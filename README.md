@@ -1,65 +1,105 @@
 # Ferrule
 
-Ferrule is a Rust-native runtime and training scaffold for **agentic reinforcement learning** on top of **Candle**.
+Ferrule is a minimal Agentic RL training-and-inference framework built on top of Candle.
 
-The project is intentionally opinionated:
+Its purpose is to validate a real closed loop:
 
-- **runtime first**, not trainer first
-- **trajectory as an event log**, not just final text
-- **tools and environments as first-class citizens**
-- **observability from day one**: structured logging, metrics, and clear startup wiring
+- run a multi-step agent episode
+- call tools during execution
+- record trajectories
+- score action tokens
+- compute returns and objectives
+- apply a small policy update
+- run inference again and observe behavior changes
 
+Ferrule is intentionally small. The current design focuses on making the full loop work end to end, not on maximizing model size, benchmark coverage, or training scale.
 
-## Workspace Layout
+## Core idea
+
+Ferrule treats agent behavior as a sequence of structured actions inside an episode.
+
+A model produces action blocks such as:
 
 ```text
-ferrule/
-├── Cargo.toml
-├── rust-toolchain.toml
-├── README.md
-├── configs/
-│   ├── rollout.toml
-│   └── train.toml
-└── crates/
-    ├── ferrule-core/
-    ├── ferrule-candle/
-    ├── ferrule-runtime/
-    └── ferrule-app/
+<ACTION>
+TOOL: calc
+INPUT: 2+2
+</ACTION>
+
+<ACTION>
+FINAL: 4
+</ACTION>
+
 ```
 
-Quick Start
-1. Check the workspace
-cargo fmt
-cargo check
-2. Run the doctor command
-cargo run -p ferrule-app -- doctor --config configs/rollout.toml
+The runtime executes the tool call, appends the result to the transcript, and continues until the agent finishes, fails, or reaches the step limit.
 
-This validates the config path, initializes observability, and runs a tiny Candle sanity check.
+## Architecture
 
-3. Run a mock rollout
-cargo run -p ferrule-app -- rollout --config configs/rollout.toml
+``` mermaid
+flowchart LR
+    A[Config / CLI] --> B[Ferrule]
+    B --> C[Agent Runtime]
+    B --> D[Candle Model]
+    C --> E[Episode Loop]
+    C --> F[Tool Execution]
+    C --> G[Trajectory Trace]
+    D --> H[Tokenizer]
+    D --> I[Llama Backend]
+    D --> J[Trainable Policy Bias]
+    I --> K[Base Logits]
+    J --> L[Bias]
+    K --> M[Adjusted Logits]
+    L --> M
+    M --> E
+    G --> N[Scoring / Returns / Objective]
+    N --> O[Optimizer Step]
+    O --> E
+```
 
-You should see a JSON trajectory printed to stdout.
+## Train-infer Loop
 
-Observability
+``` mermaid
+flowchart TD
+    A[Initial Observation] --> B[Generate Action]
+    B --> C{Action Type}
+    C -->|TOOL| D[Run Tool]
+    D --> E[Append Tool Result]
+    E --> B
+    C -->|FINAL| F[Finish Episode]
+    C -->|INVALID| G[Fail Episode]
+    F --> H[Build Trajectory]
+    G --> H
+    H --> I[Score Action Tokens]
+    I --> J[Compute Returns / Objective]
+    J --> K[Update Policy]
+    K --> L[Run Agent Again]
+```
 
-Ferrule initializes observability as early as possible.
+## What Ferrule currently proves
 
-Logging
+Ferrule already demonstrates that:
 
-Logging uses tracing and tracing-subscriber.
+- a local model can run a structured multi-step agent loop
+- tool calls can affect later actions
+- trajectories can be collected and scored step by step
+- a training update can change later inference behavior
 
-Set log level with:
+That is the main milestone of the project: the training and inference loop is no longer theoretical.
 
-RUST_LOG=debug cargo run -p ferrule-app -- rollout --config configs/rollout.toml
-Metrics
+## Core test
 
-Prometheus metrics are exported on the configured address:
+Run the end-to-end agent training step:
 
-[observability]
-metrics_enabled = true
-metrics_bind = "127.0.0.1:9000"
+``` bash
+# bash scripts/download_model.sh HuggingFaceTB/SmolLM2-135M-Instruct models/SmolLM2-135M-Instruct
+cargo run --release -p ferrule-app --features metal -- agent-train-step --config configs/agent.toml
+```
 
-You can inspect them with:
+A successful run should produce:
 
-curl http://127.0.0.1:9000
+- objective statistics
+- eval_before
+- eval_after
+
+The key signal is that eval_after shows improved behavior, such as fewer unnecessary tool calls, fewer steps, or higher reward.
