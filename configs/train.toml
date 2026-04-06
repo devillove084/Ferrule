@@ -1,0 +1,15 @@
+[observability]
+service_name = "ferrule"
+log_level = "info"
+log_format = "json"
+metrics_enabled = true
+metrics_bind = "127.0.0.1:9000"
+
+[model]
+backend = "mock"
+model_id = "bootstrap/mock-policy"
+device = "auto"
+
+[rollout]
+max_steps = 8
+seed = 42

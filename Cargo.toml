@@ -1,6 +1,13 @@
-[package]
-name = "rinfer"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = [
+  "crates/ferrule-core",
+  "crates/ferrule-candle",
+  "crates/ferrule-runtime",
+  "crates/ferrule-app",
+]
+resolver = "2"
 
-[dependencies]
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "Apache-2.0"

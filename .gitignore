@@ -24,3 +24,11 @@ target
 # Added by cargo
 
 /target
+
+Cargo.lock
+*.log
+*.jsonl
+.rustc_info.json
+.DS_Store
+
+/models

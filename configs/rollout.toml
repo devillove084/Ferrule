@@ -1,0 +1,20 @@
+[observability]
+service_name = "ferrule"
+log_level = "info"
+log_format = "json"
+metrics_enabled = true
+metrics_bind = "127.0.0.1:9000"
+
+[model]
+backend = "real"
+model_id = "./models/Llama-3.2-1B-Instruct"
+family = "llama"
+device = "auto"
+chat_template = "instruct_v1"
+dtype = "f16"
+use_flash_attn = false
+use_kv_cache = true
+
+[rollout]
+max_steps = 8
+seed = 42

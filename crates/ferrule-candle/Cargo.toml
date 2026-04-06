@@ -1,0 +1,26 @@
+[package]
+name = "ferrule-candle"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
+
+[dependencies]
+ferrule-core = { path = "../ferrule-core" }
+tracing = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+candle-core = "0.10"
+candle-nn = "0.10"
+candle-transformers = "0.10"
+tokenizers = "0.22"
+hf-hub = "0.4"
+safetensors = "0.5"
+
+[dev-dependencies]
+tempfile = "3.27.0"
