@@ -1,17 +1,21 @@
 mod device;
+mod diff_scoring;
 mod family;
+mod policy_bias;
 mod prompt;
 mod sampling;
+mod scoring;
 mod source;
 mod tokenizer;
 
-use candle_core::{Device, Tensor};
+use candle_core::{Device, Tensor, Var};
 use candle_transformers::generation::LogitsProcessor;
 use family::llama::{LlamaBackend, LlamaLoadConfig, LlamaSession};
 use ferrule_core::{
     FerruleError, FerruleResult, ModelConfig, ModelOutput, ModelStep, PolicyModel, SamplingParams,
     TokenUsage, async_trait,
 };
+use policy_bias::PolicyBiasHead;
 use sampling::build_logits_processor;
 use source::{ResolvedModelPaths, resolve_model_paths};
 use std::sync::Arc;
@@ -60,6 +64,7 @@ pub struct CandlePolicy {
     use_flash_attn: bool,
     use_kv_cache: bool,
     real_backend: Option<RealBackend>,
+    policy_bias: Option<Arc<PolicyBiasHead>>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,13 +106,45 @@ impl CandlePolicy {
             use_flash_attn: cfg.use_flash_attn,
             use_kv_cache: cfg.use_kv_cache,
             real_backend: None,
+            policy_bias: None,
         };
 
         if cfg.backend == "real" {
             policy.real_backend = Some(policy.load_real_backend()?);
         }
 
+        let vocab_size = policy.tokenizer.vocab_size_hint();
+        let bias = PolicyBiasHead::new(vocab_size, policy.bias_init_device())?;
+        policy.policy_bias = Some(Arc::new(bias));
+
         Ok(policy)
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+
+    fn bias_init_device(&self) -> &Device {
+        match &self.real_backend {
+            Some(RealBackend::Llama(b)) => b.device(),
+            None => &self.device,
+        }
+    }
+
+    pub fn trainable_vars(&self) -> FerruleResult<Vec<Var>> {
+        match &self.policy_bias {
+            Some(head) => Ok(head.trainable_vars()),
+            None => Err(FerruleError::Model(
+                "policy bias head is not initialized".to_string(),
+            )),
+        }
+    }
+
+    pub fn apply_policy_bias(&self, logits: &Tensor) -> FerruleResult<Tensor> {
+        match &self.policy_bias {
+            Some(head) => head.apply_to_logits(logits),
+            None => Ok(logits.clone()),
+        }
     }
 
     fn load_real_backend(&self) -> FerruleResult<RealBackend> {
@@ -208,6 +245,233 @@ impl CandlePolicy {
             }
             other => Err(FerruleError::Config(format!(
                 "generate_text_once not implemented for family: {other}"
+            ))),
+        }
+    }
+
+    pub fn score_completion(&self, prompt: &str, completion: &str) -> FerruleResult<Vec<f32>> {
+        match self.family.as_str() {
+            "llama" => {
+                let backend = self.llama_backend()?;
+                backend.score_completion(&self.tokenizer, prompt, completion)
+            }
+            other => Err(FerruleError::Config(format!(
+                "score_completion not implemented for family: {other}"
+            ))),
+        }
+    }
+
+    pub fn score_completion_ids(
+        &self,
+        prompt_ids: &[u32],
+        completion_ids: &[u32],
+    ) -> FerruleResult<Vec<f32>> {
+        match self.family.as_str() {
+            "llama" => {
+                let backend = self.llama_backend()?;
+                backend.score_completion_ids(prompt_ids, completion_ids)
+            }
+            other => Err(FerruleError::Config(format!(
+                "score_completion_ids not implemented for family: {other}"
+            ))),
+        }
+    }
+
+    pub fn score_completion_ids_with_bias(
+        &self,
+        prompt_ids: &[u32],
+        completion_ids: &[u32],
+    ) -> FerruleResult<Vec<f32>> {
+        match self.family.as_str() {
+            "llama" => {
+                let backend = self.llama_backend()?;
+                if prompt_ids.is_empty() {
+                    return Err(FerruleError::Runtime(
+                        "score_completion_ids_with_bias got empty prompt ids".to_string(),
+                    ));
+                }
+                if completion_ids.is_empty() {
+                    return Ok(vec![]);
+                }
+
+                let mut session = backend.new_session()?;
+                let mut out = Vec::with_capacity(completion_ids.len());
+
+                let logits = backend.forward_prefill(&mut session, prompt_ids)?;
+                let logits = self.apply_policy_bias(&logits)?;
+                out.push(crate::scoring::token_logprob_from_logits(
+                    &logits,
+                    completion_ids[0],
+                )?);
+
+                for idx in 1..completion_ids.len() {
+                    let prev = completion_ids[idx - 1];
+                    let logits = backend.forward_decode_one(&mut session, prev)?;
+                    let logits = self.apply_policy_bias(&logits)?;
+                    out.push(crate::scoring::token_logprob_from_logits(
+                        &logits,
+                        completion_ids[idx],
+                    )?);
+                }
+
+                Ok(out)
+            }
+            other => Err(FerruleError::Config(format!(
+                "score_completion_ids_with_bias not implemented for family: {other}"
+            ))),
+        }
+    }
+
+    pub fn generate_text_once_with_bias(
+        &self,
+        prompt: &str,
+        params: &SamplingParams,
+    ) -> FerruleResult<family::llama::GenerateOutput> {
+        match self.family.as_str() {
+            "llama" => {
+                let backend = self.llama_backend()?;
+                let prompt_ids = self.tokenizer.encode(prompt, true)?;
+                if prompt_ids.is_empty() {
+                    return Err(FerruleError::Runtime(
+                        "generate_text_once_with_bias got empty prompt ids".to_string(),
+                    ));
+                }
+
+                let mut session = backend.new_session()?;
+                let mut processor = crate::sampling::build_logits_processor(params);
+
+                let mut generated_ids = Vec::new();
+                let mut generated_text = String::new();
+                let mut finish_reason = "max_new_tokens".to_string();
+
+                while generated_ids.len() < params.max_new_tokens {
+                    let next_token = if generated_ids.is_empty() {
+                        let logits = backend.forward_prefill(&mut session, &prompt_ids)?;
+                        let logits = self.apply_policy_bias(&logits)?;
+                        crate::sampling::sample_next_token(
+                            &logits,
+                            &mut processor,
+                            &prompt_ids,
+                            params,
+                        )?
+                    } else {
+                        let mut prior = Vec::with_capacity(prompt_ids.len() + generated_ids.len());
+                        prior.extend_from_slice(&prompt_ids);
+                        prior.extend_from_slice(&generated_ids);
+
+                        let logits = backend
+                            .forward_decode_one(&mut session, *generated_ids.last().unwrap())?;
+                        let logits = self.apply_policy_bias(&logits)?;
+                        crate::sampling::sample_next_token(&logits, &mut processor, &prior, params)?
+                    };
+
+                    generated_ids.push(next_token);
+
+                    let new_text = self.tokenizer.decode(&generated_ids, true)?;
+                    generated_text = new_text;
+
+                    if let Some(eos) = backend.eos_token_id {
+                        if next_token == eos {
+                            finish_reason = "eos".to_string();
+                            break;
+                        }
+                    }
+
+                    if !params.stop_strings.is_empty()
+                        && params
+                            .stop_strings
+                            .iter()
+                            .any(|s| generated_text.contains(s))
+                    {
+                        finish_reason = "stop_string".to_string();
+                        break;
+                    }
+                }
+
+                Ok(family::llama::GenerateOutput {
+                    token_ids: generated_ids.clone(),
+                    text: generated_text,
+                    finish_reason,
+                    usage: ferrule_core::TokenUsage {
+                        prompt_tokens: prompt_ids.len(),
+                        completion_tokens: generated_ids.len(),
+                    },
+                })
+            }
+            other => Err(FerruleError::Config(format!(
+                "generate_text_once_with_bias not implemented for family: {other}"
+            ))),
+        }
+    }
+
+    pub fn compute_agent_loss_tensor(
+        &self,
+        steps: &[(&[u32], &[u32], f32)], // (prompt_ids, action_ids, advantage)
+    ) -> FerruleResult<Tensor> {
+        if steps.is_empty() {
+            return Err(FerruleError::Runtime(
+                "compute_agent_loss_tensor got empty steps".to_string(),
+            ));
+        }
+
+        let mut losses = Vec::with_capacity(steps.len());
+
+        for (prompt_ids, action_ids, advantage) in steps {
+            let lps = self.score_completion_ids_with_bias(prompt_ids, action_ids)?;
+            let logprob_sum = lps.iter().copied().sum::<f32>();
+            let loss_scalar = -(*advantage) * logprob_sum;
+            let t = Tensor::new(&[loss_scalar], self.policy_bias.as_ref().unwrap().device())
+                .map_err(|e| {
+                    FerruleError::Model(format!("failed to build scalar loss tensor: {e}"))
+                })?;
+            losses.push(t);
+        }
+
+        let stacked = Tensor::cat(&losses, 0)
+            .map_err(|e| FerruleError::Model(format!("failed to concat loss tensors: {e}")))?;
+
+        stacked
+            .mean(0)
+            .map_err(|e| FerruleError::Model(format!("failed to reduce mean loss: {e}")))
+    }
+
+    pub fn differentiable_action_logprob_sum(
+        &self,
+        prompt_ids: &[u32],
+        action_ids: &[u32],
+    ) -> FerruleResult<Tensor> {
+        match self.family.as_str() {
+            "llama" => {
+                let backend = self.llama_backend()?;
+                if prompt_ids.is_empty() {
+                    return Err(FerruleError::Runtime(
+                        "differentiable_action_logprob_sum got empty prompt ids".to_string(),
+                    ));
+                }
+                if action_ids.is_empty() {
+                    return Err(FerruleError::Runtime(
+                        "differentiable_action_logprob_sum got empty action ids".to_string(),
+                    ));
+                }
+
+                let mut session = backend.new_session()?;
+                let mut logits_per_step = Vec::with_capacity(action_ids.len());
+
+                let logits = backend.forward_prefill(&mut session, prompt_ids)?;
+                let logits = self.apply_policy_bias(&logits)?;
+                logits_per_step.push(logits);
+
+                for idx in 1..action_ids.len() {
+                    let prev = action_ids[idx - 1];
+                    let logits = backend.forward_decode_one(&mut session, prev)?;
+                    let logits = self.apply_policy_bias(&logits)?;
+                    logits_per_step.push(logits);
+                }
+
+                crate::diff_scoring::sequence_logprob_sum_tensor(&logits_per_step, action_ids)
+            }
+            other => Err(FerruleError::Config(format!(
+                "differentiable_action_logprob_sum not implemented for family: {other}"
             ))),
         }
     }

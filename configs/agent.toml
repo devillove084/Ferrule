@@ -19,8 +19,11 @@ use_kv_cache = true
 max_steps = 8
 seed = 42
 
-[train]
-dataset_path = "data/math_tiny.jsonl"
-num_samples = 8
-max_new_tokens = 6
-baseline_mode = "leave_one_out"
+[agent]
+initial_observation = "Please compute 2+2. You may use the calc tool. If you finish, output FINAL:4."
+max_steps = 4
+max_new_tokens = 24
+temperature = 0.0
+top_p = 0.9
+top_k = 20
+expected_final = "4"

@@ -1,4 +1,5 @@
 use crate::sampling::{build_logits_processor, sample_next_token};
+use crate::scoring::token_logprob_from_logits;
 use crate::tokenizer::FerruleTokenizer;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
@@ -312,6 +313,49 @@ impl LlamaBackend {
                 completion_tokens: generated_ids.len(),
             },
         })
+    }
+
+    pub fn score_completion(
+        &self,
+        tokenizer: &FerruleTokenizer,
+        prompt: &str,
+        completion: &str,
+    ) -> FerruleResult<Vec<f32>> {
+        let prompt_ids = tokenizer.encode(prompt, true)?;
+        let completion_ids = tokenizer.encode(completion, false)?;
+        self.score_completion_ids(&prompt_ids, &completion_ids)
+    }
+
+    pub fn score_completion_ids(
+        &self,
+        prompt_ids: &[u32],
+        completion_ids: &[u32],
+    ) -> FerruleResult<Vec<f32>> {
+        if prompt_ids.is_empty() {
+            return Err(FerruleError::Runtime(
+                "score_completion_ids got empty prompt ids".to_string(),
+            ));
+        }
+
+        if completion_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut session = self.new_session()?;
+        let mut out = Vec::with_capacity(completion_ids.len());
+
+        // First completion token is predicted from prompt prefill.
+        let logits = self.forward_prefill(&mut session, prompt_ids)?;
+        out.push(token_logprob_from_logits(&logits, completion_ids[0])?);
+
+        // Then teacher-force the rest of the completion tokens one by one.
+        for idx in 1..completion_ids.len() {
+            let prev = completion_ids[idx - 1];
+            let logits = self.forward_decode_one(&mut session, prev)?;
+            out.push(token_logprob_from_logits(&logits, completion_ids[idx])?);
+        }
+
+        Ok(out)
     }
 
     pub fn device(&self) -> &Device {
