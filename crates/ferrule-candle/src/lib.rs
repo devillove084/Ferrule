@@ -10,6 +10,7 @@ mod tokenizer;
 
 use candle_core::{Device, Tensor, Var};
 use candle_transformers::generation::LogitsProcessor;
+use family::deepseek::{DeepSeekModel, DeepSeekV2Config};
 use family::llama::{LlamaBackend, LlamaLoadConfig, LlamaSession};
 use ferrule_core::{
     FerruleError, FerruleResult, ModelConfig, ModelOutput, ModelStep, PolicyModel, SamplingParams,
@@ -25,6 +26,7 @@ use tracing::info;
 #[derive(Clone)]
 enum RealBackend {
     Llama(Arc<LlamaBackend>),
+    DeepSeek(Arc<DeepSeekModel>),
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +38,7 @@ struct MockSession {
 pub enum CandleSession {
     Mock(MockSession),
     Llama(LlamaPolicySession),
+    DeepSeek(DeepSeekPolicySession),
 }
 
 pub struct LlamaPolicySession {
@@ -47,6 +50,17 @@ pub struct LlamaPolicySession {
     generated_text: String,
     params: SamplingParams,
     finished: bool,
+    finish_reason: Option<String>,
+}
+
+pub struct DeepSeekPolicySession {
+    model: Arc<DeepSeekModel>,
+    prompt_ids: Vec<u32>,
+    generated_ids: Vec<u32>,
+    generated_text: String,
+    params: SamplingParams,
+    finished: bool,
+    kv_cache: Vec<Option<candle_core::Tensor>>,
     finish_reason: Option<String>,
 }
 
@@ -127,6 +141,7 @@ impl CandlePolicy {
     fn bias_init_device(&self) -> &Device {
         match &self.real_backend {
             Some(RealBackend::Llama(b)) => b.device(),
+            Some(RealBackend::DeepSeek(b)) => b.device(),
             None => &self.device,
         }
     }
@@ -150,6 +165,7 @@ impl CandlePolicy {
     fn load_real_backend(&self) -> FerruleResult<RealBackend> {
         match self.family.as_str() {
             "llama" => Ok(RealBackend::Llama(Arc::new(self.build_llama_backend()?))),
+            "deepseek" => Ok(RealBackend::DeepSeek(Arc::new(self.build_deepseek_backend()?))),
             other => Err(FerruleError::Config(format!(
                 "real backend not implemented for family: {other}"
             ))),
@@ -177,6 +193,30 @@ impl CandlePolicy {
             },
             eos_token_id,
         )
+    }
+    fn build_deepseek_backend(&self) -> FerruleResult<DeepSeekModel> {
+        let config_path = self.model_paths.config_json.as_ref().ok_or_else(|| {
+            FerruleError::Config("config.json is required for deepseek backend".to_string())
+        })?;
+        let config = DeepSeekV2Config::from_file(config_path)?;
+        let vb = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(
+                &self.model_paths.weight_files,
+                candle_core::DType::F32,
+                &self.device,
+            ).map_err(|e| FerruleError::Model(format!("mmap safetensors: {e}")))?
+        };
+        let eos_token_id = self.tokenizer.token_to_id("</s>")
+            .or_else(|| self.tokenizer.token_to_id("<|eot_id|>"))
+            .or_else(|| self.tokenizer.token_to_id("<|end_of_text|>"));
+        DeepSeekModel::load(vb, &config, self.device.clone(), eos_token_id)
+    }
+
+    fn deepseek_model(&self) -> FerruleResult<Arc<DeepSeekModel>> {
+        match &self.real_backend {
+            Some(RealBackend::DeepSeek(m)) => Ok(m.clone()),
+            _ => Err(FerruleError::Model("deepseek backend not loaded".to_string())),
+        }
     }
 
     pub fn candle_sanity_check(&self) -> FerruleResult<()> {
@@ -221,7 +261,7 @@ impl CandlePolicy {
     pub fn llama_backend(&self) -> FerruleResult<Arc<LlamaBackend>> {
         match &self.real_backend {
             Some(RealBackend::Llama(b)) => Ok(b.clone()),
-            None => Err(FerruleError::Model(
+            Some(RealBackend::DeepSeek(_)) | None => Err(FerruleError::Model(
                 "llama backend is not loaded; set backend='real'".to_string(),
             )),
         }
@@ -563,6 +603,69 @@ impl CandlePolicy {
             },
         })
     }
+    fn step_deepseek_session(&self, session: &mut DeepSeekPolicySession) -> FerruleResult<ModelStep> {
+        if session.finished {
+            return Ok(ModelStep {
+                action: ModelOutput::Finish {
+                    reason: session.finish_reason.clone().unwrap_or_else(|| "completed".to_string()),
+                    final_text: Some(session.generated_text.clone()),
+                },
+                usage: TokenUsage {
+                    prompt_tokens: session.prompt_ids.len(),
+                    completion_tokens: session.generated_ids.len(),
+                },
+            });
+        }
+        let token_id = if session.generated_ids.is_empty() {
+        let device = self.device.clone();
+            // Prefill: 用全部 prompt tokens 做一次前向
+            let input = Tensor::new(&session.prompt_ids[..], &self.device)
+                .map_err(|e| FerruleError::Model(format!("ds pfx: {e}")))?.unsqueeze(0)
+                .map_err(|e| FerruleError::Model(format!("ds unsq: {e}")))?;
+            let model = self.deepseek_model()?;
+            let logits = model.forward_incremental(&input, &mut session.kv_cache)?;
+            let logits = self.apply_policy_bias(&logits)?;
+            crate::sampling::sample_next_token(
+                &logits,
+                &mut LogitsProcessor::from_sampling(session.params.seed, candle_transformers::generation::Sampling::ArgMax),
+                &session.prompt_ids,
+                &session.params,
+            )?
+        } else {
+            // Decode: 只用最后一个 token
+            let last = *session.generated_ids.last().unwrap();
+            let input = Tensor::new(&[last], &self.device)
+                .map_err(|e| FerruleError::Model(format!("ds tok: {e}")))?.unsqueeze(0)
+                .map_err(|e| FerruleError::Model(format!("ds unsq: {e}")))?;
+            let model = self.deepseek_model()?;
+            let logits = model.forward_incremental(&input, &mut session.kv_cache)?;
+            let logits = self.apply_policy_bias(&logits)?;
+            let mut all_ids = session.prompt_ids.clone();
+            all_ids.extend_from_slice(&session.generated_ids);
+            crate::sampling::sample_next_token(
+                &logits,
+                &mut LogitsProcessor::from_sampling(session.params.seed, candle_transformers::generation::Sampling::ArgMax),
+                &all_ids,
+                &session.params,
+            )?
+        };
+        session.generated_ids.push(token_id);
+        let new_text = self.tokenizer.decode(&session.generated_ids, true)?;
+        session.generated_text = new_text;
+        let stop = session.generated_ids.len() >= session.params.max_new_tokens;
+        if stop {
+            session.finished = true;
+            session.finish_reason = Some("max_tokens".to_string());
+        }
+        Ok(ModelStep {
+            action: ModelOutput::Text { content: session.generated_text.clone() },
+            usage: TokenUsage {
+                prompt_tokens: session.prompt_ids.len(),
+                completion_tokens: session.generated_ids.len(),
+            },
+        })
+    }
+
 }
 
 #[async_trait]
@@ -624,6 +727,7 @@ impl PolicyModel for CandlePolicy {
         match session {
             CandleSession::Mock(s) => self.step_mock_session(s),
             CandleSession::Llama(s) => self.step_llama_session(s),
+            CandleSession::DeepSeek(s) => self.step_deepseek_session(s),
         }
     }
 }

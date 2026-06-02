@@ -83,7 +83,7 @@ fn auto_device() -> FerruleResult<Device> {
     Ok(Device::Cpu)
 }
 
-fn cuda_device(idx: usize) -> FerruleResult<Device> {
+fn cuda_device(_idx: usize) -> FerruleResult<Device> {
     #[cfg(feature = "cuda")]
     {
         return Device::new_cuda(idx)
@@ -96,7 +96,7 @@ fn cuda_device(idx: usize) -> FerruleResult<Device> {
     ))
 }
 
-fn metal_device(idx: usize) -> FerruleResult<Device> {
+fn metal_device(_idx: usize) -> FerruleResult<Device> {
     #[cfg(feature = "metal")]
     {
         return Device::new_metal(idx)
