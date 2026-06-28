@@ -13,6 +13,7 @@ ferrule-quant = { path = "../ferrule-quant" }
 ferrule-model = { path = "../ferrule-model" }
 ferrule-gguf = { path = "../ferrule-gguf" }
 rayon = "1.10"
+memmap2 = "0.9"
 cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git" }
 cuda-device = { git = "https://github.com/NVlabs/cuda-oxide.git" }
 cuda-host = { git = "https://github.com/NVlabs/cuda-oxide.git" }

@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::io::Write;
 use std::path::Path;
 
 #[derive(Parser)]
@@ -32,6 +33,14 @@ enum Command {
         #[arg(short = 'q', long, default_value = "q4")]
         quant: String,
     },
+    /// Interactive chat REPL.
+    Chat {
+        model: String,
+        #[arg(short = 'n', long, default_value = "256")]
+        max_tokens: usize,
+        #[arg(short = 'q', long, default_value = "q4")]
+        quant: String,
+    },
     Bench {
         #[arg(long, default_value = "2048")]
         hidden: usize,
@@ -60,6 +69,11 @@ fn main() -> anyhow::Result<()> {
             max_tokens,
             quant,
         } => cmd_gpu_run(&model, &prompt, max_tokens, &quant),
+        Command::Chat {
+            model,
+            max_tokens,
+            quant,
+        } => cmd_chat(&model, max_tokens, &quant),
         Command::Bench {
             hidden,
             layers,
@@ -90,6 +104,28 @@ fn argmax(logits: &[f32]) -> u32 {
         .0 as u32
 }
 
+#[cfg(feature = "cuda")]
+fn parse_quant(quant: &str) -> ferrule_quant::QuantType {
+    match quant.to_ascii_lowercase().as_str() {
+        "q2" | "q2s" => ferrule_quant::QuantType::Q2S,
+        "t1" | "t1s" => ferrule_quant::QuantType::T1S,
+        "q8" | "q8_0" => ferrule_quant::QuantType::Q8_0,
+        _ => ferrule_quant::QuantType::Q4_0,
+    }
+}
+
+fn chat_prompt(turn: &str, first_turn: bool) -> String {
+    if first_turn {
+        format!("User: {turn}\nAssistant:")
+    } else {
+        format!("\nUser: {turn}\nAssistant:")
+    }
+}
+
+fn is_eos(model: &ferrule_model::OlmoeModel, token: u32) -> bool {
+    model.eos_token_id() == Some(token)
+}
+
 fn cmd_run(model_dir: &str, prompt: &str, max_tokens: usize) -> anyhow::Result<()> {
     let model = ferrule_model::OlmoeModel::load(Path::new(model_dir))?;
     let c = &model.config;
@@ -118,21 +154,29 @@ fn cmd_run(model_dir: &str, prompt: &str, max_tokens: usize) -> anyhow::Result<(
     }
     // First generated token comes from prefill output, not by re-feeding prompt
     let first = argmax(&logits);
-    gen.push(first);
-    let txt = model.decode(&[first])?;
-    println!(
-        "  [{:>3}] {txt:30} {:.0}ms",
-        0,
-        t0.elapsed().as_secs_f64() * 1000.0
-    );
+    if !is_eos(&model, first) {
+        gen.push(first);
+        let txt = model.decode(&[first])?;
+        println!(
+            "  [{:>3}] {txt:30} {:.0}ms",
+            0,
+            t0.elapsed().as_secs_f64() * 1000.0
+        );
+    }
 
     // Generate remaining tokens
     for step in 1..max_tokens {
+        if gen.is_empty() {
+            break;
+        }
         let last = *gen.last().unwrap_or(&0);
         let (_, l) = model.forward(&[last], &mut k_cache, &mut v_cache, pos)?;
         logits = l;
         pos += 1;
         let next = argmax(&logits);
+        if is_eos(&model, next) {
+            break;
+        }
         gen.push(next);
         let txt = model.decode(&[next])?;
         println!(
@@ -269,6 +313,79 @@ fn cmd_cuda() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn cmd_chat_cpu(model_dir: &str, max_tokens: usize) -> anyhow::Result<()> {
+    use console::style;
+    use rustyline::error::ReadlineError;
+
+    let model = ferrule_model::OlmoeModel::load(Path::new(model_dir))?;
+    let c = &model.config;
+    println!(
+        "OLMoE: {}d×{}L, {}e top-{} (CPU FP32)",
+        c.hidden_size, c.num_layers, c.num_experts, c.num_experts_per_tok
+    );
+    println!(
+        "{} Type /exit or Ctrl-D to quit.",
+        style("Chat ready.").cyan()
+    );
+
+    let nl = c.num_layers;
+    let mut k_cache: Vec<Vec<f32>> = (0..nl).map(|_| Vec::new()).collect();
+    let mut v_cache: Vec<Vec<f32>> = (0..nl).map(|_| Vec::new()).collect();
+    let mut pos = 0usize;
+    let mut first_turn = true;
+    let mut rl = rustyline::DefaultEditor::new()?;
+
+    loop {
+        let line = match rl.readline(&format!("{} ", style("You>").green().bold())) {
+            Ok(line) => line,
+            Err(ReadlineError::Interrupted | ReadlineError::Eof) => break,
+            Err(err) => return Err(err.into()),
+        };
+        let input = line.trim();
+        if input.is_empty() {
+            continue;
+        }
+        if matches!(input, "/exit" | "/quit") {
+            break;
+        }
+        let _ = rl.add_history_entry(input);
+
+        let prompt = chat_prompt(input, first_turn);
+        first_turn = false;
+        let tokens = model.encode(&prompt)?;
+        let mut logits = Vec::new();
+        for tid in tokens {
+            let (_, l) = model.forward(&[tid], &mut k_cache, &mut v_cache, pos)?;
+            logits = l;
+            pos += 1;
+        }
+        if logits.is_empty() {
+            continue;
+        }
+
+        print!("{} ", style("Ferrule>").cyan().bold());
+        std::io::stdout().flush()?;
+        for _ in 0..max_tokens {
+            let next = argmax(&logits);
+            if is_eos(&model, next) {
+                break;
+            }
+            let txt = model.decode(&[next])?;
+            if txt.is_empty() {
+                break;
+            }
+            print!("{txt}");
+            std::io::stdout().flush()?;
+            let (_, l) = model.forward(&[next], &mut k_cache, &mut v_cache, pos)?;
+            logits = l;
+            pos += 1;
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
 fn cmd_bench(hidden: usize, layers: usize, warmup: usize, iters: usize) -> anyhow::Result<()> {
     use ferrule_graph::{CGraph, CpuBackend, OpKind, Shape};
     let d = hidden;
@@ -326,11 +443,7 @@ fn cmd_gpu_run(
     quant: &str,
 ) -> anyhow::Result<()> {
     let model = ferrule_model::OlmoeModel::load(std::path::Path::new(model_dir))?;
-    let qt = match quant {
-        "q2" => ferrule_quant::QuantType::Q2S,
-        "t1" => ferrule_quant::QuantType::T1S,
-        _ => ferrule_quant::QuantType::Q4_0,
-    };
+    let qt = parse_quant(quant);
     println!("Uploading to GPU (quant: {qt:?})...");
     let mut gpu = ferrule_cuda::forward::GpuOlmoeModel::from_cpu(&model, qt)?;
     let tokens = model.encode(prompt)?;
@@ -346,18 +459,27 @@ fn cmd_gpu_run(
 
     // First generated token comes from prefill output (not re-feeding prompt)
     let first = argmax(&logits);
-    let mut gen = vec![first];
-    let txt = model.decode(&[first])?;
-    println!(
-        "  [{:>3}] {txt:30} {:.0}ms",
-        0,
-        t0.elapsed().as_secs_f64() * 1000.0
-    );
+    let mut gen = Vec::new();
+    if !is_eos(&model, first) {
+        gen.push(first);
+        let txt = model.decode(&[first])?;
+        println!(
+            "  [{:>3}] {txt:30} {:.0}ms",
+            0,
+            t0.elapsed().as_secs_f64() * 1000.0
+        );
+    }
 
     // Generate remaining tokens
     for step in 1..max_tokens {
+        if gen.is_empty() {
+            break;
+        }
         let logits = gpu.forward(*gen.last().unwrap_or(&0))?;
         let next = argmax(&logits);
+        if is_eos(&model, next) {
+            break;
+        }
         gen.push(next);
         let txt = model.decode(&[next])?;
         println!(
@@ -372,6 +494,82 @@ fn cmd_gpu_run(
         max_tokens as f64 / t.as_secs_f64()
     );
     Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn cmd_chat(model_dir: &str, max_tokens: usize, quant: &str) -> anyhow::Result<()> {
+    use console::style;
+    use rustyline::error::ReadlineError;
+
+    if matches!(quant.to_ascii_lowercase().as_str(), "cpu" | "f32" | "fp32") {
+        return cmd_chat_cpu(model_dir, max_tokens);
+    }
+
+    let model = ferrule_model::OlmoeModel::load(std::path::Path::new(model_dir))?;
+    let qt = parse_quant(quant);
+    println!("Uploading to GPU (quant: {qt:?})...");
+    let mut gpu = ferrule_cuda::forward::GpuOlmoeModel::from_cpu(&model, qt)?;
+    println!(
+        "{} Type /exit or Ctrl-D to quit.",
+        style("Chat ready.").cyan()
+    );
+
+    let mut first_turn = true;
+    let mut rl = rustyline::DefaultEditor::new()?;
+    loop {
+        let line = match rl.readline(&format!("{} ", style("You>").green().bold())) {
+            Ok(line) => line,
+            Err(ReadlineError::Interrupted | ReadlineError::Eof) => break,
+            Err(err) => return Err(err.into()),
+        };
+        let input = line.trim();
+        if input.is_empty() {
+            continue;
+        }
+        if matches!(input, "/exit" | "/quit") {
+            break;
+        }
+        let _ = rl.add_history_entry(input);
+
+        let prompt = chat_prompt(input, first_turn);
+        first_turn = false;
+        let tokens = model.encode(&prompt)?;
+        let mut logits = Vec::new();
+        for tid in tokens {
+            logits = gpu.forward(tid)?;
+        }
+        if logits.is_empty() {
+            continue;
+        }
+
+        print!("{} ", style("Ferrule>").cyan().bold());
+        std::io::stdout().flush()?;
+        for _ in 0..max_tokens {
+            let next = argmax(&logits);
+            if is_eos(&model, next) {
+                break;
+            }
+            let txt = model.decode(&[next])?;
+            if txt.is_empty() {
+                break;
+            }
+            print!("{txt}");
+            std::io::stdout().flush()?;
+            logits = gpu.forward(next)?;
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+#[cfg(not(feature = "cuda"))]
+fn cmd_chat(model_dir: &str, max_tokens: usize, quant: &str) -> anyhow::Result<()> {
+    if matches!(quant.to_ascii_lowercase().as_str(), "cpu" | "f32" | "fp32") {
+        cmd_chat_cpu(model_dir, max_tokens)
+    } else {
+        anyhow::bail!("chat -q {quant} requires rebuilding with --features cuda")
+    }
 }
 
 #[cfg(not(feature = "cuda"))]

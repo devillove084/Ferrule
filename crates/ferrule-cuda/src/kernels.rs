@@ -1,6 +1,6 @@
 //! CUDA kernels — compiled by cargo-oxide's rustc-codegen-cuda backend.
 //!
-//! All GEMV kernels use 4x inner-loop unrolling for ILP.
+//! Most GEMV kernels use 4x inner-loop unrolling for ILP.
 //! fast_sigmoid uses reduction+squaring (no libdevice, no bit ops).
 
 use cuda_device::{cuda_module, kernel, ptx_asm, thread, DisjointSlice, SharedArray};
@@ -98,7 +98,7 @@ pub mod kernels {
         }
     }
 
-    // ── GEMV Q4_0 (unrolled 4x) ──────────────────────────────────────
+    // ── GEMV Q4_0 (llama.cpp half-block layout) ──────────────────────
 
     #[kernel]
     pub fn gemv_q4(x: &[f32], packed: &[u8], scales: &[f32], mut y: DisjointSlice<f32>, k: u32) {
@@ -108,7 +108,7 @@ pub mod kernels {
         }
         let k = k as usize;
         let blocks_per_row = (k + 31) / 32;
-        let bytes_per_row = k / 2;
+        let bytes_per_row = blocks_per_row * 16;
         let mut dot = 0.0f32;
         for b in 0..blocks_per_row {
             let block_start = b * 32;
@@ -117,24 +117,105 @@ pub mod kernels {
             if delta == 0.0 {
                 continue;
             }
-            let byte_off = row * bytes_per_row + block_start / 2;
+            let byte_off = row * bytes_per_row + b * 16;
+            let len = block_end - block_start;
+            let mut j = 0usize;
+            let mut bdot = 0.0f32;
+            while j < len {
+                let idx = if j < 16 { j } else { j - 16 };
+                let bv = packed[byte_off + idx];
+                let q = if j < 16 { bv & 0x0F } else { bv >> 4 };
+                bdot += x[block_start + j] * (q as f32 - 8.0);
+                j += 1;
+            }
+            dot += bdot * delta;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
+    // ── GEMV Q8_0 (unrolled 4x) ──────────────────────────────────────
+
+    #[kernel]
+    pub fn gemv_q8(x: &[f32], packed: &[u8], scales: &[f32], mut y: DisjointSlice<f32>, k: u32) {
+        let row = thread::index_1d().get();
+        if row >= y.len() {
+            return;
+        }
+        let k = k as usize;
+        let blocks_per_row = (k + 31) / 32;
+        let mut dot = 0.0f32;
+        for b in 0..blocks_per_row {
+            let block_start = b * 32;
+            let block_end = (block_start + 32).min(k);
+            let delta = scales[row * blocks_per_row + b];
+            if delta == 0.0 {
+                continue;
+            }
+            let byte_off = row * k + block_start;
             let len = block_end - block_start;
             let len4 = len - len % 4;
             let mut j = 0usize;
             let mut bdot = 0.0f32;
             while j < len4 {
-                let b0 = packed[byte_off + j / 2];
-                let b1 = packed[byte_off + j / 2 + 1];
-                bdot += x[block_start + j] * ((b0 & 0xF) as f32 - 8.0)
-                    + x[block_start + j + 1] * ((b0 >> 4) as f32 - 8.0)
-                    + x[block_start + j + 2] * ((b1 & 0xF) as f32 - 8.0)
-                    + x[block_start + j + 3] * ((b1 >> 4) as f32 - 8.0);
+                bdot += x[block_start + j] * (packed[byte_off + j] as i8 as f32)
+                    + x[block_start + j + 1] * (packed[byte_off + j + 1] as i8 as f32)
+                    + x[block_start + j + 2] * (packed[byte_off + j + 2] as i8 as f32)
+                    + x[block_start + j + 3] * (packed[byte_off + j + 3] as i8 as f32);
                 j += 4;
             }
             while j < len {
-                let bv = packed[byte_off + j / 2];
-                let q = if j % 2 == 0 { bv & 0xF } else { bv >> 4 };
-                bdot += x[block_start + j] * (q as f32 - 8.0);
+                bdot += x[block_start + j] * (packed[byte_off + j] as i8 as f32);
+                j += 1;
+            }
+            dot += bdot * delta;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
+    #[kernel]
+    pub fn gemv_q8_off(
+        x: &[f32],
+        packed: &[u8],
+        scales: &[f32],
+        mut y: DisjointSlice<f32>,
+        k: u32,
+        packed_off: u32,
+        scales_off: u32,
+    ) {
+        let row = thread::index_1d().get();
+        if row >= y.len() {
+            return;
+        }
+        let k = k as usize;
+        let blocks_per_row = (k + 31) / 32;
+        let packed_off = packed_off as usize;
+        let scales_off = scales_off as usize;
+        let mut dot = 0.0f32;
+        for b in 0..blocks_per_row {
+            let block_start = b * 32;
+            let block_end = (block_start + 32).min(k);
+            let delta = scales[scales_off + row * blocks_per_row + b];
+            if delta == 0.0 {
+                continue;
+            }
+            let byte_off = packed_off + row * k + block_start;
+            let len = block_end - block_start;
+            let len4 = len - len % 4;
+            let mut j = 0usize;
+            let mut bdot = 0.0f32;
+            while j < len4 {
+                bdot += x[block_start + j] * (packed[byte_off + j] as i8 as f32)
+                    + x[block_start + j + 1] * (packed[byte_off + j + 1] as i8 as f32)
+                    + x[block_start + j + 2] * (packed[byte_off + j + 2] as i8 as f32)
+                    + x[block_start + j + 3] * (packed[byte_off + j + 3] as i8 as f32);
+                j += 4;
+            }
+            while j < len {
+                bdot += x[block_start + j] * (packed[byte_off + j] as i8 as f32);
                 j += 1;
             }
             dot += bdot * delta;
@@ -160,7 +241,7 @@ pub mod kernels {
         }
         let k = k as usize;
         let blocks_per_row = (k + 31) / 32;
-        let bytes_per_row = k / 2;
+        let bytes_per_row = blocks_per_row * 16;
         let packed_off = packed_off as usize;
         let scales_off = scales_off as usize;
         let mut dot = 0.0f32;
@@ -171,23 +252,14 @@ pub mod kernels {
             if delta == 0.0 {
                 continue;
             }
-            let byte_off = packed_off + row * bytes_per_row + block_start / 2;
+            let byte_off = packed_off + row * bytes_per_row + b * 16;
             let len = block_end - block_start;
-            let len4 = len - len % 4;
             let mut j = 0usize;
             let mut bdot = 0.0f32;
-            while j < len4 {
-                let b0 = packed[byte_off + j / 2];
-                let b1 = packed[byte_off + j / 2 + 1];
-                bdot += x[block_start + j] * ((b0 & 0xF) as f32 - 8.0)
-                    + x[block_start + j + 1] * ((b0 >> 4) as f32 - 8.0)
-                    + x[block_start + j + 2] * ((b1 & 0xF) as f32 - 8.0)
-                    + x[block_start + j + 3] * ((b1 >> 4) as f32 - 8.0);
-                j += 4;
-            }
             while j < len {
-                let bv = packed[byte_off + j / 2];
-                let q = if j % 2 == 0 { bv & 0xF } else { bv >> 4 };
+                let idx = if j < 16 { j } else { j - 16 };
+                let bv = packed[byte_off + idx];
+                let q = if j < 16 { bv & 0x0F } else { bv >> 4 };
                 bdot += x[block_start + j] * (q as f32 - 8.0);
                 j += 1;
             }
@@ -436,7 +508,7 @@ pub mod kernels {
         }
         let k = k as usize;
         let bpr = ((k + 31) / 32) as usize;
-        let bytes_per_row = k / 2;
+        let bytes_per_row = bpr * 16;
         let mut d0 = 0.0f32;
         let mut d1 = 0.0f32;
         for b in 0..bpr {
@@ -444,34 +516,20 @@ pub mod kernels {
             let be = (bs + 32).min(k);
             let del0 = s0[row * bpr + b];
             let del1 = s1[row * bpr + b];
-            let bo = row * bytes_per_row + bs / 2;
+            let bo = row * bytes_per_row + b * 16;
             let len = be - bs;
-            let len4 = len - len % 4;
             let mut j = 0usize;
             let mut bd0 = 0.0f32;
             let mut bd1 = 0.0f32;
-            while j < len4 {
-                let bv0 = p0[bo + j / 2];
-                let bv1 = p0[bo + j / 2 + 1];
-                let bv0_1 = p1[bo + j / 2];
-                let bv1_1 = p1[bo + j / 2 + 1];
-                bd0 += x[bs + j] * ((bv0 & 0xF) as f32 - 8.0)
-                    + x[bs + j + 1] * ((bv0 >> 4) as f32 - 8.0)
-                    + x[bs + j + 2] * ((bv1 & 0xF) as f32 - 8.0)
-                    + x[bs + j + 3] * ((bv1 >> 4) as f32 - 8.0);
-                bd1 += x[bs + j] * ((bv0_1 & 0xF) as f32 - 8.0)
-                    + x[bs + j + 1] * ((bv0_1 >> 4) as f32 - 8.0)
-                    + x[bs + j + 2] * ((bv1_1 & 0xF) as f32 - 8.0)
-                    + x[bs + j + 3] * ((bv1_1 >> 4) as f32 - 8.0);
-                j += 4;
-            }
             while j < len {
-                let bv = p0[bo + j / 2];
-                let q = if j % 2 == 0 { bv & 0xF } else { bv >> 4 };
-                bd0 += x[bs + j] * (q as f32 - 8.0);
-                let bv = p1[bo + j / 2];
-                let q = if j % 2 == 0 { bv & 0xF } else { bv >> 4 };
-                bd1 += x[bs + j] * (q as f32 - 8.0);
+                let idx = if j < 16 { j } else { j - 16 };
+                let bv0 = p0[bo + idx];
+                let bv1 = p1[bo + idx];
+                let q0 = if j < 16 { bv0 & 0x0F } else { bv0 >> 4 };
+                let q1 = if j < 16 { bv1 & 0x0F } else { bv1 >> 4 };
+                let xv = x[bs + j];
+                bd0 += xv * (q0 as f32 - 8.0);
+                bd1 += xv * (q1 as f32 - 8.0);
                 j += 1;
             }
             if del0 != 0.0 {
@@ -510,7 +568,7 @@ pub mod kernels {
         }
         let k = k as usize;
         let bpr = ((k + 31) / 32) as usize;
-        let bytes_per_row = k / 2;
+        let bytes_per_row = bpr * 16;
         let mut d0 = 0.0f32;
         let mut d1 = 0.0f32;
         let mut d2 = 0.0f32;
@@ -520,22 +578,24 @@ pub mod kernels {
             let del0 = s0[row * bpr + b];
             let del1 = s1[row * bpr + b];
             let del2 = s2[row * bpr + b];
-            let bo = row * bytes_per_row + bs / 2;
+            let bo = row * bytes_per_row + b * 16;
             let len = be - bs;
             let mut j = 0usize;
             let mut bd0 = 0.0;
             let mut bd1 = 0.0;
             let mut bd2 = 0.0;
             while j < len {
-                let bv0 = p0[bo + j / 2];
-                let bv1 = p1[bo + j / 2];
-                let bv2 = p2[bo + j / 2];
-                let q = if j % 2 == 0 { bv0 & 0xF } else { bv0 >> 4 };
-                bd0 += x[bs + j] * (q as f32 - 8.0);
-                let q = if j % 2 == 0 { bv1 & 0xF } else { bv1 >> 4 };
-                bd1 += x[bs + j] * (q as f32 - 8.0);
-                let q = if j % 2 == 0 { bv2 & 0xF } else { bv2 >> 4 };
-                bd2 += x[bs + j] * (q as f32 - 8.0);
+                let idx = if j < 16 { j } else { j - 16 };
+                let bv0 = p0[bo + idx];
+                let bv1 = p1[bo + idx];
+                let bv2 = p2[bo + idx];
+                let q0 = if j < 16 { bv0 & 0x0F } else { bv0 >> 4 };
+                let q1 = if j < 16 { bv1 & 0x0F } else { bv1 >> 4 };
+                let q2 = if j < 16 { bv2 & 0x0F } else { bv2 >> 4 };
+                let xv = x[bs + j];
+                bd0 += xv * (q0 as f32 - 8.0);
+                bd1 += xv * (q1 as f32 - 8.0);
+                bd2 += xv * (q2 as f32 - 8.0);
                 j += 1;
             }
             if del0 != 0.0 {
@@ -580,7 +640,7 @@ pub mod kernels {
         }
         let k = k as usize;
         let bpr = ((k + 31) / 32) as usize;
-        let bytes_per_row = k / 2;
+        let bytes_per_row = bpr * 16;
         let off_p0 = off_p0 as usize;
         let off_s0 = off_s0 as usize;
         let off_p1 = off_p1 as usize;
@@ -592,35 +652,21 @@ pub mod kernels {
             let be = (bs + 32).min(k);
             let del0 = s0[off_s0 + row * bpr + b];
             let del1 = s1[off_s1 + row * bpr + b];
-            let bo0 = off_p0 + row * bytes_per_row + bs / 2;
-            let bo1 = off_p1 + row * bytes_per_row + bs / 2;
+            let bo0 = off_p0 + row * bytes_per_row + b * 16;
+            let bo1 = off_p1 + row * bytes_per_row + b * 16;
             let len = be - bs;
-            let len4 = len - len % 4;
             let mut j = 0usize;
             let mut bd0 = 0.0;
             let mut bd1 = 0.0;
-            while j < len4 {
-                let bv0 = p0[bo0 + j / 2];
-                let bv1 = p0[bo0 + j / 2 + 1];
-                let bv0_1 = p1[bo1 + j / 2];
-                let bv1_1 = p1[bo1 + j / 2 + 1];
-                bd0 += x[bs + j] * ((bv0 & 0xF) as f32 - 8.0)
-                    + x[bs + j + 1] * ((bv0 >> 4) as f32 - 8.0)
-                    + x[bs + j + 2] * ((bv1 & 0xF) as f32 - 8.0)
-                    + x[bs + j + 3] * ((bv1 >> 4) as f32 - 8.0);
-                bd1 += x[bs + j] * ((bv0_1 & 0xF) as f32 - 8.0)
-                    + x[bs + j + 1] * ((bv0_1 >> 4) as f32 - 8.0)
-                    + x[bs + j + 2] * ((bv1_1 & 0xF) as f32 - 8.0)
-                    + x[bs + j + 3] * ((bv1_1 >> 4) as f32 - 8.0);
-                j += 4;
-            }
             while j < len {
-                let bv = p0[bo0 + j / 2];
-                let q = if j % 2 == 0 { bv & 0xF } else { bv >> 4 };
-                bd0 += x[bs + j] * (q as f32 - 8.0);
-                let bv = p1[bo1 + j / 2];
-                let q = if j % 2 == 0 { bv & 0xF } else { bv >> 4 };
-                bd1 += x[bs + j] * (q as f32 - 8.0);
+                let idx = if j < 16 { j } else { j - 16 };
+                let bv0 = p0[bo0 + idx];
+                let bv1 = p1[bo1 + idx];
+                let q0 = if j < 16 { bv0 & 0x0F } else { bv0 >> 4 };
+                let q1 = if j < 16 { bv1 & 0x0F } else { bv1 >> 4 };
+                let xv = x[bs + j];
+                bd0 += xv * (q0 as f32 - 8.0);
+                bd1 += xv * (q1 as f32 - 8.0);
                 j += 1;
             }
             if del0 != 0.0 {

@@ -32,6 +32,7 @@ fn gemv_quant(
 ) -> Result<()> {
     match qt {
         QuantType::Q4_0 => cu(m.gemv_q4(s, cfg, x, packed, scales, y, k)),
+        QuantType::Q8_0 => cu(m.gemv_q8(s, cfg, x, packed, scales, y, k)),
         QuantType::Q2S => cu(m.gemv_q2(s, cfg, x, packed, scales, y, k)),
         QuantType::T1S => cu(m.gemv_t1(s, cfg, x, packed, scales, y, k)),
     }
@@ -53,6 +54,9 @@ fn gemv_quant_off(
     match qt {
         QuantType::Q4_0 => {
             cu(m.gemv_q4_off(s, cfg, x, packed, scales, y, k, packed_off, scales_off))
+        }
+        QuantType::Q8_0 => {
+            cu(m.gemv_q8_off(s, cfg, x, packed, scales, y, k, packed_off, scales_off))
         }
         QuantType::Q2S => {
             cu(m.gemv_q2_off(s, cfg, x, packed, scales, y, k, packed_off, scales_off))
@@ -234,18 +238,23 @@ impl GpuOlmoeModel {
             down_q_scales: Vec<u16>,
         }
 
-        let cache_file = qcache::cache_path(&model.model_dir, &format!("{:?}", qt).to_lowercase());
+        let cache_suffix = match qt {
+            QuantType::Q4_0 => "q4_0_llama".to_string(),
+            _ => format!("{:?}", qt).to_lowercase(),
+        };
+        let cache_file = qcache::cache_path(&model.model_dir, &cache_suffix);
         let layers: Vec<QLayer> = if cache_file.exists() {
             eprintln!("Loading from quantized cache: {}", cache_file.display());
-            let cached = qcache::read_cache(&cache_file)?;
+            let cache = qcache::QCacheReader::open(&cache_file)?;
             eprintln!(
                 "  {} layers from cache in {:.1}s",
-                cached.len(),
+                cache.num_layers(),
                 t0.elapsed().as_secs_f64()
             );
             // Upload cached layers directly to GPU
             let mut layers = Vec::new();
-            for (li, c) in cached.iter().enumerate() {
+            for li in 0..cache.num_layers() {
+                let c = cache.layer(li);
                 let l = &model.layers[li];
                 layers.push(QLayer {
                     an: cu(DeviceBuffer::from_host(&s, &l.attn_norm))?,
@@ -253,40 +262,40 @@ impl GpuOlmoeModel {
                     kn: cu(DeviceBuffer::from_host(&s, &l.attn.k_norm))?,
                     fn_: cu(DeviceBuffer::from_host(&s, &l.ffn_norm))?,
                     rt: cu(DeviceBuffer::from_host(&s, &l.router.w))?,
-                    qp_packed: cu(DeviceBuffer::from_host(&s, &c.qp_packed))?,
+                    qp_packed: cu(DeviceBuffer::from_host(&s, c.qp_packed))?,
                     qp_scales: cu(DeviceBuffer::from_host(
                         &s,
-                        qcache::bytes_to_f32_slice(&c.qp_scales),
+                        qcache::bytes_to_f32_slice(c.qp_scales),
                     ))?,
-                    kp_packed: cu(DeviceBuffer::from_host(&s, &c.kp_packed))?,
+                    kp_packed: cu(DeviceBuffer::from_host(&s, c.kp_packed))?,
                     kp_scales: cu(DeviceBuffer::from_host(
                         &s,
-                        qcache::bytes_to_f32_slice(&c.kp_scales),
+                        qcache::bytes_to_f32_slice(c.kp_scales),
                     ))?,
-                    vp_packed: cu(DeviceBuffer::from_host(&s, &c.vp_packed))?,
+                    vp_packed: cu(DeviceBuffer::from_host(&s, c.vp_packed))?,
                     vp_scales: cu(DeviceBuffer::from_host(
                         &s,
-                        qcache::bytes_to_f32_slice(&c.vp_scales),
+                        qcache::bytes_to_f32_slice(c.vp_scales),
                     ))?,
-                    op_packed: cu(DeviceBuffer::from_host(&s, &c.op_packed))?,
+                    op_packed: cu(DeviceBuffer::from_host(&s, c.op_packed))?,
                     op_scales: cu(DeviceBuffer::from_host(
                         &s,
-                        qcache::bytes_to_f32_slice(&c.op_scales),
+                        qcache::bytes_to_f32_slice(c.op_scales),
                     ))?,
-                    ex_gate_packed: cu(DeviceBuffer::from_host(&s, &c.gate_q_packed))?,
+                    ex_gate_packed: cu(DeviceBuffer::from_host(&s, c.gate_q_packed))?,
                     ex_gate_scales: cu(DeviceBuffer::from_host(
                         &s,
-                        qcache::bytes_to_f32_slice(&c.gate_q_scales),
+                        qcache::bytes_to_f32_slice(c.gate_q_scales),
                     ))?,
-                    ex_up_packed: cu(DeviceBuffer::from_host(&s, &c.up_q_packed))?,
+                    ex_up_packed: cu(DeviceBuffer::from_host(&s, c.up_q_packed))?,
                     ex_up_scales: cu(DeviceBuffer::from_host(
                         &s,
-                        qcache::bytes_to_f32_slice(&c.up_q_scales),
+                        qcache::bytes_to_f32_slice(c.up_q_scales),
                     ))?,
-                    ex_down_packed: cu(DeviceBuffer::from_host(&s, &c.down_q_packed))?,
+                    ex_down_packed: cu(DeviceBuffer::from_host(&s, c.down_q_packed))?,
                     ex_down_scales: cu(DeviceBuffer::from_host(
                         &s,
-                        qcache::bytes_to_f32_slice(&c.down_q_scales),
+                        qcache::bytes_to_f32_slice(c.down_q_scales),
                     ))?,
                 });
             }
@@ -564,10 +573,20 @@ impl GpuOlmoeModel {
         let mid = self.mid;
         let (gate_bytes_per_exp, gate_scales_per_exp, down_bytes_per_exp, down_scales_per_exp) =
             match self.qt {
-                QuantType::Q4_0 => (
-                    mid * d / 2,
+                QuantType::Q4_0 => {
+                    let gate_bytes_per_row = d.div_ceil(32) * 16;
+                    let down_bytes_per_row = mid.div_ceil(32) * 16;
+                    (
+                        mid * gate_bytes_per_row,
+                        mid * d.div_ceil(32),
+                        d * down_bytes_per_row,
+                        d * mid.div_ceil(32),
+                    )
+                }
+                QuantType::Q8_0 => (
+                    mid * d, // 1 byte per value
                     mid * d.div_ceil(32),
-                    d * mid / 2,
+                    d * mid,
                     d * mid.div_ceil(32),
                 ),
                 QuantType::Q2S => (
@@ -872,14 +891,16 @@ impl GpuOlmoeModel {
             d as u32,
         ))?;
         let result = cu(logits.to_host_vec(s));
-        if let Ok(ref top) = result {
-            let mut top5: Vec<(usize, f32)> = top.iter().copied().enumerate().collect();
-            top5.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-            top5.truncate(8);
-            eprintln!(
-                "GPU top8 ids: {:?}",
-                top5.iter().map(|(i, _)| i).collect::<Vec<_>>()
-            );
+        if std::env::var_os("FERRULE_DEBUG_TOPK").is_some() {
+            if let Ok(ref top) = result {
+                let mut top5: Vec<(usize, f32)> = top.iter().copied().enumerate().collect();
+                top5.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                top5.truncate(8);
+                eprintln!(
+                    "GPU top8 ids: {:?}",
+                    top5.iter().map(|(i, _)| i).collect::<Vec<_>>()
+                );
+            }
         }
         result
     }

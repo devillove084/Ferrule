@@ -1,5 +1,7 @@
 //! Quantized weight cache — serialise/deserialise Q4_0 weights to disk.
 //! Format: magic "FERRULEQ" + layer count + per-layer size-prefixed blobs.
+//!
+//! Writing uses QCacheData (owned Vecs). Reading uses QCacheReader (mmap, zero-copy).
 
 use ferrule_core::{Error, Result};
 use ferrule_quant::f16_to_f32;
@@ -24,7 +26,7 @@ fn write_buf(buf: &mut Vec<u8>, data: &[u8]) {
     write_u64(buf, data.len() as u64);
     buf.extend_from_slice(data);
 }
-pub fn read_buf_bytes<'a>(data: &'a [u8], pos: &mut usize) -> &'a [u8] {
+pub fn read_buf_slice<'a>(data: &'a [u8], pos: &mut usize) -> &'a [u8] {
     let len = read_u64(data, pos) as usize;
     let slice = &data[*pos..*pos + len];
     *pos += len;
@@ -40,7 +42,8 @@ fn f16scales_to_bytes(raw: &[u16]) -> Vec<u8> {
     unsafe { std::slice::from_raw_parts(f32s.as_ptr() as *const u8, f32s.len() * 4).to_vec() }
 }
 
-/// Quantized layer data suitable for caching.
+// ── Owned quantized layer data (for writing) ──────────────────────────
+
 pub struct QCacheData {
     pub qp_packed: Vec<u8>,
     pub qp_scales: Vec<u8>,
@@ -107,27 +110,94 @@ impl QCacheData {
         write_buf(&mut buf, &self.down_q_scales);
         buf
     }
+}
 
-    pub fn deserialize_layer(data: &[u8]) -> Self {
+// ── Zero-copy reader (mmap → slices → GPU, no intermediate allocs) ────
+
+/// Holds an mmap'd cache file and provides zero-copy layer access.
+pub struct QCacheReader {
+    _mmap: memmap2::Mmap,
+    num_layers: usize,
+    /// Byte positions of each layer's blob within the mmap.
+    layer_offsets: Vec<(usize, usize)>, // (start, end) in mmap bytes
+}
+
+impl QCacheReader {
+    pub fn open(path: &Path) -> Result<Self> {
+        let file =
+            std::fs::File::open(path).map_err(|e| Error::Internal(format!("cache open: {e}")))?;
+        let mmap = unsafe {
+            memmap2::MmapOptions::new()
+                .map(&file)
+                .map_err(|e| Error::Internal(format!("cache mmap: {e}")))?
+        };
+        let data: &[u8] = &mmap;
+        if data.len() < 8 || &data[..8] != CACHE_MAGIC {
+            return Err(Error::Internal("invalid cache magic".into()));
+        }
+        let mut pos = 8usize;
+        let num_layers = read_u64(data, &mut pos) as usize;
+        let mut layer_offsets = Vec::with_capacity(num_layers);
+        for _ in 0..num_layers {
+            let blob_len = read_u64(data, &mut pos) as usize;
+            layer_offsets.push((pos, pos + blob_len));
+            pos += blob_len;
+        }
+        Ok(Self {
+            _mmap: mmap,
+            num_layers,
+            layer_offsets,
+        })
+    }
+
+    pub fn num_layers(&self) -> usize {
+        self.num_layers
+    }
+
+    /// Get zero-copy slices for a layer. All slices point into the mmap.
+    pub fn layer(&self, li: usize) -> QCacheSlice<'_> {
+        let (start, _end) = self.layer_offsets[li];
+        let data = &self._mmap[start..];
         let mut pos = 0usize;
-        Self {
-            qp_packed: read_buf_bytes(data, &mut pos).to_vec(),
-            qp_scales: read_buf_bytes(data, &mut pos).to_vec(),
-            kp_packed: read_buf_bytes(data, &mut pos).to_vec(),
-            kp_scales: read_buf_bytes(data, &mut pos).to_vec(),
-            vp_packed: read_buf_bytes(data, &mut pos).to_vec(),
-            vp_scales: read_buf_bytes(data, &mut pos).to_vec(),
-            op_packed: read_buf_bytes(data, &mut pos).to_vec(),
-            op_scales: read_buf_bytes(data, &mut pos).to_vec(),
-            gate_q_packed: read_buf_bytes(data, &mut pos).to_vec(),
-            gate_q_scales: read_buf_bytes(data, &mut pos).to_vec(),
-            up_q_packed: read_buf_bytes(data, &mut pos).to_vec(),
-            up_q_scales: read_buf_bytes(data, &mut pos).to_vec(),
-            down_q_packed: read_buf_bytes(data, &mut pos).to_vec(),
-            down_q_scales: read_buf_bytes(data, &mut pos).to_vec(),
+        QCacheSlice {
+            qp_packed: read_buf_slice(data, &mut pos),
+            qp_scales: read_buf_slice(data, &mut pos),
+            kp_packed: read_buf_slice(data, &mut pos),
+            kp_scales: read_buf_slice(data, &mut pos),
+            vp_packed: read_buf_slice(data, &mut pos),
+            vp_scales: read_buf_slice(data, &mut pos),
+            op_packed: read_buf_slice(data, &mut pos),
+            op_scales: read_buf_slice(data, &mut pos),
+            gate_q_packed: read_buf_slice(data, &mut pos),
+            gate_q_scales: read_buf_slice(data, &mut pos),
+            up_q_packed: read_buf_slice(data, &mut pos),
+            up_q_scales: read_buf_slice(data, &mut pos),
+            down_q_packed: read_buf_slice(data, &mut pos),
+            down_q_scales: read_buf_slice(data, &mut pos),
         }
     }
 }
+
+/// Zero-copy view of a single layer's quantized weights.
+/// All slices borrow from the mmap'd cache file.
+pub struct QCacheSlice<'a> {
+    pub qp_packed: &'a [u8],
+    pub qp_scales: &'a [u8],
+    pub kp_packed: &'a [u8],
+    pub kp_scales: &'a [u8],
+    pub vp_packed: &'a [u8],
+    pub vp_scales: &'a [u8],
+    pub op_packed: &'a [u8],
+    pub op_scales: &'a [u8],
+    pub gate_q_packed: &'a [u8],
+    pub gate_q_scales: &'a [u8],
+    pub up_q_packed: &'a [u8],
+    pub up_q_scales: &'a [u8],
+    pub down_q_packed: &'a [u8],
+    pub down_q_scales: &'a [u8],
+}
+
+// ── Cache file I/O ─────────────────────────────────────────────────────
 
 /// Write quantized layers to cache file.
 pub fn write_cache(path: &Path, layers: &[QCacheData]) -> Result<()> {
@@ -147,22 +217,4 @@ pub fn write_cache(path: &Path, layers: &[QCacheData]) -> Result<()> {
             .map_err(|e| Error::Internal(format!("cache write: {e}")))?;
     }
     Ok(())
-}
-
-/// Read quantized layers from cache file.
-pub fn read_cache(path: &Path) -> Result<Vec<QCacheData>> {
-    let data = std::fs::read(path).map_err(|e| Error::Internal(format!("cache read: {e}")))?;
-    if data.len() < 8 || &data[..8] != CACHE_MAGIC {
-        return Err(Error::Internal("invalid cache magic".into()));
-    }
-    let mut pos = 8usize;
-    let num = read_u64(&data, &mut pos) as usize;
-    let mut layers = Vec::with_capacity(num);
-    for _ in 0..num {
-        let blob_len = read_u64(&data, &mut pos) as usize;
-        let blob = &data[pos..pos + blob_len];
-        pos += blob_len;
-        layers.push(QCacheData::deserialize_layer(blob));
-    }
-    Ok(layers)
 }

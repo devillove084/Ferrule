@@ -17,6 +17,8 @@ ferrule-quant = { path = "../ferrule-quant" }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 rayon = "1.10"
+rustyline = "15"
+console = "0.15"
 cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git", optional = true }
 
 [features]

@@ -63,8 +63,10 @@ fn f32_to_f16(v: f32) -> u16 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuantType {
-    /// 4-bit symmetric, block 32, low nibble first
+    /// 4-bit symmetric, block 32, llama.cpp Q4_0 half-block layout
     Q4_0,
+    /// 8-bit symmetric, block 32
+    Q8_0,
     /// 2-bit symmetric, block 64
     Q2S,
     /// Ternary {-1,0,1}, block 64, add/sub in kernel
@@ -74,7 +76,7 @@ pub enum QuantType {
 impl QuantType {
     pub fn block_size(self) -> usize {
         match self {
-            Self::Q4_0 => 32,
+            Self::Q4_0 | Self::Q8_0 => 32,
             Self::Q2S | Self::T1S => 64,
         }
     }
@@ -82,6 +84,7 @@ impl QuantType {
     pub fn bits(self) -> u32 {
         match self {
             Self::Q4_0 => 4,
+            Self::Q8_0 => 8,
             Self::Q2S | Self::T1S => 2,
         }
     }
@@ -106,6 +109,7 @@ impl QMatrix {
     pub fn quantize(w: &[f32], out_f: usize, in_f: usize, qtype: QuantType) -> Self {
         match qtype {
             QuantType::Q4_0 => Self::quantize_q4_0(w, out_f, in_f),
+            QuantType::Q8_0 => Self::quantize_q8_0(w, out_f, in_f),
             QuantType::Q2S => Self::quantize_q2_s(w, out_f, in_f),
             QuantType::T1S => Self::quantize_t1_s(w, out_f, in_f),
         }
@@ -124,44 +128,56 @@ impl QMatrix {
         self.scales.iter().map(|&b| f16_to_f32(b)).collect()
     }
 
-    // ── Q4_0 ────────────────────────────────────────────────────────
+    // ── Q4_0 (llama.cpp compatible) ──────────────────────────────────
 
     fn quantize_q4_0(w: &[f32], out_f: usize, in_f: usize) -> Self {
         let bs = QuantType::Q4_0.block_size();
         let bpr = in_f.div_ceil(bs);
         let mut scales = Vec::with_capacity(out_f * bpr);
-        let mut packed = vec![0u8; out_f * in_f / 2];
+        // llama.cpp Q4_0 stores each 32-value block as 16 bytes:
+        // byte j: low nibble = value j, high nibble = value j + 16.
+        let bytes_per_row = bpr * 16;
+        let mut packed = vec![0u8; out_f * bytes_per_row];
 
         for row in 0..out_f {
             let row_off = row * in_f;
+            let row_pack_off = row * bytes_per_row;
             for b in 0..bpr {
                 let start = b * bs;
                 let end = (start + bs).min(in_f);
+                let block_pack_off = row_pack_off + b * 16;
 
-                let mut max_abs = 0.0f32;
+                // Find signed max (value at position of max absolute), matching llama.cpp.
+                let mut amax = 0.0f32;
+                let mut max_val = 0.0f32;
                 for j in start..end {
-                    let abs = w[row_off + j].abs();
-                    if abs > max_abs {
-                        max_abs = abs;
+                    let v = w[row_off + j];
+                    let abs = v.abs();
+                    if abs > amax {
+                        amax = abs;
+                        max_val = v;
                     }
                 }
-                let delta = max_abs / 7.0f32;
-                scales.push(f32_to_f16(delta));
+                // llama.cpp: d = max / -8, id = 1/d.
+                let d = max_val / -8.0f32;
+                let id = if d != 0.0 { 1.0 / d } else { 0.0 };
+                scales.push(f32_to_f16(d));
 
                 for j in start..end {
                     let val = w[row_off + j];
-                    let q_f = if delta > 0.0 {
-                        (val / delta + 8.0).round().clamp(0.0, 15.0)
+                    // llama.cpp: (int8_t)(x * id + 8.5), clamped to [0,15].
+                    let q = if d != 0.0 {
+                        let v = (val * id + 8.5) as i32;
+                        v.clamp(0, 15) as u8
                     } else {
-                        8.0
+                        8
                     };
-                    let q = q_f as u8;
                     let local = j - start;
-                    let byte_idx = (row * in_f + start) / 2 + local / 2;
-                    if local % 2 == 0 {
-                        packed[byte_idx] = q & 0xF;
+                    let byte_idx = block_pack_off + if local < 16 { local } else { local - 16 };
+                    if local < 16 {
+                        packed[byte_idx] = (packed[byte_idx] & 0xF0) | (q & 0x0F);
                     } else {
-                        packed[byte_idx] |= q << 4;
+                        packed[byte_idx] = (packed[byte_idx] & 0x0F) | ((q & 0x0F) << 4);
                     }
                 }
             }
@@ -284,5 +300,93 @@ impl QMatrix {
             out_f,
             in_f,
         }
+    }
+
+    // ── Q8_0 ────────────────────────────────────────────────────────
+
+    fn quantize_q8_0(w: &[f32], out_f: usize, in_f: usize) -> Self {
+        let bs = QuantType::Q8_0.block_size(); // 32
+        let bpr = in_f.div_ceil(bs);
+        let mut scales = Vec::with_capacity(out_f * bpr);
+        // 1 byte per value → out_f * in_f bytes
+        let mut packed = vec![0u8; out_f * in_f];
+
+        for row in 0..out_f {
+            let row_off = row * in_f;
+            for b in 0..bpr {
+                let start = b * bs;
+                let end = (start + bs).min(in_f);
+
+                let mut max_abs = 0.0f32;
+                for j in start..end {
+                    let abs = w[row_off + j].abs();
+                    if abs > max_abs {
+                        max_abs = abs;
+                    }
+                }
+                // Q8_0: symmetric, values mapped to [-127, 127]
+                let delta = max_abs / 127.0f32;
+                scales.push(f32_to_f16(delta));
+
+                for j in start..end {
+                    let val = w[row_off + j];
+                    let q_f = if delta > 0.0 {
+                        (val / delta).round().clamp(-127.0, 127.0)
+                    } else {
+                        0.0
+                    };
+                    let q = q_f as i8;
+                    packed[row * in_f + j] = q as u8;
+                }
+            }
+        }
+        Self {
+            quant: QuantType::Q8_0,
+            packed,
+            scales,
+            out_f,
+            in_f,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn llama_q4_0_quant(v: f32, d: f32) -> u8 {
+        if d == 0.0 {
+            8
+        } else {
+            ((v * (1.0 / d) + 8.5) as i32).clamp(0, 15) as u8
+        }
+    }
+
+    #[test]
+    fn q4_0_uses_llama_half_block_layout() {
+        let w: Vec<f32> = (-16..16).map(|v| v as f32).collect();
+        let q = QMatrix::quantize(&w, 1, 32, QuantType::Q4_0);
+
+        assert_eq!(q.packed.len(), 16);
+        assert_eq!(q.scales.len(), 1);
+        let d = f16_to_f32(q.scales[0]);
+        assert_eq!(d, 2.0);
+
+        for j in 0..16 {
+            let lo = q.packed[j] & 0x0F;
+            let hi = q.packed[j] >> 4;
+            assert_eq!(lo, llama_q4_0_quant(w[j], d), "low nibble {j}");
+            assert_eq!(hi, llama_q4_0_quant(w[j + 16], d), "high nibble {j}");
+        }
+    }
+
+    #[test]
+    fn q4_0_pads_rows_by_block_storage() {
+        let w = vec![0.0f32; 2 * 33];
+        let q = QMatrix::quantize(&w, 2, 33, QuantType::Q4_0);
+
+        assert_eq!(q.blocks_per_row(), 2);
+        assert_eq!(q.packed.len(), 2 * 2 * 16);
+        assert_eq!(q.scales.len(), 2 * 2);
     }
 }

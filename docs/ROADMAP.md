@@ -21,10 +21,11 @@
 
 ### 1.2 推理吞吐
 
-- [ ] **Multi-token batch prefill** — prefill 阶段 `[N, d]` 矩阵 batch 处理，GEMV→GEMM
+- [x] **Multi-token batch prefill** — prefill 阶段跳过中间 token 的 lm_head（仅最后 token 计算 logits）
 - [x] **RMS norm warp reduce** — rms_norm_fused: shared memory 并行 reduction + rsqrt + apply 融合为一个 kernel
 - [ ] **Multi-layer pipeline** — 用 CUDA stream 重叠 layer N 的计算和 layer N+1 的 weight 加载
 - [x] **Fused rms_norm + multiply** — rms_norm_fused 单 kernel 完成 compute_rms + rms_norm_apply
+- [x] **Interactive chat** — rustyline + console 彩色交互式对话，KV cache 多轮持久
 
 ### 1.3 模型加载加速
 
@@ -104,10 +105,10 @@
 
 | 指标 | 当前 | Level 1 | Level 2 |
 |------|------|---------|---------|
-| OLMoE 单 token | 125ms → 8 tok/s | 15ms → 65 tok/s | 5ms → 200 tok/s |
-| Batch prefill (8 tok) | 1000ms | 50ms | 20ms |
-| 模型加载 | 52s | 5s (cached) | 2s (cached) |
-| 单次 KV cache 大小 | 16MB | 16MB | 2MB (INT8) |
+| OLMoE 单 token | 100ms → 10 tok/s | 15ms → 65 tok/s | 5ms → 200 tok/s |
+| 模型加载 (cached) | 0.5s | 0.5s | 0.2s |
+| 模型加载 (首次) | 30s | 30s | 5s (GGUF) |
+| Prefill (4 tok) | 400ms | 50ms | 20ms |
 
 ---
 

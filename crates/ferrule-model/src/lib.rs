@@ -20,10 +20,20 @@ pub struct OlmoeConfig {
     pub kv_dim: usize,
     pub rope_theta: f32,
     pub rms_norm_eps: f32,
+    pub eos_token_id: Option<u32>,
+    pub pad_token_id: Option<u32>,
 }
 
 impl OlmoeConfig {
     pub fn from_json(json: &serde_json::Value) -> Result<Self> {
+        fn token_id(v: Option<&serde_json::Value>) -> Option<u32> {
+            match v? {
+                serde_json::Value::Number(n) => n.as_u64().map(|id| id as u32),
+                serde_json::Value::Array(ids) => ids.first()?.as_u64().map(|id| id as u32),
+                _ => None,
+            }
+        }
+
         let h = json["hidden_size"].as_u64().unwrap_or(2048) as usize;
         let nh = json["num_attention_heads"].as_u64().unwrap_or(16) as usize;
         // Try multiple config key names for num KV heads
@@ -50,6 +60,8 @@ impl OlmoeConfig {
                 .get("rms_norm_eps")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(1e-6) as f32,
+            eos_token_id: token_id(json.get("eos_token_id")),
+            pad_token_id: token_id(json.get("pad_token_id")),
         })
     }
 
@@ -256,12 +268,168 @@ impl OlmoeModel {
         })
     }
 
+    /// Lightweight load: only essential small tensors (norms, embed, router).
+    /// Skips all large attention projection and expert FFN weights.
+    /// Used when QCache provides the quantized weights (~1s vs 30s full load).
+    pub fn load_lightweight(model_dir: &Path) -> Result<Self> {
+        let text = std::fs::read_to_string(model_dir.join("config.json"))
+            .map_err(|e| Error::Model(format!("config: {e}")))?;
+        let cj: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| Error::Model(format!("json: {e}")))?;
+        let config = OlmoeConfig::from_json(&cj)?;
+        let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json"))
+            .map_err(|e| Error::Model(format!("tok: {e}")))?;
+
+        // Collect names of tensors we actually need
+        let mut needed: Vec<String> = vec![
+            "model.embed_tokens.weight".into(),
+            "lm_head.weight".into(),
+            "model.norm.weight".into(),
+        ];
+        for i in 0..config.num_layers {
+            let p = format!("model.layers.{i}");
+            needed.push(format!("{p}.input_layernorm.weight"));
+            needed.push(format!("{p}.self_attn.q_norm.weight"));
+            needed.push(format!("{p}.self_attn.k_norm.weight"));
+            needed.push(format!("{p}.post_attention_layernorm.weight"));
+            needed.push(format!("{p}.mlp.gate.weight"));
+        }
+        let needed_set: std::collections::HashSet<_> = needed.iter().collect();
+
+        let mut sf_files: Vec<_> = std::fs::read_dir(model_dir)?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().map(|e| e == "safetensors").unwrap_or(false))
+            .collect();
+        sf_files.sort();
+        eprintln!(
+            "Loading {} shards (lightweight: {} tensors)...",
+            sf_files.len(),
+            needed.len()
+        );
+        let t0 = std::time::Instant::now();
+
+        let shards: Vec<_> = sf_files
+            .iter()
+            .map(|p| SafeTensorsFile::open(p))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Only load the needed tensors
+        struct TensorRef<'a> {
+            shard: &'a SafeTensorsFile,
+            info: &'a ferrule_gguf::safetensors::SafeTensorInfo,
+        }
+        let mut to_load: Vec<TensorRef> = Vec::new();
+        for sf in &shards {
+            for t in &sf.tensors {
+                if needed_set.contains(&t.name) {
+                    to_load.push(TensorRef { shard: sf, info: t });
+                }
+            }
+        }
+
+        let converted: Vec<(String, Vec<f32>, Vec<usize>)> = to_load
+            .par_iter()
+            .filter_map(|tr| {
+                tr.shard
+                    .tensor_f32(tr.info)
+                    .ok()
+                    .map(|d| (tr.info.name.clone(), d, tr.info.shape.clone()))
+            })
+            .collect();
+
+        let mut tmap = HashMap::with_capacity(converted.len());
+        for (name, data, shape) in converted {
+            tmap.insert(name, (data, shape));
+        }
+        eprintln!(
+            "  {} tensors in {:.1}s",
+            tmap.len(),
+            t0.elapsed().as_secs_f64()
+        );
+
+        let d = config.hidden_size;
+        let embed = get(&mut tmap, "model.embed_tokens.weight");
+        let lm_head = get(&mut tmap, "lm_head.weight");
+        let lm_head = if lm_head.is_empty() {
+            embed.clone()
+        } else {
+            lm_head
+        };
+        let final_norm = get(&mut tmap, "model.norm.weight");
+        let mut layers = Vec::new();
+        for i in 0..config.num_layers {
+            let p = format!("model.layers.{i}");
+            let attn_norm = get(&mut tmap, &format!("{p}.input_layernorm.weight"));
+            let ffn_norm = get(&mut tmap, &format!("{p}.post_attention_layernorm.weight"));
+            // Attention projection weights are NOT loaded — QCache provides them
+            let attn = AttnWeights {
+                q_proj: LinearWeight {
+                    w: Vec::new(),
+                    out_f: d,
+                    in_f: d,
+                },
+                k_proj: LinearWeight {
+                    w: Vec::new(),
+                    out_f: config.kv_dim,
+                    in_f: d,
+                },
+                v_proj: LinearWeight {
+                    w: Vec::new(),
+                    out_f: config.kv_dim,
+                    in_f: d,
+                },
+                o_proj: LinearWeight {
+                    w: Vec::new(),
+                    out_f: d,
+                    in_f: d,
+                },
+                q_norm: get(&mut tmap, &format!("{p}.self_attn.q_norm.weight")),
+                k_norm: get(&mut tmap, &format!("{p}.self_attn.k_norm.weight")),
+            };
+            let router = get_lin(
+                &mut tmap,
+                &format!("{p}.mlp.gate.weight"),
+                config.num_experts,
+                d,
+            );
+            // Expert weights are NOT loaded — QCache provides them
+            let experts = Vec::new();
+            layers.push(LayerWeights {
+                attn_norm,
+                attn,
+                ffn_norm,
+                router,
+                experts,
+            });
+        }
+        eprintln!(
+            "  {} layers in {:.1}s",
+            layers.len(),
+            t0.elapsed().as_secs_f64()
+        );
+        Ok(Self {
+            config,
+            embed,
+            lm_head,
+            final_norm,
+            layers,
+            model_dir: model_dir.to_path_buf(),
+            tokenizer,
+        })
+    }
+
     pub fn encode(&self, text: &str) -> Result<Vec<u32>> {
         self.tokenizer
             .encode(text, false)
             .map(|e| e.get_ids().to_vec())
             .map_err(|e| Error::Model(format!("encode: {e}")))
     }
+
+    pub fn eos_token_id(&self) -> Option<u32> {
+        self.config.eos_token_id
+    }
+
     pub fn decode(&self, ids: &[u32]) -> Result<String> {
         self.tokenizer
             .decode(ids, true)
@@ -372,13 +540,15 @@ impl OlmoeModel {
             logits[j] = row.iter().zip(hidden.iter()).map(|(r, h)| r * h).sum();
         }
         // Debug: print top-8 token ids
-        let mut top5: Vec<(usize, f32)> = logits.iter().copied().enumerate().collect();
-        top5.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-        top5.truncate(8);
-        eprintln!(
-            "CPU top8 ids: {:?}",
-            top5.iter().map(|(i, _)| i).collect::<Vec<_>>()
-        );
+        if std::env::var_os("FERRULE_DEBUG_TOPK").is_some() {
+            let mut top5: Vec<(usize, f32)> = logits.iter().copied().enumerate().collect();
+            top5.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+            top5.truncate(8);
+            eprintln!(
+                "CPU top8 ids: {:?}",
+                top5.iter().map(|(i, _)| i).collect::<Vec<_>>()
+            );
+        }
 
         Ok((hidden, logits))
     }
