@@ -1,3 +1,5 @@
 [toolchain]
-channel = "stable"
-components = ["rustfmt", "clippy"]
+# Pinned to match cuda_oxide's rustc-codegen-cuda requirement.
+# All crates (CPU + CUDA) compile with this nightly.
+channel = "nightly-2026-04-03"
+components = ["rustfmt", "clippy", "rust-src", "rustc-dev"]

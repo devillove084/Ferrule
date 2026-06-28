@@ -1,0 +1,9 @@
+# When building with --features cuda, use the CUDA codegen backend
+# to compile #[kernel] functions to PTX.
+[target.'cfg(all())']
+rustflags = []
+
+[env]
+# Default: no GPU backend (fast CPU builds)
+# Uncomment for GPU builds:
+# FERRULE_CUDA_BACKEND = "/home/blade/.cargo/cuda-oxide/librustc_codegen_cuda.so"

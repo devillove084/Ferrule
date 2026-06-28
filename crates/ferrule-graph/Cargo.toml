@@ -1,0 +1,25 @@
+[package]
+name = "ferrule-graph"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[features]
+default = ["simd"]
+simd = []
+cuda = ["dep:cuda-core", "dep:cuda-device", "dep:cuda-host", "dep:cuda-bindings"]
+
+[dependencies]
+ferrule-core = { path = "../ferrule-core" }
+ferrule-gguf = { path = "../ferrule-gguf" }
+rayon = "1.10"
+half = "2"
+tracing = "0.1"
+thiserror = "2"
+cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git", optional = true }
+cuda-device = { git = "https://github.com/NVlabs/cuda-oxide.git", optional = true }
+cuda-host = { git = "https://github.com/NVlabs/cuda-oxide.git", optional = true }
+cuda-bindings = { git = "https://github.com/NVlabs/cuda-oxide.git", optional = true }
+
+[lints]
+workspace = true

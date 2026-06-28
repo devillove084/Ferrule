@@ -1,0 +1,16 @@
+[package]
+name = "ferrule-gguf"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+ferrule-core = { path = "../ferrule-core" }
+memmap2 = "0.9"
+byteorder = "1"
+half = "2"
+rayon = "1.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+thiserror = "2"

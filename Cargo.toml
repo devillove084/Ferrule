@@ -1,13 +1,29 @@
 [workspace]
 members = [
   "crates/ferrule-core",
-  "crates/ferrule-candle",
-  "crates/ferrule-runtime",
-  "crates/ferrule-app",
+  "crates/ferrule-gguf",
+  "crates/ferrule-graph",
+  "crates/ferrule-model",
+  "crates/ferrule-quant",
+  "crates/ferrule-cuda",
+  "crates/ferrule-cli",
 ]
 resolver = "2"
 
 [workspace.package]
-edition = "2024"
-version = "0.1.0"
+edition = "2021"
+version = "0.2.0"
 license = "Apache-2.0"
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+non_camel_case_types = "warn"
+dead_code = "warn"
+unused_variables = "warn"
+unused_imports = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "allow"
+nursery = "allow"
+cargo = "warn"

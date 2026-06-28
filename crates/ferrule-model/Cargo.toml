@@ -1,0 +1,18 @@
+[package]
+name = "ferrule-model"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+ferrule-core = { path = "../ferrule-core" }
+ferrule-gguf = { path = "../ferrule-gguf" }
+ferrule-graph = { path = "../ferrule-graph" }
+tracing = "0.1"
+thiserror = "2"
+tokenizers = "0.21"
+serde_json = "1"
+rayon = "1.10"
+
+[lints]
+workspace = true

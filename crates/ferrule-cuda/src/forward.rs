@@ -181,7 +181,7 @@ struct Scratch {
     h_tmp1: DeviceBuffer<f32>,     // d
     h_tmp2: DeviceBuffer<f32>,     // d (zero-filled, used as zero operand)
     ffn_in: DeviceBuffer<f32>,     // d
-    router_out: DeviceBuffer<f32>, // ne
+    router_out: DeviceBuffer<f32>, // ne (also used as temp for GPU top-k)
     fo: DeviceBuffer<f32>,         // d
     gb: DeviceBuffer<f32>,         // mid
     ub: DeviceBuffer<f32>,         // mid
@@ -189,6 +189,8 @@ struct Scratch {
     db: DeviceBuffer<f32>,         // d
     rms_buf: DeviceBuffer<f32>,    // 1
     logits: DeviceBuffer<f32>,     // vocab
+    topk_idx: DeviceBuffer<f32>,   // na (top-k expert indices as f32, GPU-side)
+    topk_w: DeviceBuffer<f32>,     // na (top-k softmax weights)
 }
 
 impl GpuOlmoeModel {
@@ -233,7 +235,7 @@ impl GpuOlmoeModel {
         }
 
         let cache_file = qcache::cache_path(&model.model_dir, &format!("{:?}", qt).to_lowercase());
-        if cache_file.exists() {
+        let layers: Vec<QLayer> = if cache_file.exists() {
             eprintln!("Loading from quantized cache: {}", cache_file.display());
             let cached = qcache::read_cache(&cache_file)?;
             eprintln!(
@@ -288,106 +290,15 @@ impl GpuOlmoeModel {
                     ))?,
                 });
             }
-            eprintln!("  Done ({:.1}s total).", t0.elapsed().as_secs_f64());
-
-        // Free VMEM check
-        let mut free: usize = 0;
-        let mut total: usize = 0;
-        unsafe {
-            cuda_bindings::cuMemGetInfo_v2(&mut free, &mut total);
-        }
-        eprintln!(
-            "  GPU free: {:.1} MB / {:.1} MB",
-            free as f64 / 1e6,
-            total as f64 / 1e6
-        );
-
-        eprintln!("Allocating scratch buffers...");
-        let scratch = Scratch {
-            hidden: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            normed: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            q: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            k: cu(DeviceBuffer::<f32>::zeroed(&s, kv_dim))?,
-            v: cu(DeviceBuffer::<f32>::zeroed(&s, kv_dim))?,
-            q_tmp: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            k_tmp: cu(DeviceBuffer::<f32>::zeroed(&s, kv_dim))?,
-            ao: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            h_tmp1: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            h_tmp2: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            ffn_in: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            router_out: cu(DeviceBuffer::<f32>::zeroed(&s, ne))?,
-            fo: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            gb: cu(DeviceBuffer::<f32>::zeroed(&s, mid))?,
-            ub: cu(DeviceBuffer::<f32>::zeroed(&s, mid))?,
-            gb2: cu(DeviceBuffer::<f32>::zeroed(&s, mid))?,
-            db: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            rms_buf: cu(DeviceBuffer::<f32>::zeroed(&s, 1))?,
-            logits: cu(DeviceBuffer::<f32>::zeroed(&s, c.vocab_size))?,
-        };
-
-        let nh = c.num_heads;
-        let nkv = c.num_kv_heads;
-        let hd = d / nh;
-        let max_seq = 4096usize;
-        // Precompute RoPE cos/sin on CPU, upload to GPU
-        let mut cos_cpu = vec![0f32; max_seq * hd / 2];
-        let mut sin_cpu = vec![0f32; max_seq * hd / 2];
-        let theta = c.rope_theta;
-        for pos in 0..max_seq {
-            for i in 0..hd / 2 {
-                let freq = 1.0 / theta.powf(2.0 * i as f32 / hd as f32);
-                let angle = pos as f32 * freq;
-                cos_cpu[pos * hd / 2 + i] = angle.cos();
-                sin_cpu[pos * hd / 2 + i] = angle.sin();
-            }
-        }
-        let rope_cos = cu(DeviceBuffer::from_host(&s, &cos_cpu))?;
-        let rope_sin = cu(DeviceBuffer::from_host(&s, &sin_cpu))?;
-        let scores_buf = cu(DeviceBuffer::<f32>::zeroed(&s, nh * max_seq))?;
-        // KV cache: store kv_dim elements per position (not d)
-        let k_cache: Vec<_> = (0..c.num_layers)
-            .map(|_| cu(DeviceBuffer::<f32>::zeroed(&s, max_seq * kv_dim)))
-            .collect::<Result<_>>()?;
-        let v_cache: Vec<_> = (0..c.num_layers)
-            .map(|_| cu(DeviceBuffer::<f32>::zeroed(&s, max_seq * kv_dim)))
-            .collect::<Result<_>>()?;
-
-        return Ok(Self {
-            ctx,
-            s,
-            module,
-            emb,
-            lm_head,
-            final_norm,
-            layers,
-            d,
-            kv_dim,
-            ne,
-            na: c.num_experts_per_tok,
-            mid,
-            vocab: c.vocab_size,
-            eps: c.rms_norm_eps,
-            qt,
-            scratch,
-            nh,
-            nkv,
-            hd,
-            max_seq,
-            k_cache,
-            v_cache,
-            rope_cos,
-            rope_sin,
-            cur_seq: 0,
-            scores_buf,
-        })
-    }       }
-        eprintln!(
-            "Quantizing & uploading {} layers (pipelined)...",
-            model.layers.len()
-        );
-        let tq = std::time::Instant::now();
-        let (tx, rx) = std::sync::mpsc::sync_channel::<(usize, QData, QCacheData)>(2);
-        let layers: Vec<QLayer> =
+            layers
+        } else {
+            // ── Quantize weights + upload to GPU + write cache ──
+            eprintln!(
+                "Quantizing & uploading {} layers (pipelined)...",
+                model.layers.len()
+            );
+            let tq = std::time::Instant::now();
+            let (tx, rx) = std::sync::mpsc::sync_channel::<(usize, QData, QCacheData)>(2);
             std::thread::scope(|scope| -> ferrule_core::Result<Vec<QLayer>> {
                 // Spawn quantization thread (rayon-parallel across layers, streamed via channel)
                 scope.spawn(move || {
@@ -507,10 +418,12 @@ impl GpuOlmoeModel {
                     qcache::write_cache(&cache_file, &cache_layers)?;
                 }
                 Ok(layers)
-            })?;
+            })?
+        };
 
         eprintln!("  Done ({:.1}s total).", t0.elapsed().as_secs_f64());
 
+        // ── Common setup (GPU free check, scratch buffers, RoPE, KV cache) ──
         // Free VMEM check
         let mut free: usize = 0;
         let mut total: usize = 0;
@@ -544,6 +457,8 @@ impl GpuOlmoeModel {
             db: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
             rms_buf: cu(DeviceBuffer::<f32>::zeroed(&s, 1))?,
             logits: cu(DeviceBuffer::<f32>::zeroed(&s, c.vocab_size))?,
+            topk_idx: cu(DeviceBuffer::<f32>::zeroed(&s, c.num_experts_per_tok))?,
+            topk_w: cu(DeviceBuffer::<f32>::zeroed(&s, c.num_experts_per_tok))?,
         };
 
         let nh = c.num_heads;
@@ -601,6 +516,7 @@ impl GpuOlmoeModel {
             cur_seq: 0,
             scores_buf,
         })
+    }
 
     pub fn forward(&mut self, tid: u32) -> Result<Vec<f32>> {
         cu(self.ctx.bind_to_thread())?;
@@ -610,6 +526,12 @@ impl GpuOlmoeModel {
         let kv_dim = self.kv_dim;
         let nkv = self.nkv;
         let cfg = |n: usize| LaunchConfig::for_num_elems(n as u32);
+        // 1-block launch for fused reduce+apply kernels (max 1024 threads/block)
+        let cfg1 = |n: usize| LaunchConfig {
+            grid_dim: (1, 1, 1),
+            block_dim: (n.min(1024) as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
 
         let Scratch {
             hidden,
@@ -631,6 +553,8 @@ impl GpuOlmoeModel {
             db,
             rms_buf,
             logits,
+            topk_idx,
+            topk_w,
         } = &mut self.scratch;
 
         // ── Embedding lookup ──
@@ -663,8 +587,7 @@ impl GpuOlmoeModel {
         for (li, layer) in self.layers.iter().enumerate() {
             let qt = self.qt;
             // ── Attention norm ──
-            cu(m.compute_rms(s, cfg(1), hidden, rms_buf, d as u32, self.eps))?;
-            cu(m.rms_norm_apply(s, cfg(d), hidden, &layer.an, normed, rms_buf))?;
+            cu(m.rms_norm_fused(s, cfg1(d), hidden, &layer.an, normed, d as u32, self.eps))?;
 
             // ── Q/K/V projections (GQA: k/v have kv_dim outputs, q has d) ──
             if qt == QuantType::Q4_0 && kv_dim == d {
@@ -724,10 +647,16 @@ impl GpuOlmoeModel {
             }
 
             // ── Q/K head norms (GQA: k norm has kv_dim elements) ──
-            cu(m.compute_rms(s, cfg(1), q, rms_buf, d as u32, self.eps))?;
-            cu(m.rms_norm_apply(s, cfg(d), q, &layer.qn, q_tmp, rms_buf))?;
-            cu(m.compute_rms(s, cfg(1), k, rms_buf, kv_dim as u32, self.eps))?;
-            cu(m.rms_norm_apply(s, cfg(kv_dim), k, &layer.kn, k_tmp, rms_buf))?;
+            cu(m.rms_norm_fused(s, cfg1(d), q, &layer.qn, q_tmp, d as u32, self.eps))?;
+            cu(m.rms_norm_fused(
+                s,
+                cfg1(kv_dim),
+                k,
+                &layer.kn,
+                k_tmp,
+                kv_dim as u32,
+                self.eps,
+            ))?;
 
             // ── RoPE on GPU: q_tmp→q (nh heads), k_tmp→k (nkv heads) ──
             let pos = self.cur_seq;
@@ -815,26 +744,30 @@ impl GpuOlmoeModel {
             cu(m.add(s, cfg(d), h_tmp1, h_tmp2, hidden))?;
 
             // ── FFN norm ──
-            cu(m.compute_rms(s, cfg(1), hidden, rms_buf, d as u32, self.eps))?;
-            cu(m.rms_norm_apply(s, cfg(d), hidden, &layer.fn_, ffn_in, rms_buf))?;
+            cu(m.rms_norm_fused(s, cfg1(d), hidden, &layer.fn_, ffn_in, d as u32, self.eps))?;
 
-            // ── Router (f32, small) ──
+            // ── Router (f32, small) + GPU top-k ──
             cu(m.gemv_f32(s, cfg(self.ne), ffn_in, &layer.rt, router_out, d as u32))?;
-            let rl = cu(router_out.to_host_vec(s))?;
-
-            // ── Top-k expert selection (CPU) ──
-            let mut idx: Vec<(usize, f32)> = rl.iter().copied().enumerate().collect();
-            idx.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            idx.truncate(self.na);
-            let max_l = idx.iter().fold(f32::NEG_INFINITY, |a, (_, v)| a.max(*v));
-            let exps: Vec<f32> = idx.iter().map(|(_, v)| (v - max_l).exp()).collect();
-            let sum: f32 = exps.iter().sum();
+            // GPU-side top-k expert selection (no CPU round-trip for logits)
+            cu(m.router_topk(
+                s,
+                cfg1(self.ne),
+                router_out,
+                topk_idx,
+                topk_w,
+                self.ne as u32,
+                self.na as u32,
+            ))?;
+            // Download only k indices + k weights (tiny: 2×8×4=64 bytes vs 64×4=256 for logits)
+            let tk_idx = cu(topk_idx.to_host_vec(s))?;
+            let tk_w = cu(topk_w.to_host_vec(s))?;
 
             // ── Expert FFN ──
             cu(m.mul(s, cfg(d), hidden, h_tmp2, fo))?; // fo = 0
 
-            for (k, &(eid, _)) in idx.iter().enumerate() {
-                let w = exps[k] / sum;
+            for k in 0..self.na {
+                let eid = tk_idx[k] as usize;
+                let w = tk_w[k];
                 let gate_packed_off = eid as u32 * gate_bytes_per_exp as u32;
                 let gate_scales_off = eid as u32 * gate_scales_per_exp as u32;
                 let down_packed_off = eid as u32 * down_bytes_per_exp as u32;
@@ -918,8 +851,15 @@ impl GpuOlmoeModel {
         self.cur_seq += 1;
 
         // ── Final layer norm (model.norm.weight) ──
-        cu(m.compute_rms(s, cfg(1), hidden, rms_buf, d as u32, self.eps))?;
-        cu(m.rms_norm_apply(s, cfg(d), hidden, &self.final_norm, normed, rms_buf))?;
+        cu(m.rms_norm_fused(
+            s,
+            cfg1(d),
+            hidden,
+            &self.final_norm,
+            normed,
+            d as u32,
+            self.eps,
+        ))?;
 
         // ── lm_head on GPU (uses normed hidden state) ──
         let vocab = self.vocab;

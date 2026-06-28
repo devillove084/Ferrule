@@ -1,12 +1,10 @@
 [package]
-name = "ferrule-core"
+name = "ferrule-quant"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 
 [dependencies]
-thiserror = "2"
-tracing = "0.1"
 
 [lints]
 workspace = true

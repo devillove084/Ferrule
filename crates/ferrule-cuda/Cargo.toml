@@ -1,0 +1,22 @@
+[package]
+name = "ferrule-cuda"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+ferrule-core = { path = "../ferrule-core" }
+ferrule-quant = { path = "../ferrule-quant" }
+ferrule-model = { path = "../ferrule-model" }
+ferrule-gguf = { path = "../ferrule-gguf" }
+rayon = "1.10"
+cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git" }
+cuda-device = { git = "https://github.com/NVlabs/cuda-oxide.git" }
+cuda-host = { git = "https://github.com/NVlabs/cuda-oxide.git" }
+cuda-bindings = { git = "https://github.com/NVlabs/cuda-oxide.git" }
+
+[lints]
+workspace = true

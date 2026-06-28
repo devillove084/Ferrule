@@ -1,0 +1,957 @@
+//! CUDA kernels — compiled by cargo-oxide's rustc-codegen-cuda backend.
+//!
+//! All GEMV kernels use 4x inner-loop unrolling for ILP.
+//! fast_sigmoid uses reduction+squaring (no libdevice, no bit ops).
+
+use cuda_device::{cuda_module, kernel, ptx_asm, thread, DisjointSlice, SharedArray};
+
+// ── Fast exp via PTX ex2.approx.f32 ──────────────────────────────────
+// exp(x) = 2^(x * log2(e))  using hardware base-2 exponent.
+// ex2.approx.f32 is ~1 ULP accurate, 1 cycle throughput on most GPUs.
+// Much better than the previous Taylor-series + squaring approach.
+
+/// Fast exp(x) using PTX ex2.approx.f32. Works for all x.
+fn fast_exp(x: f32) -> f32 {
+    // log2(e) ≈ 1.4426950408889634 = 0x3FB8AA3B in IEEE 754
+    let scaled: f32;
+    let result: f32;
+    unsafe {
+        ptx_asm!(
+            "mul.f32 %0, %1, 0f3FB8AA3B;",
+            out("=f") scaled,
+            in("f") x,
+            options(register_only),
+        );
+        ptx_asm!(
+            "ex2.approx.f32 %0, %1;",
+            out("=f") result,
+            in("f") scaled,
+            options(register_only),
+        );
+    }
+    result
+}
+
+/// Fast sigmoid(x) = 1 / (1 + exp(-x)) using PTX ex2.approx
+fn fast_sigmoid(x: f32) -> f32 {
+    if x < -16.0 {
+        return 0.0;
+    }
+    if x > 16.0 {
+        return 1.0;
+    }
+    if x >= 0.0 {
+        1.0 / (1.0 + fast_exp(-x))
+    } else {
+        let ep = fast_exp(x);
+        ep / (1.0 + ep)
+    }
+}
+
+#[cuda_module]
+pub mod kernels {
+    use super::*;
+
+    // ── Embedding ──────────────────────────────────────────────────────
+
+    #[kernel]
+    pub fn embed_lookup(emb: &[f32], mut y: DisjointSlice<f32>, tid: u32, d: u32) {
+        let i = thread::index_1d().get();
+        if i >= y.len() {
+            return;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = emb[tid as usize * d as usize + i as usize];
+        }
+    }
+
+    // ── GEMV f32 (unrolled 4x) ─────────────────────────────────────────
+
+    #[kernel]
+    pub fn gemv_f32(x: &[f32], w: &[f32], mut y: DisjointSlice<f32>, k: u32) {
+        let row = thread::index_1d().get();
+        if row >= y.len() {
+            return;
+        }
+        let mut dot0 = 0.0f32;
+        let mut dot1 = 0.0f32;
+        let mut dot2 = 0.0f32;
+        let mut dot3 = 0.0f32;
+        let k = k as usize;
+        let base = row * k;
+        let mut j = 0usize;
+        let k4 = k - k % 4;
+        while j < k4 {
+            dot0 += x[j] * w[base + j];
+            dot1 += x[j + 1] * w[base + j + 1];
+            dot2 += x[j + 2] * w[base + j + 2];
+            dot3 += x[j + 3] * w[base + j + 3];
+            j += 4;
+        }
+        let mut dot = dot0 + dot1 + dot2 + dot3;
+        while j < k {
+            dot += x[j] * w[base + j];
+            j += 1;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
+    // ── GEMV Q4_0 (unrolled 4x) ──────────────────────────────────────
+
+    #[kernel]
+    pub fn gemv_q4(x: &[f32], packed: &[u8], scales: &[f32], mut y: DisjointSlice<f32>, k: u32) {
+        let row = thread::index_1d().get();
+        if row >= y.len() {
+            return;
+        }
+        let k = k as usize;
+        let blocks_per_row = (k + 31) / 32;
+        let bytes_per_row = k / 2;
+        let mut dot = 0.0f32;
+        for b in 0..blocks_per_row {
+            let block_start = b * 32;
+            let block_end = (block_start + 32).min(k);
+            let delta = scales[row * blocks_per_row + b];
+            if delta == 0.0 {
+                continue;
+            }
+            let byte_off = row * bytes_per_row + block_start / 2;
+            let len = block_end - block_start;
+            let len4 = len - len % 4;
+            let mut j = 0usize;
+            let mut bdot = 0.0f32;
+            while j < len4 {
+                let b0 = packed[byte_off + j / 2];
+                let b1 = packed[byte_off + j / 2 + 1];
+                bdot += x[block_start + j] * ((b0 & 0xF) as f32 - 8.0)
+                    + x[block_start + j + 1] * ((b0 >> 4) as f32 - 8.0)
+                    + x[block_start + j + 2] * ((b1 & 0xF) as f32 - 8.0)
+                    + x[block_start + j + 3] * ((b1 >> 4) as f32 - 8.0);
+                j += 4;
+            }
+            while j < len {
+                let bv = packed[byte_off + j / 2];
+                let q = if j % 2 == 0 { bv & 0xF } else { bv >> 4 };
+                bdot += x[block_start + j] * (q as f32 - 8.0);
+                j += 1;
+            }
+            dot += bdot * delta;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
+    #[kernel]
+    pub fn gemv_q4_off(
+        x: &[f32],
+        packed: &[u8],
+        scales: &[f32],
+        mut y: DisjointSlice<f32>,
+        k: u32,
+        packed_off: u32,
+        scales_off: u32,
+    ) {
+        let row = thread::index_1d().get();
+        if row >= y.len() {
+            return;
+        }
+        let k = k as usize;
+        let blocks_per_row = (k + 31) / 32;
+        let bytes_per_row = k / 2;
+        let packed_off = packed_off as usize;
+        let scales_off = scales_off as usize;
+        let mut dot = 0.0f32;
+        for b in 0..blocks_per_row {
+            let block_start = b * 32;
+            let block_end = (block_start + 32).min(k);
+            let delta = scales[scales_off + row * blocks_per_row + b];
+            if delta == 0.0 {
+                continue;
+            }
+            let byte_off = packed_off + row * bytes_per_row + block_start / 2;
+            let len = block_end - block_start;
+            let len4 = len - len % 4;
+            let mut j = 0usize;
+            let mut bdot = 0.0f32;
+            while j < len4 {
+                let b0 = packed[byte_off + j / 2];
+                let b1 = packed[byte_off + j / 2 + 1];
+                bdot += x[block_start + j] * ((b0 & 0xF) as f32 - 8.0)
+                    + x[block_start + j + 1] * ((b0 >> 4) as f32 - 8.0)
+                    + x[block_start + j + 2] * ((b1 & 0xF) as f32 - 8.0)
+                    + x[block_start + j + 3] * ((b1 >> 4) as f32 - 8.0);
+                j += 4;
+            }
+            while j < len {
+                let bv = packed[byte_off + j / 2];
+                let q = if j % 2 == 0 { bv & 0xF } else { bv >> 4 };
+                bdot += x[block_start + j] * (q as f32 - 8.0);
+                j += 1;
+            }
+            dot += bdot * delta;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
+    // ── GEMV Q2S ────────────────────────────────────────────────────
+
+    #[kernel]
+    pub fn gemv_q2(x: &[f32], packed: &[u8], scales: &[f32], mut y: DisjointSlice<f32>, k: u32) {
+        let row = thread::index_1d().get();
+        if row >= y.len() {
+            return;
+        }
+        let k = k as usize;
+        let blocks_per_row = (k + 63) / 64;
+        let bytes_per_row = (k + 3) / 4;
+        let mut dot = 0.0f32;
+        for b in 0..blocks_per_row {
+            let block_start = b * 64;
+            let block_end = (block_start + 64).min(k);
+            let delta = scales[row * blocks_per_row + b];
+            if delta == 0.0 {
+                continue;
+            }
+            let byte_off = row * bytes_per_row + block_start / 4;
+            let len = block_end - block_start;
+            let len4 = len - len % 4;
+            let mut j = 0usize;
+            let mut bdot = 0.0f32;
+            while j < len4 {
+                let bv = packed[byte_off + j / 4];
+                bdot += x[block_start + j] * (((bv & 0x3) as f32 - 1.5) / 1.5)
+                    + x[block_start + j + 1] * ((((bv >> 2) & 0x3) as f32 - 1.5) / 1.5)
+                    + x[block_start + j + 2] * ((((bv >> 4) & 0x3) as f32 - 1.5) / 1.5)
+                    + x[block_start + j + 3] * ((((bv >> 6) & 0x3) as f32 - 1.5) / 1.5);
+                j += 4;
+            }
+            while j < len {
+                let bv = packed[byte_off + j / 4];
+                let q = ((bv >> (2 * (j % 4))) & 0x3) as f32;
+                bdot += x[block_start + j] * (q - 1.5) / 1.5;
+                j += 1;
+            }
+            dot += bdot * delta;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
+    #[kernel]
+    pub fn gemv_q2_off(
+        x: &[f32],
+        packed: &[u8],
+        scales: &[f32],
+        mut y: DisjointSlice<f32>,
+        k: u32,
+        packed_off: u32,
+        scales_off: u32,
+    ) {
+        let row = thread::index_1d().get();
+        if row >= y.len() {
+            return;
+        }
+        let k = k as usize;
+        let blocks_per_row = (k + 63) / 64;
+        let bytes_per_row = (k + 3) / 4;
+        let packed_off = packed_off as usize;
+        let scales_off = scales_off as usize;
+        let mut dot = 0.0f32;
+        for b in 0..blocks_per_row {
+            let block_start = b * 64;
+            let block_end = (block_start + 64).min(k);
+            let delta = scales[scales_off + row * blocks_per_row + b];
+            if delta == 0.0 {
+                continue;
+            }
+            let byte_off = packed_off + row * bytes_per_row + block_start / 4;
+            let len = block_end - block_start;
+            let mut j = 0usize;
+            let mut bdot = 0.0f32;
+            while j < len {
+                let bv = packed[byte_off + j / 4];
+                let q = ((bv >> (2 * (j % 4))) & 0x3) as f32;
+                bdot += x[block_start + j] * (q - 1.5) / 1.5;
+                j += 1;
+            }
+            dot += bdot * delta;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
+    // ── GEMV T1S ────────────────────────────────────────────────────
+
+    #[kernel]
+    pub fn gemv_t1(x: &[f32], packed: &[u8], scales: &[f32], mut y: DisjointSlice<f32>, k: u32) {
+        let row = thread::index_1d().get();
+        if row >= y.len() {
+            return;
+        }
+        let k = k as usize;
+        let blocks_per_row = (k + 63) / 64;
+        let bytes_per_row = (k + 3) / 4;
+        let mut dot = 0.0f32;
+        for b in 0..blocks_per_row {
+            let block_start = b * 64;
+            let block_end = (block_start + 64).min(k);
+            let delta = scales[row * blocks_per_row + b];
+            if delta == 0.0 {
+                continue;
+            }
+            let byte_off = row * bytes_per_row + block_start / 4;
+            let len = block_end - block_start;
+            let mut j = 0usize;
+            let mut bdot = 0.0f32;
+            while j < len {
+                let bv = packed[byte_off + j / 4];
+                let q = (bv >> (2 * (j % 4))) & 0x3;
+                let xv = x[block_start + j];
+                if q == 0 {
+                    bdot -= xv;
+                } else if q == 2 {
+                    bdot += xv;
+                }
+                j += 1;
+            }
+            dot += bdot * delta;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
+    #[kernel]
+    pub fn gemv_t1_off(
+        x: &[f32],
+        packed: &[u8],
+        scales: &[f32],
+        mut y: DisjointSlice<f32>,
+        k: u32,
+        packed_off: u32,
+        scales_off: u32,
+    ) {
+        let row = thread::index_1d().get();
+        if row >= y.len() {
+            return;
+        }
+        let k = k as usize;
+        let blocks_per_row = (k + 63) / 64;
+        let bytes_per_row = (k + 3) / 4;
+        let packed_off = packed_off as usize;
+        let scales_off = scales_off as usize;
+        let mut dot = 0.0f32;
+        for b in 0..blocks_per_row {
+            let block_start = b * 64;
+            let block_end = (block_start + 64).min(k);
+            let delta = scales[scales_off + row * blocks_per_row + b];
+            if delta == 0.0 {
+                continue;
+            }
+            let byte_off = packed_off + row * bytes_per_row + block_start / 4;
+            let len = block_end - block_start;
+            let mut j = 0usize;
+            let mut bdot = 0.0f32;
+            while j < len {
+                let bv = packed[byte_off + j / 4];
+                let q = (bv >> (2 * (j % 4))) & 0x3;
+                let xv = x[block_start + j];
+                if q == 0 {
+                    bdot -= xv;
+                } else if q == 2 {
+                    bdot += xv;
+                }
+                j += 1;
+            }
+            dot += bdot * delta;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
+    // ── RMS Norm ────────────────────────────────────────────────────────
+
+    #[kernel]
+    pub fn rms_norm_apply(x: &[f32], w: &[f32], mut y: DisjointSlice<f32>, rms_val: &[f32]) {
+        let i = thread::index_1d().get();
+        if i >= y.len() {
+            return;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = x[i] * rms_val[0] * w[i];
+        }
+    }
+
+    // ── SiLU (using reduction+squaring fast sigmoid) ────────────────────
+
+    #[kernel]
+    pub fn silu(x: &[f32], mut y: DisjointSlice<f32>) {
+        let i = thread::index_1d().get();
+        if i >= y.len() {
+            return;
+        }
+        let xv = x[i];
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = xv * fast_sigmoid(xv);
+        }
+    }
+
+    #[kernel]
+    pub fn silu_mul(a: &[f32], b: &[f32], mut y: DisjointSlice<f32>) {
+        let i = thread::index_1d().get();
+        if i >= y.len() {
+            return;
+        }
+        let xv = a[i];
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = xv * fast_sigmoid(xv) * b[i];
+        }
+    }
+
+    // ── Dual GEMV ──────────────────────────────────────────────────────
+
+    #[kernel]
+    pub fn gemv_dual_q4(
+        x: &[f32],
+        p0: &[u8],
+        s0: &[f32],
+        mut y0: DisjointSlice<f32>,
+        p1: &[u8],
+        s1: &[f32],
+        mut y1: DisjointSlice<f32>,
+        k: u32,
+    ) {
+        let row = thread::index_1d().get();
+        let n = y0.len();
+        if row >= n {
+            return;
+        }
+        let k = k as usize;
+        let bpr = ((k + 31) / 32) as usize;
+        let bytes_per_row = k / 2;
+        let mut d0 = 0.0f32;
+        let mut d1 = 0.0f32;
+        for b in 0..bpr {
+            let bs = b * 32;
+            let be = (bs + 32).min(k);
+            let del0 = s0[row * bpr + b];
+            let del1 = s1[row * bpr + b];
+            let bo = row * bytes_per_row + bs / 2;
+            let len = be - bs;
+            let len4 = len - len % 4;
+            let mut j = 0usize;
+            let mut bd0 = 0.0f32;
+            let mut bd1 = 0.0f32;
+            while j < len4 {
+                let bv0 = p0[bo + j / 2];
+                let bv1 = p0[bo + j / 2 + 1];
+                let bv0_1 = p1[bo + j / 2];
+                let bv1_1 = p1[bo + j / 2 + 1];
+                bd0 += x[bs + j] * ((bv0 & 0xF) as f32 - 8.0)
+                    + x[bs + j + 1] * ((bv0 >> 4) as f32 - 8.0)
+                    + x[bs + j + 2] * ((bv1 & 0xF) as f32 - 8.0)
+                    + x[bs + j + 3] * ((bv1 >> 4) as f32 - 8.0);
+                bd1 += x[bs + j] * ((bv0_1 & 0xF) as f32 - 8.0)
+                    + x[bs + j + 1] * ((bv0_1 >> 4) as f32 - 8.0)
+                    + x[bs + j + 2] * ((bv1_1 & 0xF) as f32 - 8.0)
+                    + x[bs + j + 3] * ((bv1_1 >> 4) as f32 - 8.0);
+                j += 4;
+            }
+            while j < len {
+                let bv = p0[bo + j / 2];
+                let q = if j % 2 == 0 { bv & 0xF } else { bv >> 4 };
+                bd0 += x[bs + j] * (q as f32 - 8.0);
+                let bv = p1[bo + j / 2];
+                let q = if j % 2 == 0 { bv & 0xF } else { bv >> 4 };
+                bd1 += x[bs + j] * (q as f32 - 8.0);
+                j += 1;
+            }
+            if del0 != 0.0 {
+                d0 += bd0 * del0;
+            }
+            if del1 != 0.0 {
+                d1 += bd1 * del1;
+            }
+        }
+        if let Some(o) = y0.get_mut(thread::index_1d()) {
+            *o = d0;
+        }
+        if let Some(o) = y1.get_mut(thread::index_1d()) {
+            *o = d1;
+        }
+    }
+
+    #[kernel]
+    pub fn gemv_triple_q4(
+        x: &[f32],
+        p0: &[u8],
+        s0: &[f32],
+        mut y0: DisjointSlice<f32>,
+        p1: &[u8],
+        s1: &[f32],
+        mut y1: DisjointSlice<f32>,
+        p2: &[u8],
+        s2: &[f32],
+        mut y2: DisjointSlice<f32>,
+        k: u32,
+    ) {
+        let row = thread::index_1d().get();
+        let n = y0.len();
+        if row >= n {
+            return;
+        }
+        let k = k as usize;
+        let bpr = ((k + 31) / 32) as usize;
+        let bytes_per_row = k / 2;
+        let mut d0 = 0.0f32;
+        let mut d1 = 0.0f32;
+        let mut d2 = 0.0f32;
+        for b in 0..bpr {
+            let bs = b * 32;
+            let be = (bs + 32).min(k);
+            let del0 = s0[row * bpr + b];
+            let del1 = s1[row * bpr + b];
+            let del2 = s2[row * bpr + b];
+            let bo = row * bytes_per_row + bs / 2;
+            let len = be - bs;
+            let mut j = 0usize;
+            let mut bd0 = 0.0;
+            let mut bd1 = 0.0;
+            let mut bd2 = 0.0;
+            while j < len {
+                let bv0 = p0[bo + j / 2];
+                let bv1 = p1[bo + j / 2];
+                let bv2 = p2[bo + j / 2];
+                let q = if j % 2 == 0 { bv0 & 0xF } else { bv0 >> 4 };
+                bd0 += x[bs + j] * (q as f32 - 8.0);
+                let q = if j % 2 == 0 { bv1 & 0xF } else { bv1 >> 4 };
+                bd1 += x[bs + j] * (q as f32 - 8.0);
+                let q = if j % 2 == 0 { bv2 & 0xF } else { bv2 >> 4 };
+                bd2 += x[bs + j] * (q as f32 - 8.0);
+                j += 1;
+            }
+            if del0 != 0.0 {
+                d0 += bd0 * del0;
+            }
+            if del1 != 0.0 {
+                d1 += bd1 * del1;
+            }
+            if del2 != 0.0 {
+                d2 += bd2 * del2;
+            }
+        }
+        if let Some(o) = y0.get_mut(thread::index_1d()) {
+            *o = d0;
+        }
+        if let Some(o) = y1.get_mut(thread::index_1d()) {
+            *o = d1;
+        }
+        if let Some(o) = y2.get_mut(thread::index_1d()) {
+            *o = d2;
+        }
+    }
+
+    #[kernel]
+    pub fn gemv_dual_q4_off(
+        x: &[f32],
+        p0: &[u8],
+        s0: &[f32],
+        mut y0: DisjointSlice<f32>,
+        off_p0: u32,
+        off_s0: u32,
+        p1: &[u8],
+        s1: &[f32],
+        mut y1: DisjointSlice<f32>,
+        off_p1: u32,
+        off_s1: u32,
+        k: u32,
+    ) {
+        let row = thread::index_1d().get();
+        if row >= y0.len() {
+            return;
+        }
+        let k = k as usize;
+        let bpr = ((k + 31) / 32) as usize;
+        let bytes_per_row = k / 2;
+        let off_p0 = off_p0 as usize;
+        let off_s0 = off_s0 as usize;
+        let off_p1 = off_p1 as usize;
+        let off_s1 = off_s1 as usize;
+        let mut d0 = 0.0f32;
+        let mut d1 = 0.0f32;
+        for b in 0..bpr {
+            let bs = b * 32;
+            let be = (bs + 32).min(k);
+            let del0 = s0[off_s0 + row * bpr + b];
+            let del1 = s1[off_s1 + row * bpr + b];
+            let bo0 = off_p0 + row * bytes_per_row + bs / 2;
+            let bo1 = off_p1 + row * bytes_per_row + bs / 2;
+            let len = be - bs;
+            let len4 = len - len % 4;
+            let mut j = 0usize;
+            let mut bd0 = 0.0;
+            let mut bd1 = 0.0;
+            while j < len4 {
+                let bv0 = p0[bo0 + j / 2];
+                let bv1 = p0[bo0 + j / 2 + 1];
+                let bv0_1 = p1[bo1 + j / 2];
+                let bv1_1 = p1[bo1 + j / 2 + 1];
+                bd0 += x[bs + j] * ((bv0 & 0xF) as f32 - 8.0)
+                    + x[bs + j + 1] * ((bv0 >> 4) as f32 - 8.0)
+                    + x[bs + j + 2] * ((bv1 & 0xF) as f32 - 8.0)
+                    + x[bs + j + 3] * ((bv1 >> 4) as f32 - 8.0);
+                bd1 += x[bs + j] * ((bv0_1 & 0xF) as f32 - 8.0)
+                    + x[bs + j + 1] * ((bv0_1 >> 4) as f32 - 8.0)
+                    + x[bs + j + 2] * ((bv1_1 & 0xF) as f32 - 8.0)
+                    + x[bs + j + 3] * ((bv1_1 >> 4) as f32 - 8.0);
+                j += 4;
+            }
+            while j < len {
+                let bv = p0[bo0 + j / 2];
+                let q = if j % 2 == 0 { bv & 0xF } else { bv >> 4 };
+                bd0 += x[bs + j] * (q as f32 - 8.0);
+                let bv = p1[bo1 + j / 2];
+                let q = if j % 2 == 0 { bv & 0xF } else { bv >> 4 };
+                bd1 += x[bs + j] * (q as f32 - 8.0);
+                j += 1;
+            }
+            if del0 != 0.0 {
+                d0 += bd0 * del0;
+            }
+            if del1 != 0.0 {
+                d1 += bd1 * del1;
+            }
+        }
+        if let Some(o) = y0.get_mut(thread::index_1d()) {
+            *o = d0;
+        }
+        if let Some(o) = y1.get_mut(thread::index_1d()) {
+            *o = d1;
+        }
+    }
+
+    // ── Element-wise ────────────────────────────────────────────────────
+
+    #[kernel]
+    pub fn mul(a: &[f32], b: &[f32], mut y: DisjointSlice<f32>) {
+        let i = thread::index_1d().get();
+        if i >= y.len() {
+            return;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = a[i] * b[i];
+        }
+    }
+    #[kernel]
+    pub fn add(a: &[f32], b: &[f32], mut y: DisjointSlice<f32>) {
+        let i = thread::index_1d().get();
+        if i >= y.len() {
+            return;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = a[i] + b[i];
+        }
+    }
+    #[kernel]
+    pub fn saxpy(scale: &[f32], x: &[f32], mut y: DisjointSlice<f32>) {
+        let i = thread::index_1d().get();
+        if i >= y.len() {
+            return;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi += scale[0] * x[i];
+        }
+    }
+
+    /// Compute 1/sqrt(mean(x^2) + eps) via PTX rsqrt.approx.f32.
+    /// This matches llama.cpp's rsqrtf(var + eps) approach using hardware sqrt.
+    #[kernel]
+    pub fn compute_rms(x: &[f32], mut rms_out: DisjointSlice<f32>, n: u32, eps: f32) {
+        if thread::index_1d().get() != 0 {
+            return;
+        }
+        let mut sum = 0.0f32;
+        let n = n as usize;
+        for j in 0..n {
+            sum += x[j] * x[j];
+        }
+        if let Some(o) = rms_out.get_mut(thread::index_1d()) {
+            let val = sum / n as f32 + eps;
+            // PTX rsqrt.approx.f32 — same as llama.cpp's rsqrtf(var + eps)
+            let result: f32;
+            unsafe {
+                ptx_asm!(
+                    "rsqrt.approx.f32 %0, %1;",
+                    out("=f") result,
+                    in("f") val,
+                    options(register_only),
+                );
+            }
+            *o = result;
+        }
+    }
+
+    /// Fused RMS norm: parallel reduction via shared memory + rsqrt + apply.
+    /// Replaces the compute_rms + rms_norm_apply two-kernel sequence.
+    /// Pattern: llama.cpp's block_reduce<SUM> + rsqrtf + element-wise apply.
+    /// Launch with up to 1024 threads, 1 block. Handles n > blockDim via striding.
+    #[kernel]
+    pub fn rms_norm_fused(x: &[f32], w: &[f32], mut y: DisjointSlice<f32>, n: u32, eps: f32) {
+        static mut SMEM: SharedArray<f32, 1024> = SharedArray::UNINIT;
+        let tid = thread::threadIdx_x() as usize;
+        let bdim = thread::blockDim_x() as usize;
+        let n = n as usize;
+
+        // Phase 1: each thread accumulates partial sum for strided elements
+        let mut sum = 0.0f32;
+        let mut j = tid;
+        while j < n {
+            sum += x[j] * x[j];
+            j += bdim;
+        }
+        unsafe {
+            SMEM[tid] = sum;
+        }
+        thread::sync_threads();
+
+        // Phase 2: tree reduction — halve active threads each round
+        let mut stride = (bdim + 1) / 2;
+        while stride > 0 {
+            if tid < stride && tid + stride < bdim {
+                unsafe {
+                    SMEM[tid] += SMEM[tid + stride];
+                }
+            }
+            thread::sync_threads();
+            stride /= 2;
+        }
+
+        // Phase 3: thread 0 computes rsqrt from the total sum
+        if tid == 0 {
+            let val = unsafe { SMEM[0] } / n as f32 + eps;
+            let result: f32;
+            unsafe {
+                ptx_asm!(
+                    "rsqrt.approx.f32 %0, %1;",
+                    out("=f") result,
+                    in("f") val,
+                    options(register_only),
+                );
+            }
+            unsafe {
+                SMEM[0] = result;
+            }
+        }
+        thread::sync_threads();
+
+        // Phase 4: strided write — use raw pointer for multi-element per thread
+        let rsqrt = unsafe { SMEM[0] };
+        let y_ptr = y.as_mut_ptr();
+        let mut j = tid;
+        while j < n {
+            unsafe {
+                *y_ptr.add(j) = x[j] * rsqrt * w[j];
+            }
+            j += bdim;
+        }
+    }
+
+    // ── Router Top-K (GPU-side, eliminates CPU round-trip) ────────────
+
+    /// Find top-k expert indices and softmax weights on GPU.
+    #[kernel]
+    pub fn router_topk(
+        logits: &[f32],
+        mut indices: DisjointSlice<f32>,
+        mut weights: DisjointSlice<f32>,
+        ne: u32,
+        k: u32,
+    ) {
+        static mut SMEM: SharedArray<f32, 128> = SharedArray::UNINIT;
+        let tid = thread::threadIdx_x() as usize;
+        let ne = ne as usize;
+        let k = k as usize;
+
+        // Copy logits to shared memory (parallel)
+        if tid < ne {
+            unsafe {
+                SMEM[tid] = logits[tid];
+            }
+        }
+        thread::sync_threads();
+
+        // Thread 0: top-k selection + softmax
+        if tid == 0 {
+            // Simple top-k: k passes of find-max-and-mask
+            let mut top_val = [0.0f32; 8];
+            let mut top_idx = [0.0f32; 8];
+            for j in 0..k {
+                let mut best_val = f32::NEG_INFINITY;
+                let mut best_idx = 0usize;
+                for i in 0..ne {
+                    let v = unsafe { SMEM[i] };
+                    if v > best_val {
+                        best_val = v;
+                        best_idx = i;
+                    }
+                }
+                top_val[j] = best_val;
+                top_idx[j] = best_idx as f32;
+                unsafe {
+                    SMEM[best_idx] = f32::NEG_INFINITY;
+                }
+            }
+
+            // Softmax — use PTX ex2-based fast_exp for accuracy
+            let max_v = top_val[0];
+            let mut sum = 0.0f32;
+            for j in 0..k {
+                let w = fast_exp(top_val[j] - max_v);
+                top_val[j] = w;
+                sum += w;
+            }
+
+            // Write outputs
+            let idx_ptr = indices.as_mut_ptr();
+            let w_ptr = weights.as_mut_ptr();
+            for j in 0..k {
+                unsafe {
+                    *idx_ptr.add(j) = top_idx[j];
+                    *w_ptr.add(j) = top_val[j] / sum;
+                }
+            }
+        }
+    }
+
+    // ── RoPE ─────────────────────────────────────────────────────────────
+
+    #[kernel]
+    pub fn rope(
+        x: &[f32],
+        cos: &[f32],
+        sin: &[f32],
+        mut y: DisjointSlice<f32>,
+        pos: u32,
+        nh: u32,
+        hd: u32,
+    ) {
+        let i = thread::index_1d().get();
+        let nh = nh as usize;
+        let hd = hd as usize;
+        let hd2 = hd / 2;
+        let total = nh * hd;
+        if (i as u64) >= total as u64 {
+            return;
+        }
+        let h = i as usize / hd;
+        let off = h * hd;
+        let local = i as usize % hd;
+        let pair = if local < hd2 { local } else { local - hd2 };
+        let c = cos[pos as usize * hd2 + pair];
+        let pair_idx = if local < hd2 {
+            off + local + hd2
+        } else {
+            off + local - hd2
+        };
+        let s = sin[pos as usize * hd2 + pair];
+        let x_pair = x[pair_idx];
+        let x_self = x[off + local];
+        let val = if local < hd2 {
+            x_self * c - x_pair * s
+        } else {
+            x_pair * s + x_self * c
+        };
+        if let Some(o) = y.get_mut(thread::index_1d()) {
+            *o = val;
+        }
+    }
+
+    // ── Attention scores (GQA-aware) ──────────────────────────────────
+
+    #[kernel]
+    pub fn attn_scores(
+        q: &[f32],
+        k_cache: &[f32],
+        mut scores: DisjointSlice<f32>,
+        seq_len: u32,
+        nh: u32,
+        nkv: u32,
+        hd: u32,
+        sm_scale: f32,
+    ) {
+        let i = thread::index_1d().get();
+        let nh = nh as usize;
+        let nkv = nkv as usize;
+        let hd = hd as usize;
+        let sl = seq_len as usize;
+        let total = nh * sl;
+        if (i as u64) >= total as u64 {
+            return;
+        }
+        let h = i as usize / sl;
+        let p = i as usize % sl;
+        let n_rep = nh / nkv;
+        let kv_h = h / n_rep;
+        let mut dot = 0.0f32;
+        for j in 0..hd {
+            dot += q[h * hd + j] * k_cache[p * nkv * hd + kv_h * hd + j];
+        }
+        if let Some(s) = scores.get_mut(thread::index_1d()) {
+            *s = dot * sm_scale;
+        }
+    }
+
+    // ── Attention: weighted V combine with inline softmax (GQA-aware) ──
+    /// Fuses softmax(scores) + Σ softmax_i × V_i into one kernel.
+    /// Eliminates CPU round-trip for softmax (cf. llama.cpp flash-attn patterns).
+    #[kernel]
+    pub fn attn_combine_softmax(
+        scores: &[f32],
+        v_cache: &[f32],
+        mut out: DisjointSlice<f32>,
+        seq_len: u32,
+        nh: u32,
+        nkv: u32,
+        hd: u32,
+    ) {
+        let i = thread::index_1d().get();
+        let nh = nh as usize;
+        let nkv = nkv as usize;
+        let hd = hd as usize;
+        let sl = seq_len as usize;
+        let total = nh * hd;
+        if i >= total {
+            return;
+        }
+        let h = i as usize / hd;
+        let d = i as usize % hd;
+        let n_rep = nh / nkv;
+        let kv_h = h / n_rep;
+        // Inline softmax: max → exp-sum → weighted combine
+        let mut max_s = f32::NEG_INFINITY;
+        for p in 0..sl {
+            let s = scores[h * sl + p];
+            if s > max_s {
+                max_s = s;
+            }
+        }
+        let mut sum_w = 0.0f32;
+        let mut val = 0.0f32;
+        for p in 0..sl {
+            let w = fast_exp(scores[h * sl + p] - max_s);
+            sum_w += w;
+            val += w * v_cache[p * nkv * hd + kv_h * hd + d];
+        }
+        if let Some(o) = out.get_mut(thread::index_1d()) {
+            *o = val / sum_w;
+        }
+    }
+}

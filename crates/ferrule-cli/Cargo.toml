@@ -1,0 +1,27 @@
+[package]
+name = "ferrule-cli"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ferrule"
+path = "src/main.rs"
+
+[dependencies]
+ferrule-core = { path = "../ferrule-core" }
+ferrule-model = { path = "../ferrule-model" }
+ferrule-graph = { path = "../ferrule-graph" }
+ferrule-cuda = { path = "../ferrule-cuda", optional = true }
+ferrule-quant = { path = "../ferrule-quant" }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+rayon = "1.10"
+cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git", optional = true }
+
+[features]
+default = []
+cuda = ["ferrule-cuda", "dep:cuda-core"]
+
+[lints]
+workspace = true
