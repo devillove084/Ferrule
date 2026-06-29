@@ -1,14 +1,14 @@
 <svg width="1280" height="720" viewBox="0 0 1280 720" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">Ferrule Architecture</title>
-  <desc id="desc">A simplified Ferrule architecture diagram showing model assets, Rust runtime, MoE execution, edge inference, and state fabric.</desc>
+  <title id="title">Ferrule Runtime Architecture</title>
+  <desc id="desc">Ferrule architecture centered on a Rust-native state-aware LLM runtime with model execution, quantization, kernels, state fabric, and hardware-aware deployment.</desc>
 
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="720" gradientUnits="userSpaceOnUse">
       <stop stop-color="#07111F"/>
-      <stop offset="0.55" stop-color="#101A34"/>
-      <stop offset="1" stop-color="#06221F"/>
+      <stop offset="0.52" stop-color="#101936"/>
+      <stop offset="1" stop-color="#062420"/>
     </linearGradient>
-    <linearGradient id="orange" x1="0" y1="0" x2="1" y2="1">
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
       <stop stop-color="#FDBA74"/>
       <stop offset="1" stop-color="#EA580C"/>
     </linearGradient>
@@ -16,124 +16,138 @@
       <stop stop-color="#93C5FD"/>
       <stop offset="1" stop-color="#2563EB"/>
     </linearGradient>
-    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#86EFAC"/>
-      <stop offset="1" stop-color="#16A34A"/>
-    </linearGradient>
     <linearGradient id="purple" x1="0" y1="0" x2="1" y2="1">
       <stop stop-color="#D8B4FE"/>
       <stop offset="1" stop-color="#7C3AED"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#86EFAC"/>
+      <stop offset="1" stop-color="#16A34A"/>
     </linearGradient>
     <linearGradient id="cyan" x1="0" y1="0" x2="1" y2="1">
       <stop stop-color="#67E8F9"/>
       <stop offset="1" stop-color="#0891B2"/>
     </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000000" flood-opacity="0.32"/>
+    <linearGradient id="amber" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#FDE68A"/>
+      <stop offset="1" stop-color="#D97706"/>
+    </linearGradient>
+    <filter id="shadow" x="-18%" y="-18%" width="136%" height="136%">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000000" flood-opacity="0.34"/>
     </filter>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 z" fill="#93C5FD"/>
     </marker>
-    <marker id="arrowSoft" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 z" fill="#86EFAC"/>
     </marker>
     <style>
-      .title { font: 800 38px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #F8FAFC; letter-spacing: -0.03em; }
-      .subtitle { font: 500 15px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #CBD5E1; }
-      .label { font: 760 20px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #F8FAFC; }
+      .title { font: 850 40px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #F8FAFC; letter-spacing: -0.035em; }
+      .subtitle { font: 520 15px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #CBD5E1; }
+      .label { font: 780 21px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #F8FAFC; }
+      .cardLabel { font: 760 17px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #F8FAFC; }
       .small { font: 560 13px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #E2E8F0; }
       .tiny { font: 540 12px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #C8D3E4; }
-      .mono { font: 650 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; fill: #F1F5F9; }
+      .mono { font: 700 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; fill: #F8FAFC; }
       .card { filter: url(#shadow); stroke: rgba(255,255,255,.18); stroke-width: 1; }
-      .panel { fill: rgba(15,23,42,.78); stroke: rgba(148,163,184,.25); stroke-width: 1; filter: url(#shadow); }
-      .pill { fill: rgba(15,23,42,.56); stroke: rgba(226,232,240,.16); stroke-width: 1; }
+      .panel { fill: rgba(15,23,42,.76); stroke: rgba(148,163,184,.24); stroke-width: 1; filter: url(#shadow); }
+      .pill { fill: rgba(15,23,42,.50); stroke: rgba(255,255,255,.20); stroke-width: 1; }
       .flow { stroke: #93C5FD; stroke-width: 2.8; marker-end: url(#arrow); fill: none; stroke-linecap: round; stroke-linejoin: round; }
-      .softFlow { stroke: #86EFAC; stroke-width: 2.2; marker-end: url(#arrowSoft); fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: .86; }
+      .softFlow { stroke: #86EFAC; stroke-width: 2.2; marker-end: url(#arrowGreen); fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: .88; }
       .dash { stroke-dasharray: 7 8; }
     </style>
   </defs>
 
   <rect width="1280" height="720" fill="url(#bg)"/>
-  <circle cx="1060" cy="110" r="260" fill="#2563EB" opacity="0.10"/>
-  <circle cx="210" cy="610" r="280" fill="#14B8A6" opacity="0.10"/>
-  <circle cx="660" cy="350" r="340" fill="#A855F7" opacity="0.06"/>
+  <circle cx="1060" cy="116" r="260" fill="#2563EB" opacity="0.10"/>
+  <circle cx="190" cy="590" r="300" fill="#14B8A6" opacity="0.10"/>
+  <circle cx="650" cy="350" r="360" fill="#F97316" opacity="0.055"/>
 
-  <text x="64" y="70" class="title">Ferrule Architecture</text>
-  <text x="64" y="100" class="subtitle">Rust-native sparse MoE runtime for edge LLM systems</text>
+  <text x="64" y="70" class="title">Ferrule</text>
+  <text x="64" y="100" class="subtitle">Rust-native state-aware LLM runtime for edge, cloud, and future hardware</text>
 
-  <g transform="translate(70 178)">
-    <rect class="card" width="250" height="150" rx="28" fill="url(#purple)"/>
-    <text x="28" y="44" class="label">Model Assets</text>
-    <text x="28" y="78" class="small">safetensors</text>
-    <text x="28" y="102" class="small">tokenizer</text>
-    <text x="28" y="126" class="mono">qcache</text>
-  </g>
+  <g transform="translate(390 138)">
+    <rect class="card" width="500" height="238" rx="36" fill="url(#core)"/>
+    <text x="34" y="52" class="label">Ferrule Runtime</text>
+    <text x="34" y="82" class="small">the system core</text>
 
-  <g transform="translate(405 145)">
-    <rect class="card" width="470" height="216" rx="32" fill="url(#orange)"/>
-    <text x="32" y="48" class="label">Ferrule Runtime</text>
-    <text x="32" y="78" class="small">Rust core + cuda-oxide kernels</text>
+    <g transform="translate(34 116)">
+      <rect class="pill" width="132" height="46" rx="16"/>
+      <text x="22" y="29" class="tiny">Rust Core</text>
+    </g>
+    <g transform="translate(184 116)">
+      <rect class="pill" width="132" height="46" rx="16"/>
+      <text x="18" y="29" class="tiny">State Model</text>
+    </g>
+    <g transform="translate(334 116)">
+      <rect class="pill" width="132" height="46" rx="16"/>
+      <text x="20" y="29" class="tiny">Scheduler</text>
+    </g>
 
-    <g transform="translate(32 108)">
-      <rect class="pill" width="128" height="40" rx="14"/>
-      <text x="24" y="25" class="tiny">Rust Core</text>
+    <g transform="translate(34 176)">
+      <rect class="pill" width="204" height="42" rx="15"/>
+      <text x="22" y="27" class="tiny">Model Execution</text>
     </g>
-    <g transform="translate(174 108)">
-      <rect class="pill" width="128" height="40" rx="14"/>
-      <text x="20" y="25" class="tiny">MoE Engine</text>
-    </g>
-    <g transform="translate(316 108)">
-      <rect class="pill" width="120" height="40" rx="14"/>
-      <text x="22" y="25" class="tiny">KV Cache</text>
-    </g>
-    <g transform="translate(32 160)">
-      <rect class="pill" width="178" height="40" rx="14"/>
-      <text x="22" y="25" class="tiny">Quantized GEMV</text>
-    </g>
-    <g transform="translate(228 160)">
-      <rect class="pill" width="208" height="40" rx="14"/>
-      <text x="22" y="25" class="tiny">Router + Experts</text>
+    <g transform="translate(262 176)">
+      <rect class="pill" width="204" height="42" rx="15"/>
+      <text x="22" y="27" class="tiny">Hardware Policy</text>
     </g>
   </g>
 
-  <g transform="translate(960 178)">
-    <rect class="card" width="250" height="150" rx="28" fill="url(#green)"/>
-    <text x="28" y="44" class="label">Edge Inference</text>
-    <text x="28" y="78" class="small">chat</text>
-    <text x="28" y="102" class="small">rollout</text>
-    <text x="28" y="126" class="small">local serving</text>
+  <g transform="translate(70 168)">
+    <rect class="card" width="238" height="160" rx="28" fill="url(#purple)"/>
+    <text x="26" y="44" class="cardLabel">Model Input</text>
+    <text x="26" y="80" class="small">safetensors</text>
+    <text x="26" y="106" class="small">tokenizer</text>
+    <text x="26" y="132" class="mono">qcache</text>
   </g>
 
-  <path class="flow" d="M320 253 C350 253 372 253 405 253"/>
-  <path class="flow" d="M875 253 C910 253 928 253 960 253"/>
-
-  <g transform="translate(100 455)">
-    <rect class="panel" width="1080" height="118" rx="32"/>
-    <text x="34" y="44" class="label">State Fabric</text>
-    <text x="34" y="76" class="small">models · qcache · KV pages · experts · adapters · trajectories</text>
-
-    <g transform="translate(720 34)">
-      <rect class="pill" width="132" height="44" rx="16"/>
-      <text x="28" y="28" class="tiny">Edge</text>
-    </g>
-    <g transform="translate(866 34)">
-      <rect class="pill" width="132" height="44" rx="16"/>
-      <text x="28" y="28" class="tiny">Cloud</text>
-    </g>
+  <g transform="translate(972 168)">
+    <rect class="card" width="238" height="160" rx="28" fill="url(#green)"/>
+    <text x="26" y="44" class="cardLabel">Runtime Output</text>
+    <text x="26" y="80" class="small">chat</text>
+    <text x="26" y="106" class="small">rollout</text>
+    <text x="26" y="132" class="small">local serving</text>
   </g>
 
-  <g transform="translate(446 608)">
-    <rect width="388" height="52" rx="26" fill="rgba(6,182,212,.13)" stroke="rgba(103,232,249,.40)"/>
-    <text x="34" y="33" class="small">Future hardware: GPU · NPU · RISC-V</text>
+  <path class="flow" d="M308 248 C344 248 354 248 390 248"/>
+  <path class="flow" d="M890 248 C926 248 936 248 972 248"/>
+
+  <g transform="translate(70 428)">
+    <rect class="panel" width="238" height="126" rx="26" stroke="rgba(147,197,253,.38)"/>
+    <text x="24" y="40" class="cardLabel">Correctness</text>
+    <text x="24" y="75" class="small">CPU FP32</text>
+    <text x="24" y="100" class="small">logits diff</text>
   </g>
 
-  <path class="softFlow dash" d="M640 361 C640 392 640 420 640 455"/>
-  <path class="softFlow dash" d="M1085 328 C1085 396 1010 420 990 455"/>
-  <path class="softFlow dash" d="M640 573 C640 590 640 596 640 608"/>
+  <g transform="translate(344 428)">
+    <rect class="panel" width="238" height="126" rx="26" stroke="rgba(34,211,238,.44)"/>
+    <text x="24" y="40" class="cardLabel">Kernels</text>
+    <text x="24" y="75" class="small">cuda-oxide</text>
+    <text x="24" y="100" class="small">Q4/Q8 GEMV</text>
+  </g>
 
-  <g transform="translate(70 642)">
-    <rect width="260" height="42" rx="21" fill="rgba(34,197,94,.13)" stroke="rgba(134,239,172,.38)"/>
-    <circle cx="28" cy="21" r="6" fill="#86EFAC"/>
-    <text x="48" y="26" class="tiny">OLMoE-Instruct chat works</text>
+  <g transform="translate(618 428)">
+    <rect class="panel" width="238" height="126" rx="26" stroke="rgba(253,230,138,.44)"/>
+    <text x="24" y="40" class="cardLabel">Sparse Models</text>
+    <text x="24" y="75" class="small">router</text>
+    <text x="24" y="100" class="small">top-k experts</text>
+  </g>
+
+  <g transform="translate(892 428)">
+    <rect class="panel" width="318" height="126" rx="26" stroke="rgba(134,239,172,.44)"/>
+    <text x="24" y="40" class="cardLabel">Edge + Hardware</text>
+    <text x="24" y="75" class="small">KV pages · adapters · trajectories</text>
+    <text x="24" y="100" class="small">GPU · NPU · RISC-V</text>
+  </g>
+
+  <path class="softFlow dash" d="M642 376 C642 404 738 398 738 428"/>
+  <path class="softFlow dash" d="M536 376 C536 404 463 398 463 428"/>
+  <path class="softFlow dash" d="M466 376 C402 405 246 390 190 428"/>
+  <path class="softFlow dash" d="M812 376 C872 406 1000 394 1050 428"/>
+
+  <g transform="translate(130 612)">
+    <rect width="1020" height="58" rx="29" fill="rgba(15,23,42,.72)" stroke="rgba(255,255,255,.16)"/>
+    <text x="36" y="36" class="small">Core idea: explicit runtime state + native kernels + hardware-aware policy for modern LLM systems</text>
   </g>
 </svg>
