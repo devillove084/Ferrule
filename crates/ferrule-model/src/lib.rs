@@ -20,6 +20,7 @@ pub struct OlmoeConfig {
     pub kv_dim: usize,
     pub rope_theta: f32,
     pub rms_norm_eps: f32,
+    pub norm_topk_prob: bool,
     pub eos_token_id: Option<u32>,
     pub pad_token_id: Option<u32>,
 }
@@ -60,6 +61,10 @@ impl OlmoeConfig {
                 .get("rms_norm_eps")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(1e-6) as f32,
+            norm_topk_prob: json
+                .get("norm_topk_prob")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
             eos_token_id: token_id(json.get("eos_token_id")),
             pad_token_id: token_id(json.get("pad_token_id")),
         })
@@ -507,9 +512,15 @@ impl OlmoeModel {
             let mut idx: Vec<(usize, f32)> = rl.iter().copied().enumerate().collect();
             idx.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             idx.truncate(self.config.num_experts_per_tok);
-            let max_l = idx.iter().fold(f32::NEG_INFINITY, |a, (_, v)| a.max(*v));
+            let max_l = rl.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let all_sum: f32 = rl.iter().map(|v| (*v - max_l).exp()).sum();
             let exps: Vec<f32> = idx.iter().map(|(_, v)| (v - max_l).exp()).collect();
-            let sum: f32 = exps.iter().sum();
+            let topk_sum: f32 = exps.iter().sum();
+            let sum = if self.config.norm_topk_prob {
+                topk_sum
+            } else {
+                all_sum
+            };
             let mut fo = vec![0f32; d];
             let mid = self.config.intermediate_size;
             for (k, &(eid, _)) in idx.iter().enumerate() {

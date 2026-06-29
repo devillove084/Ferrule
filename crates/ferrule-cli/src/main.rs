@@ -114,11 +114,49 @@ fn parse_quant(quant: &str) -> ferrule_quant::QuantType {
     }
 }
 
-fn chat_prompt(turn: &str, first_turn: bool) -> String {
-    if first_turn {
-        format!("User: {turn}\nAssistant:")
+#[derive(Clone, Copy)]
+enum ChatFormat {
+    OlmoeInstruct,
+    Plain,
+}
+
+impl ChatFormat {
+    fn name(self) -> &'static str {
+        match self {
+            Self::OlmoeInstruct => "olmoe-instruct",
+            Self::Plain => "plain",
+        }
+    }
+}
+
+fn detect_chat_format(model_dir: &str) -> ChatFormat {
+    let path = Path::new(model_dir).join("tokenizer_config.json");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return ChatFormat::Plain;
+    };
+    if text.contains("<|user|>") && text.contains("<|assistant|>") {
+        ChatFormat::OlmoeInstruct
     } else {
-        format!("\nUser: {turn}\nAssistant:")
+        ChatFormat::Plain
+    }
+}
+
+fn chat_prompt(format: ChatFormat, turn: &str, first_turn: bool) -> String {
+    match format {
+        ChatFormat::OlmoeInstruct => {
+            if first_turn {
+                format!("<|endoftext|>\n<|user|>\n{turn}\n<|assistant|>")
+            } else {
+                format!("\n<|user|>\n{turn}\n<|assistant|>")
+            }
+        }
+        ChatFormat::Plain => {
+            if first_turn {
+                format!("User: {turn}\nAssistant:")
+            } else {
+                format!("\nUser: {turn}\nAssistant:")
+            }
+        }
     }
 }
 
@@ -323,9 +361,11 @@ fn cmd_chat_cpu(model_dir: &str, max_tokens: usize) -> anyhow::Result<()> {
         "OLMoE: {}d×{}L, {}e top-{} (CPU FP32)",
         c.hidden_size, c.num_layers, c.num_experts, c.num_experts_per_tok
     );
+    let chat_format = detect_chat_format(model_dir);
     println!(
-        "{} Type /exit or Ctrl-D to quit.",
-        style("Chat ready.").cyan()
+        "{} Type /exit or Ctrl-D to quit. Template: {}.",
+        style("Chat ready.").cyan(),
+        chat_format.name()
     );
 
     let nl = c.num_layers;
@@ -350,7 +390,7 @@ fn cmd_chat_cpu(model_dir: &str, max_tokens: usize) -> anyhow::Result<()> {
         }
         let _ = rl.add_history_entry(input);
 
-        let prompt = chat_prompt(input, first_turn);
+        let prompt = chat_prompt(chat_format, input, first_turn);
         first_turn = false;
         let tokens = model.encode(&prompt)?;
         let mut logits = Vec::new();
@@ -368,6 +408,8 @@ fn cmd_chat_cpu(model_dir: &str, max_tokens: usize) -> anyhow::Result<()> {
         for _ in 0..max_tokens {
             let next = argmax(&logits);
             if is_eos(&model, next) {
+                let _ = model.forward(&[next], &mut k_cache, &mut v_cache, pos)?;
+                pos += 1;
                 break;
             }
             let txt = model.decode(&[next])?;
@@ -509,9 +551,11 @@ fn cmd_chat(model_dir: &str, max_tokens: usize, quant: &str) -> anyhow::Result<(
     let qt = parse_quant(quant);
     println!("Uploading to GPU (quant: {qt:?})...");
     let mut gpu = ferrule_cuda::forward::GpuOlmoeModel::from_cpu(&model, qt)?;
+    let chat_format = detect_chat_format(model_dir);
     println!(
-        "{} Type /exit or Ctrl-D to quit.",
-        style("Chat ready.").cyan()
+        "{} Type /exit or Ctrl-D to quit. Template: {}.",
+        style("Chat ready.").cyan(),
+        chat_format.name()
     );
 
     let mut first_turn = true;
@@ -531,7 +575,7 @@ fn cmd_chat(model_dir: &str, max_tokens: usize, quant: &str) -> anyhow::Result<(
         }
         let _ = rl.add_history_entry(input);
 
-        let prompt = chat_prompt(input, first_turn);
+        let prompt = chat_prompt(chat_format, input, first_turn);
         first_turn = false;
         let tokens = model.encode(&prompt)?;
         let mut logits = Vec::new();
@@ -547,6 +591,7 @@ fn cmd_chat(model_dir: &str, max_tokens: usize, quant: &str) -> anyhow::Result<(
         for _ in 0..max_tokens {
             let next = argmax(&logits);
             if is_eos(&model, next) {
+                let _ = gpu.forward(next)?;
                 break;
             }
             let txt = model.decode(&[next])?;

@@ -1,292 +1,276 @@
-# Ferrule: Agentic Edge Inference Runtime
+# Ferrule Architecture
 
-## 1. 项目定位
+Ferrule is a Rust-native edge runtime for sparse Mixture-of-Experts inference. The current milestone is practical: **OLMoE-1B-7B-0924-Instruct chats on GPU Q4_0 while keeping router, top-k experts, and the expert loop explicit**.
 
-Ferrule 是一个面向端侧部署的原生多模态推理引擎。两个核心差异化：
+![Ferrule current architecture](assets/ferrule-current-architecture.svg)
 
-- **llama.cpp 的竞争者**：Rust 原生、safetensors 原生、持久计算图、cuda_oxide 内核
-- **Elastic State Fabric 的边缘节点**：胖客户端 + 云端控制面的联合架构
+---
 
-当前阶段（v0.2）聚焦推理引擎本身。StateFabric 控制面在后续版本接入。
+## 1. Vision
 
-## 2. 总体架构
+Ferrule's goal is to become the **Rust-native edge runtime for sparse MoE models** and to explore a new LLM engineering rhythm beyond Python-first ML stacks.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   Elastic State Fabric (云端)                │
-│  StateObject / StateTablet / Transaction / KV Migration     │
-│  → autoscaling, routing, multi-tenant, checkpoint           │
-│  → Phase 5+ 接入                                            │
-├─────────────────────────────────────────────────────────────┤
-│                   Ferrule Edge Runtime (端侧)                │
-│                                                             │
-│  ferrule-app     CLI + GPU kernels (#[kernel]) + HTTP server │
-│  ferrule-model   模型架构层 (OLMoE → Gemma/Llama/Qwen/...)   │
-│  ferrule-graph   持久计算图 + CPU backend (CudaBackend stub) │
-│  ferrule-gguf    格式层 (GGUF + Safetensors, mmap)          │
-│  ferrule-core    类型系统 + Error                           │
-│                                                             │
-│  多级存储: GPU VRAM → CPU RAM → NVMe → HTTP Remote         │
-└─────────────────────────────────────────────────────────────┘
-```
+The thesis is simple: inference, rollout, quantization, cache management, and future training should share one native systems foundation. The runtime hot path should be explicit, typed, hardware-aware, and free from a Python control plane.
 
-## 3. 计算图引擎 (ferrule-graph)
+Near term, Ferrule should reach llama.cpp-level local usability for the supported MoE path: reliable chat, fast cached startup, sampling controls, model inspection, benchmarks, and quality checks.
 
-### 3.1 持久计算图
+Long term, Ferrule should differentiate through MoE-native and hardware-aware runtime state:
 
-与 llama.cpp 的核心差异：llama.cpp 每个 token 重建完整的 ggml 图，Ferrule 构建一次，GPU 常驻。
+- explicit router/top-k/expert execution
+- expert hot/cold profiling
+- expert offload and prefetch
+- paged KV/session state
+- LoRA/SFT and RL rollout state
+- cloud-built qcache/adapters consumed by edge runtimes
+- RISC-V/GPU/NPU scheduling hooks for future hardware co-design
+- distributed state management for qcache, KV, adapters, trajectories, and checkpoints
 
-```rust
-struct CGraph {
-    tensors: Vec<Tensor>,   // 权重 + 中间结果
-    ops: Vec<Op>,           // 预构建的操作序列
-    inputs: Vec<usize>,     // 每步更新的输入 (token embedding)
-    output: usize,          // 最终输出 (logits)
-}
-```
+The token hot path should remain local and fast. Coordination, migration, and training artifacts should live around it, not inside every decode step.
 
-每次 decode 只更新输入 tensor，然后 `.compute()` 执行全图。
+---
 
-### 3.2 算子
+## 2. Current Runtime
 
-| Op | 说明 |
+| Crate | Role |
 |---|---|
-| MatMul | 矩阵乘法，CPU 用 rayon GEMV，CUDA 用 `gemv_f32` / `gemv_q4_0` kernel |
-| RmsNorm | RMS normalization，支持权重融合 |
-| SiLU | SiLU 激活 (`x * sigmoid(x)`) |
-| SwiGlu | 融合 SiLU(gate) * up |
-| Softmax | 标准 softmax |
-| RoPE | Rotary Position Embedding |
-| Embedding | 词嵌入查表 |
-| Reshape / Transpose / Add / Mul | 基础形状/算术操作 |
+| `ferrule-core` | shared errors and metadata |
+| `ferrule-gguf` | GGUF and safetensors readers |
+| `ferrule-graph` | persistent graph prototype and CPU backend |
+| `ferrule-quant` | Q4_0, Q8_0, Q2S, T1S quantization |
+| `ferrule-model` | OLMoE loader, tokenizer, CPU FP32 reference forward |
+| `ferrule-cuda` | cuda-oxide kernels and GPU OLMoE forward pass |
+| `ferrule-cli` | `chat`, `run`, `gpu-run`, `info`, `cuda`, `bench` |
 
-### 3.3 Backend
+Current inference flow:
 
-```
-CpuBackend  → rayon 并行 (默认)
-CudaBackend → cuda_oxide #[kernel] 宏，Rust 编译到 PTX
-```
-
-当前 GPU kernel 清单：
-
-| Kernel | 说明 | 来源参考 |
-|--------|------|----------|
-| `gemv_f32` / `gemv_q4` / `gemv_q2` / `gemv_t1` | 量化 GEMV，4x unroll ILP | llama.cpp vecdotq |
-| `gemv_dual_q4` / `gemv_triple_q4` | 融合双/三矩阵 GEMV（gate+up 或 QKV 一次遍历） | — |
-| `rms_norm_fused` | 融合 RMS norm：SharedArray 并行 reduction + ptx_asm rsqrt + apply | llama.cpp block_reduce |
-| `attn_scores` / `attn_combine_softmax` | GQA-aware attention scores + inline softmax + V combine | llama.cpp flash-attn 简化版 |
-| `router_topk` | GPU-side top-k expert 选择 + softmax | — |
-| `silu` / `silu_mul` | SiLU 激活，使用 ptx_asm ex2.approx 的 fast_exp | — |
-| `rope` | Rotary Position Embedding | — |
-| `embed_lookup` / `mul` / `add` / `saxpy` | 基础逐元素操作 | — |
-
-关键设计：
-- **零 CPU round-trip**：attention softmax 与 expert 选择均在 GPU 完成
-- **Shared memory reduction**：rms_norm 使用 SharedArray + sync_threads 树形归约
-- **PTX 内联汇编**：`rsqrt.approx.f32`（RMS norm）、`ex2.approx.f32`（fast exp）
-
-## 4. 多级存储
-
-一个 weight tensor 的定位链：
-
-```
-① GPU VRAM (24GB)   ← attention weights, norms, KV cache 常驻
-     ↓ miss (LRU eviction)
-② CPU RAM (32GB)    ← mmap 零拷贝, 热 expert cache
-     ↓ miss
-③ NVMe (100GB)      ← direct I/O, 温 expert cache
-     ↓ miss
-④ HTTP Range 请求    ← 冷 expert 按需流式拉取 (Phase 5)
+```text
+safetensors + tokenizer files
+        ↓
+ferrule-model OLMoE loader
+        ↓
+CPU FP32 tensors
+        ↓
+Q4_0 / Q8_0 quantization
+        ↓
+model.q4_0_llama.qcache
+        ↓
+CUDA device buffers
+        ↓
+per-token GPU decode
+        ↓
+chat / one-shot generation
 ```
 
-参考论文：FlexGen (offload 调度), PowerInfer (热/冷 expert 分离), vDNN (内存虚拟化)。
+Important limitation: a qcache hit avoids re-quantization, but Ferrule still loads the full CPU FP32 model first. **qcache-only startup is the next major systems milestone.**
 
-### 4.1 WeightCatalog
+---
 
-```rust
-struct WeightCatalogEntry {
-    name: String,
-    shape: [usize; 4],
-    dtype: QuantType,
-    location: StorageLocation,  // Ram | Disk | Remote | Owned
+## 3. OLMoE Forward Pass
+
+Per token, each layer runs:
+
+1. input RMSNorm
+2. Q/K/V projections
+3. Q/K head norms
+4. RoPE
+5. append K/V to KV cache
+6. attention score, softmax, value combine
+7. output projection and residual
+8. FFN RMSNorm
+9. router projection
+10. top-k expert selection
+11. expert gate/up/down loop
+12. weighted expert accumulation and residual
+
+Then Ferrule runs final RMSNorm, `lm_head`, and token selection.
+
+### Router correctness contract
+
+Ferrule follows the model config exactly:
+
+- `norm_topk_prob=false`: softmax over **all experts**, select top-k probabilities, do not renormalize.
+- `norm_topk_prob=true`: select top-k and renormalize selected probabilities.
+
+This fixed the previous OLMoE-Instruct chat degeneration. Renormalizing top-k expert probabilities when the config says not to over-amplifies expert outputs.
+
+---
+
+## 4. GPU Runtime
+
+`GpuOlmoeModel` owns one CUDA context, one stream, persistent device buffers, and reusable scratch buffers.
+
+Persistent state:
+
+- embedding table and `lm_head` in FP32
+- norm weights and router weights in FP32
+- quantized attention projections
+- quantized expert projections
+- RoPE tables
+- per-layer K/V cache
+- hidden, attention, router, expert, and logits scratch buffers
+
+Key kernels:
+
+| Kernel | Purpose |
+|---|---|
+| `embed_lookup` | token embedding lookup |
+| `gemv_f32` | router and `lm_head` projections |
+| `gemv_q4`, `gemv_q4_off` | Q4_0 GEMV and expert-offset GEMV |
+| `gemv_q8`, `gemv_q8_off` | Q8_0 GEMV and expert-offset GEMV |
+| `gemv_dual_q4_off` | fused Q4_0 expert gate/up GEMV |
+| `gemv_triple_q4` | fused Q/K/V path when dimensions match |
+| `rms_norm_fused` | RMSNorm reduction and apply |
+| `rope` | rotary position embedding |
+| `attn_scores` | GQA-aware attention scores |
+| `attn_combine_softmax` | softmax and V accumulation |
+| `router_topk` | all-expert softmax and top-k selection |
+| `silu_mul` | SiLU(gate) × up |
+| `saxpy` | weighted accumulation and residual updates |
+
+Current decode is single-session and greedy. Batch prefill, paged KV, sampling, CUDA graph replay, and server scheduling are planned.
+
+---
+
+## 5. Quantization and qcache
+
+### Q4_0
+
+Ferrule Q4_0 matches llama.cpp `block_q4_0`:
+
+```text
+block size: 32 values
+storage:    16 bytes per block
+byte j:     low nibble  = value j
+byte j:     high nibble = value j + 16
+scale:      d = max_value_at_absmax / -8
+value:      (q - 8) * d
+```
+
+The current compatible cache suffix is:
+
+```text
+model.q4_0_llama.qcache
+```
+
+### Q8_0
+
+Q8_0 quantizer and CUDA GEMV kernels exist, including expert-offset GEMV. Q8_0 should become the next accuracy baseline after qcache-only loading removes CPU RAM pressure.
+
+### qcache target
+
+The current qcache stores quantized per-layer projection and expert weights. The next format should add a manifest:
+
+```text
+QCacheManifest {
+  model_id,
+  source_revision_or_hash,
+  tokenizer_hash,
+  quant_type,
+  layout_version,
+  tensor_shapes,
+  dtype_policy,
+  file_chunks,
+  checksums,
+  compatible_runtime_versions
 }
 ```
 
-Safetensors index.json → shard file + offset → StorageLocation::Disk。
-GGUF 文件 → mmap → StorageLocation::Ram。
+This enables local qcache-only startup now and remote qcache distribution later.
 
-## 5. 模型格式 (ferrule-gguf)
+---
 
-### 5.1 GGUF
+## 6. Alignment Targets
 
-llama.cpp 的标准格式。42 种量化类型（IQ1_S ~ Q8_K, MXFP4, NVFP4），mmap 友好。
+### llama.cpp parity that matters first
 
-### 5.2 Safetensors (差异化)
+| Capability | Ferrule today | Target |
+|---|---|---|
+| chat CLI | basic REPL | sampling, stop strings, history, templates |
+| model metadata | `info` | qcache/model manifest inspection |
+| quantization | Q4_0/Q8_0/Q2S/T1S | Q8 validation, mixed precision, K-quant/AWQ track |
+| benchmarks | CUDA GEMV + graph bench | prompt/decode tokens/sec report |
+| quality checks | manual smoke tests | logits diff, perplexity, golden token tests |
+| loading | safetensors first | qcache-only, streaming quantization |
+| serving | none | small OpenAI-compatible HTTP server |
+| offload | none | expert-aware CPU/NVMe offload |
 
-HuggingFace 标准格式，无需转换。支持 BF16/F16/F32/FP8 E4M3 dtype。头信息 JSON + 数据段 mmap，零拷贝读取。
+Ferrule should stay selective: CUDA + sparse MoE is the current leverage point. Broad backend coverage can wait.
 
-```rust
-let sf = SafeTensorsFile::open("model-00001.safetensors")?;
-let embed = sf.tensor("model.embed_tokens.weight")?;
-let f32_data = sf.tensor_f32(embed)?; // BF16 → f32 自动转换
-```
+### Modern inference systems to track
 
-## 6. 量化内核 (ferrule-kernels)
+- vLLM/PagedAttention: paged KV and continuous batching
+- SGLang: prefix/radix KV reuse and structured generation
+- FlashAttention: efficient exact attention for long context and prefill
+- QServe/AWQ/KVQuant/KIVI: weight, activation, and KV quantization co-design
+- PowerInfer/FlexGen/LLM-in-a-flash: hot/cold locality and out-of-core scheduling
 
-融合反量化 + 矩阵乘法的算子。支持 Q4_0, Q4_K, Q8_0，每条输出 channel 一次遍历完成，无中间 f32 buffer。
+---
 
-```
-CPU:  for row in 0..n:        // rayon 并行
-          for block in 0..n_blocks:
-              d = f16_to_f32(block.scale)
-              for 4-bit quant in block:
-                  dot += x[i] * d * (q - 8)
+## 7. Elastic State Fabric
 
-CUDA: 每个 thread 处理一个 output channel
-      └─ gemv_q4_0 kernel → 共享内存分块 + warp reduce
-```
+Elastic State Fabric is the future state layer for distributed rollout, training, checkpointing, expert offload, and session migration. It is not implemented yet.
 
-## 7. 模型架构 (ferrule-model)
+Core objects:
 
-### 7.1 目标模型
+| Object | Purpose |
+|---|---|
+| `StateObject` | atomic state item: qcache chunk, KV page, adapter, trajectory, checkpoint chunk |
+| `StateTablet` | ownership group for related state objects |
+| `StateAgent` | worker-local cache, prefetch, eviction, transfer, and verification agent |
+| `ModelVersion` | runnable model identity: source, tokenizer, quant, qcache layout, adapters |
+| `SessionBinding` | `session_id → worker_id + kv_tablet_id + route_epoch` |
 
-| 模型 | 参数量 | 架构 | 用途 |
+State classes:
+
+| Class | Examples | Durability | Hot path? |
 |---|---|---|---|
-| Gemma 4 26B-A4B | 26B / 4B active | MoE, 128 experts, sliding+global attn | 主目标 |
-| Gemma 3 12B | 12B dense | 标准 decoder-only | 备选 |
-| 将来 | - | multimodal (vision+audio) | 多模态 |
+| Static model state | safetensors, tokenizer, qcache | durable | no |
+| Runtime model state | device buffers, expert cache | local/cache | yes |
+| Session state | KV pages, RNG state, chat history | semi-durable | yes |
+| RL state | trajectories, rewards, advantages | durable | no |
+| Training state | adapters, gradients, optimizer shards | durable | no |
 
-### 7.2 Gemma 4 26B-A4B 架构要点
+A future migration protocol should be session-first and route-epoch protected:
 
-```
-hidden_size: 2816         ← 极小核心 (类似 300M 模型)
-num_layers: 30            ← 25 sliding_attention + 5 full_attention
-num_experts: 128          ← 每层 128 个 expert FFN
-top_k_experts: 8          ← 每 token 激活 8 个 expert
-moe_intermediate: 704     ← expert FFN: 2816→704→2816 (~6M params)
-vocab_size: 262K          ← 大词表
-vision: SigLIP 1152d      ← 280 个 visual token
-context: 262K             ← 长上下文 (sliding window 1024)
-```
+```mermaid
+sequenceDiagram
+    participant R as Router
+    participant A as Source worker
+    participant B as Destination worker
+    participant M as Metadata
 
-参数分解：
-- Dense 核心 (attention + norms + embedding): ~500MB Q4_K
-- Expert FFNs (30 × 128 = 3840 个): ~14GB Q4_K
-- Vision encoder: ~1GB
-- 总计 Q4_K: ~15GB → 3090 可全量加载
-
-## 8. 多模态流水线
-
-```
-┌──────────┐   ┌──────────────┐   ┌──────────────┐
-│  Image   │→  │ Vision Encoder │→  │ 280 soft     │
-│  224×224 │   │ SigLIP 1152d  │   │ tokens        │
-└──────────┘   └──────────────┘   └──────┬───────┘
-                                         │
-┌──────────┐   ┌──────────────┐         │
-│  Audio   │→  │ Audio Encoder │→ ──────┤
-│  16kHz   │   │ (TBD)        │         │
-└──────────┘   └──────────────┘         │
-                                         ↓
-                                  ┌──────────────┐
-                                  │  LLM Decoder │
-                                  │  (prefill +  │
-                                  │   decode)     │
-                                  └──────────────┘
+    R->>M: mark session draining
+    R->>A: stop accepting new decode steps
+    A->>A: finish in-flight token and sync CUDA stream
+    A->>M: publish KV snapshot manifest
+    B->>A: pull and verify KV pages
+    B->>M: claim session with route_epoch + 1
+    R->>B: route future tokens
 ```
 
-视觉编码器与语言模型联合 prefill，visual token 和 text token 作为统一序列输入。
+First implementation step: qcache manifest discipline. It is useful locally today and becomes the first Fabric-compatible artifact later.
 
-## 9. StateFabric (未来接入)
+---
 
-当前代码库中保留但未激活的模块。负责：
+## 8. Training and RL Path
 
-- **StateObject**：统一的状态单元 (KVCache, HiddenState, WeightShard, Trajectory, ...)
-- **StateTablet**：分片管理，支持迁移和分裂
-- **StateTransaction**：跨节点的状态一致性 (2PC)
-- **KV Migration**：Session-first quiesce-based 迁移
-- **Autoscaling**：基于负载的自动扩缩
-- **Routing**：模型版本感知的请求路由
+Ferrule should evolve in stages:
 
-详见 [new_arch.md](new_arch.md)。
+1. **Inference worker**: current single-GPU MoE decode.
+2. **Rollout worker**: sampling, logprobs, trajectory records, model/adaptor version tags.
+3. **LoRA/SFT prototype**: adapter representation, injection/merge path, minimal training loop.
+4. **RL loop**: reward interface, advantage computation, PPO/GRPO-style driver.
+5. **Distributed state**: qcache registry, trajectory store, checkpoint registry, session/expert placement.
 
-## 10. 与 llama.cpp 的差异
+A rollout trajectory should include model version, adapter version, prompt tokens, generated tokens, logprobs, rewards, terminal reason, sampling config, and tool/environment events.
 
-| | llama.cpp | Ferrule |
-|---|---|---|
-| 语言 | C/C++ | Rust |
-| 格式 | GGUF 强制 | GGUF + Safetensors 原生 |
-| 计算图 | 每 token 重建 | 持久化，一次构建 |
-| GPU 后端 | .cu + nvcc | cuda_oxide (#[kernel]) |
-| 量化 | 42 种 | Q4_0/Q4_K/Q8_0 (扩展中) |
-| 多模态 | 后追加 | 原生 pipeline stage |
-| 存储 | CPU/GPU 两档 | 四档 (GPU→RAM→NVMe→HTTP) |
-| 客户端 | 纯本地 | 胖客户端 + 云端控制面 |
-| 训练/RL | 无 | 设计预留 (trajectory, advantage) |
+---
 
-## 11. MVP 路线
+## 9. Immediate Decisions
 
-### Phase 1: CPU 推理 (done)
-- [x] GGUF + Safetensors 读取
-- [x] 持久计算图
-- [x] CPU backend (rayon)
-- [x] 合成模型 benchmark
-
-### Phase 2: CUDA 加速 (当前)
-- [x] cuda_oxide 集成, #[kernel] 宏编译通过
-- [x] 基础 GPU kernel (gemv_f32, rms_norm, silu, mul, add, saxpy)
-- [x] 消除 CPU roundtrip (saxpy + device rms)
-- [ ] gemv_q4_k 融合量化 kernel
-- [ ] Q4_K 量化管线
-- [ ] RoPE + KV cache
-
-### Phase 3: Gemma 4 模型
-- [ ] Gemma 4 26B-A4B safetensors 下载
-- [ ] Gemma MoE 架构 (2816d core, 128e/layer, top-8, sliding+global attn)
-- [ ] Vision encoder (SigLIP 1152d)
-- [ ] 262K vocab tokenizer
-
-### Phase 4: 多模态
-- [ ] Vision encoder (SigLIP)
-- [ ] 多模态 prefill
-
-### Phase 5: 分布式
-- [ ] HTTP 远端存储 (Range 请求)
-- [ ] StateFabric metadata 接入
-- [ ] 胖客户端 + 云端联合推理
-
-## 12. 关键参考论文
-
-| 论文 | 相关能力 |
-|---|---|
-| FlexGen | Offload 调度、多级存储 (GPU→CPU→Disk) |
-| PowerInfer | 热/冷 expert 分离、激活稀疏性利用 |
-| MoE-Lightning | MoE 推理中的 expert 预取 |
-| vLLM (PagedAttention) | KV cache 分页管理 |
-| vDNN | DNN 内存虚拟化 (GPU→CPU swapping) |
-| ZeRO-Inference | 权重分片 offload |
-| QLoRA | NF4 量化 + LoRA 微调 |
-
-完整论文清单见 [paper_reads.md](paper_reads.md)。
-
-## 13. 2025-2026 最新论文洞察
-
-### MoE 推理优化
-
-| 论文 | 关键洞察 | 对 Ferrule 的启示 |
-|---|---|---|
-| **Fate** (Feb 2025) | 跨层 gate 预测: 当前层 hidden state 可 99% 预测下一层 expert，零 GPU 开销 | Scheduler 应在当前层计算时为下一层做 expert prefetch |
-| **FloE** (May 2025, ICML) | 9.3x expert 压缩 + sparse 预测，3090 上 48.7x 加速 | Expert 内参数矩阵压缩是 PCIe 瓶颈的解法 |
-| **SliceMoE** (Dec 2025, DAC) | Bit-sliced cache: 按精度切片缓存，动态分配 precision | 存储应支持 sub-expert 粒度 |
-| **MoEpic** (Sep 2025) | Expert 垂直分割 top/bottom，缓存 top segment | WeightCatalog 需 split point 元数据 |
-| **D²MoE** (Apr 2025, MobiCom) | Matryoshka 嵌套量化: 每位宽互为子集，运行时选 bit-width | 量化应支持可调精度 |
-| **MoBiLE** (Oct 2025) | Big-little expert: 非重要 token 用半数 expert | Expert count 可动态调整 |
-| **HybriMoE** (Apr 2025, DAC) | CPU+GPU 混合调度的动态负载均衡 | CPU 也应参与 expert 计算 |
-
-### 量化技术
-
-| 论文 | 洞察 |
-|---|---|
-| **Q-Palette** (Sep 2025, NeurIPS) | 分数位宽量化器 + trellis-coded quantization，接近信息论最优 |
-| **Vec-LUT** (Dec 2025, MobiSys) | 向量化查表推理，4.2x 加速，已集成 llama.cpp |
-| **CARVQ** (Oct 2025, EMNLP) | Embedding 压缩到 ~1.6 bits via residual VQ |
+1. Keep OLMoE-Instruct as the golden correctness model.
+2. Build qcache-only startup before adding larger MoE models.
+3. Add CPU/GPU logits comparison before deep kernel tuning.
+4. Add sampling and real chat templates before server work.
+5. Treat Qwen MoE as the next model-family target after streaming quantization.
+6. Treat expert profiling/offload as Ferrule's main differentiator over dense local runtimes.

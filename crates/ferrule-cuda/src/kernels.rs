@@ -820,6 +820,7 @@ pub mod kernels {
         mut weights: DisjointSlice<f32>,
         ne: u32,
         k: u32,
+        norm_topk_prob: u32,
     ) {
         static mut SMEM: SharedArray<f32, 128> = SharedArray::UNINIT;
         let tid = thread::threadIdx_x() as usize;
@@ -834,11 +835,27 @@ pub mod kernels {
         }
         thread::sync_threads();
 
-        // Thread 0: top-k selection + softmax
+        // Thread 0: top-k selection + softmax weights.
+        // HF OLMoE/Mixtral semantics: softmax is over all experts first, then top-k is
+        // selected. Only renormalize selected probabilities when norm_topk_prob=true.
         if tid == 0 {
-            // Simple top-k: k passes of find-max-and-mask
+            let mut max_v = f32::NEG_INFINITY;
+            for i in 0..ne {
+                let v = unsafe { SMEM[i] };
+                if v > max_v {
+                    max_v = v;
+                }
+            }
+
+            let mut all_sum = 0.0f32;
+            for i in 0..ne {
+                all_sum += fast_exp(unsafe { SMEM[i] } - max_v);
+            }
+
+            // Simple top-k: k passes of find-max-and-mask.
             let mut top_val = [0.0f32; 8];
             let mut top_idx = [0.0f32; 8];
+            let mut top_sum = 0.0f32;
             for j in 0..k {
                 let mut best_val = f32::NEG_INFINITY;
                 let mut best_idx = 0usize;
@@ -849,21 +866,20 @@ pub mod kernels {
                         best_idx = i;
                     }
                 }
-                top_val[j] = best_val;
+                let prob_num = fast_exp(best_val - max_v);
+                top_val[j] = prob_num;
                 top_idx[j] = best_idx as f32;
+                top_sum += prob_num;
                 unsafe {
                     SMEM[best_idx] = f32::NEG_INFINITY;
                 }
             }
 
-            // Softmax — use PTX ex2-based fast_exp for accuracy
-            let max_v = top_val[0];
-            let mut sum = 0.0f32;
-            for j in 0..k {
-                let w = fast_exp(top_val[j] - max_v);
-                top_val[j] = w;
-                sum += w;
-            }
+            let denom = if norm_topk_prob != 0 {
+                top_sum
+            } else {
+                all_sum
+            };
 
             // Write outputs
             let idx_ptr = indices.as_mut_ptr();
@@ -871,7 +887,7 @@ pub mod kernels {
             for j in 0..k {
                 unsafe {
                     *idx_ptr.add(j) = top_idx[j];
-                    *w_ptr.add(j) = top_val[j] / sum;
+                    *w_ptr.add(j) = top_val[j] / denom;
                 }
             }
         }

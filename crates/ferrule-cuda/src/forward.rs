@@ -156,6 +156,7 @@ pub struct GpuOlmoeModel {
     mid: usize,
     vocab: usize,
     eps: f32,
+    norm_topk_prob: bool,
     qt: QuantType,
     scratch: Scratch,
     // ── KV cache (GPU) + RoPE (GPU) ──
@@ -512,6 +513,7 @@ impl GpuOlmoeModel {
             mid,
             vocab: c.vocab_size,
             eps: c.rms_norm_eps,
+            norm_topk_prob: c.norm_topk_prob,
             qt,
             scratch,
             nh,
@@ -776,6 +778,7 @@ impl GpuOlmoeModel {
                 topk_w,
                 self.ne as u32,
                 self.na as u32,
+                self.norm_topk_prob as u32,
             ))?;
             // Download only k indices + k weights (tiny: 2×8×4=64 bytes vs 64×4=256 for logits)
             let tk_idx = cu(topk_idx.to_host_vec(s))?;

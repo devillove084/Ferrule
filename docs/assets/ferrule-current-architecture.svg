@@ -1,0 +1,192 @@
+<svg width="1280" height="760" viewBox="0 0 1280 760" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Ferrule system vision</title>
+  <desc id="desc">Ferrule architecture and long-term vision: Rust-native MoE runtime, cuda-oxide kernels, state-aware edge-cloud loop, and future RISC-V hardware co-design.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="760" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#08111F"/>
+      <stop offset="0.45" stop-color="#111B35"/>
+      <stop offset="1" stop-color="#062522"/>
+    </linearGradient>
+    <linearGradient id="orange" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#FDBA74"/>
+      <stop offset="1" stop-color="#EA580C"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#93C5FD"/>
+      <stop offset="1" stop-color="#2563EB"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#67E8F9"/>
+      <stop offset="1" stop-color="#0891B2"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#86EFAC"/>
+      <stop offset="1" stop-color="#16A34A"/>
+    </linearGradient>
+    <linearGradient id="purple" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#D8B4FE"/>
+      <stop offset="1" stop-color="#7C3AED"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#FDE68A"/>
+      <stop offset="1" stop-color="#D97706"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#000000" flood-opacity="0.34"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#93C5FD"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#86EFAC"/>
+    </marker>
+    <style>
+      .title { font: 800 36px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #F8FAFC; letter-spacing: -0.03em; }
+      .subtitle { font: 500 15px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #CBD5E1; }
+      .label { font: 750 18px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #F8FAFC; }
+      .small { font: 500 12px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #E2E8F0; }
+      .tiny { font: 500 11px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #B8C4D6; }
+      .mono { font: 650 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; fill: #F1F5F9; }
+      .card { filter: url(#shadow); stroke: rgba(255,255,255,.18); stroke-width: 1; }
+      .panel { fill: rgba(15, 23, 42, .78); stroke: rgba(148,163,184,.24); stroke-width: 1; filter: url(#shadow); }
+      .pill { fill: rgba(15, 23, 42, .56); stroke: rgba(226,232,240,.16); stroke-width: 1; }
+      .flow { stroke: #93C5FD; stroke-width: 2.4; marker-end: url(#arrow); fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .flowGreen { stroke: #86EFAC; stroke-width: 2.4; marker-end: url(#arrowGreen); fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .dash { stroke-dasharray: 7 7; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="760" fill="url(#bg)"/>
+  <circle cx="1100" cy="120" r="240" fill="#2563EB" opacity="0.10"/>
+  <circle cx="190" cy="640" r="270" fill="#14B8A6" opacity="0.11"/>
+  <circle cx="690" cy="390" r="360" fill="#A855F7" opacity="0.07"/>
+
+  <text x="60" y="62" class="title">Ferrule System Vision</text>
+  <text x="60" y="91" class="subtitle">Break the Python-first ML workflow • Build train/infer systems in Rust • Co-design sparse MoE with edge, cloud, and hardware</text>
+
+  <g transform="translate(60 122)">
+    <rect class="card" width="250" height="156" rx="24" fill="url(#green)"/>
+    <text x="24" y="36" class="label">Current Milestone</text>
+    <text x="24" y="66" class="small">OLMoE-Instruct chat works</text>
+    <text x="24" y="88" class="small">CPU FP32 + GPU Q4_0</text>
+    <text x="24" y="110" class="small">llama.cpp Q4_0 layout</text>
+    <text x="24" y="132" class="small">router/top-k/expert path</text>
+  </g>
+
+  <g transform="translate(372 112)">
+    <rect class="card" width="300" height="178" rx="26" fill="url(#orange)"/>
+    <text x="26" y="38" class="label">Rust Runtime Core</text>
+    <text x="26" y="67" class="small">typed model, quant, and state metadata</text>
+    <text x="26" y="90" class="small">ownership for qcache, KV, CUDA buffers</text>
+    <text x="26" y="113" class="small">native binary; no Python in hot path</text>
+    <text x="26" y="136" class="small">scheduler/state-agent ready design</text>
+    <rect x="24" y="150" width="176" height="1" fill="rgba(255,255,255,.26)"/>
+    <text x="26" y="169" class="mono">ferrule-model / cli / state</text>
+  </g>
+
+  <g transform="translate(735 112)">
+    <rect class="card" width="250" height="178" rx="26" fill="url(#blue)"/>
+    <text x="26" y="38" class="label">cuda-oxide Path</text>
+    <text x="26" y="67" class="small">Rust-owned contexts and streams</text>
+    <text x="26" y="90" class="small">custom quantized GEMV kernels</text>
+    <text x="26" y="113" class="small">router top-k on GPU</text>
+    <text x="26" y="136" class="small">future fused expert kernels</text>
+    <rect x="24" y="150" width="158" height="1" fill="rgba(255,255,255,.24)"/>
+    <text x="26" y="169" class="mono">ferrule-cuda</text>
+  </g>
+
+  <g transform="translate(1040 122)">
+    <rect class="card" width="180" height="156" rx="24" fill="url(#purple)"/>
+    <text x="24" y="36" class="label">MoE Engine</text>
+    <text x="24" y="66" class="small">router logits</text>
+    <text x="24" y="88" class="small">top-k experts</text>
+    <text x="24" y="110" class="small">expert gate/up/down</text>
+    <text x="24" y="132" class="small">KV-aware decode</text>
+  </g>
+
+  <path class="flow" d="M310 200 C340 200 344 200 372 200"/>
+  <path class="flow" d="M672 200 C704 200 708 200 735 200"/>
+  <path class="flow" d="M985 200 C1010 200 1014 200 1040 200"/>
+
+  <g transform="translate(80 342)">
+    <rect class="panel" width="338" height="194" rx="26"/>
+    <text x="26" y="40" class="label">State Fabric Direction</text>
+    <text x="26" y="68" class="small">Make runtime artifacts explicit and movable.</text>
+    <g transform="translate(24 90)">
+      <rect class="pill" width="132" height="34" rx="12"/>
+      <text x="14" y="22" class="tiny">qcache manifests</text>
+    </g>
+    <g transform="translate(174 90)">
+      <rect class="pill" width="128" height="34" rx="12"/>
+      <text x="14" y="22" class="tiny">model versions</text>
+    </g>
+    <g transform="translate(24 134)">
+      <rect class="pill" width="132" height="34" rx="12"/>
+      <text x="14" y="22" class="tiny">KV pages</text>
+    </g>
+    <g transform="translate(174 134)">
+      <rect class="pill" width="128" height="34" rx="12"/>
+      <text x="14" y="22" class="tiny">trajectories</text>
+    </g>
+  </g>
+
+  <g transform="translate(471 330)">
+    <rect class="panel" width="338" height="222" rx="28" stroke="rgba(251,191,36,.36)"/>
+    <text x="26" y="42" class="label">New LLM Engineering Loop</text>
+    <text x="26" y="72" class="small">Move beyond Python glue and offline-only ML flow.</text>
+    <g transform="translate(26 96)">
+      <rect class="pill" width="282" height="34" rx="12"/>
+      <text x="14" y="22" class="small">inference, rollout, and training share state</text>
+    </g>
+    <g transform="translate(26 140)">
+      <rect class="pill" width="282" height="34" rx="12"/>
+      <text x="14" y="22" class="small">quantization policy follows hardware feedback</text>
+    </g>
+    <g transform="translate(26 184)">
+      <rect class="pill" width="282" height="34" rx="12"/>
+      <text x="14" y="22" class="small">MoE routing guides placement and prefetch</text>
+    </g>
+  </g>
+
+  <g transform="translate(862 342)">
+    <rect class="panel" width="338" height="194" rx="26" stroke="rgba(34,211,238,.38)"/>
+    <text x="26" y="40" class="label">Edge • Cloud • Hardware</text>
+    <text x="26" y="68" class="small">Co-design runtime policy with real devices.</text>
+    <g transform="translate(24 90)">
+      <rect class="pill" width="132" height="34" rx="12"/>
+      <text x="14" y="22" class="tiny">edge privacy</text>
+    </g>
+    <g transform="translate(174 90)">
+      <rect class="pill" width="128" height="34" rx="12"/>
+      <text x="14" y="22" class="tiny">cloud artifacts</text>
+    </g>
+    <g transform="translate(24 134)">
+      <rect class="pill" width="132" height="34" rx="12"/>
+      <text x="14" y="22" class="tiny">GPU / NPU</text>
+    </g>
+    <g transform="translate(174 134)">
+      <rect class="pill" width="128" height="34" rx="12"/>
+      <text x="14" y="22" class="tiny">RISC-V path</text>
+    </g>
+  </g>
+
+  <path class="flowGreen" d="M520 290 C520 312 520 318 520 330"/>
+  <path class="flowGreen" d="M860 290 C860 315 922 315 982 342"/>
+  <path class="flow dash" d="M1040 270 C1010 326 970 344 862 410"/>
+  <path class="flow dash" d="M372 266 C270 308 230 324 210 342"/>
+  <path class="flowGreen" d="M418 440 C440 440 448 440 471 440"/>
+  <path class="flowGreen" d="M809 440 C832 440 840 440 862 440"/>
+
+  <g transform="translate(80 600)">
+    <rect class="card" width="1120" height="96" rx="28" fill="rgba(15,23,42,.72)" stroke="rgba(216,180,254,.38)"/>
+    <text x="28" y="38" class="label">North Star</text>
+    <text x="28" y="66" class="small">A Python-free hot path for train/infer systems: Rust orchestration, cuda-oxide kernels, explicit MoE state, and hardware-aware scheduling.</text>
+  </g>
+
+  <g transform="translate(930 705)">
+    <rect width="270" height="38" rx="19" fill="rgba(34,197,94,.13)" stroke="rgba(134,239,172,.38)"/>
+    <circle cx="25" cy="19" r="6" fill="#86EFAC"/>
+    <text x="44" y="24" class="tiny">Milestone now: OLMoE MoE chat works</text>
+  </g>
+</svg>

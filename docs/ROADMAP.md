@@ -1,124 +1,312 @@
 # Ferrule Roadmap
 
-> 端侧 RL 推理/训练框架。目标：比 llama.cpp 更快、更适合端侧 RL。
+Ferrule's current milestone is **OLMoE-Instruct chat on GPU Q4_0** with router, top-k experts, and the expert loop preserved.
 
-## 当前状态
+This roadmap is organized by priority, not dates. The immediate strategy is:
 
-- **模型**: OLMoE 1B (16L×2048d, 64e, top-8 MoE) — 正确推理 ✓
-- **GPU**: Q4_0 量化, cuda-oxide PTX kernels
-- **已完成 Level 1**: rms_norm_fused (shared memory 并行 reduction), router_topk (GPU-side top-k)
-- **缺失**: Flash Attention, batch prefill, PagedAttention, RL 训练基础设施
-
----
-
-## Level 1: GPU 推理正确性 + 基础性能 (当前 → 50+ tok/s)
-
-### 1.1 消除 CPU round-trip
-
-- [x] `compute_rms` PTX rsqrt fix
-- [x] **GPU softmax** — attn_combine_softmax fused kernel, 零 CPU round-trip
-- [x] **GPU top-k expert selection** — router_topk kernel: shared memory + GPU-side top-k + softmax
-
-### 1.2 推理吞吐
-
-- [x] **Multi-token batch prefill** — prefill 阶段跳过中间 token 的 lm_head（仅最后 token 计算 logits）
-- [x] **RMS norm warp reduce** — rms_norm_fused: shared memory 并行 reduction + rsqrt + apply 融合为一个 kernel
-- [ ] **Multi-layer pipeline** — 用 CUDA stream 重叠 layer N 的计算和 layer N+1 的 weight 加载
-- [x] **Fused rms_norm + multiply** — rms_norm_fused 单 kernel 完成 compute_rms + rms_norm_apply
-- [x] **Interactive chat** — rustyline + console 彩色交互式对话，KV cache 多轮持久
-
-### 1.3 模型加载加速
-
-- [x] **并行 expert 量化** — rayon 并行量化每层 64 个 expert
-- [x] **量化权重 checkpoint** — 首次量化后缓存到磁盘，二次加载秒级
-- [x] **Safetensors 并行加载** — 去除 MAP_POPULATE，全 tensor 并行 BF16→F32 转换
-- [x] **CUDA stream upload** — 使用 channel pipeline 重叠上传和下一层量化
+1. make the current MoE path reliable and easy to use
+2. align the local UX with llama.cpp where it matters
+3. add modern inference-system features in the right order
+4. differentiate through sparse expert control, offload, rollout, and training state
 
 ---
 
-## Level 2: 面向 RL 训练的推理增强
+## Current Capabilities
 
-### 2.1 Attention 系统
+### Working now
 
-- [ ] **Flash Attention** — O(n) 显存的 exact attention，支持 GQA + sliding window
-- [ ] **PagedAttention** — 分页 KV cache，支持变长序列和 memory sharing
-- [ ] **KV cache 量化** — KV cache 用 INT8/FP8 存储，减少显存
+- OLMoE safetensors loading
+- OLMoE-Instruct chat-template shortcut
+- CPU FP32 reference forward
+- GPU Q4_0 quantized forward
+- GPU Q8_0 GEMV kernels and offset expert GEMV path
+- router → top-k experts → expert loop
+- persistent single-session GPU KV cache
+- llama.cpp-compatible Q4_0 block layout
+- qcache for quantized per-layer weights
+- `norm_topk_prob=false` router semantics
+- interactive `ferrule chat`
+- one-shot `run` and `gpu-run`
+- CUDA probe/GEMV benchmark
 
-### 2.2 解码加速
+### Main gaps
 
-- [ ] **Speculative Decoding** — draft model + target model 的推测解码
-- [ ] **Continuous Batching** — 动态合并多个请求的 decode step
-
-### 2.3 训练支持
-
-- [ ] **LoRA adapter** — 插入/合并 adapter，推理时 fuse 到 base weight
-- [ ] **Gradient checkpointing** — 用显存换计算，支持长序列训练
-- [ ] **FP8/BF16 训练** — 混合精度训练 kernel
-
----
-
-## Level 3: 模型能力扩展
-
-### 3.1 MoE 优化
-
-- [ ] **Expert offload** — 冷 expert 放 CPU RAM，按需 preload 到 GPU
-- [ ] **Expert prefetch** — 当前层计算时预测下一层 expert（参考 Fate 论文）
-- [ ] **Expert 负载均衡** — 动态调整 expert 激活数（参考 MoBiLE）
-
-### 3.2 模型架构
-
-- [ ] **Gemma 4 MoE** — 2816d core, 128e/layer, sliding+global attention
-- [ ] **Llama/Qwen/Mistral** — 多 family 支持
-- [ ] **Vision encoder (SigLIP)** — 多模态 prefill
-
-### 3.3 量化升级
-
-- [ ] **Q4_K / Q6_K** — 与 llama.cpp 对齐的 K-quant 格式
-- [ ] **动态位宽** — 运行时选择精度（参考 D²MoE）
-- [ ] **Vec-LUT 推理** — 向量化查表加速（参考 Vec-LUT 论文）
+- qcache hits still load the full FP32 model first
+- no sampling controls beyond greedy decode
+- no formal CPU/GPU logits diff or golden-token regression suite
+- no prompt/decode benchmark comparable to `llama-bench`
+- no perplexity command
+- no OpenAI-compatible server
+- no batched prefill, continuous batching, paged KV, or prefix cache
+- no FlashAttention-style kernel
+- only OLMoE-style MoE is implemented end-to-end
+- no LoRA/SFT/RL runtime yet
 
 ---
 
-## Level 4: Elastic State Fabric (训练 + 分布式)
+## Framework Alignment Snapshot
 
-### 4.1 RL Rollout 基础设施
+### llama.cpp capabilities to track
 
-- [ ] **Trajectory 存储** — GRPO rollout → trajectory logging with reward
-- [ ] **Multi-rollout 并行** — 一个 GPU 同时跑多个 rollout
-- [ ] **Experience replay buffer** — GPU 侧的 replay buffer
+llama.cpp currently provides a broad local inference stack: GGUF model format, many model families, many quantization formats, CPU/GPU hybrid inference, multiple hardware backends, chat templates, sampling, grammar-constrained decoding, benchmarks, perplexity tools, server mode, embeddings/reranking, multimodal paths, and active model support.
 
-### 4.2 训练循环
+Ferrule should not copy all of that immediately. The high-value subset for the next milestones is:
 
-- [ ] **PPO/GRPO 训练 step** — policy gradient + value loss
-- [ ] **GAE advantage 计算** — Generalized Advantage Estimation
-- [ ] **Gradient accumulation + optimizer** — AdamW on GPU
+| Area | llama.cpp capability | Ferrule target |
+|---|---|---|
+| Local chat UX | robust CLI, templates, sampling | complete `chat` controls and template registry |
+| Model cache | GGUF single-file metadata | qcache manifest + qcache-only startup |
+| Quantization | broad Q/IQ/K quant suite | Q8 validation, mixed precision, K-quant/AWQ track |
+| Quality checks | perplexity and eval tools | logits diff, golden tokens, perplexity |
+| Performance | prompt/decode benchmark | `ferrule bench-infer` with pp/tg split |
+| Serving | OpenAI-compatible server | minimal local HTTP server |
+| Hybrid memory | CPU+GPU offload | expert-aware CPU/NVMe offload |
+| Model coverage | many dense/MoE models | OLMoE → Qwen MoE → Mixtral/DeepSeek-style |
 
-### 4.3 分布式
+### Modern serving systems to track
 
-- [ ] **Checkpoint / Model Version Registry** — 模型版本管理
-- [ ] **分布式 rollout** — 多节点并行 rollout + 中心化训练
-- [ ] **Elastic State Fabric** — 详见 docs/new_arch.md
+| System line | Key idea | Ferrule implication |
+|---|---|---|
+| vLLM / PagedAttention | paged KV, continuous batching | needed for multi-session serving |
+| SGLang | prefix/radix KV reuse, structured generation | useful after server and sampling exist |
+| TensorRT-LLM / QServe | low-level kernel and quant co-design | later performance target |
+| MLC-LLM / ExecuTorch | cross-device deployment | later backend portability target |
+| PowerInfer / FlexGen / LLM in a flash | offload, hot/cold locality, flash/CPU scheduling | maps naturally to MoE expert offload |
+| AWQ / TinyChat / KVQuant / KIVI | low-bit weight/KV quantization | informs Q4 quality and long-context memory work |
 
 ---
 
-## 性能目标
+## P0 — Stabilize the Current MoE Runtime
 
-| 指标 | 当前 | Level 1 | Level 2 |
-|------|------|---------|---------|
-| OLMoE 单 token | 100ms → 10 tok/s | 15ms → 65 tok/s | 5ms → 200 tok/s |
-| 模型加载 (cached) | 0.5s | 0.5s | 0.2s |
-| 模型加载 (首次) | 30s | 30s | 5s (GGUF) |
-| Prefill (4 tok) | 400ms | 50ms | 20ms |
+Goal: make OLMoE-Instruct a dependable correctness baseline.
+
+- [x] CPU FP32 OLMoE forward
+- [x] GPU Q4_0 OLMoE forward
+- [x] llama.cpp-compatible Q4_0 layout
+- [x] OLMoE-Instruct chat smoke test
+- [x] router `norm_topk_prob` semantics
+- [x] gated token top-k debug logs via `FERRULE_DEBUG_TOPK`
+- [ ] CPU/GPU logits comparison command
+- [ ] per-layer activation diff tool
+- [ ] golden token tests for short OLMoE-Instruct prompts
+- [ ] CI-friendly tiny OLMoE fixture
+- [ ] qcache metadata validation: magic, version, quant type, tensor count, shapes
+
+Exit criteria:
+
+- a short prompt can be validated automatically on CPU FP32 and GPU Q4_0
+- qcache compatibility failures are explicit, not silent
 
 ---
 
-## 与 llama.cpp 的关键差异
+## P1 — llama.cpp-Level Local Usability for OLMoE
 
-| 维度 | llama.cpp | Ferrule |
-|------|-----------|---------|
-| 语言/编译器 | C/C++ + nvcc | Rust + cuda-oxide (cargo oxide) |
-| 模型格式 | GGUF only | GGUF + Safetensors 原生 |
-| 计算图 | 每 token 重建 ggml 图 | 持久化 CGraph，一次构建 |
-| 训练能力 | 推理 only | 推理 + RL 训练（设计预留） |
-| 端侧定位 | 通用推理引擎 | 端侧 agent runtime |
-| Tensor 生命周期 | 随图销毁 | StateObject 可 persist/migrate |
+Goal: make Ferrule comfortable as a local chat tool.
+
+### Startup and loading
+
+- [ ] qcache-only startup path
+- [ ] avoid full CPU FP32 model load on qcache hits
+- [ ] store/load small FP32 tensors required by GPU inference
+- [ ] streaming safetensors → qcache writer
+- [ ] shard/layer-by-layer quantization to stay under 32 GB RAM
+
+### Generation UX
+
+- [x] interactive `ferrule chat`
+- [x] persistent KV cache across turns
+- [x] EOS-aware output
+- [ ] structured chat history instead of prompt fragments only
+- [ ] tokenizer chat-template registry or `apply_chat_template` subset
+- [ ] temperature
+- [ ] top-k sampling
+- [ ] top-p sampling
+- [ ] repetition penalty
+- [ ] stop strings
+- [ ] seed control
+- [ ] optional token/logprob output
+
+### Local tools
+
+- [ ] `bench-infer` with prompt-processing and token-generation metrics
+- [ ] perplexity command over text files
+- [ ] model/qcache inspection command
+- [ ] generation config loading from `generation_config.json`
+
+Exit criteria:
+
+- a user can download, cache, chat, benchmark, and inspect OLMoE-Instruct without reading code
+
+---
+
+## P2 — Accuracy and Quantization Track
+
+Goal: improve quality beyond naive Q4_0 while preserving edge usability.
+
+- [x] Q8_0 quantizer
+- [x] Q8_0 CUDA GEMV kernels
+- [x] Q8_0 expert-offset GEMV dispatch
+- [ ] Q8_0 end-to-end smoke test after memory-safe loading
+- [ ] mixed precision policy: FP32/F16/Q8/Q4 by tensor class
+- [ ] compare CPU FP32 vs GPU Q8_0 vs GPU Q4_0 logits
+- [ ] evaluate Q4_0 divergence over longer generations
+- [ ] investigate llama.cpp K-quants: Q4_K/Q5_K/Q6_K
+- [ ] investigate AWQ-style activation-aware offline quantization
+- [ ] investigate KV cache quantization after paged KV exists
+
+Recommended order:
+
+1. Q8_0 end-to-end validation
+2. mixed precision policy
+3. K-quant or AWQ-quality Q4 path
+4. KV cache quantization
+
+---
+
+## P3 — Decode Engine and Serving
+
+Goal: move from single-session CLI decode to a modern local serving runtime.
+
+### Attention and KV
+
+- [ ] multi-token prefill path
+- [ ] FlashAttention-style exact attention kernel
+- [ ] paged KV cache layout
+- [ ] KV page allocator and free list
+- [ ] prefix cache / radix cache design
+- [ ] KV cache quantization prototype
+
+### Scheduling
+
+- [ ] reduce per-token kernel launch count
+- [ ] CUDA graph capture or persistent decode schedule
+- [ ] async host/device scheduling
+- [ ] continuous batching
+- [ ] speculative decoding
+
+### Serving interface
+
+- [ ] minimal HTTP server
+- [ ] OpenAI-compatible `/v1/chat/completions`
+- [ ] streaming responses
+- [ ] request cancellation
+- [ ] runtime metrics endpoint
+- [ ] optional grammar/JSON constrained decoding
+
+Exit criteria:
+
+- Ferrule can serve multiple local chat sessions with predictable KV memory usage
+
+---
+
+## P4 — Larger MoE Models
+
+Goal: run stronger MoE families without requiring huge CPU RAM.
+
+Priority order:
+
+1. `allenai/OLMoE-1B-7B-0924-Instruct`
+   - current correctness baseline
+
+2. `Qwen/Qwen1.5-MoE-A2.7B-Chat`
+   - stronger chat ability
+   - requires qwen2_moe loader
+   - likely requires shared expert support
+   - requires streaming quantization/qcache-only loading
+
+3. `mistralai/Mixtral-8x7B-Instruct-v0.1`
+   - standard top-2 MoE target
+   - useful for expert offload and expert parallelism research
+   - requires much stronger memory/offload path
+
+4. DeepSeek-style MoE models
+   - useful for long-term RL/MoE research
+   - may require architecture-specific attention changes such as MLA
+
+MoE-specific runtime work:
+
+- [ ] expert activation counters per layer
+- [ ] expert hot/cold profiling
+- [ ] expert residency policy
+- [ ] expert prefetch based on router history
+- [ ] CPU/NVMe expert offload
+- [ ] grouped expert execution
+- [ ] fused multi-expert GEMV batching
+- [ ] expert-parallel execution across devices
+- [ ] router load-balance metrics
+
+---
+
+## P5 — Training and RL Runtime
+
+Goal: evolve Ferrule workers into rollout workers, then connect them to fine-tuning and RL loops.
+
+### LoRA/SFT
+
+- [ ] LoRA adapter representation
+- [ ] LoRA injection into attention and FFN projections
+- [ ] adapter merge/unmerge path
+- [ ] SFT data loader
+- [ ] loss computation and backward graph prototype
+- [ ] gradient accumulation
+- [ ] optimizer state storage
+
+### RL rollout
+
+- [ ] sampling metadata and logprob capture
+- [ ] rollout session format
+- [ ] trajectory logging
+- [ ] reward model/interface
+- [ ] advantage computation
+- [ ] PPO/GRPO experiment loop
+- [ ] replay buffer / trajectory store
+
+### MoE training-specific work
+
+- [ ] router auxiliary loss
+- [ ] expert load-balance logging
+- [ ] expert gradient accumulation
+- [ ] sparse expert optimizer state
+
+---
+
+## P6 — Elastic State Fabric
+
+Goal: make model, qcache, KV, expert, rollout, and checkpoint state durable and movable.
+
+- [ ] StateObject schema
+- [ ] qcache manifest registry
+- [ ] local StateAgent
+- [ ] model version registry
+- [ ] KV session binding
+- [ ] checkpoint manifest registry
+- [ ] transfer protocol for KV and qcache chunks
+- [ ] session-first KV migration
+- [ ] distributed rollout workers
+- [ ] central trainer / policy update loop
+
+---
+
+## Success Metrics
+
+| Metric | Current | Near target | Long target |
+|---|---:|---:|---:|
+| OLMoE-Instruct chat | works manually | golden tests | regression suite |
+| cached startup | qcache exists, FP32 still loaded | qcache-only | remote qcache artifact |
+| GPU Q4_0 decode | usable | measured diff | higher-quality quant |
+| Q8_0 decode | kernels present | end-to-end validated | mixed precision policy |
+| prompt/decode benchmark | none | pp/tg report | llama-bench style matrix |
+| model family support | OLMoE | Qwen MoE | Mixtral/DeepSeek-style MoE |
+| serving | CLI | local HTTP | paged KV + batching |
+| training/RL | none | rollout logs | LoRA/SFT/RL loop |
+
+---
+
+## Immediate Next Steps
+
+1. Implement qcache-only startup for OLMoE-Instruct.
+2. Add CPU/GPU logits comparison and golden prompt tests.
+3. Add sampling controls and chat-template registry.
+4. Add prompt/decode benchmark and qcache inspection.
+5. Validate Q8_0 end-to-end after qcache-only loading.
+6. Start Qwen MoE loader design only after streaming quantization is in place.
