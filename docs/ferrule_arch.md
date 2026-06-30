@@ -1,6 +1,6 @@
 # Ferrule Architecture
 
-Ferrule is a Rust-native edge runtime for sparse Mixture-of-Experts inference. The current milestone is practical: **OLMoE-1B-7B-0924-Instruct chats on GPU Q4_0 while keeping router, top-k experts, and the expert loop explicit**.
+Ferrule is a Rust-native, state-aware LLM runtime for edge inference. The current milestone is practical: **OLMoE-1B-7B-0924-Instruct chats on GPU Q4_0 while keeping router, top-k experts, quantized weights, and KV/session state explicit**.
 
 ![Ferrule current architecture](assets/ferrule-current-architecture.svg)
 
@@ -8,9 +8,9 @@ Ferrule is a Rust-native edge runtime for sparse Mixture-of-Experts inference. T
 
 ## 1. Vision
 
-Ferrule's goal is to become the **Rust-native edge runtime for sparse MoE models** and to explore a new LLM engineering rhythm beyond Python-first ML stacks.
+Ferrule's goal is to become a **Rust-native edge runtime for stateful LLM systems**, starting from sparse MoE inference.
 
-The thesis is simple: inference, rollout, quantization, cache management, and future training should share one native systems foundation. The runtime hot path should be explicit, typed, hardware-aware, and free from a Python control plane.
+The thesis is simple: inference, rollout, quantization, cache management, and future training should share one native systems foundation. Router decisions, selected experts, quantized weights, KV cache, adapters, and rollout state should be explicit runtime objects that can be scheduled against real hardware.
 
 Near term, Ferrule should reach llama.cpp-level local usability for the supported MoE path: reliable chat, fast cached startup, sampling controls, model inspection, benchmarks, and quality checks.
 
@@ -35,11 +35,11 @@ The token hot path should remain local and fast. Coordination, migration, and tr
 |---|---|
 | `ferrule-core` | shared errors and metadata |
 | `ferrule-gguf` | GGUF and safetensors readers |
-| `ferrule-graph` | persistent graph prototype and CPU backend |
 | `ferrule-quant` | Q4_0, Q8_0, Q2S, T1S quantization |
 | `ferrule-model` | OLMoE loader, tokenizer, CPU FP32 reference forward |
 | `ferrule-cuda` | cuda-oxide kernels and GPU OLMoE forward pass |
-| `ferrule-cli` | `chat`, `run`, `gpu-run`, `info`, `cuda`, `bench` |
+| `ferrule-runtime` | shared runner, session, sampling, and chat generation loop |
+| `ferrule-cli` | `chat`, `run`, `gpu-run`, `info`, `cuda` |
 
 Current inference flow:
 
@@ -56,7 +56,7 @@ model.q4_0_llama.qcache
         ↓
 CUDA device buffers
         ↓
-per-token GPU decode
+ferrule-runtime session + sampler
         ↓
 chat / one-shot generation
 ```
@@ -127,7 +127,7 @@ Key kernels:
 | `silu_mul` | SiLU(gate) × up |
 | `saxpy` | weighted accumulation and residual updates |
 
-Current decode is single-session and greedy. Batch prefill, paged KV, sampling, CUDA graph replay, and server scheduling are planned.
+Current decode is single-session with shared runtime sampling controls. Batch prefill, paged KV, CUDA graph replay, and server scheduling are planned.
 
 ---
 
@@ -185,10 +185,10 @@ This enables local qcache-only startup now and remote qcache distribution later.
 
 | Capability | Ferrule today | Target |
 |---|---|---|
-| chat CLI | basic REPL | sampling, stop strings, history, templates |
+| chat CLI | REPL with sampling and stop strings | structured history and template registry |
 | model metadata | `info` | qcache/model manifest inspection |
 | quantization | Q4_0/Q8_0/Q2S/T1S | Q8 validation, mixed precision, K-quant/AWQ track |
-| benchmarks | CUDA GEMV + graph bench | prompt/decode tokens/sec report |
+| benchmarks | CUDA GEMV probe | prompt/decode tokens/sec report |
 | quality checks | manual smoke tests | logits diff, perplexity, golden token tests |
 | loading | safetensors first | qcache-only, streaming quantization |
 | serving | none | small OpenAI-compatible HTTP server |

@@ -1,0 +1,7 @@
+[licenses]
+allow = ["Apache-2.0","MIT","BSD-3-Clause","Unlicense","ISC","MPL-2.0","BSL-1.0","Zlib"]
+exceptions = [{name="cuda-bindings",allow=["Unlicense"]},{name="cuda-core",allow=["Unlicense"]},{name="cuda-device",allow=["Unlicense"]},{name="cuda-host",allow=["Unlicense"]}]
+[bans]
+multiple-versions = "allow"
+[sources]
+unknown-git = "allow"

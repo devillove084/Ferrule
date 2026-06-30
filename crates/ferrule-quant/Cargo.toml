@@ -3,6 +3,11 @@ name = "ferrule-quant"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description = "Ferrule — Rust-native LLM inference runtime"
+repository = "https://github.com/ferrule/ferrule"
+readme = "../../README.md"
+keywords = ["llm", "inference", "moe", "cuda", "rust"]
+categories = ["science", "machine-learning"]
 
 [dependencies]
 

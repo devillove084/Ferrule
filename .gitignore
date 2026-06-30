@@ -6,16 +6,16 @@ Cargo.lock
 **/*.rs.bk
 *.pdb
 
-# cuda-oxide / compiler artifacts
+# cuda-oxide / compiler artifacts (generated in project root)
 /.oxide-artifacts/
-*.ptx
-*.ll
-*.opt.ll
-*.o
-*.cubin
-*.fatbin
-*.sass
-*.nvvm
+/*.ptx
+/*.ll
+/*.opt.ll
+/*.o
+/*.cubin
+/*.fatbin
+/*.sass
+/*.nvvm
 
 # Local models, weights, and quantized caches
 /models/

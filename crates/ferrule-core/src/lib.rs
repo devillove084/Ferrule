@@ -1,4 +1,6 @@
-//! Ferrule Core — shared types and error handling.
+//! Ferrule Core — shared types, errors, and observability infrastructure.
+
+pub mod observability;
 
 use thiserror::Error;
 
@@ -30,7 +32,7 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Quantization format identifier — mirrors GGUF's type enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[repr(u32)]
 #[allow(non_camel_case_types)]
 pub enum QuantType {

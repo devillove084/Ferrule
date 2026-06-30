@@ -22,17 +22,19 @@ This roadmap is organized by priority, not dates. The immediate strategy is:
 - GPU Q8_0 GEMV kernels and offset expert GEMV path
 - router → top-k experts → expert loop
 - persistent single-session GPU KV cache
+- shared `ferrule-runtime` generation loop for CPU and GPU backends
 - llama.cpp-compatible Q4_0 block layout
 - qcache for quantized per-layer weights
 - `norm_topk_prob=false` router semantics
 - interactive `ferrule chat`
 - one-shot `run` and `gpu-run`
+- llama.cpp-style sampling controls: temperature, top-k, top-p, min-p, repeat penalty, seed, stop strings
 - CUDA probe/GEMV benchmark
 
 ### Main gaps
 
 - qcache hits still load the full FP32 model first
-- no sampling controls beyond greedy decode
+- sampling is CLI-level only; no logprobs, grammar constraints, or generation config loading yet
 - no formal CPU/GPU logits diff or golden-token regression suite
 - no prompt/decode benchmark comparable to `llama-bench`
 - no perplexity command
@@ -118,12 +120,13 @@ Goal: make Ferrule comfortable as a local chat tool.
 - [x] EOS-aware output
 - [ ] structured chat history instead of prompt fragments only
 - [ ] tokenizer chat-template registry or `apply_chat_template` subset
-- [ ] temperature
-- [ ] top-k sampling
-- [ ] top-p sampling
-- [ ] repetition penalty
-- [ ] stop strings
-- [ ] seed control
+- [x] temperature
+- [x] top-k sampling
+- [x] top-p sampling
+- [x] min-p sampling
+- [x] repetition penalty
+- [x] stop strings
+- [x] seed control
 - [ ] optional token/logprob output
 
 ### Local tools

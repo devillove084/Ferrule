@@ -1,4 +1,5 @@
 //! GGUF (GPT-Generated Unified Format) reader.
+#![allow(clippy::needless_range_loop)]
 //!
 //! Full spec: https://github.com/ggml-org/ggml/blob/master/docs/gguf.md
 //!
@@ -57,7 +58,7 @@ pub struct TensorInfo {
     /// ne0 = fastest-varying dimension (inner).
     pub dims: [u64; 4],
     pub quant_type: QuantType,
-    /// Byte offset of tensor data from file start.
+    /// Byte offset of tensor data relative to the GGUF tensor data section.
     pub offset: u64,
 }
 
@@ -68,6 +69,8 @@ pub struct GgufFile {
     pub metadata: HashMap<String, GgufValue>,
     /// All tensors in the file.
     pub tensors: Vec<TensorInfo>,
+    /// Absolute byte offset where the tensor data section starts.
+    data_start: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -110,10 +113,30 @@ fn read_f64(data: &[u8], offset: &mut usize) -> f64 {
     v
 }
 
-fn read_bool(data: &[u8], offset: &mut usize) -> bool {
-    let v = data[*offset] != 0;
+fn read_u8(data: &[u8], offset: &mut usize) -> u8 {
+    let v = data[*offset];
     *offset += 1;
     v
+}
+
+fn read_i8(data: &[u8], offset: &mut usize) -> i8 {
+    read_u8(data, offset) as i8
+}
+
+fn read_u16(data: &[u8], offset: &mut usize) -> u16 {
+    let v = u16::from_le_bytes(data[*offset..*offset + 2].try_into().unwrap());
+    *offset += 2;
+    v
+}
+
+fn read_i16(data: &[u8], offset: &mut usize) -> i16 {
+    let v = i16::from_le_bytes(data[*offset..*offset + 2].try_into().unwrap());
+    *offset += 2;
+    v
+}
+
+fn read_bool(data: &[u8], offset: &mut usize) -> bool {
+    read_u8(data, offset) != 0
 }
 
 fn read_string(data: &[u8], offset: &mut usize) -> Result<String> {
@@ -129,14 +152,10 @@ fn read_string(data: &[u8], offset: &mut usize) -> Result<String> {
 
 fn read_value(data: &[u8], offset: &mut usize, vtype: u32) -> Result<GgufValue> {
     Ok(match vtype {
-        0 => GgufValue::U8(data[*offset]),
-        1 => GgufValue::I8(data[*offset] as i8),
-        2 => GgufValue::U16(u16::from_le_bytes(
-            data[*offset..*offset + 2].try_into().unwrap(),
-        )),
-        3 => GgufValue::I16(i16::from_le_bytes(
-            data[*offset..*offset + 2].try_into().unwrap(),
-        )),
+        0 => GgufValue::U8(read_u8(data, offset)),
+        1 => GgufValue::I8(read_i8(data, offset)),
+        2 => GgufValue::U16(read_u16(data, offset)),
+        3 => GgufValue::I16(read_i16(data, offset)),
         4 => GgufValue::U32(read_u32(data, offset)),
         5 => GgufValue::I32(read_i32(data, offset)),
         6 => GgufValue::F32(read_f32(data, offset)),
@@ -156,6 +175,47 @@ fn read_value(data: &[u8], offset: &mut usize, vtype: u32) -> Result<GgufValue> 
         12 => GgufValue::F64(read_f64(data, offset)),
         _ => return Err(Error::Gguf(format!("unknown value type: {vtype}"))),
     })
+}
+
+fn metadata_alignment(metadata: &HashMap<String, GgufValue>) -> Option<u32> {
+    match metadata.get("general.alignment")? {
+        GgufValue::U32(v) => Some(*v),
+        GgufValue::U64(v) => Some(*v as u32),
+        GgufValue::I32(v) if *v > 0 => Some(*v as u32),
+        GgufValue::I64(v) if *v > 0 => Some(*v as u32),
+        _ => None,
+    }
+}
+
+fn align_up(offset: usize, alignment: usize) -> Result<usize> {
+    let add = alignment
+        .checked_sub(1)
+        .ok_or_else(|| Error::Gguf("invalid GGUF alignment".into()))?;
+    let sum = offset
+        .checked_add(add)
+        .ok_or_else(|| Error::Gguf("GGUF alignment overflow".into()))?;
+    Ok(sum / alignment * alignment)
+}
+
+fn quant_block_bytes(qt: QuantType) -> usize {
+    match qt {
+        QuantType::F32 => 4,
+        QuantType::F16 | QuantType::Bf16 => 2,
+        QuantType::Q4_0 => 18,
+        QuantType::Q4_1 => 20,
+        QuantType::Q5_0 => 22,
+        QuantType::Q5_1 => 24,
+        QuantType::Q8_0 => 34,
+        QuantType::Q8_1 => 36,
+        QuantType::Q2_K => 84,
+        QuantType::Q3_K => 110,
+        QuantType::Q4_K => 144,
+        QuantType::Q5_K => 176,
+        QuantType::Q6_K => 210,
+        QuantType::Q8_K => 292,
+        // IQ sizes are derived from GGUF's average type size metadata in core.
+        other => (other.type_size() * other.block_size() as f64).ceil() as usize,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -181,7 +241,7 @@ impl GgufFile {
 
         // Version
         let version = read_u32(data, &mut offset);
-        if version < 2 || version > 3 {
+        if !(2..=3).contains(&version) {
             return Err(Error::Gguf(format!("unsupported version: {version}")));
         }
 
@@ -224,10 +284,20 @@ impl GgufFile {
             });
         }
 
+        let alignment = metadata_alignment(&metadata).unwrap_or(32).max(1) as usize;
+        let data_start = align_up(offset, alignment)?;
+        if data_start > data.len() {
+            return Err(Error::Gguf(format!(
+                "tensor data section starts past file: {data_start} > {}",
+                data.len()
+            )));
+        }
+
         Ok(Self {
             mmap,
             metadata,
             tensors,
+            data_start,
         })
     }
 
@@ -269,14 +339,31 @@ impl GgufFile {
 
     /// Total element count for a tensor.
     pub fn nelements(t: &TensorInfo) -> usize {
-        t.dims.iter().product::<u64>() as usize
+        t.dims[..t.n_dims as usize].iter().product::<u64>() as usize
+    }
+
+    /// Serialized byte size for a tensor, including quantization block overhead.
+    pub fn tensor_nbytes(t: &TensorInfo) -> Result<usize> {
+        let ne = Self::nelements(t);
+        let block = t.quant_type.block_size().max(1);
+        let blocks = ne.div_ceil(block);
+        let block_bytes = quant_block_bytes(t.quant_type);
+        blocks
+            .checked_mul(block_bytes)
+            .ok_or_else(|| Error::Gguf(format!("tensor '{}' byte size overflow", t.name)))
     }
 
     /// Get a raw byte slice for a tensor's data (zero-copy from mmap).
     pub fn tensor_data(&self, tensor: &TensorInfo) -> Result<&[u8]> {
-        let start = tensor.offset as usize;
-        let size = Self::nelements(tensor) * tensor.quant_type.type_size().ceil() as usize;
-        let end = start + size;
+        let relative = tensor.offset as usize;
+        let start = self
+            .data_start
+            .checked_add(relative)
+            .ok_or_else(|| Error::Gguf(format!("tensor '{}' offset overflow", tensor.name)))?;
+        let size = Self::tensor_nbytes(tensor)?;
+        let end = start
+            .checked_add(size)
+            .ok_or_else(|| Error::Gguf(format!("tensor '{}' size overflow", tensor.name)))?;
         if end > self.mmap.len() {
             return Err(Error::Gguf(format!(
                 "tensor '{}' data extends past file: {end} > {}",
@@ -294,6 +381,9 @@ impl GgufFile {
             "tokenizer.ggml.tokens.len",
             "llama.vocab_size",
             "gemma.vocab_size",
+            "qwen2.vocab_size",
+            "qwen3.vocab_size",
+            "deepseek2.vocab_size",
         ] {
             if let Some(v) = self.meta_u32(key) {
                 return Some(v);
@@ -310,18 +400,27 @@ impl GgufFile {
     pub fn num_layers(&self) -> Option<u32> {
         self.meta_u32("llama.block_count")
             .or_else(|| self.meta_u32("gemma.block_count"))
+            .or_else(|| self.meta_u32("qwen2.block_count"))
+            .or_else(|| self.meta_u32("qwen3.block_count"))
+            .or_else(|| self.meta_u32("deepseek2.block_count"))
     }
 
     /// Hidden size (model dimension).
     pub fn hidden_size(&self) -> Option<u32> {
         self.meta_u32("llama.embedding_length")
             .or_else(|| self.meta_u32("gemma.embedding_length"))
+            .or_else(|| self.meta_u32("qwen2.embedding_length"))
+            .or_else(|| self.meta_u32("qwen3.embedding_length"))
+            .or_else(|| self.meta_u32("deepseek2.embedding_length"))
     }
 
     /// Number of attention heads.
     pub fn num_heads(&self) -> Option<u32> {
         self.meta_u32("llama.attention.head_count")
             .or_else(|| self.meta_u32("gemma.attention.head_count"))
+            .or_else(|| self.meta_u32("qwen2.attention.head_count"))
+            .or_else(|| self.meta_u32("qwen3.attention.head_count"))
+            .or_else(|| self.meta_u32("deepseek2.attention.head_count"))
     }
 }
 

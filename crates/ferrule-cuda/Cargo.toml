@@ -3,6 +3,11 @@ name = "ferrule-cuda"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description = "Ferrule — Rust-native LLM inference runtime"
+repository = "https://github.com/ferrule/ferrule"
+readme = "../../README.md"
+keywords = ["llm", "inference", "moe", "cuda", "rust"]
+categories = ["science", "machine-learning"]
 
 [features]
 default = []
@@ -14,6 +19,9 @@ ferrule-model = { path = "../ferrule-model" }
 ferrule-gguf = { path = "../ferrule-gguf" }
 rayon = "1.10"
 memmap2 = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
 cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git" }
 cuda-device = { git = "https://github.com/NVlabs/cuda-oxide.git" }
 cuda-host = { git = "https://github.com/NVlabs/cuda-oxide.git" }

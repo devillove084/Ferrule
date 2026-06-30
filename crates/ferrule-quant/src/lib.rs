@@ -1,4 +1,5 @@
 //! Quantization framework — llama.cpp style block-wise quantization.
+#![allow(clippy::needless_range_loop)]
 //!
 //! Supported types:
 //!   Q4_0 — 4-bit symmetric,  block 32,  4.5 bpw
@@ -10,6 +11,23 @@
 //!   m.scales_f32()          → Vec<f32> for GPU upload
 //!   m.packed()              → &[u8] for GPU upload
 //!   m.blocks_per_row()      → used by kernel for indexing
+//!
+//! K-quant and AWQ investigation (P11.3):
+//!
+//! llama.cpp K-quants use importance matrices (imatrix) to weight quantization
+//! errors by activation magnitude. This gives ~0.5-1.0 bit effective precision
+//! improvement over naive Q4_0 at the same bitrate.
+//!
+//! AWQ (Activation-aware Weight Quantization) similarly uses activation statistics
+//! to find per-channel scaling factors that minimize output error.
+//!
+//! Ferrule track:
+//!   1. Implement imatrix collection pass (run model on calibration data, collect
+//!      activation statistics per linear layer).
+//!   2. Implement Q4_K quantizer using imatrix (requires per-block scales + mins,
+//!      super-block structure of 256 elements).
+//!   3. Evaluate perplexity vs Q4_0 on OLMoE-Instruct.
+//!   4. Compare with AWQ: per-channel scaling before quantization.
 
 // ── f16 conversion (no external dependency) ───────────────────────────
 
@@ -38,7 +56,7 @@ fn f32_to_f16(v: f32) -> u16 {
     let bits = v.to_bits();
     let sign = (bits >> 16) as u16 & 0x8000;
     let exp = ((bits >> 23) & 0xFF) as i32;
-    let mant = (bits & 0x7F_FFFF) as u32;
+    let mant = bits & 0x7F_FFFF;
     if exp == 0 {
         sign
     } else if exp == 0xFF {
@@ -88,6 +106,23 @@ impl QuantType {
             Self::Q2S | Self::T1S => 2,
         }
     }
+
+    /// Whether this quant type requires importance-matrix calibration
+    /// (like llama.cpp's imatrix-based K-quants and IQ-quants).
+    pub fn requires_calibration(self) -> bool {
+        matches!(self, Self::Q2S | Self::T1S)
+        // Q4_0 and Q8_0 are naive uniform quantization — no calibration needed
+    }
+
+    /// Theoretical SNR relative to FP32 (approximate).
+    pub fn theoretical_snr_db(self) -> f64 {
+        match self {
+            Self::Q4_0 => 24.0, // ~4 bits effective
+            Self::Q8_0 => 48.0, // ~8 bits effective
+            Self::Q2S => 12.0,
+            Self::T1S => 9.0, // ternary ~1.58 bits
+        }
+    }
 }
 
 // ── Quantized matrix ──────────────────────────────────────────────────
@@ -126,6 +161,48 @@ impl QMatrix {
     /// Convert f16 scales to f32 for GPU upload.
     pub fn scales_f32(&self) -> Vec<f32> {
         self.scales.iter().map(|&b| f16_to_f32(b)).collect()
+    }
+
+    /// Dequantize a single row back to f32 (used for validation/testing).
+    pub fn dequantize_row(&self, row: usize) -> Vec<f32> {
+        let bs = self.quant.block_size();
+        let bpr = self.blocks_per_row();
+        let mut result = vec![0.0f32; self.in_f];
+        match self.quant {
+            QuantType::Q8_0 => {
+                for b in 0..bpr {
+                    let scale = f16_to_f32(self.scales[row * bpr + b]);
+                    for j in b * bs..((b + 1) * bs).min(self.in_f) {
+                        let q = self.packed[row * self.in_f + j] as i8;
+                        result[j] = q as f32 * scale;
+                    }
+                }
+            }
+            QuantType::Q4_0 => {
+                let bytes_per_row = bpr * 16;
+                for b in 0..bpr {
+                    let d = f16_to_f32(self.scales[row * bpr + b]);
+                    let row_pack_off = row * bytes_per_row;
+                    for j in b * bs..((b + 1) * bs).min(self.in_f) {
+                        let local = j - b * bs;
+                        let byte = self.packed
+                            [row_pack_off + b * 16 + if local < 16 { local } else { local - 16 }];
+                        let q = if local < 16 { byte & 0x0F } else { byte >> 4 };
+                        result[j] = d * (q as f32 - 8.0);
+                    }
+                }
+            }
+            _ => {
+                // For Q2S/T1S, just return approximate values using scale only
+                for b in 0..bpr {
+                    let scale = f16_to_f32(self.scales[row * bpr + b]);
+                    for j in b * bs..((b + 1) * bs).min(self.in_f) {
+                        result[j] = scale; // crude approximation
+                    }
+                }
+            }
+        }
+        result
     }
 
     // ── Q4_0 (llama.cpp compatible) ──────────────────────────────────
@@ -198,7 +275,7 @@ impl QMatrix {
         let bpr = in_f.div_ceil(bs);
         let mut scales = Vec::with_capacity(out_f * bpr);
         // 4 values per u8 → ceil(in_f/4) u8 per row
-        let packed_per_row = (in_f + 3) / 4;
+        let packed_per_row = in_f.div_ceil(4);
         let mut packed = vec![0u8; out_f * packed_per_row];
 
         for row in 0..out_f {
@@ -248,7 +325,7 @@ impl QMatrix {
         let bs = 64;
         let bpr = in_f.div_ceil(bs);
         let mut scales = Vec::with_capacity(out_f * bpr);
-        let packed_per_row = (in_f + 3) / 4;
+        let packed_per_row = in_f.div_ceil(4);
         let mut packed = vec![0u8; out_f * packed_per_row];
 
         for row in 0..out_f {
@@ -388,5 +465,35 @@ mod tests {
         assert_eq!(q.blocks_per_row(), 2);
         assert_eq!(q.packed.len(), 2 * 2 * 16);
         assert_eq!(q.scales.len(), 2 * 2);
+    }
+
+    #[test]
+    fn q8_0_roundtrip_error_within_tolerance() {
+        // Quantize a simple vector and check reconstruction error
+        let src: Vec<f32> = (0..64).map(|i| (i as f32 - 32.0) * 0.1).collect();
+        let q = QMatrix::quantize(&src, 1, 64, QuantType::Q8_0);
+        // Q8_0 should have very low error
+        let reconstructed = q.dequantize_row(0);
+        let max_err = src
+            .iter()
+            .zip(reconstructed.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(max_err < 0.1, "Q8_0 max error {max_err} exceeds tolerance");
+    }
+
+    #[test]
+    fn quant_type_snr_ordering() {
+        // Higher-precision types should have higher theoretical SNR
+        assert!(QuantType::Q8_0.theoretical_snr_db() > QuantType::Q4_0.theoretical_snr_db());
+        assert!(QuantType::Q4_0.theoretical_snr_db() > QuantType::Q2S.theoretical_snr_db());
+    }
+
+    #[test]
+    fn q4_0_q8_0_no_calibration_needed() {
+        assert!(!QuantType::Q4_0.requires_calibration());
+        assert!(!QuantType::Q8_0.requires_calibration());
+        assert!(QuantType::Q2S.requires_calibration());
+        assert!(QuantType::T1S.requires_calibration());
     }
 }

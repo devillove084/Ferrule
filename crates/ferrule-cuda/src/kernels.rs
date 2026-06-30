@@ -707,13 +707,13 @@ pub mod kernels {
         }
     }
     #[kernel]
-    pub fn saxpy(scale: &[f32], x: &[f32], mut y: DisjointSlice<f32>) {
+    pub fn saxpy(scale: f32, x: &[f32], mut y: DisjointSlice<f32>) {
         let i = thread::index_1d().get();
         if i >= y.len() {
             return;
         }
         if let Some(yi) = y.get_mut(thread::index_1d()) {
-            *yi += scale[0] * x[i];
+            *yi += scale * x[i];
         }
     }
 
@@ -1014,6 +1014,69 @@ pub mod kernels {
         }
         if let Some(o) = out.get_mut(thread::index_1d()) {
             *o = val / sum_w;
+        }
+    }
+
+    // ── Vocab top-k ────────────────────────────────────────────────────
+    /// Find top-k token indices and values from vocab logits on GPU.
+    /// Single block, sequential chunk scan — correct for any vocab size.
+    #[kernel]
+    pub fn topk_vocab(
+        logits: &[f32],
+        mut out_idx: DisjointSlice<f32>,
+        mut out_val: DisjointSlice<f32>,
+        vocab: u32,
+        k: u32,
+    ) {
+        static mut SMEM: SharedArray<f32, 1024> = SharedArray::UNINIT;
+        let tid = thread::threadIdx_x() as usize;
+        let vocab = vocab as usize;
+        let k = k as usize;
+        let chunk = 1024usize;
+
+        // Only block 0, single thread per chunk
+        if thread::blockIdx_x() == 0 && tid == 0 {
+            let mut best_val = [f32::NEG_INFINITY; 40];
+            let mut best_idx = [0u32; 40];
+
+            let mut cursor = 0usize;
+            while cursor < vocab {
+                let n = (vocab - cursor).min(chunk);
+                // Load chunk
+                for i in 0..n {
+                    unsafe {
+                        SMEM[i] = logits[cursor + i];
+                    }
+                }
+                // Scan chunk
+                for i in 0..n {
+                    let v = unsafe { SMEM[i] };
+                    let gid = (cursor + i) as u32;
+                    let mut pos = k;
+                    while pos > 0 && v > best_val[pos - 1] {
+                        pos -= 1;
+                    }
+                    if pos < k {
+                        for j in (pos + 1..k).rev() {
+                            best_val[j] = best_val[j - 1];
+                            best_idx[j] = best_idx[j - 1];
+                        }
+                        best_val[pos] = v;
+                        best_idx[pos] = gid;
+                    }
+                }
+                cursor += n;
+            }
+
+            // Write outputs
+            let idx_ptr = out_idx.as_mut_ptr();
+            let val_ptr = out_val.as_mut_ptr();
+            for j in 0..k {
+                unsafe {
+                    *idx_ptr.add(j) = best_idx[j] as f32;
+                    *val_ptr.add(j) = best_val[j];
+                }
+            }
         }
     }
 }

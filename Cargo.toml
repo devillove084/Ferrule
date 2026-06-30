@@ -2,10 +2,10 @@
 members = [
   "crates/ferrule-core",
   "crates/ferrule-gguf",
-  "crates/ferrule-graph",
   "crates/ferrule-model",
   "crates/ferrule-quant",
   "crates/ferrule-cuda",
+  "crates/ferrule-runtime",
   "crates/ferrule-cli",
 ]
 resolver = "2"
@@ -24,6 +24,14 @@ unused_imports = "warn"
 
 [workspace.lints.clippy]
 all = "warn"
-pedantic = "allow"
-nursery = "allow"
-cargo = "warn"
+
+# ── Release optimizations ────────────────────────────────────────────
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.dev]
+opt-level = 1

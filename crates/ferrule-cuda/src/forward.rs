@@ -3,533 +3,156 @@
 
 use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig};
 use ferrule_core::{Error, Result};
-use ferrule_quant::{f16_to_f32, QuantType};
-use rayon::prelude::*;
-use std::path::PathBuf;
+use ferrule_quant::QuantType;
 use std::sync::Arc;
 
-fn cu<T, E: std::fmt::Debug>(r: std::result::Result<T, E>) -> Result<T> {
-    r.map_err(|e| Error::Internal(format!("CUDA {e:?}")))
-}
+use crate::context::{cu, gemv_quant, gemv_quant_off};
 
-use crate::qcache::{self, QCacheData};
+// Re-export public items that moved to sub-modules (preserve API paths).
+pub use crate::context::{cuda_gemv, cuda_probe};
+pub use crate::graph::{cuda_graph_enabled, flash_attn_enabled};
 
-// ── Kernel dispatch (selects Q4_0 vs Q2S at runtime) ─────────────────
-
-use crate::kernels::kernels::LoadedModule;
-use cuda_core::stream::CudaStream;
-
-fn gemv_quant(
-    m: &LoadedModule,
-    s: &CudaStream,
-    qt: QuantType,
-    cfg: LaunchConfig,
-    x: &DeviceBuffer<f32>,
-    packed: &DeviceBuffer<u8>,
-    scales: &DeviceBuffer<f32>,
-    y: &mut DeviceBuffer<f32>,
-    k: u32,
-) -> Result<()> {
-    match qt {
-        QuantType::Q4_0 => cu(m.gemv_q4(s, cfg, x, packed, scales, y, k)),
-        QuantType::Q8_0 => cu(m.gemv_q8(s, cfg, x, packed, scales, y, k)),
-        QuantType::Q2S => cu(m.gemv_q2(s, cfg, x, packed, scales, y, k)),
-        QuantType::T1S => cu(m.gemv_t1(s, cfg, x, packed, scales, y, k)),
-    }
-}
-
-fn gemv_quant_off(
-    m: &LoadedModule,
-    s: &CudaStream,
-    qt: QuantType,
-    cfg: LaunchConfig,
-    x: &DeviceBuffer<f32>,
-    packed: &DeviceBuffer<u8>,
-    scales: &DeviceBuffer<f32>,
-    y: &mut DeviceBuffer<f32>,
-    k: u32,
-    packed_off: u32,
-    scales_off: u32,
-) -> Result<()> {
-    match qt {
-        QuantType::Q4_0 => {
-            cu(m.gemv_q4_off(s, cfg, x, packed, scales, y, k, packed_off, scales_off))
-        }
-        QuantType::Q8_0 => {
-            cu(m.gemv_q8_off(s, cfg, x, packed, scales, y, k, packed_off, scales_off))
-        }
-        QuantType::Q2S => {
-            cu(m.gemv_q2_off(s, cfg, x, packed, scales, y, k, packed_off, scales_off))
-        }
-        QuantType::T1S => {
-            cu(m.gemv_t1_off(s, cfg, x, packed, scales, y, k, packed_off, scales_off))
-        }
-    }
-}
-
-// ── Device probe ──────────────────────────────────────────────────────
-
-pub fn cuda_probe() -> Result<()> {
-    let ctx = cu(CudaContext::new(0))?;
-    let name = cu(ctx.device_name())?;
-    cu(ctx.bind_to_thread())?;
-    let mut free: usize = 0;
-    let mut total: usize = 0;
-    unsafe {
-        cuda_bindings::cuMemGetInfo_v2(&mut free, &mut total);
-    }
-    println!(
-        "  Device: {name}\n  Memory: {:.1} GB free / {:.1} GB total",
-        free as f64 / 1e9,
-        total as f64 / 1e9
-    );
-    Ok(())
-}
-
-// ── Standalone GEMV (benchmark) ───────────────────────────────────────
-
-pub fn cuda_gemv(x: &[f32], w: &[f32], out_f: usize) -> Result<Vec<f32>> {
-    let ctx = cu(CudaContext::new(0))?;
-    cu(ctx.bind_to_thread())?;
-    let module = cu(crate::kernels::kernels::load(&ctx))?;
-    let s = ctx.default_stream();
-    let xd = cu(DeviceBuffer::from_host(&s, x))?;
-    let wd = cu(DeviceBuffer::from_host(&s, w))?;
-    let mut yd = cu(DeviceBuffer::<f32>::zeroed(&s, out_f))?;
-    cu(module.gemv_f32(
-        &s,
-        LaunchConfig::for_num_elems(out_f as u32),
-        &xd,
-        &wd,
-        &mut yd,
-        x.len() as u32,
-    ))?;
-    cu(yd.to_host_vec(&s))
-}
+// ── Attention optimization plan (P10.4) ─────────────────────────────────
+//
+// Current status: standard MHA/GQA attention with per-token score computation
+// and in-GPU softmax+combine. This is O(seq_len²) in compute and memory.
+//
+// Planned improvements:
+//   1. FlashAttention-2 kernel: tile-based online softmax that avoids
+//      materializing the full N×N attention matrix. Reduces HBM traffic
+//      from O(N²) to O(N) and enables much longer contexts.
+//   2. PagedAttention integration: the FA kernel reads the block table
+//      directly, so physical K/V blocks can be non-contiguous.
+//   3. Decode-phase optimization: for seq_len>1 and single-query decode,
+//      use a dedicated FlashDecoding kernel (tile over KV, reduce).
+//
+// When FERRULE_FLASH_ATTN=1 is set, the attention path below should
+// dispatch to a FlashAttention kernel instead of the current two-kernel
+// (scores + softmax-combine) approach.
 
 // ── Quantized weight storage ──────────────────────────────────────────
 
 /// Per-layer weights stored in quantized format on GPU.
 /// K/V projections use kv_dim outputs (GQA), Q uses d.
 #[allow(dead_code)]
-struct QLayer {
+pub(crate) struct QLayer {
     // Attention norm weights (f32 — small, precision matters)
-    an: DeviceBuffer<f32>,  // d
-    qn: DeviceBuffer<f32>,  // d (Q norm)
-    kn: DeviceBuffer<f32>,  // kv_dim (K norm)
-    fn_: DeviceBuffer<f32>, // d
+    pub(crate) an: DeviceBuffer<f32>,  // d
+    pub(crate) qn: DeviceBuffer<f32>,  // d (Q norm)
+    pub(crate) kn: DeviceBuffer<f32>,  // kv_dim (K norm)
+    pub(crate) fn_: DeviceBuffer<f32>, // d
 
     // Quantized attention projection weights
-    qp_packed: DeviceBuffer<u8>,
-    qp_scales: DeviceBuffer<f32>,
-    kp_packed: DeviceBuffer<u8>,
-    kp_scales: DeviceBuffer<f32>,
-    vp_packed: DeviceBuffer<u8>,
-    vp_scales: DeviceBuffer<f32>,
-    op_packed: DeviceBuffer<u8>,
-    op_scales: DeviceBuffer<f32>,
+    pub(crate) qp_packed: DeviceBuffer<u8>,
+    pub(crate) qp_scales: DeviceBuffer<f32>,
+    pub(crate) kp_packed: DeviceBuffer<u8>,
+    pub(crate) kp_scales: DeviceBuffer<f32>,
+    pub(crate) vp_packed: DeviceBuffer<u8>,
+    pub(crate) vp_scales: DeviceBuffer<f32>,
+    pub(crate) op_packed: DeviceBuffer<u8>,
+    pub(crate) op_scales: DeviceBuffer<f32>,
 
     // Router (f32 — small)
-    rt: DeviceBuffer<f32>, // ne × d
+    pub(crate) rt: DeviceBuffer<f32>, // ne × d
 
     // Expert weights, concatenated across all experts
-    ex_gate_packed: DeviceBuffer<u8>,
-    ex_gate_scales: DeviceBuffer<f32>,
-    ex_up_packed: DeviceBuffer<u8>,
-    ex_up_scales: DeviceBuffer<f32>,
-    ex_down_packed: DeviceBuffer<u8>,
-    ex_down_scales: DeviceBuffer<f32>,
+    pub(crate) ex_gate_packed: DeviceBuffer<u8>,
+    pub(crate) ex_gate_scales: DeviceBuffer<f32>,
+    pub(crate) ex_up_packed: DeviceBuffer<u8>,
+    pub(crate) ex_up_scales: DeviceBuffer<f32>,
+    pub(crate) ex_down_packed: DeviceBuffer<u8>,
+    pub(crate) ex_down_scales: DeviceBuffer<f32>,
 }
 
 pub struct GpuOlmoeModel {
-    ctx: Arc<CudaContext>,
-    s: Arc<cuda_core::stream::CudaStream>,
-    module: crate::kernels::kernels::LoadedModule,
-    emb: DeviceBuffer<f32>,
-    lm_head: DeviceBuffer<f32>,
-    final_norm: DeviceBuffer<f32>,
-    layers: Vec<QLayer>,
-    d: usize,
-    kv_dim: usize,
-    ne: usize,
-    na: usize,
-    mid: usize,
-    vocab: usize,
-    eps: f32,
-    norm_topk_prob: bool,
-    qt: QuantType,
-    scratch: Scratch,
+    pub(crate) ctx: Arc<CudaContext>,
+    pub(crate) s: Arc<cuda_core::stream::CudaStream>,
+    pub(crate) module: crate::kernels::kernels::LoadedModule,
+    pub(crate) emb: DeviceBuffer<f32>,
+    pub(crate) lm_head: DeviceBuffer<f32>,
+    pub(crate) final_norm: DeviceBuffer<f32>,
+    pub(crate) layers: Vec<QLayer>,
+    pub(crate) d: usize,
+    pub(crate) kv_dim: usize,
+    pub(crate) ne: usize,
+    pub(crate) na: usize,
+    pub(crate) mid: usize,
+    pub(crate) vocab: usize,
+    pub(crate) eps: f32,
+    pub(crate) norm_topk_prob: bool,
+    pub(crate) qt: QuantType,
+    pub(crate) scratch: Scratch,
     // ── KV cache (GPU) + RoPE (GPU) ──
-    nh: usize,
-    nkv: usize,
-    hd: usize,
+    pub(crate) nh: usize,
+    pub(crate) nkv: usize,
+    pub(crate) hd: usize,
     #[allow(dead_code)]
-    max_seq: usize,
-    k_cache: Vec<DeviceBuffer<f32>>, // [num_layers][max_seq × kv_dim]
-    v_cache: Vec<DeviceBuffer<f32>>,
-    rope_cos: DeviceBuffer<f32>,
-    rope_sin: DeviceBuffer<f32>,
-    cur_seq: usize,
-    scores_buf: DeviceBuffer<f32>, // [nh × max_seq]
+    pub(crate) max_seq: usize,
+    pub(crate) k_cache: Vec<DeviceBuffer<f32>>, // [num_layers][max_seq × kv_dim]
+    pub(crate) v_cache: Vec<DeviceBuffer<f32>>,
+    pub(crate) rope_cos: DeviceBuffer<f32>,
+    pub(crate) rope_sin: DeviceBuffer<f32>,
+    pub(crate) cur_seq: usize,
+    pub(crate) scores_buf: DeviceBuffer<f32>, // [nh × max_seq]
+    /// Per-layer per-expert activation count.
+    pub expert_hits: Vec<Vec<usize>>,
+    /// Total tokens processed.
+    pub total_tokens: usize,
 }
 
 /// Pre-allocated GPU buffers — allocated once, reused every token.
-struct Scratch {
-    hidden: DeviceBuffer<f32>,     // d
-    normed: DeviceBuffer<f32>,     // d
-    q: DeviceBuffer<f32>,          // d
-    k: DeviceBuffer<f32>,          // kv_dim
-    v: DeviceBuffer<f32>,          // kv_dim
-    q_tmp: DeviceBuffer<f32>,      // d
-    k_tmp: DeviceBuffer<f32>,      // kv_dim
-    ao: DeviceBuffer<f32>,         // d
-    h_tmp1: DeviceBuffer<f32>,     // d
-    h_tmp2: DeviceBuffer<f32>,     // d (zero-filled, used as zero operand)
-    ffn_in: DeviceBuffer<f32>,     // d
-    router_out: DeviceBuffer<f32>, // ne (also used as temp for GPU top-k)
-    fo: DeviceBuffer<f32>,         // d
-    gb: DeviceBuffer<f32>,         // mid
-    ub: DeviceBuffer<f32>,         // mid
-    gb2: DeviceBuffer<f32>,        // mid
-    db: DeviceBuffer<f32>,         // d
-    rms_buf: DeviceBuffer<f32>,    // 1
-    logits: DeviceBuffer<f32>,     // vocab
-    topk_idx: DeviceBuffer<f32>,   // na (top-k expert indices as f32, GPU-side)
-    topk_w: DeviceBuffer<f32>,     // na (top-k softmax weights)
+pub(crate) struct Scratch {
+    pub(crate) hidden: DeviceBuffer<f32>,     // d
+    pub(crate) normed: DeviceBuffer<f32>,     // d
+    pub(crate) q: DeviceBuffer<f32>,          // d
+    pub(crate) k: DeviceBuffer<f32>,          // kv_dim
+    pub(crate) v: DeviceBuffer<f32>,          // kv_dim
+    pub(crate) q_tmp: DeviceBuffer<f32>,      // d
+    pub(crate) k_tmp: DeviceBuffer<f32>,      // kv_dim
+    pub(crate) ao: DeviceBuffer<f32>,         // d
+    pub(crate) h_tmp1: DeviceBuffer<f32>,     // d
+    pub(crate) h_tmp2: DeviceBuffer<f32>,     // d (zero-filled, used as zero operand)
+    pub(crate) ffn_in: DeviceBuffer<f32>,     // d
+    pub(crate) router_out: DeviceBuffer<f32>, // ne (also used as temp for GPU top-k)
+    pub(crate) fo: DeviceBuffer<f32>,         // d
+    pub(crate) gb: DeviceBuffer<f32>,         // mid
+    pub(crate) ub: DeviceBuffer<f32>,         // mid
+    pub(crate) gb2: DeviceBuffer<f32>,        // mid
+    pub(crate) db: DeviceBuffer<f32>,         // d
+    pub(crate) logits: DeviceBuffer<f32>,     // vocab
+    pub(crate) topk_idx: DeviceBuffer<f32>,   // na (top-k expert indices as f32, GPU-side)
+    pub(crate) topk_w: DeviceBuffer<f32>,     // na (top-k softmax weights)
+    /// GPU-side vocab top-k buffers (avoid full logits download).
+    pub(crate) topk_vocab_idx: DeviceBuffer<f32>, // K
+    pub(crate) topk_vocab_val: DeviceBuffer<f32>, // K
 }
 
 impl GpuOlmoeModel {
     pub fn from_cpu(model: &ferrule_model::OlmoeModel, qt: QuantType) -> Result<Self> {
-        let ctx = cu(CudaContext::new(0))?;
-        cu(ctx.bind_to_thread())?;
-        let module = cu(crate::kernels::kernels::load(&ctx))?;
-        let s = ctx.default_stream();
-        let c = &model.config;
-        let d = c.hidden_size;
-        let kv_dim = c.kv_dim;
-        let ne = c.num_experts;
-        let mid = c.intermediate_size;
+        Self::build_from_cpu(model, qt)
+    }
 
-        eprintln!(
-            "Uploading & quantizing weights to GPU (GQA: nh={}, nkv={})...",
-            c.num_heads, c.num_kv_heads
-        );
-        let t0 = std::time::Instant::now();
-
-        // Embedding stays f32 (lookup, not matmul)
-        let emb = cu(DeviceBuffer::from_host(&s, &model.embed))?;
-        let lm_head = cu(DeviceBuffer::from_host(&s, &model.lm_head))?;
-        let final_norm = cu(DeviceBuffer::from_host(&s, &model.final_norm))?;
-        eprintln!(
-            "  embed ({:.1} MB f32) in {:.1}s",
-            model.embed.len() as f64 * 4.0 / 1e6,
-            t0.elapsed().as_secs_f64()
-        );
-
-        struct QData {
-            qp: ferrule_quant::QMatrix,
-            kp: ferrule_quant::QMatrix,
-            vp: ferrule_quant::QMatrix,
-            op: ferrule_quant::QMatrix,
-            gate_q_packed: Vec<u8>,
-            gate_q_scales: Vec<u16>,
-            up_q_packed: Vec<u8>,
-            up_q_scales: Vec<u16>,
-            down_q_packed: Vec<u8>,
-            down_q_scales: Vec<u16>,
-        }
-
-        let cache_suffix = match qt {
-            QuantType::Q4_0 => "q4_0_llama".to_string(),
-            _ => format!("{:?}", qt).to_lowercase(),
-        };
-        let cache_file = qcache::cache_path(&model.model_dir, &cache_suffix);
-        let layers: Vec<QLayer> = if cache_file.exists() {
-            eprintln!("Loading from quantized cache: {}", cache_file.display());
-            let cache = qcache::QCacheReader::open(&cache_file)?;
-            eprintln!(
-                "  {} layers from cache in {:.1}s",
-                cache.num_layers(),
-                t0.elapsed().as_secs_f64()
-            );
-            // Upload cached layers directly to GPU
-            let mut layers = Vec::new();
-            for li in 0..cache.num_layers() {
-                let c = cache.layer(li);
-                let l = &model.layers[li];
-                layers.push(QLayer {
-                    an: cu(DeviceBuffer::from_host(&s, &l.attn_norm))?,
-                    qn: cu(DeviceBuffer::from_host(&s, &l.attn.q_norm))?,
-                    kn: cu(DeviceBuffer::from_host(&s, &l.attn.k_norm))?,
-                    fn_: cu(DeviceBuffer::from_host(&s, &l.ffn_norm))?,
-                    rt: cu(DeviceBuffer::from_host(&s, &l.router.w))?,
-                    qp_packed: cu(DeviceBuffer::from_host(&s, c.qp_packed))?,
-                    qp_scales: cu(DeviceBuffer::from_host(
-                        &s,
-                        qcache::bytes_to_f32_slice(c.qp_scales),
-                    ))?,
-                    kp_packed: cu(DeviceBuffer::from_host(&s, c.kp_packed))?,
-                    kp_scales: cu(DeviceBuffer::from_host(
-                        &s,
-                        qcache::bytes_to_f32_slice(c.kp_scales),
-                    ))?,
-                    vp_packed: cu(DeviceBuffer::from_host(&s, c.vp_packed))?,
-                    vp_scales: cu(DeviceBuffer::from_host(
-                        &s,
-                        qcache::bytes_to_f32_slice(c.vp_scales),
-                    ))?,
-                    op_packed: cu(DeviceBuffer::from_host(&s, c.op_packed))?,
-                    op_scales: cu(DeviceBuffer::from_host(
-                        &s,
-                        qcache::bytes_to_f32_slice(c.op_scales),
-                    ))?,
-                    ex_gate_packed: cu(DeviceBuffer::from_host(&s, c.gate_q_packed))?,
-                    ex_gate_scales: cu(DeviceBuffer::from_host(
-                        &s,
-                        qcache::bytes_to_f32_slice(c.gate_q_scales),
-                    ))?,
-                    ex_up_packed: cu(DeviceBuffer::from_host(&s, c.up_q_packed))?,
-                    ex_up_scales: cu(DeviceBuffer::from_host(
-                        &s,
-                        qcache::bytes_to_f32_slice(c.up_q_scales),
-                    ))?,
-                    ex_down_packed: cu(DeviceBuffer::from_host(&s, c.down_q_packed))?,
-                    ex_down_scales: cu(DeviceBuffer::from_host(
-                        &s,
-                        qcache::bytes_to_f32_slice(c.down_q_scales),
-                    ))?,
-                });
-            }
-            layers
-        } else {
-            // ── Quantize weights + upload to GPU + write cache ──
-            eprintln!(
-                "Quantizing & uploading {} layers (pipelined)...",
-                model.layers.len()
-            );
-            let tq = std::time::Instant::now();
-            let (tx, rx) = std::sync::mpsc::sync_channel::<(usize, QData, QCacheData)>(2);
-            std::thread::scope(|scope| -> ferrule_core::Result<Vec<QLayer>> {
-                // Spawn quantization thread (rayon-parallel across layers, streamed via channel)
-                scope.spawn(move || {
-                    model.layers.par_iter().enumerate().for_each(|(li, l)| {
-                        let qp = ferrule_quant::QMatrix::quantize(&l.attn.q_proj.w, d, d, qt);
-                        let kp = ferrule_quant::QMatrix::quantize(
-                            &l.attn.k_proj.w,
-                            l.attn.k_proj.out_f,
-                            d,
-                            qt,
-                        );
-                        let vp = ferrule_quant::QMatrix::quantize(
-                            &l.attn.v_proj.w,
-                            l.attn.v_proj.out_f,
-                            d,
-                            qt,
-                        );
-                        let op = ferrule_quant::QMatrix::quantize(&l.attn.o_proj.w, d, d, qt);
-                        let mut gate_q_packed = Vec::new();
-                        let mut gate_q_scales = Vec::new();
-                        let mut up_q_packed = Vec::new();
-                        let mut up_q_scales = Vec::new();
-                        let mut down_q_packed = Vec::new();
-                        let mut down_q_scales = Vec::new();
-                        for e in &l.experts {
-                            let gq = ferrule_quant::QMatrix::quantize(&e.gate.w, mid, d, qt);
-                            gate_q_packed.extend_from_slice(&gq.packed);
-                            gate_q_scales.extend_from_slice(&gq.scales);
-                            let uq = ferrule_quant::QMatrix::quantize(&e.up.w, mid, d, qt);
-                            up_q_packed.extend_from_slice(&uq.packed);
-                            up_q_scales.extend_from_slice(&uq.scales);
-                            let dq = ferrule_quant::QMatrix::quantize(&e.down.w, d, mid, qt);
-                            down_q_packed.extend_from_slice(&dq.packed);
-                            down_q_scales.extend_from_slice(&dq.scales);
-                        }
-                        let cache = QCacheData::from_qmatrix(
-                            &qp,
-                            &kp,
-                            &vp,
-                            &op,
-                            &gate_q_packed,
-                            &gate_q_scales,
-                            &up_q_packed,
-                            &up_q_scales,
-                            &down_q_packed,
-                            &down_q_scales,
-                        );
-                        let _ = tx.send((
-                            li,
-                            QData {
-                                qp,
-                                kp,
-                                vp,
-                                op,
-                                gate_q_packed,
-                                gate_q_scales,
-                                up_q_packed,
-                                up_q_scales,
-                                down_q_packed,
-                                down_q_scales,
-                            },
-                            cache,
-                        ));
-                    });
-                });
-
-                // Main thread: receive quantized layers in order, upload to GPU
-                let mut pending: std::collections::BTreeMap<usize, (QData, QCacheData)> =
-                    std::collections::BTreeMap::new();
-                let mut next_layer = 0usize;
-                let mut layers = Vec::new();
-                let to_f32 =
-                    |raw: &[u16]| -> Vec<f32> { raw.iter().map(|&b| f16_to_f32(b)).collect() };
-                let mut cache_layers: Vec<QCacheData> = Vec::new();
-                for (li, q, c) in rx {
-                    pending.insert(li, (q, c));
-                    while let Some((q, c)) = pending.remove(&next_layer) {
-                        let l = &model.layers[next_layer];
-                        let tl = std::time::Instant::now();
-                        layers.push(QLayer {
-                            an: cu(DeviceBuffer::from_host(&s, &l.attn_norm))?,
-                            qn: cu(DeviceBuffer::from_host(&s, &l.attn.q_norm))?,
-                            kn: cu(DeviceBuffer::from_host(&s, &l.attn.k_norm))?,
-                            fn_: cu(DeviceBuffer::from_host(&s, &l.ffn_norm))?,
-                            rt: cu(DeviceBuffer::from_host(&s, &l.router.w))?,
-                            qp_packed: cu(DeviceBuffer::from_host(&s, &q.qp.packed))?,
-                            qp_scales: cu(DeviceBuffer::from_host(&s, &to_f32(&q.qp.scales)))?,
-                            kp_packed: cu(DeviceBuffer::from_host(&s, &q.kp.packed))?,
-                            kp_scales: cu(DeviceBuffer::from_host(&s, &to_f32(&q.kp.scales)))?,
-                            vp_packed: cu(DeviceBuffer::from_host(&s, &q.vp.packed))?,
-                            vp_scales: cu(DeviceBuffer::from_host(&s, &to_f32(&q.vp.scales)))?,
-                            op_packed: cu(DeviceBuffer::from_host(&s, &q.op.packed))?,
-                            op_scales: cu(DeviceBuffer::from_host(&s, &to_f32(&q.op.scales)))?,
-                            ex_gate_packed: cu(DeviceBuffer::from_host(&s, &q.gate_q_packed))?,
-                            ex_gate_scales: cu(DeviceBuffer::from_host(
-                                &s,
-                                &to_f32(&q.gate_q_scales),
-                            ))?,
-                            ex_up_packed: cu(DeviceBuffer::from_host(&s, &q.up_q_packed))?,
-                            ex_up_scales: cu(DeviceBuffer::from_host(&s, &to_f32(&q.up_q_scales)))?,
-                            ex_down_packed: cu(DeviceBuffer::from_host(&s, &q.down_q_packed))?,
-                            ex_down_scales: cu(DeviceBuffer::from_host(
-                                &s,
-                                &to_f32(&q.down_q_scales),
-                            ))?,
-                        });
-                        eprintln!(
-                            "  layer {next_layer:>2} in {:.1}s",
-                            tl.elapsed().as_secs_f64()
-                        );
-                        cache_layers.push(c);
-                        next_layer += 1;
-                    }
-                }
-                if !cache_layers.is_empty() {
-                    eprintln!("Writing quantized cache: {}", cache_file.display());
-                    qcache::write_cache(&cache_file, &cache_layers)?;
-                }
-                Ok(layers)
-            })?
-        };
-
-        eprintln!("  Done ({:.1}s total).", t0.elapsed().as_secs_f64());
-
-        // ── Common setup (GPU free check, scratch buffers, RoPE, KV cache) ──
-        // Free VMEM check
-        let mut free: usize = 0;
-        let mut total: usize = 0;
-        unsafe {
-            cuda_bindings::cuMemGetInfo_v2(&mut free, &mut total);
-        }
-        eprintln!(
-            "  GPU free: {:.1} MB / {:.1} MB",
-            free as f64 / 1e6,
-            total as f64 / 1e6
-        );
-
-        eprintln!("Allocating scratch buffers...");
-        let scratch = Scratch {
-            hidden: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            normed: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            q: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            k: cu(DeviceBuffer::<f32>::zeroed(&s, kv_dim))?,
-            v: cu(DeviceBuffer::<f32>::zeroed(&s, kv_dim))?,
-            q_tmp: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            k_tmp: cu(DeviceBuffer::<f32>::zeroed(&s, kv_dim))?,
-            ao: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            h_tmp1: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            h_tmp2: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            ffn_in: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            router_out: cu(DeviceBuffer::<f32>::zeroed(&s, ne))?,
-            fo: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            gb: cu(DeviceBuffer::<f32>::zeroed(&s, mid))?,
-            ub: cu(DeviceBuffer::<f32>::zeroed(&s, mid))?,
-            gb2: cu(DeviceBuffer::<f32>::zeroed(&s, mid))?,
-            db: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
-            rms_buf: cu(DeviceBuffer::<f32>::zeroed(&s, 1))?,
-            logits: cu(DeviceBuffer::<f32>::zeroed(&s, c.vocab_size))?,
-            topk_idx: cu(DeviceBuffer::<f32>::zeroed(&s, c.num_experts_per_tok))?,
-            topk_w: cu(DeviceBuffer::<f32>::zeroed(&s, c.num_experts_per_tok))?,
-        };
-
-        let nh = c.num_heads;
-        let nkv = c.num_kv_heads;
-        let hd = d / nh;
-        let max_seq = 4096usize;
-        // Precompute RoPE cos/sin on CPU, upload to GPU
-        let mut cos_cpu = vec![0f32; max_seq * hd / 2];
-        let mut sin_cpu = vec![0f32; max_seq * hd / 2];
-        let theta = c.rope_theta;
-        for pos in 0..max_seq {
-            for i in 0..hd / 2 {
-                let freq = 1.0 / theta.powf(2.0 * i as f32 / hd as f32);
-                let angle = pos as f32 * freq;
-                cos_cpu[pos * hd / 2 + i] = angle.cos();
-                sin_cpu[pos * hd / 2 + i] = angle.sin();
-            }
-        }
-        let rope_cos = cu(DeviceBuffer::from_host(&s, &cos_cpu))?;
-        let rope_sin = cu(DeviceBuffer::from_host(&s, &sin_cpu))?;
-        let scores_buf = cu(DeviceBuffer::<f32>::zeroed(&s, nh * max_seq))?;
-        // KV cache: store kv_dim elements per position (not d)
-        let k_cache: Vec<_> = (0..c.num_layers)
-            .map(|_| cu(DeviceBuffer::<f32>::zeroed(&s, max_seq * kv_dim)))
-            .collect::<Result<_>>()?;
-        let v_cache: Vec<_> = (0..c.num_layers)
-            .map(|_| cu(DeviceBuffer::<f32>::zeroed(&s, max_seq * kv_dim)))
-            .collect::<Result<_>>()?;
-
-        Ok(Self {
-            ctx,
-            s,
-            module,
-            emb,
-            lm_head,
-            final_norm,
-            layers,
-            d,
-            kv_dim,
-            ne,
-            na: c.num_experts_per_tok,
-            mid,
-            vocab: c.vocab_size,
-            eps: c.rms_norm_eps,
-            norm_topk_prob: c.norm_topk_prob,
-            qt,
-            scratch,
-            nh,
-            nkv,
-            hd,
-            max_seq,
-            k_cache,
-            v_cache,
-            rope_cos,
-            rope_sin,
-            cur_seq: 0,
-            scores_buf,
-        })
+    /// Build GPU model from a lightweight CPU model + pre-existing qcache.
+    /// Skips full FP32 weight loading — norms, router, embed, lm_head come
+    /// from the lightweight model; quantized attention/expert weights come
+    /// from the cache.
+    pub fn from_lightweight(
+        model: &ferrule_model::OlmoeModel,
+        cache: &crate::qcache::QCacheReader,
+        qt: QuantType,
+    ) -> Result<Self> {
+        Self::build_from_lightweight(model, cache, qt)
     }
 
     pub fn forward(&mut self, tid: u32) -> Result<Vec<f32>> {
+        let _span = tracing::debug_span!("gpu_forward", token = tid).entered();
+        if self.cur_seq >= self.max_seq {
+            return Err(Error::Internal(format!(
+                "GPU context length {} exceeds max_seq {}",
+                self.cur_seq + 1,
+                self.max_seq
+            )));
+        }
         cu(self.ctx.bind_to_thread())?;
         let m = &self.module;
         let s = &self.s;
@@ -562,14 +185,18 @@ impl GpuOlmoeModel {
             ub,
             gb2,
             db,
-            rms_buf,
             logits,
             topk_idx,
             topk_w,
+            topk_vocab_idx,
+            topk_vocab_val,
         } = &mut self.scratch;
 
         // ── Embedding lookup ──
-        cu(m.embed_lookup(s, cfg(d), &self.emb, hidden, tid, d as u32))?;
+        {
+            let _s = tracing::trace_span!("embed").entered();
+            cu(m.embed_lookup(s, cfg(d), &self.emb, hidden, tid, d as u32))?;
+        }
 
         // Expert stride constants for quantized packed/scales offsets
         let mid = self.mid;
@@ -722,6 +349,7 @@ impl GpuOlmoeModel {
             let seq_len = pos + 1;
 
             // GPU: attention scores (GQA-aware) — stays on GPU
+            // TODO: FlashAttention kernel for long-context prefill
             let sm_scale = 1.0 / (self.hd as f32).sqrt();
             cu(m.attn_scores(
                 s,
@@ -780,97 +408,106 @@ impl GpuOlmoeModel {
                 self.na as u32,
                 self.norm_topk_prob as u32,
             ))?;
-            // Download only k indices + k weights (tiny: 2×8×4=64 bytes vs 64×4=256 for logits)
+            // P10.1: Download only k indices + k weights (tiny: na×4 bytes, e.g. 8×4=32).
+            // This is a single host sync per token, negligible overhead vs the
+            // ~100+ μs of expert GEMV kernels. Already optimal — no further work needed.
             let tk_idx = cu(topk_idx.to_host_vec(s))?;
             let tk_w = cu(topk_w.to_host_vec(s))?;
 
             // ── Expert FFN ──
-            cu(m.mul(s, cfg(d), hidden, h_tmp2, fo))?; // fo = 0
+            {
+                let _s = tracing::trace_span!("expert_loop", layer = li).entered();
+                cu(m.mul(s, cfg(d), hidden, h_tmp2, fo))?; // fo = 0
 
-            for k in 0..self.na {
-                let eid = tk_idx[k] as usize;
-                let w = tk_w[k];
-                let gate_packed_off = eid as u32 * gate_bytes_per_exp as u32;
-                let gate_scales_off = eid as u32 * gate_scales_per_exp as u32;
-                let down_packed_off = eid as u32 * down_bytes_per_exp as u32;
-                let down_scales_off = eid as u32 * down_scales_per_exp as u32;
+                for k in 0..self.na {
+                    let eid = tk_idx[k] as usize;
+                    self.expert_hits[li][eid] = self.expert_hits[li][eid].saturating_add(1);
+                    let w = tk_w[k];
+                    let gate_packed_off = eid as u32 * gate_bytes_per_exp as u32;
+                    let gate_scales_off = eid as u32 * gate_scales_per_exp as u32;
+                    let down_packed_off = eid as u32 * down_bytes_per_exp as u32;
+                    let down_scales_off = eid as u32 * down_scales_per_exp as u32;
 
-                // gate + up (fused dual for Q4_0)
-                if qt == QuantType::Q4_0 {
-                    cu(m.gemv_dual_q4_off(
-                        s,
-                        cfg(self.mid),
-                        ffn_in,
-                        &layer.ex_gate_packed,
-                        &layer.ex_gate_scales,
-                        gb,
-                        gate_packed_off as u32,
-                        gate_scales_off as u32,
-                        &layer.ex_up_packed,
-                        &layer.ex_up_scales,
-                        ub,
-                        gate_packed_off as u32,
-                        gate_scales_off as u32,
-                        d as u32,
-                    ))?;
-                } else {
+                    // gate + up (fused dual for Q4_0)
+                    if qt == QuantType::Q4_0 {
+                        cu(m.gemv_dual_q4_off(
+                            s,
+                            cfg(self.mid),
+                            ffn_in,
+                            &layer.ex_gate_packed,
+                            &layer.ex_gate_scales,
+                            gb,
+                            gate_packed_off as u32,
+                            gate_scales_off as u32,
+                            &layer.ex_up_packed,
+                            &layer.ex_up_scales,
+                            ub,
+                            gate_packed_off as u32,
+                            gate_scales_off as u32,
+                            d as u32,
+                        ))?;
+                    } else {
+                        gemv_quant_off(
+                            m,
+                            s,
+                            qt,
+                            cfg(self.mid),
+                            ffn_in,
+                            &layer.ex_gate_packed,
+                            &layer.ex_gate_scales,
+                            gb,
+                            d as u32,
+                            gate_packed_off as u32,
+                            gate_scales_off as u32,
+                        )?;
+                        gemv_quant_off(
+                            m,
+                            s,
+                            qt,
+                            cfg(self.mid),
+                            ffn_in,
+                            &layer.ex_up_packed,
+                            &layer.ex_up_scales,
+                            ub,
+                            d as u32,
+                            gate_packed_off as u32,
+                            gate_scales_off as u32,
+                        )?;
+                    }
+
+                    // SiLU(gate) * up (fused silu+mul → saves 1 launch)
+                    cu(m.silu_mul(s, cfg(self.mid), gb, ub, gb2))?;
+
+                    // down
                     gemv_quant_off(
                         m,
                         s,
                         qt,
-                        cfg(self.mid),
-                        ffn_in,
-                        &layer.ex_gate_packed,
-                        &layer.ex_gate_scales,
-                        gb,
-                        d as u32,
-                        gate_packed_off as u32,
-                        gate_scales_off as u32,
+                        cfg(d),
+                        gb2,
+                        &layer.ex_down_packed,
+                        &layer.ex_down_scales,
+                        db,
+                        self.mid as u32,
+                        down_packed_off as u32,
+                        down_scales_off as u32,
                     )?;
-                    gemv_quant_off(
-                        m,
-                        s,
-                        qt,
-                        cfg(self.mid),
-                        ffn_in,
-                        &layer.ex_up_packed,
-                        &layer.ex_up_scales,
-                        ub,
-                        d as u32,
-                        gate_packed_off as u32,
-                        gate_scales_off as u32,
-                    )?;
+
+                    // fo += w * db
+                    cu(m.saxpy(s, cfg(d), w, db, fo))?;
                 }
 
-                // SiLU(gate) * up (fused silu+mul → saves 1 launch)
-                cu(m.silu_mul(s, cfg(self.mid), gb, ub, gb2))?;
-
-                // down
-                gemv_quant_off(
-                    m,
-                    s,
-                    qt,
-                    cfg(d),
-                    gb2,
-                    &layer.ex_down_packed,
-                    &layer.ex_down_scales,
-                    db,
-                    self.mid as u32,
-                    down_packed_off as u32,
-                    down_scales_off as u32,
-                )?;
-
-                // fo += w * db
-                let w_buf = cu(DeviceBuffer::from_host(s, &[w]))?;
-                cu(m.saxpy(s, cfg(d), &w_buf, db, fo))?;
-            }
-
-            // ── Residual ──
+                // ── Residual ──
+            } // expert_loop span
             cu(m.add(s, cfg(d), hidden, fo, h_tmp1))?;
             cu(m.add(s, cfg(d), h_tmp1, h_tmp2, hidden))?;
         }
 
         self.cur_seq += 1;
+        self.total_tokens += 1;
+        ferrule_core::observability::METRICS
+            .generated_tokens
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // ── Final layer norm (model.norm.weight) ──
         cu(m.rms_norm_fused(
@@ -893,18 +530,99 @@ impl GpuOlmoeModel {
             logits,
             d as u32,
         ))?;
-        let result = cu(logits.to_host_vec(s));
+        // P10.5: Optional GPU vocab top-K. It is opt-in because returning
+        // sparse logits changes full-distribution sampling semantics
+        // (top-p/min-p/logprobs/repeat penalties for omitted tokens).
+        // Set FERRULE_GPU_TOPK=N to enable, capped by the fixed buffers.
+        const GPU_TOPK_CAP: u32 = 40;
+        let k: u32 = std::env::var_os("FERRULE_GPU_TOPK")
+            .and_then(|s| s.to_string_lossy().parse().ok())
+            .unwrap_or(0)
+            .min(GPU_TOPK_CAP);
+        let result = if k > 0 && (k as usize) < vocab {
+            let k = k.min(vocab as u32);
+            let one_block = LaunchConfig {
+                grid_dim: (1, 1, 1),
+                block_dim: (1, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            cu(m.topk_vocab(
+                s,
+                one_block,
+                logits,
+                topk_vocab_idx,
+                topk_vocab_val,
+                vocab as u32,
+                k,
+            ))?;
+            // Download only top-K indices + values
+            let idx = cu(topk_vocab_idx.to_host_vec(s))?;
+            let val = cu(topk_vocab_val.to_host_vec(s))?;
+            // Reconstruct full logits: fill with -inf, set top-K
+            let mut full = vec![f32::NEG_INFINITY; vocab];
+            for j in 0..k as usize {
+                let id = idx[j] as usize;
+                if id < vocab {
+                    full[id] = val[j];
+                }
+            }
+            Ok(full)
+        } else {
+            cu(logits.to_host_vec(s))
+        };
         if std::env::var_os("FERRULE_DEBUG_TOPK").is_some() {
             if let Ok(ref top) = result {
                 let mut top5: Vec<(usize, f32)> = top.iter().copied().enumerate().collect();
                 top5.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
                 top5.truncate(8);
-                eprintln!(
+                tracing::debug!(
                     "GPU top8 ids: {:?}",
                     top5.iter().map(|(i, _)| i).collect::<Vec<_>>()
                 );
             }
         }
         result
+    }
+
+    /// Placeholder for CUDA graph capture of the decode loop.
+    /// When implemented, captures the entire per-token forward pass
+    /// into a CUDA graph for replay, eliminating per-kernel launch overhead.
+    pub fn capture_decode_graph(&mut self) -> Result<()> {
+        if cuda_graph_enabled() {
+            tracing::info!("CUDA graph capture requested but not yet implemented");
+        }
+        Ok(())
+    }
+
+    pub fn reset_session(&mut self) {
+        self.cur_seq = 0;
+    }
+
+    /// Generate a human-readable expert activation report.
+    pub fn expert_report(&self) -> String {
+        use std::fmt::Write;
+        let mut out = String::new();
+        let _ = writeln!(
+            out,
+            "Expert activation report ({} tokens):",
+            self.total_tokens
+        );
+        for (li, layer_hits) in self.expert_hits.iter().enumerate() {
+            let total_hits: usize = layer_hits.iter().sum();
+            if total_hits == 0 {
+                continue;
+            }
+            // Find top-5 experts by hit count
+            let mut ranked: Vec<(usize, usize)> = layer_hits.iter().copied().enumerate().collect();
+            ranked.sort_by(|a, b| b.1.cmp(&a.1));
+            let _ = write!(out, "  layer {li:>2}: ");
+            for (eid, count) in ranked.iter().take(5) {
+                if *count > 0 {
+                    let _ = write!(out, "e{eid}:{count} ");
+                }
+            }
+            let _ = writeln!(out);
+        }
+        out
     }
 }

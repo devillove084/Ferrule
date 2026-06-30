@@ -1,6 +1,24 @@
-use clap::{Parser, Subcommand};
-use std::io::Write;
+use clap::{Args, Parser, Subcommand};
+#[cfg(feature = "cuda")]
+use ferrule_runtime::{detect_chat_template, InferenceEngine, ModelGenerationDefaults};
+use ferrule_runtime::{CpuOlmoeRunner, GenerationConfig, ModelRunner, SamplingConfig};
 use std::path::Path;
+#[cfg(feature = "cuda")]
+use std::sync::{Arc, Mutex};
+
+mod commands;
+mod server;
+
+use commands::bench::cmd_bench_infer;
+use commands::chat::cmd_chat;
+use commands::compare::cmd_compare_logits;
+use commands::info::{cmd_info, print_model_info};
+use commands::inspect::cmd_inspect_cache;
+#[cfg(feature = "cuda")]
+use commands::run::parse_quant;
+use commands::run::{cmd_gpu_run, cmd_run};
+
+// ── CLI ────────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
 #[command(name = "ferrule", version = "0.2")]
@@ -11,15 +29,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    Info {
-        model: String,
-    },
+    /// Print model architecture and vocabulary size.
+    Info { model: String },
+    /// Run inference on CPU (FP32).
     Run {
         model: String,
         #[arg(short = 'p', long, default_value = "The capital of France is")]
         prompt: String,
         #[arg(short = 'n', long, default_value = "16")]
         max_tokens: usize,
+        #[command(flatten)]
+        sampling: SamplingArgs,
     },
     /// Verify CUDA and benchmark GEMV.
     Cuda,
@@ -32,6 +52,8 @@ enum Command {
         max_tokens: usize,
         #[arg(short = 'q', long, default_value = "q4")]
         quant: String,
+        #[command(flatten)]
+        sampling: SamplingArgs,
     },
     /// Interactive chat REPL.
     Chat {
@@ -40,20 +62,147 @@ enum Command {
         max_tokens: usize,
         #[arg(short = 'q', long, default_value = "q4")]
         quant: String,
+        #[command(flatten)]
+        sampling: SamplingArgs,
+        /// Override auto-detected chat template.
+        #[arg(long = "chat-template")]
+        chat_template: Option<String>,
     },
-    Bench {
-        #[arg(long, default_value = "2048")]
-        hidden: usize,
-        #[arg(long, default_value = "12")]
-        layers: usize,
+    /// Benchmark prompt/decode throughput (no model-load timing).
+    BenchInfer {
+        model: String,
+        #[arg(short = 'p', long, default_value = "Hello")]
+        prompt: String,
+        #[arg(short = 'n', long, default_value = "128")]
+        max_tokens: usize,
+        #[arg(short = 'q', long, default_value = "q4")]
+        quant: String,
+        /// Warmup runs before measuring.
         #[arg(long, default_value = "2")]
         warmup: usize,
-        #[arg(long, default_value = "8")]
-        iters: usize,
+        /// Repeat count for statistics.
+        #[arg(long, default_value = "3")]
+        repeat: usize,
+        /// JSON output for machine consumption.
+        #[arg(long)]
+        json: bool,
+        /// Context window size for token limit warnings.
+        #[arg(long, default_value = "4096")]
+        ctx_size: usize,
+    },
+    /// Compare CPU FP32 vs GPU quantized logits for the same prompt.
+    CompareLogits {
+        model: String,
+        #[arg(short = 'p', long, default_value = "The capital of France is")]
+        prompt: String,
+        #[arg(short = 'n', long, default_value = "16")]
+        max_tokens: usize,
+        #[arg(short = 'q', long, default_value = "q4")]
+        quant: String,
+        /// Allow CPU and GPU to sample independently (no teacher forcing).
+        #[arg(long)]
+        free_run: bool,
+        /// Context window size for token limit warnings.
+        #[arg(long, default_value = "4096")]
+        ctx_size: usize,
+    },
+    /// Inspect a qcache file header.
+    InspectCache { path: String },
+    /// Start a minimal OpenAI-compatible HTTP server.
+    Server {
+        model: String,
+        #[arg(short = 'q', long, default_value = "q4")]
+        quant: String,
+        /// Host to bind.
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// Port to listen on.
+        #[arg(long, default_value = "8080")]
+        port: u16,
+    },
+    /// Compute perplexity over a text file (teacher-force, CPU only).
+    Perplexity {
+        model: String,
+        /// Text file to evaluate (one line = one prompt, or freeform).
+        #[arg(short = 'f', long)]
+        file: String,
+        /// Context window size for batching.
+        #[arg(long, default_value = "512")]
+        ctx_size: usize,
     },
 }
 
+// ── Args helpers ───────────────────────────────────────────────────────────
+
+#[derive(Args, Clone)]
+struct SamplingArgs {
+    /// Sampling temperature. Use 0 for greedy decoding.
+    #[arg(long, default_value_t = 0.0)]
+    temp: f32,
+    /// Keep only the best K tokens before sampling. Use 0 to disable.
+    #[arg(long, default_value_t = 40)]
+    top_k: usize,
+    /// Nucleus sampling probability mass. Use 1.0 to disable.
+    #[arg(long, default_value_t = 0.95)]
+    top_p: f32,
+    /// Minimum probability relative to the best token. Use 0 to disable.
+    #[arg(long, default_value_t = 0.0)]
+    min_p: f32,
+    /// Penalize repeated tokens. Use 1.0 to disable.
+    #[arg(long, default_value_t = 1.0)]
+    repeat_penalty: f32,
+    /// Number of recent tokens considered by repeat penalty.
+    #[arg(long, default_value_t = 64)]
+    repeat_last_n: usize,
+    /// Deterministic sampler seed. Use 0 for Ferrule's default seed.
+    #[arg(long, default_value_t = 0)]
+    seed: u64,
+    /// Stop generation when the decoded text ends with this string.
+    #[arg(long = "stop")]
+    stop: Vec<String>,
+    /// Print top-K logprobs for each generated token.
+    #[arg(long, default_value_t = 0)]
+    logprobs: usize,
+    /// Print each token id alongside its decoded text.
+    #[arg(long)]
+    verbose_tokens: bool,
+    /// Context window size (max tokens for KV cache).
+    #[arg(long, default_value = "4096")]
+    ctx_size: usize,
+}
+
+impl SamplingArgs {
+    fn sampling_config(&self) -> SamplingConfig {
+        SamplingConfig {
+            temperature: self.temp,
+            top_k: self.top_k,
+            top_p: self.top_p,
+            min_p: self.min_p,
+            repeat_penalty: self.repeat_penalty,
+            repeat_last_n: self.repeat_last_n,
+            seed: self.seed,
+        }
+    }
+
+    fn generation_config(&self, max_tokens: usize) -> GenerationConfig {
+        GenerationConfig {
+            max_new_tokens: max_tokens,
+            stop: self.stop.clone(),
+            logprobs_k: self.logprobs,
+            ctx_size: self.ctx_size,
+            ..GenerationConfig::default()
+        }
+    }
+
+    fn verbose_tokens(&self) -> bool {
+        self.verbose_tokens
+    }
+}
+
+// ── main ───────────────────────────────────────────────────────────────────
+
 fn main() -> anyhow::Result<()> {
+    ferrule_core::observability::init_tracing();
     let cli = Cli::parse();
     match cli.command {
         Command::Info { model } => cmd_info(&model),
@@ -61,178 +210,65 @@ fn main() -> anyhow::Result<()> {
             model,
             prompt,
             max_tokens,
-        } => cmd_run(&model, &prompt, max_tokens),
+            sampling,
+        } => cmd_run(&model, &prompt, max_tokens, &sampling),
         Command::Cuda => cmd_cuda(),
         Command::GpuRun {
             model,
             prompt,
             max_tokens,
             quant,
-        } => cmd_gpu_run(&model, &prompt, max_tokens, &quant),
+            sampling,
+        } => cmd_gpu_run(&model, &prompt, max_tokens, &quant, &sampling),
         Command::Chat {
             model,
             max_tokens,
             quant,
-        } => cmd_chat(&model, max_tokens, &quant),
-        Command::Bench {
-            hidden,
-            layers,
+            sampling,
+            chat_template,
+        } => cmd_chat(
+            &model,
+            max_tokens,
+            &quant,
+            &sampling,
+            chat_template.as_deref(),
+        ),
+        Command::BenchInfer {
+            model,
+            prompt,
+            max_tokens,
+            quant,
             warmup,
-            iters,
-        } => cmd_bench(hidden, layers, warmup, iters),
+            repeat,
+            json,
+            ctx_size,
+        } => cmd_bench_infer(
+            &model, &prompt, max_tokens, &quant, warmup, repeat, json, ctx_size,
+        ),
+        Command::CompareLogits {
+            model,
+            prompt,
+            max_tokens,
+            quant,
+            free_run,
+            ctx_size,
+        } => cmd_compare_logits(&model, &prompt, max_tokens, &quant, free_run, ctx_size),
+        Command::InspectCache { path } => cmd_inspect_cache(&path),
+        Command::Server {
+            model,
+            quant,
+            host,
+            port,
+        } => cmd_server(&model, &quant, &host, port),
+        Command::Perplexity {
+            model,
+            file,
+            ctx_size,
+        } => cmd_perplexity(&model, &file, ctx_size),
     }
 }
 
-fn cmd_info(model_dir: &str) -> anyhow::Result<()> {
-    let model = ferrule_model::OlmoeModel::load(Path::new(model_dir))?;
-    let c = &model.config;
-    println!(
-        "OLMoE: {}d×{}L, {}e top-{}, vocab={}",
-        c.hidden_size, c.num_layers, c.num_experts, c.num_experts_per_tok, c.vocab_size
-    );
-    Ok(())
-}
-
-fn argmax(logits: &[f32]) -> u32 {
-    logits
-        .iter()
-        .enumerate()
-        .fold(
-            (0usize, logits[0]),
-            |(bi, bv), (i, &v)| if v > bv { (i, v) } else { (bi, bv) },
-        )
-        .0 as u32
-}
-
-#[cfg(feature = "cuda")]
-fn parse_quant(quant: &str) -> ferrule_quant::QuantType {
-    match quant.to_ascii_lowercase().as_str() {
-        "q2" | "q2s" => ferrule_quant::QuantType::Q2S,
-        "t1" | "t1s" => ferrule_quant::QuantType::T1S,
-        "q8" | "q8_0" => ferrule_quant::QuantType::Q8_0,
-        _ => ferrule_quant::QuantType::Q4_0,
-    }
-}
-
-#[derive(Clone, Copy)]
-enum ChatFormat {
-    OlmoeInstruct,
-    Plain,
-}
-
-impl ChatFormat {
-    fn name(self) -> &'static str {
-        match self {
-            Self::OlmoeInstruct => "olmoe-instruct",
-            Self::Plain => "plain",
-        }
-    }
-}
-
-fn detect_chat_format(model_dir: &str) -> ChatFormat {
-    let path = Path::new(model_dir).join("tokenizer_config.json");
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return ChatFormat::Plain;
-    };
-    if text.contains("<|user|>") && text.contains("<|assistant|>") {
-        ChatFormat::OlmoeInstruct
-    } else {
-        ChatFormat::Plain
-    }
-}
-
-fn chat_prompt(format: ChatFormat, turn: &str, first_turn: bool) -> String {
-    match format {
-        ChatFormat::OlmoeInstruct => {
-            if first_turn {
-                format!("<|endoftext|>\n<|user|>\n{turn}\n<|assistant|>")
-            } else {
-                format!("\n<|user|>\n{turn}\n<|assistant|>")
-            }
-        }
-        ChatFormat::Plain => {
-            if first_turn {
-                format!("User: {turn}\nAssistant:")
-            } else {
-                format!("\nUser: {turn}\nAssistant:")
-            }
-        }
-    }
-}
-
-fn is_eos(model: &ferrule_model::OlmoeModel, token: u32) -> bool {
-    model.eos_token_id() == Some(token)
-}
-
-fn cmd_run(model_dir: &str, prompt: &str, max_tokens: usize) -> anyhow::Result<()> {
-    let model = ferrule_model::OlmoeModel::load(Path::new(model_dir))?;
-    let c = &model.config;
-    println!(
-        "OLMoE: {}d×{}L, {}e top-{}",
-        c.hidden_size, c.num_layers, c.num_experts, c.num_experts_per_tok
-    );
-
-    let tokens = model.encode(prompt)?;
-    println!("Prompt: \"{prompt}\" → {} tokens", tokens.len());
-
-    let nl = c.num_layers;
-    let mut k_cache: Vec<Vec<f32>> = (0..nl).map(|_| Vec::new()).collect();
-    let mut v_cache: Vec<Vec<f32>> = (0..nl).map(|_| Vec::new()).collect();
-    let mut pos = 0usize;
-
-    let t0 = std::time::Instant::now();
-
-    // Prefill: process all prompt tokens, sample first token from last prefill output
-    let mut gen = Vec::new();
-    let mut logits = Vec::new();
-    for &tid in &tokens {
-        let (_, l) = model.forward(&[tid], &mut k_cache, &mut v_cache, pos)?;
-        logits = l;
-        pos += 1;
-    }
-    // First generated token comes from prefill output, not by re-feeding prompt
-    let first = argmax(&logits);
-    if !is_eos(&model, first) {
-        gen.push(first);
-        let txt = model.decode(&[first])?;
-        println!(
-            "  [{:>3}] {txt:30} {:.0}ms",
-            0,
-            t0.elapsed().as_secs_f64() * 1000.0
-        );
-    }
-
-    // Generate remaining tokens
-    for step in 1..max_tokens {
-        if gen.is_empty() {
-            break;
-        }
-        let last = *gen.last().unwrap_or(&0);
-        let (_, l) = model.forward(&[last], &mut k_cache, &mut v_cache, pos)?;
-        logits = l;
-        pos += 1;
-        let next = argmax(&logits);
-        if is_eos(&model, next) {
-            break;
-        }
-        gen.push(next);
-        let txt = model.decode(&[next])?;
-        println!(
-            "  [{step:>3}] {txt:30} {:.0}ms",
-            t0.elapsed().as_secs_f64() * 1000.0
-        );
-    }
-
-    let full = model.decode(&gen)?;
-    let t = t0.elapsed();
-    println!("\n{full}");
-    println!(
-        "{:.1}s, {:.1} tok/s",
-        t.as_secs_f64(),
-        max_tokens as f64 / t.as_secs_f64()
-    );
-    Ok(())
-}
+// ── cuda ───────────────────────────────────────────────────────────────────
 
 #[cfg(feature = "cuda")]
 fn cmd_cuda() -> anyhow::Result<()> {
@@ -244,7 +280,6 @@ fn cmd_cuda() -> anyhow::Result<()> {
     let x: Vec<f32> = (0..d).map(|i| (i as f32).sin()).collect();
     let w: Vec<f32> = (0..d * d).map(|i| (i as f32).cos()).collect();
 
-    // Proper benchmark: create context once
     use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig};
     let ctx = CudaContext::new(0).map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
     ctx.bind_to_thread()
@@ -256,7 +291,6 @@ fn cmd_cuda() -> anyhow::Result<()> {
     let wd = DeviceBuffer::from_host(&s, &w).map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
     let mut yd = DeviceBuffer::<f32>::zeroed(&s, d).map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
 
-    // Warmup
     for _ in 0..10 {
         module
             .gemv_f32(
@@ -286,11 +320,9 @@ fn cmd_cuda() -> anyhow::Result<()> {
     }
     let gpu_ms = t0.elapsed().as_secs_f64() * 1000.0 / n_iter as f64;
 
-    // Measure empty kernel overhead: launch compute_rms with 1 thread, 1 element
     let mut rms_buf =
         DeviceBuffer::<f32>::zeroed(&s, 1).map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
-    let mut dummy =
-        DeviceBuffer::<f32>::zeroed(&s, 1).map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
+    let dummy = DeviceBuffer::<f32>::zeroed(&s, 1).map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
     let t0 = std::time::Instant::now();
     let n_empty = 5000;
     for _ in 0..n_empty {
@@ -307,8 +339,7 @@ fn cmd_cuda() -> anyhow::Result<()> {
     }
     let empty_us = t0.elapsed().as_secs_f64() * 1e6 / n_empty as f64;
 
-    // Measure compute_rms with real size (d=2048, 1 thread)
-    let mut hidden_buf =
+    let hidden_buf =
         DeviceBuffer::<f32>::zeroed(&s, d).map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
     let t0 = std::time::Instant::now();
     let n_rms = 1000;
@@ -326,7 +357,6 @@ fn cmd_cuda() -> anyhow::Result<()> {
     }
     let rms_us = t0.elapsed().as_secs_f64() * 1e6 / n_rms as f64;
 
-    // CPU comparison
     let t0 = std::time::Instant::now();
     for _ in 0..n_iter {
         let mut out = vec![0f32; d];
@@ -347,283 +377,141 @@ fn cmd_cuda() -> anyhow::Result<()> {
 
 #[cfg(not(feature = "cuda"))]
 fn cmd_cuda() -> anyhow::Result<()> {
-    println!("CUDA not available. Rebuild with: cargo build --release --features cuda");
+    println!("cuda requires --features cuda");
     Ok(())
 }
 
-fn cmd_chat_cpu(model_dir: &str, max_tokens: usize) -> anyhow::Result<()> {
-    use console::style;
-    use rustyline::error::ReadlineError;
-
-    let model = ferrule_model::OlmoeModel::load(Path::new(model_dir))?;
-    let c = &model.config;
-    println!(
-        "OLMoE: {}d×{}L, {}e top-{} (CPU FP32)",
-        c.hidden_size, c.num_layers, c.num_experts, c.num_experts_per_tok
-    );
-    let chat_format = detect_chat_format(model_dir);
-    println!(
-        "{} Type /exit or Ctrl-D to quit. Template: {}.",
-        style("Chat ready.").cyan(),
-        chat_format.name()
-    );
-
-    let nl = c.num_layers;
-    let mut k_cache: Vec<Vec<f32>> = (0..nl).map(|_| Vec::new()).collect();
-    let mut v_cache: Vec<Vec<f32>> = (0..nl).map(|_| Vec::new()).collect();
-    let mut pos = 0usize;
-    let mut first_turn = true;
-    let mut rl = rustyline::DefaultEditor::new()?;
-
-    loop {
-        let line = match rl.readline(&format!("{} ", style("You>").green().bold())) {
-            Ok(line) => line,
-            Err(ReadlineError::Interrupted | ReadlineError::Eof) => break,
-            Err(err) => return Err(err.into()),
-        };
-        let input = line.trim();
-        if input.is_empty() {
-            continue;
-        }
-        if matches!(input, "/exit" | "/quit") {
-            break;
-        }
-        let _ = rl.add_history_entry(input);
-
-        let prompt = chat_prompt(chat_format, input, first_turn);
-        first_turn = false;
-        let tokens = model.encode(&prompt)?;
-        let mut logits = Vec::new();
-        for tid in tokens {
-            let (_, l) = model.forward(&[tid], &mut k_cache, &mut v_cache, pos)?;
-            logits = l;
-            pos += 1;
-        }
-        if logits.is_empty() {
-            continue;
-        }
-
-        print!("{} ", style("Ferrule>").cyan().bold());
-        std::io::stdout().flush()?;
-        for _ in 0..max_tokens {
-            let next = argmax(&logits);
-            if is_eos(&model, next) {
-                let _ = model.forward(&[next], &mut k_cache, &mut v_cache, pos)?;
-                pos += 1;
-                break;
-            }
-            let txt = model.decode(&[next])?;
-            if txt.is_empty() {
-                break;
-            }
-            print!("{txt}");
-            std::io::stdout().flush()?;
-            let (_, l) = model.forward(&[next], &mut k_cache, &mut v_cache, pos)?;
-            logits = l;
-            pos += 1;
-        }
-        println!();
-    }
-
-    Ok(())
-}
-
-fn cmd_bench(hidden: usize, layers: usize, warmup: usize, iters: usize) -> anyhow::Result<()> {
-    use ferrule_graph::{CGraph, CpuBackend, OpKind, Shape};
-    let d = hidden;
-    let mut g = CGraph::new();
-    let w = vec![1f32; d * d];
-    let n = vec![1f32; d];
-    let mut wids = vec![];
-    let mut nids = vec![];
-    for _ in 0..layers {
-        wids.push(g.add_tensor_f32(Shape::matrix(d, d), w.clone()));
-        nids.push(g.add_tensor_f32(Shape::vector(d), n.clone()));
-    }
-    let i = g.add_tensor_f32(Shape::vector(d), vec![0.5f32; d]);
-    g.mark_input(i);
-    let mut h = i;
-    for l in 0..layers {
-        let a = g.add_op(
-            OpKind::RmsNorm,
-            vec![h, nids[l]],
-            Shape::vector(d),
-            Some(1e-5),
-            None,
-        );
-        let b = g.add_op(
-            OpKind::MatMul,
-            vec![a, wids[l]],
-            Shape::vector(d),
-            None,
-            None,
-        );
-        let c = g.add_op(OpKind::SiLU, vec![b], Shape::vector(d), None, None);
-        h = g.add_op(OpKind::Add, vec![h, c], Shape::vector(d), None, None);
-    }
-    g.set_output(h);
-    let mut be = CpuBackend::new(rayon::current_num_threads());
-    for _ in 0..warmup {
-        be.compute(&g)?;
-    }
-    let t0 = std::time::Instant::now();
-    for _ in 0..iters {
-        be.compute(&g)?;
-    }
-    println!(
-        "{:.1} ms/iter",
-        t0.elapsed().as_secs_f64() * 1000.0 / iters as f64
-    );
-    Ok(())
-}
+// ── server ─────────────────────────────────────────────────────────────────
 
 #[cfg(feature = "cuda")]
-fn cmd_gpu_run(
-    model_dir: &str,
-    prompt: &str,
-    max_tokens: usize,
-    quant: &str,
-) -> anyhow::Result<()> {
-    let model = ferrule_model::OlmoeModel::load(std::path::Path::new(model_dir))?;
+fn cmd_server(model_dir: &str, quant: &str, host: &str, port: u16) -> anyhow::Result<()> {
     let qt = parse_quant(quant);
-    println!("Uploading to GPU (quant: {qt:?})...");
-    let mut gpu = ferrule_cuda::forward::GpuOlmoeModel::from_cpu(&model, qt)?;
-    let tokens = model.encode(prompt)?;
-    println!("Prompt: \"{prompt}\" → {} tokens", tokens.len());
+    let template = detect_chat_template(Path::new(model_dir));
 
-    let t0 = std::time::Instant::now();
-
-    // Prefill: process all prompt tokens, keep logits from last position
-    let mut logits = Vec::new();
-    for &tid in &tokens {
-        logits = gpu.forward(tid)?;
+    tracing::info!("Loading server model once (quant: {qt:?})...");
+    let runner = ferrule_runtime::GpuOlmoeRunner::load(Path::new(model_dir), qt)?;
+    let mut sc = SamplingConfig::greedy();
+    if let Some(def) = ModelGenerationDefaults::load(Path::new(model_dir)) {
+        def.apply_to_config(&mut sc);
     }
+    let engine = Arc::new(Mutex::new(InferenceEngine::new(runner, sc)));
 
-    // First generated token comes from prefill output (not re-feeding prompt)
-    let first = argmax(&logits);
-    let mut gen = Vec::new();
-    if !is_eos(&model, first) {
-        gen.push(first);
-        let txt = model.decode(&[first])?;
-        println!(
-            "  [{:>3}] {txt:30} {:.0}ms",
-            0,
-            t0.elapsed().as_secs_f64() * 1000.0
-        );
-    }
+    let gen_fn: server::GenFn = Box::new({
+        let engine = engine.clone();
+        move |prompt: &str, max_tokens: usize| {
+            let gen_cfg = GenerationConfig {
+                max_new_tokens: max_tokens,
+                stop: Vec::new(),
+                logprobs_k: 0,
+                ..GenerationConfig::default()
+            };
 
-    // Generate remaining tokens
-    for step in 1..max_tokens {
-        if gen.is_empty() {
-            break;
+            let mut engine = engine
+                .lock()
+                .map_err(|_| anyhow::anyhow!("server engine mutex poisoned"))?;
+            let result = engine.generate_text(prompt, &gen_cfg, |_| Ok(()))?;
+
+            Ok((
+                result.text,
+                result.stats.prompt_tokens,
+                result.stats.generated_tokens,
+            ))
         }
-        let logits = gpu.forward(*gen.last().unwrap_or(&0))?;
-        let next = argmax(&logits);
-        if is_eos(&model, next) {
-            break;
+    });
+
+    let stream_fn: server::StreamingGenFn = Box::new({
+        let engine = engine.clone();
+        move |prompt: &str, max_tokens: usize, on_token: Box<dyn Fn(&str) + Send>| {
+            let gen_cfg = GenerationConfig {
+                max_new_tokens: max_tokens,
+                stop: Vec::new(),
+                logprobs_k: 0,
+                ..GenerationConfig::default()
+            };
+
+            let mut engine = engine
+                .lock()
+                .map_err(|_| anyhow::anyhow!("server engine mutex poisoned"))?;
+            let result = engine.generate_text(prompt, &gen_cfg, |event| {
+                on_token(&event.text);
+                Ok(())
+            })?;
+
+            Ok((result.stats.prompt_tokens, result.stats.generated_tokens))
         }
-        gen.push(next);
-        let txt = model.decode(&[next])?;
-        println!(
-            "  [{step:>3}] {txt:30} {:.0}ms",
-            t0.elapsed().as_secs_f64() * 1000.0
-        );
-    }
-    let t = t0.elapsed();
-    println!(
-        "{:.1}s, {:.1} tok/s",
-        t.as_secs_f64(),
-        max_tokens as f64 / t.as_secs_f64()
-    );
-    Ok(())
-}
+    });
 
-#[cfg(feature = "cuda")]
-fn cmd_chat(model_dir: &str, max_tokens: usize, quant: &str) -> anyhow::Result<()> {
-    use console::style;
-    use rustyline::error::ReadlineError;
-
-    if matches!(quant.to_ascii_lowercase().as_str(), "cpu" | "f32" | "fp32") {
-        return cmd_chat_cpu(model_dir, max_tokens);
-    }
-
-    let model = ferrule_model::OlmoeModel::load(std::path::Path::new(model_dir))?;
-    let qt = parse_quant(quant);
-    println!("Uploading to GPU (quant: {qt:?})...");
-    let mut gpu = ferrule_cuda::forward::GpuOlmoeModel::from_cpu(&model, qt)?;
-    let chat_format = detect_chat_format(model_dir);
-    println!(
-        "{} Type /exit or Ctrl-D to quit. Template: {}.",
-        style("Chat ready.").cyan(),
-        chat_format.name()
-    );
-
-    let mut first_turn = true;
-    let mut rl = rustyline::DefaultEditor::new()?;
-    loop {
-        let line = match rl.readline(&format!("{} ", style("You>").green().bold())) {
-            Ok(line) => line,
-            Err(ReadlineError::Interrupted | ReadlineError::Eof) => break,
-            Err(err) => return Err(err.into()),
-        };
-        let input = line.trim();
-        if input.is_empty() {
-            continue;
-        }
-        if matches!(input, "/exit" | "/quit") {
-            break;
-        }
-        let _ = rl.add_history_entry(input);
-
-        let prompt = chat_prompt(chat_format, input, first_turn);
-        first_turn = false;
-        let tokens = model.encode(&prompt)?;
-        let mut logits = Vec::new();
-        for tid in tokens {
-            logits = gpu.forward(tid)?;
-        }
-        if logits.is_empty() {
-            continue;
-        }
-
-        print!("{} ", style("Ferrule>").cyan().bold());
-        std::io::stdout().flush()?;
-        for _ in 0..max_tokens {
-            let next = argmax(&logits);
-            if is_eos(&model, next) {
-                let _ = gpu.forward(next)?;
-                break;
-            }
-            let txt = model.decode(&[next])?;
-            if txt.is_empty() {
-                break;
-            }
-            print!("{txt}");
-            std::io::stdout().flush()?;
-            logits = gpu.forward(next)?;
-        }
-        println!();
-    }
-
-    Ok(())
+    server::run(
+        gen_fn,
+        Some(stream_fn),
+        model_dir.to_string(),
+        template,
+        host,
+        port,
+    )
 }
 
 #[cfg(not(feature = "cuda"))]
-fn cmd_chat(model_dir: &str, max_tokens: usize, quant: &str) -> anyhow::Result<()> {
-    if matches!(quant.to_ascii_lowercase().as_str(), "cpu" | "f32" | "fp32") {
-        cmd_chat_cpu(model_dir, max_tokens)
+fn cmd_server(_model_dir: &str, _quant: &str, _host: &str, _port: u16) -> anyhow::Result<()> {
+    anyhow::bail!("server requires --features cuda")
+}
+
+// ── perplexity ──────────────────────────────────────────────────────────────
+
+fn cmd_perplexity(model_dir: &str, file: &str, ctx_size: usize) -> anyhow::Result<()> {
+    use ferrule_runtime::perplexity;
+
+    let mut runner = CpuOlmoeRunner::load(Path::new(model_dir))?;
+    print_model_info(&runner.model_info());
+
+    let text = std::fs::read_to_string(file).map_err(|e| anyhow::anyhow!("read {file}: {e}"))?;
+    let tokens = runner.encode(&text)?;
+    println!("File: {file}  tokens: {}", tokens.len());
+
+    // Chunk tokens into context windows
+    let total = tokens.len();
+    let mut sum_nll = 0.0f64;
+    let mut loss_tokens = 0usize;
+    let t0 = std::time::Instant::now();
+
+    for chunk_start in (0..total).step_by(ctx_size) {
+        let chunk_end = (chunk_start + ctx_size + 1).min(total); // +1 for next-token target
+        let chunk = &tokens[chunk_start..chunk_end];
+        if chunk.len() < 2 {
+            continue;
+        }
+
+        runner.reset_session()?;
+        let result =
+            perplexity::compute_perplexity(chunk, runner.model_info().vocab_size, |token| {
+                runner.decode_token(token)
+            })?;
+        sum_nll += result.sum_nll;
+        loss_tokens += result.loss_tokens;
+    }
+
+    let dur = t0.elapsed();
+    let perplexity = if loss_tokens > 0 {
+        (sum_nll / loss_tokens as f64).exp()
     } else {
-        anyhow::bail!("chat -q {quant} requires rebuilding with --features cuda")
-    }
+        f64::INFINITY
+    };
+
+    println!(
+        "total_tokens={total}  loss_tokens={loss_tokens}  perplexity={perplexity:.2}  duration={:.1}s  tok/s={:.1}",
+        dur.as_secs_f64(),
+        total as f64 / dur.as_secs_f64().max(1e-6)
+    );
+    Ok(())
 }
 
-#[cfg(not(feature = "cuda"))]
-fn cmd_gpu_run(
-    _model_dir: &str,
-    _prompt: &str,
-    _max_tokens: usize,
-    _quant: &str,
-) -> anyhow::Result<()> {
-    println!("Rebuild with --features cuda");
-    Ok(())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn cli_arguments_are_unique() {
+        Cli::command().debug_assert();
+    }
 }

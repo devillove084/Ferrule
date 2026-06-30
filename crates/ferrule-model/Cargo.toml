@@ -3,11 +3,15 @@ name = "ferrule-model"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description = "Ferrule — Rust-native LLM inference runtime"
+repository = "https://github.com/ferrule/ferrule"
+readme = "../../README.md"
+keywords = ["llm", "inference", "moe", "cuda", "rust"]
+categories = ["science", "machine-learning"]
 
 [dependencies]
 ferrule-core = { path = "../ferrule-core" }
 ferrule-gguf = { path = "../ferrule-gguf" }
-ferrule-graph = { path = "../ferrule-graph" }
 tracing = "0.1"
 thiserror = "2"
 tokenizers = "0.21"
