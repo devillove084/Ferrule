@@ -33,7 +33,7 @@ pub fn cmd_bench_infer(
 
     // Warmup
     for i in 0..warmup {
-        let runner = ferrule_runtime::GpuOlmoeRunner::load(Path::new(model_dir), qt)?;
+        let runner = ferrule_runtime::GpuModelRunner::load(Path::new(model_dir), qt)?;
         let mut engine = InferenceEngine::new(runner, sc.clone());
         let _ = engine.generate_text(prompt, &gen_cfg, |_| Ok(()))?;
         if !json {
@@ -41,7 +41,7 @@ pub fn cmd_bench_infer(
         }
     }
 
-    let runner = ferrule_runtime::GpuOlmoeRunner::load(Path::new(model_dir), qt)?;
+    let runner = ferrule_runtime::GpuModelRunner::load(Path::new(model_dir), qt)?;
     let mut engine = InferenceEngine::new(runner, sc);
     let mut total_pp_secs = Vec::with_capacity(repeat);
     let mut total_tg_secs = Vec::with_capacity(repeat);

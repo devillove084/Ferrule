@@ -3,6 +3,7 @@
 //! Uses mock runners to avoid requiring model files.
 
 use ferrule_core::Result;
+use ferrule_model::{AttentionKind, ModelFamily, WeightSource};
 use ferrule_runtime::{
     ContiguousKvCache, GenerationConfig, InferenceEngine, KvCache, ModelInfo, ModelRunner,
     MultiSessionKvCache, SamplingConfig, Scheduler, SequenceState, SessionId,
@@ -45,6 +46,10 @@ impl MockRunner {
 impl ModelRunner for MockRunner {
     fn model_info(&self) -> ModelInfo {
         ModelInfo {
+            family: ModelFamily::Unknown("mock".into()),
+            architecture: Some("mock".into()),
+            attention: AttentionKind::GroupedQuery,
+            weight_source: WeightSource::Unknown,
             hidden_size: 64,
             num_layers: 2,
             num_experts: 4,

@@ -1,5 +1,5 @@
 //! Expert residency policy — manage which experts are GPU-resident, CPU-resident,
-//! or offloaded to NVMe/qcache. Works with expert activation telemetry to decide
+//! or offloaded to NVMe/weight pack. Works with expert activation telemetry to decide
 //! hot/cold placement.
 
 use std::collections::HashMap;
@@ -45,7 +45,7 @@ pub enum ExpertLocation {
     Gpu,
     /// Weights in CPU RAM, can be uploaded on demand.
     Cpu,
-    /// Weights on NVMe/qcache file, slowest to access.
+    /// Weights on NVMe/weight-pack file, slowest to access.
     Disk,
     /// Currently being transferred to GPU.
     Loading,

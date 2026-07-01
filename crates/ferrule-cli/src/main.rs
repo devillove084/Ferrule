@@ -1,7 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 #[cfg(feature = "cuda")]
 use ferrule_runtime::{detect_chat_template, InferenceEngine, ModelGenerationDefaults};
-use ferrule_runtime::{CpuOlmoeRunner, GenerationConfig, ModelRunner, SamplingConfig};
+use ferrule_runtime::{CpuModelRunner, GenerationConfig, ModelRunner, SamplingConfig};
 use std::path::Path;
 #[cfg(feature = "cuda")]
 use std::sync::{Arc, Mutex};
@@ -13,7 +13,7 @@ use commands::bench::cmd_bench_infer;
 use commands::chat::cmd_chat;
 use commands::compare::cmd_compare_logits;
 use commands::info::{cmd_info, print_model_info};
-use commands::inspect::cmd_inspect_cache;
+use commands::inspect::{cmd_expert_stream_smoke, cmd_inspect_weightpack};
 #[cfg(feature = "cuda")]
 use commands::run::parse_quant;
 use commands::run::{cmd_gpu_run, cmd_run};
@@ -106,8 +106,20 @@ enum Command {
         #[arg(long, default_value = "4096")]
         ctx_size: usize,
     },
-    /// Inspect a qcache file header.
-    InspectCache { path: String },
+    /// Inspect a WeightPack file header.
+    #[command(name = "inspect-weightpack")]
+    InspectWeightPack { path: String },
+    /// Smoke-test source-preserving expert streaming from local HF shards.
+    #[command(name = "expert-stream-smoke")]
+    ExpertStreamSmoke {
+        model: String,
+        #[arg(long, default_value_t = 0)]
+        layer: usize,
+        #[arg(long, default_value_t = 0)]
+        expert: usize,
+        #[arg(long = "max-slice-mb", default_value_t = 64)]
+        max_slice_mb: u64,
+    },
     /// Start a minimal OpenAI-compatible HTTP server.
     Server {
         model: String,
@@ -253,7 +265,13 @@ fn main() -> anyhow::Result<()> {
             free_run,
             ctx_size,
         } => cmd_compare_logits(&model, &prompt, max_tokens, &quant, free_run, ctx_size),
-        Command::InspectCache { path } => cmd_inspect_cache(&path),
+        Command::InspectWeightPack { path } => cmd_inspect_weightpack(&path),
+        Command::ExpertStreamSmoke {
+            model,
+            layer,
+            expert,
+            max_slice_mb,
+        } => cmd_expert_stream_smoke(&model, layer, expert, max_slice_mb),
         Command::Server {
             model,
             quant,
@@ -300,6 +318,7 @@ fn cmd_cuda() -> anyhow::Result<()> {
                 &wd,
                 &mut yd,
                 d as u32,
+                d as u32,
             )
             .map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
     }
@@ -314,6 +333,7 @@ fn cmd_cuda() -> anyhow::Result<()> {
                 &xd,
                 &wd,
                 &mut yd,
+                d as u32,
                 d as u32,
             )
             .map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
@@ -389,7 +409,7 @@ fn cmd_server(model_dir: &str, quant: &str, host: &str, port: u16) -> anyhow::Re
     let template = detect_chat_template(Path::new(model_dir));
 
     tracing::info!("Loading server model once (quant: {qt:?})...");
-    let runner = ferrule_runtime::GpuOlmoeRunner::load(Path::new(model_dir), qt)?;
+    let runner = ferrule_runtime::GpuModelRunner::load(Path::new(model_dir), qt)?;
     let mut sc = SamplingConfig::greedy();
     if let Some(def) = ModelGenerationDefaults::load(Path::new(model_dir)) {
         def.apply_to_config(&mut sc);
@@ -461,7 +481,7 @@ fn cmd_server(_model_dir: &str, _quant: &str, _host: &str, _port: u16) -> anyhow
 fn cmd_perplexity(model_dir: &str, file: &str, ctx_size: usize) -> anyhow::Result<()> {
     use ferrule_runtime::perplexity;
 
-    let mut runner = CpuOlmoeRunner::load(Path::new(model_dir))?;
+    let mut runner = CpuModelRunner::load(Path::new(model_dir))?;
     print_model_info(&runner.model_info());
 
     let text = std::fs::read_to_string(file).map_err(|e| anyhow::anyhow!("read {file}: {e}"))?;

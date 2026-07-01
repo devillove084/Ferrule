@@ -24,7 +24,7 @@ This roadmap is organized by priority, not dates. The immediate strategy is:
 - persistent single-session GPU KV cache
 - shared `ferrule-runtime` generation loop for CPU and GPU backends
 - llama.cpp-compatible Q4_0 block layout
-- qcache for quantized per-layer weights
+- WeightPack for quantized per-layer weights
 - `norm_topk_prob=false` router semantics
 - interactive `ferrule chat`
 - one-shot `run` and `gpu-run`
@@ -33,7 +33,7 @@ This roadmap is organized by priority, not dates. The immediate strategy is:
 
 ### Main gaps
 
-- qcache hits still load the full FP32 model first
+- WeightPack hits still load the full FP32 model first
 - sampling is CLI-level only; no logprobs, grammar constraints, or generation config loading yet
 - no formal CPU/GPU logits diff or golden-token regression suite
 - no prompt/decode benchmark comparable to `llama-bench`
@@ -57,7 +57,7 @@ Ferrule should not copy all of that immediately. The high-value subset for the n
 | Area | llama.cpp capability | Ferrule target |
 |---|---|---|
 | Local chat UX | robust CLI, templates, sampling | complete `chat` controls and template registry |
-| Model cache | GGUF single-file metadata | qcache manifest + qcache-only startup |
+| Model cache | GGUF single-file metadata | WeightPack manifest + WeightPack-only startup |
 | Quantization | broad Q/IQ/K quant suite | Q8 validation, mixed precision, K-quant/AWQ track |
 | Quality checks | perplexity and eval tools | logits diff, golden tokens, perplexity |
 | Performance | prompt/decode benchmark | `ferrule bench-infer` with pp/tg split |
@@ -92,12 +92,12 @@ Goal: make OLMoE-Instruct a dependable correctness baseline.
 - [ ] per-layer activation diff tool
 - [ ] golden token tests for short OLMoE-Instruct prompts
 - [ ] CI-friendly tiny OLMoE fixture
-- [ ] qcache metadata validation: magic, version, quant type, tensor count, shapes
+- [ ] WeightPack metadata validation: magic, version, quant type, tensor count, shapes
 
 Exit criteria:
 
 - a short prompt can be validated automatically on CPU FP32 and GPU Q4_0
-- qcache compatibility failures are explicit, not silent
+- WeightPack compatibility failures are explicit, not silent
 
 ---
 
@@ -107,10 +107,10 @@ Goal: make Ferrule comfortable as a local chat tool.
 
 ### Startup and loading
 
-- [ ] qcache-only startup path
-- [ ] avoid full CPU FP32 model load on qcache hits
+- [ ] WeightPack-only startup path
+- [ ] avoid full CPU FP32 model load on WeightPack hits
 - [ ] store/load small FP32 tensors required by GPU inference
-- [ ] streaming safetensors → qcache writer
+- [ ] streaming safetensors → WeightPack writer
 - [ ] shard/layer-by-layer quantization to stay under 32 GB RAM
 
 ### Generation UX
@@ -133,7 +133,7 @@ Goal: make Ferrule comfortable as a local chat tool.
 
 - [ ] `bench-infer` with prompt-processing and token-generation metrics
 - [ ] perplexity command over text files
-- [ ] model/qcache inspection command
+- [ ] model/WeightPack inspection command
 - [ ] generation config loading from `generation_config.json`
 
 Exit criteria:
@@ -215,7 +215,7 @@ Priority order:
    - stronger chat ability
    - requires qwen2_moe loader
    - likely requires shared expert support
-   - requires streaming quantization/qcache-only loading
+   - requires streaming quantization/WeightPack-only loading
 
 3. `mistralai/Mixtral-8x7B-Instruct-v0.1`
    - standard top-2 MoE target
@@ -275,15 +275,15 @@ Goal: evolve Ferrule workers into rollout workers, then connect them to fine-tun
 
 ## P6 — Elastic State Fabric
 
-Goal: make model, qcache, KV, expert, rollout, and checkpoint state durable and movable.
+Goal: make model, WeightPack, KV, expert, rollout, and checkpoint state durable and movable.
 
 - [ ] StateObject schema
-- [ ] qcache manifest registry
+- [ ] WeightPack manifest registry
 - [ ] local StateAgent
 - [ ] model version registry
 - [ ] KV session binding
 - [ ] checkpoint manifest registry
-- [ ] transfer protocol for KV and qcache chunks
+- [ ] transfer protocol for KV and WeightPack chunks
 - [ ] session-first KV migration
 - [ ] distributed rollout workers
 - [ ] central trainer / policy update loop
@@ -295,7 +295,7 @@ Goal: make model, qcache, KV, expert, rollout, and checkpoint state durable and 
 | Metric | Current | Near target | Long target |
 |---|---:|---:|---:|
 | OLMoE-Instruct chat | works manually | golden tests | regression suite |
-| cached startup | qcache exists, FP32 still loaded | qcache-only | remote qcache artifact |
+| cached startup | WeightPack exists, FP32 still loaded | WeightPack-only | remote WeightPack artifact |
 | GPU Q4_0 decode | usable | measured diff | higher-quality quant |
 | Q8_0 decode | kernels present | end-to-end validated | mixed precision policy |
 | prompt/decode benchmark | none | pp/tg report | llama-bench style matrix |
@@ -307,9 +307,9 @@ Goal: make model, qcache, KV, expert, rollout, and checkpoint state durable and 
 
 ## Immediate Next Steps
 
-1. Implement qcache-only startup for OLMoE-Instruct.
+1. Implement WeightPack-only startup for OLMoE-Instruct.
 2. Add CPU/GPU logits comparison and golden prompt tests.
 3. Add sampling controls and chat-template registry.
-4. Add prompt/decode benchmark and qcache inspection.
-5. Validate Q8_0 end-to-end after qcache-only loading.
+4. Add prompt/decode benchmark and WeightPack inspection.
+5. Validate Q8_0 end-to-end after WeightPack-only loading.
 6. Start Qwen MoE loader design only after streaming quantization is in place.

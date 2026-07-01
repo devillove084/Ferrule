@@ -1,18 +1,18 @@
 <h1 align="center">Ferrule</h1>
 
 <p align="center">
-  <strong>Rust-native sparse MoE inference for edge GPUs and hardware-aware LLM systems.</strong>
+  <strong>Rust-native, composable LLM inference for sparse MoE, expert streaming, and hardware-aware execution.</strong>
 </p>
 
 <p align="center">
-  Ferrule keeps router, top-k experts, quantized weights, KV cache, and future rollout/training state as explicit runtime concepts.
+  Ferrule keeps model-family policies, tensor source bindings, router/top-k experts, quantized weights, KV cache, and future speculation/parallelism state as explicit runtime concepts.
 </p>
 
 <p align="center">
   <img alt="Rust" src="https://img.shields.io/badge/Rust-native-f97316?style=flat-square" />
   <img alt="CUDA" src="https://img.shields.io/badge/CUDA-cuda--oxide-22c55e?style=flat-square" />
   <img alt="MoE" src="https://img.shields.io/badge/MoE-router%20%2B%20top--k%20experts-8b5cf6?style=flat-square" />
-  <img alt="Q4_0" src="https://img.shields.io/badge/Q4__0-llama.cpp%20layout-2563eb?style=flat-square" />
+  <img alt="WeightPack" src="https://img.shields.io/badge/WeightPack-source%20aware-2563eb?style=flat-square" />
   <img alt="Edge" src="https://img.shields.io/badge/edge--cloud-state%20aware-06b6d4?style=flat-square" />
 </p>
 
@@ -28,24 +28,34 @@
 
 ## Current milestone
 
-Ferrule can run **OLMoE-1B-7B-0924-Instruct** end-to-end with a real sparse MoE path:
+Ferrule has two active tracks:
+
+1. **Executable OLMoE path** — Ferrule can run **OLMoE-1B-7B-0924-Instruct** end-to-end with a real sparse MoE path:
 
 ```text
-safetensors → Rust loader → Q4_0 qcache → cuda-oxide kernels → router/top-k experts → chat
+safetensors → Rust loader → WeightPack/Q4_0 cache → cuda-oxide kernels → router/top-k experts → chat/server
+```
+
+2. **Generic model bring-up path** — Ferrule is being refactored around semantic model-family policies and source bindings, with **DeepSeek V4 Flash + DSpark** as the current pressure-test model:
+
+```text
+HF safetensors inventory → family tensor descriptors → source payloads → generic attention / HC / router / expert policies
 ```
 
 What works today:
 
-- CPU FP32 reference inference
-- GPU Q4_0 quantized inference
-- llama.cpp-compatible Q4_0 packing/dequant layout
-- OLMoE router semantics for `norm_topk_prob=false`
-- explicit router → top-k experts → expert gate/up/down loop
-- interactive chat REPL with persistent KV cache
-- quantized layer cache: `model.q4_0_llama.qcache`
-- Q8_0 quantizer and CUDA GEMV kernels are present for validation work
+- CPU FP32 reference inference and GPU Q4_0 inference for the current OLMoE path.
+- WeightPack cache support for quantized OLMoE startup and inspection.
+- Interactive chat REPL, one-shot run, benchmark, compare-logits, perplexity, and minimal OpenAI-compatible server commands.
+- Generic `ModelSupportContract` / `EnginePlan` policy skeleton for non-OLMoE bring-up.
+- DeepSeek V4 Flash + DSpark local HF inventory parsing: 72,317 tensors, 48 shards, ~166.9GB source, with semantic tensor classification.
+- Source-preserving expert streaming from local HF shards, including packed FP4 routed expert tensor sets.
+- Real DSV4 router/shared-expert bindings and CPU/reference MoE fixture coverage.
+- Real DSV4 attention source binding for core MLA tensors plus compressor/indexer auxiliary slices.
+- Real DSV4 Hyper-Connection source binding for layer HC and global HC head tensors, with reference `hc_pre` / `hc_post` / `hc_head` primitives.
+- Initial CUDA Oxide correctness-oriented kernels for packed FP4 experts and sparse attention ABI work.
 
-This is the first milestone where Ferrule can chat with an instruct MoE model while preserving the sparse expert execution path instead of flattening it into a dense abstraction.
+Ferrule is no longer just an OLMoE runner: OLMoE remains the executable regression fixture, while the main architecture is moving toward a generic, policy-composed Transformer runtime.
 
 ---
 
@@ -53,14 +63,15 @@ This is the first milestone where Ferrule can chat with an instruct MoE model wh
 
 | Feature | Why it matters |
 |---|---|
-| **MoE-first execution** | Router logits, top-k selection, expert loops, and expert weights are first-class runtime objects. |
-| **Rust-native model runtime** | Model metadata, qcache files, CUDA buffers, and KV cache have explicit ownership and typed boundaries. |
-| **cuda-oxide kernels** | Custom CUDA kernels stay integrated with the Rust runtime, enabling MoE-specific quantized GEMV and router/expert fusion work. |
-| **Safetensors-first loading** | Ferrule can load Hugging Face / ModelScope-style OLMoE shards directly instead of requiring a GGUF conversion step. |
-| **Quantized qcache** | Layer weights can be quantized once and reloaded from an mmap-backed cache. qcache-only startup is the next target. |
-| **CPU reference path** | CPU FP32 inference provides a correctness anchor for GPU quantization, router behavior, and future model support. |
-| **State-aware design** | KV pages, qcache artifacts, model versions, LoRA adapters, trajectories, and checkpoints are planned as managed runtime state. |
-| **Edge/hardware direction** | Expert placement, qcache layout, and scheduling can adapt to VRAM, DRAM, NVMe, cloud artifacts, and future RISC-V/GPU/NPU cooperation. |
+| **Policy-composed Transformer runtime** | Model families map source tensors into semantic attention, FFN/MoE, KV, residency, quantization, and speculation policies instead of forking runners per model. |
+| **MoE-first execution** | Router logits, hash/top-k selection, selected experts, shared experts, and expert residency are first-class runtime objects. |
+| **Rust-native model runtime** | Model metadata, source tensor slices, WeightPack files, CUDA buffers, KV cache, sessions, and scheduler state have explicit ownership and typed boundaries. |
+| **cuda-oxide kernels** | Custom CUDA kernels stay integrated with the Rust runtime, enabling MoE-specific quantized GEMV, packed FP4 expert execution, sparse attention, and future fusion work. |
+| **Safetensors source binding** | Ferrule can inspect and bind Hugging Face safetensors by semantic role, with bounded reads instead of loading a whole 100GB+ checkpoint into RAM. |
+| **WeightPack execution artifact** | Layer weights can be quantized once and reloaded from a Ferrule-owned package/cache; GGUF remains a compatibility/PK path rather than the only source format. |
+| **CPU/reference path** | CPU reference execution anchors CUDA kernels, source-format decoders, router behavior, HC math, and future model support. |
+| **State-aware design** | KV pages, source artifacts, WeightPack artifacts, model versions, adapters, speculation state, and future rollout/checkpoint state are planned as managed runtime state. |
+| **Edge/hardware direction** | Expert placement, streaming, WeightPack layout, and scheduling can adapt to VRAM, DRAM, NVMe, cloud artifacts, and future multi-GPU / multi-node / RISC-V/GPU/NPU cooperation. |
 
 ---
 
@@ -72,15 +83,17 @@ Ferrule is designed around a simple idea: future LLM systems need to co-design m
   <img src="docs/assets/ferrule-current-architecture.svg" alt="Ferrule system vision" width="100%" />
 </p>
 
-Near term, Ferrule aims to reach llama.cpp-level local usability for sparse MoE models: fast cached startup, sampling controls, templates, quality checks, benchmarks, and a small local server.
+Near term, Ferrule aims to reach llama.cpp-level local usability while keeping a more explicit runtime architecture: fast cached startup, sampling controls, templates, quality checks, benchmarks, a small local server, and source-preserving bring-up for mainstream model families.
 
 Long term, Ferrule should become a runtime substrate for edge-cloud LLM systems:
 
-- cloud builds model versions, qcache artifacts, calibration data, and adapters
+- cloud builds model versions, weight pack artifacts, calibration data, and adapters
 - edge devices run private low-latency inference and collect rollout traces
 - router statistics guide expert placement, prefetch, and offload
 - KV/session state can become movable and eventually distributed
+- speculation modules such as DSpark/MTP can attach through a target/draft policy
 - hardware counters feed back into quantization and scheduling policies
+- DP/TP/EP/SP/CP/PP placement can evolve under one state-aware runtime
 - RISC-V/GPU/NPU paths can cooperate under one state-aware runtime
 
 ---
@@ -99,7 +112,7 @@ Build CUDA with cuda-oxide:
 cargo oxide build --features cuda --arch sm_86
 ```
 
-Download OLMoE-Instruct with the project helper:
+Download the current executable OLMoE-Instruct fixture with the project helper:
 
 ```bash
 ./.venv/bin/python scripts/download_ms.py \
@@ -109,7 +122,7 @@ Download OLMoE-Instruct with the project helper:
 ln -s LLM-Research/OLMoE-1B-7B-0924-Instruct models/OLMoE-Instruct
 ```
 
-Run chat:
+Run OLMoE chat:
 
 ```bash
 ./target/release/ferrule chat models/OLMoE-Instruct -q q4 -n 256
@@ -121,20 +134,36 @@ CPU reference chat:
 ./target/release/ferrule chat models/OLMoE-Instruct -q cpu -n 128
 ```
 
+Inspect a local DeepSeek V4 Flash + DSpark source checkout if present:
+
+```bash
+./target/release/ferrule info models/DeepSeek-V4-Flash-DSpark
+
+./target/release/ferrule expert-stream-smoke \
+  models/DeepSeek-V4-Flash-DSpark \
+  --layer 0 \
+  --expert 0 \
+  --max-slice-mb 64
+```
+
 ---
 
 ## Current capability map
 
 | Area | Status |
 |---|---|
-| Model family | OLMoE-style sparse MoE |
-| Inference paths | CPU FP32, GPU Q4_0, Q8_0 kernels present |
-| MoE execution | router → top-k → expert gate/up/down loop |
-| Chat | interactive REPL, OLMoE-Instruct template shortcut, EOS stop |
-| KV cache | persistent single-session GPU KV cache |
-| Quant cache | mmap-backed per-layer qcache for quantized weights |
-| Sampling | greedy only today |
-| Serving | CLI only today |
+| Executable model fixture | OLMoE-style sparse MoE, CPU FP32 and GPU Q4_0 paths |
+| Generic bring-up target | DeepSeek V4 Flash + DSpark source inventory and semantic source binding |
+| Inference commands | `run`, `gpu-run`, `chat`, `server`, `bench-infer`, `compare-logits`, `perplexity` |
+| MoE execution | router → top-k/hash selection → routed experts → optional shared FFN; CPU/reference DSV4 MoE fixtures pass |
+| Expert streaming | bounded local HF shard reads for selected experts; source FP4 expert bundles and resident handle abstractions exist |
+| Attention | OLMoE GQA executable path; DSV4 attention source binding, sparse attention reference, and CUDA sparse-attention ABI in progress |
+| Hyper-Connections | DSV4 HC source binding plus reference `hc_pre` / `hc_post` / `hc_head` primitives |
+| KV cache | contiguous, multi-session, paged, prefix, and radix-cache components exist; GPU OLMoE path uses persistent session KV |
+| Quant/cache artifact | WeightPack cache for quantized weights; source-preserving FP4/FP8 decoders for DSV4 bring-up |
+| Sampling/control | greedy and configurable sampling arguments, stop handling, structured/program-like generation utilities |
+| Serving | minimal OpenAI-compatible local server path |
+| Speculation | DSpark/MTP metadata and tensor roles are represented as a generic speculation attachment policy |
 | Training/RL | design target, not implemented yet |
 
 ---
@@ -142,14 +171,29 @@ CPU reference chat:
 ## Useful commands
 
 ```bash
-# Model metadata
+# OLMoE metadata
 ./target/release/ferrule info models/OLMoE-Instruct
 
-# One-shot CPU generation
+# DeepSeek V4 / DSpark source metadata and tensor policy summary
+./target/release/ferrule info models/DeepSeek-V4-Flash-DSpark
+
+# One-shot CPU generation on the current executable fixture
 ./target/release/ferrule run models/OLMoE-Instruct -p "Paris is" -n 16
 
-# One-shot GPU generation
+# One-shot GPU generation on the current executable fixture
 ./target/release/ferrule gpu-run models/OLMoE-Instruct -p "Paris is" -n 16 -q q4
+
+# Minimal local server
+./target/release/ferrule server models/OLMoE-Instruct -q q4 --host 127.0.0.1 --port 8080
+
+# Compare CPU FP32 vs GPU quantized logits
+./target/release/ferrule compare-logits models/OLMoE-Instruct -p "Paris is" -n 16 -q q4
+
+# Benchmark prompt/decode throughput, excluding model-load time
+./target/release/ferrule bench-infer models/OLMoE-Instruct -p "Paris is" -n 64 -q q4
+
+# Smoke-test one source-preserved DSV4 routed expert from local HF shards
+./target/release/ferrule expert-stream-smoke models/DeepSeek-V4-Flash-DSpark --layer 0 --expert 0 --max-slice-mb 64
 
 # CUDA probe and GEMV benchmark
 ./target/release/ferrule cuda
@@ -158,16 +202,25 @@ CPU reference chat:
 FERRULE_DEBUG_TOPK=1 ./target/release/ferrule chat models/OLMoE-Instruct -q q4 -n 32
 ```
 
+Useful validation commands:
+
+```bash
+cargo test -p ferrule-model
+cargo test -p ferrule-runtime
+cargo check -p ferrule-cli --features cuda
+cargo oxide test -- -p ferrule-cuda
+```
+
 ---
 
-## Near-term priorities
+## Active development focus
 
-1. **qcache-only startup** — stop loading the full FP32 model on cache hits.
-2. **Generation controls** — temperature, top-p/top-k, repetition penalty, stop strings, seed.
-3. **Correctness tools** — CPU/GPU logits diff, golden token tests, per-layer activation diff.
-4. **Memory-safe quantization** — streaming safetensors → qcache, Q8_0 validation, mixed precision.
-5. **llama.cpp parity for local UX** — templates, benchmarks, perplexity, OpenAI-compatible server.
-6. **MoE differentiators** — Qwen MoE, expert hot/cold profiling, expert offload/prefetch.
+Ferrule's current implementation focus is the generic DeepSeek V4 vertical slice while keeping OLMoE as the executable regression fixture:
+
+1. **Layer source binding** — compose attention, HC, router, shared FFN, routed experts, and KV state into a typed per-layer bundle.
+2. **DSV4 attention path** — execute the bound MLA/sparse attention payload through generic `AttentionPolicy` dispatch.
+3. **Source-format CUDA** — continue validating FP8 attention/shared linears, packed FP4 experts, and sparse attention against CPU/reference math.
+4. **Single-node DGX Spark smoke** — run the base DeepSeek V4 target path first; attach DSpark/MTP through generic speculation policy after target decode is stable.
 
 ---
 
@@ -175,4 +228,5 @@ FERRULE_DEBUG_TOPK=1 ./target/release/ferrule chat models/OLMoE-Instruct -q q4 -
 
 - [Architecture](docs/ferrule_arch.md)
 - [Roadmap and llama.cpp gap analysis](docs/ROADMAP.md)
+- [Temporary inference roadmap / DeepSeek V4 bring-up notes](docs/TEMP_INFERENCE_ROADMAP.md)
 - [Paper and system notes](docs/paper_reads.md)

@@ -14,7 +14,7 @@ pub fn cmd_run(
     max_tokens: usize,
     sampling: &SamplingArgs,
 ) -> anyhow::Result<()> {
-    let runner = ferrule_runtime::CpuOlmoeRunner::load(Path::new(model_dir))?;
+    let runner = ferrule_runtime::CpuModelRunner::load(Path::new(model_dir))?;
     print_model_info(&runner.model_info());
 
     let mut sc = sampling.sampling_config();
@@ -102,7 +102,7 @@ pub fn cmd_gpu_run(
 ) -> anyhow::Result<()> {
     let qt = parse_quant(quant);
     tracing::info!("Uploading to GPU (quant: {qt:?})...");
-    let runner = ferrule_runtime::GpuOlmoeRunner::load(Path::new(model_dir), qt)?;
+    let runner = ferrule_runtime::GpuModelRunner::load(Path::new(model_dir), qt)?;
     print_model_info(&runner.model_info());
 
     let mut sc = sampling.sampling_config();

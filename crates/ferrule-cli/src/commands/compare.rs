@@ -51,10 +51,10 @@ pub fn cmd_compare_logits(
     free_run: bool,
     ctx_size: usize,
 ) -> anyhow::Result<()> {
-    let mut cpu = ferrule_runtime::CpuOlmoeRunner::load(Path::new(model_dir))?;
+    let mut cpu = ferrule_runtime::CpuModelRunner::load(Path::new(model_dir))?;
     let qt = super::run::parse_quant(quant);
     tracing::info!("Uploading to GPU (quant: {qt:?})...");
-    let mut gpu = ferrule_runtime::GpuOlmoeRunner::load(Path::new(model_dir), qt)?;
+    let mut gpu = ferrule_runtime::GpuModelRunner::load(Path::new(model_dir), qt)?;
 
     let tokens = cpu.encode(prompt)?;
     println!("Prompt: \"{prompt}\" → {} tokens", tokens.len());

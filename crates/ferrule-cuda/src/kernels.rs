@@ -48,6 +48,56 @@ fn fast_sigmoid(x: f32) -> f32 {
     }
 }
 
+fn fp4_e2m1_value(nibble: u8) -> f32 {
+    let magnitude = match nibble & 0x07 {
+        0 => 0.0,
+        1 => 0.5,
+        2 => 1.0,
+        3 => 1.5,
+        4 => 2.0,
+        5 => 3.0,
+        6 => 4.0,
+        _ => 6.0,
+    };
+    if nibble & 0x08 != 0 {
+        -magnitude
+    } else {
+        magnitude
+    }
+}
+
+fn e8m0_scale(byte: u8) -> f32 {
+    let exponent = byte as f32 - 127.0;
+    let result: f32;
+    unsafe {
+        ptx_asm!(
+            "ex2.approx.f32 %0, %1;",
+            out("=f") result,
+            in("f") exponent,
+            options(register_only),
+        );
+    }
+    result
+}
+
+fn clamp_max(x: f32, max_value: f32) -> f32 {
+    if x > max_value {
+        max_value
+    } else {
+        x
+    }
+}
+
+fn clamp_range(x: f32, min_value: f32, max_value: f32) -> f32 {
+    if x < min_value {
+        min_value
+    } else if x > max_value {
+        max_value
+    } else {
+        x
+    }
+}
+
 #[cuda_module]
 pub mod kernels {
     use super::*;
@@ -57,7 +107,7 @@ pub mod kernels {
     #[kernel]
     pub fn embed_lookup(emb: &[f32], mut y: DisjointSlice<f32>, tid: u32, d: u32) {
         let i = thread::index_1d().get();
-        if i >= y.len() {
+        if (i as u64) >= d as u64 {
             return;
         }
         if let Some(yi) = y.get_mut(thread::index_1d()) {
@@ -68,9 +118,9 @@ pub mod kernels {
     // ── GEMV f32 (unrolled 4x) ─────────────────────────────────────────
 
     #[kernel]
-    pub fn gemv_f32(x: &[f32], w: &[f32], mut y: DisjointSlice<f32>, k: u32) {
+    pub fn gemv_f32(x: &[f32], w: &[f32], mut y: DisjointSlice<f32>, n: u32, k: u32) {
         let row = thread::index_1d().get();
-        if row >= y.len() {
+        if (row as u64) >= n as u64 {
             return;
         }
         let mut dot0 = 0.0f32;
@@ -101,9 +151,16 @@ pub mod kernels {
     // ── GEMV Q4_0 (llama.cpp half-block layout) ──────────────────────
 
     #[kernel]
-    pub fn gemv_q4(x: &[f32], packed: &[u8], scales: &[f32], mut y: DisjointSlice<f32>, k: u32) {
+    pub fn gemv_q4(
+        x: &[f32],
+        packed: &[u8],
+        scales: &[f32],
+        mut y: DisjointSlice<f32>,
+        n: u32,
+        k: u32,
+    ) {
         let row = thread::index_1d().get();
-        if row >= y.len() {
+        if (row as u64) >= n as u64 {
             return;
         }
         let k = k as usize;
@@ -138,9 +195,16 @@ pub mod kernels {
     // ── GEMV Q8_0 (unrolled 4x) ──────────────────────────────────────
 
     #[kernel]
-    pub fn gemv_q8(x: &[f32], packed: &[u8], scales: &[f32], mut y: DisjointSlice<f32>, k: u32) {
+    pub fn gemv_q8(
+        x: &[f32],
+        packed: &[u8],
+        scales: &[f32],
+        mut y: DisjointSlice<f32>,
+        n: u32,
+        k: u32,
+    ) {
         let row = thread::index_1d().get();
-        if row >= y.len() {
+        if (row as u64) >= n as u64 {
             return;
         }
         let k = k as usize;
@@ -182,12 +246,13 @@ pub mod kernels {
         packed: &[u8],
         scales: &[f32],
         mut y: DisjointSlice<f32>,
+        n: u32,
         k: u32,
         packed_off: u32,
         scales_off: u32,
     ) {
         let row = thread::index_1d().get();
-        if row >= y.len() {
+        if (row as u64) >= n as u64 {
             return;
         }
         let k = k as usize;
@@ -231,12 +296,13 @@ pub mod kernels {
         packed: &[u8],
         scales: &[f32],
         mut y: DisjointSlice<f32>,
+        n: u32,
         k: u32,
         packed_off: u32,
         scales_off: u32,
     ) {
         let row = thread::index_1d().get();
-        if row >= y.len() {
+        if (row as u64) >= n as u64 {
             return;
         }
         let k = k as usize;
@@ -270,12 +336,168 @@ pub mod kernels {
         }
     }
 
+    // ── Source FP4 E2M1 + E8M0 GEMV ─────────────────────────────────
+
+    /// GEMV for source-preserved `torch.float4_e2m1fn_x2` weights with
+    /// `float8_e8m0fnu` scales.
+    ///
+    /// Layout matches Ferrule's CPU reference path and DeepSeek V4 expert tensors:
+    /// `packed = [out_features, in_features / 2]`, low nibble first; `scales =
+    /// [out_features, in_features / 32]` with byte 127 mapping to scale 1.0.
+    #[kernel]
+    pub fn gemv_fp4_e2m1_e8m0(
+        x: &[f32],
+        packed: &[u8],
+        scales: &[u8],
+        mut y: DisjointSlice<f32>,
+        n: u32,
+        k: u32,
+    ) {
+        let row = thread::index_1d().get();
+        if (row as u64) >= n as u64 {
+            return;
+        }
+        let k = k as usize;
+        let packed_cols = k / 2;
+        let scale_cols = k / 32;
+        let mut dot = 0.0f32;
+        let mut j = 0usize;
+        while j < k {
+            let byte = packed[row * packed_cols + j / 2];
+            let nibble = if j % 2 == 0 { byte & 0x0f } else { byte >> 4 };
+            let scale = e8m0_scale(scales[row * scale_cols + j / 32]);
+            dot += x[j] * fp4_e2m1_value(nibble) * scale;
+            j += 1;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
+    #[kernel]
+    pub fn gemv_fp4_e2m1_e8m0_off(
+        x: &[f32],
+        packed: &[u8],
+        scales: &[u8],
+        mut y: DisjointSlice<f32>,
+        n: u32,
+        k: u32,
+        packed_off: u32,
+        scales_off: u32,
+    ) {
+        let row = thread::index_1d().get();
+        if (row as u64) >= n as u64 {
+            return;
+        }
+        let k = k as usize;
+        let packed_cols = k / 2;
+        let scale_cols = k / 32;
+        let packed_off = packed_off as usize;
+        let scales_off = scales_off as usize;
+        let mut dot = 0.0f32;
+        let mut j = 0usize;
+        while j < k {
+            let byte = packed[packed_off + row * packed_cols + j / 2];
+            let nibble = if j % 2 == 0 { byte & 0x0f } else { byte >> 4 };
+            let scale = e8m0_scale(scales[scales_off + row * scale_cols + j / 32]);
+            dot += x[j] * fp4_e2m1_value(nibble) * scale;
+            j += 1;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
+    #[kernel]
+    pub fn gemv_dual_fp4_e2m1_e8m0_off(
+        x: &[f32],
+        p0: &[u8],
+        s0: &[u8],
+        mut y0: DisjointSlice<f32>,
+        off_p0: u32,
+        off_s0: u32,
+        p1: &[u8],
+        s1: &[u8],
+        mut y1: DisjointSlice<f32>,
+        off_p1: u32,
+        off_s1: u32,
+        n: u32,
+        k: u32,
+    ) {
+        let row = thread::index_1d().get();
+        if (row as u64) >= n as u64 {
+            return;
+        }
+        let k = k as usize;
+        let packed_cols = k / 2;
+        let scale_cols = k / 32;
+        let off_p0 = off_p0 as usize;
+        let off_s0 = off_s0 as usize;
+        let off_p1 = off_p1 as usize;
+        let off_s1 = off_s1 as usize;
+        let mut d0 = 0.0f32;
+        let mut d1 = 0.0f32;
+        let mut j = 0usize;
+        while j < k {
+            let byte0 = p0[off_p0 + row * packed_cols + j / 2];
+            let byte1 = p1[off_p1 + row * packed_cols + j / 2];
+            let nibble0 = if j % 2 == 0 { byte0 & 0x0f } else { byte0 >> 4 };
+            let nibble1 = if j % 2 == 0 { byte1 & 0x0f } else { byte1 >> 4 };
+            let scale0 = e8m0_scale(s0[off_s0 + row * scale_cols + j / 32]);
+            let scale1 = e8m0_scale(s1[off_s1 + row * scale_cols + j / 32]);
+            let xv = x[j];
+            d0 += xv * fp4_e2m1_value(nibble0) * scale0;
+            d1 += xv * fp4_e2m1_value(nibble1) * scale1;
+            j += 1;
+        }
+        if let Some(o) = y0.get_mut(thread::index_1d()) {
+            *o = d0;
+        }
+        if let Some(o) = y1.get_mut(thread::index_1d()) {
+            *o = d1;
+        }
+    }
+
+    /// DeepSeek-style expert activation:
+    /// `silu(clamp_max(gate, limit)) * clamp(up, -limit, limit) * route_weight`.
+    /// `limit <= 0` disables clipping.
+    #[kernel]
+    pub fn swiglu_weighted_clamped(
+        gate: &[f32],
+        up: &[f32],
+        mut y: DisjointSlice<f32>,
+        n: u32,
+        route_weight: f32,
+        limit: f32,
+    ) {
+        let i = thread::index_1d().get();
+        if (i as u64) >= n as u64 {
+            return;
+        }
+        let mut g = gate[i];
+        let mut u = up[i];
+        if limit > 0.0 {
+            g = clamp_max(g, limit);
+            u = clamp_range(u, -limit, limit);
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = g * fast_sigmoid(g) * u * route_weight;
+        }
+    }
+
     // ── GEMV Q2S ────────────────────────────────────────────────────
 
     #[kernel]
-    pub fn gemv_q2(x: &[f32], packed: &[u8], scales: &[f32], mut y: DisjointSlice<f32>, k: u32) {
+    pub fn gemv_q2(
+        x: &[f32],
+        packed: &[u8],
+        scales: &[f32],
+        mut y: DisjointSlice<f32>,
+        n: u32,
+        k: u32,
+    ) {
         let row = thread::index_1d().get();
-        if row >= y.len() {
+        if (row as u64) >= n as u64 {
             return;
         }
         let k = k as usize;
@@ -321,12 +543,13 @@ pub mod kernels {
         packed: &[u8],
         scales: &[f32],
         mut y: DisjointSlice<f32>,
+        n: u32,
         k: u32,
         packed_off: u32,
         scales_off: u32,
     ) {
         let row = thread::index_1d().get();
-        if row >= y.len() {
+        if (row as u64) >= n as u64 {
             return;
         }
         let k = k as usize;
@@ -362,9 +585,16 @@ pub mod kernels {
     // ── GEMV T1S ────────────────────────────────────────────────────
 
     #[kernel]
-    pub fn gemv_t1(x: &[f32], packed: &[u8], scales: &[f32], mut y: DisjointSlice<f32>, k: u32) {
+    pub fn gemv_t1(
+        x: &[f32],
+        packed: &[u8],
+        scales: &[f32],
+        mut y: DisjointSlice<f32>,
+        n: u32,
+        k: u32,
+    ) {
         let row = thread::index_1d().get();
-        if row >= y.len() {
+        if (row as u64) >= n as u64 {
             return;
         }
         let k = k as usize;
@@ -406,12 +636,13 @@ pub mod kernels {
         packed: &[u8],
         scales: &[f32],
         mut y: DisjointSlice<f32>,
+        n: u32,
         k: u32,
         packed_off: u32,
         scales_off: u32,
     ) {
         let row = thread::index_1d().get();
-        if row >= y.len() {
+        if (row as u64) >= n as u64 {
             return;
         }
         let k = k as usize;
@@ -452,9 +683,15 @@ pub mod kernels {
     // ── RMS Norm ────────────────────────────────────────────────────────
 
     #[kernel]
-    pub fn rms_norm_apply(x: &[f32], w: &[f32], mut y: DisjointSlice<f32>, rms_val: &[f32]) {
+    pub fn rms_norm_apply(
+        x: &[f32],
+        w: &[f32],
+        mut y: DisjointSlice<f32>,
+        rms_val: &[f32],
+        n: u32,
+    ) {
         let i = thread::index_1d().get();
-        if i >= y.len() {
+        if (i as u64) >= n as u64 {
             return;
         }
         if let Some(yi) = y.get_mut(thread::index_1d()) {
@@ -465,9 +702,9 @@ pub mod kernels {
     // ── SiLU (using reduction+squaring fast sigmoid) ────────────────────
 
     #[kernel]
-    pub fn silu(x: &[f32], mut y: DisjointSlice<f32>) {
+    pub fn silu(x: &[f32], mut y: DisjointSlice<f32>, n: u32) {
         let i = thread::index_1d().get();
-        if i >= y.len() {
+        if (i as u64) >= n as u64 {
             return;
         }
         let xv = x[i];
@@ -477,9 +714,9 @@ pub mod kernels {
     }
 
     #[kernel]
-    pub fn silu_mul(a: &[f32], b: &[f32], mut y: DisjointSlice<f32>) {
+    pub fn silu_mul(a: &[f32], b: &[f32], mut y: DisjointSlice<f32>, n: u32) {
         let i = thread::index_1d().get();
-        if i >= y.len() {
+        if (i as u64) >= n as u64 {
             return;
         }
         let xv = a[i];
@@ -499,11 +736,11 @@ pub mod kernels {
         p1: &[u8],
         s1: &[f32],
         mut y1: DisjointSlice<f32>,
+        n: u32,
         k: u32,
     ) {
         let row = thread::index_1d().get();
-        let n = y0.len();
-        if row >= n {
+        if (row as u64) >= n as u64 {
             return;
         }
         let k = k as usize;
@@ -559,11 +796,11 @@ pub mod kernels {
         p2: &[u8],
         s2: &[f32],
         mut y2: DisjointSlice<f32>,
+        n: u32,
         k: u32,
     ) {
         let row = thread::index_1d().get();
-        let n = y0.len();
-        if row >= n {
+        if (row as u64) >= n as u64 {
             return;
         }
         let k = k as usize;
@@ -632,10 +869,11 @@ pub mod kernels {
         mut y1: DisjointSlice<f32>,
         off_p1: u32,
         off_s1: u32,
+        n: u32,
         k: u32,
     ) {
         let row = thread::index_1d().get();
-        if row >= y0.len() {
+        if (row as u64) >= n as u64 {
             return;
         }
         let k = k as usize;
@@ -687,9 +925,9 @@ pub mod kernels {
     // ── Element-wise ────────────────────────────────────────────────────
 
     #[kernel]
-    pub fn mul(a: &[f32], b: &[f32], mut y: DisjointSlice<f32>) {
+    pub fn mul(a: &[f32], b: &[f32], mut y: DisjointSlice<f32>, n: u32) {
         let i = thread::index_1d().get();
-        if i >= y.len() {
+        if (i as u64) >= n as u64 {
             return;
         }
         if let Some(yi) = y.get_mut(thread::index_1d()) {
@@ -697,9 +935,9 @@ pub mod kernels {
         }
     }
     #[kernel]
-    pub fn add(a: &[f32], b: &[f32], mut y: DisjointSlice<f32>) {
+    pub fn add(a: &[f32], b: &[f32], mut y: DisjointSlice<f32>, n: u32) {
         let i = thread::index_1d().get();
-        if i >= y.len() {
+        if (i as u64) >= n as u64 {
             return;
         }
         if let Some(yi) = y.get_mut(thread::index_1d()) {
@@ -707,9 +945,9 @@ pub mod kernels {
         }
     }
     #[kernel]
-    pub fn saxpy(scale: f32, x: &[f32], mut y: DisjointSlice<f32>) {
+    pub fn saxpy(scale: f32, x: &[f32], mut y: DisjointSlice<f32>, n: u32) {
         let i = thread::index_1d().get();
-        if i >= y.len() {
+        if (i as u64) >= n as u64 {
             return;
         }
         if let Some(yi) = y.get_mut(thread::index_1d()) {
@@ -933,6 +1171,104 @@ pub mod kernels {
         };
         if let Some(o) = y.get_mut(thread::index_1d()) {
             *o = val;
+        }
+    }
+
+    // ── Sparse attention with sink (DSV4/MLA path) ─────────────────────
+
+    /// Source-compatible sparse attention with attention sink.
+    ///
+    /// Layouts are flattened row-major:
+    /// - q: `[tokens, heads, head_dim]`
+    /// - kv: `[batch, kv_len, head_dim]`
+    /// - topk: `[tokens, topk_len]`, `-1` masks an entry
+    /// - sink: `[heads]`, contributes to denominator only
+    /// - out: `[tokens, heads, head_dim]`
+    ///
+    /// This initial kernel is correctness-oriented and intentionally exposes the
+    /// final ABI for a later tiled FlashAttention-style replacement. It uses a
+    /// two-pass stable softmax per output element; the production kernel should
+    /// compute one `(token, head)` block cooperatively and reuse scores across D.
+    #[kernel]
+    pub fn sparse_attn_sink_f32(
+        q: &[f32],
+        kv: &[f32],
+        topk: &[i32],
+        sink: &[f32],
+        mut out: DisjointSlice<f32>,
+        total: u32,
+        tokens_per_batch: u32,
+        kv_len: u32,
+        heads: u32,
+        head_dim: u32,
+        topk_len: u32,
+        softmax_scale: f32,
+    ) {
+        let elem = thread::index_1d().get();
+        if (elem as u64) >= total as u64 {
+            return;
+        }
+        let heads = heads as usize;
+        let head_dim = head_dim as usize;
+        let topk_len = topk_len as usize;
+        let kv_len = kv_len as usize;
+        let tokens_per_batch = tokens_per_batch as usize;
+        let elem = elem as usize;
+        let d = elem % head_dim;
+        let head = (elem / head_dim) % heads;
+        let token = elem / (heads * head_dim);
+        let batch = token / tokens_per_batch;
+        let q_base = (token * heads + head) * head_dim;
+        let topk_base = token * topk_len;
+        let kv_batch_base = batch * kv_len * head_dim;
+
+        let mut max_score = sink[head];
+        let mut slot = 0usize;
+        while slot < topk_len {
+            let idx = topk[topk_base + slot];
+            if idx >= 0 {
+                let kv_pos = idx as usize;
+                if kv_pos < kv_len {
+                    let kv_base = kv_batch_base + kv_pos * head_dim;
+                    let mut dot = 0.0f32;
+                    let mut j = 0usize;
+                    while j < head_dim {
+                        dot += q[q_base + j] * kv[kv_base + j];
+                        j += 1;
+                    }
+                    let score = dot * softmax_scale;
+                    if score > max_score {
+                        max_score = score;
+                    }
+                }
+            }
+            slot += 1;
+        }
+
+        let mut denom = fast_exp(sink[head] - max_score);
+        let mut value = 0.0f32;
+        slot = 0;
+        while slot < topk_len {
+            let idx = topk[topk_base + slot];
+            if idx >= 0 {
+                let kv_pos = idx as usize;
+                if kv_pos < kv_len {
+                    let kv_base = kv_batch_base + kv_pos * head_dim;
+                    let mut dot = 0.0f32;
+                    let mut j = 0usize;
+                    while j < head_dim {
+                        dot += q[q_base + j] * kv[kv_base + j];
+                        j += 1;
+                    }
+                    let weight = fast_exp(dot * softmax_scale - max_score);
+                    denom += weight;
+                    value += weight * kv[kv_base + d];
+                }
+            }
+            slot += 1;
+        }
+        if let Some(o) = out.get_mut(thread::index_1d()) {
+            *o = value / denom;
         }
     }
 

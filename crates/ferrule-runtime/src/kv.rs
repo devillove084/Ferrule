@@ -3,16 +3,89 @@
 //! Separates KV storage policy (contiguous, paged, prefix-shared) from
 //! model forward kernels. First implementation: simple contiguous cache.
 
-use ferrule_core::Result;
+use ferrule_core::{Error, Result};
 
 /// Handle to a specific sequence's KV cache slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct KvHandle(pub usize);
 
-/// Trait for KV cache backends.
+/// Physical KV storage layout.
+///
+/// The runtime should reason in terms of logical sequences and layer views;
+/// concrete backends are free to store those views contiguously, in fixed
+/// session partitions, or in vLLM-style pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KvCacheLayout {
+    /// One contiguous sequence: `[layer][seq][kv_dim]`.
+    SingleContiguous,
+    /// Fixed slots for multiple contiguous sequences.
+    MultiContiguous { max_sessions: usize },
+    /// Fixed-size block table. `block_size` is measured in tokens.
+    Paged { block_size: usize },
+}
+
+/// Read-only host view for one layer of one logical sequence.
+#[derive(Debug, Clone, Copy)]
+pub struct KvLayerView<'a> {
+    pub k: &'a [f32],
+    pub v: &'a [f32],
+    pub seq_len: usize,
+    pub dim: usize,
+}
+
+impl<'a> KvLayerView<'a> {
+    pub fn is_empty(&self) -> bool {
+        self.seq_len == 0
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let expected = self
+            .seq_len
+            .checked_mul(self.dim)
+            .ok_or_else(|| Error::Internal("KV layer view length overflow".into()))?;
+        if self.k.len() != expected || self.v.len() != expected {
+            return Err(Error::Internal(format!(
+                "KV view has k={} v={} floats, expected {}",
+                self.k.len(),
+                self.v.len(),
+                expected
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Sequence-oriented KV cache API.
+///
+/// This is the boundary Ferrule should grow toward for vLLM/SGLang-like serving:
+/// sequence ownership is explicit, while attention kernels receive a per-layer
+/// view appropriate for the concrete backend.
+pub trait SequenceKvCache {
+    fn storage_layout(&self) -> KvCacheLayout;
+    fn layer_count(&self) -> usize;
+    fn entry_dim(&self) -> usize;
+    fn sequence_capacity(&self, handle: KvHandle) -> usize;
+    fn alloc_sequence(&mut self) -> Result<KvHandle>;
+    fn free_sequence(&mut self, handle: KvHandle) -> Result<()>;
+    fn append_to_sequence(
+        &mut self,
+        handle: KvHandle,
+        layer: usize,
+        pos: usize,
+        k: &[f32],
+        v: &[f32],
+    ) -> Result<()>;
+    fn layer_view(&self, handle: KvHandle, layer: usize) -> Result<KvLayerView<'_>>;
+    fn sequence_len(&self, handle: KvHandle) -> usize;
+}
+
+/// Trait for legacy single-sequence KV cache backends.
 ///
 /// Implementations range from simple contiguous buffers to paged/radix caches.
 pub trait KvCache {
+    /// Physical storage layout.
+    fn layout(&self) -> KvCacheLayout;
+
     /// Maximum number of tokens this cache can hold per layer.
     fn capacity(&self) -> usize;
 
@@ -30,6 +103,9 @@ pub trait KvCache {
 
     /// Get a reference to the V cache for one layer.
     fn v_slice(&self, layer: usize) -> &[f32];
+
+    /// Get K/V together as an explicit view for attention code.
+    fn layer_view(&self, layer: usize) -> KvLayerView<'_>;
 
     /// Total number of positions currently stored.
     fn seq_len(&self) -> usize;
@@ -65,9 +141,33 @@ impl ContiguousKvCache {
             seq_len: 0,
         }
     }
+
+    fn validate_write(&self, layer: usize, pos: usize, k: &[f32], v: &[f32]) -> Result<()> {
+        if layer >= self.k.len() {
+            return Err(Error::Internal(format!("KV layer {layer} out of range")));
+        }
+        if pos >= self.capacity {
+            return Err(Error::Internal(format!(
+                "KV position {pos} exceeds capacity {}",
+                self.capacity
+            )));
+        }
+        if k.len() != self.dim || v.len() != self.dim {
+            return Err(Error::Internal(format!(
+                "KV dim mismatch: k={} v={} expected {}",
+                k.len(),
+                v.len(),
+                self.dim
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl KvCache for ContiguousKvCache {
+    fn layout(&self) -> KvCacheLayout {
+        KvCacheLayout::SingleContiguous
+    }
     fn capacity(&self) -> usize {
         self.capacity
     }
@@ -81,9 +181,7 @@ impl KvCache for ContiguousKvCache {
     }
 
     fn append(&mut self, layer: usize, pos: usize, k: &[f32], v: &[f32]) -> Result<()> {
-        assert!(layer < self.k.len());
-        assert!(k.len() == self.dim);
-        assert!(v.len() == self.dim);
+        self.validate_write(layer, pos, k, v)?;
         let off = pos * self.dim;
         self.k[layer][off..off + self.dim].copy_from_slice(k);
         self.v[layer][off..off + self.dim].copy_from_slice(v);
@@ -101,6 +199,15 @@ impl KvCache for ContiguousKvCache {
         &self.v[layer][..self.seq_len * self.dim]
     }
 
+    fn layer_view(&self, layer: usize) -> KvLayerView<'_> {
+        KvLayerView {
+            k: self.k_slice(layer),
+            v: self.v_slice(layer),
+            seq_len: self.seq_len,
+            dim: self.dim,
+        }
+    }
+
     fn seq_len(&self) -> usize {
         self.seq_len
     }
@@ -114,6 +221,72 @@ impl KvCache for ContiguousKvCache {
         }
         self.seq_len = 0;
         Ok(())
+    }
+}
+
+impl SequenceKvCache for ContiguousKvCache {
+    fn storage_layout(&self) -> KvCacheLayout {
+        KvCacheLayout::SingleContiguous
+    }
+
+    fn layer_count(&self) -> usize {
+        self.k.len()
+    }
+
+    fn entry_dim(&self) -> usize {
+        self.dim
+    }
+
+    fn sequence_capacity(&self, handle: KvHandle) -> usize {
+        if handle == KvHandle(0) {
+            self.capacity
+        } else {
+            0
+        }
+    }
+
+    fn alloc_sequence(&mut self) -> Result<KvHandle> {
+        self.reset()?;
+        Ok(KvHandle(0))
+    }
+
+    fn free_sequence(&mut self, handle: KvHandle) -> Result<()> {
+        if handle != KvHandle(0) {
+            return Err(Error::Internal(format!("unknown KV handle {}", handle.0)));
+        }
+        self.reset()
+    }
+
+    fn append_to_sequence(
+        &mut self,
+        handle: KvHandle,
+        layer: usize,
+        pos: usize,
+        k: &[f32],
+        v: &[f32],
+    ) -> Result<()> {
+        if handle != KvHandle(0) {
+            return Err(Error::Internal(format!("unknown KV handle {}", handle.0)));
+        }
+        self.append(layer, pos, k, v)
+    }
+
+    fn layer_view(&self, handle: KvHandle, layer: usize) -> Result<KvLayerView<'_>> {
+        if handle != KvHandle(0) {
+            return Err(Error::Internal(format!("unknown KV handle {}", handle.0)));
+        }
+        if layer >= self.k.len() {
+            return Err(Error::Internal(format!("KV layer {layer} out of range")));
+        }
+        Ok(KvCache::layer_view(self, layer))
+    }
+
+    fn sequence_len(&self, handle: KvHandle) -> usize {
+        if handle == KvHandle(0) {
+            self.seq_len
+        } else {
+            0
+        }
     }
 }
 
@@ -195,6 +368,23 @@ mod tests {
         assert_eq!(h1, h2);
         assert_ne!(h1, h3);
     }
+
+    #[test]
+    fn contiguous_sequence_api_returns_layer_view() {
+        let mut cache = ContiguousKvCache::new(2, 2, 4);
+        let handle = SequenceKvCache::alloc_sequence(&mut cache).unwrap();
+        assert_eq!(
+            SequenceKvCache::storage_layout(&cache),
+            KvCacheLayout::SingleContiguous
+        );
+        SequenceKvCache::append_to_sequence(&mut cache, handle, 0, 0, &[1.0, 2.0], &[3.0, 4.0])
+            .unwrap();
+        let view = SequenceKvCache::layer_view(&cache, handle, 0).unwrap();
+        view.validate().unwrap();
+        assert_eq!(view.seq_len, 1);
+        assert_eq!(view.k, &[1.0, 2.0]);
+        assert_eq!(view.v, &[3.0, 4.0]);
+    }
 }
 
 // ── Multi-session contiguous KV ─────────────────────────────────────────
@@ -233,13 +423,53 @@ impl MultiSessionKvCache {
             KvHandle(i)
         })
     }
-    pub fn append(&mut self, h: KvHandle, layer: usize, k: &[f32], v: &[f32]) -> Result<()> {
+
+    fn validate_handle(&self, h: KvHandle) -> Result<usize> {
         let sid = h.0;
-        assert!(layer < self.num_layers);
-        assert!(k.len() == self.dim);
-        assert!(v.len() == self.dim);
+        if sid >= self.max_sessions || self.free_mask[sid] {
+            return Err(Error::Internal(format!("inactive KV handle {sid}")));
+        }
+        Ok(sid)
+    }
+
+    fn validate_write(
+        &self,
+        sid: usize,
+        layer: usize,
+        pos: usize,
+        k: &[f32],
+        v: &[f32],
+    ) -> Result<()> {
+        if layer >= self.num_layers {
+            return Err(Error::Internal(format!("KV layer {layer} out of range")));
+        }
+        if pos >= self.session_cap {
+            return Err(Error::Internal(format!(
+                "KV position {pos} exceeds session capacity {}",
+                self.session_cap
+            )));
+        }
+        if k.len() != self.dim || v.len() != self.dim {
+            return Err(Error::Internal(format!(
+                "KV dim mismatch: k={} v={} expected {}",
+                k.len(),
+                v.len(),
+                self.dim
+            )));
+        }
+        if sid >= self.max_sessions {
+            return Err(Error::Internal(format!("KV session {sid} out of range")));
+        }
+        Ok(())
+    }
+
+    pub fn append(&mut self, h: KvHandle, layer: usize, k: &[f32], v: &[f32]) -> Result<()> {
+        let sid = self.validate_handle(h)?;
+        if layer >= self.num_layers {
+            return Err(Error::Internal(format!("KV layer {layer} out of range")));
+        }
         let pos = self.layer_seq_lens[sid][layer];
-        assert!(pos < self.session_cap);
+        self.validate_write(sid, layer, pos, k, v)?;
         let off = (sid * self.session_cap + pos) * self.dim;
         self.k[layer][off..off + self.dim].copy_from_slice(k);
         self.v[layer][off..off + self.dim].copy_from_slice(v);
@@ -258,6 +488,21 @@ impl MultiSessionKvCache {
         let s = self.layer_seq_lens[sid][layer];
         let start = sid * self.session_cap * self.dim;
         &self.v[layer][start..start + s * self.dim]
+    }
+    pub fn layer_view(&self, h: KvHandle, layer: usize) -> Result<KvLayerView<'_>> {
+        let sid = self.validate_handle(h)?;
+        if layer >= self.num_layers {
+            return Err(Error::Internal(format!("KV layer {layer} out of range")));
+        }
+        let seq_len = self.layer_seq_lens[sid][layer];
+        let view = KvLayerView {
+            k: self.k_slice(h, layer),
+            v: self.v_slice(h, layer),
+            seq_len,
+            dim: self.dim,
+        };
+        view.validate()?;
+        Ok(view)
     }
     pub fn seq_len(&self, h: KvHandle) -> usize {
         self.seq_lens[h.0]
@@ -284,6 +529,71 @@ impl MultiSessionKvCache {
     }
     pub fn session_capacity(&self) -> usize {
         self.session_cap
+    }
+}
+
+impl SequenceKvCache for MultiSessionKvCache {
+    fn storage_layout(&self) -> KvCacheLayout {
+        KvCacheLayout::MultiContiguous {
+            max_sessions: self.max_sessions,
+        }
+    }
+
+    fn layer_count(&self) -> usize {
+        self.num_layers
+    }
+
+    fn entry_dim(&self) -> usize {
+        self.dim
+    }
+
+    fn sequence_capacity(&self, handle: KvHandle) -> usize {
+        if handle.0 < self.max_sessions && !self.free_mask[handle.0] {
+            self.session_cap
+        } else {
+            0
+        }
+    }
+
+    fn alloc_sequence(&mut self) -> Result<KvHandle> {
+        self.alloc()
+            .ok_or_else(|| Error::Internal("no free KV session slots".into()))
+    }
+
+    fn free_sequence(&mut self, handle: KvHandle) -> Result<()> {
+        self.validate_handle(handle)?;
+        self.free(handle);
+        Ok(())
+    }
+
+    fn append_to_sequence(
+        &mut self,
+        handle: KvHandle,
+        layer: usize,
+        pos: usize,
+        k: &[f32],
+        v: &[f32],
+    ) -> Result<()> {
+        let sid = self.validate_handle(handle)?;
+        self.validate_write(sid, layer, pos, k, v)?;
+        let off = (sid * self.session_cap + pos) * self.dim;
+        self.k[layer][off..off + self.dim].copy_from_slice(k);
+        self.v[layer][off..off + self.dim].copy_from_slice(v);
+        self.layer_seq_lens[sid][layer] = self.layer_seq_lens[sid][layer].max(pos + 1);
+        self.seq_lens[sid] = self.seq_lens[sid].max(self.layer_seq_lens[sid][layer]);
+        Ok(())
+    }
+
+    fn layer_view(&self, handle: KvHandle, layer: usize) -> Result<KvLayerView<'_>> {
+        self.layer_view(handle, layer)
+    }
+
+    fn sequence_len(&self, handle: KvHandle) -> usize {
+        if handle.0 < self.max_sessions && !self.free_mask[handle.0] {
+            self.seq_lens[handle.0]
+        } else {
+            0
+        }
     }
 }
 
@@ -334,9 +644,31 @@ mod multi_tests {
         assert!(c.k[0].iter().all(|&x| x == 0.0));
     }
     #[test]
-    fn overflow_panics() {
+    fn overflow_returns_error() {
         let mut c = MultiSessionKvCache::new(1, 2, 1, 1);
         let h = c.alloc().unwrap();
         c.append(h, 0, &[1., 2.], &[3., 4.]).unwrap();
+        assert!(c.append(h, 0, &[5., 6.], &[7., 8.]).is_err());
+    }
+
+    #[test]
+    fn multi_sequence_api_returns_isolated_views() {
+        let mut c = MultiSessionKvCache::new(2, 2, 4, 2);
+        let s0 = SequenceKvCache::alloc_sequence(&mut c).unwrap();
+        let s1 = SequenceKvCache::alloc_sequence(&mut c).unwrap();
+        assert_eq!(
+            SequenceKvCache::storage_layout(&c),
+            KvCacheLayout::MultiContiguous { max_sessions: 2 }
+        );
+
+        SequenceKvCache::append_to_sequence(&mut c, s0, 0, 0, &[1., 2.], &[3., 4.]).unwrap();
+        SequenceKvCache::append_to_sequence(&mut c, s1, 0, 0, &[10., 20.], &[30., 40.]).unwrap();
+
+        let v0 = SequenceKvCache::layer_view(&c, s0, 0).unwrap();
+        let v1 = SequenceKvCache::layer_view(&c, s1, 0).unwrap();
+        assert_eq!(v0.k, &[1., 2.]);
+        assert_eq!(v1.k, &[10., 20.]);
+        assert_eq!(SequenceKvCache::sequence_len(&c, s0), 1);
+        assert_eq!(SequenceKvCache::sequence_len(&c, s1), 1);
     }
 }

@@ -314,6 +314,11 @@ impl GgufFile {
         }
     }
 
+    /// GGUF architecture name, e.g. `llama`, `qwen2`, `deepseek4`.
+    pub fn architecture(&self) -> Option<&str> {
+        self.meta_str("general.architecture")
+    }
+
     /// Get a u32 metadata value.
     pub fn meta_u32(&self, key: &str) -> Option<u32> {
         match self.metadata.get(key)? {
@@ -384,6 +389,7 @@ impl GgufFile {
             "qwen2.vocab_size",
             "qwen3.vocab_size",
             "deepseek2.vocab_size",
+            "deepseek4.vocab_size",
         ] {
             if let Some(v) = self.meta_u32(key) {
                 return Some(v);
@@ -403,6 +409,7 @@ impl GgufFile {
             .or_else(|| self.meta_u32("qwen2.block_count"))
             .or_else(|| self.meta_u32("qwen3.block_count"))
             .or_else(|| self.meta_u32("deepseek2.block_count"))
+            .or_else(|| self.meta_u32("deepseek4.block_count"))
     }
 
     /// Hidden size (model dimension).
@@ -412,6 +419,7 @@ impl GgufFile {
             .or_else(|| self.meta_u32("qwen2.embedding_length"))
             .or_else(|| self.meta_u32("qwen3.embedding_length"))
             .or_else(|| self.meta_u32("deepseek2.embedding_length"))
+            .or_else(|| self.meta_u32("deepseek4.embedding_length"))
     }
 
     /// Number of attention heads.
@@ -421,6 +429,39 @@ impl GgufFile {
             .or_else(|| self.meta_u32("qwen2.attention.head_count"))
             .or_else(|| self.meta_u32("qwen3.attention.head_count"))
             .or_else(|| self.meta_u32("deepseek2.attention.head_count"))
+            .or_else(|| self.meta_u32("deepseek4.attention.head_count"))
+    }
+
+    /// Number of key/value heads, when separate from attention heads.
+    pub fn num_kv_heads(&self) -> Option<u32> {
+        self.meta_u32("llama.attention.head_count_kv")
+            .or_else(|| self.meta_u32("gemma.attention.head_count_kv"))
+            .or_else(|| self.meta_u32("qwen2.attention.head_count_kv"))
+            .or_else(|| self.meta_u32("qwen3.attention.head_count_kv"))
+            .or_else(|| self.meta_u32("deepseek2.attention.head_count_kv"))
+            .or_else(|| self.meta_u32("deepseek4.attention.head_count_kv"))
+    }
+
+    /// Number of routed experts, when encoded in GGUF metadata.
+    pub fn expert_count(&self) -> Option<u32> {
+        self.meta_u32("llama.expert_count")
+            .or_else(|| self.meta_u32("qwen2.expert_count"))
+            .or_else(|| self.meta_u32("qwen3.expert_count"))
+            .or_else(|| self.meta_u32("deepseek2.expert_count"))
+            .or_else(|| self.meta_u32("deepseek4.expert_count"))
+            .or_else(|| self.meta_u32("deepseek2.feed_forward.expert_count"))
+            .or_else(|| self.meta_u32("deepseek4.feed_forward.expert_count"))
+    }
+
+    /// Number of selected experts per token, when encoded in GGUF metadata.
+    pub fn expert_used_count(&self) -> Option<u32> {
+        self.meta_u32("llama.expert_used_count")
+            .or_else(|| self.meta_u32("qwen2.expert_used_count"))
+            .or_else(|| self.meta_u32("qwen3.expert_used_count"))
+            .or_else(|| self.meta_u32("deepseek2.expert_used_count"))
+            .or_else(|| self.meta_u32("deepseek4.expert_used_count"))
+            .or_else(|| self.meta_u32("deepseek2.feed_forward.expert_used_count"))
+            .or_else(|| self.meta_u32("deepseek4.feed_forward.expert_used_count"))
     }
 }
 

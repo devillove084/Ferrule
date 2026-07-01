@@ -7,7 +7,8 @@ use rayon::prelude::*;
 
 use crate::context::cu;
 use crate::forward::{GpuOlmoeModel, QLayer, Scratch};
-use crate::qcache::{self, QCacheData};
+use crate::transformer::CudaContiguousKvCache;
+use crate::weightpack::{self, WeightPackLayerData};
 
 struct QData {
     qp: QMatrix,
@@ -55,26 +56,26 @@ impl GpuOlmoeModel {
             t0.elapsed().as_secs_f64()
         );
 
-        let cache_suffix = qcache::quant_suffix(qt).to_string();
-        let cache_file = qcache::cache_path(&model.model_dir, &cache_suffix);
+        let cache_suffix = weightpack::quant_suffix(qt).to_string();
+        let cache_file = weightpack::weightpack_path(&model.model_dir, &cache_suffix);
         let layers: Vec<QLayer> = if cache_file.exists() {
             ferrule_core::observability::METRICS
                 .cache_hits
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            tracing::info!("Loading from quantized cache: {}", cache_file.display());
-            let cache = qcache::QCacheReader::open(&cache_file)?;
+            tracing::info!("Loading from WeightPack: {}", cache_file.display());
+            let cache = weightpack::WeightPackReader::open(&cache_file)?;
             if cache.num_layers() != model.layers.len() {
                 return Err(Error::Internal(format!(
-                    "cache layers {} != model layers {}",
+                    "weight pack layers {} != model layers {}",
                     cache.num_layers(),
                     model.layers.len()
                 )));
             }
             if let Some(m) = cache.manifest() {
-                validate_qcache_manifest(m, model, qt, &cache_suffix)?;
+                validate_weightpack_manifest(m, model, qt, &cache_suffix)?;
             }
             tracing::info!(
-                "  {} layers from cache in {:.1}s",
+                "  {} layers from WeightPack in {:.1}s",
                 cache.num_layers(),
                 t0.elapsed().as_secs_f64()
             );
@@ -92,43 +93,43 @@ impl GpuOlmoeModel {
                     qp_packed: cu(DeviceBuffer::from_host(&s, cq.qp_packed))?,
                     qp_scales: cu(DeviceBuffer::from_host(
                         &s,
-                        &qcache::bytes_to_f32_vec(cq.qp_scales)?,
+                        &weightpack::bytes_to_f32_vec(cq.qp_scales)?,
                     ))?,
                     kp_packed: cu(DeviceBuffer::from_host(&s, cq.kp_packed))?,
                     kp_scales: cu(DeviceBuffer::from_host(
                         &s,
-                        &qcache::bytes_to_f32_vec(cq.kp_scales)?,
+                        &weightpack::bytes_to_f32_vec(cq.kp_scales)?,
                     ))?,
                     vp_packed: cu(DeviceBuffer::from_host(&s, cq.vp_packed))?,
                     vp_scales: cu(DeviceBuffer::from_host(
                         &s,
-                        &qcache::bytes_to_f32_vec(cq.vp_scales)?,
+                        &weightpack::bytes_to_f32_vec(cq.vp_scales)?,
                     ))?,
                     op_packed: cu(DeviceBuffer::from_host(&s, cq.op_packed))?,
                     op_scales: cu(DeviceBuffer::from_host(
                         &s,
-                        &qcache::bytes_to_f32_vec(cq.op_scales)?,
+                        &weightpack::bytes_to_f32_vec(cq.op_scales)?,
                     ))?,
                     ex_gate_packed: cu(DeviceBuffer::from_host(&s, cq.gate_q_packed))?,
                     ex_gate_scales: cu(DeviceBuffer::from_host(
                         &s,
-                        &qcache::bytes_to_f32_vec(cq.gate_q_scales)?,
+                        &weightpack::bytes_to_f32_vec(cq.gate_q_scales)?,
                     ))?,
                     ex_up_packed: cu(DeviceBuffer::from_host(&s, cq.up_q_packed))?,
                     ex_up_scales: cu(DeviceBuffer::from_host(
                         &s,
-                        &qcache::bytes_to_f32_vec(cq.up_q_scales)?,
+                        &weightpack::bytes_to_f32_vec(cq.up_q_scales)?,
                     ))?,
                     ex_down_packed: cu(DeviceBuffer::from_host(&s, cq.down_q_packed))?,
                     ex_down_scales: cu(DeviceBuffer::from_host(
                         &s,
-                        &qcache::bytes_to_f32_vec(cq.down_q_scales)?,
+                        &weightpack::bytes_to_f32_vec(cq.down_q_scales)?,
                     ))?,
                 });
             }
             layers
         } else {
-            // ── Quantize weights + upload to GPU + write cache ──
+            // ── Quantize weights + upload to GPU + write WeightPack ──
             ferrule_core::observability::METRICS
                 .cache_misses
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -136,7 +137,7 @@ impl GpuOlmoeModel {
                 "Quantizing & uploading {} layers (pipelined)...",
                 model.layers.len()
             );
-            let (tx, rx) = std::sync::mpsc::sync_channel::<(usize, QData, QCacheData)>(2);
+            let (tx, rx) = std::sync::mpsc::sync_channel::<(usize, QData, WeightPackLayerData)>(2);
             std::thread::scope(|scope| -> ferrule_core::Result<Vec<QLayer>> {
                 // Spawn quantization thread (rayon-parallel across layers, streamed via channel)
                 scope.spawn(move || {
@@ -162,7 +163,7 @@ impl GpuOlmoeModel {
                             down_q_packed.extend_from_slice(&dq.packed);
                             down_q_scales.extend_from_slice(&dq.scales);
                         }
-                        let cache = QCacheData::from_qmatrix(
+                        let cache = WeightPackLayerData::from_qmatrix(
                             &qp,
                             &kp,
                             &vp,
@@ -194,11 +195,11 @@ impl GpuOlmoeModel {
                 });
 
                 // Main thread: receive quantized layers in order, upload to GPU
-                let mut pending: std::collections::BTreeMap<usize, (QData, QCacheData)> =
+                let mut pending: std::collections::BTreeMap<usize, (QData, WeightPackLayerData)> =
                     std::collections::BTreeMap::new();
                 let mut next_layer = 0usize;
                 let mut layers = Vec::new();
-                let mut cache_layers: Vec<QCacheData> = Vec::new();
+                let mut cache_layers: Vec<WeightPackLayerData> = Vec::new();
                 for (li, q, cq) in rx {
                     pending.insert(li, (q, cq));
                     while let Some((q, cq)) = pending.remove(&next_layer) {
@@ -255,18 +256,18 @@ impl GpuOlmoeModel {
                     }
                 }
                 if !cache_layers.is_empty() {
-                    tracing::info!("Writing quantized cache: {}", cache_file.display());
-                    let qt_suffix = qcache::quant_suffix(qt);
-                    let config_hash = qcache::model_config_hash(&model.model_dir)?;
-                    let mut manifest = qcache::QCacheManifest::new(
+                    tracing::info!("Writing WeightPack: {}", cache_file.display());
+                    let qt_suffix = weightpack::quant_suffix(qt);
+                    let config_hash = weightpack::model_config_hash(&model.model_dir)?;
+                    let mut manifest = weightpack::WeightPackManifest::new(
                         &format!("{qt:?}"),
                         qt_suffix,
                         cache_layers.len(),
                         &config_hash,
                         qt_suffix,
                     );
-                    manifest.tensor_shapes = qcache_tensor_shapes(model);
-                    qcache::write_cache(&cache_file, &cache_layers, Some(&manifest))?;
+                    manifest.tensor_shapes = weightpack_tensor_shapes(model);
+                    weightpack::write_weightpack(&cache_file, &cache_layers, Some(&manifest))?;
                 }
                 Ok(layers)
             })?
@@ -331,14 +332,7 @@ impl GpuOlmoeModel {
         }
         let rope_cos = cu(DeviceBuffer::from_host(&s, &cos_cpu))?;
         let rope_sin = cu(DeviceBuffer::from_host(&s, &sin_cpu))?;
-        let scores_buf = cu(DeviceBuffer::<f32>::zeroed(&s, nh * max_seq))?;
-        // KV cache: store kv_dim elements per position (not d)
-        let k_cache: Vec<_> = (0..c.num_layers)
-            .map(|_| cu(DeviceBuffer::<f32>::zeroed(&s, max_seq * kv_dim)))
-            .collect::<Result<_>>()?;
-        let v_cache: Vec<_> = (0..c.num_layers)
-            .map(|_| cu(DeviceBuffer::<f32>::zeroed(&s, max_seq * kv_dim)))
-            .collect::<Result<_>>()?;
+        let kv = CudaContiguousKvCache::new(&s, c.num_layers, max_seq, kv_dim, nh)?;
 
         let mut m = Self {
             ctx,
@@ -361,13 +355,9 @@ impl GpuOlmoeModel {
             nh,
             nkv,
             hd,
-            max_seq,
-            k_cache,
-            v_cache,
             rope_cos,
             rope_sin,
-            cur_seq: 0,
-            scores_buf,
+            kv,
             expert_hits: vec![vec![0usize; ne]; c.num_layers],
             total_tokens: 0,
         };
@@ -375,13 +365,13 @@ impl GpuOlmoeModel {
         Ok(m)
     }
 
-    /// Build GPU model from a lightweight CPU model + pre-existing qcache.
+    /// Build GPU model from a lightweight CPU model + pre-existing WeightPack.
     /// Skips full FP32 weight loading — norms, router, embed, lm_head come
     /// from the lightweight model; quantized attention/expert weights come
-    /// from the cache.
+    /// from the WeightPack.
     pub(crate) fn build_from_lightweight(
         model: &ferrule_model::OlmoeModel,
-        cache: &qcache::QCacheReader,
+        cache: &weightpack::WeightPackReader,
         qt: QuantType,
     ) -> Result<Self> {
         let ctx = cu(CudaContext::new(0))?;
@@ -394,7 +384,7 @@ impl GpuOlmoeModel {
         let ne = c.num_experts;
         let mid = c.intermediate_size;
 
-        tracing::info!("Uploading lightweight model + qcache to GPU...");
+        tracing::info!("Uploading lightweight model + weight pack to GPU...");
         let t0 = std::time::Instant::now();
 
         let emb = cu(DeviceBuffer::from_host(&s, &model.embed))?;
@@ -406,13 +396,13 @@ impl GpuOlmoeModel {
             t0.elapsed().as_secs_f64()
         );
 
-        // Validate cache
+        // Validate WeightPack
         if let Some(m) = cache.manifest() {
-            validate_qcache_manifest(m, model, qt, qcache::quant_suffix(qt))?;
+            validate_weightpack_manifest(m, model, qt, weightpack::quant_suffix(qt))?;
         }
         if cache.num_layers() != model.layers.len() {
             return Err(Error::Internal(format!(
-                "cache layers {} != model layers {}",
+                "weight pack layers {} != model layers {}",
                 cache.num_layers(),
                 model.layers.len()
             )));
@@ -431,42 +421,42 @@ impl GpuOlmoeModel {
                 qp_packed: cu(DeviceBuffer::from_host(&s, cq.qp_packed))?,
                 qp_scales: cu(DeviceBuffer::from_host(
                     &s,
-                    &qcache::bytes_to_f32_vec(cq.qp_scales)?,
+                    &weightpack::bytes_to_f32_vec(cq.qp_scales)?,
                 ))?,
                 kp_packed: cu(DeviceBuffer::from_host(&s, cq.kp_packed))?,
                 kp_scales: cu(DeviceBuffer::from_host(
                     &s,
-                    &qcache::bytes_to_f32_vec(cq.kp_scales)?,
+                    &weightpack::bytes_to_f32_vec(cq.kp_scales)?,
                 ))?,
                 vp_packed: cu(DeviceBuffer::from_host(&s, cq.vp_packed))?,
                 vp_scales: cu(DeviceBuffer::from_host(
                     &s,
-                    &qcache::bytes_to_f32_vec(cq.vp_scales)?,
+                    &weightpack::bytes_to_f32_vec(cq.vp_scales)?,
                 ))?,
                 op_packed: cu(DeviceBuffer::from_host(&s, cq.op_packed))?,
                 op_scales: cu(DeviceBuffer::from_host(
                     &s,
-                    &qcache::bytes_to_f32_vec(cq.op_scales)?,
+                    &weightpack::bytes_to_f32_vec(cq.op_scales)?,
                 ))?,
                 ex_gate_packed: cu(DeviceBuffer::from_host(&s, cq.gate_q_packed))?,
                 ex_gate_scales: cu(DeviceBuffer::from_host(
                     &s,
-                    &qcache::bytes_to_f32_vec(cq.gate_q_scales)?,
+                    &weightpack::bytes_to_f32_vec(cq.gate_q_scales)?,
                 ))?,
                 ex_up_packed: cu(DeviceBuffer::from_host(&s, cq.up_q_packed))?,
                 ex_up_scales: cu(DeviceBuffer::from_host(
                     &s,
-                    &qcache::bytes_to_f32_vec(cq.up_q_scales)?,
+                    &weightpack::bytes_to_f32_vec(cq.up_q_scales)?,
                 ))?,
                 ex_down_packed: cu(DeviceBuffer::from_host(&s, cq.down_q_packed))?,
                 ex_down_scales: cu(DeviceBuffer::from_host(
                     &s,
-                    &qcache::bytes_to_f32_vec(cq.down_q_scales)?,
+                    &weightpack::bytes_to_f32_vec(cq.down_q_scales)?,
                 ))?,
             });
         }
         tracing::info!(
-            "  {} layers from qcache in {:.1}s",
+            "  {} layers from weight pack in {:.1}s",
             layers.len(),
             t0.elapsed().as_secs_f64()
         );
@@ -495,13 +485,7 @@ impl GpuOlmoeModel {
         }
         let rope_cos = cu(DeviceBuffer::from_host(&s, &cos))?;
         let rope_sin = cu(DeviceBuffer::from_host(&s, &sin))?;
-
-        let k_cache: Vec<_> = (0..nl)
-            .map(|_| cu(DeviceBuffer::<f32>::zeroed(&s, max_seq * kv_dim)))
-            .collect::<Result<Vec<_>>>()?;
-        let v_cache: Vec<_> = (0..nl)
-            .map(|_| cu(DeviceBuffer::<f32>::zeroed(&s, max_seq * kv_dim)))
-            .collect::<Result<Vec<_>>>()?;
+        let kv = CudaContiguousKvCache::new(&s, nl, max_seq, kv_dim, nh)?;
 
         let scratch = Scratch {
             hidden: cu(DeviceBuffer::<f32>::zeroed(&s, d))?,
@@ -527,7 +511,6 @@ impl GpuOlmoeModel {
             topk_vocab_val: cu(DeviceBuffer::<f32>::zeroed(&s, 40))?,
             topk_w: cu(DeviceBuffer::<f32>::zeroed(&s, na))?,
         };
-        let scores_buf = cu(DeviceBuffer::<f32>::zeroed(&s, nh * max_seq))?;
 
         let mut m = Self {
             ctx,
@@ -550,13 +533,9 @@ impl GpuOlmoeModel {
             nh,
             nkv,
             hd,
-            max_seq,
-            k_cache,
-            v_cache,
             rope_cos,
             rope_sin,
-            cur_seq: 0,
-            scores_buf,
+            kv,
             expert_hits: vec![vec![0usize; ne]; nl],
             total_tokens: 0,
         };
@@ -565,51 +544,53 @@ impl GpuOlmoeModel {
     }
 }
 
-fn validate_qcache_manifest(
-    manifest: &qcache::QCacheManifest,
+fn validate_weightpack_manifest(
+    manifest: &weightpack::WeightPackManifest,
     model: &ferrule_model::OlmoeModel,
     qt: QuantType,
     expected_suffix: &str,
 ) -> Result<()> {
     if manifest.num_layers != model.layers.len() {
         return Err(Error::Internal(format!(
-            "cache has {} layers, model expects {}",
+            "weight pack has {} layers, model expects {}",
             manifest.num_layers,
             model.layers.len()
         )));
     }
     if manifest.quant_suffix != expected_suffix {
         return Err(Error::Internal(format!(
-            "cache quant suffix {} does not match requested {}",
+            "weight pack quant suffix {} does not match requested {}",
             manifest.quant_suffix, expected_suffix
         )));
     }
     if manifest.quant_type != format!("{qt:?}") {
         return Err(Error::Internal(format!(
-            "cache quant type {} does not match requested {qt:?}",
+            "weight pack quant type {} does not match requested {qt:?}",
             manifest.quant_type
         )));
     }
 
-    let expected_hash = qcache::model_config_hash(&model.model_dir)?;
+    let expected_hash = weightpack::model_config_hash(&model.model_dir)?;
     if manifest.model_config_hash != expected_hash {
         return Err(Error::Internal(format!(
-            "cache model fingerprint {} does not match current {}",
+            "weight pack model fingerprint {} does not match current {}",
             manifest.model_config_hash, expected_hash
         )));
     }
 
-    let expected_shapes = qcache_tensor_shapes(model);
+    let expected_shapes = weightpack_tensor_shapes(model);
     if !manifest.tensor_shapes.is_empty() && manifest.tensor_shapes != expected_shapes {
         return Err(Error::Internal(
-            "cache tensor shapes do not match current model config".into(),
+            "weight pack tensor shapes do not match current model config".into(),
         ));
     }
 
     Ok(())
 }
 
-fn qcache_tensor_shapes(model: &ferrule_model::OlmoeModel) -> Vec<qcache::QCacheTensorInfo> {
+fn weightpack_tensor_shapes(
+    model: &ferrule_model::OlmoeModel,
+) -> Vec<weightpack::WeightPackTensorInfo> {
     let c = &model.config;
     let d = c.hidden_size;
     let kv = c.kv_dim;
@@ -639,8 +620,11 @@ fn qcache_tensor_shapes(model: &ferrule_model::OlmoeModel) -> Vec<qcache::QCache
     out
 }
 
-fn tensor_shape<const N: usize>(name: String, shape: [usize; N]) -> qcache::QCacheTensorInfo {
-    qcache::QCacheTensorInfo {
+fn tensor_shape<const N: usize>(
+    name: String,
+    shape: [usize; N],
+) -> weightpack::WeightPackTensorInfo {
+    weightpack::WeightPackTensorInfo {
         name,
         shape: shape.to_vec(),
     }

@@ -132,7 +132,7 @@ impl OlmoeModel {
 
     /// Lightweight load: only essential small tensors (norms, embed, router).
     /// Skips all large attention projection and expert FFN weights.
-    /// Used when QCache provides the quantized weights (~1s vs 30s full load).
+    /// Used when WeightPack provides the quantized weights (~1s vs 30s full load).
     pub fn load_lightweight(model_dir: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(model_dir.join("config.json"))
             .map_err(|e| Error::Model(format!("config: {e}")))?;
@@ -219,7 +219,7 @@ impl OlmoeModel {
             let attn_norm = get_required(&mut tmap, &format!("{p}.input_layernorm.weight"))?;
             let ffn_norm =
                 get_required(&mut tmap, &format!("{p}.post_attention_layernorm.weight"))?;
-            // Attention projection weights are NOT loaded — QCache provides them
+            // Attention projection weights are NOT loaded — WeightPack provides them
             let attn = AttnWeights {
                 q_proj: LinearWeight {
                     w: Vec::new(),
@@ -245,7 +245,7 @@ impl OlmoeModel {
                 k_norm: get_required(&mut tmap, &format!("{p}.self_attn.k_norm.weight"))?,
             };
             let router = get_lin_required(&mut tmap, &format!("{p}.mlp.gate.weight"), d)?;
-            // Expert weights are NOT loaded — QCache provides them
+            // Expert weights are NOT loaded — WeightPack provides them
             let experts = Vec::new();
             layers.push(LayerWeights {
                 attn_norm,

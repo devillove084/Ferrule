@@ -5,7 +5,7 @@
 //!   GGML_FTYPE_MOSTLY_Q4_1_SOME_F16 → embed+output in F16, rest Q4_1
 //!
 //! Ferrule's PrecisionPolicy mirrors this: named presets with per-tensor overrides.
-//! Individual tensor overrides are stored in qcache manifest for qcache-only startup.
+//! Individual tensor overrides are stored in weight pack manifest for weight-pack-only startup.
 
 use ferrule_core::QuantType;
 use serde::{Deserialize, Serialize};

@@ -1,13 +1,43 @@
 #![allow(clippy::needless_range_loop)]
-//! OLMoE — f32 weights, tokenizer.
+//! Model metadata, OLMoE weights, and tokenizer utilities.
+pub mod artifact;
 pub mod config;
+pub mod conversion;
 pub mod cpu_forward;
+pub mod descriptor;
+pub mod families;
 pub mod loader;
+pub mod spec;
+pub mod support;
+pub mod tensor_policy;
 pub mod weights;
 
-// Re-exports — keep the same public API surface as before the split.
+// Re-exports — keep the same public API surface while adding generic model metadata.
+pub use artifact::{
+    ArtifactFormat, ArtifactIdentity, DtypeCount, HfAttentionTensorInfo, HfFilePurpose,
+    HfHyperConnectionTensorInfo, HfRepoFile, HfRoutedExpertTensorInfo, HfRouterTensorInfo,
+    HfSafetensorsArtifact, HfSafetensorsIndex, HfSafetensorsInventory, HfSafetensorsShardSummary,
+    HfSafetensorsTensorInfo, HfSharedExpertTensorInfo, SourceArtifact, TensorRoleCount,
+};
 pub use config::OlmoeConfig;
+pub use conversion::{
+    ArtifactTarget, CalibrationSet, ConversionPlan, QuantizationFormat, QuantizationRecipe,
+    TensorRoleQuantPolicy,
+};
 pub use cpu_forward::rms_norm;
+pub use descriptor::ModelDescriptor;
+pub use spec::{
+    AttentionKind, ModelFamily, MoeSpec, QuantFormatCount, RouterKind, TransformerSpec,
+    WeightSource,
+};
+pub use support::{
+    AttentionLayout, AttentionPolicy, EnginePlan, EnginePlanStatus, ExpertPolicy, FeedForwardKind,
+    FeedForwardLayout, KvCacheShape, KvPolicy, LayerLayout, MissingPolicy, ModelLayout,
+    ModelSupportContract, ParallelismPlan, PolicyArea, PolicySet, QuantPolicy, ResidencyPolicy,
+    RouterPolicy, SpeculationMode, SpeculationPolicy, TensorBinding, TensorRole, TokenizerPolicy,
+    ValidationPolicy,
+};
+pub use tensor_policy::{GgufTensorPolicy, HfTensorPolicy, TensorClass, TensorClassCount};
 pub use weights::{AttnWeights, ExpertWeights, LayerWeights, LinearWeight};
 
 use ferrule_core::Result;
@@ -40,6 +70,10 @@ impl OlmoeModel {
         self.tokenizer
             .decode(ids, true)
             .map_err(|e| ferrule_core::Error::Model(format!("decode: {e}")))
+    }
+
+    pub fn transformer_spec(&self) -> TransformerSpec {
+        TransformerSpec::from_olmoe_config(&self.config, WeightSource::Safetensors)
     }
 
     /// Extract the tokenizer, consuming the model.

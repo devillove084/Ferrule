@@ -38,13 +38,13 @@ pub fn cmd_chat(
     let gen_cfg = sampling.generation_config(max_tokens);
 
     if matches!(quant.to_ascii_lowercase().as_str(), "cpu" | "f32" | "fp32") {
-        let runner = ferrule_runtime::CpuOlmoeRunner::load(Path::new(model_dir))?;
+        let runner = ferrule_runtime::CpuModelRunner::load(Path::new(model_dir))?;
         let engine = InferenceEngine::new(runner, sc);
         run_chat_loop(engine, max_tokens, &gen_cfg, template, sampling)
     } else {
         let qt = super::run::parse_quant(quant);
         tracing::info!("Uploading to GPU (quant: {qt:?})...");
-        let runner = ferrule_runtime::GpuOlmoeRunner::load(Path::new(model_dir), qt)?;
+        let runner = ferrule_runtime::GpuModelRunner::load(Path::new(model_dir), qt)?;
         let engine = InferenceEngine::new(runner, sc);
         run_chat_loop(engine, max_tokens, &gen_cfg, template, sampling)
     }
@@ -68,7 +68,7 @@ pub fn cmd_chat(
     let gen_cfg = sampling.generation_config(_max_tokens);
 
     if matches!(quant.to_ascii_lowercase().as_str(), "cpu" | "f32" | "fp32") {
-        let runner = ferrule_runtime::CpuOlmoeRunner::load(Path::new(model_dir))?;
+        let runner = ferrule_runtime::CpuModelRunner::load(Path::new(model_dir))?;
         let engine = InferenceEngine::new(runner, sc);
         run_chat_loop(engine, _max_tokens, &gen_cfg, template, sampling)
     } else {

@@ -15,16 +15,20 @@ pub fn flash_attn_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn cuda_graph_enabled_defaults_false() {
-        // Ensure env var is not set during test
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::remove_var("FERRULE_CUDA_GRAPH");
         assert!(!cuda_graph_enabled());
     }
 
     #[test]
     fn cuda_graph_enabled_when_env_set() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("FERRULE_CUDA_GRAPH", "1");
         assert!(cuda_graph_enabled());
         std::env::remove_var("FERRULE_CUDA_GRAPH");
