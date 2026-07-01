@@ -9,6 +9,7 @@ pub mod layout;
 pub mod plan;
 pub mod policies;
 pub mod roles;
+pub mod validation;
 
 pub use binding::{tensor_role_for_class, TensorBinding};
 pub use contract::ModelSupportContract;
@@ -20,6 +21,10 @@ pub use policies::{
     ValidationPolicy,
 };
 pub use roles::{FeedForwardKind, KvCacheShape, TensorRole};
+pub use validation::{
+    validate_model_layout_bindings, BoundRoleCount, LayoutValidationReport, MissingRequiredRole,
+    OptionalRoleStatus, RoleScope,
+};
 
 #[cfg(test)]
 mod tests;

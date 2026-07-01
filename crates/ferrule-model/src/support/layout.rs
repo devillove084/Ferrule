@@ -44,6 +44,7 @@ impl AttentionLayout {
                     TensorRole::AttentionLatentKv,
                     TensorRole::AttentionLatentOutputA,
                     TensorRole::AttentionLatentOutputB,
+                    TensorRole::AttentionSink,
                 ],
                 optional_roles: vec![
                     TensorRole::AttentionCompressor,

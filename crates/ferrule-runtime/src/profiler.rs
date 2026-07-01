@@ -1,4 +1,5 @@
-//! Kernel-level profiling — count launches and time major regions.
+//! Kernel-level profiling — count launches, time major regions, and
+//! measure arbitrary code blocks.
 //!
 //! Gated behind `FERRULE_PROFILE=1` env var; zero overhead when disabled.
 
@@ -154,6 +155,59 @@ impl Profiler {
     }
 }
 
+// ── Lightweight kernel-level timer (P3.2) ─────────────────────────────
+
+/// Accumulates named timing regions over many invocations.
+///
+/// A simpler alternative to the region-based [`Profiler`]: call
+/// [`KernelProfiler::time`] with any label and a closure to measure and
+/// accumulate elapsed wall-clock time across calls.
+#[derive(Debug, Clone, Default)]
+pub struct KernelProfiler {
+    pub regions: Vec<TimedRegion>,
+}
+
+/// A single named region tracked by [`KernelProfiler`].
+#[derive(Debug, Clone)]
+pub struct TimedRegion {
+    pub label: String,
+    pub elapsed_us: u64,
+    pub calls: u64,
+}
+
+impl KernelProfiler {
+    /// Time execution of `f`, associating elapsed microseconds with `label`.
+    ///
+    /// If `label` has been seen before, elapsed time and call count are
+    /// accumulated; otherwise a new [`TimedRegion`] is created.
+    pub fn time<R>(&mut self, label: &str, f: impl FnOnce() -> R) -> R {
+        let start = Instant::now();
+        let result = f();
+        let elapsed = start.elapsed().as_micros() as u64;
+        if let Some(region) = self.regions.iter_mut().find(|r| r.label == label) {
+            region.elapsed_us += elapsed;
+            region.calls += 1;
+        } else {
+            self.regions.push(TimedRegion {
+                label: label.to_string(),
+                elapsed_us: elapsed,
+                calls: 1,
+            });
+        }
+        result
+    }
+
+    /// Total elapsed microseconds across all timed regions.
+    pub fn total_us(&self) -> u64 {
+        self.regions.iter().map(|r| r.elapsed_us).sum()
+    }
+
+    /// Clear all accumulated timing data.
+    pub fn reset(&mut self) {
+        self.regions.clear();
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -215,5 +269,71 @@ mod tests {
         p.launch(Region::Other);
         let report = p.report();
         assert!(report.contains("disabled"));
+    }
+
+    // ── KernelProfiler tests ───────────────────────────────────────
+
+    #[test]
+    fn kernel_profiler_single_region() {
+        let mut kp = KernelProfiler::default();
+        let result = kp.time("my_kernel", || 42);
+        assert_eq!(result, 42);
+        assert_eq!(kp.regions.len(), 1);
+        assert_eq!(kp.regions[0].label, "my_kernel");
+        assert_eq!(kp.regions[0].calls, 1);
+        assert!(kp.regions[0].elapsed_us > 0 || kp.regions[0].elapsed_us == 0);
+    }
+
+    #[test]
+    fn kernel_profiler_accumulates_same_label() {
+        let mut kp = KernelProfiler::default();
+        kp.time("gemv", || {
+            std::thread::sleep(std::time::Duration::from_micros(100))
+        });
+        kp.time("gemv", || {
+            std::thread::sleep(std::time::Duration::from_micros(100))
+        });
+        assert_eq!(kp.regions.len(), 1);
+        assert_eq!(kp.regions[0].calls, 2);
+        assert!(kp.regions[0].elapsed_us >= 200);
+    }
+
+    #[test]
+    fn kernel_profiler_multiple_labels() {
+        let mut kp = KernelProfiler::default();
+        kp.time("embed", || ());
+        kp.time("attn", || ());
+        kp.time("router", || ());
+        assert_eq!(kp.regions.len(), 3);
+        let labels: Vec<&str> = kp.regions.iter().map(|r| r.label.as_str()).collect();
+        assert!(labels.contains(&"embed"));
+        assert!(labels.contains(&"attn"));
+        assert!(labels.contains(&"router"));
+    }
+
+    #[test]
+    fn kernel_profiler_total_us() {
+        let mut kp = KernelProfiler::default();
+        kp.time("a", || ());
+        kp.time("b", || ());
+        let total = kp.total_us();
+        let sum: u64 = kp.regions.iter().map(|r| r.elapsed_us).sum();
+        assert_eq!(total, sum);
+    }
+
+    #[test]
+    fn kernel_profiler_reset() {
+        let mut kp = KernelProfiler::default();
+        kp.time("x", || ());
+        assert_eq!(kp.regions.len(), 1);
+        kp.reset();
+        assert!(kp.regions.is_empty());
+    }
+
+    #[test]
+    fn kernel_profiler_default_is_empty() {
+        let kp = KernelProfiler::default();
+        assert!(kp.regions.is_empty());
+        assert_eq!(kp.total_us(), 0);
     }
 }

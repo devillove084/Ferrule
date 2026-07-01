@@ -1,9 +1,11 @@
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::OlmoeConfig;
 
 /// High-level model family understood by Ferrule's runtime boundary.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModelFamily {
     Olmoe,
     DeepSeekV4,
@@ -62,7 +64,7 @@ impl fmt::Display for ModelFamily {
 }
 
 /// Attention layout exposed at the model-family boundary.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AttentionKind {
     DenseMha,
     GroupedQuery,
@@ -88,7 +90,7 @@ impl fmt::Display for AttentionKind {
 }
 
 /// Where the model weights come from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WeightSource {
     Safetensors,
     Gguf,
@@ -111,7 +113,7 @@ impl fmt::Display for WeightSource {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RouterKind {
     DenseTopK,
     HashAssistedTopK,
@@ -136,7 +138,7 @@ impl fmt::Display for RouterKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MoeSpec {
     pub num_experts: Option<usize>,
     pub num_experts_per_tok: Option<usize>,
@@ -159,13 +161,13 @@ impl MoeSpec {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuantFormatCount {
     pub format: String,
     pub tensors: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransformerSpec {
     pub family: ModelFamily,
     pub architecture: Option<String>,

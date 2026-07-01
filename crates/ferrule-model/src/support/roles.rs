@@ -1,11 +1,13 @@
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 /// Semantic tensor role consumed by the generic Transformer executor boundary.
 ///
 /// Source tensor names such as `blk.0.attn_q_a.weight` should be translated into
 /// these roles by model-family bindings. Generic runtime code should depend on
 /// roles, not source names or one model family's naming scheme.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum TensorRole {
     TokenEmbedding,
     OutputNorm,
@@ -127,7 +129,7 @@ impl fmt::Display for TensorRole {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KvCacheShape {
     None,
     FullKeysValues,
@@ -154,7 +156,7 @@ impl fmt::Display for KvCacheShape {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FeedForwardKind {
     None,
     DenseMlp,

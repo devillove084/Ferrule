@@ -15,6 +15,7 @@ ferrule-gguf = { path = "../ferrule-gguf" }
 tracing = "0.1"
 thiserror = "2"
 tokenizers = "0.21"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rayon = "1.10"
 

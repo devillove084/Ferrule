@@ -1,33 +1,7 @@
 //! Quantization framework — llama.cpp style block-wise quantization.
 #![allow(clippy::needless_range_loop)]
-//!
-//! Supported types:
-//!   Q4_0 — 4-bit symmetric,  block 32,  4.5 bpw
-//!   Q2S — 2-bit symmetric,  block 64,  2.25 bpw
-//!   T1S — ternary 1.58b,    block 64,  ~2.1 bpw, add/sub replaces mul
-//!
-//! Usage:
-//!   let m = QMatrix::quantize(&w, out_f, in_f, QuantType::Q4_0);
-//!   m.scales_f32()          → Vec<f32> for GPU upload
-//!   m.packed()              → &[u8] for GPU upload
-//!   m.blocks_per_row()      → used by kernel for indexing
-//!
-//! K-quant and AWQ investigation (P11.3):
-//!
-//! llama.cpp K-quants use importance matrices (imatrix) to weight quantization
-//! errors by activation magnitude. This gives ~0.5-1.0 bit effective precision
-//! improvement over naive Q4_0 at the same bitrate.
-//!
-//! AWQ (Activation-aware Weight Quantization) similarly uses activation statistics
-//! to find per-channel scaling factors that minimize output error.
-//!
-//! Ferrule track:
-//!   1. Implement imatrix collection pass (run model on calibration data, collect
-//!      activation statistics per linear layer).
-//!   2. Implement Q4_K quantizer using imatrix (requires per-block scales + mins,
-//!      super-block structure of 256 elements).
-//!   3. Evaluate perplexity vs Q4_0 on OLMoE-Instruct.
-//!   4. Compare with AWQ: per-channel scaling before quantization.
+
+pub mod gguf_quant;
 
 // ── f16 conversion (no external dependency) ───────────────────────────
 

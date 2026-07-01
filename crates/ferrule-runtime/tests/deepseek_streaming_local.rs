@@ -8,10 +8,11 @@ use ferrule_model::{
 };
 use ferrule_runtime::{
     bind_attention_from_hf, bind_hyper_connection_from_hf, bind_hyper_connection_head_from_hf,
-    bind_router_from_hf, bind_shared_swiglu_ffn_from_hf, ExpertComputeBundle, ExpertId,
-    ExpertLinearFormat, ExpertLoadReason, ExpertSource, ExpertStreamingPlanner,
-    ExpertStreamingPolicy, ExpertStreamingReader, HyperConnectionConfig, SourceLinearFormat,
-    SourceLinearPayload, SourceTensorReader, SourceTensorSlice, TokenizerHandle,
+    bind_layer_source_from_hf, bind_router_from_hf, bind_shared_swiglu_ffn_from_hf,
+    ExpertComputeBundle, ExpertId, ExpertLinearFormat, ExpertLoadReason, ExpertRouterPolicy,
+    ExpertSource, ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader,
+    HyperConnectionConfig, SourceLinearFormat, SourceLinearPayload, SourceTensorReader,
+    SourceTensorSlice, SparseAttentionSpec, TokenizerHandle,
 };
 
 #[test]
@@ -327,6 +328,55 @@ fn local_deepseek_v4_attention_and_hc_bind_real_sources_if_present() {
     assert_eq!(hc_head.function.len(), 4 * 16384);
     assert_eq!(hc_head.scale.len(), 1);
     assert_eq!(hc_head.base.len(), 4);
+}
+
+#[test]
+fn local_deepseek_v4_layer_source_bundle_binds_real_layer0_if_present() {
+    let Some(model_dir) = local_deepseek_v4_dir() else {
+        return;
+    };
+
+    let inventory = HfSafetensorsInventory::open(&model_dir, ModelFamily::DeepSeekV4)
+        .expect("local DeepSeek V4 inventory should parse headers only");
+    let attention = inventory.attention_tensors(&ModelFamily::DeepSeekV4);
+    let hc = inventory.hyper_connection_tensors(&ModelFamily::DeepSeekV4);
+    let routers = inventory.router_tensors(&ModelFamily::DeepSeekV4);
+    let shared = inventory.shared_expert_tensors(&ModelFamily::DeepSeekV4);
+    let reader = SourceTensorReader::new(64 * 1024 * 1024);
+    let config = HyperConnectionConfig {
+        hc_mult: 4,
+        hidden_size: 4096,
+        sinkhorn_iters: 4,
+        eps: 1e-6,
+        norm_eps: 1e-6,
+    };
+    let binding = bind_layer_source_from_hf(
+        &model_dir,
+        0,
+        &attention,
+        &hc,
+        &routers,
+        &shared,
+        &reader,
+        config,
+        10.0,
+        ExpertRouterPolicy::deepseek_v4_hash(6, 1.0),
+        SparseAttentionSpec {
+            heads: 64,
+            head_dim: 512,
+            topk: 128,
+            softmax_scale: (512.0f32).powf(-0.5),
+            has_attention_sink: true,
+        },
+    )
+    .expect("layer 0 source bundle should compose real attention/HC/router/shared payloads");
+    assert_eq!(binding.layer, 0);
+    assert_eq!(binding.attention.wq_a.format.in_features(), 4096);
+    assert_eq!(binding.attention.attention_sink.len(), 64);
+    assert!(binding.router.hash_table.is_some());
+    assert!(binding.shared_ffn.is_some());
+    assert_eq!(binding.hc_attention.scale.len(), 3);
+    assert_eq!(binding.hc_feed_forward.scale.len(), 3);
 }
 
 #[test]

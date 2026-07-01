@@ -31,11 +31,12 @@ pub use spec::{
     WeightSource,
 };
 pub use support::{
-    AttentionLayout, AttentionPolicy, EnginePlan, EnginePlanStatus, ExpertPolicy, FeedForwardKind,
-    FeedForwardLayout, KvCacheShape, KvPolicy, LayerLayout, MissingPolicy, ModelLayout,
-    ModelSupportContract, ParallelismPlan, PolicyArea, PolicySet, QuantPolicy, ResidencyPolicy,
-    RouterPolicy, SpeculationMode, SpeculationPolicy, TensorBinding, TensorRole, TokenizerPolicy,
-    ValidationPolicy,
+    validate_model_layout_bindings, AttentionLayout, AttentionPolicy, BoundRoleCount, EnginePlan,
+    EnginePlanStatus, ExpertPolicy, FeedForwardKind, FeedForwardLayout, KvCacheShape, KvPolicy,
+    LayerLayout, LayoutValidationReport, MissingPolicy, MissingRequiredRole, ModelLayout,
+    ModelSupportContract, OptionalRoleStatus, ParallelismPlan, PolicyArea, PolicySet, QuantPolicy,
+    ResidencyPolicy, RoleScope, RouterPolicy, SpeculationMode, SpeculationPolicy, TensorBinding,
+    TensorRole, TokenizerPolicy, ValidationPolicy,
 };
 pub use tensor_policy::{GgufTensorPolicy, HfTensorPolicy, TensorClass, TensorClassCount};
 pub use weights::{AttnWeights, ExpertWeights, LayerWeights, LinearWeight};

@@ -105,18 +105,18 @@ impl<'a> CudaSparseAttentionExecutor<'a> {
         shape: CudaSparseAttentionShape,
     ) -> Result<()> {
         shape.validate()?;
-        cu(self.module.sparse_attn_sink_f32(
+        cu(self.module.sparse_attn_tiled_sink_f32(
             self.stream,
-            LaunchConfig::for_num_elems(shape.output_elements() as u32),
+            LaunchConfig::for_num_elems((shape.tokens() * shape.heads) as u32),
             q,
             kv,
             topk,
             sink,
             output,
             checked_u32(
-                shape.output_elements(),
+                shape.tokens() * shape.heads,
                 "sparse attention",
-                "output elements",
+                "num_pairs",
             )?,
             checked_u32(
                 shape.tokens_per_batch,
