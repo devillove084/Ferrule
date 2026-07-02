@@ -1,10 +1,10 @@
 //! Attention backend contracts and reference kernels.
 //!
-//! DeepSeek V4's attention is not a plain dense causal MHA kernel. The runtime
+//! Some supported attention layouts are not plain dense causal MHA. The runtime
 //! needs a generic attention surface that can route to: CPU/reference correctness,
 //! sparse FlashAttention-style CUDA for MLA/compressed KV, or dense FlashAttention
-//! for future Llama/Qwen-like models. This module defines that surface without
-//! concrete model-family tensor names.
+//! for Llama/Qwen-like models. This module defines that surface without concrete
+//! model-family tensor names.
 
 use ferrule_core::{Error, Result};
 
@@ -60,7 +60,7 @@ pub struct AttentionBackendPlan {
 }
 
 impl AttentionBackendPlan {
-    pub fn dsv4_sparse_flash(heads: usize, head_dim: usize, topk: usize) -> Self {
+    pub fn sparse_flash_with_sink(heads: usize, head_dim: usize, topk: usize) -> Self {
         Self {
             backend: AttentionBackendKind::CudaSparseFlash,
             mask: AttentionMaskKind::ExplicitTopK,
@@ -83,7 +83,7 @@ impl AttentionBackendPlan {
     }
 }
 
-/// CPU/reference sparse attention with DSV4 sink semantics.
+/// CPU/reference sparse attention with optional attention-sink denominator semantics.
 ///
 /// Shapes:
 /// - `q`: `[tokens, heads, head_dim]`
@@ -196,7 +196,7 @@ pub fn sparse_attention_reference(
     Ok(out)
 }
 
-/// Reference helper for DSV4 sliding-window top-k indices, single batch.
+/// Reference helper for sliding-window top-k indices, single batch.
 pub fn sliding_window_topk_indices(
     window_size: usize,
     seq_len: usize,
@@ -206,28 +206,12 @@ pub fn sliding_window_topk_indices(
         return Vec::new();
     }
     let mut out = vec![-1isize; seq_len * window_size];
-    if start_pos > 0 {
-        let row = if start_pos >= window_size - 1 {
-            let pivot = start_pos % window_size;
-            (pivot + 1..window_size)
-                .chain(0..=pivot)
-                .map(|v| v as isize)
-                .collect::<Vec<_>>()
-        } else {
-            (0..=start_pos)
-                .map(|v| v as isize)
-                .chain(std::iter::repeat(-1).take(window_size - start_pos - 1))
-                .collect::<Vec<_>>()
-        };
-        for token in 0..seq_len {
-            out[token * window_size..(token + 1) * window_size].copy_from_slice(&row);
-        }
-        return out;
-    }
-
     for token in 0..seq_len {
-        let start = token.saturating_sub(window_size - 1);
-        for slot in 0..window_size.min(token + 1) {
+        let pos = start_pos + token;
+        let available = pos + 1;
+        let take = window_size.min(available);
+        let start = available - take;
+        for slot in 0..take {
             out[token * window_size + slot] = (start + slot) as isize;
         }
     }
@@ -293,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn sliding_window_topk_decode_wraps_ring_buffer() {
-        assert_eq!(sliding_window_topk_indices(4, 1, 5), vec![2, 3, 0, 1]);
+    fn sliding_window_topk_decode_uses_contiguous_absolute_positions() {
+        assert_eq!(sliding_window_topk_indices(4, 1, 5), vec![2, 3, 4, 5]);
     }
 }

@@ -1,6 +1,12 @@
 use crate::SamplingArgs;
+use ferrule_model::{ModelDescriptor, ModelFamily};
 use ferrule_runtime::{
-    detect_chat_template, ChatTemplate, InferenceEngine, ModelGenerationDefaults, ModelRunner,
+    detect_chat_template,
+    models::deepseek_v4::{
+        DeepSeekV4OperatorBackend, DeepSeekV4ReferenceOptions, DeepSeekV4ReferenceRunner,
+    },
+    ChatTemplate, GenerationConfig, InferenceEngine, ModelGenerationDefaults, ModelRunner,
+    SamplingConfig,
 };
 use std::io::Write;
 use std::path::Path;
@@ -18,6 +24,21 @@ fn resolve_template(model_dir: &Path, chat_template_override: Option<&str>) -> C
     }
 }
 
+fn resolve_template_for_family(
+    model_dir: &Path,
+    family: &ModelFamily,
+    chat_template_override: Option<&str>,
+) -> ChatTemplate {
+    if chat_template_override.is_some() {
+        return resolve_template(model_dir, chat_template_override);
+    }
+    if matches!(family, ModelFamily::DeepSeekV4) {
+        ChatTemplate::DeepSeekV4
+    } else {
+        detect_chat_template(model_dir)
+    }
+}
+
 // ── chat ─────────────────────────────────────────────────────────────────────
 
 #[cfg(feature = "cuda")]
@@ -28,23 +49,34 @@ pub fn cmd_chat(
     sampling: &SamplingArgs,
     chat_template_override: Option<&str>,
 ) -> anyhow::Result<()> {
-    let template = resolve_template(Path::new(model_dir), chat_template_override);
+    let model_path = Path::new(model_dir);
+    let descriptor = ModelDescriptor::load(model_path)?;
+    let template =
+        resolve_template_for_family(model_path, &descriptor.spec.family, chat_template_override);
+    let gen_cfg = sampling.generation_config(max_tokens);
+
+    if matches!(descriptor.spec.family, ModelFamily::DeepSeekV4) {
+        let backend = if matches!(quant.to_ascii_lowercase().as_str(), "cpu" | "f32" | "fp32") {
+            DeepSeekV4OperatorBackend::Cpu
+        } else {
+            DeepSeekV4OperatorBackend::Cuda
+        };
+        return run_deepseek_v4_chat(model_path, backend, &gen_cfg, template, sampling);
+    }
 
     let mut sc = sampling.sampling_config();
-    if let Some(def) = ModelGenerationDefaults::load(Path::new(model_dir)) {
+    if let Some(def) = ModelGenerationDefaults::load(model_path) {
         def.apply_to_config(&mut sc);
     }
 
-    let gen_cfg = sampling.generation_config(max_tokens);
-
     if matches!(quant.to_ascii_lowercase().as_str(), "cpu" | "f32" | "fp32") {
-        let runner = ferrule_runtime::CpuModelRunner::load(Path::new(model_dir))?;
+        let runner = ferrule_runtime::CpuModelRunner::load(model_path)?;
         let engine = InferenceEngine::new(runner, sc);
         run_chat_loop(engine, max_tokens, &gen_cfg, template, sampling)
     } else {
         let qt = super::run::parse_quant(quant);
         tracing::info!("Uploading to GPU (quant: {qt:?})...");
-        let runner = ferrule_runtime::GpuModelRunner::load(Path::new(model_dir), qt)?;
+        let runner = ferrule_runtime::GpuModelRunner::load(model_path, qt)?;
         let engine = InferenceEngine::new(runner, sc);
         run_chat_loop(engine, max_tokens, &gen_cfg, template, sampling)
     }
@@ -58,22 +90,276 @@ pub fn cmd_chat(
     sampling: &SamplingArgs,
     chat_template_override: Option<&str>,
 ) -> anyhow::Result<()> {
-    let template = resolve_template(Path::new(model_dir), chat_template_override);
+    let model_path = Path::new(model_dir);
+    let descriptor = ModelDescriptor::load(model_path)?;
+    let template =
+        resolve_template_for_family(model_path, &descriptor.spec.family, chat_template_override);
+    let gen_cfg = sampling.generation_config(_max_tokens);
+
+    if matches!(descriptor.spec.family, ModelFamily::DeepSeekV4) {
+        if !matches!(quant.to_ascii_lowercase().as_str(), "cpu" | "f32" | "fp32") {
+            anyhow::bail!("DeepSeek-V4 chat -q {quant} requires --features cuda; use -q cpu for the slow reference path")
+        }
+        return run_deepseek_v4_chat(
+            model_path,
+            DeepSeekV4OperatorBackend::Cpu,
+            &gen_cfg,
+            template,
+            sampling,
+        );
+    }
 
     let mut sc = sampling.sampling_config();
-    if let Some(def) = ModelGenerationDefaults::load(Path::new(model_dir)) {
+    if let Some(def) = ModelGenerationDefaults::load(model_path) {
         def.apply_to_config(&mut sc);
     }
 
-    let gen_cfg = sampling.generation_config(_max_tokens);
-
     if matches!(quant.to_ascii_lowercase().as_str(), "cpu" | "f32" | "fp32") {
-        let runner = ferrule_runtime::CpuModelRunner::load(Path::new(model_dir))?;
+        let runner = ferrule_runtime::CpuModelRunner::load(model_path)?;
         let engine = InferenceEngine::new(runner, sc);
         run_chat_loop(engine, _max_tokens, &gen_cfg, template, sampling)
     } else {
         anyhow::bail!("chat -q {quant} requires --features cuda")
     }
+}
+
+// ── DeepSeek-V4 chat ─────────────────────────────────────────────────────────
+
+fn deepseek_v4_chat_options() -> DeepSeekV4ReferenceOptions {
+    DeepSeekV4ReferenceOptions {
+        output_head_chunk_rows: 4096,
+        ..DeepSeekV4ReferenceOptions::default()
+    }
+}
+
+fn run_deepseek_v4_chat(
+    model_path: &Path,
+    backend: DeepSeekV4OperatorBackend,
+    generation: &GenerationConfig,
+    chat_template: ChatTemplate,
+    sampling: &SamplingArgs,
+) -> anyhow::Result<()> {
+    let runner = DeepSeekV4ReferenceRunner::load_hf_with_options_and_backend(
+        model_path,
+        128 * 1024 * 1024,
+        deepseek_v4_chat_options(),
+        backend,
+    )?;
+
+    let sampling_config = sampling.sampling_config();
+    if can_use_deepseek_v4_fast_greedy(&sampling_config, generation) {
+        run_deepseek_v4_greedy_chat_loop(runner, generation, chat_template, sampling)
+    } else {
+        eprintln!(
+            "note: DeepSeek-V4 non-greedy/logprob chat uses the full-logits path; use --temp 0 --repeat-penalty 1 --logprobs 0 for the top-k fast path"
+        );
+        let engine = InferenceEngine::new(runner, sampling_config);
+        run_chat_loop(
+            engine,
+            generation.max_new_tokens,
+            generation,
+            chat_template,
+            sampling,
+        )
+    }
+}
+
+fn can_use_deepseek_v4_fast_greedy(
+    sampling: &SamplingConfig,
+    generation: &GenerationConfig,
+) -> bool {
+    sampling.temperature <= 0.0
+        && (sampling.repeat_penalty - 1.0).abs() < f32::EPSILON
+        && generation.logprobs_k == 0
+}
+
+fn run_deepseek_v4_greedy_chat_loop(
+    mut runner: DeepSeekV4ReferenceRunner,
+    generation: &GenerationConfig,
+    chat_template: ChatTemplate,
+    sampling: &SamplingArgs,
+) -> anyhow::Result<()> {
+    use console::style;
+    use rustyline::error::ReadlineError;
+
+    print_model_info(&runner.model_info());
+    println!(
+        "{} Type /exit or Ctrl-D to quit. Template: {}. DeepSeek-V4 greedy top-k fast path.",
+        style("Chat ready.").cyan(),
+        chat_template.name()
+    );
+    println!("  /reset      clear session state\n  /stats      show session stats\n  /experts    show DSV4 layer/cache stats\n  /ctx        show context window usage");
+
+    let mut first_turn = true;
+    let mut generated_total = 0usize;
+    let mut rl = rustyline::DefaultEditor::new()?;
+    loop {
+        let line = match rl.readline(&format!("{} ", style("You>").green().bold())) {
+            Ok(line) => line,
+            Err(ReadlineError::Interrupted | ReadlineError::Eof) => break,
+            Err(err) => return Err(err.into()),
+        };
+        let input = line.trim();
+        if input.is_empty() {
+            continue;
+        }
+        if matches!(input, "/exit" | "/quit") {
+            break;
+        }
+        if input == "/reset" || input == "/clear" {
+            runner.reset_session()?;
+            first_turn = true;
+            generated_total = 0;
+            println!("{} session reset.", style("Ferrule>").cyan().bold());
+            continue;
+        }
+        if input == "/stats" {
+            println!(
+                "{} position={} generated={} bound_layers={}",
+                style("Ferrule>").cyan().bold(),
+                runner.position(),
+                generated_total,
+                runner.bound_layer_count()
+            );
+            continue;
+        }
+        if input == "/experts" {
+            match runner.expert_report() {
+                Some(report) => print!("{report}"),
+                None => println!(
+                    "{} expert report not available.",
+                    style("Ferrule>").cyan().bold()
+                ),
+            }
+            continue;
+        }
+        if input == "/ctx" {
+            let usage_pct = if generation.ctx_size > 0 {
+                runner.position() as f64 / generation.ctx_size as f64 * 100.0
+            } else {
+                0.0
+            };
+            println!(
+                "{} context: {} / {} tokens ({:.0}%)",
+                style("Ferrule>").cyan().bold(),
+                runner.position(),
+                generation.ctx_size,
+                usage_pct
+            );
+            continue;
+        }
+
+        let _ = rl.add_history_entry(input);
+        let prompt = chat_template.format_turn(input, first_turn);
+        let prompt_tokens = runner.encode(&prompt)?;
+        ensure_deepseek_v4_context_room(
+            runner.position(),
+            prompt_tokens.len(),
+            generation.ctx_size,
+        )?;
+        first_turn = false;
+
+        let prefill_start = std::time::Instant::now();
+        let mut top = runner.prefill_tokens_topk_batched(&prompt_tokens, 1)?;
+        if top.is_empty() {
+            println!();
+            continue;
+        }
+
+        print!("{} ", style("Ferrule>").cyan().bold());
+        std::io::stdout().flush()?;
+
+        let mut text = String::new();
+        let mut turn_generated = 0usize;
+        let mut stopped_by_eos = false;
+        let mut stopped_by_string = None;
+        let eos = runner.eos_token_id();
+        let decode_start = std::time::Instant::now();
+
+        for step in 0..generation.max_new_tokens {
+            if runner.position() >= generation.ctx_size {
+                break;
+            }
+            let Some(&next) = top.first() else {
+                break;
+            };
+
+            if sampling.verbose_tokens() {
+                eprint!("[{}:{:.4}]", next.token_id, next.logit);
+            }
+
+            if eos == Some(next.token_id) {
+                if generation.append_eos_to_session {
+                    runner.feed_token(next.token_id)?;
+                }
+                stopped_by_eos = true;
+                break;
+            }
+
+            let piece = runner.decode(&[next.token_id]).unwrap_or_default();
+            print!("{piece}");
+            std::io::stdout().flush()?;
+            text.push_str(&piece);
+            turn_generated += 1;
+            generated_total += 1;
+
+            if let Some(stop) = matched_deepseek_v4_stop(&text, &generation.stop) {
+                runner.feed_token(next.token_id)?;
+                stopped_by_string = Some(stop.to_string());
+                break;
+            }
+
+            if step + 1 == generation.max_new_tokens {
+                runner.feed_token(next.token_id)?;
+                break;
+            }
+
+            top = runner.decode_token_topk(next.token_id, 1)?;
+        }
+        println!();
+
+        if generation.max_new_tokens == 0 {
+            println!("{} max_new_tokens is 0.", style("Ferrule>").cyan().bold());
+        } else if !stopped_by_eos
+            && stopped_by_string.is_none()
+            && turn_generated == generation.max_new_tokens
+        {
+            println!(
+                "{} turn stopped at max_tokens; use a larger -n or /reset if the next turn looks malformed.",
+                style("Ferrule>").cyan().bold()
+            );
+        }
+        println!(
+            "{} prefill={:.1}ms decode={:.1}ms pos={}",
+            style("stats>").dim(),
+            prefill_start.elapsed().as_secs_f64() * 1000.0,
+            decode_start.elapsed().as_secs_f64() * 1000.0,
+            runner.position()
+        );
+    }
+
+    Ok(())
+}
+
+fn matched_deepseek_v4_stop<'a>(text: &str, stop: &'a [String]) -> Option<&'a str> {
+    stop.iter()
+        .find(|candidate| !candidate.is_empty() && text.ends_with(candidate.as_str()))
+        .map(String::as_str)
+}
+
+fn ensure_deepseek_v4_context_room(
+    current_tokens: usize,
+    new_tokens: usize,
+    ctx_size: usize,
+) -> anyhow::Result<()> {
+    if ctx_size == 0 {
+        anyhow::bail!("ctx_size must be greater than zero");
+    }
+    let requested = current_tokens.saturating_add(new_tokens);
+    if requested > ctx_size {
+        anyhow::bail!("context length {requested} exceeds ctx_size {ctx_size}");
+    }
+    Ok(())
 }
 
 // ── run_chat_loop ────────────────────────────────────────────────────────────

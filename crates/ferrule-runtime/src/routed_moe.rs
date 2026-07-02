@@ -223,7 +223,7 @@ mod tests {
         register_tiny_expert(&dir, &mut planner, 0, 1, 0x52, 0x42, 0x22);
 
         let shared = tiny_shared_ffn();
-        let policy = ExpertRouterPolicy::deepseek_v4_score_topk(2, 1.0);
+        let policy = ExpertRouterPolicy::sqrt_softplus_score_topk(2, 1.0);
         let reader = ExpertStreamingReader::new(4096);
         let out = execute_routed_moe_reference(
             0,
@@ -262,8 +262,8 @@ mod tests {
     }
 
     #[test]
-    fn tiny_dsv4_moe_layer_fixture_uses_source_router_hash_streaming_and_shared() {
-        let dir = unique_temp_dir("ferrule-tiny-dsv4-moe-layer");
+    fn tiny_hash_assisted_moe_layer_fixture_uses_source_router_streaming_and_shared() {
+        let dir = unique_temp_dir("ferrule-tiny-hash-moe-layer");
         std::fs::create_dir_all(&dir).unwrap();
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy::quality_first(2));
         register_tiny_expert(&dir, &mut planner, 0, 0, 0x42, 0x43, 0x22);
@@ -283,7 +283,7 @@ mod tests {
             0,
             &router,
             &[],
-            &ExpertRouterPolicy::deepseek_v4_hash(2, 1.0),
+            &ExpertRouterPolicy::sqrt_softplus_hash(2, 1.0),
             &mut planner,
             &ExpertStreamingReader::new(4096),
             &CpuReferenceExpertExecutor::default(),
@@ -330,7 +330,7 @@ mod tests {
             None,
             None,
             &[],
-            &ExpertRouterPolicy::deepseek_v4_score_topk(1, 1.0),
+            &ExpertRouterPolicy::sqrt_softplus_score_topk(1, 1.0),
             &mut planner,
             &ExpertStreamingReader::new(4096),
             &mut handles,
@@ -366,7 +366,7 @@ mod tests {
             None,
             None,
             &[],
-            &ExpertRouterPolicy::deepseek_v4_score_topk(1, 1.0),
+            &ExpertRouterPolicy::sqrt_softplus_score_topk(1, 1.0),
             &mut planner,
             &ExpertStreamingReader::new(4096),
             &mut handles,
@@ -388,7 +388,7 @@ mod tests {
             None,
             None,
             &[],
-            &ExpertRouterPolicy::deepseek_v4_score_topk(1, 1.0),
+            &ExpertRouterPolicy::sqrt_softplus_score_topk(1, 1.0),
             &mut planner,
             &ExpertStreamingReader::new(4096),
             &mut handles,

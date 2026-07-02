@@ -1,7 +1,7 @@
 //! CUDA sparse-attention backend contracts.
 //!
-//! DeepSeek V4 uses sparse attention over a sliding-window + compressed-KV index
-//! set with an attention sink. The first CUDA kernel is correctness-oriented but
+//! Sparse attention over a sliding-window or compressed-KV index set with an
+//! optional attention sink. The first CUDA kernel is correctness-oriented but
 //! fixes the ABI for a later tiled FlashAttention-style implementation.
 
 use cuda_core::{stream::CudaStream, DeviceBuffer, LaunchConfig};
@@ -145,7 +145,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sparse_attention_shape_validates_dsv4_like_decode() {
+    fn sparse_attention_shape_validates_large_decode() {
         let shape = CudaSparseAttentionShape {
             batch_size: 1,
             tokens_per_batch: 1,

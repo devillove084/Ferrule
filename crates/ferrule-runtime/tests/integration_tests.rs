@@ -2,6 +2,8 @@
 //!
 //! Uses mock runners to avoid requiring model files.
 
+use std::path::{Path, PathBuf};
+
 use ferrule_core::Result;
 use ferrule_model::{AttentionKind, ModelFamily, WeightSource};
 use ferrule_runtime::{
@@ -135,6 +137,34 @@ fn engine_stops_on_eos() {
     let result = engine.generate_text("x", &gen_cfg, |_| Ok(())).unwrap();
     assert!(result.tokens.is_empty());
     assert!(result.stopped_by_eos);
+}
+
+#[test]
+fn engine_generate_text_with_real_olmoe_if_present() {
+    let Some(model_dir) = local_olmoe_dir() else {
+        return;
+    };
+
+    let runner = ferrule_runtime::CpuOlmoeRunner::load(&model_dir)
+        .expect("local OLMoE model should load through the CPU runner");
+    let mut engine = InferenceEngine::new(runner, SamplingConfig::greedy());
+    let gen_cfg = GenerationConfig {
+        max_new_tokens: 1,
+        append_eos_to_session: false,
+        ..Default::default()
+    };
+
+    let mut events = 0usize;
+    let result = engine
+        .generate_text("The capital of France is", &gen_cfg, |_| {
+            events += 1;
+            Ok(())
+        })
+        .expect("real OLMoE generation smoke should produce a first-token result");
+
+    assert!(result.stats.prompt_tokens > 0);
+    assert!(result.tokens.len() <= 1);
+    assert_eq!(events, result.tokens.len());
 }
 
 #[test]
@@ -345,4 +375,21 @@ fn kv_concurrent_sessions_no_interference() {
     // s2 should be unaffected
     assert_eq!(kv.k_slice(s2, 0), &[10., 10.]);
     assert_eq!(kv.active_count(), 1);
+}
+
+fn local_olmoe_dir() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("FERRULE_MODEL") {
+        let path = PathBuf::from(path);
+        assert!(
+            path.join("config.json").exists(),
+            "FERRULE_MODEL must point at a HF model directory with config.json"
+        );
+        return Some(path);
+    }
+
+    let default = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("models")
+        .join("OLMoE-Instruct");
+    default.join("config.json").exists().then_some(default)
 }

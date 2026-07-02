@@ -29,13 +29,13 @@ use crate::source_tensor::{
 #[derive(Debug, Clone, PartialEq)]
 pub struct AttentionSourcePayload {
     pub layer: usize,
-    pub wq_a: SourceLinearPayload,
-    pub wq_b: SourceLinearPayload,
-    pub wkv: SourceLinearPayload,
-    pub wo_a: SourceLinearPayload,
-    pub wo_b: SourceLinearPayload,
-    pub q_norm: Vec<f32>,
-    pub kv_norm: Vec<f32>,
+    pub query_a: SourceLinearPayload,
+    pub query_b: SourceLinearPayload,
+    pub key_value: SourceLinearPayload,
+    pub output_a: SourceLinearPayload,
+    pub output_b: SourceLinearPayload,
+    pub query_norm: Vec<f32>,
+    pub key_value_norm: Vec<f32>,
     pub attention_sink: Vec<f32>,
     /// Optional compressor/indexer tensors for compressed sparse attention. These
     /// remain as source slices until their execution path is wired; core MLA
@@ -212,7 +212,7 @@ pub fn bind_attention_from_hf(
 
     Ok(AttentionSourcePayload {
         layer,
-        wq_a: bind_attention_linear(
+        query_a: bind_attention_linear(
             model_dir,
             layer,
             AttentionTensorKind::QueryA,
@@ -220,7 +220,7 @@ pub fn bind_attention_from_hf(
             grouped.remove(&AttentionTensorKind::QueryA),
             reader,
         )?,
-        wq_b: bind_attention_linear(
+        query_b: bind_attention_linear(
             model_dir,
             layer,
             AttentionTensorKind::QueryB,
@@ -228,7 +228,7 @@ pub fn bind_attention_from_hf(
             grouped.remove(&AttentionTensorKind::QueryB),
             reader,
         )?,
-        wkv: bind_attention_linear(
+        key_value: bind_attention_linear(
             model_dir,
             layer,
             AttentionTensorKind::KeyValue,
@@ -236,7 +236,7 @@ pub fn bind_attention_from_hf(
             grouped.remove(&AttentionTensorKind::KeyValue),
             reader,
         )?,
-        wo_a: bind_attention_linear(
+        output_a: bind_attention_linear(
             model_dir,
             layer,
             AttentionTensorKind::OutputA,
@@ -244,7 +244,7 @@ pub fn bind_attention_from_hf(
             grouped.remove(&AttentionTensorKind::OutputA),
             reader,
         )?,
-        wo_b: bind_attention_linear(
+        output_b: bind_attention_linear(
             model_dir,
             layer,
             AttentionTensorKind::OutputB,
@@ -252,19 +252,19 @@ pub fn bind_attention_from_hf(
             grouped.remove(&AttentionTensorKind::OutputB),
             reader,
         )?,
-        q_norm: bind_attention_vector(
+        query_norm: bind_attention_vector(
             model_dir,
             layer,
             AttentionTensorKind::QueryNorm,
-            TensorRole::LayerNorm,
+            TensorRole::AttentionQueryNorm,
             grouped.remove(&AttentionTensorKind::QueryNorm),
             reader,
         )?,
-        kv_norm: bind_attention_vector(
+        key_value_norm: bind_attention_vector(
             model_dir,
             layer,
             AttentionTensorKind::KeyValueNorm,
-            TensorRole::LayerNorm,
+            TensorRole::AttentionKeyValueNorm,
             grouped.remove(&AttentionTensorKind::KeyValueNorm),
             reader,
         )?,
@@ -631,7 +631,8 @@ fn attention_role_for_kind(kind: AttentionTensorKind) -> TensorRole {
         AttentionTensorKind::KeyValue => TensorRole::AttentionLatentKv,
         AttentionTensorKind::OutputA => TensorRole::AttentionLatentOutputA,
         AttentionTensorKind::OutputB => TensorRole::AttentionLatentOutputB,
-        AttentionTensorKind::QueryNorm | AttentionTensorKind::KeyValueNorm => TensorRole::LayerNorm,
+        AttentionTensorKind::QueryNorm => TensorRole::AttentionQueryNorm,
+        AttentionTensorKind::KeyValueNorm => TensorRole::AttentionKeyValueNorm,
         AttentionTensorKind::AttentionSink => TensorRole::AttentionSink,
         AttentionTensorKind::Compressor => TensorRole::AttentionCompressor,
         AttentionTensorKind::Indexer => TensorRole::AuxIndexer,
@@ -991,10 +992,10 @@ mod tests {
         let attention =
             bind_attention_from_hf(&dir, 0, &tensors, &SourceTensorReader::new(1024)).unwrap();
         assert_eq!(attention.layer, 0);
-        assert_eq!(attention.wq_a.format.in_features(), 2);
-        assert_eq!(attention.wo_b.format.out_features(), 2);
-        assert_eq!(attention.q_norm, vec![1.0, 2.0]);
-        assert_eq!(attention.kv_norm, vec![3.0, 4.0]);
+        assert_eq!(attention.query_a.format.in_features(), 2);
+        assert_eq!(attention.output_b.format.out_features(), 2);
+        assert_eq!(attention.query_norm, vec![1.0, 2.0]);
+        assert_eq!(attention.key_value_norm, vec![3.0, 4.0]);
         assert_eq!(attention.attention_sink, vec![0.1, 0.2]);
         assert_eq!(attention.auxiliary.len(), 1);
         assert_eq!(attention.auxiliary[0].role, TensorRole::AttentionCompressor);

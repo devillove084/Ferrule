@@ -153,7 +153,15 @@ fn model_support_contract_deepseek_binding_stays_semantic() {
             tensors: 3,
         },
         TensorClassCount {
+            class: TensorClass::MlaQueryNorm,
+            tensors: 3,
+        },
+        TensorClassCount {
             class: TensorClass::MlaKv,
+            tensors: 3,
+        },
+        TensorClassCount {
+            class: TensorClass::MlaKvNorm,
             tensors: 3,
         },
         TensorClassCount {
@@ -168,7 +176,9 @@ fn model_support_contract_deepseek_binding_stays_semantic() {
     let contract = ModelSupportContract::from_spec(&spec, &classes);
     let roles = contract.bound_roles();
     assert!(roles.contains(&TensorRole::AttentionLatentQueryA));
+    assert!(roles.contains(&TensorRole::AttentionQueryNorm));
     assert!(roles.contains(&TensorRole::AttentionLatentKv));
+    assert!(roles.contains(&TensorRole::AttentionKeyValueNorm));
     assert!(roles.contains(&TensorRole::HashRouterTable));
     assert!(roles.contains(&TensorRole::AuxOutputHiddenCompressor));
     assert!(roles.iter().all(|role| !role.as_str().contains("deepseek")));

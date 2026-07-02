@@ -14,6 +14,14 @@ pub struct TokenizerHandle {
 }
 
 impl TokenizerHandle {
+    #[cfg(test)]
+    pub(crate) fn from_parts(inner: tokenizers::Tokenizer, eos_token_id: Option<u32>) -> Self {
+        Self {
+            inner,
+            eos_token_id,
+        }
+    }
+
     /// Load only tokenizer/config metadata from `model_dir`.
     ///
     /// Prefer the generic `tokenizer.json` path so non-OLMoE families do not have

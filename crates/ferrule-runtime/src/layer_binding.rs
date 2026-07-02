@@ -1,11 +1,11 @@
 //! Generic per-layer source binding and reference execution.
 //!
-//! This is the first executable vertical slice for DSV4-shaped layers. It keeps
-//! concrete source tensor names in `ferrule-model` bindings: runtime consumes
-//! semantic payloads only (attention linears, HC weights, router/shared FFN
-//! payloads, and expert streaming handles). The reference executor is deliberately
-//! scalar and correctness-oriented; CUDA backends can replace individual steps
-//! behind the same bundle/state boundary.
+//! This is the first executable vertical slice for source-bound HC/MLA/MoE layers.
+//! It keeps concrete source tensor names in `ferrule-model` bindings: runtime
+//! consumes semantic payloads only (attention linears, HC weights, router/shared
+//! FFN payloads, and expert streaming handles). The reference executor is
+//! deliberately scalar and correctness-oriented; CUDA backends can replace
+//! individual steps behind the same bundle/state boundary.
 
 use std::path::Path;
 
@@ -311,9 +311,10 @@ fn execute_attention_decode_reference(
         )));
     }
 
-    let query_latent = attention.wq_a.reference_matvec(input)?;
-    let query_latent = rms_norm_with_weight(&query_latent, &attention.q_norm, 1e-6, "q_norm")?;
-    let query = attention.wq_b.reference_matvec(&query_latent)?;
+    let query_latent = attention.query_a.reference_matvec(input)?;
+    let query_latent =
+        rms_norm_with_weight(&query_latent, &attention.query_norm, 1e-6, "query_norm")?;
+    let query = attention.query_b.reference_matvec(&query_latent)?;
     if query.len() != spec.heads * spec.head_dim {
         return Err(Error::Model(format!(
             "attention query length mismatch: expected {}, got {}",
@@ -322,8 +323,9 @@ fn execute_attention_decode_reference(
         )));
     }
 
-    let kv_value = attention.wkv.reference_matvec(input)?;
-    let kv_value = rms_norm_with_weight(&kv_value, &attention.kv_norm, 1e-6, "kv_norm")?;
+    let kv_value = attention.key_value.reference_matvec(input)?;
+    let kv_value =
+        rms_norm_with_weight(&kv_value, &attention.key_value_norm, 1e-6, "key_value_norm")?;
     kv.append(&kv_value)?;
     let kv_len = kv.len();
     let topk_indices = sliding_window_topk_indices(spec.topk, 1, kv_len.saturating_sub(1));
@@ -336,8 +338,8 @@ fn execute_attention_decode_reference(
         kv_len,
         spec,
     )?;
-    let projected = attention.wo_a.reference_matvec(&context)?;
-    attention.wo_b.reference_matvec(&projected)
+    let projected = attention.output_a.reference_matvec(&context)?;
+    attention.output_b.reference_matvec(&projected)
 }
 
 fn rms_norm_with_weight(input: &[f32], weight: &[f32], eps: f32, label: &str) -> Result<Vec<f32>> {
@@ -378,8 +380,8 @@ mod tests {
     use crate::source_tensor::{SourceDType, SourceTensorPayload, SourceTensorSlice};
 
     #[test]
-    fn dsv4_layer_vertical_slice_runs_hc_attention_moe_shared_hc() {
-        let dir = unique_temp_dir("ferrule-dsv4-layer-vertical-slice");
+    fn generic_mla_layer_vertical_slice_runs_hc_attention_moe_shared_hc() {
+        let dir = unique_temp_dir("ferrule-mla-layer-vertical-slice");
         std::fs::create_dir_all(&dir).unwrap();
 
         let config = HyperConnectionConfig {
@@ -459,7 +461,7 @@ mod tests {
                 hash_cols: 1,
             },
             shared_ffn: Some(tiny_shared_ffn()),
-            router_policy: ExpertRouterPolicy::deepseek_v4_hash(1, 1.0),
+            router_policy: ExpertRouterPolicy::sqrt_softplus_hash(1, 1.0),
             attention_spec: SparseAttentionSpec {
                 heads: 1,
                 head_dim: 32,
@@ -473,21 +475,21 @@ mod tests {
     fn tiny_attention_payload() -> AttentionSourcePayload {
         AttentionSourcePayload {
             layer: 0,
-            wq_a: f32_linear(
+            query_a: f32_linear(
                 TensorRole::AttentionLatentQueryA,
                 "wq_a",
                 4,
                 32,
                 &one_hot_rows(4, 32, &[(0, 0, 1.0), (1, 1, 1.0), (2, 2, 1.0), (3, 3, 1.0)]),
             ),
-            wq_b: f32_linear(
+            query_b: f32_linear(
                 TensorRole::AttentionLatentQueryB,
                 "wq_b",
                 32,
                 4,
                 &one_hot_rows(32, 4, &[(0, 0, 1.0), (1, 1, 1.0), (2, 2, 1.0), (3, 3, 1.0)]),
             ),
-            wkv: f32_linear(
+            key_value: f32_linear(
                 TensorRole::AttentionLatentKv,
                 "wkv",
                 32,
@@ -498,22 +500,22 @@ mod tests {
                     &[(0, 0, 1.0), (1, 1, 1.0), (2, 2, 1.0), (3, 3, 1.0)],
                 ),
             ),
-            wo_a: f32_linear(
+            output_a: f32_linear(
                 TensorRole::AttentionLatentOutputA,
                 "wo_a",
                 4,
                 32,
                 &one_hot_rows(4, 32, &[(0, 0, 1.0), (1, 1, 1.0), (2, 2, 1.0), (3, 3, 1.0)]),
             ),
-            wo_b: f32_linear(
+            output_b: f32_linear(
                 TensorRole::AttentionLatentOutputB,
                 "wo_b",
                 32,
                 4,
                 &one_hot_rows(32, 4, &[(0, 0, 1.0), (1, 1, 1.0), (2, 2, 1.0), (3, 3, 1.0)]),
             ),
-            q_norm: vec![1.0; 4],
-            kv_norm: vec![1.0; 32],
+            query_norm: vec![1.0; 4],
+            key_value_norm: vec![1.0; 32],
             attention_sink: vec![0.0],
             auxiliary: Vec::new(),
         }

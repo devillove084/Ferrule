@@ -1,6 +1,6 @@
 //! Source-preserved packed FP4 expert execution primitives.
 //!
-//! This is the first CUDA execution surface for DeepSeek-style routed experts.
+//! This is the first CUDA execution surface for source-format packed routed experts.
 //! It deliberately stays generic: it accepts device buffers plus explicit shapes,
 //! not model-family tensor names. Scheduler/residency code can map a resident
 //! expert handle to these buffers later.
@@ -298,7 +298,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn packed_fp4_expert_shape_validation_accepts_dsv4_like_shapes() {
+    fn packed_fp4_expert_shape_validation_accepts_large_moe_shapes() {
         let shape = CudaPackedFp4ExpertShape {
             gate: CudaPackedFp4LinearShape::new(2048, 4096),
             up: CudaPackedFp4LinearShape::new(2048, 4096),

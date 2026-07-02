@@ -27,6 +27,7 @@ Cargo.lock
 *.pt
 *.pth
 *.onnx
+*.target
 
 # Python local environment and caches
 /.venv/

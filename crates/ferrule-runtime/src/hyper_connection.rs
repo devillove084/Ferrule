@@ -1,10 +1,10 @@
 //! Hyper-Connection (HC) reference primitives.
 //!
-//! DeepSeek V4 uses HC instead of a plain residual stream: each layer carries
-//! `hc_mult` hidden copies, reduces them before attention/FFN, then expands the
-//! sub-layer output back into HC state. This module implements the math without
-//! model-family tensor names so future families can attach similar residual
-//! mixers through the same runtime shape.
+//! HC-style models carry `hc_mult` hidden copies, reduce them before attention/FFN,
+//! then expand sub-layer output back into HC state instead of using a plain residual
+//! stream. This module implements the math without model-family tensor names so
+//! future families can attach similar residual mixers through the same runtime
+//! shape.
 
 use ferrule_core::{Error, Result};
 
@@ -151,7 +151,7 @@ pub struct HyperConnectionPreOutput {
     pub split: HyperConnectionSplit,
 }
 
-/// Official `hc_split_sinkhorn` semantics from DeepSeek V4 reference.
+/// Reference `hc_split_sinkhorn` semantics used by HC-style source-bound models.
 pub fn hc_split_sinkhorn_reference(
     mixes: &[f32],
     tokens: usize,

@@ -13,7 +13,10 @@ use commands::bench::cmd_bench_infer;
 use commands::chat::cmd_chat;
 use commands::compare::cmd_compare_logits;
 use commands::info::{cmd_info, print_model_info};
-use commands::inspect::{cmd_expert_stream_smoke, cmd_inspect_weightpack};
+use commands::inspect::{
+    cmd_deepseek_v4_generate, cmd_deepseek_v4_probe, cmd_expert_stream_smoke,
+    cmd_inspect_weightpack,
+};
 #[cfg(feature = "cuda")]
 use commands::run::parse_quant;
 use commands::run::{cmd_gpu_run, cmd_run};
@@ -119,6 +122,80 @@ enum Command {
         expert: usize,
         #[arg(long = "max-slice-mb", default_value_t = 64)]
         max_slice_mb: u64,
+    },
+    /// Generate greedily from real local DeepSeek-V4 HF shards.
+    #[command(name = "deepseek-v4-generate")]
+    DeepSeekV4Generate {
+        model: String,
+        #[arg(short = 'p', long, default_value = "Hello")]
+        prompt: String,
+        /// Number of new tokens to generate greedily.
+        #[arg(short = 'n', long = "max-tokens", default_value_t = 4)]
+        max_tokens: usize,
+        /// Number of DSV4 base layers to execute.
+        #[arg(long, default_value_t = 43)]
+        max_layers: usize,
+        /// lm_head chunk size in rows for full-vocab top-1 scans.
+        #[arg(long, default_value_t = 4096)]
+        output_head_chunk_rows: usize,
+        /// Maximum single source tensor read size for top-level/layer tensors.
+        #[arg(long = "max-tensor-mb", default_value_t = 128)]
+        max_tensor_mb: u64,
+        /// Maximum single expert source read size.
+        #[arg(long = "expert-max-slice-mb", default_value_t = 64)]
+        expert_reader_max_slice_mb: u64,
+        /// Operator backend: cuda or cpu. cuda requires running via cargo oxide / just run-cuda.
+        #[arg(long, default_value = "cuda")]
+        backend: String,
+        /// Do not stop when eos_token_id is generated.
+        #[arg(long)]
+        no_stop_eos: bool,
+        /// Print generated token ids/logits to stderr.
+        #[arg(long)]
+        verbose_tokens: bool,
+        /// Wrap --prompt with the official DeepSeek-V4 chat encoding for a single user turn.
+        #[arg(long)]
+        chat: bool,
+    },
+    /// Probe real local DeepSeek-V4 HF shards through the DSV4-specific reference path.
+    #[command(name = "deepseek-v4-probe")]
+    DeepSeekV4Probe {
+        model: String,
+        #[arg(short = 'p', long, default_value = "Hello")]
+        prompt: String,
+        /// Number of DSV4 base layers to execute. Use 0 for fast top-level IO smoke.
+        #[arg(long, default_value_t = 0)]
+        max_layers: usize,
+        /// First lm_head row to print when not using --full-vocab-topk.
+        #[arg(long, default_value_t = 0)]
+        start_row: usize,
+        /// Number of lm_head rows to print when not using --full-vocab-topk.
+        #[arg(long, default_value_t = 16)]
+        row_count: usize,
+        /// Top-K logits to print. With --full-vocab-topk this scans the whole vocab in chunks.
+        #[arg(long, default_value_t = 8)]
+        top_k: usize,
+        /// Scan all lm_head rows in chunks and print full-vocab top-K.
+        #[arg(long)]
+        full_vocab_topk: bool,
+        /// lm_head chunk size in rows for full-vocab logits/top-K scans.
+        #[arg(long, default_value_t = 1024)]
+        output_head_chunk_rows: usize,
+        /// Maximum single source tensor read size for top-level/layer tensors.
+        #[arg(long = "max-tensor-mb", default_value_t = 128)]
+        max_tensor_mb: u64,
+        /// Maximum single expert source read size.
+        #[arg(long = "expert-max-slice-mb", default_value_t = 64)]
+        expert_reader_max_slice_mb: u64,
+        /// Operator backend: cpu or cuda. cuda requires running via cargo oxide / just run-cuda.
+        #[arg(long, default_value = "cpu")]
+        backend: String,
+        /// Optional official/reference JSON to compare prompt tokens and logits against.
+        #[arg(long = "reference-json")]
+        reference_json: Option<String>,
+        /// Absolute tolerance for --reference-json logit comparisons.
+        #[arg(long = "reference-atol", default_value_t = 1e-3)]
+        reference_atol: f32,
     },
     /// Start a minimal OpenAI-compatible HTTP server.
     Server {
@@ -272,6 +349,60 @@ fn main() -> anyhow::Result<()> {
             expert,
             max_slice_mb,
         } => cmd_expert_stream_smoke(&model, layer, expert, max_slice_mb),
+        Command::DeepSeekV4Generate {
+            model,
+            prompt,
+            max_tokens,
+            max_layers,
+            output_head_chunk_rows,
+            max_tensor_mb,
+            expert_reader_max_slice_mb,
+            backend,
+            no_stop_eos,
+            verbose_tokens,
+            chat,
+        } => cmd_deepseek_v4_generate(
+            &model,
+            &prompt,
+            max_tokens,
+            max_layers,
+            output_head_chunk_rows,
+            max_tensor_mb,
+            expert_reader_max_slice_mb,
+            &backend,
+            !no_stop_eos,
+            verbose_tokens,
+            chat,
+        ),
+        Command::DeepSeekV4Probe {
+            model,
+            prompt,
+            max_layers,
+            start_row,
+            row_count,
+            top_k,
+            full_vocab_topk,
+            output_head_chunk_rows,
+            max_tensor_mb,
+            expert_reader_max_slice_mb,
+            backend,
+            reference_json,
+            reference_atol,
+        } => cmd_deepseek_v4_probe(
+            &model,
+            &prompt,
+            max_layers,
+            start_row,
+            row_count,
+            top_k,
+            full_vocab_topk,
+            output_head_chunk_rows,
+            max_tensor_mb,
+            expert_reader_max_slice_mb,
+            &backend,
+            reference_json.as_deref(),
+            reference_atol,
+        ),
         Command::Server {
             model,
             quant,

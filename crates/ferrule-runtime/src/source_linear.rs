@@ -1,9 +1,10 @@
 //! Generic source linear handles and CPU reference matvec.
 //!
-//! DeepSeek V4 exercises several source formats: BF16/F32 metadata or HC tensors,
-//! FP8 E4M3 block-scaled linears, and FP4 packed routed experts. This module keeps
-//! those formats behind one typed linear payload so attention, router, shared
-//! expert, logits, and future CUDA dispatch all consume the same abstraction.
+//! Source-bound model bring-up can exercise several formats: BF16/F32 metadata or
+//! auxiliary tensors, FP8 E4M3 block-scaled linears, and FP4 packed routed experts.
+//! This module keeps those formats behind one typed linear payload so attention,
+//! router, shared expert, logits, and future CUDA dispatch all consume the same
+//! abstraction.
 
 use ferrule_core::{Error, Result};
 use ferrule_model::TensorRole;

@@ -1,5 +1,3 @@
-use ferrule_core::Result;
-
 pub trait TokenConstraint {
     fn allow(&mut self, token: u32, token_text: &str) -> bool;
     fn reset(&mut self) {}
@@ -102,8 +100,11 @@ impl TokenConstraint for JsonConstraint {
             return true;
         }
         if t.contains('}') {
+            if self.depth == 0 {
+                return false;
+            }
             self.depth -= 1;
-            return self.depth >= 0;
+            return true;
         }
         if t.contains(':') {
             self.expect_value = true;
@@ -156,5 +157,11 @@ mod tests {
         assert!(c.allow(1, "\"key\""));
         assert!(c.allow(2, ":"));
         assert!(c.allow(3, "}"));
+    }
+
+    #[test]
+    fn json_rejects_unmatched_closing_brace() {
+        let mut c = JsonConstraint::new();
+        assert!(!c.allow(0, "}"));
     }
 }

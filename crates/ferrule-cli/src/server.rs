@@ -334,6 +334,18 @@ fn append_chat_message(
                 "<|start_header_id|>{role}<|end_header_id|>\n\n{content}<|eot_id|>"
             ));
         }
+        ChatTemplate::DeepSeekV4 => {
+            if first_message {
+                out.push_str("<｜begin▁of▁sentence｜>");
+            }
+            match role {
+                "system" => out.push_str(content),
+                "assistant" => out.push_str(&format!(
+                    "<｜Assistant｜></think>{content}<｜end▁of▁sentence｜>"
+                )),
+                _ => out.push_str(&format!("<｜User｜>{content}")),
+            }
+        }
         ChatTemplate::Plain => match role {
             "system" => out.push_str(&format!("System: {content}\n")),
             "assistant" => out.push_str(&format!("Assistant: {content}\n")),
@@ -347,6 +359,7 @@ fn assistant_prefix(template: ChatTemplate) -> &'static str {
         ChatTemplate::OlmoeInstruct => "<|assistant|>",
         ChatTemplate::ChatML | ChatTemplate::Qwen => "<|im_start|>assistant\n",
         ChatTemplate::Llama3 => "<|start_header_id|>assistant<|end_header_id|>\n\n",
+        ChatTemplate::DeepSeekV4 => "<｜Assistant｜></think>",
         ChatTemplate::Plain => "Assistant:",
     }
 }

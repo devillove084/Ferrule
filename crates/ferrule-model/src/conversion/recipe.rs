@@ -135,9 +135,19 @@ impl QuantizationRecipe {
                     "preserve official FP8/BF16 attention source until kernels are validated",
                 ),
                 TensorRoleQuantPolicy::new(
+                    TensorRole::AttentionQueryNorm,
+                    QuantizationFormat::F32,
+                    "low-rank query norm is small and correctness-critical",
+                ),
+                TensorRoleQuantPolicy::new(
                     TensorRole::AttentionLatentKv,
                     QuantizationFormat::PreserveSource,
                     "KV compression semantics must be validated before lossy conversion",
+                ),
+                TensorRoleQuantPolicy::new(
+                    TensorRole::AttentionKeyValueNorm,
+                    QuantizationFormat::F32,
+                    "compressed KV norm is small and correctness-critical",
                 ),
                 TensorRoleQuantPolicy::new(
                     TensorRole::RouterLogits,
@@ -222,9 +232,19 @@ impl QuantizationRecipe {
                     "attention is a small fraction of bytes; preserve source for first smoke",
                 ),
                 TensorRoleQuantPolicy::new(
+                    TensorRole::AttentionQueryNorm,
+                    QuantizationFormat::F32,
+                    "low-rank query norm is small and correctness-critical",
+                ),
+                TensorRoleQuantPolicy::new(
                     TensorRole::AttentionLatentKv,
                     QuantizationFormat::PreserveSource,
                     "KV compression semantics must be validated before lossy conversion",
+                ),
+                TensorRoleQuantPolicy::new(
+                    TensorRole::AttentionKeyValueNorm,
+                    QuantizationFormat::F32,
+                    "compressed KV norm is small and correctness-critical",
                 ),
                 TensorRoleQuantPolicy::new(
                     TensorRole::RouterLogits,

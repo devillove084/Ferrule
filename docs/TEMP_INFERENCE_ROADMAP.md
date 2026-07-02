@@ -453,7 +453,8 @@ Already in place:
   including `sqrtsoftplus`, bias-for-selection, selected-weight normalization,
   and route scaling;
 - generic `SourceTensorReader` / `SourceLinearPayload` handles for bounded HF
-  safetensors byte ranges and F32/BF16/FP8/FP4 source linear formats;
+  safetensors byte ranges and F32/BF16/FP8/FP4 source linear formats, including
+  bounded 2D row-range reads for embedding rows and chunked lm_head rows;
 - `AttentionSourcePayload` binds real local DSV4 layer-0 core attention tensors,
   validates FP8 block-scale shapes, decodes BF16 norms/F32 sinks, and preserves
   layer-2 compressor/indexer slices as auxiliary semantic source tensors;
@@ -473,41 +474,72 @@ Already in place:
   real layer-0/layer-3 routers bind into `RouterSourcePayload` with hash-table /
   bias distinction;
 - tiny DSV4 MoE layer fixture now runs source router → hash routing → expert
-  streaming → packed-FP4 routed experts → shared FFN aggregation.
+  streaming → packed-FP4 routed experts → shared FFN aggregation;
+- `models::deepseek_v4::DeepSeekV4SourceModel` provides the explicit model-family
+  boundary for real local DSV4 metadata, tokenizer, top-level embedding/output
+  tensors, HC head, and per-layer source binding;
+- `models::deepseek_v4::DeepSeekV4Attention` validates the official grouped output
+  projection contract (`wo_a` grouped by `o_groups`) and executes both non-compressed
+  sliding-window attention and a correctness-first compressed CSA/HCA decode path with
+  typed compressor/indexer payloads, window KV, compressed KV, and sparse top-k gather;
+- `models::deepseek_v4::DeepSeekV4Layer::decode_step_reference` now owns the DSV4
+  Block order (`hc_pre → attn_norm → attention → hc_post → hc_pre → ffn_norm → MoE
+  → hc_post`) and a synthetic vertical slice covers this model-specific path;
+- local DSV4 smokes read a real embedding row, build initial HC state, run real HC
+  head + output norm, and compute a small range of lm_head logits from local shards
+  without loading the full embedding/head tensors;
+- `DeepSeekV4ReferenceRunner` is the model-specific source runner for real local
+  DSV4 HF shards. It implements the generic `ModelRunner` interface for full-logits
+  sampling/debug paths and exposes top-k decode helpers for greedy DSV4 chat;
+- `ferrule chat models/DeepSeek-V4-Flash-DSpark -q cuda --chat-template deepseek-v4`
+  now runs through a readline loop using the official DSV4 chat prompt wrapper
+  (`<｜begin▁of▁sentence｜><｜User｜>...<｜Assistant｜></think>`), and greedy chat uses
+  the DSV4 top-k fast path instead of materializing full vocab logits every step;
+- `deepseek-v4-generate --chat` wraps a single user turn with the same official
+  DSV4 chat encoding for first-token / greedy smoke tests.
 
-Not yet in place for first real DSV4 token:
+Remaining gaps after the first real DSV4 chat milestone:
 
-- executable kernels behind `TransformerRuntimePlan`: the generic layer graph now exists and plans DSV4 as MLA + streamed routed/shared experts + MTP attachment, but it is not yet connected to full weight handles or CUDA execution;
-- tokenizer/encoding reference harness against `encoding_dsv4.py` / official generation semantics;
-- CUDA linear handles for FP8 E4M3 + E8M0 attention/shared linears; CPU reference decode exists and FP4 expert CUDA correctness path exists, but FP8 production execution is still missing;
-- full `LayerSourceBinding` / executable layer assembly: attention, HC, router,
-  shared FFN, routed experts, embeddings, output norm, and logits need one typed
-  per-layer binding consumed by the generic executor;
-- DeepSeek router/MoE connection to model-layer execution: hash `tid2eid`,
-  score/bias tensors, selected expert ids, route weights, shared FFN, resident
-  handles, and CUDA FP4 expert executor exist in pieces but are not yet one full
-  DSV4 layer step;
-- HC integration into executable layer state and CUDA kernels; reference math and
-  real source binding exist, but `hc_pre/post/head` are not yet in the forward path;
-- DeepSeek attention execution: q low-rank path, rotary/inverse rotary, sliding
-  window KV, compression/indexer logic, sparse gather, attention sinks, and
-  compressed KV append/view semantics;
-- logits/head path and first-token/golden-token reference;
+- production device-resident prefill/decode: `start_pos == 0` now uses batched
+  DSV4 prefill semantics, but many inner operations still run row-by-row through
+  host `Vec<f32>` buffers and synchronize after each source operator. This remains
+  the main TTFT/decode bottleneck for readline chat;
+- tokenizer/encoding parity against the full local `encoding_dsv4.py` feature set:
+  basic chat-mode strings match official examples, but tool/developer/reminder/task
+  variants and official generation JSON parity are not yet captured;
+- full verified DSV4 model execution: strict CUDA covers the full 43-layer greedy
+  path over real weights, but official numeric parity, output-quality parity, and
+  longer multi-turn regression fixtures are still incomplete;
+- DeepSeek router/MoE production execution: CPU/reference pieces, resident handles,
+  and a CUDA FP4 expert executor exist; decode still needs GPU-resident expert
+  handles, prefetch, and batched selected-expert kernels instead of host-mediated
+  streaming/upload on the hot path;
+- HC production integration: reference `hc_pre/post/head` and generic CUDA
+  single/multi-token kernels are wired, but end-to-end official parity and
+  device-resident HC state are still pending;
+- DeepSeek attention execution: q path, kv path, RoPE/YaRN tail, sparse gather,
+  attention sinks, grouped output projection, compressor state, compressed KV, and
+  indexer top-k scoring now have correctness-first decode + `start_pos == 0` prefill
+  paths; remaining work is official numeric parity, exact QAT/Hadamard/FP4 simulation
+  for indexer, and device-resident CUDA kernels;
+- first-token/golden-token reference: small row ranges and a chunked full-logits API
+  exist, but a practical full-vocab/top-k production policy and official-output parity
+  still need to land;
 - DSpark/MTP proposal, verifier, rollback, confidence policy, and metrics.
 
 Run-critical priority queue:
 
 | Priority | Milestone | Why first | Main implementation target | Required test/smoke |
 |---|---|---|---|---|
-| P0 | Generic execution skeleton | Avoid another model-specific runner | `TransformerRuntimePlan` now lowers semantic contracts into embed/layer-attn/layer-ffn/logits plus MTP attachment steps; next add executable trait dispatch | DSV4 plan fixture passes: MLA + hash routing + streamed routed/shared experts |
-| P1 | DSV4 tokenizer/reference harness | Without identical token ids, logits comparisons are noisy | generic `TokenizerHandle` loads official `tokenizer.json`; `encoding_dsv4.py` chat wrapper is absent locally/needs reference parity when available | local tokenizer smoke passes; next fixed chat-format golden ids |
-| P2 | Source linear formats | Every DSV4 block depends on BF16/FP8/FP4 linears | generic source tensor + linear handles exist for F32/BF16/FP8/FP4; real local attention FP8 pairs bind for full core layer payloads; FP4 expert CUDA correctness path exists | CPU golden blocks and local FP8 source-linear/source-binding smokes pass; next FP8 CUDA tiny matvec/GEMM |
-| P3 | DSV4 MoE step | Experts are the memory bottleneck and current differentiator | CPU reference MoE step wires source router + source-streamed routed experts + optional shared FFN; real DSV4 shared/router bindings pass; resident handles and correctness-first CUDA FP4 expert executor exist | synthetic hash/non-hash router, tiny DSV4 MoE layer fixture, real shared expert binding, and real hash/score router binding pass; next full layer integration |
-| P4 | Hyper-Connection block state | DSV4 residual path is not vanilla Transformer | `hc_pre`, `hc_post`, `hc_head`, Sinkhorn reference exist; real layer/global HC source binding validates local DSV4 shapes | CPU tiny HC fixture and local HC binding smoke pass; next wire HC into executable layer state |
-| P5 | DSV4 attention/KV | This is the largest correctness blocker | attention source binding, sparse attention reference, and correctness-first CUDA sparse ABI exist | next q LoRA + rotary + sliding/compressed KV + compressor/indexer execution; then tiny prefill/decode attention parity |
-| P6 | Tiny DSV4 executable fixture | Proves all policies compose before huge model | 1–2 layers, tiny dims, source-format weights, generic executor | deterministic logits/golden token on CPU and CUDA where available |
-| P7 | Full single-node base-model smoke | First “runs on DGX Spark” milestone | stream official HF/WeightPack tensors, source-preserving expert residency, prompt/decode loop | fixed prompt first token/golden text, peak memory, TTFT, tok/s |
-| P8 | DSpark as speculation layer | DSpark is optional acceleration, not base-model correctness | generic draft/propose/verify/rollback loop using MTP tensors | synthetic accept/reject tests, then short DSV4 speculative smoke |
+| P0 | Official parity gate | The model can run but output quality is suspect (`QwQ-32B` wrong-identity answer) | tokenizer/template JSON exists; add official first-token/first-N-token and intermediate dumps | `Who are you?` official chat prompt matches reference or mismatch names a specific unsupported policy |
+| P1 | DSV4 benchmark contract | 20 tok/s needs load-excluded decode numbers, not anecdotal chat output | add DSV4 JSON bench with load/prefill/decode split, generated tokens, tok/s, bytes moved, resident experts, peak GPU memory | reproducible `max_new_tokens>=128` report on GB10 / `sm_121` |
+| P2 | Device-resident decode arena | Current host `Vec<f32>` boundaries dominate latency | reusable device buffers for HC state, hidden, q/kv/context/MoE/output-head; generic device-buffer source-linear APIs | one decode token downloads only final `(token_id, logit)` |
+| P3 | GPU KV/compressor/indexer state | Host KV assembly/copies block long-context speed | window KV, compressed KV, indexer KV, rolling compressor state, and top-k indices stay on GPU | no `combined_values_for_attention()` allocation/copy in decode profile |
+| P4 | Expert residency + batched expert kernel | 43 layers × top-6 experts is the biggest MoE hot path | persist/prefetch expert handles; one selected-expert FP4 MoE kernel per layer accumulates all routes | per-layer MoE is O(1) launches and no synchronous expert upload per token |
+| P5 | Attention/qkv fusion | After residency, launch count and bandwidth dominate | fuse q low-rank/norm/rotary pieces; sparse attention consumes GPU top-k/KV; keep masks exact | attention output remains device-resident and matches parity fixtures |
+| P6 | GPU output-head/top-k sampler | Greedy chat should not download full hidden/logits | HC head, output norm, lm_head chunk/top-k, and greedy token selection stay device-side | only token id/logit copied to host for greedy decode |
+| P7 | CUDA graph steady-state decode | Launch overhead matters after device residency | capture per-token decode bucket with debug fallback | measurable latency reduction without hiding parity failures |
+| P8 | DSpark speculation | Acceleration layer after base correctness/speed is stable | generic draft/propose/verify/rollback, acceptance metrics | report target tok/s, draft tok/s, acceptance, rollback, effective tok/s |
 | P9 | PK harness | Claims need comparable commands | llama.cpp/reference/Ferrule command capture, metric schema | same prompt/quant artifact, reproducible report |
 
 Execution rule for the next patches:
@@ -1647,9 +1679,10 @@ Review focus:
 - sampler currently runs on CPU; moving it GPU-side changes architecture.
 - keep debug mode that can download full logits.
 
-### P10.6 DeepSeek attention kernels
+### P10.6 DeepSeek attention kernels  ✅ PARTIAL
 
 Goal: add the first mainstream non-fixture attention implementation through the
+DSV4 model boundary first, then migrate the reusable contracts into the
 Transformer executor policy boundary.
 
 Tasks:
@@ -1666,16 +1699,23 @@ Tasks:
 - Define DeepSeek KV state shape separately from GQA KV state; do not force it
   into `kv_dim = num_kv_heads * head_dim` if that is semantically wrong.
 - Confirm CSA/HCA/mHC semantics from paper/reference code before committing the
-  final kernel contract.
-- Implement a correctness-first decode kernel before optimizing prefill.
+  final kernel contract. ✅ implemented from official local `inference/model.py`
+  for the current correctness-first DSV4 boundary; still needs reference numeric
+  parity.
+- Implement a correctness-first decode kernel before optimizing prefill. ✅ real
+  local CUDA source-operator path exists.
+- Add true `start_pos == 0` prefill semantics for window KV, compressor KV,
+  indexer KV, `remainder`, and `cutoff`. ✅ initial implementation.
 - Add tiny fixture tests using synthetic DeepSeek attention tensor shapes before
-  full model load.
+  full model load. ✅ partial; add more official parity hooks before claiming
+  quality.
 
 Acceptance:
 
 - `ferrule info` reports DeepSeek attention layout from GGUF metadata/tensor
   names.
 - A tiny DeepSeek-style fixture can run one attention step without OLMoE fields.
+- Real local `DeepSeek-V4-Flash-DSpark` CUDA chat can run through all 43 layers.
 - Unsupported auxiliary attention tensors fail with a named missing-policy error,
   not a panic or silent ignore.
 
@@ -1683,7 +1723,114 @@ Review focus:
 
 - keep the OLMoE fixture GQA path untouched,
 - no fake `DeepSeekV4` execution until full layer semantics are wired,
-- match reference shapes before chasing speed.
+- match reference logits/tokens before claiming output quality or speed.
+
+### P10.7 DSV4 20 tok/s decode target
+
+Goal: turn the current correctness-first CUDA chat path into a usable local chat
+path on the target GB10 / `sm_121` machine. The target is **decode** throughput,
+load excluded, for greedy chat (`--temp 0`) on `models/DeepSeek-V4-Flash-DSpark`.
+Do not count prompt prefill or model load in the 20 tok/s number.
+
+Current measured state:
+
+- Chat is real DSV4 CUDA over local HF shards, not mock/hybrid.
+- Prompt prefill now uses `start_pos == 0` batched DSV4 semantics, but many inner
+  operators still materialize host `Vec<f32>` rows and synchronize after each
+  source linear / norm / attention / MoE step.
+- Decode is still dominated by host-device round trips, per-layer/per-expert
+  launches, expert streaming/upload, and non-resident intermediate tensors.
+- A sample `Who are you?` answer claiming `QwQ-32B` is a **correctness/parity
+  blocker**, not a UI issue. The chat template/tokenization string is aligned
+  with official `encoding_dsv4.py`, so the next suspect is numeric forward
+  mismatch: activation quantization, Hadamard/indexer QAT, rotary/YaRN details,
+  source FP4/FP8 semantics, sparse attention top-k/masks, or MoE routing/expert
+  accumulation.
+
+Measurement contract:
+
+```bash
+just dsv4-parity-json "Who are you?" target/dsv4_generation_parity.json
+just dsv4-cuda-generate "Who are you?" 32 4096 --chat --verbose-tokens
+# later: add `ferrule dsv4-bench --json` to report load_ms, prefill_ms,
+# decode_ms, generated_tokens, decode_tok_s, prompt_tok_s, resident_experts,
+# bytes_loaded, and peak GPU memory.
+```
+
+Milestones to 20 tok/s:
+
+1. **Quality gate before speed claims**
+   - Compare official prompt strings and token ids. ✅ `scripts/dsv4_generation_parity.py`.
+   - Add official/reference first-token and first-N-token JSON once the official
+     converted runtime can run locally.
+   - Add optional per-layer dump hooks for a tiny prompt: q latent, q, kv,
+     compressor output, indexer top-k, router top-k, selected expert output, final
+     top-k logits.
+   - Acceptance: `Who are you?` no longer produces obvious wrong-identity output
+     under the official chat prompt, or the mismatch is attributed to a named
+     unsupported policy.
+
+2. **Device-resident decode tensor arena**
+   - Stop using host `Vec<f32>` as the boundary between every DSV4 operator.
+   - Keep per-layer hidden/HC state, q latent, q, kv, attention context, MoE
+     output, and final hidden in reusable `DeviceBuffer`s.
+   - Expose generic CUDA source-linear APIs that accept/return device buffers.
+   - Acceptance: one generated token can run without downloading intermediate
+     activations except the final top-k token id/logit.
+
+3. **GPU-resident KV / compressor / indexer state**
+   - Move window KV, compressed KV, indexer KV, compressor rolling state, and
+     top-k index buffers to GPU.
+   - Preserve CPU-visible counters for `/experts` and `/ctx`, but do not copy KV
+     payloads back to host during decode.
+   - Acceptance: decode profile shows no per-layer KV host copy and no
+     `combined_values_for_attention()` allocation on the hot path.
+
+4. **Expert residency and batching**
+   - Preload or persist a bounded hot expert set per layer; do not read/upload
+     selected experts synchronously for every token.
+   - Batch the six selected routed experts in one generic FP4 MoE kernel per
+     layer: gate/up, SwiGLU, down, route-weight accumulation.
+   - Keep eviction/prefetch policy separate from DSV4 semantics.
+   - Acceptance: per-layer routed MoE becomes O(1) launches, not O(top-k experts)
+     host-mediated launches.
+
+5. **Fused attention path**
+   - Fuse q path pieces where practical: `wq_a -> q_norm -> wq_b -> per-head RMS ->
+     rotary` with device-resident intermediates.
+   - Fuse/update sparse attention to consume GPU-resident top-k and KV buffers.
+   - Implement exact official masks for prefill/decode before FlashAttention-style
+     tiling.
+   - Acceptance: attention emits device context rows and only final token top-k is
+     copied to host.
+
+6. **Output head / sampler on GPU**
+   - Keep output HC head + output norm + lm_head chunk/top-k device-side for
+     greedy and top-k sampling.
+   - CPU sampler may remain for debug/logprobs, but greedy chat should copy only
+     `(token_id, logit)`.
+   - Acceptance: greedy decode does not download full logits or hidden vectors.
+
+7. **CUDA graph / steady-state decode replay**
+   - After shapes and buffers are stable, capture per-token decode for fixed
+     context bucket and resident expert policy.
+   - Acceptance: graph replay reduces launch overhead without removing the
+     non-graph debug path.
+
+8. **Only then add DSpark speculation**
+   - DSpark can multiply throughput if acceptance is good, but it should not hide
+     base-model correctness or per-token decode bottlenecks.
+   - Acceptance: report target tok/s, draft tok/s, acceptance rate, rollback count,
+     and effective tok/s separately.
+
+20 tok/s acceptance:
+
+- Fixed hardware and command recorded.
+- Load excluded; prefill and decode reported separately.
+- `max_new_tokens >= 128` to avoid warmup noise.
+- First-token / first-N-token parity status included next to speed result.
+- Output quality smoke does not show obvious wrong-model identity for the official
+  chat prompt.
 
 ---
 
@@ -2048,9 +2195,19 @@ Current state:
 - Real local DSV4 source-binding smokes pass for attention core tensors,
   compressor/indexer auxiliary slices, layer/global HC tensors, routers, shared
   experts, tokenizer, and one selected routed expert.
-- Execution is guarded with an explicit engine-plan missing-policy error until the
-  generic layer runner is wired.
-- The CUDA hot path is split into executor + attention/MoE/logits/KV steps.
+- The old mock/source-bound runner paths have been removed; executable DSV4
+  semantics live under `ferrule_runtime::models::deepseek_v4`.
+- Real local `DeepSeek-V4-Flash-DSpark` can run full 43-layer greedy CUDA
+  generation and readline chat through the DSV4 model boundary.
+- `start_pos == 0` prompt prefill now uses DSV4 batched prefill semantics for
+  HC/layer traversal, window KV, compressed KV, indexer KV, `remainder`, and
+  `cutoff`; non-zero incremental turns still use the safe append/decode path.
+- The CUDA hot path is split into generic source operators + DSV4 semantics:
+  source linears, sparse attention sink, grouped `wo_a`, HC pre/post/head,
+  shared SwiGLU FFN, routed FP4 experts, and lm_head top-k.
+- Output quality is not yet official-parity. Wrong-identity answers such as
+  `QwQ-32B` must be treated as correctness bugs until first-token / first-N-token
+  and key intermediate tensors are compared against the official runtime.
 
 ### P14.1 Model bring-up contract + DeepSeek V4 and DSpark metadata  ✅ PARTIAL
 
@@ -2185,14 +2342,24 @@ Tasks:
   - DONE for bounded HF source binding: layer-0 core attention payloads bind into
     semantic `AttentionSourcePayload`; layer-2 compressor/indexer tensors are
     preserved as auxiliary source slices.
-  - NEXT: lower `AttentionSourcePayload` into executable CPU/CUDA buffers and step
-    state.
-- Define DeepSeek KV/cache state and append/view semantics.
+  - DONE for CPU/reference executable DSV4 attention inside
+    `models::deepseek_v4::{DeepSeekV4Attention,DeepSeekV4AttentionCache}`:
+    layer-0/1 sliding-window decode and layer-2 ratio-4 compressor/indexer decode
+    run against the real local HF shards through `deepseek-v4-probe --max-layers 3`.
+  - DONE strict CUDA backend: generic CUDA source operators cover F32/BF16/FP8/FP4
+    source linears, sparse attention sink, grouped `wo_a`, RMS/per-head RMS, HC
+    pre/post/head, shared SwiGLU FFN, routed FP4 expert execution, and lm_head row
+    chunks through one cached cuda-oxide context/module. `cuda-hybrid` remains only
+    as a deprecated CLI alias for `cuda`; unsupported CUDA formats now fail instead
+    of silently falling back to CPU.
+- Define DeepSeek KV/cache state and append/view semantics. ✅ CPU/reference,
+  including window KV, compressed KV, and indexer compressed KV counters.
 - Implement correctness-first decode attention:
-  - q low-rank path: `wq_a -> q_norm -> wq_b`, per-head normalization, rotary;
-  - `wkv -> kv_norm`, KV rotary, source quant/dequant policy;
-  - sparse top-k gather + attention sink denominator;
-  - inverse rotary + `wo_a` + `wo_b`.
+  - q low-rank path: `wq_a -> q_norm -> wq_b`, per-head normalization, rotary; ✅
+  - `wkv -> kv_norm`, KV rotary, source quant/dequant policy; ✅ reference dequant,
+    QAT activation quant simulation still approximate
+  - sparse top-k gather + attention sink denominator; ✅
+  - inverse rotary + grouped `wo_a` + `wo_b`. ✅
 - Keep GQA path and DeepSeek path selected by `AttentionPolicy`, not model name.
 - Keep DeepSeek tensor names inside the binding/layout layer; executor inputs are
   semantic roles and buffers.
@@ -2202,6 +2369,8 @@ Acceptance:
 - Local DSV4 source-binding smoke passes for attention payloads and auxiliary
   compressor/indexer slices.
 - Tiny DeepSeek-like fixture runs attention decode step.
+- Real local probe can execute `max_layers=3` over a 4-token prompt and reports
+  layer-2 `compressed_kv=1` / `indexer_kv=1`.
 - OLMoE fixture GQA tests still pass.
 
 ### P14.5 DeepSeek router and experts  ✅ PARTIAL
@@ -2214,7 +2383,7 @@ Tasks:
 - Add shared expert execution path. ✅ CPU/reference source binding + tiny MoE fixture
 - Add resident expert handle path. ✅ CPU/reference store; CUDA handle wiring still pending
 - Add correctness-first CUDA packed-FP4 expert executor. ✅ initial source-preserving path
-- Add routed expert WeightPack/GGUF upload policy and production expert batching/residency integration.
+- Add routed expert WeightPack/GGUF upload policy and production expert batching/residency integration. NEXT: replace host-mediated expert streaming/upload in DSV4 decode with CUDA-resident expert handles, prefetch, and batched selected-expert kernels.
 
 Acceptance:
 
@@ -2224,19 +2393,43 @@ Acceptance:
 - Full DSV4 layer execution must still wire these pieces into the generic forward
   path.
 
-### P14.6 Full single-request DeepSeek V4 smoke
+### P14.6 Full single-request DeepSeek V4 smoke  ✅ PARTIAL
 
 Tasks:
 
 - Wire tokenizer/encoding, prefill, decode, sampler, and stop handling.
+- Current diagnostic path: `ferrule deepseek-v4-probe <hf-dir>` uses real tokenizer,
+  bounded embedding row reads, HC head/output norm, row-range `lm_head` reads, and
+  optional full-vocab top-k streaming without loading the whole output head.
+- `DeepSeekV4ReferenceRunner::prefill_tokens_*` implements a correctness-first
+  sequential prefill fallback over the decode path. This is not the production
+  batched prefill kernel, but it exercises real KV/compressor state.
+- `--max-layers N` now lazily caches bound DSV4 layers and can execute real local
+  layers on CPU/reference for small N. Validated manually for `N=1` and `N=3`; `N=3`
+  covers the first ratio-4 compressed/indexer layer.
+- `--backend cuda --max-layers 43` now runs the full local HF-shard DSV4
+  first-token diagnostic path. Validated manually with row-range logits and
+  full-vocab top-1.
+- `deepseek-v4-generate --backend cuda` now provides a minimal greedy multi-token
+  generation path over the same local HF shards. It uses sequential prefill/decode
+  and CUDA chunk-local lm_head top-k, so it is runnable but not yet the production
+  batched `run/chat` stack.
 - Start with one quantization profile known to fit the available hardware.
-- If the full model cannot fit, implement layer/expert streaming or residency
-  before claiming support.
+- If the full model cannot fit or is too slow, attach CUDA operators and implement
+  layer/expert streaming or residency before claiming full support.
 
 Acceptance:
 
+- `ferrule deepseek-v4-probe models/DeepSeek-V4-Flash-DSpark -p '...' --max-layers 0`
+  produces real top-level row logits / optional full-vocab top-k.
+- `ferrule deepseek-v4-probe models/DeepSeek-V4-Flash-DSpark -p 'one two three four' --max-layers 3 --row-count 1 --top-k 0`
+  executes real layers 0..2 and reports layer-2 compressed/indexer KV state.
+- `just dsv4-cuda-first-token Hello 1` executes all 43 local layers and scans the
+  output head in chunks for full-vocab top-1. Current validated output: token `20`
+  (`"2"`) with logit about `14.854602`.
 - `ferrule run <deepseek-v4.gguf> -p '...' -n 1` produces the reference first
-  token or a documented tolerance/golden-token match.
+  token or a documented tolerance/golden-token match only after official reference
+  parity and production request/sampler wiring exist.
 - `ferrule chat` works only after `run` smoke is stable.
 
 ### P14.7 DSpark speculative decoding interface
@@ -2336,39 +2529,51 @@ Acceptance:
 
 ## 19. Suggested Implementation Order
 
-If implementing alone from the current refactor state, prefer this order:
+Current phase: DSV4 can run real local CUDA chat, but output quality and speed
+are not yet acceptable. Prefer this order:
 
-1. Lock the `ModelSupportContract` + `EnginePlan`/policy boundary in code
-   comments and small traits/types. ✅ DONE
-2. Add descriptor/layout smoke fixtures for one dense Llama/Qwen-like model and
-   one MoE fixture so the contract is not DeepSeek-shaped. ✅ DONE
-3. Add official HF `SourceArtifact`, `ConversionPlan`, and `QuantizationRecipe`
-   skeletons for DeepSeek-V4-Flash-DSpark. ✅ DONE
-4. Add DeepSeek V4 metadata fixtures and DSpark attachment/speculation metadata.
-5. Build generic layer-layout IR, then implement the DeepSeek GGUF/HF binding and
-   required tensor validation on top of it.
-6. Parse local `model.safetensors.index.json` to inventory official source tensor
-   names, shards, and dtypes without loading payloads.
-7. Extend `info`/inspection output for tensor classes, quant classes, required
-   policies, conversion plans, and unsupported execution reasons.
-8. Add reference correctness harness against official DeepSeek inference code for
-   encoding, tokenization, and first token.
-9. Add DeepSeek attention decode fixture with tiny synthetic tensors before
-   full-model tensors.
-10. Add GGUF Q_K/IQ and/or official FP8/I8 decoder tests for one tensor type used
-    by the selected artifact.
-11. Add the first CUDA dequant/matvec kernel or explicit conversion policy for the
-    most blocking DeepSeek quant class.
-12. Add DeepSeek router bias/hash routing fixture.
-13. Add shared expert execution fixture.
-14. Run a one-layer DeepSeek Transformer fixture through `CudaTransformerExecutor`.
-15. Run full single-request DeepSeek V4 smoke (`run -n 1`) if memory fits.
-16. Add streaming/residency path if the target artifact cannot fit in VRAM/RAM.
-17. Add DSpark `SpeculationPolicy` fake target/draft fixture after base target
-    first-token correctness exists.
-18. Add `bench-infer` PK manifest for Ferrule vs llama.cpp.
-19. Optimize DeepSeek attention/expert kernels only after first-token correctness.
-20. Run server PK against vLLM/SGLang only after scheduler/batching is wired.
+1. Preserve the completed bring-up boundary:
+   - no `dsv4_mock` / universal source-bound runner resurrection;
+   - DSV4 semantics stay in `models::deepseek_v4`;
+   - CUDA kernels stay generic source/attention/HC/MoE/logits operators.
+2. Lock tokenizer/template parity with official `encoding_dsv4.py`. ✅ basic
+   JSON generator exists via `just dsv4-parity-json`.
+3. Add official first-token / first-N-token parity JSON for at least:
+   - `Hello` raw prompt,
+   - `Hello` official chat prompt,
+   - `Who are you?` official chat prompt,
+   - one multi-turn prompt.
+4. Add layer/intermediate dump comparison against official Python for one short
+   prompt before optimizing more kernels:
+   - q latent / q / kv,
+   - compressor KV and indexer KV,
+   - window/compressed top-k masks,
+   - router top-k and route weights,
+   - selected expert output,
+   - final top-k logits.
+5. Fix numeric parity blockers in this order:
+   - exact FP4/FP8 source decode and scale semantics,
+   - activation quant simulation (`act_quant`, FP4 QAT),
+   - Hadamard rotation for indexer,
+   - YaRN/rotary details,
+   - sparse attention masks/top-k offsets,
+   - router/hash routing and expert accumulation.
+6. Add a DSV4 benchmark command/report that separates load, prefill, decode,
+   generated tokens, decode tok/s, prompt tok/s, resident experts, bytes moved,
+   and peak GPU memory.
+7. Move decode to a device-resident tensor arena; remove host `Vec<f32>` from
+   per-operator hot boundaries.
+8. Move KV/compressor/indexer state to GPU-resident buffers.
+9. Implement expert residency + prefetch + one batched selected-expert kernel per
+   layer.
+10. Fuse/factor q/k/v/norm/rotary/attention/output-head paths only after device
+    residency is in place.
+11. Add CUDA graph replay for steady-state decode buckets.
+12. Re-run quality parity and performance. Claim 20 tok/s only with load-excluded
+    decode numbers and parity status recorded.
+13. Add DSpark speculation only after base DSV4 correctness and single-token decode
+    are stable; report acceptance rate separately.
+14. Run server PK against vLLM/SGLang only after scheduler/batching is wired.
 
 Already completed prerequisites remain important:
 
@@ -2662,7 +2867,7 @@ Deliverables:
 Validation:
 
 ```bash
-cargo test -p ferrule-cuda deepseek_attention_fixture --features cuda
+just test-cuda deepseek_attention_fixture
 ```
 
 Expected:
@@ -2682,7 +2887,7 @@ Validation:
 
 ```bash
 cargo test -p ferrule-quant gguf_quant
-cargo test -p ferrule-cuda gguf_quant --features cuda
+just test-cuda gguf_quant
 ```
 
 Expected:
@@ -2708,7 +2913,7 @@ Validation:
 cargo test -p ferrule-runtime routed_moe
 cargo test -p ferrule-runtime local_deepseek_v4_router_binds_hash_and_score_layers_if_present
 cargo test -p ferrule-runtime local_deepseek_v4_expert_streaming_reads_one_selected_expert_if_present
-cargo oxide test -- -p ferrule-cuda
+just test-cuda
 ```
 
 Expected:
@@ -2717,18 +2922,27 @@ Expected:
 - Shared experts are not silently skipped.
 - Real local DSV4 router/shared/routed expert source smokes pass when model is present.
 
-### Ticket M: DeepSeek V4 first-token smoke
+### Ticket M: DeepSeek V4 first-token smoke  ✅ PARTIAL
 
 Deliverables:
 
-- Load one selected DeepSeek V4 artifact or sliced fixture.
-- Run `ferrule run ... -n 1` through generic Transformer executor.
-- Compare first token against reference.
+- Load one selected DeepSeek V4 artifact or sliced fixture. ✅ local HF shards
+- Run `deepseek-v4-probe --backend cuda --max-layers 43 --full-vocab-topk`
+  through the DSV4 model boundary. ✅ diagnostic path
+- Run `deepseek-v4-generate --backend cuda --max-tokens N` through the same DSV4
+  model boundary. ✅ minimal greedy generation path
+- Wire the same path into production chat/readline flow. ✅ `ferrule chat` routes
+  local DSV4 to the DSV4 CUDA path for greedy top-k chat.
+- Compare first token / first-N tokens against official/reference JSON before
+  claiming numeric parity. NEXT; tokenizer/template parity JSON exists, but
+  official logits/token parity is still missing.
 
 Validation:
 
 ```bash
-ferrule run /path/to/deepseek-v4.gguf -p 'hello' -n 1
+just dsv4-cuda-first-token Hello 1
+# later production target:
+# ferrule run /path/to/deepseek-v4.gguf -p 'hello' -n 1
 ```
 
 Expected:
@@ -2774,39 +2988,72 @@ Validation:
 cargo test -p ferrule-runtime pk_manifest
 ```
 
-### Ticket P: DSV4 executable layer vertical slice
+### Ticket P: DSV4 executable layer vertical slice  ✅ PARTIAL
 
 Deliverables:
 
-- Add a typed `LayerSourceBinding` or equivalent generic per-layer source bundle
-  that composes:
-  - attention source payload,
-  - HC attention/FFN weights,
-  - router payload,
-  - shared FFN payload,
-  - routed expert source/resident handles,
-  - layer-local KV/cache step state.
-- Implement a tiny executable DSV4-shaped layer fixture through generic executor
-  traits, not a `DeepSeekForward` copy of OLMoE.
+- Keep generic runtime pieces limited to source IO, linear payload formats, expert
+  streaming/residency, scheduler/session/sampling/KV surfaces, and CUDA operator
+  APIs.
+- Put DSV4 forward semantics in `models::deepseek_v4`, including DSV4 layer norms,
+  HC sequencing, MLA/CSA/HCA attention behavior, grouped output projection, and
+  router/MoE semantics.
 - Start with CPU/reference execution for correctness, then attach CUDA backends for
-  FP8 linears, sparse attention, HC, and FP4 experts behind policies.
-- Keep source names out of runtime; runtime consumes semantic descriptors and
-  source payloads only.
+  source linears, sparse attention, HC, shared FFN, output head, and FP4 experts
+  behind operator policies. ✅ strict CUDA source-operator path for F32/BF16/FP8/FP4
+  linears, RMS/per-head RMS, sparse attention, grouped `wo_a`, HC, shared FFN,
+  routed FP4 experts, and lm_head chunks.
+- Keep concrete source names inside `ferrule-model` family binding and the DSV4
+  model boundary; do not reintroduce a universal source-bound transformer runner.
 
 Validation:
 
 ```bash
-cargo test -p ferrule-runtime dsv4_layer_vertical_slice
+cargo test -p ferrule-runtime deepseek_v4
 cargo test -p ferrule-runtime local_deepseek_v4_attention_and_hc_bind_real_sources_if_present
+cargo test -p ferrule-runtime local_deepseek_v4_model_binds_layer0_with_official_shapes_if_present
+cargo test -p ferrule-runtime local_deepseek_v4_compressed_attention_payloads_bind_official_shapes_if_present
+cargo test -p ferrule-runtime local_deepseek_v4_model_reads_real_embedding_and_output_head_rows_if_present
+cargo test -p ferrule-runtime local_deepseek_v4_reference_runner_decodes_top_level_logits_rows_if_present
+cargo test -p ferrule-runtime local_deepseek_v4_layer_state_registers_real_routed_expert_sources_if_present
+cargo test -p ferrule-runtime local_deepseek_v4_reference_runner_prefills_prompt_top_level_if_present
 cargo check -p ferrule-cli --features cuda
+cargo run -p ferrule-cli -- deepseek-v4-probe models/DeepSeek-V4-Flash-DSpark --prompt "Hello" --row-count 4 --top-k 2
+cargo run -p ferrule-cli -- deepseek-v4-probe models/DeepSeek-V4-Flash-DSpark --prompt "one two three four" --max-layers 3 --row-count 1 --top-k 0
+just test-cuda source_format_kernels_produce_expected_tiny_outputs
+just dsv4-cuda-probe "one two three four" 3 1 0
+just dsv4-cuda-first-token Hello 1
+just dsv4-cuda-generate Hello 2 4096 --chat
+just dsv4-chat 64
 ```
 
 Expected:
 
-- One synthetic DSV4-shaped layer can run HC → attention → HC → MoE/shared FFN → HC.
-- Real local DSV4 layer-0 source payloads can be bound into the same generic bundle.
-- The fixture exposes any remaining attention/KV/FP8 execution gaps before the full
-  43-layer first-token smoke.
+- One synthetic DSV4-shaped layer can run HC → attention → HC → MoE/shared FFN → HC
+  through the DSV4 model boundary.
+- Real local DSV4 layer-0 source payloads bind with official grouped attention shapes.
+- Real local embedding rows and lm_head row ranges can be read/executed without
+  loading the full top-level matrices, both directly and through the DSV4 reference
+  runner with `max_layers=0`.
+- `start_pos == 0` batched prefill can process a real tokenized prompt, build
+  window/compressed/indexer KV state in bulk, and emit row-range or top-k logits.
+- Real local layer state registers routed expert source tensor sets for layer 0.
+- Layer-2/layer-3 compressed attention binding succeeds with typed compressor/indexer
+  payloads matching official shapes.
+- A synthetic compressed attention decode updates compressed KV and uses the compressed
+  sparse-attention path.
+- Real local `deepseek-v4-probe --max-layers 3` executes layers 0..2 and reports
+  layer-2 compressed/indexer KV state on both CPU/reference and CUDA.
+- Real local `deepseek-v4-probe --backend cuda --max-layers 43 --full-vocab-topk`
+  executes all 43 layers and emits a full-vocab first-token top-k diagnostic.
+- Real local `deepseek-v4-generate --backend cuda --max-tokens 1 --chat` executes
+  all 43 layers over the official single-user chat prompt and emits token `3`
+  (`"!"`) for `Hello`; `--max-tokens 2 --chat` continues decode to `[3, 1730]`.
+- Real local `ferrule chat ... -q cuda --chat-template deepseek-v4 --temp 0`
+  enters readline chat and can generate text from the same model boundary.
+- Remaining gaps: official numeric parity, output-quality parity, production
+  device-resident decode, production expert batching/residency, and performance
+  above the 20 tok/s decode target.
 
 ---
 

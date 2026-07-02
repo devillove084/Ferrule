@@ -108,17 +108,30 @@ impl CudaContiguousKvCache {
 
         let byte_offset = pos * self.kv_dim * std::mem::size_of::<f32>();
         let byte_len = self.kv_dim * std::mem::size_of::<f32>();
-        unsafe {
+        let k_copy = unsafe {
             cuda_bindings::cuMemcpyDtoD_v2(
                 self.k_cache[layer].cu_deviceptr() + byte_offset as u64,
                 k.cu_deviceptr(),
                 byte_len,
-            );
+            )
+        };
+        if k_copy != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+            return Err(Error::Internal(format!(
+                "CUDA K-cache device copy failed for layer {layer}, pos {pos}: {k_copy}"
+            )));
+        }
+
+        let v_copy = unsafe {
             cuda_bindings::cuMemcpyDtoD_v2(
                 self.v_cache[layer].cu_deviceptr() + byte_offset as u64,
                 v.cu_deviceptr(),
                 byte_len,
-            );
+            )
+        };
+        if v_copy != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+            return Err(Error::Internal(format!(
+                "CUDA V-cache device copy failed for layer {layer}, pos {pos}: {v_copy}"
+            )));
         }
         Ok(())
     }

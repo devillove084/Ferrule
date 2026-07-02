@@ -16,7 +16,7 @@ use crate::expert_streaming::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpertResidentFormat {
-    /// Source-preserved DeepSeek-style packed FP4 expert payload.
+    /// Source-preserved packed FP4 expert payload.
     PackedFp4E2M1WithE8M0Scale,
     /// Exact source representation is preserved but not represented by a CPU bundle.
     SourcePreserved,

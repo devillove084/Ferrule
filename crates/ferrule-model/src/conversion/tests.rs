@@ -59,6 +59,12 @@ fn deepseek_weightpack_recipe_keeps_weightpack_as_primary_target() {
             .map(|policy| &policy.format),
         Some(&QuantizationFormat::F32)
     );
+    assert_eq!(
+        recipe
+            .policy_for_role(&TensorRole::AttentionQueryNorm)
+            .map(|policy| &policy.format),
+        Some(&QuantizationFormat::F32)
+    );
     assert!(recipe
         .notes
         .iter()

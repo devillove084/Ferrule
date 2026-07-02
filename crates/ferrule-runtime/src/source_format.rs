@@ -1,8 +1,8 @@
 //! Source weight-format helpers for reference tests and tiny fixtures.
 //!
 //! These routines are intentionally correctness/debug utilities, not the final
-//! high-throughput path. Full DeepSeek V4 execution should consume packed FP4 +
-//! E8M0 scales directly in CUDA kernels instead of expanding experts to F32.
+//! high-throughput path. Production execution should consume packed FP4 + E8M0
+//! scales directly in backend kernels instead of expanding experts to F32.
 
 use ferrule_core::{Error, Result};
 
@@ -45,7 +45,7 @@ pub fn decode_fp4_e2m1_packed_low_first(bytes: &[u8]) -> Vec<f32> {
 
 /// Decode unsigned E8M0 power-of-two scale into f32.
 ///
-/// DeepSeek V4 stores FP4/FP8 block scales as `float8_e8m0fnu`. The operational
+/// Decode FP4/FP8 block scales stored as `float8_e8m0fnu`. The operational
 /// behavior needed by kernels is a power-of-two scale. This reference helper uses
 /// the standard exponent-bias interpretation where byte 127 maps to 1.0.
 pub fn decode_e8m0_scale(byte: u8) -> f32 {

@@ -1,9 +1,9 @@
-//! Cache-aware DSV4 MLA attention kernels.
+//! Cache-aware MLA/compressed-KV attention kernels.
 //!
 //! Implements the Flash Attention approach (tiled QK^T + online softmax) adapted
-//! for DSV4 Multi-Latent Attention:
-//!   1. wq_a → q_norm → wq_b → reshape to [heads, head_dim]
-//!   2. wkv → kv_norm → [kv_dim] (compressed KV, not separate K/V)
+//! for Multi-Latent Attention-style source payloads:
+//!   1. query A → query norm → query B → reshape to [heads, head_dim]
+//!   2. key/value projection → key/value norm → [kv_dim] (compressed KV)
 //!   3. Sparse top-k gather over sliding window KV cache
 //!   4. Online softmax with attention sink
 //!   5. wo_a + wo_b output projection
@@ -67,8 +67,8 @@ pub trait AttentionKernel {
     /// Down-projection after attention: output = wo_b.matvec(wo_a.matvec(context))
     fn output_projection(
         &self,
-        wo_a: &SourceLinearPayload,
-        wo_b: &SourceLinearPayload,
+        output_a: &SourceLinearPayload,
+        output_b: &SourceLinearPayload,
         context: &[f32],
     ) -> Result<Vec<f32>>;
 }
@@ -246,49 +246,48 @@ impl AttentionKernel for CpuAttentionKernel {
 
     fn output_projection(
         &self,
-        wo_a: &SourceLinearPayload,
-        wo_b: &SourceLinearPayload,
+        output_a: &SourceLinearPayload,
+        output_b: &SourceLinearPayload,
         context: &[f32],
     ) -> Result<Vec<f32>> {
-        let projected = self.linear_matvec(wo_a, context)?;
-        self.linear_matvec(wo_b, &projected)
+        let projected = self.linear_matvec(output_a, context)?;
+        self.linear_matvec(output_b, &projected)
     }
 }
 
 // ── unified decode-attention step ────────────────────────────────────────
 
-/// Executes a full DSV4 MLA decode attention step through the kernel trait.
+/// Executes a full MLA decode attention step through the kernel trait.
 ///
 /// Steps:
-///   1. wq_a(hidden) → q_norm → wq_b → reshape to [heads, head_dim]
-///   2. wkv(hidden) → kv_norm → append to KV cache
+///   1. query A(hidden) → query norm → query B → reshape to [heads, head_dim]
+///   2. key/value(hidden) → key/value norm → append to KV cache
 ///   3. Build sliding-window top-k indices from KV cache
 ///   4. Online softmax sparse attention → context
 ///   5. wo_a(context) → wo_b → output
 #[allow(clippy::too_many_arguments)]
-pub fn dsv4_attention_decode_step(
+pub fn mla_attention_decode_step(
     kernel: &impl AttentionKernel,
     hidden: &[f32],
-    wq_a: &SourceLinearPayload,
-    wq_b: &SourceLinearPayload,
-    q_norm: &[f32],
-    wkv: &SourceLinearPayload,
-    kv_norm: &[f32],
+    query_a: &SourceLinearPayload,
+    query_b: &SourceLinearPayload,
+    query_norm: &[f32],
+    key_value: &SourceLinearPayload,
+    key_value_norm: &[f32],
     kv_cache: &mut Vec<f32>,
     attention_sink: &[f32],
-    wo_a: &SourceLinearPayload,
-    wo_b: &SourceLinearPayload,
+    output_a: &SourceLinearPayload,
+    output_b: &SourceLinearPayload,
     spec: SparseAttentionSpec,
 ) -> Result<Vec<f32>> {
     // 1. Query low-rank path
-    let q_latent = kernel.linear_matvec(wq_a, hidden)?;
-    let q_latent = kernel.rms_norm_weight(&q_latent, q_norm, 1e-6, "q_norm")?;
-    let q_full = kernel.linear_matvec(wq_b, &q_latent)?;
+    let q_latent = kernel.linear_matvec(query_a, hidden)?;
+    let q_latent = kernel.rms_norm_weight(&q_latent, query_norm, 1e-6, "query_norm")?;
+    let q_full = kernel.linear_matvec(query_b, &q_latent)?;
 
     // 2. KV projection + cache append
-    let kv_val = kernel.linear_matvec(wkv, hidden)?;
-    let kv_val = kernel.rms_norm_weight(&kv_val, kv_norm, 1e-6, "kv_norm")?;
-    let kv_len_before = kv_cache.len() / spec.head_dim;
+    let kv_val = kernel.linear_matvec(key_value, hidden)?;
+    let kv_val = kernel.rms_norm_weight(&kv_val, key_value_norm, 1e-6, "key_value_norm")?;
     kv_cache.extend_from_slice(&kv_val);
     let kv_len = kv_cache.len() / spec.head_dim;
 
@@ -305,7 +304,7 @@ pub fn dsv4_attention_decode_step(
         kernel.sparse_attention_online(&q_full, kv_cache, &indices, Some(attention_sink), spec)?;
 
     // 5. Output projection
-    kernel.output_projection(wo_a, wo_b, &context)
+    kernel.output_projection(output_a, output_b, &context)
 }
 
 #[cfg(test)]
@@ -371,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn dsv4_attention_decode_step_runs_end_to_end() {
+    fn mla_attention_decode_step_runs_end_to_end() {
         let kernel = CpuAttentionKernel::new();
         let h = 32;
         let qr = 8;
@@ -384,35 +383,35 @@ mod tests {
             softmax_scale: (hd as f32).powf(-0.5),
             has_attention_sink: true,
         };
-        let wq_a = f32_linear(
+        let query_a = f32_linear(
             TensorRole::AttentionLatentQueryA,
             "wq_a",
             qr,
             h,
             &vec![0.1; qr * h],
         );
-        let wq_b = f32_linear(
+        let query_b = f32_linear(
             TensorRole::AttentionLatentQueryB,
             "wq_b",
             nh * hd,
             qr,
             &vec![0.1; nh * hd * qr],
         );
-        let wkv = f32_linear(
+        let key_value = f32_linear(
             TensorRole::AttentionLatentKv,
             "wkv",
             hd,
             h,
             &vec![0.1; hd * h],
         );
-        let wo_a = f32_linear(
+        let output_a = f32_linear(
             TensorRole::AttentionLatentOutputA,
             "wo_a",
             qr,
             nh * hd,
             &vec![0.1; qr * nh * hd],
         );
-        let wo_b = f32_linear(
+        let output_b = f32_linear(
             TensorRole::AttentionLatentOutputB,
             "wo_b",
             h,
@@ -423,18 +422,18 @@ mod tests {
         let hidden: Vec<f32> = (0..h).map(|i| (i % 7) as f32).collect();
         let mut kv_cache = Vec::new();
 
-        let out = dsv4_attention_decode_step(
+        let out = mla_attention_decode_step(
             &kernel,
             &hidden,
-            &wq_a,
-            &wq_b,
+            &query_a,
+            &query_b,
             &vec![1.0; qr],
-            &wkv,
+            &key_value,
             &vec![1.0; hd],
             &mut kv_cache,
             &vec![0.0; nh],
-            &wo_a,
-            &wo_b,
+            &output_a,
+            &output_b,
             spec,
         )
         .unwrap();

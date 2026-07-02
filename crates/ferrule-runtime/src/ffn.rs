@@ -1,9 +1,9 @@
 //! Feed-forward network reference helpers.
 //!
 //! This module is the generic dense/shared FFN counterpart to routed expert
-//! execution. DeepSeek V4 shared experts use the same SwiGLU structure as routed
-//! experts, but should be represented as ordinary semantic source linears rather
-//! than fake routed expert ids.
+//! execution. Shared experts that use the same SwiGLU structure as routed experts
+//! should be represented as ordinary semantic source linears rather than fake
+//! routed expert ids.
 
 use ferrule_core::{Error, Result};
 
@@ -14,7 +14,7 @@ pub struct SwiGluFfnPayload {
     pub gate: SourceLinearPayload,
     pub up: SourceLinearPayload,
     pub down: SourceLinearPayload,
-    /// `0.0` disables clipping. DeepSeek V4 uses `swiglu_limit=10.0`.
+    /// `0.0` disables clipping; positive values apply model-family-specific clipping.
     pub swiglu_limit: f32,
 }
 

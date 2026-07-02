@@ -3,9 +3,9 @@
 //! This module is deliberately separate from expert residency/streaming. Streaming
 //! decides *where bytes come from* and yields an `ExpertComputeBundle`; executors
 //! decide *how to compute* with that bundle. The first implementation is a small
-//! CPU reference path for packed FP4 + E8M0 expert fixtures. Production DeepSeek
-//! V4 execution should add a CUDA executor that consumes packed payloads directly
-//! instead of dequantizing whole experts to f32.
+//! CPU reference path for packed FP4 + E8M0 expert fixtures. Production execution
+//! should add CUDA executors that consume packed payloads directly instead of
+//! dequantizing whole experts to f32.
 
 use ferrule_core::{Error, Result};
 
@@ -34,12 +34,12 @@ pub trait ExpertExecutor {
 /// CPU reference executor for correctness tests and tiny fixtures.
 ///
 /// This is not a performance path. It expands packed FP4 matrices into f32 and is
-/// only meant for small synthetic tensors or debugging slices. Real DeepSeek V4
+/// only meant for small synthetic tensors or debugging slices. Full-size packed
 /// experts are too large to run through this path in production.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CpuReferenceExpertExecutor {
-    /// DeepSeek V4 uses `swiglu_limit=10.0`; `0.0` disables clipping and matches
-    /// plain SwiGLU experts.
+    /// `0.0` disables clipping and matches plain SwiGLU experts; positive values
+    /// apply model-family-specific SwiGLU clipping.
     pub swiglu_limit: f32,
 }
 
@@ -190,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn cpu_reference_executor_applies_deepseek_swiglu_limit() {
+    fn cpu_reference_executor_applies_swiglu_limit() {
         let expert = ExpertId::new(0, 0);
         let bundle = ExpertComputeBundle::from_source_payload(ExpertSourcePayload {
             expert,

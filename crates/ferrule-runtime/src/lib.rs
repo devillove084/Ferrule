@@ -10,9 +10,6 @@ pub mod chat;
 pub mod config;
 pub mod constraint;
 pub mod cpu_kv;
-pub mod dsv4_mock;
-pub mod dsv4_param;
-pub mod dsv4_runner;
 pub mod expert_executor;
 pub mod expert_handle;
 pub mod expert_routing;
@@ -21,10 +18,10 @@ pub mod expert_telemetry;
 pub mod ffn;
 pub mod first_token_smoke;
 pub mod generation;
-pub mod hf_dsv4_runner;
 pub mod hyper_connection;
 pub mod kv;
 pub mod layer_binding;
+pub mod models;
 pub mod paged_kv;
 pub mod perplexity;
 pub mod pk_manifest;
@@ -60,10 +57,6 @@ pub use attention_kernel::AttentionKernel;
 pub use chat::{detect_chat_template, ChatTemplate};
 pub use config::ModelGenerationDefaults;
 pub use cpu_kv::CpuContiguousKvState;
-pub use dsv4_mock::{
-    build_mock_execution_state, build_mock_layer, f32_linear_identity, register_mock_expert,
-    SyntheticTokenizer,
-};
 pub use expert_executor::{reference_linear, CpuReferenceExpertExecutor, ExpertExecutor};
 pub use expert_handle::{
     CpuExpertHandleStore, ExpertComputeHandle, ExpertHandleStore, ExpertResidentFormat,

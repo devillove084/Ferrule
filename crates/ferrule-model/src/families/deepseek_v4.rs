@@ -1,6 +1,47 @@
 use crate::spec::TransformerSpec;
 use crate::tensor_policy::{TensorClass, TensorClassCount};
 
+/// Official DeepSeek-V4 / DeepSeek-V4-Flash source metadata defaults.
+///
+/// These constants belong to the model-family layer. Runtime code should consume
+/// semantic layouts, policies, and payload shapes derived from descriptors rather
+/// than hard-coding these values in generic execution paths.
+pub const HIDDEN_SIZE: usize = 4096;
+pub const HC_MULT: usize = 4;
+pub const HC_SINKHORN_ITERS: usize = 20;
+pub const HC_EPS: f32 = 1e-6;
+pub const RMS_NORM_EPS: f32 = 1e-6;
+pub const NUM_LAYERS: usize = 43;
+pub const NUM_HASH_LAYERS: usize = 3;
+pub const N_ROUTED_EXPERTS: usize = 256;
+pub const NUM_EXPERTS_PER_TOK: usize = 6;
+pub const MOE_INTERMEDIATE_SIZE: usize = 2048;
+pub const HEAD_DIM: usize = 512;
+pub const QK_ROPE_HEAD_DIM: usize = 64;
+pub const NUM_HEADS: usize = 64;
+pub const NUM_KV_HEADS: usize = 1;
+pub const Q_LORA_RANK: usize = 1024;
+pub const O_GROUPS: usize = 8;
+pub const O_LORA_RANK: usize = 1024;
+pub const SLIDING_WINDOW: usize = 128;
+pub const VOCAB_SIZE: usize = 129_280;
+pub const SWIGLU_LIMIT: f32 = 10.0;
+pub const ROUTED_SCALING_FACTOR: f32 = 1.5;
+pub const ROPE_THETA: f32 = 10_000.0;
+pub const COMPRESS_ROPE_THETA: f32 = 160_000.0;
+pub const ORIGINAL_MAX_POSITION_EMBEDDINGS: usize = 65_536;
+pub const ROPE_FACTOR: f32 = 16.0;
+pub const ROPE_BETA_FAST: usize = 32;
+pub const ROPE_BETA_SLOW: usize = 1;
+pub const INDEX_N_HEADS: usize = 64;
+pub const INDEX_HEAD_DIM: usize = 128;
+pub const INDEX_TOPK: usize = 512;
+pub const DSPARK_BLOCK_SIZE: usize = 5;
+
+pub fn is_hash_routed_layer(layer: usize) -> bool {
+    layer < NUM_HASH_LAYERS
+}
+
 use super::{
     common, AttentionTensorKind, AttentionTensorRef, HyperConnectionStage,
     HyperConnectionTensorKind, HyperConnectionTensorRef, RoutedExpertMatrix,
@@ -254,6 +295,12 @@ fn classify_tensor_name(name: &str) -> TensorClass {
     if name.contains("attn_q_b") || name.contains(".attn.wq_b") {
         return TensorClass::MlaQueryB;
     }
+    if name.contains("attn_q_norm") || name.contains(".attn.q_norm") {
+        return TensorClass::MlaQueryNorm;
+    }
+    if name.contains("attn_kv_norm") || name.contains(".attn.kv_norm") {
+        return TensorClass::MlaKvNorm;
+    }
     if name.contains("attn_kv") || name.contains(".attn.wkv") {
         return TensorClass::MlaKv;
     }
@@ -364,8 +411,16 @@ mod tests {
             TensorClass::MlaQueryA
         );
         assert_eq!(
+            classify_gguf_tensor("blk.0.attn_q_norm.weight"),
+            TensorClass::MlaQueryNorm
+        );
+        assert_eq!(
             classify_gguf_tensor("blk.0.attn_kv.weight"),
             TensorClass::MlaKv
+        );
+        assert_eq!(
+            classify_gguf_tensor("blk.0.attn_kv_norm.weight"),
+            TensorClass::MlaKvNorm
         );
         assert_eq!(
             classify_gguf_tensor("blk.0.attn_output_b.weight"),
@@ -408,8 +463,16 @@ mod tests {
             TensorClass::MlaQueryA
         );
         assert_eq!(
+            classify_hf_tensor("layers.0.attn.q_norm.weight"),
+            TensorClass::MlaQueryNorm
+        );
+        assert_eq!(
             classify_hf_tensor("layers.0.attn.wkv.scale"),
             TensorClass::MlaKv
+        );
+        assert_eq!(
+            classify_hf_tensor("layers.0.attn.kv_norm.weight"),
+            TensorClass::MlaKvNorm
         );
         assert_eq!(
             classify_hf_tensor("layers.0.attn.wo_b.weight"),

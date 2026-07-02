@@ -1,11 +1,8 @@
 //! Expert routing policies and CPU reference semantics.
 //!
 //! This module captures router math independently from any one model family or
-//! backend kernel. DeepSeek V4 uses the same shape with a few specific policy
-//! choices: `sqrtsoftplus` scores, bias for score-top-k layers, hash-selected
-//! experts for early layers, normalized selected weights, and a route scale.
-//! Keeping that behavior here gives CUDA kernels and future model-family adapters
-//! a small, testable contract.
+//! backend kernel. Model-family adapters choose score functions, selection modes,
+//! normalization, bias handling, and route scaling through this typed policy.
 
 use std::cmp::Ordering;
 
@@ -32,15 +29,15 @@ pub struct ExpertRouterPolicy {
     pub top_k: usize,
     pub score_function: RouterScoreFunction,
     pub selection: RouterSelectionPolicy,
-    /// Matches DeepSeek `norm_topk_prob=true` behavior for non-softmax scores.
+    /// Normalize selected non-softmax scores before applying `route_scale`.
     /// Softmax scores are already normalized over all experts and are not
-    /// renormalized by the official reference gate.
+    /// renormalized by the reference gate.
     pub normalize_non_softmax_weights: bool,
     pub route_scale: f32,
 }
 
 impl ExpertRouterPolicy {
-    pub fn deepseek_v4_score_topk(top_k: usize, route_scale: f32) -> Self {
+    pub fn sqrt_softplus_score_topk(top_k: usize, route_scale: f32) -> Self {
         Self {
             top_k,
             score_function: RouterScoreFunction::SqrtSoftplus,
@@ -50,10 +47,10 @@ impl ExpertRouterPolicy {
         }
     }
 
-    pub fn deepseek_v4_hash(top_k: usize, route_scale: f32) -> Self {
+    pub fn sqrt_softplus_hash(top_k: usize, route_scale: f32) -> Self {
         Self {
             selection: RouterSelectionPolicy::Hash,
-            ..Self::deepseek_v4_score_topk(top_k, route_scale)
+            ..Self::sqrt_softplus_score_topk(top_k, route_scale)
         }
     }
 
@@ -270,8 +267,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deepseek_sqrtsoftplus_router_normalizes_and_scales_weights() {
-        let policy = ExpertRouterPolicy::deepseek_v4_score_topk(2, 1.5);
+    fn sqrt_softplus_router_normalizes_and_scales_weights() {
+        let policy = ExpertRouterPolicy::sqrt_softplus_score_topk(2, 1.5);
         let routes = policy.route(&[0.0, 1.0, -1.0], None, None).unwrap();
         assert_eq!(routes[0].expert, 1);
         assert_eq!(routes[1].expert, 0);
@@ -285,7 +282,7 @@ mod tests {
 
     #[test]
     fn bias_changes_score_topk_selection_but_not_gathered_scores() {
-        let policy = ExpertRouterPolicy::deepseek_v4_score_topk(2, 1.0);
+        let policy = ExpertRouterPolicy::sqrt_softplus_score_topk(2, 1.0);
         let routes = policy
             .route(&[5.0, 4.0, -4.0], Some(&[0.0, 0.0, 10.0]), None)
             .unwrap();
@@ -300,7 +297,7 @@ mod tests {
 
     #[test]
     fn hash_router_preserves_hash_indices_and_gathers_original_scores() {
-        let policy = ExpertRouterPolicy::deepseek_v4_hash(2, 1.5);
+        let policy = ExpertRouterPolicy::sqrt_softplus_hash(2, 1.5);
         let routes = policy.route(&[0.0, 1.0, 2.0], None, Some(&[2, 0])).unwrap();
         assert_eq!(
             routes.iter().map(|route| route.expert).collect::<Vec<_>>(),
@@ -333,7 +330,7 @@ mod tests {
 
     #[test]
     fn hash_router_rejects_out_of_range_expert_ids() {
-        let policy = ExpertRouterPolicy::deepseek_v4_hash(1, 1.0);
+        let policy = ExpertRouterPolicy::sqrt_softplus_hash(1, 1.0);
         let err = policy.route(&[0.0, 1.0], None, Some(&[2])).unwrap_err();
         assert!(err.to_string().contains("exceeds expert count"));
     }

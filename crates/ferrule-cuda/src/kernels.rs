@@ -1,38 +1,35 @@
 //! CUDA kernels — compiled by cargo-oxide's rustc-codegen-cuda backend.
 //!
 //! Most GEMV kernels use 4x inner-loop unrolling for ILP.
-//! fast_sigmoid uses reduction+squaring (no libdevice, no bit ops).
+//! Device math uses Rust float intrinsics so cuda-oxide lowers them through
+//! libdevice/NVVM, matching the upstream examples and avoiding arch-specific
+//! inline-PTX JIT issues on newer GPUs.
 
 use cuda_device::{cuda_module, kernel, ptx_asm, thread, DisjointSlice, SharedArray};
 
-// ── Fast exp via PTX ex2.approx.f32 ──────────────────────────────────
-// exp(x) = 2^(x * log2(e))  using hardware base-2 exponent.
-// ex2.approx.f32 is ~1 ULP accurate, 1 cycle throughput on most GPUs.
-// Much better than the previous Taylor-series + squaring approach.
+const LN_2_F32: f32 = 0.693_147_2;
 
-/// Fast exp(x) using PTX ex2.approx.f32. Works for all x.
+/// Device exp(x). cuda-oxide lowers this to libdevice (`__nv_expf`) on GPU.
 fn fast_exp(x: f32) -> f32 {
-    // log2(e) ≈ 1.4426950408889634 = 0x3FB8AA3B in IEEE 754
-    let scaled: f32;
+    libm::expf(x)
+}
+
+/// Fast reciprocal sqrt. This stays as inline PTX because libm::sqrtf uses
+/// host-arch inline asm before cuda-oxide can route it to libdevice on aarch64.
+fn fast_rsqrt(x: f32) -> f32 {
     let result: f32;
     unsafe {
         ptx_asm!(
-            "mul.f32 %0, %1, 0f3FB8AA3B;",
-            out("=f") scaled,
-            in("f") x,
-            options(register_only),
-        );
-        ptx_asm!(
-            "ex2.approx.f32 %0, %1;",
+            "rsqrt.approx.f32 %0, %1;",
             out("=f") result,
-            in("f") scaled,
+            in("f") x,
             options(register_only),
         );
     }
     result
 }
 
-/// Fast sigmoid(x) = 1 / (1 + exp(-x)) using PTX ex2.approx
+/// Fast sigmoid(x) = 1 / (1 + exp(-x)).
 fn fast_sigmoid(x: f32) -> f32 {
     if x < -16.0 {
         return 0.0;
@@ -79,34 +76,12 @@ fn fp8_e4m3fn_value(byte: u8) -> f32 {
     if exponent == 0x0f && mantissa == 0x07 {
         return f32::NAN;
     }
-    let pow2 = {
-        let exp_f = (exponent as i32 - 7) as f32;
-        let result: f32;
-        unsafe {
-            ptx_asm!(
-                "ex2.approx.f32 %0, %1;",
-                out("=f") result,
-                in("f") exp_f,
-                options(register_only),
-            );
-        }
-        result
-    };
+    let pow2 = libm::expf(((exponent as i32 - 7) as f32) * LN_2_F32);
     sign * pow2 * (1.0 + mantissa as f32 / 8.0)
 }
 
 fn e8m0_scale(byte: u8) -> f32 {
-    let exponent = byte as f32 - 127.0;
-    let result: f32;
-    unsafe {
-        ptx_asm!(
-            "ex2.approx.f32 %0, %1;",
-            out("=f") result,
-            in("f") exponent,
-            options(register_only),
-        );
-    }
-    result
+    libm::expf((byte as f32 - 127.0) * LN_2_F32)
 }
 
 fn clamp_max(x: f32, max_value: f32) -> f32 {
@@ -144,7 +119,7 @@ pub mod kernels {
         }
     }
 
-    // ── GEMV f32 (unrolled 4x) ─────────────────────────────────────────
+    // ── GEMV f32/BF16 (unrolled 4x) ───────────────────────────────────
 
     #[kernel]
     pub fn gemv_f32(x: &[f32], w: &[f32], mut y: DisjointSlice<f32>, n: u32, k: u32) {
@@ -170,6 +145,86 @@ pub mod kernels {
         let mut dot = dot0 + dot1 + dot2 + dot3;
         while j < k {
             dot += x[j] * w[base + j];
+            j += 1;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
+    fn f32_bytes_to_f32(b0: u8, b1: u8, b2: u8, b3: u8) -> f32 {
+        f32::from_bits((b0 as u32) | ((b1 as u32) << 8) | ((b2 as u32) << 16) | ((b3 as u32) << 24))
+    }
+
+    fn bf16_pair_to_f32(lo: u8, hi: u8) -> f32 {
+        f32::from_bits((((hi as u32) << 8) | lo as u32) << 16)
+    }
+
+    #[kernel]
+    pub fn gemv_f32_bytes(x: &[f32], w: &[u8], mut y: DisjointSlice<f32>, n: u32, k: u32) {
+        let row = thread::index_1d().get();
+        if (row as u64) >= n as u64 {
+            return;
+        }
+        let k = k as usize;
+        let base = row * k * 4;
+        let mut dot0 = 0.0f32;
+        let mut dot1 = 0.0f32;
+        let mut dot2 = 0.0f32;
+        let mut dot3 = 0.0f32;
+        let mut j = 0usize;
+        let k4 = k - k % 4;
+        while j < k4 {
+            let o0 = base + 4 * j;
+            let o1 = base + 4 * (j + 1);
+            let o2 = base + 4 * (j + 2);
+            let o3 = base + 4 * (j + 3);
+            dot0 += x[j] * f32_bytes_to_f32(w[o0], w[o0 + 1], w[o0 + 2], w[o0 + 3]);
+            dot1 += x[j + 1] * f32_bytes_to_f32(w[o1], w[o1 + 1], w[o1 + 2], w[o1 + 3]);
+            dot2 += x[j + 2] * f32_bytes_to_f32(w[o2], w[o2 + 1], w[o2 + 2], w[o2 + 3]);
+            dot3 += x[j + 3] * f32_bytes_to_f32(w[o3], w[o3 + 1], w[o3 + 2], w[o3 + 3]);
+            j += 4;
+        }
+        let mut dot = dot0 + dot1 + dot2 + dot3;
+        while j < k {
+            let off = base + 4 * j;
+            dot += x[j] * f32_bytes_to_f32(w[off], w[off + 1], w[off + 2], w[off + 3]);
+            j += 1;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
+    #[kernel]
+    pub fn gemv_bf16_bytes(x: &[f32], w: &[u8], mut y: DisjointSlice<f32>, n: u32, k: u32) {
+        let row = thread::index_1d().get();
+        if (row as u64) >= n as u64 {
+            return;
+        }
+        let k = k as usize;
+        let base = row * k * 2;
+        let mut dot0 = 0.0f32;
+        let mut dot1 = 0.0f32;
+        let mut dot2 = 0.0f32;
+        let mut dot3 = 0.0f32;
+        let mut j = 0usize;
+        let k4 = k - k % 4;
+        while j < k4 {
+            let o0 = base + 2 * j;
+            let o1 = base + 2 * (j + 1);
+            let o2 = base + 2 * (j + 2);
+            let o3 = base + 2 * (j + 3);
+            dot0 += x[j] * bf16_pair_to_f32(w[o0], w[o0 + 1]);
+            dot1 += x[j + 1] * bf16_pair_to_f32(w[o1], w[o1 + 1]);
+            dot2 += x[j + 2] * bf16_pair_to_f32(w[o2], w[o2 + 1]);
+            dot3 += x[j + 3] * bf16_pair_to_f32(w[o3], w[o3 + 1]);
+            j += 4;
+        }
+        let mut dot = dot0 + dot1 + dot2 + dot3;
+        while j < k {
+            let off = base + 2 * j;
+            dot += x[j] * bf16_pair_to_f32(w[off], w[off + 1]);
             j += 1;
         }
         if let Some(yi) = y.get_mut(thread::index_1d()) {
@@ -370,7 +425,7 @@ pub mod kernels {
     /// GEMV for source-preserved `torch.float4_e2m1fn_x2` weights with
     /// `float8_e8m0fnu` scales.
     ///
-    /// Layout matches Ferrule's CPU reference path and DeepSeek V4 expert tensors:
+    /// Layout matches Ferrule's CPU reference path for source-format packed experts:
     /// `packed = [out_features, in_features / 2]`, low nibble first; `scales =
     /// [out_features, in_features / 32]` with byte 127 mapping to scale 1.0.
     #[kernel]
@@ -487,7 +542,7 @@ pub mod kernels {
         }
     }
 
-    /// DeepSeek-style expert activation:
+    /// Clipped SwiGLU expert activation:
     /// `silu(clamp_max(gate, limit)) * clamp(up, -limit, limit) * route_weight`.
     /// `limit <= 0` disables clipping.
     #[kernel]
@@ -514,7 +569,7 @@ pub mod kernels {
         }
     }
 
-    // ── Source FP8 E4M3FN + E8M0 GEMV (DSV4 attention linears) ─────────
+    // ── Source FP8 E4M3FN + E8M0 GEMV ────────────────────────────────
 
     /// GEMV for FP8 E4M3FN weights with 2D E8M0 block scales.
     /// weight: [out_features, in_features] u8
@@ -1059,8 +1114,8 @@ pub mod kernels {
         }
     }
 
-    /// Compute 1/sqrt(mean(x^2) + eps) via PTX rsqrt.approx.f32.
-    /// This matches llama.cpp's rsqrtf(var + eps) approach using hardware sqrt.
+    /// Compute 1/sqrt(mean(x^2) + eps) through libdevice-backed float math.
+    /// This matches llama.cpp's rsqrtf(var + eps) semantics without inline PTX.
     #[kernel]
     pub fn compute_rms(x: &[f32], mut rms_out: DisjointSlice<f32>, n: u32, eps: f32) {
         if thread::index_1d().get() != 0 {
@@ -1073,17 +1128,7 @@ pub mod kernels {
         }
         if let Some(o) = rms_out.get_mut(thread::index_1d()) {
             let val = sum / n as f32 + eps;
-            // PTX rsqrt.approx.f32 — same as llama.cpp's rsqrtf(var + eps)
-            let result: f32;
-            unsafe {
-                ptx_asm!(
-                    "rsqrt.approx.f32 %0, %1;",
-                    out("=f") result,
-                    in("f") val,
-                    options(register_only),
-                );
-            }
-            *o = result;
+            *o = fast_rsqrt(val);
         }
     }
 
@@ -1122,20 +1167,11 @@ pub mod kernels {
             stride /= 2;
         }
 
-        // Phase 3: thread 0 computes rsqrt from the total sum
+        // Phase 3: thread 0 computes reciprocal sqrt from the total sum.
         if tid == 0 {
             let val = unsafe { SMEM[0] } / n as f32 + eps;
-            let result: f32;
             unsafe {
-                ptx_asm!(
-                    "rsqrt.approx.f32 %0, %1;",
-                    out("=f") result,
-                    in("f") val,
-                    options(register_only),
-                );
-            }
-            unsafe {
-                SMEM[0] = result;
+                SMEM[0] = fast_rsqrt(val);
             }
         }
         thread::sync_threads();
@@ -1147,6 +1183,70 @@ pub mod kernels {
         while j < n {
             unsafe {
                 *y_ptr.add(j) = x[j] * rsqrt * w[j];
+            }
+            j += bdim;
+        }
+    }
+
+    /// Per-head RMS normalize `[heads, head_dim]` without an affine weight.
+    /// One CUDA block owns one head; each block reduces its row and writes the
+    /// normalized row to `y`.
+    #[kernel]
+    pub fn rms_norm_heads_fused(
+        x: &[f32],
+        mut y: DisjointSlice<f32>,
+        heads: u32,
+        head_dim: u32,
+        eps: f32,
+    ) {
+        static mut SMEM: SharedArray<f32, 1024> = SharedArray::UNINIT;
+        let head = thread::blockIdx_x() as usize;
+        let heads = heads as usize;
+        if head >= heads {
+            return;
+        }
+        let tid = thread::threadIdx_x() as usize;
+        let bdim = thread::blockDim_x() as usize;
+        let hd = head_dim as usize;
+        let base = head * hd;
+
+        let mut sum = 0.0f32;
+        let mut j = tid;
+        while j < hd {
+            let v = x[base + j];
+            sum += v * v;
+            j += bdim;
+        }
+        unsafe {
+            SMEM[tid] = sum;
+        }
+        thread::sync_threads();
+
+        let mut stride = (bdim + 1) / 2;
+        while stride > 0 {
+            if tid < stride && tid + stride < bdim {
+                unsafe {
+                    SMEM[tid] += SMEM[tid + stride];
+                }
+            }
+            thread::sync_threads();
+            stride /= 2;
+        }
+
+        if tid == 0 {
+            let val = unsafe { SMEM[0] } / hd as f32 + eps;
+            unsafe {
+                SMEM[0] = fast_rsqrt(val);
+            }
+        }
+        thread::sync_threads();
+
+        let rsqrt = unsafe { SMEM[0] };
+        let y_ptr = y.as_mut_ptr();
+        let mut j = tid;
+        while j < hd {
+            unsafe {
+                *y_ptr.add(base + j) = x[base + j] * rsqrt;
             }
             j += bdim;
         }
@@ -1278,7 +1378,7 @@ pub mod kernels {
         }
     }
 
-    // ── Sparse attention with sink (DSV4/MLA path) ─────────────────────
+    // ── Sparse attention with sink ────────────────────────────────────
 
     /// Tiled sparse attention with online softmax and attention sink.
     /// 2D grid: threads map to (token, head), each thread processes topk KV slots.
@@ -1517,9 +1617,13 @@ pub mod kernels {
         }
     }
 
-    // ── Fused MLA Q-projection (wq_a → q_norm → wq_b) ───────────────
-    /// DSV4 MLA query path: x → wq_a → rms_norm(q_norm) → wq_b → [heads, head_dim]
-    /// One thread per output element in the final query tensor.
+    // ── Correctness-first MLA query projection ───────────────────────
+    /// MLA query path: `x → query_a → rms_norm(query_norm) → query_b`.
+    ///
+    /// This kernel intentionally recomputes the low-rank latent vector per output
+    /// element so it can stay scratch-free and easy to validate. It is a semantic
+    /// reference kernel, not the optimized production form needed for full-model
+    /// decode.
     #[kernel]
     pub fn mla_q_projection_f32(
         x: &[f32],
@@ -1538,36 +1642,32 @@ pub mod kernels {
         }
         let hs = hidden_size as usize;
         let qr = q_lora_rank as usize;
-        // Step 1: q_latent = x @ wq_a^T  (one thread per output element)
-        let q_latent_idx = idx as usize % qr;
-        // Compute rms_norm for this latent position
+        if hs == 0 || qr == 0 {
+            return;
+        }
+
+        // Pass 1: compute the RMS over the whole low-rank latent vector.
         let mut sum_sq = 0.0f32;
-        let mut latent_val = 0.0f32;
-        for j in 0..hs {
-            latent_val += x[j] * wq_a[q_latent_idx * hs + j];
+        for r in 0..qr {
+            let mut latent = 0.0f32;
+            for j in 0..hs {
+                latent += x[j] * wq_a[r * hs + j];
+            }
+            sum_sq += latent * latent;
         }
-        // Apply q_norm weight
-        latent_val *= q_norm[q_latent_idx as usize];
-        sum_sq += latent_val * latent_val;
-        // Note: rms_norm requires all q_latent elements. For fused kernel we
-        // compute the full q_latent first, then rms_norm, then wq_b projection.
-        // This simplified version does per-element rms approximation.
         let val = sum_sq / qr as f32 + eps;
-        let rms: f32;
-        unsafe {
-            ptx_asm!(
-                "rsqrt.approx.f32 %0, %1;",
-                out("=f") rms,
-                in("f") val,
-                options(register_only),
-            );
-        }
-        let q_normed = latent_val * rms;
-        // Step 2: q_final = q_normed @ wq_b^T
+        let rms = fast_rsqrt(val);
+
+        // Pass 2: apply q_norm and project through query_b.
+        let row = idx as usize;
         let mut dot = 0.0f32;
-        for j in 0..qr {
-            // wq_b is [heads*head_dim, q_lora_rank]
-            dot += q_normed * wq_b[idx as usize * qr + j];
+        for r in 0..qr {
+            let mut latent = 0.0f32;
+            for j in 0..hs {
+                latent += x[j] * wq_a[r * hs + j];
+            }
+            let normed = latent * rms * q_norm[r];
+            dot += normed * wq_b[row * qr + r];
         }
         if let Some(o) = q_out.get_mut(thread::index_1d()) {
             *o = dot;
@@ -1655,6 +1755,608 @@ pub mod kernels {
         dot *= route_weight;
         if let Some(o) = output.get_mut(thread::index_1d()) {
             *o += dot;
+        }
+    }
+
+    // ── Generic Hyper-Connection helpers ───────────────────────────────
+
+    #[kernel]
+    pub fn hc_pre_f32(
+        state: &[f32],
+        function: &[f32],
+        scale: &[f32],
+        base: &[f32],
+        mut hidden: DisjointSlice<f32>,
+        mut split_pre: DisjointSlice<f32>,
+        mut split_post: DisjointSlice<f32>,
+        mut split_comb: DisjointSlice<f32>,
+        tokens: u32,
+        hc_mult: u32,
+        hidden_size: u32,
+        mix_hc: u32,
+        sinkhorn_iters: u32,
+        eps: f32,
+        norm_eps: f32,
+    ) {
+        static mut SUM: SharedArray<f32, 1024> = SharedArray::UNINIT;
+        static mut MIX: SharedArray<f32, 128> = SharedArray::UNINIT;
+        static mut PRE: SharedArray<f32, 16> = SharedArray::UNINIT;
+        static mut COMB: SharedArray<f32, 256> = SharedArray::UNINIT;
+        let token = thread::blockIdx_x() as usize;
+        if token >= tokens as usize {
+            return;
+        }
+        let tid = thread::threadIdx_x() as usize;
+        let bdim = thread::blockDim_x() as usize;
+        let hc = hc_mult as usize;
+        let dim = hidden_size as usize;
+        let mix = mix_hc as usize;
+        let hc_dim = hc * dim;
+        if hc == 0 || hc > 16 || mix > 128 || hc * hc > 256 {
+            return;
+        }
+        let state_base = token * hc_dim;
+
+        let mut sum = 0.0f32;
+        let mut j = tid;
+        while j < hc_dim {
+            let v = state[state_base + j];
+            sum += v * v;
+            j += bdim;
+        }
+        unsafe {
+            SUM[tid] = sum;
+        }
+        thread::sync_threads();
+        let mut stride = (bdim + 1) / 2;
+        while stride > 0 {
+            if tid < stride && tid + stride < bdim {
+                unsafe {
+                    SUM[tid] += SUM[tid + stride];
+                }
+            }
+            thread::sync_threads();
+            stride /= 2;
+        }
+        if tid == 0 {
+            let val = unsafe { SUM[0] } / hc_dim as f32 + norm_eps;
+            unsafe {
+                SUM[0] = fast_rsqrt(val);
+            }
+        }
+        thread::sync_threads();
+        let rms = unsafe { SUM[0] };
+
+        if tid < mix {
+            let mut dot = 0.0f32;
+            let row = tid;
+            for col in 0..hc_dim {
+                dot += function[row * hc_dim + col] * state[state_base + col];
+            }
+            unsafe {
+                MIX[row] = dot * rms;
+            }
+        }
+        thread::sync_threads();
+
+        if tid == 0 {
+            let pre_ptr = split_pre.as_mut_ptr();
+            let post_ptr = split_post.as_mut_ptr();
+            let comb_ptr = split_comb.as_mut_ptr();
+            let pre_base = token * hc;
+            let comb_base = token * hc * hc;
+            for copy in 0..hc {
+                let pre = fast_sigmoid(unsafe { MIX[copy] } * scale[0] + base[copy]) + eps;
+                let post =
+                    2.0 * fast_sigmoid(unsafe { MIX[hc + copy] } * scale[1] + base[hc + copy]);
+                unsafe {
+                    PRE[copy] = pre;
+                    *pre_ptr.add(pre_base + copy) = pre;
+                    *post_ptr.add(pre_base + copy) = post;
+                }
+            }
+
+            for row in 0..hc {
+                let mut row_max = f32::NEG_INFINITY;
+                for col in 0..hc {
+                    let idx = row * hc + col;
+                    let v = unsafe { MIX[2 * hc + idx] } * scale[2] + base[2 * hc + idx];
+                    unsafe {
+                        COMB[idx] = v;
+                    }
+                    if v > row_max {
+                        row_max = v;
+                    }
+                }
+                let mut row_sum = 0.0f32;
+                for col in 0..hc {
+                    let idx = row * hc + col;
+                    let v = fast_exp(unsafe { COMB[idx] } - row_max);
+                    unsafe {
+                        COMB[idx] = v;
+                    }
+                    row_sum += v;
+                }
+                for col in 0..hc {
+                    let idx = row * hc + col;
+                    unsafe {
+                        COMB[idx] = COMB[idx] / row_sum + eps;
+                    }
+                }
+            }
+
+            for col in 0..hc {
+                let mut col_sum = 0.0f32;
+                for row in 0..hc {
+                    col_sum += unsafe { COMB[row * hc + col] };
+                }
+                for row in 0..hc {
+                    let idx = row * hc + col;
+                    unsafe {
+                        COMB[idx] = COMB[idx] / (col_sum + eps);
+                    }
+                }
+            }
+            let mut iter = 1u32;
+            while iter < sinkhorn_iters {
+                for row in 0..hc {
+                    let mut row_sum = 0.0f32;
+                    for col in 0..hc {
+                        row_sum += unsafe { COMB[row * hc + col] };
+                    }
+                    for col in 0..hc {
+                        let idx = row * hc + col;
+                        unsafe {
+                            COMB[idx] = COMB[idx] / (row_sum + eps);
+                        }
+                    }
+                }
+                for col in 0..hc {
+                    let mut col_sum = 0.0f32;
+                    for row in 0..hc {
+                        col_sum += unsafe { COMB[row * hc + col] };
+                    }
+                    for row in 0..hc {
+                        let idx = row * hc + col;
+                        unsafe {
+                            COMB[idx] = COMB[idx] / (col_sum + eps);
+                        }
+                    }
+                }
+                iter += 1;
+            }
+
+            for idx in 0..hc * hc {
+                unsafe {
+                    *comb_ptr.add(comb_base + idx) = COMB[idx];
+                }
+            }
+        }
+        thread::sync_threads();
+
+        let hidden_ptr = hidden.as_mut_ptr();
+        let hidden_base = token * dim;
+        let mut d = tid;
+        while d < dim {
+            let mut out = 0.0f32;
+            for copy in 0..hc {
+                out += unsafe { PRE[copy] } * state[state_base + copy * dim + d];
+            }
+            unsafe {
+                *hidden_ptr.add(hidden_base + d) = out;
+            }
+            d += bdim;
+        }
+    }
+
+    #[kernel]
+    pub fn hc_post_f32(
+        hidden: &[f32],
+        residual: &[f32],
+        split_post: &[f32],
+        split_comb: &[f32],
+        mut output: DisjointSlice<f32>,
+        tokens: u32,
+        hc_mult: u32,
+        hidden_size: u32,
+    ) {
+        let idx = thread::index_1d().get();
+        let hc = hc_mult as usize;
+        let dim = hidden_size as usize;
+        let hc_dim = hc * dim;
+        let total = tokens as usize * hc_dim;
+        if (idx as u64) >= total as u64 {
+            return;
+        }
+        let idx = idx as usize;
+        let token = idx / hc_dim;
+        let rem = idx % hc_dim;
+        let copy = rem / dim;
+        let d = rem % dim;
+        let mut comb_row_sum = 0.0f32;
+        let comb_base = token * hc * hc + copy * hc;
+        for k in 0..hc {
+            comb_row_sum += split_comb[comb_base + k];
+        }
+        if let Some(o) = output.get_mut(thread::index_1d()) {
+            *o = split_post[token * hc + copy] * hidden[token * dim + d]
+                + comb_row_sum * residual[idx];
+        }
+    }
+
+    #[kernel]
+    pub fn hc_head_f32(
+        state: &[f32],
+        function: &[f32],
+        scale: &[f32],
+        base: &[f32],
+        mut hidden: DisjointSlice<f32>,
+        tokens: u32,
+        hc_mult: u32,
+        hidden_size: u32,
+        eps: f32,
+        norm_eps: f32,
+    ) {
+        static mut SUM: SharedArray<f32, 1024> = SharedArray::UNINIT;
+        static mut PRE: SharedArray<f32, 16> = SharedArray::UNINIT;
+        let token = thread::blockIdx_x() as usize;
+        if token >= tokens as usize {
+            return;
+        }
+        let tid = thread::threadIdx_x() as usize;
+        let bdim = thread::blockDim_x() as usize;
+        let hc = hc_mult as usize;
+        let dim = hidden_size as usize;
+        let hc_dim = hc * dim;
+        if hc == 0 || hc > 16 {
+            return;
+        }
+        let state_base = token * hc_dim;
+
+        let mut sum = 0.0f32;
+        let mut j = tid;
+        while j < hc_dim {
+            let v = state[state_base + j];
+            sum += v * v;
+            j += bdim;
+        }
+        unsafe {
+            SUM[tid] = sum;
+        }
+        thread::sync_threads();
+        let mut stride = (bdim + 1) / 2;
+        while stride > 0 {
+            if tid < stride && tid + stride < bdim {
+                unsafe {
+                    SUM[tid] += SUM[tid + stride];
+                }
+            }
+            thread::sync_threads();
+            stride /= 2;
+        }
+        if tid == 0 {
+            let val = unsafe { SUM[0] } / hc_dim as f32 + norm_eps;
+            unsafe {
+                SUM[0] = fast_rsqrt(val);
+            }
+        }
+        thread::sync_threads();
+        let rms = unsafe { SUM[0] };
+
+        if tid < hc {
+            let mut dot = 0.0f32;
+            let row = tid;
+            for col in 0..hc_dim {
+                dot += function[row * hc_dim + col] * state[state_base + col];
+            }
+            unsafe {
+                PRE[row] = fast_sigmoid(dot * rms * scale[0] + base[row]) + eps;
+            }
+        }
+        thread::sync_threads();
+
+        let hidden_ptr = hidden.as_mut_ptr();
+        let hidden_base = token * dim;
+        let mut d = tid;
+        while d < dim {
+            let mut out = 0.0f32;
+            for copy in 0..hc {
+                out += unsafe { PRE[copy] } * state[state_base + copy * dim + d];
+            }
+            unsafe {
+                *hidden_ptr.add(hidden_base + d) = out;
+            }
+            d += bdim;
+        }
+    }
+
+    #[kernel]
+    pub fn hc_pre_single_f32(
+        state: &[f32],
+        function: &[f32],
+        scale: &[f32],
+        base: &[f32],
+        mut hidden: DisjointSlice<f32>,
+        mut split_pre: DisjointSlice<f32>,
+        mut split_post: DisjointSlice<f32>,
+        mut split_comb: DisjointSlice<f32>,
+        hc_mult: u32,
+        hidden_size: u32,
+        mix_hc: u32,
+        sinkhorn_iters: u32,
+        eps: f32,
+        norm_eps: f32,
+    ) {
+        static mut SUM: SharedArray<f32, 1024> = SharedArray::UNINIT;
+        static mut MIX: SharedArray<f32, 128> = SharedArray::UNINIT;
+        static mut PRE: SharedArray<f32, 16> = SharedArray::UNINIT;
+        static mut COMB: SharedArray<f32, 256> = SharedArray::UNINIT;
+        let tid = thread::threadIdx_x() as usize;
+        let bdim = thread::blockDim_x() as usize;
+        let hc = hc_mult as usize;
+        let dim = hidden_size as usize;
+        let mix = mix_hc as usize;
+        let hc_dim = hc * dim;
+        if hc == 0 || hc > 16 || mix > 128 || hc * hc > 256 {
+            return;
+        }
+
+        let mut sum = 0.0f32;
+        let mut j = tid;
+        while j < hc_dim {
+            let v = state[j];
+            sum += v * v;
+            j += bdim;
+        }
+        unsafe {
+            SUM[tid] = sum;
+        }
+        thread::sync_threads();
+        let mut stride = (bdim + 1) / 2;
+        while stride > 0 {
+            if tid < stride && tid + stride < bdim {
+                unsafe {
+                    SUM[tid] += SUM[tid + stride];
+                }
+            }
+            thread::sync_threads();
+            stride /= 2;
+        }
+        if tid == 0 {
+            let val = unsafe { SUM[0] } / hc_dim as f32 + norm_eps;
+            unsafe {
+                SUM[0] = fast_rsqrt(val);
+            }
+        }
+        thread::sync_threads();
+        let rms = unsafe { SUM[0] };
+
+        if tid < mix {
+            let mut dot = 0.0f32;
+            let row = tid;
+            for col in 0..hc_dim {
+                dot += function[row * hc_dim + col] * state[col];
+            }
+            unsafe {
+                MIX[row] = dot * rms;
+            }
+        }
+        thread::sync_threads();
+
+        if tid == 0 {
+            for copy in 0..hc {
+                let pre = fast_sigmoid(unsafe { MIX[copy] } * scale[0] + base[copy]) + eps;
+                let post =
+                    2.0 * fast_sigmoid(unsafe { MIX[hc + copy] } * scale[1] + base[hc + copy]);
+                unsafe {
+                    PRE[copy] = pre;
+                }
+                let pre_ptr = split_pre.as_mut_ptr();
+                let post_ptr = split_post.as_mut_ptr();
+                unsafe {
+                    *pre_ptr.add(copy) = pre;
+                    *post_ptr.add(copy) = post;
+                }
+            }
+
+            for row in 0..hc {
+                let mut row_max = f32::NEG_INFINITY;
+                for col in 0..hc {
+                    let idx = row * hc + col;
+                    let v = unsafe { MIX[2 * hc + idx] } * scale[2] + base[2 * hc + idx];
+                    unsafe {
+                        COMB[idx] = v;
+                    }
+                    if v > row_max {
+                        row_max = v;
+                    }
+                }
+                let mut row_sum = 0.0f32;
+                for col in 0..hc {
+                    let idx = row * hc + col;
+                    let v = fast_exp(unsafe { COMB[idx] } - row_max);
+                    unsafe {
+                        COMB[idx] = v;
+                    }
+                    row_sum += v;
+                }
+                for col in 0..hc {
+                    let idx = row * hc + col;
+                    unsafe {
+                        COMB[idx] = COMB[idx] / row_sum + eps;
+                    }
+                }
+            }
+
+            for col in 0..hc {
+                let mut col_sum = 0.0f32;
+                for row in 0..hc {
+                    col_sum += unsafe { COMB[row * hc + col] };
+                }
+                for row in 0..hc {
+                    let idx = row * hc + col;
+                    unsafe {
+                        COMB[idx] = COMB[idx] / (col_sum + eps);
+                    }
+                }
+            }
+            let mut iter = 1u32;
+            while iter < sinkhorn_iters {
+                for row in 0..hc {
+                    let mut row_sum = 0.0f32;
+                    for col in 0..hc {
+                        row_sum += unsafe { COMB[row * hc + col] };
+                    }
+                    for col in 0..hc {
+                        let idx = row * hc + col;
+                        unsafe {
+                            COMB[idx] = COMB[idx] / (row_sum + eps);
+                        }
+                    }
+                }
+                for col in 0..hc {
+                    let mut col_sum = 0.0f32;
+                    for row in 0..hc {
+                        col_sum += unsafe { COMB[row * hc + col] };
+                    }
+                    for row in 0..hc {
+                        let idx = row * hc + col;
+                        unsafe {
+                            COMB[idx] = COMB[idx] / (col_sum + eps);
+                        }
+                    }
+                }
+                iter += 1;
+            }
+
+            let comb_ptr = split_comb.as_mut_ptr();
+            for idx in 0..hc * hc {
+                unsafe {
+                    *comb_ptr.add(idx) = COMB[idx];
+                }
+            }
+        }
+        thread::sync_threads();
+
+        let hidden_ptr = hidden.as_mut_ptr();
+        let mut d = tid;
+        while d < dim {
+            let mut out = 0.0f32;
+            for copy in 0..hc {
+                out += unsafe { PRE[copy] } * state[copy * dim + d];
+            }
+            unsafe {
+                *hidden_ptr.add(d) = out;
+            }
+            d += bdim;
+        }
+    }
+
+    #[kernel]
+    pub fn hc_post_single_f32(
+        hidden: &[f32],
+        residual: &[f32],
+        split_post: &[f32],
+        split_comb: &[f32],
+        mut output: DisjointSlice<f32>,
+        hc_mult: u32,
+        hidden_size: u32,
+    ) {
+        let idx = thread::index_1d().get();
+        let hc = hc_mult as usize;
+        let dim = hidden_size as usize;
+        let total = hc * dim;
+        if (idx as u64) >= total as u64 {
+            return;
+        }
+        let idx = idx as usize;
+        let copy = idx / dim;
+        let d = idx % dim;
+        let mut comb_row_sum = 0.0f32;
+        for k in 0..hc {
+            comb_row_sum += split_comb[copy * hc + k];
+        }
+        if let Some(o) = output.get_mut(thread::index_1d()) {
+            *o = split_post[copy] * hidden[d] + comb_row_sum * residual[idx];
+        }
+    }
+
+    #[kernel]
+    pub fn hc_head_single_f32(
+        state: &[f32],
+        function: &[f32],
+        scale: &[f32],
+        base: &[f32],
+        mut hidden: DisjointSlice<f32>,
+        hc_mult: u32,
+        hidden_size: u32,
+        eps: f32,
+        norm_eps: f32,
+    ) {
+        static mut SUM: SharedArray<f32, 1024> = SharedArray::UNINIT;
+        static mut PRE: SharedArray<f32, 16> = SharedArray::UNINIT;
+        let tid = thread::threadIdx_x() as usize;
+        let bdim = thread::blockDim_x() as usize;
+        let hc = hc_mult as usize;
+        let dim = hidden_size as usize;
+        let hc_dim = hc * dim;
+        if hc == 0 || hc > 16 {
+            return;
+        }
+
+        let mut sum = 0.0f32;
+        let mut j = tid;
+        while j < hc_dim {
+            let v = state[j];
+            sum += v * v;
+            j += bdim;
+        }
+        unsafe {
+            SUM[tid] = sum;
+        }
+        thread::sync_threads();
+        let mut stride = (bdim + 1) / 2;
+        while stride > 0 {
+            if tid < stride && tid + stride < bdim {
+                unsafe {
+                    SUM[tid] += SUM[tid + stride];
+                }
+            }
+            thread::sync_threads();
+            stride /= 2;
+        }
+        if tid == 0 {
+            let val = unsafe { SUM[0] } / hc_dim as f32 + norm_eps;
+            unsafe {
+                SUM[0] = fast_rsqrt(val);
+            }
+        }
+        thread::sync_threads();
+        let rms = unsafe { SUM[0] };
+
+        if tid < hc {
+            let mut dot = 0.0f32;
+            let row = tid;
+            for col in 0..hc_dim {
+                dot += function[row * hc_dim + col] * state[col];
+            }
+            unsafe {
+                PRE[row] = fast_sigmoid(dot * rms * scale[0] + base[row]) + eps;
+            }
+        }
+        thread::sync_threads();
+
+        let hidden_ptr = hidden.as_mut_ptr();
+        let mut d = tid;
+        while d < dim {
+            let mut out = 0.0f32;
+            for copy in 0..hc {
+                out += unsafe { PRE[copy] } * state[copy * dim + d];
+            }
+            unsafe {
+                *hidden_ptr.add(d) = out;
+            }
+            d += bdim;
         }
     }
 }

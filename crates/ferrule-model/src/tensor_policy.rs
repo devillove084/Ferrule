@@ -25,7 +25,9 @@ pub enum TensorClass {
     AttentionSink,
     MlaQueryA,
     MlaQueryB,
+    MlaQueryNorm,
     MlaKv,
+    MlaKvNorm,
     MlaOutputA,
     MlaOutputB,
     MlaCompressor,
@@ -62,7 +64,9 @@ impl TensorClass {
             Self::AttentionSink => "attention_sink",
             Self::MlaQueryA => "mla_query_a",
             Self::MlaQueryB => "mla_query_b",
+            Self::MlaQueryNorm => "mla_query_norm",
             Self::MlaKv => "mla_kv",
+            Self::MlaKvNorm => "mla_kv_norm",
             Self::MlaOutputA => "mla_output_a",
             Self::MlaOutputB => "mla_output_b",
             Self::MlaCompressor => "mla_compressor",
@@ -91,7 +95,9 @@ impl TensorClass {
             self,
             Self::MlaQueryA
                 | Self::MlaQueryB
+                | Self::MlaQueryNorm
                 | Self::MlaKv
+                | Self::MlaKvNorm
                 | Self::MlaOutputA
                 | Self::MlaOutputB
                 | Self::MlaCompressor

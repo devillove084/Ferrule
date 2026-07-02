@@ -1,10 +1,14 @@
+use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
 
 use ferrule_model::{HfSafetensorsInventory, ModelDescriptor};
 use ferrule_runtime::{
-    ExpertComputeBundle, ExpertId, ExpertSource, ExpertStreamingPlanner, ExpertStreamingPolicy,
-    ExpertStreamingReader,
+    models::deepseek_v4::{
+        DeepSeekV4OperatorBackend, DeepSeekV4ReferenceOptions, DeepSeekV4ReferenceRunner,
+    },
+    ChatTemplate, ExpertComputeBundle, ExpertId, ExpertSource, ExpertStreamingPlanner,
+    ExpertStreamingPolicy, ExpertStreamingReader,
 };
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -120,6 +124,427 @@ pub fn cmd_expert_stream_smoke(
     println!("            up={:?}", bundle.up.format);
     println!("            down={:?}", bundle.down.format);
     Ok(())
+}
+
+// ── deepseek-v4-probe / generate ─────────────────────────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+pub fn cmd_deepseek_v4_generate(
+    model_dir: &str,
+    prompt: &str,
+    max_new_tokens: usize,
+    max_layers: usize,
+    output_head_chunk_rows: usize,
+    max_tensor_mb: u64,
+    expert_reader_max_slice_mb: u64,
+    backend: &str,
+    stop_at_eos: bool,
+    verbose_tokens: bool,
+    chat_prompt: bool,
+) -> anyhow::Result<()> {
+    let model_path = Path::new(model_dir);
+    let options = DeepSeekV4ReferenceOptions {
+        max_layers,
+        output_head_chunk_rows,
+        expert_reader_max_tensor_bytes: expert_reader_max_slice_mb.saturating_mul(1024 * 1024),
+    };
+    let operator_backend = DeepSeekV4OperatorBackend::parse(backend)?;
+    let load_start = Instant::now();
+    let mut runner = DeepSeekV4ReferenceRunner::load_hf_with_options_and_backend(
+        model_path,
+        max_tensor_mb.saturating_mul(1024 * 1024),
+        options,
+        operator_backend,
+    )?;
+    let load_elapsed = load_start.elapsed();
+
+    let encoded_prompt = if chat_prompt {
+        ChatTemplate::DeepSeekV4.format_turn(prompt, true)
+    } else {
+        prompt.to_string()
+    };
+    let prompt_tokens = runner.model.tokenizer.encode(&encoded_prompt)?;
+    if prompt_tokens.is_empty() {
+        anyhow::bail!("prompt encoded to zero tokens");
+    }
+
+    println!("=== DeepSeek-V4 Generate ===");
+    println!("model:      {model_dir}");
+    println!("backend:    {}", runner.operator_backend().as_str());
+    println!("prompt:     {prompt:?}");
+    if chat_prompt {
+        println!("chat_prompt: {:?}", encoded_prompt);
+    }
+    println!("tokens:     {:?}", prompt_tokens);
+    println!("max_new:   {max_new_tokens}");
+    println!("max_layers: {max_layers}");
+    println!("load:       {:.3} ms", load_elapsed.as_secs_f64() * 1000.0);
+    println!("--- output ---");
+
+    if max_new_tokens == 0 {
+        println!();
+        return Ok(());
+    }
+
+    let run_start = Instant::now();
+    let mut top = runner.prefill_tokens_topk_batched(&prompt_tokens, 1)?;
+    if top.is_empty() {
+        anyhow::bail!("DSV4 generation produced no candidate after prefill");
+    }
+
+    let eos = runner.model.tokenizer.eos_token_id();
+    let mut generated = Vec::new();
+    for step in 0..max_new_tokens {
+        let next = top[0];
+        generated.push(next.token_id);
+        if verbose_tokens {
+            eprintln!("[{}] token={} logit={:.6}", step, next.token_id, next.logit);
+        }
+        let piece = runner
+            .model
+            .tokenizer
+            .decode(&[next.token_id])
+            .unwrap_or_else(|_| String::new());
+        print!("{piece}");
+        std::io::stdout().flush()?;
+
+        if stop_at_eos && Some(next.token_id) == eos {
+            break;
+        }
+        if step + 1 == max_new_tokens {
+            break;
+        }
+        top = runner.decode_token_topk(next.token_id, 1)?;
+        if top.is_empty() {
+            anyhow::bail!(
+                "DSV4 generation produced no candidate at decode step {}",
+                step + 1
+            );
+        }
+    }
+
+    let elapsed = run_start.elapsed();
+    println!();
+    println!("--- stats ---");
+    println!("generated_tokens: {:?}", generated);
+    println!("position:   {}", runner.position());
+    println!("bound layers: {}", runner.bound_layer_count());
+    print_deepseek_v4_runtime_stats(&runner);
+    println!("run:        {:.3} ms", elapsed.as_secs_f64() * 1000.0);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn cmd_deepseek_v4_probe(
+    model_dir: &str,
+    prompt: &str,
+    max_layers: usize,
+    start_row: usize,
+    row_count: usize,
+    top_k: usize,
+    full_vocab_topk: bool,
+    output_head_chunk_rows: usize,
+    max_tensor_mb: u64,
+    expert_reader_max_slice_mb: u64,
+    backend: &str,
+    reference_json: Option<&str>,
+    reference_atol: f32,
+) -> anyhow::Result<()> {
+    let model_path = Path::new(model_dir);
+    let options = DeepSeekV4ReferenceOptions {
+        max_layers,
+        output_head_chunk_rows,
+        expert_reader_max_tensor_bytes: expert_reader_max_slice_mb.saturating_mul(1024 * 1024),
+    };
+
+    let operator_backend = DeepSeekV4OperatorBackend::parse(backend)?;
+    let load_start = Instant::now();
+    let mut runner = DeepSeekV4ReferenceRunner::load_hf_with_options_and_backend(
+        model_path,
+        max_tensor_mb.saturating_mul(1024 * 1024),
+        options,
+        operator_backend,
+    )?;
+    let load_elapsed = load_start.elapsed();
+
+    let token_ids = runner.model.tokenizer.encode(prompt)?;
+    if token_ids.is_empty() {
+        anyhow::bail!("prompt encoded to zero tokens");
+    }
+
+    println!("=== DeepSeek-V4 Probe ===");
+    println!("model:      {model_dir}");
+    println!("prompt:     {prompt:?}");
+    println!("tokens:     {:?}", token_ids);
+    println!(
+        "config:     hidden={} layers={} vocab={} heads={} head_dim={} window={} compress_layers={}",
+        runner.model.config.hidden_size,
+        runner.model.config.num_layers,
+        runner.model.config.vocab_size,
+        runner.model.config.num_heads,
+        runner.model.config.head_dim,
+        runner.model.config.window_size,
+        runner
+            .model
+            .config
+            .compress_ratios
+            .iter()
+            .filter(|&&ratio| ratio != 0)
+            .count()
+    );
+    println!(
+        "mode:       max_layers={}{}",
+        max_layers,
+        if max_layers < runner.model.config.num_layers {
+            " (partial/reference)"
+        } else {
+            " (full source path; sequential diagnostic prefill)"
+        }
+    );
+    println!("backend:    {}", runner.operator_backend().as_str());
+    if max_layers > 0 {
+        if runner.operator_backend() == DeepSeekV4OperatorBackend::Cuda {
+            println!(
+                "note:       cuda reuses one cuda-oxide context/module and cached source-linear/expert handles; CPU is only the explicit reference backend"
+            );
+        } else {
+            println!(
+                "note:       CPU layer execution dequantizes source tensors and streams selected experts; use small prompts/layers for diagnostics"
+            );
+        }
+    }
+    println!("load:       {:.3} ms", load_elapsed.as_secs_f64() * 1000.0);
+
+    let run_start = Instant::now();
+    if full_vocab_topk {
+        let top = runner.prefill_tokens_topk_batched(&token_ids, top_k)?;
+        if let Some(path) = reference_json {
+            compare_deepseek_v4_probe_reference(
+                path,
+                prompt,
+                &token_ids,
+                max_layers,
+                None,
+                Some(&top),
+                reference_atol,
+            )?;
+        }
+        let elapsed = run_start.elapsed();
+        println!("position:   {}", runner.position());
+        println!("bound layers: {}", runner.bound_layer_count());
+        print_deepseek_v4_runtime_stats(&runner);
+        println!(
+            "run:        {:.3} ms (batched prefill + full-vocab top-{top_k})",
+            elapsed.as_secs_f64() * 1000.0
+        );
+        println!("top logits:");
+        for item in top {
+            let piece = runner
+                .model
+                .tokenizer
+                .decode(&[item.token_id])
+                .unwrap_or_else(|_| String::new());
+            println!("  {:>8}: {:>12.6}  {:?}", item.token_id, item.logit, piece);
+        }
+    } else {
+        let logits =
+            runner.prefill_tokens_logits_row_range_batched(&token_ids, start_row, row_count)?;
+        let row_logits = logits
+            .iter()
+            .copied()
+            .enumerate()
+            .map(
+                |(offset, logit)| ferrule_runtime::models::deepseek_v4::DeepSeekV4Logit {
+                    token_id: (start_row + offset) as u32,
+                    logit,
+                },
+            )
+            .collect::<Vec<_>>();
+        if let Some(path) = reference_json {
+            compare_deepseek_v4_probe_reference(
+                path,
+                prompt,
+                &token_ids,
+                max_layers,
+                Some(&row_logits),
+                None,
+                reference_atol,
+            )?;
+        }
+        let elapsed = run_start.elapsed();
+        println!("position:   {}", runner.position());
+        println!("bound layers: {}", runner.bound_layer_count());
+        print_deepseek_v4_runtime_stats(&runner);
+        println!(
+            "run:        {:.3} ms (batched prefill + lm_head rows [{}, {}))",
+            elapsed.as_secs_f64() * 1000.0,
+            start_row,
+            start_row + row_count
+        );
+        println!("row logits:");
+        for (offset, logit) in logits.iter().enumerate() {
+            let token_id = (start_row + offset) as u32;
+            let piece = runner
+                .model
+                .tokenizer
+                .decode(&[token_id])
+                .unwrap_or_else(|_| String::new());
+            println!("  {:>8}: {:>12.6}  {:?}", token_id, logit, piece);
+        }
+        if top_k > 0 {
+            let mut ranked = logits
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(offset, logit)| ((start_row + offset) as u32, logit))
+                .collect::<Vec<_>>();
+            ranked.sort_by(|(left_id, left), (right_id, right)| {
+                right.total_cmp(left).then_with(|| left_id.cmp(right_id))
+            });
+            ranked.truncate(top_k.min(ranked.len()));
+            println!("top logits in row range:");
+            for (token_id, logit) in ranked {
+                let piece = runner
+                    .model
+                    .tokenizer
+                    .decode(&[token_id])
+                    .unwrap_or_else(|_| String::new());
+                println!("  {:>8}: {:>12.6}  {:?}", token_id, logit, piece);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn compare_deepseek_v4_probe_reference(
+    path: &str,
+    prompt: &str,
+    token_ids: &[u32],
+    max_layers: usize,
+    row_logits: Option<&[ferrule_runtime::models::deepseek_v4::DeepSeekV4Logit]>,
+    top_logits: Option<&[ferrule_runtime::models::deepseek_v4::DeepSeekV4Logit]>,
+    atol: f32,
+) -> anyhow::Result<()> {
+    let text = std::fs::read_to_string(path)?;
+    let json: serde_json::Value = serde_json::from_str(&text)?;
+    if let Some(expected_prompt) = json.get("prompt").and_then(|value| value.as_str()) {
+        if expected_prompt != prompt {
+            anyhow::bail!(
+                "reference prompt mismatch: expected {:?}, got {:?}",
+                expected_prompt,
+                prompt
+            );
+        }
+    }
+    if let Some(expected_layers) = json.get("max_layers").and_then(|value| value.as_u64()) {
+        if expected_layers as usize != max_layers {
+            anyhow::bail!(
+                "reference max_layers mismatch: expected {}, got {}",
+                expected_layers,
+                max_layers
+            );
+        }
+    }
+    if let Some(expected_tokens) = json.get("tokens").and_then(|value| value.as_array()) {
+        let expected = expected_tokens
+            .iter()
+            .map(|value| {
+                value
+                    .as_u64()
+                    .map(|value| value as u32)
+                    .ok_or_else(|| anyhow::anyhow!("reference token ids must be u32 integers"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        if expected != token_ids {
+            anyhow::bail!(
+                "reference token ids mismatch: expected {:?}, got {:?}",
+                expected,
+                token_ids
+            );
+        }
+    }
+    if let Some(actual) = row_logits {
+        if let Some(expected) = json.get("row_logits") {
+            compare_logit_array(expected, actual, atol, "row_logits")?;
+            println!("reference: row_logits matched within atol={atol}");
+        }
+    }
+    if let Some(actual) = top_logits {
+        if let Some(expected) = json.get("top_logits") {
+            compare_logit_array(expected, actual, atol, "top_logits")?;
+            println!("reference: top_logits matched within atol={atol}");
+        }
+    }
+    Ok(())
+}
+
+fn compare_logit_array(
+    expected: &serde_json::Value,
+    actual: &[ferrule_runtime::models::deepseek_v4::DeepSeekV4Logit],
+    atol: f32,
+    label: &str,
+) -> anyhow::Result<()> {
+    let expected = expected
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("reference {label} must be an array"))?;
+    if expected.len() != actual.len() {
+        anyhow::bail!(
+            "reference {label} length mismatch: expected {}, got {}",
+            expected.len(),
+            actual.len()
+        );
+    }
+    for (idx, (expected, actual)) in expected.iter().zip(actual.iter()).enumerate() {
+        let token_id = expected
+            .get("token_id")
+            .and_then(|value| value.as_u64())
+            .ok_or_else(|| anyhow::anyhow!("reference {label}[{idx}].token_id missing/u64"))?
+            as u32;
+        let logit = expected
+            .get("logit")
+            .and_then(|value| value.as_f64())
+            .ok_or_else(|| anyhow::anyhow!("reference {label}[{idx}].logit missing/f64"))?
+            as f32;
+        if token_id != actual.token_id {
+            anyhow::bail!(
+                "reference {label}[{idx}] token mismatch: expected {}, got {}",
+                token_id,
+                actual.token_id
+            );
+        }
+        let diff = (logit - actual.logit).abs();
+        if diff > atol {
+            anyhow::bail!(
+                "reference {label}[{idx}] logit mismatch for token {}: expected {:.8}, got {:.8}, diff {:.8} > atol {:.8}",
+                token_id,
+                logit,
+                actual.logit,
+                diff,
+                atol
+            );
+        }
+    }
+    Ok(())
+}
+
+fn print_deepseek_v4_runtime_stats(runner: &DeepSeekV4ReferenceRunner) {
+    let stats = runner.layer_runtime_stats();
+    if stats.is_empty() {
+        return;
+    }
+    println!("layer stats:");
+    for stat in stats {
+        println!(
+            "  L{:>2}: window_kv={} compressed_kv={} indexer_kv={} resident_experts={} resident_bytes={}",
+            stat.layer,
+            stat.window_kv_len,
+            stat.compressed_kv_len,
+            stat.indexer_compressed_kv_len,
+            stat.resident_experts,
+            stat.resident_expert_bytes,
+        );
+    }
 }
 
 // ── inspect-weightpack ───────────────────────────────────────────────────────

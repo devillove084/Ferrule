@@ -3,8 +3,8 @@
 //! This module is intentionally model-family agnostic. A model adapter decides
 //! which source tensors represent an expert; the runtime decides when an expert
 //! should be GPU-resident, prefetched, evicted, or streamed from a slower tier.
-//! The first target is quality-first DeepSeek V4: preserve source FP4/FP8 payloads
-//! and stream experts instead of immediately re-quantizing them to fit.
+//! Quality-first adapters can preserve source FP4/FP8 payloads and stream experts
+//! instead of immediately re-quantizing them to fit.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek, SeekFrom};
@@ -477,9 +477,9 @@ pub struct ExpertSourcePayload {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpertLinearFormat {
-    /// Official DeepSeek V4 expert source format: `torch.float4_e2m1fn_x2`
-    /// stored in safetensors as I8 bytes, with one `float8_e8m0fnu` scale per
-    /// 32 logical K elements.
+    /// Packed FP4 expert source format: `torch.float4_e2m1fn_x2` stored in
+    /// safetensors as I8 bytes, with one `float8_e8m0fnu` scale per logical
+    /// K block.
     Fp4E2M1PackedWithE8M0Scale {
         out_features: usize,
         in_features: usize,

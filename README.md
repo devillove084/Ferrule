@@ -28,34 +28,53 @@
 
 ## Current milestone
 
-Ferrule has two active tracks:
+Ferrule just crossed an important line: **real local DeepSeek V4 Flash + DSpark weights can enter an interactive CUDA chat loop from Rust**.
 
-1. **Executable OLMoE path** — Ferrule can run **OLMoE-1B-7B-0924-Instruct** end-to-end with a real sparse MoE path:
-
-```text
-safetensors → Rust loader → WeightPack/Q4_0 cache → cuda-oxide kernels → router/top-k experts → chat/server
-```
-
-2. **Generic model bring-up path** — Ferrule is being refactored around semantic model-family policies and source bindings, with **DeepSeek V4 Flash + DSpark** as the current pressure-test model:
+This is not a mock path and not a DeepSeek-specific CUDA fork. The current DSV4 path keeps the split we want long-term:
 
 ```text
-HF safetensors inventory → family tensor descriptors → source payloads → generic attention / HC / router / expert policies
+local HF safetensors → semantic source binding → DSV4 model semantics → generic CUDA source operators → readline chat
 ```
 
 What works today:
 
-- CPU FP32 reference inference and GPU Q4_0 inference for the current OLMoE path.
-- WeightPack cache support for quantized OLMoE startup and inspection.
-- Interactive chat REPL, one-shot run, benchmark, compare-logits, perplexity, and minimal OpenAI-compatible server commands.
-- Generic `ModelSupportContract` / `EnginePlan` policy skeleton for non-OLMoE bring-up.
-- DeepSeek V4 Flash + DSpark local HF inventory parsing: 72,317 tensors, 48 shards, ~166.9GB source, with semantic tensor classification.
-- Source-preserving expert streaming from local HF shards, including packed FP4 routed expert tensor sets.
-- Real DSV4 router/shared-expert bindings and CPU/reference MoE fixture coverage.
-- Real DSV4 attention source binding for core MLA tensors plus compressor/indexer auxiliary slices.
-- Real DSV4 Hyper-Connection source binding for layer HC and global HC head tensors, with reference `hc_pre` / `hc_post` / `hc_head` primitives.
-- Initial CUDA Oxide correctness-oriented kernels for packed FP4 experts and sparse attention ABI work.
+- **DeepSeek V4 Flash + DSpark local CUDA chat** through `ferrule chat` / `just dsv4-chat`.
+- Full 43-layer DSV4 greedy generation over local HF shards with strict `cuda` backend.
+- Official-ish DSV4 chat prompt wrapper:
+  ```text
+  <｜begin▁of▁sentence｜><｜User｜>...<｜Assistant｜></think>
+  ```
+- `start_pos == 0` DSV4 prefill semantics for HC/layer traversal, window KV, compressed KV, indexer KV, `remainder`, and `cutoff`.
+- Generic CUDA source operators for F32/BF16/FP8/FP4 linears, sparse attention sink, grouped `wo_a`, HC pre/post/head, shared SwiGLU FFN, routed FP4 experts, and lm_head top-k.
+- CPU/reference anchors for tokenizer, source formats, HC math, sparse attention, routing, and MoE pieces.
+- OLMoE remains the smaller executable regression fixture with CPU/GPU chat/server/bench paths.
 
-Ferrule is no longer just an OLMoE runner: OLMoE remains the executable regression fixture, while the main architecture is moving toward a generic, policy-composed Transformer runtime.
+A real local smoke from the current DSV4 CUDA chat milestone:
+
+```text
+$ just dsv4-chat tokens=128
+→ CUDA chat via cargo oxide build (arch: sm_121, tokens: 128)
+=========================================
+RUSTC-CODEGEN-CUDA CARGO build
+=========================================
+
+Running cargo build --features cuda --release -p ferrule-cli...
+
+    Finished `release` profile [optimized] target(s) in 0.11s
+
+✓ Cargo build succeeded
+DeepSeek-V4: 4096d×43L, 256e top-6, vocab=129280 (cuda, attention=MLA, source=safetensors, arch=deepseek_v4)
+Chat ready. Type /exit or Ctrl-D to quit. Template: deepseek-v4. DeepSeek-V4 greedy top-k fast path.
+  /reset      clear session state
+  /stats      show session stats
+  /experts    show DSV4 layer/cache stats
+  /ctx        show context window usage
+You> hi
+Ferrule> H! How can I help you?
+stats> prefill=65789.6ms decode=41575.4ms pos=14
+```
+
+This is a huge milestone, but the next gates are clear: **official numeric parity first, then 20 tok/s load-excluded decode**. If Ferrule gives a wrong-identity answer, treat that as a correctness bug, not as a UI issue.
 
 ---
 
@@ -80,7 +99,7 @@ Ferrule is no longer just an OLMoE runner: OLMoE remains the executable regressi
 Ferrule is designed around a simple idea: future LLM systems need to co-design model structure, runtime state, and hardware placement.
 
 <p align="center">
-  <img src="docs/assets/ferrule-current-architecture.svg" alt="Ferrule system vision" width="100%" />
+  <img src="docs/assets/ferrule-current-architecture.svg" alt="Ferrule current architecture" width="100%" />
 </p>
 
 Near term, Ferrule aims to reach llama.cpp-level local usability while keeping a more explicit runtime architecture: fast cached startup, sampling controls, templates, quality checks, benchmarks, a small local server, and source-preserving bring-up for mainstream model families.
@@ -100,50 +119,70 @@ Long term, Ferrule should become a runtime substrate for edge-cloud LLM systems:
 
 ## Quick start
 
-Build CPU-only:
+The fastest path to the current milestone is through the `justfile` wrappers. For CUDA work, prefer `just` / `cargo oxide` commands; plain CUDA `cargo test` can miss cuda-oxide artifact wiring.
+
+1. Check the environment:
 
 ```bash
-cargo build --release
+just cuda-info
+just oxide-doctor
 ```
 
-Build CUDA with cuda-oxide:
+2. Build the CUDA release binary:
 
 ```bash
-cargo oxide build --features cuda --arch sm_86
+just build-cuda
 ```
 
-Download the current executable OLMoE-Instruct fixture with the project helper:
+If auto-detection picks the wrong GPU architecture, override it explicitly:
 
 ```bash
-./.venv/bin/python scripts/download_ms.py \
-  LLM-Research/OLMoE-1B-7B-0924-Instruct \
-  --out models
-
-ln -s LLM-Research/OLMoE-1B-7B-0924-Instruct models/OLMoE-Instruct
+FERRULE_CUDA_ARCH=sm_121 just build-cuda
 ```
 
-Run OLMoE chat:
+3. Put the local DSV4 source checkout here:
 
-```bash
-./target/release/ferrule chat models/OLMoE-Instruct -q q4 -n 256
+```text
+models/DeepSeek-V4-Flash-DSpark
 ```
 
-CPU reference chat:
+4. Run real local DeepSeek V4 Flash + DSpark CUDA chat:
 
 ```bash
-./target/release/ferrule chat models/OLMoE-Instruct -q cpu -n 128
+just dsv4-chat tokens=128
+# or:
+just dsv4-chat 128
 ```
 
-Inspect a local DeepSeek V4 Flash + DSpark source checkout if present:
+Inside chat:
+
+```text
+/reset    clear session state
+/stats    show session stats
+/experts  show DSV4 layer/cache stats
+/ctx      show context window usage
+/exit     quit
+```
+
+5. Run a one-shot DSV4 CUDA smoke:
 
 ```bash
-./target/release/ferrule info models/DeepSeek-V4-Flash-DSpark
+just dsv4-cuda-generate Hello 2 4096 --chat
+```
 
-./target/release/ferrule expert-stream-smoke \
-  models/DeepSeek-V4-Flash-DSpark \
-  --layer 0 \
-  --expert 0 \
-  --max-slice-mb 64
+6. Generate tokenizer/chat parity JSON from the local official encoding code:
+
+```bash
+just dsv4-parity-json "Who are you?" target/dsv4_generation_parity.json
+```
+
+7. Optional: build CPU-only or run the smaller OLMoE regression fixture:
+
+```bash
+just build-cpu
+
+# If the OLMoE fixture is present:
+just chat models/OLMoE-Instruct q4 -n 256
 ```
 
 ---
@@ -153,9 +192,10 @@ Inspect a local DeepSeek V4 Flash + DSpark source checkout if present:
 | Area | Status |
 |---|---|
 | Executable model fixture | OLMoE-style sparse MoE, CPU FP32 and GPU Q4_0 paths |
-| Generic bring-up target | DeepSeek V4 Flash + DSpark source inventory and semantic source binding |
-| Inference commands | `run`, `gpu-run`, `chat`, `server`, `bench-infer`, `compare-logits`, `perplexity` |
-| MoE execution | router → top-k/hash selection → routed experts → optional shared FFN; CPU/reference DSV4 MoE fixtures pass |
+| Real large-model milestone | DeepSeek V4 Flash + DSpark local HF shards can run full 43-layer CUDA greedy chat |
+| DSV4 execution boundary | `ferrule_runtime::models::deepseek_v4` owns DSV4 HC, MLA, compressor/indexer, router, MoE, and output semantics |
+| Inference commands | `run`, `gpu-run`, `chat`, `server`, `bench-infer`, `compare-logits`, `perplexity`, `deepseek-v4-generate`, `deepseek-v4-probe` |
+| MoE execution | router → top-k/hash selection → routed FP4 experts → shared FFN; next target is GPU-resident expert residency + batched selected-expert kernels |
 | Expert streaming | bounded local HF shard reads for selected experts; source FP4 expert bundles and resident handle abstractions exist |
 | Attention | OLMoE GQA executable path; DSV4 attention source binding, sparse attention reference, and CUDA sparse-attention ABI in progress |
 | Hyper-Connections | DSV4 HC source binding plus reference `hc_pre` / `hc_post` / `hc_head` primitives |
@@ -170,46 +210,114 @@ Inspect a local DeepSeek V4 Flash + DSpark source checkout if present:
 
 ## Useful commands
 
-```bash
-# OLMoE metadata
-./target/release/ferrule info models/OLMoE-Instruct
+Most day-to-day commands are wrapped in `justfile` recipes.
 
-# DeepSeek V4 / DSpark source metadata and tensor policy summary
-./target/release/ferrule info models/DeepSeek-V4-Flash-DSpark
-
-# One-shot CPU generation on the current executable fixture
-./target/release/ferrule run models/OLMoE-Instruct -p "Paris is" -n 16
-
-# One-shot GPU generation on the current executable fixture
-./target/release/ferrule gpu-run models/OLMoE-Instruct -p "Paris is" -n 16 -q q4
-
-# Minimal local server
-./target/release/ferrule server models/OLMoE-Instruct -q q4 --host 127.0.0.1 --port 8080
-
-# Compare CPU FP32 vs GPU quantized logits
-./target/release/ferrule compare-logits models/OLMoE-Instruct -p "Paris is" -n 16 -q q4
-
-# Benchmark prompt/decode throughput, excluding model-load time
-./target/release/ferrule bench-infer models/OLMoE-Instruct -p "Paris is" -n 64 -q q4
-
-# Smoke-test one source-preserved DSV4 routed expert from local HF shards
-./target/release/ferrule expert-stream-smoke models/DeepSeek-V4-Flash-DSpark --layer 0 --expert 0 --max-slice-mb 64
-
-# CUDA probe and GEMV benchmark
-./target/release/ferrule cuda
-
-# Enable token top-k debug logging
-FERRULE_DEBUG_TOPK=1 ./target/release/ferrule chat models/OLMoE-Instruct -q q4 -n 32
-```
-
-Useful validation commands:
+### Environment and build
 
 ```bash
-cargo test -p ferrule-model
-cargo test -p ferrule-runtime
-cargo check -p ferrule-cli --features cuda
-cargo oxide test -- -p ferrule-cuda
+# Show cuda-oxide/GPU/arch detection.
+just cuda-info
+
+# Run cuda-oxide's environment doctor.
+just oxide-doctor
+
+# Auto-detect CUDA availability: CUDA build when available, CPU build otherwise.
+just build
+
+# Explicit CPU or CUDA builds.
+just build-cpu
+just build-cuda
+
+# Override detected architecture.
+FERRULE_CUDA_ARCH=sm_121 just build-cuda
+
+# Development check paths.
+just check
+just check-cuda
 ```
+
+### DeepSeek V4 / DSpark local CUDA path
+
+```bash
+# Interactive readline chat over local HF shards.
+just dsv4-chat tokens=128
+just dsv4-chat 128
+
+# One-shot greedy generation through the same DSV4 model boundary.
+just dsv4-cuda-generate Hello 2 4096 --chat
+
+# Full 43-layer first-token/top-k diagnostic.
+just dsv4-cuda-first-token Hello 1
+
+# Probe selected rows/top-k, optionally limiting layers for debugging.
+just dsv4-cuda-probe "one two three four" 3 1 0
+
+# CPU/source diagnostic probes without building CUDA.
+just dsv4-probe Hello 0 4 2
+just dsv4-topk Hello 0 3 4096
+
+# Official tokenizer/chat parity JSON from local encoding_dsv4.py.
+just dsv4-parity-json "Who are you?" target/dsv4_generation_parity.json
+```
+
+### Generic / OLMoE regression fixture
+
+```bash
+# Generic CUDA runner wrapper.
+just run-cuda info models/DeepSeek-V4-Flash-DSpark
+
+# OLMoE chat through the generic chat wrapper.
+just chat models/OLMoE-Instruct q4 -n 256
+
+# CPU one-shot run.
+just run models/OLMoE-Instruct "Paris is" -n 16
+
+# GPU one-shot run.
+just gpu-run models/OLMoE-Instruct "Paris is" 16 q4
+
+# Benchmark and compare-logits.
+just bench models/OLMoE-Instruct "Paris is" 64 q4
+just compare models/OLMoE-Instruct "The capital of France is" 8 q4
+
+# Minimal local server.
+just serve models/OLMoE-Instruct q4 8080
+
+# Perplexity / metadata helpers.
+just perplexity models/OLMoE-Instruct data/sample.txt
+just info models/DeepSeek-V4-Flash-DSpark
+```
+
+### Validation and code quality
+
+```bash
+# Full default validation chain.
+just test
+
+# Focused tests.
+just test-runtime
+just test-model
+just test-cli
+just test-cuda
+just test-cuda-required
+
+# Formatting / lint.
+just fmt
+just fmt-fix
+just clippy
+just clippy-cuda
+just lint
+```
+
+### Raw cargo commands still useful for targeted debugging
+
+```bash
+cargo check -p ferrule-runtime -p ferrule-cli
+cargo check -p ferrule-runtime -p ferrule-cli --features ferrule-cli/cuda
+cargo test -p ferrule-runtime deepseek_v4
+cargo test -p ferrule-cli commands::chat::tests
+```
+
+For CUDA tests, use `just test-cuda` or `cargo oxide test`; avoid plain `cargo test -p ferrule-cuda` unless you intentionally want to debug cargo-oxide artifact linking.
 
 ---
 

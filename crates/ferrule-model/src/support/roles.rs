@@ -20,7 +20,9 @@ pub enum TensorRole {
     AttentionSink,
     AttentionLatentQueryA,
     AttentionLatentQueryB,
+    AttentionQueryNorm,
     AttentionLatentKv,
+    AttentionKeyValueNorm,
     AttentionLatentOutputA,
     AttentionLatentOutputB,
     AttentionCompressor,
@@ -60,7 +62,9 @@ impl TensorRole {
             Self::AttentionSink => "attention_sink",
             Self::AttentionLatentQueryA => "attention_latent_query_a",
             Self::AttentionLatentQueryB => "attention_latent_query_b",
+            Self::AttentionQueryNorm => "attention_query_norm",
             Self::AttentionLatentKv => "attention_latent_kv",
+            Self::AttentionKeyValueNorm => "attention_key_value_norm",
             Self::AttentionLatentOutputA => "attention_latent_output_a",
             Self::AttentionLatentOutputB => "attention_latent_output_b",
             Self::AttentionCompressor => "attention_compressor",
@@ -92,7 +96,9 @@ impl TensorRole {
             self,
             Self::AttentionLatentQueryA
                 | Self::AttentionLatentQueryB
+                | Self::AttentionQueryNorm
                 | Self::AttentionLatentKv
+                | Self::AttentionKeyValueNorm
                 | Self::AttentionLatentOutputA
                 | Self::AttentionLatentOutputB
                 | Self::AttentionCompressor

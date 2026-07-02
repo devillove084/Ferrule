@@ -263,17 +263,29 @@ mod tests {
         };
         ctx.bind_to_thread().ok();
 
+        let mut closure_invoked = false;
         let result = capture_decode_graph(&stream, || {
+            closure_invoked = true;
             Err(Error::Internal("simulated capture failure".into()))
         });
         match result {
+            Err(e) if closure_invoked => {
+                assert!(
+                    format!("{e}").contains("simulated capture failure"),
+                    "capture_fn error should be preserved after capture begins, got: {e}"
+                );
+            }
             Err(e) => {
-                assert!(format!("{e}").contains("simulated capture failure"));
+                // Some CUDA default-stream / driver combinations reject capture before
+                // the callback is invoked. That is covered by the unsupported-driver
+                // tests above; this test only checks preservation once the callback ran.
+                let msg = format!("{e}");
+                assert!(
+                    msg.contains("capture") || msg.contains("driver") || msg.contains("10.0"),
+                    "unexpected pre-callback capture error: {msg}"
+                );
             }
-            Ok(_) => {
-                // If capture succeeded anyway (stream was empty before the
-                // closure returned an error), the stream should remain usable.
-            }
+            Ok(_) => panic!("capture_fn returned an error but graph capture succeeded"),
         }
     }
 }

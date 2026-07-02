@@ -2,7 +2,7 @@
 //!
 //! This module deliberately does not run a model. It compares Ferrule-observed
 //! tokenization/generation facts against a checked-in `ReferenceCommandManifest`,
-//! allowing DSV4 bring-up to validate tokenizer and first-token behavior even when
+//! allowing model bring-up to validate tokenizer and first-token behavior even when
 //! the full target model is not available in CI.
 
 use std::collections::BTreeSet;
@@ -204,7 +204,7 @@ mod tests {
             id: ReferenceManifestId::new("fixture").unwrap(),
             family: ModelFamily::DeepSeekV4,
             artifact: ReferenceArtifact::SyntheticFixture {
-                fixture: "tiny-dsv4".into(),
+                fixture: "tiny-source-bound".into(),
             },
             engine: ReferenceEngineKind::PythonFixture,
             command: ReferenceCommand::new("python", ["fixture.py"]),

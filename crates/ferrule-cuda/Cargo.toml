@@ -22,6 +22,7 @@ memmap2 = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
+libm = "0.2"
 cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git" }
 cuda-device = { git = "https://github.com/NVlabs/cuda-oxide.git" }
 cuda-host = { git = "https://github.com/NVlabs/cuda-oxide.git" }

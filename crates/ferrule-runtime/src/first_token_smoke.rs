@@ -1,19 +1,34 @@
 //! First-token smoke harness.
 //!
-//! This is intentionally model-runner agnostic. A full Ferrule runner, a sliced
-//! DSV4 fixture, or a fake test runner can implement `FirstTokenModel`; the harness
-//! handles reference-manifest lookup and comparison without requiring a local full
-//! DeepSeek V4 checkpoint.
+//! This is intentionally model-runner agnostic. Any Ferrule `ModelRunner`, sliced
+//! source-bound fixture, or fake test runner can implement `FirstTokenModel`; the
+//! harness handles reference-manifest lookup and comparison without requiring a
+//! local full target checkpoint in CI.
 
 use ferrule_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::reference_compare::{compare_reference_observation, ReferenceObservation};
 use crate::reference_manifest::{PromptId, ReferenceCommandManifest};
+use crate::runner::ModelRunner;
 
 pub trait FirstTokenModel {
     fn encode_prompt(&self, prompt: &str) -> Result<Vec<u32>>;
     fn generate_first_token(&mut self, prompt_tokens: &[u32]) -> Result<Option<u32>>;
+}
+
+impl<T: ModelRunner> FirstTokenModel for T {
+    fn encode_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
+        self.encode(prompt)
+    }
+
+    fn generate_first_token(&mut self, prompt_tokens: &[u32]) -> Result<Option<u32>> {
+        let logits = self.prefill(prompt_tokens)?;
+        if logits.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(crate::argmax(&logits)))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,7 +164,7 @@ mod tests {
             id: ReferenceManifestId::new("fixture").unwrap(),
             family: ModelFamily::DeepSeekV4,
             artifact: ReferenceArtifact::SyntheticFixture {
-                fixture: "tiny-dsv4".into(),
+                fixture: "tiny-source-bound".into(),
             },
             engine: ReferenceEngineKind::PythonFixture,
             command: ReferenceCommand::new("python", ["fixture.py"]),

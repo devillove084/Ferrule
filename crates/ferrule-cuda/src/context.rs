@@ -1,11 +1,18 @@
 //! CUDA context helpers — probe, GEMV benchmarks, kernel dispatch.
 
+use std::sync::Arc;
+
 use cuda_core::stream::CudaStream;
 use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig};
 use ferrule_core::{Error, Result};
 use ferrule_quant::QuantType;
 
 use crate::kernels::kernels::LoadedModule;
+use crate::transformer::source_expert::{
+    CudaPackedFp4Expert, CudaPackedFp4ExpertExecutor, CudaPackedFp4ExpertScratch,
+    CudaPackedFp4Linear,
+};
+use crate::transformer::sparse_attention::{CudaSparseAttentionExecutor, CudaSparseAttentionShape};
 
 /// Convert a CUDA result into a ferrule Result.
 pub(crate) fn cu<T, E: std::fmt::Debug>(r: std::result::Result<T, E>) -> Result<T> {
@@ -85,6 +92,907 @@ pub fn cuda_probe() -> Result<()> {
     Ok(())
 }
 
+// ── Reusable source-format operator context ────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CudaSourceLinearShape {
+    F32 {
+        out_features: usize,
+        in_features: usize,
+    },
+    Bf16Bytes {
+        out_features: usize,
+        in_features: usize,
+    },
+    Fp8E4M3WithE8M0Scale {
+        out_features: usize,
+        in_features: usize,
+        block_m: usize,
+        block_k: usize,
+    },
+    Fp4E2M1PackedWithE8M0Scale {
+        out_features: usize,
+        in_features: usize,
+    },
+}
+
+impl CudaSourceLinearShape {
+    pub fn out_features(self) -> usize {
+        match self {
+            Self::F32 { out_features, .. }
+            | Self::Bf16Bytes { out_features, .. }
+            | Self::Fp8E4M3WithE8M0Scale { out_features, .. }
+            | Self::Fp4E2M1PackedWithE8M0Scale { out_features, .. } => out_features,
+        }
+    }
+
+    pub fn in_features(self) -> usize {
+        match self {
+            Self::F32 { in_features, .. }
+            | Self::Bf16Bytes { in_features, .. }
+            | Self::Fp8E4M3WithE8M0Scale { in_features, .. }
+            | Self::Fp4E2M1PackedWithE8M0Scale { in_features, .. } => in_features,
+        }
+    }
+
+    fn validate(self, weight_len: usize, scale_len: usize) -> Result<()> {
+        match self {
+            Self::F32 {
+                out_features,
+                in_features,
+            } => {
+                if in_features == 0 || out_features == 0 {
+                    return Err(Error::Internal(format!(
+                        "invalid CUDA F32 source linear shape: out={out_features} in={in_features}"
+                    )));
+                }
+                let expected_weight = out_features
+                    .checked_mul(in_features)
+                    .and_then(|elements| elements.checked_mul(4))
+                    .ok_or_else(|| {
+                        Error::Internal("CUDA F32 source weight size overflow".into())
+                    })?;
+                if weight_len != expected_weight || scale_len != 0 {
+                    return Err(Error::Internal(format!(
+                        "CUDA F32 source linear length mismatch: weight={weight_len} scale={scale_len}, expected weight={expected_weight} scale=0"
+                    )));
+                }
+            }
+            Self::Bf16Bytes {
+                out_features,
+                in_features,
+            } => {
+                if in_features == 0 || out_features == 0 {
+                    return Err(Error::Internal(format!(
+                        "invalid CUDA BF16 source linear shape: out={out_features} in={in_features}"
+                    )));
+                }
+                let expected_weight = out_features
+                    .checked_mul(in_features)
+                    .and_then(|elements| elements.checked_mul(2))
+                    .ok_or_else(|| {
+                        Error::Internal("CUDA BF16 source weight size overflow".into())
+                    })?;
+                if weight_len != expected_weight || scale_len != 0 {
+                    return Err(Error::Internal(format!(
+                        "CUDA BF16 source linear length mismatch: weight={weight_len} scale={scale_len}, expected weight={expected_weight} scale=0"
+                    )));
+                }
+            }
+            Self::Fp8E4M3WithE8M0Scale {
+                out_features,
+                in_features,
+                block_m,
+                block_k,
+            } => {
+                if in_features == 0 || out_features == 0 || block_m == 0 || block_k == 0 {
+                    return Err(Error::Internal(format!(
+                        "invalid CUDA FP8 source linear shape: out={out_features} in={in_features} block_m={block_m} block_k={block_k}"
+                    )));
+                }
+                let expected_weight = out_features.checked_mul(in_features).ok_or_else(|| {
+                    Error::Internal("CUDA FP8 source weight size overflow".into())
+                })?;
+                let expected_scale = out_features
+                    .div_ceil(block_m)
+                    .checked_mul(in_features.div_ceil(block_k))
+                    .ok_or_else(|| Error::Internal("CUDA FP8 source scale size overflow".into()))?;
+                if weight_len != expected_weight || scale_len != expected_scale {
+                    return Err(Error::Internal(format!(
+                        "CUDA FP8 source linear length mismatch: weight={weight_len} scale={scale_len}, expected weight={expected_weight} scale={expected_scale}"
+                    )));
+                }
+            }
+            Self::Fp4E2M1PackedWithE8M0Scale {
+                out_features,
+                in_features,
+            } => {
+                if in_features == 0
+                    || out_features == 0
+                    || in_features % 32 != 0
+                    || in_features % 2 != 0
+                {
+                    return Err(Error::Internal(format!(
+                        "invalid CUDA FP4 source linear shape: out={out_features} in={in_features}"
+                    )));
+                }
+                let expected_weight =
+                    out_features.checked_mul(in_features / 2).ok_or_else(|| {
+                        Error::Internal("CUDA FP4 source weight size overflow".into())
+                    })?;
+                let expected_scale = out_features
+                    .checked_mul(in_features / 32)
+                    .ok_or_else(|| Error::Internal("CUDA FP4 source scale size overflow".into()))?;
+                if weight_len != expected_weight || scale_len != expected_scale {
+                    return Err(Error::Internal(format!(
+                        "CUDA FP4 source linear length mismatch: weight={weight_len} scale={scale_len}, expected weight={expected_weight} scale={expected_scale}"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+pub struct CudaSourceLinearHandle {
+    shape: CudaSourceLinearShape,
+    weight: DeviceBuffer<u8>,
+    scale: Option<DeviceBuffer<u8>>,
+}
+
+impl CudaSourceLinearHandle {
+    pub fn shape(&self) -> CudaSourceLinearShape {
+        self.shape
+    }
+}
+
+/// Reusable host-side context for generic source-format CUDA operators.
+///
+/// This follows cuda-oxide's preferred examples: create one `CudaContext`, load
+/// the embedded `#[cuda_module]` once, then reuse its default stream and typed
+/// launch methods. It is intentionally generic and knows only packed source
+/// formats plus explicit shapes — model-family semantics stay in runtime code.
+pub struct CudaSourceOperatorContext {
+    _ctx: Arc<CudaContext>,
+    module: LoadedModule,
+    stream: Arc<CudaStream>,
+}
+
+impl CudaSourceOperatorContext {
+    pub fn new() -> Result<Self> {
+        let ctx = cu(CudaContext::new(0))?;
+        cu(ctx.bind_to_thread())?;
+        let module = cu(crate::kernels::kernels::load(&ctx))?;
+        let stream = ctx.default_stream();
+        Ok(Self {
+            _ctx: ctx,
+            module,
+            stream,
+        })
+    }
+
+    pub fn upload_source_linear(
+        &self,
+        shape: CudaSourceLinearShape,
+        weight: &[u8],
+        scale: &[u8],
+    ) -> Result<CudaSourceLinearHandle> {
+        shape.validate(weight.len(), scale.len())?;
+        Ok(CudaSourceLinearHandle {
+            shape,
+            weight: cu(DeviceBuffer::from_host(&self.stream, weight))?,
+            scale: if scale.is_empty() {
+                None
+            } else {
+                Some(cu(DeviceBuffer::from_host(&self.stream, scale))?)
+            },
+        })
+    }
+
+    pub fn upload_f32_linear(
+        &self,
+        weight: &[u8],
+        out_features: usize,
+        in_features: usize,
+    ) -> Result<CudaSourceLinearHandle> {
+        self.upload_source_linear(
+            CudaSourceLinearShape::F32 {
+                out_features,
+                in_features,
+            },
+            weight,
+            &[],
+        )
+    }
+
+    pub fn upload_bf16_linear(
+        &self,
+        weight: &[u8],
+        out_features: usize,
+        in_features: usize,
+    ) -> Result<CudaSourceLinearHandle> {
+        self.upload_source_linear(
+            CudaSourceLinearShape::Bf16Bytes {
+                out_features,
+                in_features,
+            },
+            weight,
+            &[],
+        )
+    }
+
+    pub fn upload_fp8_e4m3_e8m0_linear(
+        &self,
+        weight: &[u8],
+        scale: &[u8],
+        out_features: usize,
+        in_features: usize,
+        block_m: usize,
+        block_k: usize,
+    ) -> Result<CudaSourceLinearHandle> {
+        self.upload_source_linear(
+            CudaSourceLinearShape::Fp8E4M3WithE8M0Scale {
+                out_features,
+                in_features,
+                block_m,
+                block_k,
+            },
+            weight,
+            scale,
+        )
+    }
+
+    pub fn upload_fp4_e2m1_e8m0_linear(
+        &self,
+        weight: &[u8],
+        scale: &[u8],
+        out_features: usize,
+        in_features: usize,
+    ) -> Result<CudaSourceLinearHandle> {
+        self.upload_source_linear(
+            CudaSourceLinearShape::Fp4E2M1PackedWithE8M0Scale {
+                out_features,
+                in_features,
+            },
+            weight,
+            scale,
+        )
+    }
+
+    pub fn source_linear_matvec(
+        &self,
+        handle: &CudaSourceLinearHandle,
+        input: &[f32],
+    ) -> Result<Vec<f32>> {
+        if input.len() != handle.shape.in_features() {
+            return Err(Error::Internal(format!(
+                "CUDA source linear input length mismatch: expected {}, got {}",
+                handle.shape.in_features(),
+                input.len()
+            )));
+        }
+        let xd = cu(DeviceBuffer::from_host(&self.stream, input))?;
+        let mut yd = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            handle.shape.out_features(),
+        ))?;
+        self.source_linear_matvec_device(handle, &xd, &mut yd)?;
+        cu(yd.to_host_vec(&self.stream))
+    }
+
+    pub fn source_linear_topk(
+        &self,
+        handle: &CudaSourceLinearHandle,
+        input: &[f32],
+        top_k: usize,
+    ) -> Result<Vec<(u32, f32)>> {
+        if top_k == 0 {
+            return Ok(Vec::new());
+        }
+        if top_k > 40 {
+            return Err(Error::Internal(format!(
+                "CUDA source linear top-k supports k<=40, got {top_k}"
+            )));
+        }
+        if input.len() != handle.shape.in_features() {
+            return Err(Error::Internal(format!(
+                "CUDA source linear top-k input length mismatch: expected {}, got {}",
+                handle.shape.in_features(),
+                input.len()
+            )));
+        }
+        let xd = cu(DeviceBuffer::from_host(&self.stream, input))?;
+        let mut yd = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            handle.shape.out_features(),
+        ))?;
+        self.source_linear_matvec_device(handle, &xd, &mut yd)?;
+        let mut idx = cu(DeviceBuffer::<f32>::zeroed(&self.stream, top_k))?;
+        let mut val = cu(DeviceBuffer::<f32>::zeroed(&self.stream, top_k))?;
+        cu(self.module.topk_vocab(
+            &self.stream,
+            one_block_config(256),
+            &yd,
+            &mut idx,
+            &mut val,
+            handle.shape.out_features() as u32,
+            top_k as u32,
+        ))?;
+        let idx = cu(idx.to_host_vec(&self.stream))?;
+        let val = cu(val.to_host_vec(&self.stream))?;
+        Ok(idx
+            .into_iter()
+            .zip(val)
+            .map(|(idx, value)| (idx as u32, value))
+            .collect())
+    }
+
+    pub fn source_swiglu_ffn_matvec(
+        &self,
+        gate: &CudaSourceLinearHandle,
+        up: &CudaSourceLinearHandle,
+        down: &CudaSourceLinearHandle,
+        input: &[f32],
+        output_scale: f32,
+        swiglu_limit: f32,
+    ) -> Result<Vec<f32>> {
+        if input.len() != gate.shape.in_features() || input.len() != up.shape.in_features() {
+            return Err(Error::Internal(format!(
+                "CUDA SwiGLU input length mismatch: input={} gate_in={} up_in={}",
+                input.len(),
+                gate.shape.in_features(),
+                up.shape.in_features()
+            )));
+        }
+        if gate.shape.out_features() != up.shape.out_features()
+            || down.shape.in_features() != gate.shape.out_features()
+        {
+            return Err(Error::Internal(format!(
+                "CUDA SwiGLU shape mismatch: gate={:?} up={:?} down={:?}",
+                gate.shape, up.shape, down.shape
+            )));
+        }
+        let xd = cu(DeviceBuffer::from_host(&self.stream, input))?;
+        let mut gated = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            gate.shape.out_features(),
+        ))?;
+        let mut upd = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            up.shape.out_features(),
+        ))?;
+        let mut hidden = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            gate.shape.out_features(),
+        ))?;
+        let mut yd = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            down.shape.out_features(),
+        ))?;
+        self.source_linear_matvec_device(gate, &xd, &mut gated)?;
+        self.source_linear_matvec_device(up, &xd, &mut upd)?;
+        cu(self.module.swiglu_weighted_clamped(
+            &self.stream,
+            LaunchConfig::for_num_elems(gate.shape.out_features() as u32),
+            &gated,
+            &upd,
+            &mut hidden,
+            gate.shape.out_features() as u32,
+            output_scale,
+            swiglu_limit,
+        ))?;
+        self.source_linear_matvec_device(down, &hidden, &mut yd)?;
+        cu(yd.to_host_vec(&self.stream))
+    }
+
+    pub fn source_fp4_swiglu_ffn_matvec(
+        &self,
+        gate: &CudaSourceLinearHandle,
+        up: &CudaSourceLinearHandle,
+        down: &CudaSourceLinearHandle,
+        input: &[f32],
+        route_weight: f32,
+        swiglu_limit: f32,
+    ) -> Result<Vec<f32>> {
+        let CudaSourceLinearShape::Fp4E2M1PackedWithE8M0Scale {
+            out_features: gate_out,
+            in_features: gate_in,
+        } = gate.shape
+        else {
+            return Err(Error::Internal("CUDA packed expert gate is not FP4".into()));
+        };
+        let CudaSourceLinearShape::Fp4E2M1PackedWithE8M0Scale {
+            out_features: up_out,
+            in_features: up_in,
+        } = up.shape
+        else {
+            return Err(Error::Internal("CUDA packed expert up is not FP4".into()));
+        };
+        let CudaSourceLinearShape::Fp4E2M1PackedWithE8M0Scale {
+            out_features: down_out,
+            in_features: down_in,
+        } = down.shape
+        else {
+            return Err(Error::Internal("CUDA packed expert down is not FP4".into()));
+        };
+        if input.len() != gate_in || up_in != gate_in || up_out != gate_out || down_in != gate_out {
+            return Err(Error::Internal(format!(
+                "CUDA packed expert shape mismatch: input={} gate=[{gate_out},{gate_in}] up=[{up_out},{up_in}] down=[{down_out},{down_in}]",
+                input.len()
+            )));
+        }
+        let gate_scale = gate
+            .scale
+            .as_ref()
+            .ok_or_else(|| Error::Internal("CUDA packed expert gate missing scale".into()))?;
+        let up_scale = up
+            .scale
+            .as_ref()
+            .ok_or_else(|| Error::Internal("CUDA packed expert up missing scale".into()))?;
+        let down_scale = down
+            .scale
+            .as_ref()
+            .ok_or_else(|| Error::Internal("CUDA packed expert down missing scale".into()))?;
+        let xd = cu(DeviceBuffer::from_host(&self.stream, input))?;
+        let mut yd = cu(DeviceBuffer::<f32>::zeroed(&self.stream, down_out))?;
+        let mut scratch = CudaPackedFp4ExpertScratch::new(&self.stream, gate_out)?;
+        let expert = CudaPackedFp4Expert {
+            gate: CudaPackedFp4Linear::new(&gate.weight, gate_scale, gate_out, gate_in),
+            up: CudaPackedFp4Linear::new(&up.weight, up_scale, up_out, up_in),
+            down: CudaPackedFp4Linear::new(&down.weight, down_scale, down_out, down_in),
+        };
+        CudaPackedFp4ExpertExecutor::new(&self.module, &self.stream, swiglu_limit).execute(
+            &expert,
+            &xd,
+            route_weight,
+            &mut scratch,
+            &mut yd,
+        )?;
+        cu(yd.to_host_vec(&self.stream))
+    }
+
+    pub fn rms_norm(&self, input: &[f32], weight: &[f32], eps: f32) -> Result<Vec<f32>> {
+        if input.len() != weight.len() || input.is_empty() {
+            return Err(Error::Internal(format!(
+                "CUDA RMS norm length mismatch: input={} weight={}",
+                input.len(),
+                weight.len()
+            )));
+        }
+        let xd = cu(DeviceBuffer::from_host(&self.stream, input))?;
+        let wd = cu(DeviceBuffer::from_host(&self.stream, weight))?;
+        let mut yd = cu(DeviceBuffer::<f32>::zeroed(&self.stream, input.len()))?;
+        cu(self.module.rms_norm_fused(
+            &self.stream,
+            one_block_config(256),
+            &xd,
+            &wd,
+            &mut yd,
+            input.len() as u32,
+            eps,
+        ))?;
+        cu(yd.to_host_vec(&self.stream))
+    }
+
+    pub fn rms_norm_heads(
+        &self,
+        input: &[f32],
+        heads: usize,
+        head_dim: usize,
+        eps: f32,
+    ) -> Result<Vec<f32>> {
+        if heads == 0 || head_dim == 0 || input.len() != heads * head_dim {
+            return Err(Error::Internal(format!(
+                "CUDA per-head RMS length mismatch: input={} heads={heads} head_dim={head_dim}",
+                input.len()
+            )));
+        }
+        let xd = cu(DeviceBuffer::from_host(&self.stream, input))?;
+        let mut yd = cu(DeviceBuffer::<f32>::zeroed(&self.stream, input.len()))?;
+        cu(self.module.rms_norm_heads_fused(
+            &self.stream,
+            LaunchConfig {
+                grid_dim: (heads as u32, 1, 1),
+                block_dim: (256, 1, 1),
+                shared_mem_bytes: 0,
+            },
+            &xd,
+            &mut yd,
+            heads as u32,
+            head_dim as u32,
+            eps,
+        ))?;
+        cu(yd.to_host_vec(&self.stream))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn hc_pre_f32(
+        &self,
+        state: &[f32],
+        function: &[f32],
+        scale: &[f32],
+        base: &[f32],
+        tokens: usize,
+        hc_mult: usize,
+        hidden_size: usize,
+        sinkhorn_iters: usize,
+        eps: f32,
+        norm_eps: f32,
+    ) -> Result<(Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>)> {
+        let mix_hc = hc_mult
+            .checked_mul(hc_mult + 2)
+            .ok_or_else(|| Error::Internal("CUDA HC mix_hc overflow".into()))?;
+        let hc_dim = hc_mult
+            .checked_mul(hidden_size)
+            .ok_or_else(|| Error::Internal("CUDA HC hidden size overflow".into()))?;
+        if tokens == 0
+            || hc_mult == 0
+            || hc_mult > 16
+            || mix_hc > 128
+            || hc_mult * hc_mult > 256
+            || state.len() != tokens * hc_dim
+            || function.len() != mix_hc * hc_dim
+            || scale.len() != 3
+            || base.len() != mix_hc
+        {
+            return Err(Error::Internal(format!(
+                "CUDA HC pre shape mismatch: tokens={tokens} state={} function={} scale={} base={} hc={hc_mult} hidden={hidden_size} mix={mix_hc}",
+                state.len(),
+                function.len(),
+                scale.len(),
+                base.len()
+            )));
+        }
+        let sd = cu(DeviceBuffer::from_host(&self.stream, state))?;
+        let fd = cu(DeviceBuffer::from_host(&self.stream, function))?;
+        let scd = cu(DeviceBuffer::from_host(&self.stream, scale))?;
+        let bd = cu(DeviceBuffer::from_host(&self.stream, base))?;
+        let mut hidden = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            tokens * hidden_size,
+        ))?;
+        let mut pre = cu(DeviceBuffer::<f32>::zeroed(&self.stream, tokens * hc_mult))?;
+        let mut post = cu(DeviceBuffer::<f32>::zeroed(&self.stream, tokens * hc_mult))?;
+        let mut comb = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            tokens * hc_mult * hc_mult,
+        ))?;
+        cu(self.module.hc_pre_f32(
+            &self.stream,
+            LaunchConfig {
+                grid_dim: (tokens as u32, 1, 1),
+                block_dim: (256, 1, 1),
+                shared_mem_bytes: 0,
+            },
+            &sd,
+            &fd,
+            &scd,
+            &bd,
+            &mut hidden,
+            &mut pre,
+            &mut post,
+            &mut comb,
+            tokens as u32,
+            hc_mult as u32,
+            hidden_size as u32,
+            mix_hc as u32,
+            sinkhorn_iters as u32,
+            eps,
+            norm_eps,
+        ))?;
+        Ok((
+            cu(hidden.to_host_vec(&self.stream))?,
+            cu(pre.to_host_vec(&self.stream))?,
+            cu(post.to_host_vec(&self.stream))?,
+            cu(comb.to_host_vec(&self.stream))?,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn hc_pre_single_f32(
+        &self,
+        state: &[f32],
+        function: &[f32],
+        scale: &[f32],
+        base: &[f32],
+        hc_mult: usize,
+        hidden_size: usize,
+        sinkhorn_iters: usize,
+        eps: f32,
+        norm_eps: f32,
+    ) -> Result<(Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>)> {
+        self.hc_pre_f32(
+            state,
+            function,
+            scale,
+            base,
+            1,
+            hc_mult,
+            hidden_size,
+            sinkhorn_iters,
+            eps,
+            norm_eps,
+        )
+    }
+
+    pub fn hc_post_f32(
+        &self,
+        hidden: &[f32],
+        residual: &[f32],
+        split_post: &[f32],
+        split_comb: &[f32],
+        tokens: usize,
+        hc_mult: usize,
+        hidden_size: usize,
+    ) -> Result<Vec<f32>> {
+        let hc_dim = hc_mult
+            .checked_mul(hidden_size)
+            .ok_or_else(|| Error::Internal("CUDA HC post hidden size overflow".into()))?;
+        if tokens == 0
+            || hc_mult == 0
+            || hidden_size == 0
+            || hidden.len() != tokens * hidden_size
+            || residual.len() != tokens * hc_dim
+            || split_post.len() != tokens * hc_mult
+            || split_comb.len() != tokens * hc_mult * hc_mult
+        {
+            return Err(Error::Internal(format!(
+                "CUDA HC post shape mismatch: tokens={tokens} hidden={} residual={} post={} comb={} hc={hc_mult} hidden_size={hidden_size}",
+                hidden.len(),
+                residual.len(),
+                split_post.len(),
+                split_comb.len()
+            )));
+        }
+        let hd = cu(DeviceBuffer::from_host(&self.stream, hidden))?;
+        let rd = cu(DeviceBuffer::from_host(&self.stream, residual))?;
+        let pd = cu(DeviceBuffer::from_host(&self.stream, split_post))?;
+        let cd = cu(DeviceBuffer::from_host(&self.stream, split_comb))?;
+        let mut out = cu(DeviceBuffer::<f32>::zeroed(&self.stream, tokens * hc_dim))?;
+        cu(self.module.hc_post_f32(
+            &self.stream,
+            LaunchConfig::for_num_elems((tokens * hc_dim) as u32),
+            &hd,
+            &rd,
+            &pd,
+            &cd,
+            &mut out,
+            tokens as u32,
+            hc_mult as u32,
+            hidden_size as u32,
+        ))?;
+        cu(out.to_host_vec(&self.stream))
+    }
+
+    pub fn hc_post_single_f32(
+        &self,
+        hidden: &[f32],
+        residual: &[f32],
+        split_post: &[f32],
+        split_comb: &[f32],
+        hc_mult: usize,
+        hidden_size: usize,
+    ) -> Result<Vec<f32>> {
+        self.hc_post_f32(
+            hidden,
+            residual,
+            split_post,
+            split_comb,
+            1,
+            hc_mult,
+            hidden_size,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn hc_head_f32(
+        &self,
+        state: &[f32],
+        function: &[f32],
+        scale: &[f32],
+        base: &[f32],
+        tokens: usize,
+        hc_mult: usize,
+        hidden_size: usize,
+        eps: f32,
+        norm_eps: f32,
+    ) -> Result<Vec<f32>> {
+        let hc_dim = hc_mult
+            .checked_mul(hidden_size)
+            .ok_or_else(|| Error::Internal("CUDA HC head hidden size overflow".into()))?;
+        if tokens == 0
+            || hc_mult == 0
+            || hc_mult > 16
+            || state.len() != tokens * hc_dim
+            || function.len() != hc_mult * hc_dim
+            || scale.len() != 1
+            || base.len() != hc_mult
+        {
+            return Err(Error::Internal(format!(
+                "CUDA HC head shape mismatch: tokens={tokens} state={} function={} scale={} base={} hc={hc_mult} hidden={hidden_size}",
+                state.len(),
+                function.len(),
+                scale.len(),
+                base.len()
+            )));
+        }
+        let sd = cu(DeviceBuffer::from_host(&self.stream, state))?;
+        let fd = cu(DeviceBuffer::from_host(&self.stream, function))?;
+        let scd = cu(DeviceBuffer::from_host(&self.stream, scale))?;
+        let bd = cu(DeviceBuffer::from_host(&self.stream, base))?;
+        let mut hidden = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            tokens * hidden_size,
+        ))?;
+        cu(self.module.hc_head_f32(
+            &self.stream,
+            LaunchConfig {
+                grid_dim: (tokens as u32, 1, 1),
+                block_dim: (256, 1, 1),
+                shared_mem_bytes: 0,
+            },
+            &sd,
+            &fd,
+            &scd,
+            &bd,
+            &mut hidden,
+            tokens as u32,
+            hc_mult as u32,
+            hidden_size as u32,
+            eps,
+            norm_eps,
+        ))?;
+        cu(hidden.to_host_vec(&self.stream))
+    }
+
+    pub fn hc_head_single_f32(
+        &self,
+        state: &[f32],
+        function: &[f32],
+        scale: &[f32],
+        base: &[f32],
+        hc_mult: usize,
+        hidden_size: usize,
+        eps: f32,
+        norm_eps: f32,
+    ) -> Result<Vec<f32>> {
+        self.hc_head_f32(
+            state,
+            function,
+            scale,
+            base,
+            1,
+            hc_mult,
+            hidden_size,
+            eps,
+            norm_eps,
+        )
+    }
+
+    fn source_linear_matvec_device(
+        &self,
+        handle: &CudaSourceLinearHandle,
+        input: &DeviceBuffer<f32>,
+        output: &mut DeviceBuffer<f32>,
+    ) -> Result<()> {
+        match handle.shape {
+            CudaSourceLinearShape::F32 {
+                out_features,
+                in_features,
+            } => cu(self.module.gemv_f32_bytes(
+                &self.stream,
+                LaunchConfig::for_num_elems(out_features as u32),
+                input,
+                &handle.weight,
+                output,
+                out_features as u32,
+                in_features as u32,
+            )),
+            CudaSourceLinearShape::Bf16Bytes {
+                out_features,
+                in_features,
+            } => cu(self.module.gemv_bf16_bytes(
+                &self.stream,
+                LaunchConfig::for_num_elems(out_features as u32),
+                input,
+                &handle.weight,
+                output,
+                out_features as u32,
+                in_features as u32,
+            )),
+            CudaSourceLinearShape::Fp8E4M3WithE8M0Scale {
+                out_features,
+                in_features,
+                block_m,
+                block_k,
+            } => {
+                let scale = handle.scale.as_ref().ok_or_else(|| {
+                    Error::Internal("CUDA FP8 source linear missing scale".into())
+                })?;
+                let scale_cols = in_features.div_ceil(block_k);
+                cu(self.module.gemv_fp8_e4m3fn_e8m0_2d(
+                    &self.stream,
+                    LaunchConfig::for_num_elems(out_features as u32),
+                    input,
+                    &handle.weight,
+                    scale,
+                    output,
+                    out_features as u32,
+                    in_features as u32,
+                    scale_cols as u32,
+                    block_m as u32,
+                    block_k as u32,
+                ))
+            }
+            CudaSourceLinearShape::Fp4E2M1PackedWithE8M0Scale {
+                out_features,
+                in_features,
+            } => {
+                let scale = handle.scale.as_ref().ok_or_else(|| {
+                    Error::Internal("CUDA FP4 source linear missing scale".into())
+                })?;
+                cu(self.module.gemv_fp4_e2m1_e8m0(
+                    &self.stream,
+                    LaunchConfig::for_num_elems(out_features as u32),
+                    input,
+                    &handle.weight,
+                    scale,
+                    output,
+                    out_features as u32,
+                    in_features as u32,
+                ))
+            }
+        }
+    }
+
+    pub fn sparse_attention_sink_f32(
+        &self,
+        query: &[f32],
+        values: &[f32],
+        topk: &[i32],
+        sink: &[f32],
+        shape: CudaSparseAttentionShape,
+    ) -> Result<Vec<f32>> {
+        shape.validate()?;
+        if query.len() != shape.q_elements()
+            || values.len() != shape.kv_elements()
+            || topk.len() != shape.topk_elements()
+            || sink.len() != shape.heads
+        {
+            return Err(Error::Internal(format!(
+                "sparse attention length mismatch: q={} values={} topk={} sink={}, expected q={} values={} topk={} sink={}",
+                query.len(),
+                values.len(),
+                topk.len(),
+                sink.len(),
+                shape.q_elements(),
+                shape.kv_elements(),
+                shape.topk_elements(),
+                shape.heads
+            )));
+        }
+        let qd = cu(DeviceBuffer::from_host(&self.stream, query))?;
+        let vd = cu(DeviceBuffer::from_host(&self.stream, values))?;
+        let td = cu(DeviceBuffer::from_host(&self.stream, topk))?;
+        let sd = cu(DeviceBuffer::from_host(&self.stream, sink))?;
+        let mut od = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            shape.output_elements(),
+        ))?;
+        CudaSparseAttentionExecutor::new(&self.module, &self.stream)
+            .sparse_attention_sink_f32(&qd, &vd, &td, &sd, &mut od, shape)?;
+        cu(od.to_host_vec(&self.stream))
+    }
+}
+
+fn one_block_config(threads: u32) -> LaunchConfig {
+    LaunchConfig {
+        grid_dim: (1, 1, 1),
+        block_dim: (threads, 1, 1),
+        shared_mem_bytes: 0,
+    }
+}
+
 // ── Standalone GEMV (benchmark) ───────────────────────────────────────
 
 /// Run a single GEMV on GPU — used for microbenchmarking.
@@ -112,8 +1020,8 @@ pub fn cuda_gemv(x: &[f32], w: &[f32], out_f: usize) -> Result<Vec<f32>> {
 ///
 /// `packed` is row-major `[out_features, in_features / 2]`, low nibble first.
 /// `scales` is row-major `[out_features, in_features / 32]`, where byte 127 is
-/// scale 1.0. This is the standalone kernel-level contract used by the DeepSeek
-/// V4 expert executor before it is wired into full-model scheduling.
+/// scale 1.0. This is the standalone kernel-level contract used by source-format
+/// packed expert executors before they are wired into full-model scheduling.
 pub fn cuda_gemv_fp4_e2m1_e8m0(
     x: &[f32],
     packed: &[u8],
@@ -145,25 +1053,9 @@ pub fn cuda_gemv_fp4_e2m1_e8m0(
         )));
     }
 
-    let ctx = cu(CudaContext::new(0))?;
-    cu(ctx.bind_to_thread())?;
-    let module = cu(crate::kernels::kernels::load(&ctx))?;
-    let s = ctx.default_stream();
-    let xd = cu(DeviceBuffer::from_host(&s, x))?;
-    let pd = cu(DeviceBuffer::from_host(&s, packed))?;
-    let sd = cu(DeviceBuffer::from_host(&s, scales))?;
-    let mut yd = cu(DeviceBuffer::<f32>::zeroed(&s, out_features))?;
-    cu(module.gemv_fp4_e2m1_e8m0(
-        &s,
-        LaunchConfig::for_num_elems(out_features as u32),
-        &xd,
-        &pd,
-        &sd,
-        &mut yd,
-        out_features as u32,
-        in_features as u32,
-    ))?;
-    cu(yd.to_host_vec(&s))
+    let ops = CudaSourceOperatorContext::new()?;
+    let handle = ops.upload_fp4_e2m1_e8m0_linear(packed, scales, out_features, in_features)?;
+    ops.source_linear_matvec(&handle, x)
 }
 
 /// Run FP8 E4M3FN + E8M0 2D-block-scale GEMV on GPU.
@@ -191,28 +1083,63 @@ pub fn cuda_gemv_fp8_e4m3fn_e8m0_2d(
     {
         return Err(Error::Internal(format!("FP8 GEMV length mismatch")));
     }
-    let ctx = cu(CudaContext::new(0))?;
-    cu(ctx.bind_to_thread())?;
-    let module = cu(crate::kernels::kernels::load(&ctx))?;
-    let s = ctx.default_stream();
-    let xd = cu(DeviceBuffer::from_host(&s, x))?;
-    let wd = cu(DeviceBuffer::from_host(&s, weight))?;
-    let sd = cu(DeviceBuffer::from_host(&s, scales))?;
-    let mut yd = cu(DeviceBuffer::<f32>::zeroed(&s, out_features))?;
-    cu(module.gemv_fp8_e4m3fn_e8m0_2d(
-        &s,
-        LaunchConfig::for_num_elems(out_features as u32),
-        &xd,
-        &wd,
-        &sd,
-        &mut yd,
-        out_features as u32,
-        in_features as u32,
-        scale_cols as u32,
-        block_m as u32,
-        block_k as u32,
-    ))?;
-    cu(yd.to_host_vec(&s))
+    let ops = CudaSourceOperatorContext::new()?;
+    let handle = ops.upload_fp8_e4m3_e8m0_linear(
+        weight,
+        scales,
+        out_features,
+        in_features,
+        block_m,
+        block_k,
+    )?;
+    ops.source_linear_matvec(&handle, x)
+}
+
+/// Run sparse attention with an attention sink on GPU.
+///
+/// This is intentionally a generic source-format operator: callers pass explicit
+/// shapes and row-major buffers; no model-family tensor names are visible here.
+pub fn cuda_sparse_attention_sink_f32(
+    query: &[f32],
+    values: &[f32],
+    topk: &[i32],
+    sink: &[f32],
+    tokens: usize,
+    kv_len: usize,
+    heads: usize,
+    head_dim: usize,
+    topk_len: usize,
+    softmax_scale: f32,
+) -> Result<Vec<f32>> {
+    let shape = CudaSparseAttentionShape {
+        batch_size: 1,
+        tokens_per_batch: tokens,
+        kv_len,
+        heads,
+        head_dim,
+        topk: topk_len,
+        softmax_scale,
+    };
+    shape.validate()?;
+    if query.len() != shape.q_elements()
+        || values.len() != shape.kv_elements()
+        || topk.len() != shape.topk_elements()
+        || sink.len() != heads
+    {
+        return Err(Error::Internal(format!(
+            "sparse attention length mismatch: q={} values={} topk={} sink={}, expected q={} values={} topk={} sink={}",
+            query.len(),
+            values.len(),
+            topk.len(),
+            sink.len(),
+            shape.q_elements(),
+            shape.kv_elements(),
+            shape.topk_elements(),
+            heads
+        )));
+    }
+
+    CudaSourceOperatorContext::new()?.sparse_attention_sink_f32(query, values, topk, sink, shape)
 }
 
 #[cfg(test)]
@@ -293,9 +1220,9 @@ mod tests {
     }
 
     #[test]
-    fn dsv4_all_gpu_kernels_smoke() {
+    fn source_format_gpu_kernels_smoke() {
         if CudaContext::new(0).is_err() {
-            eprintln!("skipping DSv4 GPU kernel smoke: no CUDA device");
+            eprintln!("skipping source-format GPU kernel smoke: no CUDA device");
             return;
         }
         let ctx = cu(CudaContext::new(0)).unwrap();

@@ -77,9 +77,7 @@ fn print_transformer_spec(spec: &TransformerSpec) {
         }
     }
     if !spec.supports_current_runtime() {
-        println!(
-            "runtime:      metadata-only for now (current executable backend is OLMoE-compatible)"
-        );
+        println!("runtime:      metadata-only for now; see engine plan below");
     }
     for note in &spec.notes {
         println!("note:         {note}");

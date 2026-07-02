@@ -1,153 +1,171 @@
-<svg width="1280" height="720" viewBox="0 0 1280 720" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">Ferrule Runtime Architecture</title>
-  <desc id="desc">Ferrule architecture centered on a Rust-native state-aware LLM runtime with model execution, quantization, kernels, state fabric, and hardware-aware deployment.</desc>
-
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="920" viewBox="0 0 1280 920" role="img" aria-labelledby="title desc">
+  <title id="title">Ferrule current architecture</title>
+  <desc id="desc">Ferrule architecture showing CLI and runtime orchestration, DeepSeek V4 model semantics, semantic safetensors source binding, generic CUDA source operators, and the path toward parity and 20 token per second decode.</desc>
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="720" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#07111F"/>
-      <stop offset="0.52" stop-color="#101936"/>
-      <stop offset="1" stop-color="#062420"/>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#08111f"/>
+      <stop offset="0.45" stop-color="#10172a"/>
+      <stop offset="1" stop-color="#111827"/>
     </linearGradient>
-    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#FDBA74"/>
-      <stop offset="1" stop-color="#EA580C"/>
+    <linearGradient id="orange" x1="0" x2="1">
+      <stop offset="0" stop-color="#fb923c"/>
+      <stop offset="1" stop-color="#f97316"/>
     </linearGradient>
-    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#93C5FD"/>
-      <stop offset="1" stop-color="#2563EB"/>
+    <linearGradient id="green" x1="0" x2="1">
+      <stop offset="0" stop-color="#34d399"/>
+      <stop offset="1" stop-color="#22c55e"/>
     </linearGradient>
-    <linearGradient id="purple" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#D8B4FE"/>
-      <stop offset="1" stop-color="#7C3AED"/>
+    <linearGradient id="blue" x1="0" x2="1">
+      <stop offset="0" stop-color="#60a5fa"/>
+      <stop offset="1" stop-color="#2563eb"/>
     </linearGradient>
-    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#86EFAC"/>
-      <stop offset="1" stop-color="#16A34A"/>
+    <linearGradient id="violet" x1="0" x2="1">
+      <stop offset="0" stop-color="#a78bfa"/>
+      <stop offset="1" stop-color="#7c3aed"/>
     </linearGradient>
-    <linearGradient id="cyan" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#67E8F9"/>
-      <stop offset="1" stop-color="#0891B2"/>
+    <linearGradient id="cyan" x1="0" x2="1">
+      <stop offset="0" stop-color="#67e8f9"/>
+      <stop offset="1" stop-color="#0891b2"/>
     </linearGradient>
-    <linearGradient id="amber" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#FDE68A"/>
-      <stop offset="1" stop-color="#D97706"/>
-    </linearGradient>
-    <filter id="shadow" x="-18%" y="-18%" width="136%" height="136%">
-      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000000" flood-opacity="0.34"/>
+    <filter id="shadow" x="-15%" y="-20%" width="130%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.32"/>
     </filter>
-    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
-      <path d="M0 0 L10 5 L0 10 z" fill="#93C5FD"/>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#93c5fd"/>
     </marker>
-    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-      <path d="M0 0 L10 5 L0 10 z" fill="#86EFAC"/>
+    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#86efac"/>
     </marker>
     <style>
-      .title { font: 850 40px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #F8FAFC; letter-spacing: -0.035em; }
-      .subtitle { font: 520 15px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #CBD5E1; }
-      .label { font: 780 21px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #F8FAFC; }
-      .cardLabel { font: 760 17px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #F8FAFC; }
-      .small { font: 560 13px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #E2E8F0; }
-      .tiny { font: 540 12px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #C8D3E4; }
-      .mono { font: 700 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; fill: #F8FAFC; }
-      .card { filter: url(#shadow); stroke: rgba(255,255,255,.18); stroke-width: 1; }
-      .panel { fill: rgba(15,23,42,.76); stroke: rgba(148,163,184,.24); stroke-width: 1; filter: url(#shadow); }
-      .pill { fill: rgba(15,23,42,.50); stroke: rgba(255,255,255,.20); stroke-width: 1; }
-      .flow { stroke: #93C5FD; stroke-width: 2.8; marker-end: url(#arrow); fill: none; stroke-linecap: round; stroke-linejoin: round; }
-      .softFlow { stroke: #86EFAC; stroke-width: 2.2; marker-end: url(#arrowGreen); fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: .88; }
-      .dash { stroke-dasharray: 7 8; }
+      .bg { fill: url(#bg); }
+      .title { fill: #f8fafc; font: 800 36px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: -0.03em; }
+      .subtitle { fill: #cbd5e1; font: 500 17px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .label { fill: #f8fafc; font: 800 18px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .small { fill: #cbd5e1; font: 500 14px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .tiny { fill: #94a3b8; font: 500 12px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .mono { fill: #e2e8f0; font: 600 13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+      .card { fill: #111827; stroke: #334155; stroke-width: 1.2; filter: url(#shadow); }
+      .card2 { fill: #0f172a; stroke: #334155; stroke-width: 1.2; filter: url(#shadow); }
+      .soft { fill: #0b1220; stroke: #263244; stroke-width: 1; }
+      .pillText { fill: #0b1020; font: 800 12px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: .03em; }
+      .arrow { stroke: #93c5fd; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+      .arrowGreen { stroke: #86efac; stroke-width: 2.5; fill: none; marker-end: url(#arrowGreen); }
+      .arrowDim { stroke: #64748b; stroke-width: 2; fill: none; stroke-dasharray: 6 6; marker-end: url(#arrow); }
     </style>
   </defs>
 
-  <rect width="1280" height="720" fill="url(#bg)"/>
-  <circle cx="1060" cy="116" r="260" fill="#2563EB" opacity="0.10"/>
-  <circle cx="190" cy="590" r="300" fill="#14B8A6" opacity="0.10"/>
-  <circle cx="650" cy="350" r="360" fill="#F97316" opacity="0.055"/>
+  <rect class="bg" x="0" y="0" width="1280" height="920" rx="28"/>
+  <circle cx="1040" cy="80" r="220" fill="#2563eb" opacity="0.10"/>
+  <circle cx="220" cy="830" r="260" fill="#f97316" opacity="0.09"/>
+  <circle cx="680" cy="520" r="300" fill="#7c3aed" opacity="0.08"/>
 
-  <text x="64" y="70" class="title">Ferrule</text>
-  <text x="64" y="100" class="subtitle">Rust-native state-aware LLM runtime for edge, cloud, and future hardware</text>
+  <text x="54" y="62" class="title">Ferrule Architecture — Real DSV4 CUDA Chat Milestone</text>
+  <text x="56" y="94" class="subtitle">Rust-native inference with model-family semantics, source-preserving tensors, MoE residency, and cuda-oxide operators.</text>
 
-  <g transform="translate(390 138)">
-    <rect class="card" width="500" height="238" rx="36" fill="url(#core)"/>
-    <text x="34" y="52" class="label">Ferrule Runtime</text>
-    <text x="34" y="82" class="small">the system core</text>
+  <rect x="56" y="120" width="176" height="32" rx="16" fill="url(#green)"/>
+  <text x="77" y="141" class="pillText">REAL DSV4 CHAT</text>
+  <rect x="248" y="120" width="198" height="32" rx="16" fill="url(#blue)"/>
+  <text x="270" y="141" class="pillText">FULL 43-LAYER CUDA</text>
+  <rect x="462" y="120" width="186" height="32" rx="16" fill="url(#orange)"/>
+  <text x="484" y="141" class="pillText">PARITY NEXT</text>
+  <rect x="664" y="120" width="236" height="32" rx="16" fill="url(#violet)"/>
+  <text x="686" y="141" class="pillText">20 TOK/S DECODE TARGET</text>
 
-    <g transform="translate(34 116)">
-      <rect class="pill" width="132" height="46" rx="16"/>
-      <text x="22" y="29" class="tiny">Rust Core</text>
-    </g>
-    <g transform="translate(184 116)">
-      <rect class="pill" width="132" height="46" rx="16"/>
-      <text x="18" y="29" class="tiny">State Model</text>
-    </g>
-    <g transform="translate(334 116)">
-      <rect class="pill" width="132" height="46" rx="16"/>
-      <text x="20" y="29" class="tiny">Scheduler</text>
-    </g>
+  <!-- Top runtime lane -->
+  <rect class="card" x="52" y="190" width="250" height="122" rx="20"/>
+  <text x="78" y="224" class="label">1. User surfaces</text>
+  <text x="78" y="252" class="small">readline chat · CLI · server</text>
+  <text x="78" y="276" class="small">bench · probes · parity JSON</text>
+  <text x="78" y="298" class="mono">just dsv4-chat tokens=128</text>
 
-    <g transform="translate(34 176)">
-      <rect class="pill" width="204" height="42" rx="15"/>
-      <text x="22" y="27" class="tiny">Model Execution</text>
-    </g>
-    <g transform="translate(262 176)">
-      <rect class="pill" width="204" height="42" rx="15"/>
-      <text x="22" y="27" class="tiny">Hardware Policy</text>
-    </g>
-  </g>
+  <rect class="card" x="356" y="190" width="250" height="122" rx="20"/>
+  <text x="382" y="224" class="label">2. Runtime control</text>
+  <text x="382" y="252" class="small">tokenizer · templates · stops</text>
+  <text x="382" y="276" class="small">session position · stats</text>
+  <text x="382" y="298" class="small">greedy top-k fast path</text>
 
-  <g transform="translate(70 168)">
-    <rect class="card" width="238" height="160" rx="28" fill="url(#purple)"/>
-    <text x="26" y="44" class="cardLabel">Model Input</text>
-    <text x="26" y="80" class="small">safetensors</text>
-    <text x="26" y="106" class="small">tokenizer</text>
-    <text x="26" y="132" class="mono">qcache</text>
-  </g>
+  <rect class="card" x="660" y="190" width="250" height="122" rx="20"/>
+  <text x="686" y="224" class="label">3. Model boundary</text>
+  <text x="686" y="252" class="small">DSV4 semantics stay here</text>
+  <text x="686" y="276" class="small">no mock · no hybrid · no</text>
+  <text x="686" y="298" class="small">DeepSeek-only CUDA kernels</text>
 
-  <g transform="translate(972 168)">
-    <rect class="card" width="238" height="160" rx="28" fill="url(#green)"/>
-    <text x="26" y="44" class="cardLabel">Runtime Output</text>
-    <text x="26" y="80" class="small">chat</text>
-    <text x="26" y="106" class="small">rollout</text>
-    <text x="26" y="132" class="small">local serving</text>
-  </g>
+  <rect class="card" x="964" y="190" width="250" height="122" rx="20"/>
+  <text x="990" y="224" class="label">4. Output</text>
+  <text x="990" y="252" class="small">stream tokens to chat</text>
+  <text x="990" y="276" class="small">report prefill/decode stats</text>
+  <text x="990" y="298" class="small">next: parity + throughput</text>
 
-  <path class="flow" d="M308 248 C344 248 354 248 390 248"/>
-  <path class="flow" d="M890 248 C926 248 936 248 972 248"/>
+  <path class="arrow" d="M302 251 C324 251 334 251 356 251"/>
+  <path class="arrow" d="M606 251 C628 251 638 251 660 251"/>
+  <path class="arrow" d="M910 251 C932 251 942 251 964 251"/>
 
-  <g transform="translate(70 428)">
-    <rect class="panel" width="238" height="126" rx="26" stroke="rgba(147,197,253,.38)"/>
-    <text x="24" y="40" class="cardLabel">Correctness</text>
-    <text x="24" y="75" class="small">CPU FP32</text>
-    <text x="24" y="100" class="small">logits diff</text>
-  </g>
+  <!-- Source binding lane -->
+  <rect class="card2" x="52" y="370" width="250" height="164" rx="20"/>
+  <text x="78" y="404" class="label">Local source artifacts</text>
+  <text x="78" y="434" class="small">DeepSeek-V4-Flash-DSpark</text>
+  <text x="78" y="458" class="small">48 HF safetensors shards</text>
+  <text x="78" y="482" class="small">tokenizer.json + config.json</text>
+  <text x="78" y="506" class="small">official encoding/inference files</text>
 
-  <g transform="translate(344 428)">
-    <rect class="panel" width="238" height="126" rx="26" stroke="rgba(34,211,238,.44)"/>
-    <text x="24" y="40" class="cardLabel">Kernels</text>
-    <text x="24" y="75" class="small">cuda-oxide</text>
-    <text x="24" y="100" class="small">Q4/Q8 GEMV</text>
-  </g>
+  <rect class="card2" x="356" y="370" width="250" height="164" rx="20"/>
+  <text x="382" y="404" class="label">Semantic source binding</text>
+  <text x="382" y="434" class="small">bounded reads by role</text>
+  <text x="382" y="458" class="small">attention · HC · router</text>
+  <text x="382" y="482" class="small">shared/routed experts</text>
+  <text x="382" y="506" class="small">embedding · output head</text>
 
-  <g transform="translate(618 428)">
-    <rect class="panel" width="238" height="126" rx="26" stroke="rgba(253,230,138,.44)"/>
-    <text x="24" y="40" class="cardLabel">Sparse Models</text>
-    <text x="24" y="75" class="small">router</text>
-    <text x="24" y="100" class="small">top-k experts</text>
-  </g>
+  <rect class="card2" x="660" y="370" width="554" height="244" rx="24"/>
+  <text x="690" y="404" class="label">DeepSeek V4 layer semantics</text>
+  <text x="690" y="432" class="small">The model-specific forward path is explicit and inspectable.</text>
 
-  <g transform="translate(892 428)">
-    <rect class="panel" width="318" height="126" rx="26" stroke="rgba(134,239,172,.44)"/>
-    <text x="24" y="40" class="cardLabel">Edge + Hardware</text>
-    <text x="24" y="75" class="small">KV pages · adapters · trajectories</text>
-    <text x="24" y="100" class="small">GPU · NPU · RISC-V</text>
-  </g>
+  <rect class="soft" x="690" y="458" width="226" height="62" rx="14"/>
+  <text x="710" y="483" class="small">Hyper-Connections</text>
+  <text x="710" y="505" class="tiny">hc_pre · hc_post · hc_head</text>
 
-  <path class="softFlow dash" d="M642 376 C642 404 738 398 738 428"/>
-  <path class="softFlow dash" d="M536 376 C536 404 463 398 463 428"/>
-  <path class="softFlow dash" d="M466 376 C402 405 246 390 190 428"/>
-  <path class="softFlow dash" d="M812 376 C872 406 1000 394 1050 428"/>
+  <rect class="soft" x="948" y="458" width="226" height="62" rx="14"/>
+  <text x="968" y="483" class="small">MLA sparse attention</text>
+  <text x="968" y="505" class="tiny">window KV · compressed KV</text>
 
-  <g transform="translate(130 612)">
-    <rect width="1020" height="58" rx="29" fill="rgba(15,23,42,.72)" stroke="rgba(255,255,255,.16)"/>
-    <text x="36" y="36" class="small">Core idea: explicit runtime state + native kernels + hardware-aware policy for modern LLM systems</text>
-  </g>
+  <rect class="soft" x="690" y="538" width="226" height="62" rx="14"/>
+  <text x="710" y="563" class="small">MoE routing</text>
+  <text x="710" y="585" class="tiny">hash/top-k · FP4 experts</text>
+
+  <rect class="soft" x="948" y="538" width="226" height="62" rx="14"/>
+  <text x="968" y="563" class="small">Output head</text>
+  <text x="968" y="585" class="tiny">norm · lm_head · top-k</text>
+
+  <path class="arrowGreen" d="M302 452 C324 452 334 452 356 452"/>
+  <path class="arrowGreen" d="M606 452 C628 452 638 452 660 452"/>
+  <path class="arrowDim" d="M785 312 C785 332 785 348 785 370"/>
+
+  <!-- Operators and hardware lane -->
+  <rect class="card" x="52" y="672" width="360" height="148" rx="22"/>
+  <text x="82" y="708" class="label">Generic CUDA source operators</text>
+  <text x="82" y="738" class="small">F32 / BF16 / FP8 / FP4 source linears</text>
+  <text x="82" y="762" class="small">sparse attention sink · grouped wo_a</text>
+  <text x="82" y="786" class="small">HC kernels · SwiGLU · routed FP4 experts</text>
+
+  <rect class="card" x="462" y="672" width="304" height="148" rx="22"/>
+  <text x="492" y="708" class="label">cuda-oxide backend</text>
+  <text x="492" y="738" class="small">Rust kernels compiled to CUDA</text>
+  <text x="492" y="762" class="small">cargo oxide build/test wrappers</text>
+  <text x="492" y="786" class="small">current target: sm_121</text>
+
+  <rect class="card" x="816" y="672" width="398" height="148" rx="22"/>
+  <text x="846" y="708" class="label">Next performance architecture</text>
+  <text x="846" y="738" class="small">device-resident tensors, KV, experts</text>
+  <text x="846" y="762" class="small">batched selected-expert kernels</text>
+  <text x="846" y="786" class="small">GPU top-k sampler · CUDA graph replay</text>
+
+  <path class="arrow" d="M803 614 C720 640 570 648 412 724"/>
+  <path class="arrow" d="M412 746 C432 746 442 746 462 746"/>
+  <path class="arrow" d="M766 746 C786 746 796 746 816 746"/>
+
+  <!-- Footer callouts -->
+  <rect x="52" y="854" width="558" height="38" rx="19" fill="#052e16" stroke="#22c55e" stroke-opacity="0.45"/>
+  <text x="76" y="879" class="small">Milestone now: real DSV4 CUDA chat over local safetensors.</text>
+
+  <rect x="660" y="854" width="554" height="38" rx="19" fill="#431407" stroke="#fb923c" stroke-opacity="0.45"/>
+  <text x="684" y="879" class="small">Next gates: official numeric parity, then 20 tok/s load-excluded decode.</text>
 </svg>

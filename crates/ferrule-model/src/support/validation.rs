@@ -202,7 +202,9 @@ mod tests {
             binding(TensorClass::LayerNorm, TensorRole::LayerNorm, 1),
             binding(TensorClass::MlaQueryA, TensorRole::AttentionLatentQueryA, 2),
             binding(TensorClass::MlaQueryB, TensorRole::AttentionLatentQueryB, 2),
+            binding(TensorClass::MlaQueryNorm, TensorRole::AttentionQueryNorm, 1),
             binding(TensorClass::MlaKv, TensorRole::AttentionLatentKv, 2),
+            binding(TensorClass::MlaKvNorm, TensorRole::AttentionKeyValueNorm, 1),
             binding(
                 TensorClass::MlaOutputA,
                 TensorRole::AttentionLatentOutputA,

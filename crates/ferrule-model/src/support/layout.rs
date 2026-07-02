@@ -1,4 +1,4 @@
-use crate::spec::{AttentionKind, RouterKind, TransformerSpec};
+use crate::spec::{AttentionKind, ModelFamily, RouterKind, TransformerSpec};
 
 use super::roles::{FeedForwardKind, KvCacheShape, TensorRole};
 
@@ -41,7 +41,9 @@ impl AttentionLayout {
                 required_roles: vec![
                     TensorRole::AttentionLatentQueryA,
                     TensorRole::AttentionLatentQueryB,
+                    TensorRole::AttentionQueryNorm,
                     TensorRole::AttentionLatentKv,
+                    TensorRole::AttentionKeyValueNorm,
                     TensorRole::AttentionLatentOutputA,
                     TensorRole::AttentionLatentOutputB,
                     TensorRole::AttentionSink,
@@ -143,7 +145,7 @@ impl LayerLayout {
         }
         Self {
             index,
-            norms: vec![TensorRole::LayerNorm],
+            norms: layer_norm_roles_for_spec(spec),
             attention,
             feed_forward: FeedForwardLayout::from_spec(spec),
             auxiliary_roles,
@@ -155,6 +157,14 @@ impl LayerLayout {
         roles.extend(self.attention.required_roles.iter().cloned());
         roles.extend(self.feed_forward.required_roles.iter().cloned());
         roles
+    }
+}
+
+fn layer_norm_roles_for_spec(spec: &TransformerSpec) -> Vec<TensorRole> {
+    if matches!(spec.family, ModelFamily::DeepSeekV4) {
+        Vec::new()
+    } else {
+        vec![TensorRole::LayerNorm]
     }
 }
 
@@ -179,5 +189,65 @@ impl ModelLayout {
 
     pub fn layer_count(&self) -> usize {
         self.layers.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::spec::{MoeSpec, WeightSource};
+
+    use super::*;
+
+    #[test]
+    fn deepseek_v4_layout_does_not_require_generic_layer_norm() {
+        let spec = TransformerSpec {
+            family: ModelFamily::DeepSeekV4,
+            architecture: Some("deepseek_v4".into()),
+            weight_source: WeightSource::Safetensors,
+            hidden_size: Some(4096),
+            num_layers: Some(1),
+            vocab_size: Some(129_280),
+            num_heads: Some(64),
+            num_kv_heads: Some(1),
+            head_dim: Some(512),
+            attention: AttentionKind::MultiLatentAttention,
+            moe: MoeSpec {
+                num_experts: Some(256),
+                num_experts_per_tok: Some(6),
+                has_shared_experts: true,
+                router: RouterKind::HashAssistedTopK,
+            },
+            tensor_count: None,
+            quantization: Vec::new(),
+            notes: Vec::new(),
+        };
+        let layout = ModelLayout::from_spec(&spec);
+        assert!(layout.layers[0].norms.is_empty());
+        let required = layout.layers[0].required_roles();
+        assert!(!required.contains(&TensorRole::LayerNorm));
+        assert!(required.contains(&TensorRole::AttentionQueryNorm));
+        assert!(required.contains(&TensorRole::AttentionKeyValueNorm));
+    }
+
+    #[test]
+    fn dense_layout_keeps_generic_layer_norm_requirement() {
+        let spec = TransformerSpec {
+            family: ModelFamily::Llama,
+            architecture: Some("llama".into()),
+            weight_source: WeightSource::Safetensors,
+            hidden_size: Some(16),
+            num_layers: Some(1),
+            vocab_size: Some(32),
+            num_heads: Some(4),
+            num_kv_heads: Some(4),
+            head_dim: Some(4),
+            attention: AttentionKind::DenseMha,
+            moe: MoeSpec::none(),
+            tensor_count: None,
+            quantization: Vec::new(),
+            notes: Vec::new(),
+        };
+        let layout = ModelLayout::from_spec(&spec);
+        assert_eq!(layout.layers[0].norms, vec![TensorRole::LayerNorm]);
     }
 }
