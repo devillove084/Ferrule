@@ -7,6 +7,7 @@
 
 pub mod common;
 pub mod deepseek_v4;
+pub mod qwen3;
 
 use crate::spec::ModelFamily;
 use crate::tensor_policy::{TensorClass, TensorClassCount};
@@ -107,6 +108,7 @@ pub struct HyperConnectionTensorRef {
 pub fn classify_hf_tensor(family: &ModelFamily, name: &str) -> TensorClass {
     match family {
         ModelFamily::DeepSeekV4 => deepseek_v4::classify_hf_tensor(name),
+        ModelFamily::Qwen3 => qwen3::classify_hf_tensor(name),
         _ => common::classify_hf_tensor(name),
     }
 }
@@ -114,6 +116,7 @@ pub fn classify_hf_tensor(family: &ModelFamily, name: &str) -> TensorClass {
 pub fn classify_gguf_tensor(family: &ModelFamily, name: &str) -> TensorClass {
     match family {
         ModelFamily::DeepSeekV4 => deepseek_v4::classify_gguf_tensor(name),
+        ModelFamily::Qwen3 => qwen3::classify_gguf_tensor(name),
         _ => common::classify_gguf_tensor(name),
     }
 }

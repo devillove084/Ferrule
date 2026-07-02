@@ -11,6 +11,7 @@ pub enum ModelFamily {
     DeepSeekV4,
     DeepSeekV3,
     DeepSeekV2,
+    Qwen3,
     QwenMoe,
     Mixtral,
     Llama,
@@ -45,6 +46,7 @@ impl ModelFamily {
             Self::DeepSeekV4 => "DeepSeek-V4",
             Self::DeepSeekV3 => "DeepSeek-V3",
             Self::DeepSeekV2 => "DeepSeek-V2",
+            Self::Qwen3 => "Qwen3",
             Self::QwenMoe => "Qwen-MoE",
             Self::Mixtral => "Mixtral",
             Self::Llama => "Llama",
@@ -53,7 +55,7 @@ impl ModelFamily {
     }
 
     pub fn is_supported_runtime_family(&self) -> bool {
-        matches!(self, Self::Olmoe)
+        matches!(self, Self::Olmoe | Self::Qwen3)
     }
 }
 

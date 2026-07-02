@@ -11,13 +11,14 @@ categories = ["science", "machine-learning"]
 
 [features]
 default = []
-cuda = ["dep:ferrule-cuda", "dep:ferrule-quant"]
+cuda = ["dep:ferrule-cuda"]
 
 [dependencies]
 ferrule-core = { path = "../ferrule-core" }
+ferrule-graph = { path = "../ferrule-graph" }
 ferrule-model = { path = "../ferrule-model" }
+ferrule-quant = { path = "../ferrule-quant" }
 ferrule-cuda = { path = "../ferrule-cuda", optional = true }
-ferrule-quant = { path = "../ferrule-quant", optional = true }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

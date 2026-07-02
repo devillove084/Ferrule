@@ -6,7 +6,7 @@ use ferrule_runtime::{
         DeepSeekV4OperatorBackend, DeepSeekV4ReferenceOptions, DeepSeekV4ReferenceRunner,
     },
     ChatTemplate, GenerationConfig, InferenceEngine, ModelGenerationDefaults, ModelRunner,
-    SamplingConfig,
+    RuntimeRunner, SamplingConfig,
 };
 use std::io::Write;
 use std::path::Path;
@@ -70,13 +70,13 @@ pub fn cmd_chat(
     }
 
     if matches!(quant.to_ascii_lowercase().as_str(), "cpu" | "f32" | "fp32") {
-        let runner = ferrule_runtime::CpuModelRunner::load(model_path)?;
+        let runner = RuntimeRunner::load(model_path)?;
         let engine = InferenceEngine::new(runner, sc);
         run_chat_loop(engine, max_tokens, &gen_cfg, template, sampling)
     } else {
         let qt = super::run::parse_quant(quant);
         tracing::info!("Uploading to GPU (quant: {qt:?})...");
-        let runner = ferrule_runtime::GpuModelRunner::load(model_path, qt)?;
+        let runner = RuntimeRunner::load_with_quant(model_path, qt)?;
         let engine = InferenceEngine::new(runner, sc);
         run_chat_loop(engine, max_tokens, &gen_cfg, template, sampling)
     }
@@ -115,7 +115,7 @@ pub fn cmd_chat(
     }
 
     if matches!(quant.to_ascii_lowercase().as_str(), "cpu" | "f32" | "fp32") {
-        let runner = ferrule_runtime::CpuModelRunner::load(model_path)?;
+        let runner = RuntimeRunner::load(model_path)?;
         let engine = InferenceEngine::new(runner, sc);
         run_chat_loop(engine, _max_tokens, &gen_cfg, template, sampling)
     } else {

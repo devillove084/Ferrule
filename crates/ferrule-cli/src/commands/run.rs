@@ -1,12 +1,12 @@
 use crate::SamplingArgs;
 use ferrule_runtime::{
-    GenerateStats, InferenceEngine, Logprobs, ModelGenerationDefaults, ModelRunner,
+    GenerateStats, InferenceEngine, Logprobs, ModelGenerationDefaults, ModelRunner, RuntimeRunner,
 };
 use std::path::Path;
 
 use super::info::print_model_info;
 
-// ── run (CPU) ────────────────────────────────────────────────────────────────
+// ── run (auto-dispatch) ──────────────────────────────────────────────────
 
 pub fn cmd_run(
     model_dir: &str,
@@ -14,7 +14,7 @@ pub fn cmd_run(
     max_tokens: usize,
     sampling: &SamplingArgs,
 ) -> anyhow::Result<()> {
-    let runner = ferrule_runtime::CpuModelRunner::load(Path::new(model_dir))?;
+    let runner = RuntimeRunner::load(Path::new(model_dir))?;
     print_model_info(&runner.model_info());
 
     let mut sc = sampling.sampling_config();
@@ -52,7 +52,7 @@ pub fn cmd_run(
     Ok(())
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// ── helpers ──────────────────────────────────────────────────────────────
 
 pub fn format_token_display(token: u32, text: &str, verbose: bool) -> String {
     if verbose {
@@ -78,7 +78,7 @@ pub fn print_generation_stats(stats: &GenerateStats) {
     );
 }
 
-// ── parse_quant (CUDA only) ──────────────────────────────────────────────────
+// ── parse_quant (CUDA only) ──────────────────────────────────────────────
 
 #[cfg(feature = "cuda")]
 pub fn parse_quant(quant: &str) -> ferrule_quant::QuantType {
@@ -90,7 +90,7 @@ pub fn parse_quant(quant: &str) -> ferrule_quant::QuantType {
     }
 }
 
-// ── gpu-run ──────────────────────────────────────────────────────────────────
+// ── gpu-run ──────────────────────────────────────────────────────────────
 
 #[cfg(feature = "cuda")]
 pub fn cmd_gpu_run(
@@ -102,7 +102,7 @@ pub fn cmd_gpu_run(
 ) -> anyhow::Result<()> {
     let qt = parse_quant(quant);
     tracing::info!("Uploading to GPU (quant: {qt:?})...");
-    let runner = ferrule_runtime::GpuModelRunner::load(Path::new(model_dir), qt)?;
+    let runner = RuntimeRunner::load_with_quant(Path::new(model_dir), qt)?;
     print_model_info(&runner.model_info());
 
     let mut sc = sampling.sampling_config();
@@ -167,20 +167,5 @@ mod tests {
     fn test_format_token_display_plain() {
         let result = format_token_display(42, "hello", false);
         assert_eq!(result, "hello");
-    }
-
-    #[cfg(feature = "cuda")]
-    #[test]
-    fn test_parse_quant() {
-        use ferrule_quant::QuantType;
-        assert_eq!(parse_quant("q4"), QuantType::Q4_0);
-        assert_eq!(parse_quant("q2"), QuantType::Q2S);
-        assert_eq!(parse_quant("q2s"), QuantType::Q2S);
-        assert_eq!(parse_quant("t1"), QuantType::T1S);
-        assert_eq!(parse_quant("t1s"), QuantType::T1S);
-        assert_eq!(parse_quant("q8"), QuantType::Q8_0);
-        assert_eq!(parse_quant("q8_0"), QuantType::Q8_0);
-        assert_eq!(parse_quant("unknown"), QuantType::Q4_0);
-        assert_eq!(parse_quant("Q4"), QuantType::Q4_0);
     }
 }

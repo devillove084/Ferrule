@@ -4,12 +4,27 @@
 //! This crate keeps tokenization, prefill/decode state, sampling, and chat
 //! formatting out of the CLI so CPU and GPU backends share the same behavior.
 
+pub use ferrule_graph as graph;
+
 pub mod attention_backend;
 pub mod attention_kernel;
 pub mod chat;
 pub mod config;
 pub mod constraint;
-pub mod cpu_kv;
+pub mod graph_runtime;
+
+pub mod execution {
+    pub use crate::graph_runtime::{
+        ExecutionBatch, ExecutionRow, ExecutionSegment, LogitsSelection,
+    };
+}
+
+pub mod external_binding {
+    pub use crate::graph_runtime::{
+        ExternalBinding, ExternalBindingKind, ExternalBindingPlan, ExternalResidency,
+    };
+}
+
 pub mod expert_executor;
 pub mod expert_handle;
 pub mod expert_routing;
@@ -56,7 +71,6 @@ pub use attention_backend::{
 pub use attention_kernel::AttentionKernel;
 pub use chat::{detect_chat_template, ChatTemplate};
 pub use config::ModelGenerationDefaults;
-pub use cpu_kv::CpuContiguousKvState;
 pub use expert_executor::{reference_linear, CpuReferenceExpertExecutor, ExpertExecutor};
 pub use expert_handle::{
     CpuExpertHandleStore, ExpertComputeHandle, ExpertHandleStore, ExpertResidentFormat,
@@ -79,6 +93,10 @@ pub use first_token_smoke::{
     FirstTokenUnsupportedReason,
 };
 pub use generation::{GenerationConfig, GenerationResult, InferenceEngine, TokenEvent};
+pub use graph_runtime::{
+    ExecutionBatch, ExecutionRow, ExecutionSegment, ExternalBinding, ExternalBindingKind,
+    ExternalBindingPlan, ExternalResidency, LogitsSelection,
+};
 pub use hyper_connection::{
     hc_head_reference, hc_post_reference, hc_pre_reference, hc_split_sinkhorn_reference,
     HyperConnectionConfig, HyperConnectionHeadWeights, HyperConnectionPreOutput,
@@ -112,7 +130,7 @@ pub use routed_moe::{
     execute_routed_moe_with_source_router_reference,
     execute_routed_moe_with_source_router_reference_with_handles, RoutedMoeStepOutput,
 };
-pub use runner::{CpuModelRunner, CpuOlmoeRunner, ModelInfo, ModelRunner};
+pub use runner::{unsupported_runtime_message, ModelInfo, ModelRunner, RuntimeRunner};
 pub use sampler::{Logprobs, Sampler, SamplingConfig};
 
 /// Argmax: return the index of the maximum logit value.
@@ -149,4 +167,4 @@ pub use transformer_plan::{
 };
 
 #[cfg(feature = "cuda")]
-pub use runner::{GpuModelRunner, GpuOlmoeRunner};
+pub use runner::GpuOlmoeRunner;

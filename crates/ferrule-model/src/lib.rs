@@ -1,9 +1,8 @@
 #![allow(clippy::needless_range_loop)]
-//! Model metadata, OLMoE weights, and tokenizer utilities.
+//! Model metadata, weights, and tokenizer utilities.
 pub mod artifact;
 pub mod config;
 pub mod conversion;
-pub mod cpu_forward;
 pub mod descriptor;
 pub mod families;
 pub mod loader;
@@ -24,7 +23,6 @@ pub use conversion::{
     ArtifactTarget, CalibrationSet, ConversionPlan, QuantizationFormat, QuantizationRecipe,
     TensorRoleQuantPolicy,
 };
-pub use cpu_forward::rms_norm;
 pub use descriptor::ModelDescriptor;
 pub use spec::{
     AttentionKind, ModelFamily, MoeSpec, QuantFormatCount, RouterKind, TransformerSpec,

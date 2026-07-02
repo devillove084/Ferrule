@@ -6,6 +6,7 @@
 #   just run-cuda ARGS... → CUDA build via cargo oxide, then run target/release/ferrule
 #   just chat MODEL → interactive chat (MODEL required)
 #   just test       → all tests
+#   just test-graph → compute graph IR tests
 
 # ── Default ────────────────────────────────────────────────────────────
 
@@ -86,7 +87,10 @@ oxide-test *args='':
 
 # ── Test ───────────────────────────────────────────────────────────────
 
-test: test-runtime test-model test-cuda test-cli
+test: test-graph test-runtime test-model test-cuda test-cli
+
+test-graph:
+    cargo test -p ferrule-graph
 
 test-runtime:
     cargo test -p ferrule-runtime
@@ -124,10 +128,10 @@ fmt-fix:
     cargo fmt
 
 clippy:
-    cargo clippy -p ferrule-core -p ferrule-model -p ferrule-runtime -p ferrule-cli -- -D warnings
+    cargo clippy -p ferrule-core -p ferrule-graph -p ferrule-model -p ferrule-runtime -p ferrule-cli -- -D warnings
 
 clippy-cuda:
-    cargo clippy -p ferrule-core -p ferrule-model -p ferrule-runtime -p ferrule-cli --features cuda -- -D warnings
+    cargo clippy -p ferrule-core -p ferrule-graph -p ferrule-model -p ferrule-runtime -p ferrule-cli --features cuda -- -D warnings
 
 clippy-all: clippy clippy-cuda
     @echo "=== Clippy passed ==="

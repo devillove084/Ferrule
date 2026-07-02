@@ -1,10 +1,10 @@
 use ferrule_core::{Error, Result};
-use ferrule_model::{
-    AttentionKind, EnginePlan, ModelDescriptor, ModelFamily, OlmoeModel, WeightSource,
-};
+use ferrule_model::{AttentionKind, EnginePlan, ModelDescriptor, ModelFamily, WeightSource};
+use ferrule_quant::QuantType;
 
-use crate::cpu_kv::CpuContiguousKvState;
 use std::path::Path;
+
+// ── ModelInfo ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct ModelInfo {
@@ -21,46 +21,24 @@ pub struct ModelInfo {
 }
 
 impl ModelInfo {
-    fn from_olmoe(model: &OlmoeModel, backend: &'static str) -> Self {
-        let c = &model.config;
-        let spec = model.transformer_spec();
+    pub fn from_descriptor(descriptor: &ModelDescriptor, backend: &'static str) -> Self {
+        let spec = &descriptor.spec;
         Self {
-            family: spec.family,
-            architecture: spec.architecture,
-            attention: spec.attention,
+            family: spec.family.clone(),
+            architecture: spec.architecture.clone(),
+            attention: spec.attention.clone(),
             weight_source: spec.weight_source,
-            hidden_size: c.hidden_size,
-            num_layers: c.num_layers,
-            num_experts: c.num_experts,
-            num_experts_per_tok: c.num_experts_per_tok,
-            vocab_size: c.vocab_size,
+            hidden_size: spec.hidden_size.unwrap_or(0),
+            num_layers: spec.num_layers.unwrap_or(0),
+            num_experts: spec.moe.num_experts.unwrap_or(0),
+            num_experts_per_tok: spec.moe.num_experts_per_tok.unwrap_or(0),
+            vocab_size: spec.vocab_size.unwrap_or(0),
             backend,
         }
     }
 }
 
-fn ensure_current_runtime_family(model_dir: &Path) -> Result<()> {
-    let descriptor = ModelDescriptor::load(model_dir)?;
-    let plan = descriptor.engine_plan();
-    if plan.is_executable() {
-        return Ok(());
-    }
-    Err(Error::Model(unsupported_runtime_message(&plan)))
-}
-
-fn unsupported_runtime_message(plan: &EnginePlan) -> String {
-    let mut message = format!(
-        "{} metadata is recognized, but the current executable backend cannot run it yet (engine plan: {})",
-        plan.family, plan.status
-    );
-    if !plan.missing.is_empty() {
-        message.push_str(". Missing policies:");
-        for item in &plan.missing {
-            message.push_str(&format!(" {}: {};", item.area, item.reason));
-        }
-    }
-    message
-}
+// ── ModelRunner trait ────────────────────────────────────────────────────
 
 pub trait ModelRunner {
     fn model_info(&self) -> ModelInfo;
@@ -76,89 +54,166 @@ pub trait ModelRunner {
     }
 }
 
-pub struct CpuOlmoeRunner {
-    model: OlmoeModel,
-    kv: CpuContiguousKvState,
+// ── Engine-plan helpers ──────────────────────────────────────────────────
+
+pub fn unsupported_runtime_message(plan: &EnginePlan) -> String {
+    let mut message = format!(
+        "{} metadata is recognized, but the current executable backend cannot run it yet (engine plan: {})",
+        plan.family, plan.status
+    );
+    if !plan.missing.is_empty() {
+        message.push_str(". Missing policies:");
+        for item in &plan.missing {
+            message.push_str(&format!(" {}: {};", item.area, item.reason));
+        }
+    }
+    message
 }
 
-/// Current CPU runtime runner. Today it executes OLMoE, but callers should use
-/// this generic alias so model-family dispatch can grow without changing CLI code.
-pub type CpuModelRunner = CpuOlmoeRunner;
+// ── RuntimeRunner — model-family dispatch enum ───────────────────────────
 
-impl CpuOlmoeRunner {
-    pub fn load(model_dir: &Path) -> Result<Self> {
-        ensure_current_runtime_family(model_dir)?;
-        Ok(Self::new(OlmoeModel::load(model_dir)?))
-    }
+/// Concrete runner that dispatches at load time by model family.
+/// Used directly by `InferenceEngine<R>` (generic over `R: ModelRunner`).
+pub enum RuntimeRunner {
+    #[cfg(feature = "cuda")]
+    OlmoeGpu(GpuOlmoeRunner),
+    /// Placeholder variant when no backend is compiled.
+    #[cfg(not(feature = "cuda"))]
+    NoBackend,
+}
 
-    pub fn new(model: OlmoeModel) -> Self {
-        let num_layers = model.config.num_layers;
-        Self {
-            model,
-            kv: CpuContiguousKvState::new(num_layers),
+impl RuntimeRunner {
+    /// Load the best available runner for a model directory.
+    /// For OLMoE: CUDA GPU runner (Q4_0 default).
+    pub fn load(_model_dir: &Path) -> Result<Self> {
+        #[cfg(not(feature = "cuda"))]
+        return Err(Error::Model(
+            "no runtime backend available (build with --features cuda)".into(),
+        ));
+        #[cfg(feature = "cuda")]
+        {
+            let descriptor = ModelDescriptor::load(_model_dir)?;
+            match descriptor.spec.family {
+                ModelFamily::Olmoe => {
+                    let runner = GpuOlmoeRunner::load(_model_dir, QuantType::Q4_0)?;
+                    return Ok(Self::OlmoeGpu(runner));
+                }
+                ref family => Err(Error::Model(format!(
+                    "model family '{family}' is not yet supported by the runtime executor"
+                ))),
+            }
         }
     }
 
-    pub fn model(&self) -> &OlmoeModel {
-        &self.model
+    /// Load with explicit quantization (GPU runners only).
+    #[cfg(feature = "cuda")]
+    pub fn load_with_quant(model_dir: &Path, quant: QuantType) -> Result<Self> {
+        let descriptor = ModelDescriptor::load(model_dir)?;
+        match descriptor.spec.family {
+            ModelFamily::Olmoe => {
+                let runner = GpuOlmoeRunner::load(model_dir, quant)?;
+                Ok(Self::OlmoeGpu(runner))
+            }
+            ref family => Err(Error::Model(format!(
+                "model family '{family}' is not yet supported by the runtime executor"
+            ))),
+        }
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    pub fn load_with_quant(_model_dir: &Path, _quant: QuantType) -> Result<Self> {
+        Err(Error::Model(
+            "quantized loading requires CUDA backend (build with --features cuda)".into(),
+        ))
     }
 }
 
-impl ModelRunner for CpuOlmoeRunner {
+impl ModelRunner for RuntimeRunner {
     fn model_info(&self) -> ModelInfo {
-        ModelInfo::from_olmoe(&self.model, "cpu-fp32")
-    }
-
-    fn encode(&self, text: &str) -> Result<Vec<u32>> {
-        self.model.encode(text)
-    }
-
-    fn decode(&self, tokens: &[u32]) -> Result<String> {
-        self.model.decode(tokens)
-    }
-
-    fn prefill(&mut self, tokens: &[u32]) -> Result<Vec<f32>> {
-        let mut logits = Vec::new();
-        for &token in tokens {
-            logits = self.decode_token(token)?;
+        match self {
+            #[cfg(feature = "cuda")]
+            Self::OlmoeGpu(r) => r.model_info(),
+            #[cfg(not(feature = "cuda"))]
+            Self::NoBackend => panic!("no runtime backend compiled"),
         }
-        Ok(logits)
     }
 
-    fn decode_token(&mut self, token: u32) -> Result<Vec<f32>> {
-        let model = &self.model;
-        let (_, logits) = self
-            .kv
-            .decode_one(|k_cache, v_cache, pos| model.forward(&[token], k_cache, v_cache, pos))?;
-        Ok(logits)
+    fn encode(&self, _text: &str) -> Result<Vec<u32>> {
+        match self {
+            #[cfg(feature = "cuda")]
+            Self::OlmoeGpu(r) => r.encode(_text),
+            #[cfg(not(feature = "cuda"))]
+            Self::NoBackend => Err(Error::Model("no runtime backend compiled".into())),
+        }
+    }
+
+    fn decode(&self, _tokens: &[u32]) -> Result<String> {
+        match self {
+            #[cfg(feature = "cuda")]
+            Self::OlmoeGpu(r) => r.decode(_tokens),
+            #[cfg(not(feature = "cuda"))]
+            Self::NoBackend => Err(Error::Model("no runtime backend compiled".into())),
+        }
+    }
+
+    fn prefill(&mut self, _tokens: &[u32]) -> Result<Vec<f32>> {
+        match self {
+            #[cfg(feature = "cuda")]
+            Self::OlmoeGpu(r) => r.prefill(_tokens),
+            #[cfg(not(feature = "cuda"))]
+            Self::NoBackend => Err(Error::Model("no runtime backend compiled".into())),
+        }
+    }
+
+    fn decode_token(&mut self, _token: u32) -> Result<Vec<f32>> {
+        match self {
+            #[cfg(feature = "cuda")]
+            Self::OlmoeGpu(r) => r.decode_token(_token),
+            #[cfg(not(feature = "cuda"))]
+            Self::NoBackend => Err(Error::Model("no runtime backend compiled".into())),
+        }
     }
 
     fn reset_session(&mut self) -> Result<()> {
-        self.kv.reset(self.model.config.num_layers);
-        Ok(())
+        match self {
+            #[cfg(feature = "cuda")]
+            Self::OlmoeGpu(r) => r.reset_session(),
+            #[cfg(not(feature = "cuda"))]
+            Self::NoBackend => Err(Error::Model("no runtime backend compiled".into())),
+        }
     }
 
     fn eos_token_id(&self) -> Option<u32> {
-        self.model.eos_token_id()
+        match self {
+            #[cfg(feature = "cuda")]
+            Self::OlmoeGpu(r) => r.eos_token_id(),
+            #[cfg(not(feature = "cuda"))]
+            Self::NoBackend => None,
+        }
+    }
+
+    fn expert_report(&self) -> Option<String> {
+        match self {
+            #[cfg(feature = "cuda")]
+            Self::OlmoeGpu(r) => Some(r.expert_report()),
+            #[cfg(not(feature = "cuda"))]
+            Self::NoBackend => None,
+        }
     }
 }
 
+// ── OLMoE GPU runner ─────────────────────────────────────────────────────
+
 #[cfg(feature = "cuda")]
 pub struct GpuOlmoeRunner {
-    model: OlmoeModel,
+    model: ferrule_model::OlmoeModel,
     gpu: ferrule_cuda::forward::GpuOlmoeModel,
-    quant: ferrule_quant::QuantType,
+    quant: QuantType,
 }
-
-/// Current CUDA runtime runner. Today it executes OLMoE, but callers should use
-/// this generic alias so model-family dispatch can grow without changing CLI code.
-#[cfg(feature = "cuda")]
-pub type GpuModelRunner = GpuOlmoeRunner;
 
 #[cfg(feature = "cuda")]
 impl GpuOlmoeRunner {
-    pub fn load(model_dir: &Path, quant: ferrule_quant::QuantType) -> Result<Self> {
-        ensure_current_runtime_family(model_dir)?;
+    pub fn load(model_dir: &Path, quant: QuantType) -> Result<Self> {
         let qt_suffix = ferrule_cuda::weightpack::quant_suffix(quant);
         let pack_path = ferrule_cuda::weightpack::weightpack_path(model_dir, qt_suffix);
         if pack_path.exists() {
@@ -170,32 +225,30 @@ impl GpuOlmoeRunner {
                 ),
             }
         }
-        let model = OlmoeModel::load(model_dir)?;
+        let model = ferrule_model::OlmoeModel::load(model_dir)?;
         Self::from_model(model, quant)
     }
 
-    /// Load using weight-pack-only path (no full FP32 model load).
-    pub fn load_weightpack(model_dir: &Path, quant: ferrule_quant::QuantType) -> Result<Self> {
-        ensure_current_runtime_family(model_dir)?;
+    pub fn load_weightpack(model_dir: &Path, quant: QuantType) -> Result<Self> {
         let qt_suffix = ferrule_cuda::weightpack::quant_suffix(quant);
         let pack_path = ferrule_cuda::weightpack::weightpack_path(model_dir, qt_suffix);
         let weightpack = ferrule_cuda::weightpack::WeightPackReader::open(&pack_path)?;
-        let model = OlmoeModel::load_lightweight(model_dir)?;
+        let model = ferrule_model::OlmoeModel::load_lightweight(model_dir)?;
         let gpu =
             ferrule_cuda::forward::GpuOlmoeModel::from_lightweight(&model, &weightpack, quant)?;
         Ok(Self { model, gpu, quant })
     }
 
-    pub fn from_model(model: OlmoeModel, quant: ferrule_quant::QuantType) -> Result<Self> {
+    pub fn from_model(model: ferrule_model::OlmoeModel, quant: QuantType) -> Result<Self> {
         let gpu = ferrule_cuda::forward::GpuOlmoeModel::from_cpu(&model, quant)?;
         Ok(Self { model, gpu, quant })
     }
 
-    pub fn quant(&self) -> ferrule_quant::QuantType {
+    pub fn quant(&self) -> QuantType {
         self.quant
     }
 
-    pub fn model(&self) -> &OlmoeModel {
+    pub fn model(&self) -> &ferrule_model::OlmoeModel {
         &self.model
     }
 
@@ -207,7 +260,20 @@ impl GpuOlmoeRunner {
 #[cfg(feature = "cuda")]
 impl ModelRunner for GpuOlmoeRunner {
     fn model_info(&self) -> ModelInfo {
-        ModelInfo::from_olmoe(&self.model, "gpu")
+        let c = &self.model.config;
+        let spec = self.model.transformer_spec();
+        ModelInfo {
+            family: spec.family,
+            architecture: spec.architecture,
+            attention: spec.attention,
+            weight_source: spec.weight_source,
+            hidden_size: c.hidden_size,
+            num_layers: c.num_layers,
+            num_experts: c.num_experts,
+            num_experts_per_tok: c.num_experts_per_tok,
+            vocab_size: c.vocab_size,
+            backend: "gpu",
+        }
     }
 
     fn encode(&self, text: &str) -> Result<Vec<u32>> {

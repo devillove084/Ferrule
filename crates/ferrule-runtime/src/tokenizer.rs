@@ -15,6 +15,7 @@ pub struct TokenizerHandle {
 
 impl TokenizerHandle {
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn from_parts(inner: tokenizers::Tokenizer, eos_token_id: Option<u32>) -> Self {
         Self {
             inner,

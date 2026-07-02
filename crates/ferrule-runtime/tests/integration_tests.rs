@@ -145,8 +145,8 @@ fn engine_generate_text_with_real_olmoe_if_present() {
         return;
     };
 
-    let runner = ferrule_runtime::CpuOlmoeRunner::load(&model_dir)
-        .expect("local OLMoE model should load through the CPU runner");
+    let runner = ferrule_runtime::RuntimeRunner::load(&model_dir)
+        .expect("local OLMoE model should load through RuntimeRunner");
     let mut engine = InferenceEngine::new(runner, SamplingConfig::greedy());
     let gen_cfg = GenerationConfig {
         max_new_tokens: 1,

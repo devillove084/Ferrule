@@ -1,7 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 #[cfg(feature = "cuda")]
 use ferrule_runtime::{detect_chat_template, InferenceEngine, ModelGenerationDefaults};
-use ferrule_runtime::{CpuModelRunner, GenerationConfig, ModelRunner, SamplingConfig};
+use ferrule_runtime::{GenerationConfig, ModelRunner, RuntimeRunner, SamplingConfig};
 use std::path::Path;
 #[cfg(feature = "cuda")]
 use std::sync::{Arc, Mutex};
@@ -540,7 +540,7 @@ fn cmd_server(model_dir: &str, quant: &str, host: &str, port: u16) -> anyhow::Re
     let template = detect_chat_template(Path::new(model_dir));
 
     tracing::info!("Loading server model once (quant: {qt:?})...");
-    let runner = ferrule_runtime::GpuModelRunner::load(Path::new(model_dir), qt)?;
+    let runner = RuntimeRunner::load_with_quant(Path::new(model_dir), qt)?;
     let mut sc = SamplingConfig::greedy();
     if let Some(def) = ModelGenerationDefaults::load(Path::new(model_dir)) {
         def.apply_to_config(&mut sc);
@@ -612,7 +612,7 @@ fn cmd_server(_model_dir: &str, _quant: &str, _host: &str, _port: u16) -> anyhow
 fn cmd_perplexity(model_dir: &str, file: &str, ctx_size: usize) -> anyhow::Result<()> {
     use ferrule_runtime::perplexity;
 
-    let mut runner = CpuModelRunner::load(Path::new(model_dir))?;
+    let mut runner = RuntimeRunner::load(Path::new(model_dir))?;
     print_model_info(&runner.model_info());
 
     let text = std::fs::read_to_string(file).map_err(|e| anyhow::anyhow!("read {file}: {e}"))?;

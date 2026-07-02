@@ -8,6 +8,9 @@
     unsafe_code
 )]
 //! CUDA backend for Ferrule — kernels, forward pass, memory pool.
+//!
+//! Note: `graph` in this crate refers to CUDA driver graph capture/replay.
+//! Ferrule's device-independent compute graph IR lives in `ferrule-graph`.
 
 pub mod build;
 pub mod context;

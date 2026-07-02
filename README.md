@@ -47,7 +47,7 @@ What works today:
 - `start_pos == 0` DSV4 prefill semantics for HC/layer traversal, window KV, compressed KV, indexer KV, `remainder`, and `cutoff`.
 - Generic CUDA source operators for F32/BF16/FP8/FP4 linears, sparse attention sink, grouped `wo_a`, HC pre/post/head, shared SwiGLU FFN, routed FP4 experts, and lm_head top-k.
 - CPU/reference anchors for tokenizer, source formats, HC math, sparse attention, routing, and MoE pieces.
-- OLMoE remains the smaller executable regression fixture with CPU/GPU chat/server/bench paths.
+- OLMoE remains the smaller CUDA executable regression fixture; the legacy OLMoE CPU forward path has been removed.
 
 A real local smoke from the current DSV4 CUDA chat milestone:
 
@@ -88,7 +88,7 @@ This is a huge milestone, but the next gates are clear: **official numeric parit
 | **cuda-oxide kernels** | Custom CUDA kernels stay integrated with the Rust runtime, enabling MoE-specific quantized GEMV, packed FP4 expert execution, sparse attention, and future fusion work. |
 | **Safetensors source binding** | Ferrule can inspect and bind Hugging Face safetensors by semantic role, with bounded reads instead of loading a whole 100GB+ checkpoint into RAM. |
 | **WeightPack execution artifact** | Layer weights can be quantized once and reloaded from a Ferrule-owned package/cache; GGUF remains a compatibility/PK path rather than the only source format. |
-| **CPU/reference path** | CPU reference execution anchors CUDA kernels, source-format decoders, router behavior, HC math, and future model support. |
+| **CPU/reference components** | CPU reference pieces anchor CUDA kernels, source-format decoders, router behavior, HC math, graph validation, and future model support without keeping a legacy full-model CPU runner. |
 | **State-aware design** | KV pages, source artifacts, WeightPack artifacts, model versions, adapters, speculation state, and future rollout/checkpoint state are planned as managed runtime state. |
 | **Edge/hardware direction** | Expert placement, streaming, WeightPack layout, and scheduling can adapt to VRAM, DRAM, NVMe, cloud artifacts, and future multi-GPU / multi-node / RISC-V/GPU/NPU cooperation. |
 
@@ -176,12 +176,12 @@ just dsv4-cuda-generate Hello 2 4096 --chat
 just dsv4-parity-json "Who are you?" target/dsv4_generation_parity.json
 ```
 
-7. Optional: build CPU-only or run the smaller OLMoE regression fixture:
+7. Optional: build CPU-only for metadata/reference work, or run the smaller OLMoE CUDA regression fixture:
 
 ```bash
 just build-cpu
 
-# If the OLMoE fixture is present:
+# If the OLMoE fixture is present and CUDA is available:
 just chat models/OLMoE-Instruct q4 -n 256
 ```
 
@@ -191,7 +191,7 @@ just chat models/OLMoE-Instruct q4 -n 256
 
 | Area | Status |
 |---|---|
-| Executable model fixture | OLMoE-style sparse MoE, CPU FP32 and GPU Q4_0 paths |
+| Executable model fixture | OLMoE-style sparse MoE CUDA path via `RuntimeRunner`; legacy CPU FP32 forward was removed |
 | Real large-model milestone | DeepSeek V4 Flash + DSpark local HF shards can run full 43-layer CUDA greedy chat |
 | DSV4 execution boundary | `ferrule_runtime::models::deepseek_v4` owns DSV4 HC, MLA, compressor/indexer, router, MoE, and output semantics |
 | Inference commands | `run`, `gpu-run`, `chat`, `server`, `bench-infer`, `compare-logits`, `perplexity`, `deepseek-v4-generate`, `deepseek-v4-probe` |
@@ -266,11 +266,8 @@ just dsv4-parity-json "Who are you?" target/dsv4_generation_parity.json
 # Generic CUDA runner wrapper.
 just run-cuda info models/DeepSeek-V4-Flash-DSpark
 
-# OLMoE chat through the generic chat wrapper.
+# OLMoE chat through the generic CUDA chat wrapper.
 just chat models/OLMoE-Instruct q4 -n 256
-
-# CPU one-shot run.
-just run models/OLMoE-Instruct "Paris is" -n 16
 
 # GPU one-shot run.
 just gpu-run models/OLMoE-Instruct "Paris is" 16 q4
@@ -294,6 +291,7 @@ just info models/DeepSeek-V4-Flash-DSpark
 just test
 
 # Focused tests.
+just test-graph
 just test-runtime
 just test-model
 just test-cli
@@ -323,12 +321,12 @@ For CUDA tests, use `just test-cuda` or `cargo oxide test`; avoid plain `cargo t
 
 ## Active development focus
 
-Ferrule's current implementation focus is the generic DeepSeek V4 vertical slice while keeping OLMoE as the executable regression fixture:
+Ferrule's current implementation focus is separating model semantics from execution so new families can move toward a graph-backed runner:
 
-1. **Layer source binding** — compose attention, HC, router, shared FFN, routed experts, and KV state into a typed per-layer bundle.
-2. **DSV4 attention path** — execute the bound MLA/sparse attention payload through generic `AttentionPolicy` dispatch.
+1. **Compute graph IR** — keep a device-independent `ferrule-graph` core while CUDA kernels remain in `ferrule-cuda`.
+2. **Layer source binding** — compose attention, HC, router, shared FFN, routed experts, and KV state into typed per-layer bundles.
 3. **Source-format CUDA** — continue validating FP8 attention/shared linears, packed FP4 experts, and sparse attention against CPU/reference math.
-4. **Single-node DGX Spark smoke** — run the base DeepSeek V4 target path first; attach DSpark/MTP through generic speculation policy after target decode is stable.
+4. **Graph migration path** — prototype Qwen3-style dense decoder graph first, then migrate MoE and DeepSeekV4 only after parity anchors are strong.
 
 ---
 
@@ -336,5 +334,6 @@ Ferrule's current implementation focus is the generic DeepSeek V4 vertical slice
 
 - [Architecture](docs/ferrule_arch.md)
 - [Roadmap and llama.cpp gap analysis](docs/ROADMAP.md)
+- [Runtime graph architecture](docs/runtime-graph-architecture.md)
 - [Temporary inference roadmap / DeepSeek V4 bring-up notes](docs/TEMP_INFERENCE_ROADMAP.md)
 - [Paper and system notes](docs/paper_reads.md)
