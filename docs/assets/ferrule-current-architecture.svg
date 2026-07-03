@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="920" viewBox="0 0 1280 920" role="img" aria-labelledby="title desc">
-  <title id="title">Ferrule current architecture</title>
-  <desc id="desc">Ferrule architecture showing CLI and runtime orchestration, DeepSeek V4 model semantics, semantic safetensors source binding, generic CUDA source operators, and the path toward parity and 20 token per second decode.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="980" viewBox="0 0 1280 980" role="img" aria-labelledby="title desc">
+  <title id="title">Ferrule Architecture</title>
+  <desc id="desc">Ferrule architecture: 10 crates in four layers — CLI, execution + backends, vocabulary + IR + model policies, foundation. Shows storage/residency vocabulary, expert streaming, graph runtime, and DSV4 execution path.</desc>
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
       <stop offset="0" stop-color="#08111f"/>
@@ -28,144 +28,259 @@
       <stop offset="1" stop-color="#0891b2"/>
     </linearGradient>
     <filter id="shadow" x="-15%" y="-20%" width="130%" height="150%">
-      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.32"/>
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#000000" flood-opacity="0.28"/>
     </filter>
-    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
-      <path d="M2,2 L10,6 L2,10 Z" fill="#93c5fd"/>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L9,5 L2,8 Z" fill="#93c5fd"/>
     </marker>
-    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
-      <path d="M2,2 L10,6 L2,10 Z" fill="#86efac"/>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L9,5 L2,8 Z" fill="#86efac"/>
+    </marker>
+    <marker id="arrowCyan" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L9,5 L2,8 Z" fill="#67e8f9"/>
     </marker>
     <style>
       .bg { fill: url(#bg); }
-      .title { fill: #f8fafc; font: 800 36px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: -0.03em; }
-      .subtitle { fill: #cbd5e1; font: 500 17px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      .label { fill: #f8fafc; font: 800 18px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      .small { fill: #cbd5e1; font: 500 14px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      .tiny { fill: #94a3b8; font: 500 12px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      .mono { fill: #e2e8f0; font: 600 13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+      .title { fill: #f8fafc; font: 800 30px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: -0.03em; }
+      .subtitle { fill: #94a3b8; font: 500 14px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .label { fill: #f8fafc; font: 700 15px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .crateName { fill: #e2e8f0; font: 700 13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+      .small { fill: #94a3b8; font: 500 11px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .tiny { fill: #64748b; font: 500 10px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .mono { fill: #cbd5e1; font: 500 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+      .pillText { fill: #0b1020; font: 800 10px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: .03em; }
       .card { fill: #111827; stroke: #334155; stroke-width: 1.2; filter: url(#shadow); }
-      .card2 { fill: #0f172a; stroke: #334155; stroke-width: 1.2; filter: url(#shadow); }
+      .cardStorage { fill: #0c1a26; stroke: #0891b2; stroke-width: 1.5; filter: url(#shadow); }
+      .cardGraph { fill: #0f1326; stroke: #7c3aed; stroke-width: 1.5; filter: url(#shadow); }
+      .cardModel { fill: #0d1a14; stroke: #22c55e; stroke-width: 1.5; filter: url(#shadow); }
+      .cardCuda { fill: #1a1208; stroke: #f97316; stroke-width: 1.5; filter: url(#shadow); }
       .soft { fill: #0b1220; stroke: #263244; stroke-width: 1; }
-      .pillText { fill: #0b1020; font: 800 12px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: .03em; }
-      .arrow { stroke: #93c5fd; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
-      .arrowGreen { stroke: #86efac; stroke-width: 2.5; fill: none; marker-end: url(#arrowGreen); }
-      .arrowDim { stroke: #64748b; stroke-width: 2; fill: none; stroke-dasharray: 6 6; marker-end: url(#arrow); }
+      .softStorage { fill: #061a24; stroke: #155e75; stroke-width: 1; }
+      .softGraph { fill: #0d1124; stroke: #5b21b6; stroke-width: 1; }
+      .arrow { stroke: #93c5fd; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .arrowGreen { stroke: #86efac; stroke-width: 2; fill: none; marker-end: url(#arrowGreen); }
+      .arrowCyan { stroke: #67e8f9; stroke-width: 2; fill: none; marker-end: url(#arrowCyan); }
+      .arrowDim { stroke: #475569; stroke-width: 1.5; fill: none; stroke-dasharray: 5 5; }
+      .layerLabel { fill: #475569; font: 700 10px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: .08em; text-transform: uppercase; }
     </style>
   </defs>
 
-  <rect class="bg" x="0" y="0" width="1280" height="920" rx="28"/>
-  <circle cx="1040" cy="80" r="220" fill="#2563eb" opacity="0.10"/>
-  <circle cx="220" cy="830" r="260" fill="#f97316" opacity="0.09"/>
-  <circle cx="680" cy="520" r="300" fill="#7c3aed" opacity="0.08"/>
+  <rect class="bg" x="0" y="0" width="1280" height="980" rx="28"/>
+  <circle cx="1050" cy="70" r="200" fill="#7c3aed" opacity="0.07"/>
+  <circle cx="180" cy="900" r="240" fill="#f97316" opacity="0.06"/>
+  <circle cx="640" cy="500" r="280" fill="#0891b2" opacity="0.05"/>
 
-  <text x="54" y="62" class="title">Ferrule Architecture — Real DSV4 CUDA Chat Milestone</text>
-  <text x="56" y="94" class="subtitle">Rust-native inference with model-family semantics, source-preserving tensors, MoE residency, and cuda-oxide operators.</text>
+  <text x="52" y="50" class="title">Ferrule Architecture</text>
+  <text x="54" y="72" class="subtitle">Rust-native LLM runtime — sparse MoE, expert streaming, storage residency vocabulary, cuda-oxide operators</text>
 
-  <rect x="56" y="120" width="176" height="32" rx="16" fill="url(#green)"/>
-  <text x="77" y="141" class="pillText">REAL DSV4 CHAT</text>
-  <rect x="248" y="120" width="198" height="32" rx="16" fill="url(#blue)"/>
-  <text x="270" y="141" class="pillText">FULL 43-LAYER CUDA</text>
-  <rect x="462" y="120" width="186" height="32" rx="16" fill="url(#orange)"/>
-  <text x="484" y="141" class="pillText">PARITY NEXT</text>
-  <rect x="664" y="120" width="236" height="32" rx="16" fill="url(#violet)"/>
-  <text x="686" y="141" class="pillText">20 TOK/S DECODE TARGET</text>
+  <!-- Status pills -->
+  <rect x="52" y="90" width="150" height="24" rx="12" fill="url(#green)"/>
+  <text x="65" y="106" class="pillText">DSV4 CUDA CHAT</text>
+  <rect x="216" y="90" width="130" height="24" rx="12" fill="url(#blue)"/>
+  <text x="229" y="106" class="pillText">GRAPH BRIDGE</text>
+  <rect x="360" y="90" width="140" height="24" rx="12" fill="url(#cyan)"/>
+  <text x="373" y="106" class="pillText">STORAGE VOCAB</text>
+  <rect x="514" y="90" width="140" height="24" rx="12" fill="url(#violet)"/>
+  <text x="527" y="106" class="pillText">RESIDENCY TRAIT</text>
+  <rect x="668" y="90" width="120" height="24" rx="12" fill="url(#orange)"/>
+  <text x="681" y="106" class="pillText">PARITY NEXT</text>
 
-  <!-- Top runtime lane -->
-  <rect class="card" x="52" y="190" width="250" height="122" rx="20"/>
-  <text x="78" y="224" class="label">1. User surfaces</text>
-  <text x="78" y="252" class="small">readline chat · CLI · server</text>
-  <text x="78" y="276" class="small">bench · probes · parity JSON</text>
-  <text x="78" y="298" class="mono">just dsv4-chat tokens=128</text>
+  <!-- ════════ LAYER 1 — CLI ════════ -->
+  <text x="54" y="140" class="layerLabel">LAYER 1 — CLI</text>
 
-  <rect class="card" x="356" y="190" width="250" height="122" rx="20"/>
-  <text x="382" y="224" class="label">2. Runtime control</text>
-  <text x="382" y="252" class="small">tokenizer · templates · stops</text>
-  <text x="382" y="276" class="small">session position · stats</text>
-  <text x="382" y="298" class="small">greedy top-k fast path</text>
+  <rect class="card" x="52" y="148" width="1176" height="52" rx="14"/>
+  <text x="72" y="170" class="crateName">ferrule-cli</text>
+  <text x="72" y="190" class="small">chat · run · gpu-run · info · bench-infer · compare-logits · server · deepseek-v4-probe · deepseek-v4-generate · perplexity</text>
 
-  <rect class="card" x="660" y="190" width="250" height="122" rx="20"/>
-  <text x="686" y="224" class="label">3. Model boundary</text>
-  <text x="686" y="252" class="small">DSV4 semantics stay here</text>
-  <text x="686" y="276" class="small">no mock · no hybrid · no</text>
-  <text x="686" y="298" class="small">DeepSeek-only CUDA kernels</text>
+  <path class="arrow" d="M360 200 L360 224"/>
+  <path class="arrow" d="M920 200 L920 224"/>
 
-  <rect class="card" x="964" y="190" width="250" height="122" rx="20"/>
-  <text x="990" y="224" class="label">4. Output</text>
-  <text x="990" y="252" class="small">stream tokens to chat</text>
-  <text x="990" y="276" class="small">report prefill/decode stats</text>
-  <text x="990" y="298" class="small">next: parity + throughput</text>
+  <!-- ════════ LAYER 2 — EXECUTION ════════ -->
+  <text x="54" y="216" class="layerLabel">LAYER 2 — EXECUTION &amp; BACKENDS</text>
 
-  <path class="arrow" d="M302 251 C324 251 334 251 356 251"/>
-  <path class="arrow" d="M606 251 C628 251 638 251 660 251"/>
-  <path class="arrow" d="M910 251 C932 251 942 251 964 251"/>
+  <!-- ferrule-runtime (big card) -->
+  <rect class="card" x="52" y="224" width="600" height="310" rx="18"/>
+  <text x="72" y="250" class="crateName">ferrule-runtime</text>
 
-  <!-- Source binding lane -->
-  <rect class="card2" x="52" y="370" width="250" height="164" rx="20"/>
-  <text x="78" y="404" class="label">Local source artifacts</text>
-  <text x="78" y="434" class="small">DeepSeek-V4-Flash-DSpark</text>
-  <text x="78" y="458" class="small">48 HF safetensors shards</text>
-  <text x="78" y="482" class="small">tokenizer.json + config.json</text>
-  <text x="78" y="506" class="small">official encoding/inference files</text>
+  <!-- Row 1: three modules -->
+  <rect class="soft" x="68" y="264" width="178" height="54" rx="10"/>
+  <text x="80" y="282" class="small">Graph runtime</text>
+  <text x="80" y="298" class="tiny">GraphProgram</text>
+  <text x="80" y="310" class="tiny">BackendObjectStore · RefBackend</text>
 
-  <rect class="card2" x="356" y="370" width="250" height="164" rx="20"/>
-  <text x="382" y="404" class="label">Semantic source binding</text>
-  <text x="382" y="434" class="small">bounded reads by role</text>
-  <text x="382" y="458" class="small">attention · HC · router</text>
-  <text x="382" y="482" class="small">shared/routed experts</text>
-  <text x="382" y="506" class="small">embedding · output head</text>
+  <rect class="soft" x="256" y="264" width="178" height="54" rx="10"/>
+  <text x="268" y="282" class="small">Expert streaming</text>
+  <text x="268" y="298" class="tiny">ExpertStreamingPlanner</text>
+  <text x="268" y="310" class="tiny">ExpertStreamingReader</text>
 
-  <rect class="card2" x="660" y="370" width="554" height="244" rx="24"/>
-  <text x="690" y="404" class="label">DeepSeek V4 layer semantics</text>
-  <text x="690" y="432" class="small">The model-specific forward path is explicit and inspectable.</text>
+  <rect class="soft" x="444" y="264" width="192" height="54" rx="10"/>
+  <text x="456" y="282" class="small">Expert residency</text>
+  <text x="456" y="298" class="tiny">ExpertResidencyBackend trait</text>
+  <text x="456" y="310" class="tiny">apply_streaming_step()</text>
 
-  <rect class="soft" x="690" y="458" width="226" height="62" rx="14"/>
-  <text x="710" y="483" class="small">Hyper-Connections</text>
-  <text x="710" y="505" class="tiny">hc_pre · hc_post · hc_head</text>
+  <!-- Row 2: three modules -->
+  <rect class="soft" x="68" y="328" width="178" height="54" rx="10"/>
+  <text x="80" y="346" class="small">Runner &amp; session</text>
+  <text x="80" y="362" class="tiny">ModelRunner trait</text>
+  <text x="80" y="374" class="tiny">GpuOlmoeRunner · DSV4Runner</text>
 
-  <rect class="soft" x="948" y="458" width="226" height="62" rx="14"/>
-  <text x="968" y="483" class="small">MLA sparse attention</text>
-  <text x="968" y="505" class="tiny">window KV · compressed KV</text>
+  <rect class="soft" x="256" y="328" width="178" height="54" rx="10"/>
+  <text x="268" y="346" class="small">KV cache</text>
+  <text x="268" y="362" class="tiny">KvCache trait · contiguous</text>
+  <text x="268" y="374" class="tiny">radix prefix cache</text>
 
-  <rect class="soft" x="690" y="538" width="226" height="62" rx="14"/>
-  <text x="710" y="563" class="small">MoE routing</text>
-  <text x="710" y="585" class="tiny">hash/top-k · FP4 experts</text>
+  <rect class="soft" x="444" y="328" width="192" height="54" rx="10"/>
+  <text x="456" y="346" class="small">Sampler &amp; scheduler</text>
+  <text x="456" y="362" class="tiny">top-k · top-p · min-p · repeat</text>
+  <text x="456" y="374" class="tiny">batching · preempt</text>
 
-  <rect class="soft" x="948" y="538" width="226" height="62" rx="14"/>
-  <text x="968" y="563" class="small">Output head</text>
-  <text x="968" y="585" class="tiny">norm · lm_head · top-k</text>
+  <!-- DSV4 model semantics block -->
+  <rect class="soft" x="68" y="394" width="568" height="126" rx="10"/>
+  <text x="80" y="414" class="small">DeepSeek V4 model semantics (models/deepseek_v4.rs)</text>
+  <text x="80" y="434" class="mono">hc_pre → attn_norm → attention → hc_post</text>
+  <text x="80" y="450" class="mono">→ hc_pre → ffn_norm → MoE → hc_post</text>
+  <text x="80" y="468" class="tiny">DeepSeekV4CudaOperatorCache</text>
+  <text x="80" y="482" class="tiny">experts: HashMap&lt;ExpertId, CudaFp4ExpertHandles&gt;</text>
+  <text x="80" y="496" class="tiny">planner · reader · counters</text>
+  <text x="80" y="512" class="tiny">hash/score routing · FP4 experts · MLA sparse attn</text>
 
-  <path class="arrowGreen" d="M302 452 C324 452 334 452 356 452"/>
-  <path class="arrowGreen" d="M606 452 C628 452 638 452 660 452"/>
-  <path class="arrowDim" d="M785 312 C785 332 785 348 785 370"/>
+  <!-- ferrule-cuda -->
+  <rect class="cardCuda" x="672" y="224" width="280" height="150" rx="18"/>
+  <text x="692" y="250" class="crateName">ferrule-cuda</text>
+  <text x="692" y="270" class="small">cuda-oxide kernels · GPU forward</text>
+  <text x="692" y="288" class="small">WeightPack reader · artifact ops</text>
+  <text x="692" y="306" class="small">GEMV Q4/Q8 · FP4 SwiGLU expert</text>
+  <text x="692" y="324" class="small">sparse attention · HC kernels</text>
+  <text x="692" y="342" class="small">RoPE · RMSNorm · router topk</text>
+  <text x="692" y="360" class="small">embedding · lm_head · saxpy</text>
 
-  <!-- Operators and hardware lane -->
-  <rect class="card" x="52" y="672" width="360" height="148" rx="22"/>
-  <text x="82" y="708" class="label">Generic CUDA source operators</text>
-  <text x="82" y="738" class="small">F32 / BF16 / FP8 / FP4 source linears</text>
-  <text x="82" y="762" class="small">sparse attention sink · grouped wo_a</text>
-  <text x="82" y="786" class="small">HC kernels · SwiGLU · routed FP4 experts</text>
+  <!-- ferrule-bench -->
+  <rect class="card" x="672" y="390" width="280" height="88" rx="18"/>
+  <text x="692" y="414" class="crateName">ferrule-bench</text>
+  <text x="692" y="434" class="small">benchmarks · PK harness</text>
+  <text x="692" y="452" class="small">reference smokes · perplexity</text>
+  <text x="692" y="470" class="small">JSON reports · TransferCounters</text>
 
-  <rect class="card" x="462" y="672" width="304" height="148" rx="22"/>
-  <text x="492" y="708" class="label">cuda-oxide backend</text>
-  <text x="492" y="738" class="small">Rust kernels compiled to CUDA</text>
-  <text x="492" y="762" class="small">cargo oxide build/test wrappers</text>
-  <text x="492" y="786" class="small">current target: sm_121</text>
+  <!-- arrow runtime → cuda -->
+  <path class="arrow" d="M652 300 L672 300"/>
 
-  <rect class="card" x="816" y="672" width="398" height="148" rx="22"/>
-  <text x="846" y="708" class="label">Next performance architecture</text>
-  <text x="846" y="738" class="small">device-resident tensors, KV, experts</text>
-  <text x="846" y="762" class="small">batched selected-expert kernels</text>
-  <text x="846" y="786" class="small">GPU top-k sampler · CUDA graph replay</text>
+  <!-- ════════ LAYER 3 — VOCABULARY ════════ -->
+  <text x="54" y="552" class="layerLabel">LAYER 3 — VOCABULARY · IR · MODEL POLICIES</text>
 
-  <path class="arrow" d="M803 614 C720 640 570 648 412 724"/>
-  <path class="arrow" d="M412 746 C432 746 442 746 462 746"/>
-  <path class="arrow" d="M766 746 C786 746 796 746 816 746"/>
+  <!-- ferrule-storage -->
+  <rect class="cardStorage" x="52" y="560" width="300" height="190" rx="18"/>
+  <text x="72" y="584" class="crateName">ferrule-storage</text>
+  <rect x="180" y="572" width="56" height="18" rx="9" fill="url(#cyan)"/>
+  <text x="190" y="585" class="pillText">NEW</text>
 
-  <!-- Footer callouts -->
-  <rect x="52" y="854" width="558" height="38" rx="19" fill="#052e16" stroke="#22c55e" stroke-opacity="0.45"/>
-  <text x="76" y="879" class="small">Milestone now: real DSV4 CUDA chat over local safetensors.</text>
+  <rect class="softStorage" x="68" y="600" width="134" height="64" rx="10"/>
+  <text x="78" y="618" class="small">Object identity</text>
+  <text x="78" y="634" class="tiny">StorageObjectId (enum)</text>
+  <text x="78" y="648" class="tiny">ModelRevision</text>
+  <text x="78" y="660" class="tiny">WeightPackId · Display</text>
 
-  <rect x="660" y="854" width="554" height="38" rx="19" fill="#431407" stroke="#fb923c" stroke-opacity="0.45"/>
-  <text x="684" y="879" class="small">Next gates: official numeric parity, then 20 tok/s load-excluded decode.</text>
+  <rect class="softStorage" x="210" y="600" width="126" height="64" rx="10"/>
+  <text x="220" y="618" class="small">Locators</text>
+  <text x="220" y="634" class="tiny">ObjectLocator</text>
+  <text x="220" y="648" class="tiny">LocalFile · LocalMmap</text>
+  <text x="220" y="660" class="tiny">WeightPack · Remote</text>
+
+  <rect class="softStorage" x="68" y="672" width="134" height="64" rx="10"/>
+  <text x="78" y="690" class="small">Placement</text>
+  <text x="78" y="706" class="tiny">Device · Host · Disk</text>
+  <text x="78" y="720" class="tiny">Remote · RemoteEndpoint</text>
+  <text x="78" y="732" class="tiny">tier_rank()</text>
+
+  <rect class="softStorage" x="210" y="672" width="126" height="64" rx="10"/>
+  <text x="220" y="690" class="small">Replica &amp; transfer</text>
+  <text x="220" y="706" class="tiny">ObjectReplica</text>
+  <text x="220" y="720" class="tiny">ReplicaHandleId</text>
+  <text x="220" y="732" class="tiny">TransferEngine trait</text>
+
+  <!-- ferrule-graph -->
+  <rect class="cardGraph" x="372" y="560" width="260" height="190" rx="18"/>
+  <text x="392" y="584" class="crateName">ferrule-graph</text>
+
+  <rect class="softGraph" x="388" y="600" width="228" height="44" rx="10"/>
+  <text x="400" y="618" class="small">Opaque graph IR</text>
+  <text x="400" y="636" class="tiny">ComputeGraph · OpKey · ExternalKey</text>
+
+  <rect class="softGraph" x="388" y="654" width="228" height="44" rx="10"/>
+  <text x="400" y="672" class="small">Graph program</text>
+  <text x="400" y="690" class="tiny">GraphProgram · ExecutionBatch</text>
+
+  <rect class="softGraph" x="388" y="708" width="228" height="30" rx="10"/>
+  <text x="400" y="727" class="tiny">shape registry · validation</text>
+
+  <!-- ferrule-model -->
+  <rect class="cardModel" x="652" y="560" width="300" height="190" rx="18"/>
+  <text x="672" y="584" class="crateName">ferrule-model</text>
+
+  <rect class="soft" x="668" y="600" width="134" height="64" rx="10"/>
+  <text x="678" y="618" class="small">OLMoE loader</text>
+  <text x="678" y="634" class="tiny">safetensors → FP32</text>
+  <text x="678" y="648" class="tiny">Q4/Q8 quantization</text>
+  <text x="678" y="660" class="tiny">WeightPack cache</text>
+
+  <rect class="soft" x="810" y="600" width="126" height="64" rx="10"/>
+  <text x="820" y="618" class="small">DSV4 descriptor</text>
+  <text x="820" y="634" class="tiny">72K tensors</text>
+  <text x="820" y="648" class="tiny">48 shards · 167 GB</text>
+  <text x="820" y="660" class="tiny">all classified</text>
+
+  <rect class="soft" x="668" y="672" width="268" height="30" rx="10"/>
+  <text x="678" y="691" class="small">families/ · common.rs · deepseek_v4.rs</text>
+
+  <rect class="soft" x="668" y="710" width="268" height="30" rx="10"/>
+  <text x="678" y="729" class="small">TokenizerHandle · EnginePlan · policies</text>
+
+  <!-- arrows: layer 3 → layer 2 -->
+  <path class="arrowCyan" d="M202 560 L202 534 L380 534 L380 514"/>
+  <path class="arrow" d="M502 560 L502 534 L440 534 L440 514"/>
+  <path class="arrowGreen" d="M802 560 L802 534 L520 534 L520 514"/>
+
+  <!-- ════════ LAYER 4 — FOUNDATION ════════ -->
+  <text x="54" y="772" class="layerLabel">LAYER 4 — FOUNDATION</text>
+
+  <rect class="card" x="52" y="780" width="200" height="50" rx="12"/>
+  <text x="72" y="802" class="crateName">ferrule-core</text>
+  <text x="72" y="820" class="small">Error · QuantType · observability</text>
+
+  <rect class="card" x="272" y="780" width="200" height="50" rx="12"/>
+  <text x="292" y="802" class="crateName">ferrule-quant</text>
+  <text x="292" y="820" class="small">Q4_0 · Q8_0 · FP4 · FP8 · mixed</text>
+
+  <rect class="card" x="492" y="780" width="200" height="50" rx="12"/>
+  <text x="512" y="802" class="crateName">ferrule-gguf</text>
+  <text x="512" y="820" class="small">safetensors reader · GGUF reader</text>
+
+  <!-- Storage tier hierarchy -->
+  <rect class="cardStorage" x="720" y="780" width="508" height="110" rx="14"/>
+  <text x="740" y="804" class="label">Storage tier hierarchy</text>
+
+  <rect x="740" y="816" width="96" height="28" rx="14" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1"/>
+  <text x="754" y="834" class="tiny" fill="#93c5fd">Device (VRAM)</text>
+
+  <rect x="846" y="816" width="96" height="28" rx="14" class="softStorage"/>
+  <text x="860" y="834" class="tiny">Host (DRAM)</text>
+
+  <rect x="952" y="816" width="96" height="28" rx="14" class="softStorage"/>
+  <text x="966" y="834" class="tiny">Disk (NVMe)</text>
+
+  <rect x="1058" y="816" width="96" height="28" rx="14" class="softStorage"/>
+  <text x="1072" y="834" class="tiny">Remote (P5)</text>
+
+  <path class="arrowDim" d="M836 830 L846 830"/>
+  <path class="arrowDim" d="M942 830 L952 830"/>
+  <path class="arrowDim" d="M1048 830 L1058 830"/>
+
+  <text x="740" y="868" class="tiny">↑ hotter · cheaper to miss a load</text>
+  <text x="740" y="882" class="tiny">↓ colder · cheaper to evict</text>
+
+  <!-- Footer -->
+  <rect x="52" y="872" width="640" height="32" rx="16" fill="#052e16" stroke="#22c55e" stroke-opacity="0.35"/>
+  <text x="68" y="892" class="small">Milestone: DSV4 CUDA chat · storage vocab landed · ExpertResidencyBackend trait</text>
+
+  <rect x="720" y="908" width="508" height="32" rx="16" fill="#1c1917" stroke="#f97316" stroke-opacity="0.30"/>
+  <text x="736" y="928" class="small">Next: official parity · device-resident decode · host-staged expert cache · 20 tok/s</text>
 </svg>

@@ -1,19 +1,20 @@
 <h1 align="center">Ferrule</h1>
 
 <p align="center">
-  <strong>Rust-native, composable LLM inference for sparse MoE, expert streaming, and hardware-aware execution.</strong>
+  <strong>Rust-native LLM runtime for sparse MoE, expert streaming, and hardware-aware execution.</strong>
 </p>
 
 <p align="center">
-  Ferrule keeps model-family policies, tensor source bindings, router/top-k experts, quantized weights, KV cache, and future speculation/parallelism state as explicit runtime concepts.
+  Router decisions, selected experts, quantized weights, KV cache, expert residency,
+  and storage objects are explicit runtime concepts — not hidden behind opaque kernels.
 </p>
 
 <p align="center">
   <img alt="Rust" src="https://img.shields.io/badge/Rust-native-f97316?style=flat-square" />
   <img alt="CUDA" src="https://img.shields.io/badge/CUDA-cuda--oxide-22c55e?style=flat-square" />
   <img alt="MoE" src="https://img.shields.io/badge/MoE-router%20%2B%20top--k%20experts-8b5cf6?style=flat-square" />
-  <img alt="WeightPack" src="https://img.shields.io/badge/WeightPack-source%20aware-2563eb?style=flat-square" />
-  <img alt="Edge" src="https://img.shields.io/badge/edge--cloud-state%20aware-06b6d4?style=flat-square" />
+  <img alt="WeightPack" src="https://img.shields.io/badge/WeightPack-execution%20artifact-2563eb?style=flat-square" />
+  <img alt="Storage" src="https://img.shields.io/badge/Storage-residency%20vocabulary-06b6d4?style=flat-square" />
 </p>
 
 <p align="center">
@@ -21,60 +22,59 @@
   <a href="#current-milestone">Milestone</a> ·
   <a href="#core-features">Features</a> ·
   <a href="docs/ferrule_arch.md">Architecture</a> ·
-  <a href="docs/ROADMAP.md">Roadmap</a>
+  <a href="docs/ROADMAP.md">Roadmap</a> ·
+  <a href="docs/storage-residency-architecture.md">Storage</a>
 </p>
 
 ---
 
 ## Current milestone
 
-Ferrule just crossed an important line: **real local DeepSeek V4 Flash + DSpark weights can enter an interactive CUDA chat loop from Rust**.
+Ferrule just crossed an important line: **real local DeepSeek V4 Flash + DSpark
+weights can enter an interactive CUDA chat loop from Rust**.
 
-This is not a mock path and not a DeepSeek-specific CUDA fork. The current DSV4 path keeps the split we want long-term:
+This is not a mock path and not a DeepSeek-specific CUDA fork. The DSV4 path
+keeps the split we want long-term:
 
-```text
-local HF safetensors → semantic source binding → DSV4 model semantics → generic CUDA source operators → readline chat
+```
+local HF safetensors → semantic source binding → DSV4 model semantics
+  → generic CUDA source operators → readline chat
 ```
 
 What works today:
 
 - **DeepSeek V4 Flash + DSpark local CUDA chat** through `ferrule chat` / `just dsv4-chat`.
 - Full 43-layer DSV4 greedy generation over local HF shards with strict `cuda` backend.
-- Official-ish DSV4 chat prompt wrapper:
-  ```text
-  <｜begin▁of▁sentence｜><｜User｜>...<｜Assistant｜></think>
-  ```
-- `start_pos == 0` DSV4 prefill semantics for HC/layer traversal, window KV, compressed KV, indexer KV, `remainder`, and `cutoff`.
-- Generic CUDA source operators for F32/BF16/FP8/FP4 linears, sparse attention sink, grouped `wo_a`, HC pre/post/head, shared SwiGLU FFN, routed FP4 experts, and lm_head top-k.
-- CPU/reference anchors for tokenizer, source formats, HC math, sparse attention, routing, and MoE pieces.
-- OLMoE remains the smaller CUDA executable regression fixture; the legacy OLMoE CPU forward path has been removed.
+- Official DSV4 chat prompt wrapper (`<｜begin▁of▁sentence｜><｜User｜>...<｜Assistant｜></think>`).
+- DSV4 prefill semantics: HC/layer traversal, window KV, compressed KV, indexer KV.
+- Generic CUDA source operators for F32/BF16/FP8/FP4 linears, sparse attention,
+  grouped output projection, HC pre/post/head, shared SwiGLU FFN, routed FP4
+  experts, and lm_head top-k.
+- **Storage/residency vocabulary** (`ferrule-storage` crate): `StorageObjectId`,
+  `Placement`, `ObjectLocator`, `ObjectReplica`, `TransferEngine` trait — the
+  foundation for expert host-staging, frequency-aware eviction, and future
+  async/remote backends.
+- **`ExpertResidencyBackend` trait**: unifies the duplicated load/evict loop
+  between CPU and CUDA expert paths. One `apply_streaming_step()` function
+  replaces two inline loops.
+- OLMoE remains the CUDA executable regression fixture.
 
 A real local smoke from the current DSV4 CUDA chat milestone:
 
-```text
+```
 $ just dsv4-chat tokens=128
 → CUDA chat via cargo oxide build (arch: sm_121, tokens: 128)
-=========================================
-RUSTC-CODEGEN-CUDA CARGO build
-=========================================
 
-Running cargo build --features cuda --release -p ferrule-cli...
+DeepSeek-V4: 4096d×43L, 256e top-6, vocab=129280
+  (cuda, attention=MLA, source=safetensors, arch=deepseek_v4)
+Chat ready. Type /exit or Ctrl-D to quit.
 
-    Finished `release` profile [optimized] target(s) in 0.11s
-
-✓ Cargo build succeeded
-DeepSeek-V4: 4096d×43L, 256e top-6, vocab=129280 (cuda, attention=MLA, source=safetensors, arch=deepseek_v4)
-Chat ready. Type /exit or Ctrl-D to quit. Template: deepseek-v4. DeepSeek-V4 greedy top-k fast path.
-  /reset      clear session state
-  /stats      show session stats
-  /experts    show DSV4 layer/cache stats
-  /ctx        show context window usage
 You> hi
 Ferrule> H! How can I help you?
 stats> prefill=65789.6ms decode=41575.4ms pos=14
 ```
 
-This is a huge milestone, but the next gates are clear: **official numeric parity first, then 20 tok/s load-excluded decode**. If Ferrule gives a wrong-identity answer, treat that as a correctness bug, not as a UI issue.
+Next gates: **official numeric parity first, then 20 tok/s load-excluded decode**.
 
 ---
 
@@ -82,81 +82,107 @@ This is a huge milestone, but the next gates are clear: **official numeric parit
 
 | Feature | Why it matters |
 |---|---|
-| **Policy-composed Transformer runtime** | Model families map source tensors into semantic attention, FFN/MoE, KV, residency, quantization, and speculation policies instead of forking runners per model. |
+| **Policy-composed Transformer runtime** | Model families map source tensors into semantic attention, FFN/MoE, KV, residency, quantization, and speculation policies — no per-family runner forks. |
 | **MoE-first execution** | Router logits, hash/top-k selection, selected experts, shared experts, and expert residency are first-class runtime objects. |
-| **Rust-native model runtime** | Model metadata, source tensor slices, WeightPack files, CUDA buffers, KV cache, sessions, and scheduler state have explicit ownership and typed boundaries. |
-| **cuda-oxide kernels** | Custom CUDA kernels stay integrated with the Rust runtime, enabling MoE-specific quantized GEMV, packed FP4 expert execution, sparse attention, and future fusion work. |
-| **Safetensors source binding** | Ferrule can inspect and bind Hugging Face safetensors by semantic role, with bounded reads instead of loading a whole 100GB+ checkpoint into RAM. |
-| **WeightPack execution artifact** | Layer weights can be quantized once and reloaded from a Ferrule-owned package/cache; GGUF remains a compatibility/PK path rather than the only source format. |
-| **CPU/reference components** | CPU reference pieces anchor CUDA kernels, source-format decoders, router behavior, HC math, graph validation, and future model support without keeping a legacy full-model CPU runner. |
-| **State-aware design** | KV pages, source artifacts, WeightPack artifacts, model versions, adapters, speculation state, and future rollout/checkpoint state are planned as managed runtime state. |
-| **Edge/hardware direction** | Expert placement, streaming, WeightPack layout, and scheduling can adapt to VRAM, DRAM, NVMe, cloud artifacts, and future multi-GPU / multi-node / RISC-V/GPU/NPU cooperation. |
+| **Storage/residency vocabulary** | `StorageObjectId`, `ObjectLocator`, `Placement`, `ObjectReplica` — one typed vocabulary for all loadable/resident state. Expert eviction is frequency-aware, not just LRU. |
+| **cuda-oxide kernels** | Custom CUDA kernels integrated with the Rust runtime: quantized GEMV, packed FP4 expert execution, sparse attention, artifact-preserving operators. |
+| **Safetensors source binding** | Inspect and bind Hugging Face safetensors by semantic role, with bounded reads instead of loading a 100 GB+ checkpoint into RAM. |
+| **WeightPack execution artifact** | Layer weights quantized once and reloaded from a Ferrule-owned package. GGUF remains a compatibility/PK path. |
+| **Runtime graph IR** | Opaque graph with semantic ops, typed artifact bindings, shape registry, and backend object store. Model-family names stay out of graph nodes. |
+| **CPU/reference anchors** | CPU reference pieces validate CUDA kernels, source-format decoders, router behavior, and HC math — without a legacy full-model CPU runner. |
+| **Edge/hardware direction** | Expert placement, streaming, WeightPack layout, and scheduling adapt to VRAM, DRAM, NVMe, and future multi-GPU / multi-node cooperation. |
 
 ---
 
 ## System vision
 
-Ferrule is designed around a simple idea: future LLM systems need to co-design model structure, runtime state, and hardware placement.
+Ferrule is designed around a simple idea: future LLM systems need to co-design
+model structure, runtime state, and hardware placement.
 
 <p align="center">
-  <img src="docs/assets/ferrule-current-architecture.svg" alt="Ferrule current architecture" width="100%" />
+  <img src="docs/assets/ferrule-current-architecture.svg" alt="Ferrule architecture" width="100%" />
 </p>
 
-Near term, Ferrule aims to reach llama.cpp-level local usability while keeping a more explicit runtime architecture: fast cached startup, sampling controls, templates, quality checks, benchmarks, a small local server, and source-preserving bring-up for mainstream model families.
+``
+┌──────────────────────────────────────────────────────────────────────┐
+│                        FERRULE RUNTIME                               │
+│                                                                      │
+│  ┌─────────────┐  ┌──────────────┐  ┌───────────────┐               │
+│  │ ModelFamily │─▶│  EnginePlan  │─▶│  GraphProgram │               │
+│  │  policies   │  │ (composed)   │  │  + externals  │               │
+│  └─────────────┘  └──────────────┘  └───────┬───────┘               │
+│                                             │                        │
+│                    ┌───────────────────────┘                        │
+│                    ▼                                                │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │                    EXECUTION LAYER                            │   │
+│  │  ┌────────────┐  ┌──────────────┐  ┌────────────────────┐    │   │
+│  │  │  Expert    │  │  Storage &   │  │  CUDA / CPU        │    │   │
+│  │  │ Streaming  │  │  Residency   │  │  Backends          │    │   │
+│  │  │ Planner    │  │  Manager     │  │  (kernels, H2D)    │    │   │
+│  │  └────────────┘  └──────────────┘  └────────────────────┘    │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│  ┌─────────────┐  ┌──────────────┐  ┌───────────────┐               │
+│  │ KV Cache    │  │ Sampler      │  │ Scheduler     │               │
+│  │ (radix/paged)│  │ (top-k/top-p)│  │ (batching)    │               │
+│  └─────────────┘  └──────────────┘  └───────────────┘               │
+└──────────────────────────────────────────────────────────────────────┘
+```
 
-Long term, Ferrule should become a runtime substrate for edge-cloud LLM systems:
+Near term: llama.cpp-level local usability with a more explicit runtime
+architecture — fast cached startup, sampling controls, templates, quality
+checks, benchmarks, a small local server, and source-preserving bring-up for
+mainstream model families.
 
-- cloud builds model versions, weight pack artifacts, calibration data, and adapters
+Long term: a runtime substrate for edge-cloud LLM systems:
+
+- cloud builds model versions, WeightPack artifacts, calibration data, adapters
 - edge devices run private low-latency inference and collect rollout traces
 - router statistics guide expert placement, prefetch, and offload
-- KV/session state can become movable and eventually distributed
-- speculation modules such as DSpark/MTP can attach through a target/draft policy
-- hardware counters feed back into quantization and scheduling policies
-- DP/TP/EP/SP/CP/PP placement can evolve under one state-aware runtime
-- RISC-V/GPU/NPU paths can cooperate under one state-aware runtime
+- KV/session state becomes movable and eventually distributed
+- speculation modules (DSpark/MTP) attach through a target/draft policy
+- DP/TP/EP/SP/CP/PP placement evolves under one state-aware runtime
 
 ---
 
 ## Quick start
 
-The fastest path to the current milestone is through the `justfile` wrappers. For CUDA work, prefer `just` / `cargo oxide` commands; plain CUDA `cargo test` can miss cuda-oxide artifact wiring.
+The fastest path is through `justfile` wrappers. For CUDA, prefer `just` /
+`cargo oxide` commands; plain `cargo test -p ferrule-cuda` can miss cuda-oxide
+artifact wiring.
 
-1. Check the environment:
+1. **Check the environment:**
 
 ```bash
 just cuda-info
 just oxide-doctor
 ```
 
-2. Build the CUDA release binary:
+2. **Build the CUDA release binary:**
 
 ```bash
 just build-cuda
-```
 
-If auto-detection picks the wrong GPU architecture, override it explicitly:
-
-```bash
+# Override architecture if auto-detection fails:
 FERRULE_CUDA_ARCH=sm_121 just build-cuda
 ```
 
-3. Put the local DSV4 source checkout here:
+3. **Put the local DSV4 source checkout here:**
 
-```text
+```
 models/DeepSeek-V4-Flash-DSpark
 ```
 
-4. Run real local DeepSeek V4 Flash + DSpark CUDA chat:
+4. **Run real local DeepSeek V4 Flash + DSpark CUDA chat:**
 
 ```bash
 just dsv4-chat tokens=128
-# or:
-just dsv4-chat 128
 ```
 
 Inside chat:
 
-```text
+```
 /reset    clear session state
 /stats    show session stats
 /experts  show DSV4 layer/cache stats
@@ -164,176 +190,118 @@ Inside chat:
 /exit     quit
 ```
 
-5. Run a one-shot DSV4 CUDA smoke:
+5. **One-shot DSV4 CUDA smoke:**
 
 ```bash
 just dsv4-cuda-generate Hello 2 4096 --chat
 ```
 
-6. Generate tokenizer/chat parity JSON from the local official encoding code:
+6. **OLMoE regression fixture (if present):**
 
 ```bash
-just dsv4-parity-json "Who are you?" target/dsv4_generation_parity.json
-```
-
-7. Optional: build CPU-only for metadata/reference work, or run the smaller OLMoE CUDA regression fixture:
-
-```bash
-just build-cpu
-
-# If the OLMoE fixture is present and CUDA is available:
 just chat models/OLMoE-Instruct q4 -n 256
 ```
 
 ---
 
-## Current capability map
+## Capability map
 
 | Area | Status |
 |---|---|
-| Executable model fixture | OLMoE-style sparse MoE CUDA path via `RuntimeRunner`; legacy CPU FP32 forward was removed |
-| Real large-model milestone | DeepSeek V4 Flash + DSpark local HF shards can run full 43-layer CUDA greedy chat |
-| DSV4 execution boundary | `ferrule_runtime::models::deepseek_v4` owns DSV4 HC, MLA, compressor/indexer, router, MoE, and output semantics |
-| Inference commands | `run`, `gpu-run`, `chat`, `server`, `bench-infer`, `compare-logits`, `perplexity`, `deepseek-v4-generate`, `deepseek-v4-probe` |
-| MoE execution | router → top-k/hash selection → routed FP4 experts → shared FFN; next target is GPU-resident expert residency + batched selected-expert kernels |
-| Expert streaming | bounded local HF shard reads for selected experts; source FP4 expert bundles and resident handle abstractions exist |
-| Attention | OLMoE GQA executable path; DSV4 attention source binding, sparse attention reference, and CUDA sparse-attention ABI in progress |
-| Hyper-Connections | DSV4 HC source binding plus reference `hc_pre` / `hc_post` / `hc_head` primitives |
-| KV cache | contiguous, multi-session, paged, prefix, and radix-cache components exist; GPU OLMoE path uses persistent session KV |
-| Quant/cache artifact | WeightPack cache for quantized weights; source-preserving FP4/FP8 decoders for DSV4 bring-up |
-| Sampling/control | greedy and configurable sampling arguments, stop handling, structured/program-like generation utilities |
-| Serving | minimal OpenAI-compatible local server path |
-| Speculation | DSpark/MTP metadata and tensor roles are represented as a generic speculation attachment policy |
-| Training/RL | design target, not implemented yet |
+| Executable model fixture | OLMoE sparse MoE CUDA path via `GpuOlmoeRunner` |
+| Real large-model milestone | DeepSeek V4 Flash + DSpark full 43-layer CUDA greedy chat |
+| DSV4 execution boundary | `ferrule_runtime::models::deepseek_v4` owns HC, MLA, compressor/indexer, router, MoE, output semantics |
+| Expert streaming | `ExpertStreamingPlanner` + `ExpertStreamingReader` + `ExpertResidencyBackend` trait |
+| Storage/residency | `ferrule-storage` crate: vocabulary types + `StorageCatalog` + `TransferEngine` traits |
+| Attention | OLMoE GQA executable; DSV4 MLA sparse attention correctness-first CUDA path |
+| Hyper-connections | DSV4 HC source binding + reference `hc_pre`/`hc_post`/`hc_head` |
+| KV cache | `KvCache` trait, contiguous per-session, radix prefix cache |
+| Quantization | Q4_0/Q8_0, FP4 E2M1 + E8M0 scales, FP8 E4M3FN, mixed precision policy |
+| WeightPack | mmap'd reader, streaming writer, zero-copy slices, WeightPack-only load path |
+| Runtime graph | Opaque IR, `GraphProgram`, `BackendObjectStore`, `ReferenceGraphBackend` |
+| Sampling | temperature, top-k, top-p, min-p, repeat penalty, seed, stop strings, logprobs |
+| Chat templates | OLMoE, ChatML, Llama3, Qwen, DeepSeek-V4, Plain |
+| Server | minimal OpenAI-compatible `/v1/chat/completions` with SSE streaming |
+| Structured decoding | token mask API, program-like generation API |
+| Speculation | DSpark/MTP metadata represented as generic speculation attachment policy |
+| Training/RL | design target, not implemented |
 
 ---
 
 ## Useful commands
 
-Most day-to-day commands are wrapped in `justfile` recipes.
-
 ### Environment and build
 
 ```bash
-# Show cuda-oxide/GPU/arch detection.
-just cuda-info
-
-# Run cuda-oxide's environment doctor.
-just oxide-doctor
-
-# Auto-detect CUDA availability: CUDA build when available, CPU build otherwise.
-just build
-
-# Explicit CPU or CUDA builds.
-just build-cpu
-just build-cuda
-
-# Override detected architecture.
-FERRULE_CUDA_ARCH=sm_121 just build-cuda
-
-# Development check paths.
-just check
-just check-cuda
+just cuda-info          # Show GPU/arch detection
+just oxide-doctor       # cuda-oxide environment check
+just build              # Auto-detect: CUDA if available, CPU otherwise
+just build-cuda         # Explicit CUDA build
+just build-cpu          # CPU-only build
+just check              # Quick check
 ```
 
-### DeepSeek V4 / DSpark local CUDA path
+### DeepSeek V4 / DSpark
 
 ```bash
-# Interactive readline chat over local HF shards.
-just dsv4-chat tokens=128
-just dsv4-chat 128
-
-# One-shot greedy generation through the same DSV4 model boundary.
-just dsv4-cuda-generate Hello 2 4096 --chat
-
-# Full 43-layer first-token/top-k diagnostic.
-just dsv4-cuda-first-token Hello 1
-
-# Probe selected rows/top-k, optionally limiting layers for debugging.
-just dsv4-cuda-probe "one two three four" 3 1 0
-
-# CPU/source diagnostic probes without building CUDA.
-just dsv4-probe Hello 0 4 2
-just dsv4-topk Hello 0 3 4096
-
-# Official tokenizer/chat parity JSON from local encoding_dsv4.py.
-just dsv4-parity-json "Who are you?" target/dsv4_generation_parity.json
+just dsv4-chat tokens=128                        # Interactive chat
+just dsv4-cuda-generate Hello 2 4096 --chat       # One-shot generation
+just dsv4-cuda-first-token Hello 1               # First-token diagnostic
+just dsv4-cuda-probe "one two three" 3 1 0       # Layer-limited probe
+just dsv4-parity-json "Who are you?" output.json # Tokenizer parity JSON
 ```
 
-### Generic / OLMoE regression fixture
+### OLMoE regression
 
 ```bash
-# Generic CUDA runner wrapper.
-just run-cuda info models/DeepSeek-V4-Flash-DSpark
-
-# OLMoE chat through the generic CUDA chat wrapper.
-just chat models/OLMoE-Instruct q4 -n 256
-
-# GPU one-shot run.
-just gpu-run models/OLMoE-Instruct "Paris is" 16 q4
-
-# Benchmark and compare-logits.
-just bench models/OLMoE-Instruct "Paris is" 64 q4
-just compare models/OLMoE-Instruct "The capital of France is" 8 q4
-
-# Minimal local server.
-just serve models/OLMoE-Instruct q4 8080
-
-# Perplexity / metadata helpers.
-just perplexity models/OLMoE-Instruct data/sample.txt
-just info models/DeepSeek-V4-Flash-DSpark
+just chat models/OLMoE-Instruct q4 -n 256        # Chat
+just gpu-run models/OLMoE-Instruct "Paris is" 16 q4  # One-shot
+just bench models/OLMoE-Instruct "Paris is" 64 q4    # Benchmark
+just compare models/OLMoE-Instruct "The capital of France is" 8 q4  # Logits diff
+just serve models/OLMoE-Instruct q4 8080         # Local server
 ```
 
-### Validation and code quality
+### Validation
 
 ```bash
-# Full default validation chain.
-just test
-
-# Focused tests.
-just test-graph
-just test-runtime
-just test-model
-just test-cli
-just test-cuda
-just test-cuda-required
-
-# Formatting / lint.
-just fmt
-just fmt-fix
-just clippy
-just clippy-cuda
-just lint
+just test           # All tests
+just test-graph     # Graph IR tests
+just test-runtime   # Runtime tests
+just test-cuda      # CUDA tests (via cargo oxide)
+just fmt            # Format check
+just clippy         # Lint
+just lint           # fmt + clippy
 ```
-
-### Raw cargo commands still useful for targeted debugging
-
-```bash
-cargo check -p ferrule-runtime -p ferrule-cli
-cargo check -p ferrule-runtime -p ferrule-cli --features ferrule-cli/cuda
-cargo test -p ferrule-runtime deepseek_v4
-cargo test -p ferrule-cli commands::chat::tests
-```
-
-For CUDA tests, use `just test-cuda` or `cargo oxide test`; avoid plain `cargo test -p ferrule-cuda` unless you intentionally want to debug cargo-oxide artifact linking.
 
 ---
 
 ## Active development focus
 
-Ferrule's current implementation focus is separating model semantics from execution so new families can move toward a graph-backed runner:
-
-1. **Compute graph IR** — keep a device-independent `ferrule-graph` core while CUDA kernels remain in `ferrule-cuda`.
-2. **Layer source binding** — compose attention, HC, router, shared FFN, routed experts, and KV state into typed per-layer bundles.
-3. **Source-format CUDA** — continue validating FP8 attention/shared linears, packed FP4 experts, and sparse attention against CPU/reference math.
-4. **Graph migration path** — prototype Qwen3-style dense decoder graph first, then migrate MoE and DeepSeekV4 only after parity anchors are strong.
+1. **Official DSV4 parity** — tokenizer/template JSON parity, first-token
+   golden tests, intermediate layer dumps.
+2. **Device-resident decode** — remove host `Vec<f32>` boundaries; decode arena,
+   GPU-resident KV, expert residency.
+3. **Storage/residency integration** — wire `ferrule-storage` vocabulary into
+   execution: CUDA `ExpertResidencyBackend`, host-staged expert cache,
+   frequency-aware eviction.
+4. **Graph bridge** — coarse `transformer_layer` execution through
+   `ReferenceGraphBackend`, then split into fine-grained semantic ops.
+5. **Benchmark contract** — DSV4 JSON bench with load/prefill/decode split,
+   tok/s, bytes moved, resident experts.
 
 ---
 
 ## Documentation
 
-- [Architecture](docs/ferrule_arch.md)
-- [Roadmap and llama.cpp gap analysis](docs/ROADMAP.md)
-- [Runtime graph architecture](docs/runtime-graph-architecture.md)
-- [Temporary inference roadmap / DeepSeek V4 bring-up notes](docs/TEMP_INFERENCE_ROADMAP.md)
-- [Paper and system notes](docs/paper_reads.md)
+| Document | Content |
+|---|---|
+| [Architecture](docs/ferrule_arch.md) | Crate layout, runtime, graph, storage, model-family boundary, GPU kernels, DSV4 execution |
+| [Roadmap](docs/ROADMAP.md) | Priority roadmap P0–P8, implementation order, gap matrix, model bring-up contract |
+| [Storage & Residency](docs/storage-residency-architecture.md) | `StorageObjectId`, `Placement`, `ObjectLocator`, `ObjectReplica`, `TransferEngine`, `ExpertResidencyBackend` — full design |
+| [Runtime Graph](docs/runtime-graph-architecture.md) | Graph IR, `GraphNode`, `GraphBackend`, `ExecutionBatch`, `ExternalBindingPlan` |
+
+---
+
+## License
+
+Apache-2.0
