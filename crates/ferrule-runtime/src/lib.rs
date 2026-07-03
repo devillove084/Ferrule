@@ -59,7 +59,6 @@ pub mod profiler;
 pub mod program;
 pub mod radix_cache;
 pub mod reference_graph_backend;
-pub mod residency;
 pub mod routed_moe;
 pub mod runner;
 pub mod sampler;
