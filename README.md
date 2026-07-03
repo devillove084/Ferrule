@@ -103,33 +103,6 @@ model structure, runtime state, and hardware placement.
   <img src="docs/assets/ferrule-current-architecture.svg" alt="Ferrule architecture" width="100%" />
 </p>
 
-``
-┌──────────────────────────────────────────────────────────────────────┐
-│                        FERRULE RUNTIME                               │
-│                                                                      │
-│  ┌─────────────┐  ┌──────────────┐  ┌───────────────┐               │
-│  │ ModelFamily │─▶│  EnginePlan  │─▶│  GraphProgram │               │
-│  │  policies   │  │ (composed)   │  │  + externals  │               │
-│  └─────────────┘  └──────────────┘  └───────┬───────┘               │
-│                                             │                        │
-│                    ┌───────────────────────┘                        │
-│                    ▼                                                │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                    EXECUTION LAYER                            │   │
-│  │  ┌────────────┐  ┌──────────────┐  ┌────────────────────┐    │   │
-│  │  │  Expert    │  │  Storage &   │  │  CUDA / CPU        │    │   │
-│  │  │ Streaming  │  │  Residency   │  │  Backends          │    │   │
-│  │  │ Planner    │  │  Manager     │  │  (kernels, H2D)    │    │   │
-│  │  └────────────┘  └──────────────┘  └────────────────────┘    │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                      │
-│  ┌─────────────┐  ┌──────────────┐  ┌───────────────┐               │
-│  │ KV Cache    │  │ Sampler      │  │ Scheduler     │               │
-│  │ (radix/paged)│  │ (top-k/top-p)│  │ (batching)    │               │
-│  └─────────────┘  └──────────────┘  └───────────────┘               │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
 Near term: llama.cpp-level local usability with a more explicit runtime
 architecture — fast cached startup, sampling controls, templates, quality
 checks, benchmarks, a small local server, and source-preserving bring-up for
