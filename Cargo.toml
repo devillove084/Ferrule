@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/ferrule-core",
+  "crates/ferrule-storage",
   "crates/ferrule-graph",
   "crates/ferrule-gguf",
   "crates/ferrule-model",

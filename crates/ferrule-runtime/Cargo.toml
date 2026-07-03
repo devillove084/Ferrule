@@ -15,6 +15,7 @@ cuda = ["dep:ferrule-cuda"]
 
 [dependencies]
 ferrule-core = { path = "../ferrule-core" }
+ferrule-storage = { path = "../ferrule-storage" }
 ferrule-graph = { path = "../ferrule-graph" }
 ferrule-model = { path = "../ferrule-model" }
 ferrule-quant = { path = "../ferrule-quant" }

@@ -43,6 +43,7 @@ pub mod artifact_linear;
 pub mod artifact_tensor;
 pub mod expert_executor;
 pub mod expert_handle;
+pub mod expert_residency;
 pub mod expert_routing;
 pub mod expert_streaming;
 pub mod expert_telemetry;
