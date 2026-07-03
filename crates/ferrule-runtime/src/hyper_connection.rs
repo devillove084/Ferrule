@@ -281,10 +281,9 @@ pub fn hc_pre_reference(
 /// Official `Block.hc_post` semantics.
 ///
 /// Note: the Python expression is
-/// `post[..., j] * x + sum(comb[..., j, k] * residual[..., j, :], k)`. That is,
-/// `residual.unsqueeze(-2)` repeats the same HC copy across the comb row. We keep
-/// this exact behavior for reference parity instead of "fixing" it into a full
-/// residual-copy matrix multiply.
+/// `post.unsqueeze(-1) * x.unsqueeze(-2) + sum(comb.unsqueeze(-1) * residual.unsqueeze(-2), dim=2)`.
+/// With PyTorch broadcasting this means output copy `j` receives
+/// `sum_i comb[..., i, j] * residual[..., i, :]`.
 pub fn hc_post_reference(
     hidden: &[f32],
     residual: &[f32],
@@ -314,14 +313,16 @@ pub fn hc_post_reference(
 
     let mut out = vec![0.0f32; tokens * hc * dim];
     for token in 0..tokens {
-        for copy in 0..hc {
-            let post = split.post[token * hc + copy];
-            let comb_row_sum = (0..hc)
-                .map(|k| split.comb[(token * hc + copy) * hc + k])
-                .sum::<f32>();
+        for out_copy in 0..hc {
+            let post = split.post[token * hc + out_copy];
             for d in 0..dim {
-                let idx = (token * hc + copy) * dim + d;
-                out[idx] = post * hidden[token * dim + d] + comb_row_sum * residual[idx];
+                let mut residual_mix = 0.0f32;
+                for in_copy in 0..hc {
+                    let comb = split.comb[(token * hc + in_copy) * hc + out_copy];
+                    residual_mix += comb * residual[(token * hc + in_copy) * dim + d];
+                }
+                let idx = (token * hc + out_copy) * dim + d;
+                out[idx] = post * hidden[token * dim + d] + residual_mix;
             }
         }
     }
@@ -417,6 +418,21 @@ mod tests {
                 .sum::<f32>();
             assert!((sum - 1.0).abs() < 1e-5, "col sum {sum}");
         }
+    }
+
+    #[test]
+    fn hc_post_uses_comb_columns_like_official_broadcasting() {
+        let config = tiny_config();
+        let split = HyperConnectionSplit {
+            tokens: 1,
+            hc_mult: 2,
+            pre: vec![0.0, 0.0],
+            post: vec![0.0, 0.0],
+            comb: vec![0.0, 1.0, 2.0, 3.0],
+        };
+        let out =
+            hc_post_reference(&[10.0, 20.0], &[5.0, 7.0, 11.0, 13.0], config, &split).unwrap();
+        assert_eq!(out, vec![22.0, 26.0, 38.0, 46.0]);
     }
 
     #[test]

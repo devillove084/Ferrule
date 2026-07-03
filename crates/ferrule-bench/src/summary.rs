@@ -159,6 +159,8 @@ pub struct TransferCounters {
     pub device_to_host_bytes: u64,
     pub host_to_device_copies: u64,
     pub device_to_host_copies: u64,
+    pub artifact_uploads: u64,
+    pub artifact_upload_bytes: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,6 +200,9 @@ impl RuntimeCounters {
             .saturating_add(duration_us(elapsed));
         self.transfers.host_to_device_bytes =
             self.transfers.host_to_device_bytes.saturating_add(bytes);
+        self.transfers.artifact_uploads = self.transfers.artifact_uploads.saturating_add(1);
+        self.transfers.artifact_upload_bytes =
+            self.transfers.artifact_upload_bytes.saturating_add(bytes);
     }
 
     pub fn record_layer_bind(&mut self, elapsed: Duration) {
@@ -238,6 +243,12 @@ impl RuntimeCounters {
             self.transfers.device_to_host_copies.saturating_add(1);
         self.transfers.device_to_host_bytes =
             self.transfers.device_to_host_bytes.saturating_add(bytes);
+    }
+
+    pub fn record_artifact_uploads(&mut self, uploads: u64, bytes: u64) {
+        self.transfers.artifact_uploads = self.transfers.artifact_uploads.saturating_add(uploads);
+        self.transfers.artifact_upload_bytes =
+            self.transfers.artifact_upload_bytes.saturating_add(bytes);
     }
 
     pub fn record_expert_loads(&mut self, loads: u64, bytes: u64) {

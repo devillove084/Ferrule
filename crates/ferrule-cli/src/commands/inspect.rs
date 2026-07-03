@@ -240,10 +240,36 @@ pub fn cmd_deepseek_v4_generate(
             .iter()
             .map(|stat| stat.resident_expert_bytes)
             .sum();
+        let layers = layer_stats
+            .iter()
+            .map(|stat| {
+                serde_json::json!({
+                    "layer": stat.layer,
+                    "window_kv_len": stat.window_kv_len,
+                    "compressed_kv_len": stat.compressed_kv_len,
+                    "indexer_compressed_kv_len": stat.indexer_compressed_kv_len,
+                    "resident_experts": stat.resident_experts,
+                    "resident_expert_bytes": stat.resident_expert_bytes,
+                })
+            })
+            .collect::<Vec<_>>();
+        let op_counters = runner.operator_runtime_counters();
         let mut counters = RuntimeCounters::default();
         counters.record_load(load_elapsed);
         counters.record_prefill(prefill_elapsed);
         counters.record_decode(decode_elapsed);
+        counters.record_kernel_launches(op_counters.kernel_launches);
+        counters.transfers.host_to_device_copies = op_counters.host_to_device_copies;
+        counters.transfers.host_to_device_bytes = op_counters.host_to_device_bytes;
+        counters.transfers.device_to_host_copies = op_counters.device_to_host_copies;
+        counters.transfers.device_to_host_bytes = op_counters.device_to_host_bytes;
+        counters.record_artifact_uploads(
+            op_counters.artifact_uploads,
+            op_counters.artifact_upload_bytes,
+        );
+        counters.record_selected_experts(op_counters.expert_selected);
+        counters.record_expert_loads(op_counters.expert_loads, op_counters.expert_load_bytes);
+        counters.record_expert_evictions(op_counters.expert_evictions);
         counters.set_expert_residency(resident_experts, resident_bytes);
         let summary =
             RuntimeBenchSummary::new(None, None, counters, prompt_tokens.len(), generated.len());
@@ -258,6 +284,7 @@ pub fn cmd_deepseek_v4_generate(
             "max_layers": max_layers,
             "bound_layers": runner.bound_layer_count(),
             "position": runner.position(),
+            "layers": layers,
             "load_seconds": load_elapsed.as_secs_f64(),
             "prefill_seconds": prefill_elapsed.as_secs_f64(),
             "decode_seconds": decode_elapsed.as_secs_f64(),

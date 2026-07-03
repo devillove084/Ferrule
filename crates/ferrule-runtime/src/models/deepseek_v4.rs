@@ -25,9 +25,10 @@ use crate::artifact_format::{
     normalized_hadamard_transform_rows_in_place, simulate_fp4_e2m1_e8m0_activation_quant_in_place,
     simulate_fp8_e4m3fn_e8m0_activation_quant_in_place,
 };
-#[cfg(feature = "cuda")]
-use crate::artifact_linear::ArtifactLinearFormat;
-use crate::artifact_linear::ArtifactLinearPayload;
+use crate::artifact_linear::{
+    ArtifactActivationQuantization, ArtifactLinearExecutionPolicy, ArtifactLinearFormat,
+    ArtifactLinearPayload,
+};
 use crate::artifact_tensor::{
     ArtifactDType, ArtifactTensorPayload, ArtifactTensorReader, ArtifactTensorSlice,
 };
@@ -55,6 +56,71 @@ use crate::routed_moe::{
 };
 use crate::runner::{ModelInfo, ModelRunner};
 use crate::tokenizer::TokenizerHandle;
+
+const DSV4_LINEAR_ACTIVATION_QUANT_BLOCK_SIZE: usize = 128;
+
+fn deepseek_v4_linear_activation_quantization() -> ArtifactActivationQuantization {
+    ArtifactActivationQuantization::Fp8E4M3WithE8M0Scale {
+        block_size: DSV4_LINEAR_ACTIVATION_QUANT_BLOCK_SIZE,
+    }
+}
+
+fn deepseek_v4_quantized_linear_execution_policy() -> ArtifactLinearExecutionPolicy {
+    ArtifactLinearExecutionPolicy::fp8_e4m3_e8m0_activation(DSV4_LINEAR_ACTIVATION_QUANT_BLOCK_SIZE)
+}
+
+fn with_deepseek_v4_linear_execution_policy(
+    linear: ArtifactLinearPayload,
+) -> ArtifactLinearPayload {
+    if deepseek_v4_role_uses_official_linear_activation_quantization(&linear.role)
+        && artifact_linear_format_has_quantized_weight(&linear.format)
+    {
+        linear.with_execution_policy(deepseek_v4_quantized_linear_execution_policy())
+    } else {
+        linear
+    }
+}
+
+fn with_deepseek_v4_attention_execution_policies(
+    mut payload: AttentionArtifactPayload,
+) -> AttentionArtifactPayload {
+    payload.query_a = with_deepseek_v4_linear_execution_policy(payload.query_a);
+    payload.query_b = with_deepseek_v4_linear_execution_policy(payload.query_b);
+    payload.key_value = with_deepseek_v4_linear_execution_policy(payload.key_value);
+    // Official DSV4 does not call `linear()` for `wo_a`; it uses a grouped einsum
+    // over the dequantized FP8 weight, so activation quantization must not be applied.
+    payload.output_b = with_deepseek_v4_linear_execution_policy(payload.output_b);
+    payload
+}
+
+fn with_deepseek_v4_swiglu_execution_policies(mut ffn: SwiGluFfnPayload) -> SwiGluFfnPayload {
+    ffn.gate = with_deepseek_v4_linear_execution_policy(ffn.gate);
+    ffn.up = with_deepseek_v4_linear_execution_policy(ffn.up);
+    ffn.down = with_deepseek_v4_linear_execution_policy(ffn.down);
+    ffn
+}
+
+fn deepseek_v4_role_uses_official_linear_activation_quantization(role: &TensorRole) -> bool {
+    matches!(
+        role,
+        TensorRole::AttentionLatentQueryA
+            | TensorRole::AttentionLatentQueryB
+            | TensorRole::AttentionLatentKv
+            | TensorRole::AttentionLatentOutputB
+            | TensorRole::SharedExpertGate
+            | TensorRole::SharedExpertUp
+            | TensorRole::SharedExpertDown
+            | TensorRole::AuxIndexer
+    )
+}
+
+fn artifact_linear_format_has_quantized_weight(format: &ArtifactLinearFormat) -> bool {
+    matches!(
+        format,
+        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale { .. }
+            | ArtifactLinearFormat::Fp4E2M1PackedWithE8M0Scale { .. }
+    )
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeepSeekV4Config {
@@ -310,7 +376,7 @@ impl DeepSeekV4ArtifactModel {
             num_experts: self.config.num_routed_experts,
             num_experts_per_tok: self.config.num_experts_per_tok,
             vocab_size: self.config.vocab_size,
-            backend: "deepseek-v4-source",
+            backend: "deepseek-v4-artifact",
         }
     }
 
@@ -486,8 +552,18 @@ impl DeepSeekV4ArtifactModel {
                 "DeepSeek-V4 output head chunk_rows must be > 0".into(),
             ));
         }
-        let mut top = Vec::<DeepSeekV4Logit>::new();
         let reader = ArtifactTensorReader::new(self.max_tensor_bytes);
+        if operators.backend() == DeepSeekV4OperatorBackend::Cuda {
+            return operators.output_head_topk_chunks(
+                &self.output_head.slice,
+                hidden,
+                top_k,
+                chunk_rows,
+                &reader,
+            );
+        }
+
+        let mut top = Vec::<DeepSeekV4Logit>::new();
         let mut start = 0usize;
         while start < self.output_head.rows {
             let rows = chunk_rows.min(self.output_head.rows - start);
@@ -537,8 +613,9 @@ impl DeepSeekV4ArtifactModel {
             &format!("layers.{layer}.ffn_norm.weight"),
             TensorRole::LayerNorm,
         )?;
-        let attention_payload =
-            bind_attention_from_hf(&self.descriptor.path, layer, &attention_tensors, &reader)?;
+        let attention_payload = with_deepseek_v4_attention_execution_policies(
+            bind_attention_from_hf(&self.descriptor.path, layer, &attention_tensors, &reader)?,
+        );
         let attention_config = self.config.attention_config_for_layer(layer)?;
         let compressed = DeepSeekV4CompressedAttentionPayload::bind_optional(
             layer,
@@ -569,13 +646,14 @@ impl DeepSeekV4ArtifactModel {
             self.config.hc_config(),
         )?;
         let router = bind_router_from_hf(&self.descriptor.path, layer, &router_tensors, &reader)?;
-        let shared_ffn = bind_shared_swiglu_ffn_from_hf(
-            &self.descriptor.path,
-            layer,
-            &shared_tensors,
-            &reader,
-            self.config.swiglu_limit,
-        )?;
+        let shared_ffn =
+            with_deepseek_v4_swiglu_execution_policies(bind_shared_swiglu_ffn_from_hf(
+                &self.descriptor.path,
+                layer,
+                &shared_tensors,
+                &reader,
+                self.config.swiglu_limit,
+            )?);
         let router_policy = if layer < self.config.num_hash_layers {
             ExpertRouterPolicy::sqrt_softplus_hash(
                 self.config.num_experts_per_tok,
@@ -643,6 +721,21 @@ pub struct DeepSeekV4Logit {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeepSeekV4OperatorRuntimeCounters {
+    pub kernel_launches: u64,
+    pub host_to_device_copies: u64,
+    pub host_to_device_bytes: u64,
+    pub device_to_host_copies: u64,
+    pub device_to_host_bytes: u64,
+    pub artifact_uploads: u64,
+    pub artifact_upload_bytes: u64,
+    pub expert_selected: u64,
+    pub expert_loads: u64,
+    pub expert_load_bytes: u64,
+    pub expert_evictions: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum DeepSeekV4OperatorBackend {
     /// CPU/reference execution for every operator. This is the correctness anchor.
     #[default]
@@ -695,6 +788,13 @@ impl DeepSeekV4OperatorContext {
         self.backend
     }
 
+    pub fn runtime_counters(&self) -> DeepSeekV4OperatorRuntimeCounters {
+        match self.backend {
+            DeepSeekV4OperatorBackend::Cpu => DeepSeekV4OperatorRuntimeCounters::default(),
+            DeepSeekV4OperatorBackend::Cuda => self.cuda_runtime_counters(),
+        }
+    }
+
     fn linear_matvec(&mut self, linear: &ArtifactLinearPayload, input: &[f32]) -> Result<Vec<f32>> {
         match self.backend {
             DeepSeekV4OperatorBackend::Cpu => linear.reference_matvec(input),
@@ -727,6 +827,24 @@ impl DeepSeekV4OperatorContext {
                 Ok(top)
             }
             DeepSeekV4OperatorBackend::Cuda => self.cuda_linear_topk(linear, input, top_k),
+        }
+    }
+
+    fn output_head_topk_chunks(
+        &mut self,
+        slice: &ArtifactTensorSlice,
+        hidden: &[f32],
+        top_k: usize,
+        chunk_rows: usize,
+        reader: &ArtifactTensorReader,
+    ) -> Result<Vec<DeepSeekV4Logit>> {
+        match self.backend {
+            DeepSeekV4OperatorBackend::Cpu => Err(Error::Internal(
+                "CPU output-head chunk top-k should use the reference row-read loop".into(),
+            )),
+            DeepSeekV4OperatorBackend::Cuda => {
+                self.cuda_output_head_topk_chunks(slice, hidden, top_k, chunk_rows, reader)
+            }
         }
     }
 
@@ -891,6 +1009,19 @@ impl DeepSeekV4OperatorContext {
     }
 
     #[cfg(feature = "cuda")]
+    fn cuda_runtime_counters(&self) -> DeepSeekV4OperatorRuntimeCounters {
+        self.cuda
+            .as_ref()
+            .map(DeepSeekV4CudaOperatorCache::runtime_counters)
+            .unwrap_or_default()
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    fn cuda_runtime_counters(&self) -> DeepSeekV4OperatorRuntimeCounters {
+        DeepSeekV4OperatorRuntimeCounters::default()
+    }
+
+    #[cfg(feature = "cuda")]
     fn cuda_matvec(&mut self, linear: &ArtifactLinearPayload, input: &[f32]) -> Result<Vec<f32>> {
         self.cuda_mut()?.linear_matvec(linear, input)
     }
@@ -907,6 +1038,33 @@ impl DeepSeekV4OperatorContext {
 
     #[cfg(not(feature = "cuda"))]
     fn cuda_matvec(&mut self, _linear: &ArtifactLinearPayload, _input: &[f32]) -> Result<Vec<f32>> {
+        Err(Error::Model(
+            "DeepSeek-V4 CUDA backend requires ferrule-runtime/cuda feature".into(),
+        ))
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_output_head_topk_chunks(
+        &mut self,
+        slice: &ArtifactTensorSlice,
+        hidden: &[f32],
+        top_k: usize,
+        chunk_rows: usize,
+        reader: &ArtifactTensorReader,
+    ) -> Result<Vec<DeepSeekV4Logit>> {
+        self.cuda_mut()?
+            .output_head_topk_chunks(slice, hidden, top_k, chunk_rows, reader)
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    fn cuda_output_head_topk_chunks(
+        &mut self,
+        _slice: &ArtifactTensorSlice,
+        _hidden: &[f32],
+        _top_k: usize,
+        _chunk_rows: usize,
+        _reader: &ArtifactTensorReader,
+    ) -> Result<Vec<DeepSeekV4Logit>> {
         Err(Error::Model(
             "DeepSeek-V4 CUDA backend requires ferrule-runtime/cuda feature".into(),
         ))
@@ -1143,6 +1301,17 @@ struct DeepSeekV4CudaOperatorCache {
     ops: ferrule_cuda::context::CudaArtifactOperatorContext,
     linears: HashMap<String, ferrule_cuda::context::CudaArtifactLinearHandle>,
     experts: HashMap<ExpertId, CudaFp4ExpertHandles>,
+    decode_arena: DeepSeekV4DecodeArena,
+    expert_selected: u64,
+    expert_loads: u64,
+    expert_load_bytes: u64,
+    expert_evictions: u64,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Default)]
+struct DeepSeekV4DecodeArena {
+    hidden: Option<ferrule_cuda::context::CudaF32Buffer>,
 }
 
 #[cfg(feature = "cuda")]
@@ -1160,7 +1329,29 @@ impl DeepSeekV4CudaOperatorCache {
             ops: ferrule_cuda::context::CudaArtifactOperatorContext::new()?,
             linears: HashMap::new(),
             experts: HashMap::new(),
+            decode_arena: DeepSeekV4DecodeArena::default(),
+            expert_selected: 0,
+            expert_loads: 0,
+            expert_load_bytes: 0,
+            expert_evictions: 0,
         })
+    }
+
+    fn runtime_counters(&self) -> DeepSeekV4OperatorRuntimeCounters {
+        let cuda = self.ops.counters();
+        DeepSeekV4OperatorRuntimeCounters {
+            kernel_launches: cuda.kernel_launches,
+            host_to_device_copies: cuda.host_to_device_copies,
+            host_to_device_bytes: cuda.host_to_device_bytes,
+            device_to_host_copies: cuda.device_to_host_copies,
+            device_to_host_bytes: cuda.device_to_host_bytes,
+            artifact_uploads: cuda.artifact_uploads,
+            artifact_upload_bytes: cuda.artifact_upload_bytes,
+            expert_selected: self.expert_selected,
+            expert_loads: self.expert_loads,
+            expert_load_bytes: self.expert_load_bytes,
+            expert_evictions: self.expert_evictions,
+        }
     }
 
     fn linear_matvec(&mut self, linear: &ArtifactLinearPayload, input: &[f32]) -> Result<Vec<f32>> {
@@ -1172,9 +1363,10 @@ impl DeepSeekV4CudaOperatorCache {
                 input.len()
             )));
         }
+        let input = linear.execution_input(input)?;
         let key = self.ensure_linear_uploaded(linear)?;
         let handle = self.linears.get(&key).expect("inserted above");
-        self.ops.artifact_linear_matvec(handle, input)
+        self.ops.artifact_linear_matvec(handle, input.as_ref())
     }
 
     fn linear_topk(
@@ -1191,14 +1383,111 @@ impl DeepSeekV4CudaOperatorCache {
                 input.len()
             )));
         }
+        let input = linear.execution_input(input)?;
         let key = self.ensure_linear_uploaded(linear)?;
         let handle = self.linears.get(&key).expect("inserted above");
         Ok(self
             .ops
-            .artifact_linear_topk(handle, input, top_k)?
+            .artifact_linear_topk(handle, input.as_ref(), top_k)?
             .into_iter()
             .map(|(token_id, logit)| DeepSeekV4Logit { token_id, logit })
             .collect())
+    }
+
+    fn output_head_topk_chunks(
+        &mut self,
+        slice: &ArtifactTensorSlice,
+        hidden: &[f32],
+        top_k: usize,
+        chunk_rows: usize,
+        reader: &ArtifactTensorReader,
+    ) -> Result<Vec<DeepSeekV4Logit>> {
+        if top_k == 0 {
+            return Ok(Vec::new());
+        }
+        if chunk_rows == 0 {
+            return Err(Error::Model(
+                "DeepSeek-V4 CUDA output-head chunk_rows must be > 0".into(),
+            ));
+        }
+        if slice.shape.len() != 2 {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 CUDA output head expects 2D slice, got {:?}",
+                slice.shape
+            )));
+        }
+        let vocab_rows = slice.shape[0];
+        let hidden_cols = slice.shape[1];
+        if hidden.len() != hidden_cols {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 CUDA output head input mismatch: expected {hidden_cols}, got {}",
+                hidden.len()
+            )));
+        }
+
+        self.decode_arena.hidden = Some(self.ops.upload_f32_buffer(hidden)?);
+        let hidden_device = self
+            .decode_arena
+            .hidden
+            .take()
+            .expect("hidden uploaded immediately above");
+        let result = self.output_head_topk_chunks_with_device(
+            slice,
+            &hidden_device,
+            top_k,
+            chunk_rows,
+            reader,
+            vocab_rows,
+        );
+        self.decode_arena.hidden = Some(hidden_device);
+        result
+    }
+
+    fn output_head_topk_chunks_with_device(
+        &mut self,
+        slice: &ArtifactTensorSlice,
+        hidden: &ferrule_cuda::context::CudaF32Buffer,
+        top_k: usize,
+        chunk_rows: usize,
+        reader: &ArtifactTensorReader,
+        vocab_rows: usize,
+    ) -> Result<Vec<DeepSeekV4Logit>> {
+        let mut top = Vec::<DeepSeekV4Logit>::new();
+        let mut start = 0usize;
+        while start < vocab_rows {
+            let rows = chunk_rows.min(vocab_rows - start);
+            let key = artifact_linear_row_cache_key(slice, start, rows)?;
+            if !self.linears.contains_key(&key) {
+                let payload = reader.read_2d_rows(slice, start, rows)?;
+                let linear = ArtifactLinearPayload::from_weight_and_scale(
+                    TensorRole::OutputHead,
+                    payload,
+                    None,
+                )?;
+                let actual_key = artifact_linear_cache_key(&linear);
+                if actual_key != key {
+                    return Err(Error::Model(format!(
+                        "DeepSeek-V4 output-head cache-key mismatch: predicted {key}, materialized {actual_key}"
+                    )));
+                }
+                let handle = self.upload_linear(&linear)?;
+                self.linears.insert(key.clone(), handle);
+            }
+            let handle = self.linears.get(&key).expect("inserted above");
+            top.extend(
+                self.ops
+                    .artifact_linear_topk_from_device(handle, hidden, top_k.min(rows))?
+                    .into_iter()
+                    .map(|(token_id, logit)| DeepSeekV4Logit {
+                        token_id: token_id + start as u32,
+                        logit,
+                    }),
+            );
+            top.sort_by(rank_logits_desc);
+            top.truncate(top_k);
+            start += rows;
+        }
+        Ok(top)
     }
 
     fn ensure_linear_uploaded(&mut self, linear: &ArtifactLinearPayload) -> Result<String> {
@@ -1396,6 +1685,10 @@ impl DeepSeekV4CudaOperatorCache {
             router_policy.route(&logits, router.bias.as_deref(), hash_experts.as_deref())?;
         let selected = routes.iter().map(|route| route.expert).collect::<Vec<_>>();
         let streaming = planner.plan_layer_step(layer, &selected, predicted_experts)?;
+        self.expert_selected = self.expert_selected.saturating_add(routes.len() as u64);
+        self.expert_evictions = self
+            .expert_evictions
+            .saturating_add(streaming.evictions.len() as u64);
 
         handles.apply_evictions(&streaming.evictions);
         for eviction in &streaming.evictions {
@@ -1407,11 +1700,13 @@ impl DeepSeekV4CudaOperatorCache {
             let bundle = ExpertComputeBundle::from_artifact_payload(payload)?;
             let expert = self.upload_expert_bundle(&bundle)?;
             let bytes = expert.bytes;
+            self.expert_loads = self.expert_loads.saturating_add(1);
+            self.expert_load_bytes = self.expert_load_bytes.saturating_add(bytes);
             self.experts.insert(load.expert, expert);
             handles.insert_resident_handle(ResidentExpertHandle::new(
                 load.expert,
                 ExpertStorageTier::Gpu,
-                ExpertResidentFormat::Opaque("cuda-fp4-source".into()),
+                ExpertResidentFormat::Opaque("cuda-fp4-artifact".into()),
                 bytes,
             ))?;
         }
@@ -1613,16 +1908,147 @@ impl DeepSeekV4CudaOperatorCache {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", test))]
 fn artifact_linear_cache_key(linear: &ArtifactLinearPayload) -> String {
-    let scale_name = linear
-        .scale
-        .as_ref()
-        .map(|scale| scale.slice.name.as_str())
-        .unwrap_or("<none>");
+    artifact_linear_cache_key_from_parts(
+        &linear.weight.slice,
+        linear.scale.as_ref().map(|scale| &scale.slice),
+        &linear.format,
+    )
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn artifact_linear_cache_key_from_parts(
+    weight: &ArtifactTensorSlice,
+    scale: Option<&ArtifactTensorSlice>,
+    format: &ArtifactLinearFormat,
+) -> String {
+    let scale_key = scale
+        .map(artifact_tensor_slice_cache_key)
+        .unwrap_or_else(|| "<none>".into());
     format!(
-        "{}::{scale_name}::{:?}",
-        linear.weight.slice.name, linear.format
+        "weight={}::scale={}::format={:?}",
+        artifact_tensor_slice_cache_key(weight),
+        scale_key,
+        format
+    )
+}
+
+#[cfg(feature = "cuda")]
+fn artifact_linear_row_cache_key(
+    slice: &ArtifactTensorSlice,
+    start_row: usize,
+    row_count: usize,
+) -> Result<String> {
+    let row_slice = artifact_2d_row_slice_descriptor(slice, start_row, row_count)?;
+    let format = artifact_unscaled_2d_linear_format(&row_slice)?;
+    Ok(artifact_linear_cache_key_from_parts(
+        &row_slice, None, &format,
+    ))
+}
+
+#[cfg(feature = "cuda")]
+fn artifact_2d_row_slice_descriptor(
+    slice: &ArtifactTensorSlice,
+    start_row: usize,
+    row_count: usize,
+) -> Result<ArtifactTensorSlice> {
+    if slice.shape.len() != 2 {
+        return Err(Error::Model(format!(
+            "artifact tensor '{}' row descriptor expects 2D shape, got {:?}",
+            slice.name, slice.shape
+        )));
+    }
+    let rows = slice.shape[0];
+    let cols = slice.shape[1];
+    let end_row = start_row.checked_add(row_count).ok_or_else(|| {
+        Error::Model(format!(
+            "artifact tensor '{}' row descriptor overflows: start={start_row} count={row_count}",
+            slice.name
+        ))
+    })?;
+    if row_count == 0 || start_row >= rows || end_row > rows {
+        return Err(Error::Model(format!(
+            "artifact tensor '{}' invalid row descriptor: start={start_row} count={row_count} rows={rows}",
+            slice.name
+        )));
+    }
+    let elem_bytes = slice.dtype.element_size_bytes().ok_or_else(|| {
+        Error::Model(format!(
+            "artifact tensor '{}' has unknown dtype {} for row descriptor",
+            slice.name,
+            slice.dtype.as_str()
+        ))
+    })?;
+    let row_bytes = cols.checked_mul(elem_bytes).ok_or_else(|| {
+        Error::Model(format!(
+            "artifact tensor '{}' row descriptor byte size overflows for cols={cols} elem_bytes={elem_bytes}",
+            slice.name
+        ))
+    })?;
+    let byte_offset = start_row.checked_mul(row_bytes).ok_or_else(|| {
+        Error::Model(format!(
+            "artifact tensor '{}' row descriptor offset overflows",
+            slice.name
+        ))
+    })?;
+    let bytes = row_count.checked_mul(row_bytes).ok_or_else(|| {
+        Error::Model(format!(
+            "artifact tensor '{}' row descriptor byte count overflows",
+            slice.name
+        ))
+    })?;
+    let mut row_slice = slice.clone();
+    row_slice.offset = slice
+        .offset
+        .checked_add(byte_offset as u64)
+        .ok_or_else(|| {
+            Error::Model(format!(
+                "artifact tensor '{}' absolute row descriptor offset overflows",
+                slice.name
+            ))
+        })?;
+    row_slice.bytes = bytes as u64;
+    row_slice.shape = vec![row_count, cols];
+    Ok(row_slice)
+}
+
+#[cfg(feature = "cuda")]
+fn artifact_unscaled_2d_linear_format(slice: &ArtifactTensorSlice) -> Result<ArtifactLinearFormat> {
+    if slice.shape.len() != 2 {
+        return Err(Error::Model(format!(
+            "artifact linear '{}' cache-key format expects 2D shape, got {:?}",
+            slice.name, slice.shape
+        )));
+    }
+    let out_features = slice.shape[0];
+    let in_features = slice.shape[1];
+    match slice.dtype {
+        ArtifactDType::F32 => Ok(ArtifactLinearFormat::F32 {
+            out_features,
+            in_features,
+        }),
+        ArtifactDType::Bf16 => Ok(ArtifactLinearFormat::Bf16 {
+            out_features,
+            in_features,
+        }),
+        _ => Err(Error::Model(format!(
+            "artifact linear '{}' dtype {} cannot be used as an unscaled output-head row chunk",
+            slice.name,
+            slice.dtype.as_str()
+        ))),
+    }
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn artifact_tensor_slice_cache_key(slice: &ArtifactTensorSlice) -> String {
+    format!(
+        "{}@{}+{}:{:?}:{:?}",
+        slice.path.display(),
+        slice.offset,
+        slice.bytes,
+        slice.dtype,
+        slice.shape
     )
 }
 
@@ -1701,7 +2127,8 @@ impl DeepSeekV4ReferenceRunner {
             states,
             position: 0,
             expert_reader: ExpertStreamingReader::new(options.expert_reader_max_tensor_bytes),
-            expert_executor: CpuReferenceExpertExecutor::new(swiglu_limit),
+            expert_executor: CpuReferenceExpertExecutor::new(swiglu_limit)
+                .with_activation_quantization(deepseek_v4_linear_activation_quantization()),
         })
     }
 
@@ -1731,6 +2158,10 @@ impl DeepSeekV4ReferenceRunner {
 
     pub fn operator_backend(&self) -> DeepSeekV4OperatorBackend {
         self.operators.backend()
+    }
+
+    pub fn operator_runtime_counters(&self) -> DeepSeekV4OperatorRuntimeCounters {
+        self.operators.runtime_counters()
     }
 
     pub fn position(&self) -> usize {
@@ -3810,6 +4241,7 @@ fn bind_aux_linear(
         .map(|name| read_aux_tensor(auxiliary, reader, name))
         .transpose()?;
     ArtifactLinearPayload::from_weight_and_scale(role, weight, scale)
+        .map(with_deepseek_v4_linear_execution_policy)
 }
 
 fn read_aux_tensor(
@@ -4433,7 +4865,7 @@ fn inventory_tensor<'a>(
 fn decode_vector_f32(payload: &ArtifactTensorPayload) -> Result<Vec<f32>> {
     if payload.slice.shape.len() != 1 {
         return Err(Error::Model(format!(
-            "DeepSeek-V4 source vector '{}' expects 1D shape, got {:?}",
+            "DeepSeek-V4 artifact vector '{}' expects 1D shape, got {:?}",
             payload.slice.name, payload.slice.shape
         )));
     }
@@ -4534,7 +4966,7 @@ mod tests {
     use crate::artifact_linear::ArtifactLinearPayload;
     use crate::expert_executor::CpuReferenceExpertExecutor;
     use crate::expert_streaming::{
-        ExpertId, ExpertMatrixKind, ExpertSource, ExpertTensorComponent, ExpertTensorKey,
+        ExpertId, ExpertLoadSource, ExpertMatrixKind, ExpertTensorComponent, ExpertTensorKey,
         ExpertTensorPayload, ExpertTensorSlice,
     };
 
@@ -4545,6 +4977,19 @@ mod tests {
         let attention = DeepSeekV4Attention::new(0, cfg, payload).unwrap();
         assert_eq!(attention.config.output_group_input_dim(), 4096);
         assert_eq!(attention.config.output_latent_dim(), 8192);
+    }
+
+    #[test]
+    fn artifact_linear_cache_key_distinguishes_same_named_slices() {
+        let first = f32_linear(TensorRole::OutputHead, "head", 2, 2);
+        let mut second = first.clone();
+        second.weight.slice.offset += 8;
+        second.weight.slice.bytes = 8;
+
+        assert_ne!(
+            artifact_linear_cache_key(&first),
+            artifact_linear_cache_key(&second)
+        );
     }
 
     #[test]
@@ -5031,7 +5476,10 @@ mod tests {
                 slice
             })
             .collect();
-        planner.register_source(expert_id, ExpertSource::LocalTensorSet { tensors: slices });
+        planner.register_load_source(
+            expert_id,
+            ExpertLoadSource::LocalTensorSet { tensors: slices },
+        );
     }
 
     fn tiny_expert_tensors(

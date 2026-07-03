@@ -84,6 +84,73 @@ fn e8m0_scale(byte: u8) -> f32 {
     libm::expf((byte as f32 - 127.0) * LN_2_F32)
 }
 
+fn pow2f(exp: f32) -> f32 {
+    fast_exp(exp * LN_2_F32)
+}
+
+fn rounded_power_of_two_scale(amax: f32, quant_max: f32) -> f32 {
+    pow2f(libm::ceilf(libm::log2f(amax / quant_max)))
+}
+
+fn quantize_fp8_e4m3fn_to_f32(value: f32) -> f32 {
+    if !value.is_finite() || value == 0.0 {
+        return value;
+    }
+    let sign = if value < 0.0 { -1.0 } else { 1.0 };
+    let abs_value = if value < 0.0 { -value } else { value };
+    let magnitude = if abs_value > 448.0 { 448.0 } else { abs_value };
+    sign * nearest_fp8_e4m3fn_positive(magnitude)
+}
+
+fn nearest_fp8_e4m3fn_positive(magnitude: f32) -> f32 {
+    let mut best = nearest_fp8_subnormal_positive(magnitude);
+    let mut best_err = if best > magnitude {
+        best - magnitude
+    } else {
+        magnitude - best
+    };
+    let exp_floor = libm::floorf(libm::log2f(magnitude)) as i32;
+    let mut exp = exp_floor - 1;
+    while exp <= exp_floor + 1 {
+        if (-6..=8).contains(&exp) {
+            let scale = pow2f(exp as f32);
+            let mut mantissa = libm::roundf((magnitude / scale - 1.0) * 8.0) as i32;
+            let mut candidate_exp = exp;
+            if mantissa >= 0 {
+                if mantissa > 7 {
+                    candidate_exp += 1;
+                    mantissa = 0;
+                }
+                if candidate_exp > 8 {
+                    candidate_exp = 8;
+                    mantissa = 6;
+                }
+                if candidate_exp == 8 && mantissa > 6 {
+                    mantissa = 6;
+                }
+                let candidate = pow2f(candidate_exp as f32) * (1.0 + mantissa as f32 / 8.0);
+                let err = if candidate > magnitude {
+                    candidate - magnitude
+                } else {
+                    magnitude - candidate
+                };
+                if err < best_err {
+                    best = candidate;
+                    best_err = err;
+                }
+            }
+        }
+        exp += 1;
+    }
+    best
+}
+
+fn nearest_fp8_subnormal_positive(magnitude: f32) -> f32 {
+    let step = pow2f(-9.0);
+    let mantissa = libm::roundf(magnitude / step).clamp(0.0, 7.0);
+    mantissa * step
+}
+
 fn clamp_max(x: f32, max_value: f32) -> f32 {
     if x > max_value {
         max_value
@@ -582,6 +649,56 @@ pub mod kernels {
         }
         if let Some(yi) = y.get_mut(thread::index_1d()) {
             *yi = g * fast_sigmoid(g) * u * route_weight;
+        }
+    }
+
+    /// Simulate block-wise FP8 E4M3FN + E8M0 activation quantization in-place.
+    ///
+    /// One CUDA thread handles one activation block. This is intentionally simple
+    /// and correctness-oriented; it removes host round-trips before later fusion.
+    #[kernel]
+    pub fn fp8_e4m3fn_e8m0_quantize_f32_inplace(
+        mut values: DisjointSlice<f32>,
+        value_len: u32,
+        row_width: u32,
+        block_size: u32,
+    ) {
+        let block_idx = thread::index_1d().get() as usize;
+        let value_len = value_len as usize;
+        let row_width = row_width as usize;
+        let block_size = block_size as usize;
+        if row_width == 0 || block_size == 0 || !row_width.is_multiple_of(block_size) {
+            return;
+        }
+        let blocks_per_row = row_width / block_size;
+        let row = block_idx / blocks_per_row;
+        let block = block_idx % blocks_per_row;
+        let start = row * row_width + block * block_size;
+        if start >= value_len {
+            return;
+        }
+        let end = (start + block_size).min(value_len);
+        let ptr = values.as_mut_ptr();
+        let mut amax = 1e-4f32;
+        let mut i = start;
+        while i < end {
+            let value = unsafe { *ptr.add(i) };
+            let abs_value = if value < 0.0 { -value } else { value };
+            if abs_value > amax {
+                amax = abs_value;
+            }
+            i += 1;
+        }
+        let scale = rounded_power_of_two_scale(amax, 448.0);
+        let mut i = start;
+        while i < end {
+            let value = unsafe { *ptr.add(i) };
+            let scaled = clamp_range(value / scale, -448.0, 448.0);
+            let quantized = quantize_fp8_e4m3fn_to_f32(scaled) * scale;
+            unsafe {
+                *ptr.add(i) = quantized;
+            }
+            i += 1;
         }
     }
 
@@ -1996,16 +2113,17 @@ pub mod kernels {
         let idx = idx as usize;
         let token = idx / hc_dim;
         let rem = idx % hc_dim;
-        let copy = rem / dim;
+        let out_copy = rem / dim;
         let d = rem % dim;
-        let mut comb_row_sum = 0.0f32;
-        let comb_base = token * hc * hc + copy * hc;
-        for k in 0..hc {
-            comb_row_sum += split_comb[comb_base + k];
+        let mut residual_mix = 0.0f32;
+        let comb_base = token * hc * hc;
+        let residual_base = token * hc_dim;
+        for in_copy in 0..hc {
+            let comb = split_comb[comb_base + in_copy * hc + out_copy];
+            residual_mix += comb * residual[residual_base + in_copy * dim + d];
         }
         if let Some(o) = output.get_mut(thread::index_1d()) {
-            *o = split_post[token * hc + copy] * hidden[token * dim + d]
-                + comb_row_sum * residual[idx];
+            *o = split_post[token * hc + out_copy] * hidden[token * dim + d] + residual_mix;
         }
     }
 

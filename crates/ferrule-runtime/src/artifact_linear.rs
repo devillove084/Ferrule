@@ -6,11 +6,14 @@
 //! router, shared expert, logits, and future CUDA dispatch all consume the same
 //! abstraction.
 
+use std::borrow::Cow;
+
 use ferrule_core::{Error, Result};
 use ferrule_model::TensorRole;
 
 use crate::artifact_format::{
     dequantize_fp4_e2m1_with_e8m0_scales, dequantize_fp8_e4m3fn_with_e8m0_scales,
+    simulate_fp8_e4m3fn_e8m0_activation_quant_in_place,
 };
 use crate::artifact_tensor::{ArtifactDType, ArtifactTensorPayload};
 
@@ -57,12 +60,60 @@ impl ArtifactLinearFormat {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactActivationQuantization {
+    /// Simulate `act_quant(..., scale_dtype=float8_e8m0fnu)` before a quantized
+    /// artifact GEMM. The backend can later fuse this; the policy keeps the semantic
+    /// contract explicit and model-family agnostic.
+    Fp8E4M3WithE8M0Scale { block_size: usize },
+}
+
+impl ArtifactActivationQuantization {
+    pub fn apply_in_place(&self, values: &mut [f32], row_width: usize) -> Result<()> {
+        match *self {
+            Self::Fp8E4M3WithE8M0Scale { block_size } => {
+                simulate_fp8_e4m3fn_e8m0_activation_quant_in_place(values, row_width, block_size)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ArtifactLinearExecutionPolicy {
+    pub activation_quantization: Option<ArtifactActivationQuantization>,
+}
+
+impl ArtifactLinearExecutionPolicy {
+    pub const NONE: Self = Self {
+        activation_quantization: None,
+    };
+
+    pub const fn fp8_e4m3_e8m0_activation(block_size: usize) -> Self {
+        Self {
+            activation_quantization: Some(ArtifactActivationQuantization::Fp8E4M3WithE8M0Scale {
+                block_size,
+            }),
+        }
+    }
+
+    pub fn prepare_input<'a>(&self, input: &'a [f32], row_width: usize) -> Result<Cow<'a, [f32]>> {
+        if let Some(quantization) = self.activation_quantization {
+            let mut prepared = input.to_vec();
+            quantization.apply_in_place(&mut prepared, row_width)?;
+            Ok(Cow::Owned(prepared))
+        } else {
+            Ok(Cow::Borrowed(input))
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactLinearPayload {
     pub role: TensorRole,
     pub weight: ArtifactTensorPayload,
     pub scale: Option<ArtifactTensorPayload>,
     pub format: ArtifactLinearFormat,
+    pub execution: ArtifactLinearExecutionPolicy,
 }
 
 impl ArtifactLinearPayload {
@@ -77,7 +128,27 @@ impl ArtifactLinearPayload {
             weight,
             scale,
             format,
+            execution: ArtifactLinearExecutionPolicy::NONE,
         })
+    }
+
+    pub fn with_execution_policy(mut self, execution: ArtifactLinearExecutionPolicy) -> Self {
+        self.execution = execution;
+        self
+    }
+
+    pub fn with_activation_quantization(
+        self,
+        activation_quantization: ArtifactActivationQuantization,
+    ) -> Self {
+        self.with_execution_policy(ArtifactLinearExecutionPolicy {
+            activation_quantization: Some(activation_quantization),
+        })
+    }
+
+    pub fn execution_input<'a>(&self, input: &'a [f32]) -> Result<Cow<'a, [f32]>> {
+        self.execution
+            .prepare_input(input, self.format.in_features())
     }
 
     pub fn reference_matvec(&self, input: &[f32]) -> Result<Vec<f32>> {
@@ -89,12 +160,13 @@ impl ArtifactLinearPayload {
                 input.len()
             )));
         }
+        let input = self.execution_input(input)?;
         let weights = self.reference_weights_f32()?;
         Ok(matvec_row_major(
             &weights,
             self.format.out_features(),
             self.format.in_features(),
-            input,
+            input.as_ref(),
         ))
     }
 
@@ -471,6 +543,36 @@ mod tests {
         input[0] = 3.0;
         input[1] = 5.0;
         assert_eq!(linear.reference_matvec(&input).unwrap(), vec![13.0]);
+    }
+
+    #[test]
+    fn execution_policy_quantizes_activation_before_reference_matvec() {
+        let mut weight = vec![0.0f32; 128];
+        weight[0] = 1.0;
+        let linear = ArtifactLinearPayload::from_weight_and_scale(
+            TensorRole::AttentionLatentQueryA,
+            payload(
+                "selector.weight",
+                ArtifactDType::F32,
+                vec![1, 128],
+                f32_bytes(&weight),
+            ),
+            None,
+        )
+        .unwrap()
+        .with_activation_quantization(
+            ArtifactActivationQuantization::Fp8E4M3WithE8M0Scale { block_size: 128 },
+        );
+        let mut input = vec![0.0f32; 128];
+        input[0] = 1.1;
+        let mut expected_input = input.clone();
+        simulate_fp8_e4m3fn_e8m0_activation_quant_in_place(&mut expected_input, 128, 128).unwrap();
+
+        assert_ne!(expected_input[0], input[0]);
+        assert_eq!(
+            linear.reference_matvec(&input).unwrap(),
+            vec![expected_input[0]]
+        );
     }
 
     #[test]

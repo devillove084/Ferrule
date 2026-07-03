@@ -1698,12 +1698,16 @@ Likely current bottlenecks:
 - no CUDA graph replay,
 - no batched decode kernels.
 
-### P10.1 Remove host sync from expert loop  ✅ DONE
+### P10.1 Remove host sync from expert loop  ✅ DONE for legacy path / 🚧 DSV4 PARTIAL
 
-Current gap:
+Current DSV4 gap:
 
-- GPU router top-k runs on GPU, but selected indices/weights are downloaded to
-  host before expert loop.
+- The real DSV4 CUDA path is correctness-first and still uses host `Vec<f32>`
+  boundaries between most operators.
+- Routed experts run from GPU-resident artifact handles, but selected route
+  outputs are returned to host for accumulation.
+- The FP4 expert down-projection path still performs a host round-trip for hidden
+  activation quantization before the down GEMV.
 
 Tasks:
 
@@ -1721,7 +1725,7 @@ Review focus:
 - avoid complicated dynamic parallelism unless necessary,
 - correctness of expert offsets.
 
-### P10.2 Fuse expert gate/up/down where possible  ✅ DONE
+### P10.2 Fuse expert gate/up/down where possible  ✅ DONE for legacy path / 🚧 DSV4 PARTIAL
 
 Tasks:
 
@@ -1741,7 +1745,7 @@ Review focus:
 - memory bandwidth vs occupancy tradeoff,
 - keep Q8 path correct too.
 
-### P10.3 CUDA graph replay for decode  ✅ DONE
+### P10.3 CUDA graph replay for decode  ✅ DONE for legacy path / ⏳ DSV4 BLOCKED ON RESIDENCY
 
 Tasks:
 
@@ -1759,7 +1763,7 @@ Review focus:
 - graph capture should not make debugging impossible,
 - fallback path must remain.
 
-### P10.4 Attention improvements  ✅ DONE
+### P10.4 Attention improvements  ✅ DONE for legacy path / 🚧 DSV4 PARTIAL
 
 Tasks:
 
@@ -1776,7 +1780,7 @@ Review focus:
 - long-context numerical stability,
 - GQA correctness.
 
-### P10.5 Vocab projection optimization  ✅ DONE
+### P10.5 Vocab projection optimization  ✅ DONE for legacy path / 🚧 DSV4 PARTIAL
 
 Tasks:
 
@@ -1849,17 +1853,21 @@ Do not count prompt prefill or model load in the 20 tok/s number.
 Current measured state:
 
 - Chat is real DSV4 CUDA over local HF shards, not mock/hybrid.
-- Prompt prefill now uses `start_pos == 0` batched DSV4 semantics, but many inner
+- Basic correctness smoke is now usable again: `just dsv4-cuda-generate '你好' 8
+  4096 --chat --verbose-tokens` produces a normal greeting rather than the prior
+  broken identity/markdown output.
+- Prompt prefill uses `start_pos == 0` batched DSV4 semantics, but many inner
   operators still materialize host `Vec<f32>` rows and synchronize after each
   artifact linear / norm / attention / MoE step.
 - Decode is still dominated by host-device round trips, per-layer/per-expert
-  launches, expert streaming/upload, and non-resident intermediate tensors.
-- A sample `Who are you?` answer claiming `QwQ-32B` is a **correctness/parity
-  blocker**, not a UI issue. The chat template/tokenization string is aligned
-  with official `encoding_dsv4.py`, so the next suspect is numeric forward
-  mismatch: activation quantization, Hadamard/indexer QAT, rotary/YaRN details,
-  source FP4/FP8 semantics, sparse attention top-k/masks, or MoE routing/expert
-  accumulation.
+  launches, expert streaming/upload, and non-resident intermediate tensors. A
+  short JSON probe after correctness fixes measured roughly `0.3 tok/s` decode on
+  the target local DSV4 path before real CUDA counters were wired. The next
+  measurement must use the DSV4 JSON counters added in Ticket Q rather than the
+  earlier placeholder zeros.
+- The previous output-head chunk cache-key bug is fixed: CUDA linear cache keys now
+  include artifact slice path/offset/bytes/dtype/shape, so full-vocab chunk scans
+  no longer reuse the first `lm_head` chunk.
 
 Measurement contract:
 
@@ -1873,24 +1881,26 @@ just dsv4-cuda-generate "Who are you?" 32 4096 --chat --verbose-tokens
 
 Milestones to 20 tok/s:
 
-1. **Quality gate before speed claims**
-   - Compare official prompt strings and token ids. ✅ `scripts/dsv4_generation_parity.py`.
-   - Add official/reference first-token and first-N-token JSON once the official
-     converted runtime can run locally.
-   - Add optional per-layer dump hooks for a tiny prompt: q latent, q, kv,
-     compressor output, indexer top-k, router top-k, selected expert output, final
-     top-k logits.
-   - Acceptance: `Who are you?` no longer produces obvious wrong-identity output
-     under the official chat prompt, or the mismatch is attributed to a named
-     unsupported policy.
+1. **Measured DSV4 counters + output-head cache hygiene**
+   - Wire CUDA operator counters into DSV4 JSON: kernel launches, H2D/D2H copies,
+     H2D/D2H bytes, artifact uploads, expert selected/loads/evictions/residency,
+     load/prefill/decode time.
+   - Keep `ferrule-bench` responsible for JSON summary/reporting; runtime exposes
+     stats but does not own benchmark presentation.
+   - Avoid re-reading or re-uploading cached `lm_head` chunks during repeated
+     greedy decode scans. CUDA handle cache keys must remain artifact-slice aware.
+   - Acceptance: `just dsv4-cuda-generate '你好' 16 4096 --chat --json` reports
+     non-zero CUDA launches/transfers and stable token output.
 
 2. **Device-resident decode tensor arena**
    - Stop using host `Vec<f32>` as the boundary between every DSV4 operator.
    - Keep per-layer hidden/HC state, q latent, q, kv, attention context, MoE
-     output, and final hidden in reusable `DeviceBuffer`s.
-   - Expose generic CUDA source-linear APIs that accept/return device buffers.
+     output, and final hidden in reusable backend buffers.
+   - Expose generic CUDA artifact/operator APIs that accept/return device buffers;
+     DSV4 may own an internal arena, but public runtime graph APIs stay
+     model-family-neutral.
    - Acceptance: one generated token can run without downloading intermediate
-     activations except the final top-k token id/logit.
+     activations except the final top-k token id/logit and debug-gated tensors.
 
 3. **GPU-resident KV / compressor / indexer state**
    - Move window KV, compressed KV, indexer KV, compressor rolling state, and
@@ -1903,11 +1913,12 @@ Milestones to 20 tok/s:
 4. **Expert residency and batching**
    - Preload or persist a bounded hot expert set per layer; do not read/upload
      selected experts synchronously for every token.
-   - Batch the six selected routed experts in one generic FP4 MoE kernel per
-     layer: gate/up, SwiGLU, down, route-weight accumulation.
+   - Move expert activation QAT before down projection onto device.
+   - Batch the six selected routed experts in one generic FP4 MoE path per layer:
+     gate/up, SwiGLU, down, route-weight accumulation.
    - Keep eviction/prefetch policy separate from DSV4 semantics.
-   - Acceptance: per-layer routed MoE becomes O(1) launches, not O(top-k experts)
-     host-mediated launches.
+   - Acceptance: per-layer routed MoE becomes O(1) host-mediated calls, not O(top-k
+     experts) round trips, with selected/resident/load counters visible.
 
 5. **Fused attention path**
    - Fuse q path pieces where practical: `wq_a -> q_norm -> wq_b -> per-head RMS ->
@@ -3168,6 +3179,54 @@ Expected:
 - Remaining gaps: official numeric parity, output-quality parity, production
   device-resident decode, production expert batching/residency, and performance
   above the 20 tok/s decode target.
+
+### Ticket Q: DSV4 counters + output-head cache + device QAT phase 1  🚧 IN PROGRESS
+
+Design dependency:
+
+- Storage/residency terminology should converge on `docs/storage-residency-architecture.md` before adding async prefetch, io_uring, remote cache, or Mooncake/HiCache-like backends.
+
+Deliverables:
+
+- Add generic CUDA operator counters in `ferrule-cuda`, not benchmark/reporting code
+  in runtime:
+  - kernel launches,
+  - host→device copies/bytes,
+  - device→host copies/bytes,
+  - artifact uploads/bytes.
+- Keep JSON/report schema ownership in `ferrule-bench` and populate it from the
+  DSV4 runner in CLI JSON mode.
+- Add DSV4 runtime counters for selected experts, expert loads/load bytes,
+  evictions, and residency.
+- Fix output-head cache hygiene after the slice-aware key correctness fix:
+  - predict `lm_head` row-chunk cache keys from artifact row descriptors,
+  - skip shard reads when a CUDA chunk handle is already resident,
+  - upload final hidden once per full-vocab chunk scan via a DSV4-internal decode
+    arena buffer.
+- Move FP8 activation QAT before quantized expert down projection onto device via a
+  generic CUDA in-place kernel.
+- Start device-resident decode arena only as a typed internal buffer boundary; do
+  not add DSV4-specific public runtime graph ops.
+
+Validation:
+
+```bash
+cargo check -p ferrule-runtime --features cuda
+cargo clippy -p ferrule-runtime --features cuda -- -D warnings
+cargo clippy -p ferrule-cli --features cuda -- -D warnings
+cargo oxide build --features cuda --arch sm_121 -- --release -p ferrule-cli
+just dsv4-cuda-generate '你好' 16 4096 --chat --json
+```
+
+Expected:
+
+- JSON `summary.counters.kernels.launches` is non-zero.
+- JSON `summary.counters.transfers.host_to_device_*` and
+  `device_to_host_*` are non-zero and expose the host-bound hot path clearly.
+- JSON expert counters report selected experts and resident expert counts/bytes.
+- Repeated decode does not re-read/upload already cached `lm_head` row chunks.
+- The expert hidden QAT D2H/H2D round trip before FP4 down projection is removed.
+- Token output for the `你好` smoke remains stable.
 
 ---
 

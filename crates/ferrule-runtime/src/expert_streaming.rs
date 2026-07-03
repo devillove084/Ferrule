@@ -329,6 +329,23 @@ impl ExpertStreamingPlanner {
             .collect()
     }
 
+    fn resident_experts_by_recency(&self, layer: usize) -> Vec<ExpertId> {
+        let mut experts = self
+            .experts
+            .iter()
+            .filter_map(|(expert, state)| {
+                (expert.layer == layer && state.location.is_gpu_ready())
+                    .then_some((*expert, state.last_used_step))
+            })
+            .collect::<Vec<_>>();
+        experts.sort_by(|(left, left_step), (right, right_step)| {
+            right_step
+                .cmp(left_step)
+                .then_with(|| left.expert.cmp(&right.expert))
+        });
+        experts.into_iter().map(|(expert, _)| expert).collect()
+    }
+
     pub fn plan_layer_step(
         &mut self,
         layer: usize,
@@ -362,9 +379,16 @@ impl ExpertStreamingPlanner {
             prefetched.push(expert);
         }
 
-        let current_gpu = self.resident_experts(layer);
+        let mut current_gpu = self.resident_experts_by_recency(layer);
+        for expert in current_gpu.iter().copied() {
+            if target.len() >= self.policy.gpu_slots_per_layer {
+                break;
+            }
+            target.insert(expert);
+        }
+
         let mut evictions = Vec::new();
-        for expert in current_gpu {
+        for expert in current_gpu.drain(..) {
             if !target.contains(&expert) {
                 evictions.push(ExpertEvictRequest {
                     expert,
@@ -1055,6 +1079,39 @@ mod tests {
             vec![ExpertId::new(0, 3), ExpertId::new(0, 4)]
         );
         assert_eq!(step.loads.len(), 3);
+    }
+
+    #[test]
+    fn retains_recent_resident_experts_when_slots_are_available() {
+        let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
+            gpu_slots_per_layer: 2,
+            prefetch_per_layer: 0,
+            preserve_artifact_quantization: true,
+            allow_cpu_staging: false,
+            allow_remote_sources: false,
+        });
+        for expert in 0..4 {
+            planner.register_load_source(
+                ExpertId::new(0, expert),
+                ExpertLoadSource::LocalShard {
+                    path: PathBuf::from("model.safetensors"),
+                    offset: 0,
+                    bytes: 10,
+                },
+            );
+        }
+
+        let first = planner.plan_layer_step(0, &[0], &[]).unwrap();
+        planner.commit_step(&first).unwrap();
+        let second = planner.plan_layer_step(0, &[2], &[]).unwrap();
+
+        assert_eq!(second.loads.len(), 1);
+        assert!(second.evictions.is_empty());
+        planner.commit_step(&second).unwrap();
+        assert_eq!(
+            planner.resident_experts(0),
+            vec![ExpertId::new(0, 0), ExpertId::new(0, 2)]
+        );
     }
 
     #[test]

@@ -10,6 +10,7 @@
 use ferrule_core::{Error, Result};
 
 use crate::artifact_format::dequantize_fp4_e2m1_with_e8m0_scales;
+use crate::artifact_linear::ArtifactActivationQuantization;
 use crate::expert_streaming::{ExpertComputeBundle, ExpertLinearFormat, ExpertLinearPayload};
 
 /// Executes a single routed expert for one activation vector.
@@ -41,17 +42,40 @@ pub struct CpuReferenceExpertExecutor {
     /// `0.0` disables clipping and matches plain SwiGLU experts; positive values
     /// apply model-family-specific SwiGLU clipping.
     pub swiglu_limit: f32,
+    /// Optional activation quantization to apply before quantized expert linears.
+    /// This is disabled by default for tiny fixtures and enabled by model-family
+    /// boundaries whose official artifact contract requires quantized activations.
+    pub activation_quantization: Option<ArtifactActivationQuantization>,
 }
 
 impl CpuReferenceExpertExecutor {
     pub fn new(swiglu_limit: f32) -> Self {
-        Self { swiglu_limit }
+        Self {
+            swiglu_limit,
+            activation_quantization: None,
+        }
+    }
+
+    pub fn with_activation_quantization(
+        mut self,
+        activation_quantization: ArtifactActivationQuantization,
+    ) -> Self {
+        self.activation_quantization = Some(activation_quantization);
+        self
+    }
+
+    fn quantized_input(&self, input: &[f32]) -> Result<Vec<f32>> {
+        let mut quantized = input.to_vec();
+        if let Some(activation_quantization) = self.activation_quantization {
+            activation_quantization.apply_in_place(&mut quantized, input.len())?;
+        }
+        Ok(quantized)
     }
 }
 
 impl Default for CpuReferenceExpertExecutor {
     fn default() -> Self {
-        Self { swiglu_limit: 0.0 }
+        Self::new(0.0)
     }
 }
 
@@ -62,8 +86,9 @@ impl ExpertExecutor for CpuReferenceExpertExecutor {
         input: &[f32],
         route_weight: f32,
     ) -> Result<Vec<f32>> {
-        let mut gate = reference_linear(&bundle.gate, input)?;
-        let mut up = reference_linear(&bundle.up, input)?;
+        let quantized_input = self.quantized_input(input)?;
+        let mut gate = reference_linear(&bundle.gate, &quantized_input)?;
+        let mut up = reference_linear(&bundle.up, &quantized_input)?;
         if gate.len() != up.len() {
             return Err(Error::Model(format!(
                 "expert layer {} expert {} gate/up mismatch: {} vs {}",
@@ -83,11 +108,15 @@ impl ExpertExecutor for CpuReferenceExpertExecutor {
             }
         }
 
-        let hidden = gate
+        let mut hidden = gate
             .iter()
             .zip(up.iter())
             .map(|(&gate, &up)| silu(gate) * up * route_weight)
             .collect::<Vec<_>>();
+        if let Some(activation_quantization) = self.activation_quantization {
+            let row_width = hidden.len();
+            activation_quantization.apply_in_place(&mut hidden, row_width)?;
+        }
         reference_linear(&bundle.down, &hidden)
     }
 }

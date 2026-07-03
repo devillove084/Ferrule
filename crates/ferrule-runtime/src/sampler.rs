@@ -78,7 +78,7 @@ impl Sampler {
             .enumerate()
             .map(|(id, logit)| (id as u32, sanitize_logit(logit)))
             .collect();
-        pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+        pairs.sort_by(rank_candidates_desc);
         pairs.truncate(k);
         // Numerically stable softmax for display
         if let Some(&(_, max_logit)) = pairs.first() {
@@ -121,7 +121,7 @@ impl Sampler {
             *logit /= temperature;
         }
 
-        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+        candidates.sort_by(rank_candidates_desc);
 
         if self.config.top_k > 0 && self.config.top_k < candidates.len() {
             candidates.truncate(self.config.top_k);
@@ -147,9 +147,16 @@ fn greedy(candidates: &[(u32, f32)]) -> u32 {
     candidates
         .iter()
         .copied()
-        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))
+        .min_by(rank_candidates_desc)
         .map(|(id, _)| id)
         .unwrap_or(0)
+}
+
+fn rank_candidates_desc(left: &(u32, f32), right: &(u32, f32)) -> Ordering {
+    right
+        .1
+        .total_cmp(&left.1)
+        .then_with(|| left.0.cmp(&right.0))
 }
 
 fn apply_repeat_penalty(candidates: &mut [(u32, f32)], history: &[u32], config: &SamplingConfig) {
@@ -278,5 +285,20 @@ impl TinyRng {
     fn next_f32(&mut self) -> f32 {
         let value = self.next_u64() >> 40;
         value as f32 / (1u32 << 24) as f32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn greedy_and_top_logprobs_share_tie_breaking() {
+        let mut sampler = Sampler::new(SamplingConfig::greedy());
+        let logits = vec![0.0, 2.0, 1.0, 2.0];
+
+        assert_eq!(sampler.sample(&logits, &[]), 1);
+        assert_eq!(sampler.top_logprobs(&logits, 2)[0].0, 1);
+        assert_eq!(sampler.top_logprobs(&logits, 2)[1].0, 3);
     }
 }
