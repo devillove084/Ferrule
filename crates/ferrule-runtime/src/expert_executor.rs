@@ -9,8 +9,8 @@
 
 use ferrule_core::{Error, Result};
 
+use crate::artifact_format::dequantize_fp4_e2m1_with_e8m0_scales;
 use crate::expert_streaming::{ExpertComputeBundle, ExpertLinearFormat, ExpertLinearPayload};
-use crate::source_format::dequantize_fp4_e2m1_with_e8m0_scales;
 
 /// Executes a single routed expert for one activation vector.
 ///
@@ -151,14 +151,14 @@ mod tests {
 
     use super::*;
     use crate::expert_streaming::{
-        ExpertId, ExpertMatrixKind, ExpertSourcePayload, ExpertTensorComponent, ExpertTensorKey,
+        ExpertArtifactPayload, ExpertId, ExpertMatrixKind, ExpertTensorComponent, ExpertTensorKey,
         ExpertTensorPayload, ExpertTensorSlice,
     };
 
     #[test]
     fn cpu_reference_executor_runs_tiny_fp4_swiglu_expert() {
         let expert = ExpertId::new(2, 7);
-        let bundle = ExpertComputeBundle::from_source_payload(ExpertSourcePayload {
+        let bundle = ExpertComputeBundle::from_artifact_payload(ExpertArtifactPayload {
             expert,
             tensors: vec![
                 tiny_fp4_payload(expert, ExpertMatrixKind::Gate, &[(0, 0, 4)]),
@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn cpu_reference_executor_applies_swiglu_limit() {
         let expert = ExpertId::new(0, 0);
-        let bundle = ExpertComputeBundle::from_source_payload(ExpertSourcePayload {
+        let bundle = ExpertComputeBundle::from_artifact_payload(ExpertArtifactPayload {
             expert,
             tensors: vec![
                 tiny_fp4_payload(expert, ExpertMatrixKind::Gate, &[(0, 0, 7)]),
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn cpu_reference_executor_rejects_wrong_activation_size() {
         let expert = ExpertId::new(0, 0);
-        let bundle = ExpertComputeBundle::from_source_payload(ExpertSourcePayload {
+        let bundle = ExpertComputeBundle::from_artifact_payload(ExpertArtifactPayload {
             expert,
             tensors: vec![
                 tiny_fp4_payload(expert, ExpertMatrixKind::Gate, &[]),

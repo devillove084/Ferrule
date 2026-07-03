@@ -25,7 +25,7 @@ impl fmt::Display for ArtifactTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuantizationFormat {
-    PreserveSource,
+    PreserveArtifact,
     F32,
     F16,
     Bf16,
@@ -42,7 +42,7 @@ pub enum QuantizationFormat {
 impl QuantizationFormat {
     pub fn as_str(&self) -> &str {
         match self {
-            Self::PreserveSource => "preserve_source",
+            Self::PreserveArtifact => "preserve_artifact",
             Self::F32 => "f32",
             Self::F16 => "f16",
             Self::Bf16 => "bf16",
@@ -105,19 +105,19 @@ impl QuantizationRecipe {
         }
     }
 
-    /// Quality-first planning recipe for official DeepSeek-V4-Flash-DSpark source
-    /// checkpoints.
+    /// Quality-first planning recipe for official DeepSeek-V4-Flash-DSpark checkpoint
+    /// artifacts.
     ///
-    /// The downloaded HF source is already aggressively mixed precision: routed
+    /// The downloaded HF checkpoint is already aggressively mixed precision: routed
     /// experts are stored as I8 containers for official FP4 payloads, attention is
     /// mostly FP8 plus FP8 scales, and small correctness-critical tensors are
     /// BF16/F32. Re-quantizing the FP4 experts to another 4-bit format does not
     /// materially reduce memory and can only hurt quality. This recipe therefore
-    /// preserves the source quantization and expects WeightPack residency/streaming
+    /// preserves the artifact quantization and expects WeightPack residency/streaming
     /// to make it runnable on one DGX Spark.
     pub fn deepseek_v4_flash_weightpack_mixed_v1() -> Self {
         Self {
-            name: "deepseek-v4-flash-weightpack-source-fp4-streaming-v1".into(),
+            name: "deepseek-v4-flash-weightpack-artifact-fp4-streaming-v1".into(),
             per_role: vec![
                 TensorRoleQuantPolicy::new(
                     TensorRole::TokenEmbedding,
@@ -126,13 +126,13 @@ impl QuantizationRecipe {
                 ),
                 TensorRoleQuantPolicy::new(
                     TensorRole::AttentionLatentQueryA,
-                    QuantizationFormat::PreserveSource,
-                    "preserve official FP8/BF16 attention source until kernels are validated",
+                    QuantizationFormat::PreserveArtifact,
+                    "preserve official FP8/BF16 attention artifact until kernels are validated",
                 ),
                 TensorRoleQuantPolicy::new(
                     TensorRole::AttentionLatentQueryB,
-                    QuantizationFormat::PreserveSource,
-                    "preserve official FP8/BF16 attention source until kernels are validated",
+                    QuantizationFormat::PreserveArtifact,
+                    "preserve official FP8/BF16 attention artifact until kernels are validated",
                 ),
                 TensorRoleQuantPolicy::new(
                     TensorRole::AttentionQueryNorm,
@@ -141,7 +141,7 @@ impl QuantizationRecipe {
                 ),
                 TensorRoleQuantPolicy::new(
                     TensorRole::AttentionLatentKv,
-                    QuantizationFormat::PreserveSource,
+                    QuantizationFormat::PreserveArtifact,
                     "KV compression semantics must be validated before lossy conversion",
                 ),
                 TensorRoleQuantPolicy::new(
@@ -161,18 +161,18 @@ impl QuantizationRecipe {
                 ),
                 TensorRoleQuantPolicy::new(
                     TensorRole::RoutedExpertGate,
-                    QuantizationFormat::PreserveSource,
-                    "official source stores routed experts as FP4 payloads in I8 containers; preserve and stream first",
+                    QuantizationFormat::PreserveArtifact,
+                    "official artifact stores routed experts as FP4 payloads in I8 containers; preserve and stream first",
                 ),
                 TensorRoleQuantPolicy::new(
                     TensorRole::RoutedExpertUp,
-                    QuantizationFormat::PreserveSource,
-                    "official source stores routed experts as FP4 payloads in I8 containers; preserve and stream first",
+                    QuantizationFormat::PreserveArtifact,
+                    "official artifact stores routed experts as FP4 payloads in I8 containers; preserve and stream first",
                 ),
                 TensorRoleQuantPolicy::new(
                     TensorRole::RoutedExpertDown,
-                    QuantizationFormat::PreserveSource,
-                    "official source stores routed experts as FP4 payloads in I8 containers; preserve and stream first",
+                    QuantizationFormat::PreserveArtifact,
+                    "official artifact stores routed experts as FP4 payloads in I8 containers; preserve and stream first",
                 ),
                 TensorRoleQuantPolicy::new(
                     TensorRole::SharedExpertGate,
@@ -198,7 +198,7 @@ impl QuantizationRecipe {
             calibration: None,
             notes: vec![
                 "WeightPack is the primary Ferrule execution artifact".into(),
-                "default DeepSeek-V4 profile is quality-first: preserve official FP4/FP8 source and rely on expert streaming/residency".into(),
+                "default DeepSeek-V4 profile is quality-first: preserve official FP4/FP8 artifact format and rely on expert streaming/residency".into(),
                 "GGUF export should be treated as compatibility/PK output".into(),
                 "recipe must be validated against official DeepSeek reference outputs".into(),
             ],
@@ -210,7 +210,7 @@ impl QuantizationRecipe {
     /// This is not the default quality profile. It is the practical first target
     /// when we want a full model to fit in roughly 128GB unified memory without a
     /// second LAN node or expert streaming. It compresses the routed expert payload
-    /// from source FP4-sized storage toward ~2-bit class storage and must be judged
+    /// from artifact FP4-sized storage toward ~2-bit class storage and must be judged
     /// by reference prompts before any quality claim.
     pub fn deepseek_v4_flash_dgxspark_resident_iq2_v1() -> Self {
         Self {
@@ -223,13 +223,13 @@ impl QuantizationRecipe {
                 ),
                 TensorRoleQuantPolicy::new(
                     TensorRole::AttentionLatentQueryA,
-                    QuantizationFormat::PreserveSource,
-                    "attention is a small fraction of bytes; preserve source for first smoke",
+                    QuantizationFormat::PreserveArtifact,
+                    "attention is a small fraction of bytes; preserve artifact for first smoke",
                 ),
                 TensorRoleQuantPolicy::new(
                     TensorRole::AttentionLatentQueryB,
-                    QuantizationFormat::PreserveSource,
-                    "attention is a small fraction of bytes; preserve source for first smoke",
+                    QuantizationFormat::PreserveArtifact,
+                    "attention is a small fraction of bytes; preserve artifact for first smoke",
                 ),
                 TensorRoleQuantPolicy::new(
                     TensorRole::AttentionQueryNorm,
@@ -238,7 +238,7 @@ impl QuantizationRecipe {
                 ),
                 TensorRoleQuantPolicy::new(
                     TensorRole::AttentionLatentKv,
-                    QuantizationFormat::PreserveSource,
+                    QuantizationFormat::PreserveArtifact,
                     "KV compression semantics must be validated before lossy conversion",
                 ),
                 TensorRoleQuantPolicy::new(
@@ -259,17 +259,17 @@ impl QuantizationRecipe {
                 TensorRoleQuantPolicy::new(
                     TensorRole::RoutedExpertGate,
                     QuantizationFormat::Iq2Xxs,
-                    "routed experts dominate source bytes; ~2-bit class storage is needed for all-resident DGX Spark smoke",
+                    "routed experts dominate artifact bytes; ~2-bit class storage is needed for all-resident DGX Spark smoke",
                 ),
                 TensorRoleQuantPolicy::new(
                     TensorRole::RoutedExpertUp,
                     QuantizationFormat::Iq2Xxs,
-                    "routed experts dominate source bytes; ~2-bit class storage is needed for all-resident DGX Spark smoke",
+                    "routed experts dominate artifact bytes; ~2-bit class storage is needed for all-resident DGX Spark smoke",
                 ),
                 TensorRoleQuantPolicy::new(
                     TensorRole::RoutedExpertDown,
                     QuantizationFormat::Iq2Xxs,
-                    "routed experts dominate source bytes; ~2-bit class storage is needed for all-resident DGX Spark smoke",
+                    "routed experts dominate artifact bytes; ~2-bit class storage is needed for all-resident DGX Spark smoke",
                 ),
                 TensorRoleQuantPolicy::new(
                     TensorRole::SharedExpertGate,
@@ -298,7 +298,7 @@ impl QuantizationRecipe {
             }),
             notes: vec![
                 "single-node DGX Spark resident profile: intended for first end-to-end smoke, not final quality".into(),
-                "expected memory target is roughly source non-experts plus ~half-sized routed experts, before KV/workspace".into(),
+                "expected memory target is roughly artifact non-experts plus ~half-sized routed experts, before KV/workspace".into(),
                 "must be validated against official DeepSeek reference prompts before speed claims".into(),
             ],
         }

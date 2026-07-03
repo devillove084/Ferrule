@@ -145,6 +145,7 @@ mod tests {
             head_dim: Some(4),
             attention: AttentionKind::DenseMha,
             moe: MoeSpec::none(),
+            semantics: Default::default(),
             tensor_count: None,
             quantization: Vec::new(),
             notes: Vec::new(),
@@ -159,9 +160,9 @@ mod tests {
             binding(TensorClass::AttentionKey, TensorRole::AttentionKey, 1),
             binding(TensorClass::AttentionValue, TensorRole::AttentionValue, 1),
             binding(TensorClass::AttentionOutput, TensorRole::AttentionOutput, 1),
-            binding(TensorClass::Auxiliary, TensorRole::DenseMlpGate, 1),
-            binding(TensorClass::Auxiliary, TensorRole::DenseMlpUp, 1),
-            binding(TensorClass::Auxiliary, TensorRole::DenseMlpDown, 1),
+            binding(TensorClass::DenseMlpGate, TensorRole::DenseMlpGate, 1),
+            binding(TensorClass::DenseMlpUp, TensorRole::DenseMlpUp, 1),
+            binding(TensorClass::DenseMlpDown, TensorRole::DenseMlpDown, 1),
         ];
         let report = validate_model_layout_bindings(&layout, &bindings);
         assert!(
@@ -190,6 +191,7 @@ mod tests {
                 has_shared_experts: true,
                 router: RouterKind::HashAssistedTopK,
             },
+            semantics: Default::default(),
             tensor_count: None,
             quantization: Vec::new(),
             notes: Vec::new(),
@@ -248,9 +250,9 @@ mod tests {
                 && missing.role == TensorRole::AttentionSink));
     }
 
-    fn binding(source_class: TensorClass, role: TensorRole, tensors: usize) -> TensorBinding {
+    fn binding(tensor_class: TensorClass, role: TensorRole, tensors: usize) -> TensorBinding {
         TensorBinding {
-            source_class,
+            tensor_class,
             role,
             tensors,
         }

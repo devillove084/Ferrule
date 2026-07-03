@@ -4,7 +4,7 @@ use super::roles::TensorRole;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TensorBinding {
-    pub source_class: TensorClass,
+    pub tensor_class: TensorClass,
     pub role: TensorRole,
     pub tensors: usize,
 }
@@ -12,7 +12,7 @@ pub struct TensorBinding {
 impl TensorBinding {
     pub fn from_class_count(count: &TensorClassCount) -> Self {
         Self {
-            source_class: count.class.clone(),
+            tensor_class: count.class.clone(),
             role: tensor_role_for_class(&count.class),
             tensors: count.tensors,
         }
@@ -25,11 +25,16 @@ pub fn tensor_role_for_class(class: &TensorClass) -> TensorRole {
         TensorClass::OutputNorm => TensorRole::OutputNorm,
         TensorClass::OutputHead => TensorRole::OutputHead,
         TensorClass::LayerNorm => TensorRole::LayerNorm,
+        TensorClass::AttentionNorm => TensorRole::AttentionNorm,
+        TensorClass::FeedForwardNorm => TensorRole::FeedForwardNorm,
         TensorClass::AttentionQuery => TensorRole::AttentionQuery,
         TensorClass::AttentionKey => TensorRole::AttentionKey,
         TensorClass::AttentionValue => TensorRole::AttentionValue,
         TensorClass::AttentionOutput => TensorRole::AttentionOutput,
         TensorClass::AttentionSink => TensorRole::AttentionSink,
+        TensorClass::DenseMlpGate => TensorRole::DenseMlpGate,
+        TensorClass::DenseMlpUp => TensorRole::DenseMlpUp,
+        TensorClass::DenseMlpDown => TensorRole::DenseMlpDown,
         TensorClass::MlaQueryA => TensorRole::AttentionLatentQueryA,
         TensorClass::MlaQueryB => TensorRole::AttentionLatentQueryB,
         TensorClass::MlaQueryNorm => TensorRole::AttentionQueryNorm,

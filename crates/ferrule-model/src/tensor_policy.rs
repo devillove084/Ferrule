@@ -6,10 +6,10 @@ use ferrule_gguf::TensorInfo;
 use crate::families;
 use crate::spec::ModelFamily;
 
-/// Semantic tensor classes used to map source artifact names into Transformer
+/// Semantic tensor classes used to map checkpoint artifact names into Transformer
 /// blocks and optional execution attachments.
 ///
-/// Concrete source names live in `crate::families::*`. This enum should stay
+/// Concrete artifact names live in `crate::families::*`. This enum should stay
 /// semantic enough that multiple model families can share roles without forcing
 /// DeepSeek/OLMoE/Llama naming into the generic runtime.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -18,11 +18,16 @@ pub enum TensorClass {
     OutputNorm,
     OutputHead,
     LayerNorm,
+    AttentionNorm,
+    FeedForwardNorm,
     AttentionQuery,
     AttentionKey,
     AttentionValue,
     AttentionOutput,
     AttentionSink,
+    DenseMlpGate,
+    DenseMlpUp,
+    DenseMlpDown,
     MlaQueryA,
     MlaQueryB,
     MlaQueryNorm,
@@ -57,11 +62,16 @@ impl TensorClass {
             Self::OutputNorm => "output_norm",
             Self::OutputHead => "output_head",
             Self::LayerNorm => "layer_norm",
+            Self::AttentionNorm => "attention_norm",
+            Self::FeedForwardNorm => "feed_forward_norm",
             Self::AttentionQuery => "attention_query",
             Self::AttentionKey => "attention_key",
             Self::AttentionValue => "attention_value",
             Self::AttentionOutput => "attention_output",
             Self::AttentionSink => "attention_sink",
+            Self::DenseMlpGate => "dense_mlp_gate",
+            Self::DenseMlpUp => "dense_mlp_up",
+            Self::DenseMlpDown => "dense_mlp_down",
             Self::MlaQueryA => "mla_query_a",
             Self::MlaQueryB => "mla_query_b",
             Self::MlaQueryNorm => "mla_query_norm",

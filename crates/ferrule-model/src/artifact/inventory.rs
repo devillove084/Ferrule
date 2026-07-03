@@ -5,8 +5,8 @@ use std::path::Path;
 use ferrule_core::{Error, Result};
 
 use crate::families::{
-    self, AttentionTensorRef, HyperConnectionTensorRef, RoutedExpertTensorRef, RouterTensorRef,
-    SharedExpertTensorRef,
+    self, AttentionTensorRef, DenseLayerTensorRef, HyperConnectionTensorRef, RoutedExpertTensorRef,
+    RouterTensorRef, SharedExpertTensorRef,
 };
 use crate::spec::ModelFamily;
 use crate::support::{tensor_role_for_class, TensorRole};
@@ -70,6 +70,18 @@ pub struct HfRouterTensorInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HfAttentionTensorInfo {
     pub descriptor: AttentionTensorRef,
+    pub name: String,
+    pub shard: String,
+    pub dtype: String,
+    pub shape: Vec<usize>,
+    pub data_offset: u64,
+    pub file_offset: u64,
+    pub byte_size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HfDenseLayerTensorInfo {
+    pub descriptor: DenseLayerTensorRef,
     pub name: String,
     pub shard: String,
     pub dtype: String,
@@ -325,6 +337,26 @@ impl HfSafetensorsInventory {
             .filter_map(|tensor| {
                 families::parse_hf_attention_tensor(family, &tensor.name).map(|descriptor| {
                     HfAttentionTensorInfo {
+                        descriptor,
+                        name: tensor.name.clone(),
+                        shard: tensor.shard.clone(),
+                        dtype: tensor.dtype.clone(),
+                        shape: tensor.shape.clone(),
+                        data_offset: tensor.data_offset,
+                        file_offset: tensor.file_offset,
+                        byte_size: tensor.byte_size,
+                    }
+                })
+            })
+            .collect()
+    }
+
+    pub fn dense_layer_tensors(&self, family: &ModelFamily) -> Vec<HfDenseLayerTensorInfo> {
+        self.tensors
+            .iter()
+            .filter_map(|tensor| {
+                families::parse_hf_dense_layer_tensor(family, &tensor.name).map(|descriptor| {
+                    HfDenseLayerTensorInfo {
                         descriptor,
                         name: tensor.name.clone(),
                         shard: tensor.shard.clone(),

@@ -7,7 +7,7 @@
 
 use cuda_device::{cuda_module, kernel, ptx_asm, thread, DisjointSlice, SharedArray};
 
-const LN_2_F32: f32 = 0.693_147_2;
+const LN_2_F32: f32 = core::f32::consts::LN_2;
 
 /// Device exp(x). cuda-oxide lowers this to libdevice (`__nv_expf`) on GPU.
 fn fast_exp(x: f32) -> f32 {
@@ -420,12 +420,12 @@ pub mod kernels {
         }
     }
 
-    // ── Source FP4 E2M1 + E8M0 GEMV ─────────────────────────────────
+    // ── Artifact FP4 E2M1 + E8M0 GEMV ─────────────────────────────────
 
-    /// GEMV for source-preserved `torch.float4_e2m1fn_x2` weights with
+    /// GEMV for artifact-preserved `torch.float4_e2m1fn_x2` weights with
     /// `float8_e8m0fnu` scales.
     ///
-    /// Layout matches Ferrule's CPU reference path for source-format packed experts:
+    /// Layout matches Ferrule's CPU reference path for artifact-format packed experts:
     /// `packed = [out_features, in_features / 2]`, low nibble first; `scales =
     /// [out_features, in_features / 32]` with byte 127 mapping to scale 1.0.
     #[kernel]
@@ -448,7 +448,11 @@ pub mod kernels {
         let mut j = 0usize;
         while j < k {
             let byte = packed[row * packed_cols + j / 2];
-            let nibble = if j % 2 == 0 { byte & 0x0f } else { byte >> 4 };
+            let nibble = if j.is_multiple_of(2) {
+                byte & 0x0f
+            } else {
+                byte >> 4
+            };
             let scale = e8m0_scale(scales[row * scale_cols + j / 32]);
             dot += x[j] * fp4_e2m1_value(nibble) * scale;
             j += 1;
@@ -482,7 +486,11 @@ pub mod kernels {
         let mut j = 0usize;
         while j < k {
             let byte = packed[packed_off + row * packed_cols + j / 2];
-            let nibble = if j % 2 == 0 { byte & 0x0f } else { byte >> 4 };
+            let nibble = if j.is_multiple_of(2) {
+                byte & 0x0f
+            } else {
+                byte >> 4
+            };
             let scale = e8m0_scale(scales[scales_off + row * scale_cols + j / 32]);
             dot += x[j] * fp4_e2m1_value(nibble) * scale;
             j += 1;
@@ -525,8 +533,16 @@ pub mod kernels {
         while j < k {
             let byte0 = p0[off_p0 + row * packed_cols + j / 2];
             let byte1 = p1[off_p1 + row * packed_cols + j / 2];
-            let nibble0 = if j % 2 == 0 { byte0 & 0x0f } else { byte0 >> 4 };
-            let nibble1 = if j % 2 == 0 { byte1 & 0x0f } else { byte1 >> 4 };
+            let nibble0 = if j.is_multiple_of(2) {
+                byte0 & 0x0f
+            } else {
+                byte0 >> 4
+            };
+            let nibble1 = if j.is_multiple_of(2) {
+                byte1 & 0x0f
+            } else {
+                byte1 >> 4
+            };
             let scale0 = e8m0_scale(s0[off_s0 + row * scale_cols + j / 32]);
             let scale1 = e8m0_scale(s1[off_s1 + row * scale_cols + j / 32]);
             let xv = x[j];
@@ -569,7 +585,7 @@ pub mod kernels {
         }
     }
 
-    // ── Source FP8 E4M3FN + E8M0 GEMV ────────────────────────────────
+    // ── Artifact FP8 E4M3FN + E8M0 GEMV ────────────────────────────────
 
     /// GEMV for FP8 E4M3FN weights with 2D E8M0 block scales.
     /// weight: [out_features, in_features] u8
@@ -634,7 +650,11 @@ pub mod kernels {
         let mut j = 0usize;
         while j < k {
             let byte = packed[row * packed_cols + j / 2];
-            let nibble = if j % 2 == 0 { byte & 0x0f } else { byte >> 4 };
+            let nibble = if j.is_multiple_of(2) {
+                byte & 0x0f
+            } else {
+                byte >> 4
+            };
             let scale = e8m0_scale(scales[row * scale_cols + j / 32]);
             dot += x[input_off + j] * fp4_e2m1_value(nibble) * scale;
             j += 1;
@@ -1739,7 +1759,11 @@ pub mod kernels {
         let mut j = 0usize;
         while j < inter {
             let byte = down_packed[row * packed_cols + j / 2];
-            let nibble = if j % 2 == 0 { byte & 0x0f } else { byte >> 4 };
+            let nibble = if j.is_multiple_of(2) {
+                byte & 0x0f
+            } else {
+                byte >> 4
+            };
             let scale = e8m0_scale(down_scales[row * scale_cols + j / 32]);
             let mut g = gate[j];
             let mut u = up[j];
@@ -1880,7 +1904,8 @@ pub mod kernels {
                 for col in 0..hc {
                     let idx = row * hc + col;
                     unsafe {
-                        COMB[idx] = COMB[idx] / row_sum + eps;
+                        COMB[idx] /= row_sum;
+                        COMB[idx] += eps;
                     }
                 }
             }
@@ -1893,7 +1918,7 @@ pub mod kernels {
                 for row in 0..hc {
                     let idx = row * hc + col;
                     unsafe {
-                        COMB[idx] = COMB[idx] / (col_sum + eps);
+                        COMB[idx] /= col_sum + eps;
                     }
                 }
             }
@@ -1907,7 +1932,7 @@ pub mod kernels {
                     for col in 0..hc {
                         let idx = row * hc + col;
                         unsafe {
-                            COMB[idx] = COMB[idx] / (row_sum + eps);
+                            COMB[idx] /= row_sum + eps;
                         }
                     }
                 }
@@ -1919,7 +1944,7 @@ pub mod kernels {
                     for row in 0..hc {
                         let idx = row * hc + col;
                         unsafe {
-                            COMB[idx] = COMB[idx] / (col_sum + eps);
+                            COMB[idx] /= col_sum + eps;
                         }
                     }
                 }
@@ -2183,7 +2208,8 @@ pub mod kernels {
                 for col in 0..hc {
                     let idx = row * hc + col;
                     unsafe {
-                        COMB[idx] = COMB[idx] / row_sum + eps;
+                        COMB[idx] /= row_sum;
+                        COMB[idx] += eps;
                     }
                 }
             }
@@ -2196,7 +2222,7 @@ pub mod kernels {
                 for row in 0..hc {
                     let idx = row * hc + col;
                     unsafe {
-                        COMB[idx] = COMB[idx] / (col_sum + eps);
+                        COMB[idx] /= col_sum + eps;
                     }
                 }
             }
@@ -2210,7 +2236,7 @@ pub mod kernels {
                     for col in 0..hc {
                         let idx = row * hc + col;
                         unsafe {
-                            COMB[idx] = COMB[idx] / (row_sum + eps);
+                            COMB[idx] /= row_sum + eps;
                         }
                     }
                 }
@@ -2222,7 +2248,7 @@ pub mod kernels {
                     for row in 0..hc {
                         let idx = row * hc + col;
                         unsafe {
-                            COMB[idx] = COMB[idx] / (col_sum + eps);
+                            COMB[idx] /= col_sum + eps;
                         }
                     }
                 }

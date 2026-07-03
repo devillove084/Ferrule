@@ -162,7 +162,7 @@ impl LayerLayout {
 
 fn layer_norm_roles_for_spec(spec: &TransformerSpec) -> Vec<TensorRole> {
     if matches!(spec.family, ModelFamily::DeepSeekV4) {
-        Vec::new()
+        vec![TensorRole::AttentionNorm, TensorRole::FeedForwardNorm]
     } else {
         vec![TensorRole::LayerNorm]
     }
@@ -199,7 +199,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deepseek_v4_layout_does_not_require_generic_layer_norm() {
+    fn deepseek_v4_layout_requires_stage_norms_without_generic_layer_norm() {
         let spec = TransformerSpec {
             family: ModelFamily::DeepSeekV4,
             architecture: Some("deepseek_v4".into()),
@@ -217,14 +217,20 @@ mod tests {
                 has_shared_experts: true,
                 router: RouterKind::HashAssistedTopK,
             },
+            semantics: Default::default(),
             tensor_count: None,
             quantization: Vec::new(),
             notes: Vec::new(),
         };
         let layout = ModelLayout::from_spec(&spec);
-        assert!(layout.layers[0].norms.is_empty());
+        assert_eq!(
+            layout.layers[0].norms,
+            vec![TensorRole::AttentionNorm, TensorRole::FeedForwardNorm]
+        );
         let required = layout.layers[0].required_roles();
         assert!(!required.contains(&TensorRole::LayerNorm));
+        assert!(required.contains(&TensorRole::AttentionNorm));
+        assert!(required.contains(&TensorRole::FeedForwardNorm));
         assert!(required.contains(&TensorRole::AttentionQueryNorm));
         assert!(required.contains(&TensorRole::AttentionKeyValueNorm));
     }
@@ -243,6 +249,7 @@ mod tests {
             head_dim: Some(4),
             attention: AttentionKind::DenseMha,
             moe: MoeSpec::none(),
+            semantics: Default::default(),
             tensor_count: None,
             quantization: Vec::new(),
             notes: Vec::new(),

@@ -1,9 +1,9 @@
 //! Expert streaming and residency planning.
 //!
 //! This module is intentionally model-family agnostic. A model adapter decides
-//! which source tensors represent an expert; the runtime decides when an expert
+//! which artifact tensors represent an expert; the runtime decides when an expert
 //! should be GPU-resident, prefetched, evicted, or streamed from a slower tier.
-//! Quality-first adapters can preserve source FP4/FP8 payloads and stream experts
+//! Quality-first adapters can preserve artifact FP4/FP8 payloads and stream experts
 //! instead of immediately re-quantizing them to fit.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -96,7 +96,7 @@ impl ExpertStorageTier {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExpertSource {
+pub enum ExpertLoadSource {
     GpuResident,
     CpuResident,
     HostMmap {
@@ -124,7 +124,7 @@ pub enum ExpertSource {
     },
 }
 
-impl ExpertSource {
+impl ExpertLoadSource {
     pub fn tier(&self) -> ExpertStorageTier {
         match self {
             Self::GpuResident => ExpertStorageTier::Gpu,
@@ -158,7 +158,7 @@ pub enum ExpertLoadReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpertLoadRequest {
     pub expert: ExpertId,
-    pub source: ExpertSource,
+    pub load_source: ExpertLoadSource,
     pub reason: ExpertLoadReason,
 }
 
@@ -177,8 +177,8 @@ pub struct ExpertStreamingPolicy {
     pub gpu_slots_per_layer: usize,
     /// Best-effort predicted experts to load after selected experts are covered.
     pub prefetch_per_layer: usize,
-    /// Keep the exact source payload/format; do not force a conversion policy here.
-    pub preserve_source_quantization: bool,
+    /// Keep the exact artifact payload/format; do not force a conversion policy here.
+    pub preserve_artifact_quantization: bool,
     /// Whether CPU RAM staging is allowed. Disabling this models very constrained
     /// hosts where streaming should go directly from mmap/local/remote chunks.
     pub allow_cpu_staging: bool,
@@ -194,7 +194,7 @@ impl ExpertStreamingPolicy {
         Self {
             gpu_slots_per_layer,
             prefetch_per_layer: num_experts_per_tok,
-            preserve_source_quantization: true,
+            preserve_artifact_quantization: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
         }
@@ -225,7 +225,7 @@ impl ExpertStreamingStep {
 
 #[derive(Debug, Clone)]
 struct ExpertState {
-    source: ExpertSource,
+    load_source: ExpertLoadSource,
     location: ExpertStorageTier,
     last_used_step: u64,
 }
@@ -250,12 +250,12 @@ impl ExpertStreamingPlanner {
         &self.policy
     }
 
-    pub fn register_source(&mut self, expert: ExpertId, source: ExpertSource) {
-        let location = source.tier();
+    pub fn register_load_source(&mut self, expert: ExpertId, load_source: ExpertLoadSource) {
+        let location = load_source.tier();
         self.experts.insert(
             expert,
             ExpertState {
-                source,
+                load_source,
                 location,
                 last_used_step: 0,
             },
@@ -300,7 +300,7 @@ impl ExpertStreamingPlanner {
                     expert.layer, expert.expert
                 )));
             }
-            self.register_source(expert, ExpertSource::LocalTensorSet { tensors });
+            self.register_load_source(expert, ExpertLoadSource::LocalTensorSet { tensors });
         }
         Ok(count)
     }
@@ -308,7 +308,7 @@ impl ExpertStreamingPlanner {
     pub fn mark_resident(&mut self, expert: ExpertId, location: ExpertStorageTier) -> Result<()> {
         let state = self.experts.get_mut(&expert).ok_or_else(|| {
             Error::Model(format!(
-                "expert streaming source missing for layer {} expert {}",
+                "expert streaming load source missing for layer {} expert {}",
                 expert.layer, expert.expert
             ))
         })?;
@@ -368,18 +368,18 @@ impl ExpertStreamingPlanner {
             if !target.contains(&expert) {
                 evictions.push(ExpertEvictRequest {
                     expert,
-                    target: self.source_tier_or_local(expert)?,
+                    target: self.load_source_tier_or_local(expert)?,
                 });
             }
         }
 
         let mut loads = Vec::new();
         for expert in &selected {
-            self.ensure_source_allowed(*expert)?;
+            self.ensure_load_source_allowed(*expert)?;
             if !matches!(self.location(*expert), Some(ExpertStorageTier::Gpu)) {
                 loads.push(ExpertLoadRequest {
                     expert: *expert,
-                    source: self.source_for(*expert)?.clone(),
+                    load_source: self.load_source_for(*expert)?.clone(),
                     reason: ExpertLoadReason::Selected,
                 });
             }
@@ -388,11 +388,11 @@ impl ExpertStreamingPlanner {
             }
         }
         for expert in &prefetched {
-            self.ensure_source_allowed(*expert)?;
+            self.ensure_load_source_allowed(*expert)?;
             if !matches!(self.location(*expert), Some(ExpertStorageTier::Gpu)) {
                 loads.push(ExpertLoadRequest {
                     expert: *expert,
-                    source: self.source_for(*expert)?.clone(),
+                    load_source: self.load_source_for(*expert)?.clone(),
                     reason: ExpertLoadReason::Prefetch,
                 });
             }
@@ -417,20 +417,20 @@ impl ExpertStreamingPlanner {
         Ok(())
     }
 
-    fn source_for(&self, expert: ExpertId) -> Result<&ExpertSource> {
+    fn load_source_for(&self, expert: ExpertId) -> Result<&ExpertLoadSource> {
         self.experts
             .get(&expert)
-            .map(|state| &state.source)
+            .map(|state| &state.load_source)
             .ok_or_else(|| {
                 Error::Model(format!(
-                    "expert streaming source missing for layer {} expert {}",
+                    "expert streaming load source missing for layer {} expert {}",
                     expert.layer, expert.expert
                 ))
             })
     }
 
-    fn source_tier_or_local(&self, expert: ExpertId) -> Result<ExpertStorageTier> {
-        let tier = self.source_for(expert)?.tier();
+    fn load_source_tier_or_local(&self, expert: ExpertId) -> Result<ExpertStorageTier> {
+        let tier = self.load_source_for(expert)?.tier();
         Ok(if tier == ExpertStorageTier::Gpu {
             ExpertStorageTier::LocalStorage
         } else {
@@ -438,24 +438,24 @@ impl ExpertStreamingPlanner {
         })
     }
 
-    fn ensure_source_allowed(&self, expert: ExpertId) -> Result<()> {
-        let source = self.source_for(expert)?;
-        let tier = source.tier();
+    fn ensure_load_source_allowed(&self, expert: ExpertId) -> Result<()> {
+        let load_source = self.load_source_for(expert)?;
+        let tier = load_source.tier();
         if !tier.is_streamable() && tier != ExpertStorageTier::Gpu {
             return Err(Error::Model(format!(
-                "expert source for layer {} expert {} is not streamable: {:?}",
+                "expert load source for layer {} expert {} is not streamable: {:?}",
                 expert.layer, expert.expert, tier
             )));
         }
         if tier == ExpertStorageTier::Remote && !self.policy.allow_remote_sources {
             return Err(Error::Model(format!(
-                "remote expert source for layer {} expert {} requires allow_remote_sources=true",
+                "remote expert load source for layer {} expert {} requires allow_remote_sources=true",
                 expert.layer, expert.expert
             )));
         }
         if tier == ExpertStorageTier::Cpu && !self.policy.allow_cpu_staging {
             return Err(Error::Model(format!(
-                "CPU-staged expert source for layer {} expert {} requires allow_cpu_staging=true",
+                "CPU-staged expert load source for layer {} expert {} requires allow_cpu_staging=true",
                 expert.layer, expert.expert
             )));
         }
@@ -470,14 +470,14 @@ pub struct ExpertTensorPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExpertSourcePayload {
+pub struct ExpertArtifactPayload {
     pub expert: ExpertId,
     pub tensors: Vec<ExpertTensorPayload>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpertLinearFormat {
-    /// Packed FP4 expert source format: `torch.float4_e2m1fn_x2` stored in
+    /// Packed FP4 expert artifact format: `torch.float4_e2m1fn_x2` stored in
     /// safetensors as I8 bytes, with one `float8_e8m0fnu` scale per logical
     /// K block.
     Fp4E2M1PackedWithE8M0Scale {
@@ -505,7 +505,7 @@ pub struct ExpertComputeBundle {
 }
 
 impl ExpertComputeBundle {
-    pub fn from_source_payload(payload: ExpertSourcePayload) -> Result<Self> {
+    pub fn from_artifact_payload(payload: ExpertArtifactPayload) -> Result<Self> {
         let expert = payload.expert;
         let mut grouped = BTreeMap::<ExpertMatrixKind, Vec<ExpertTensorPayload>>::new();
         for tensor in payload.tensors {
@@ -560,17 +560,17 @@ impl ExpertStreamingReader {
         Self { max_slice_bytes }
     }
 
-    pub fn read_source(
+    pub fn read_load_source(
         &self,
         expert: ExpertId,
-        source: &ExpertSource,
-    ) -> Result<ExpertSourcePayload> {
-        let tensors = match source {
-            ExpertSource::LocalTensorSet { tensors } => tensors
+        load_source: &ExpertLoadSource,
+    ) -> Result<ExpertArtifactPayload> {
+        let tensors = match load_source {
+            ExpertLoadSource::LocalTensorSet { tensors } => tensors
                 .iter()
                 .map(|slice| self.read_local_slice(slice))
                 .collect::<Result<Vec<_>>>()?,
-            ExpertSource::LocalShard {
+            ExpertLoadSource::LocalShard {
                 path,
                 offset,
                 bytes,
@@ -591,12 +591,12 @@ impl ExpertStreamingReader {
             }
             other => {
                 return Err(Error::Model(format!(
-                    "expert streaming reader does not support source tier {:?} yet",
+                    "expert streaming reader does not support artifact tier {:?} yet",
                     other.tier()
                 )))
             }
         };
-        Ok(ExpertSourcePayload { expert, tensors })
+        Ok(ExpertArtifactPayload { expert, tensors })
     }
 
     pub fn read_local_slice(&self, slice: &ExpertTensorSlice) -> Result<ExpertTensorPayload> {
@@ -639,7 +639,7 @@ fn build_linear_payload(
 ) -> Result<ExpertLinearPayload> {
     let tensors = tensors.ok_or_else(|| {
         Error::Model(format!(
-            "expert source bundle missing {:?} matrix for layer {} expert {}",
+            "expert artifact bundle missing {:?} matrix for layer {} expert {}",
             matrix, expert.layer, expert.expert
         ))
     })?;
@@ -650,7 +650,7 @@ fn build_linear_payload(
             ExpertTensorComponent::Weight => {
                 if weight.replace(tensor).is_some() {
                     return Err(Error::Model(format!(
-                        "expert source bundle has duplicate {:?} weight for layer {} expert {}",
+                        "expert artifact bundle has duplicate {:?} weight for layer {} expert {}",
                         matrix, expert.layer, expert.expert
                     )));
                 }
@@ -658,14 +658,14 @@ fn build_linear_payload(
             ExpertTensorComponent::Scale => {
                 if scale.replace(tensor).is_some() {
                     return Err(Error::Model(format!(
-                        "expert source bundle has duplicate {:?} scale for layer {} expert {}",
+                        "expert artifact bundle has duplicate {:?} scale for layer {} expert {}",
                         matrix, expert.layer, expert.expert
                     )));
                 }
             }
             ExpertTensorComponent::Other(name) => {
                 return Err(Error::Model(format!(
-                    "expert source bundle has unsupported {:?} component '{}' for layer {} expert {}",
+                    "expert artifact bundle has unsupported {:?} component '{}' for layer {} expert {}",
                     matrix, name, expert.layer, expert.expert
                 )));
             }
@@ -673,7 +673,7 @@ fn build_linear_payload(
     }
     let weight = weight.ok_or_else(|| {
         Error::Model(format!(
-            "expert source bundle missing {:?} weight for layer {} expert {}",
+            "expert artifact bundle missing {:?} weight for layer {} expert {}",
             matrix, expert.layer, expert.expert
         ))
     })?;
@@ -772,9 +772,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn quality_first_policy_preserves_source_quantization() {
+    fn quality_first_policy_preserves_artifact_quantization() {
         let policy = ExpertStreamingPolicy::quality_first(6);
-        assert!(policy.preserve_source_quantization);
+        assert!(policy.preserve_artifact_quantization);
         assert_eq!(policy.gpu_slots_per_layer, 12);
         assert_eq!(policy.prefetch_per_layer, 6);
         assert!(!policy.allow_cpu_staging);
@@ -828,15 +828,15 @@ mod tests {
 
         let step = planner.plan_layer_step(0, &[3], &[]).unwrap();
         assert_eq!(step.loads.len(), 1);
-        let ExpertSource::LocalTensorSet { tensors } = &step.loads[0].source else {
-            panic!("expected LocalTensorSet source");
+        let ExpertLoadSource::LocalTensorSet { tensors } = &step.loads[0].load_source else {
+            panic!("expected LocalTensorSet load source");
         };
         assert_eq!(tensors.len(), 3);
-        assert_eq!(step.loads[0].source.bytes(), 10);
+        assert_eq!(step.loads[0].load_source.bytes(), 10);
 
         let reader = ExpertStreamingReader::new(8);
         let payload = reader
-            .read_source(ExpertId::new(0, 3), &step.loads[0].source)
+            .read_load_source(ExpertId::new(0, 3), &step.loads[0].load_source)
             .unwrap();
         assert_eq!(payload.tensors.len(), 3);
         assert_eq!(payload.tensors[0].bytes, vec![8, 9, 10, 11]);
@@ -847,9 +847,9 @@ mod tests {
     }
 
     #[test]
-    fn builds_fp4_expert_compute_bundle_from_six_source_slices() {
+    fn builds_fp4_expert_compute_bundle_from_six_artifact_slices() {
         let expert = ExpertId::new(0, 3);
-        let payload = ExpertSourcePayload {
+        let payload = ExpertArtifactPayload {
             expert,
             tensors: vec![
                 fp4_payload(
@@ -896,7 +896,7 @@ mod tests {
                 ),
             ],
         };
-        let bundle = ExpertComputeBundle::from_source_payload(payload).unwrap();
+        let bundle = ExpertComputeBundle::from_artifact_payload(payload).unwrap();
         assert_eq!(bundle.expert, expert);
         assert_eq!(
             bundle.gate.format,
@@ -920,7 +920,7 @@ mod tests {
     #[test]
     fn rejects_fp4_expert_bundle_with_bad_scale_shape() {
         let expert = ExpertId::new(0, 3);
-        let payload = ExpertSourcePayload {
+        let payload = ExpertArtifactPayload {
             expert,
             tensors: vec![
                 fp4_payload(
@@ -967,7 +967,7 @@ mod tests {
                 ),
             ],
         };
-        let err = ExpertComputeBundle::from_source_payload(payload).unwrap_err();
+        let err = ExpertComputeBundle::from_artifact_payload(payload).unwrap_err();
         assert!(err.to_string().contains("scale shape mismatch"));
     }
 
@@ -997,9 +997,9 @@ mod tests {
     fn loads_selected_experts_from_local_shards_without_cpu_staging() {
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy::quality_first(2));
         for expert in 0..4 {
-            planner.register_source(
+            planner.register_load_source(
                 ExpertId::new(0, expert),
-                ExpertSource::LocalShard {
+                ExpertLoadSource::LocalShard {
                     path: PathBuf::from(format!("shard-{expert}.safetensors")),
                     offset: expert as u64 * 1024,
                     bytes: 1024,
@@ -1033,14 +1033,14 @@ mod tests {
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
             gpu_slots_per_layer: 3,
             prefetch_per_layer: 2,
-            preserve_source_quantization: true,
+            preserve_artifact_quantization: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
         });
         for expert in 0..5 {
-            planner.register_source(
+            planner.register_load_source(
                 ExpertId::new(0, expert),
-                ExpertSource::LocalShard {
+                ExpertLoadSource::LocalShard {
                     path: PathBuf::from("model.safetensors"),
                     offset: 0,
                     bytes: 10,
@@ -1058,18 +1058,18 @@ mod tests {
     }
 
     #[test]
-    fn evicts_non_target_gpu_experts_to_source_tier() {
+    fn evicts_non_target_gpu_experts_to_artifact_tier() {
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
             gpu_slots_per_layer: 2,
             prefetch_per_layer: 0,
-            preserve_source_quantization: true,
+            preserve_artifact_quantization: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
         });
         for expert in 0..4 {
-            planner.register_source(
+            planner.register_load_source(
                 ExpertId::new(0, expert),
-                ExpertSource::LocalShard {
+                ExpertLoadSource::LocalShard {
                     path: PathBuf::from("model.safetensors"),
                     offset: 0,
                     bytes: 10,
@@ -1100,9 +1100,9 @@ mod tests {
     #[test]
     fn rejects_remote_sources_until_policy_allows_them() {
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy::quality_first(1));
-        planner.register_source(
+        planner.register_load_source(
             ExpertId::new(0, 7),
-            ExpertSource::Remote {
+            ExpertLoadSource::Remote {
                 uri: "http://lan-node/experts/l0e7".into(),
                 offset: 0,
                 bytes: 2048,
@@ -1116,9 +1116,9 @@ mod tests {
     fn supports_remote_sources_for_no_local_storage_mode() {
         let mut planner =
             ExpertStreamingPlanner::new(ExpertStreamingPolicy::quality_first_remote(1));
-        planner.register_source(
+        planner.register_load_source(
             ExpertId::new(0, 7),
-            ExpertSource::Remote {
+            ExpertLoadSource::Remote {
                 uri: "http://lan-node/experts/l0e7".into(),
                 offset: 0,
                 bytes: 2048,
@@ -1126,7 +1126,7 @@ mod tests {
         );
         let step = planner.plan_layer_step(0, &[7], &[]).unwrap();
         assert_eq!(step.loads.len(), 1);
-        assert_eq!(step.loads[0].source.tier(), ExpertStorageTier::Remote);
+        assert_eq!(step.loads[0].load_source.tier(), ExpertStorageTier::Remote);
     }
 
     #[test]
@@ -1134,14 +1134,14 @@ mod tests {
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
             gpu_slots_per_layer: 1,
             prefetch_per_layer: 0,
-            preserve_source_quantization: true,
+            preserve_artifact_quantization: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
         });
         for expert in 0..2 {
-            planner.register_source(
+            planner.register_load_source(
                 ExpertId::new(0, expert),
-                ExpertSource::LocalShard {
+                ExpertLoadSource::LocalShard {
                     path: PathBuf::from("model.safetensors"),
                     offset: 0,
                     bytes: 10,

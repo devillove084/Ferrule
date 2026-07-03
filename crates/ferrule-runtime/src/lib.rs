@@ -1,4 +1,8 @@
-#![allow(clippy::unnecessary_sort_by, clippy::needless_range_loop)]
+#![allow(
+    clippy::unnecessary_sort_by,
+    clippy::needless_range_loop,
+    clippy::too_many_arguments
+)]
 //! Ferrule Runtime — state-aware generation loops over model backends.
 //!
 //! This crate keeps tokenization, prefill/decode state, sampling, and chat
@@ -8,10 +12,17 @@ pub use ferrule_graph as graph;
 
 pub mod attention_backend;
 pub mod attention_kernel;
+pub mod backend_object_store;
 pub mod chat;
 pub mod config;
 pub mod constraint;
+pub mod dialects;
+pub mod graph_builder;
+pub mod graph_layer_binding;
+pub mod graph_program;
 pub mod graph_runtime;
+pub mod graph_translate;
+pub mod graph_validation;
 
 pub mod execution {
     pub use crate::graph_runtime::{
@@ -21,42 +32,40 @@ pub mod execution {
 
 pub mod external_binding {
     pub use crate::graph_runtime::{
-        ExternalBinding, ExternalBindingKind, ExternalBindingPlan, ExternalResidency,
+        ArtifactGroupKind, ExternalBinding, ExternalBindingKind, ExternalBindingPlan,
+        ExternalResidency,
     };
 }
 
+pub mod artifact_binding;
+pub mod artifact_format;
+pub mod artifact_linear;
+pub mod artifact_tensor;
 pub mod expert_executor;
 pub mod expert_handle;
 pub mod expert_routing;
 pub mod expert_streaming;
 pub mod expert_telemetry;
 pub mod ffn;
-pub mod first_token_smoke;
 pub mod generation;
 pub mod hyper_connection;
 pub mod kv;
 pub mod layer_binding;
 pub mod models;
 pub mod paged_kv;
-pub mod perplexity;
-pub mod pk_manifest;
 pub mod precision;
 pub mod prefix_cache;
 pub mod profiler;
 pub mod program;
 pub mod radix_cache;
-pub mod reference_compare;
-pub mod reference_manifest;
+pub mod reference_graph_backend;
 pub mod residency;
 pub mod routed_moe;
 pub mod runner;
 pub mod sampler;
 pub mod scheduler;
 pub mod session;
-pub mod source_binding;
-pub mod source_format;
-pub mod source_linear;
-pub mod source_tensor;
+pub mod shape_registry;
 pub mod speculation;
 pub mod stats;
 pub mod structured;
@@ -69,6 +78,11 @@ pub use attention_backend::{
     AttentionBackendPlan, AttentionMaskKind, SparseAttentionSpec,
 };
 pub use attention_kernel::AttentionKernel;
+pub use backend_object_store::{
+    materialize_dense_hf_externals, materialize_graph_hf_externals, materialize_hf_externals,
+    materialize_hf_externals_for_family, ArtifactObjectGroup, BackendObject, BackendObjectStore,
+    ExpertRegistryObject,
+};
 pub use chat::{detect_chat_template, ChatTemplate};
 pub use config::ModelGenerationDefaults;
 pub use expert_executor::{reference_linear, CpuReferenceExpertExecutor, ExpertExecutor};
@@ -80,22 +94,35 @@ pub use expert_routing::{
     ExpertRoute, ExpertRouterPolicy, RouterScoreFunction, RouterSelectionPolicy,
 };
 pub use expert_streaming::{
-    ExpertComputeBundle, ExpertEvictRequest, ExpertId, ExpertLinearFormat, ExpertLinearPayload,
-    ExpertLoadReason, ExpertLoadRequest, ExpertMatrixKind, ExpertSource, ExpertSourcePayload,
+    ExpertArtifactPayload, ExpertComputeBundle, ExpertEvictRequest, ExpertId, ExpertLinearFormat,
+    ExpertLinearPayload, ExpertLoadReason, ExpertLoadRequest, ExpertLoadSource, ExpertMatrixKind,
     ExpertStorageTier, ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader,
     ExpertStreamingStep, ExpertTensorComponent, ExpertTensorKey, ExpertTensorPayload,
     ExpertTensorSlice,
 };
 pub use expert_telemetry::ExpertTelemetry;
 pub use ffn::SwiGluFfnPayload;
-pub use first_token_smoke::{
-    run_first_token_smoke, FirstTokenModel, FirstTokenSmokeReport, FirstTokenSmokeStatus,
-    FirstTokenUnsupportedReason,
-};
+
 pub use generation::{GenerationConfig, GenerationResult, InferenceEngine, TokenEvent};
+pub use graph_builder::{
+    build_graph_program_from_descriptor, build_graph_program_from_descriptor_with_options,
+    build_graph_program_from_runtime_plan, build_graph_program_from_runtime_plan_with_options,
+    GraphProgramBuildOptions,
+};
+pub use graph_layer_binding::{GraphLayerObjects, GraphObjectRef};
+pub use graph_program::{GraphProgram, GraphProgramProfile};
 pub use graph_runtime::{
-    ExecutionBatch, ExecutionRow, ExecutionSegment, ExternalBinding, ExternalBindingKind,
-    ExternalBindingPlan, ExternalResidency, LogitsSelection,
+    ArtifactGroupKind, ExecutionBatch, ExecutionRow, ExecutionSegment, ExternalBinding,
+    ExternalBindingKind, ExternalBindingPlan, ExternalResidency, LogitsSelection,
+};
+pub use graph_translate::{
+    build_dense_decoder_graph_program, build_dense_decoder_graph_program_with_options,
+    build_semantic_transformer_graph_program,
+    build_semantic_transformer_graph_program_with_options, uses_semantic_artifact_groups,
+    DenseGraphTranslationOptions, SemanticGraphTranslationOptions,
+};
+pub use graph_validation::{
+    validate_graph_program, validate_graph_program_with_registry, GraphValidationReport,
 };
 pub use hyper_connection::{
     hc_head_reference, hc_post_reference, hc_pre_reference, hc_split_sinkhorn_reference,
@@ -107,28 +134,20 @@ pub use kv::{
     SequenceKvCache,
 };
 pub use layer_binding::{
-    bind_layer_source_from_hf, LayerExecutionState, LayerKvState, LayerSourceBinding,
-    LayerStepOutput, ReferenceLayerExecutor,
+    bind_layer_artifact_from_graph_objects, bind_layer_artifact_from_hf,
+    new_layer_execution_state_from_graph_objects, GraphLayerBindingOptions, LayerArtifactBinding,
+    LayerExecutionState, LayerKvState, LayerStepOutput, ReferenceLayerExecutor,
 };
-pub use pk_manifest::{
-    render_pk_markdown_summary, CompetitivePkManifest, HardwareSpec, PkCommand, PkManifestId,
-    PkMetricKind, PkMetricValue, PkModelId, PkPromptSetId, PkQuantizationId, PkResultRecord,
-    PkRunSpec, PkRuntimeKind, PkSpeculationConfig,
-};
+
 pub use profiler::{KernelProfiler, Profiler, TimedRegion};
 pub use program::GenerationProgram;
-pub use reference_compare::{
-    compare_reference_observation, ReferenceComparisonReport, ReferenceMismatch,
-    ReferenceObservation,
-};
-pub use reference_manifest::{
-    GoldenPrompt, PromptId, ReferenceArtifact, ReferenceCommand, ReferenceCommandManifest,
-    ReferenceEngineKind, ReferenceManifestId, ReferenceTopKLogit,
-};
+
+pub use reference_graph_backend::{ReferenceGraphBackend, ReferenceGraphExecutor};
+
 pub use routed_moe::{
     execute_routed_moe_reference, execute_routed_moe_reference_with_handles,
-    execute_routed_moe_with_source_router_reference,
-    execute_routed_moe_with_source_router_reference_with_handles, RoutedMoeStepOutput,
+    execute_routed_moe_with_artifact_router_reference,
+    execute_routed_moe_with_artifact_router_reference_with_handles, RoutedMoeStepOutput,
 };
 pub use runner::{unsupported_runtime_message, ModelInfo, ModelRunner, RuntimeRunner};
 pub use sampler::{Logprobs, Sampler, SamplingConfig};
@@ -145,20 +164,26 @@ pub fn argmax(logits: &[f32]) -> u32 {
         )
         .0 as u32
 }
+pub use artifact_binding::{
+    bind_attention_from_artifact_group, bind_attention_from_hf,
+    bind_hyper_connection_from_artifact_group, bind_hyper_connection_from_hf,
+    bind_hyper_connection_head_from_artifact_group, bind_hyper_connection_head_from_hf,
+    bind_layer_norms_from_artifact_group, bind_router_from_artifact_group, bind_router_from_hf,
+    bind_shared_swiglu_ffn_from_artifact_group, bind_shared_swiglu_ffn_from_hf,
+    AttentionArtifactPayload, LayerNormArtifactPayload, RouterArtifactPayload,
+};
+pub use artifact_linear::{ArtifactLinearFormat, ArtifactLinearPayload};
+pub use artifact_tensor::{
+    ArtifactDType, ArtifactTensorPayload, ArtifactTensorReader, ArtifactTensorSlice,
+};
 pub use scheduler::{BatchedScheduler, PreemptionPolicy, Scheduler};
 pub use session::{GenerateRequest, RequestId, SequenceState, SequenceStatus, SessionId};
-pub use source_binding::{
-    bind_attention_from_hf, bind_hyper_connection_from_hf, bind_hyper_connection_head_from_hf,
-    bind_router_from_hf, bind_shared_swiglu_ffn_from_hf, AttentionSourcePayload,
-    RouterSourcePayload,
-};
-pub use source_linear::{SourceLinearFormat, SourceLinearPayload};
-pub use source_tensor::{SourceDType, SourceTensorPayload, SourceTensorReader, SourceTensorSlice};
+pub use shape_registry::TransformerShapeRegistry;
 pub use speculation::{
     run_speculative_step, DraftModel, SpeculationMetrics, SpeculativeDecodingPolicy,
     SpeculativeStepOutput, TargetModel,
 };
-pub use stats::{GenerateStats, TokenDebug, TokenDebugEntry};
+pub use stats::GenerateStats;
 pub use token_mask::{JsonConstraint, MaxLengthConstraint, SamplerMask, TokenConstraint};
 pub use tokenizer::TokenizerHandle;
 pub use transformer_plan::{

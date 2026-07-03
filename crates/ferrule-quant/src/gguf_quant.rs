@@ -92,7 +92,7 @@ impl<'a> Q4KBlock<'a> {
 }
 
 pub fn dequantize_q4_k_row(bytes: &[u8], row_values: usize) -> GgufQuantResult<Vec<f32>> {
-    if row_values == 0 || row_values % QK_K != 0 {
+    if row_values == 0 || !row_values.is_multiple_of(QK_K) {
         return Err(GgufQuantError::InvalidRowSize {
             quant: GgufQuantType::Q4K,
             row_values,

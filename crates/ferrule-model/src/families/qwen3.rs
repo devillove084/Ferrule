@@ -6,6 +6,7 @@
 //! HF tensor naming: model.layers.{i}.self_attn.{q,k,v,o}_proj.weight
 //!                  model.layers.{i}.mlp.{gate,up,down}_proj.weight
 
+use crate::families::{common, DenseLayerTensorRef};
 use crate::tensor_policy::TensorClass;
 
 /// Classify a HuggingFace safetensors tensor name.
@@ -22,11 +23,8 @@ pub fn classify_hf_tensor(name: &str) -> TensorClass {
     if name.contains("self_attn.o_proj") {
         return TensorClass::AttentionOutput;
     }
-    // Router: gate_proj in MoE models acts as router
-    if name.contains("mlp.gate.weight") || name.contains("mlp.gate_proj") {
-        return TensorClass::Router;
-    }
-    // Shared experts (MoE variant)
+    // Shared/routed experts must be checked before dense FFN projections because
+    // expert matrices use the same gate/up/down projection suffixes.
     if name.contains("shared_expert.gate_proj") {
         return TensorClass::SharedExpertGate;
     }
@@ -36,7 +34,6 @@ pub fn classify_hf_tensor(name: &str) -> TensorClass {
     if name.contains("shared_expert.down_proj") {
         return TensorClass::SharedExpertDown;
     }
-    // Routed experts (MoE variant)
     if name.contains("mlp.experts") && name.contains("gate_proj") {
         return TensorClass::RoutedExpertGate;
     }
@@ -45,6 +42,18 @@ pub fn classify_hf_tensor(name: &str) -> TensorClass {
     }
     if name.contains("mlp.experts") && name.contains("down_proj") {
         return TensorClass::RoutedExpertDown;
+    }
+    if name.contains("mlp.gate.weight") {
+        return TensorClass::Router;
+    }
+    if name.contains("mlp.gate_proj") {
+        return TensorClass::DenseMlpGate;
+    }
+    if name.contains("mlp.up_proj") {
+        return TensorClass::DenseMlpUp;
+    }
+    if name.contains("mlp.down_proj") {
+        return TensorClass::DenseMlpDown;
     }
     // Embedding / output
     if name.contains("embed_tokens") {
@@ -60,14 +69,14 @@ pub fn classify_hf_tensor(name: &str) -> TensorClass {
     if name.contains("input_layernorm") || name.contains("post_attention_layernorm") {
         return TensorClass::LayerNorm;
     }
-    // Dense FFN projections (up/down) — no specific TensorClass variant yet
-    if name.contains("mlp.up_proj") || name.contains("mlp.down_proj") {
-        return TensorClass::Auxiliary;
-    }
     TensorClass::Unknown
 }
 
 /// Classify a GGUF tensor name (llama.cpp naming convention).
+pub fn parse_hf_dense_layer_tensor(name: &str) -> Option<DenseLayerTensorRef> {
+    common::parse_hf_dense_layer_tensor(name)
+}
+
 pub fn classify_gguf_tensor(name: &str) -> TensorClass {
     let lower = name.to_lowercase();
     if lower.contains("attn_q") {
@@ -78,8 +87,6 @@ pub fn classify_gguf_tensor(name: &str) -> TensorClass {
         TensorClass::AttentionValue
     } else if lower.contains("attn_output") {
         TensorClass::AttentionOutput
-    } else if lower.contains("ffn_gate") {
-        TensorClass::Router
     } else if lower.contains("ffn_gate_exps") {
         TensorClass::RoutedExpertGate
     } else if lower.contains("ffn_up_exps") {
@@ -92,8 +99,12 @@ pub fn classify_gguf_tensor(name: &str) -> TensorClass {
         TensorClass::SharedExpertUp
     } else if lower.contains("ffn_down_shexp") {
         TensorClass::SharedExpertDown
-    } else if lower.contains("ffn_up") || lower.contains("ffn_down") {
-        TensorClass::Auxiliary
+    } else if lower.contains("ffn_gate") {
+        TensorClass::DenseMlpGate
+    } else if lower.contains("ffn_up") {
+        TensorClass::DenseMlpUp
+    } else if lower.contains("ffn_down") {
+        TensorClass::DenseMlpDown
     } else if lower.contains("attention_norm") || lower.contains("ffn_norm") {
         TensorClass::LayerNorm
     } else if lower.contains("output_norm") {

@@ -1,7 +1,7 @@
-//! Generic per-layer source binding and reference execution.
+//! Generic per-layer artifact binding and reference execution.
 //!
-//! This is the first executable vertical slice for source-bound HC/MLA/MoE layers.
-//! It keeps concrete source tensor names in `ferrule-model` bindings: runtime
+//! This is the first executable vertical slice for artifact-bound HC/MLA/MoE layers.
+//! It keeps concrete artifact tensor names in `ferrule-model` bindings: runtime
 //! consumes semantic payloads only (attention linears, HC weights, router/shared
 //! FFN payloads, and expert streaming handles). The reference executor is
 //! deliberately scalar and correctness-oriented; CUDA backends can replace
@@ -13,42 +13,181 @@ use ferrule_core::{Error, Result};
 use ferrule_model::families::HyperConnectionStage;
 use ferrule_model::{
     HfAttentionTensorInfo, HfHyperConnectionTensorInfo, HfRouterTensorInfo,
-    HfSharedExpertTensorInfo,
+    HfSharedExpertTensorInfo, RouterKind,
 };
 
+use crate::artifact_binding::{
+    bind_attention_from_artifact_group, bind_attention_from_hf,
+    bind_hyper_connection_from_artifact_group, bind_hyper_connection_from_hf,
+    bind_layer_norms_from_artifact_group, bind_router_from_artifact_group, bind_router_from_hf,
+    bind_shared_swiglu_ffn_from_artifact_group, bind_shared_swiglu_ffn_from_hf,
+    AttentionArtifactPayload, RouterArtifactPayload,
+};
+use crate::artifact_tensor::ArtifactTensorReader;
 use crate::attention_backend::{
     sliding_window_topk_indices, sparse_attention_reference, SparseAttentionSpec,
 };
 use crate::expert_executor::CpuReferenceExpertExecutor;
 use crate::expert_handle::CpuExpertHandleStore;
 use crate::expert_routing::ExpertRouterPolicy;
-use crate::expert_streaming::{ExpertStreamingPlanner, ExpertStreamingReader};
+use crate::expert_streaming::{
+    ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader,
+};
 use crate::ffn::SwiGluFfnPayload;
+use crate::graph_layer_binding::GraphLayerObjects;
 use crate::hyper_connection::{
     hc_post_reference, hc_pre_reference, HyperConnectionConfig, HyperConnectionWeights,
 };
 use crate::routed_moe::{
-    execute_routed_moe_with_source_router_reference_with_handles, RoutedMoeStepOutput,
+    execute_routed_moe_with_artifact_router_reference_with_handles, RoutedMoeStepOutput,
 };
-use crate::source_binding::{
-    bind_attention_from_hf, bind_hyper_connection_from_hf, bind_router_from_hf,
-    bind_shared_swiglu_ffn_from_hf, AttentionSourcePayload, RouterSourcePayload,
-};
-use crate::source_tensor::SourceTensorReader;
+use crate::transformer_plan::{FeedForwardStepPlan, TransformerLayerPlan};
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct LayerSourceBinding {
+pub struct GraphLayerBindingOptions {
+    pub hc_eps: f32,
+    pub norm_eps: f32,
+    pub hc_sinkhorn_iters: usize,
+    pub swiglu_limit: f32,
+    pub route_scale: f32,
+    pub attention_topk: Option<usize>,
+    pub expert_policy: ExpertStreamingPolicy,
+}
+
+impl Default for GraphLayerBindingOptions {
+    fn default() -> Self {
+        Self {
+            hc_eps: 1e-6,
+            norm_eps: 1e-6,
+            hc_sinkhorn_iters: 4,
+            swiglu_limit: 0.0,
+            route_scale: 1.0,
+            attention_topk: None,
+            expert_policy: ExpertStreamingPolicy::quality_first(1),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerArtifactBinding {
     pub layer: usize,
-    pub attention: AttentionSourcePayload,
+    pub attention: AttentionArtifactPayload,
+    pub attention_norm: Option<Vec<f32>>,
+    pub feed_forward_norm: Option<Vec<f32>>,
     pub hc_attention: HyperConnectionWeights,
     pub hc_feed_forward: HyperConnectionWeights,
-    pub router: RouterSourcePayload,
+    pub router: RouterArtifactPayload,
     pub shared_ffn: Option<SwiGluFfnPayload>,
     pub router_policy: ExpertRouterPolicy,
     pub attention_spec: SparseAttentionSpec,
 }
 
-impl LayerSourceBinding {
+impl LayerArtifactBinding {
+    pub fn inferred_hc_config(
+        &self,
+        eps: f32,
+        norm_eps: f32,
+        sinkhorn_iters: usize,
+    ) -> Result<HyperConnectionConfig> {
+        let mix_hc = self.hc_attention.base.len();
+        let hc_mult = infer_hc_mult_from_mix_hc(mix_hc).ok_or_else(|| {
+            Error::Model(format!(
+                "layer {} cannot infer HC multiplier from HC mix length {mix_hc}",
+                self.layer
+            ))
+        })?;
+        Ok(HyperConnectionConfig {
+            hc_mult,
+            hidden_size: self.attention.query_a.format.in_features(),
+            sinkhorn_iters,
+            eps,
+            norm_eps,
+        })
+    }
+
+    pub fn bind_from_graph_objects(
+        objects: &GraphLayerObjects<'_>,
+        layer_plan: &TransformerLayerPlan,
+        reader: &ArtifactTensorReader,
+        options: GraphLayerBindingOptions,
+    ) -> Result<Self> {
+        if objects.layer != layer_plan.index {
+            return Err(Error::Model(format!(
+                "graph layer object mismatch: objects layer={} plan layer={}",
+                objects.layer, layer_plan.index
+            )));
+        }
+        let attention = bind_attention_from_artifact_group(objects.attention, reader)?;
+        let layer_norms = objects
+            .layer_norms
+            .map(|group| bind_layer_norms_from_artifact_group(group, reader))
+            .transpose()?;
+        let hc_attention_group = objects.hc_attention.ok_or_else(|| {
+            Error::Model(format!(
+                "layer {} graph objects are missing HC attention artifacts",
+                objects.layer
+            ))
+        })?;
+        let hc_mult = infer_hc_mult(hc_attention_group)?;
+        let hidden_size = attention.query_a.format.in_features();
+        let hc_config = HyperConnectionConfig {
+            hc_mult,
+            hidden_size,
+            sinkhorn_iters: options.hc_sinkhorn_iters,
+            eps: options.hc_eps,
+            norm_eps: options.norm_eps,
+        };
+        let hc_attention =
+            bind_hyper_connection_from_artifact_group(hc_attention_group, reader, hc_config)?;
+        let hc_feed_forward = bind_hyper_connection_from_artifact_group(
+            objects.hc_feed_forward.ok_or_else(|| {
+                Error::Model(format!(
+                    "layer {} graph objects are missing HC feed-forward artifacts",
+                    objects.layer
+                ))
+            })?,
+            reader,
+            hc_config,
+        )?;
+        let router = bind_router_from_artifact_group(
+            objects.router.ok_or_else(|| {
+                Error::Model(format!(
+                    "layer {} graph objects are missing router artifacts",
+                    objects.layer
+                ))
+            })?,
+            reader,
+        )?;
+        let shared_ffn = objects
+            .shared_expert
+            .map(|group| {
+                bind_shared_swiglu_ffn_from_artifact_group(group, reader, options.swiglu_limit)
+            })
+            .transpose()?;
+        let attention_spec = infer_attention_spec(layer_plan, &attention, options.attention_topk)?;
+        attention_spec.validate()?;
+        Ok(Self {
+            layer: objects.layer,
+            attention,
+            attention_norm: layer_norms
+                .as_ref()
+                .and_then(|norms| norms.attention_norm.clone()),
+            feed_forward_norm: layer_norms
+                .as_ref()
+                .and_then(|norms| norms.feed_forward_norm.clone()),
+            hc_attention,
+            hc_feed_forward,
+            router_policy: router_policy_from_plan(
+                &layer_plan.feed_forward,
+                &router,
+                options.route_scale,
+            ),
+            router,
+            shared_ffn,
+            attention_spec,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn bind_from_hf(
         model_dir: &Path,
@@ -57,7 +196,7 @@ impl LayerSourceBinding {
         hyper_connection_tensors: &[HfHyperConnectionTensorInfo],
         router_tensors: &[HfRouterTensorInfo],
         shared_expert_tensors: &[HfSharedExpertTensorInfo],
-        reader: &SourceTensorReader,
+        reader: &ArtifactTensorReader,
         hc_config: HyperConnectionConfig,
         swiglu_limit: f32,
         router_policy: ExpertRouterPolicy,
@@ -99,6 +238,8 @@ impl LayerSourceBinding {
         Ok(Self {
             layer,
             attention,
+            attention_norm: None,
+            feed_forward_norm: None,
             hc_attention,
             hc_feed_forward,
             router,
@@ -110,20 +251,20 @@ impl LayerSourceBinding {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn bind_layer_source_from_hf(
+pub fn bind_layer_artifact_from_hf(
     model_dir: &Path,
     layer: usize,
     attention_tensors: &[HfAttentionTensorInfo],
     hyper_connection_tensors: &[HfHyperConnectionTensorInfo],
     router_tensors: &[HfRouterTensorInfo],
     shared_expert_tensors: &[HfSharedExpertTensorInfo],
-    reader: &SourceTensorReader,
+    reader: &ArtifactTensorReader,
     hc_config: HyperConnectionConfig,
     swiglu_limit: f32,
     router_policy: ExpertRouterPolicy,
     attention_spec: SparseAttentionSpec,
-) -> Result<LayerSourceBinding> {
-    LayerSourceBinding::bind_from_hf(
+) -> Result<LayerArtifactBinding> {
+    LayerArtifactBinding::bind_from_hf(
         model_dir,
         layer,
         attention_tensors,
@@ -136,6 +277,117 @@ pub fn bind_layer_source_from_hf(
         router_policy,
         attention_spec,
     )
+}
+
+pub fn bind_layer_artifact_from_graph_objects(
+    objects: &GraphLayerObjects<'_>,
+    layer_plan: &TransformerLayerPlan,
+    reader: &ArtifactTensorReader,
+    options: GraphLayerBindingOptions,
+) -> Result<LayerArtifactBinding> {
+    LayerArtifactBinding::bind_from_graph_objects(objects, layer_plan, reader, options)
+}
+
+pub fn new_layer_execution_state_from_graph_objects(
+    objects: &GraphLayerObjects<'_>,
+    binding: &LayerArtifactBinding,
+    policy: ExpertStreamingPolicy,
+) -> Result<LayerExecutionState> {
+    let mut planner = ExpertStreamingPlanner::new(policy);
+    if let Some(registry) = objects.expert_registry {
+        for (expert, load_source) in &registry.experts {
+            planner.register_load_source(*expert, load_source.clone());
+        }
+    }
+    Ok(LayerExecutionState::new(
+        binding.attention_spec.head_dim,
+        planner,
+    ))
+}
+
+fn infer_hc_mult(group: &crate::backend_object_store::ArtifactObjectGroup) -> Result<usize> {
+    let mix_hc = group
+        .tensors
+        .iter()
+        .filter(|tensor| tensor.shape.len() == 1)
+        .filter_map(|tensor| tensor.shape.first().copied())
+        .max()
+        .ok_or_else(|| {
+            Error::Model(format!(
+                "cannot infer HC multiplier from artifact group {} layer={:?}",
+                group.kind.as_str(),
+                group.layer
+            ))
+        })?;
+    infer_hc_mult_from_mix_hc(mix_hc).ok_or_else(|| {
+        Error::Model(format!(
+            "invalid HC mix length {mix_hc} in artifact group {} layer={:?}",
+            group.kind.as_str(),
+            group.layer
+        ))
+    })
+}
+
+fn infer_hc_mult_from_mix_hc(mix_hc: usize) -> Option<usize> {
+    (1..=mix_hc).find(|hc_mult| (hc_mult + 2) * hc_mult == mix_hc)
+}
+
+fn infer_attention_spec(
+    layer_plan: &TransformerLayerPlan,
+    attention: &AttentionArtifactPayload,
+    topk_override: Option<usize>,
+) -> Result<SparseAttentionSpec> {
+    let heads = layer_plan
+        .attention
+        .num_heads
+        .or(Some(attention.attention_sink.len()))
+        .filter(|value| *value > 0)
+        .ok_or_else(|| {
+            Error::Model(format!(
+                "layer {} missing attention heads",
+                layer_plan.index
+            ))
+        })?;
+    let head_dim = layer_plan
+        .attention
+        .head_dim
+        .or_else(|| attention.key_value_norm.len().checked_div(1))
+        .filter(|value| *value > 0)
+        .ok_or_else(|| {
+            Error::Model(format!(
+                "layer {} missing attention head_dim",
+                layer_plan.index
+            ))
+        })?;
+    let inferred_topk = layer_plan
+        .attention
+        .window_size
+        .or(layer_plan.attention.index_topk)
+        .unwrap_or_else(|| attention.attention_sink.len().max(1));
+    Ok(SparseAttentionSpec {
+        heads,
+        head_dim,
+        topk: topk_override.unwrap_or(inferred_topk),
+        softmax_scale: (head_dim as f32).powf(-0.5),
+        has_attention_sink: !attention.attention_sink.is_empty(),
+    })
+}
+
+fn router_policy_from_plan(
+    plan: &FeedForwardStepPlan,
+    router: &RouterArtifactPayload,
+    route_scale: f32,
+) -> ExpertRouterPolicy {
+    let top_k = plan
+        .num_experts_per_tok
+        .or_else(|| (router.hash_cols > 0).then_some(router.hash_cols))
+        .unwrap_or(1)
+        .max(1);
+    if matches!(&plan.router, RouterKind::HashAssistedTopK) {
+        ExpertRouterPolicy::sqrt_softplus_hash(top_k, route_scale)
+    } else {
+        ExpertRouterPolicy::sqrt_softplus_score_topk(top_k, route_scale)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -232,7 +484,7 @@ impl ReferenceLayerExecutor {
 
     pub fn execute_decode_step(
         &self,
-        binding: &LayerSourceBinding,
+        binding: &LayerArtifactBinding,
         state: &mut LayerExecutionState,
         hc_state: &[f32],
         token_id: u32,
@@ -248,10 +500,16 @@ impl ReferenceLayerExecutor {
         }
 
         let attention_pre = hc_pre_reference(hc_state, 1, self.hc_config, &binding.hc_attention)?;
+        let attention_input = apply_optional_norm(
+            &attention_pre.hidden,
+            binding.attention_norm.as_deref(),
+            self.hc_config.norm_eps,
+            "attention_norm",
+        )?;
         let attention_hidden = execute_attention_decode_reference(
             &binding.attention,
             &mut state.kv,
-            &attention_pre.hidden,
+            &attention_input,
             binding.attention_spec,
         )?;
         let after_attention = hc_post_reference(
@@ -267,9 +525,15 @@ impl ReferenceLayerExecutor {
             self.hc_config,
             &binding.hc_feed_forward,
         )?;
-        let moe = execute_routed_moe_with_source_router_reference_with_handles(
-            binding.layer,
+        let ffn_input = apply_optional_norm(
             &ffn_pre.hidden,
+            binding.feed_forward_norm.as_deref(),
+            self.hc_config.norm_eps,
+            "feed_forward_norm",
+        )?;
+        let moe = execute_routed_moe_with_artifact_router_reference_with_handles(
+            binding.layer,
+            &ffn_input,
             token_id,
             &binding.router,
             predicted_experts,
@@ -297,7 +561,7 @@ impl ReferenceLayerExecutor {
 }
 
 fn execute_attention_decode_reference(
-    attention: &AttentionSourcePayload,
+    attention: &AttentionArtifactPayload,
     kv: &mut LayerKvState,
     input: &[f32],
     spec: SparseAttentionSpec,
@@ -342,6 +606,18 @@ fn execute_attention_decode_reference(
     attention.output_b.reference_matvec(&projected)
 }
 
+fn apply_optional_norm(
+    input: &[f32],
+    weight: Option<&[f32]>,
+    eps: f32,
+    label: &str,
+) -> Result<Vec<f32>> {
+    match weight {
+        Some(weight) => rms_norm_with_weight(input, weight, eps, label),
+        None => Ok(input.to_vec()),
+    }
+}
+
 fn rms_norm_with_weight(input: &[f32], weight: &[f32], eps: f32, label: &str) -> Result<Vec<f32>> {
     if input.len() != weight.len() {
         return Err(Error::Model(format!(
@@ -371,13 +647,13 @@ mod tests {
     use ferrule_model::TensorRole;
 
     use super::*;
+    use crate::artifact_linear::ArtifactLinearPayload;
+    use crate::artifact_tensor::{ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice};
     use crate::expert_executor::CpuReferenceExpertExecutor;
     use crate::expert_streaming::{
-        ExpertId, ExpertMatrixKind, ExpertSource, ExpertStorageTier, ExpertStreamingPolicy,
+        ExpertId, ExpertLoadSource, ExpertMatrixKind, ExpertStorageTier, ExpertStreamingPolicy,
         ExpertTensorComponent, ExpertTensorKey, ExpertTensorPayload, ExpertTensorSlice,
     };
-    use crate::source_linear::SourceLinearPayload;
-    use crate::source_tensor::{SourceDType, SourceTensorPayload, SourceTensorSlice};
 
     #[test]
     fn generic_mla_layer_vertical_slice_runs_hc_attention_moe_shared_hc() {
@@ -394,7 +670,7 @@ mod tests {
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
             gpu_slots_per_layer: 1,
             prefetch_per_layer: 0,
-            preserve_source_quantization: true,
+            preserve_artifact_quantization: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
         });
@@ -446,13 +722,15 @@ mod tests {
         assert!(err.to_string().contains("KV value length mismatch"));
     }
 
-    fn tiny_layer_binding(config: HyperConnectionConfig) -> LayerSourceBinding {
-        LayerSourceBinding {
+    fn tiny_layer_binding(config: HyperConnectionConfig) -> LayerArtifactBinding {
+        LayerArtifactBinding {
             layer: 0,
             attention: tiny_attention_payload(),
+            attention_norm: Some(vec![1.0; 32]),
+            feed_forward_norm: Some(vec![1.0; 32]),
             hc_attention: zero_hc_weights(config),
             hc_feed_forward: zero_hc_weights(config),
-            router: RouterSourcePayload {
+            router: RouterArtifactPayload {
                 layer: 0,
                 weight: f32_linear(TensorRole::RouterLogits, "router", 1, 32, &vec![0.0; 32]),
                 bias: None,
@@ -472,8 +750,8 @@ mod tests {
         }
     }
 
-    fn tiny_attention_payload() -> AttentionSourcePayload {
-        AttentionSourcePayload {
+    fn tiny_attention_payload() -> AttentionArtifactPayload {
+        AttentionArtifactPayload {
             layer: 0,
             query_a: f32_linear(
                 TensorRole::AttentionLatentQueryA,
@@ -562,18 +840,18 @@ mod tests {
         out: usize,
         input: usize,
         values: &[f32],
-    ) -> SourceLinearPayload {
+    ) -> ArtifactLinearPayload {
         assert_eq!(values.len(), out * input);
-        SourceLinearPayload::from_weight_and_scale(
+        ArtifactLinearPayload::from_weight_and_scale(
             role,
-            SourceTensorPayload {
-                slice: SourceTensorSlice {
+            ArtifactTensorPayload {
+                slice: ArtifactTensorSlice {
                     name: format!("{name}.weight"),
                     role: TensorRole::Unknown,
                     path: PathBuf::from("synthetic.safetensors"),
                     offset: 0,
                     bytes: (values.len() * 4) as u64,
-                    dtype: SourceDType::F32,
+                    dtype: ArtifactDType::F32,
                     shape: vec![out, input],
                 },
                 bytes: values
@@ -625,7 +903,10 @@ mod tests {
                 slice
             })
             .collect();
-        planner.register_source(expert_id, ExpertSource::LocalTensorSet { tensors: slices });
+        planner.register_load_source(
+            expert_id,
+            ExpertLoadSource::LocalTensorSet { tensors: slices },
+        );
     }
 
     fn tiny_expert_tensors(

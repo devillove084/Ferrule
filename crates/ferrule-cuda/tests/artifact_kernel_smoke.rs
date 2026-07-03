@@ -1,4 +1,4 @@
-//! Source-format CUDA kernel smoke tests.
+//! Artifact-format CUDA kernel smoke tests.
 //!
 //! These tests skip on machines without CUDA. On CUDA machines, launch failures
 //! and deterministic output mismatches fail the test instead of only printing a
@@ -62,7 +62,7 @@ fn assert_close_slice(actual: &[f32], expected: &[f32], tolerance: f32, label: &
 }
 
 #[test]
-fn source_format_kernels_produce_expected_tiny_outputs() {
+fn artifact_format_kernels_produce_expected_tiny_outputs() {
     if !has_cuda() {
         eprintln!("SKIP: no CUDA");
         return;

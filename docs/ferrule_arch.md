@@ -163,7 +163,7 @@ The current qcache stores quantized per-layer projection and expert weights. The
 ```text
 QCacheManifest {
   model_id,
-  source_revision_or_hash,
+  input_revision_or_hash,
   tokenizer_hash,
   quant_type,
   layout_version,

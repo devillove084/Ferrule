@@ -7,11 +7,14 @@ This document is the canonical design note for Ferrule's graph-facing runtime ar
 The key decision is: **do not rename `ferrule-cuda` to `ferrule-graph`**.
 
 - `ferrule-graph` is the device-independent graph IR crate.
-- `ferrule-runtime` owns sessions, scheduling, source binding, semantic external binding, and graph-facing execution batches.
-- `ferrule-cuda` remains the CUDA backend, kernel, source-operator, WeightPack, and CUDA driver graph-capture crate.
+- `ferrule-runtime` owns sessions, scheduling, artifact binding, semantic external binding, graph programs, and graph-facing execution batches.
+- `ferrule-bench` owns benchmark/report schemas, graph/object summaries, reference manifests/comparison, smoke harnesses, and perplexity-style evaluation utilities.
+- `ferrule-cuda` remains the CUDA backend, kernel, artifact-operator, WeightPack, and CUDA driver graph-capture crate.
 - `ferrule-cuda::graph` refers to CUDA driver graph capture/replay, not Ferrule's compute graph IR.
 
 A future rename from `ferrule-cuda` to something like `ferrule-backend-cuda` may be reasonable, but the CUDA backend should not become the graph IR crate.
+
+A first implementation slice now exists: dense graph translation, generic semantic Transformer graph translation, graph validation, `BackendObjectStore`, `ReferenceGraphBackend`, and DSV4 local materialization through semantic artifact groups, stage norm groups, expert registries, and generic config-derived layer policies. The next design pressure is expanding coarse semantic `transformer_layer` nodes into fine-grained operator graph nodes without introducing model-family-specific runtime graph files.
 
 ## Goals
 
@@ -19,7 +22,7 @@ Ferrule should move from model-specific runners toward a reusable runtime archit
 
 1. Model families describe structure and semantic roles.
 2. Graph translation builds a device-independent program.
-3. Runtime state, weights, KV cache, source tensors, and resident experts are bound through external handles.
+3. Runtime state, weights, KV cache, artifact tensors/groups, expert registries, and resident experts are bound through external handles.
 4. Backends execute whole graphs, not public per-op trait methods.
 5. CUDA, CPU/reference, and future autograd paths share the same graph-facing contracts.
 
@@ -39,53 +42,38 @@ This is intended to make Ferrule easier to extend across model families and futu
 ```text
 +----------------------------------------------------------------------------------+
 |                                  Ferrule CLI                                      |
-|  commands, chat/server entrypoints, benchmarks, probes, local smoke tests         |
-+----------------------------------------+-----------------------------------------+
-                                         |
-                                         v
-+----------------------------------------------------------------------------------+
-|                              ferrule-runtime                                     |
-|                                                                                  |
-|  generation/chat/sampler/session/scheduler                                       |
-|  KV cache policies: contiguous, paged, prefix, radix                             |
-|  source binding: SourceTensorPayload, SourceLinearPayload, LayerSourceBinding     |
-|  reference anchors: attention, FFN, routing, MoE, HC                              |
-|                                                                                  |
-|  Graph-facing contracts:                                                         |
-|    - ExecutionBatch                                                              |
-|    - ExternalBindingPlan                                                         |
-|    - TransformerRuntimePlan                                                      |
-|    - future GraphProgram / GraphRunner                                           |
-+--------------------------+-------------------------------+-----------------------+
-                           |                               |
-                           v                               v
-+----------------------------------------+     +-----------------------------------+
-|              ferrule-model             |     |           ferrule-graph           |
-|                                        |     |                                   |
-|  ModelDescriptor                       |     |  ComputeGraph                    |
-|  TransformerSpec                       |     |  GraphTemplate                   |
-|  ModelSupportContract                  |     |  GraphNode { OpKey, attrs }      |
-|  ModelFamily                           |     |  ValueMeta / TensorShape         |
-|  TensorRole                            |     |  ExternalKey / ExternalHandles   |
-|  HF/GGUF tensor classification         |     |  GraphBackend::execute(...)      |
-+----------------------------------------+     +----------------+------------------+
-                                                                |
-                                                                v
+|  commands, chat/server entrypoints, probes, local smoke tests                     |
++-----------------------------+--------------------------+-----------------------------+
+                              |                          |
+                              v                          v
++-------------------------------------------+  +-------------------------------------------+
+|              ferrule-bench                |  |              ferrule-runtime              |
+|  benchmark JSON, graph/object summaries,  |  |  generation/chat/sampler/session/scheduler|
+|  reference manifests, comparison, eval    |  |  KV policies: contiguous/paged/prefix/radix|
++-------------------------------------------+  |  artifact binding and reference anchors   |
+                                               |  graph-facing contracts:                 |
+                                               |    - ExecutionBatch                      |
+                                               |    - ExternalBindingPlan                 |
+                                               |    - TransformerRuntimePlan              |
+                                               |    - GraphProgram / GraphRunner          |
+                                               +--------------------+----------------------+
+                                                                    |
+                                                                    v
++----------------------------------------+     +-------------------------------------------+
+|              ferrule-model             |     |              ferrule-graph                |
+|  ModelDescriptor                       |     |  ComputeGraph / GraphTemplate             |
+|  TransformerSpec                       |     |  GraphNode { OpKey, attrs }               |
+|  ModelSupportContract                  |     |  ValueMeta / TensorShape                  |
+|  ModelFamily / TensorRole              |     |  ExternalKey / ExternalHandles            |
+|  HF/GGUF tensor classification         |     |                                           |
++----------------------------------------+     +--------------------+----------------------+
+                                                                    |
+                                                                    v
 +----------------------------------------------------------------------------------+
 |                                Backend crates                                     |
-|                                                                                  |
-|  ferrule-cuda                                                                    |
-|    - CudaSourceOperatorContext                                                   |
-|    - CUDA kernels and cuda-oxide integration                                      |
-|    - WeightPack CUDA loading                                                     |
-|    - CUDA driver graph capture/replay                                             |
-|    - future CudaGraphBackend                                                     |
-|                                                                                  |
-|  future CPU/reference graph backend                                               |
-|    - correctness-first interpreter over graph nodes                               |
-|                                                                                  |
-|  future Autograd backend                                                          |
-|    - backward graph/tape built from dialect gradient registries                   |
+|  ferrule-cuda: CudaArtifactOperatorContext, kernels, WeightPack, CUDA graph       |
+|  future CPU/reference graph backend: correctness-first interpreter                |
+|  future Autograd backend: backward graph/tape from gradient registries            |
 +----------------------------------------------------------------------------------+
 ```
 
@@ -166,7 +154,7 @@ Ferrule should group operation semantics into dialects. The exact crate/module p
 +----------------------+-----------------------------------------------------------+
 | ferrule.tensor       | tensor views, layout, elementwise, reductions             |
 | ferrule.transformer  | decoder-layer semantics: norm, projection, attention, FFN |
-| ferrule.state        | KV cache, paged state, residency, source handles          |
+| ferrule.state        | KV cache, paged state, residency, artifact handles        |
 | ferrule.moe          | routing, expert selection, expert combine                 |
 | ferrule.custom       | experimental, fused, or backend-owned ops                 |
 +----------------------+-----------------------------------------------------------+
@@ -336,7 +324,7 @@ BackendObjectStore
     |
     +--> CUDA buffer
     +--> CPU tensor
-    +--> mmap source tensor
+    +--> mmap artifact tensor
     +--> WeightPack object
     +--> resident expert handle
     +--> KV block table / cache handle
@@ -396,7 +384,7 @@ Recommended first targets:
 
 1. Dense decoder graph generation, without rushing execution.
 2. CPU/reference graph executor for correctness.
-3. CUDA graph backend adapter using `CudaSourceOperatorContext` internally.
+3. CUDA graph backend adapter using `CudaArtifactOperatorContext` internally.
 4. Qwen3 dense execution once graph/batch/binding contracts are validated.
 5. MoE graph parity using OLMoE/Mixtral/Qwen-MoE style fragments.
 6. DeepSeekV4 migration only after MLA/HC/hash-routing dialect coverage is strong.
@@ -424,12 +412,12 @@ ComputeGraph
               |
               v
 +---------------------------+
-| CudaSourceOperatorContext |
+| CudaArtifactOperatorContext |
 | CUDA kernels / cuda-oxide |
 +---------------------------+
 ```
 
-This keeps `CudaSourceOperatorContext` valuable as the existing generic CUDA source operator library while preventing low-level kernel methods from becoming the public runtime abstraction.
+This keeps `CudaArtifactOperatorContext` valuable as the existing generic CUDA artifact operator library while preventing low-level kernel methods from becoming the public runtime abstraction.
 
 ## Relationship with current code
 
@@ -444,10 +432,11 @@ ferrule-model
 
 ferrule-runtime
   graph_runtime.rs                ExecutionBatch, ExternalBindingPlan
+  graph_layer_binding.rs          materialized externals -> layer object bundles
   transformer_plan.rs             semantic model plan -> runtime plan
-  source_tensor.rs                bounded source tensor payload/readers
-  source_linear.rs                source-format linear payload + CPU reference
-  source_binding.rs               semantic source binding
+  artifact_tensor.rs              bounded artifact tensor payload/readers
+  artifact_linear.rs              artifact-format linear payload + CPU reference
+  artifact_binding.rs             semantic artifact binding
   attention_backend.rs            sparse/reference attention anchors
   ffn.rs                          SwiGLU payload/reference pieces
   expert_routing.rs               routing policies
@@ -463,7 +452,7 @@ ferrule-graph
   ExternalKey / ExternalHandles   graph-facing external references
 
 ferrule-cuda
-  context.rs                      CudaSourceOperatorContext
+  context.rs                      CudaArtifactOperatorContext
   graph.rs                        CUDA driver graph capture/replay
   transformer/*                   current OLMoE CUDA executor pieces
   weightpack.rs                   WeightPack CUDA loading
@@ -482,7 +471,7 @@ The immediate goal is not simply to add another model name. The goal is to build
 | backend buffer separation     | ExternalKey + ExternalBindingPlan             |
 | paged KV direction            | KvHandle + ExternalBindingKind::KvState       |
 | continuous batching           | ExecutionBatch + Scheduler                    |
-| source/WeightPack loading     | ExternalBindingPlan + backend object store    |
+| artifact/WeightPack loading     | ExternalBindingPlan + backend object store    |
 | CUDA fusion/capture           | backend lowering + memory plan + CUDA capture |
 | model-family bring-up         | TransformerRuntimePlan + graph translator     |
 | future training/backprop      | graph IR + GradientRegistry / autograd pass   |
@@ -526,28 +515,36 @@ Phase 1: graph construction
   - Produce ExternalBindingPlan from semantic roles
   - Add shape validation registry
 
-Phase 2: CPU/reference graph executor
-  - Interpret graph nodes through reference registries
-  - Reuse existing runtime reference helpers
-  - Use this for graph/dialect/backend parity
+Phase 2: materialized external bridge
+  - Materialize graph externals into BackendObjectStore
+  - Aggregate layer-scoped ArtifactGroup / ExpertRegistry / KvState objects
+  - Build GraphLayerObjects / executable layer bundles without model-family graph APIs
 
-Phase 3: CUDA graph backend adapter
-  - Lower graph nodes internally to CudaSourceOperatorContext
+Phase 3: coarse semantic layer execution
+  - Lower coarse transformer_layer nodes into existing runtime components
+  - Reuse semantic artifact binding, stage norms, HC, attention, router, MoE, expert streaming, and KV helpers
+  - Carry generic attrs/policies for norm eps, HC eps/sinkhorn iters, RoPE/YaRN, compression/indexer metadata, grouped output metadata, SwiGLU limit, route scale, and hash-router layer count
+  - Prove tiny/synthetic layer execution, then local DSV4 layer execution when present
+
+Phase 4: fine-grained semantic op split
+  - Split transformer_layer after the coarse bridge executes
+  - Add generic MLA/HC/router/MoE/cache ops and shape inference
+  - Keep op names semantic, not model-family-specific
+
+Phase 5: CUDA graph backend adapter
+  - Lower graph nodes internally to CudaArtifactOperatorContext
   - Add scratch allocation and memory planning
   - Add pattern fusion
   - Add optional CUDA driver graph capture
 
-Phase 4: graph-backed RuntimeRunner
+Phase 6: graph-backed RuntimeRunner
   - Add RuntimeRunner::Graph(...)
-  - Use graph runner for new dense-family support first
-  - Keep OLMoE and DeepSeekV4 legacy paths until parity exists
+  - Keep OLMoE and DeepSeekV4 legacy paths until graph-backed parity exists
 
-Phase 5: MoE and DeepSeek migration
-  - Add routed/shared expert graph fragments
-  - Validate expert residency and streaming through ExternalBindingPlan
-  - Add MLA/HC/hash-routing dialect support before moving DeepSeekV4
-
-Phase 6: training/autograd
+Phase 7: serving, speculation, and training/autograd
+  - Add paged KV / scheduler integration
+  - Add DSpark-style speculation through generic Speculation bindings
+  - Add GradientRegistry
   - Add GradientRegistry
   - Generate backward graph or tape
   - Reuse backend execute boundary

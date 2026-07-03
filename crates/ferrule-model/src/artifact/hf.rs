@@ -57,9 +57,9 @@ impl HfSafetensorsArtifact {
             .collect()
     }
 
-    /// Official source artifact metadata for `deepseek-ai/DeepSeek-V4-Flash-DSpark`.
+    /// Official checkpoint artifact metadata for `deepseek-ai/DeepSeek-V4-Flash-DSpark`.
     ///
-    /// This is a source-of-truth checkpoint entry, not a Ferrule execution format.
+    /// This is a canonical checkpoint entry, not a Ferrule execution format.
     /// It should be converted into semantic tensor bindings and then into
     /// WeightPack/GGUF through an explicit conversion plan.
     pub fn deepseek_v4_flash_dspark_official() -> Self {

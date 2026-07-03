@@ -11,12 +11,15 @@ use ferrule_model::{
     RouterKind, SpeculationMode, TensorRole,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TransformerRuntimePlan {
     pub family: ModelFamily,
     pub architecture: Option<String>,
     pub hidden_size: Option<usize>,
     pub vocab_size: Option<usize>,
+    pub num_heads: Option<usize>,
+    pub num_kv_heads: Option<usize>,
+    pub head_dim: Option<usize>,
     pub prologue: RuntimePrologue,
     pub layers: Vec<TransformerLayerPlan>,
     pub epilogue: RuntimeEpilogue,
@@ -31,49 +34,88 @@ impl TransformerRuntimePlan {
         let prologue = RuntimePrologue {
             token_embedding: layout.token_embedding.clone(),
         };
+        let semantics = &contract.policies.semantics;
+        let norm_epsilon = semantics.norm_epsilon.unwrap_or(1e-6);
+        let hyper_connection_epsilon = semantics.hyper_connection_epsilon.unwrap_or(norm_epsilon);
+        let hyper_connection_sinkhorn_iters =
+            semantics.hyper_connection_sinkhorn_iters.unwrap_or(4);
         let layers = layout
             .layers
             .iter()
-            .map(|layer| TransformerLayerPlan {
-                index: layer.index,
-                pre_norm_roles: layer.norms.clone(),
-                attention: AttentionStepPlan {
-                    kind: layer.attention.kind.clone(),
-                    kv_shape: layer.attention.kv_shape.clone(),
-                    required_roles: layer.attention.required_roles.clone(),
-                    optional_roles: layer.attention.optional_roles.clone(),
-                    needs_sparse_indices: matches!(
-                        layer.attention.kv_shape,
-                        KvCacheShape::LatentOrCompressed
-                    ),
-                    needs_attention_sink: layer
-                        .attention
-                        .required_roles
-                        .iter()
-                        .chain(layer.attention.optional_roles.iter())
-                        .any(|role| matches!(role, TensorRole::AttentionSink))
-                        || matches!(layer.attention.kind, AttentionKind::MultiLatentAttention),
-                },
-                feed_forward: FeedForwardStepPlan {
-                    kind: layer.feed_forward.kind.clone(),
-                    router: layer.feed_forward.router.clone(),
-                    required_roles: layer.feed_forward.required_roles.clone(),
-                    optional_roles: layer.feed_forward.optional_roles.clone(),
-                    expert_residency: if matches!(
-                        layer.feed_forward.kind,
-                        FeedForwardKind::RoutedExperts | FeedForwardKind::RoutedAndSharedExperts
-                    ) && contract.policies.residency.streaming_allowed
-                    {
-                        ExpertResidencyMode::Streamable
-                    } else {
-                        ExpertResidencyMode::AllResident
+            .map(|layer| {
+                let router = layer_router_kind(
+                    layer.index,
+                    &layer.feed_forward.router,
+                    semantics.num_hash_layers,
+                );
+                TransformerLayerPlan {
+                    index: layer.index,
+                    pre_norm_roles: layer.norms.clone(),
+                    attention: AttentionStepPlan {
+                        kind: layer.attention.kind.clone(),
+                        kv_shape: layer.attention.kv_shape.clone(),
+                        num_heads: spec.num_heads,
+                        num_kv_heads: spec.num_kv_heads,
+                        head_dim: spec.head_dim,
+                        rope_theta: semantics.rope_theta,
+                        rope_head_dim: semantics.rope_head_dim,
+                        rope_factor: semantics.rope_factor,
+                        rope_original_max_position_embeddings: semantics
+                            .rope_original_max_position_embeddings,
+                        rope_beta_fast: semantics.rope_beta_fast,
+                        rope_beta_slow: semantics.rope_beta_slow,
+                        compress_rope_theta: semantics.compress_rope_theta,
+                        window_size: semantics.attention_window_size,
+                        index_topk: semantics.attention_index_topk,
+                        index_num_heads: semantics.attention_index_num_heads,
+                        index_head_dim: semantics.attention_index_head_dim,
+                        compress_ratio: semantics
+                            .attention_compress_ratios
+                            .get(layer.index)
+                            .copied(),
+                        required_roles: layer.attention.required_roles.clone(),
+                        optional_roles: layer.attention.optional_roles.clone(),
+                        needs_sparse_indices: matches!(
+                            layer.attention.kv_shape,
+                            KvCacheShape::LatentOrCompressed
+                        ),
+                        needs_attention_sink: layer
+                            .attention
+                            .required_roles
+                            .iter()
+                            .chain(layer.attention.optional_roles.iter())
+                            .any(|role| matches!(role, TensorRole::AttentionSink))
+                            || matches!(layer.attention.kind, AttentionKind::MultiLatentAttention),
                     },
-                    has_shared_experts: matches!(
-                        layer.feed_forward.kind,
-                        FeedForwardKind::RoutedAndSharedExperts
-                    ),
-                },
-                auxiliary_roles: layer.auxiliary_roles.clone(),
+                    feed_forward: FeedForwardStepPlan {
+                        kind: layer.feed_forward.kind.clone(),
+                        router,
+                        num_experts: spec.moe.num_experts,
+                        num_experts_per_tok: spec.moe.num_experts_per_tok,
+                        required_roles: layer.feed_forward.required_roles.clone(),
+                        optional_roles: layer.feed_forward.optional_roles.clone(),
+                        swiglu_limit: semantics.swiglu_limit,
+                        route_scale: semantics.route_scale,
+                        expert_residency: if matches!(
+                            layer.feed_forward.kind,
+                            FeedForwardKind::RoutedExperts
+                                | FeedForwardKind::RoutedAndSharedExperts
+                        ) && contract.policies.residency.streaming_allowed
+                        {
+                            ExpertResidencyMode::Streamable
+                        } else {
+                            ExpertResidencyMode::AllResident
+                        },
+                        has_shared_experts: matches!(
+                            layer.feed_forward.kind,
+                            FeedForwardKind::RoutedAndSharedExperts
+                        ),
+                    },
+                    auxiliary_roles: layer.auxiliary_roles.clone(),
+                    norm_epsilon,
+                    hyper_connection_epsilon,
+                    hyper_connection_sinkhorn_iters,
+                }
             })
             .collect();
         let epilogue = RuntimeEpilogue {
@@ -94,6 +136,9 @@ impl TransformerRuntimePlan {
             architecture: spec.architecture.clone(),
             hidden_size: spec.hidden_size,
             vocab_size: spec.vocab_size,
+            num_heads: spec.num_heads,
+            num_kv_heads: spec.num_kv_heads,
+            head_dim: spec.head_dim,
             prologue,
             layers,
             epilogue,
@@ -138,31 +183,53 @@ pub struct RuntimePrologue {
     pub token_embedding: TensorRole,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TransformerLayerPlan {
     pub index: usize,
     pub pre_norm_roles: Vec<TensorRole>,
     pub attention: AttentionStepPlan,
     pub feed_forward: FeedForwardStepPlan,
     pub auxiliary_roles: Vec<TensorRole>,
+    pub norm_epsilon: f32,
+    pub hyper_connection_epsilon: f32,
+    pub hyper_connection_sinkhorn_iters: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AttentionStepPlan {
     pub kind: AttentionKind,
     pub kv_shape: KvCacheShape,
+    pub num_heads: Option<usize>,
+    pub num_kv_heads: Option<usize>,
+    pub head_dim: Option<usize>,
+    pub rope_theta: Option<f32>,
+    pub rope_head_dim: Option<usize>,
+    pub rope_factor: Option<f32>,
+    pub rope_original_max_position_embeddings: Option<usize>,
+    pub rope_beta_fast: Option<usize>,
+    pub rope_beta_slow: Option<usize>,
+    pub compress_rope_theta: Option<f32>,
+    pub window_size: Option<usize>,
+    pub index_topk: Option<usize>,
+    pub index_num_heads: Option<usize>,
+    pub index_head_dim: Option<usize>,
+    pub compress_ratio: Option<usize>,
     pub required_roles: Vec<TensorRole>,
     pub optional_roles: Vec<TensorRole>,
     pub needs_sparse_indices: bool,
     pub needs_attention_sink: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FeedForwardStepPlan {
     pub kind: FeedForwardKind,
     pub router: RouterKind,
+    pub num_experts: Option<usize>,
+    pub num_experts_per_tok: Option<usize>,
     pub required_roles: Vec<TensorRole>,
     pub optional_roles: Vec<TensorRole>,
+    pub swiglu_limit: Option<f32>,
+    pub route_scale: Option<f32>,
     pub expert_residency: ExpertResidencyMode,
     pub has_shared_experts: bool,
 }
@@ -183,6 +250,20 @@ pub struct RuntimeEpilogue {
 pub enum RuntimeAttachment {
     MultiTokenPrediction { roles: Vec<TensorRole> },
     DraftModel,
+}
+
+fn layer_router_kind(
+    layer: usize,
+    base: &RouterKind,
+    num_hash_layers: Option<usize>,
+) -> RouterKind {
+    if matches!(base, RouterKind::HashAssistedTopK)
+        && num_hash_layers.is_some_and(|hash_layers| layer >= hash_layers)
+    {
+        RouterKind::DenseTopK
+    } else {
+        base.clone()
+    }
 }
 
 fn runtime_attachments(contract: &ModelSupportContract) -> Vec<RuntimeAttachment> {
@@ -229,6 +310,7 @@ mod tests {
                     has_shared_experts: false,
                     router: RouterKind::DenseTopK,
                 },
+                semantics: Default::default(),
                 tensor_count: None,
                 quantization: Vec::new(),
                 notes: Vec::new(),
@@ -274,6 +356,7 @@ mod tests {
                     has_shared_experts: true,
                     router: RouterKind::HashAssistedTopK,
                 },
+                semantics: Default::default(),
                 tensor_count: Some(72_317),
                 quantization: vec![QuantFormatCount {
                     format: "I8".into(),
@@ -330,6 +413,7 @@ mod tests {
                     has_shared_experts: true,
                     router: RouterKind::HashAssistedTopK,
                 },
+                semantics: Default::default(),
                 tensor_count: None,
                 quantization: Vec::new(),
                 notes: Vec::new(),

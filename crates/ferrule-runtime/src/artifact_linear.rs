@@ -1,6 +1,6 @@
-//! Generic source linear handles and CPU reference matvec.
+//! Generic artifact linear handles and CPU reference matvec.
 //!
-//! Source-bound model bring-up can exercise several formats: BF16/F32 metadata or
+//! Artifact-bound model bring-up can exercise several formats: BF16/F32 metadata or
 //! auxiliary tensors, FP8 E4M3 block-scaled linears, and FP4 packed routed experts.
 //! This module keeps those formats behind one typed linear payload so attention,
 //! router, shared expert, logits, and future CUDA dispatch all consume the same
@@ -9,13 +9,13 @@
 use ferrule_core::{Error, Result};
 use ferrule_model::TensorRole;
 
-use crate::source_format::{
+use crate::artifact_format::{
     dequantize_fp4_e2m1_with_e8m0_scales, dequantize_fp8_e4m3fn_with_e8m0_scales,
 };
-use crate::source_tensor::{SourceDType, SourceTensorPayload};
+use crate::artifact_tensor::{ArtifactDType, ArtifactTensorPayload};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SourceLinearFormat {
+pub enum ArtifactLinearFormat {
     F32 {
         out_features: usize,
         in_features: usize,
@@ -37,7 +37,7 @@ pub enum SourceLinearFormat {
     },
 }
 
-impl SourceLinearFormat {
+impl ArtifactLinearFormat {
     pub fn out_features(&self) -> usize {
         match self {
             Self::F32 { out_features, .. }
@@ -58,20 +58,20 @@ impl SourceLinearFormat {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceLinearPayload {
+pub struct ArtifactLinearPayload {
     pub role: TensorRole,
-    pub weight: SourceTensorPayload,
-    pub scale: Option<SourceTensorPayload>,
-    pub format: SourceLinearFormat,
+    pub weight: ArtifactTensorPayload,
+    pub scale: Option<ArtifactTensorPayload>,
+    pub format: ArtifactLinearFormat,
 }
 
-impl SourceLinearPayload {
+impl ArtifactLinearPayload {
     pub fn from_weight_and_scale(
         role: TensorRole,
-        weight: SourceTensorPayload,
-        scale: Option<SourceTensorPayload>,
+        weight: ArtifactTensorPayload,
+        scale: Option<ArtifactTensorPayload>,
     ) -> Result<Self> {
-        let format = infer_source_linear_format(&weight, scale.as_ref())?;
+        let format = infer_artifact_linear_format(&weight, scale.as_ref())?;
         Ok(Self {
             role,
             weight,
@@ -83,7 +83,7 @@ impl SourceLinearPayload {
     pub fn reference_matvec(&self, input: &[f32]) -> Result<Vec<f32>> {
         if input.len() != self.format.in_features() {
             return Err(Error::Model(format!(
-                "source linear {:?} input length mismatch: expected {}, got {}",
+                "artifact linear {:?} input length mismatch: expected {}, got {}",
                 self.role,
                 self.format.in_features(),
                 input.len()
@@ -100,15 +100,15 @@ impl SourceLinearPayload {
 
     pub fn reference_weights_f32(&self) -> Result<Vec<f32>> {
         match self.format {
-            SourceLinearFormat::F32 {
+            ArtifactLinearFormat::F32 {
                 out_features,
                 in_features,
             } => decode_f32_matrix(&self.weight, out_features, in_features),
-            SourceLinearFormat::Bf16 {
+            ArtifactLinearFormat::Bf16 {
                 out_features,
                 in_features,
             } => decode_bf16_matrix(&self.weight, out_features, in_features),
-            SourceLinearFormat::Fp8E4M3WithE8M0Scale {
+            ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
                 out_features,
                 in_features,
                 block_m,
@@ -116,7 +116,7 @@ impl SourceLinearPayload {
             } => {
                 let scale = self.scale.as_ref().ok_or_else(|| {
                     Error::Model(format!(
-                        "source linear {:?} FP8 weight is missing E8M0 scale tensor",
+                        "artifact linear {:?} FP8 weight is missing E8M0 scale tensor",
                         self.role
                     ))
                 })?;
@@ -129,14 +129,14 @@ impl SourceLinearPayload {
                     block_k,
                 )
             }
-            SourceLinearFormat::Fp4E2M1PackedWithE8M0Scale {
+            ArtifactLinearFormat::Fp4E2M1PackedWithE8M0Scale {
                 out_features,
                 in_features,
                 block_size,
             } => {
                 let scale = self.scale.as_ref().ok_or_else(|| {
                     Error::Model(format!(
-                        "source linear {:?} FP4 weight is missing E8M0 scale tensor",
+                        "artifact linear {:?} FP4 weight is missing E8M0 scale tensor",
                         self.role
                     ))
                 })?;
@@ -152,45 +152,45 @@ impl SourceLinearPayload {
     }
 }
 
-fn infer_source_linear_format(
-    weight: &SourceTensorPayload,
-    scale: Option<&SourceTensorPayload>,
-) -> Result<SourceLinearFormat> {
+fn infer_artifact_linear_format(
+    weight: &ArtifactTensorPayload,
+    scale: Option<&ArtifactTensorPayload>,
+) -> Result<ArtifactLinearFormat> {
     if weight.slice.shape.len() != 2 {
         return Err(Error::Model(format!(
-            "source linear '{}' expects 2D weight shape, got {:?}",
+            "artifact linear '{}' expects 2D weight shape, got {:?}",
             weight.slice.name, weight.slice.shape
         )));
     }
     let out = weight.slice.shape[0];
     let width = weight.slice.shape[1];
     match weight.slice.dtype {
-        SourceDType::F32 => {
+        ArtifactDType::F32 => {
             ensure_no_scale(weight, scale)?;
             ensure_byte_len(weight, out, width, 4)?;
-            Ok(SourceLinearFormat::F32 {
+            Ok(ArtifactLinearFormat::F32 {
                 out_features: out,
                 in_features: width,
             })
         }
-        SourceDType::Bf16 => {
+        ArtifactDType::Bf16 => {
             ensure_no_scale(weight, scale)?;
             ensure_byte_len(weight, out, width, 2)?;
-            Ok(SourceLinearFormat::Bf16 {
+            Ok(ArtifactLinearFormat::Bf16 {
                 out_features: out,
                 in_features: width,
             })
         }
-        SourceDType::F8E4M3 => {
+        ArtifactDType::F8E4M3 => {
             let scale = scale.ok_or_else(|| {
                 Error::Model(format!(
-                    "FP8 source linear '{}' requires E8M0 scale tensor",
+                    "FP8 artifact linear '{}' requires E8M0 scale tensor",
                     weight.slice.name
                 ))
             })?;
-            if scale.slice.dtype != SourceDType::F8E8M0 || scale.slice.shape.len() != 2 {
+            if scale.slice.dtype != ArtifactDType::F8E8M0 || scale.slice.shape.len() != 2 {
                 return Err(Error::Model(format!(
-                    "FP8 source linear '{}' expects 2D F8_E8M0 scale, got dtype={} shape={:?}",
+                    "FP8 artifact linear '{}' expects 2D F8_E8M0 scale, got dtype={} shape={:?}",
                     weight.slice.name,
                     scale.slice.dtype.as_str(),
                     scale.slice.shape
@@ -201,23 +201,23 @@ fn infer_source_linear_format(
                 infer_fp8_block(out, scale.slice.shape[0], 128, "out", &weight.slice.name)?;
             let block_k =
                 infer_fp8_block(width, scale.slice.shape[1], 128, "in", &weight.slice.name)?;
-            Ok(SourceLinearFormat::Fp8E4M3WithE8M0Scale {
+            Ok(ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
                 out_features: out,
                 in_features: width,
                 block_m,
                 block_k,
             })
         }
-        SourceDType::I8 => {
+        ArtifactDType::I8 => {
             let scale = scale.ok_or_else(|| {
                 Error::Model(format!(
-                    "I8 source linear '{}' requires a scale tensor to infer packed FP4",
+                    "I8 artifact linear '{}' requires a scale tensor to infer packed FP4",
                     weight.slice.name
                 ))
             })?;
-            if scale.slice.dtype != SourceDType::F8E8M0 || scale.slice.shape.len() != 2 {
+            if scale.slice.dtype != ArtifactDType::F8E8M0 || scale.slice.shape.len() != 2 {
                 return Err(Error::Model(format!(
-                    "I8/FP4 source linear '{}' expects 2D F8_E8M0 scale, got dtype={} shape={:?}",
+                    "I8/FP4 artifact linear '{}' expects 2D F8_E8M0 scale, got dtype={} shape={:?}",
                     weight.slice.name,
                     scale.slice.dtype.as_str(),
                     scale.slice.shape
@@ -226,26 +226,26 @@ fn infer_source_linear_format(
             ensure_byte_len(weight, out, width, 1)?;
             let in_features = width.checked_mul(2).ok_or_else(|| {
                 Error::Model(format!(
-                    "source linear '{}' FP4 logical input dimension overflow",
+                    "artifact linear '{}' FP4 logical input dimension overflow",
                     weight.slice.name
                 ))
             })?;
             let scale_cols = scale.slice.shape[1];
             if scale.slice.shape[0] != out || scale_cols == 0 || in_features % scale_cols != 0 {
                 return Err(Error::Model(format!(
-                    "I8/FP4 source linear '{}' scale shape {:?} is incompatible with weight shape {:?}",
+                    "I8/FP4 artifact linear '{}' scale shape {:?} is incompatible with weight shape {:?}",
                     weight.slice.name, scale.slice.shape, weight.slice.shape
                 )));
             }
             let block_size = in_features / scale_cols;
-            Ok(SourceLinearFormat::Fp4E2M1PackedWithE8M0Scale {
+            Ok(ArtifactLinearFormat::Fp4E2M1PackedWithE8M0Scale {
                 out_features: out,
                 in_features,
                 block_size,
             })
         }
         _ => Err(Error::Model(format!(
-            "source linear '{}' has unsupported dtype {}",
+            "artifact linear '{}' has unsupported dtype {}",
             weight.slice.name,
             weight.slice.dtype.as_str()
         ))),
@@ -253,12 +253,12 @@ fn infer_source_linear_format(
 }
 
 fn ensure_no_scale(
-    weight: &SourceTensorPayload,
-    scale: Option<&SourceTensorPayload>,
+    weight: &ArtifactTensorPayload,
+    scale: Option<&ArtifactTensorPayload>,
 ) -> Result<()> {
     if let Some(scale) = scale {
         return Err(Error::Model(format!(
-            "source linear '{}' has unexpected scale tensor '{}' for dtype {}",
+            "artifact linear '{}' has unexpected scale tensor '{}' for dtype {}",
             weight.slice.name,
             scale.slice.name,
             weight.slice.dtype.as_str()
@@ -268,7 +268,7 @@ fn ensure_no_scale(
 }
 
 fn ensure_byte_len(
-    tensor: &SourceTensorPayload,
+    tensor: &ArtifactTensorPayload,
     rows: usize,
     cols: usize,
     bytes_per_element: usize,
@@ -278,13 +278,13 @@ fn ensure_byte_len(
         .and_then(|elements| elements.checked_mul(bytes_per_element))
         .ok_or_else(|| {
             Error::Model(format!(
-                "source tensor '{}' size overflow",
+                "artifact tensor '{}' size overflow",
                 tensor.slice.name
             ))
         })?;
     if tensor.bytes.len() != expected || tensor.slice.bytes != expected as u64 {
         return Err(Error::Model(format!(
-            "source tensor '{}' byte length mismatch: expected {expected}, metadata={}, payload={}",
+            "artifact tensor '{}' byte length mismatch: expected {expected}, metadata={}, payload={}",
             tensor.slice.name,
             tensor.slice.bytes,
             tensor.bytes.len()
@@ -302,7 +302,7 @@ fn infer_fp8_block(
 ) -> Result<usize> {
     if scale_dim == 0 {
         return Err(Error::Model(format!(
-            "FP8 source linear '{name}' has zero scale {axis} dimension"
+            "FP8 artifact linear '{name}' has zero scale {axis} dimension"
         )));
     }
     if dim.div_ceil(preferred) == scale_dim {
@@ -313,12 +313,12 @@ fn infer_fp8_block(
         return Ok(block);
     }
     Err(Error::Model(format!(
-        "FP8 source linear '{name}' cannot infer {axis} block size from dim={dim}, scale_dim={scale_dim}"
+        "FP8 artifact linear '{name}' cannot infer {axis} block size from dim={dim}, scale_dim={scale_dim}"
     )))
 }
 
 fn decode_f32_matrix(
-    tensor: &SourceTensorPayload,
+    tensor: &ArtifactTensorPayload,
     out_features: usize,
     in_features: usize,
 ) -> Result<Vec<f32>> {
@@ -331,7 +331,7 @@ fn decode_f32_matrix(
 }
 
 fn decode_bf16_matrix(
-    tensor: &SourceTensorPayload,
+    tensor: &ArtifactTensorPayload,
     out_features: usize,
     in_features: usize,
 ) -> Result<Vec<f32>> {
@@ -364,15 +364,15 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::source_tensor::{SourceDType, SourceTensorSlice};
+    use crate::artifact_tensor::{ArtifactDType, ArtifactTensorSlice};
 
     #[test]
-    fn f32_source_linear_matvec() {
-        let linear = SourceLinearPayload::from_weight_and_scale(
+    fn f32_artifact_linear_matvec() {
+        let linear = ArtifactLinearPayload::from_weight_and_scale(
             TensorRole::AttentionOutput,
             payload(
                 "f32.weight",
-                SourceDType::F32,
+                ArtifactDType::F32,
                 vec![2, 3],
                 f32_bytes(&[1.0, 2.0, 3.0, -1.0, 0.5, 4.0]),
             ),
@@ -381,7 +381,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             linear.format,
-            SourceLinearFormat::F32 {
+            ArtifactLinearFormat::F32 {
                 out_features: 2,
                 in_features: 3,
             }
@@ -393,12 +393,12 @@ mod tests {
     }
 
     #[test]
-    fn bf16_source_linear_matvec() {
-        let linear = SourceLinearPayload::from_weight_and_scale(
+    fn bf16_artifact_linear_matvec() {
+        let linear = ArtifactLinearPayload::from_weight_and_scale(
             TensorRole::RouterLogits,
             payload(
                 "bf16.weight",
-                SourceDType::Bf16,
+                ArtifactDType::Bf16,
                 vec![1, 3],
                 bf16_bytes(&[1.0, -2.0, 0.5]),
             ),
@@ -412,18 +412,18 @@ mod tests {
     }
 
     #[test]
-    fn fp8_source_linear_matvec_uses_e8m0_scales() {
-        let linear = SourceLinearPayload::from_weight_and_scale(
+    fn fp8_artifact_linear_matvec_uses_e8m0_scales() {
+        let linear = ArtifactLinearPayload::from_weight_and_scale(
             TensorRole::AttentionQuery,
             payload(
                 "fp8.weight",
-                SourceDType::F8E4M3,
+                ArtifactDType::F8E4M3,
                 vec![2, 3],
                 vec![0x38, 0x40, 0xb8, 0x00, 0x38, 0x38],
             ),
             Some(payload(
                 "fp8.scale",
-                SourceDType::F8E8M0,
+                ArtifactDType::F8E8M0,
                 vec![2, 2],
                 vec![127, 128, 126, 127],
             )),
@@ -431,7 +431,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             linear.format,
-            SourceLinearFormat::Fp8E4M3WithE8M0Scale {
+            ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
                 out_features: 2,
                 in_features: 3,
                 block_m: 1,
@@ -445,15 +445,15 @@ mod tests {
     }
 
     #[test]
-    fn fp4_source_linear_matvec_uses_packed_layout() {
+    fn fp4_artifact_linear_matvec_uses_packed_layout() {
         let mut weight = vec![0u8; 16];
         weight[0] = 0x42; // row 0: 1.0, 2.0
-        let linear = SourceLinearPayload::from_weight_and_scale(
+        let linear = ArtifactLinearPayload::from_weight_and_scale(
             TensorRole::RoutedExpertGate,
-            payload("fp4.weight", SourceDType::I8, vec![1, 16], weight),
+            payload("fp4.weight", ArtifactDType::I8, vec![1, 16], weight),
             Some(payload(
                 "fp4.scale",
-                SourceDType::F8E8M0,
+                ArtifactDType::F8E8M0,
                 vec![1, 1],
                 vec![127],
             )),
@@ -461,7 +461,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             linear.format,
-            SourceLinearFormat::Fp4E2M1PackedWithE8M0Scale {
+            ArtifactLinearFormat::Fp4E2M1PackedWithE8M0Scale {
                 out_features: 1,
                 in_features: 32,
                 block_size: 32,
@@ -474,10 +474,10 @@ mod tests {
     }
 
     #[test]
-    fn fp8_source_linear_requires_scale_tensor() {
-        let err = SourceLinearPayload::from_weight_and_scale(
+    fn fp8_artifact_linear_requires_scale_tensor() {
+        let err = ArtifactLinearPayload::from_weight_and_scale(
             TensorRole::AttentionQuery,
-            payload("fp8.weight", SourceDType::F8E4M3, vec![1, 1], vec![0x38]),
+            payload("fp8.weight", ArtifactDType::F8E4M3, vec![1, 1], vec![0x38]),
             None,
         )
         .unwrap_err();
@@ -486,12 +486,12 @@ mod tests {
 
     fn payload(
         name: &str,
-        dtype: SourceDType,
+        dtype: ArtifactDType,
         shape: Vec<usize>,
         bytes: Vec<u8>,
-    ) -> SourceTensorPayload {
-        SourceTensorPayload {
-            slice: SourceTensorSlice {
+    ) -> ArtifactTensorPayload {
+        ArtifactTensorPayload {
+            slice: ArtifactTensorSlice {
                 name: name.into(),
                 role: TensorRole::Unknown,
                 path: PathBuf::from("synthetic.safetensors"),

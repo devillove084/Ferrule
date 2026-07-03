@@ -8,7 +8,7 @@ use ferrule_core::{Error, Result};
 use ferrule_quant::QuantType;
 
 use crate::kernels::kernels::LoadedModule;
-use crate::transformer::source_expert::{
+use crate::transformer::artifact_expert::{
     CudaPackedFp4Expert, CudaPackedFp4ExpertExecutor, CudaPackedFp4ExpertScratch,
     CudaPackedFp4Linear,
 };
@@ -92,10 +92,10 @@ pub fn cuda_probe() -> Result<()> {
     Ok(())
 }
 
-// ── Reusable source-format operator context ────────────────────────────
+// ── Reusable artifact-format operator context ────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CudaSourceLinearShape {
+pub enum CudaArtifactLinearShape {
     F32 {
         out_features: usize,
         in_features: usize,
@@ -116,7 +116,7 @@ pub enum CudaSourceLinearShape {
     },
 }
 
-impl CudaSourceLinearShape {
+impl CudaArtifactLinearShape {
     pub fn out_features(self) -> usize {
         match self {
             Self::F32 { out_features, .. }
@@ -143,18 +143,18 @@ impl CudaSourceLinearShape {
             } => {
                 if in_features == 0 || out_features == 0 {
                     return Err(Error::Internal(format!(
-                        "invalid CUDA F32 source linear shape: out={out_features} in={in_features}"
+                        "invalid CUDA F32 artifact linear shape: out={out_features} in={in_features}"
                     )));
                 }
                 let expected_weight = out_features
                     .checked_mul(in_features)
                     .and_then(|elements| elements.checked_mul(4))
                     .ok_or_else(|| {
-                        Error::Internal("CUDA F32 source weight size overflow".into())
+                        Error::Internal("CUDA F32 artifact weight size overflow".into())
                     })?;
                 if weight_len != expected_weight || scale_len != 0 {
                     return Err(Error::Internal(format!(
-                        "CUDA F32 source linear length mismatch: weight={weight_len} scale={scale_len}, expected weight={expected_weight} scale=0"
+                        "CUDA F32 artifact linear length mismatch: weight={weight_len} scale={scale_len}, expected weight={expected_weight} scale=0"
                     )));
                 }
             }
@@ -164,18 +164,18 @@ impl CudaSourceLinearShape {
             } => {
                 if in_features == 0 || out_features == 0 {
                     return Err(Error::Internal(format!(
-                        "invalid CUDA BF16 source linear shape: out={out_features} in={in_features}"
+                        "invalid CUDA BF16 artifact linear shape: out={out_features} in={in_features}"
                     )));
                 }
                 let expected_weight = out_features
                     .checked_mul(in_features)
                     .and_then(|elements| elements.checked_mul(2))
                     .ok_or_else(|| {
-                        Error::Internal("CUDA BF16 source weight size overflow".into())
+                        Error::Internal("CUDA BF16 artifact weight size overflow".into())
                     })?;
                 if weight_len != expected_weight || scale_len != 0 {
                     return Err(Error::Internal(format!(
-                        "CUDA BF16 source linear length mismatch: weight={weight_len} scale={scale_len}, expected weight={expected_weight} scale=0"
+                        "CUDA BF16 artifact linear length mismatch: weight={weight_len} scale={scale_len}, expected weight={expected_weight} scale=0"
                     )));
                 }
             }
@@ -187,19 +187,21 @@ impl CudaSourceLinearShape {
             } => {
                 if in_features == 0 || out_features == 0 || block_m == 0 || block_k == 0 {
                     return Err(Error::Internal(format!(
-                        "invalid CUDA FP8 source linear shape: out={out_features} in={in_features} block_m={block_m} block_k={block_k}"
+                        "invalid CUDA FP8 artifact linear shape: out={out_features} in={in_features} block_m={block_m} block_k={block_k}"
                     )));
                 }
                 let expected_weight = out_features.checked_mul(in_features).ok_or_else(|| {
-                    Error::Internal("CUDA FP8 source weight size overflow".into())
+                    Error::Internal("CUDA FP8 artifact weight size overflow".into())
                 })?;
                 let expected_scale = out_features
                     .div_ceil(block_m)
                     .checked_mul(in_features.div_ceil(block_k))
-                    .ok_or_else(|| Error::Internal("CUDA FP8 source scale size overflow".into()))?;
+                    .ok_or_else(|| {
+                        Error::Internal("CUDA FP8 artifact scale size overflow".into())
+                    })?;
                 if weight_len != expected_weight || scale_len != expected_scale {
                     return Err(Error::Internal(format!(
-                        "CUDA FP8 source linear length mismatch: weight={weight_len} scale={scale_len}, expected weight={expected_weight} scale={expected_scale}"
+                        "CUDA FP8 artifact linear length mismatch: weight={weight_len} scale={scale_len}, expected weight={expected_weight} scale={expected_scale}"
                     )));
                 }
             }
@@ -209,23 +211,24 @@ impl CudaSourceLinearShape {
             } => {
                 if in_features == 0
                     || out_features == 0
-                    || in_features % 32 != 0
-                    || in_features % 2 != 0
+                    || !in_features.is_multiple_of(32)
+                    || !in_features.is_multiple_of(2)
                 {
                     return Err(Error::Internal(format!(
-                        "invalid CUDA FP4 source linear shape: out={out_features} in={in_features}"
+                        "invalid CUDA FP4 artifact linear shape: out={out_features} in={in_features}"
                     )));
                 }
                 let expected_weight =
                     out_features.checked_mul(in_features / 2).ok_or_else(|| {
-                        Error::Internal("CUDA FP4 source weight size overflow".into())
+                        Error::Internal("CUDA FP4 artifact weight size overflow".into())
                     })?;
-                let expected_scale = out_features
-                    .checked_mul(in_features / 32)
-                    .ok_or_else(|| Error::Internal("CUDA FP4 source scale size overflow".into()))?;
+                let expected_scale =
+                    out_features.checked_mul(in_features / 32).ok_or_else(|| {
+                        Error::Internal("CUDA FP4 artifact scale size overflow".into())
+                    })?;
                 if weight_len != expected_weight || scale_len != expected_scale {
                     return Err(Error::Internal(format!(
-                        "CUDA FP4 source linear length mismatch: weight={weight_len} scale={scale_len}, expected weight={expected_weight} scale={expected_scale}"
+                        "CUDA FP4 artifact linear length mismatch: weight={weight_len} scale={scale_len}, expected weight={expected_weight} scale={expected_scale}"
                     )));
                 }
             }
@@ -234,31 +237,31 @@ impl CudaSourceLinearShape {
     }
 }
 
-pub struct CudaSourceLinearHandle {
-    shape: CudaSourceLinearShape,
+pub struct CudaArtifactLinearHandle {
+    shape: CudaArtifactLinearShape,
     weight: DeviceBuffer<u8>,
     scale: Option<DeviceBuffer<u8>>,
 }
 
-impl CudaSourceLinearHandle {
-    pub fn shape(&self) -> CudaSourceLinearShape {
+impl CudaArtifactLinearHandle {
+    pub fn shape(&self) -> CudaArtifactLinearShape {
         self.shape
     }
 }
 
-/// Reusable host-side context for generic source-format CUDA operators.
+/// Reusable host-side context for generic artifact-format CUDA operators.
 ///
 /// This follows cuda-oxide's preferred examples: create one `CudaContext`, load
 /// the embedded `#[cuda_module]` once, then reuse its default stream and typed
-/// launch methods. It is intentionally generic and knows only packed source
+/// launch methods. It is intentionally generic and knows only packed artifact
 /// formats plus explicit shapes — model-family semantics stay in runtime code.
-pub struct CudaSourceOperatorContext {
+pub struct CudaArtifactOperatorContext {
     _ctx: Arc<CudaContext>,
     module: LoadedModule,
     stream: Arc<CudaStream>,
 }
 
-impl CudaSourceOperatorContext {
+impl CudaArtifactOperatorContext {
     pub fn new() -> Result<Self> {
         let ctx = cu(CudaContext::new(0))?;
         cu(ctx.bind_to_thread())?;
@@ -271,14 +274,14 @@ impl CudaSourceOperatorContext {
         })
     }
 
-    pub fn upload_source_linear(
+    pub fn upload_artifact_linear(
         &self,
-        shape: CudaSourceLinearShape,
+        shape: CudaArtifactLinearShape,
         weight: &[u8],
         scale: &[u8],
-    ) -> Result<CudaSourceLinearHandle> {
+    ) -> Result<CudaArtifactLinearHandle> {
         shape.validate(weight.len(), scale.len())?;
-        Ok(CudaSourceLinearHandle {
+        Ok(CudaArtifactLinearHandle {
             shape,
             weight: cu(DeviceBuffer::from_host(&self.stream, weight))?,
             scale: if scale.is_empty() {
@@ -294,9 +297,9 @@ impl CudaSourceOperatorContext {
         weight: &[u8],
         out_features: usize,
         in_features: usize,
-    ) -> Result<CudaSourceLinearHandle> {
-        self.upload_source_linear(
-            CudaSourceLinearShape::F32 {
+    ) -> Result<CudaArtifactLinearHandle> {
+        self.upload_artifact_linear(
+            CudaArtifactLinearShape::F32 {
                 out_features,
                 in_features,
             },
@@ -310,9 +313,9 @@ impl CudaSourceOperatorContext {
         weight: &[u8],
         out_features: usize,
         in_features: usize,
-    ) -> Result<CudaSourceLinearHandle> {
-        self.upload_source_linear(
-            CudaSourceLinearShape::Bf16Bytes {
+    ) -> Result<CudaArtifactLinearHandle> {
+        self.upload_artifact_linear(
+            CudaArtifactLinearShape::Bf16Bytes {
                 out_features,
                 in_features,
             },
@@ -329,9 +332,9 @@ impl CudaSourceOperatorContext {
         in_features: usize,
         block_m: usize,
         block_k: usize,
-    ) -> Result<CudaSourceLinearHandle> {
-        self.upload_source_linear(
-            CudaSourceLinearShape::Fp8E4M3WithE8M0Scale {
+    ) -> Result<CudaArtifactLinearHandle> {
+        self.upload_artifact_linear(
+            CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
                 out_features,
                 in_features,
                 block_m,
@@ -348,9 +351,9 @@ impl CudaSourceOperatorContext {
         scale: &[u8],
         out_features: usize,
         in_features: usize,
-    ) -> Result<CudaSourceLinearHandle> {
-        self.upload_source_linear(
-            CudaSourceLinearShape::Fp4E2M1PackedWithE8M0Scale {
+    ) -> Result<CudaArtifactLinearHandle> {
+        self.upload_artifact_linear(
+            CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
                 out_features,
                 in_features,
             },
@@ -359,14 +362,14 @@ impl CudaSourceOperatorContext {
         )
     }
 
-    pub fn source_linear_matvec(
+    pub fn artifact_linear_matvec(
         &self,
-        handle: &CudaSourceLinearHandle,
+        handle: &CudaArtifactLinearHandle,
         input: &[f32],
     ) -> Result<Vec<f32>> {
         if input.len() != handle.shape.in_features() {
             return Err(Error::Internal(format!(
-                "CUDA source linear input length mismatch: expected {}, got {}",
+                "CUDA artifact linear input length mismatch: expected {}, got {}",
                 handle.shape.in_features(),
                 input.len()
             )));
@@ -376,13 +379,13 @@ impl CudaSourceOperatorContext {
             &self.stream,
             handle.shape.out_features(),
         ))?;
-        self.source_linear_matvec_device(handle, &xd, &mut yd)?;
+        self.artifact_linear_matvec_device(handle, &xd, &mut yd)?;
         cu(yd.to_host_vec(&self.stream))
     }
 
-    pub fn source_linear_topk(
+    pub fn artifact_linear_topk(
         &self,
-        handle: &CudaSourceLinearHandle,
+        handle: &CudaArtifactLinearHandle,
         input: &[f32],
         top_k: usize,
     ) -> Result<Vec<(u32, f32)>> {
@@ -391,12 +394,12 @@ impl CudaSourceOperatorContext {
         }
         if top_k > 40 {
             return Err(Error::Internal(format!(
-                "CUDA source linear top-k supports k<=40, got {top_k}"
+                "CUDA artifact linear top-k supports k<=40, got {top_k}"
             )));
         }
         if input.len() != handle.shape.in_features() {
             return Err(Error::Internal(format!(
-                "CUDA source linear top-k input length mismatch: expected {}, got {}",
+                "CUDA artifact linear top-k input length mismatch: expected {}, got {}",
                 handle.shape.in_features(),
                 input.len()
             )));
@@ -406,7 +409,7 @@ impl CudaSourceOperatorContext {
             &self.stream,
             handle.shape.out_features(),
         ))?;
-        self.source_linear_matvec_device(handle, &xd, &mut yd)?;
+        self.artifact_linear_matvec_device(handle, &xd, &mut yd)?;
         let mut idx = cu(DeviceBuffer::<f32>::zeroed(&self.stream, top_k))?;
         let mut val = cu(DeviceBuffer::<f32>::zeroed(&self.stream, top_k))?;
         cu(self.module.topk_vocab(
@@ -427,11 +430,11 @@ impl CudaSourceOperatorContext {
             .collect())
     }
 
-    pub fn source_swiglu_ffn_matvec(
+    pub fn artifact_swiglu_ffn_matvec(
         &self,
-        gate: &CudaSourceLinearHandle,
-        up: &CudaSourceLinearHandle,
-        down: &CudaSourceLinearHandle,
+        gate: &CudaArtifactLinearHandle,
+        up: &CudaArtifactLinearHandle,
+        down: &CudaArtifactLinearHandle,
         input: &[f32],
         output_scale: f32,
         swiglu_limit: f32,
@@ -469,8 +472,8 @@ impl CudaSourceOperatorContext {
             &self.stream,
             down.shape.out_features(),
         ))?;
-        self.source_linear_matvec_device(gate, &xd, &mut gated)?;
-        self.source_linear_matvec_device(up, &xd, &mut upd)?;
+        self.artifact_linear_matvec_device(gate, &xd, &mut gated)?;
+        self.artifact_linear_matvec_device(up, &xd, &mut upd)?;
         cu(self.module.swiglu_weighted_clamped(
             &self.stream,
             LaunchConfig::for_num_elems(gate.shape.out_features() as u32),
@@ -481,34 +484,34 @@ impl CudaSourceOperatorContext {
             output_scale,
             swiglu_limit,
         ))?;
-        self.source_linear_matvec_device(down, &hidden, &mut yd)?;
+        self.artifact_linear_matvec_device(down, &hidden, &mut yd)?;
         cu(yd.to_host_vec(&self.stream))
     }
 
-    pub fn source_fp4_swiglu_ffn_matvec(
+    pub fn artifact_fp4_swiglu_ffn_matvec(
         &self,
-        gate: &CudaSourceLinearHandle,
-        up: &CudaSourceLinearHandle,
-        down: &CudaSourceLinearHandle,
+        gate: &CudaArtifactLinearHandle,
+        up: &CudaArtifactLinearHandle,
+        down: &CudaArtifactLinearHandle,
         input: &[f32],
         route_weight: f32,
         swiglu_limit: f32,
     ) -> Result<Vec<f32>> {
-        let CudaSourceLinearShape::Fp4E2M1PackedWithE8M0Scale {
+        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
             out_features: gate_out,
             in_features: gate_in,
         } = gate.shape
         else {
             return Err(Error::Internal("CUDA packed expert gate is not FP4".into()));
         };
-        let CudaSourceLinearShape::Fp4E2M1PackedWithE8M0Scale {
+        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
             out_features: up_out,
             in_features: up_in,
         } = up.shape
         else {
             return Err(Error::Internal("CUDA packed expert up is not FP4".into()));
         };
-        let CudaSourceLinearShape::Fp4E2M1PackedWithE8M0Scale {
+        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
             out_features: down_out,
             in_features: down_in,
         } = down.shape
@@ -869,14 +872,14 @@ impl CudaSourceOperatorContext {
         )
     }
 
-    fn source_linear_matvec_device(
+    fn artifact_linear_matvec_device(
         &self,
-        handle: &CudaSourceLinearHandle,
+        handle: &CudaArtifactLinearHandle,
         input: &DeviceBuffer<f32>,
         output: &mut DeviceBuffer<f32>,
     ) -> Result<()> {
         match handle.shape {
-            CudaSourceLinearShape::F32 {
+            CudaArtifactLinearShape::F32 {
                 out_features,
                 in_features,
             } => cu(self.module.gemv_f32_bytes(
@@ -888,7 +891,7 @@ impl CudaSourceOperatorContext {
                 out_features as u32,
                 in_features as u32,
             )),
-            CudaSourceLinearShape::Bf16Bytes {
+            CudaArtifactLinearShape::Bf16Bytes {
                 out_features,
                 in_features,
             } => cu(self.module.gemv_bf16_bytes(
@@ -900,14 +903,14 @@ impl CudaSourceOperatorContext {
                 out_features as u32,
                 in_features as u32,
             )),
-            CudaSourceLinearShape::Fp8E4M3WithE8M0Scale {
+            CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
                 out_features,
                 in_features,
                 block_m,
                 block_k,
             } => {
                 let scale = handle.scale.as_ref().ok_or_else(|| {
-                    Error::Internal("CUDA FP8 source linear missing scale".into())
+                    Error::Internal("CUDA FP8 artifact linear missing scale".into())
                 })?;
                 let scale_cols = in_features.div_ceil(block_k);
                 cu(self.module.gemv_fp8_e4m3fn_e8m0_2d(
@@ -924,12 +927,12 @@ impl CudaSourceOperatorContext {
                     block_k as u32,
                 ))
             }
-            CudaSourceLinearShape::Fp4E2M1PackedWithE8M0Scale {
+            CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
                 out_features,
                 in_features,
             } => {
                 let scale = handle.scale.as_ref().ok_or_else(|| {
-                    Error::Internal("CUDA FP4 source linear missing scale".into())
+                    Error::Internal("CUDA FP4 artifact linear missing scale".into())
                 })?;
                 cu(self.module.gemv_fp4_e2m1_e8m0(
                     &self.stream,
@@ -1016,11 +1019,11 @@ pub fn cuda_gemv(x: &[f32], w: &[f32], out_f: usize) -> Result<Vec<f32>> {
     cu(yd.to_host_vec(&s))
 }
 
-/// Run source-preserved packed FP4(E2M1)+E8M0 GEMV on GPU.
+/// Run artifact-preserved packed FP4(E2M1)+E8M0 GEMV on GPU.
 ///
 /// `packed` is row-major `[out_features, in_features / 2]`, low nibble first.
 /// `scales` is row-major `[out_features, in_features / 32]`, where byte 127 is
-/// scale 1.0. This is the standalone kernel-level contract used by source-format
+/// scale 1.0. This is the standalone kernel-level contract used by artifact-format
 /// packed expert executors before they are wired into full-model scheduling.
 pub fn cuda_gemv_fp4_e2m1_e8m0(
     x: &[f32],
@@ -1029,21 +1032,21 @@ pub fn cuda_gemv_fp4_e2m1_e8m0(
     out_features: usize,
     in_features: usize,
 ) -> Result<Vec<f32>> {
-    if in_features == 0 || in_features % 32 != 0 || in_features % 2 != 0 {
+    if in_features == 0 || !in_features.is_multiple_of(32) || !in_features.is_multiple_of(2) {
         return Err(Error::Internal(format!(
-            "invalid source FP4 GEMV input shape: in_features={in_features}"
+            "invalid artifact FP4 GEMV input shape: in_features={in_features}"
         )));
     }
     let expected_packed = out_features
         .checked_mul(in_features / 2)
-        .ok_or_else(|| Error::Internal("source FP4 packed size overflow".into()))?;
+        .ok_or_else(|| Error::Internal("artifact FP4 packed size overflow".into()))?;
     let expected_scales = out_features
         .checked_mul(in_features / 32)
-        .ok_or_else(|| Error::Internal("source FP4 scale size overflow".into()))?;
+        .ok_or_else(|| Error::Internal("artifact FP4 scale size overflow".into()))?;
     if x.len() != in_features || packed.len() != expected_packed || scales.len() != expected_scales
     {
         return Err(Error::Internal(format!(
-            "source FP4 GEMV length mismatch: x={} packed={} scales={}, expected x={} packed={} scales={}",
+            "artifact FP4 GEMV length mismatch: x={} packed={} scales={}, expected x={} packed={} scales={}",
             x.len(),
             packed.len(),
             scales.len(),
@@ -1053,9 +1056,9 @@ pub fn cuda_gemv_fp4_e2m1_e8m0(
         )));
     }
 
-    let ops = CudaSourceOperatorContext::new()?;
+    let ops = CudaArtifactOperatorContext::new()?;
     let handle = ops.upload_fp4_e2m1_e8m0_linear(packed, scales, out_features, in_features)?;
-    ops.source_linear_matvec(&handle, x)
+    ops.artifact_linear_matvec(&handle, x)
 }
 
 /// Run FP8 E4M3FN + E8M0 2D-block-scale GEMV on GPU.
@@ -1069,7 +1072,7 @@ pub fn cuda_gemv_fp8_e4m3fn_e8m0_2d(
     block_k: usize,
 ) -> Result<Vec<f32>> {
     if in_features == 0 || block_m == 0 || block_k == 0 {
-        return Err(Error::Internal(format!("invalid FP8 GEMV shape")));
+        return Err(Error::Internal("invalid FP8 GEMV shape".to_string()));
     }
     let expected_weight = out_features
         .checked_mul(in_features)
@@ -1081,9 +1084,9 @@ pub fn cuda_gemv_fp8_e4m3fn_e8m0_2d(
         .ok_or_else(|| Error::Internal("FP8 scale size overflow".into()))?;
     if x.len() != in_features || weight.len() != expected_weight || scales.len() != expected_scales
     {
-        return Err(Error::Internal(format!("FP8 GEMV length mismatch")));
+        return Err(Error::Internal("FP8 GEMV length mismatch".to_string()));
     }
-    let ops = CudaSourceOperatorContext::new()?;
+    let ops = CudaArtifactOperatorContext::new()?;
     let handle = ops.upload_fp8_e4m3_e8m0_linear(
         weight,
         scales,
@@ -1092,12 +1095,12 @@ pub fn cuda_gemv_fp8_e4m3fn_e8m0_2d(
         block_m,
         block_k,
     )?;
-    ops.source_linear_matvec(&handle, x)
+    ops.artifact_linear_matvec(&handle, x)
 }
 
 /// Run sparse attention with an attention sink on GPU.
 ///
-/// This is intentionally a generic source-format operator: callers pass explicit
+/// This is intentionally a generic artifact-format operator: callers pass explicit
 /// shapes and row-major buffers; no model-family tensor names are visible here.
 pub fn cuda_sparse_attention_sink_f32(
     query: &[f32],
@@ -1139,7 +1142,7 @@ pub fn cuda_sparse_attention_sink_f32(
         )));
     }
 
-    CudaSourceOperatorContext::new()?.sparse_attention_sink_f32(query, values, topk, sink, shape)
+    CudaArtifactOperatorContext::new()?.sparse_attention_sink_f32(query, values, topk, sink, shape)
 }
 
 #[cfg(test)]
@@ -1220,9 +1223,9 @@ mod tests {
     }
 
     #[test]
-    fn source_format_gpu_kernels_smoke() {
+    fn artifact_format_gpu_kernels_smoke() {
         if CudaContext::new(0).is_err() {
-            eprintln!("skipping source-format GPU kernel smoke: no CUDA device");
+            eprintln!("skipping artifact-format GPU kernel smoke: no CUDA device");
             return;
         }
         let ctx = cu(CudaContext::new(0)).unwrap();

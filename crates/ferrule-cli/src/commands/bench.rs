@@ -1,9 +1,13 @@
 #[cfg(feature = "cuda")]
+use ferrule_bench::{RuntimeBenchSummary, RuntimeCounters};
+#[cfg(feature = "cuda")]
 use ferrule_runtime::{
     InferenceEngine, ModelGenerationDefaults, ModelRunner, RuntimeRunner, SamplingConfig,
 };
 #[cfg(feature = "cuda")]
 use std::path::Path;
+#[cfg(feature = "cuda")]
+use std::time::{Duration, Instant};
 
 // ── bench-infer ──────────────────────────────────────────────────────────────
 
@@ -43,7 +47,9 @@ pub fn cmd_bench_infer(
         }
     }
 
+    let load_start = Instant::now();
     let runner = RuntimeRunner::load_with_quant(Path::new(model_dir), qt)?;
+    let load_elapsed = load_start.elapsed();
     let mut engine = InferenceEngine::new(runner, sc);
     let mut total_pp_secs = Vec::with_capacity(repeat);
     let mut total_tg_secs = Vec::with_capacity(repeat);
@@ -68,18 +74,25 @@ pub fn cmd_bench_infer(
     }
 
     if json {
+        let mut counters = RuntimeCounters::default();
+        counters.record_load(load_elapsed);
+        counters.record_prefill(Duration::from_secs_f64(pp));
+        counters.record_decode(Duration::from_secs_f64(tg));
+        let summary = RuntimeBenchSummary::new(None, None, counters, prompt_tokens, max_tokens);
         let out = serde_json::json!({
             "model": model_dir,
             "backend": "gpu",
             "quant": format!("{qt:?}"),
             "prompt_tokens": prompt_tokens,
             "generated_tokens": max_tokens,
+            "load_seconds": load_elapsed.as_secs_f64(),
             "prompt_seconds": pp,
             "prompt_tok_per_s": prompt_tokens as f64 / pp.max(1e-6),
             "decode_seconds": tg,
             "decode_tok_per_s": tok_s,
             "total_seconds": pp + tg,
             "total_tok_per_s": (prompt_tokens + max_tokens) as f64 / (pp + tg).max(1e-6),
+            "summary": summary,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {

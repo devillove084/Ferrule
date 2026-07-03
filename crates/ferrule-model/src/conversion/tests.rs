@@ -1,5 +1,5 @@
 use super::*;
-use crate::artifact::SourceArtifact;
+use crate::artifact::InputArtifact;
 use crate::spec::{
     AttentionKind, ModelFamily, MoeSpec, QuantFormatCount, RouterKind, TransformerSpec,
     WeightSource,
@@ -24,6 +24,7 @@ fn deepseek_flash_contract() -> ModelSupportContract {
             has_shared_experts: true,
             router: RouterKind::HashAssistedTopK,
         },
+        semantics: Default::default(),
         tensor_count: None,
         quantization: vec![
             QuantFormatCount {
@@ -45,13 +46,13 @@ fn deepseek_weightpack_recipe_keeps_weightpack_as_primary_target() {
     let recipe = QuantizationRecipe::deepseek_v4_flash_weightpack_mixed_v1();
     assert_eq!(
         recipe.name,
-        "deepseek-v4-flash-weightpack-source-fp4-streaming-v1"
+        "deepseek-v4-flash-weightpack-artifact-fp4-streaming-v1"
     );
     assert_eq!(
         recipe
             .policy_for_role(&TensorRole::RoutedExpertGate)
             .map(|policy| &policy.format),
-        Some(&QuantizationFormat::PreserveSource)
+        Some(&QuantizationFormat::PreserveArtifact)
     );
     assert_eq!(
         recipe
@@ -100,16 +101,16 @@ fn deepseek_dgxspark_resident_recipe_uses_two_bit_class_experts() {
 }
 
 #[test]
-fn conversion_plan_links_official_hf_source_to_weightpack_target() {
+fn conversion_plan_links_official_hf_input_to_weightpack_target() {
     let contract = deepseek_flash_contract();
-    let source = SourceArtifact::deepseek_v4_flash_dspark_official();
+    let input_artifact = InputArtifact::deepseek_v4_flash_dspark_official();
     let plan = ConversionPlan::new(
-        &source,
+        &input_artifact,
         &contract,
         ArtifactTarget::WeightPack,
         QuantizationRecipe::deepseek_v4_flash_weightpack_mixed_v1(),
     );
-    assert_eq!(plan.source.name, "deepseek-ai/DeepSeek-V4-Flash-DSpark");
+    assert_eq!(plan.input.name, "deepseek-ai/DeepSeek-V4-Flash-DSpark");
     assert_eq!(plan.family, ModelFamily::DeepSeekV4);
     assert_eq!(plan.target, ArtifactTarget::WeightPack);
     assert!(plan.requires_reference_validation);
@@ -117,15 +118,15 @@ fn conversion_plan_links_official_hf_source_to_weightpack_target() {
     assert!(plan
         .notes
         .iter()
-        .any(|note| note.contains("source of truth")));
+        .any(|note| note.contains("canonical checkpoint")));
 }
 
 #[test]
 fn gguf_conversion_plan_is_explicitly_compatibility_target() {
     let contract = deepseek_flash_contract();
-    let source = SourceArtifact::deepseek_v4_flash_dspark_official();
+    let input_artifact = InputArtifact::deepseek_v4_flash_dspark_official();
     let plan = ConversionPlan::new(
-        &source,
+        &input_artifact,
         &contract,
         ArtifactTarget::Gguf,
         QuantizationRecipe::deepseek_v4_flash_weightpack_mixed_v1(),

@@ -1,4 +1,4 @@
-use crate::artifact::{ArtifactFormat, ArtifactIdentity, SourceArtifact};
+use crate::artifact::{ArtifactFormat, ArtifactIdentity, InputArtifact};
 use crate::spec::ModelFamily;
 use crate::support::{EnginePlanStatus, ModelSupportContract};
 
@@ -6,7 +6,7 @@ use super::recipe::{ArtifactTarget, QuantizationRecipe};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversionPlan {
-    pub source: ArtifactIdentity,
+    pub input: ArtifactIdentity,
     pub family: ModelFamily,
     pub target: ArtifactTarget,
     pub recipe: QuantizationRecipe,
@@ -17,36 +17,36 @@ pub struct ConversionPlan {
 
 impl ConversionPlan {
     pub fn new(
-        source: &SourceArtifact,
+        input: &InputArtifact,
         contract: &ModelSupportContract,
         target: ArtifactTarget,
         recipe: QuantizationRecipe,
     ) -> Self {
-        let source_identity = source.identity();
+        let input_identity = input.identity();
         let engine_plan = contract.engine_plan();
         let output_name = format!(
             "{}-{}.{}",
-            sanitize_name(&source_identity.name),
+            sanitize_name(&input_identity.name),
             recipe.name,
             target.as_str()
         );
         let mut notes = Vec::new();
-        if matches!(source_identity.format, ArtifactFormat::HfSafetensors)
+        if matches!(input_identity.format, ArtifactFormat::HfSafetensors)
             && matches!(target, ArtifactTarget::WeightPack)
         {
-            notes.push("HF safetensors are the source of truth; WeightPack is Ferrule's execution artifact".into());
+            notes.push("HF safetensors are the canonical checkpoint; WeightPack is Ferrule's execution artifact".into());
         }
         if matches!(target, ArtifactTarget::Gguf) {
             notes.push("GGUF target is for compatibility/PK; do not make it the only internal execution format".into());
         }
         if !matches!(engine_plan.status, EnginePlanStatus::Executable) {
             notes.push(format!(
-                "source model is currently {}; conversion can produce artifacts before execution is supported",
+                "input model is currently {}; conversion can produce artifacts before execution is supported",
                 engine_plan.status
             ));
         }
         Self {
-            source: source_identity,
+            input: input_identity,
             family: contract.spec.family.clone(),
             target,
             recipe,
@@ -57,9 +57,9 @@ impl ConversionPlan {
     }
 
     pub fn deepseek_v4_flash_dspark_weightpack_plan(contract: &ModelSupportContract) -> Self {
-        let source = SourceArtifact::deepseek_v4_flash_dspark_official();
+        let input_artifact = InputArtifact::deepseek_v4_flash_dspark_official();
         Self::new(
-            &source,
+            &input_artifact,
             contract,
             ArtifactTarget::WeightPack,
             QuantizationRecipe::deepseek_v4_flash_weightpack_mixed_v1(),

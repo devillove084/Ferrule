@@ -1,7 +1,7 @@
 use crate::spec::TransformerSpec;
 use crate::tensor_policy::{TensorClass, TensorClassCount};
 
-/// Official DeepSeek-V4 / DeepSeek-V4-Flash source metadata defaults.
+/// Official DeepSeek-V4 / DeepSeek-V4-Flash artifact metadata defaults.
 ///
 /// These constants belong to the model-family layer. Runtime code should consume
 /// semantic layouts, policies, and payload shapes derived from descriptors rather
@@ -43,15 +43,15 @@ pub fn is_hash_routed_layer(layer: usize) -> bool {
 }
 
 use super::{
-    common, AttentionTensorKind, AttentionTensorRef, HyperConnectionStage,
+    common, ArtifactTensorPart, AttentionTensorKind, AttentionTensorRef, HyperConnectionStage,
     HyperConnectionTensorKind, HyperConnectionTensorRef, RoutedExpertMatrix,
     RoutedExpertTensorPart, RoutedExpertTensorRef, RouterTensorKind, RouterTensorRef,
-    SharedExpertTensorRef, SourceTensorPart,
+    SharedExpertTensorRef,
 };
 
 /// DeepSeek-V4 / DeepSeek-V4-Flash tensor-name policy.
 ///
-/// Keep concrete source names here. The rest of the engine should consume
+/// Keep concrete artifact names here. The rest of the engine should consume
 /// semantic `TensorClass` / `TensorRole` values instead of matching on strings
 /// like `layers.0.attn.wq_a.weight` or `mtp.2.markov_head.markov_w1.weight`.
 pub fn classify_hf_tensor(name: &str) -> TensorClass {
@@ -69,6 +69,7 @@ pub fn has_mla_gguf_tensor_names<'a>(names: impl IntoIterator<Item = &'a str>) -
 }
 
 pub fn refine_hf_spec(spec: &mut TransformerSpec, json: &serde_json::Value) {
+    refine_semantics(spec, json);
     if has_dspark_metadata(json) {
         spec.notes.push(format!(
             "DSpark attachment metadata detected: block_size={}, target_layers={}, markov_rank={}",
@@ -193,7 +194,7 @@ pub fn parse_hf_attention_tensor(name: &str) -> Option<AttentionTensorRef> {
             return Some(AttentionTensorRef {
                 layer,
                 kind: AttentionTensorKind::Compressor,
-                part: SourceTensorPart::Other,
+                part: ArtifactTensorPart::Other,
             });
         }
         ["layers", layer, "attn", "indexer", ..] => {
@@ -201,7 +202,7 @@ pub fn parse_hf_attention_tensor(name: &str) -> Option<AttentionTensorRef> {
             return Some(AttentionTensorRef {
                 layer,
                 kind: AttentionTensorKind::Indexer,
-                part: SourceTensorPart::Other,
+                part: ArtifactTensorPart::Other,
             });
         }
         ["layers", layer, "attn", field, part] => (*layer, *field, Some(*part)),
@@ -221,9 +222,9 @@ pub fn parse_hf_attention_tensor(name: &str) -> Option<AttentionTensorRef> {
         _ => return None,
     };
     let part = match part {
-        Some("weight") => SourceTensorPart::Weight,
-        Some("scale") => SourceTensorPart::Scale,
-        Some(_) | None => SourceTensorPart::Other,
+        Some("weight") => ArtifactTensorPart::Weight,
+        Some("scale") => ArtifactTensorPart::Scale,
+        Some(_) | None => ArtifactTensorPart::Other,
     };
     Some(AttentionTensorRef { layer, kind, part })
 }
@@ -283,6 +284,14 @@ fn classify_tensor_name(name: &str) -> TensorClass {
         }
         "output.weight" | "lm_head.weight" | "head.weight" => return TensorClass::OutputHead,
         _ => {}
+    }
+
+    // DeepSeek-V4 layer-stage norms.
+    if name.contains(".attn_norm") || name.contains("attn_norm.weight") {
+        return TensorClass::AttentionNorm;
+    }
+    if name.contains(".ffn_norm") || name.contains("ffn_norm.weight") {
+        return TensorClass::FeedForwardNorm;
     }
 
     // DeepSeek-V4 MLA / CSA-HCA-compatible attention layouts.
@@ -375,6 +384,77 @@ fn classify_tensor_name(name: &str) -> TensorClass {
     }
 
     common::classify_hf_tensor(name)
+}
+
+fn refine_semantics(spec: &mut TransformerSpec, json: &serde_json::Value) {
+    let semantics = &mut spec.semantics;
+    semantics.norm_epsilon.get_or_insert(RMS_NORM_EPS);
+    semantics.hyper_connection_epsilon.get_or_insert(HC_EPS);
+    semantics
+        .hyper_connection_sinkhorn_iters
+        .get_or_insert(HC_SINKHORN_ITERS);
+    semantics.rope_theta.get_or_insert(ROPE_THETA);
+    semantics.rope_head_dim.get_or_insert(QK_ROPE_HEAD_DIM);
+    semantics
+        .compress_rope_theta
+        .get_or_insert(COMPRESS_ROPE_THETA);
+    semantics
+        .attention_window_size
+        .get_or_insert(SLIDING_WINDOW);
+    semantics.attention_index_topk.get_or_insert(INDEX_TOPK);
+    semantics
+        .attention_index_num_heads
+        .get_or_insert(INDEX_N_HEADS);
+    semantics
+        .attention_index_head_dim
+        .get_or_insert(INDEX_HEAD_DIM);
+    semantics.output_projection_groups.get_or_insert(O_GROUPS);
+    semantics.output_projection_rank.get_or_insert(O_LORA_RANK);
+    semantics.swiglu_limit.get_or_insert(SWIGLU_LIMIT);
+    semantics.route_scale.get_or_insert(ROUTED_SCALING_FACTOR);
+    semantics.num_hash_layers.get_or_insert(NUM_HASH_LAYERS);
+    let rope_scaling = json.get("rope_scaling").unwrap_or(&serde_json::Value::Null);
+    semantics.rope_factor.get_or_insert_with(|| {
+        f32_json_key(rope_scaling, &["factor"])
+            .or_else(|| f32_json_key(json, &["rope_factor"]))
+            .unwrap_or(ROPE_FACTOR)
+    });
+    semantics
+        .rope_original_max_position_embeddings
+        .get_or_insert_with(|| {
+            usize_json_key(rope_scaling, &["original_max_position_embeddings"])
+                .or_else(|| usize_json_key(json, &["original_seq_len"]))
+                .unwrap_or(ORIGINAL_MAX_POSITION_EMBEDDINGS)
+        });
+    semantics.rope_beta_fast.get_or_insert_with(|| {
+        usize_json_key(rope_scaling, &["beta_fast"])
+            .or_else(|| usize_json_key(json, &["beta_fast"]))
+            .unwrap_or(ROPE_BETA_FAST)
+    });
+    semantics.rope_beta_slow.get_or_insert_with(|| {
+        usize_json_key(rope_scaling, &["beta_slow"])
+            .or_else(|| usize_json_key(json, &["beta_slow"]))
+            .unwrap_or(ROPE_BETA_SLOW)
+    });
+    if semantics.attention_compress_ratios.is_empty() {
+        semantics.attention_compress_ratios = vec![0; spec.num_layers.unwrap_or(NUM_LAYERS)];
+    }
+}
+
+fn usize_json_key(json: &serde_json::Value, keys: &[&str]) -> Option<usize> {
+    keys.iter().find_map(|key| {
+        json.get(*key)
+            .and_then(|value| value.as_u64())
+            .map(|value| value as usize)
+    })
+}
+
+fn f32_json_key(json: &serde_json::Value, keys: &[&str]) -> Option<f32> {
+    keys.iter().find_map(|key| {
+        json.get(*key)
+            .and_then(|value| value.as_f64())
+            .map(|value| value as f32)
+    })
 }
 
 fn has_dspark_metadata(json: &serde_json::Value) -> bool {
@@ -526,7 +606,7 @@ mod tests {
             Some(AttentionTensorRef {
                 layer: 2,
                 kind: AttentionTensorKind::QueryA,
-                part: SourceTensorPart::Weight,
+                part: ArtifactTensorPart::Weight,
             })
         );
         assert_eq!(
@@ -534,7 +614,7 @@ mod tests {
             Some(AttentionTensorRef {
                 layer: 2,
                 kind: AttentionTensorKind::QueryB,
-                part: SourceTensorPart::Scale,
+                part: ArtifactTensorPart::Scale,
             })
         );
         assert_eq!(
@@ -542,7 +622,7 @@ mod tests {
             Some(AttentionTensorRef {
                 layer: 2,
                 kind: AttentionTensorKind::QueryNorm,
-                part: SourceTensorPart::Weight,
+                part: ArtifactTensorPart::Weight,
             })
         );
         assert_eq!(
@@ -550,7 +630,7 @@ mod tests {
             Some(AttentionTensorRef {
                 layer: 2,
                 kind: AttentionTensorKind::AttentionSink,
-                part: SourceTensorPart::Other,
+                part: ArtifactTensorPart::Other,
             })
         );
         assert_eq!(
@@ -700,6 +780,7 @@ mod tests {
             head_dim: None,
             attention: crate::AttentionKind::MultiLatentAttention,
             moe: crate::MoeSpec::none(),
+            semantics: Default::default(),
             tensor_count: None,
             quantization: Vec::new(),
             notes: Vec::new(),

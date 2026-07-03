@@ -204,7 +204,7 @@ mod tests {
             id: ReferenceManifestId::new("fixture").unwrap(),
             family: ModelFamily::DeepSeekV4,
             artifact: ReferenceArtifact::SyntheticFixture {
-                fixture: "tiny-source-bound".into(),
+                fixture: "tiny-artifact-bound".into(),
             },
             engine: ReferenceEngineKind::PythonFixture,
             command: ReferenceCommand::new("python", ["fixture.py"]),

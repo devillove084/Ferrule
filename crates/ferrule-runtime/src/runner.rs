@@ -96,7 +96,7 @@ impl RuntimeRunner {
             match descriptor.spec.family {
                 ModelFamily::Olmoe => {
                     let runner = GpuOlmoeRunner::load(_model_dir, QuantType::Q4_0)?;
-                    return Ok(Self::OlmoeGpu(runner));
+                    Ok(Self::OlmoeGpu(runner))
                 }
                 ref family => Err(Error::Model(format!(
                     "model family '{family}' is not yet supported by the runtime executor"
@@ -337,6 +337,7 @@ mod tests {
                 has_shared_experts: true,
                 router: RouterKind::HashAssistedTopK,
             },
+            semantics: Default::default(),
             tensor_count: Some(1),
             quantization: vec![QuantFormatCount {
                 format: "Q4_K".into(),

@@ -1,5 +1,6 @@
 use crate::spec::{
-    AttentionKind, ModelFamily, QuantFormatCount, RouterKind, TransformerSpec, WeightSource,
+    AttentionKind, ModelFamily, QuantFormatCount, RouterKind, TransformerSemantics,
+    TransformerSpec, WeightSource,
 };
 
 use super::layout::{AttentionLayout, FeedForwardLayout};
@@ -24,13 +25,13 @@ pub struct ExpertPolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuantPolicy {
-    pub source: WeightSource,
+    pub weight_source: WeightSource,
     pub formats: Vec<QuantFormatCount>,
 }
 
 impl QuantPolicy {
     pub fn has_gguf_quantized_tensors(&self) -> bool {
-        matches!(self.source, WeightSource::Gguf)
+        matches!(self.weight_source, WeightSource::Gguf)
             && self.formats.iter().any(|item| {
                 let format = item.format.as_str();
                 !matches!(format, "F32" | "F16" | "Bf16" | "BF16")
@@ -98,7 +99,7 @@ pub struct ValidationPolicy {
     pub supports_cpu_reference: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PolicySet {
     pub attention: AttentionPolicy,
     pub router: RouterPolicy,
@@ -110,6 +111,7 @@ pub struct PolicySet {
     pub speculation: SpeculationPolicy,
     pub tokenizer: TokenizerPolicy,
     pub validation: ValidationPolicy,
+    pub semantics: TransformerSemantics,
 }
 
 impl PolicySet {
@@ -133,7 +135,7 @@ impl PolicySet {
                 has_shared_experts: spec.moe.has_shared_experts,
             },
             quant: QuantPolicy {
-                source: spec.weight_source,
+                weight_source: spec.weight_source,
                 formats: spec.quantization.clone(),
             },
             kv: KvPolicy {
@@ -157,6 +159,7 @@ impl PolicySet {
                 requires_reference_engine: !matches!(spec.family, ModelFamily::Olmoe),
                 supports_cpu_reference: matches!(spec.family, ModelFamily::Olmoe),
             },
+            semantics: spec.semantics.clone(),
         }
     }
 }

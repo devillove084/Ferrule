@@ -1,6 +1,6 @@
-//! Source-preserved packed FP4 expert execution primitives.
+//! Artifact-preserved packed FP4 expert execution primitives.
 //!
-//! This is the first CUDA execution surface for source-format packed routed experts.
+//! This is the first CUDA execution surface for artifact-format packed routed experts.
 //! It deliberately stays generic: it accepts device buffers plus explicit shapes,
 //! not model-family tensor names. Scheduler/residency code can map a resident
 //! expert handle to these buffers later.
@@ -36,15 +36,18 @@ impl CudaPackedFp4LinearShape {
     }
 
     pub fn validate(&self, label: &str) -> Result<()> {
-        if self.in_features == 0 || self.in_features % 32 != 0 || self.in_features % 2 != 0 {
+        if self.in_features == 0
+            || !self.in_features.is_multiple_of(32)
+            || !self.in_features.is_multiple_of(2)
+        {
             return Err(Error::Internal(format!(
-                "{label} source FP4 linear requires in_features divisible by 32, got {}",
+                "{label} artifact FP4 linear requires in_features divisible by 32, got {}",
                 self.in_features
             )));
         }
         if self.out_features == 0 {
             return Err(Error::Internal(format!(
-                "{label} source FP4 linear has zero out_features"
+                "{label} artifact FP4 linear has zero out_features"
             )));
         }
         let packed_len = self
@@ -288,7 +291,7 @@ impl<'a> CudaPackedFp4ExpertExecutor<'a> {
 fn checked_u32(value: usize, label: &str, field: &str) -> Result<u32> {
     u32::try_from(value).map_err(|_| {
         Error::Internal(format!(
-            "{label} source FP4 {field} exceeds CUDA u32 launch ABI: {value}"
+            "{label} artifact FP4 {field} exceeds CUDA u32 launch ABI: {value}"
         ))
     })
 }

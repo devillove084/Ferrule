@@ -80,7 +80,7 @@ impl MissingPolicy {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EnginePlan {
     pub family: ModelFamily,
     pub architecture: Option<String>,

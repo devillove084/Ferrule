@@ -10,6 +10,12 @@ pub struct SamplerMask {
     constraints: Vec<Box<dyn TokenConstraint + Send>>,
 }
 
+impl Default for SamplerMask {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SamplerMask {
     pub fn new() -> Self {
         Self {
@@ -74,6 +80,12 @@ pub struct JsonConstraint {
     expect_key: bool,
     expect_value: bool,
 }
+impl Default for JsonConstraint {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl JsonConstraint {
     pub fn new() -> Self {
         Self {

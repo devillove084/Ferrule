@@ -8,8 +8,8 @@ use crate::artifact::{HfSafetensorsIndex, HfSafetensorsInventory};
 use crate::config::OlmoeConfig;
 use crate::families;
 use crate::spec::{
-    AttentionKind, ModelFamily, MoeSpec, QuantFormatCount, RouterKind, TransformerSpec,
-    WeightSource,
+    AttentionKind, ModelFamily, MoeSpec, QuantFormatCount, RouterKind, TransformerSemantics,
+    TransformerSpec, WeightSource,
 };
 use crate::support::{EnginePlan, ModelSupportContract};
 use crate::tensor_policy::{GgufTensorPolicy, HfTensorPolicy, TensorClassCount};
@@ -63,7 +63,7 @@ impl ModelDescriptor {
     ///
     /// This keeps model-specific tensor names at the descriptor/binding boundary.
     /// Generic executors should consume semantic roles and policies from the
-    /// returned contract instead of matching on source tensor names.
+    /// returned contract instead of matching on artifact tensor names.
     pub fn support_contract(&self) -> ModelSupportContract {
         ModelSupportContract::from_spec(&self.spec, &self.tensor_classes)
     }
@@ -226,6 +226,7 @@ impl ModelDescriptor {
                 has_shared_experts,
                 router,
             },
+            semantics: TransformerSemantics::default(),
             tensor_count: Some(gguf.tensors.len()),
             quantization: quant_counts(&gguf),
             notes,
@@ -309,9 +310,52 @@ fn generic_hf_spec(
             has_shared_experts,
             router,
         },
+        semantics: hf_semantics(json),
         tensor_count: None,
         quantization: Vec::new(),
         notes: Vec::new(),
+    }
+}
+
+fn hf_semantics(json: &serde_json::Value) -> TransformerSemantics {
+    let rope_scaling = json.get("rope_scaling").unwrap_or(&serde_json::Value::Null);
+    let attention_compress_ratios = json
+        .get("compress_ratios")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_u64().map(|value| value as usize))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    TransformerSemantics {
+        norm_epsilon: f32_key(json, &["rms_norm_eps", "norm_eps", "layer_norm_eps"]),
+        hyper_connection_epsilon: f32_key(json, &["hc_eps"]),
+        hyper_connection_sinkhorn_iters: usize_key(json, &["hc_sinkhorn_iters"]),
+        rope_theta: f32_key(json, &["rope_theta"]),
+        rope_head_dim: usize_key(json, &["qk_rope_head_dim", "rope_head_dim"]),
+        rope_factor: f32_key(rope_scaling, &["factor"]).or_else(|| f32_key(json, &["rope_factor"])),
+        rope_original_max_position_embeddings: usize_key(
+            rope_scaling,
+            &["original_max_position_embeddings"],
+        )
+        .or_else(|| usize_key(json, &["original_seq_len"])),
+        rope_beta_fast: usize_key(rope_scaling, &["beta_fast"])
+            .or_else(|| usize_key(json, &["beta_fast"])),
+        rope_beta_slow: usize_key(rope_scaling, &["beta_slow"])
+            .or_else(|| usize_key(json, &["beta_slow"])),
+        compress_rope_theta: f32_key(json, &["compress_rope_theta"]),
+        attention_window_size: usize_key(json, &["sliding_window", "window_size"]),
+        attention_index_topk: usize_key(json, &["index_topk"]),
+        attention_index_num_heads: usize_key(json, &["index_n_heads"]),
+        attention_index_head_dim: usize_key(json, &["index_head_dim"]),
+        attention_compress_ratios,
+        output_projection_groups: usize_key(json, &["o_groups", "output_projection_groups"]),
+        output_projection_rank: usize_key(json, &["o_lora_rank", "output_projection_rank"]),
+        swiglu_limit: f32_key(json, &["swiglu_limit"]),
+        route_scale: f32_key(json, &["routed_scaling_factor", "route_scale"]),
+        num_hash_layers: usize_key(json, &["num_hash_layers"]),
     }
 }
 
@@ -331,6 +375,11 @@ fn hf_architecture(json: &serde_json::Value) -> Option<String> {
 fn usize_key(json: &serde_json::Value, keys: &[&str]) -> Option<usize> {
     keys.iter()
         .find_map(|key| json.get(*key).and_then(|v| v.as_u64()).map(|v| v as usize))
+}
+
+fn f32_key(json: &serde_json::Value, keys: &[&str]) -> Option<f32> {
+    keys.iter()
+        .find_map(|key| json.get(*key).and_then(|v| v.as_f64()).map(|v| v as f32))
 }
 
 fn has_any_key(json: &serde_json::Value, keys: &[&str]) -> bool {

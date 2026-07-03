@@ -13,10 +13,11 @@ pub mod weights;
 
 // Re-exports — keep the same public API surface while adding generic model metadata.
 pub use artifact::{
-    ArtifactFormat, ArtifactIdentity, DtypeCount, HfAttentionTensorInfo, HfFilePurpose,
-    HfHyperConnectionTensorInfo, HfRepoFile, HfRoutedExpertTensorInfo, HfRouterTensorInfo,
-    HfSafetensorsArtifact, HfSafetensorsIndex, HfSafetensorsInventory, HfSafetensorsShardSummary,
-    HfSafetensorsTensorInfo, HfSharedExpertTensorInfo, SourceArtifact, TensorRoleCount,
+    ArtifactFormat, ArtifactIdentity, DtypeCount, HfAttentionTensorInfo, HfDenseLayerTensorInfo,
+    HfFilePurpose, HfHyperConnectionTensorInfo, HfRepoFile, HfRoutedExpertTensorInfo,
+    HfRouterTensorInfo, HfSafetensorsArtifact, HfSafetensorsIndex, HfSafetensorsInventory,
+    HfSafetensorsShardSummary, HfSafetensorsTensorInfo, HfSharedExpertTensorInfo, InputArtifact,
+    TensorRoleCount,
 };
 pub use config::OlmoeConfig;
 pub use conversion::{
@@ -25,8 +26,8 @@ pub use conversion::{
 };
 pub use descriptor::ModelDescriptor;
 pub use spec::{
-    AttentionKind, ModelFamily, MoeSpec, QuantFormatCount, RouterKind, TransformerSpec,
-    WeightSource,
+    AttentionKind, ModelFamily, MoeSpec, QuantFormatCount, RouterKind, TransformerSemantics,
+    TransformerSpec, WeightSource,
 };
 pub use support::{
     validate_model_layout_bindings, AttentionLayout, AttentionPolicy, BoundRoleCount, EnginePlan,

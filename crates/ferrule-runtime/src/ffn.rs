@@ -2,18 +2,18 @@
 //!
 //! This module is the generic dense/shared FFN counterpart to routed expert
 //! execution. Shared experts that use the same SwiGLU structure as routed experts
-//! should be represented as ordinary semantic source linears rather than fake
+//! should be represented as ordinary semantic artifact linears rather than fake
 //! routed expert ids.
 
 use ferrule_core::{Error, Result};
 
-use crate::source_linear::SourceLinearPayload;
+use crate::artifact_linear::ArtifactLinearPayload;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SwiGluFfnPayload {
-    pub gate: SourceLinearPayload,
-    pub up: SourceLinearPayload,
-    pub down: SourceLinearPayload,
+    pub gate: ArtifactLinearPayload,
+    pub up: ArtifactLinearPayload,
+    pub down: ArtifactLinearPayload,
     /// `0.0` disables clipping; positive values apply model-family-specific clipping.
     pub swiglu_limit: f32,
 }
@@ -59,8 +59,8 @@ mod tests {
     use ferrule_model::TensorRole;
 
     use super::*;
-    use crate::source_linear::SourceLinearPayload;
-    use crate::source_tensor::{SourceDType, SourceTensorPayload, SourceTensorSlice};
+    use crate::artifact_linear::ArtifactLinearPayload;
+    use crate::artifact_tensor::{ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice};
 
     #[test]
     fn swiglu_ffn_reference_executes_f32_linears() {
@@ -126,18 +126,18 @@ mod tests {
         out: usize,
         input: usize,
         values: &[f32],
-    ) -> SourceLinearPayload {
+    ) -> ArtifactLinearPayload {
         assert_eq!(values.len(), out * input);
-        SourceLinearPayload::from_weight_and_scale(
+        ArtifactLinearPayload::from_weight_and_scale(
             role,
-            SourceTensorPayload {
-                slice: SourceTensorSlice {
+            ArtifactTensorPayload {
+                slice: ArtifactTensorSlice {
                     name: format!("{name}.weight"),
                     role: TensorRole::Unknown,
                     path: PathBuf::from("synthetic.safetensors"),
                     offset: 0,
                     bytes: (values.len() * 4) as u64,
-                    dtype: SourceDType::F32,
+                    dtype: ArtifactDType::F32,
                     shape: vec![out, input],
                 },
                 bytes: values

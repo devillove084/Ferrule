@@ -1,7 +1,7 @@
 //! First-token smoke harness.
 //!
 //! This is intentionally model-runner agnostic. Any Ferrule `ModelRunner`, sliced
-//! source-bound fixture, or fake test runner can implement `FirstTokenModel`; the
+//! artifact-bound fixture, or fake test runner can implement `FirstTokenModel`; the
 //! harness handles reference-manifest lookup and comparison without requiring a
 //! local full target checkpoint in CI.
 
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::reference_compare::{compare_reference_observation, ReferenceObservation};
 use crate::reference_manifest::{PromptId, ReferenceCommandManifest};
-use crate::runner::ModelRunner;
+use ferrule_runtime::ModelRunner;
 
 pub trait FirstTokenModel {
     fn encode_prompt(&self, prompt: &str) -> Result<Vec<u32>>;
@@ -27,7 +27,7 @@ impl<T: ModelRunner> FirstTokenModel for T {
         if logits.is_empty() {
             return Ok(None);
         }
-        Ok(Some(crate::argmax(&logits)))
+        Ok(Some(ferrule_runtime::argmax(&logits)))
     }
 }
 
@@ -164,7 +164,7 @@ mod tests {
             id: ReferenceManifestId::new("fixture").unwrap(),
             family: ModelFamily::DeepSeekV4,
             artifact: ReferenceArtifact::SyntheticFixture {
-                fixture: "tiny-source-bound".into(),
+                fixture: "tiny-artifact-bound".into(),
             },
             engine: ReferenceEngineKind::PythonFixture,
             command: ReferenceCommand::new("python", ["fixture.py"]),

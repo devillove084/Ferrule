@@ -1,7 +1,7 @@
 //! Cache-aware MLA/compressed-KV attention kernels.
 //!
 //! Implements the Flash Attention approach (tiled QK^T + online softmax) adapted
-//! for Multi-Latent Attention-style source payloads:
+//! for Multi-Latent Attention-style artifact payloads:
 //!   1. query A → query norm → query B → reshape to [heads, head_dim]
 //!   2. key/value projection → key/value norm → [kv_dim] (compressed KV)
 //!   3. Sparse top-k gather over sliding window KV cache
@@ -13,8 +13,8 @@
 
 use ferrule_core::{Error, Result};
 
+use crate::artifact_linear::ArtifactLinearPayload;
 use crate::attention_backend::SparseAttentionSpec;
-use crate::source_linear::SourceLinearPayload;
 
 // ── block sizes for cache tiling ─────────────────────────────────────────
 
@@ -36,7 +36,7 @@ const QK_TILE_B: usize = 256; // KV cache tile size for score computation
 /// with shared memory and warp-level reductions.
 pub trait AttentionKernel {
     /// Compute output = linear_matvec(weight, input) with cache tiling.
-    fn linear_matvec(&self, linear: &SourceLinearPayload, input: &[f32]) -> Result<Vec<f32>>;
+    fn linear_matvec(&self, linear: &ArtifactLinearPayload, input: &[f32]) -> Result<Vec<f32>>;
 
     /// rms_norm with per-element weight vector.
     fn rms_norm_weight(
@@ -67,8 +67,8 @@ pub trait AttentionKernel {
     /// Down-projection after attention: output = wo_b.matvec(wo_a.matvec(context))
     fn output_projection(
         &self,
-        output_a: &SourceLinearPayload,
-        output_b: &SourceLinearPayload,
+        output_a: &ArtifactLinearPayload,
+        output_b: &ArtifactLinearPayload,
         context: &[f32],
     ) -> Result<Vec<f32>>;
 }
@@ -200,7 +200,7 @@ impl CpuAttentionKernel {
 }
 
 impl AttentionKernel for CpuAttentionKernel {
-    fn linear_matvec(&self, linear: &SourceLinearPayload, input: &[f32]) -> Result<Vec<f32>> {
+    fn linear_matvec(&self, linear: &ArtifactLinearPayload, input: &[f32]) -> Result<Vec<f32>> {
         let in_features = linear.format.in_features();
         let out_features = linear.format.out_features();
         if input.len() != in_features {
@@ -246,8 +246,8 @@ impl AttentionKernel for CpuAttentionKernel {
 
     fn output_projection(
         &self,
-        output_a: &SourceLinearPayload,
-        output_b: &SourceLinearPayload,
+        output_a: &ArtifactLinearPayload,
+        output_b: &ArtifactLinearPayload,
         context: &[f32],
     ) -> Result<Vec<f32>> {
         let projected = self.linear_matvec(output_a, context)?;
@@ -269,15 +269,15 @@ impl AttentionKernel for CpuAttentionKernel {
 pub fn mla_attention_decode_step(
     kernel: &impl AttentionKernel,
     hidden: &[f32],
-    query_a: &SourceLinearPayload,
-    query_b: &SourceLinearPayload,
+    query_a: &ArtifactLinearPayload,
+    query_b: &ArtifactLinearPayload,
     query_norm: &[f32],
-    key_value: &SourceLinearPayload,
+    key_value: &ArtifactLinearPayload,
     key_value_norm: &[f32],
     kv_cache: &mut Vec<f32>,
     attention_sink: &[f32],
-    output_a: &SourceLinearPayload,
-    output_b: &SourceLinearPayload,
+    output_a: &ArtifactLinearPayload,
+    output_b: &ArtifactLinearPayload,
     spec: SparseAttentionSpec,
 ) -> Result<Vec<f32>> {
     // 1. Query low-rank path
@@ -314,7 +314,7 @@ mod tests {
     use ferrule_model::TensorRole;
 
     use super::*;
-    use crate::source_tensor::{SourceDType, SourceTensorPayload, SourceTensorSlice};
+    use crate::artifact_tensor::{ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice};
 
     #[test]
     fn cpu_tiled_attention_produces_same_result_as_naive() {
@@ -448,18 +448,18 @@ mod tests {
         out: usize,
         input: usize,
         values: &[f32],
-    ) -> SourceLinearPayload {
+    ) -> ArtifactLinearPayload {
         assert_eq!(values.len(), out * input);
-        SourceLinearPayload::from_weight_and_scale(
+        ArtifactLinearPayload::from_weight_and_scale(
             role,
-            SourceTensorPayload {
-                slice: SourceTensorSlice {
+            ArtifactTensorPayload {
+                slice: ArtifactTensorSlice {
                     name: format!("{name}.weight"),
                     role: TensorRole::Unknown,
                     path: PathBuf::from("synthetic.safetensors"),
                     offset: 0,
                     bytes: (values.len() * 4) as u64,
-                    dtype: SourceDType::F32,
+                    dtype: ArtifactDType::F32,
                     shape: vec![out, input],
                 },
                 bytes: values.iter().flat_map(|v| v.to_le_bytes()).collect(),

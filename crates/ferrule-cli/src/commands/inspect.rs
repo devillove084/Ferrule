@@ -1,13 +1,14 @@
 use std::io::Write;
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use ferrule_bench::{RuntimeBenchSummary, RuntimeCounters};
 use ferrule_model::{HfSafetensorsInventory, ModelDescriptor};
 use ferrule_runtime::{
     models::deepseek_v4::{
         DeepSeekV4OperatorBackend, DeepSeekV4ReferenceOptions, DeepSeekV4ReferenceRunner,
     },
-    ChatTemplate, ExpertComputeBundle, ExpertId, ExpertSource, ExpertStreamingPlanner,
+    ChatTemplate, ExpertComputeBundle, ExpertId, ExpertLoadSource, ExpertStreamingPlanner,
     ExpertStreamingPolicy, ExpertStreamingReader,
 };
 
@@ -76,8 +77,8 @@ pub fn cmd_expert_stream_smoke(
         .iter()
         .find(|load| load.expert == ExpertId::new(layer, expert))
         .ok_or_else(|| anyhow::anyhow!("selected expert was already resident or not planned"))?;
-    let ExpertSource::LocalTensorSet { tensors } = &load.source else {
-        anyhow::bail!("selected expert source is not a local tensor set");
+    let ExpertLoadSource::LocalTensorSet { tensors } = &load.load_source else {
+        anyhow::bail!("selected expert load source is not a local tensor set");
     };
 
     println!("=== Expert Streaming Smoke ===");
@@ -88,8 +89,8 @@ pub fn cmd_expert_stream_smoke(
     println!("slices:     {}", tensors.len());
     println!(
         "bytes:      {} ({:.3} MiB)",
-        load.source.bytes(),
-        load.source.bytes() as f64 / 1_048_576.0
+        load.load_source.bytes(),
+        load.load_source.bytes() as f64 / 1_048_576.0
     );
     for tensor in tensors {
         println!(
@@ -106,14 +107,14 @@ pub fn cmd_expert_stream_smoke(
 
     let reader = ExpertStreamingReader::new(max_slice_mb.saturating_mul(1024 * 1024));
     let start = Instant::now();
-    let payload = reader.read_source(load.expert, &load.source)?;
+    let payload = reader.read_load_source(load.expert, &load.load_source)?;
     let elapsed = start.elapsed();
     let read_bytes = payload
         .tensors
         .iter()
         .map(|tensor| tensor.bytes.len() as u64)
         .sum::<u64>();
-    let bundle = ExpertComputeBundle::from_source_payload(payload)?;
+    let bundle = ExpertComputeBundle::from_artifact_payload(payload)?;
     println!(
         "read:       {} bytes ({:.3} MiB) in {:.3} ms",
         read_bytes,
@@ -141,6 +142,7 @@ pub fn cmd_deepseek_v4_generate(
     stop_at_eos: bool,
     verbose_tokens: bool,
     chat_prompt: bool,
+    json: bool,
 ) -> anyhow::Result<()> {
     let model_path = Path::new(model_dir);
     let options = DeepSeekV4ReferenceOptions {
@@ -168,69 +170,110 @@ pub fn cmd_deepseek_v4_generate(
         anyhow::bail!("prompt encoded to zero tokens");
     }
 
-    println!("=== DeepSeek-V4 Generate ===");
-    println!("model:      {model_dir}");
-    println!("backend:    {}", runner.operator_backend().as_str());
-    println!("prompt:     {prompt:?}");
-    if chat_prompt {
-        println!("chat_prompt: {:?}", encoded_prompt);
-    }
-    println!("tokens:     {:?}", prompt_tokens);
-    println!("max_new:   {max_new_tokens}");
-    println!("max_layers: {max_layers}");
-    println!("load:       {:.3} ms", load_elapsed.as_secs_f64() * 1000.0);
-    println!("--- output ---");
-
-    if max_new_tokens == 0 {
-        println!();
-        return Ok(());
+    if !json {
+        println!("=== DeepSeek-V4 Generate ===");
+        println!("model:      {model_dir}");
+        println!("backend:    {}", runner.operator_backend().as_str());
+        println!("prompt:     {prompt:?}");
+        if chat_prompt {
+            println!("chat_prompt: {:?}", encoded_prompt);
+        }
+        println!("tokens:     {:?}", prompt_tokens);
+        println!("max_new:   {max_new_tokens}");
+        println!("max_layers: {max_layers}");
+        println!("load:       {:.3} ms", load_elapsed.as_secs_f64() * 1000.0);
+        println!("--- output ---");
     }
 
-    let run_start = Instant::now();
-    let mut top = runner.prefill_tokens_topk_batched(&prompt_tokens, 1)?;
-    if top.is_empty() {
-        anyhow::bail!("DSV4 generation produced no candidate after prefill");
-    }
-
-    let eos = runner.model.tokenizer.eos_token_id();
     let mut generated = Vec::new();
-    for step in 0..max_new_tokens {
-        let next = top[0];
-        generated.push(next.token_id);
-        if verbose_tokens {
-            eprintln!("[{}] token={} logit={:.6}", step, next.token_id, next.logit);
-        }
-        let piece = runner
-            .model
-            .tokenizer
-            .decode(&[next.token_id])
-            .unwrap_or_else(|_| String::new());
-        print!("{piece}");
-        std::io::stdout().flush()?;
+    let mut prefill_elapsed = Duration::ZERO;
+    let mut decode_elapsed = Duration::ZERO;
 
-        if stop_at_eos && Some(next.token_id) == eos {
-            break;
-        }
-        if step + 1 == max_new_tokens {
-            break;
-        }
-        top = runner.decode_token_topk(next.token_id, 1)?;
+    if max_new_tokens > 0 {
+        let prefill_start = Instant::now();
+        let mut top = runner.prefill_tokens_topk_batched(&prompt_tokens, 1)?;
+        prefill_elapsed = prefill_start.elapsed();
         if top.is_empty() {
-            anyhow::bail!(
-                "DSV4 generation produced no candidate at decode step {}",
-                step + 1
-            );
+            anyhow::bail!("DSV4 generation produced no candidate after prefill");
         }
+
+        let eos = runner.model.tokenizer.eos_token_id();
+        let decode_start = Instant::now();
+        for step in 0..max_new_tokens {
+            let next = top[0];
+            generated.push(next.token_id);
+            if verbose_tokens {
+                eprintln!("[{}] token={} logit={:.6}", step, next.token_id, next.logit);
+            }
+            if !json {
+                let piece = runner
+                    .model
+                    .tokenizer
+                    .decode(&[next.token_id])
+                    .unwrap_or_else(|_| String::new());
+                print!("{piece}");
+                std::io::stdout().flush()?;
+            }
+
+            if stop_at_eos && Some(next.token_id) == eos {
+                break;
+            }
+            if step + 1 == max_new_tokens {
+                break;
+            }
+            top = runner.decode_token_topk(next.token_id, 1)?;
+            if top.is_empty() {
+                anyhow::bail!(
+                    "DSV4 generation produced no candidate at decode step {}",
+                    step + 1
+                );
+            }
+        }
+        decode_elapsed = decode_start.elapsed();
     }
 
-    let elapsed = run_start.elapsed();
-    println!();
-    println!("--- stats ---");
-    println!("generated_tokens: {:?}", generated);
-    println!("position:   {}", runner.position());
-    println!("bound layers: {}", runner.bound_layer_count());
-    print_deepseek_v4_runtime_stats(&runner);
-    println!("run:        {:.3} ms", elapsed.as_secs_f64() * 1000.0);
+    let elapsed = prefill_elapsed + decode_elapsed;
+    if json {
+        let layer_stats = runner.layer_runtime_stats();
+        let resident_experts = layer_stats.iter().map(|stat| stat.resident_experts).sum();
+        let resident_bytes = layer_stats
+            .iter()
+            .map(|stat| stat.resident_expert_bytes)
+            .sum();
+        let mut counters = RuntimeCounters::default();
+        counters.record_load(load_elapsed);
+        counters.record_prefill(prefill_elapsed);
+        counters.record_decode(decode_elapsed);
+        counters.set_expert_residency(resident_experts, resident_bytes);
+        let summary =
+            RuntimeBenchSummary::new(None, None, counters, prompt_tokens.len(), generated.len());
+        let out = serde_json::json!({
+            "model": model_dir,
+            "backend": runner.operator_backend().as_str(),
+            "prompt": prompt,
+            "prompt_tokens": prompt_tokens.len(),
+            "prompt_token_ids": prompt_tokens,
+            "generated_tokens": generated.len(),
+            "generated_token_ids": generated,
+            "max_layers": max_layers,
+            "bound_layers": runner.bound_layer_count(),
+            "position": runner.position(),
+            "load_seconds": load_elapsed.as_secs_f64(),
+            "prefill_seconds": prefill_elapsed.as_secs_f64(),
+            "decode_seconds": decode_elapsed.as_secs_f64(),
+            "total_seconds": elapsed.as_secs_f64(),
+            "summary": summary,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!();
+        println!("--- stats ---");
+        println!("generated_tokens: {:?}", generated);
+        println!("position:   {}", runner.position());
+        println!("bound layers: {}", runner.bound_layer_count());
+        print_deepseek_v4_runtime_stats(&runner);
+        println!("run:        {:.3} ms", elapsed.as_secs_f64() * 1000.0);
+    }
     Ok(())
 }
 
@@ -298,18 +341,18 @@ pub fn cmd_deepseek_v4_probe(
         if max_layers < runner.model.config.num_layers {
             " (partial/reference)"
         } else {
-            " (full source path; sequential diagnostic prefill)"
+            " (full artifact path; sequential diagnostic prefill)"
         }
     );
     println!("backend:    {}", runner.operator_backend().as_str());
     if max_layers > 0 {
         if runner.operator_backend() == DeepSeekV4OperatorBackend::Cuda {
             println!(
-                "note:       cuda reuses one cuda-oxide context/module and cached source-linear/expert handles; CPU is only the explicit reference backend"
+                "note:       cuda reuses one cuda-oxide context/module and cached artifact-linear/expert handles; CPU is only the explicit reference backend"
             );
         } else {
             println!(
-                "note:       CPU layer execution dequantizes source tensors and streams selected experts; use small prompts/layers for diagnostics"
+                "note:       CPU layer execution dequantizes artifact tensors and streams selected experts; use small prompts/layers for diagnostics"
             );
         }
     }

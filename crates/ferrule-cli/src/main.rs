@@ -112,7 +112,7 @@ enum Command {
     /// Inspect a WeightPack file header.
     #[command(name = "inspect-weightpack")]
     InspectWeightPack { path: String },
-    /// Smoke-test source-preserving expert streaming from local HF shards.
+    /// Smoke-test artifact-preserving expert streaming from local HF shards.
     #[command(name = "expert-stream-smoke")]
     ExpertStreamSmoke {
         model: String,
@@ -138,10 +138,10 @@ enum Command {
         /// lm_head chunk size in rows for full-vocab top-1 scans.
         #[arg(long, default_value_t = 4096)]
         output_head_chunk_rows: usize,
-        /// Maximum single source tensor read size for top-level/layer tensors.
+        /// Maximum single artifact tensor read size for top-level/layer tensors.
         #[arg(long = "max-tensor-mb", default_value_t = 128)]
         max_tensor_mb: u64,
-        /// Maximum single expert source read size.
+        /// Maximum single expert artifact read size.
         #[arg(long = "expert-max-slice-mb", default_value_t = 64)]
         expert_reader_max_slice_mb: u64,
         /// Operator backend: cuda or cpu. cuda requires running via cargo oxide / just run-cuda.
@@ -156,6 +156,9 @@ enum Command {
         /// Wrap --prompt with the official DeepSeek-V4 chat encoding for a single user turn.
         #[arg(long)]
         chat: bool,
+        /// Emit machine-readable benchmark counters instead of streamed text.
+        #[arg(long)]
+        json: bool,
     },
     /// Probe real local DeepSeek-V4 HF shards through the DSV4-specific reference path.
     #[command(name = "deepseek-v4-probe")]
@@ -181,10 +184,10 @@ enum Command {
         /// lm_head chunk size in rows for full-vocab logits/top-K scans.
         #[arg(long, default_value_t = 1024)]
         output_head_chunk_rows: usize,
-        /// Maximum single source tensor read size for top-level/layer tensors.
+        /// Maximum single artifact tensor read size for top-level/layer tensors.
         #[arg(long = "max-tensor-mb", default_value_t = 128)]
         max_tensor_mb: u64,
-        /// Maximum single expert source read size.
+        /// Maximum single expert artifact read size.
         #[arg(long = "expert-max-slice-mb", default_value_t = 64)]
         expert_reader_max_slice_mb: u64,
         /// Operator backend: cpu or cuda. cuda requires running via cargo oxide / just run-cuda.
@@ -361,6 +364,7 @@ fn main() -> anyhow::Result<()> {
             no_stop_eos,
             verbose_tokens,
             chat,
+            json,
         } => cmd_deepseek_v4_generate(
             &model,
             &prompt,
@@ -373,6 +377,7 @@ fn main() -> anyhow::Result<()> {
             !no_stop_eos,
             verbose_tokens,
             chat,
+            json,
         ),
         Command::DeepSeekV4Probe {
             model,
@@ -610,7 +615,7 @@ fn cmd_server(_model_dir: &str, _quant: &str, _host: &str, _port: u16) -> anyhow
 // ── perplexity ──────────────────────────────────────────────────────────────
 
 fn cmd_perplexity(model_dir: &str, file: &str, ctx_size: usize) -> anyhow::Result<()> {
-    use ferrule_runtime::perplexity;
+    use ferrule_bench::perplexity;
 
     let mut runner = RuntimeRunner::load(Path::new(model_dir))?;
     print_model_info(&runner.model_info());

@@ -1,0 +1,19 @@
+[package]
+name = "ferrule-bench"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "Ferrule benchmark, evaluation, and reporting utilities"
+repository = "https://github.com/ferrule/ferrule"
+readme = "../../README.md"
+keywords = ["llm", "benchmark", "inference", "moe"]
+categories = ["science", "machine-learning"]
+
+[dependencies]
+ferrule-core = { path = "../ferrule-core" }
+ferrule-model = { path = "../ferrule-model" }
+ferrule-runtime = { path = "../ferrule-runtime" }
+serde = { version = "1", features = ["derive"] }
+
+[lints]
+workspace = true

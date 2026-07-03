@@ -1,7 +1,7 @@
 //! Model-family policy registry.
 //!
 //! Generic runtime code should not know concrete tensor names from OLMoE,
-//! DeepSeek, Llama, etc. Family modules translate source artifacts into Ferrule's
+//! DeepSeek, Llama, etc. Family modules translate checkpoint artifacts into Ferrule's
 //! semantic model IR: `TransformerSpec`, `TensorClass`, support contracts, and
 //! conversion plans.
 
@@ -57,7 +57,7 @@ pub struct RouterTensorRef {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum SourceTensorPart {
+pub enum ArtifactTensorPart {
     Weight,
     Scale,
     Other,
@@ -81,7 +81,27 @@ pub enum AttentionTensorKind {
 pub struct AttentionTensorRef {
     pub layer: usize,
     pub kind: AttentionTensorKind,
-    pub part: SourceTensorPart,
+    pub part: ArtifactTensorPart,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DenseLayerTensorKind {
+    InputNorm,
+    PostAttentionNorm,
+    AttentionQuery,
+    AttentionKey,
+    AttentionValue,
+    AttentionOutput,
+    DenseMlpGate,
+    DenseMlpUp,
+    DenseMlpDown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DenseLayerTensorRef {
+    pub layer: usize,
+    pub kind: DenseLayerTensorKind,
+    pub part: ArtifactTensorPart,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -108,7 +128,7 @@ pub struct HyperConnectionTensorRef {
 pub fn classify_hf_tensor(family: &ModelFamily, name: &str) -> TensorClass {
     match family {
         ModelFamily::DeepSeekV4 => deepseek_v4::classify_hf_tensor(name),
-        ModelFamily::Qwen3 => qwen3::classify_hf_tensor(name),
+        ModelFamily::Qwen3 | ModelFamily::QwenMoe => qwen3::classify_hf_tensor(name),
         _ => common::classify_hf_tensor(name),
     }
 }
@@ -116,7 +136,7 @@ pub fn classify_hf_tensor(family: &ModelFamily, name: &str) -> TensorClass {
 pub fn classify_gguf_tensor(family: &ModelFamily, name: &str) -> TensorClass {
     match family {
         ModelFamily::DeepSeekV4 => deepseek_v4::classify_gguf_tensor(name),
-        ModelFamily::Qwen3 => qwen3::classify_gguf_tensor(name),
+        ModelFamily::Qwen3 | ModelFamily::QwenMoe => qwen3::classify_gguf_tensor(name),
         _ => common::classify_gguf_tensor(name),
     }
 }
@@ -132,9 +152,8 @@ pub fn has_mla_gguf_tensor_names<'a>(
 }
 
 pub fn refine_hf_spec(spec: &mut TransformerSpec, json: &serde_json::Value) {
-    match spec.family {
-        ModelFamily::DeepSeekV4 => deepseek_v4::refine_hf_spec(spec, json),
-        _ => {}
+    if spec.family == ModelFamily::DeepSeekV4 {
+        deepseek_v4::refine_hf_spec(spec, json);
     }
 }
 
@@ -143,9 +162,8 @@ pub fn append_gguf_notes(
     tensor_classes: &[TensorClassCount],
     notes: &mut Vec<String>,
 ) {
-    match family {
-        ModelFamily::DeepSeekV4 => deepseek_v4::append_gguf_notes(tensor_classes, notes),
-        _ => {}
+    if family == &ModelFamily::DeepSeekV4 {
+        deepseek_v4::append_gguf_notes(tensor_classes, notes);
     }
 }
 
@@ -180,6 +198,17 @@ pub fn parse_hf_attention_tensor(family: &ModelFamily, name: &str) -> Option<Att
     match family {
         ModelFamily::DeepSeekV4 => deepseek_v4::parse_hf_attention_tensor(name),
         _ => None,
+    }
+}
+
+pub fn parse_hf_dense_layer_tensor(
+    family: &ModelFamily,
+    name: &str,
+) -> Option<DenseLayerTensorRef> {
+    match family {
+        ModelFamily::Qwen3 | ModelFamily::QwenMoe => qwen3::parse_hf_dense_layer_tensor(name),
+        ModelFamily::DeepSeekV4 => None,
+        _ => common::parse_hf_dense_layer_tensor(name),
     }
 }
 

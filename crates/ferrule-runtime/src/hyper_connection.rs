@@ -151,7 +151,7 @@ pub struct HyperConnectionPreOutput {
     pub split: HyperConnectionSplit,
 }
 
-/// Reference `hc_split_sinkhorn` semantics used by HC-style source-bound models.
+/// Reference `hc_split_sinkhorn` semantics used by HC-style artifact-bound models.
 pub fn hc_split_sinkhorn_reference(
     mixes: &[f32],
     tokens: usize,

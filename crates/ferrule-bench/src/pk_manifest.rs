@@ -291,7 +291,7 @@ mod tests {
         let manifest = CompetitivePkManifest {
             id: PkManifestId::new("dsv4-local-first-token").unwrap(),
             model: PkModelId::new("DeepSeek-V4-Flash-DSpark").unwrap(),
-            quantization: PkQuantizationId::new("source-fp4/fp8").unwrap(),
+            quantization: PkQuantizationId::new("artifact-fp4/fp8").unwrap(),
             context_length: 4096,
             prompt_set: PkPromptSetId::new("golden/dsv4-smoke.jsonl").unwrap(),
             hardware: HardwareSpec {

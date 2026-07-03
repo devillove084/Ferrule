@@ -4,15 +4,17 @@ use serde::{Deserialize, Serialize};
 
 /// Semantic tensor role consumed by the generic Transformer executor boundary.
 ///
-/// Source tensor names such as `blk.0.attn_q_a.weight` should be translated into
+/// Artifact tensor names such as `blk.0.attn_q_a.weight` should be translated into
 /// these roles by model-family bindings. Generic runtime code should depend on
-/// roles, not source names or one model family's naming scheme.
+/// roles, not artifact names or one model family's naming scheme.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum TensorRole {
     TokenEmbedding,
     OutputNorm,
     OutputHead,
     LayerNorm,
+    AttentionNorm,
+    FeedForwardNorm,
     AttentionQuery,
     AttentionKey,
     AttentionValue,
@@ -55,6 +57,8 @@ impl TensorRole {
             Self::OutputNorm => "output_norm",
             Self::OutputHead => "output_head",
             Self::LayerNorm => "layer_norm",
+            Self::AttentionNorm => "attention_norm",
+            Self::FeedForwardNorm => "feed_forward_norm",
             Self::AttentionQuery => "attention_query",
             Self::AttentionKey => "attention_key",
             Self::AttentionValue => "attention_value",

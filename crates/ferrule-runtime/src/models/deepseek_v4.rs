@@ -1,7 +1,7 @@
 //! DeepSeek-V4 model-specific runtime boundary.
 //!
 //! Keep DeepSeek-V4 forward semantics here. The surrounding runtime remains generic
-//! over scheduling, sampling, source tensor IO, source linear formats, and CUDA
+//! over scheduling, sampling, artifact tensor IO, artifact linear formats, and CUDA
 //! operator surfaces.
 
 use std::cmp::Ordering;
@@ -16,6 +16,21 @@ use ferrule_model::{
     WeightSource,
 };
 
+use crate::artifact_binding::{
+    bind_attention_from_hf, bind_hyper_connection_from_hf, bind_hyper_connection_head_from_hf,
+    bind_router_from_hf, bind_shared_swiglu_ffn_from_hf, AttentionArtifactPayload,
+    RouterArtifactPayload,
+};
+use crate::artifact_format::{
+    normalized_hadamard_transform_rows_in_place, simulate_fp4_e2m1_e8m0_activation_quant_in_place,
+    simulate_fp8_e4m3fn_e8m0_activation_quant_in_place,
+};
+#[cfg(feature = "cuda")]
+use crate::artifact_linear::ArtifactLinearFormat;
+use crate::artifact_linear::ArtifactLinearPayload;
+use crate::artifact_tensor::{
+    ArtifactDType, ArtifactTensorPayload, ArtifactTensorReader, ArtifactTensorSlice,
+};
 use crate::attention_backend::{sparse_attention_reference, SparseAttentionSpec};
 use crate::expert_executor::{CpuReferenceExpertExecutor, ExpertExecutor};
 use crate::expert_handle::CpuExpertHandleStore;
@@ -36,20 +51,9 @@ use crate::hyper_connection::{
     HyperConnectionWeights,
 };
 use crate::routed_moe::{
-    execute_routed_moe_with_source_router_reference_with_handles, RoutedMoeStepOutput,
+    execute_routed_moe_with_artifact_router_reference_with_handles, RoutedMoeStepOutput,
 };
 use crate::runner::{ModelInfo, ModelRunner};
-use crate::source_binding::{
-    bind_attention_from_hf, bind_hyper_connection_from_hf, bind_hyper_connection_head_from_hf,
-    bind_router_from_hf, bind_shared_swiglu_ffn_from_hf, AttentionSourcePayload,
-    RouterSourcePayload,
-};
-#[cfg(feature = "cuda")]
-use crate::source_linear::SourceLinearFormat;
-use crate::source_linear::SourceLinearPayload;
-use crate::source_tensor::{
-    SourceDType, SourceTensorPayload, SourceTensorReader, SourceTensorSlice,
-};
 use crate::tokenizer::TokenizerHandle;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -204,14 +208,14 @@ impl DeepSeekV4Config {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceTensor2D {
-    pub slice: SourceTensorSlice,
+pub struct ArtifactTensor2D {
+    pub slice: ArtifactTensorSlice,
     pub rows: usize,
     pub cols: usize,
 }
 
-impl SourceTensor2D {
-    pub fn from_slice(slice: SourceTensorSlice, label: &str) -> Result<Self> {
+impl ArtifactTensor2D {
+    pub fn from_slice(slice: ArtifactTensorSlice, label: &str) -> Result<Self> {
         let [rows, cols]: [usize; 2] =
             slice
                 .shape
@@ -227,19 +231,19 @@ impl SourceTensor2D {
     }
 }
 
-pub struct DeepSeekV4SourceModel {
+pub struct DeepSeekV4ArtifactModel {
     pub descriptor: ModelDescriptor,
     pub config: DeepSeekV4Config,
     pub tokenizer: TokenizerHandle,
-    pub embedding: SourceTensor2D,
+    pub embedding: ArtifactTensor2D,
     pub output_norm: Vec<f32>,
-    pub output_head: SourceTensor2D,
+    pub output_head: ArtifactTensor2D,
     pub hc_head: HyperConnectionHeadWeights,
     inventory: HfSafetensorsInventory,
     max_tensor_bytes: u64,
 }
 
-impl DeepSeekV4SourceModel {
+impl DeepSeekV4ArtifactModel {
     pub fn load_hf(model_dir: &Path) -> Result<Self> {
         Self::load_hf_with_limit(model_dir, 128 * 1024 * 1024)
     }
@@ -248,21 +252,21 @@ impl DeepSeekV4SourceModel {
         let descriptor = ModelDescriptor::load(model_dir)?;
         if descriptor.spec.family != ModelFamily::DeepSeekV4 {
             return Err(Error::Model(format!(
-                "DeepSeek-V4 source model expected DeepSeek-V4 descriptor, got {}",
+                "DeepSeek-V4 artifact model expected DeepSeek-V4 descriptor, got {}",
                 descriptor.spec.family
             )));
         }
         if descriptor.spec.weight_source != WeightSource::Safetensors {
             return Err(Error::Model(format!(
-                "DeepSeek-V4 source model requires safetensors, got {}",
+                "DeepSeek-V4 artifact model requires safetensors, got {}",
                 descriptor.spec.weight_source
             )));
         }
         let config = DeepSeekV4Config::from_hf_config(model_dir)?;
         let inventory = HfSafetensorsInventory::open(model_dir, ModelFamily::DeepSeekV4)?;
-        let reader = SourceTensorReader::new(max_tensor_bytes);
+        let reader = ArtifactTensorReader::new(max_tensor_bytes);
         let tokenizer = TokenizerHandle::load(model_dir)?;
-        let embedding = SourceTensor2D::from_slice(
+        let embedding = ArtifactTensor2D::from_slice(
             unique_top_level_slice(model_dir, &inventory, TensorRole::TokenEmbedding)?,
             "token embedding",
         )?;
@@ -271,7 +275,7 @@ impl DeepSeekV4SourceModel {
             &inventory,
             TensorRole::OutputNorm,
         )?)?)?;
-        let output_head = SourceTensor2D::from_slice(
+        let output_head = ArtifactTensor2D::from_slice(
             unique_top_level_slice(model_dir, &inventory, TensorRole::OutputHead)?,
             "output head",
         )?;
@@ -318,7 +322,7 @@ impl DeepSeekV4SourceModel {
                 self.embedding.rows
             )));
         }
-        let reader = SourceTensorReader::new(self.max_tensor_bytes);
+        let reader = ArtifactTensorReader::new(self.max_tensor_bytes);
         let payload = reader.read_2d_rows(&self.embedding.slice, token, 1)?;
         let values = decode_tensor_f32(&payload)?;
         if values.len() != self.embedding.cols {
@@ -422,10 +426,10 @@ impl DeepSeekV4SourceModel {
                 hidden.len()
             )));
         }
-        let reader = SourceTensorReader::new(self.max_tensor_bytes);
+        let reader = ArtifactTensorReader::new(self.max_tensor_bytes);
         let payload = reader.read_2d_rows(&self.output_head.slice, start_row, row_count)?;
         let linear =
-            SourceLinearPayload::from_weight_and_scale(TensorRole::OutputHead, payload, None)?;
+            ArtifactLinearPayload::from_weight_and_scale(TensorRole::OutputHead, payload, None)?;
         operators.linear_matvec(&linear, hidden)
     }
 
@@ -483,13 +487,16 @@ impl DeepSeekV4SourceModel {
             ));
         }
         let mut top = Vec::<DeepSeekV4Logit>::new();
-        let reader = SourceTensorReader::new(self.max_tensor_bytes);
+        let reader = ArtifactTensorReader::new(self.max_tensor_bytes);
         let mut start = 0usize;
         while start < self.output_head.rows {
             let rows = chunk_rows.min(self.output_head.rows - start);
             let payload = reader.read_2d_rows(&self.output_head.slice, start, rows)?;
-            let linear =
-                SourceLinearPayload::from_weight_and_scale(TensorRole::OutputHead, payload, None)?;
+            let linear = ArtifactLinearPayload::from_weight_and_scale(
+                TensorRole::OutputHead,
+                payload,
+                None,
+            )?;
             top.extend(
                 operators
                     .linear_topk(&linear, hidden, top_k.min(rows))?
@@ -507,7 +514,7 @@ impl DeepSeekV4SourceModel {
     }
 
     pub fn bind_layer(&self, layer: usize) -> Result<DeepSeekV4Layer> {
-        let reader = SourceTensorReader::new(self.max_tensor_bytes);
+        let reader = ArtifactTensorReader::new(self.max_tensor_bytes);
         let attention_tensors = self.inventory.attention_tensors(&ModelFamily::DeepSeekV4);
         let hc_tensors = self
             .inventory
@@ -635,19 +642,14 @@ pub struct DeepSeekV4Logit {
     pub logit: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum DeepSeekV4OperatorBackend {
     /// CPU/reference execution for every operator. This is the correctness anchor.
+    #[default]
     Cpu,
     /// CUDA execution for model operators. CPU remains only the explicit reference
     /// backend; unsupported CUDA formats fail instead of silently falling back.
     Cuda,
-}
-
-impl Default for DeepSeekV4OperatorBackend {
-    fn default() -> Self {
-        Self::Cpu
-    }
 }
 
 impl DeepSeekV4OperatorBackend {
@@ -693,7 +695,7 @@ impl DeepSeekV4OperatorContext {
         self.backend
     }
 
-    fn linear_matvec(&mut self, linear: &SourceLinearPayload, input: &[f32]) -> Result<Vec<f32>> {
+    fn linear_matvec(&mut self, linear: &ArtifactLinearPayload, input: &[f32]) -> Result<Vec<f32>> {
         match self.backend {
             DeepSeekV4OperatorBackend::Cpu => linear.reference_matvec(input),
             DeepSeekV4OperatorBackend::Cuda => self.cuda_matvec(linear, input),
@@ -702,7 +704,7 @@ impl DeepSeekV4OperatorContext {
 
     fn linear_topk(
         &mut self,
-        linear: &SourceLinearPayload,
+        linear: &ArtifactLinearPayload,
         input: &[f32],
         top_k: usize,
     ) -> Result<Vec<DeepSeekV4Logit>> {
@@ -750,7 +752,7 @@ impl DeepSeekV4OperatorContext {
 
     fn grouped_output_a(
         &mut self,
-        output_a: &SourceLinearPayload,
+        output_a: &ArtifactLinearPayload,
         context: &[f32],
         cfg: DeepSeekV4AttentionConfig,
         layer: usize,
@@ -841,7 +843,7 @@ impl DeepSeekV4OperatorContext {
         layer: usize,
         input: &[f32],
         token_id: u32,
-        router: &RouterSourcePayload,
+        router: &RouterArtifactPayload,
         predicted_experts: &[usize],
         router_policy: &ExpertRouterPolicy,
         planner: &mut ExpertStreamingPlanner,
@@ -852,7 +854,7 @@ impl DeepSeekV4OperatorContext {
     ) -> Result<RoutedMoeStepOutput> {
         match self.backend {
             DeepSeekV4OperatorBackend::Cpu => {
-                execute_routed_moe_with_source_router_reference_with_handles(
+                execute_routed_moe_with_artifact_router_reference_with_handles(
                     layer,
                     input,
                     token_id,
@@ -889,14 +891,14 @@ impl DeepSeekV4OperatorContext {
     }
 
     #[cfg(feature = "cuda")]
-    fn cuda_matvec(&mut self, linear: &SourceLinearPayload, input: &[f32]) -> Result<Vec<f32>> {
+    fn cuda_matvec(&mut self, linear: &ArtifactLinearPayload, input: &[f32]) -> Result<Vec<f32>> {
         self.cuda_mut()?.linear_matvec(linear, input)
     }
 
     #[cfg(feature = "cuda")]
     fn cuda_linear_topk(
         &mut self,
-        linear: &SourceLinearPayload,
+        linear: &ArtifactLinearPayload,
         input: &[f32],
         top_k: usize,
     ) -> Result<Vec<DeepSeekV4Logit>> {
@@ -904,7 +906,7 @@ impl DeepSeekV4OperatorContext {
     }
 
     #[cfg(not(feature = "cuda"))]
-    fn cuda_matvec(&mut self, _linear: &SourceLinearPayload, _input: &[f32]) -> Result<Vec<f32>> {
+    fn cuda_matvec(&mut self, _linear: &ArtifactLinearPayload, _input: &[f32]) -> Result<Vec<f32>> {
         Err(Error::Model(
             "DeepSeek-V4 CUDA backend requires ferrule-runtime/cuda feature".into(),
         ))
@@ -928,7 +930,7 @@ impl DeepSeekV4OperatorContext {
     #[cfg(not(feature = "cuda"))]
     fn cuda_linear_topk(
         &mut self,
-        _linear: &SourceLinearPayload,
+        _linear: &ArtifactLinearPayload,
         _input: &[f32],
         _top_k: usize,
     ) -> Result<Vec<DeepSeekV4Logit>> {
@@ -956,7 +958,7 @@ impl DeepSeekV4OperatorContext {
     #[cfg(feature = "cuda")]
     fn cuda_grouped_output_a(
         &mut self,
-        output_a: &SourceLinearPayload,
+        output_a: &ArtifactLinearPayload,
         context: &[f32],
         cfg: DeepSeekV4AttentionConfig,
         layer: usize,
@@ -968,7 +970,7 @@ impl DeepSeekV4OperatorContext {
     #[cfg(not(feature = "cuda"))]
     fn cuda_grouped_output_a(
         &mut self,
-        _output_a: &SourceLinearPayload,
+        _output_a: &ArtifactLinearPayload,
         _context: &[f32],
         _cfg: DeepSeekV4AttentionConfig,
         _layer: usize,
@@ -1093,7 +1095,7 @@ impl DeepSeekV4OperatorContext {
         layer: usize,
         input: &[f32],
         token_id: u32,
-        router: &RouterSourcePayload,
+        router: &RouterArtifactPayload,
         predicted_experts: &[usize],
         router_policy: &ExpertRouterPolicy,
         planner: &mut ExpertStreamingPlanner,
@@ -1122,7 +1124,7 @@ impl DeepSeekV4OperatorContext {
         _layer: usize,
         _input: &[f32],
         _token_id: u32,
-        _router: &RouterSourcePayload,
+        _router: &RouterArtifactPayload,
         _predicted_experts: &[usize],
         _router_policy: &ExpertRouterPolicy,
         _planner: &mut ExpertStreamingPlanner,
@@ -1138,16 +1140,16 @@ impl DeepSeekV4OperatorContext {
 
 #[cfg(feature = "cuda")]
 struct DeepSeekV4CudaOperatorCache {
-    ops: ferrule_cuda::context::CudaSourceOperatorContext,
-    linears: HashMap<String, ferrule_cuda::context::CudaSourceLinearHandle>,
+    ops: ferrule_cuda::context::CudaArtifactOperatorContext,
+    linears: HashMap<String, ferrule_cuda::context::CudaArtifactLinearHandle>,
     experts: HashMap<ExpertId, CudaFp4ExpertHandles>,
 }
 
 #[cfg(feature = "cuda")]
 struct CudaFp4ExpertHandles {
-    gate: ferrule_cuda::context::CudaSourceLinearHandle,
-    up: ferrule_cuda::context::CudaSourceLinearHandle,
-    down: ferrule_cuda::context::CudaSourceLinearHandle,
+    gate: ferrule_cuda::context::CudaArtifactLinearHandle,
+    up: ferrule_cuda::context::CudaArtifactLinearHandle,
+    down: ferrule_cuda::context::CudaArtifactLinearHandle,
     bytes: u64,
 }
 
@@ -1155,16 +1157,16 @@ struct CudaFp4ExpertHandles {
 impl DeepSeekV4CudaOperatorCache {
     fn new() -> Result<Self> {
         Ok(Self {
-            ops: ferrule_cuda::context::CudaSourceOperatorContext::new()?,
+            ops: ferrule_cuda::context::CudaArtifactOperatorContext::new()?,
             linears: HashMap::new(),
             experts: HashMap::new(),
         })
     }
 
-    fn linear_matvec(&mut self, linear: &SourceLinearPayload, input: &[f32]) -> Result<Vec<f32>> {
+    fn linear_matvec(&mut self, linear: &ArtifactLinearPayload, input: &[f32]) -> Result<Vec<f32>> {
         if input.len() != linear.format.in_features() {
             return Err(Error::Model(format!(
-                "source linear {:?} input length mismatch: expected {}, got {}",
+                "artifact linear {:?} input length mismatch: expected {}, got {}",
                 linear.role,
                 linear.format.in_features(),
                 input.len()
@@ -1172,18 +1174,18 @@ impl DeepSeekV4CudaOperatorCache {
         }
         let key = self.ensure_linear_uploaded(linear)?;
         let handle = self.linears.get(&key).expect("inserted above");
-        self.ops.source_linear_matvec(handle, input)
+        self.ops.artifact_linear_matvec(handle, input)
     }
 
     fn linear_topk(
         &mut self,
-        linear: &SourceLinearPayload,
+        linear: &ArtifactLinearPayload,
         input: &[f32],
         top_k: usize,
     ) -> Result<Vec<DeepSeekV4Logit>> {
         if input.len() != linear.format.in_features() {
             return Err(Error::Model(format!(
-                "source linear {:?} top-k input length mismatch: expected {}, got {}",
+                "artifact linear {:?} top-k input length mismatch: expected {}, got {}",
                 linear.role,
                 linear.format.in_features(),
                 input.len()
@@ -1193,14 +1195,14 @@ impl DeepSeekV4CudaOperatorCache {
         let handle = self.linears.get(&key).expect("inserted above");
         Ok(self
             .ops
-            .source_linear_topk(handle, input, top_k)?
+            .artifact_linear_topk(handle, input, top_k)?
             .into_iter()
             .map(|(token_id, logit)| DeepSeekV4Logit { token_id, logit })
             .collect())
     }
 
-    fn ensure_linear_uploaded(&mut self, linear: &SourceLinearPayload) -> Result<String> {
-        let key = source_linear_cache_key(linear);
+    fn ensure_linear_uploaded(&mut self, linear: &ArtifactLinearPayload) -> Result<String> {
+        let key = artifact_linear_cache_key(linear);
         if !self.linears.contains_key(&key) {
             let handle = self.upload_linear(linear)?;
             self.linears.insert(key.clone(), handle);
@@ -1210,22 +1212,22 @@ impl DeepSeekV4CudaOperatorCache {
 
     fn upload_linear(
         &self,
-        linear: &SourceLinearPayload,
-    ) -> Result<ferrule_cuda::context::CudaSourceLinearHandle> {
+        linear: &ArtifactLinearPayload,
+    ) -> Result<ferrule_cuda::context::CudaArtifactLinearHandle> {
         match linear.format {
-            SourceLinearFormat::F32 {
+            ArtifactLinearFormat::F32 {
                 out_features,
                 in_features,
             } => self
                 .ops
                 .upload_f32_linear(&linear.weight.bytes, out_features, in_features),
-            SourceLinearFormat::Bf16 {
+            ArtifactLinearFormat::Bf16 {
                 out_features,
                 in_features,
             } => self
                 .ops
                 .upload_bf16_linear(&linear.weight.bytes, out_features, in_features),
-            SourceLinearFormat::Fp8E4M3WithE8M0Scale {
+            ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
                 out_features,
                 in_features,
                 block_m,
@@ -1233,7 +1235,7 @@ impl DeepSeekV4CudaOperatorCache {
             } => {
                 let scale = linear.scale.as_ref().ok_or_else(|| {
                     Error::Model(format!(
-                        "source linear {:?} CUDA FP8 weight is missing E8M0 scale tensor",
+                        "artifact linear {:?} CUDA FP8 weight is missing E8M0 scale tensor",
                         linear.role
                     ))
                 })?;
@@ -1246,14 +1248,14 @@ impl DeepSeekV4CudaOperatorCache {
                     block_k,
                 )
             }
-            SourceLinearFormat::Fp4E2M1PackedWithE8M0Scale {
+            ArtifactLinearFormat::Fp4E2M1PackedWithE8M0Scale {
                 out_features,
                 in_features,
                 block_size: 32,
             } => {
                 let scale = linear.scale.as_ref().ok_or_else(|| {
                     Error::Model(format!(
-                        "source linear {:?} CUDA FP4 weight is missing E8M0 scale tensor",
+                        "artifact linear {:?} CUDA FP4 weight is missing E8M0 scale tensor",
                         linear.role
                     ))
                 })?;
@@ -1264,9 +1266,9 @@ impl DeepSeekV4CudaOperatorCache {
                     in_features,
                 )
             }
-            SourceLinearFormat::Fp4E2M1PackedWithE8M0Scale { block_size, .. } => {
+            ArtifactLinearFormat::Fp4E2M1PackedWithE8M0Scale { block_size, .. } => {
                 Err(Error::Model(format!(
-                    "source linear {:?} CUDA FP4 block_size {block_size} is unsupported (expected 32)",
+                    "artifact linear {:?} CUDA FP4 block_size {block_size} is unsupported (expected 32)",
                     linear.role
                 )))
             }
@@ -1300,7 +1302,7 @@ impl DeepSeekV4CudaOperatorCache {
         let up = self.linears.get(&up_key).expect("inserted above");
         let down = self.linears.get(&down_key).expect("inserted above");
         self.ops
-            .source_swiglu_ffn_matvec(gate, up, down, input, output_scale, ffn.swiglu_limit)
+            .artifact_swiglu_ffn_matvec(gate, up, down, input, output_scale, ffn.swiglu_limit)
     }
 
     fn hc_pre(
@@ -1380,7 +1382,7 @@ impl DeepSeekV4CudaOperatorCache {
         layer: usize,
         input: &[f32],
         token_id: u32,
-        router: &RouterSourcePayload,
+        router: &RouterArtifactPayload,
         predicted_experts: &[usize],
         router_policy: &ExpertRouterPolicy,
         planner: &mut ExpertStreamingPlanner,
@@ -1401,8 +1403,8 @@ impl DeepSeekV4CudaOperatorCache {
         }
 
         for load in &streaming.loads {
-            let payload = reader.read_source(load.expert, &load.source)?;
-            let bundle = ExpertComputeBundle::from_source_payload(payload)?;
+            let payload = reader.read_load_source(load.expert, &load.load_source)?;
+            let bundle = ExpertComputeBundle::from_artifact_payload(payload)?;
             let expert = self.upload_expert_bundle(&bundle)?;
             let bytes = expert.bytes;
             self.experts.insert(load.expert, expert);
@@ -1423,7 +1425,7 @@ impl DeepSeekV4CudaOperatorCache {
                     expert_id.layer, expert_id.expert
                 ))
             })?;
-            let expert_out = self.ops.source_fp4_swiglu_ffn_matvec(
+            let expert_out = self.ops.artifact_fp4_swiglu_ffn_matvec(
                 &expert.gate,
                 &expert.up,
                 &expert.down,
@@ -1473,7 +1475,7 @@ impl DeepSeekV4CudaOperatorCache {
     fn upload_expert_linear(
         &self,
         linear: &ExpertLinearPayload,
-    ) -> Result<ferrule_cuda::context::CudaSourceLinearHandle> {
+    ) -> Result<ferrule_cuda::context::CudaArtifactLinearHandle> {
         let ExpertLinearFormat::Fp4E2M1PackedWithE8M0Scale {
             out_features,
             in_features,
@@ -1481,7 +1483,7 @@ impl DeepSeekV4CudaOperatorCache {
         } = linear.format
         else {
             return Err(Error::Model(format!(
-                "CUDA routed expert {:?} requires source FP4 block_size=32, got {:?}",
+                "CUDA routed expert {:?} requires artifact FP4 block_size=32, got {:?}",
                 linear.matrix, linear.format
             )));
         };
@@ -1532,12 +1534,12 @@ impl DeepSeekV4CudaOperatorCache {
 
     fn grouped_output_a(
         &mut self,
-        output_a: &SourceLinearPayload,
+        output_a: &ArtifactLinearPayload,
         context: &[f32],
         cfg: DeepSeekV4AttentionConfig,
         layer: usize,
     ) -> Result<Vec<f32>> {
-        let SourceLinearFormat::Fp8E4M3WithE8M0Scale {
+        let ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
             out_features,
             in_features,
             block_m,
@@ -1545,7 +1547,7 @@ impl DeepSeekV4CudaOperatorCache {
         } = output_a.format
         else {
             return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} CUDA grouped wo_a requires FP8 source format, got {:?}",
+                "DeepSeek-V4 layer {layer} CUDA grouped wo_a requires FP8 artifact format, got {:?}",
                 output_a.format
             )));
         };
@@ -1556,7 +1558,9 @@ impl DeepSeekV4CudaOperatorCache {
                 cfg.output_group_input_dim()
             )));
         }
-        if cfg.o_lora_rank % block_m != 0 || cfg.output_group_input_dim() % block_k != 0 {
+        if !cfg.o_lora_rank.is_multiple_of(block_m)
+            || !cfg.output_group_input_dim().is_multiple_of(block_k)
+        {
             return Err(Error::Model(format!(
                 "DeepSeek-V4 layer {layer} CUDA grouped wo_a block shape unsupported: o_rank={} group_in={} block_m={block_m} block_k={block_k}",
                 cfg.o_lora_rank,
@@ -1599,9 +1603,10 @@ impl DeepSeekV4CudaOperatorCache {
             }
             let handle = self.linears.get(&key).expect("inserted above");
             let context_start = group * group_in;
-            let group_out = self
-                .ops
-                .source_linear_matvec(handle, &context[context_start..context_start + group_in])?;
+            let group_out = self.ops.artifact_linear_matvec(
+                handle,
+                &context[context_start..context_start + group_in],
+            )?;
             out[row_start..row_start + cfg.o_lora_rank].copy_from_slice(&group_out);
         }
         Ok(out)
@@ -1609,7 +1614,7 @@ impl DeepSeekV4CudaOperatorCache {
 }
 
 #[cfg(feature = "cuda")]
-fn source_linear_cache_key(linear: &SourceLinearPayload) -> String {
+fn artifact_linear_cache_key(linear: &ArtifactLinearPayload) -> String {
     let scale_name = linear
         .scale
         .as_ref()
@@ -1649,7 +1654,7 @@ impl Default for DeepSeekV4ReferenceOptions {
 }
 
 pub struct DeepSeekV4ReferenceRunner {
-    pub model: DeepSeekV4SourceModel,
+    pub model: DeepSeekV4ArtifactModel,
     pub options: DeepSeekV4ReferenceOptions,
     operators: DeepSeekV4OperatorContext,
     layers: Vec<Option<DeepSeekV4Layer>>,
@@ -1660,12 +1665,15 @@ pub struct DeepSeekV4ReferenceRunner {
 }
 
 impl DeepSeekV4ReferenceRunner {
-    pub fn new(model: DeepSeekV4SourceModel, options: DeepSeekV4ReferenceOptions) -> Result<Self> {
+    pub fn new(
+        model: DeepSeekV4ArtifactModel,
+        options: DeepSeekV4ReferenceOptions,
+    ) -> Result<Self> {
         Self::new_with_operator_backend(model, options, DeepSeekV4OperatorBackend::Cpu)
     }
 
     pub fn new_with_operator_backend(
-        model: DeepSeekV4SourceModel,
+        model: DeepSeekV4ArtifactModel,
         options: DeepSeekV4ReferenceOptions,
         operator_backend: DeepSeekV4OperatorBackend,
     ) -> Result<Self> {
@@ -1703,7 +1711,7 @@ impl DeepSeekV4ReferenceRunner {
         options: DeepSeekV4ReferenceOptions,
     ) -> Result<Self> {
         Self::new(
-            DeepSeekV4SourceModel::load_hf_with_limit(model_dir, max_tensor_bytes)?,
+            DeepSeekV4ArtifactModel::load_hf_with_limit(model_dir, max_tensor_bytes)?,
             options,
         )
     }
@@ -1715,7 +1723,7 @@ impl DeepSeekV4ReferenceRunner {
         operator_backend: DeepSeekV4OperatorBackend,
     ) -> Result<Self> {
         Self::new_with_operator_backend(
-            DeepSeekV4SourceModel::load_hf_with_limit(model_dir, max_tensor_bytes)?,
+            DeepSeekV4ArtifactModel::load_hf_with_limit(model_dir, max_tensor_bytes)?,
             options,
             operator_backend,
         )
@@ -2034,7 +2042,7 @@ pub struct DeepSeekV4Layer {
     pub attention: DeepSeekV4Attention,
     pub hc_attention: HyperConnectionWeights,
     pub hc_feed_forward: HyperConnectionWeights,
-    pub router: RouterSourcePayload,
+    pub router: RouterArtifactPayload,
     pub shared_ffn: SwiGluFfnPayload,
     pub router_policy: ExpertRouterPolicy,
 }
@@ -2323,13 +2331,13 @@ impl DeepSeekV4AttentionConfig {
                 self.index_topk
             )));
         }
-        if self.num_heads % self.o_groups != 0 {
+        if !self.num_heads.is_multiple_of(self.o_groups) {
             return Err(Error::Model(format!(
                 "DeepSeek-V4 attention heads {} must be divisible by o_groups {}",
                 self.num_heads, self.o_groups
             )));
         }
-        if self.rope_head_dim > self.head_dim || self.rope_head_dim % 2 != 0 {
+        if self.rope_head_dim > self.head_dim || !self.rope_head_dim.is_multiple_of(2) {
             return Err(Error::Model(format!(
                 "DeepSeek-V4 rope_head_dim {} must be even and <= head_dim {}",
                 self.rope_head_dim, self.head_dim
@@ -2415,15 +2423,15 @@ pub struct DeepSeekV4CompressorPayload {
     pub ape_rows: usize,
     pub ape_cols: usize,
     pub norm: Vec<f32>,
-    pub wkv: SourceLinearPayload,
-    pub wgate: SourceLinearPayload,
+    pub wkv: ArtifactLinearPayload,
+    pub wgate: ArtifactLinearPayload,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeepSeekV4IndexerPayload {
     pub compressor: DeepSeekV4CompressorPayload,
-    pub wq_b: SourceLinearPayload,
-    pub weights_proj: SourceLinearPayload,
+    pub wq_b: ArtifactLinearPayload,
+    pub weights_proj: ArtifactLinearPayload,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2436,8 +2444,8 @@ impl DeepSeekV4CompressedAttentionPayload {
     pub fn bind_optional(
         layer: usize,
         cfg: DeepSeekV4AttentionConfig,
-        auxiliary: &[SourceTensorSlice],
-        reader: &SourceTensorReader,
+        auxiliary: &[ArtifactTensorSlice],
+        reader: &ArtifactTensorReader,
     ) -> Result<Option<Self>> {
         if cfg.compress_ratio == 0 {
             if !auxiliary.is_empty() {
@@ -2477,8 +2485,8 @@ impl DeepSeekV4CompressorPayload {
     #[allow(clippy::too_many_arguments)]
     fn bind(
         layer: usize,
-        auxiliary: &[SourceTensorSlice],
-        reader: &SourceTensorReader,
+        auxiliary: &[ArtifactTensorSlice],
+        reader: &ArtifactTensorReader,
         prefix: &str,
         role: TensorRole,
         compress_ratio: usize,
@@ -2545,8 +2553,8 @@ impl DeepSeekV4IndexerPayload {
     fn bind(
         layer: usize,
         cfg: DeepSeekV4AttentionConfig,
-        auxiliary: &[SourceTensorSlice],
-        reader: &SourceTensorReader,
+        auxiliary: &[ArtifactTensorSlice],
+        reader: &ArtifactTensorReader,
     ) -> Result<Self> {
         let prefix = format!("layers.{layer}.attn.indexer");
         let compressor = DeepSeekV4CompressorPayload::bind(
@@ -2600,7 +2608,7 @@ impl DeepSeekV4IndexerPayload {
 pub struct DeepSeekV4Attention {
     pub layer: usize,
     pub config: DeepSeekV4AttentionConfig,
-    pub payload: AttentionSourcePayload,
+    pub payload: AttentionArtifactPayload,
     pub compressed: Option<DeepSeekV4CompressedAttentionPayload>,
 }
 
@@ -2608,7 +2616,7 @@ impl DeepSeekV4Attention {
     pub fn new(
         layer: usize,
         config: DeepSeekV4AttentionConfig,
-        payload: AttentionSourcePayload,
+        payload: AttentionArtifactPayload,
     ) -> Result<Self> {
         Self::new_with_compressed(layer, config, payload, None)
     }
@@ -2616,7 +2624,7 @@ impl DeepSeekV4Attention {
     pub fn new_with_compressed(
         layer: usize,
         config: DeepSeekV4AttentionConfig,
-        payload: AttentionSourcePayload,
+        payload: AttentionArtifactPayload,
         compressed: Option<DeepSeekV4CompressedAttentionPayload>,
     ) -> Result<Self> {
         config.validate()?;
@@ -2707,7 +2715,7 @@ impl DeepSeekV4Attention {
                 self.layer
             )));
         }
-        if hidden.is_empty() || hidden.len() % cfg.hidden_size != 0 {
+        if hidden.is_empty() || !hidden.len().is_multiple_of(cfg.hidden_size) {
             return Err(Error::Model(format!(
                 "DeepSeek-V4 layer {} prefill hidden length mismatch: hidden={} dim={}",
                 self.layer,
@@ -2777,6 +2785,7 @@ impl DeepSeekV4Attention {
                 cfg.rope_params(),
                 false,
             )?;
+            quantize_attention_kv_for_qat_in_place(&mut kv, cfg.head_dim, cfg.rope_head_dim)?;
             cache.window.append(position, &kv)?;
             values.extend_from_slice(&kv);
         }
@@ -2859,6 +2868,7 @@ impl DeepSeekV4Attention {
                 rope,
                 false,
             )?;
+            quantize_attention_kv_for_qat_in_place(&mut kv, cfg.head_dim, cfg.rope_head_dim)?;
             cache.window.append(position, &kv)?;
             window_values.extend_from_slice(&kv);
         }
@@ -3088,6 +3098,7 @@ impl DeepSeekV4Attention {
             rope,
             false,
         )?;
+        quantize_attention_kv_for_qat_in_place(&mut kv, cfg.head_dim, cfg.rope_head_dim)?;
         cache.window.append(position, &kv)?;
 
         if let Some(indexer) = compressed.indexer.as_ref() {
@@ -3261,6 +3272,7 @@ impl DeepSeekV4Attention {
             cfg.rope_theta,
             false,
         )?;
+        quantize_attention_kv_for_qat_in_place(&mut kv, cfg.head_dim, cfg.rope_head_dim)?;
         cache.append(position, &kv)?;
         let topk = cache.topk_indices(position, cfg.window_size);
         let values = cache.values_for_attention();
@@ -3321,16 +3333,19 @@ impl DeepSeekV4AttentionCache {
         self.window.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn compressed_len(&self) -> usize {
         self.compressed.len() / self.window.head_dim
     }
 
     pub fn indexer_compressed_len(&self, index_head_dim: usize) -> usize {
-        if index_head_dim == 0 {
-            0
-        } else {
-            self.indexer_compressed.len() / index_head_dim
-        }
+        self.indexer_compressed
+            .len()
+            .checked_div(index_head_dim)
+            .unwrap_or(0)
     }
 
     fn append_compressed(&mut self, value: &[f32]) -> Result<()> {
@@ -3409,7 +3424,11 @@ impl DeepSeekV4CompressorState {
                 "DeepSeek-V4 compressor payload/state shape mismatch".into(),
             ));
         }
-        if hidden.is_empty() || hidden.len() % payload.wkv.format.in_features() != 0 {
+        if hidden.is_empty()
+            || !hidden
+                .len()
+                .is_multiple_of(payload.wkv.format.in_features())
+        {
             return Err(Error::Model(format!(
                 "DeepSeek-V4 compressor prefill hidden length mismatch: hidden={} in_features={}",
                 hidden.len(),
@@ -3534,6 +3553,12 @@ impl DeepSeekV4CompressorState {
                 rope,
                 false,
             )?;
+            quantize_compressed_kv_for_qat_in_place(
+                &mut out,
+                self.head_dim,
+                rope_dim.min(self.head_dim),
+                payload.rotate_for_indexer,
+            )?;
             out_all.extend_from_slice(&out);
         }
         Ok(out_all)
@@ -3583,7 +3608,7 @@ impl DeepSeekV4CompressorState {
         self.kv_state[dst..dst + self.out_dim].copy_from_slice(&kv);
         self.score_state[dst..dst + self.out_dim].copy_from_slice(&score);
 
-        if (position + 1) % self.ratio != 0 {
+        if !(position + 1).is_multiple_of(self.ratio) {
             return Ok(None);
         }
 
@@ -3680,6 +3705,12 @@ impl DeepSeekV4CompressorState {
             rope,
             false,
         )?;
+        quantize_compressed_kv_for_qat_in_place(
+            &mut out,
+            self.head_dim,
+            rope_dim.min(self.head_dim),
+            payload.rotate_for_indexer,
+        )?;
         Ok(out)
     }
 }
@@ -3704,6 +3735,10 @@ impl DeepSeekV4WindowKvCache {
 
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
     pub fn append(&mut self, position: usize, value: &[f32]) -> Result<()> {
@@ -3764,24 +3799,24 @@ impl DeepSeekV4WindowKvCache {
 }
 
 fn bind_aux_linear(
-    auxiliary: &[SourceTensorSlice],
-    reader: &SourceTensorReader,
+    auxiliary: &[ArtifactTensorSlice],
+    reader: &ArtifactTensorReader,
     role: TensorRole,
     weight_name: &str,
     scale_name: Option<&str>,
-) -> Result<SourceLinearPayload> {
+) -> Result<ArtifactLinearPayload> {
     let weight = read_aux_tensor(auxiliary, reader, weight_name)?;
     let scale = scale_name
         .map(|name| read_aux_tensor(auxiliary, reader, name))
         .transpose()?;
-    SourceLinearPayload::from_weight_and_scale(role, weight, scale)
+    ArtifactLinearPayload::from_weight_and_scale(role, weight, scale)
 }
 
 fn read_aux_tensor(
-    auxiliary: &[SourceTensorSlice],
-    reader: &SourceTensorReader,
+    auxiliary: &[ArtifactTensorSlice],
+    reader: &ArtifactTensorReader,
     name: &str,
-) -> Result<SourceTensorPayload> {
+) -> Result<ArtifactTensorPayload> {
     let slice = auxiliary
         .iter()
         .find(|slice| slice.name == name)
@@ -3790,17 +3825,17 @@ fn read_aux_tensor(
 }
 
 fn read_aux_tensor_f32(
-    auxiliary: &[SourceTensorSlice],
-    reader: &SourceTensorReader,
+    auxiliary: &[ArtifactTensorSlice],
+    reader: &ArtifactTensorReader,
     name: &str,
-) -> Result<SourceTensorPayload> {
+) -> Result<ArtifactTensorPayload> {
     let payload = read_aux_tensor(auxiliary, reader, name)?;
     let _ = decode_tensor_f32(&payload)?;
     Ok(payload)
 }
 
 fn two_dim_shape_from_payload(
-    payload: &SourceTensorPayload,
+    payload: &ArtifactTensorPayload,
     label: &str,
 ) -> Result<(usize, usize)> {
     let [rows, cols]: [usize; 2] =
@@ -3821,7 +3856,7 @@ fn two_dim_shape_from_payload(
 fn check_linear(
     layer: usize,
     label: &str,
-    linear: &SourceLinearPayload,
+    linear: &ArtifactLinearPayload,
     out: usize,
     input: usize,
 ) -> Result<()> {
@@ -3866,6 +3901,61 @@ fn rms_norm_rows_with_operators(
         out.extend_from_slice(&normalized);
     }
     Ok(out)
+}
+
+fn quantize_attention_kv_for_qat_in_place(
+    values: &mut [f32],
+    head_dim: usize,
+    rope_dim: usize,
+) -> Result<()> {
+    quantize_non_rope_fp8_for_qat_in_place(values, head_dim, rope_dim, 64)
+}
+
+fn quantize_compressed_kv_for_qat_in_place(
+    values: &mut [f32],
+    head_dim: usize,
+    rope_dim: usize,
+    rotate_for_indexer: bool,
+) -> Result<()> {
+    if rotate_for_indexer {
+        quantize_indexer_activation_for_qat_in_place(values, head_dim)
+    } else {
+        quantize_non_rope_fp8_for_qat_in_place(values, head_dim, rope_dim, 64)
+    }
+}
+
+fn quantize_non_rope_fp8_for_qat_in_place(
+    values: &mut [f32],
+    head_dim: usize,
+    rope_dim: usize,
+    block_size: usize,
+) -> Result<()> {
+    if head_dim == 0 || rope_dim > head_dim || !values.len().is_multiple_of(head_dim) {
+        return Err(Error::Model(format!(
+            "DeepSeek-V4 QAT FP8 shape mismatch: values={} head_dim={head_dim} rope_dim={rope_dim}",
+            values.len()
+        )));
+    }
+    let non_rope = head_dim - rope_dim;
+    if non_rope == 0 {
+        return Ok(());
+    }
+    for row in values.chunks_exact_mut(head_dim) {
+        simulate_fp8_e4m3fn_e8m0_activation_quant_in_place(
+            &mut row[..non_rope],
+            non_rope,
+            block_size,
+        )?;
+    }
+    Ok(())
+}
+
+fn quantize_indexer_activation_for_qat_in_place(
+    values: &mut [f32],
+    row_width: usize,
+) -> Result<()> {
+    normalized_hadamard_transform_rows_in_place(values, row_width)?;
+    simulate_fp4_e2m1_e8m0_activation_quant_in_place(values, row_width, 32)
 }
 
 fn window_topk_indices_prefill(window_size: usize, tokens: usize) -> Vec<isize> {
@@ -3969,6 +4059,7 @@ fn indexer_topk_indices_prefill(
             cfg.rope_params(),
             false,
         )?;
+        quantize_indexer_activation_for_qat_in_place(&mut query, cfg.index_head_dim)?;
         let hidden_row = &hidden[token * cfg.hidden_size..(token + 1) * cfg.hidden_size];
         let mut weights = operators.linear_matvec(&indexer.weights_proj, hidden_row)?;
         let scale = (cfg.index_head_dim as f32).powf(-0.5) * (cfg.index_n_heads as f32).powf(-0.5);
@@ -4084,6 +4175,7 @@ fn indexer_topk_indices(
         cfg.rope_params(),
         false,
     )?;
+    quantize_indexer_activation_for_qat_in_place(&mut query, cfg.index_head_dim)?;
     let mut weights = operators.linear_matvec(&indexer.weights_proj, hidden)?;
     let scale = (cfg.index_head_dim as f32).powf(-0.5) * (cfg.index_n_heads as f32).powf(-0.5);
     for weight in &mut weights {
@@ -4115,7 +4207,7 @@ fn indexer_topk_indices(
 }
 
 fn grouped_output_a(
-    output_a: &SourceLinearPayload,
+    output_a: &ArtifactLinearPayload,
     context: &[f32],
     cfg: DeepSeekV4AttentionConfig,
     layer: usize,
@@ -4225,7 +4317,7 @@ fn apply_rotary_tail_scaled(
     if rope_dim == 0 {
         return Ok(());
     }
-    if rope_dim > head_dim || rope_dim % 2 != 0 || values.len() != heads * head_dim {
+    if rope_dim > head_dim || !rope_dim.is_multiple_of(2) || values.len() != heads * head_dim {
         return Err(Error::Model(format!(
             "DeepSeek-V4 rotary shape mismatch: values={}, heads={heads}, head_dim={head_dim}, rope_dim={rope_dim}",
             values.len()
@@ -4296,14 +4388,14 @@ fn unique_top_level_slice(
     model_dir: &Path,
     inventory: &HfSafetensorsInventory,
     role: TensorRole,
-) -> Result<SourceTensorSlice> {
+) -> Result<ArtifactTensorSlice> {
     let tensors = inventory
         .tensors
         .iter()
         .filter(|tensor| tensor.role == role)
         .collect::<Vec<_>>();
     match tensors.as_slice() {
-        [tensor] => Ok(SourceTensorSlice::from_hf_inventory(model_dir, tensor)),
+        [tensor] => Ok(ArtifactTensorSlice::from_hf_inventory(model_dir, tensor)),
         [] => Err(Error::Model(format!(
             "DeepSeek-V4 missing top-level tensor role {role}"
         ))),
@@ -4317,12 +4409,12 @@ fn unique_top_level_slice(
 fn read_named_vector_f32(
     model_dir: &Path,
     inventory: &HfSafetensorsInventory,
-    reader: &SourceTensorReader,
+    reader: &ArtifactTensorReader,
     name: &str,
     role: TensorRole,
 ) -> Result<Vec<f32>> {
     let tensor = inventory_tensor(inventory, name)?;
-    let mut slice = SourceTensorSlice::from_hf_inventory(model_dir, tensor);
+    let mut slice = ArtifactTensorSlice::from_hf_inventory(model_dir, tensor);
     slice.role = role;
     decode_vector_f32(&reader.read_slice(&slice)?)
 }
@@ -4338,7 +4430,7 @@ fn inventory_tensor<'a>(
         .ok_or_else(|| Error::Model(format!("DeepSeek-V4 missing tensor '{name}'")))
 }
 
-fn decode_vector_f32(payload: &SourceTensorPayload) -> Result<Vec<f32>> {
+fn decode_vector_f32(payload: &ArtifactTensorPayload) -> Result<Vec<f32>> {
     if payload.slice.shape.len() != 1 {
         return Err(Error::Model(format!(
             "DeepSeek-V4 source vector '{}' expects 1D shape, got {:?}",
@@ -4348,10 +4440,10 @@ fn decode_vector_f32(payload: &SourceTensorPayload) -> Result<Vec<f32>> {
     decode_tensor_f32(payload)
 }
 
-fn decode_tensor_f32(payload: &SourceTensorPayload) -> Result<Vec<f32>> {
+fn decode_tensor_f32(payload: &ArtifactTensorPayload) -> Result<Vec<f32>> {
     let expected = payload.slice.element_count()?;
     match payload.slice.dtype {
-        SourceDType::F32 => {
+        ArtifactDType::F32 => {
             if payload.bytes.len() != expected * 4 {
                 return Err(Error::Model(format!(
                     "DeepSeek-V4 F32 tensor '{}' byte length mismatch",
@@ -4364,7 +4456,7 @@ fn decode_tensor_f32(payload: &SourceTensorPayload) -> Result<Vec<f32>> {
                 .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
                 .collect())
         }
-        SourceDType::Bf16 => {
+        ArtifactDType::Bf16 => {
             if payload.bytes.len() != expected * 2 {
                 return Err(Error::Model(format!(
                     "DeepSeek-V4 BF16 tensor '{}' byte length mismatch",
@@ -4381,7 +4473,7 @@ fn decode_tensor_f32(payload: &SourceTensorPayload) -> Result<Vec<f32>> {
                 .collect())
         }
         _ => Err(Error::Model(format!(
-            "DeepSeek-V4 source tensor '{}' has unsupported vector dtype {}",
+            "DeepSeek-V4 artifact tensor '{}' has unsupported vector dtype {}",
             payload.slice.name,
             payload.slice.dtype.as_str()
         ))),
@@ -4439,12 +4531,12 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
+    use crate::artifact_linear::ArtifactLinearPayload;
     use crate::expert_executor::CpuReferenceExpertExecutor;
     use crate::expert_streaming::{
         ExpertId, ExpertMatrixKind, ExpertSource, ExpertTensorComponent, ExpertTensorKey,
         ExpertTensorPayload, ExpertTensorSlice,
     };
-    use crate::source_linear::SourceLinearPayload;
 
     #[test]
     fn attention_shape_contract_accepts_official_dimensions() {
@@ -4605,7 +4697,7 @@ mod tests {
             .unwrap(),
             hc_attention: zero_hc_weights(hc_config),
             hc_feed_forward: zero_hc_weights(hc_config),
-            router: RouterSourcePayload {
+            router: RouterArtifactPayload {
                 layer: 0,
                 weight: f32_linear(TensorRole::RouterLogits, "router", 1, 32),
                 bias: None,
@@ -4674,8 +4766,8 @@ mod tests {
         }
     }
 
-    fn attention_payload_for_cfg(cfg: DeepSeekV4AttentionConfig) -> AttentionSourcePayload {
-        AttentionSourcePayload {
+    fn attention_payload_for_cfg(cfg: DeepSeekV4AttentionConfig) -> AttentionArtifactPayload {
+        AttentionArtifactPayload {
             layer: 0,
             query_a: f32_linear(
                 TensorRole::AttentionLatentQueryA,
@@ -4714,8 +4806,8 @@ mod tests {
         }
     }
 
-    fn attention_payload_for_small_cfg(cfg: DeepSeekV4AttentionConfig) -> AttentionSourcePayload {
-        AttentionSourcePayload {
+    fn attention_payload_for_small_cfg(cfg: DeepSeekV4AttentionConfig) -> AttentionArtifactPayload {
+        AttentionArtifactPayload {
             layer: 0,
             query_a: identity_linear(TensorRole::AttentionLatentQueryA, "wq_a", 4),
             query_b: identity_linear(TensorRole::AttentionLatentQueryB, "wq_b", 4),
@@ -4737,8 +4829,8 @@ mod tests {
 
     fn attention_payload_for_vertical_cfg(
         cfg: DeepSeekV4AttentionConfig,
-    ) -> AttentionSourcePayload {
-        AttentionSourcePayload {
+    ) -> AttentionArtifactPayload {
+        AttentionArtifactPayload {
             layer: 0,
             query_a: f32_linear_values(
                 TensorRole::AttentionLatentQueryA,
@@ -4792,7 +4884,7 @@ mod tests {
         }
     }
 
-    fn identity_linear(role: TensorRole, name: &str, dim: usize) -> SourceLinearPayload {
+    fn identity_linear(role: TensorRole, name: &str, dim: usize) -> ArtifactLinearPayload {
         let mut values = vec![0.0; dim * dim];
         for i in 0..dim {
             values[i * dim + i] = 1.0;
@@ -4800,7 +4892,7 @@ mod tests {
         f32_linear_values(role, name, dim, dim, &values)
     }
 
-    fn f32_linear(role: TensorRole, name: &str, out: usize, input: usize) -> SourceLinearPayload {
+    fn f32_linear(role: TensorRole, name: &str, out: usize, input: usize) -> ArtifactLinearPayload {
         f32_linear_values(role, name, out, input, &vec![0.0; out * input])
     }
 
@@ -4810,18 +4902,18 @@ mod tests {
         out: usize,
         input: usize,
         values: &[f32],
-    ) -> SourceLinearPayload {
+    ) -> ArtifactLinearPayload {
         assert_eq!(values.len(), out * input);
-        SourceLinearPayload::from_weight_and_scale(
+        ArtifactLinearPayload::from_weight_and_scale(
             role,
-            SourceTensorPayload {
-                slice: SourceTensorSlice {
+            ArtifactTensorPayload {
+                slice: ArtifactTensorSlice {
                     name: format!("{name}.weight"),
                     role: TensorRole::Unknown,
                     path: PathBuf::from("synthetic.safetensors"),
                     offset: 0,
                     bytes: (values.len() * 4) as u64,
-                    dtype: SourceDType::F32,
+                    dtype: ArtifactDType::F32,
                     shape: vec![out, input],
                 },
                 bytes: values

@@ -1,4 +1,4 @@
-//! Source weight-format helpers for reference tests and tiny fixtures.
+//! Artifact weight-format helpers for reference tests and tiny fixtures.
 //!
 //! These routines are intentionally correctness/debug utilities, not the final
 //! high-throughput path. Production execution should consume packed FP4 + E8M0
@@ -86,7 +86,8 @@ pub fn dequantize_fp4_e2m1_with_e8m0_scales(
     in_features: usize,
     block_size: usize,
 ) -> Result<Vec<f32>> {
-    if block_size == 0 || in_features % block_size != 0 || in_features % 2 != 0 {
+    if block_size == 0 || !in_features.is_multiple_of(block_size) || !in_features.is_multiple_of(2)
+    {
         return Err(Error::Model(format!(
             "invalid FP4 shape: in_features={in_features}, block_size={block_size}"
         )));
@@ -178,6 +179,204 @@ pub fn dequantize_fp8_e4m3fn_with_e8m0_scales(
     Ok(out)
 }
 
+/// Simulate official block-wise FP8 activation quantization in-place.
+///
+/// This matches the reference `act_quant(..., scale_dtype=float8_e8m0fnu,
+/// scale_fmt="ue8m0", inplace=True)` contract: each row/block uses a power-of-two
+/// scale computed from `ceil(log2(absmax / 448))`, casts through E4M3FN, and
+/// dequantizes back to f32. It is intentionally a reference helper for semantic
+/// parity; production backends should fuse this into kernels.
+pub fn simulate_fp8_e4m3fn_e8m0_activation_quant_in_place(
+    values: &mut [f32],
+    row_width: usize,
+    block_size: usize,
+) -> Result<()> {
+    if row_width == 0 || block_size == 0 || !row_width.is_multiple_of(block_size) {
+        return Err(Error::Model(format!(
+            "invalid FP8 activation quant shape: row_width={row_width}, block_size={block_size}"
+        )));
+    }
+    if !values.len().is_multiple_of(row_width) {
+        return Err(Error::Model(format!(
+            "FP8 activation quant length {} is not a multiple of row_width {row_width}",
+            values.len()
+        )));
+    }
+
+    for row in values.chunks_exact_mut(row_width) {
+        for block in row.chunks_exact_mut(block_size) {
+            let amax = block
+                .iter()
+                .fold(0.0f32, |acc, value| acc.max(value.abs()))
+                .max(1e-4);
+            let scale = rounded_power_of_two_scale(amax, 448.0);
+            for value in block {
+                let quantized = quantize_fp8_e4m3fn_to_f32((*value / scale).clamp(-448.0, 448.0));
+                *value = quantized * scale;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Simulate official block-wise FP4 E2M1 activation quantization in-place.
+///
+/// This corresponds to `fp4_act_quant(..., inplace=True)`: each row/block uses a
+/// power-of-two scale from `ceil(log2(absmax / 6))`, casts through E2M1, and
+/// dequantizes back to f32.
+pub fn simulate_fp4_e2m1_e8m0_activation_quant_in_place(
+    values: &mut [f32],
+    row_width: usize,
+    block_size: usize,
+) -> Result<()> {
+    if row_width == 0 || block_size == 0 || !row_width.is_multiple_of(block_size) {
+        return Err(Error::Model(format!(
+            "invalid FP4 activation quant shape: row_width={row_width}, block_size={block_size}"
+        )));
+    }
+    if !values.len().is_multiple_of(row_width) {
+        return Err(Error::Model(format!(
+            "FP4 activation quant length {} is not a multiple of row_width {row_width}",
+            values.len()
+        )));
+    }
+
+    for row in values.chunks_exact_mut(row_width) {
+        for block in row.chunks_exact_mut(block_size) {
+            let amax = block
+                .iter()
+                .fold(0.0f32, |acc, value| acc.max(value.abs()))
+                .max(6.0 * 2.0f32.powi(-126));
+            let scale = rounded_power_of_two_scale(amax, 6.0);
+            for value in block {
+                let quantized = quantize_fp4_e2m1_to_f32((*value / scale).clamp(-6.0, 6.0));
+                *value = quantized * scale;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Apply a normalized Walsh-Hadamard transform independently to each row.
+///
+/// The official DSV4 indexer uses `fast_hadamard_transform(x, scale=n^-0.5)`
+/// before FP4 activation quantization. This helper keeps that transform generic
+/// and CPU-reference-only.
+pub fn normalized_hadamard_transform_rows_in_place(
+    values: &mut [f32],
+    row_width: usize,
+) -> Result<()> {
+    if row_width == 0 || !row_width.is_power_of_two() {
+        return Err(Error::Model(format!(
+            "Hadamard row_width must be a non-zero power of two, got {row_width}"
+        )));
+    }
+    if !values.len().is_multiple_of(row_width) {
+        return Err(Error::Model(format!(
+            "Hadamard input length {} is not a multiple of row_width {row_width}",
+            values.len()
+        )));
+    }
+
+    let scale = (row_width as f32).sqrt().recip();
+    for row in values.chunks_exact_mut(row_width) {
+        let mut span = 1usize;
+        while span < row_width {
+            let step = span * 2;
+            let mut start = 0usize;
+            while start < row_width {
+                for offset in 0..span {
+                    let left = start + offset;
+                    let right = left + span;
+                    let a = row[left];
+                    let b = row[right];
+                    row[left] = a + b;
+                    row[right] = a - b;
+                }
+                start += step;
+            }
+            span = step;
+        }
+        for value in row {
+            *value *= scale;
+        }
+    }
+    Ok(())
+}
+
+fn rounded_power_of_two_scale(amax: f32, quant_max: f32) -> f32 {
+    2.0f32.powf((amax / quant_max).log2().ceil())
+}
+
+fn quantize_fp8_e4m3fn_to_f32(value: f32) -> f32 {
+    if !value.is_finite() || value == 0.0 {
+        return value;
+    }
+    let sign = if value.is_sign_negative() { -1.0 } else { 1.0 };
+    let magnitude = value.abs().min(448.0);
+    sign * nearest_fp8_e4m3fn_positive(magnitude)
+}
+
+fn nearest_fp8_e4m3fn_positive(magnitude: f32) -> f32 {
+    let mut best = nearest_fp8_subnormal_positive(magnitude);
+    let mut best_err = (best - magnitude).abs();
+    let exp_floor = magnitude.log2().floor() as i32;
+    for exp in exp_floor - 1..=exp_floor + 1 {
+        if !(-6..=8).contains(&exp) {
+            continue;
+        }
+        let scale = 2.0f32.powi(exp);
+        let mut mantissa = ((magnitude / scale - 1.0) * 8.0).round() as i32;
+        let mut candidate_exp = exp;
+        if mantissa < 0 {
+            continue;
+        }
+        if mantissa > 7 {
+            candidate_exp += 1;
+            mantissa = 0;
+        }
+        if candidate_exp > 8 {
+            candidate_exp = 8;
+            mantissa = 6;
+        }
+        if candidate_exp == 8 && mantissa > 6 {
+            mantissa = 6;
+        }
+        let candidate = 2.0f32.powi(candidate_exp) * (1.0 + mantissa as f32 / 8.0);
+        let err = (candidate - magnitude).abs();
+        if err < best_err {
+            best = candidate;
+            best_err = err;
+        }
+    }
+    best
+}
+
+fn nearest_fp8_subnormal_positive(magnitude: f32) -> f32 {
+    let step = 2.0f32.powi(-9);
+    let mantissa = (magnitude / step).round().clamp(0.0, 7.0);
+    mantissa * step
+}
+
+fn quantize_fp4_e2m1_to_f32(value: f32) -> f32 {
+    if !value.is_finite() || value == 0.0 {
+        return value;
+    }
+    let sign = if value.is_sign_negative() { -1.0 } else { 1.0 };
+    const MAGNITUDES: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
+    let magnitude = value.abs().min(6.0);
+    let mut best = MAGNITUDES[0];
+    let mut best_err = (magnitude - best).abs();
+    for candidate in MAGNITUDES.into_iter().skip(1) {
+        let err = (magnitude - candidate).abs();
+        if err < best_err {
+            best = candidate;
+            best_err = err;
+        }
+    }
+    sign * best
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +441,40 @@ mod tests {
         let out = dequantize_fp4_e2m1_with_e8m0_scales(&weight, &scales, 1, 32, 32).unwrap();
         assert_eq!(out[0], 2.0);
         assert_eq!(out[1], 2.0);
+    }
+
+    #[test]
+    fn fp8_activation_quant_uses_power_of_two_scale() {
+        let mut values = vec![0.0f32; 128];
+        values[0] = 448.0;
+        values[1] = 224.0;
+        values[2] = 500.0;
+        values[3] = 1.3;
+        simulate_fp8_e4m3fn_e8m0_activation_quant_in_place(&mut values, 128, 128).unwrap();
+        assert_eq!(values[0], 448.0);
+        assert_eq!(values[1], 224.0);
+        assert_eq!(values[2], 512.0);
+        assert!((values[3] - 1.25).abs() < 1e-6, "{}", values[3]);
+    }
+
+    #[test]
+    fn fp4_activation_quant_uses_e2m1_grid() {
+        let mut values = vec![0.0f32; 32];
+        values[0] = 6.0;
+        values[1] = 5.1;
+        values[2] = 2.6;
+        values[3] = -0.7;
+        simulate_fp4_e2m1_e8m0_activation_quant_in_place(&mut values, 32, 32).unwrap();
+        assert_eq!(values[0], 6.0);
+        assert_eq!(values[1], 6.0);
+        assert_eq!(values[2], 3.0);
+        assert_eq!(values[3], -0.5);
+    }
+
+    #[test]
+    fn normalized_hadamard_transform_is_row_local() {
+        let mut values = vec![1.0, 2.0, 3.0, 4.0, 4.0, 3.0, 2.0, 1.0];
+        normalized_hadamard_transform_rows_in_place(&mut values, 4).unwrap();
+        assert_eq!(values, vec![5.0, -1.0, -2.0, 0.0, 5.0, 1.0, 2.0, 0.0]);
     }
 }

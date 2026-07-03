@@ -7,7 +7,7 @@ use super::plan::EnginePlan;
 use super::policies::{PolicySet, SpeculationMode};
 use super::roles::TensorRole;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ModelSupportContract {
     pub spec: TransformerSpec,
     pub layout: ModelLayout,

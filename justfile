@@ -87,7 +87,7 @@ oxide-test *args='':
 
 # ── Test ───────────────────────────────────────────────────────────────
 
-test: test-graph test-runtime test-model test-cuda test-cli
+test: test-graph test-runtime test-model test-bench test-cuda test-cli
 
 test-graph:
     cargo test -p ferrule-graph
@@ -97,6 +97,9 @@ test-runtime:
 
 test-model:
     cargo test -p ferrule-model
+
+test-bench:
+    cargo test -p ferrule-bench
 
 test-cuda *args='':
     @if [ "{{ _use-cuda }}" != "1" ]; then \
@@ -128,7 +131,7 @@ fmt-fix:
     cargo fmt
 
 clippy:
-    cargo clippy -p ferrule-core -p ferrule-graph -p ferrule-model -p ferrule-runtime -p ferrule-cli -- -D warnings
+    cargo clippy -p ferrule-core -p ferrule-graph -p ferrule-model -p ferrule-runtime -p ferrule-bench -p ferrule-cli -- -D warnings
 
 clippy-cuda:
     cargo clippy -p ferrule-core -p ferrule-graph -p ferrule-model -p ferrule-runtime -p ferrule-cli --features cuda -- -D warnings

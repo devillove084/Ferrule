@@ -1,13 +1,14 @@
 //! Routed MoE step orchestration.
 //!
 //! This module wires together pieces that must remain independently swappable:
-//! router policy, expert residency/streaming planner, source reader, expert
+//! router policy, expert residency/streaming planner, artifact reader, expert
 //! executor, and optional shared FFN. The first implementation is a CPU reference
 //! path for tiny fixtures; CUDA will replace the executor/handle side while
 //! keeping the same routing and residency semantics.
 
 use ferrule_core::{Error, Result};
 
+use crate::artifact_binding::RouterArtifactPayload;
 use crate::expert_executor::ExpertExecutor;
 use crate::expert_handle::{CpuExpertHandleStore, ExpertHandleStore};
 use crate::expert_routing::{ExpertRoute, ExpertRouterPolicy};
@@ -15,7 +16,6 @@ use crate::expert_streaming::{
     ExpertId, ExpertStreamingPlanner, ExpertStreamingReader, ExpertStreamingStep,
 };
 use crate::ffn::SwiGluFfnPayload;
-use crate::source_binding::RouterSourcePayload;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoutedMoeStepOutput {
@@ -78,14 +78,14 @@ pub fn execute_routed_moe_reference_with_handles(
 
     handles.apply_evictions(&streaming.evictions);
     for load in &streaming.loads {
-        let payload = reader.read_source(load.expert, &load.source)?;
-        handles.insert_source_payload(payload)?;
+        let payload = reader.read_load_source(load.expert, &load.load_source)?;
+        handles.insert_artifact_payload(payload)?;
     }
 
     let mut routed_output = None::<Vec<f32>>;
     for route in &routes {
         let expert_id = ExpertId::new(layer, route.expert);
-        let bundle = handles.source_bundle(expert_id)?;
+        let bundle = handles.artifact_bundle(expert_id)?;
         let expert_out = expert_executor.execute(bundle, input, route.weight)?;
         accumulate(&mut routed_output, expert_out)?;
     }
@@ -118,11 +118,11 @@ pub fn execute_routed_moe_reference_with_handles(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn execute_routed_moe_with_source_router_reference(
+pub fn execute_routed_moe_with_artifact_router_reference(
     layer: usize,
     input: &[f32],
     token_id: u32,
-    router: &RouterSourcePayload,
+    router: &RouterArtifactPayload,
     predicted_experts: &[usize],
     router_policy: &ExpertRouterPolicy,
     planner: &mut ExpertStreamingPlanner,
@@ -131,7 +131,7 @@ pub fn execute_routed_moe_with_source_router_reference(
     shared_expert: Option<&SwiGluFfnPayload>,
 ) -> Result<RoutedMoeStepOutput> {
     let mut handles = CpuExpertHandleStore::new();
-    execute_routed_moe_with_source_router_reference_with_handles(
+    execute_routed_moe_with_artifact_router_reference_with_handles(
         layer,
         input,
         token_id,
@@ -147,11 +147,11 @@ pub fn execute_routed_moe_with_source_router_reference(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn execute_routed_moe_with_source_router_reference_with_handles(
+pub fn execute_routed_moe_with_artifact_router_reference_with_handles(
     layer: usize,
     input: &[f32],
     token_id: u32,
-    router: &RouterSourcePayload,
+    router: &RouterArtifactPayload,
     predicted_experts: &[usize],
     router_policy: &ExpertRouterPolicy,
     planner: &mut ExpertStreamingPlanner,
@@ -203,16 +203,16 @@ mod tests {
     use ferrule_model::TensorRole;
 
     use super::*;
+    use crate::artifact_linear::ArtifactLinearPayload;
+    use crate::artifact_tensor::{ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice};
     use crate::expert_executor::CpuReferenceExpertExecutor;
     use crate::expert_handle::{CpuExpertHandleStore, ExpertHandleStore};
     use crate::expert_streaming::{
-        ExpertMatrixKind, ExpertSource, ExpertSourcePayload, ExpertStorageTier,
+        ExpertArtifactPayload, ExpertLoadSource, ExpertMatrixKind, ExpertStorageTier,
         ExpertStreamingPolicy, ExpertTensorComponent, ExpertTensorKey, ExpertTensorPayload,
         ExpertTensorSlice,
     };
     use crate::ffn::SwiGluFfnPayload;
-    use crate::source_linear::SourceLinearPayload;
-    use crate::source_tensor::{SourceDType, SourceTensorPayload, SourceTensorSlice};
 
     #[test]
     fn routed_moe_reference_streams_selected_experts_and_adds_shared_ffn() {
@@ -262,14 +262,14 @@ mod tests {
     }
 
     #[test]
-    fn tiny_hash_assisted_moe_layer_fixture_uses_source_router_streaming_and_shared() {
+    fn tiny_hash_assisted_moe_layer_fixture_uses_artifact_router_streaming_and_shared() {
         let dir = unique_temp_dir("ferrule-tiny-hash-moe-layer");
         std::fs::create_dir_all(&dir).unwrap();
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy::quality_first(2));
         register_tiny_expert(&dir, &mut planner, 0, 0, 0x42, 0x43, 0x22);
         register_tiny_expert(&dir, &mut planner, 0, 1, 0x52, 0x42, 0x22);
 
-        let router = RouterSourcePayload {
+        let router = RouterArtifactPayload {
             layer: 0,
             weight: f32_linear(TensorRole::RouterLogits, "router", 2, 32, 0, 1.0),
             bias: None,
@@ -277,7 +277,7 @@ mod tests {
             hash_rows: 1,
             hash_cols: 2,
         };
-        let out = execute_routed_moe_with_source_router_reference(
+        let out = execute_routed_moe_with_artifact_router_reference(
             0,
             &tiny_input(),
             0,
@@ -317,7 +317,7 @@ mod tests {
         let expert = ExpertId::new(0, 0);
         let mut handles = CpuExpertHandleStore::new();
         handles
-            .insert_source_payload(ExpertSourcePayload {
+            .insert_artifact_payload(ExpertArtifactPayload {
                 expert,
                 tensors: tiny_expert_tensors(expert, &dir.join("resident.bin"), 0x42, 0x43, 0x22),
             })
@@ -352,7 +352,7 @@ mod tests {
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
             gpu_slots_per_layer: 1,
             prefetch_per_layer: 0,
-            preserve_source_quantization: true,
+            preserve_artifact_quantization: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
         });
@@ -433,7 +433,10 @@ mod tests {
                 slice
             })
             .collect();
-        planner.register_source(expert_id, ExpertSource::LocalTensorSet { tensors: slices });
+        planner.register_load_source(
+            expert_id,
+            ExpertLoadSource::LocalTensorSet { tensors: slices },
+        );
     }
 
     fn tiny_expert_tensors(
@@ -530,19 +533,19 @@ mod tests {
         input: usize,
         nonzero_col: usize,
         value: f32,
-    ) -> SourceLinearPayload {
+    ) -> ArtifactLinearPayload {
         let mut values = vec![0.0f32; out * input];
         values[nonzero_col] = value;
-        SourceLinearPayload::from_weight_and_scale(
+        ArtifactLinearPayload::from_weight_and_scale(
             role,
-            SourceTensorPayload {
-                slice: SourceTensorSlice {
+            ArtifactTensorPayload {
+                slice: ArtifactTensorSlice {
                     name: format!("{name}.weight"),
                     role: TensorRole::Unknown,
                     path: PathBuf::from("synthetic.safetensors"),
                     offset: 0,
                     bytes: (values.len() * 4) as u64,
-                    dtype: SourceDType::F32,
+                    dtype: ArtifactDType::F32,
                     shape: vec![out, input],
                 },
                 bytes: values

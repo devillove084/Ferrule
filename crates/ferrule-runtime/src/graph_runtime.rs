@@ -45,7 +45,7 @@
 //! A binding records:
 //!
 //! - the graph `ExternalKey`
-//! - the kind of runtime object, such as weight, KV state, source tensor, or
+//! - the kind of runtime object, such as weight, KV state, artifact tensor, or
 //!   resident expert
 //! - optional `TensorRole` and layer metadata
 //! - shape/type metadata used by graph validation
@@ -56,7 +56,7 @@
 //!
 //! - Keeps raw Hugging Face tensor names and backend storage details out of graph
 //!   translators.
-//! - Lets CUDA/CPU/source backends decide upload, residency, eviction, and
+//! - Lets CUDA/CPU/artifact backends decide upload, residency, eviction, and
 //!   streamable expert policy behind one semantic binding layer.
 //! - Makes weights, KV cache, adapters, speculation state, and resident expert
 //!   handles visible to the runtime without embedding them in the graph IR.
@@ -237,12 +237,40 @@ impl ExecutionBatch {
     }
 }
 
-/// Runtime/source object class represented by a graph external.
+/// Semantic artifact group represented by a graph external.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ArtifactGroupKind {
+    Attention,
+    LayerNorm,
+    HyperConnectionAttention,
+    HyperConnectionFeedForward,
+    HyperConnectionHead,
+    Router,
+    SharedExpert,
+}
+
+impl ArtifactGroupKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Attention => "attention",
+            Self::LayerNorm => "layer_norm",
+            Self::HyperConnectionAttention => "hyper_connection_attention",
+            Self::HyperConnectionFeedForward => "hyper_connection_feed_forward",
+            Self::HyperConnectionHead => "hyper_connection_head",
+            Self::Router => "router",
+            Self::SharedExpert => "shared_expert",
+        }
+    }
+}
+
+/// Runtime/artifact object class represented by a graph external.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExternalBindingKind {
     Weight,
     KvState,
-    SourceTensor,
+    ArtifactTensor,
+    ArtifactGroup(ArtifactGroupKind),
+    ExpertRegistry,
     ResidentExpert,
     Adapter,
     Speculation,
@@ -299,6 +327,39 @@ impl ExternalBinding {
             kind,
             role: None,
             layer: None,
+            meta,
+            residency,
+        }
+    }
+
+    pub fn artifact_group(
+        key: ExternalKey,
+        group: ArtifactGroupKind,
+        layer: Option<usize>,
+        meta: ValueMeta,
+        residency: ExternalResidency,
+    ) -> Self {
+        Self {
+            key,
+            kind: ExternalBindingKind::ArtifactGroup(group),
+            role: None,
+            layer,
+            meta,
+            residency,
+        }
+    }
+
+    pub fn expert_registry(
+        key: ExternalKey,
+        layer: usize,
+        meta: ValueMeta,
+        residency: ExternalResidency,
+    ) -> Self {
+        Self {
+            key,
+            kind: ExternalBindingKind::ExpertRegistry,
+            role: None,
+            layer: Some(layer),
             meta,
             residency,
         }

@@ -237,7 +237,7 @@ impl ValueMeta {
     }
 }
 
-/// External object key for weights, KV cache, source tensors, residency handles,
+/// External object key for weights, KV cache, artifact tensors, residency handles,
 /// or other runtime-managed state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ExternalKey {

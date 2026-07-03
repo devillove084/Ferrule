@@ -31,6 +31,8 @@ impl ModelFamily {
             Self::DeepSeekV2
         } else if n.contains("qwen") && n.contains("moe") {
             Self::QwenMoe
+        } else if n.contains("qwen3") {
+            Self::Qwen3
         } else if n.contains("mixtral") {
             Self::Mixtral
         } else if n.contains("llama") {
@@ -169,7 +171,31 @@ pub struct QuantFormatCount {
     pub tensors: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TransformerSemantics {
+    pub norm_epsilon: Option<f32>,
+    pub hyper_connection_epsilon: Option<f32>,
+    pub hyper_connection_sinkhorn_iters: Option<usize>,
+    pub rope_theta: Option<f32>,
+    pub rope_head_dim: Option<usize>,
+    pub rope_factor: Option<f32>,
+    pub rope_original_max_position_embeddings: Option<usize>,
+    pub rope_beta_fast: Option<usize>,
+    pub rope_beta_slow: Option<usize>,
+    pub compress_rope_theta: Option<f32>,
+    pub attention_window_size: Option<usize>,
+    pub attention_index_topk: Option<usize>,
+    pub attention_index_num_heads: Option<usize>,
+    pub attention_index_head_dim: Option<usize>,
+    pub attention_compress_ratios: Vec<usize>,
+    pub output_projection_groups: Option<usize>,
+    pub output_projection_rank: Option<usize>,
+    pub swiglu_limit: Option<f32>,
+    pub route_scale: Option<f32>,
+    pub num_hash_layers: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TransformerSpec {
     pub family: ModelFamily,
     pub architecture: Option<String>,
@@ -182,6 +208,8 @@ pub struct TransformerSpec {
     pub head_dim: Option<usize>,
     pub attention: AttentionKind,
     pub moe: MoeSpec,
+    #[serde(default)]
+    pub semantics: TransformerSemantics,
     pub tensor_count: Option<usize>,
     pub quantization: Vec<QuantFormatCount>,
     pub notes: Vec<String>,
@@ -210,6 +238,11 @@ impl TransformerSpec {
                 num_experts_per_tok: Some(config.num_experts_per_tok),
                 has_shared_experts: false,
                 router: RouterKind::DenseTopK,
+            },
+            semantics: TransformerSemantics {
+                norm_epsilon: Some(config.rms_norm_eps),
+                rope_theta: Some(config.rope_theta),
+                ..TransformerSemantics::default()
             },
             tensor_count: None,
             quantization: Vec::new(),

@@ -24,7 +24,7 @@ pub fn print_model_info(info: &ModelInfo) {
         .map(|a| format!(", arch={a}"))
         .unwrap_or_default();
     println!(
-        "{}: {}d×{}L{}, vocab={} ({}, attention={}, source={}{})",
+        "{}: {}d×{}L{}, vocab={} ({}, attention={}, weight_source={}{})",
         info.family,
         info.hidden_size,
         info.num_layers,
@@ -42,7 +42,7 @@ fn print_transformer_spec(spec: &TransformerSpec) {
     if let Some(arch) = &spec.architecture {
         println!("architecture: {arch}");
     }
-    println!("source:       {}", spec.weight_source);
+    println!("weight source: {}", spec.weight_source);
     println!("attention:    {}", spec.attention);
     println!(
         "transformer:  {}d × {}L, vocab={}",
@@ -97,12 +97,12 @@ fn print_tensor_classes(classes: &[TensorClassCount]) {
 fn print_engine_plan(plan: &EnginePlan) {
     println!("engine plan:  {}", plan.status);
     println!(
-        "  policies: attention={} kv={} router={} expert={} quant_source={} residency={} speculation={:?}",
+        "  policies: attention={} kv={} router={} expert={} quant_weight_source={} residency={} speculation={:?}",
         plan.policies.attention.kind,
         plan.policies.kv.shape,
         plan.policies.router.kind,
         plan.policies.expert.kind,
-        plan.policies.quant.source,
+        plan.policies.quant.weight_source,
         fmt_residency(plan.policies.residency.streaming_allowed, plan.policies.residency.all_resident_required),
         plan.policies.speculation.mode,
     );

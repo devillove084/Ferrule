@@ -19,6 +19,7 @@ fn dense_llama_spec() -> TransformerSpec {
         head_dim: Some(128),
         attention: AttentionKind::GroupedQuery,
         moe: MoeSpec::none(),
+        semantics: Default::default(),
         tensor_count: None,
         quantization: Vec::new(),
         notes: Vec::new(),
@@ -43,6 +44,7 @@ fn qwen_moe_spec(shared: bool) -> TransformerSpec {
             has_shared_experts: shared,
             router: RouterKind::DenseTopK,
         },
+        semantics: Default::default(),
         tensor_count: None,
         quantization: Vec::new(),
         notes: Vec::new(),
@@ -67,6 +69,7 @@ fn deepseek_spec() -> TransformerSpec {
             has_shared_experts: true,
             router: RouterKind::HashAssistedTopK,
         },
+        semantics: Default::default(),
         tensor_count: Some(12),
         quantization: vec![
             QuantFormatCount {
@@ -264,6 +267,7 @@ fn model_support_contract_olmoe_safetensors_is_currently_executable() {
             has_shared_experts: false,
             router: RouterKind::DenseTopK,
         },
+        semantics: Default::default(),
         tensor_count: None,
         quantization: Vec::new(),
         notes: Vec::new(),

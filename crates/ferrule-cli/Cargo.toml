@@ -17,6 +17,7 @@ path = "src/main.rs"
 ferrule-core = { path = "../ferrule-core" }
 ferrule-model = { path = "../ferrule-model" }
 ferrule-runtime = { path = "../ferrule-runtime" }
+ferrule-bench = { path = "../ferrule-bench" }
 ferrule-cuda = { path = "../ferrule-cuda", optional = true }
 ferrule-quant = { path = "../ferrule-quant" }
 memmap2 = "0.9"

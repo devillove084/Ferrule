@@ -2,7 +2,7 @@
 //!
 //! Streaming/planning decides which experts must be available. This module owns
 //! the runtime mapping from an `ExpertId` to the executable representation that
-//! is already resident somewhere. CPU reference tests keep source-preserved
+//! is already resident somewhere. CPU reference tests keep artifact-preserved
 //! `ExpertComputeBundle`s here; a CUDA path can store opaque device-resident
 //! handles while reusing the same planner and routing semantics.
 
@@ -11,15 +11,15 @@ use std::collections::BTreeMap;
 use ferrule_core::{Error, Result};
 
 use crate::expert_streaming::{
-    ExpertComputeBundle, ExpertEvictRequest, ExpertId, ExpertSourcePayload, ExpertStorageTier,
+    ExpertArtifactPayload, ExpertComputeBundle, ExpertEvictRequest, ExpertId, ExpertStorageTier,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpertResidentFormat {
-    /// Source-preserved packed FP4 expert payload.
+    /// Artifact-preserved packed FP4 expert payload.
     PackedFp4E2M1WithE8M0Scale,
-    /// Exact source representation is preserved but not represented by a CPU bundle.
-    SourcePreserved,
+    /// Exact artifact representation is preserved but not represented by a CPU bundle.
+    ArtifactPreserved,
     /// Backend-specific handle format. This keeps generic runtime metadata free of
     /// concrete model-family names and lets CUDA/remote backends attach their own
     /// slot registries outside this enum.
@@ -57,12 +57,13 @@ impl ResidentExpertHandle {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpertComputeHandle {
     /// CPU/reference executable handle. This may represent an expert that the
     /// planner considers GPU-resident in a tiny fixture; the important property is
-    /// that the executor can resolve it without going back to the source reader.
-    SourceBundle(ExpertComputeBundle),
+    /// that the executor can resolve it without going back to the artifact reader.
+    ArtifactBundle(ExpertComputeBundle),
     /// Opaque resident handle for production backends. The CPU reference executor
     /// intentionally does not consume this variant; CUDA executors should downcast
     /// through their own handle store implementation.
@@ -72,21 +73,21 @@ pub enum ExpertComputeHandle {
 impl ExpertComputeHandle {
     pub fn expert(&self) -> ExpertId {
         match self {
-            Self::SourceBundle(bundle) => bundle.expert,
+            Self::ArtifactBundle(bundle) => bundle.expert,
             Self::Resident(handle) => handle.expert,
         }
     }
 
-    pub fn as_source_bundle(&self) -> Option<&ExpertComputeBundle> {
+    pub fn as_artifact_bundle(&self) -> Option<&ExpertComputeBundle> {
         match self {
-            Self::SourceBundle(bundle) => Some(bundle),
+            Self::ArtifactBundle(bundle) => Some(bundle),
             Self::Resident(_) => None,
         }
     }
 
     pub fn total_bytes(&self) -> u64 {
         match self {
-            Self::SourceBundle(bundle) => bundle.total_bytes(),
+            Self::ArtifactBundle(bundle) => bundle.total_bytes(),
             Self::Resident(handle) => handle.bytes,
         }
     }
@@ -101,13 +102,13 @@ pub trait ExpertHandleStore {
         self.get(expert).is_some()
     }
 
-    fn insert_source_payload(&mut self, payload: ExpertSourcePayload) -> Result<()> {
-        self.insert(ExpertComputeHandle::SourceBundle(
-            ExpertComputeBundle::from_source_payload(payload)?,
+    fn insert_artifact_payload(&mut self, payload: ExpertArtifactPayload) -> Result<()> {
+        self.insert(ExpertComputeHandle::ArtifactBundle(
+            ExpertComputeBundle::from_artifact_payload(payload)?,
         ))
     }
 
-    fn source_bundle(&self, expert: ExpertId) -> Result<&ExpertComputeBundle> {
+    fn artifact_bundle(&self, expert: ExpertId) -> Result<&ExpertComputeBundle> {
         self.get(expert)
             .ok_or_else(|| {
                 Error::Model(format!(
@@ -115,10 +116,10 @@ pub trait ExpertHandleStore {
                     expert.layer, expert.expert
                 ))
             })?
-            .as_source_bundle()
+            .as_artifact_bundle()
             .ok_or_else(|| {
                 Error::Model(format!(
-                    "expert handle for layer {} expert {} is not a CPU source bundle",
+                    "expert handle for layer {} expert {} is not a CPU artifact bundle",
                     expert.layer, expert.expert
                 ))
             })
@@ -150,7 +151,7 @@ impl CpuExpertHandleStore {
     }
 
     pub fn insert_bundle(&mut self, bundle: ExpertComputeBundle) -> Result<()> {
-        self.insert(ExpertComputeHandle::SourceBundle(bundle))
+        self.insert(ExpertComputeHandle::ArtifactBundle(bundle))
     }
 
     pub fn insert_resident_handle(&mut self, handle: ResidentExpertHandle) -> Result<()> {
@@ -190,12 +191,12 @@ mod tests {
     };
 
     #[test]
-    fn cpu_handle_store_inserts_source_payload_and_resolves_bundle() {
+    fn cpu_handle_store_inserts_artifact_payload_and_resolves_bundle() {
         let expert = ExpertId::new(1, 2);
         let mut store = CpuExpertHandleStore::new();
-        store.insert_source_payload(tiny_payload(expert)).unwrap();
+        store.insert_artifact_payload(tiny_payload(expert)).unwrap();
 
-        let bundle = store.source_bundle(expert).unwrap();
+        let bundle = store.artifact_bundle(expert).unwrap();
         assert_eq!(bundle.expert, expert);
         assert_eq!(store.len(), 1);
         assert!(store.total_bytes() > 0);
@@ -214,15 +215,15 @@ mod tests {
             ))
             .unwrap();
 
-        let err = store.source_bundle(expert).unwrap_err();
-        assert!(err.to_string().contains("not a CPU source bundle"));
+        let err = store.artifact_bundle(expert).unwrap_err();
+        assert!(err.to_string().contains("not a CPU artifact bundle"));
     }
 
     #[test]
     fn evictions_remove_handles() {
         let expert = ExpertId::new(0, 0);
         let mut store = CpuExpertHandleStore::new();
-        store.insert_source_payload(tiny_payload(expert)).unwrap();
+        store.insert_artifact_payload(tiny_payload(expert)).unwrap();
         store.apply_evictions(&[ExpertEvictRequest {
             expert,
             target: ExpertStorageTier::LocalStorage,
@@ -230,8 +231,8 @@ mod tests {
         assert!(!store.contains(expert));
     }
 
-    fn tiny_payload(expert: ExpertId) -> ExpertSourcePayload {
-        ExpertSourcePayload {
+    fn tiny_payload(expert: ExpertId) -> ExpertArtifactPayload {
+        ExpertArtifactPayload {
             expert,
             tensors: vec![
                 tiny_linear(expert, ExpertMatrixKind::Gate),

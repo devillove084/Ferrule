@@ -32,36 +32,150 @@ Current baseline:
 - Chat template registry: OLMoE-Instruct, ChatML, Llama3, Qwen, Plain.
 - CLI commands: `info`, `run`, `gpu-run`, `chat`, `cuda`, `bench-infer`,
   `compare-logits`, `inspect-weightpack`, `server`.
-- Model-family descriptor boundary exists: OLMoE fixture is executable;
-  DeepSeek V4 has metadata inspection, complete tensor classification, HF shard
-  inventory, expert source streaming, and a tiny CPU expert reference executor,
-  but no full Transformer decode path yet.
+- Runtime graph foundation exists:
+  - `ferrule-graph` opaque IR,
+  - `GraphProgram`,
+  - `ExecutionBatch`,
+  - `ExternalBindingPlan`,
+  - `BackendObjectStore`,
+  - `ReferenceGraphBackend`,
+  - shape validation registry.
+- Graph construction is capability-driven:
+  - dense MHA/GQA + dense MLP uses the dense decoder graph translator,
+  - MLA / latent KV / routed experts use the generic semantic Transformer graph translator.
+- The current semantic Transformer graph is intentionally model-neutral:
+  - `transformer_state_init`,
+  - `transformer_layer`,
+  - `output_projection`,
+  - `ArtifactGroupKind`,
+  - `ExpertRegistry`,
+  - `KvState`.
+- DeepSeek V4 is now represented through semantic runtime capabilities, not through
+  a `deepseek_v4_graph.rs` runtime specialization.
+- Model-family descriptor boundary exists: OLMoE fixture is executable; DeepSeek V4
+  has metadata inspection, complete tensor classification, HF shard inventory,
+  artifact tensor binding, expert artifact streaming, and CPU/CUDA correctness-first
+  expert paths, but no fully optimized graph-backed Transformer decode path yet.
 - `ModelSupportContract` + `EnginePlan` skeleton exists and can describe dense,
   MoE, OLMoE, and DeepSeek-style layouts without making DeepSeek the generic
   runtime shape.
-- `SourceArtifact` + `ConversionPlan` + `QuantizationRecipe` skeleton exists:
-  official HF safetensors are source-of-truth, WeightPack is Ferrule's primary
+- `InputArtifact` + `ConversionPlan` + `QuantizationRecipe` skeleton exists:
+  official HF safetensors are the input artifact, WeightPack is Ferrule's primary
   execution artifact, and GGUF is an optional compatibility/PK target.
 - CUDA Transformer hot path is split into executor + attention/MoE/logits/KV
   steps; OLMoE is now one concrete weight/state container, not the generic
   runtime abstraction.
-- Model-family tensor policy is now split under `ferrule-model/src/families/`:
+- Model-family tensor policy is split under `ferrule-model/src/families/`:
   generic `tensor_policy` exposes semantic classes, while per-family files own
   concrete HF/GGUF names.
 - DeepSeek V4 HF index inspection is wired for the local official model:
-  72,317 tensors, 48 shards, 166.9GB source size, all referenced shards present,
-  DSpark metadata detected, and no tensor remains `unknown` after classifying
-  attention sinks plus DSpark/MTP projection/Markov/confidence-head tensors.
-- DeepSeek V4 local smoke coverage exists in `ferrule-model` tests: it validates
-  the DGX Spark model directory when present, but skips cleanly on machines that
-  do not have the 166GB checkpoint.
-- HF safetensors shard-header inventory exists: it reads dtype/shape/byte ranges
-  without touching tensor payloads and feeds dtype counts into `ferrule info`.
-- Expert streaming now registers DeepSeek routed expert tensor sets from HF
-  safetensors, reads bounded byte ranges for selected experts, builds generic
-  `ExpertComputeBundle`s, and has CPU reference tests for packed FP4 + E8M0
-  SwiGLU expert math. This proves the source-preserving expert path, not full
-  model inference.
+  72,317 tensors, 48 shards, 166.9GB input-checkpoint size, all referenced shards
+  present, DSpark metadata detected, and no tensor remains `unknown` after
+  classifying attention sinks plus DSpark/MTP projection/Markov/confidence-head tensors.
+- DeepSeek V4 local smoke coverage validates metadata, tokenizer, attention/HC,
+  router/shared expert, routed expert streaming, top-level rows, model-specific
+  reference slices, and generic graph external materialization when the local model
+  is present; tests skip cleanly when the 166GB checkpoint is absent.
+- HF safetensors shard-header inventory reads dtype/shape/byte ranges without
+  touching tensor payloads and feeds dtype counts into `ferrule info`.
+- Expert streaming registers DeepSeek routed expert tensor sets from HF safetensors,
+  reads bounded byte ranges for selected experts, builds generic
+  `ExpertComputeBundle`s, and has CPU/CUDA correctness tests for packed FP4 + E8M0
+  SwiGLU expert math. This proves the artifact-preserving expert path, not full
+  optimized model inference.
+
+---
+
+## 0. Runtime Graph / DSV4 Operator Graph Update
+
+The next implementation phase is to make the current coarse semantic graph
+executable through a generic layer bridge before expanding it into finer ops.
+The goal is **faster, better, stabler DSV4** by making state, artifacts,
+residency, and backend lowering explicit without turning runtime graph into a
+model-family-specific path.
+
+### 0.1 Current graph shape
+
+```text
+token_ids, positions
+  -> token_embedding
+  -> transformer_state_init
+  -> transformer_layer(layer=0..N, semantic artifact groups, expert registry, kv state)
+  -> output_projection
+  -> logits_select
+```
+
+This is enough to validate descriptor-to-graph translation, semantic external
+bindings, and local HF materialization. It is not enough to optimize DSV4 because
+`transformer_layer` still hides attention, HC, routing, expert execution, and KV
+state transitions.
+
+### 0.2 Bridge-first execution path
+
+The near-term path is:
+
+```text
+GraphProgram + BackendObjectStore
+  -> GraphLayerObjects / layer execution bundle
+  -> typed artifact payload binders
+  -> existing HC / attention / router / MoE / expert / KV components
+  -> coarse transformer_layer lowering inside the graph backend
+```
+
+This keeps the runtime graph generic: `ferrule-model` still owns model-family
+checkpoint parsing, while `ferrule-runtime` consumes semantic artifact groups,
+expert registries, KV state, execution batches, and backend object stores.
+
+Immediate bridge work:
+
+| Bridge step | Work | Proof |
+|---|---|---|
+| materialized objects | aggregate `ArtifactGroupKind` + layer into `GraphLayerObjects` | local DSV4 materialization test sees layer 0 attention/HC/router/shared/expert/KV objects |
+| typed payloads | bind artifact groups into existing attention, HC, router, shared-FFN payloads | no raw HF name matching in runtime graph code |
+| coarse lowering | execute `transformer_layer` by calling existing generic components internally | tiny/synthetic layer through graph backend, then local DSV4 layer 0 when present |
+| caching | cache decoded layer payloads per graph program/layer | decode does not re-read/rebind artifacts every token |
+| observability | dump graph/layer summaries and counters | mismatches and bottlenecks localize to named semantic boundaries |
+
+### 0.3 Next graph shape after the bridge
+
+After coarse graph execution works, split `transformer_layer` into model-neutral
+ops:
+
+| Graph area | Ops to add | DSV4 pressure point |
+|---|---|---|
+| layer state | `layer_hc_pre`, `layer_hc_post`, `rms_norm`, `residual_merge` | HC state and hidden state must stay device-resident |
+| latent attention | `latent_q_project_a`, `latent_q_norm`, `latent_q_project_b`, `latent_kv_project`, `latent_kv_norm`, `rope_apply` | low-rank q/kv path, FP8 artifacts, RoPE/YaRN |
+| sparse/compressed attention | `window_kv_update`, `compressed_kv_update`, `indexer_score_topk`, `sparse_attention` | compressed/indexer KV and top-k gather should avoid host copies |
+| attention output | `attention_output_grouped_a`, `attention_output_b` | DSV4 grouped output projection needs shape-visible lowering |
+| routing | `router_logits`, `hash_router_lookup`, `topk_select`, `route_weight_normalize` | hash-assisted early layers and bias/score later layers share one semantic router path |
+| MoE | `expert_registry_lookup`, `routed_expert_swiglu`, `shared_swiglu_ffn`, `moe_accumulate` | selected experts should batch, reuse handles, and report residency |
+| output | `output_norm`, `lm_head_chunk_topk`, `logits_select` | greedy/common decode should not download full vocab logits |
+
+Naming rule: op names describe semantics, not the family. Use attrs/policies for
+`attention=multi_latent_attention`, `kv_shape=latent_or_compressed`,
+`router=hash_assisted_topk`, `residency=streamable`, etc.
+
+### 0.4 DSV4 speed/stability priority queue
+
+| Priority | Work | Why first | Required proof |
+|---|---|---|---|
+| G0 | graph summary/dump + DSV4 benchmark counters | cannot optimize hidden bottlenecks | JSON report with graph ops, externals, load/prefill/decode time, kernel count, bytes moved |
+| G1 | graph layer execution bridge | proves graph path can drive execution without new model-specific public APIs | `GraphLayerObjects` + typed binders + one-layer synthetic graph execution |
+| G2 | split coarse `transformer_layer` into semantic phase ops | exposes lowering and parity boundaries after bridge semantics are proven | synthetic graph validation + local DSV4 binding/materialization tests |
+| G3 | device decode arena | host `Vec<f32>` boundaries dominate latency | normal decode copies back only token/logit and debug-gated tensors |
+| G4 | device-resident KV/compressor/indexer state | long-context DSV4 cannot assemble KV on host | no host allocation/copy in decode profile for attention KV paths |
+| G5 | expert residency + batched selected-expert kernel | top-6 experts × layers is the MoE hot path | selected experts reuse handles; one batched MoE path per layer |
+| G6 | attention/output fusion | after residency, bandwidth and launch count dominate | fewer launches/token with parity unchanged |
+| G7 | CUDA graph replay for steady decode buckets | only useful once shapes/state are stable | measurable latency reduction with uncaptured debug fallback |
+| G8 | DSpark speculation | acceleration layer after base model is stable | proposed/accepted/rejected/rollback metrics and effective tok/s |
+
+### 0.5 What this deliberately avoids
+
+- no `deepseek_v4_graph.rs` runtime graph specialization;
+- no public per-op backend API that exposes model-family methods;
+- no graph nodes containing CUDA buffers, KV pages, or `WeightPack` objects;
+- no thousands of routed expert tensor externals in the graph by default;
+- no DSpark speculation before base DSV4 correctness and decode residency are stable.
 
 ---
 
@@ -217,16 +331,16 @@ Transformer architecture unless actual metadata proves otherwise.
 | Area | DeepSeek V4 / DSpark needs | Ferrule has | Gap |
 |---|---|---|---|
 | Model detection | `deepseek4` architecture, optional DSpark attachment metadata, GGUF metadata | `ModelDescriptor`, `ModelFamily::DeepSeekV4`, per-family HF/GGUF tensor policy, DSpark/MTP tensor roles | executable family policy without forking base execution path |
-| Official source | `deepseek-ai/DeepSeek-V4-Flash-DSpark` HF safetensors, encoding scripts, inference scripts, 48 shards | `SourceArtifact::deepseek_v4_flash_dspark_official()` metadata fixture; local index summary confirms 72,317 tensors and all 48 shards present; shard-header inventory has dtype/shape/file offsets without loading payloads; typed HF descriptors now exist for attention, HC, router, shared experts, and routed experts | assemble executable per-layer `LayerSourceBinding`s and reference checks |
-| Attention | DeepSeek hybrid attention / MLA-compatible projection layout and decode/prefill kernels | MHA/GQA RoPE attention step + `AttentionKind` boundary; `AttentionSourcePayload` binds real DSV4 layer-0/layer-2 HF source tensors; sparse attention reference + correctness-first CUDA sparse-attention ABI exist | q low-rank execution, rotary/inverse-rotary, compressed/sliding KV state, compressor/indexer execution, FP8 CUDA linears, and tiled sparse-flash kernels |
+| Official source | `deepseek-ai/DeepSeek-V4-Flash-DSpark` HF safetensors, encoding scripts, inference scripts, 48 shards | `InputArtifact::deepseek_v4_flash_dspark_official()` metadata fixture; local index summary confirms 72,317 tensors and all 48 shards present; shard-header inventory has dtype/shape/file offsets without loading payloads; typed HF descriptors now exist for attention, HC, router, shared experts, and routed experts | assemble executable per-layer `LayerArtifactBinding`s and reference checks |
+| Attention | DeepSeek hybrid attention / MLA-compatible projection layout and decode/prefill kernels | MHA/GQA RoPE attention step + `AttentionKind` boundary; `AttentionArtifactPayload` binds real DSV4 layer-0/layer-2 HF artifact tensors; sparse attention reference + correctness-first CUDA sparse-attention ABI exist | q low-rank execution, rotary/inverse-rotary, compressed/sliding KV state, compressor/indexer execution, FP8 CUDA linears, and tiled sparse-flash kernels |
 | Routing | hash-assisted first layers, score/bias top-k later layers, `sqrtsoftplus`, normalized weights, route scale | DeepSeek router policy has CPU reference semantics; real layer-0 hash router and layer-3 score/bias router bind from local HF shards | connect router output to executable layer runner and CUDA selected-expert path |
-| Experts | routed experts, shared experts, source FP4 expert quant layout | generic expert streaming planner/reader; `ExpertComputeBundle`; CPU packed-FP4 SwiGLU executor; resident expert handle store; correctness-first CUDA packed-FP4 expert executor; real local shared/router bindings pass | production expert batching/residency policy in full decode loop, FP8 shared/attention CUDA linears, and performance tuning |
-| Quantization | official FP8/I8/BF16/F32 source; reproducible Ferrule quant recipes; optional GGUF Q_K/IQ export | `QuantizationRecipe` skeleton for DeepSeek Flash WeightPack mixed policy; source-preserving FP4/FP8 decoders exist for correctness | real conversion kernels, calibration/eval, and GGUF export/import validators |
-| Artifacts | source checkpoint, Ferrule execution package, compatibility package | `ConversionPlan`: HF safetensors -> WeightPack primary, GGUF optional | streaming converter, manifest checksums, per-role conversion reports |
-| Auxiliary tensors | indexer, compressor, HC/output-HC blocks, attention sinks | metadata classification + named missing-policy errors; HC reference math and real HC source binding pass; compressor/indexer source slices are preserved as attention auxiliaries | wire HC into executable layer state and implement compressor/indexer semantics from reference code |
-| Scale | 166GB official HF source; 80–150+ GiB quantized/community artifacts; million-token context pressure | single-process local runner; source-preserving expert streaming reader for local HF shards; bounded source readers validate real attention/HC/router/expert payloads without full-model load | residency manager wired into decode, WeightPack chunks, optional remote source policy, async/prioritized I/O later |
-| DSpark | draft model, target model, acceptance/rejection/rollback, speculation metrics | source metadata marks DSpark attachment; MTP projection/Markov/confidence tensors map to speculative semantic roles and set `SpeculationPolicy::MultiTokenPrediction` | verifier/rollback loop, acceptance policy, scheduler integration |
-| Correctness | compare against official inference and/or reference engine outputs | OLMoE CPU reference fixture + compare-logits; DSV4 local metadata/source-binding smokes for expert, router, shared FFN, attention, HC, tokenizer | reference DeepSeek engine harness and first-token/golden-token tests |
+| Experts | routed experts, shared experts, artifact FP4 expert quant layout | generic expert streaming planner/reader; `ExpertComputeBundle`; CPU packed-FP4 SwiGLU executor; resident expert handle store; correctness-first CUDA packed-FP4 expert executor; real local shared/router bindings pass | production expert batching/residency policy in full decode loop, FP8 shared/attention CUDA linears, and performance tuning |
+| Quantization | official FP8/I8/BF16/F32 input artifacts; reproducible Ferrule quant recipes; optional GGUF Q_K/IQ export | `QuantizationRecipe` skeleton for DeepSeek Flash WeightPack mixed policy; artifact-preserving FP4/FP8 decoders exist for correctness | real conversion kernels, calibration/eval, and GGUF export/import validators |
+| Artifacts | input checkpoint, Ferrule execution package, compatibility package | `ConversionPlan`: HF safetensors -> WeightPack primary, GGUF optional | streaming converter, manifest checksums, per-role conversion reports |
+| Auxiliary tensors | indexer, compressor, HC/output-HC blocks, attention sinks | metadata classification + named missing-policy errors; HC reference math and real HC artifact binding pass; compressor/indexer artifact slices are preserved as attention auxiliaries | wire HC into executable layer state and implement compressor/indexer semantics from reference code |
+| Scale | 166GB official HF input artifact; 80–150+ GiB quantized/community artifacts; million-token context pressure | single-process local runner; artifact-preserving expert streaming reader for local HF shards; bounded artifact readers validate real attention/HC/router/expert payloads without full-model load | residency manager wired into decode, WeightPack chunks, optional remote source policy, async/prioritized I/O later |
+| DSpark | draft model, target model, acceptance/rejection/rollback, speculation metrics | input artifact metadata marks DSpark attachment; MTP projection/Markov/confidence tensors map to speculative semantic roles and set `SpeculationPolicy::MultiTokenPrediction` | verifier/rollback loop, acceptance policy, scheduler integration |
+| Correctness | compare against official inference and/or reference engine outputs | OLMoE CPU reference fixture + compare-logits; DSV4 local metadata/artifact-binding smokes for expert, router, shared FFN, attention, HC, tokenizer | reference DeepSeek engine harness and first-token/golden-token tests |
 
 Near-term rule: DeepSeek V4 execution must enter through generic Transformer
 executor policies; DSpark must enter through a generic speculative decoding
@@ -264,7 +378,7 @@ Llama/Qwen/Mixtral-like dense or MoE models.
 |---|---|---|
 | `ModelDescriptor` | architecture, dimensions, tokenizer/encoding metadata, tensor inventory | format readers, metadata validation, unsupported-policy errors |
 | `ModelLayout` | layer graph, required/optional tensor classes, residual/norm ordering | layer iteration, state ownership, execution orchestration |
-| `TensorBinding` | mapping from source tensor names to semantic tensor roles | loading, mmap/streaming, placement, dtype/quant dispatch |
+| `TensorBinding` | mapping from artifact tensor names to semantic tensor roles | loading, mmap/streaming, placement, dtype/quant dispatch |
 | `AttentionPolicy` | attention kind, projection roles, position encoding, KV shape | attention step scheduling, KV ownership, backend kernel dispatch |
 | `MlpPolicy` / `ExpertPolicy` | dense MLP or routed/shared experts, activation and routing semantics | expert batching, residency, dequant/matvec execution |
 | `QuantPolicy` | supported quant classes per tensor role and fallback rules | validators, conversion or native kernels, benchmark counters |
@@ -286,17 +400,17 @@ crates/ferrule-model/src/families/
 
 When adding a family, create a new `families/<family>.rs` file that maps source
 artifact names into generic `TensorClass` / `TensorRole` values and adds only
-family-local metadata refinement. Do not add source tensor names to generic
+family-local metadata refinement. Do not add artifact tensor names to generic
 `tensor_policy`, runtime runners, KV state, or CUDA kernels.
 
 ### 1.11 Artifact and conversion strategy
 
-Ferrule should distinguish source artifacts, execution artifacts, and
+Ferrule should distinguish input artifacts, execution artifacts, and
 compatibility artifacts.
 
 ```text
 Official HF safetensors / tokenizer / encoding / inference scripts
-  -> SourceArtifact
+  -> InputArtifact
   -> ModelDescriptor + ModelSupportContract
   -> ConversionPlan + QuantizationRecipe
   -> WeightPack  primary Ferrule execution artifact
@@ -305,31 +419,31 @@ Official HF safetensors / tokenizer / encoding / inference scripts
 
 Rules:
 
-- Official `deepseek-ai/DeepSeek-V4-Flash-DSpark` is the source-of-truth for
+- Official `deepseek-ai/DeepSeek-V4-Flash-DSpark` is the source of truth for
   DeepSeek Flash + DSpark metadata, encoding behavior, and reference inference.
 - WeightPack is Ferrule's native execution package because it can carry semantic
   roles, quant recipes, residency hints, streaming chunks, checksums, and future
   DP/TP/EP/SP/CP/PP placement metadata.
 - GGUF remains important for llama.cpp compatibility, distribution, and PK, but
   Ferrule should not make GGUF the only internal execution contract.
-- Conversion should be reproducible: source repo/revision, recipe name,
+- Conversion should be reproducible: input repo/revision, recipe name,
   per-role dtype policy, calibration set, checksums, and reference validation
   must be recorded.
-- Quantized artifacts are not correctness references. Official source inference
+- Quantized artifacts are not correctness references. Official reference inference
   and tiny high-precision fixtures remain the correctness anchors.
 
-Current DeepSeek V4 Flash DSpark source byte facts from local shard headers:
+Current DeepSeek V4 Flash DSpark artifact byte facts from local shard headers:
 
 | Group | Bytes | GiB | Implication |
 |---|---:|---:|---|
 | Routed expert gate | 52,479,131,648 | 48.875 | dominates memory |
 | Routed expert up | 52,479,131,648 | 48.875 | dominates memory |
 | Routed expert down | 52,479,131,648 | 48.875 | dominates memory |
-| Attention tensors | 5,721,447,936 | 5.329 | small enough to preserve source initially |
+| Attention tensors | 5,721,447,936 | 5.329 | small enough to preserve artifact dtype initially |
 | Shared experts | 1,157,698,560 | 1.078 | keep conservative/Q8 initially |
 | Embedding | 1,059,061,760 | 0.986 | Q8 conservative |
 | Output head | 1,059,061,760 | 0.986 | Q8 conservative |
-| DSpark/MTP | 198,786,204 | 0.185 | keep source until speculation verifier exists |
+| DSpark/MTP | 198,786,204 | 0.185 | keep input artifact dtype until speculation verifier exists |
 
 By dtype:
 
@@ -344,7 +458,7 @@ By dtype:
 
 Quantization decision for one DGX Spark:
 
-1. **Quality-first default:** preserve official source quantization for routed
+1. **Quality-first default:** preserve official artifact quantization for routed
    experts (`I8` containers for official FP4 payloads) and implement expert
    streaming/residency. This avoids extra loss and matches Ferrule's original
    goal: run even when VRAM, host RAM, or local storage cannot hold the full
@@ -358,7 +472,7 @@ Quantization decision for one DGX Spark:
    routed experts are already effectively FP4-sized; another 4-bit format does
    not solve the memory problem and adds conversion error.
 4. **Design streaming before extra quantization.** Quantization and streaming can
-   be stacked later, but the first executable path should prove source-preserving
+   be stacked later, but the first executable path should prove artifact-preserving
    expert streaming from local shards / WeightPack chunks / optional LAN remote
    chunks.
 
@@ -371,13 +485,13 @@ layer is marked supported.
 
 | Stage | Scope | Must pass on normal dev/CI | Must pass on DGX Spark local model | Why it matters |
 |---|---|---|---|---|
-| T0 metadata fixture | source artifact, family detection, synthetic tensor names | unit tests for `SourceArtifact`, `ModelFamily`, per-family classifiers | `cargo test -p ferrule-model` | prevents generic policy pollution and source metadata drift |
+| T0 metadata fixture | input artifact, family detection, synthetic tensor names | unit tests for `InputArtifact`, `ModelFamily`, per-family classifiers | `cargo test -p ferrule-model` | prevents generic policy pollution and input metadata drift |
 | T1 local HF index | official downloaded HF directory, index count, shard presence | skips if model absent | `cargo test -p ferrule-model local_deepseek_v4_flash_dspark_descriptor_smoke_if_present` | confirms the 166GB checkpoint is complete without loading payloads |
 | T2 shard header inventory | dtype/shape/byte-size from safetensors headers only | synthetic header fixtures | full 48-shard header scan with dtype/class/role counts | required before quantization or streaming conversion |
 | T3 semantic layer binding | per-layer required/optional roles, MTP attachment, attention sinks | tiny synthetic DeepSeek V4 layer fixture | validate all local tensors bind to a known role or explicit unsupported auxiliary role | prevents conversion plans from silently dropping tensors |
 | T4 conversion planning | HF source -> WeightPack recipe; optional GGUF compatibility plan | deterministic recipe/manifest unit tests | local conversion dry-run report: roles, bytes, target chunks, skipped/unsupported=0 unless named | makes quantization reproducible before writing huge artifacts |
 | T5 streaming converter | bounded-memory HF -> WeightPack writer | small safetensors fixture conversion | one-shard then full-model conversion with peak RSS/throughput report | DGX Spark memory pressure requires streaming, not all-in-RAM load |
-| T6 source-format kernels | per-format CPU decoder + CUDA dequant/matvec | FP4 E2M1 + E8M0 source-format tests and tiny CPU expert executor tests | FP8/FP4 CUDA kernels compared against CPU decoder and official reference snippets | source-preserving kernels precede speed; avoid secondary quantization as the first fit strategy |
+| T6 artifact-format kernels | per-format CPU decoder + CUDA dequant/matvec | FP4 E2M1 + E8M0 artifact-format tests and tiny CPU expert executor tests | FP8/FP4 CUDA kernels compared against CPU decoder and official reference snippets | artifact-preserving kernels precede speed; avoid secondary quantization as the first fit strategy |
 | T7 tiny executable fixture | one or few DeepSeek-shaped layers | synthetic logits/golden-token tests through generic Transformer policies | CUDA one-token decode on tiny/sliced fixture | verifies attention/router/HC/MoE policies without needing the 166GB model resident |
 | T8 full single-node smoke | quantized WeightPack load + prompt/decode | not required | fixed prompt first-token/golden text; memory, TTFT, tok/s captured | first honest “runs on one DGX Spark” milestone |
 | T9 DSpark speculation | target/draft proposal + verifier + rollback | synthetic accept/reject tests | short prompt with speculation metrics: proposed, accepted, rejected, rollback count | DSpark must be validated as generic speculation, not a DeepSeek-only shortcut |
@@ -414,13 +528,13 @@ FERRULE_DEEPSEEK_V4_DIR=/path/to/DeepSeek-V4-Flash-DSpark cargo test -p ferrule-
 # Human-readable local metadata inspection.
 cargo run -p ferrule-cli -- info models/DeepSeek-V4-Flash-DSpark
 
-# Read one selected expert's six source slices from real local safetensors shards.
+# Read one selected expert's six artifact slices from real local safetensors shards.
 cargo run -p ferrule-cli -- expert-stream-smoke models/DeepSeek-V4-Flash-DSpark --layer 0 --expert 0 --max-slice-mb 64
 
-# Runtime unit/integration coverage for expert streaming + source-format reference math.
+# Runtime unit/integration coverage for expert streaming + artifact-format reference math.
 cargo test -p ferrule-runtime
 
-# Focused local DSV4 source-binding smoke: real attention + HC payloads from HF shards.
+# Focused local DSV4 artifact-binding smoke: real attention + HC payloads from HF shards.
 cargo test -p ferrule-runtime local_deepseek_v4_attention_and_hc_bind_real_sources_if_present
 ```
 
@@ -437,27 +551,27 @@ Already in place:
 - complete local HF inventory: 72,317 tensors across 48 shards, 166.9GB source,
   zero unknown tensor classes;
 - semantic family adapter boundary under `ferrule-model/src/families/`;
-- source byte offsets for bounded safetensors streaming;
+- artifact byte offsets for bounded safetensors streaming;
 - typed HF semantic descriptors for DSV4 attention, HC, router, shared experts,
-  and routed experts; concrete source names stay inside the family parser;
+  and routed experts; concrete artifact names stay inside the family parser;
 - routed expert tensor-set grouping for 43 layers × 256 experts;
-- local expert-streaming smoke that reads one expert's six source tensors;
+- local expert-streaming smoke that reads one expert's six artifact tensors;
 - `ExpertComputeBundle` format inference for official FP4 experts;
 - resident expert handle abstraction/store for CPU/reference MoE and future GPU
   handles;
-- `source_format` CPU helpers for FP4 E2M1 + E8M0 scales and FP8 E4M3FN + E8M0 block scales;
-- tiny `CpuReferenceExpertExecutor` for source-preserving SwiGLU expert math;
-- correctness-first CUDA packed-FP4 expert executor path for official source FP4
+- `artifact_format` CPU helpers for FP4 E2M1 + E8M0 scales and FP8 E4M3FN + E8M0 block scales;
+- tiny `CpuReferenceExpertExecutor` for artifact-preserving SwiGLU expert math;
+- correctness-first CUDA packed-FP4 expert executor path for official input artifact FP4
   experts;
 - `ExpertRouterPolicy` CPU reference semantics for score-top-k and hash routing,
   including `sqrtsoftplus`, bias-for-selection, selected-weight normalization,
   and route scaling;
-- generic `SourceTensorReader` / `SourceLinearPayload` handles for bounded HF
-  safetensors byte ranges and F32/BF16/FP8/FP4 source linear formats, including
+- generic `ArtifactTensorReader` / `ArtifactLinearPayload` handles for bounded HF
+  safetensors byte ranges and F32/BF16/FP8/FP4 artifact linear formats, including
   bounded 2D row-range reads for embedding rows and chunked lm_head rows;
-- `AttentionSourcePayload` binds real local DSV4 layer-0 core attention tensors,
+- `AttentionArtifactPayload` binds real local DSV4 layer-0 core attention tensors,
   validates FP8 block-scale shapes, decodes BF16 norms/F32 sinks, and preserves
-  layer-2 compressor/indexer slices as auxiliary semantic source tensors;
+  layer-2 compressor/indexer slices as auxiliary semantic artifact tensors;
 - `HyperConnectionWeights` / `HyperConnectionHeadWeights` bind real layer HC and
   global HC head tensors from local HF shards and validate official DSV4 shapes;
 - HC reference math exists for `hc_pre`, `hc_post`, `hc_head`, and Sinkhorn split;
@@ -471,13 +585,13 @@ Already in place:
 - DeepSeek HF family parser now exposes semantic shared-expert and router tensor
   refs, including correct `gate.bias` and `gate.tid2eid` classification;
 - real local DSV4 layer-0 shared expert tensors bind into `SwiGluFfnPayload`, and
-  real layer-0/layer-3 routers bind into `RouterSourcePayload` with hash-table /
+  real layer-0/layer-3 routers bind into `RouterArtifactPayload` with hash-table /
   bias distinction;
 - tiny DSV4 MoE layer fixture now runs source router → hash routing → expert
   streaming → packed-FP4 routed experts → shared FFN aggregation;
-- `models::deepseek_v4::DeepSeekV4SourceModel` provides the explicit model-family
+- `models::deepseek_v4::DeepSeekV4ArtifactModel` provides the explicit model-family
   boundary for real local DSV4 metadata, tokenizer, top-level embedding/output
-  tensors, HC head, and per-layer source binding;
+  tensors, HC head, and per-layer artifact binding;
 - `models::deepseek_v4::DeepSeekV4Attention` validates the official grouped output
   projection contract (`wo_a` grouped by `o_groups`) and executes both non-compressed
   sliding-window attention and a correctness-first compressed CSA/HCA decode path with
@@ -488,7 +602,7 @@ Already in place:
 - local DSV4 smokes read a real embedding row, build initial HC state, run real HC
   head + output norm, and compute a small range of lm_head logits from local shards
   without loading the full embedding/head tensors;
-- `DeepSeekV4ReferenceRunner` is the model-specific source runner for real local
+- `DeepSeekV4ReferenceRunner` is the model-specific artifact runner for real local
   DSV4 HF shards. It implements the generic `ModelRunner` interface for full-logits
   sampling/debug paths and exposes top-k decode helpers for greedy DSV4 chat;
 - `ferrule chat models/DeepSeek-V4-Flash-DSpark -q cuda --chat-template deepseek-v4`
@@ -502,7 +616,7 @@ Remaining gaps after the first real DSV4 chat milestone:
 
 - production device-resident prefill/decode: `start_pos == 0` now uses batched
   DSV4 prefill semantics, but many inner operations still run row-by-row through
-  host `Vec<f32>` buffers and synchronize after each source operator. This remains
+  host `Vec<f32>` buffers and synchronize after each artifact operator. This remains
   the main TTFT/decode bottleneck for readline chat;
 - tokenizer/encoding parity against the full local `encoding_dsv4.py` feature set:
   basic chat-mode strings match official examples, but tool/developer/reminder/task
@@ -544,8 +658,8 @@ Run-critical priority queue:
 
 Execution rule for the next patches:
 
-1. Do **not** wait for GGUF conversion to start execution. The official HF source
-   already has enough metadata and byte offsets for source-preserving streaming.
+1. Do **not** wait for GGUF conversion to start execution. The official HF input artifact
+   already has enough metadata and byte offsets for artifact-preserving streaming.
 2. Do **not** make DSV4 a special runner. Put DSV4 names in `ferrule-model`
    family adapters; runtime takes semantic policies and tensor handles.
 3. Do **not** block on async I/O. Keep the synchronous bounded reader as the
@@ -1703,7 +1817,7 @@ Tasks:
   for the current correctness-first DSV4 boundary; still needs reference numeric
   parity.
 - Implement a correctness-first decode kernel before optimizing prefill. ✅ real
-  local CUDA source-operator path exists.
+  local CUDA artifact-operator path exists.
 - Add true `start_pos == 0` prefill semantics for window KV, compressor KV,
   indexer KV, `remainder`, and `cutoff`. ✅ initial implementation.
 - Add tiny fixture tests using synthetic DeepSeek attention tensor shapes before
@@ -1737,7 +1851,7 @@ Current measured state:
 - Chat is real DSV4 CUDA over local HF shards, not mock/hybrid.
 - Prompt prefill now uses `start_pos == 0` batched DSV4 semantics, but many inner
   operators still materialize host `Vec<f32>` rows and synchronize after each
-  source linear / norm / attention / MoE step.
+  artifact linear / norm / attention / MoE step.
 - Decode is still dominated by host-device round trips, per-layer/per-expert
   launches, expert streaming/upload, and non-resident intermediate tensors.
 - A sample `Who are you?` answer claiming `QwQ-32B` is a **correctness/parity
@@ -1989,9 +2103,9 @@ Current status:
 - `ferrule-runtime::expert_streaming` defines generic, model-family-agnostic
   streaming primitives:
   - `ExpertId`, `ExpertTensorKey`, `ExpertMatrixKind`,
-  - `ExpertSource` for GPU, CPU, host mmap, local shard, local tensor sets,
+  - `ExpertLoadSource` for GPU, CPU, host mmap, local shard, local tensor sets,
     WeightPack chunk, and remote/LAN source,
-  - `ExpertStreamingPolicy` with source-preserving quality-first defaults,
+  - `ExpertStreamingPolicy` with artifact-preserving quality-first defaults,
   - `ExpertStreamingPlanner` for selected expert loads, prefetch, eviction, and
     remote-source gating,
   - `ExpertStreamingReader` for bounded local byte-range reads.
@@ -2004,9 +2118,9 @@ Current status:
 
 Tasks:
 
-- Map DeepSeek V4 HF/WeightPack expert tensors into `ExpertSource` entries:
+- Map DeepSeek V4 HF/WeightPack expert tensors into `ExpertLoadSource` entries:
   - gate/up/down per `(layer, expert)`,
-  - source shard path, byte offset, byte length, dtype/source format. ✅ HF local-shard mapping done for target model experts.
+  - artifact shard path, byte offset, byte length, dtype/artifact format. ✅ HF local-shard mapping done for target model experts.
 - Add a concrete streaming backend:
   - header/index lookup, ✅ HF header inventory done,
   - bounded read buffer, ✅ local byte-range reader done,
@@ -2038,8 +2152,8 @@ Acceptance:
 
 Deferred streaming I/O optimization TODO:
 
-- Keep the first executable path synchronous and bounded: source tensor slice →
-  byte-range read → source-format decode/dequant → expert compute handle.
+- Keep the first executable path synchronous and bounded: artifact tensor slice →
+  byte-range read → artifact-format decode/dequant → expert compute handle.
 - Add async expert streaming only after correctness works end-to-end.
 - Introduce an I/O backend trait before adding platform-specific APIs, so runtime
   is not tied to `io_uring`.
@@ -2058,10 +2172,10 @@ Review focus:
 
 - streaming policy must remain generic; no DeepSeek-named runtime fields,
 - no all-in-RAM expert materialization,
-- source-preserving path first; IQ2/Q2 resident path later as an optional stack,
+- artifact-preserving path first; IQ2/Q2 resident path later as an optional stack,
 - executor integration must keep unsupported kernels as named missing-policy
   errors until fully implemented,
-- do not let async I/O optimization delay source-format decode and expert compute
+- do not let async I/O optimization delay artifact-format decode and expert compute
   integration.
 - keep policy separate from kernel implementation.
 
@@ -2112,7 +2226,7 @@ Tasks:
   - manifest,
   - chunks,
   - checksum,
-  - source model identity,
+  - artifact model identity,
   - runtime compatibility.
 - Add cloud-built WeightPack flow:
   - build on large machine,
@@ -2188,11 +2302,11 @@ Current state:
 - DeepSeek V4 tensor classes can be classified.
 - `ModelSupportContract` and `EnginePlan` can describe generic dense, MoE,
   OLMoE, and DeepSeek-style layouts.
-- `SourceArtifact`, `ConversionPlan`, and `QuantizationRecipe` skeletons exist,
+- `InputArtifact`, `ConversionPlan`, and `QuantizationRecipe` skeletons exist,
   including official `deepseek-ai/DeepSeek-V4-Flash-DSpark` source metadata.
-- Typed HF source binding now covers DSV4 attention, HC, router, shared experts,
+- Typed HF artifact binding now covers DSV4 attention, HC, router, shared experts,
   and routed experts without putting concrete tensor names in runtime code.
-- Real local DSV4 source-binding smokes pass for attention core tensors,
+- Real local DSV4 artifact-binding smokes pass for attention core tensors,
   compressor/indexer auxiliary slices, layer/global HC tensors, routers, shared
   experts, tokenizer, and one selected routed expert.
 - The old mock/source-bound runner paths have been removed; executable DSV4
@@ -2202,8 +2316,8 @@ Current state:
 - `start_pos == 0` prompt prefill now uses DSV4 batched prefill semantics for
   HC/layer traversal, window KV, compressed KV, indexer KV, `remainder`, and
   `cutoff`; non-zero incremental turns still use the safe append/decode path.
-- The CUDA hot path is split into generic source operators + DSV4 semantics:
-  source linears, sparse attention sink, grouped `wo_a`, HC pre/post/head,
+- The CUDA hot path is split into generic artifact operators + DSV4 semantics:
+  artifact linears, sparse attention sink, grouped `wo_a`, HC pre/post/head,
   shared SwiGLU FFN, routed FP4 experts, and lm_head top-k.
 - Output quality is not yet official-parity. Wrong-identity answers such as
   `QwQ-32B` must be treated as correctness bugs until first-token / first-N-token
@@ -2244,12 +2358,12 @@ Acceptance:
 - DSpark artifacts fail as `metadata-known/speculation-unsupported` or
   `metadata-known/execution-unsupported`, not `unknown`.
 
-### P14.1b Official source artifact and conversion plan  ✅ DONE
+### P14.1b Official input artifact and conversion plan  ✅ DONE
 
 Tasks:
 
 - Treat official `deepseek-ai/DeepSeek-V4-Flash-DSpark` HF safetensors as the
-  source-of-truth artifact.
+  source of truth artifact.
 - Represent source metadata separately from execution artifacts:
   - repo id,
   - revision,
@@ -2264,7 +2378,7 @@ Tasks:
 
 Acceptance:
 
-- official source artifact metadata fixture exists.
+- official input artifact metadata fixture exists.
 - DeepSeek Flash conversion plan can target WeightPack and records reference-validation needs.
 - GGUF conversion plan explicitly reports compatibility/PK intent.
 
@@ -2288,7 +2402,7 @@ Tasks:
   - hash routing tables,
   - routed and shared experts,
   - HC/output-HC or mHC-related auxiliary tensors.
-- Build layout from source tensor names/headers without loading full tensor
+- Build layout from artifact tensor names/headers without loading full tensor
   payloads; then bind only bounded required payloads for the layer being executed.
 - Validate required tensor presence per layer.
 - Current partial completion:
@@ -2296,8 +2410,8 @@ Tasks:
   - `HfSafetensorsInventory::{attention_tensors,hyper_connection_tensors}` exposes
     those descriptors;
   - runtime `bind_attention_from_hf`, `bind_hyper_connection_from_hf`, and
-    `bind_hyper_connection_head_from_hf` read real local source payloads behind
-    generic roles and validate source formats/shapes;
+    `bind_hyper_connection_head_from_hf` read real local artifact payloads behind
+    generic roles and validate artifact formats/shapes;
   - DSV4 names remain isolated in `ferrule-model::families::deepseek_v4`.
 - Allow optional DSpark-specific draft/speculation tensors only via explicit
   `SpeculationPolicy` metadata.
@@ -2307,7 +2421,7 @@ Acceptance:
 - `ModelDescriptor` can produce a DeepSeek layer-layout summary.
 - The same IR can represent a dense attention + dense MLP layer without DeepSeek
   fields.
-- Local DSV4 source-binding smoke validates core attention count `43 * 13`,
+- Local DSV4 artifact-binding smoke validates core attention count `43 * 13`,
   compressor/indexer auxiliary slices, `43 * 6 + 3` HC tensors, and real layer-0
   attention/HC payload shapes.
 - Missing required tensors produce a precise error naming layer and tensor class.
@@ -2339,15 +2453,15 @@ Acceptance:
 Tasks:
 
 - Implement DeepSeek attention tensor upload/load for one layer fixture.
-  - DONE for bounded HF source binding: layer-0 core attention payloads bind into
-    semantic `AttentionSourcePayload`; layer-2 compressor/indexer tensors are
-    preserved as auxiliary source slices.
+  - DONE for bounded HF artifact binding: layer-0 core attention payloads bind into
+    semantic `AttentionArtifactPayload`; layer-2 compressor/indexer tensors are
+    preserved as auxiliary artifact slices.
   - DONE for CPU/reference executable DSV4 attention inside
     `models::deepseek_v4::{DeepSeekV4Attention,DeepSeekV4AttentionCache}`:
     layer-0/1 sliding-window decode and layer-2 ratio-4 compressor/indexer decode
     run against the real local HF shards through `deepseek-v4-probe --max-layers 3`.
-  - DONE strict CUDA backend: generic CUDA source operators cover F32/BF16/FP8/FP4
-    source linears, sparse attention sink, grouped `wo_a`, RMS/per-head RMS, HC
+  - DONE strict CUDA backend: generic CUDA artifact operators cover F32/BF16/FP8/FP4
+    artifact linears, sparse attention sink, grouped `wo_a`, RMS/per-head RMS, HC
     pre/post/head, shared SwiGLU FFN, routed FP4 expert execution, and lm_head row
     chunks through one cached cuda-oxide context/module. `cuda-hybrid` remains only
     as a deprecated CLI alias for `cuda`; unsupported CUDA formats now fail instead
@@ -2366,7 +2480,7 @@ Tasks:
 
 Acceptance:
 
-- Local DSV4 source-binding smoke passes for attention payloads and auxiliary
+- Local DSV4 artifact-binding smoke passes for attention payloads and auxiliary
   compressor/indexer slices.
 - Tiny DeepSeek-like fixture runs attention decode step.
 - Real local probe can execute `max_layers=3` over a 4-token prompt and reports
@@ -2380,16 +2494,16 @@ Tasks:
 - Implement router bias handling (`exp_probs_b` / HF `gate.bias`). ✅ CPU/reference
 - Implement hash-assisted routing tables (`ffn_gate_tid2eid` / HF `gate.tid2eid`) if required by the
   first target layers. ✅ CPU/reference
-- Add shared expert execution path. ✅ CPU/reference source binding + tiny MoE fixture
+- Add shared expert execution path. ✅ CPU/reference artifact binding + tiny MoE fixture
 - Add resident expert handle path. ✅ CPU/reference store; CUDA handle wiring still pending
-- Add correctness-first CUDA packed-FP4 expert executor. ✅ initial source-preserving path
+- Add correctness-first CUDA packed-FP4 expert executor. ✅ initial artifact-preserving path
 - Add routed expert WeightPack/GGUF upload policy and production expert batching/residency integration. NEXT: replace host-mediated expert streaming/upload in DSV4 decode with CUDA-resident expert handles, prefetch, and batched selected-expert kernels.
 
 Acceptance:
 
 - A tiny layer fixture runs router + selected experts and matches reference within
   tolerance.
-- Real local DSV4 router/shared/routed expert source-binding smokes pass.
+- Real local DSV4 router/shared/routed expert artifact-binding smokes pass.
 - Full DSV4 layer execution must still wire these pieces into the generic forward
   path.
 
@@ -2805,17 +2919,17 @@ cargo test -p ferrule-model deepseek
 ferrule info /path/to/deepseek-v4.gguf
 ```
 
-### Ticket H: DeepSeek semantic layer-layout/source binding IR  ✅ PARTIAL
+### Ticket H: DeepSeek semantic layer-layout/artifact binding IR  ✅ PARTIAL
 
 Deliverables:
 
 - `DeepSeekLayerLayout` or generic layer-layout IR.
 - Typed HF semantic descriptors for attention, HC, router, shared experts, and
   routed experts. ✅
-- Runtime source-binding payloads for real DSV4 attention and HC tensors. ✅
+- Runtime artifact-binding payloads for real DSV4 attention and HC tensors. ✅
 - Required/optional tensor validation per layer.
 - Tensor-class count, quant-class count, and missing-policy report.
-- Remaining: assemble a single executable `LayerSourceBinding` consumed by the
+- Remaining: assemble a single executable `LayerArtifactBinding` consumed by the
   generic Transformer executor.
 
 Validation:
@@ -2999,11 +3113,11 @@ Deliverables:
   HC sequencing, MLA/CSA/HCA attention behavior, grouped output projection, and
   router/MoE semantics.
 - Start with CPU/reference execution for correctness, then attach CUDA backends for
-  source linears, sparse attention, HC, shared FFN, output head, and FP4 experts
-  behind operator policies. ✅ strict CUDA source-operator path for F32/BF16/FP8/FP4
+  artifact linears, sparse attention, HC, shared FFN, output head, and FP4 experts
+  behind operator policies. ✅ strict CUDA artifact-operator path for F32/BF16/FP8/FP4
   linears, RMS/per-head RMS, sparse attention, grouped `wo_a`, HC, shared FFN,
   routed FP4 experts, and lm_head chunks.
-- Keep concrete source names inside `ferrule-model` family binding and the DSV4
+- Keep concrete artifact names inside `ferrule-model` family binding and the DSV4
   model boundary; do not reintroduce a universal source-bound transformer runner.
 
 Validation:
@@ -3020,7 +3134,7 @@ cargo test -p ferrule-runtime local_deepseek_v4_reference_runner_prefills_prompt
 cargo check -p ferrule-cli --features cuda
 cargo run -p ferrule-cli -- deepseek-v4-probe models/DeepSeek-V4-Flash-DSpark --prompt "Hello" --row-count 4 --top-k 2
 cargo run -p ferrule-cli -- deepseek-v4-probe models/DeepSeek-V4-Flash-DSpark --prompt "one two three four" --max-layers 3 --row-count 1 --top-k 0
-just test-cuda source_format_kernels_produce_expected_tiny_outputs
+just test-cuda artifact_format_kernels_produce_expected_tiny_outputs
 just dsv4-cuda-probe "one two three four" 3 1 0
 just dsv4-cuda-first-token Hello 1
 just dsv4-cuda-generate Hello 2 4096 --chat
@@ -3031,13 +3145,13 @@ Expected:
 
 - One synthetic DSV4-shaped layer can run HC → attention → HC → MoE/shared FFN → HC
   through the DSV4 model boundary.
-- Real local DSV4 layer-0 source payloads bind with official grouped attention shapes.
+- Real local DSV4 layer-0 artifact payloads bind with official grouped attention shapes.
 - Real local embedding rows and lm_head row ranges can be read/executed without
   loading the full top-level matrices, both directly and through the DSV4 reference
   runner with `max_layers=0`.
 - `start_pos == 0` batched prefill can process a real tokenized prompt, build
   window/compressed/indexer KV state in bulk, and emit row-range or top-k logits.
-- Real local layer state registers routed expert source tensor sets for layer 0.
+- Real local layer state registers routed expert artifact tensor sets for layer 0.
 - Layer-2/layer-3 compressed attention binding succeeds with typed compressor/indexer
   payloads matching official shapes.
 - A synthetic compressed attention decode updates compressed KV and uses the compressed

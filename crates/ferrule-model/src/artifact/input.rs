@@ -6,13 +6,13 @@ use super::hf::HfSafetensorsArtifact;
 use super::identity::{ArtifactFormat, ArtifactIdentity};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SourceArtifact {
+pub enum InputArtifact {
     HfSafetensors(HfSafetensorsArtifact),
     Gguf { path: PathBuf, family: ModelFamily },
     WeightPack { path: PathBuf, family: ModelFamily },
 }
 
-impl SourceArtifact {
+impl InputArtifact {
     pub fn deepseek_v4_flash_dspark_official() -> Self {
         Self::HfSafetensors(HfSafetensorsArtifact::deepseek_v4_flash_dspark_official())
     }
