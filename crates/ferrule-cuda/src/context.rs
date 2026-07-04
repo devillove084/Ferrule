@@ -554,6 +554,27 @@ impl CudaArtifactOperatorContext {
         self.download_f32(&buffer.buffer, buffer.len)
     }
 
+    /// Device-side accumulate: `y += scale * x`.
+    ///
+    /// Used to accumulate routed expert outputs on the GPU without
+    /// downloading each expert's output to host and accumulating in Vec<f32>.
+    pub fn saxpy_into(&self, scale: f32, x: &CudaF32Buffer, y: &mut CudaF32Buffer) -> Result<()> {
+        if x.len != y.len {
+            return Err(Error::Internal(format!(
+                "CUDA saxpy length mismatch: x={} y={}",
+                x.len, y.len
+            )));
+        }
+        self.launched(self.module.saxpy(
+            &self.stream,
+            LaunchConfig::for_num_elems(x.len as u32),
+            scale,
+            &x.buffer,
+            &mut y.buffer,
+            x.len as u32,
+        ))
+    }
+
     pub fn upload_artifact_linear(
         &self,
         shape: CudaArtifactLinearShape,
@@ -858,6 +879,79 @@ impl CudaArtifactOperatorContext {
         route_weight: f32,
         swiglu_limit: f32,
     ) -> Result<Vec<f32>> {
+        let quantized = self.prepare_fp4_expert_input(gate, up, down, input)?;
+        let yd = self.fp4_swiglu_ffn_from_device(
+            gate,
+            up,
+            down,
+            &quantized,
+            route_weight,
+            swiglu_limit,
+        )?;
+        self.download_f32_buffer(&yd)
+    }
+
+    /// Quantize and upload an expert input once, for reuse across multiple
+    /// experts via `fp4_swiglu_ffn_from_device`.
+    ///
+    /// This avoids re-uploading and re-quantizing the same input for each
+    /// expert in a routed MoE step (6 experts × 1 upload → 1 upload).
+    pub fn prepare_fp4_expert_input(
+        &self,
+        gate: &CudaArtifactLinearHandle,
+        up: &CudaArtifactLinearHandle,
+        down: &CudaArtifactLinearHandle,
+        input: &[f32],
+    ) -> Result<CudaF32Buffer> {
+        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
+            out_features: gate_out,
+            in_features: gate_in,
+        } = gate.shape
+        else {
+            return Err(Error::Internal("CUDA packed expert gate is not FP4".into()));
+        };
+        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
+            out_features: up_out,
+            in_features: up_in,
+        } = up.shape
+        else {
+            return Err(Error::Internal("CUDA packed expert up is not FP4".into()));
+        };
+        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
+            out_features: down_out,
+            in_features: down_in,
+        } = down.shape
+        else {
+            return Err(Error::Internal("CUDA packed expert down is not FP4".into()));
+        };
+        if input.len() != gate_in || up_in != gate_in || up_out != gate_out || down_in != gate_out {
+            return Err(Error::Internal(format!(
+                "CUDA packed expert shape mismatch: input={} gate=[{gate_out},{gate_in}] up=[{up_out},{up_in}] down=[{down_out},{down_in}]",
+                input.len()
+            )));
+        }
+        let mut quantized_input = input.to_vec();
+        simulate_fp8_e4m3fn_e8m0_activation_quant_in_place(
+            &mut quantized_input,
+            gate_in,
+            ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
+        )?;
+        self.upload_f32_buffer(&quantized_input)
+    }
+
+    /// Run FP4 SwiGLU expert matvec from a pre-uploaded device input buffer.
+    ///
+    /// Pair with `prepare_fp4_expert_input` to share the input across experts.
+    /// Returns a device buffer instead of downloading to host.
+    pub fn fp4_swiglu_ffn_from_device(
+        &self,
+        gate: &CudaArtifactLinearHandle,
+        up: &CudaArtifactLinearHandle,
+        down: &CudaArtifactLinearHandle,
+        input: &CudaF32Buffer,
+        route_weight: f32,
+        swiglu_limit: f32,
+    ) -> Result<CudaF32Buffer> {
         let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
             out_features: gate_out,
             in_features: gate_in,
@@ -897,13 +991,6 @@ impl CudaArtifactOperatorContext {
             .scale
             .as_ref()
             .ok_or_else(|| Error::Internal("CUDA packed expert down missing scale".into()))?;
-        let mut quantized_input = input.to_vec();
-        simulate_fp8_e4m3fn_e8m0_activation_quant_in_place(
-            &mut quantized_input,
-            gate_in,
-            ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
-        )?;
-        let xd = self.upload_f32(&quantized_input)?;
         let mut yd = cu(DeviceBuffer::<f32>::zeroed(&self.stream, down_out))?;
         let mut scratch = CudaPackedFp4ExpertScratch::new(&self.stream, gate_out)?;
         let expert = CudaPackedFp4Expert {
@@ -918,7 +1005,7 @@ impl CudaArtifactOperatorContext {
         self.launched(self.module.gemv_dual_fp4_e2m1_e8m0_off(
             &self.stream,
             cfg_mid,
-            &xd,
+            &input.buffer,
             expert.gate.packed,
             expert.gate.scales,
             &mut scratch.gate,
@@ -962,7 +1049,10 @@ impl CudaArtifactOperatorContext {
             checked_u32(expert.down.packed_offset(), "down", "packed offset")?,
             checked_u32(expert.down.scale_offset(), "down", "scale offset")?,
         ))?;
-        self.download_f32(&yd, down_out)
+        Ok(CudaF32Buffer {
+            buffer: yd,
+            len: down_out,
+        })
     }
 
     pub fn rms_norm(&self, input: &[f32], weight: &[f32], eps: f32) -> Result<Vec<f32>> {
@@ -986,6 +1076,42 @@ impl CudaArtifactOperatorContext {
             eps,
         ))?;
         self.download_f32(&yd, input.len())
+    }
+
+    /// Device-resident RMS norm: input is already on device, weight is uploaded
+    /// once and cached by the caller. Output stays on device.
+    pub fn rms_norm_from_device(
+        &self,
+        input: &CudaF32Buffer,
+        weight: &CudaF32Buffer,
+        eps: f32,
+    ) -> Result<CudaF32Buffer> {
+        if input.len() != weight.len() || input.is_empty() {
+            return Err(Error::Internal(format!(
+                "CUDA RMS norm device length mismatch: input={} weight={}",
+                input.len(),
+                weight.len()
+            )));
+        }
+        let mut yd = cu(DeviceBuffer::<f32>::zeroed(&self.stream, input.len()))?;
+        self.launched(self.module.rms_norm_fused(
+            &self.stream,
+            one_block_config(256),
+            &input.buffer,
+            &weight.buffer,
+            &mut yd,
+            input.len() as u32,
+            eps,
+        ))?;
+        Ok(CudaF32Buffer {
+            buffer: yd,
+            len: input.len(),
+        })
+    }
+
+    /// Upload a norm weight once for reuse with `rms_norm_from_device`.
+    pub fn upload_norm_weight(&self, weight: &[f32]) -> Result<CudaF32Buffer> {
+        self.upload_f32_buffer(weight)
     }
 
     pub fn rms_norm_heads(

@@ -226,6 +226,134 @@ pub fn apply_streaming_step(
 // ── Implementation for CpuExpertHandleStore ───────────────────────────
 
 use crate::expert_handle::{CpuExpertHandleStore, ExpertHandleStore};
+use crate::expert_streaming::ExpertComputeBundle;
+use std::collections::VecDeque;
+
+// ── HostStagedExpertCache ────────────────────────────────────────────
+
+/// Host-side LRU cache of decoded expert compute bundles.
+///
+/// Sits between disk (`ExpertStreamingReader`) and the GPU upload path.
+/// When an expert is re-activated after eviction from VRAM, its bundle is
+/// served from host memory instead of re-reading from safetensors shards.
+///
+/// This directly targets the synthetic-fixture bottleneck of 243 disk reads
+/// across 5 forward passes (ROADMAP P4).
+#[derive(Debug)]
+pub struct HostStagedExpertCache {
+    entries: std::collections::HashMap<ExpertId, ExpertComputeBundle>,
+    order: VecDeque<ExpertId>,
+    capacity: usize,
+    hits: u64,
+    misses: u64,
+    evictions: u64,
+}
+
+impl HostStagedExpertCache {
+    /// Create a cache holding at most `capacity` expert bundles in host RAM.
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            entries: std::collections::HashMap::new(),
+            order: VecDeque::new(),
+            capacity,
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+        }
+    }
+
+    /// Look up a staged bundle, returning a clone if present.
+    ///
+    /// Cloning is intentional: the caller (CUDA upload path) needs an owned
+    /// bundle to upload, while the cache retains its copy for future hits.
+    /// Bundles are small (a few MB each for FP4 experts).
+    pub fn get(&mut self, expert: ExpertId) -> Option<ExpertComputeBundle> {
+        if self.entries.contains_key(&expert) {
+            self.hits += 1;
+            // Move to back (most-recently-used).
+            self.order.retain(|id| *id != expert);
+            self.order.push_back(expert);
+            self.entries.get(&expert).cloned()
+        } else {
+            self.misses += 1;
+            None
+        }
+    }
+
+    /// Insert a bundle, evicting the least-recently-used entry if at capacity.
+    pub fn insert(&mut self, bundle: ExpertComputeBundle) {
+        let expert = bundle.expert;
+        if self.entries.contains_key(&expert) {
+            self.order.retain(|id| *id != expert);
+        } else if self.entries.len() >= self.capacity && self.capacity > 0 {
+            if let Some(evicted) = self.order.pop_front() {
+                self.entries.remove(&evicted);
+                self.evictions += 1;
+            }
+        }
+        self.entries.insert(expert, bundle);
+        self.order.push_back(expert);
+    }
+
+    /// Load an expert bundle from disk via the reader, caching the result.
+    ///
+    /// On cache hit, skips the disk read entirely. On miss, reads from disk
+    /// and inserts into the cache before returning.
+    pub fn get_or_load(
+        &mut self,
+        expert: ExpertId,
+        source: &ExpertLoadSource,
+        reader: &ExpertStreamingReader,
+    ) -> Result<ExpertComputeBundle> {
+        if let Some(bundle) = self.get(expert) {
+            return Ok(bundle);
+        }
+        let payload = reader.read_load_source(expert, source)?;
+        let bundle = ExpertComputeBundle::from_artifact_payload(payload)?;
+        self.insert(bundle.clone());
+        Ok(bundle)
+    }
+
+    /// Number of currently staged bundles.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the cache is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Cache hit count (experts served from host memory).
+    pub fn hits(&self) -> u64 {
+        self.hits
+    }
+
+    /// Cache miss count (experts that required a disk read).
+    pub fn misses(&self) -> u64 {
+        self.misses
+    }
+
+    /// Number of host-side evictions (LRU replacements).
+    pub fn evictions(&self) -> u64 {
+        self.evictions
+    }
+
+    /// Total bytes of all staged bundles.
+    pub fn total_bytes(&self) -> u64 {
+        self.entries.values().map(|b| b.total_bytes()).sum()
+    }
+}
+
+impl Default for HostStagedExpertCache {
+    fn default() -> Self {
+        // Default capacity: 64 expert bundles. At ~6 MB per FP4 expert
+        // (gate+up+down for hidden=2816, inter=1408), this is ~384 MB host RAM.
+        Self::new(64)
+    }
+}
+
+// ── CpuExpertHandleStore backend ─────────────────────────────────────
 
 impl ExpertResidencyBackend for CpuExpertHandleStore {
     fn evict(&mut self, expert: ExpertId) -> Result<()> {
@@ -561,5 +689,104 @@ mod tests {
             scale: None,
             format: ExpertLinearFormat::Opaque,
         }
+    }
+
+    fn make_bundle(expert: ExpertId) -> crate::expert_streaming::ExpertComputeBundle {
+        crate::expert_streaming::ExpertComputeBundle {
+            expert,
+            gate: make_gate_payload(expert),
+            up: make_gate_payload(expert),
+            down: make_gate_payload(expert),
+        }
+    }
+
+    // ── HostStagedExpertCache tests ──
+
+    #[test]
+    fn host_staged_cache_insert_and_get() {
+        let mut cache = HostStagedExpertCache::new(4);
+        let id = expert_id(0, 0);
+        cache.insert(make_bundle(id));
+
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.hits(), 0);
+        assert_eq!(cache.misses(), 0);
+
+        let got = cache.get(id);
+        assert!(got.is_some());
+        assert_eq!(cache.hits(), 1);
+        assert_eq!(cache.misses(), 0);
+    }
+
+    #[test]
+    fn host_staged_cache_miss_on_absent() {
+        let mut cache = HostStagedExpertCache::new(4);
+        let id = expert_id(0, 0);
+
+        let got = cache.get(id);
+        assert!(got.is_none());
+        assert_eq!(cache.misses(), 1);
+        assert_eq!(cache.hits(), 0);
+    }
+
+    #[test]
+    fn host_staged_cache_lru_eviction() {
+        let mut cache = HostStagedExpertCache::new(2);
+        let e0 = expert_id(0, 0);
+        let e1 = expert_id(0, 1);
+        let e2 = expert_id(0, 2);
+
+        cache.insert(make_bundle(e0));
+        cache.insert(make_bundle(e1));
+        assert_eq!(cache.len(), 2);
+
+        // Inserting e2 should evict e0 (least recently used).
+        cache.insert(make_bundle(e2));
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.evictions(), 1);
+
+        // e0 should be gone, e1 and e2 present.
+        assert!(cache.get(e0).is_none());
+        assert!(cache.get(e1).is_some());
+        assert!(cache.get(e2).is_some());
+    }
+
+    #[test]
+    fn host_staged_cache_lru_access_promotes() {
+        let mut cache = HostStagedExpertCache::new(2);
+        let e0 = expert_id(0, 0);
+        let e1 = expert_id(0, 1);
+        let e2 = expert_id(0, 2);
+
+        cache.insert(make_bundle(e0));
+        cache.insert(make_bundle(e1));
+
+        // Access e0 to promote it to most-recently-used.
+        assert!(cache.get(e0).is_some());
+
+        // Inserting e2 should now evict e1 (not e0).
+        cache.insert(make_bundle(e2));
+        assert_eq!(cache.evictions(), 1);
+
+        assert!(cache.get(e0).is_some());
+        assert!(cache.get(e1).is_none());
+        assert!(cache.get(e2).is_some());
+    }
+
+    #[test]
+    fn host_staged_cache_total_bytes() {
+        let mut cache = HostStagedExpertCache::new(4);
+        let e0 = expert_id(0, 0);
+        cache.insert(make_bundle(e0));
+
+        // Each bundle has 3 payloads × 8 bytes = 24 bytes.
+        assert_eq!(cache.total_bytes(), 24);
+    }
+
+    #[test]
+    fn host_staged_cache_default_capacity() {
+        let cache = HostStagedExpertCache::default();
+        assert_eq!(cache.len(), 0);
+        assert!(cache.is_empty());
     }
 }

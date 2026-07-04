@@ -1294,6 +1294,83 @@ impl DeepSeekV4OperatorContext {
             "DeepSeek-V4 CUDA backend requires ferrule-runtime/cuda feature".into(),
         ))
     }
+
+    // ── Device-resident op variants (CUDA only) ──
+    //
+    // These accept and return `CudaF32Buffer` instead of `&[f32]`/`Vec<f32>`,
+    // allowing multiple ops to chain without host round-trips.
+
+    #[cfg(feature = "cuda")]
+    fn cuda_linear_matvec_from_device(
+        &mut self,
+        linear: &ArtifactLinearPayload,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.cuda_mut()?.linear_matvec_from_device(linear, input)
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    fn cuda_linear_matvec_from_device(
+        &mut self,
+        _linear: &ArtifactLinearPayload,
+        _input: &(),
+    ) -> Result<()> {
+        Err(Error::Model(
+            "DeepSeek-V4 CUDA backend requires ferrule-runtime/cuda feature".into(),
+        ))
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_rms_norm_device_cached(
+        &mut self,
+        name: &str,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        weight: &[f32],
+        eps: f32,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.cuda_mut()?
+            .rms_norm_device_cached(name, input, weight, eps)
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    fn cuda_rms_norm_device_cached(
+        &mut self,
+        _name: &str,
+        _input: &(),
+        _weight: &[f32],
+        _eps: f32,
+    ) -> Result<()> {
+        Err(Error::Model(
+            "DeepSeek-V4 CUDA backend requires ferrule-runtime/cuda feature".into(),
+        ))
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_upload_f32(&mut self, values: &[f32]) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.cuda_mut()?.ops.upload_f32_buffer(values)
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    fn cuda_upload_f32(&mut self, _values: &[f32]) -> Result<()> {
+        Err(Error::Model(
+            "DeepSeek-V4 CUDA backend requires ferrule-runtime/cuda feature".into(),
+        ))
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_download_f32(
+        &mut self,
+        buffer: &ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<Vec<f32>> {
+        self.cuda_mut()?.ops.download_f32_buffer(buffer)
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    fn cuda_download_f32(&mut self, _buffer: &()) -> Result<Vec<f32>> {
+        Err(Error::Model(
+            "DeepSeek-V4 CUDA backend requires ferrule-runtime/cuda feature".into(),
+        ))
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -1302,6 +1379,8 @@ struct DeepSeekV4CudaOperatorCache {
     linears: HashMap<String, ferrule_cuda::context::CudaArtifactLinearHandle>,
     experts: HashMap<ExpertId, CudaFp4ExpertHandles>,
     decode_arena: DeepSeekV4DecodeArena,
+    host_staged_cache: crate::expert_residency::HostStagedExpertCache,
+    norm_weights: HashMap<String, ferrule_cuda::context::CudaF32Buffer>,
     expert_selected: u64,
     expert_loads: u64,
     expert_load_bytes: u64,
@@ -1330,6 +1409,8 @@ impl DeepSeekV4CudaOperatorCache {
             linears: HashMap::new(),
             experts: HashMap::new(),
             decode_arena: DeepSeekV4DecodeArena::default(),
+            host_staged_cache: crate::expert_residency::HostStagedExpertCache::default(),
+            norm_weights: HashMap::new(),
             expert_selected: 0,
             expert_loads: 0,
             expert_load_bytes: 0,
@@ -1367,6 +1448,69 @@ impl DeepSeekV4CudaOperatorCache {
         let key = self.ensure_linear_uploaded(linear)?;
         let handle = self.linears.get(&key).expect("inserted above");
         self.ops.artifact_linear_matvec(handle, input.as_ref())
+    }
+
+    /// Device-resident linear matvec: input is already on device, output stays
+    /// on device. Skips host input preparation (caller must handle activation
+    /// quantization if needed).
+    fn linear_matvec_from_device(
+        &mut self,
+        linear: &ArtifactLinearPayload,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        if input.len() != linear.format.in_features() {
+            return Err(Error::Model(format!(
+                "artifact linear {:?} device input length mismatch: expected {}, got {}",
+                linear.role,
+                linear.format.in_features(),
+                input.len()
+            )));
+        }
+        let key = self.ensure_linear_uploaded(linear)?;
+        let handle = self.linears.get(&key).expect("inserted above");
+        let mut output = self.ops.zero_f32_buffer(handle.shape().out_features())?;
+        self.ops
+            .artifact_linear_matvec_into(handle, input, &mut output)?;
+        Ok(output)
+    }
+
+    /// Device-resident RMS norm: input and weight on device, output on device.
+    fn rms_norm_from_device(
+        &self,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        weight: &ferrule_cuda::context::CudaF32Buffer,
+        eps: f32,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.ops.rms_norm_from_device(input, weight, eps)
+    }
+
+    /// Upload a norm weight once for reuse with `rms_norm_from_device`.
+    fn upload_norm_weight(&self, weight: &[f32]) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.ops.upload_norm_weight(weight)
+    }
+
+    /// Get or upload a named norm weight, cached on device.
+    /// Returns a key that can be used to look up the weight in `norm_weights`.
+    fn ensure_norm_uploaded(&mut self, name: &str, weight: &[f32]) -> Result<()> {
+        if !self.norm_weights.contains_key(name) {
+            let buf = self.upload_norm_weight(weight)?;
+            self.norm_weights.insert(name.to_string(), buf);
+        }
+        Ok(())
+    }
+
+    /// Device-resident RMS norm with cached weight.
+    fn rms_norm_device_cached(
+        &mut self,
+        name: &str,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        weight: &[f32],
+        eps: f32,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.ensure_norm_uploaded(name, weight)?;
+        // Safe to unwrap: ensure_norm_uploaded just inserted it.
+        let weight_buf = self.norm_weights.get(name).expect("inserted above");
+        self.ops.rms_norm_from_device(input, weight_buf, eps)
     }
 
     fn linear_topk(
@@ -1696,8 +1840,11 @@ impl DeepSeekV4CudaOperatorCache {
         }
 
         for load in &streaming.loads {
-            let payload = reader.read_load_source(load.expert, &load.load_source)?;
-            let bundle = ExpertComputeBundle::from_artifact_payload(payload)?;
+            // Host-staged cache: serve from host RAM on re-activation,
+            // skipping the disk read. Only counts as a disk load on miss.
+            let bundle =
+                self.host_staged_cache
+                    .get_or_load(load.expert, &load.load_source, reader)?;
             let expert = self.upload_expert_bundle(&bundle)?;
             let bytes = expert.bytes;
             self.expert_loads = self.expert_loads.saturating_add(1);
@@ -1711,7 +1858,48 @@ impl DeepSeekV4CudaOperatorCache {
             ))?;
         }
 
-        let mut routed_output = None::<Vec<f32>>;
+        // Upload the shared input once and reuse across all selected experts.
+        // This eliminates 5/6 of the per-expert H2D copies (258 → 43 input uploads/token).
+        // Device-side accumulation via saxpy eliminates 258 D2H copies/token.
+        let input_len = input.len();
+        if routes.is_empty() {
+            let routed_output = vec![0.0f32; input_len];
+            let shared_output = shared_expert
+                .map(|shared| self.swiglu_ffn(shared, input, 1.0))
+                .transpose()?;
+            let mut output = routed_output.clone();
+            if let Some(shared) = &shared_output {
+                for (dst, value) in output.iter_mut().zip(shared.iter()) {
+                    *dst += value;
+                }
+            }
+            planner.commit_step(&streaming)?;
+            return Ok(RoutedMoeStepOutput {
+                routes,
+                streaming,
+                routed_output,
+                shared_output,
+                output,
+            });
+        }
+
+        // Use the first expert's handles to determine FP4 shapes for input prep.
+        let first_expert_id = ExpertId::new(layer, routes[0].expert);
+        let first_expert = self.experts.get(&first_expert_id).ok_or_else(|| {
+            Error::Model(format!(
+                "CUDA expert handle missing for layer {} expert {}",
+                first_expert_id.layer, first_expert_id.expert
+            ))
+        })?;
+        let shared_input = self.ops.prepare_fp4_expert_input(
+            &first_expert.gate,
+            &first_expert.up,
+            &first_expert.down,
+            input,
+        )?;
+        let mut accumulator = self.ops.zero_f32_buffer(input_len)?;
+        let swiglu_limit = shared_expert.map(|ffn| ffn.swiglu_limit).unwrap_or(0.0);
+
         for route in &routes {
             let expert_id = ExpertId::new(layer, route.expert);
             let expert = self.experts.get(&expert_id).ok_or_else(|| {
@@ -1720,17 +1908,18 @@ impl DeepSeekV4CudaOperatorCache {
                     expert_id.layer, expert_id.expert
                 ))
             })?;
-            let expert_out = self.ops.artifact_fp4_swiglu_ffn_matvec(
+            let expert_out = self.ops.fp4_swiglu_ffn_from_device(
                 &expert.gate,
                 &expert.up,
                 &expert.down,
-                input,
+                &shared_input,
                 route.weight,
-                shared_expert.map(|ffn| ffn.swiglu_limit).unwrap_or(0.0),
+                swiglu_limit,
             )?;
-            accumulate_output(&mut routed_output, expert_out)?;
+            // Accumulate on device: accumulator += 1.0 * expert_out
+            self.ops.saxpy_into(1.0, &expert_out, &mut accumulator)?;
         }
-        let routed_output = routed_output.unwrap_or_else(|| vec![0.0; input.len()]);
+        let routed_output = self.ops.download_f32_buffer(&accumulator)?;
         let shared_output = shared_expert
             .map(|shared| self.swiglu_ffn(shared, input, 1.0))
             .transpose()?;
@@ -2545,6 +2734,22 @@ impl DeepSeekV4Layer {
             )));
         }
 
+        // Device-resident path for CUDA: keeps norm weights on device and
+        // avoids redundant H2D/D2H for rms_norm inputs/outputs.
+        #[cfg(feature = "cuda")]
+        if operators.backend == DeepSeekV4OperatorBackend::Cuda {
+            return self.decode_step_device(
+                state,
+                hc_state,
+                token_id,
+                position,
+                predicted_experts,
+                expert_reader,
+                expert_executor,
+                operators,
+            );
+        }
+
         let attention_pre = operators.hc_pre(hc_state, 1, self.hc_config, &self.hc_attention)?;
         let attention_input = operators.rms_norm(
             &attention_pre.hidden,
@@ -2573,6 +2778,100 @@ impl DeepSeekV4Layer {
             self.hc_config.norm_eps,
             "ffn_norm",
         )?;
+        let moe = operators.routed_moe_step(
+            self.layer,
+            &ffn_input,
+            token_id,
+            &self.router,
+            predicted_experts,
+            &self.router_policy,
+            &mut state.expert_planner,
+            expert_reader,
+            &mut state.expert_handles,
+            expert_executor,
+            Some(&self.shared_ffn),
+        )?;
+        let hc_state = operators.hc_post(
+            &moe.output,
+            &after_attention,
+            self.hc_config,
+            &ffn_pre.split,
+        )?;
+
+        Ok(DeepSeekV4LayerStepOutput {
+            attention_hidden,
+            feed_forward_hidden: moe.output.clone(),
+            moe,
+            hc_state,
+        })
+    }
+
+    /// CUDA device-resident decode path.
+    ///
+    /// Uses `CudaF32Buffer` to chain rms_norm outputs on device, avoiding
+    /// the H2D upload + D2H download that `rms_norm` does on every call.
+    /// The hc_pre/hc_post/attention ops still use host boundaries, but the
+    /// two rms_norm calls per layer are device-resident.
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    fn decode_step_device(
+        &self,
+        state: &mut DeepSeekV4LayerState,
+        hc_state: &[f32],
+        token_id: u32,
+        position: usize,
+        predicted_experts: &[usize],
+        expert_reader: &ExpertStreamingReader,
+        expert_executor: &impl ExpertExecutor,
+        operators: &mut DeepSeekV4OperatorContext,
+    ) -> Result<DeepSeekV4LayerStepOutput> {
+        let norm_eps = self.hc_config.norm_eps;
+        let layer_tag = format!("L{}", self.layer);
+
+        // --- Attention block ---
+        let attention_pre = operators.hc_pre(hc_state, 1, self.hc_config, &self.hc_attention)?;
+
+        // Upload hidden to device, run rms_norm on device, download result.
+        // This saves: 1 weight upload (cached) + avoids host round-trip for
+        // the norm output (it goes device→next op's input on host anyway,
+        // but the norm weight is cached).
+        let attn_norm_name = format!("attn_norm_{layer_tag}");
+        let hidden_device = operators.cuda_upload_f32(&attention_pre.hidden)?;
+        let normed_device = operators.cuda_rms_norm_device_cached(
+            &attn_norm_name,
+            &hidden_device,
+            &self.attn_norm,
+            norm_eps,
+        )?;
+        let attention_input = operators.cuda_download_f32(&normed_device)?;
+
+        let attention_hidden = self.attention.decode_step_with_operators(
+            &mut state.kv,
+            &attention_input,
+            position,
+            operators,
+        )?;
+        let after_attention = operators.hc_post(
+            &attention_hidden,
+            hc_state,
+            self.hc_config,
+            &attention_pre.split,
+        )?;
+
+        // --- FFN/MoE block ---
+        let ffn_pre =
+            operators.hc_pre(&after_attention, 1, self.hc_config, &self.hc_feed_forward)?;
+
+        let ffn_norm_name = format!("ffn_norm_{layer_tag}");
+        let hidden_device = operators.cuda_upload_f32(&ffn_pre.hidden)?;
+        let normed_device = operators.cuda_rms_norm_device_cached(
+            &ffn_norm_name,
+            &hidden_device,
+            &self.ffn_norm,
+            norm_eps,
+        )?;
+        let ffn_input = operators.cuda_download_f32(&normed_device)?;
+
         let moe = operators.routed_moe_step(
             self.layer,
             &ffn_input,
@@ -3670,6 +3969,12 @@ impl DeepSeekV4Attention {
             )));
         }
 
+        // Device-resident path: chain linear_matvec + rms_norm on device.
+        #[cfg(feature = "cuda")]
+        if operators.backend == DeepSeekV4OperatorBackend::Cuda {
+            return self.decode_step_no_compress_device(cache, hidden, position, operators, cfg);
+        }
+
         let q_latent = operators.linear_matvec(&self.payload.query_a, hidden)?;
         let q_latent =
             operators.rms_norm(&q_latent, &self.payload.query_norm, cfg.norm_eps, "q_norm")?;
@@ -3694,6 +3999,102 @@ impl DeepSeekV4Attention {
         let kv = operators.linear_matvec(&self.payload.key_value, hidden)?;
         let mut kv =
             operators.rms_norm(&kv, &self.payload.key_value_norm, cfg.norm_eps, "kv_norm")?;
+        apply_rotary_tail(
+            &mut kv,
+            1,
+            cfg.head_dim,
+            cfg.rope_head_dim,
+            position,
+            cfg.rope_theta,
+            false,
+        )?;
+        quantize_attention_kv_for_qat_in_place(&mut kv, cfg.head_dim, cfg.rope_head_dim)?;
+        cache.append(position, &kv)?;
+        let topk = cache.topk_indices(position, cfg.window_size);
+        let values = cache.values_for_attention();
+        let mut context = operators.sparse_attention(
+            &query,
+            values,
+            &topk,
+            &self.payload.attention_sink,
+            1,
+            cache.kv_len_for_attention(),
+            cfg.sparse_spec(),
+        )?;
+        apply_rotary_tail(
+            &mut context,
+            cfg.num_heads,
+            cfg.head_dim,
+            cfg.rope_head_dim,
+            position,
+            cfg.rope_theta,
+            true,
+        )?;
+        let latent =
+            operators.grouped_output_a(&self.payload.output_a, &context, cfg, self.layer)?;
+        operators.linear_matvec(&self.payload.output_b, &latent)
+    }
+
+    /// CUDA device-resident no-compress attention path.
+    ///
+    /// Chains `query_a → rms_norm → query_b` and `key_value → rms_norm` on
+    /// device, avoiding 4 H2D uploads + 4 D2H downloads per layer.
+    #[cfg(feature = "cuda")]
+    fn decode_step_no_compress_device(
+        &self,
+        cache: &mut DeepSeekV4WindowKvCache,
+        hidden: &[f32],
+        position: usize,
+        operators: &mut DeepSeekV4OperatorContext,
+        cfg: DeepSeekV4AttentionConfig,
+    ) -> Result<Vec<f32>> {
+        let layer_tag = format!("attn_L{}", self.layer);
+
+        // Upload hidden once, reuse for both query and KV projections.
+        let hidden_device = operators.cuda_upload_f32(hidden)?;
+
+        // Query: query_a → rms_norm → query_b (all on device)
+        let q_latent_dev =
+            operators.cuda_linear_matvec_from_device(&self.payload.query_a, &hidden_device)?;
+        let q_norm_name = format!("q_norm_{layer_tag}");
+        let q_normed_dev = operators.cuda_rms_norm_device_cached(
+            &q_norm_name,
+            &q_latent_dev,
+            &self.payload.query_norm,
+            cfg.norm_eps,
+        )?;
+        let mut query =
+            operators.cuda_linear_matvec_from_device(&self.payload.query_b, &q_normed_dev)?;
+        // rms_norm_heads + rotary still need host.
+        let mut query = operators.cuda_download_f32(&query)?;
+        operators.rms_norm_heads_in_place(
+            &mut query,
+            cfg.num_heads,
+            cfg.head_dim,
+            cfg.norm_eps,
+            self.layer,
+        )?;
+        apply_rotary_tail(
+            &mut query,
+            cfg.num_heads,
+            cfg.head_dim,
+            cfg.rope_head_dim,
+            position,
+            cfg.rope_theta,
+            false,
+        )?;
+
+        // KV: key_value → rms_norm (on device), then rotary+quantize on host.
+        let kv_dev =
+            operators.cuda_linear_matvec_from_device(&self.payload.key_value, &hidden_device)?;
+        let kv_norm_name = format!("kv_norm_{layer_tag}");
+        let kv_normed_dev = operators.cuda_rms_norm_device_cached(
+            &kv_norm_name,
+            &kv_dev,
+            &self.payload.key_value_norm,
+            cfg.norm_eps,
+        )?;
+        let mut kv = operators.cuda_download_f32(&kv_normed_dev)?;
         apply_rotary_tail(
             &mut kv,
             1,
@@ -4940,6 +5341,7 @@ fn dot(a: &[f32], b: &[f32]) -> f32 {
 }
 
 #[cfg(feature = "cuda")]
+#[allow(dead_code)]
 fn accumulate_output(target: &mut Option<Vec<f32>>, value: Vec<f32>) -> Result<()> {
     if let Some(target) = target {
         if target.len() != value.len() {

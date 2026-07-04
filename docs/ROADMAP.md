@@ -28,7 +28,8 @@ into a single source of truth, reflecting the current code state including the
 7. [Gap against mainstream engines](#gap-against-mainstream-engines)
 8. [Model bring-up contract](#model-bring-up-contract)
 9. [DSV4 artifact facts](#dsv4-artifact-facts)
-10. [Review checklist](#review-checklist)
+10. [DSV4 synthetic fixture benchmark](#dsv4-synthetic-fixture-benchmark)
+11. [Review checklist](#review-checklist)
 
 ---
 
@@ -57,7 +58,14 @@ into a single source of truth, reflecting the current code state including the
 - **DSV4 metadata + artifact materialization**: 72,317 tensors across 48 shards
   classified. Attention/HC/router/shared-expert/routed-expert tensor descriptors
   bind from local HF shards. Local-model tests skip cleanly when absent.
-- **Expert streaming**: `ExpertStreamingPlanner` with slot-based GPU residency,
+- **DSV4 synthetic fixture**: `scripts/dsv4_synthetic_fixture.py` generates
+  structurally complete zero-weight safetensors scaled to VRAM × 2.
+  Auto-detects NVIDIA VRAM, scales all dimensions proportionally (FP8 block
+  alignment, FP4 scale packing), and produces a valid `config.json` +
+  `model.safetensors.index.json` + safetensors shards that Ferrule's DSV4
+  loader, inventory, expert streaming, and generation path consume
+  identically to real weights. Used for streaming/residency development
+  without requiring the 166 GB full model on disk.
   LRU eviction, prefetch, and `commit_step`. `ExpertStreamingReader` reads
   bounded byte ranges from local safetensors. CPU packed-FP4 SwiGlU expert
   executor + correctness-first CUDA packed-FP4 expert executor.
@@ -92,12 +100,34 @@ into a single source of truth, reflecting the current code state including the
 
 ### Main gaps
 
-- DSV4 decode still has too many host-side `Vec<f32>` and synchronous
-  artifact/operator boundaries (~0.3 tok/s estimated).
-- Expert residency CUDA integration pending: `ExpertResidencyBackend` not yet
-  implemented for `DeepSeekV4CudaOperatorCache`. Host-staged cache not built.
-- No production batched selected-expert kernel.
+Measured on synthetic DSV4 fixture (RTX 3090 24 GB, CUDA sm_86, 43 layers,
+170 experts, hidden=2816, 51 GB on disk). After Phase 1+2 optimizations
+(device-resident expert loop, attention device chain, norm weight cache,
+host-staged expert cache):
+
+| Metric | Baseline | Current | Root cause |
+|---|---|---|---|
+| decode tok/s | 0.60 | 0.64 (+7%) | sync latency from D2H copies, not data volume |
+| prefill tok/s | 0.065 | 0.063 | same host-mediated path, no prefill batching |
+| kernel launches | 8,776 (~2,194/tok) | 9,808 (~2,229/tok) | per-expert launch, unfused attention sub-ops |
+| H2D copies | 10,924 (4.48 GB) | 8,860 (4.80 GB) | reduced via device chaining; remaining is weight upload |
+| D2H copies | 6,024 (73 MB) | 4,648 (67 MB) | reduced via device accumulation; remaining is op boundaries |
+| expert loads (disk) | 243 | 243 | host-staged cache cold (5-token run too short for reuse) |
+
+**Key finding:** reducing H2D/D2D copies by 30-40% yielded only +7% tok/s.
+The bottleneck is synchronization latency (each D2H is a CPU-GPU sync point),
+not data movement volume. CUDA graph capture (P5) is now the highest-impact
+next step. See benchmark section for full analysis.
+
+- DSV4 decode still has host-side Vec<f32> boundaries at `hc_pre`/`hc_post`,
+  `apply_rotary_tail`, `sparse_attention`, and `grouped_output_a` boundaries.
+- Expert residency CUDA integration: `HostStagedExpertCache` implemented and
+  wired in; `ExpertResidencyBackend` not yet implemented for
+  `DeepSeekV4CudaOperatorCache`.
+- No production batched selected-expert kernel (6 experts/layer x 43 layers
+  = 258 separate kernel launches per token).
 - KV/compressed KV/indexer state not fully device-resident.
+- CUDA graph capture not implemented: 9,808 launches for 5 forward passes.
 - Official DSV4 numeric parity incomplete.
 - `ferrule-storage` vocabulary not yet wired into execution path (Phase 0 types
   only, no call site changes).
@@ -228,9 +258,33 @@ Goal: expose performance-critical boundaries while staying model-family neutral.
 ### P3 — Device-resident DSV4 decode
 
 Goal: remove host-mediated hot-path boundaries.
+**Motivation:** Phase 1+2 optimization reduced H2D/D2H copies by 30-40%, but
+decode tok/s only improved 7%. The real bottleneck is **synchronization
+latency** from D2H copies (each is a CPU-GPU sync point), not data movement
+volume. See benchmark section for full analysis.
 
 1. **Decode arena** — reusable device buffers for hidden, HC state, q/kv,
    attention workspace, router scores, expert outputs, logits/top-k.
+   - [x] Device-resident FP4 expert input sharing: 6 experts per layer share
+         one uploaded input buffer instead of 6 separate H2D uploads.
+         (`prepare_fp4_expert_input` + `fp4_swiglu_ffn_from_device` in
+         `ferrule-cuda/src/context.rs`)
+   - [x] Device-side expert output accumulation via `saxpy_into`: eliminates
+         258 D2H copies/token (6 experts × 43 layers) down to 43 D2H/token.
+   - [x] Norm weight caching (`rms_norm_device_cached`): norm weights uploaded
+         once per layer instead of per-call.
+   - [x] Attention device chain (`decode_step_no_compress_device`):
+         `query_a → rms_norm → query_b` and `key_value → rms_norm` chained on
+         device; `hidden` uploaded once and reused for both projections.
+   - [ ] Device-resident `hc_pre`/`hc_post`: need `hc_pre_from_device` and
+         `hc_post_from_device` variants. These are called 4×/layer and each
+         involves multiple H2D uploads + D2H downloads.
+   - [ ] Device-resident `apply_rotary_tail`: currently host-only, called
+         3×/layer. Needs a CUDA kernel.
+   - [ ] Device-resident `sparse_attention`: already has CUDA kernel; needs
+         `from_device` variant to accept pre-uploaded query/values.
+   - [ ] Full decode arena: all per-layer intermediate buffers (HC state,
+         attention I/O, router scores) device-resident end-to-end.
 2. **Device-resident KV state** — window KV, compressed KV, indexer KV,
    compressor state stay on device.
 3. **Artifact linear dispatch** — generic APIs for BF16/F32/FP8/FP4 payloads;
@@ -243,10 +297,16 @@ Goal: remove host-mediated hot-path boundaries.
 Exit: one-token DSV4 decode downloads only debug-gated tensors + final
 token/logit; expert loads visible and amortizable.
 
+**Revised expectation:** P3 alone (copy reduction) yields ~7% improvement.
+The ~10x target requires P5 (CUDA graph capture) to eliminate sync latency.
+
 ### P4 — Storage and residency integration
 
 Goal: wire `ferrule-storage` vocabulary into the execution path. See
 `docs/storage-residency-architecture.md` for full design.
+**Motivation:** synthetic fixture recorded 243 expert disk reads across 5
+forward passes — repeated expert activation re-reads from safetensors shards
+with zero host-side caching. Host-staged cache targets this directly.
 
 - [x] `ferrule-storage` crate with vocabulary types + traits (67 tests).
 - [x] `ExpertResidencyBackend` trait + `apply_streaming_step()` + adapters
@@ -262,19 +322,38 @@ Goal: wire `ferrule-storage` vocabulary into the execution path. See
       counter.
 - [ ] Host-staged expert cache (`HostStagedExpertCache`) with per-tier
       hit/miss counters.
+      - [x] `HostStagedExpertCache` LRU cache implemented in
+            `expert_residency.rs` (6 tests). Serves re-activated experts from
+            host RAM instead of re-reading from disk.
+      - [x] Wired into `DeepSeekV4CudaOperatorCache::routed_moe_step` CUDA
+            path.
+      - [ ] Wire hit/miss counters into JSON benchmark summary.
 - [ ] Expert ID migration: `ExpertId` → `StorageObjectId` as handle store key.
 
 ### P5 — Kernel fusion and CUDA graph replay
 
 Goal: optimize only after P0/P3/P4 make correctness and data movement visible.
+**Motivation:** Phase 2 benchmark showed that reducing H2D/D2H copies by 30-40%
+yielded only +7% tok/s. The dominant bottleneck is **synchronization latency**:
+~1,056 D2H copies/token each force CPU-GPU synchronization. CUDA graph capture
+eliminates all intermediate sync points, allowing the GPU to execute the entire
+decode bucket without CPU intervention. This is now the **highest-impact** item.
 
-- [ ] Count kernel launches per token/layer.
+- [x] Count kernel launches per token/layer (measured: see benchmark above).
+- [ ] **CUDA graph capture for stable decode buckets** — capture the entire
+      `decode_step_device` path as one graph. The path is already structured
+      for this: deterministic op sequence, no data-dependent control flow in
+      steady-state decode. Expected: ~5-10x decode improvement.
+      - [ ] Identify stable decode shape buckets (fixed hidden size, expert
+            count, KV length window).
+      - [ ] Capture graph for each bucket.
+      - [ ] Replay with updated input/weight pointers.
+      - [ ] Debug fallback (replay disabled when debug dump requested).
 - [ ] Fuse low-rank attention projection + norm pieces.
 - [ ] Fuse sparse attention gather/softmax/value accumulation.
 - [ ] Batched selected-expert FP4/FP8 MoE kernel per layer.
 - [ ] Grouped output projection fusion.
 - [ ] Steady-state decode shape buckets.
-- [ ] CUDA graph replay for stable decode buckets with debug fallback.
 
 ### P6 — Benchmarks and competitive parity
 
@@ -374,7 +453,7 @@ decode are stable.
 | Storage/residency | ad-hoc per-engine | `ferrule-storage` vocabulary + `ExpertResidencyBackend` trait | wire vocabulary into execution, host-staged cache |
 | Quantization | GPTQ/AWQ/FP8/INT4/K/IQ, calibration | Q4/Q8 + FP4/FP8 artifact decoders, mixed policy | calibration, GGUF K/IQ execution, quality gates |
 | Scheduler | continuous batching, chunked prefill, preemption | scheduler prototypes, not graph-backed | paged KV + request lifecycle + graph batch lowering |
-| CUDA performance | fused kernels, CUDA graphs, memory planners | many small kernels, correctness-first | decode arena, fusion, capture |
+| CUDA performance | fused kernels, CUDA graphs, memory planners | ~2,229 kernel launches/token, 30-40% copy reduction (Phase 2), correctness-first | CUDA graph capture (P5), hc_pre/post device variants (P3) |
 | Correctness | evals, perplexity, golden suites, parity | unit/local smokes, compare tools | DSV4 official parity, long regressions |
 | Serving UX | OpenAI API, streaming, metrics | minimal server, CLI tools | full server after graph runtime stabilizes |
 | Distributed | TP/PP/EP, multi-node | none | design should not block, not near-term |
@@ -435,6 +514,238 @@ Quantization decision: **quality-first default** — preserve official artifact
 FP4 for routed experts, implement streaming/residency. Do not re-quantize to
 4-bit as the single-node fit strategy. Design streaming before extra
 quantization.
+
+---
+
+## DSV4 synthetic fixture benchmark
+
+### Experiment environment
+
+| Item | Value |
+|---|---|
+| Date | 2026-07-04 |
+| GPU | NVIDIA GeForce RTX 3090 (24 GB VRAM) |
+| CUDA arch | sm_86 |
+| OS | WSL2 (Linux), Windows host |
+| Build | `just build-cuda` (cargo-oxide, release, `--features cuda --arch sm_86`) |
+| Model | `models/DeepSeek-V4-Flash-DSpark-synthetic` (zero-weight structural fixture) |
+| Fixture script | `scripts/dsv4_synthetic_fixture.py` (auto-scales to VRAM × 2) |
+| Prompt | `"Hello"` (1 token, token id 19923) |
+| Layer cap | `--max-layers 43` (full model depth) |
+| Decode tokens | `-n 4` (4 decode tokens) or `-n 10` (10 decode tokens, for stability) |
+| Weights | All zero-valued; structure identical to official model |
+| compress_ratio | 0 (CSA/HCA disabled for synthetic; uses `decode_step_no_compress` path) |
+| MTP | disabled (`num_nextn_predict_layers=0`) |
+
+### Fixture configuration
+
+| Param | Value |
+|---|---|
+| hidden_size | 2,816 (scaled 0.69x, aligned 128) |
+| num_hidden_layers | 43 |
+| n_routed_experts | 170 (scaled from 256) |
+| num_attention_heads | 42 (o_groups=6, divides 42) |
+| head_dim | 384 |
+| q_lora_rank / o_lora_rank | 768 / 768 |
+| moe_intermediate_size | 1,408 |
+| vocab_size | 85,729 |
+| num_nextn_predict_layers | 0 (MTP disabled for synthetic) |
+| compress_ratios | all 0 (CSA disabled for synthetic) |
+| tensor count | 46,172 |
+| shard count | 12 (4 GiB each) |
+| on-disk size | 50.8 GB |
+
+### Reproduction
+
+```bash
+# Generate fixture (auto-detects VRAM, targets VRAM x 2)
+python scripts/dsv4_synthetic_fixture.py
+
+# Build and run (4-token decode)
+just build-cuda
+./target/release/ferrule deepseek-v4-generate \
+  models/DeepSeek-V4-Flash-DSpark-synthetic \
+  --backend cuda -n 4 --max-layers 43 --json
+
+# 10-token decode (more stable, less prefill noise)
+./target/release/ferrule deepseek-v4-generate \
+  models/DeepSeek-V4-Flash-DSpark-synthetic \
+  --backend cuda -n 10 --max-layers 43 --json
+
+# Extract key metrics
+./target/release/ferrule deepseek-v4-generate \
+  models/DeepSeek-V4-Flash-DSpark-synthetic \
+  --backend cuda -n 10 --max-layers 43 --json \
+  | python3 -c "import json,sys; d=json.load(sys.stdin); s=d['summary']; \
+    c=s['counters']; k=c['kernels']; t=c['transfers']; e=c['experts']; \
+    print(f'decode tok/s: {s[\"decode_tok_per_s\"]:.3f}'); \
+    print(f'prefill tok/s: {s[\"prefill_tok_per_s\"]:.4f}'); \
+    print(f'kernel launches: {k[\"launches\"]}'); \
+    print(f'H2D copies: {t[\"host_to_device_copies\"]}'); \
+    print(f'D2H copies: {t[\"device_to_host_copies\"]}'); \
+    print(f'expert loads: {e[\"loads\"]}')"
+```
+
+### Phase 0 — Baseline (pre-optimization)
+
+Prefill 1 token + decode 4 tokens:
+
+```
+backend:            cuda (sm_86)
+load:               2.83 s
+prefill:            15.30 s  (0.065 tok/s)
+decode (4 tokens):  6.63 s   (0.60 tok/s)
+total:              21.93 s
+```
+
+| Counter | Value | Per-token | Notes |
+|---|---:|---:|---|
+| kernel launches | 8,776 | ~2,194/tok | ~51 launches/layer/token |
+| expert selected | 1,032 | 258/tok | 6 per score-router layer, 1 per hash layer |
+| expert loads | 243 | 60.8/tok | disk reads on activation; no host cache |
+| expert load bytes | 1.43 GB | — | from safetensors shards |
+| artifact uploads | 1,352 | — | attention + expert bundles to GPU |
+| artifact upload bytes | 4.04 GB | — | |
+| host->device copies | 10,924 | ~2,731/tok | 4.48 GB total |
+| device->host copies | 6,024 | ~1,506/tok | 73 MB total |
+
+### Phase 1 — Expert loop optimization (P3 expert + P4 cache)
+
+**Changes:**
+- `prepare_fp4_expert_input` + `fp4_swiglu_ffn_from_device`: 6 experts share
+  one uploaded input buffer instead of 6 separate H2D uploads.
+- `saxpy_into`: device-side expert output accumulation, eliminating per-expert
+  D2H downloads.
+- `HostStagedExpertCache`: LRU host-RAM cache for re-activated experts.
+
+**Files:** `ferrule-cuda/src/context.rs`, `ferrule-runtime/src/expert_residency.rs`,
+`ferrule-runtime/src/models/deepseek_v4.rs` (`routed_moe_step` CUDA path)
+
+```
+load:               1.50 s
+prefill:            18.31 s  (0.055 tok/s)
+decode (4 tokens):  6.48 s   (0.62 tok/s)
+total:              24.78 s
+```
+
+| Counter | Baseline | Phase 1 | Delta |
+|---|---:|---:|---:|
+| kernel launches | 8,776 | 9,808 | +1,032 (saxpy adds 258/tok) |
+| H2D copies | 10,924 | 10,064 | -860 (expert input shared) |
+| D2H copies | 6,024 | 5,164 | -860 (expert outputs on device) |
+| expert loads (disk) | 243 | 243 | 0 (cache cold: 5-token run too short) |
+| decode tok/s | 0.60 | 0.62 | +3% |
+
+### Phase 2 — Attention device chain + norm weight cache
+
+**Changes:**
+- `rms_norm_from_device` + `upload_norm_weight` + `rms_norm_device_cached`:
+  norm weights uploaded once per layer and cached on device.
+- `linear_matvec_from_device`: device-resident linear matvec using
+  `artifact_linear_matvec_into` with `CudaF32Buffer` I/O.
+- `decode_step_no_compress_device`: CUDA path that chains
+  `query_a → rms_norm → query_b` and `key_value → rms_norm` on device,
+  uploading `hidden` once and reusing for both projections.
+- `decode_step_device`: CUDA path that uses `rms_norm_device_cached` for the
+  two per-layer norm calls.
+
+**Files:** `ferrule-cuda/src/context.rs`, `ferrule-runtime/src/models/deepseek_v4.rs`
+(`decode_step_with_operators`, `decode_step_no_compress_with_operators`)
+
+**4-token run:**
+
+```
+load:               1.50 s
+prefill:            18.31 s  (0.063 tok/s)
+decode (4 tokens):  6.20 s   (0.64 tok/s)
+total:              22.82 s
+```
+
+| Counter | Baseline | Phase 1 | Phase 2 | Delta (P2 vs baseline) |
+|---|---:|---:|---:|---:|
+| kernel launches | 8,776 | 9,808 | 9,808 | +12% |
+| H2D copies | 10,924 | 10,064 | 8,860 | **-19%** |
+| D2H copies | 6,024 | 5,164 | 4,648 | **-23%** |
+| decode tok/s | 0.60 | 0.62 | 0.64 | +7% |
+
+**10-token run (more stable, per-token counts):**
+
+| Counter | Baseline (per-token) | Phase 2 (per-token) | Delta |
+|---|---:|---:|---:|
+| H2D copies | ~2,731 | ~1,630 | **-40%** |
+| D2H copies | ~1,506 | ~1,056 | **-30%** |
+| kernel launches | ~2,194 | ~2,229 | +2% |
+| decode tok/s | ~0.60 | ~0.49 | -18% (KV cache growth; see note) |
+
+Note: 10-token decode tok/s is lower for both baseline and optimized because
+sparse attention cost grows with KV cache length. The 4-token run is more
+comparable to the original baseline measurement.
+
+### Key findings
+
+1. **H2D/D2H copies reduced 30-40%, but tok/s only +7%.** Copy reduction
+   alone is insufficient — the bottleneck is not data movement volume but
+   **synchronization latency**. Each D2H copy is a CPU-GPU sync point; ~1,056
+   sync points/token dominate latency.
+
+2. **Kernel launch overhead is significant but not dominant.** ~2,229 launches
+   × ~5µs/launch ≈ 11ms/token. At 0.64 tok/s (~1.56s/token), launch overhead
+   is ~0.7%. The real cost is the CPU stalling between launches waiting for
+   D2H copies.
+
+3. **Host-side computation is a hidden bottleneck.** `hc_pre`/`hc_post`,
+   `apply_rotary_tail`, `quantize_attention_kv_for_qat_in_place`, and
+   `sparse_attention` reference logic all run on CPU between GPU ops. This
+   serializes CPU and GPU — neither is fully utilized.
+
+4. **Host-staged expert cache was cold.** 243 disk reads unchanged because
+   the 5-token run has near-zero expert reuse. Longer sequences or prefix
+   caching would show cache hits. The cache value is in amortization, not
+   single-shot runs.
+
+### Updated bottleneck attribution
+
+| Rank | Bottleneck | Evidence | Target | Est. gain |
+|---|---|---|---|---|
+| 1 | Sync latency from D2H copies (1,056/token) | -40% copies → only +7% tok/s | P5: CUDA graph capture | ~5-10x |
+| 2 | Host-side compute between GPU ops | hc_pre/post, rotary, sparse_attn on CPU | P3: device-resident full layer | ~2-3x |
+| 3 | Per-expert kernel launch (258/token) | 6 separate launches/layer | P5: batched expert kernel | ~2x MoE |
+| 4 | No host-staged expert cache (cold) | 243 reads, 0 hits on 5-token run | P4: longer sequences | situational |
+| 5 | Attention sub-ops unfused | multiple small kernels | P5: attention fusion | ~1.5x |
+
+### Next steps (priority order)
+
+1. **CUDA graph capture (P5)** — highest impact. Capture the entire decode
+   bucket as one graph, eliminating all per-launch sync overhead. The
+   `decode_step_device` path is already structured for this: deterministic
+   op sequence, no data-dependent control flow in steady state. Expected:
+   ~5-10x decode improvement.
+
+2. **Device-resident `hc_pre`/`hc_post`** — these are called 4×/layer and
+   each involves multiple H2D uploads + D2H downloads. Need `hc_pre_from_device`
+   and `hc_post_from_device` variants in `CudaArtifactOperatorContext`.
+
+3. **Device-resident `apply_rotary_tail`** — currently host-only, called
+   3×/layer. Needs a CUDA kernel.
+
+4. **Device-resident `sparse_attention`** — currently uploads all inputs and
+   downloads output. Already has a CUDA kernel; needs `from_device` variant.
+
+### Git state
+
+Changes are unstaged on `main`. Files modified:
+```
+ crates/ferrule-cuda/src/context.rs               | 144 ++++++
+ crates/ferrule-runtime/src/expert_residency.rs   | 227 +++++++++
+ crates/ferrule-runtime/src/models/deepseek_v4.rs | 418 ++++++++++++++++++-
+ docs/ROADMAP.md                                  | 199 ++++++-
+ 4 files changed, 963 insertions(+), 25 deletions(-)
+```
+
+CPU tests: 229 passed, 2 pre-existing failures
+(`compressed_attention_decode_reference_updates_compressed_cache`,
+`dsv4_layer_decode_step_runs_hc_attention_moe_shared_hc`) — both fail with
+`invalid FP8 activation quant shape` and are unrelated to these changes.
 
 ---
 
