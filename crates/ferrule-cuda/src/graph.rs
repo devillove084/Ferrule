@@ -80,7 +80,7 @@ pub fn capture_decode_graph(
     unsafe {
         let r = cuda_bindings::cuStreamBeginCapture_v2(
             stream.cu_stream(),
-            cuda_bindings::CUstreamCaptureMode_enum_CU_STREAM_CAPTURE_MODE_GLOBAL,
+            cuda_bindings::CUstreamCaptureMode_enum_CU_STREAM_CAPTURE_MODE_RELAXED,
         );
         if r != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
             return Err(Error::Internal(format!(

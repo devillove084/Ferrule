@@ -282,6 +282,9 @@ impl HostStagedExpertCache {
 
     /// Insert a bundle, evicting the least-recently-used entry if at capacity.
     pub fn insert(&mut self, bundle: ExpertComputeBundle) {
+        if self.capacity == 0 {
+            return;
+        }
         let expert = bundle.expert;
         if self.entries.contains_key(&expert) {
             self.order.retain(|id| *id != expert);
@@ -347,9 +350,11 @@ impl HostStagedExpertCache {
 
 impl Default for HostStagedExpertCache {
     fn default() -> Self {
-        // Default capacity: 64 expert bundles. At ~6 MB per FP4 expert
-        // (gate+up+down for hidden=2816, inter=1408), this is ~384 MB host RAM.
-        Self::new(64)
+        // Default capacity: 256 expert bundles. At ~13 MB per FP4 expert
+        // (gate+up+down for DeepSeek-V4 Flash), this is ~3.4 GB host RAM.
+        // Larger cache reduces disk re-reads across decode tokens with
+        // different expert routing.
+        Self::new(256)
     }
 }
 
@@ -788,5 +793,17 @@ mod tests {
         let cache = HostStagedExpertCache::default();
         assert_eq!(cache.len(), 0);
         assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn host_staged_cache_zero_capacity_does_not_store() {
+        let mut cache = HostStagedExpertCache::new(0);
+        let id = expert_id(0, 0);
+        cache.insert(make_bundle(id));
+
+        assert_eq!(cache.len(), 0);
+        assert!(cache.is_empty());
+        assert!(cache.get(id).is_none());
+        assert_eq!(cache.misses(), 1);
     }
 }

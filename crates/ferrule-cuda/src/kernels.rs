@@ -5,7 +5,10 @@
 //! libdevice/NVVM, matching the upstream examples and avoiding arch-specific
 //! inline-PTX JIT issues on newer GPUs.
 
-use cuda_device::{cuda_module, kernel, ptx_asm, thread, DisjointSlice, SharedArray};
+use cuda_device::{
+    atomic::{AtomicOrdering, DeviceAtomicF32},
+    cuda_module, kernel, ptx_asm, thread, DisjointSlice, SharedArray,
+};
 
 const LN_2_F32: f32 = core::f32::consts::LN_2;
 
@@ -45,6 +48,7 @@ fn fast_sigmoid(x: f32) -> f32 {
     }
 }
 
+#[inline(always)]
 fn fp4_e2m1_value(nibble: u8) -> f32 {
     let magnitude = match nibble & 0x07 {
         0 => 0.0,
@@ -63,25 +67,36 @@ fn fp4_e2m1_value(nibble: u8) -> f32 {
     }
 }
 
+#[inline(always)]
 fn fp8_e4m3fn_value(byte: u8) -> f32 {
-    let sign = if byte & 0x80 != 0 { -1.0 } else { 1.0 };
+    let sign_bits = ((byte & 0x80) as u32) << 24;
     let exponent = (byte >> 3) & 0x0f;
     let mantissa = byte & 0x07;
     if exponent == 0 {
         if mantissa == 0 {
-            return sign * 0.0;
+            return f32::from_bits(sign_bits);
         }
-        return sign * (mantissa as f32) / 512.0; // 2^(-9) = 1/512
+        let value = (mantissa as f32) * (1.0 / 512.0); // E4M3FN subnormal step: 2^-9.
+        return if sign_bits != 0 { -value } else { value };
     }
     if exponent == 0x0f && mantissa == 0x07 {
         return f32::NAN;
     }
-    let pow2 = libm::expf(((exponent as i32 - 7) as f32) * LN_2_F32);
-    sign * pow2 * (1.0 + mantissa as f32 / 8.0)
+    let f32_exponent = (exponent as u32) + 120; // exponent - bias(7) + f32 bias(127).
+    f32::from_bits(sign_bits | (f32_exponent << 23) | ((mantissa as u32) << 20))
 }
 
+#[inline(always)]
 fn e8m0_scale(byte: u8) -> f32 {
-    libm::expf((byte as f32 - 127.0) * LN_2_F32)
+    // E8M0 scales are powers of two: scale = 2^(byte - 127).
+    // Build the f32 exponent bits directly instead of calling device expf in
+    // every FP4/FP8 inner-loop iteration.
+    let bits = if byte == 0 {
+        1u32 << 22 // 2^-127, matching the previous expf-based behavior.
+    } else {
+        (byte as u32) << 23
+    };
+    f32::from_bits(bits)
 }
 
 fn pow2f(exp: f32) -> f32 {
@@ -215,6 +230,55 @@ pub mod kernels {
             j += 1;
         }
         if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
+    /// Grouped matvec for block-diagonal weight layout.
+    ///
+    /// `context` is `[o_groups * group_in]` (the full concatenated context).
+    /// `weight` is `[output_latent_dim, group_in]` f32, stored row-major:
+    ///   row `r = group * o_lora_rank + rank` only touches `context[group * group_in ..]`.
+    /// `output` is `[output_latent_dim]` = `[o_groups * o_lora_rank]`.
+    ///
+    /// One thread per output row.
+    #[kernel]
+    pub fn grouped_matvec_f32(
+        context: &[f32],
+        weight: &[f32],
+        mut output: DisjointSlice<f32>,
+        output_latent_dim: u32,
+        group_in: u32,
+        o_lora_rank: u32,
+    ) {
+        let row = thread::index_1d().get();
+        if (row as u64) >= output_latent_dim as u64 {
+            return;
+        }
+        let group_in = group_in as usize;
+        let o_lora_rank = o_lora_rank as usize;
+        let group = row / o_lora_rank;
+        let context_start = group * group_in;
+        let weight_start = row * group_in;
+        let mut dot0 = 0.0f32;
+        let mut dot1 = 0.0f32;
+        let mut dot2 = 0.0f32;
+        let mut dot3 = 0.0f32;
+        let mut j = 0usize;
+        let k4 = group_in - group_in % 4;
+        while j < k4 {
+            dot0 += context[context_start + j] * weight[weight_start + j];
+            dot1 += context[context_start + j + 1] * weight[weight_start + j + 1];
+            dot2 += context[context_start + j + 2] * weight[weight_start + j + 2];
+            dot3 += context[context_start + j + 3] * weight[weight_start + j + 3];
+            j += 4;
+        }
+        let mut dot = dot0 + dot1 + dot2 + dot3;
+        while j < group_in {
+            dot += context[context_start + j] * weight[weight_start + j];
+            j += 1;
+        }
+        if let Some(yi) = output.get_mut(thread::index_1d()) {
             *yi = dot;
         }
     }
@@ -512,17 +576,22 @@ pub mod kernels {
         let packed_cols = k / 2;
         let scale_cols = k / 32;
         let mut dot = 0.0f32;
-        let mut j = 0usize;
-        while j < k {
-            let byte = packed[row * packed_cols + j / 2];
-            let nibble = if j.is_multiple_of(2) {
-                byte & 0x0f
-            } else {
-                byte >> 4
-            };
-            let scale = e8m0_scale(scales[row * scale_cols + j / 32]);
-            dot += x[j] * fp4_e2m1_value(nibble) * scale;
-            j += 1;
+        let row_packed = row * packed_cols;
+        let row_scales = row * scale_cols;
+        let mut block = 0usize;
+        while block < scale_cols {
+            let scale = e8m0_scale(scales[row_scales + block]);
+            let packed_base = row_packed + block * 16;
+            let x_base = block * 32;
+            let mut b = 0usize;
+            while b < 16 {
+                let byte = packed[packed_base + b];
+                let j = x_base + b * 2;
+                dot += (x[j] * fp4_e2m1_value(byte & 0x0f) + x[j + 1] * fp4_e2m1_value(byte >> 4))
+                    * scale;
+                b += 1;
+            }
+            block += 1;
         }
         if let Some(yi) = y.get_mut(thread::index_1d()) {
             *yi = dot;
@@ -550,17 +619,22 @@ pub mod kernels {
         let packed_off = packed_off as usize;
         let scales_off = scales_off as usize;
         let mut dot = 0.0f32;
-        let mut j = 0usize;
-        while j < k {
-            let byte = packed[packed_off + row * packed_cols + j / 2];
-            let nibble = if j.is_multiple_of(2) {
-                byte & 0x0f
-            } else {
-                byte >> 4
-            };
-            let scale = e8m0_scale(scales[scales_off + row * scale_cols + j / 32]);
-            dot += x[j] * fp4_e2m1_value(nibble) * scale;
-            j += 1;
+        let row_packed = packed_off + row * packed_cols;
+        let row_scales = scales_off + row * scale_cols;
+        let mut block = 0usize;
+        while block < scale_cols {
+            let scale = e8m0_scale(scales[row_scales + block]);
+            let packed_base = row_packed + block * 16;
+            let x_base = block * 32;
+            let mut b = 0usize;
+            while b < 16 {
+                let byte = packed[packed_base + b];
+                let j = x_base + b * 2;
+                dot += (x[j] * fp4_e2m1_value(byte & 0x0f) + x[j + 1] * fp4_e2m1_value(byte >> 4))
+                    * scale;
+                b += 1;
+            }
+            block += 1;
         }
         if let Some(yi) = y.get_mut(thread::index_1d()) {
             *yi = dot;
@@ -596,26 +670,31 @@ pub mod kernels {
         let off_s1 = off_s1 as usize;
         let mut d0 = 0.0f32;
         let mut d1 = 0.0f32;
-        let mut j = 0usize;
-        while j < k {
-            let byte0 = p0[off_p0 + row * packed_cols + j / 2];
-            let byte1 = p1[off_p1 + row * packed_cols + j / 2];
-            let nibble0 = if j.is_multiple_of(2) {
-                byte0 & 0x0f
-            } else {
-                byte0 >> 4
-            };
-            let nibble1 = if j.is_multiple_of(2) {
-                byte1 & 0x0f
-            } else {
-                byte1 >> 4
-            };
-            let scale0 = e8m0_scale(s0[off_s0 + row * scale_cols + j / 32]);
-            let scale1 = e8m0_scale(s1[off_s1 + row * scale_cols + j / 32]);
-            let xv = x[j];
-            d0 += xv * fp4_e2m1_value(nibble0) * scale0;
-            d1 += xv * fp4_e2m1_value(nibble1) * scale1;
-            j += 1;
+        let row_p0 = off_p0 + row * packed_cols;
+        let row_p1 = off_p1 + row * packed_cols;
+        let row_s0 = off_s0 + row * scale_cols;
+        let row_s1 = off_s1 + row * scale_cols;
+        let mut block = 0usize;
+        while block < scale_cols {
+            let scale0 = e8m0_scale(s0[row_s0 + block]);
+            let scale1 = e8m0_scale(s1[row_s1 + block]);
+            let packed_base0 = row_p0 + block * 16;
+            let packed_base1 = row_p1 + block * 16;
+            let x_base = block * 32;
+            let mut b = 0usize;
+            while b < 16 {
+                let byte0 = p0[packed_base0 + b];
+                let byte1 = p1[packed_base1 + b];
+                let j = x_base + b * 2;
+                let x0 = x[j];
+                let x1 = x[j + 1];
+                d0 +=
+                    (x0 * fp4_e2m1_value(byte0 & 0x0f) + x1 * fp4_e2m1_value(byte0 >> 4)) * scale0;
+                d1 +=
+                    (x0 * fp4_e2m1_value(byte1 & 0x0f) + x1 * fp4_e2m1_value(byte1 >> 4)) * scale1;
+                b += 1;
+            }
+            block += 1;
         }
         if let Some(o) = y0.get_mut(thread::index_1d()) {
             *o = d0;
@@ -728,12 +807,20 @@ pub mod kernels {
         let bm = block_m as usize;
         let bk = block_k as usize;
         let mut dot = 0.0f32;
-        let mut j = 0usize;
-        while j < k {
-            let scale = e8m0_scale(scales[(row / bm) * sc + j / bk]);
-            let w = fp8_e4m3fn_value(weight[row * k + j]);
-            dot += x[j] * w * scale;
-            j += 1;
+        let row_weight = row * k;
+        let row_scales = (row / bm) * sc;
+        let mut block = 0usize;
+        while block < sc {
+            let scale = e8m0_scale(scales[row_scales + block]);
+            let start = block * bk;
+            let end = (start + bk).min(k);
+            let mut j = start;
+            while j < end {
+                let w = fp8_e4m3fn_value(weight[row_weight + j]);
+                dot += x[j] * w * scale;
+                j += 1;
+            }
+            block += 1;
         }
         if let Some(yi) = y.get_mut(thread::index_1d()) {
             *yi = dot;
@@ -764,17 +851,22 @@ pub mod kernels {
         let scale_cols = k / 32;
         let input_off = b * k;
         let mut dot = 0.0f32;
-        let mut j = 0usize;
-        while j < k {
-            let byte = packed[row * packed_cols + j / 2];
-            let nibble = if j.is_multiple_of(2) {
-                byte & 0x0f
-            } else {
-                byte >> 4
-            };
-            let scale = e8m0_scale(scales[row * scale_cols + j / 32]);
-            dot += x[input_off + j] * fp4_e2m1_value(nibble) * scale;
-            j += 1;
+        let row_packed = row * packed_cols;
+        let row_scales = row * scale_cols;
+        let mut block = 0usize;
+        while block < scale_cols {
+            let scale = e8m0_scale(scales[row_scales + block]);
+            let packed_base = row_packed + block * 16;
+            let x_base = input_off + block * 32;
+            let mut p = 0usize;
+            while p < 16 {
+                let byte = packed[packed_base + p];
+                let j = x_base + p * 2;
+                dot += (x[j] * fp4_e2m1_value(byte & 0x0f) + x[j + 1] * fp4_e2m1_value(byte >> 4))
+                    * scale;
+                p += 1;
+            }
+            block += 1;
         }
         if let Some(yi) = y.get_mut(thread::index_1d()) {
             *yi = dot;
@@ -1248,6 +1340,22 @@ pub mod kernels {
         }
         if let Some(yi) = y.get_mut(thread::index_1d()) {
             *yi += scale * x[i];
+        }
+    }
+
+    /// Copy `n` f32 elements from `src` into `dst` starting at element
+    /// `dst_offset`. Used for device-resident KV cache slot appends without
+    /// a host round-trip.
+    #[kernel]
+    pub fn copy_f32_slot(src: &[f32], mut dst: DisjointSlice<f32>, dst_offset: u32, n: u32) {
+        let i = thread::index_1d().get();
+        if (i as u64) >= n as u64 {
+            return;
+        }
+        let dst_idx = dst_offset as usize + i;
+        let dst_ptr = dst.as_mut_ptr();
+        unsafe {
+            *dst_ptr.add(dst_idx) = src[i];
         }
     }
 
@@ -1849,6 +1957,62 @@ pub mod kernels {
         }
     }
 
+    // ── DSV4 Tail Rotary (YAARN-scaled, interleaved pairs) ────────────
+    /// Apply rotary embedding to the *last* `rope_dim` elements of each head.
+    /// `cos_table` / `sin_table` are precomputed `[max_positions, rope_dim/2]`.
+    /// Interleaved pair layout: `[x0, x1] → [x0*cos - x1*sin, x0*sin + x1*cos]`.
+    #[kernel]
+    pub fn rope_tail_yaarn(
+        mut qk: DisjointSlice<f32>,
+        cos_table: &[f32],
+        sin_table: &[f32],
+        num_elements: u32,
+        position: u32,
+        _heads: u32,
+        head_dim: u32,
+        rope_dim: u32,
+        inverse: u32,
+    ) {
+        let idx = thread::index_1d().get();
+        if (idx as u64) >= num_elements as u64 {
+            return;
+        }
+        let hd = head_dim as usize;
+        let rd = rope_dim as usize;
+        if rd == 0 || rd > hd {
+            return;
+        }
+        let tail_start = hd - rd;
+        let head_idx = idx as usize / hd;
+        let local = idx as usize % hd;
+        if local < tail_start {
+            return;
+        }
+        let tail_local = local - tail_start;
+        let pair = tail_local / 2;
+        let rd2 = rd / 2;
+        let cos = cos_table[position as usize * rd2 + pair];
+        let sin = sin_table[position as usize * rd2 + pair];
+        let (s, c) = if inverse != 0 {
+            (-sin, cos)
+        } else {
+            (sin, cos)
+        };
+        let ptr = qk.as_mut_ptr();
+        let base = head_idx * hd + tail_start + pair * 2;
+        let x0 = unsafe { *ptr.add(base) };
+        let x1 = unsafe { *ptr.add(base + 1) };
+        let is_even = (tail_local & 1) == 0;
+        let val = if is_even {
+            x0 * c - x1 * s
+        } else {
+            x0 * s + x1 * c
+        };
+        if let Some(o) = qk.get_mut(thread::index_1d()) {
+            *o = val;
+        }
+    }
+
     // ── Batched expert SwiGLU accumulation ────────────────────────────
     /// Fused: gate+up activation → down projection → weighted_add into output.
     /// One thread per output element.
@@ -1873,29 +2037,381 @@ pub mod kernels {
         let packed_cols = inter / 2;
         let scale_cols = inter / 32;
         let mut dot = 0.0f32;
-        let mut j = 0usize;
-        while j < inter {
-            let byte = down_packed[row * packed_cols + j / 2];
-            let nibble = if j.is_multiple_of(2) {
-                byte & 0x0f
-            } else {
-                byte >> 4
-            };
-            let scale = e8m0_scale(down_scales[row * scale_cols + j / 32]);
-            let mut g = gate[j];
-            let mut u = up[j];
-            if limit > 0.0 {
-                g = clamp_max(g, limit);
+        let row_packed = row * packed_cols;
+        let row_scales = row * scale_cols;
+        let mut block = 0usize;
+        while block < scale_cols {
+            let scale = e8m0_scale(down_scales[row_scales + block]);
+            let packed_base = row_packed + block * 16;
+            let base = block * 32;
+            let mut b = 0usize;
+            while b < 16 {
+                let byte = down_packed[packed_base + b];
+                let j0 = base + b * 2;
+                let j1 = j0 + 1;
+                let mut g0 = gate[j0];
+                let mut u0 = up[j0];
+                let mut g1 = gate[j1];
+                let mut u1 = up[j1];
+                if limit > 0.0 {
+                    g0 = clamp_max(g0, limit);
+                    u0 = clamp_range(u0, -limit, limit);
+                    g1 = clamp_max(g1, limit);
+                    u1 = clamp_range(u1, -limit, limit);
+                }
+                dot += (g0 * fast_sigmoid(g0) * u0 * fp4_e2m1_value(byte & 0x0f)
+                    + g1 * fast_sigmoid(g1) * u1 * fp4_e2m1_value(byte >> 4))
+                    * scale;
+                b += 1;
             }
-            if limit > 0.0 {
-                u = clamp_range(u, -limit, limit);
-            }
-            dot += g * fast_sigmoid(g) * u * fp4_e2m1_value(nibble) * scale;
-            j += 1;
+            block += 1;
         }
         dot *= route_weight;
         if let Some(o) = output.get_mut(thread::index_1d()) {
             *o += dot;
+        }
+    }
+
+    // ── Batched MoE expert kernels (single launch for all selected experts) ─
+    //
+    // These kernels process all `num_experts` selected experts in a single
+    // launch using a 2D grid: `gridDim = (ceil(output_rows / block), num_experts)`.
+    // blockIdx.y = expert index. Expert weight pointers are passed as device
+    // address arrays (`&[u64]`) and dereferenced inside the kernel.
+
+    /// Batched gate+up FP4 GEMV for all selected experts.
+    ///
+    /// Grid: `(ceil(intermediate_size / 256), num_experts)`.
+    /// Each thread computes one output row for one expert's gate and up.
+    /// `gate_ptrs` / `gate_scale_ptrs` / `up_ptrs` / `up_scale_ptrs` are
+    /// `[num_experts]` device address arrays.
+    /// `route_weights` is `[num_experts]` f32 (applied later in swiglu).
+    /// Output: `y_gate` and `y_up` are `[num_experts * intermediate_size]`.
+    #[kernel]
+    pub fn moe_gemv_dual_fp4_batched(
+        x: &[f32],
+        gate_ptrs: &[u64],
+        gate_scale_ptrs: &[u64],
+        up_ptrs: &[u64],
+        up_scale_ptrs: &[u64],
+        mut y_gate: DisjointSlice<f32>,
+        mut y_up: DisjointSlice<f32>,
+        n: u32,
+        k: u32,
+        num_experts: u32,
+    ) {
+        let expert = thread::blockIdx_y() as usize;
+        let row = thread::blockIdx_x() as usize * thread::blockDim_x() as usize
+            + thread::threadIdx_x() as usize;
+        if row >= n as usize || expert >= num_experts as usize {
+            return;
+        }
+        let k = k as usize;
+        let packed_cols = k / 2;
+        let scale_cols = k / 32;
+
+        let gate_ptr = gate_ptrs[expert] as *const u8;
+        let gate_scale_ptr = gate_scale_ptrs[expert] as *const u8;
+        let up_ptr = up_ptrs[expert] as *const u8;
+        let up_scale_ptr = up_scale_ptrs[expert] as *const u8;
+
+        let mut d_gate = 0.0f32;
+        let mut d_up = 0.0f32;
+        let row_packed = row * packed_cols;
+        let row_scales = row * scale_cols;
+        let mut block = 0usize;
+        while block < scale_cols {
+            let scale_g = e8m0_scale(unsafe { *gate_scale_ptr.add(row_scales + block) });
+            let scale_u = e8m0_scale(unsafe { *up_scale_ptr.add(row_scales + block) });
+            let packed_base = row_packed + block * 16;
+            let x_base = block * 32;
+            let mut b = 0usize;
+            while b < 16 {
+                let byte_g = unsafe { *gate_ptr.add(packed_base + b) };
+                let byte_u = unsafe { *up_ptr.add(packed_base + b) };
+                let j = x_base + b * 2;
+                let x0 = x[j];
+                let x1 = x[j + 1];
+                d_gate += (x0 * fp4_e2m1_value(byte_g & 0x0f) + x1 * fp4_e2m1_value(byte_g >> 4))
+                    * scale_g;
+                d_up += (x0 * fp4_e2m1_value(byte_u & 0x0f) + x1 * fp4_e2m1_value(byte_u >> 4))
+                    * scale_u;
+                b += 1;
+            }
+            block += 1;
+        }
+        let out_off = expert * n as usize + row;
+        let y_ptr = y_gate.as_mut_ptr();
+        unsafe {
+            *y_ptr.add(out_off) = d_gate;
+        }
+        let y_up_ptr = y_up.as_mut_ptr();
+        unsafe {
+            *y_up_ptr.add(out_off) = d_up;
+        }
+    }
+
+    /// Batched SwiGLU + FP8 quantize for all selected experts.
+    ///
+    /// Grid: `(ceil(intermediate_size / 256), num_experts)`.
+    /// Reads `y_gate` and `y_up`, writes swiglu + fp8-quantized hidden to
+    /// `y_hidden`. Also applies route_weight and swiglu_limit.
+    #[kernel]
+    pub fn moe_swiglu_fp8_batched(
+        y_gate: &[f32],
+        y_up: &[f32],
+        route_weights: &[f32],
+        mut y_hidden: DisjointSlice<f32>,
+        n: u32,
+        num_experts: u32,
+        swiglu_limit: f32,
+        block_size: u32,
+    ) {
+        let expert = thread::blockIdx_y() as usize;
+        let row = thread::blockIdx_x() as usize * thread::blockDim_x() as usize
+            + thread::threadIdx_x() as usize;
+        if row >= n as usize || expert >= num_experts as usize {
+            return;
+        }
+        let idx = expert * n as usize + row;
+        let mut g = y_gate[idx];
+        let mut u = y_up[idx];
+        if swiglu_limit > 0.0 {
+            g = clamp_max(g, swiglu_limit);
+            u = clamp_range(u, -swiglu_limit, swiglu_limit);
+        }
+        let rw = route_weights[expert];
+        let val = g * fast_sigmoid(g) * u * rw;
+        // FP8 E4M3FN quantize in-place
+        let qval = quantize_fp8_e4m3fn_to_f32(val);
+        let h_ptr = y_hidden.as_mut_ptr();
+        unsafe {
+            *h_ptr.add(idx) = qval;
+        }
+        // Suppress unused warning
+        let _ = block_size;
+    }
+
+    /// Batched down FP4 GEMV + accumulate for all selected experts.
+    ///
+    /// Grid: `(ceil(hidden_size / 256), num_experts)`.
+    /// Each thread computes one output element for one expert, reading from
+    /// the expert's down weights and the shared `y_hidden` buffer.
+    /// Accumulates into `output` (which must be pre-zeroed).
+    #[kernel]
+    pub fn moe_gemv_down_fp4_batched(
+        y_hidden: &[f32],
+        down_ptrs: &[u64],
+        down_scale_ptrs: &[u64],
+        mut output: DisjointSlice<f32>,
+        intermediate_size: u32,
+        hidden_size: u32,
+        num_experts: u32,
+    ) {
+        let expert = thread::blockIdx_y() as usize;
+        let row = thread::blockIdx_x() as usize * thread::blockDim_x() as usize
+            + thread::threadIdx_x() as usize;
+        if row >= hidden_size as usize || expert >= num_experts as usize {
+            return;
+        }
+        let inter = intermediate_size as usize;
+        let packed_cols = inter / 2;
+        let scale_cols = inter / 32;
+
+        let down_ptr = down_ptrs[expert] as *const u8;
+        let down_scale_ptr = down_scale_ptrs[expert] as *const u8;
+
+        let mut dot = 0.0f32;
+        let row_packed = row * packed_cols;
+        let row_scales = row * scale_cols;
+        let hidden_base = expert * inter;
+        let mut block = 0usize;
+        while block < scale_cols {
+            let scale = e8m0_scale(unsafe { *down_scale_ptr.add(row_scales + block) });
+            let packed_base = row_packed + block * 16;
+            let h_base = hidden_base + block * 32;
+            let mut b = 0usize;
+            while b < 16 {
+                let byte = unsafe { *down_ptr.add(packed_base + b) };
+                let j = h_base + b * 2;
+                dot += (y_hidden[j] * fp4_e2m1_value(byte & 0x0f)
+                    + y_hidden[j + 1] * fp4_e2m1_value(byte >> 4))
+                    * scale;
+                b += 1;
+            }
+            block += 1;
+        }
+        // Multiple experts can update the same output row concurrently, so this
+        // accumulation must be atomic in the batched expert grid.
+        let o_ptr = output.as_mut_ptr();
+        let o = unsafe { DeviceAtomicF32::from_ptr(o_ptr.add(row)) };
+        let _ = o.fetch_add(dot, AtomicOrdering::Relaxed);
+    }
+
+    /// Experimental block-reduction gate+up FP4 GEMV.
+    ///
+    /// Grid: `(intermediate_size, num_experts)`. One block owns one
+    /// `(expert, row)` and threads split K by FP4 scale block. This is gated
+    /// by `FERRULE_CUDA_MOE_REDUCE=1` on the host side for A/B testing.
+    #[kernel]
+    pub fn moe_gemv_dual_fp4_batched_reduce(
+        x: &[f32],
+        gate_ptrs: &[u64],
+        gate_scale_ptrs: &[u64],
+        up_ptrs: &[u64],
+        up_scale_ptrs: &[u64],
+        mut y_gate: DisjointSlice<f32>,
+        mut y_up: DisjointSlice<f32>,
+        n: u32,
+        k: u32,
+        num_experts: u32,
+    ) {
+        static mut SUM_GATE: SharedArray<f32, 256> = SharedArray::UNINIT;
+        static mut SUM_UP: SharedArray<f32, 256> = SharedArray::UNINIT;
+
+        let row = thread::blockIdx_x() as usize;
+        let expert = thread::blockIdx_y() as usize;
+        if row >= n as usize || expert >= num_experts as usize {
+            return;
+        }
+        let tid = thread::threadIdx_x() as usize;
+        let bdim = thread::blockDim_x() as usize;
+        let k = k as usize;
+        let packed_cols = k / 2;
+        let scale_cols = k / 32;
+
+        let gate_ptr = gate_ptrs[expert] as *const u8;
+        let gate_scale_ptr = gate_scale_ptrs[expert] as *const u8;
+        let up_ptr = up_ptrs[expert] as *const u8;
+        let up_scale_ptr = up_scale_ptrs[expert] as *const u8;
+
+        let row_packed = row * packed_cols;
+        let row_scales = row * scale_cols;
+        let mut d_gate = 0.0f32;
+        let mut d_up = 0.0f32;
+        let mut block = tid;
+        while block < scale_cols {
+            let scale_g = e8m0_scale(unsafe { *gate_scale_ptr.add(row_scales + block) });
+            let scale_u = e8m0_scale(unsafe { *up_scale_ptr.add(row_scales + block) });
+            let packed_base = row_packed + block * 16;
+            let x_base = block * 32;
+            let mut b = 0usize;
+            while b < 16 {
+                let byte_g = unsafe { *gate_ptr.add(packed_base + b) };
+                let byte_u = unsafe { *up_ptr.add(packed_base + b) };
+                let j = x_base + b * 2;
+                let x0 = x[j];
+                let x1 = x[j + 1];
+                d_gate += (x0 * fp4_e2m1_value(byte_g & 0x0f) + x1 * fp4_e2m1_value(byte_g >> 4))
+                    * scale_g;
+                d_up += (x0 * fp4_e2m1_value(byte_u & 0x0f) + x1 * fp4_e2m1_value(byte_u >> 4))
+                    * scale_u;
+                b += 1;
+            }
+            block += bdim;
+        }
+
+        unsafe {
+            SUM_GATE[tid] = d_gate;
+            SUM_UP[tid] = d_up;
+        }
+        thread::sync_threads();
+
+        let mut stride = bdim / 2;
+        while stride > 0 {
+            if tid < stride {
+                unsafe {
+                    SUM_GATE[tid] += SUM_GATE[tid + stride];
+                    SUM_UP[tid] += SUM_UP[tid + stride];
+                }
+            }
+            thread::sync_threads();
+            stride /= 2;
+        }
+
+        if tid == 0 {
+            let out_off = expert * n as usize + row;
+            let y_ptr = y_gate.as_mut_ptr();
+            let y_up_ptr = y_up.as_mut_ptr();
+            unsafe {
+                *y_ptr.add(out_off) = SUM_GATE[0];
+                *y_up_ptr.add(out_off) = SUM_UP[0];
+            }
+        }
+    }
+
+    /// Experimental block-reduction down FP4 GEMV with one atomic add per
+    /// `(expert, output row)`.
+    ///
+    /// Grid: `(hidden_size, num_experts)`. Gated by
+    /// `FERRULE_CUDA_MOE_REDUCE=1` on the host side for A/B testing.
+    #[kernel]
+    pub fn moe_gemv_down_fp4_batched_reduce(
+        y_hidden: &[f32],
+        down_ptrs: &[u64],
+        down_scale_ptrs: &[u64],
+        mut output: DisjointSlice<f32>,
+        intermediate_size: u32,
+        hidden_size: u32,
+        num_experts: u32,
+    ) {
+        static mut SUM: SharedArray<f32, 256> = SharedArray::UNINIT;
+
+        let row = thread::blockIdx_x() as usize;
+        let expert = thread::blockIdx_y() as usize;
+        if row >= hidden_size as usize || expert >= num_experts as usize {
+            return;
+        }
+        let tid = thread::threadIdx_x() as usize;
+        let bdim = thread::blockDim_x() as usize;
+        let inter = intermediate_size as usize;
+        let packed_cols = inter / 2;
+        let scale_cols = inter / 32;
+
+        let down_ptr = down_ptrs[expert] as *const u8;
+        let down_scale_ptr = down_scale_ptrs[expert] as *const u8;
+
+        let row_packed = row * packed_cols;
+        let row_scales = row * scale_cols;
+        let hidden_base = expert * inter;
+        let mut dot = 0.0f32;
+        let mut block = tid;
+        while block < scale_cols {
+            let scale = e8m0_scale(unsafe { *down_scale_ptr.add(row_scales + block) });
+            let packed_base = row_packed + block * 16;
+            let h_base = hidden_base + block * 32;
+            let mut b = 0usize;
+            while b < 16 {
+                let byte = unsafe { *down_ptr.add(packed_base + b) };
+                let j = h_base + b * 2;
+                dot += (y_hidden[j] * fp4_e2m1_value(byte & 0x0f)
+                    + y_hidden[j + 1] * fp4_e2m1_value(byte >> 4))
+                    * scale;
+                b += 1;
+            }
+            block += bdim;
+        }
+
+        unsafe {
+            SUM[tid] = dot;
+        }
+        thread::sync_threads();
+
+        let mut stride = bdim / 2;
+        while stride > 0 {
+            if tid < stride {
+                unsafe {
+                    SUM[tid] += SUM[tid + stride];
+                }
+            }
+            thread::sync_threads();
+            stride /= 2;
+        }
+
+        if tid == 0 {
+            let o_ptr = output.as_mut_ptr();
+            let o = unsafe { DeviceAtomicF32::from_ptr(o_ptr.add(row)) };
+            let _ = o.fetch_add(unsafe { SUM[0] }, AtomicOrdering::Relaxed);
         }
     }
 

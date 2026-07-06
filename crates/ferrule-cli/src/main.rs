@@ -159,6 +159,13 @@ enum Command {
         /// Emit machine-readable benchmark counters instead of streamed text.
         #[arg(long)]
         json: bool,
+        /// Number of warmup decode tokens to run before timing. These tokens
+        /// populate GPU expert residency and are NOT counted in decode timing.
+        #[arg(long, default_value_t = 0)]
+        warmup_tokens: usize,
+        /// Number of routed experts per layer to predictively prefetch during decode.
+        #[arg(long, default_value_t = 0)]
+        moe_prefetch_experts: usize,
     },
     /// Probe real local DeepSeek-V4 HF shards through the DSV4-specific reference path.
     #[command(name = "deepseek-v4-probe")]
@@ -365,6 +372,8 @@ fn main() -> anyhow::Result<()> {
             verbose_tokens,
             chat,
             json,
+            warmup_tokens,
+            moe_prefetch_experts,
         } => cmd_deepseek_v4_generate(
             &model,
             &prompt,
@@ -378,6 +387,8 @@ fn main() -> anyhow::Result<()> {
             verbose_tokens,
             chat,
             json,
+            warmup_tokens,
+            moe_prefetch_experts,
         ),
         Command::DeepSeekV4Probe {
             model,

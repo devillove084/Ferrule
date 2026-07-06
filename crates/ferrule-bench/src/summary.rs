@@ -171,6 +171,11 @@ pub struct ExpertRuntimeCounters {
     pub selected: u64,
     pub resident_experts: usize,
     pub resident_expert_bytes: u64,
+    pub host_cache_hits: u64,
+    pub host_cache_misses: u64,
+    pub host_cache_evictions: u64,
+    pub host_cache_entries: usize,
+    pub host_cache_bytes: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -258,6 +263,21 @@ impl RuntimeCounters {
 
     pub fn record_expert_evictions(&mut self, evictions: u64) {
         self.experts.evictions = self.experts.evictions.saturating_add(evictions);
+    }
+
+    pub fn set_expert_host_cache(
+        &mut self,
+        hits: u64,
+        misses: u64,
+        evictions: u64,
+        entries: usize,
+        bytes: u64,
+    ) {
+        self.experts.host_cache_hits = hits;
+        self.experts.host_cache_misses = misses;
+        self.experts.host_cache_evictions = evictions;
+        self.experts.host_cache_entries = entries;
+        self.experts.host_cache_bytes = bytes;
     }
 
     pub fn record_selected_experts(&mut self, selected: u64) {

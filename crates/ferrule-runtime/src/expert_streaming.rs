@@ -6,13 +6,15 @@
 //! Quality-first adapters can preserve artifact FP4/FP8 payloads and stream experts
 //! instead of immediately re-quantizing them to fit.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use ferrule_core::{Error, Result};
 use ferrule_model::families::{RoutedExpertMatrix, RoutedExpertTensorPart, RoutedExpertTensorRef};
 use ferrule_model::HfRoutedExpertTensorInfo;
+use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ExpertId {
@@ -197,6 +199,35 @@ impl ExpertStreamingPolicy {
             preserve_artifact_quantization: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
+        }
+    }
+
+    pub fn quality_first_no_prefetch(num_experts_per_tok: usize) -> Self {
+        Self {
+            gpu_slots_per_layer: num_experts_per_tok
+                .saturating_mul(8)
+                .max(num_experts_per_tok),
+            prefetch_per_layer: 0,
+            ..Self::quality_first(num_experts_per_tok)
+        }
+    }
+
+    pub fn quality_first_with_prefetch(
+        num_experts_per_tok: usize,
+        prefetch_per_layer: usize,
+    ) -> Self {
+        let no_prefetch_slots = num_experts_per_tok
+            .saturating_mul(8)
+            .max(num_experts_per_tok);
+        let gpu_slots_per_layer = no_prefetch_slots.max(
+            num_experts_per_tok
+                .saturating_add(prefetch_per_layer)
+                .max(num_experts_per_tok),
+        );
+        Self {
+            gpu_slots_per_layer,
+            prefetch_per_layer,
+            ..Self::quality_first(num_experts_per_tok)
         }
     }
 
@@ -574,14 +605,51 @@ impl ExpertComputeBundle {
     }
 }
 
+/// Cache of mmap'd safetensors files, keyed by path.
+/// The OS page cache provides automatic caching of file contents across reads.
+/// Once a page is faulted in, subsequent reads of the same region are served
+/// from the page cache without disk I/O.
+static MMAP_CACHE: Mutex<Option<HashMap<PathBuf, Arc<memmap2::Mmap>>>> = Mutex::new(None);
+
+fn get_or_open_mmap(path: &Path) -> Result<Arc<memmap2::Mmap>> {
+    let mut guard = MMAP_CACHE.lock().expect("mmap cache poisoned");
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    let cache = guard.as_mut().expect("initialized above");
+    if let Some(mmap) = cache.get(path) {
+        return Ok(mmap.clone());
+    }
+    let file = std::fs::File::open(path)
+        .map_err(|e| Error::Model(format!("expert mmap open '{}': {e}", path.display())))?;
+    let mmap = unsafe {
+        memmap2::MmapOptions::new()
+            .map(&file)
+            .map_err(|e| Error::Model(format!("expert mmap map '{}': {e}", path.display())))?
+    };
+    let mmap = Arc::new(mmap);
+    cache.insert(path.to_path_buf(), mmap.clone());
+    Ok(mmap)
+}
+
 #[derive(Debug, Clone)]
 pub struct ExpertStreamingReader {
     max_slice_bytes: u64,
+    /// When true, reads use mmap'd file regions instead of pread.
+    /// The mmap cache is shared across all reader instances (static).
+    use_mmap: bool,
 }
 
 impl ExpertStreamingReader {
     pub fn new(max_slice_bytes: u64) -> Self {
-        Self { max_slice_bytes }
+        Self {
+            max_slice_bytes,
+            use_mmap: true,
+        }
+    }
+
+    pub fn max_slice_bytes(&self) -> u64 {
+        self.max_slice_bytes
     }
 
     pub fn read_load_source(
@@ -592,7 +660,7 @@ impl ExpertStreamingReader {
         let tensors = match load_source {
             ExpertLoadSource::LocalTensorSet { tensors } => tensors
                 .iter()
-                .map(|slice| self.read_local_slice(slice))
+                .map(Self::read_local_slice_positioned)
                 .collect::<Result<Vec<_>>>()?,
             ExpertLoadSource::LocalShard {
                 path,
@@ -611,7 +679,7 @@ impl ExpertStreamingReader {
                     dtype: "opaque".into(),
                     shape: Vec::new(),
                 };
-                vec![self.read_local_slice(&slice)?]
+                vec![Self::read_local_slice_positioned(&slice)?]
             }
             other => {
                 return Err(Error::Model(format!(
@@ -654,6 +722,164 @@ impl ExpertStreamingReader {
             bytes,
         })
     }
+
+    /// Read a single tensor slice using positioned read (pread) — no seek needed.
+    /// Uses `std::os::unix::fs::FileExt::read_exact_at` on Unix for a single
+    /// syscall instead of open+seek+read (3 syscalls).
+    ///
+    /// When mmap is enabled, reads from the mmap'd file region instead.
+    /// The OS page cache provides automatic caching across reads.
+    fn read_local_slice_positioned(slice: &ExpertTensorSlice) -> Result<ExpertTensorPayload> {
+        Self::read_local_slice_positioned_with_mmap(slice, true)
+    }
+
+    fn read_local_slice_positioned_with_mmap(
+        slice: &ExpertTensorSlice,
+        use_mmap: bool,
+    ) -> Result<ExpertTensorPayload> {
+        if use_mmap {
+            // Try mmap path first — OS page cache handles caching.
+            match get_or_open_mmap(&slice.path) {
+                Ok(mmap) => {
+                    let end = slice.offset as usize + slice.bytes as usize;
+                    if end > mmap.len() {
+                        return Err(Error::Model(format!(
+                            "expert mmap slice out of bounds: '{}': offset {} + bytes {} > mmap len {}",
+                            slice.path.display(),
+                            slice.offset,
+                            slice.bytes,
+                            mmap.len()
+                        )));
+                    }
+                    // Copy from mmap'd region — OS page cache will serve repeated reads.
+                    let bytes = mmap[slice.offset as usize..end].to_vec();
+                    return Ok(ExpertTensorPayload {
+                        slice: slice.clone(),
+                        bytes,
+                    });
+                }
+                Err(e) => {
+                    // Fall back to pread if mmap fails (e.g. special filesystem).
+                    tracing::trace!(
+                        "expert mmap failed for '{}': {e}, falling back to pread",
+                        slice.path.display()
+                    );
+                }
+            }
+        }
+
+        // Fallback: positioned read (pread).
+        use std::os::unix::fs::FileExt;
+        let file = std::fs::File::open(&slice.path).map_err(|e| {
+            Error::Model(format!(
+                "expert tensor slice open '{}': {e}",
+                slice.path.display()
+            ))
+        })?;
+        let mut bytes = vec![0u8; slice.bytes as usize];
+        file.read_exact_at(&mut bytes, slice.offset).map_err(|e| {
+            Error::Model(format!(
+                "expert tensor slice read_at '{}': {e}",
+                slice.path.display()
+            ))
+        })?;
+        Ok(ExpertTensorPayload {
+            slice: slice.clone(),
+            bytes,
+        })
+    }
+
+    /// Read all tensor slices for one expert concurrently using a tokio
+    /// blocking thread pool. Each slice uses positioned read (pread) so
+    /// multiple slices from the same file can be read in parallel without
+    /// seeking.
+    pub fn read_load_source_concurrent(
+        &self,
+        expert: ExpertId,
+        load_source: &ExpertLoadSource,
+    ) -> Result<ExpertArtifactPayload> {
+        let slices: Vec<ExpertTensorSlice> = match load_source {
+            ExpertLoadSource::LocalTensorSet { tensors } => tensors.clone(),
+            ExpertLoadSource::LocalShard {
+                path,
+                offset,
+                bytes,
+            } => {
+                vec![ExpertTensorSlice {
+                    key: ExpertTensorKey {
+                        expert,
+                        matrix: ExpertMatrixKind::Gate,
+                    },
+                    component: ExpertTensorComponent::Other("whole_expert_chunk".into()),
+                    path: path.clone(),
+                    offset: *offset,
+                    bytes: *bytes,
+                    dtype: "opaque".into(),
+                    shape: Vec::new(),
+                }]
+            }
+            other => {
+                return Err(Error::Model(format!(
+                    "expert streaming reader does not support artifact tier {:?} yet",
+                    other.tier()
+                )))
+            }
+        };
+        for slice in &slices {
+            if slice.bytes > self.max_slice_bytes {
+                return Err(Error::Model(format!(
+                    "expert tensor slice exceeds bounded read size: {} > {} bytes",
+                    slice.bytes, self.max_slice_bytes
+                )));
+            }
+        }
+
+        // Fast path: single slice, no need for tokio overhead.
+        if slices.len() <= 1 {
+            let tensors = slices
+                .iter()
+                .map(|s| Self::read_local_slice_positioned_with_mmap(s, self.use_mmap))
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(ExpertArtifactPayload { expert, tensors });
+        }
+
+        // Parallel path: use rayon for concurrent slice reads.
+        let use_mmap = self.use_mmap;
+        let results: Vec<Result<ExpertTensorPayload>> = slices
+            .par_iter()
+            .map(|s| Self::read_local_slice_positioned_with_mmap(s, use_mmap))
+            .collect();
+        let tensors = results.into_iter().collect::<Result<Vec<_>>>()?;
+        Ok(ExpertArtifactPayload { expert, tensors })
+    }
+}
+
+/// Read multiple experts concurrently. Each expert's slices are read in
+/// parallel, and multiple experts are read in parallel too.
+pub fn read_experts_concurrent(
+    reader: &ExpertStreamingReader,
+    loads: &[(ExpertId, ExpertLoadSource)],
+) -> Result<Vec<ExpertArtifactPayload>> {
+    if loads.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Fast path: single expert.
+    if loads.len() == 1 {
+        let (expert, source) = &loads[0];
+        return Ok(vec![reader.read_load_source_concurrent(*expert, source)?]);
+    }
+
+    // Parallel path: use rayon scope (no runtime creation overhead).
+    // The previous tokio-based code created a new runtime per call, which
+    // added ~1ms overhead per layer per token.
+    let results: Vec<Result<ExpertArtifactPayload>> = loads
+        .par_iter()
+        .map(|(expert, source)| {
+            let r = ExpertStreamingReader::new(reader.max_slice_bytes);
+            r.read_load_source_concurrent(*expert, source)
+        })
+        .collect();
+    results.into_iter().collect()
 }
 
 fn build_linear_payload(

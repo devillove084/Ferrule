@@ -100,7 +100,7 @@ fn element_bytes<T>(len: usize) -> u64 {
     (len as u64).saturating_mul(std::mem::size_of::<T>() as u64)
 }
 
-const ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE: usize = 128;
+pub const ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE: usize = 128;
 
 fn quantized_shape_uses_fp8_activation(shape: CudaArtifactLinearShape) -> bool {
     matches!(
@@ -441,6 +441,84 @@ pub struct CudaArtifactLinearHandle {
     scale: Option<DeviceBuffer<u8>>,
 }
 
+/// Page-locked host memory buffer that is directly accessible from the GPU
+/// via `cuMemHostGetDevicePointer`. On GB10 (unified memory), this avoids
+/// the page-fault overhead of `cuMemAllocManaged` — the GPU reads directly
+/// from host LPDDR5X pages over the coherent interconnect.
+///
+/// Unlike `cuMemAllocManaged`, which triggers a page fault on first GPU
+/// access (~2.4ms per expert for migration), `cuMemAllocHost` pre-pins the
+/// memory so GPU access has zero fault overhead.
+///
+/// The host pointer and device pointer alias the same physical memory,
+/// so there is no need for an explicit H2D copy after the initial memcpy.
+pub struct HostPinnedBuffer {
+    /// Raw host pointer from `cuMemAllocHost`. Freed via `cuMemFreeHost`.
+    host_ptr: *mut std::os::raw::c_void,
+    /// Device pointer aliasing the same physical memory.
+    dev_ptr: cuda_bindings::CUdeviceptr,
+    len: usize,
+}
+
+impl HostPinnedBuffer {
+    /// Allocate page-locked host memory, copy `data` into it, and obtain the
+    /// device pointer. The GPU can read this memory directly over the
+    /// coherent interconnect without any H2D DMA transfer.
+    pub fn alloc_and_copy(data: &[u8]) -> Result<Self> {
+        let mut host_ptr: *mut std::os::raw::c_void = std::ptr::null_mut();
+        let result = unsafe { cuda_bindings::cuMemAllocHost_v2(&mut host_ptr, data.len()) };
+        if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+            return Err(Error::Internal(format!(
+                "cuMemAllocHost failed: error {result}, size {} bytes",
+                data.len()
+            )));
+        }
+        // Copy data into page-locked host memory (host-side memcpy, no DMA).
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), host_ptr as *mut u8, data.len());
+        }
+        // Get the device pointer that aliases the same physical memory.
+        let mut dev_ptr: cuda_bindings::CUdeviceptr = 0;
+        let result =
+            unsafe { cuda_bindings::cuMemHostGetDevicePointer_v2(&mut dev_ptr, host_ptr, 0) };
+        if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+            unsafe { cuda_bindings::cuMemFreeHost(host_ptr) };
+            return Err(Error::Internal(format!(
+                "cuMemHostGetDevicePointer failed: error {result}"
+            )));
+        }
+        Ok(Self {
+            host_ptr,
+            dev_ptr,
+            len: data.len(),
+        })
+    }
+
+    /// Device pointer for kernel launches.
+    pub fn cu_deviceptr(&self) -> cuda_bindings::CUdeviceptr {
+        self.dev_ptr
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl Drop for HostPinnedBuffer {
+    fn drop(&mut self) {
+        if !self.host_ptr.is_null() {
+            unsafe { cuda_bindings::cuMemFreeHost(self.host_ptr) };
+        }
+    }
+}
+
+unsafe impl Send for HostPinnedBuffer {}
+unsafe impl Sync for HostPinnedBuffer {}
+
 impl CudaArtifactLinearHandle {
     pub fn shape(&self) -> CudaArtifactLinearShape {
         self.shape
@@ -457,6 +535,28 @@ pub struct CudaF32Buffer {
     len: usize,
 }
 
+/// Reusable workspace for artifact FP4 SwiGLU expert execution.
+pub struct CudaFp4ExpertWorkspace {
+    scratch: CudaPackedFp4ExpertScratch,
+    output: CudaF32Buffer,
+    intermediate_size: usize,
+    output_size: usize,
+}
+
+impl CudaFp4ExpertWorkspace {
+    pub fn intermediate_size(&self) -> usize {
+        self.intermediate_size
+    }
+
+    pub fn output_size(&self) -> usize {
+        self.output_size
+    }
+
+    pub fn output(&self) -> &CudaF32Buffer {
+        &self.output
+    }
+}
+
 impl CudaF32Buffer {
     pub fn len(&self) -> usize {
         self.len
@@ -464,6 +564,29 @@ impl CudaF32Buffer {
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+}
+
+/// Opaque i32 device buffer used by sparse-attention top-k index sets and
+/// other integer-valued device operands. Mirrors [`CudaF32Buffer`].
+pub struct CudaI32Buffer {
+    buffer: DeviceBuffer<i32>,
+    len: usize,
+}
+
+impl CudaI32Buffer {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Borrow the underlying `DeviceBuffer<i32>` for kernels (e.g. sparse
+    /// attention) that take a raw device buffer reference.
+    pub fn as_device_buffer(&self) -> &DeviceBuffer<i32> {
+        &self.buffer
     }
 }
 
@@ -485,7 +608,9 @@ impl CudaArtifactOperatorContext {
         let ctx = cu(CudaContext::new(0))?;
         cu(ctx.bind_to_thread())?;
         let module = cu(crate::kernels::kernels::load(&ctx))?;
-        let stream = ctx.default_stream();
+        // Use a non-blocking stream (forked from default) so that CUDA graph
+        // capture works (the default/NULL stream does not support capture).
+        let stream = cu(ctx.default_stream().fork())?;
         Ok(Self {
             _ctx: ctx,
             module,
@@ -496,6 +621,27 @@ impl CudaArtifactOperatorContext {
 
     pub fn counters(&self) -> CudaOpCounters {
         self.counters.snapshot()
+    }
+
+    #[cfg(feature = "cuda")]
+    pub fn capture_decode_graph(
+        &self,
+        capture_fn: impl FnOnce() -> Result<()>,
+    ) -> Result<crate::graph::CudaGraphHandle> {
+        crate::graph::capture_decode_graph(&self.stream, capture_fn)
+    }
+
+    pub fn launch_graph(&self, graph: &crate::graph::CudaGraphHandle) -> Result<()> {
+        graph.launch(&self.stream)
+    }
+
+    /// Clone the stream for use with graph capture outside of `&self` borrow.
+    pub fn stream_clone(&self) -> Arc<CudaStream> {
+        self.stream.clone()
+    }
+
+    pub fn sync_stream(&self) -> Result<()> {
+        cu(self.stream.synchronize())
     }
 
     pub fn reset_counters(&self) {
@@ -550,8 +696,92 @@ impl CudaArtifactOperatorContext {
         })
     }
 
+    /// Zero an existing device buffer in-place (cuMemsetD32Async, no allocation).
+    /// Safe for CUDA graph capture.
+    pub fn zero_f32_buffer_in_place(&self, buf: &mut CudaF32Buffer) -> Result<()> {
+        let result = unsafe {
+            cuda_bindings::cuMemsetD32Async(
+                buf.buffer.cu_deviceptr(),
+                0,
+                buf.len,
+                self.stream.cu_stream(),
+            )
+        };
+        if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+            return Err(Error::Internal(format!(
+                "cuMemsetD32Async failed: error {result}"
+            )));
+        }
+        self.counters.add_kernel_launch();
+        Ok(())
+    }
+
     pub fn download_f32_buffer(&self, buffer: &CudaF32Buffer) -> Result<Vec<f32>> {
         self.download_f32(&buffer.buffer, buffer.len)
+    }
+
+    /// Clone a device f32 buffer (device-to-device copy, no host round-trip).
+    pub fn clone_f32_buffer(&self, src: &CudaF32Buffer) -> Result<CudaF32Buffer> {
+        let mut dst = self.zero_f32_buffer(src.len)?;
+        self.copy_f32_into_slot(src, &mut dst, 0)?;
+        Ok(dst)
+    }
+
+    pub fn upload_i32_buffer(&self, values: &[i32]) -> Result<CudaI32Buffer> {
+        Ok(CudaI32Buffer {
+            buffer: self.upload_i32(values)?,
+            len: values.len(),
+        })
+    }
+
+    pub fn zero_i32_buffer(&self, len: usize) -> Result<CudaI32Buffer> {
+        Ok(CudaI32Buffer {
+            buffer: cu(DeviceBuffer::<i32>::zeroed(&self.stream, len))?,
+            len,
+        })
+    }
+
+    /// Copy `src` into `dst` device-to-device in place, element-for-element.
+    /// Used to refresh a pre-allocated top-k index buffer for graph capture.
+    pub fn copy_i32_into_buffer(&self, src: &[i32], dst: &mut CudaI32Buffer) -> Result<()> {
+        if src.len() != dst.len {
+            return Err(Error::Internal(format!(
+                "CUDA i32 copy length mismatch: src={} dst={}",
+                src.len(),
+                dst.len
+            )));
+        }
+        self.counters.add_host_to_device(slice_bytes(src));
+        cu(dst.buffer.copy_from_host(&self.stream, src))
+    }
+
+    /// Copy `src.len()` f32 elements from `src` into `dst` starting at element
+    /// `slot_offset_elements`. Launches the `copy_f32_slot` kernel so the copy
+    /// is fully device-resident (no host round-trip), which is required for
+    /// CUDA graph capture of the KV-cache append.
+    pub fn copy_f32_into_slot(
+        &self,
+        src: &CudaF32Buffer,
+        dst: &mut CudaF32Buffer,
+        slot_offset_elements: usize,
+    ) -> Result<()> {
+        let end = slot_offset_elements
+            .checked_add(src.len)
+            .ok_or_else(|| Error::Internal("CUDA slot copy offset overflow".into()))?;
+        if end > dst.len {
+            return Err(Error::Internal(format!(
+                "CUDA slot copy out of bounds: dst.len={}, offset={}, src.len={}",
+                dst.len, slot_offset_elements, src.len
+            )));
+        }
+        self.launched(self.module.copy_f32_slot(
+            &self.stream,
+            LaunchConfig::for_num_elems(src.len as u32),
+            &src.buffer,
+            &mut dst.buffer,
+            slot_offset_elements as u32,
+            src.len as u32,
+        ))
     }
 
     /// Device-side accumulate: `y += scale * x`.
@@ -655,6 +885,23 @@ impl CudaArtifactOperatorContext {
         out_features: usize,
         in_features: usize,
     ) -> Result<CudaArtifactLinearHandle> {
+        // On GB10 (unified memory), use cuMemAllocManaged to avoid H2D copy.
+        // The GPU reads expert weights directly from host pages via unified
+        // addressing, eliminating the 888 MB/token upload bottleneck.
+        // Default: enabled. Set FERRULE_MANAGED_EXPERTS=0 to disable.
+        let use_managed = std::env::var("FERRULE_MANAGED_EXPERTS")
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(true);
+        if use_managed {
+            return self.upload_artifact_linear_managed(
+                CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
+                    out_features,
+                    in_features,
+                },
+                weight,
+                scale,
+            );
+        }
         self.upload_artifact_linear(
             CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
                 out_features,
@@ -663,6 +910,65 @@ impl CudaArtifactOperatorContext {
             weight,
             scale,
         )
+    }
+
+    /// Allocate expert weight/scale buffers as CUDA managed memory.
+    ///
+    /// On GB10 (sm_121, unified addressing), managed memory is accessible by
+    /// both CPU and GPU without explicit H2D copies. The GPU reads directly
+    /// from host LPDDR5X pages, so expert loading becomes a pure host-side
+    /// memcpy (disk -> managed buffer) with zero upload overhead.
+    pub fn upload_artifact_linear_managed(
+        &self,
+        shape: CudaArtifactLinearShape,
+        weight: &[u8],
+        scale: &[u8],
+    ) -> Result<CudaArtifactLinearHandle> {
+        shape.validate(weight.len(), scale.len())?;
+        let weight_buf = self.alloc_managed_u8(weight)?;
+        let scale_buf = if scale.is_empty() {
+            None
+        } else {
+            Some(self.alloc_managed_u8(scale)?)
+        };
+        // No counter bump: managed memory is not an H2D transfer.
+        Ok(CudaArtifactLinearHandle {
+            shape,
+            weight: weight_buf,
+            scale: scale_buf,
+        })
+    }
+
+    /// Allocate a CUDA managed-memory buffer and copy `data` into it.
+    ///
+    /// Managed memory is accessible from both host and device on unified
+    /// addressing platforms (GB10). The returned `DeviceBuffer` owns the
+    /// allocation and frees it via `cuMemFree` on drop.
+    ///
+    /// On GB10 (sm_121, unified addressing), managed memory is accessible by
+    /// both CPU and GPU without explicit H2D copies. The GPU reads directly
+    /// from host LPDDR5X pages, so expert loading becomes a pure host-side
+    /// memcpy (disk → managed buffer) with zero upload overhead.
+    ///
+    /// We also set `CU_MEM_ADVISE_SET_READ_MOSTLY` to hint the driver that
+    /// expert weights are read-only after upload, enabling better page
+    /// placement and reducing fault overhead.
+    fn alloc_managed_u8(&self, data: &[u8]) -> Result<DeviceBuffer<u8>> {
+        let ctx = self.stream.context().clone();
+        let mut dptr: cuda_bindings::CUdeviceptr = 0;
+        // CU_MEM_ATTACH_GLOBAL = 0x1
+        let result = unsafe { cuda_bindings::cuMemAllocManaged(&mut dptr, data.len(), 0x1) };
+        if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+            return Err(Error::Internal(format!(
+                "cuMemAllocManaged failed: error {result}, size {} bytes",
+                data.len()
+            )));
+        }
+        // Copy data into managed buffer (host-side memcpy, no DMA transfer).
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), dptr as *mut u8, data.len());
+        }
+        Ok(unsafe { DeviceBuffer::from_raw_parts(dptr, data.len(), ctx) })
     }
 
     pub fn artifact_linear_matvec(
@@ -704,6 +1010,66 @@ impl CudaArtifactOperatorContext {
             )));
         }
         self.artifact_linear_matvec_device(handle, &input.buffer, &mut output.buffer)
+    }
+
+    /// Device-resident grouped matvec for block-diagonal weight layouts.
+    ///
+    /// `context` is the full `[o_groups * group_in]` device buffer. `weight` is
+    /// the dequantized `[output_latent_dim, group_in]` f32 weight buffer, cached
+    /// by the caller. The output `[output_latent_dim]` buffer is allocated here.
+    /// One thread per output row; each row only reads its group's context slice.
+    pub fn grouped_matvec_f32_from_device(
+        &self,
+        context: &CudaF32Buffer,
+        weight: &CudaF32Buffer,
+        output_latent_dim: usize,
+        group_in: usize,
+        o_lora_rank: usize,
+    ) -> Result<CudaF32Buffer> {
+        let expected_context = output_latent_dim
+            .checked_div(o_lora_rank)
+            .and_then(|groups| groups.checked_mul(group_in))
+            .ok_or_else(|| {
+                Error::Internal(format!(
+                    "CUDA grouped matvec shape overflow: out={output_latent_dim} rank={o_lora_rank} group_in={group_in}"
+                ))
+            })?;
+        if context.len != expected_context {
+            return Err(Error::Internal(format!(
+                "CUDA grouped matvec context length mismatch: expected {expected_context}, got {}",
+                context.len
+            )));
+        }
+        let expected_weight = output_latent_dim.checked_mul(group_in).ok_or_else(|| {
+            Error::Internal(format!(
+                "CUDA grouped matvec weight size overflow: out={output_latent_dim} group_in={group_in}"
+            ))
+        })?;
+        if weight.len != expected_weight {
+            return Err(Error::Internal(format!(
+                "CUDA grouped matvec weight length mismatch: expected {expected_weight}, got {}",
+                weight.len
+            )));
+        }
+        let mut output = cu(DeviceBuffer::<f32>::zeroed(&self.stream, output_latent_dim))?;
+        self.launched(self.module.grouped_matvec_f32(
+            &self.stream,
+            LaunchConfig::for_num_elems(checked_u32(
+                output_latent_dim,
+                "grouped_matvec_f32",
+                "output_latent_dim",
+            )?),
+            &context.buffer,
+            &weight.buffer,
+            &mut output,
+            checked_u32(output_latent_dim, "grouped_matvec_f32", "output_latent_dim")?,
+            checked_u32(group_in, "grouped_matvec_f32", "group_in")?,
+            checked_u32(o_lora_rank, "grouped_matvec_f32", "o_lora_rank")?,
+        ))?;
+        Ok(CudaF32Buffer {
+            buffer: output,
+            len: output_latent_dim,
+        })
     }
 
     pub fn artifact_linear_topk(
@@ -772,6 +1138,15 @@ impl CudaArtifactOperatorContext {
             .zip(val)
             .map(|(idx, value)| (idx as u32, value))
             .collect())
+    }
+
+    pub fn fp8_activation_quantize_buffer_in_place(
+        &self,
+        values: &mut CudaF32Buffer,
+        row_width: usize,
+        block_size: usize,
+    ) -> Result<()> {
+        self.fp8_activation_quantize_in_place(&mut values.buffer, values.len, row_width, block_size)
     }
 
     pub fn fp8_activation_quantize_in_place(
@@ -870,6 +1245,93 @@ impl CudaArtifactOperatorContext {
         self.download_f32(&yd, down.shape.out_features())
     }
 
+    pub fn artifact_swiglu_ffn_from_device(
+        &self,
+        gate: &CudaArtifactLinearHandle,
+        up: &CudaArtifactLinearHandle,
+        down: &CudaArtifactLinearHandle,
+        input: &CudaF32Buffer,
+        output_scale: f32,
+        swiglu_limit: f32,
+    ) -> Result<CudaF32Buffer> {
+        if input.len != gate.shape.in_features() || input.len != up.shape.in_features() {
+            return Err(Error::Internal(format!(
+                "CUDA SwiGLU device input length mismatch: input={} gate_in={} up_in={}",
+                input.len,
+                gate.shape.in_features(),
+                up.shape.in_features()
+            )));
+        }
+        if gate.shape.out_features() != up.shape.out_features()
+            || down.shape.in_features() != gate.shape.out_features()
+        {
+            return Err(Error::Internal(format!(
+                "CUDA SwiGLU shape mismatch: gate={:?} up={:?} down={:?}",
+                gate.shape, up.shape, down.shape
+            )));
+        }
+        let mut gate_input = self.zero_f32_buffer(input.len)?;
+        self.copy_f32_into_slot(input, &mut gate_input, 0)?;
+        if quantized_shape_uses_fp8_activation(gate.shape) {
+            self.fp8_activation_quantize_buffer_in_place(
+                &mut gate_input,
+                gate.shape.in_features(),
+                ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
+            )?;
+        }
+        let mut up_input = self.zero_f32_buffer(input.len)?;
+        self.copy_f32_into_slot(input, &mut up_input, 0)?;
+        if quantized_shape_uses_fp8_activation(up.shape) {
+            self.fp8_activation_quantize_buffer_in_place(
+                &mut up_input,
+                up.shape.in_features(),
+                ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
+            )?;
+        }
+
+        let mut gated = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            gate.shape.out_features(),
+        ))?;
+        let mut upd = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            up.shape.out_features(),
+        ))?;
+        let mut hidden = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            gate.shape.out_features(),
+        ))?;
+        let mut yd = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            down.shape.out_features(),
+        ))?;
+        self.artifact_linear_matvec_device(gate, &gate_input.buffer, &mut gated)?;
+        self.artifact_linear_matvec_device(up, &up_input.buffer, &mut upd)?;
+        self.launched(self.module.swiglu_weighted_clamped(
+            &self.stream,
+            LaunchConfig::for_num_elems(gate.shape.out_features() as u32),
+            &gated,
+            &upd,
+            &mut hidden,
+            gate.shape.out_features() as u32,
+            output_scale,
+            swiglu_limit,
+        ))?;
+        if quantized_shape_uses_fp8_activation(down.shape) {
+            self.fp8_activation_quantize_in_place(
+                &mut hidden,
+                down.shape.in_features(),
+                down.shape.in_features(),
+                ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
+            )?;
+        }
+        self.artifact_linear_matvec_device(down, &hidden, &mut yd)?;
+        Ok(CudaF32Buffer {
+            buffer: yd,
+            len: down.shape.out_features(),
+        })
+    }
+
     pub fn artifact_fp4_swiglu_ffn_matvec(
         &self,
         gate: &CudaArtifactLinearHandle,
@@ -939,10 +1401,70 @@ impl CudaArtifactOperatorContext {
         self.upload_f32_buffer(&quantized_input)
     }
 
+    pub fn prepare_fp4_expert_input_from_device(
+        &self,
+        gate: &CudaArtifactLinearHandle,
+        up: &CudaArtifactLinearHandle,
+        down: &CudaArtifactLinearHandle,
+        input: &CudaF32Buffer,
+    ) -> Result<CudaF32Buffer> {
+        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
+            out_features: gate_out,
+            in_features: gate_in,
+        } = gate.shape
+        else {
+            return Err(Error::Internal("CUDA packed expert gate is not FP4".into()));
+        };
+        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
+            out_features: up_out,
+            in_features: up_in,
+        } = up.shape
+        else {
+            return Err(Error::Internal("CUDA packed expert up is not FP4".into()));
+        };
+        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
+            out_features: down_out,
+            in_features: down_in,
+        } = down.shape
+        else {
+            return Err(Error::Internal("CUDA packed expert down is not FP4".into()));
+        };
+        if input.len != gate_in || up_in != gate_in || up_out != gate_out || down_in != gate_out {
+            return Err(Error::Internal(format!(
+                "CUDA packed expert shape mismatch: input={} gate=[{gate_out},{gate_in}] up=[{up_out},{up_in}] down=[{down_out},{down_in}]",
+                input.len
+            )));
+        }
+        let mut quantized_input = self.zero_f32_buffer(input.len)?;
+        self.copy_f32_into_slot(input, &mut quantized_input, 0)?;
+        self.fp8_activation_quantize_buffer_in_place(
+            &mut quantized_input,
+            gate_in,
+            ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
+        )?;
+        Ok(quantized_input)
+    }
+
     /// Run FP4 SwiGLU expert matvec from a pre-uploaded device input buffer.
     ///
     /// Pair with `prepare_fp4_expert_input` to share the input across experts.
     /// Returns a device buffer instead of downloading to host.
+    pub fn fp4_expert_workspace(
+        &self,
+        intermediate_size: usize,
+        output_size: usize,
+    ) -> Result<CudaFp4ExpertWorkspace> {
+        Ok(CudaFp4ExpertWorkspace {
+            scratch: CudaPackedFp4ExpertScratch::new(&self.stream, intermediate_size)?,
+            output: CudaF32Buffer {
+                buffer: cu(DeviceBuffer::<f32>::zeroed(&self.stream, output_size))?,
+                len: output_size,
+            },
+            intermediate_size,
+            output_size,
+        })
+    }
+
     pub fn fp4_swiglu_ffn_from_device(
         &self,
         gate: &CudaArtifactLinearHandle,
@@ -979,6 +1501,62 @@ impl CudaArtifactOperatorContext {
                 input.len()
             )));
         }
+        let mut workspace = self.fp4_expert_workspace(gate_out, down_out)?;
+        self.fp4_swiglu_ffn_into_from_device(
+            gate,
+            up,
+            down,
+            input,
+            route_weight,
+            swiglu_limit,
+            &mut workspace,
+        )?;
+        Ok(workspace.output)
+    }
+
+    pub fn fp4_swiglu_ffn_into_from_device(
+        &self,
+        gate: &CudaArtifactLinearHandle,
+        up: &CudaArtifactLinearHandle,
+        down: &CudaArtifactLinearHandle,
+        input: &CudaF32Buffer,
+        route_weight: f32,
+        swiglu_limit: f32,
+        workspace: &mut CudaFp4ExpertWorkspace,
+    ) -> Result<()> {
+        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
+            out_features: gate_out,
+            in_features: gate_in,
+        } = gate.shape
+        else {
+            return Err(Error::Internal("CUDA packed expert gate is not FP4".into()));
+        };
+        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
+            out_features: up_out,
+            in_features: up_in,
+        } = up.shape
+        else {
+            return Err(Error::Internal("CUDA packed expert up is not FP4".into()));
+        };
+        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
+            out_features: down_out,
+            in_features: down_in,
+        } = down.shape
+        else {
+            return Err(Error::Internal("CUDA packed expert down is not FP4".into()));
+        };
+        if input.len() != gate_in || up_in != gate_in || up_out != gate_out || down_in != gate_out {
+            return Err(Error::Internal(format!(
+                "CUDA packed expert shape mismatch: input={} gate=[{gate_out},{gate_in}] up=[{up_out},{up_in}] down=[{down_out},{down_in}]",
+                input.len()
+            )));
+        }
+        if workspace.intermediate_size != gate_out || workspace.output_size != down_out {
+            return Err(Error::Internal(format!(
+                "CUDA packed expert workspace mismatch: workspace=[{},{}] expert=[{},{}]",
+                workspace.intermediate_size, workspace.output_size, gate_out, down_out
+            )));
+        }
         let gate_scale = gate
             .scale
             .as_ref()
@@ -991,8 +1569,6 @@ impl CudaArtifactOperatorContext {
             .scale
             .as_ref()
             .ok_or_else(|| Error::Internal("CUDA packed expert down missing scale".into()))?;
-        let mut yd = cu(DeviceBuffer::<f32>::zeroed(&self.stream, down_out))?;
-        let mut scratch = CudaPackedFp4ExpertScratch::new(&self.stream, gate_out)?;
         let expert = CudaPackedFp4Expert {
             gate: CudaPackedFp4Linear::new(&gate.weight, gate_scale, gate_out, gate_in),
             up: CudaPackedFp4Linear::new(&up.weight, up_scale, up_out, up_in),
@@ -1008,12 +1584,12 @@ impl CudaArtifactOperatorContext {
             &input.buffer,
             expert.gate.packed,
             expert.gate.scales,
-            &mut scratch.gate,
+            &mut workspace.scratch.gate,
             checked_u32(expert.gate.packed_offset(), "gate", "packed offset")?,
             checked_u32(expert.gate.scale_offset(), "gate", "scale offset")?,
             expert.up.packed,
             expert.up.scales,
-            &mut scratch.up,
+            &mut workspace.scratch.up,
             checked_u32(expert.up.packed_offset(), "up", "packed offset")?,
             checked_u32(expert.up.scale_offset(), "up", "scale offset")?,
             checked_u32(gate_out, "expert", "intermediate size")?,
@@ -1023,16 +1599,16 @@ impl CudaArtifactOperatorContext {
         self.launched(self.module.swiglu_weighted_clamped(
             &self.stream,
             cfg_mid,
-            &scratch.gate,
-            &scratch.up,
-            &mut scratch.hidden,
+            &workspace.scratch.gate,
+            &workspace.scratch.up,
+            &mut workspace.scratch.hidden,
             checked_u32(gate_out, "expert", "intermediate size")?,
             route_weight,
             swiglu_limit,
         ))?;
 
         self.fp8_activation_quantize_in_place(
-            &mut scratch.hidden,
+            &mut workspace.scratch.hidden,
             down_in,
             down_in,
             ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
@@ -1040,19 +1616,216 @@ impl CudaArtifactOperatorContext {
         self.launched(self.module.gemv_fp4_e2m1_e8m0_off(
             &self.stream,
             cfg_out,
-            &scratch.hidden,
+            &workspace.scratch.hidden,
             expert.down.packed,
             expert.down.scales,
-            &mut yd,
+            &mut workspace.output.buffer,
             checked_u32(down_out, "down", "output size")?,
             checked_u32(down_in, "down", "input size")?,
             checked_u32(expert.down.packed_offset(), "down", "packed offset")?,
             checked_u32(expert.down.scale_offset(), "down", "scale offset")?,
         ))?;
-        Ok(CudaF32Buffer {
-            buffer: yd,
-            len: down_out,
-        })
+        Ok(())
+    }
+
+    /// Batched MoE: process all selected experts in 3 kernel launches
+    /// instead of 3 × num_experts launches.
+    ///
+    /// `expert_handles`: one per selected expert, each containing gate/up/down.
+    /// `route_weights`: per-expert routing weight.
+    /// `input`: shared device input buffer (already FP8-quantized).
+    /// `output`: pre-zeroed accumulator, `[hidden_size]` f32.
+    /// Returns the same `output` buffer with accumulated expert outputs.
+    pub fn moe_experts_batched_from_device(
+        &self,
+        expert_handles: &[&CudaArtifactLinearHandle; 6],
+        gate_handles: &[&CudaArtifactLinearHandle; 6],
+        up_handles: &[&CudaArtifactLinearHandle; 6],
+        down_handles: &[&CudaArtifactLinearHandle; 6],
+        route_weights: &[f32; 6],
+        input: &CudaF32Buffer,
+        swiglu_limit: f32,
+        num_experts: usize,
+        intermediate_size: usize,
+        hidden_size: usize,
+    ) -> Result<(CudaF32Buffer, CudaF32Buffer, CudaF32Buffer)> {
+        if num_experts == 0 || num_experts > 6 {
+            return Err(Error::Internal(format!(
+                "MoE batched expects 1..=6 experts, got {num_experts}"
+            )));
+        }
+        // Pack device pointers into u64 arrays.
+        let gate_ptrs: Vec<u64> = gate_handles[..num_experts]
+            .iter()
+            .map(|h| h.weight.cu_deviceptr())
+            .collect();
+        let gate_scale_ptrs: Vec<u64> = gate_handles[..num_experts]
+            .iter()
+            .map(|h| h.scale.as_ref().expect("gate scale").cu_deviceptr())
+            .collect();
+        let up_ptrs: Vec<u64> = up_handles[..num_experts]
+            .iter()
+            .map(|h| h.weight.cu_deviceptr())
+            .collect();
+        let up_scale_ptrs: Vec<u64> = up_handles[..num_experts]
+            .iter()
+            .map(|h| h.scale.as_ref().expect("up scale").cu_deviceptr())
+            .collect();
+        let down_ptrs: Vec<u64> = down_handles[..num_experts]
+            .iter()
+            .map(|h| h.weight.cu_deviceptr())
+            .collect();
+        let down_scale_ptrs: Vec<u64> = down_handles[..num_experts]
+            .iter()
+            .map(|h| h.scale.as_ref().expect("down scale").cu_deviceptr())
+            .collect();
+
+        let gate_ptrs_d = self.upload_u64_buffer(&gate_ptrs)?;
+        let gate_scale_ptrs_d = self.upload_u64_buffer(&gate_scale_ptrs)?;
+        let up_ptrs_d = self.upload_u64_buffer(&up_ptrs)?;
+        let up_scale_ptrs_d = self.upload_u64_buffer(&up_scale_ptrs)?;
+        let down_ptrs_d = self.upload_u64_buffer(&down_ptrs)?;
+        let down_scale_ptrs_d = self.upload_u64_buffer(&down_scale_ptrs)?;
+        let route_weights_d = self.upload_f32_buffer(route_weights)?;
+
+        let total_inter = num_experts * intermediate_size;
+        let mut y_gate = cu(DeviceBuffer::<f32>::zeroed(&self.stream, total_inter))?;
+        let mut y_up = cu(DeviceBuffer::<f32>::zeroed(&self.stream, total_inter))?;
+        let mut y_hidden = cu(DeviceBuffer::<f32>::zeroed(&self.stream, total_inter))?;
+        let mut output = cu(DeviceBuffer::<f32>::zeroed(&self.stream, hidden_size))?;
+
+        let block = 256u32;
+        let reduce_block = 128u32;
+        let use_reduce = std::env::var("FERRULE_CUDA_MOE_REDUCE")
+            .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
+            .unwrap_or(false);
+        let grid_inter = (
+            (intermediate_size as u32 + block - 1) / block,
+            num_experts as u32,
+            1,
+        );
+        let grid_hidden = (
+            (hidden_size as u32 + block - 1) / block,
+            num_experts as u32,
+            1,
+        );
+        let grid_inter_reduce = (intermediate_size as u32, num_experts as u32, 1);
+        let grid_hidden_reduce = (hidden_size as u32, num_experts as u32, 1);
+
+        // Launch 1: gate+up GEMV
+        if use_reduce {
+            self.launched(self.module.moe_gemv_dual_fp4_batched_reduce(
+                &self.stream,
+                LaunchConfig {
+                    grid_dim: grid_inter_reduce,
+                    block_dim: (reduce_block, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                &input.buffer,
+                &gate_ptrs_d,
+                &gate_scale_ptrs_d,
+                &up_ptrs_d,
+                &up_scale_ptrs_d,
+                &mut y_gate,
+                &mut y_up,
+                intermediate_size as u32,
+                input.len as u32,
+                num_experts as u32,
+            ))?;
+        } else {
+            self.launched(self.module.moe_gemv_dual_fp4_batched(
+                &self.stream,
+                LaunchConfig {
+                    grid_dim: grid_inter,
+                    block_dim: (block, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                &input.buffer,
+                &gate_ptrs_d,
+                &gate_scale_ptrs_d,
+                &up_ptrs_d,
+                &up_scale_ptrs_d,
+                &mut y_gate,
+                &mut y_up,
+                intermediate_size as u32,
+                input.len as u32,
+                num_experts as u32,
+            ))?;
+        }
+
+        // Launch 2: SwiGLU + FP8 quantize
+        self.launched(self.module.moe_swiglu_fp8_batched(
+            &self.stream,
+            LaunchConfig {
+                grid_dim: grid_inter,
+                block_dim: (block, 1, 1),
+                shared_mem_bytes: 0,
+            },
+            &y_gate,
+            &y_up,
+            &route_weights_d.buffer,
+            &mut y_hidden,
+            intermediate_size as u32,
+            num_experts as u32,
+            swiglu_limit,
+            ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE as u32,
+        ))?;
+
+        // Launch 3: down GEMV + accumulate
+        if use_reduce {
+            self.launched(self.module.moe_gemv_down_fp4_batched_reduce(
+                &self.stream,
+                LaunchConfig {
+                    grid_dim: grid_hidden_reduce,
+                    block_dim: (reduce_block, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                &y_hidden,
+                &down_ptrs_d,
+                &down_scale_ptrs_d,
+                &mut output,
+                intermediate_size as u32,
+                hidden_size as u32,
+                num_experts as u32,
+            ))?;
+        } else {
+            self.launched(self.module.moe_gemv_down_fp4_batched(
+                &self.stream,
+                LaunchConfig {
+                    grid_dim: grid_hidden,
+                    block_dim: (block, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                &y_hidden,
+                &down_ptrs_d,
+                &down_scale_ptrs_d,
+                &mut output,
+                intermediate_size as u32,
+                hidden_size as u32,
+                num_experts as u32,
+            ))?;
+        }
+
+        Ok((
+            CudaF32Buffer {
+                buffer: y_gate,
+                len: total_inter,
+            },
+            CudaF32Buffer {
+                buffer: y_hidden,
+                len: total_inter,
+            },
+            CudaF32Buffer {
+                buffer: output,
+                len: hidden_size,
+            },
+        ))
+    }
+
+    fn upload_u64_buffer(&self, values: &[u64]) -> Result<DeviceBuffer<u64>> {
+        let buffer = cu(DeviceBuffer::<u64>::from_host(&self.stream, values))?;
+        self.counters.add_host_to_device((values.len() * 8) as u64);
+        Ok(buffer)
     }
 
     pub fn rms_norm(&self, input: &[f32], weight: &[f32], eps: f32) -> Result<Vec<f32>> {
@@ -1121,14 +1894,25 @@ impl CudaArtifactOperatorContext {
         head_dim: usize,
         eps: f32,
     ) -> Result<Vec<f32>> {
-        if heads == 0 || head_dim == 0 || input.len() != heads * head_dim {
+        let xd = self.upload_f32_buffer(input)?;
+        let yd = self.rms_norm_heads_from_device(&xd, heads, head_dim, eps)?;
+        self.download_f32_buffer(&yd)
+    }
+
+    pub fn rms_norm_heads_from_device(
+        &self,
+        input: &CudaF32Buffer,
+        heads: usize,
+        head_dim: usize,
+        eps: f32,
+    ) -> Result<CudaF32Buffer> {
+        if heads == 0 || head_dim == 0 || input.len != heads * head_dim {
             return Err(Error::Internal(format!(
-                "CUDA per-head RMS length mismatch: input={} heads={heads} head_dim={head_dim}",
-                input.len()
+                "CUDA per-head RMS device length mismatch: input={} heads={heads} head_dim={head_dim}",
+                input.len
             )));
         }
-        let xd = self.upload_f32(input)?;
-        let mut yd = cu(DeviceBuffer::<f32>::zeroed(&self.stream, input.len()))?;
+        let mut yd = cu(DeviceBuffer::<f32>::zeroed(&self.stream, input.len))?;
         self.launched(self.module.rms_norm_heads_fused(
             &self.stream,
             LaunchConfig {
@@ -1136,13 +1920,94 @@ impl CudaArtifactOperatorContext {
                 block_dim: (256, 1, 1),
                 shared_mem_bytes: 0,
             },
-            &xd,
+            &input.buffer,
             &mut yd,
             heads as u32,
             head_dim as u32,
             eps,
         ))?;
-        self.download_f32(&yd, input.len())
+        Ok(CudaF32Buffer {
+            buffer: yd,
+            len: input.len,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn hc_pre_from_device(
+        &self,
+        state: &CudaF32Buffer,
+        function: &CudaF32Buffer,
+        scale: &CudaF32Buffer,
+        base: &CudaF32Buffer,
+        tokens: usize,
+        hc_mult: usize,
+        hidden_size: usize,
+        sinkhorn_iters: usize,
+        eps: f32,
+        norm_eps: f32,
+    ) -> Result<(CudaF32Buffer, CudaF32Buffer, CudaF32Buffer, CudaF32Buffer)> {
+        let mix_hc = hc_mult
+            .checked_mul(hc_mult + 2)
+            .ok_or_else(|| Error::Internal("CUDA HC mix_hc overflow".into()))?;
+        let _hc_dim = hc_mult
+            .checked_mul(hidden_size)
+            .ok_or_else(|| Error::Internal("CUDA HC hidden size overflow".into()))?;
+        if tokens == 0 || hc_mult == 0 || hc_mult > 16 || mix_hc > 128 || hc_mult * hc_mult > 256 {
+            return Err(Error::Internal(format!(
+                "CUDA HC pre device shape mismatch: tokens={tokens} hc={hc_mult} hidden={hidden_size} mix={mix_hc}"
+            )));
+        }
+        let mut hidden = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            tokens * hidden_size,
+        ))?;
+        let mut pre = cu(DeviceBuffer::<f32>::zeroed(&self.stream, tokens * hc_mult))?;
+        let mut post = cu(DeviceBuffer::<f32>::zeroed(&self.stream, tokens * hc_mult))?;
+        let mut comb = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            tokens * hc_mult * hc_mult,
+        ))?;
+        self.launched(self.module.hc_pre_f32(
+            &self.stream,
+            LaunchConfig {
+                grid_dim: (tokens as u32, 1, 1),
+                block_dim: (256, 1, 1),
+                shared_mem_bytes: 0,
+            },
+            &state.buffer,
+            &function.buffer,
+            &scale.buffer,
+            &base.buffer,
+            &mut hidden,
+            &mut pre,
+            &mut post,
+            &mut comb,
+            tokens as u32,
+            hc_mult as u32,
+            hidden_size as u32,
+            mix_hc as u32,
+            sinkhorn_iters as u32,
+            eps,
+            norm_eps,
+        ))?;
+        Ok((
+            CudaF32Buffer {
+                buffer: hidden,
+                len: tokens * hidden_size,
+            },
+            CudaF32Buffer {
+                buffer: pre,
+                len: tokens * hc_mult,
+            },
+            CudaF32Buffer {
+                buffer: post,
+                len: tokens * hc_mult,
+            },
+            CudaF32Buffer {
+                buffer: comb,
+                len: tokens * hc_mult * hc_mult,
+            },
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1253,6 +2118,43 @@ impl CudaArtifactOperatorContext {
             eps,
             norm_eps,
         )
+    }
+
+    pub fn hc_post_from_device(
+        &self,
+        hidden: &CudaF32Buffer,
+        residual: &CudaF32Buffer,
+        split_post: &CudaF32Buffer,
+        split_comb: &CudaF32Buffer,
+        tokens: usize,
+        hc_mult: usize,
+        hidden_size: usize,
+    ) -> Result<CudaF32Buffer> {
+        let hc_dim = hc_mult
+            .checked_mul(hidden_size)
+            .ok_or_else(|| Error::Internal("CUDA HC post hidden size overflow".into()))?;
+        if tokens == 0 || hc_mult == 0 || hidden_size == 0 {
+            return Err(Error::Internal(format!(
+                "CUDA HC post device shape mismatch: tokens={tokens} hc={hc_mult} hidden_size={hidden_size}"
+            )));
+        }
+        let mut out = cu(DeviceBuffer::<f32>::zeroed(&self.stream, tokens * hc_dim))?;
+        self.launched(self.module.hc_post_f32(
+            &self.stream,
+            LaunchConfig::for_num_elems((tokens * hc_dim) as u32),
+            &hidden.buffer,
+            &residual.buffer,
+            &split_post.buffer,
+            &split_comb.buffer,
+            &mut out,
+            tokens as u32,
+            hc_mult as u32,
+            hidden_size as u32,
+        ))?;
+        Ok(CudaF32Buffer {
+            buffer: out,
+            len: tokens * hc_dim,
+        })
     }
 
     pub fn hc_post_f32(
@@ -1409,6 +2311,69 @@ impl CudaArtifactOperatorContext {
         )
     }
 
+    /// Device-resident `hc_head`: state and weights are already on device,
+    /// output stays on device. This is the HC terminal projection applied
+    /// after all transformer layers.
+    #[allow(clippy::too_many_arguments)]
+    pub fn hc_head_from_device(
+        &self,
+        state: &CudaF32Buffer,
+        function: &CudaF32Buffer,
+        scale: &CudaF32Buffer,
+        base: &CudaF32Buffer,
+        tokens: usize,
+        hc_mult: usize,
+        hidden_size: usize,
+        eps: f32,
+        norm_eps: f32,
+    ) -> Result<CudaF32Buffer> {
+        let hc_dim = hc_mult
+            .checked_mul(hidden_size)
+            .ok_or_else(|| Error::Internal("CUDA HC head hidden size overflow".into()))?;
+        if tokens == 0
+            || hc_mult == 0
+            || hc_mult > 16
+            || state.len != tokens * hc_dim
+            || function.len != hc_mult * hc_dim
+            || scale.len != 1
+            || base.len != hc_mult
+        {
+            return Err(Error::Internal(format!(
+                "CUDA HC head device shape mismatch: tokens={tokens} state={} function={} scale={} base={} hc={hc_mult} hidden={hidden_size}",
+                state.len,
+                function.len,
+                scale.len,
+                base.len
+            )));
+        }
+        let mut hidden = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            tokens * hidden_size,
+        ))?;
+        self.launched(self.module.hc_head_f32(
+            &self.stream,
+            LaunchConfig {
+                grid_dim: (tokens as u32, 1, 1),
+                block_dim: (256, 1, 1),
+                shared_mem_bytes: 0,
+            },
+            &state.buffer,
+            &function.buffer,
+            &scale.buffer,
+            &base.buffer,
+            &mut hidden,
+            tokens as u32,
+            hc_mult as u32,
+            hidden_size as u32,
+            eps,
+            norm_eps,
+        ))?;
+        Ok(CudaF32Buffer {
+            buffer: hidden,
+            len: tokens * hidden_size,
+        })
+    }
+
     fn artifact_linear_matvec_device(
         &self,
         handle: &CudaArtifactLinearHandle,
@@ -1484,6 +2449,67 @@ impl CudaArtifactOperatorContext {
                 ))
             }
         }
+    }
+
+    pub fn sparse_attention_sink_from_device(
+        &self,
+        query: &CudaF32Buffer,
+        values: &CudaF32Buffer,
+        topk: &DeviceBuffer<i32>,
+        sink: &CudaF32Buffer,
+        shape: CudaSparseAttentionShape,
+    ) -> Result<CudaF32Buffer> {
+        shape.validate()?;
+        let mut od = cu(DeviceBuffer::<f32>::zeroed(
+            &self.stream,
+            shape.output_elements(),
+        ))?;
+        CudaSparseAttentionExecutor::new(&self.module, &self.stream).sparse_attention_sink_f32(
+            &query.buffer,
+            &values.buffer,
+            topk,
+            &sink.buffer,
+            &mut od,
+            shape,
+        )?;
+        self.record_kernel_launch();
+        Ok(CudaF32Buffer {
+            buffer: od,
+            len: shape.output_elements(),
+        })
+    }
+
+    /// Apply DSV4-style tail rotary embedding (interleaved pairs, YAARN-scaled)
+    /// to a device buffer. `cos_table` and `sin_table` are precomputed for
+    /// `[max_positions, rope_dim/2]` and uploaded once.
+    pub fn rope_tail_from_device(
+        &self,
+        qk: &mut CudaF32Buffer,
+        cos_table: &CudaF32Buffer,
+        sin_table: &CudaF32Buffer,
+        position: u32,
+        heads: u32,
+        head_dim: u32,
+        rope_dim: u32,
+        inverse: bool,
+    ) -> Result<()> {
+        if rope_dim == 0 || rope_dim > head_dim {
+            return Ok(());
+        }
+        let total = heads * head_dim;
+        self.launched(self.module.rope_tail_yaarn(
+            &self.stream,
+            LaunchConfig::for_num_elems(total),
+            &mut qk.buffer,
+            &cos_table.buffer,
+            &sin_table.buffer,
+            total,
+            position,
+            heads,
+            head_dim,
+            rope_dim,
+            if inverse { 1u32 } else { 0u32 },
+        ))
     }
 
     pub fn sparse_attention_sink_f32(

@@ -143,12 +143,15 @@ pub fn cmd_deepseek_v4_generate(
     verbose_tokens: bool,
     chat_prompt: bool,
     json: bool,
+    warmup_tokens: usize,
+    moe_prefetch_experts: usize,
 ) -> anyhow::Result<()> {
     let model_path = Path::new(model_dir);
     let options = DeepSeekV4ReferenceOptions {
         max_layers,
         output_head_chunk_rows,
         expert_reader_max_tensor_bytes: expert_reader_max_slice_mb.saturating_mul(1024 * 1024),
+        moe_prefetch_experts,
     };
     let operator_backend = DeepSeekV4OperatorBackend::parse(backend)?;
     let load_start = Instant::now();
@@ -181,6 +184,8 @@ pub fn cmd_deepseek_v4_generate(
         println!("tokens:     {:?}", prompt_tokens);
         println!("max_new:   {max_new_tokens}");
         println!("max_layers: {max_layers}");
+        println!("warmup:    {warmup_tokens}");
+        println!("prefetch:  {moe_prefetch_experts} experts/layer");
         println!("load:       {:.3} ms", load_elapsed.as_secs_f64() * 1000.0);
         println!("--- output ---");
     }
@@ -188,6 +193,9 @@ pub fn cmd_deepseek_v4_generate(
     let mut generated = Vec::new();
     let mut prefill_elapsed = Duration::ZERO;
     let mut decode_elapsed = Duration::ZERO;
+    let mut warmup_counters_baseline: Option<
+        ferrule_runtime::models::deepseek_v4::DeepSeekV4OperatorRuntimeCounters,
+    > = None;
 
     if max_new_tokens > 0 {
         let prefill_start = Instant::now();
@@ -198,6 +206,33 @@ pub fn cmd_deepseek_v4_generate(
         }
 
         let eos = runner.model.tokenizer.eos_token_id();
+
+        // ── Warmup: populate GPU expert residency ───────────────────────
+        // Run extra decode tokens that are NOT counted in decode timing.
+        // This loads + uploads experts into GPU residency so the timed
+        // decode loop hits resident experts instead of cold-loading from disk.
+        let warmup_counters_baseline_inner = if warmup_tokens > 0 {
+            let warmup_start = Instant::now();
+            let mut warmup_top = top.clone();
+            for _ in 0..warmup_tokens {
+                let next = warmup_top[0];
+                warmup_top = runner.decode_token_topk(next.token_id, 1)?;
+                if warmup_top.is_empty() {
+                    break;
+                }
+            }
+            if !json {
+                eprintln!(
+                    "[warmup] {warmup_tokens} tokens in {:.3}s",
+                    warmup_start.elapsed().as_secs_f64()
+                );
+            }
+            Some(runner.operator_runtime_counters())
+        } else {
+            None
+        };
+        warmup_counters_baseline = warmup_counters_baseline_inner;
+
         let decode_start = Instant::now();
         for step in 0..max_new_tokens {
             let next = top[0];
@@ -254,22 +289,103 @@ pub fn cmd_deepseek_v4_generate(
             })
             .collect::<Vec<_>>();
         let op_counters = runner.operator_runtime_counters();
+        // If warmup ran, subtract warmup baseline so counters reflect
+        // only the timed decode phase.
+        let (expert_loads, expert_load_bytes, expert_evictions, expert_selected) =
+            match &warmup_counters_baseline {
+                Some(base) => (
+                    op_counters.expert_loads.saturating_sub(base.expert_loads),
+                    op_counters
+                        .expert_load_bytes
+                        .saturating_sub(base.expert_load_bytes),
+                    op_counters
+                        .expert_evictions
+                        .saturating_sub(base.expert_evictions),
+                    op_counters
+                        .expert_selected
+                        .saturating_sub(base.expert_selected),
+                ),
+                None => (
+                    op_counters.expert_loads,
+                    op_counters.expert_load_bytes,
+                    op_counters.expert_evictions,
+                    op_counters.expert_selected,
+                ),
+            };
+        let (kernel_launches, h2d_copies, h2d_bytes, d2h_copies, d2h_bytes, uploads, upload_bytes) =
+            match &warmup_counters_baseline {
+                Some(base) => (
+                    op_counters
+                        .kernel_launches
+                        .saturating_sub(base.kernel_launches),
+                    op_counters
+                        .host_to_device_copies
+                        .saturating_sub(base.host_to_device_copies),
+                    op_counters
+                        .host_to_device_bytes
+                        .saturating_sub(base.host_to_device_bytes),
+                    op_counters
+                        .device_to_host_copies
+                        .saturating_sub(base.device_to_host_copies),
+                    op_counters
+                        .device_to_host_bytes
+                        .saturating_sub(base.device_to_host_bytes),
+                    op_counters
+                        .artifact_uploads
+                        .saturating_sub(base.artifact_uploads),
+                    op_counters
+                        .artifact_upload_bytes
+                        .saturating_sub(base.artifact_upload_bytes),
+                ),
+                None => (
+                    op_counters.kernel_launches,
+                    op_counters.host_to_device_copies,
+                    op_counters.host_to_device_bytes,
+                    op_counters.device_to_host_copies,
+                    op_counters.device_to_host_bytes,
+                    op_counters.artifact_uploads,
+                    op_counters.artifact_upload_bytes,
+                ),
+            };
         let mut counters = RuntimeCounters::default();
         counters.record_load(load_elapsed);
         counters.record_prefill(prefill_elapsed);
         counters.record_decode(decode_elapsed);
-        counters.record_kernel_launches(op_counters.kernel_launches);
-        counters.transfers.host_to_device_copies = op_counters.host_to_device_copies;
-        counters.transfers.host_to_device_bytes = op_counters.host_to_device_bytes;
-        counters.transfers.device_to_host_copies = op_counters.device_to_host_copies;
-        counters.transfers.device_to_host_bytes = op_counters.device_to_host_bytes;
-        counters.record_artifact_uploads(
-            op_counters.artifact_uploads,
-            op_counters.artifact_upload_bytes,
+        counters.record_kernel_launches(kernel_launches);
+        counters.transfers.host_to_device_copies = h2d_copies;
+        counters.transfers.host_to_device_bytes = h2d_bytes;
+        counters.transfers.device_to_host_copies = d2h_copies;
+        counters.transfers.device_to_host_bytes = d2h_bytes;
+        counters.record_artifact_uploads(uploads, upload_bytes);
+        counters.record_selected_experts(expert_selected);
+        counters.record_expert_loads(expert_loads, expert_load_bytes);
+        counters.record_expert_evictions(expert_evictions);
+        let (host_cache_hits, host_cache_misses, host_cache_evictions) =
+            match &warmup_counters_baseline {
+                Some(base) => (
+                    op_counters
+                        .expert_host_cache_hits
+                        .saturating_sub(base.expert_host_cache_hits),
+                    op_counters
+                        .expert_host_cache_misses
+                        .saturating_sub(base.expert_host_cache_misses),
+                    op_counters
+                        .expert_host_cache_evictions
+                        .saturating_sub(base.expert_host_cache_evictions),
+                ),
+                None => (
+                    op_counters.expert_host_cache_hits,
+                    op_counters.expert_host_cache_misses,
+                    op_counters.expert_host_cache_evictions,
+                ),
+            };
+        counters.set_expert_host_cache(
+            host_cache_hits,
+            host_cache_misses,
+            host_cache_evictions,
+            op_counters.expert_host_cache_entries,
+            op_counters.expert_host_cache_bytes,
         );
-        counters.record_selected_experts(op_counters.expert_selected);
-        counters.record_expert_loads(op_counters.expert_loads, op_counters.expert_load_bytes);
-        counters.record_expert_evictions(op_counters.expert_evictions);
         counters.set_expert_residency(resident_experts, resident_bytes);
         let summary =
             RuntimeBenchSummary::new(None, None, counters, prompt_tokens.len(), generated.len());
@@ -282,6 +398,8 @@ pub fn cmd_deepseek_v4_generate(
             "generated_tokens": generated.len(),
             "generated_token_ids": generated,
             "max_layers": max_layers,
+            "warmup_tokens": warmup_tokens,
+            "moe_prefetch_experts": moe_prefetch_experts,
             "bound_layers": runner.bound_layer_count(),
             "position": runner.position(),
             "layers": layers,
@@ -325,6 +443,7 @@ pub fn cmd_deepseek_v4_probe(
         max_layers,
         output_head_chunk_rows,
         expert_reader_max_tensor_bytes: expert_reader_max_slice_mb.saturating_mul(1024 * 1024),
+        moe_prefetch_experts: 0,
     };
 
     let operator_backend = DeepSeekV4OperatorBackend::parse(backend)?;

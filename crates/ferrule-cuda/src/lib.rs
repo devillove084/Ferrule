@@ -19,3 +19,9 @@ pub mod graph;
 pub mod kernels;
 pub mod transformer;
 pub mod weightpack;
+
+/// Re-export `CudaStream` so downstream crates (e.g. `ferrule-runtime`) can
+/// use `ferrule_cuda::CudaStream` without directly depending on `cuda-core`.
+pub use cuda_core::stream::CudaStream;
+/// Re-export `CudaContext` for the same reason.
+pub use cuda_core::CudaContext;

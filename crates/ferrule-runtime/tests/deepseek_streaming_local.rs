@@ -665,6 +665,7 @@ fn local_deepseek_v4_reference_runner_decodes_top_level_logits_rows_if_present()
         max_layers: 0,
         output_head_chunk_rows: 8,
         expert_reader_max_tensor_bytes: 64 * 1024 * 1024,
+        moe_prefetch_experts: 0,
     };
     let mut runner =
         DeepSeekV4ReferenceRunner::load_hf_with_options(&model_dir, 64 * 1024 * 1024, options)
@@ -689,6 +690,7 @@ fn local_deepseek_v4_reference_runner_prefills_prompt_top_level_if_present() {
         max_layers: 0,
         output_head_chunk_rows: 8,
         expert_reader_max_tensor_bytes: 64 * 1024 * 1024,
+        moe_prefetch_experts: 0,
     };
     let mut runner =
         DeepSeekV4ReferenceRunner::load_hf_with_options(&model_dir, 64 * 1024 * 1024, options)
@@ -719,6 +721,7 @@ fn local_deepseek_v4_reference_runner_decodes_one_real_layer_if_present() {
         max_layers: 1,
         output_head_chunk_rows: 8,
         expert_reader_max_tensor_bytes: 64 * 1024 * 1024,
+        moe_prefetch_experts: 0,
     };
     let mut runner =
         DeepSeekV4ReferenceRunner::load_hf_with_options(&model_dir, 128 * 1024 * 1024, options)
