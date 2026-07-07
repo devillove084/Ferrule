@@ -3,13 +3,16 @@ use ferrule_model::{ModelDescriptor, ModelFamily};
 use ferrule_runtime::{
     detect_chat_template,
     models::deepseek_v4::{
-        DeepSeekV4OperatorBackend, DeepSeekV4ReferenceOptions, DeepSeekV4ReferenceRunner,
+        DeepSeekV4ArtifactModel, DeepSeekV4OperatorBackend, DeepSeekV4ReferenceOptions,
+        DeepSeekV4ReferenceRunner,
     },
     ChatTemplate, GenerationConfig, InferenceEngine, ModelGenerationDefaults, ModelRunner,
     RuntimeRunner, SamplingConfig,
 };
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::thread::JoinHandle;
+use std::time::Instant;
 
 use super::info::print_model_info;
 use super::run::{format_token_display, print_logprobs};
@@ -128,6 +131,10 @@ pub fn cmd_chat(
 fn deepseek_v4_chat_options() -> DeepSeekV4ReferenceOptions {
     DeepSeekV4ReferenceOptions {
         output_head_chunk_rows: 4096,
+        // Match the ROADMAP interactive goal: use the observed per-layer hotset
+        // for predictive residency instead of naive low expert IDs. This improves
+        // steady chat turns while keeping FERRULE_CUDA_MOE_TC available for A/B.
+        moe_prefetch_experts: 8,
         ..DeepSeekV4ReferenceOptions::default()
     }
 }
@@ -139,17 +146,24 @@ fn run_deepseek_v4_chat(
     chat_template: ChatTemplate,
     sampling: &SamplingArgs,
 ) -> anyhow::Result<()> {
-    let runner = DeepSeekV4ReferenceRunner::load_hf_with_options_and_backend(
-        model_path,
-        128 * 1024 * 1024,
-        deepseek_v4_chat_options(),
-        backend,
-    )?;
-
     let sampling_config = sampling.sampling_config();
+    let options = deepseek_v4_chat_options();
     if can_use_deepseek_v4_fast_greedy(&sampling_config, generation) {
-        run_deepseek_v4_greedy_chat_loop(runner, generation, chat_template, sampling)
+        run_deepseek_v4_greedy_chat_loop_lazy(
+            model_path.to_path_buf(),
+            backend,
+            options,
+            generation,
+            chat_template,
+            sampling,
+        )
     } else {
+        let runner = DeepSeekV4ReferenceRunner::load_hf_with_options_and_backend(
+            model_path,
+            128 * 1024 * 1024,
+            options,
+            backend,
+        )?;
         eprintln!(
             "note: DeepSeek-V4 non-greedy/logprob chat uses the full-logits path; use --temp 0 --repeat-penalty 1 --logprobs 0 for the top-k fast path"
         );
@@ -173,8 +187,83 @@ fn can_use_deepseek_v4_fast_greedy(
         && generation.logprobs_k == 0
 }
 
-fn run_deepseek_v4_greedy_chat_loop(
-    mut runner: DeepSeekV4ReferenceRunner,
+struct DeepSeekV4LazyRunner {
+    backend: DeepSeekV4OperatorBackend,
+    options: DeepSeekV4ReferenceOptions,
+    loader: Option<JoinHandle<anyhow::Result<DeepSeekV4ArtifactModel>>>,
+    runner: Option<DeepSeekV4ReferenceRunner>,
+    load_started: Instant,
+    model_info_printed: bool,
+}
+
+impl DeepSeekV4LazyRunner {
+    fn loading(
+        model_path: PathBuf,
+        backend: DeepSeekV4OperatorBackend,
+        options: DeepSeekV4ReferenceOptions,
+    ) -> Self {
+        let load_path = model_path.clone();
+        let loader = std::thread::spawn(move || {
+            Ok(DeepSeekV4ArtifactModel::load_hf_with_limit(
+                &load_path,
+                128 * 1024 * 1024,
+            )?)
+        });
+        Self {
+            backend,
+            options,
+            loader: Some(loader),
+            runner: None,
+            load_started: Instant::now(),
+            model_info_printed: false,
+        }
+    }
+
+    fn position_if_loaded(&self) -> usize {
+        self.runner
+            .as_ref()
+            .map(DeepSeekV4ReferenceRunner::position)
+            .unwrap_or(0)
+    }
+
+    fn runner_mut_if_loaded(&mut self) -> Option<&mut DeepSeekV4ReferenceRunner> {
+        self.runner.as_mut()
+    }
+
+    fn ensure_loaded(&mut self) -> anyhow::Result<&mut DeepSeekV4ReferenceRunner> {
+        if self.runner.is_none() {
+            let loader = self
+                .loader
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("DeepSeek-V4 model loader was not started"))?;
+            let model = loader
+                .join()
+                .map_err(|_| anyhow::anyhow!("DeepSeek-V4 model loader panicked"))??;
+            let runner = DeepSeekV4ReferenceRunner::new_with_operator_backend(
+                model,
+                self.options,
+                self.backend,
+            )?;
+            self.runner = Some(runner);
+        }
+        if !self.model_info_printed {
+            if let Some(runner) = self.runner.as_ref() {
+                print_model_info(&runner.model_info());
+                eprintln!(
+                    "[load] DeepSeek-V4 artifact loaded in {:.2}s; CUDA runtime initialized on first use",
+                    self.load_started.elapsed().as_secs_f64()
+                );
+            }
+            self.model_info_printed = true;
+        }
+        Ok(self.runner.as_mut().expect("runner initialized above"))
+    }
+}
+
+fn run_deepseek_v4_greedy_chat_loop_lazy(
+    model_path: PathBuf,
+    backend: DeepSeekV4OperatorBackend,
+    options: DeepSeekV4ReferenceOptions,
     generation: &GenerationConfig,
     chat_template: ChatTemplate,
     sampling: &SamplingArgs,
@@ -182,11 +271,14 @@ fn run_deepseek_v4_greedy_chat_loop(
     use console::style;
     use rustyline::error::ReadlineError;
 
-    print_model_info(&runner.model_info());
+    let mut lazy_runner = DeepSeekV4LazyRunner::loading(model_path, backend, options);
     println!(
         "{} Type /exit or Ctrl-D to quit. Template: {}. DeepSeek-V4 greedy top-k fast path.",
         style("Chat ready.").cyan(),
         chat_template.name()
+    );
+    println!(
+        "  model is loading in the background; the first prompt waits only if loading is not finished"
     );
     println!("  /reset      clear session state\n  /stats      show session stats\n  /experts    show DSV4 layer/cache stats\n  /ctx        show context window usage");
 
@@ -207,42 +299,57 @@ fn run_deepseek_v4_greedy_chat_loop(
             break;
         }
         if input == "/reset" || input == "/clear" {
-            runner.reset_session()?;
+            if let Some(runner) = lazy_runner.runner_mut_if_loaded() {
+                runner.reset_session()?;
+            }
             first_turn = true;
             generated_total = 0;
             println!("{} session reset.", style("Ferrule>").cyan().bold());
             continue;
         }
         if input == "/stats" {
-            println!(
-                "{} position={} generated={} bound_layers={}",
-                style("Ferrule>").cyan().bold(),
-                runner.position(),
-                generated_total,
-                runner.bound_layer_count()
-            );
+            if let Some(runner) = lazy_runner.runner.as_ref() {
+                println!(
+                    "{} position={} generated={} bound_layers={}",
+                    style("Ferrule>").cyan().bold(),
+                    runner.position(),
+                    generated_total,
+                    runner.bound_layer_count()
+                );
+            } else {
+                println!(
+                    "{} model loading for {:.1}s; generated=0 bound_layers=0",
+                    style("Ferrule>").cyan().bold(),
+                    lazy_runner.load_started.elapsed().as_secs_f64()
+                );
+            }
             continue;
         }
         if input == "/experts" {
-            match runner.expert_report() {
-                Some(report) => print!("{report}"),
-                None => println!(
-                    "{} expert report not available.",
-                    style("Ferrule>").cyan().bold()
-                ),
+            if let Some(runner) = lazy_runner.runner.as_ref() {
+                match runner.expert_report() {
+                    Some(report) => print!("{report}"),
+                    None => println!(
+                        "{} expert report not available.",
+                        style("Ferrule>").cyan().bold()
+                    ),
+                }
+            } else {
+                println!("{} model still loading.", style("Ferrule>").cyan().bold());
             }
             continue;
         }
         if input == "/ctx" {
+            let position = lazy_runner.position_if_loaded();
             let usage_pct = if generation.ctx_size > 0 {
-                runner.position() as f64 / generation.ctx_size as f64 * 100.0
+                position as f64 / generation.ctx_size as f64 * 100.0
             } else {
                 0.0
             };
             println!(
                 "{} context: {} / {} tokens ({:.0}%)",
                 style("Ferrule>").cyan().bold(),
-                runner.position(),
+                position,
                 generation.ctx_size,
                 usage_pct
             );
@@ -250,6 +357,7 @@ fn run_deepseek_v4_greedy_chat_loop(
         }
 
         let _ = rl.add_history_entry(input);
+        let runner = lazy_runner.ensure_loaded()?;
         let prompt = chat_template.format_turn(input, first_turn);
         let prompt_tokens = runner.encode(&prompt)?;
         ensure_deepseek_v4_context_room(
@@ -260,7 +368,7 @@ fn run_deepseek_v4_greedy_chat_loop(
         first_turn = false;
 
         let prefill_start = std::time::Instant::now();
-        let mut top = runner.prefill_tokens_topk_batched(&prompt_tokens, 1)?;
+        let mut top = runner.prefill_tokens_topk_interactive(&prompt_tokens, 1)?;
         if top.is_empty() {
             println!();
             continue;

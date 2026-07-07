@@ -1,8 +1,24 @@
 //! CUDA graph capture for decode — enables kernel replay without per-step launch overhead.
 //!
-//! Requires CUDA driver ≥ 10.0. Feature-gated behind `FERRULE_CUDA_GRAPH=1`.
+//! This module is built on top of cuda-oxide's high-level CUDA Graph API
+//! (`CudaStreamCaptureExt`, `CudaGraph`, `CudaGraphExec`, `CachedGraphExec`).
+//! Two entry points are provided:
+//!
+//! - [`capture_decode_graph`] / [`CudaGraphHandle`]: one-shot capture of a
+//!   decode step into a replayable executable. Captured once, replayed many.
+//! - [`CachedDecodeGraph`]: llama.cpp-style auto-warmup replay. The first run
+//!   executes directly (warmup); if the workload is stable, the second run
+//!   captures a graph, and subsequent runs replay it. Property changes
+//!   (data pointers / shapes) invalidate and re-capture automatically.
+//!
+//! Feature-gated behind `FERRULE_CUDA_GRAPH=1`.
 
+use cuda_core::graph::{
+    CachedGraphExec, CaptureMode, CaptureModeGuard, CudaGraph, CudaGraphExec, CudaStreamCaptureExt,
+    GraphStrategy,
+};
 use cuda_core::stream::CudaStream;
+use cuda_core::DriverError;
 use ferrule_core::{Error, Result};
 use std::sync::Arc;
 
@@ -18,7 +34,12 @@ pub fn flash_attn_enabled() -> bool {
     std::env::var_os("FERRULE_FLASH_ATTN").is_some()
 }
 
-// ── CUDA graph capture ─────────────────────────────────────────────────
+/// Convert a cuda-oxide `DriverError` into a ferrule `Error`.
+fn drv(e: DriverError) -> Error {
+    Error::Internal(format!("CUDA graph: {e:?}"))
+}
+
+// ── One-shot capture: CudaGraphHandle ─────────────────────────────────
 
 /// An owned, instantiated CUDA graph that can be replayed onto a stream.
 ///
@@ -26,15 +47,20 @@ pub fn flash_attn_enabled() -> bool {
 /// be launched repeatedly with [`CudaGraphHandle::launch`] without
 /// re-recording kernels — eliminating per-step kernel-launch overhead
 /// during autoregressive decode.
+///
+/// Backed by cuda-oxide's `CudaGraphExec`.
 pub struct CudaGraphHandle {
-    graph: cuda_bindings::CUgraph,
-    instance: cuda_bindings::CUgraphExec,
+    /// The executable graph (instantiated from `graph`).
+    exec: CudaGraphExec,
+    /// Retain the source graph so the executable's topology stays valid for
+    /// future `update()` calls. `CudaGraphExec` does not own the `CudaGraph`.
+    _graph: CudaGraph,
     /// Keep the parent context alive so the CUDA context outlives the graph.
     _ctx: Arc<cuda_core::CudaContext>,
 }
 
-// CUgraph / CUgraphExec are raw pointers; the driver is thread-safe for
-// graph launch from any host thread bound to the owning context.
+// CudaGraphExec is Send+Sync via cuda-oxide; we re-assert it here for the
+// composite handle.
 unsafe impl Send for CudaGraphHandle {}
 unsafe impl Sync for CudaGraphHandle {}
 
@@ -44,29 +70,42 @@ impl CudaGraphHandle {
     /// The stream must belong to the same CUDA context that was active
     /// when the graph was captured.
     pub fn launch(&self, stream: &CudaStream) -> Result<()> {
-        let result = unsafe { cuda_bindings::cuGraphLaunch(self.instance, stream.cu_stream()) };
-        if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
-            return Err(Error::Internal(format!("cuGraphLaunch failed: {result}")));
-        }
-        Ok(())
+        self.exec.launch(stream).map_err(drv)
     }
-}
 
-impl Drop for CudaGraphHandle {
-    fn drop(&mut self) {
-        unsafe {
-            if !self.instance.is_null() {
-                let _ = cuda_bindings::cuGraphExecDestroy(self.instance);
-            }
-            if !self.graph.is_null() {
-                let _ = cuda_bindings::cuGraphDestroy(self.graph);
-            }
+    /// Upload the graph's execution nodes to the device ahead of the first
+    /// launch on `stream`. Reduces first-launch latency; optional.
+    pub fn upload(&self, stream: &CudaStream) -> Result<()> {
+        self.exec.upload(stream).map_err(drv)
+    }
+
+    /// Attempt to update the executable in-place to match `updated_graph`.
+    ///
+    /// Returns `Ok(true)` if the update succeeded, `Ok(false)` if the
+    /// topology changed and the caller must re-capture, or an `Err` on
+    /// driver failure. Useful when only kernel parameters (e.g. input
+    /// buffer pointers) change between decode steps.
+    pub fn update(&self, updated_graph: &CudaGraph) -> Result<bool> {
+        use cuda_core::graph::GraphUpdateResult;
+        match self.exec.update(updated_graph).map_err(drv)? {
+            GraphUpdateResult::Success => Ok(true),
+            // Topology / node-type / function changes require re-capture.
+            _ => Ok(false),
         }
+    }
+
+    /// Borrow the underlying source graph (for `update()` on another handle).
+    pub fn source_graph(&self) -> &CudaGraph {
+        &self._graph
     }
 }
 
 /// Capture all kernel launches enqueued by `capture_fn` on `stream` into
 /// an instantiated [`CudaGraphHandle`] that can be replayed.
+///
+/// Uses `CaptureMode::Relaxed` (matches Ferrule's previous behaviour) and
+/// a [`CaptureModeGuard`] so the capture mode is thread-local and restored
+/// even if `capture_fn` errors.
 ///
 /// # Errors
 ///
@@ -76,58 +115,109 @@ pub fn capture_decode_graph(
     stream: &CudaStream,
     capture_fn: impl FnOnce() -> Result<()>,
 ) -> Result<CudaGraphHandle> {
-    // Begin capture.
-    unsafe {
-        let r = cuda_bindings::cuStreamBeginCapture_v2(
-            stream.cu_stream(),
-            cuda_bindings::CUstreamCaptureMode_enum_CU_STREAM_CAPTURE_MODE_RELAXED,
-        );
-        if r != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
-            return Err(Error::Internal(format!(
-                "cuStreamBeginCapture_v2 failed: {r} (requires CUDA driver ≥ 10.0)"
-            )));
-        }
-    }
+    // Make capture mode thread-local + restore on drop (cuda-oxide best practice).
+    let _guard = CaptureModeGuard::new(CaptureMode::Relaxed).map_err(drv)?;
 
-    // Record the compute graph.
+    // Begin capture.
+    stream.begin_capture(CaptureMode::Relaxed).map_err(drv)?;
+
+    // Record the compute graph. If it errors, end capture + destroy to avoid
+    // leaving the stream in a broken capture state.
     if let Err(e) = capture_fn() {
-        // Attempt to end capture to avoid leaving the stream in a broken state.
-        let mut graph: cuda_bindings::CUgraph = std::ptr::null_mut();
-        unsafe {
-            let _ = cuda_bindings::cuStreamEndCapture(stream.cu_stream(), &mut graph);
-            if !graph.is_null() {
-                let _ = cuda_bindings::cuGraphDestroy(graph);
-            }
-        }
+        let _ = stream.end_capture();
         return Err(e);
     }
 
     // End capture and obtain the graph.
-    let mut graph: cuda_bindings::CUgraph = std::ptr::null_mut();
-    unsafe {
-        let r = cuda_bindings::cuStreamEndCapture(stream.cu_stream(), &mut graph);
-        if r != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
-            return Err(Error::Internal(format!("cuStreamEndCapture failed: {r}")));
-        }
-    }
+    let graph = stream.end_capture().map_err(drv)?;
 
     // Instantiate the graph for launch.
-    let mut instance: cuda_bindings::CUgraphExec = std::ptr::null_mut();
-    unsafe {
-        let r = cuda_bindings::cuGraphInstantiateWithFlags(&mut instance, graph, 0);
-        if r != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
-            cuda_bindings::cuGraphDestroy(graph);
-            return Err(Error::Internal(format!(
-                "cuGraphInstantiateWithFlags failed: {r}"
-            )));
+    let exec = graph.instantiate().map_err(drv)?;
+
+    Ok(CudaGraphHandle {
+        exec,
+        _graph: graph,
+        _ctx: stream.context().clone(),
+    })
+}
+
+// ── Auto-warmup replay: CachedDecodeGraph ─────────────────────────────
+
+/// A decode-step graph with llama.cpp-style auto-warmup and change detection.
+///
+/// Wraps cuda-oxide's [`CachedGraphExec`] with [`GraphStrategy::AutoCapture`]:
+///
+/// 1. First `launch_or_capture` call executes directly (warmup).
+/// 2. If the recorded properties are stable, the second call captures a graph.
+/// 3. Subsequent calls replay the captured graph.
+/// 4. If [`set_properties`] changes the data pointers / shapes, the graph is
+///    invalidated and the warmup cycle restarts.
+///
+/// This is the recommended path for stable decode buckets once all host
+/// boundaries are eliminated. For decode steps whose pointer set changes
+/// every token (e.g. incremental KV append), either keep the pointer stable
+/// across the bucket or fall back to [`capture_decode_graph`].
+///
+/// **Stream requirement:** auto-capture must run on a *non-default* stream
+/// (`CudaContext::new_stream`). The legacy default stream rejects repeat
+/// capture with `CUDA_ERROR_STREAM_CAPTURE_UNSUPPORTED` (900).
+pub struct CachedDecodeGraph {
+    inner: CachedGraphExec,
+}
+
+impl CachedDecodeGraph {
+    /// Create a new auto-warmup decode graph bound to `ctx`.
+    pub fn new(ctx: &Arc<cuda_core::CudaContext>) -> Self {
+        Self {
+            inner: CachedGraphExec::new(ctx, GraphStrategy::AutoCapture),
         }
     }
 
-    Ok(CudaGraphHandle {
-        graph,
-        instance,
-        _ctx: stream.context().clone(),
-    })
+    /// Record the properties that define graph identity. If these change
+    /// between calls, any captured graph is invalidated.
+    ///
+    /// `data_ptrs` are the device pointers the graph reads/writes (e.g.
+    /// input embedding, hidden, KV, hc_state buffers); `shapes` are the
+    /// corresponding element counts. Keep these stable across replay steps
+    /// to keep the graph cached.
+    pub fn set_properties(&mut self, data_ptrs: &[*const std::ffi::c_void], shapes: &[u64]) {
+        self.inner.set_properties(data_ptrs, shapes);
+    }
+
+    /// True if a captured graph is ready for instant replay.
+    pub fn has_cached_graph(&self) -> bool {
+        self.inner.has_cached_graph()
+    }
+
+    /// Invalidate any captured graph, forcing re-capture on the next launch.
+    pub fn invalidate(&mut self) {
+        self.inner.invalidate();
+    }
+
+    /// Execute one decode step using the auto-warmup strategy.
+    ///
+    /// - `capture_fn`: called with the stream in capture mode to record the
+    ///   decode step. Must NOT synchronize the stream or do host work that
+    ///   can't be captured.
+    /// - `execute_fn`: called with the stream to execute the decode step
+    ///   directly (warmup / fallback).
+    pub fn launch_or_capture<C, E>(
+        &mut self,
+        stream: &CudaStream,
+        capture_fn: C,
+        execute_fn: E,
+    ) -> Result<()>
+    where
+        C: FnOnce(&CudaStream) -> std::result::Result<(), DriverError>,
+        E: FnOnce(&CudaStream) -> std::result::Result<(), DriverError>,
+    {
+        // Relaxed thread capture mode is required for default-stream
+        // capture; the guard restores the previous mode on drop.
+        let _guard = CaptureModeGuard::new(CaptureMode::Relaxed).map_err(drv)?;
+        self.inner
+            .launch_or_capture(stream, capture_fn, execute_fn)
+            .map_err(drv)
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────
@@ -189,7 +279,7 @@ mod tests {
                 // If driver < 10.0, capture may fail; that is expected.
                 let msg = format!("{e}");
                 assert!(
-                    msg.contains("CUDA driver") || msg.contains("capture"),
+                    msg.contains("CUDA driver") || msg.contains("capture") || msg.contains("graph"),
                     "unexpected error: {msg}"
                 );
             }
@@ -210,13 +300,12 @@ mod tests {
         ctx.bind_to_thread().ok();
 
         let result = capture_decode_graph(&stream, || Ok(()));
-        // If capture fails (e.g. old driver), it should return an error with
-        // a message mentioning the driver version requirement.
+        // If capture fails (e.g. old driver), it should return an error.
         if let Err(e) = &result {
             let msg = format!("{e}");
             assert!(
-                msg.contains("10.0") || msg.contains("capture") || msg.contains("driver"),
-                "error message should mention driver version: {msg}"
+                msg.contains("capture") || msg.contains("driver") || msg.contains("graph"),
+                "error message should mention capture/driver/graph: {msg}"
             );
         }
         // If capture succeeds (modern driver), that's also fine.
@@ -276,16 +365,56 @@ mod tests {
                 );
             }
             Err(e) => {
-                // Some CUDA default-stream / driver combinations reject capture before
-                // the callback is invoked. That is covered by the unsupported-driver
-                // tests above; this test only checks preservation once the callback ran.
                 let msg = format!("{e}");
                 assert!(
-                    msg.contains("capture") || msg.contains("driver") || msg.contains("10.0"),
+                    msg.contains("capture") || msg.contains("driver") || msg.contains("graph"),
                     "unexpected pre-callback capture error: {msg}"
                 );
             }
             Ok(_) => panic!("capture_fn returned an error but graph capture succeeded"),
         }
+    }
+
+    #[test]
+    fn cached_decode_graph_warmup_then_capture() {
+        let ctx = match cuda_core::CudaContext::new(0) {
+            Ok(c) => c,
+            Err(_) => {
+                eprintln!("skipping cached_decode_graph_warmup_then_capture: no CUDA device");
+                return;
+            }
+        };
+        ctx.bind_to_thread().ok();
+        // Graph capture requires a non-default stream.
+        let stream = ctx.new_stream();
+        let stream = stream.expect("new_stream");
+
+        let mut cached = CachedDecodeGraph::new(&ctx);
+        // Stable empty workload: warmup (run 1, no graph), then capture (run 2),
+        // then replay (run 3). Neither closure synchronizes — during capture
+        // that is forbidden, and for warmup it is unnecessary for an empty graph.
+        let exec = |_s: &CudaStream| Ok::<(), DriverError>(());
+        let cap = |_s: &CudaStream| Ok::<(), DriverError>(());
+
+        // Run 1: warmup, direct.
+        cached.launch_or_capture(&stream, cap, exec).expect("run 1");
+        assert!(
+            !cached.has_cached_graph(),
+            "no graph after first warmup run"
+        );
+
+        // Run 2: should capture.
+        cached.launch_or_capture(&stream, cap, exec).expect("run 2");
+        // After the second stable run the graph is captured and launched.
+        assert!(
+            cached.has_cached_graph(),
+            "graph should be captured after 2nd run"
+        );
+
+        // Run 3: replay.
+        cached.launch_or_capture(&stream, cap, exec).expect("run 3");
+        assert!(cached.has_cached_graph());
+
+        stream.synchronize().expect("final sync");
     }
 }

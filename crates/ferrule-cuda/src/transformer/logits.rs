@@ -30,18 +30,22 @@ impl CudaTransformerExecutor<'_> {
         } = &mut model.scratch;
 
         // Final layer norm.
-        cu(m.rms_norm_fused(s, cfg1(d), hidden, &model.final_norm, normed, d as u32, eps))?;
+        cu(unsafe {
+            m.rms_norm_fused(s, cfg1(d), hidden, &model.final_norm, normed, d as u32, eps)
+        })?;
 
         // lm_head on GPU.
-        cu(m.gemv_f32(
-            s,
-            LaunchConfig::for_num_elems(vocab as u32),
-            normed,
-            &model.lm_head,
-            logits,
-            vocab as u32,
-            d as u32,
-        ))?;
+        cu(unsafe {
+            m.gemv_f32(
+                s,
+                LaunchConfig::for_num_elems(vocab as u32),
+                normed,
+                &model.lm_head,
+                logits,
+                vocab as u32,
+                d as u32,
+            )
+        })?;
 
         // Optional GPU vocab top-K. Opt-in because returning sparse logits
         // changes full-distribution sampling semantics.
@@ -57,15 +61,17 @@ impl CudaTransformerExecutor<'_> {
                 block_dim: (1, 1, 1),
                 shared_mem_bytes: 0,
             };
-            cu(m.topk_vocab(
-                s,
-                one_block,
-                logits,
-                topk_vocab_idx,
-                topk_vocab_val,
-                vocab as u32,
-                k,
-            ))?;
+            cu(unsafe {
+                m.topk_vocab(
+                    s,
+                    one_block,
+                    logits,
+                    topk_vocab_idx,
+                    topk_vocab_val,
+                    vocab as u32,
+                    k,
+                )
+            })?;
             let idx = cu(topk_vocab_idx.to_host_vec(s))?;
             let val = cu(topk_vocab_val.to_host_vec(s))?;
             let mut full = vec![f32::NEG_INFINITY; vocab];

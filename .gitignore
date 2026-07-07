@@ -50,3 +50,4 @@ __pycache__/
 # IDE / editor state
 .idea/
 .vscode/
+*.options

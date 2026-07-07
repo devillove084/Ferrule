@@ -3,9 +3,10 @@
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use cuda_core::stream::CudaStream;
-use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig};
+use cuda_core::{CudaContext, DeviceBuffer, DeviceCopy, LaunchConfig};
 use ferrule_core::{Error, Result};
 use ferrule_quant::QuantType;
 
@@ -29,6 +30,17 @@ pub struct CudaOpCounters {
     pub device_to_host_bytes: u64,
     pub artifact_uploads: u64,
     pub artifact_upload_bytes: u64,
+    pub moe_calls: u64,
+    pub moe_tc_calls: u64,
+    pub moe_scalar_calls: u64,
+    pub moe_reduce_calls: u64,
+    pub moe_total_us: u64,
+    pub moe_pointer_upload_us: u64,
+    pub moe_input_prepare_us: u64,
+    pub moe_gate_up_us: u64,
+    pub moe_swiglu_us: u64,
+    pub moe_hidden_pack_us: u64,
+    pub moe_down_us: u64,
 }
 
 #[derive(Default)]
@@ -40,6 +52,17 @@ struct CudaOpCounterCells {
     device_to_host_bytes: Cell<u64>,
     artifact_uploads: Cell<u64>,
     artifact_upload_bytes: Cell<u64>,
+    moe_calls: Cell<u64>,
+    moe_tc_calls: Cell<u64>,
+    moe_scalar_calls: Cell<u64>,
+    moe_reduce_calls: Cell<u64>,
+    moe_total_us: Cell<u64>,
+    moe_pointer_upload_us: Cell<u64>,
+    moe_input_prepare_us: Cell<u64>,
+    moe_gate_up_us: Cell<u64>,
+    moe_swiglu_us: Cell<u64>,
+    moe_hidden_pack_us: Cell<u64>,
+    moe_down_us: Cell<u64>,
 }
 
 impl CudaOpCounterCells {
@@ -52,6 +75,17 @@ impl CudaOpCounterCells {
             device_to_host_bytes: self.device_to_host_bytes.get(),
             artifact_uploads: self.artifact_uploads.get(),
             artifact_upload_bytes: self.artifact_upload_bytes.get(),
+            moe_calls: self.moe_calls.get(),
+            moe_tc_calls: self.moe_tc_calls.get(),
+            moe_scalar_calls: self.moe_scalar_calls.get(),
+            moe_reduce_calls: self.moe_reduce_calls.get(),
+            moe_total_us: self.moe_total_us.get(),
+            moe_pointer_upload_us: self.moe_pointer_upload_us.get(),
+            moe_input_prepare_us: self.moe_input_prepare_us.get(),
+            moe_gate_up_us: self.moe_gate_up_us.get(),
+            moe_swiglu_us: self.moe_swiglu_us.get(),
+            moe_hidden_pack_us: self.moe_hidden_pack_us.get(),
+            moe_down_us: self.moe_down_us.get(),
         }
     }
 
@@ -63,6 +97,17 @@ impl CudaOpCounterCells {
         self.device_to_host_bytes.set(0);
         self.artifact_uploads.set(0);
         self.artifact_upload_bytes.set(0);
+        self.moe_calls.set(0);
+        self.moe_tc_calls.set(0);
+        self.moe_scalar_calls.set(0);
+        self.moe_reduce_calls.set(0);
+        self.moe_total_us.set(0);
+        self.moe_pointer_upload_us.set(0);
+        self.moe_input_prepare_us.set(0);
+        self.moe_gate_up_us.set(0);
+        self.moe_swiglu_us.set(0);
+        self.moe_hidden_pack_us.set(0);
+        self.moe_down_us.set(0);
     }
 
     fn add_kernel_launch(&self) {
@@ -90,6 +135,58 @@ impl CudaOpCounterCells {
         self.artifact_upload_bytes
             .set(self.artifact_upload_bytes.get().saturating_add(bytes));
     }
+
+    fn add_moe_call(&self, path: CudaMoeExecutionPath) {
+        self.moe_calls.set(self.moe_calls.get().saturating_add(1));
+        match path {
+            CudaMoeExecutionPath::TensorCore => self
+                .moe_tc_calls
+                .set(self.moe_tc_calls.get().saturating_add(1)),
+            CudaMoeExecutionPath::Scalar => self
+                .moe_scalar_calls
+                .set(self.moe_scalar_calls.get().saturating_add(1)),
+            CudaMoeExecutionPath::Reduce => self
+                .moe_reduce_calls
+                .set(self.moe_reduce_calls.get().saturating_add(1)),
+        }
+    }
+
+    fn add_moe_total_us(&self, us: u64) {
+        self.moe_total_us
+            .set(self.moe_total_us.get().saturating_add(us));
+    }
+
+    fn add_moe_pointer_upload_us(&self, us: u64) {
+        self.moe_pointer_upload_us
+            .set(self.moe_pointer_upload_us.get().saturating_add(us));
+    }
+
+    fn add_moe_input_prepare_us(&self, us: u64) {
+        self.moe_input_prepare_us
+            .set(self.moe_input_prepare_us.get().saturating_add(us));
+    }
+
+    fn add_moe_gate_up_us(&self, us: u64) {
+        self.moe_gate_up_us
+            .set(self.moe_gate_up_us.get().saturating_add(us));
+    }
+
+    fn add_moe_swiglu_us(&self, us: u64) {
+        self.moe_swiglu_us
+            .set(self.moe_swiglu_us.get().saturating_add(us));
+    }
+
+    fn add_moe_down_us(&self, us: u64) {
+        self.moe_down_us
+            .set(self.moe_down_us.get().saturating_add(us));
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CudaMoeExecutionPath {
+    TensorCore,
+    Scalar,
+    Reduce,
 }
 
 fn slice_bytes<T>(slice: &[T]) -> u64 {
@@ -98,6 +195,10 @@ fn slice_bytes<T>(slice: &[T]) -> u64 {
 
 fn element_bytes<T>(len: usize) -> u64 {
     (len as u64).saturating_mul(std::mem::size_of::<T>() as u64)
+}
+
+fn duration_us(duration: Duration) -> u64 {
+    duration.as_micros().min(u128::from(u64::MAX)) as u64
 }
 
 pub const ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE: usize = 128;
@@ -230,10 +331,10 @@ pub(crate) fn gemv_quant(
     k: u32,
 ) -> Result<()> {
     match qt {
-        QuantType::Q4_0 => cu(m.gemv_q4(s, cfg, x, packed, scales, y, n, k)),
-        QuantType::Q8_0 => cu(m.gemv_q8(s, cfg, x, packed, scales, y, n, k)),
-        QuantType::Q2S => cu(m.gemv_q2(s, cfg, x, packed, scales, y, n, k)),
-        QuantType::T1S => cu(m.gemv_t1(s, cfg, x, packed, scales, y, n, k)),
+        QuantType::Q4_0 => cu(unsafe { m.gemv_q4(s, cfg, x, packed, scales, y, n, k) }),
+        QuantType::Q8_0 => cu(unsafe { m.gemv_q8(s, cfg, x, packed, scales, y, n, k) }),
+        QuantType::Q2S => cu(unsafe { m.gemv_q2(s, cfg, x, packed, scales, y, n, k) }),
+        QuantType::T1S => cu(unsafe { m.gemv_t1(s, cfg, x, packed, scales, y, n, k) }),
     }
 }
 
@@ -253,16 +354,32 @@ pub(crate) fn gemv_quant_off(
 ) -> Result<()> {
     match qt {
         QuantType::Q4_0 => {
-            cu(m.gemv_q4_off(s, cfg, x, packed, scales, y, n, k, packed_off, scales_off))
+            cu(
+                unsafe {
+                    m.gemv_q4_off(s, cfg, x, packed, scales, y, n, k, packed_off, scales_off)
+                },
+            )
         }
         QuantType::Q8_0 => {
-            cu(m.gemv_q8_off(s, cfg, x, packed, scales, y, n, k, packed_off, scales_off))
+            cu(
+                unsafe {
+                    m.gemv_q8_off(s, cfg, x, packed, scales, y, n, k, packed_off, scales_off)
+                },
+            )
         }
         QuantType::Q2S => {
-            cu(m.gemv_q2_off(s, cfg, x, packed, scales, y, n, k, packed_off, scales_off))
+            cu(
+                unsafe {
+                    m.gemv_q2_off(s, cfg, x, packed, scales, y, n, k, packed_off, scales_off)
+                },
+            )
         }
         QuantType::T1S => {
-            cu(m.gemv_t1_off(s, cfg, x, packed, scales, y, n, k, packed_off, scales_off))
+            cu(
+                unsafe {
+                    m.gemv_t1_off(s, cfg, x, packed, scales, y, n, k, packed_off, scales_off)
+                },
+            )
         }
     }
 }
@@ -543,6 +660,33 @@ pub struct CudaFp4ExpertWorkspace {
     output_size: usize,
 }
 
+/// Reusable workspace for routed FP4 MoE batched execution.
+///
+/// The decode path hits this once per layer per token, so avoiding transient
+/// CUDA allocations here is critical. The workspace owns all per-call scratch
+/// buffers and fixed-size device arrays for selected expert pointers/weights.
+pub struct CudaMoeBatchedWorkspace {
+    gate_ptrs: DeviceBuffer<u64>,
+    gate_scale_ptrs: DeviceBuffer<u64>,
+    up_ptrs: DeviceBuffer<u64>,
+    up_scale_ptrs: DeviceBuffer<u64>,
+    down_ptrs: DeviceBuffer<u64>,
+    down_scale_ptrs: DeviceBuffer<u64>,
+    route_weights: DeviceBuffer<f32>,
+    x_f32: CudaF32Buffer,
+    y_gate: CudaF32Buffer,
+    y_up: CudaF32Buffer,
+    y_hidden: CudaF32Buffer,
+    x_packed: DeviceBuffer<u8>,
+    x_scales: DeviceBuffer<u8>,
+    y_hidden_packed: DeviceBuffer<u8>,
+    y_hidden_scales: DeviceBuffer<u8>,
+    max_experts: usize,
+    input_size: usize,
+    intermediate_size: usize,
+    hidden_size: usize,
+}
+
 impl CudaFp4ExpertWorkspace {
     pub fn intermediate_size(&self) -> usize {
         self.intermediate_size
@@ -554,6 +698,21 @@ impl CudaFp4ExpertWorkspace {
 
     pub fn output(&self) -> &CudaF32Buffer {
         &self.output
+    }
+}
+
+impl CudaMoeBatchedWorkspace {
+    pub fn matches(
+        &self,
+        max_experts: usize,
+        input_size: usize,
+        intermediate_size: usize,
+        hidden_size: usize,
+    ) -> bool {
+        self.max_experts >= max_experts
+            && self.input_size == input_size
+            && self.intermediate_size == intermediate_size
+            && self.hidden_size == hidden_size
     }
 }
 
@@ -635,6 +794,27 @@ impl CudaArtifactOperatorContext {
         graph.launch(&self.stream)
     }
 
+    /// Upload a captured graph's nodes to the device ahead of first launch.
+    pub fn upload_graph(&self, graph: &crate::graph::CudaGraphHandle) -> Result<()> {
+        graph.upload(&self.stream)
+    }
+
+    /// Try to update a captured graph in-place to match `updated_graph`.
+    /// Returns `Ok(true)` if updated, `Ok(false)` if re-capture is needed.
+    pub fn update_graph(
+        &self,
+        graph: &crate::graph::CudaGraphHandle,
+        updated_graph: &cuda_core::graph::CudaGraph,
+    ) -> Result<bool> {
+        graph.update(updated_graph)
+    }
+
+    /// Build a llama.cpp-style auto-warmup cached decode graph bound to this
+    /// context's stream. See [`crate::graph::CachedDecodeGraph`].
+    pub fn cached_decode_graph(&self) -> crate::graph::CachedDecodeGraph {
+        crate::graph::CachedDecodeGraph::new(&self._ctx)
+    }
+
     /// Clone the stream for use with graph capture outside of `&self` borrow.
     pub fn stream_clone(&self) -> Arc<CudaStream> {
         self.stream.clone()
@@ -642,6 +822,12 @@ impl CudaArtifactOperatorContext {
 
     pub fn sync_stream(&self) -> Result<()> {
         cu(self.stream.synchronize())
+    }
+
+    fn moe_timing_enabled(&self) -> bool {
+        std::env::var("FERRULE_CUDA_MOE_TIMING")
+            .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
+            .unwrap_or(false)
     }
 
     pub fn reset_counters(&self) {
@@ -656,6 +842,15 @@ impl CudaArtifactOperatorContext {
         let value = cu(result)?;
         self.record_kernel_launch();
         Ok(value)
+    }
+
+    /// Allocate a device buffer without initializing it.
+    ///
+    /// Use only for scratch buffers that are fully written by subsequent kernels
+    /// before any read. This keeps the unsafe `uninitialized_async` contract in
+    /// one place instead of scattering `cu(unsafe { ... })` through hot paths.
+    fn uninitialized_device_buffer<T: DeviceCopy>(&self, len: usize) -> Result<DeviceBuffer<T>> {
+        cu(unsafe { DeviceBuffer::<T>::uninitialized_async(&self.stream, len) })
     }
 
     fn upload_u8(&self, values: &[u8]) -> Result<DeviceBuffer<u8>> {
@@ -755,6 +950,16 @@ impl CudaArtifactOperatorContext {
         cu(dst.buffer.copy_from_host(&self.stream, src))
     }
 
+    fn copy_u64_into_device_buffer(&self, src: &[u64], dst: &mut DeviceBuffer<u64>) -> Result<()> {
+        self.counters.add_host_to_device(slice_bytes(src));
+        cu(dst.copy_from_host(&self.stream, src))
+    }
+
+    fn copy_f32_into_device_buffer(&self, src: &[f32], dst: &mut DeviceBuffer<f32>) -> Result<()> {
+        self.counters.add_host_to_device(slice_bytes(src));
+        cu(dst.copy_from_host(&self.stream, src))
+    }
+
     /// Copy `src.len()` f32 elements from `src` into `dst` starting at element
     /// `slot_offset_elements`. Launches the `copy_f32_slot` kernel so the copy
     /// is fully device-resident (no host round-trip), which is required for
@@ -774,14 +979,16 @@ impl CudaArtifactOperatorContext {
                 dst.len, slot_offset_elements, src.len
             )));
         }
-        self.launched(self.module.copy_f32_slot(
-            &self.stream,
-            LaunchConfig::for_num_elems(src.len as u32),
-            &src.buffer,
-            &mut dst.buffer,
-            slot_offset_elements as u32,
-            src.len as u32,
-        ))
+        self.launched(unsafe {
+            self.module.copy_f32_slot(
+                &self.stream,
+                LaunchConfig::for_num_elems(src.len as u32),
+                &src.buffer,
+                &mut dst.buffer,
+                slot_offset_elements as u32,
+                src.len as u32,
+            )
+        })
     }
 
     /// Device-side accumulate: `y += scale * x`.
@@ -795,14 +1002,16 @@ impl CudaArtifactOperatorContext {
                 x.len, y.len
             )));
         }
-        self.launched(self.module.saxpy(
-            &self.stream,
-            LaunchConfig::for_num_elems(x.len as u32),
-            scale,
-            &x.buffer,
-            &mut y.buffer,
-            x.len as u32,
-        ))
+        self.launched(unsafe {
+            self.module.saxpy(
+                &self.stream,
+                LaunchConfig::for_num_elems(x.len as u32),
+                scale,
+                &x.buffer,
+                &mut y.buffer,
+                x.len as u32,
+            )
+        })
     }
 
     pub fn upload_artifact_linear(
@@ -1052,20 +1261,22 @@ impl CudaArtifactOperatorContext {
             )));
         }
         let mut output = cu(DeviceBuffer::<f32>::zeroed(&self.stream, output_latent_dim))?;
-        self.launched(self.module.grouped_matvec_f32(
-            &self.stream,
-            LaunchConfig::for_num_elems(checked_u32(
-                output_latent_dim,
-                "grouped_matvec_f32",
-                "output_latent_dim",
-            )?),
-            &context.buffer,
-            &weight.buffer,
-            &mut output,
-            checked_u32(output_latent_dim, "grouped_matvec_f32", "output_latent_dim")?,
-            checked_u32(group_in, "grouped_matvec_f32", "group_in")?,
-            checked_u32(o_lora_rank, "grouped_matvec_f32", "o_lora_rank")?,
-        ))?;
+        self.launched(unsafe {
+            self.module.grouped_matvec_f32(
+                &self.stream,
+                LaunchConfig::for_num_elems(checked_u32(
+                    output_latent_dim,
+                    "grouped_matvec_f32",
+                    "output_latent_dim",
+                )?),
+                &context.buffer,
+                &weight.buffer,
+                &mut output,
+                checked_u32(output_latent_dim, "grouped_matvec_f32", "output_latent_dim")?,
+                checked_u32(group_in, "grouped_matvec_f32", "group_in")?,
+                checked_u32(o_lora_rank, "grouped_matvec_f32", "o_lora_rank")?,
+            )
+        })?;
         Ok(CudaF32Buffer {
             buffer: output,
             len: output_latent_dim,
@@ -1122,15 +1333,17 @@ impl CudaArtifactOperatorContext {
         self.artifact_linear_matvec_into(handle, input, &mut yd)?;
         let mut idx = cu(DeviceBuffer::<f32>::zeroed(&self.stream, top_k))?;
         let mut val = cu(DeviceBuffer::<f32>::zeroed(&self.stream, top_k))?;
-        self.launched(self.module.topk_vocab(
-            &self.stream,
-            one_block_config(256),
-            &yd.buffer,
-            &mut idx,
-            &mut val,
-            handle.shape.out_features() as u32,
-            top_k as u32,
-        ))?;
+        self.launched(unsafe {
+            self.module.topk_vocab(
+                &self.stream,
+                one_block_config(256),
+                &yd.buffer,
+                &mut idx,
+                &mut val,
+                handle.shape.out_features() as u32,
+                top_k as u32,
+            )
+        })?;
         let idx = self.download_f32(&idx, top_k)?;
         let val = self.download_f32(&val, top_k)?;
         Ok(idx
@@ -1166,14 +1379,16 @@ impl CudaArtifactOperatorContext {
                 "invalid CUDA FP8 activation quant shape: len={value_len}, row_width={row_width}, block_size={block_size}"
             )));
         }
-        self.launched(self.module.fp8_e4m3fn_e8m0_quantize_f32_inplace(
-            &self.stream,
-            LaunchConfig::for_num_elems((value_len / block_size) as u32),
-            values,
-            value_len as u32,
-            row_width as u32,
-            block_size as u32,
-        ))
+        self.launched(unsafe {
+            self.module.fp8_e4m3fn_e8m0_quantize_f32_inplace(
+                &self.stream,
+                LaunchConfig::for_num_elems((value_len / block_size) as u32),
+                values,
+                value_len as u32,
+                row_width as u32,
+                block_size as u32,
+            )
+        })
     }
 
     pub fn artifact_swiglu_ffn_matvec(
@@ -1223,16 +1438,18 @@ impl CudaArtifactOperatorContext {
         ))?;
         self.artifact_linear_matvec_device(gate, &gate_xd, &mut gated)?;
         self.artifact_linear_matvec_device(up, &up_xd, &mut upd)?;
-        self.launched(self.module.swiglu_weighted_clamped(
-            &self.stream,
-            LaunchConfig::for_num_elems(gate.shape.out_features() as u32),
-            &gated,
-            &upd,
-            &mut hidden,
-            gate.shape.out_features() as u32,
-            output_scale,
-            swiglu_limit,
-        ))?;
+        self.launched(unsafe {
+            self.module.swiglu_weighted_clamped(
+                &self.stream,
+                LaunchConfig::for_num_elems(gate.shape.out_features() as u32),
+                &gated,
+                &upd,
+                &mut hidden,
+                gate.shape.out_features() as u32,
+                output_scale,
+                swiglu_limit,
+            )
+        })?;
         if quantized_shape_uses_fp8_activation(down.shape) {
             self.fp8_activation_quantize_in_place(
                 &mut hidden,
@@ -1307,16 +1524,18 @@ impl CudaArtifactOperatorContext {
         ))?;
         self.artifact_linear_matvec_device(gate, &gate_input.buffer, &mut gated)?;
         self.artifact_linear_matvec_device(up, &up_input.buffer, &mut upd)?;
-        self.launched(self.module.swiglu_weighted_clamped(
-            &self.stream,
-            LaunchConfig::for_num_elems(gate.shape.out_features() as u32),
-            &gated,
-            &upd,
-            &mut hidden,
-            gate.shape.out_features() as u32,
-            output_scale,
-            swiglu_limit,
-        ))?;
+        self.launched(unsafe {
+            self.module.swiglu_weighted_clamped(
+                &self.stream,
+                LaunchConfig::for_num_elems(gate.shape.out_features() as u32),
+                &gated,
+                &upd,
+                &mut hidden,
+                gate.shape.out_features() as u32,
+                output_scale,
+                swiglu_limit,
+            )
+        })?;
         if quantized_shape_uses_fp8_activation(down.shape) {
             self.fp8_activation_quantize_in_place(
                 &mut hidden,
@@ -1465,6 +1684,67 @@ impl CudaArtifactOperatorContext {
         })
     }
 
+    pub fn moe_batched_workspace(
+        &self,
+        max_experts: usize,
+        input_size: usize,
+        intermediate_size: usize,
+        hidden_size: usize,
+    ) -> Result<CudaMoeBatchedWorkspace> {
+        if max_experts == 0 || max_experts > 6 {
+            return Err(Error::Internal(format!(
+                "CUDA MoE workspace expects 1..=6 experts, got {max_experts}"
+            )));
+        }
+        if input_size == 0 || intermediate_size == 0 || hidden_size == 0 {
+            return Err(Error::Internal(format!(
+                "CUDA MoE workspace invalid shape: input={input_size} intermediate={intermediate_size} hidden={hidden_size}"
+            )));
+        }
+        if !input_size.is_multiple_of(32) || !intermediate_size.is_multiple_of(32) {
+            return Err(Error::Internal(format!(
+                "CUDA MoE workspace expects 32-aligned input/intermediate, got input={input_size} intermediate={intermediate_size}"
+            )));
+        }
+
+        let total_inter = max_experts.checked_mul(intermediate_size).ok_or_else(|| {
+            Error::Internal("CUDA MoE workspace intermediate size overflow".into())
+        })?;
+        Ok(CudaMoeBatchedWorkspace {
+            gate_ptrs: cu(DeviceBuffer::<u64>::zeroed(&self.stream, 6))?,
+            gate_scale_ptrs: cu(DeviceBuffer::<u64>::zeroed(&self.stream, 6))?,
+            up_ptrs: cu(DeviceBuffer::<u64>::zeroed(&self.stream, 6))?,
+            up_scale_ptrs: cu(DeviceBuffer::<u64>::zeroed(&self.stream, 6))?,
+            down_ptrs: cu(DeviceBuffer::<u64>::zeroed(&self.stream, 6))?,
+            down_scale_ptrs: cu(DeviceBuffer::<u64>::zeroed(&self.stream, 6))?,
+            route_weights: cu(DeviceBuffer::<f32>::zeroed(&self.stream, 6))?,
+            x_f32: CudaF32Buffer {
+                buffer: self.uninitialized_device_buffer::<f32>(input_size)?,
+                len: input_size,
+            },
+            y_gate: CudaF32Buffer {
+                buffer: self.uninitialized_device_buffer::<f32>(total_inter)?,
+                len: total_inter,
+            },
+            y_up: CudaF32Buffer {
+                buffer: self.uninitialized_device_buffer::<f32>(total_inter)?,
+                len: total_inter,
+            },
+            y_hidden: CudaF32Buffer {
+                buffer: self.uninitialized_device_buffer::<f32>(total_inter)?,
+                len: total_inter,
+            },
+            x_packed: self.uninitialized_device_buffer::<u8>(input_size / 2)?,
+            x_scales: self.uninitialized_device_buffer::<u8>(input_size / 32)?,
+            y_hidden_packed: self.uninitialized_device_buffer::<u8>(total_inter / 2)?,
+            y_hidden_scales: self.uninitialized_device_buffer::<u8>(total_inter / 32)?,
+            max_experts,
+            input_size,
+            intermediate_size,
+            hidden_size,
+        })
+    }
+
     pub fn fp4_swiglu_ffn_from_device(
         &self,
         gate: &CudaArtifactLinearHandle,
@@ -1578,34 +1858,38 @@ impl CudaArtifactOperatorContext {
         let cfg_mid = LaunchConfig::for_num_elems(gate_out as u32);
         let cfg_out = LaunchConfig::for_num_elems(down_out as u32);
 
-        self.launched(self.module.gemv_dual_fp4_e2m1_e8m0_off(
-            &self.stream,
-            cfg_mid,
-            &input.buffer,
-            expert.gate.packed,
-            expert.gate.scales,
-            &mut workspace.scratch.gate,
-            checked_u32(expert.gate.packed_offset(), "gate", "packed offset")?,
-            checked_u32(expert.gate.scale_offset(), "gate", "scale offset")?,
-            expert.up.packed,
-            expert.up.scales,
-            &mut workspace.scratch.up,
-            checked_u32(expert.up.packed_offset(), "up", "packed offset")?,
-            checked_u32(expert.up.scale_offset(), "up", "scale offset")?,
-            checked_u32(gate_out, "expert", "intermediate size")?,
-            checked_u32(gate_in, "expert", "hidden size")?,
-        ))?;
+        self.launched(unsafe {
+            self.module.gemv_dual_fp4_e2m1_e8m0_off(
+                &self.stream,
+                cfg_mid,
+                &input.buffer,
+                expert.gate.packed,
+                expert.gate.scales,
+                &mut workspace.scratch.gate,
+                checked_u32(expert.gate.packed_offset(), "gate", "packed offset")?,
+                checked_u32(expert.gate.scale_offset(), "gate", "scale offset")?,
+                expert.up.packed,
+                expert.up.scales,
+                &mut workspace.scratch.up,
+                checked_u32(expert.up.packed_offset(), "up", "packed offset")?,
+                checked_u32(expert.up.scale_offset(), "up", "scale offset")?,
+                checked_u32(gate_out, "expert", "intermediate size")?,
+                checked_u32(gate_in, "expert", "hidden size")?,
+            )
+        })?;
 
-        self.launched(self.module.swiglu_weighted_clamped(
-            &self.stream,
-            cfg_mid,
-            &workspace.scratch.gate,
-            &workspace.scratch.up,
-            &mut workspace.scratch.hidden,
-            checked_u32(gate_out, "expert", "intermediate size")?,
-            route_weight,
-            swiglu_limit,
-        ))?;
+        self.launched(unsafe {
+            self.module.swiglu_weighted_clamped(
+                &self.stream,
+                cfg_mid,
+                &workspace.scratch.gate,
+                &workspace.scratch.up,
+                &mut workspace.scratch.hidden,
+                checked_u32(gate_out, "expert", "intermediate size")?,
+                route_weight,
+                swiglu_limit,
+            )
+        })?;
 
         self.fp8_activation_quantize_in_place(
             &mut workspace.scratch.hidden,
@@ -1613,18 +1897,441 @@ impl CudaArtifactOperatorContext {
             down_in,
             ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
         )?;
-        self.launched(self.module.gemv_fp4_e2m1_e8m0_off(
-            &self.stream,
-            cfg_out,
-            &workspace.scratch.hidden,
-            expert.down.packed,
-            expert.down.scales,
-            &mut workspace.output.buffer,
-            checked_u32(down_out, "down", "output size")?,
-            checked_u32(down_in, "down", "input size")?,
-            checked_u32(expert.down.packed_offset(), "down", "packed offset")?,
-            checked_u32(expert.down.scale_offset(), "down", "scale offset")?,
-        ))?;
+        self.launched(unsafe {
+            self.module.gemv_fp4_e2m1_e8m0_off(
+                &self.stream,
+                cfg_out,
+                &workspace.scratch.hidden,
+                expert.down.packed,
+                expert.down.scales,
+                &mut workspace.output.buffer,
+                checked_u32(down_out, "down", "output size")?,
+                checked_u32(down_in, "down", "input size")?,
+                checked_u32(expert.down.packed_offset(), "down", "packed offset")?,
+                checked_u32(expert.down.scale_offset(), "down", "scale offset")?,
+            )
+        })?;
+        Ok(())
+    }
+
+    /// Batched routed MoE into an existing accumulator using reusable scratch.
+    ///
+    /// This is the decode hot-path variant. It avoids per-call CUDA allocation,
+    /// writes selected expert pointers into persistent tiny device arrays, and
+    /// accumulates the down projection directly into `output`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn moe_experts_batched_add_into_from_device(
+        &self,
+        gate_handles: &[&CudaArtifactLinearHandle; 6],
+        up_handles: &[&CudaArtifactLinearHandle; 6],
+        down_handles: &[&CudaArtifactLinearHandle; 6],
+        route_weights: &[f32; 6],
+        input: &CudaF32Buffer,
+        swiglu_limit: f32,
+        num_experts: usize,
+        intermediate_size: usize,
+        hidden_size: usize,
+        workspace: &mut CudaMoeBatchedWorkspace,
+        output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        if num_experts == 0 || num_experts > 6 {
+            return Err(Error::Internal(format!(
+                "MoE batched expects 1..=6 experts, got {num_experts}"
+            )));
+        }
+        if output.len != hidden_size {
+            return Err(Error::Internal(format!(
+                "CUDA MoE output length mismatch: output={} hidden={hidden_size}",
+                output.len
+            )));
+        }
+        if !workspace.matches(num_experts, input.len, intermediate_size, hidden_size) {
+            return Err(Error::Internal(format!(
+                "CUDA MoE workspace mismatch: workspace=[max_experts={},input={},intermediate={},hidden={}] call=[experts={},input={},intermediate={},hidden={}]",
+                workspace.max_experts,
+                workspace.input_size,
+                workspace.intermediate_size,
+                workspace.hidden_size,
+                num_experts,
+                input.len,
+                intermediate_size,
+                hidden_size
+            )));
+        }
+
+        let first_gate = gate_handles[0];
+        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
+            out_features: gate_out,
+            in_features: gate_in,
+        } = first_gate.shape
+        else {
+            return Err(Error::Internal("CUDA packed expert gate is not FP4".into()));
+        };
+        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
+            out_features: up_out,
+            in_features: up_in,
+        } = up_handles[0].shape
+        else {
+            return Err(Error::Internal("CUDA packed expert up is not FP4".into()));
+        };
+        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
+            out_features: down_out,
+            in_features: down_in,
+        } = down_handles[0].shape
+        else {
+            return Err(Error::Internal("CUDA packed expert down is not FP4".into()));
+        };
+        if input.len != gate_in
+            || up_in != gate_in
+            || up_out != gate_out
+            || down_in != gate_out
+            || down_out != hidden_size
+            || gate_out != intermediate_size
+        {
+            return Err(Error::Internal(format!(
+                "CUDA packed expert shape mismatch: input={} gate=[{gate_out},{gate_in}] up=[{up_out},{up_in}] down=[{down_out},{down_in}] expected intermediate={intermediate_size} hidden={hidden_size}",
+                input.len
+            )));
+        }
+
+        let timing_enabled = self.moe_timing_enabled();
+        let total_start = timing_enabled.then(Instant::now);
+
+        let mut gate_ptrs = [0u64; 6];
+        let mut gate_scale_ptrs = [0u64; 6];
+        let mut up_ptrs = [0u64; 6];
+        let mut up_scale_ptrs = [0u64; 6];
+        let mut down_ptrs = [0u64; 6];
+        let mut down_scale_ptrs = [0u64; 6];
+        for i in 0..num_experts {
+            gate_ptrs[i] = gate_handles[i].weight.cu_deviceptr();
+            gate_scale_ptrs[i] = gate_handles[i]
+                .scale
+                .as_ref()
+                .ok_or_else(|| Error::Internal("CUDA packed expert gate missing scale".into()))?
+                .cu_deviceptr();
+            up_ptrs[i] = up_handles[i].weight.cu_deviceptr();
+            up_scale_ptrs[i] = up_handles[i]
+                .scale
+                .as_ref()
+                .ok_or_else(|| Error::Internal("CUDA packed expert up missing scale".into()))?
+                .cu_deviceptr();
+            down_ptrs[i] = down_handles[i].weight.cu_deviceptr();
+            down_scale_ptrs[i] = down_handles[i]
+                .scale
+                .as_ref()
+                .ok_or_else(|| Error::Internal("CUDA packed expert down missing scale".into()))?
+                .cu_deviceptr();
+        }
+        let phase_start = timing_enabled.then(Instant::now);
+        self.copy_u64_into_device_buffer(&gate_ptrs, &mut workspace.gate_ptrs)?;
+        self.copy_u64_into_device_buffer(&gate_scale_ptrs, &mut workspace.gate_scale_ptrs)?;
+        self.copy_u64_into_device_buffer(&up_ptrs, &mut workspace.up_ptrs)?;
+        self.copy_u64_into_device_buffer(&up_scale_ptrs, &mut workspace.up_scale_ptrs)?;
+        self.copy_u64_into_device_buffer(&down_ptrs, &mut workspace.down_ptrs)?;
+        self.copy_u64_into_device_buffer(&down_scale_ptrs, &mut workspace.down_scale_ptrs)?;
+        self.copy_f32_into_device_buffer(route_weights, &mut workspace.route_weights)?;
+        if let Some(start) = phase_start {
+            self.sync_stream()?;
+            self.counters
+                .add_moe_pointer_upload_us(duration_us(start.elapsed()));
+        }
+
+        let block = 256u32;
+        let reduce_block = 128u32;
+        let use_reduce = std::env::var("FERRULE_CUDA_MOE_REDUCE")
+            .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
+            .unwrap_or(false);
+        // FP4 mxf4 Tensor Core path is the default hot path. It is still under-utilized
+        // at batch_cols=1, but avoids the scalar FP4 decode loop and remains env-gated
+        // for A/B: set FERRULE_CUDA_MOE_TC=0 to force the scalar fallback.
+        let use_tensor_core = !use_reduce
+            && input.len.is_multiple_of(64)
+            && std::env::var("FERRULE_CUDA_MOE_TC")
+                .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
+                .unwrap_or(true);
+        let grid_inter = (
+            (intermediate_size as u32 + block - 1) / block,
+            num_experts as u32,
+            1,
+        );
+        let grid_hidden = (
+            (hidden_size as u32 + block - 1) / block,
+            num_experts as u32,
+            1,
+        );
+        let grid_inter_reduce = (intermediate_size as u32, num_experts as u32, 1);
+        let grid_hidden_reduce = (hidden_size as u32, num_experts as u32, 1);
+        let grid_inter_tc = (intermediate_size.div_ceil(16) as u32, num_experts as u32, 1);
+        let grid_hidden_tc = (hidden_size.div_ceil(16) as u32, num_experts as u32, 1);
+        let moe_path = if use_reduce {
+            CudaMoeExecutionPath::Reduce
+        } else if use_tensor_core {
+            CudaMoeExecutionPath::TensorCore
+        } else {
+            CudaMoeExecutionPath::Scalar
+        };
+        self.counters.add_moe_call(moe_path);
+
+        if use_reduce {
+            let phase_start = timing_enabled.then(Instant::now);
+            self.copy_f32_into_slot(input, &mut workspace.x_f32, 0)?;
+            self.fp8_activation_quantize_buffer_in_place(
+                &mut workspace.x_f32,
+                input.len,
+                ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
+            )?;
+            if let Some(start) = phase_start {
+                self.sync_stream()?;
+                self.counters
+                    .add_moe_input_prepare_us(duration_us(start.elapsed()));
+            }
+            let phase_start = timing_enabled.then(Instant::now);
+            self.launched(unsafe {
+                self.module.moe_gemv_dual_fp4_batched_reduce(
+                    &self.stream,
+                    LaunchConfig {
+                        grid_dim: grid_inter_reduce,
+                        block_dim: (reduce_block, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    &workspace.x_f32.buffer,
+                    &workspace.gate_ptrs,
+                    &workspace.gate_scale_ptrs,
+                    &workspace.up_ptrs,
+                    &workspace.up_scale_ptrs,
+                    &mut workspace.y_gate.buffer,
+                    &mut workspace.y_up.buffer,
+                    intermediate_size as u32,
+                    input.len as u32,
+                    num_experts as u32,
+                )
+            })?;
+            if let Some(start) = phase_start {
+                self.sync_stream()?;
+                self.counters
+                    .add_moe_gate_up_us(duration_us(start.elapsed()));
+            }
+        } else if use_tensor_core {
+            // Tensor Core path consumes FP4 activations directly. Avoid the old
+            // FP8-in-f32 preparation buffer; the mxf4 MMA needs packed FP4 + E8M0.
+            let phase_start = timing_enabled.then(Instant::now);
+            self.launched(unsafe {
+                self.module.fp4_e2m1_e8m0_quantize_f32_packed(
+                    &self.stream,
+                    LaunchConfig::for_num_elems((input.len / 32) as u32),
+                    &input.buffer,
+                    &mut workspace.x_packed,
+                    &mut workspace.x_scales,
+                    input.len as u32,
+                    input.len as u32,
+                    32,
+                )
+            })?;
+            if let Some(start) = phase_start {
+                self.sync_stream()?;
+                self.counters
+                    .add_moe_input_prepare_us(duration_us(start.elapsed()));
+            }
+            let phase_start = timing_enabled.then(Instant::now);
+            self.launched(unsafe {
+                self.module.moe_gemm_dual_fp4_mxf4_batched(
+                    &self.stream,
+                    LaunchConfig {
+                        grid_dim: grid_inter_tc,
+                        block_dim: (32, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    &workspace.x_packed,
+                    &workspace.x_scales,
+                    &workspace.gate_ptrs,
+                    &workspace.gate_scale_ptrs,
+                    &workspace.up_ptrs,
+                    &workspace.up_scale_ptrs,
+                    &mut workspace.y_gate.buffer,
+                    &mut workspace.y_up.buffer,
+                    intermediate_size as u32,
+                    input.len as u32,
+                    1,
+                    num_experts as u32,
+                )
+            })?;
+            if let Some(start) = phase_start {
+                self.sync_stream()?;
+                self.counters
+                    .add_moe_gate_up_us(duration_us(start.elapsed()));
+            }
+        } else {
+            let phase_start = timing_enabled.then(Instant::now);
+            self.copy_f32_into_slot(input, &mut workspace.x_f32, 0)?;
+            self.fp8_activation_quantize_buffer_in_place(
+                &mut workspace.x_f32,
+                input.len,
+                ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
+            )?;
+            if let Some(start) = phase_start {
+                self.sync_stream()?;
+                self.counters
+                    .add_moe_input_prepare_us(duration_us(start.elapsed()));
+            }
+            let phase_start = timing_enabled.then(Instant::now);
+            self.launched(unsafe {
+                self.module.moe_gemv_dual_fp4_batched(
+                    &self.stream,
+                    LaunchConfig {
+                        grid_dim: grid_inter,
+                        block_dim: (block, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    &workspace.x_f32.buffer,
+                    &workspace.gate_ptrs,
+                    &workspace.gate_scale_ptrs,
+                    &workspace.up_ptrs,
+                    &workspace.up_scale_ptrs,
+                    &mut workspace.y_gate.buffer,
+                    &mut workspace.y_up.buffer,
+                    intermediate_size as u32,
+                    input.len as u32,
+                    num_experts as u32,
+                )
+            })?;
+            if let Some(start) = phase_start {
+                self.sync_stream()?;
+                self.counters
+                    .add_moe_gate_up_us(duration_us(start.elapsed()));
+            }
+        }
+
+        if use_tensor_core {
+            let phase_start = timing_enabled.then(Instant::now);
+            self.launched(unsafe {
+                self.module.moe_swiglu_fp4_packed_batched(
+                    &self.stream,
+                    LaunchConfig {
+                        grid_dim: ((intermediate_size / 32) as u32, num_experts as u32, 1),
+                        block_dim: (32, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    &workspace.y_gate.buffer,
+                    &workspace.y_up.buffer,
+                    &workspace.route_weights,
+                    &mut workspace.y_hidden_packed,
+                    &mut workspace.y_hidden_scales,
+                    intermediate_size as u32,
+                    1,
+                    num_experts as u32,
+                    swiglu_limit,
+                )
+            })?;
+            if let Some(start) = phase_start {
+                self.sync_stream()?;
+                self.counters
+                    .add_moe_swiglu_us(duration_us(start.elapsed()));
+            }
+        } else {
+            let phase_start = timing_enabled.then(Instant::now);
+            self.launched(unsafe {
+                self.module.moe_swiglu_fp8_batched(
+                    &self.stream,
+                    LaunchConfig {
+                        grid_dim: grid_inter,
+                        block_dim: (block, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    &workspace.y_gate.buffer,
+                    &workspace.y_up.buffer,
+                    &workspace.route_weights,
+                    &mut workspace.y_hidden.buffer,
+                    intermediate_size as u32,
+                    num_experts as u32,
+                    swiglu_limit,
+                    ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE as u32,
+                )
+            })?;
+            if let Some(start) = phase_start {
+                self.sync_stream()?;
+                self.counters
+                    .add_moe_swiglu_us(duration_us(start.elapsed()));
+            }
+        }
+
+        if use_reduce {
+            let phase_start = timing_enabled.then(Instant::now);
+            self.launched(unsafe {
+                self.module.moe_gemv_down_fp4_batched_reduce(
+                    &self.stream,
+                    LaunchConfig {
+                        grid_dim: grid_hidden_reduce,
+                        block_dim: (reduce_block, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    &workspace.y_hidden.buffer,
+                    &workspace.down_ptrs,
+                    &workspace.down_scale_ptrs,
+                    &mut output.buffer,
+                    intermediate_size as u32,
+                    hidden_size as u32,
+                    num_experts as u32,
+                )
+            })?;
+            if let Some(start) = phase_start {
+                self.sync_stream()?;
+                self.counters.add_moe_down_us(duration_us(start.elapsed()));
+            }
+        } else if use_tensor_core {
+            let phase_start = timing_enabled.then(Instant::now);
+            self.launched(unsafe {
+                self.module.moe_gemm_down_fp4_mxf4_batched(
+                    &self.stream,
+                    LaunchConfig {
+                        grid_dim: grid_hidden_tc,
+                        block_dim: (32, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    &workspace.y_hidden_packed,
+                    &workspace.y_hidden_scales,
+                    &workspace.down_ptrs,
+                    &workspace.down_scale_ptrs,
+                    &mut output.buffer,
+                    intermediate_size as u32,
+                    hidden_size as u32,
+                    1,
+                    num_experts as u32,
+                )
+            })?;
+            if let Some(start) = phase_start {
+                self.sync_stream()?;
+                self.counters.add_moe_down_us(duration_us(start.elapsed()));
+            }
+        } else {
+            let phase_start = timing_enabled.then(Instant::now);
+            self.launched(unsafe {
+                self.module.moe_gemv_down_fp4_batched(
+                    &self.stream,
+                    LaunchConfig {
+                        grid_dim: grid_hidden,
+                        block_dim: (block, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    &workspace.y_hidden.buffer,
+                    &workspace.down_ptrs,
+                    &workspace.down_scale_ptrs,
+                    &mut output.buffer,
+                    intermediate_size as u32,
+                    hidden_size as u32,
+                    num_experts as u32,
+                )
+            })?;
+            if let Some(start) = phase_start {
+                self.sync_stream()?;
+                self.counters.add_moe_down_us(duration_us(start.elapsed()));
+            }
+        }
+
+        if let Some(start) = total_start {
+            self.counters.add_moe_total_us(duration_us(start.elapsed()));
+        }
+
         Ok(())
     }
 
@@ -1638,7 +2345,7 @@ impl CudaArtifactOperatorContext {
     /// Returns the same `output` buffer with accumulated expert outputs.
     pub fn moe_experts_batched_from_device(
         &self,
-        expert_handles: &[&CudaArtifactLinearHandle; 6],
+        _expert_handles: &[&CudaArtifactLinearHandle; 6],
         gate_handles: &[&CudaArtifactLinearHandle; 6],
         up_handles: &[&CudaArtifactLinearHandle; 6],
         down_handles: &[&CudaArtifactLinearHandle; 6],
@@ -1689,9 +2396,9 @@ impl CudaArtifactOperatorContext {
         let route_weights_d = self.upload_f32_buffer(route_weights)?;
 
         let total_inter = num_experts * intermediate_size;
-        let mut y_gate = cu(DeviceBuffer::<f32>::zeroed(&self.stream, total_inter))?;
-        let mut y_up = cu(DeviceBuffer::<f32>::zeroed(&self.stream, total_inter))?;
-        let mut y_hidden = cu(DeviceBuffer::<f32>::zeroed(&self.stream, total_inter))?;
+        let mut y_gate = self.uninitialized_device_buffer::<f32>(total_inter)?;
+        let mut y_up = self.uninitialized_device_buffer::<f32>(total_inter)?;
+        let mut y_hidden = self.uninitialized_device_buffer::<f32>(total_inter)?;
         let mut output = cu(DeviceBuffer::<f32>::zeroed(&self.stream, hidden_size))?;
 
         let block = 256u32;
@@ -1699,6 +2406,14 @@ impl CudaArtifactOperatorContext {
         let use_reduce = std::env::var("FERRULE_CUDA_MOE_REDUCE")
             .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
             .unwrap_or(false);
+        // FP4 mxf4 Tensor Core path is the default hot path. It is still under-utilized
+        // at batch_cols=1, but avoids the scalar FP4 decode loop and remains env-gated
+        // for A/B: set FERRULE_CUDA_MOE_TC=0 to force the scalar fallback.
+        let use_tensor_core = !use_reduce
+            && input.len.is_multiple_of(64)
+            && std::env::var("FERRULE_CUDA_MOE_TC")
+                .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
+                .unwrap_or(true);
         let grid_inter = (
             (intermediate_size as u32 + block - 1) / block,
             num_experts as u32,
@@ -1711,99 +2426,183 @@ impl CudaArtifactOperatorContext {
         );
         let grid_inter_reduce = (intermediate_size as u32, num_experts as u32, 1);
         let grid_hidden_reduce = (hidden_size as u32, num_experts as u32, 1);
+        let grid_inter_tc = (intermediate_size.div_ceil(16) as u32, num_experts as u32, 1);
+        let grid_hidden_tc = (hidden_size.div_ceil(16) as u32, num_experts as u32, 1);
 
-        // Launch 1: gate+up GEMV
+        // Launch 1: gate+up GEMM/GEMV. The tensor-core kernel is GEMM-ready
+        // (`batch_cols <= 8`) and currently runs with one decode column.
         if use_reduce {
-            self.launched(self.module.moe_gemv_dual_fp4_batched_reduce(
-                &self.stream,
-                LaunchConfig {
-                    grid_dim: grid_inter_reduce,
-                    block_dim: (reduce_block, 1, 1),
-                    shared_mem_bytes: 0,
-                },
-                &input.buffer,
-                &gate_ptrs_d,
-                &gate_scale_ptrs_d,
-                &up_ptrs_d,
-                &up_scale_ptrs_d,
-                &mut y_gate,
-                &mut y_up,
-                intermediate_size as u32,
-                input.len as u32,
-                num_experts as u32,
-            ))?;
+            self.launched(unsafe {
+                self.module.moe_gemv_dual_fp4_batched_reduce(
+                    &self.stream,
+                    LaunchConfig {
+                        grid_dim: grid_inter_reduce,
+                        block_dim: (reduce_block, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    &input.buffer,
+                    &gate_ptrs_d,
+                    &gate_scale_ptrs_d,
+                    &up_ptrs_d,
+                    &up_scale_ptrs_d,
+                    &mut y_gate,
+                    &mut y_up,
+                    intermediate_size as u32,
+                    input.len as u32,
+                    num_experts as u32,
+                )
+            })?;
+        } else if use_tensor_core {
+            let mut x_packed = self.uninitialized_device_buffer::<u8>(input.len / 2)?;
+            let mut x_scales = self.uninitialized_device_buffer::<u8>(input.len / 32)?;
+            self.launched(unsafe {
+                self.module.fp4_e2m1_e8m0_quantize_f32_packed(
+                    &self.stream,
+                    LaunchConfig::for_num_elems((input.len / 32) as u32),
+                    &input.buffer,
+                    &mut x_packed,
+                    &mut x_scales,
+                    input.len as u32,
+                    input.len as u32,
+                    32,
+                )
+            })?;
+            self.launched(unsafe {
+                self.module.moe_gemm_dual_fp4_mxf4_batched(
+                    &self.stream,
+                    LaunchConfig {
+                        grid_dim: grid_inter_tc,
+                        block_dim: (32, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    &x_packed,
+                    &x_scales,
+                    &gate_ptrs_d,
+                    &gate_scale_ptrs_d,
+                    &up_ptrs_d,
+                    &up_scale_ptrs_d,
+                    &mut y_gate,
+                    &mut y_up,
+                    intermediate_size as u32,
+                    input.len as u32,
+                    1,
+                    num_experts as u32,
+                )
+            })?;
         } else {
-            self.launched(self.module.moe_gemv_dual_fp4_batched(
+            self.launched(unsafe {
+                self.module.moe_gemv_dual_fp4_batched(
+                    &self.stream,
+                    LaunchConfig {
+                        grid_dim: grid_inter,
+                        block_dim: (block, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    &input.buffer,
+                    &gate_ptrs_d,
+                    &gate_scale_ptrs_d,
+                    &up_ptrs_d,
+                    &up_scale_ptrs_d,
+                    &mut y_gate,
+                    &mut y_up,
+                    intermediate_size as u32,
+                    input.len as u32,
+                    num_experts as u32,
+                )
+            })?;
+        }
+
+        // Launch 2: SwiGLU + FP8 quantize
+        self.launched(unsafe {
+            self.module.moe_swiglu_fp8_batched(
                 &self.stream,
                 LaunchConfig {
                     grid_dim: grid_inter,
                     block_dim: (block, 1, 1),
                     shared_mem_bytes: 0,
                 },
-                &input.buffer,
-                &gate_ptrs_d,
-                &gate_scale_ptrs_d,
-                &up_ptrs_d,
-                &up_scale_ptrs_d,
-                &mut y_gate,
-                &mut y_up,
+                &y_gate,
+                &y_up,
+                &route_weights_d.buffer,
+                &mut y_hidden,
                 intermediate_size as u32,
-                input.len as u32,
                 num_experts as u32,
-            ))?;
-        }
+                swiglu_limit,
+                ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE as u32,
+            )
+        })?;
 
-        // Launch 2: SwiGLU + FP8 quantize
-        self.launched(self.module.moe_swiglu_fp8_batched(
-            &self.stream,
-            LaunchConfig {
-                grid_dim: grid_inter,
-                block_dim: (block, 1, 1),
-                shared_mem_bytes: 0,
-            },
-            &y_gate,
-            &y_up,
-            &route_weights_d.buffer,
-            &mut y_hidden,
-            intermediate_size as u32,
-            num_experts as u32,
-            swiglu_limit,
-            ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE as u32,
-        ))?;
-
-        // Launch 3: down GEMV + accumulate
+        // Launch 3: down GEMM/GEMV + accumulate.
         if use_reduce {
-            self.launched(self.module.moe_gemv_down_fp4_batched_reduce(
-                &self.stream,
-                LaunchConfig {
-                    grid_dim: grid_hidden_reduce,
-                    block_dim: (reduce_block, 1, 1),
-                    shared_mem_bytes: 0,
-                },
-                &y_hidden,
-                &down_ptrs_d,
-                &down_scale_ptrs_d,
-                &mut output,
-                intermediate_size as u32,
-                hidden_size as u32,
-                num_experts as u32,
-            ))?;
+            self.launched(unsafe {
+                self.module.moe_gemv_down_fp4_batched_reduce(
+                    &self.stream,
+                    LaunchConfig {
+                        grid_dim: grid_hidden_reduce,
+                        block_dim: (reduce_block, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    &y_hidden,
+                    &down_ptrs_d,
+                    &down_scale_ptrs_d,
+                    &mut output,
+                    intermediate_size as u32,
+                    hidden_size as u32,
+                    num_experts as u32,
+                )
+            })?;
+        } else if use_tensor_core {
+            let mut y_hidden_packed = self.uninitialized_device_buffer::<u8>(total_inter / 2)?;
+            let mut y_hidden_scales = self.uninitialized_device_buffer::<u8>(total_inter / 32)?;
+            self.launched(unsafe {
+                self.module.fp4_e2m1_e8m0_quantize_f32_packed(
+                    &self.stream,
+                    LaunchConfig::for_num_elems((total_inter / 32) as u32),
+                    &y_hidden,
+                    &mut y_hidden_packed,
+                    &mut y_hidden_scales,
+                    total_inter as u32,
+                    intermediate_size as u32,
+                    32,
+                )
+            })?;
+            self.launched(unsafe {
+                self.module.moe_gemm_down_fp4_mxf4_batched(
+                    &self.stream,
+                    LaunchConfig {
+                        grid_dim: grid_hidden_tc,
+                        block_dim: (32, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    &y_hidden_packed,
+                    &y_hidden_scales,
+                    &down_ptrs_d,
+                    &down_scale_ptrs_d,
+                    &mut output,
+                    intermediate_size as u32,
+                    hidden_size as u32,
+                    1,
+                    num_experts as u32,
+                )
+            })?;
         } else {
-            self.launched(self.module.moe_gemv_down_fp4_batched(
-                &self.stream,
-                LaunchConfig {
-                    grid_dim: grid_hidden,
-                    block_dim: (block, 1, 1),
-                    shared_mem_bytes: 0,
-                },
-                &y_hidden,
-                &down_ptrs_d,
-                &down_scale_ptrs_d,
-                &mut output,
-                intermediate_size as u32,
-                hidden_size as u32,
-                num_experts as u32,
-            ))?;
+            self.launched(unsafe {
+                self.module.moe_gemv_down_fp4_batched(
+                    &self.stream,
+                    LaunchConfig {
+                        grid_dim: grid_hidden,
+                        block_dim: (block, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    &y_hidden,
+                    &down_ptrs_d,
+                    &down_scale_ptrs_d,
+                    &mut output,
+                    intermediate_size as u32,
+                    hidden_size as u32,
+                    num_experts as u32,
+                )
+            })?;
         }
 
         Ok((
@@ -1839,15 +2638,17 @@ impl CudaArtifactOperatorContext {
         let xd = self.upload_f32(input)?;
         let wd = self.upload_f32(weight)?;
         let mut yd = cu(DeviceBuffer::<f32>::zeroed(&self.stream, input.len()))?;
-        self.launched(self.module.rms_norm_fused(
-            &self.stream,
-            one_block_config(256),
-            &xd,
-            &wd,
-            &mut yd,
-            input.len() as u32,
-            eps,
-        ))?;
+        self.launched(unsafe {
+            self.module.rms_norm_fused(
+                &self.stream,
+                one_block_config(256),
+                &xd,
+                &wd,
+                &mut yd,
+                input.len() as u32,
+                eps,
+            )
+        })?;
         self.download_f32(&yd, input.len())
     }
 
@@ -1867,15 +2668,17 @@ impl CudaArtifactOperatorContext {
             )));
         }
         let mut yd = cu(DeviceBuffer::<f32>::zeroed(&self.stream, input.len()))?;
-        self.launched(self.module.rms_norm_fused(
-            &self.stream,
-            one_block_config(256),
-            &input.buffer,
-            &weight.buffer,
-            &mut yd,
-            input.len() as u32,
-            eps,
-        ))?;
+        self.launched(unsafe {
+            self.module.rms_norm_fused(
+                &self.stream,
+                one_block_config(256),
+                &input.buffer,
+                &weight.buffer,
+                &mut yd,
+                input.len() as u32,
+                eps,
+            )
+        })?;
         Ok(CudaF32Buffer {
             buffer: yd,
             len: input.len(),
@@ -1913,19 +2716,21 @@ impl CudaArtifactOperatorContext {
             )));
         }
         let mut yd = cu(DeviceBuffer::<f32>::zeroed(&self.stream, input.len))?;
-        self.launched(self.module.rms_norm_heads_fused(
-            &self.stream,
-            LaunchConfig {
-                grid_dim: (heads as u32, 1, 1),
-                block_dim: (256, 1, 1),
-                shared_mem_bytes: 0,
-            },
-            &input.buffer,
-            &mut yd,
-            heads as u32,
-            head_dim as u32,
-            eps,
-        ))?;
+        self.launched(unsafe {
+            self.module.rms_norm_heads_fused(
+                &self.stream,
+                LaunchConfig {
+                    grid_dim: (heads as u32, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                &input.buffer,
+                &mut yd,
+                heads as u32,
+                head_dim as u32,
+                eps,
+            )
+        })?;
         Ok(CudaF32Buffer {
             buffer: yd,
             len: input.len,
@@ -1967,29 +2772,31 @@ impl CudaArtifactOperatorContext {
             &self.stream,
             tokens * hc_mult * hc_mult,
         ))?;
-        self.launched(self.module.hc_pre_f32(
-            &self.stream,
-            LaunchConfig {
-                grid_dim: (tokens as u32, 1, 1),
-                block_dim: (256, 1, 1),
-                shared_mem_bytes: 0,
-            },
-            &state.buffer,
-            &function.buffer,
-            &scale.buffer,
-            &base.buffer,
-            &mut hidden,
-            &mut pre,
-            &mut post,
-            &mut comb,
-            tokens as u32,
-            hc_mult as u32,
-            hidden_size as u32,
-            mix_hc as u32,
-            sinkhorn_iters as u32,
-            eps,
-            norm_eps,
-        ))?;
+        self.launched(unsafe {
+            self.module.hc_pre_f32(
+                &self.stream,
+                LaunchConfig {
+                    grid_dim: (tokens as u32, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                &state.buffer,
+                &function.buffer,
+                &scale.buffer,
+                &base.buffer,
+                &mut hidden,
+                &mut pre,
+                &mut post,
+                &mut comb,
+                tokens as u32,
+                hc_mult as u32,
+                hidden_size as u32,
+                mix_hc as u32,
+                sinkhorn_iters as u32,
+                eps,
+                norm_eps,
+            )
+        })?;
         Ok((
             CudaF32Buffer {
                 buffer: hidden,
@@ -2062,29 +2869,31 @@ impl CudaArtifactOperatorContext {
             &self.stream,
             tokens * hc_mult * hc_mult,
         ))?;
-        self.launched(self.module.hc_pre_f32(
-            &self.stream,
-            LaunchConfig {
-                grid_dim: (tokens as u32, 1, 1),
-                block_dim: (256, 1, 1),
-                shared_mem_bytes: 0,
-            },
-            &sd,
-            &fd,
-            &scd,
-            &bd,
-            &mut hidden,
-            &mut pre,
-            &mut post,
-            &mut comb,
-            tokens as u32,
-            hc_mult as u32,
-            hidden_size as u32,
-            mix_hc as u32,
-            sinkhorn_iters as u32,
-            eps,
-            norm_eps,
-        ))?;
+        self.launched(unsafe {
+            self.module.hc_pre_f32(
+                &self.stream,
+                LaunchConfig {
+                    grid_dim: (tokens as u32, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                &sd,
+                &fd,
+                &scd,
+                &bd,
+                &mut hidden,
+                &mut pre,
+                &mut post,
+                &mut comb,
+                tokens as u32,
+                hc_mult as u32,
+                hidden_size as u32,
+                mix_hc as u32,
+                sinkhorn_iters as u32,
+                eps,
+                norm_eps,
+            )
+        })?;
         Ok((
             self.download_f32(&hidden, tokens * hidden_size)?,
             self.download_f32(&pre, tokens * hc_mult)?,
@@ -2139,18 +2948,20 @@ impl CudaArtifactOperatorContext {
             )));
         }
         let mut out = cu(DeviceBuffer::<f32>::zeroed(&self.stream, tokens * hc_dim))?;
-        self.launched(self.module.hc_post_f32(
-            &self.stream,
-            LaunchConfig::for_num_elems((tokens * hc_dim) as u32),
-            &hidden.buffer,
-            &residual.buffer,
-            &split_post.buffer,
-            &split_comb.buffer,
-            &mut out,
-            tokens as u32,
-            hc_mult as u32,
-            hidden_size as u32,
-        ))?;
+        self.launched(unsafe {
+            self.module.hc_post_f32(
+                &self.stream,
+                LaunchConfig::for_num_elems((tokens * hc_dim) as u32),
+                &hidden.buffer,
+                &residual.buffer,
+                &split_post.buffer,
+                &split_comb.buffer,
+                &mut out,
+                tokens as u32,
+                hc_mult as u32,
+                hidden_size as u32,
+            )
+        })?;
         Ok(CudaF32Buffer {
             buffer: out,
             len: tokens * hc_dim,
@@ -2191,18 +3002,20 @@ impl CudaArtifactOperatorContext {
         let pd = self.upload_f32(split_post)?;
         let cd = self.upload_f32(split_comb)?;
         let mut out = cu(DeviceBuffer::<f32>::zeroed(&self.stream, tokens * hc_dim))?;
-        self.launched(self.module.hc_post_f32(
-            &self.stream,
-            LaunchConfig::for_num_elems((tokens * hc_dim) as u32),
-            &hd,
-            &rd,
-            &pd,
-            &cd,
-            &mut out,
-            tokens as u32,
-            hc_mult as u32,
-            hidden_size as u32,
-        ))?;
+        self.launched(unsafe {
+            self.module.hc_post_f32(
+                &self.stream,
+                LaunchConfig::for_num_elems((tokens * hc_dim) as u32),
+                &hd,
+                &rd,
+                &pd,
+                &cd,
+                &mut out,
+                tokens as u32,
+                hc_mult as u32,
+                hidden_size as u32,
+            )
+        })?;
         self.download_f32(&out, tokens * hc_dim)
     }
 
@@ -2266,24 +3079,26 @@ impl CudaArtifactOperatorContext {
             &self.stream,
             tokens * hidden_size,
         ))?;
-        self.launched(self.module.hc_head_f32(
-            &self.stream,
-            LaunchConfig {
-                grid_dim: (tokens as u32, 1, 1),
-                block_dim: (256, 1, 1),
-                shared_mem_bytes: 0,
-            },
-            &sd,
-            &fd,
-            &scd,
-            &bd,
-            &mut hidden,
-            tokens as u32,
-            hc_mult as u32,
-            hidden_size as u32,
-            eps,
-            norm_eps,
-        ))?;
+        self.launched(unsafe {
+            self.module.hc_head_f32(
+                &self.stream,
+                LaunchConfig {
+                    grid_dim: (tokens as u32, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                &sd,
+                &fd,
+                &scd,
+                &bd,
+                &mut hidden,
+                tokens as u32,
+                hc_mult as u32,
+                hidden_size as u32,
+                eps,
+                norm_eps,
+            )
+        })?;
         self.download_f32(&hidden, tokens * hidden_size)
     }
 
@@ -2350,24 +3165,26 @@ impl CudaArtifactOperatorContext {
             &self.stream,
             tokens * hidden_size,
         ))?;
-        self.launched(self.module.hc_head_f32(
-            &self.stream,
-            LaunchConfig {
-                grid_dim: (tokens as u32, 1, 1),
-                block_dim: (256, 1, 1),
-                shared_mem_bytes: 0,
-            },
-            &state.buffer,
-            &function.buffer,
-            &scale.buffer,
-            &base.buffer,
-            &mut hidden,
-            tokens as u32,
-            hc_mult as u32,
-            hidden_size as u32,
-            eps,
-            norm_eps,
-        ))?;
+        self.launched(unsafe {
+            self.module.hc_head_f32(
+                &self.stream,
+                LaunchConfig {
+                    grid_dim: (tokens as u32, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                &state.buffer,
+                &function.buffer,
+                &scale.buffer,
+                &base.buffer,
+                &mut hidden,
+                tokens as u32,
+                hc_mult as u32,
+                hidden_size as u32,
+                eps,
+                norm_eps,
+            )
+        })?;
         Ok(CudaF32Buffer {
             buffer: hidden,
             len: tokens * hidden_size,
@@ -2384,27 +3201,31 @@ impl CudaArtifactOperatorContext {
             CudaArtifactLinearShape::F32 {
                 out_features,
                 in_features,
-            } => self.launched(self.module.gemv_f32_bytes(
-                &self.stream,
-                LaunchConfig::for_num_elems(out_features as u32),
-                input,
-                &handle.weight,
-                output,
-                out_features as u32,
-                in_features as u32,
-            )),
+            } => self.launched(unsafe {
+                self.module.gemv_f32_bytes(
+                    &self.stream,
+                    LaunchConfig::for_num_elems(out_features as u32),
+                    input,
+                    &handle.weight,
+                    output,
+                    out_features as u32,
+                    in_features as u32,
+                )
+            }),
             CudaArtifactLinearShape::Bf16Bytes {
                 out_features,
                 in_features,
-            } => self.launched(self.module.gemv_bf16_bytes(
-                &self.stream,
-                LaunchConfig::for_num_elems(out_features as u32),
-                input,
-                &handle.weight,
-                output,
-                out_features as u32,
-                in_features as u32,
-            )),
+            } => self.launched(unsafe {
+                self.module.gemv_bf16_bytes(
+                    &self.stream,
+                    LaunchConfig::for_num_elems(out_features as u32),
+                    input,
+                    &handle.weight,
+                    output,
+                    out_features as u32,
+                    in_features as u32,
+                )
+            }),
 
             CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
                 out_features,
@@ -2416,19 +3237,21 @@ impl CudaArtifactOperatorContext {
                     Error::Internal("CUDA FP8 artifact linear missing scale".into())
                 })?;
                 let scale_cols = in_features.div_ceil(block_k);
-                self.launched(self.module.gemv_fp8_e4m3fn_e8m0_2d(
-                    &self.stream,
-                    LaunchConfig::for_num_elems(out_features as u32),
-                    input,
-                    &handle.weight,
-                    scale,
-                    output,
-                    out_features as u32,
-                    in_features as u32,
-                    scale_cols as u32,
-                    block_m as u32,
-                    block_k as u32,
-                ))
+                self.launched(unsafe {
+                    self.module.gemv_fp8_e4m3fn_e8m0_2d(
+                        &self.stream,
+                        LaunchConfig::for_num_elems(out_features as u32),
+                        input,
+                        &handle.weight,
+                        scale,
+                        output,
+                        out_features as u32,
+                        in_features as u32,
+                        scale_cols as u32,
+                        block_m as u32,
+                        block_k as u32,
+                    )
+                })
             }
             CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
                 out_features,
@@ -2437,16 +3260,18 @@ impl CudaArtifactOperatorContext {
                 let scale = handle.scale.as_ref().ok_or_else(|| {
                     Error::Internal("CUDA FP4 artifact linear missing scale".into())
                 })?;
-                self.launched(self.module.gemv_fp4_e2m1_e8m0(
-                    &self.stream,
-                    LaunchConfig::for_num_elems(out_features as u32),
-                    input,
-                    &handle.weight,
-                    scale,
-                    output,
-                    out_features as u32,
-                    in_features as u32,
-                ))
+                self.launched(unsafe {
+                    self.module.gemv_fp4_e2m1_e8m0(
+                        &self.stream,
+                        LaunchConfig::for_num_elems(out_features as u32),
+                        input,
+                        &handle.weight,
+                        scale,
+                        output,
+                        out_features as u32,
+                        in_features as u32,
+                    )
+                })
             }
         }
     }
@@ -2497,19 +3322,21 @@ impl CudaArtifactOperatorContext {
             return Ok(());
         }
         let total = heads * head_dim;
-        self.launched(self.module.rope_tail_yaarn(
-            &self.stream,
-            LaunchConfig::for_num_elems(total),
-            &mut qk.buffer,
-            &cos_table.buffer,
-            &sin_table.buffer,
-            total,
-            position,
-            heads,
-            head_dim,
-            rope_dim,
-            if inverse { 1u32 } else { 0u32 },
-        ))
+        self.launched(unsafe {
+            self.module.rope_tail_yaarn(
+                &self.stream,
+                LaunchConfig::for_num_elems(total),
+                &mut qk.buffer,
+                &cos_table.buffer,
+                &sin_table.buffer,
+                total,
+                position,
+                heads,
+                head_dim,
+                rope_dim,
+                if inverse { 1u32 } else { 0u32 },
+            )
+        })
     }
 
     pub fn sparse_attention_sink_f32(
@@ -2572,15 +3399,17 @@ pub fn cuda_gemv(x: &[f32], w: &[f32], out_f: usize) -> Result<Vec<f32>> {
     let xd = cu(DeviceBuffer::from_host(&s, x))?;
     let wd = cu(DeviceBuffer::from_host(&s, w))?;
     let mut yd = cu(DeviceBuffer::<f32>::zeroed(&s, out_f))?;
-    cu(module.gemv_f32(
-        &s,
-        LaunchConfig::for_num_elems(out_f as u32),
-        &xd,
-        &wd,
-        &mut yd,
-        out_f as u32,
-        x.len() as u32,
-    ))?;
+    cu(unsafe {
+        module.gemv_f32(
+            &s,
+            LaunchConfig::for_num_elems(out_f as u32),
+            &xd,
+            &wd,
+            &mut yd,
+            out_f as u32,
+            x.len() as u32,
+        )
+    })?;
     cu(yd.to_host_vec(&s))
 }
 
@@ -2810,17 +3639,19 @@ mod tests {
             let pd = cu(DeviceBuffer::from_host(&s, &packed)).unwrap();
             let sd = cu(DeviceBuffer::from_host(&s, &scales)).unwrap();
             let mut yd = cu(DeviceBuffer::<f32>::zeroed(&s, (batch * n) as usize)).unwrap();
-            cu(module.gemm_fp4_e2m1_e8m0(
-                &s,
-                LaunchConfig::for_num_elems(batch * n),
-                &xd,
-                &pd,
-                &sd,
-                &mut yd,
-                batch,
-                n,
-                k,
-            ))
+            cu(unsafe {
+                module.gemm_fp4_e2m1_e8m0(
+                    &s,
+                    LaunchConfig::for_num_elems(batch * n),
+                    &xd,
+                    &pd,
+                    &sd,
+                    &mut yd,
+                    batch,
+                    n,
+                    k,
+                )
+            })
             .unwrap();
             let _out = cu(yd.to_host_vec(&s)).unwrap();
             eprintln!("  [PASS] gemm_fp4_e2m1_e8m0");
@@ -2841,19 +3672,21 @@ mod tests {
             let wbd = cu(DeviceBuffer::from_host(&s, &wq_b)).unwrap();
             let qnd = cu(DeviceBuffer::from_host(&s, &q_norm)).unwrap();
             let mut q_out = cu(DeviceBuffer::<f32>::zeroed(&s, hd as usize)).unwrap();
-            cu(module.mla_q_projection_f32(
-                &s,
-                LaunchConfig::for_num_elems(hd),
-                &xd,
-                &wad,
-                &wbd,
-                &qnd,
-                &mut q_out,
-                hs,
-                qr,
-                hd,
-                eps,
-            ))
+            cu(unsafe {
+                module.mla_q_projection_f32(
+                    &s,
+                    LaunchConfig::for_num_elems(hd),
+                    &xd,
+                    &wad,
+                    &wbd,
+                    &qnd,
+                    &mut q_out,
+                    hs,
+                    qr,
+                    hd,
+                    eps,
+                )
+            })
             .unwrap();
             let _out = cu(q_out.to_host_vec(&s)).unwrap();
             eprintln!("  [PASS] mla_q_projection_f32");
@@ -2871,16 +3704,18 @@ mod tests {
             let mut qkd = cu(DeviceBuffer::from_host(&s, &qk)).unwrap();
             let cosd = cu(DeviceBuffer::from_host(&s, &cos)).unwrap();
             let sind = cu(DeviceBuffer::from_host(&s, &sin)).unwrap();
-            cu(module.rope_yarn(
-                &s,
-                LaunchConfig::for_num_elems(num_elements),
-                &mut qkd,
-                &cosd,
-                &sind,
-                num_elements,
-                hd,
-                rd,
-            ))
+            cu(unsafe {
+                module.rope_yarn(
+                    &s,
+                    LaunchConfig::for_num_elems(num_elements),
+                    &mut qkd,
+                    &cosd,
+                    &sind,
+                    num_elements,
+                    hd,
+                    rd,
+                )
+            })
             .unwrap();
             let _out = cu(qkd.to_host_vec(&s)).unwrap();
             eprintln!("  [PASS] rope_yarn");
@@ -2908,22 +3743,24 @@ mod tests {
                 (tokens * nh2 * hd2) as usize,
             ))
             .unwrap();
-            cu(module.sparse_attn_tiled_sink_f32(
-                &s,
-                LaunchConfig::for_num_elems(num_pairs),
-                &qd,
-                &kvd,
-                &tkd,
-                &sinkd,
-                &mut out,
-                num_pairs,
-                tokens,
-                kvl,
-                nh2,
-                hd2,
-                tk,
-                softmax_scale,
-            ))
+            cu(unsafe {
+                module.sparse_attn_tiled_sink_f32(
+                    &s,
+                    LaunchConfig::for_num_elems(num_pairs),
+                    &qd,
+                    &kvd,
+                    &tkd,
+                    &sinkd,
+                    &mut out,
+                    num_pairs,
+                    tokens,
+                    kvl,
+                    nh2,
+                    hd2,
+                    tk,
+                    softmax_scale,
+                )
+            })
             .unwrap();
             let _out = cu(out.to_host_vec(&s)).unwrap();
             eprintln!("  [PASS] sparse_attn_tiled_sink_f32");
@@ -2944,19 +3781,21 @@ mod tests {
             let dpd = cu(DeviceBuffer::from_host(&s, &down_packed)).unwrap();
             let dsd = cu(DeviceBuffer::from_host(&s, &down_scales)).unwrap();
             let mut out = cu(DeviceBuffer::<f32>::zeroed(&s, hid as usize)).unwrap();
-            cu(module.swiglu_down_accumulate(
-                &s,
-                LaunchConfig::for_num_elems(hid),
-                &gated,
-                &upd,
-                &dpd,
-                &dsd,
-                &mut out,
-                inter,
-                hid,
-                route_weight,
-                limit,
-            ))
+            cu(unsafe {
+                module.swiglu_down_accumulate(
+                    &s,
+                    LaunchConfig::for_num_elems(hid),
+                    &gated,
+                    &upd,
+                    &dpd,
+                    &dsd,
+                    &mut out,
+                    inter,
+                    hid,
+                    route_weight,
+                    limit,
+                )
+            })
             .unwrap();
             let _out = cu(out.to_host_vec(&s)).unwrap();
             eprintln!("  [PASS] swiglu_down_accumulate");

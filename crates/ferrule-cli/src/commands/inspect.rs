@@ -145,6 +145,7 @@ pub fn cmd_deepseek_v4_generate(
     json: bool,
     warmup_tokens: usize,
     moe_prefetch_experts: usize,
+    moe_hotset_experts: usize,
 ) -> anyhow::Result<()> {
     let model_path = Path::new(model_dir);
     let options = DeepSeekV4ReferenceOptions {
@@ -152,6 +153,7 @@ pub fn cmd_deepseek_v4_generate(
         output_head_chunk_rows,
         expert_reader_max_tensor_bytes: expert_reader_max_slice_mb.saturating_mul(1024 * 1024),
         moe_prefetch_experts,
+        moe_hotset_experts,
     };
     let operator_backend = DeepSeekV4OperatorBackend::parse(backend)?;
     let load_start = Instant::now();
@@ -185,7 +187,8 @@ pub fn cmd_deepseek_v4_generate(
         println!("max_new:   {max_new_tokens}");
         println!("max_layers: {max_layers}");
         println!("warmup:    {warmup_tokens}");
-        println!("prefetch:  {moe_prefetch_experts} experts/layer");
+        println!("prefetch:  {moe_prefetch_experts} hot experts/layer");
+        println!("hotset:    {moe_hotset_experts} resident experts/layer (0 = managed default)");
         println!("load:       {:.3} ms", load_elapsed.as_secs_f64() * 1000.0);
         println!("--- output ---");
     }
@@ -193,7 +196,7 @@ pub fn cmd_deepseek_v4_generate(
     let mut generated = Vec::new();
     let mut prefill_elapsed = Duration::ZERO;
     let mut decode_elapsed = Duration::ZERO;
-    let mut warmup_counters_baseline: Option<
+    let mut decode_counters_baseline: Option<
         ferrule_runtime::models::deepseek_v4::DeepSeekV4OperatorRuntimeCounters,
     > = None;
 
@@ -211,7 +214,7 @@ pub fn cmd_deepseek_v4_generate(
         // Run extra decode tokens that are NOT counted in decode timing.
         // This loads + uploads experts into GPU residency so the timed
         // decode loop hits resident experts instead of cold-loading from disk.
-        let warmup_counters_baseline_inner = if warmup_tokens > 0 {
+        if warmup_tokens > 0 {
             let warmup_start = Instant::now();
             let mut warmup_top = top.clone();
             for _ in 0..warmup_tokens {
@@ -227,11 +230,10 @@ pub fn cmd_deepseek_v4_generate(
                     warmup_start.elapsed().as_secs_f64()
                 );
             }
-            Some(runner.operator_runtime_counters())
-        } else {
-            None
-        };
-        warmup_counters_baseline = warmup_counters_baseline_inner;
+        }
+        // Baseline after prefill + optional warmup. JSON counters below report
+        // only the timed decode loop, matching `decode_seconds`/`decode_tok_per_s`.
+        decode_counters_baseline = Some(runner.operator_runtime_counters());
 
         let decode_start = Instant::now();
         for step in 0..max_new_tokens {
@@ -292,7 +294,7 @@ pub fn cmd_deepseek_v4_generate(
         // If warmup ran, subtract warmup baseline so counters reflect
         // only the timed decode phase.
         let (expert_loads, expert_load_bytes, expert_evictions, expert_selected) =
-            match &warmup_counters_baseline {
+            match &decode_counters_baseline {
                 Some(base) => (
                     op_counters.expert_loads.saturating_sub(base.expert_loads),
                     op_counters
@@ -313,7 +315,7 @@ pub fn cmd_deepseek_v4_generate(
                 ),
             };
         let (kernel_launches, h2d_copies, h2d_bytes, d2h_copies, d2h_bytes, uploads, upload_bytes) =
-            match &warmup_counters_baseline {
+            match &decode_counters_baseline {
                 Some(base) => (
                     op_counters
                         .kernel_launches
@@ -347,10 +349,73 @@ pub fn cmd_deepseek_v4_generate(
                     op_counters.artifact_upload_bytes,
                 ),
             };
+        let (
+            moe_calls,
+            moe_tc_calls,
+            moe_scalar_calls,
+            moe_reduce_calls,
+            moe_total_us,
+            moe_pointer_upload_us,
+            moe_input_prepare_us,
+            moe_gate_up_us,
+            moe_swiglu_us,
+            moe_hidden_pack_us,
+            moe_down_us,
+        ) = match &decode_counters_baseline {
+            Some(base) => (
+                op_counters.moe_calls.saturating_sub(base.moe_calls),
+                op_counters.moe_tc_calls.saturating_sub(base.moe_tc_calls),
+                op_counters
+                    .moe_scalar_calls
+                    .saturating_sub(base.moe_scalar_calls),
+                op_counters
+                    .moe_reduce_calls
+                    .saturating_sub(base.moe_reduce_calls),
+                op_counters.moe_total_us.saturating_sub(base.moe_total_us),
+                op_counters
+                    .moe_pointer_upload_us
+                    .saturating_sub(base.moe_pointer_upload_us),
+                op_counters
+                    .moe_input_prepare_us
+                    .saturating_sub(base.moe_input_prepare_us),
+                op_counters
+                    .moe_gate_up_us
+                    .saturating_sub(base.moe_gate_up_us),
+                op_counters.moe_swiglu_us.saturating_sub(base.moe_swiglu_us),
+                op_counters
+                    .moe_hidden_pack_us
+                    .saturating_sub(base.moe_hidden_pack_us),
+                op_counters.moe_down_us.saturating_sub(base.moe_down_us),
+            ),
+            None => (
+                op_counters.moe_calls,
+                op_counters.moe_tc_calls,
+                op_counters.moe_scalar_calls,
+                op_counters.moe_reduce_calls,
+                op_counters.moe_total_us,
+                op_counters.moe_pointer_upload_us,
+                op_counters.moe_input_prepare_us,
+                op_counters.moe_gate_up_us,
+                op_counters.moe_swiglu_us,
+                op_counters.moe_hidden_pack_us,
+                op_counters.moe_down_us,
+            ),
+        };
         let mut counters = RuntimeCounters::default();
         counters.record_load(load_elapsed);
         counters.record_prefill(prefill_elapsed);
         counters.record_decode(decode_elapsed);
+        counters.timing.moe_calls = moe_calls;
+        counters.timing.moe_tc_calls = moe_tc_calls;
+        counters.timing.moe_scalar_calls = moe_scalar_calls;
+        counters.timing.moe_reduce_calls = moe_reduce_calls;
+        counters.timing.moe_total_us = moe_total_us;
+        counters.timing.moe_pointer_upload_us = moe_pointer_upload_us;
+        counters.timing.moe_input_prepare_us = moe_input_prepare_us;
+        counters.timing.moe_gate_up_us = moe_gate_up_us;
+        counters.timing.moe_swiglu_us = moe_swiglu_us;
+        counters.timing.moe_hidden_pack_us = moe_hidden_pack_us;
+        counters.timing.moe_down_us = moe_down_us;
         counters.record_kernel_launches(kernel_launches);
         counters.transfers.host_to_device_copies = h2d_copies;
         counters.transfers.host_to_device_bytes = h2d_bytes;
@@ -361,7 +426,7 @@ pub fn cmd_deepseek_v4_generate(
         counters.record_expert_loads(expert_loads, expert_load_bytes);
         counters.record_expert_evictions(expert_evictions);
         let (host_cache_hits, host_cache_misses, host_cache_evictions) =
-            match &warmup_counters_baseline {
+            match &decode_counters_baseline {
                 Some(base) => (
                     op_counters
                         .expert_host_cache_hits
@@ -400,6 +465,7 @@ pub fn cmd_deepseek_v4_generate(
             "max_layers": max_layers,
             "warmup_tokens": warmup_tokens,
             "moe_prefetch_experts": moe_prefetch_experts,
+            "moe_hotset_experts": moe_hotset_experts,
             "bound_layers": runner.bound_layer_count(),
             "position": runner.position(),
             "layers": layers,
@@ -444,6 +510,7 @@ pub fn cmd_deepseek_v4_probe(
         output_head_chunk_rows,
         expert_reader_max_tensor_bytes: expert_reader_max_slice_mb.saturating_mul(1024 * 1024),
         moe_prefetch_experts: 0,
+        moe_hotset_experts: 0,
     };
 
     let operator_backend = DeepSeekV4OperatorBackend::parse(backend)?;

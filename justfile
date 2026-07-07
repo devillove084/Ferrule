@@ -19,7 +19,7 @@ default: check test
 # plain `cargo run --features cuda` cannot link #[cuda_module] artifacts and may fail
 # with cuda_oxide_artifact_anchor errors.
 [private]
-_cuda-arch := `if [ -n "${FERRULE_CUDA_ARCH:-}" ]; then echo "$FERRULE_CUDA_ARCH"; elif command -v nvidia-smi >/dev/null 2>&1; then cap=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | sed -n '1p' | tr -d '[:space:].'); if [ -n "${cap:-}" ]; then echo "sm_$cap"; else echo sm_86; fi; else echo sm_86; fi`
+_cuda-arch := `if [ -n "${FERRULE_CUDA_ARCH:-}" ]; then echo "$FERRULE_CUDA_ARCH"; elif command -v nvidia-smi >/dev/null 2>&1; then cap=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | sed -n '1p' | tr -d '[:space:].'); if [ -n "${cap:-}" ]; then arch="sm_$cap"; case "$cap" in 10*|11*|12*) arch="${arch}a";; esac; echo "$arch"; else echo sm_86; fi; else echo sm_86; fi`
 
 [private]
 _has-oxide := `command -v cargo-oxide >/dev/null 2>&1 && echo 1 || echo 0`
@@ -213,6 +213,29 @@ dsv4-cuda-generate prompt='Hello' tokens='4' chunk='4096' *args='':
     @echo "→ CUDA run via cargo oxide build (arch: {{ _cuda-arch }})"
     cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
     ./target/release/ferrule deepseek-v4-generate models/DeepSeek-V4-Flash-DSpark --prompt "{{ prompt }}" --backend cuda --max-tokens {{ tokens }} --output-head-chunk-rows {{ chunk }} {{ args }}
+
+dsv4-cuda-generate-json prompt='Hello' tokens='4' chunk='4096' output='target/dsv4-generate.json' *args='':
+    @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
+    @echo "→ CUDA JSON run via cargo oxide build (arch: {{ _cuda-arch }}, output: {{ output }})"
+    @mkdir -p target
+    cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
+    ./target/release/ferrule deepseek-v4-generate models/DeepSeek-V4-Flash-DSpark --prompt "{{ prompt }}" --backend cuda --max-tokens {{ tokens }} --output-head-chunk-rows {{ chunk }} --json {{ args }} | tee {{ output }}
+
+dsv4-cuda-moe-profile prompt='Hello' tokens='4' chunk='4096' output='target/dsv4-moe-profile.json' *args='':
+    @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
+    @echo "→ CUDA MoE timing JSON run (arch: {{ _cuda-arch }}, output: {{ output }})"
+    @mkdir -p target
+    cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
+    FERRULE_CUDA_MOE_TIMING=1 ./target/release/ferrule deepseek-v4-generate models/DeepSeek-V4-Flash-DSpark --prompt "{{ prompt }}" --backend cuda --max-tokens {{ tokens }} --output-head-chunk-rows {{ chunk }} --json {{ args }} | tee {{ output }}
+
+dsv4-cuda-moe-ab prompt='Hello' tokens='4' chunk='4096' *args='':
+    @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
+    @echo "→ CUDA MoE TC/scalar A/B JSON timing (arch: {{ _cuda-arch }})"
+    @mkdir -p target
+    cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
+    FERRULE_CUDA_MOE_TIMING=1 FERRULE_CUDA_MOE_TC=1 ./target/release/ferrule deepseek-v4-generate models/DeepSeek-V4-Flash-DSpark --prompt "{{ prompt }}" --backend cuda --max-tokens {{ tokens }} --output-head-chunk-rows {{ chunk }} --json {{ args }} > target/dsv4-moe-tc.json
+    FERRULE_CUDA_MOE_TIMING=1 FERRULE_CUDA_MOE_TC=0 ./target/release/ferrule deepseek-v4-generate models/DeepSeek-V4-Flash-DSpark --prompt "{{ prompt }}" --backend cuda --max-tokens {{ tokens }} --output-head-chunk-rows {{ chunk }} --json {{ args }} > target/dsv4-moe-scalar.json
+    python3 -c 'import json; paths=[("tc","target/dsv4-moe-tc.json"),("scalar","target/dsv4-moe-scalar.json")]; [print("{}: decode_tok/s={:.3f} total={:.3f}s moe_calls={} tc/scalar/reduce={}/{}/{} moe_total={:.3f}s ptr={:.3f}s input={:.3f}s gate_up={:.3f}s swiglu={:.3f}s hidden_pack={:.3f}s down={:.3f}s".format(label,s["decode_tok_per_s"],d["total_seconds"],t["moe_calls"],t["moe_tc_calls"],t["moe_scalar_calls"],t["moe_reduce_calls"],t["moe_total_us"]/1e6,t["moe_pointer_upload_us"]/1e6,t["moe_input_prepare_us"]/1e6,t["moe_gate_up_us"]/1e6,t["moe_swiglu_us"]/1e6,t["moe_hidden_pack_us"]/1e6,t["moe_down_us"]/1e6)) for label,path in paths for d in [json.load(open(path))] for s in [d["summary"]] for t in [s["counters"]["timing"]]]; print("wrote target/dsv4-moe-tc.json and target/dsv4-moe-scalar.json")'
 
 dsv4-parity-json prompt='Hello' output='target/dsv4_generation_parity.json' *args='':
     python3 scripts/dsv4_generation_parity.py models/DeepSeek-V4-Flash-DSpark --prompt "{{ prompt }}" --output "{{ output }}" {{ args }}

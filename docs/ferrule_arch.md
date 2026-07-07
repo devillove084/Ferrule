@@ -90,37 +90,47 @@ be explicit runtime objects that can be scheduled against real hardware.
 
 ## Current runtime
 
-```
+```text
 safetensors + tokenizer files
         ↓
-ferrule-model loader (OLMoE) or family descriptor (DSV4)
+ferrule-model family descriptor + tensor inventory
         ↓
-CPU FP32 tensors (OLMoE) or artifact payloads (DSV4)
+Artifact-preserving runtime payloads
         ↓
-Q4_0 / Q8_0 quantization (OLMoE) or artifact-preserving FP4 (DSV4)
+DSV4: direct HF artifact streaming + mmap + managed expert handles
+OLMoE: optional WeightPack cache / all-resident CUDA path
         ↓
-WeightPack cache (optional, OLMoE) or direct artifact streaming (DSV4)
+DeepSeekV4ReferenceRunner / Engine-facing runner
         ↓
-CUDA device buffers
+CUDA operator cache + session state + expert residency planner
         ↓
-ferrule-runtime session + sampler + graph runtime
-        ↓
-chat / one-shot generation / server
+chat / one-shot generation / minimal server
 ```
 
 Two execution paths coexist:
 
-1. **OLMoE legacy path**: `GpuOlmoeModel::build_from_cpu` quantizes and uploads
-   all experts at startup as a concatenated `DeviceBuffer`. All-resident, no
-   eviction, no streaming. Used when the model fits in VRAM.
+1. **OLMoE all-resident path**: `GpuOlmoeModel::build_from_cpu` quantizes and
+   uploads all experts at startup as concatenated device buffers. It is the
+   correctness fixture for router semantics and legacy CUDA kernels.
 
-2. **DSV4 streaming path**: `DeepSeekV4CudaOperatorCache` holds per-expert
-   `CudaFp4ExpertHandles` in a `HashMap`. `ExpertStreamingPlanner` decides
-   load/evict per layer per token. Synchronous disk read + H2D upload on miss.
-   Used when the model does not fit in VRAM.
+2. **DSV4 interactive streaming path**: `DeepSeekV4ReferenceRunner` owns session
+   position and per-layer state. `DeepSeekV4CudaOperatorCache` owns CUDA operator
+   state, uploaded linears, norm/rope caches, device KV buffers, expert handles,
+   MoE workspaces, and counters. `ExpertStreamingPlanner` decides selected,
+   prefetched, loaded, and evicted `(layer, expert)` bundles.
 
-Both paths are valid. The storage abstraction accommodates both — all-resident
-mode bypasses eviction; streaming mode uses `ExpertResidencyBackend`.
+Current DSV4 chat is a **single-process resident runner**, not yet a production
+serving engine:
+
+- `ferrule chat ... -q cuda --chat-template deepseek-v4 --temp 0` starts the REPL
+  immediately and loads CPU-side DSV4 artifacts on a background thread.
+- CUDA context/operator cache is initialized on the main thread when the model is
+  first used.
+- Interactive prompt append uses `prefill_tokens_topk_interactive`: non-final
+  prompt tokens update session/KV/MoE state without materializing final
+  hidden/logits; the final prompt token materializes top-k for generation.
+- This improves terminal latency, but it is still token-by-token device append,
+  not true SGLang/vLLM-style CUDA chunked prefill.
 
 ---
 
@@ -163,71 +173,63 @@ Graph invariants:
 
 ## Storage and residency
 
-Ferrule treats every loadable/resident runtime datum as a **storage object**
-with identity, layout, locators, replicas, and policy. The design is in
+Ferrule treats every loadable/resident runtime datum as a **storage object** with
+identity, layout, locators, replicas, and policy. The vocabulary design is in
 `docs/storage-residency-architecture.md`.
 
 ### Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         STORAGE OBJECT                              │
-│  StorageObjectId (enum)  ·  Descriptor  ·  ObjectLocator(s)         │
-└──────────────────────────────────┬──────────────────────────────────┘
-                                   │
-                    catalog maps ID → descriptor + locators
-                                   │
-         ┌─────────────────────────┴───────────────────────────┐
-         ▼                                                   ▼
-┌─────────────────────────┐              ┌────────────────────────────┐
-│    ResidencyManager     │   miss →     │      TransferEngine        │
-│  ObjectReplica[]        │  transfer    │  ensure() / prefetch()      │
-│  placement · state ·    │              │  poll()                     │
-│  generation · handleId  │              │  backends: file/mmap/H2D/   │
-│  budgets (bytes+slots)  │              │  (future) io_uring/RDMA     │
-└─────────────────────────┘              └────────────────────────────┘
-         ▲                                                   ▲
-         │  policy ranks objects, requests residency          │
-         ▼                                                   │
-┌─────────────────────────────────────────────────────────────────────┐
-│  StorageResidencyPolicy { budgets, retain_hot, eviction_weights }   │
-│  ResidencyScore { execute_now, predicted, recency, freq, cost }     │
-└─────────────────────────────────────────────────────────────────────┘
+```text
+StorageObjectId + descriptor + locators
+        ↓
+Residency policy scores objects by execute_now / predicted / recency / freq / cost
+        ↓
+Transfer/residency backend ensures placement
+        ↓
+Runtime handle store exposes executable objects to model code
 ```
 
 ### Current state
 
-- `ferrule-storage` crate: vocabulary types + traits, zero backend deps, 67
-  tests.
-- `ExpertResidencyBackend` trait in `ferrule-runtime`: unifies the duplicated
-  load/evict loop. `CpuExpertHandleStore` impl done. 14 tests.
-- Two active systems: `ExpertStreamingPlanner` (strategy) +
-  `DeepSeekV4CudaOperatorCache` (execution). Not merged — they are different
-  layers. The trait unifies the execution loop, not the systems.
-- Dead code `residency.rs` deleted.
+- `ferrule-storage` provides backend-neutral vocabulary: `StorageObjectId`,
+  `ObjectLocator`, `Placement`, `ObjectReplica`, `ReplicaHandleId`,
+  `StorageCatalog`, `TransferEngine`, and policy scoring types.
+- `ExpertStreamingPlanner` is the active DSV4 strategy layer. It tracks per-layer
+  expert state, recency, frequency, selected experts, predicted experts, loads,
+  evictions, and committed residency.
+- `HostStagedExpertCache` caches decoded expert bundles in host RAM and uses mmap
+  shard reads underneath.
+- CUDA DSV4 expert execution uses managed-memory FP4 expert buffers on GB10 by
+  default. This avoids explicit H2D uploads for expert weights, but resident
+  handles still represent `(layer, expert)` bundles and can exceed small-GPU
+  budgets if left unbounded.
+- Routing-aware hot prefetch is implemented: `--moe-prefetch-experts N` uses the
+  per-layer observed hotset instead of naive low expert IDs.
+- Bounded hotset residency is available via `--moe-hotset-experts N`; it is a
+  memory-pressure tool. Short GB10 runs showed `N=16` increased churn and slowed
+  throughput.
 
 ### Tier hierarchy
 
-```
-Remote  ── (Phase 5: RDMA / object store / LAN cache)
-   │
-   ▼
-Disk    ── safetensors / WeightPack / local cache log
-   │
-   ▼
-Host    ── staged bytes (pinned or unpinned)     [Phase 2: not built yet]
-   │
-   ▼
-Device  ── CUDA handles / device buffers
+```text
+Remote  ── future object store / LAN / RDMA
+   ↓
+Disk    ── HF safetensors / WeightPack / local cache log
+   ↓
+Host    ── mmap page cache + HostStagedExpertCache
+   ↓
+Managed ── CUDA managed expert buffers on unified-memory GB10
+   ↓
+Device  ── CUDA scratch, KV/cache, linears, output-head/top-k buffers
 ```
 
 ### Two residency policy levels
 
-- `ferrule-model` `ResidencyPolicy` (`streaming_allowed`,
-  `all_resident_required`) — model-level: does this model fit?
-- `ferrule-storage` `StorageResidencyPolicy` (`Budgets`, `EvictionWeights`,
-  `prefetch_window`) — runtime-level: what to keep, what to evict. Active only
-  when `streaming_allowed = true`.
+- `ferrule-model` `ResidencyPolicy` answers whether a model family allows
+  streaming or requires all-resident execution.
+- Runtime/storage policy answers what to keep, evict, prefetch, or pin under
+  real budgets. For DSV4, this must be per `(layer, expert)`, not “256 experts”
+  globally.
 
 ---
 
@@ -288,84 +290,112 @@ This fixed the previous OLMoE-Instruct chat degeneration.
 
 ## GPU runtime
 
-`GpuOlmoeModel` owns one CUDA context, one stream, persistent device buffers,
-and reusable scratch buffers.
+`ferrule-cuda` provides two families of CUDA code:
 
-Persistent state:
+1. legacy OLMoE kernels over Q4/Q8/all-resident buffers;
+2. artifact-preserving DSV4 operators over FP4/FP8/BF16/F32 payloads.
 
-- embedding table and `lm_head` in FP32
-- norm weights and router weights in FP32
-- quantized attention projections
-- quantized expert projections (concatenated `ex_gate_packed` / `ex_down_packed`)
-- RoPE tables
-- per-layer K/V cache
-- hidden, attention, router, expert, and logits scratch buffers
+Persistent DSV4 CUDA state is owned by `DeepSeekV4CudaOperatorCache`:
 
-Key kernels:
+- one CUDA context and stream through `CudaArtifactOperatorContext`;
+- uploaded/cached artifact linears and norm weights;
+- rope tables, sink buffers, grouped output-a cache, top-k buffer;
+- device KV and combined window/compressed KV buffers where implemented;
+- managed-memory FP4 expert handles in `experts: HashMap<ExpertId, ...>`;
+- reusable routed MoE workspace and counters.
 
-| Kernel | Purpose |
+Key current kernels/operators:
+
+| Kernel/operator | Purpose |
 |---|---|
-| `embed_lookup` | token embedding lookup |
-| `gemv_f32` | router and `lm_head` projections |
-| `gemv_q4`, `gemv_q4_off` | Q4_0 GEMV and expert-offset GEMV |
-| `gemv_q8`, `gemv_q8_off` | Q8_0 GEMV and expert-offset GEMV |
-| `gemv_dual_q4_off` | fused Q4_0 expert gate/up GEMV |
-| `gemv_triple_q4` | fused Q/K/V path when dimensions match |
-| `rms_norm_fused` | RMSNorm reduction and apply |
-| `rope` | rotary position embedding |
-| `attn_scores` | GQA-aware attention scores |
-| `attn_combine_softmax` | softmax and V accumulation |
-| `router_topk` | all-expert softmax and top-k selection |
-| `silu_mul` | SiLU(gate) × up |
-| `saxpy` | weighted accumulation and residual updates |
-| `artifact_fp4_swiglu_ffn_matvec` | DSV4 packed FP4 expert SwiGLU |
+| `artifact_linear_*` | artifact-preserving FP4/FP8/BF16/F32 matvec/top-k |
+| `fp4_e2m1_e8m0_quantize_f32_packed` | pack f32 activations into FP4 + E8M0 scales |
+| `moe_gemm_dual_fp4_mxf4_batched` | FP4 mxf4 Tensor Core gate/up path |
+| `moe_swiglu_fp4_packed_batched` | fused SwiGLU + route weight + FP4 pack |
+| `moe_gemm_down_fp4_mxf4_batched` | FP4 mxf4 Tensor Core down projection |
+| `moe_gemv_*_batched` | scalar/reduce FP4 fallback paths |
+| `rms_norm_*`, `rope_tail_from_device` | device norm/rotary pieces |
+| `sparse_attention_sink_from_device` | sparse attention over device query/value buffers |
+| `artifact_linear_topk_from_device` | greedy output-head top-k without full logits download |
+
+The FP4 Tensor Core path is correct and default-on (`FERRULE_CUDA_MOE_TC=0` forces
+scalar fallback), but it is still under-utilized because current decode feeds
+`batch_cols=1`. True GEMM utilization requires real prompt/speculative columns
+and per-column routing.
 
 ---
 
 ## DeepSeek V4 execution
 
-DSV4 is the near-term pressure test. It exercises: hybrid attention (CSA/HCA/
-MLA), sparse expert routing (hash + score/bias), artifact FP4 experts, HC
-(hyper-connection) state, compressed/sliding/indexer KV, and out-of-core
-streaming pressure.
+DSV4 is the current pressure test. It exercises hybrid attention, hyper-connection
+state, compressed/sliding/indexer KV, hash + score/bias expert routing, shared
+experts, routed FP4 experts, unified-memory residency, and DSpark/speculation
+metadata.
 
 ### Current DSV4 path
 
+```text
+chat/generate token or prompt segment
+  → tokenizer + DeepSeek-V4 chat template
+  → runner session position + per-layer state
+  → per layer:
+       hc_pre → attn_norm → attention/KV append → hc_post
+       hc_pre → ffn_norm → router → expert residency plan
+       routed MoE + shared FFN → hc_post
+  → final hc_head/output_norm only when hidden/logits are needed
+  → device output-head top-k for greedy decode
 ```
-router selects experts (per layer)
-  → ExpertStreamingPlanner.plan_layer_step()
-       produces loads[] + evictions[]
-  → DeepSeekV4CudaOperatorCache.routed_moe_step():
-       for each eviction: remove from experts HashMap + handle store
-       for each load: read_load_source → upload_expert_bundle → insert
-       for each route: artifact_fp4_swiglu_ffn_matvec
-  → planner.commit_step()
+
+Interactive chat adds a short-turn optimization:
+
+```text
+prompt tokens except last: feed_token() fast append, no final hidden/logits
+last prompt token: decode_token_topk(), materialize top-k
+new generated tokens: print token, then feed_token() if it must be committed
 ```
+
+This reduces repeated final projection work, but it is still not true chunked
+prefill. Every prompt token currently performs a full-layer append pass.
 
 ### DSV4 layer order
 
-```
+```text
 hc_pre → attn_norm → attention → hc_post
-  → hc_pre → ffn_norm → MoE (routed + shared) → hc_post
+  → hc_pre → ffn_norm → routed MoE + shared FFN → hc_post
 ```
 
 ### What works
 
-- Full 43-layer CUDA greedy generation + readline chat.
-- Official DSV4 chat prompt wrapper.
-- Packed FP4 + E8M0 scale artifact-preserving expert math.
-- Hash routing (early layers) + score/bias routing (later layers).
-- HC reference math (`hc_pre`, `hc_post`, `hc_head`, Sinkhorn split).
-- Compressed/sliding/indexer attention decode path (correctness-first).
-- `deepseek-v4-probe` and `deepseek-v4-generate` CLI commands.
+- Full 43-layer CUDA greedy generation and readline chat.
+- Official DSV4 chat template wrapper.
+- Artifact inventory and binding for attention, HC, routers, shared experts, and
+  routed experts from local HF shards.
+- Hash-routed early layers and score/bias routed later layers.
+- Managed-memory FP4 expert residency with mmap + host-staged cache.
+- Device-resident hot decode chain for single-token greedy decode.
+- FP4 `mxf4` Tensor Core MoE path with scalar fallback.
+- Routing-aware expert hotset/prefetch counters.
+- JSON decode benchmark counters and chat per-turn stats.
+
+### Measured current behavior
+
+- Best short JSON decode observed: **0.910 tok/s** for 8 decode tokens + 4 warmup
+  with TC default and no prefetch.
+- 16-token TC + hot prefetch observed: **0.864 tok/s**.
+- Two-turn terminal pipe after interactive append:
+  - REPL ready immediately; artifact load ~0.82s in background;
+  - first turn `Hello`, `-n 1`: prefill 23.65s, decode/feed 1.28s;
+  - second turn `Hi`, `-n 1`: prefill 5.88s, decode/feed 1.09s.
 
 ### What's missing
 
-- Official numeric parity (output quality is suspect).
-- Device-resident decode arena (host `Vec<f32>` boundaries dominate latency).
-- GPU-resident KV/compressor/indexer state.
-- Production expert residency + batched selected-expert kernel.
-- DSpark speculation.
+- Official DSV4 numeric parity and output-quality gate.
+- True CUDA chunked/segment prefill over an existing prefix.
+- Fully device-resident compressor/indexer state and top-k.
+- Real FP4 GEMM utilization with `batch_cols > 1` and per-column routing.
+- Resident worker abstraction shared by CLI chat and server.
+- Paged KV, prefix/radix reuse, continuous batching, cancellation.
+- DSpark proposal/verify/rollback loop.
 
 ---
 
@@ -438,23 +468,40 @@ class. CLI: `--quant q4-mixed`.
   seed, stop strings, top-K logprobs.
 - `generation_config.json` auto-loading with CLI > config > default precedence.
 - Chat template registry: OLMoE, ChatML, Llama3, Qwen, DeepSeek-V4, Plain.
-- Context controls: `--ctx-size`, `/reset`, `/stats` in REPL.
+- Context controls: `--ctx-size`, `/reset`, `/stats`, `/experts`, `/ctx` in REPL.
 - Token/logprob debugging: `--verbose-tokens`, `--logprobs <K>`.
-- DSV4 greedy chat uses top-k fast path (no full vocab logits materialization).
+- DSV4 greedy chat uses a top-k fast path and avoids full-vocab logits unless
+  non-greedy/logprob settings require it.
+- DSV4 chat now starts the REPL immediately and loads CPU-side artifacts in the
+  background. The first prompt waits only if loading is not finished.
+- DSV4 prompt append uses `prefill_tokens_topk_interactive` for short-turn latency:
+  non-final prompt tokens update session state without final hidden/logits; the
+  final prompt token produces top-k for generation.
+
+The next architecture step is to move this CLI-local behavior into a reusable
+resident `EngineWorker` so chat and server share the same SGLang-style execution
+shape.
 
 ---
 
 ## Server
 
-Minimal OpenAI-compatible server:
+Minimal OpenAI-compatible server exists:
 
 - `GET /health`
 - `GET /v1/models`
 - `POST /v1/chat/completions` (one request at a time)
 - SSE streaming (`stream: true`) with token text + final usage stats
 
-Production serving (paged KV, continuous batching, scheduler) is planned after
-the graph runtime stabilizes.
+Current limitation: server does not yet use the new DSV4 resident/lazy chat path
+or a production worker loop. Production serving needs:
+
+1. shared resident `EngineWorker` for chat and server;
+2. request/session/sequence lifecycle;
+3. paged KV and prefix/radix cache integration;
+4. chunked prefill scheduler;
+5. continuous batching for decode;
+6. cancellation, metrics, and structured output masks.
 
 ---
 
@@ -489,18 +536,19 @@ leak into scheduler/sampler/CLI.
 
 ## Alignment targets
 
-### llama.cpp parity that matters
+### Mainstream-engine parity that matters
 
 | Capability | Ferrule today | Target |
 |---|---|---|
-| chat CLI | REPL with sampling + stop strings + templates | ✅ structured history + template registry |
-| model metadata | `info` | qcache/WeightPack manifest inspection |
-| quantization | Q4/Q8/FP4/FP8, mixed precision | GGUF K/IQ execution, calibration |
-| benchmarks | `bench-infer` JSON | prompt/decode split, PK matrix |
-| quality checks | compare-logits, golden tokens, perplexity | DSV4 official parity |
-| loading | safetensors + WeightPack | WeightPack-only, streaming quantization |
-| serving | minimal server | paged KV + continuous batching |
-| offload | expert streaming (DSV4) | host-staged cache, residency policy |
+| Chat CLI | immediate REPL + DSV4 lazy artifact load + interactive append | resident worker with async warmup and first-token metrics |
+| Prompt prefill | token-by-token device append for CUDA chat | CUDA chunked prefill over existing prefix |
+| Decode | ~0.9 tok/s short JSON DSV4; top-k device path | multi-token/speculative throughput + graph buckets |
+| Model metadata | `info`, DSV4 descriptor, DSpark metadata parse | engine-plan inspection and policy dump |
+| Quantization | Q4/Q8/FP4/FP8, mixed precision, artifact-preserving DSV4 | calibrated GGUF K/IQ + official quality gates |
+| Benchmarks | JSON decode summaries + chat stats | interactive benchmark, first-token, PK matrix |
+| Loading | safetensors + WeightPack; DSV4 background artifact load | resident worker warmup + artifact placement plan |
+| Serving | minimal OpenAI-compatible server | SGLang/vLLM-style worker, paged KV, batching |
+| Offload | expert streaming + managed memory + hotset prefetch | budgeted placement, async overlap, long-run policy |
 
 ### Differentiation
 
@@ -508,10 +556,12 @@ Ferrule's differentiation over dense local runtimes:
 
 - **MoE-native**: explicit router/top-k/expert execution, expert hot/cold
   profiling, expert residency and prefetch.
-- **Artifact-aware**: preserve official quantization formats (FP4/FP8) instead
-  of always re-quantizing.
-- **Graph/runtime contracts**: semantic graph IR, typed artifact bindings,
-  backend object store.
+- **Artifact-aware**: preserve official quantization formats (FP4/FP8) instead of
+  always re-quantizing.
+- **Interactive state-aware runtime**: session state, prompt append, KV, expert
+  residency, and future speculation are explicit runtime objects.
+- **Graph/runtime contracts**: semantic graph IR, typed artifact bindings, backend
+  object store.
 - **Storage/residency vocabulary**: `StorageObjectId`, `Placement`,
   `ObjectLocator`, `ObjectReplica` — one vocabulary for all loadable/resident
   state.

@@ -105,30 +105,32 @@ impl<'a> CudaSparseAttentionExecutor<'a> {
         shape: CudaSparseAttentionShape,
     ) -> Result<()> {
         shape.validate()?;
-        cu(self.module.sparse_attn_tiled_sink_f32(
-            self.stream,
-            LaunchConfig::for_num_elems((shape.tokens() * shape.heads) as u32),
-            q,
-            kv,
-            topk,
-            sink,
-            output,
-            checked_u32(
-                shape.tokens() * shape.heads,
-                "sparse attention",
-                "num_pairs",
-            )?,
-            checked_u32(
-                shape.tokens_per_batch,
-                "sparse attention",
-                "tokens_per_batch",
-            )?,
-            checked_u32(shape.kv_len, "sparse attention", "kv_len")?,
-            checked_u32(shape.heads, "sparse attention", "heads")?,
-            checked_u32(shape.head_dim, "sparse attention", "head_dim")?,
-            checked_u32(shape.topk, "sparse attention", "topk")?,
-            shape.softmax_scale,
-        ))
+        cu(unsafe {
+            self.module.sparse_attn_tiled_sink_f32(
+                self.stream,
+                LaunchConfig::for_num_elems((shape.tokens() * shape.heads) as u32),
+                q,
+                kv,
+                topk,
+                sink,
+                output,
+                checked_u32(
+                    shape.tokens() * shape.heads,
+                    "sparse attention",
+                    "num_pairs",
+                )?,
+                checked_u32(
+                    shape.tokens_per_batch,
+                    "sparse attention",
+                    "tokens_per_batch",
+                )?,
+                checked_u32(shape.kv_len, "sparse attention", "kv_len")?,
+                checked_u32(shape.heads, "sparse attention", "heads")?,
+                checked_u32(shape.head_dim, "sparse attention", "head_dim")?,
+                checked_u32(shape.topk, "sparse attention", "topk")?,
+                shape.softmax_scale,
+            )
+        })
     }
 }
 

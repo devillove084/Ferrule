@@ -83,34 +83,38 @@ impl CudaTransformerExecutor<'_> {
         } = &mut model.scratch;
 
         // FFN norm.
-        cu(m.rms_norm_fused(s, cfg1(d), hidden, &layer.fn_, ffn_in, d as u32, eps))?;
+        cu(unsafe { m.rms_norm_fused(s, cfg1(d), hidden, &layer.fn_, ffn_in, d as u32, eps) })?;
 
         // Router (f32, small) + GPU top-k.
-        cu(m.gemv_f32(
-            s,
-            cfg(ne),
-            ffn_in,
-            &layer.rt,
-            router_out,
-            ne as u32,
-            d as u32,
-        ))?;
-        cu(m.router_topk(
-            s,
-            cfg1(ne),
-            router_out,
-            topk_idx,
-            topk_w,
-            ne as u32,
-            na as u32,
-            norm_topk_prob as u32,
-        ))?;
+        cu(unsafe {
+            m.gemv_f32(
+                s,
+                cfg(ne),
+                ffn_in,
+                &layer.rt,
+                router_out,
+                ne as u32,
+                d as u32,
+            )
+        })?;
+        cu(unsafe {
+            m.router_topk(
+                s,
+                cfg1(ne),
+                router_out,
+                topk_idx,
+                topk_w,
+                ne as u32,
+                na as u32,
+                norm_topk_prob as u32,
+            )
+        })?;
 
         // Tiny host sync: only top-k expert indices and weights.
         let tk_idx = cu(topk_idx.to_host_vec(s))?;
         let tk_w = cu(topk_w.to_host_vec(s))?;
 
-        cu(m.mul(s, cfg(d), hidden, h_tmp2, fo, d as u32))?; // fo = 0
+        cu(unsafe { m.mul(s, cfg(d), hidden, h_tmp2, fo, d as u32) })?; // fo = 0
 
         for rank in 0..na {
             let eid = tk_idx[rank] as usize;
@@ -126,23 +130,25 @@ impl CudaTransformerExecutor<'_> {
 
             // gate + up (fused dual for Q4_0)
             if qt == QuantType::Q4_0 {
-                cu(m.gemv_dual_q4_off(
-                    s,
-                    cfg(mid),
-                    ffn_in,
-                    &layer.ex_gate_packed,
-                    &layer.ex_gate_scales,
-                    gb,
-                    gate_packed_off,
-                    gate_scales_off,
-                    &layer.ex_up_packed,
-                    &layer.ex_up_scales,
-                    ub,
-                    gate_packed_off,
-                    gate_scales_off,
-                    mid as u32,
-                    d as u32,
-                ))?;
+                cu(unsafe {
+                    m.gemv_dual_q4_off(
+                        s,
+                        cfg(mid),
+                        ffn_in,
+                        &layer.ex_gate_packed,
+                        &layer.ex_gate_scales,
+                        gb,
+                        gate_packed_off,
+                        gate_scales_off,
+                        &layer.ex_up_packed,
+                        &layer.ex_up_scales,
+                        ub,
+                        gate_packed_off,
+                        gate_scales_off,
+                        mid as u32,
+                        d as u32,
+                    )
+                })?;
             } else {
                 gemv_quant_off(
                     m,
@@ -175,7 +181,7 @@ impl CudaTransformerExecutor<'_> {
             }
 
             // SiLU(gate) * up.
-            cu(m.silu_mul(s, cfg(mid), gb, ub, gb2, mid as u32))?;
+            cu(unsafe { m.silu_mul(s, cfg(mid), gb, ub, gb2, mid as u32) })?;
 
             // down.
             gemv_quant_off(
@@ -194,12 +200,12 @@ impl CudaTransformerExecutor<'_> {
             )?;
 
             // fo += w * db.
-            cu(m.saxpy(s, cfg(d), w, db, fo, d as u32))?;
+            cu(unsafe { m.saxpy(s, cfg(d), w, db, fo, d as u32) })?;
         }
 
         // Residual.
-        cu(m.add(s, cfg(d), hidden, fo, h_tmp1, d as u32))?;
-        cu(m.add(s, cfg(d), h_tmp1, h_tmp2, hidden, d as u32))?;
+        cu(unsafe { m.add(s, cfg(d), hidden, fo, h_tmp1, d as u32) })?;
+        cu(unsafe { m.add(s, cfg(d), h_tmp1, h_tmp2, hidden, d as u32) })?;
         Ok(())
     }
 }

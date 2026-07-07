@@ -7,7 +7,9 @@
 
 use cuda_device::{
     atomic::{AtomicOrdering, DeviceAtomicF32},
-    cuda_module, kernel, ptx_asm, thread, DisjointSlice, SharedArray,
+    cuda_module, kernel, ptx_asm, thread,
+    wmma::mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0,
+    DisjointSlice, SharedArray,
 };
 
 const LN_2_F32: f32 = core::f32::consts::LN_2;
@@ -115,6 +117,47 @@ fn quantize_fp8_e4m3fn_to_f32(value: f32) -> f32 {
     let abs_value = if value < 0.0 { -value } else { value };
     let magnitude = if abs_value > 448.0 { 448.0 } else { abs_value };
     sign * nearest_fp8_e4m3fn_positive(magnitude)
+}
+
+fn e8m0_scale_byte_for_amax(amax: f32, quant_max: f32) -> u8 {
+    if !amax.is_finite() || amax <= 0.0 || !quant_max.is_finite() || quant_max <= 0.0 {
+        return 127;
+    }
+    let exp = libm::ceilf(libm::log2f(amax / quant_max)) as i32;
+    let byte = exp + 127;
+    if byte < 0 {
+        0
+    } else if byte > 255 {
+        255
+    } else {
+        byte as u8
+    }
+}
+
+fn quantize_fp4_e2m1_nibble(value: f32) -> u8 {
+    if !value.is_finite() || value == 0.0 {
+        return 0;
+    }
+    let sign = if value < 0.0 { 0x08 } else { 0x00 };
+    let magnitude = if value < 0.0 { -value } else { value };
+    let clamped = if magnitude > 6.0 { 6.0 } else { magnitude };
+    let mut best_idx = 0u8;
+    let mut best_err = clamped;
+    let mut idx = 1u8;
+    while idx < 8 {
+        let candidate = fp4_e2m1_value(idx);
+        let err = if candidate > clamped {
+            candidate - clamped
+        } else {
+            clamped - candidate
+        };
+        if err < best_err {
+            best_err = err;
+            best_idx = idx;
+        }
+        idx += 1;
+    }
+    sign | best_idx
 }
 
 fn nearest_fp8_e4m3fn_positive(magnitude: f32) -> f32 {
@@ -778,6 +821,77 @@ pub mod kernels {
                 *ptr.add(i) = quantized;
             }
             i += 1;
+        }
+    }
+
+    /// Block-wise FP4 E2M1 + E8M0 activation quantization into packed bytes.
+    ///
+    /// `values` is row-major `[rows, row_width]`; `packed` is
+    /// `[rows, row_width / 2]` low-nibble-first; `scales` is
+    /// `[rows, row_width / block_size]`. For mxf4 Tensor Core paths the block
+    /// size should be 32.
+    #[kernel]
+    pub fn fp4_e2m1_e8m0_quantize_f32_packed(
+        values: &[f32],
+        mut packed: DisjointSlice<u8>,
+        mut scales: DisjointSlice<u8>,
+        value_len: u32,
+        row_width: u32,
+        block_size: u32,
+    ) {
+        let block_idx = thread::index_1d().get() as usize;
+        let value_len = value_len as usize;
+        let row_width = row_width as usize;
+        let block_size = block_size as usize;
+        if row_width == 0
+            || block_size == 0
+            || !row_width.is_multiple_of(block_size)
+            || !block_size.is_multiple_of(2)
+        {
+            return;
+        }
+        if value_len == 0 || !value_len.is_multiple_of(row_width) {
+            return;
+        }
+        let blocks_per_row = row_width / block_size;
+        let total_blocks = value_len / block_size;
+        if block_idx >= total_blocks {
+            return;
+        }
+        let row = block_idx / blocks_per_row;
+        let block = block_idx % blocks_per_row;
+        let start = row * row_width + block * block_size;
+        let end = start + block_size;
+
+        let mut amax = 0.0f32;
+        let mut i = start;
+        while i < end {
+            let value = values[i];
+            let abs_value = if value < 0.0 { -value } else { value };
+            if abs_value > amax {
+                amax = abs_value;
+            }
+            i += 1;
+        }
+        let scale_byte = e8m0_scale_byte_for_amax(amax, 6.0);
+        let scale = e8m0_scale(scale_byte);
+        unsafe {
+            *scales.as_mut_ptr().add(row * blocks_per_row + block) = scale_byte;
+        }
+
+        let packed_row = row * (row_width / 2);
+        let packed_block = block * (block_size / 2);
+        let packed_ptr = packed.as_mut_ptr();
+        let mut j = 0usize;
+        while j < block_size {
+            let v0 = values[start + j] / scale;
+            let v1 = values[start + j + 1] / scale;
+            let n0 = quantize_fp4_e2m1_nibble(v0);
+            let n1 = quantize_fp4_e2m1_nibble(v1);
+            unsafe {
+                *packed_ptr.add(packed_row + packed_block + j / 2) = n0 | (n1 << 4);
+            }
+            j += 2;
         }
     }
 
@@ -2151,6 +2265,218 @@ pub mod kernels {
         }
     }
 
+    /// Batched gate+up FP4 GEMM using Blackwell mxf4 Tensor Cores.
+    ///
+    /// Grid: `(ceil(intermediate_size / 16), num_experts)`, blockDim.x = 32.
+    /// One warp computes a `16×min(batch_cols, 8)` output tile for one expert.
+    /// Outputs are laid out as `[expert, batch_col, output_row]`; with
+    /// `batch_cols=1` this is identical to the historical `[expert, row]` GEMV
+    /// layout used by the rest of the decode path.
+    #[kernel]
+    pub unsafe fn moe_gemm_dual_fp4_mxf4_batched(
+        x_packed: &[u8],
+        x_scales: &[u8],
+        gate_ptrs: &[u64],
+        gate_scale_ptrs: &[u64],
+        up_ptrs: &[u64],
+        up_scale_ptrs: &[u64],
+        mut y_gate: DisjointSlice<f32>,
+        mut y_up: DisjointSlice<f32>,
+        n: u32,
+        k: u32,
+        batch_cols: u32,
+        num_experts: u32,
+    ) {
+        static mut SMEM_A: SharedArray<u8, 512, 32> = SharedArray::UNINIT;
+        static mut SMEM_B: SharedArray<u8, 256, 32> = SharedArray::UNINIT;
+
+        let tid = thread::threadIdx_x() as usize;
+        let expert = thread::blockIdx_y() as usize;
+        let row_base = thread::blockIdx_x() as usize * 16;
+        let n = n as usize;
+        let k = k as usize;
+        let batch_cols = batch_cols as usize;
+        let num_experts = num_experts as usize;
+        if expert >= num_experts
+            || batch_cols == 0
+            || batch_cols > 8
+            || k == 0
+            || !k.is_multiple_of(64)
+        {
+            return;
+        }
+
+        let packed_cols = k / 2;
+        let scale_cols = k / 32;
+        let gate_ptr = gate_ptrs[expert] as *const u8;
+        let gate_scale_ptr = gate_scale_ptrs[expert] as *const u8;
+        let up_ptr = up_ptrs[expert] as *const u8;
+        let up_scale_ptr = up_scale_ptrs[expert] as *const u8;
+        let mut acc_gate = [0.0f32; 4];
+        let mut acc_up = [0.0f32; 4];
+
+        let mut kt = 0usize;
+        while kt < k {
+            unsafe {
+                let a_dst = &raw mut SMEM_A as *mut u8;
+                let b_dst = &raw mut SMEM_B as *mut u8;
+                let mut i = tid;
+                while i < 512 {
+                    *a_dst.add(i) = 0;
+                    i += 32;
+                }
+                let mut i = tid;
+                while i < 128 {
+                    let k4 = i / 8;
+                    let col = i & 7;
+                    let dst = k4 * 16 + col * 2;
+                    if col < batch_cols {
+                        let src = col * packed_cols + kt / 2 + k4 * 2;
+                        *b_dst.add(dst) = x_packed[src];
+                        *b_dst.add(dst + 1) = x_packed[src + 1];
+                    } else {
+                        *b_dst.add(dst) = 0;
+                        *b_dst.add(dst + 1) = 0;
+                    }
+                    i += 32;
+                }
+                let mut i = tid;
+                while i < 512 {
+                    let row_local = i / 32;
+                    let byte = i & 31;
+                    let row = row_base + row_local;
+                    if row < n {
+                        *a_dst.add(row_local * 32 + byte) =
+                            *gate_ptr.add(row * packed_cols + kt / 2 + byte);
+                    }
+                    i += 32;
+                }
+            }
+            thread::sync_threads();
+
+            let b_frag: [u32; 2] = unsafe {
+                let row = tid & 0x0F;
+                let addr = (&raw const SMEM_B as *const u8).add(row * 16) as *const u32;
+                cuda_device::wmma::ldmatrix_x2_trans(addr)
+            };
+            let a_frag_gate: [u32; 4] = unsafe {
+                let q = tid / 8;
+                let row = (tid & 7) + if (q & 1) != 0 { 8 } else { 0 };
+                let col_b16 = if q >= 2 { 8 } else { 0 };
+                let addr =
+                    (&raw const SMEM_A as *const u8).add(row * 32 + col_b16 * 2) as *const u32;
+                cuda_device::wmma::ldmatrix_x4(addr)
+            };
+            let group = tid / 4;
+            let scale_row = group + if (tid & 1) != 0 { 8 } else { 0 };
+            let logical_row = row_base + scale_row;
+            let col_for_scale = group;
+            let k_block = kt / 32;
+            let scale_a_gate = if logical_row < n {
+                unsafe {
+                    (*gate_scale_ptr.add(logical_row * scale_cols + k_block + 1) as u32) << 8
+                        | (*gate_scale_ptr.add(logical_row * scale_cols + k_block) as u32)
+                }
+            } else {
+                (127u32 << 8) | 127u32
+            };
+            let scale_b = if col_for_scale < batch_cols {
+                (x_scales[col_for_scale * scale_cols + k_block + 1] as u32) << 8
+                    | (x_scales[col_for_scale * scale_cols + k_block] as u32)
+            } else {
+                (127u32 << 8) | 127u32
+            };
+            let d_gate = unsafe {
+                mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0(
+                    [0.0f32; 4],
+                    a_frag_gate,
+                    b_frag,
+                    scale_a_gate,
+                    scale_b,
+                )
+            };
+            let mut j = 0usize;
+            while j < 4 {
+                acc_gate[j] += d_gate[j];
+                j += 1;
+            }
+            thread::sync_threads();
+
+            unsafe {
+                let a_dst = &raw mut SMEM_A as *mut u8;
+                let mut i = tid;
+                while i < 512 {
+                    *a_dst.add(i) = 0;
+                    i += 32;
+                }
+                let mut i = tid;
+                while i < 512 {
+                    let row_local = i / 32;
+                    let byte = i & 31;
+                    let row = row_base + row_local;
+                    if row < n {
+                        *a_dst.add(row_local * 32 + byte) =
+                            *up_ptr.add(row * packed_cols + kt / 2 + byte);
+                    }
+                    i += 32;
+                }
+            }
+            thread::sync_threads();
+
+            let a_frag_up: [u32; 4] = unsafe {
+                let q = tid / 8;
+                let row = (tid & 7) + if (q & 1) != 0 { 8 } else { 0 };
+                let col_b16 = if q >= 2 { 8 } else { 0 };
+                let addr =
+                    (&raw const SMEM_A as *const u8).add(row * 32 + col_b16 * 2) as *const u32;
+                cuda_device::wmma::ldmatrix_x4(addr)
+            };
+            let scale_a_up = if logical_row < n {
+                unsafe {
+                    (*up_scale_ptr.add(logical_row * scale_cols + k_block + 1) as u32) << 8
+                        | (*up_scale_ptr.add(logical_row * scale_cols + k_block) as u32)
+                }
+            } else {
+                (127u32 << 8) | 127u32
+            };
+            let d_up = unsafe {
+                mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0(
+                    [0.0f32; 4],
+                    a_frag_up,
+                    b_frag,
+                    scale_a_up,
+                    scale_b,
+                )
+            };
+            let mut j = 0usize;
+            while j < 4 {
+                acc_up[j] += d_up[j];
+                j += 1;
+            }
+            thread::sync_threads();
+            kt += 64;
+        }
+
+        let lane = tid;
+        let group = lane / 4;
+        let thr = lane % 4;
+        let gate_ptr_out = y_gate.as_mut_ptr();
+        let up_ptr_out = y_up.as_mut_ptr();
+        let mut j = 0usize;
+        while j < 4 {
+            let row = row_base + group + if j >= 2 { 8 } else { 0 };
+            let col = thr * 2 + (j & 1);
+            if row < n && col < batch_cols {
+                let out_off = expert * batch_cols * n + col * n + row;
+                unsafe {
+                    *gate_ptr_out.add(out_off) = acc_gate[j];
+                    *up_ptr_out.add(out_off) = acc_up[j];
+                }
+            }
+            j += 1;
+        }
+    }
+
     /// Batched SwiGLU + FP8 quantize for all selected experts.
     ///
     /// Grid: `(ceil(intermediate_size / 256), num_experts)`.
@@ -2182,14 +2508,109 @@ pub mod kernels {
         }
         let rw = route_weights[expert];
         let val = g * fast_sigmoid(g) * u * rw;
-        // FP8 E4M3FN quantize in-place
         let qval = quantize_fp8_e4m3fn_to_f32(val);
         let h_ptr = y_hidden.as_mut_ptr();
         unsafe {
             *h_ptr.add(idx) = qval;
         }
-        // Suppress unused warning
         let _ = block_size;
+    }
+
+    /// Batched SwiGLU directly into packed FP4 E2M1 + E8M0 activations for the
+    /// Tensor Core down projection.
+    ///
+    /// Grid: `(intermediate_size / 32, num_experts, batch_cols)`, blockDim.x = 32.
+    /// Reads `y_gate`/`y_up` as `[expert, batch_col, row]` and writes
+    /// `y_hidden_packed` as `[expert, batch_col, row / 2]` plus one E8M0 scale per
+    /// 32-value block. The FP8 activation quantization step from the scalar path
+    /// is preserved before FP4 packing so this remains behavior-compatible with
+    /// the previous TC path (`SwiGLU -> f32 FP8 values -> FP4 pack`).
+    #[kernel]
+    pub fn moe_swiglu_fp4_packed_batched(
+        y_gate: &[f32],
+        y_up: &[f32],
+        route_weights: &[f32],
+        mut y_hidden_packed: DisjointSlice<u8>,
+        mut y_hidden_scales: DisjointSlice<u8>,
+        n: u32,
+        batch_cols: u32,
+        num_experts: u32,
+        swiglu_limit: f32,
+    ) {
+        static mut VALUES: SharedArray<f32, 32> = SharedArray::UNINIT;
+        static mut NIBBLES: SharedArray<u8, 32> = SharedArray::UNINIT;
+
+        let tid = thread::threadIdx_x() as usize;
+        let block = thread::blockIdx_x() as usize;
+        let expert = thread::blockIdx_y() as usize;
+        let batch_col = thread::blockIdx_z() as usize;
+        let n = n as usize;
+        let batch_cols = batch_cols as usize;
+        let num_experts = num_experts as usize;
+        if tid >= 32
+            || n == 0
+            || !n.is_multiple_of(32)
+            || batch_cols == 0
+            || batch_cols > 8
+            || expert >= num_experts
+            || batch_col >= batch_cols
+            || block >= n / 32
+        {
+            return;
+        }
+
+        let row = block * 32 + tid;
+        let idx = (expert * batch_cols + batch_col) * n + row;
+        let mut g = y_gate[idx];
+        let mut u = y_up[idx];
+        if swiglu_limit > 0.0 {
+            g = clamp_max(g, swiglu_limit);
+            u = clamp_range(u, -swiglu_limit, swiglu_limit);
+        }
+        let rw = route_weights[expert];
+        let val = quantize_fp8_e4m3fn_to_f32(g * fast_sigmoid(g) * u * rw);
+        let abs_value = if val < 0.0 { -val } else { val };
+        unsafe {
+            VALUES[tid] = abs_value;
+        }
+        thread::sync_threads();
+
+        let mut stride = 16usize;
+        while stride > 0 {
+            if tid < stride {
+                unsafe {
+                    let current = VALUES[tid];
+                    let other = VALUES[tid + stride];
+                    VALUES[tid] = if other > current { other } else { current };
+                }
+            }
+            thread::sync_threads();
+            stride /= 2;
+        }
+
+        let scale_byte = unsafe { e8m0_scale_byte_for_amax(VALUES[0], 6.0) };
+        let scale = e8m0_scale(scale_byte);
+        unsafe {
+            NIBBLES[tid] = quantize_fp4_e2m1_nibble(val / scale);
+        }
+        if tid == 0 {
+            let scale_cols = n / 32;
+            let scale_off = (expert * batch_cols + batch_col) * scale_cols + block;
+            unsafe {
+                *y_hidden_scales.as_mut_ptr().add(scale_off) = scale_byte;
+            }
+        }
+        thread::sync_threads();
+
+        if tid < 16 {
+            let packed_cols = n / 2;
+            let packed_off = (expert * batch_cols + batch_col) * packed_cols + block * 16 + tid;
+            let lo = unsafe { NIBBLES[tid * 2] };
+            let hi = unsafe { NIBBLES[tid * 2 + 1] };
+            unsafe {
+                *y_hidden_packed.as_mut_ptr().add(packed_off) = lo | (hi << 4);
+            }
+        }
     }
 
     /// Batched down FP4 GEMV + accumulate for all selected experts.
@@ -2246,6 +2667,154 @@ pub mod kernels {
         let o_ptr = output.as_mut_ptr();
         let o = unsafe { DeviceAtomicF32::from_ptr(o_ptr.add(row)) };
         let _ = o.fetch_add(dot, AtomicOrdering::Relaxed);
+    }
+
+    /// Batched down FP4 GEMM using Blackwell mxf4 Tensor Cores.
+    ///
+    /// Grid: `(ceil(hidden_size / 16), num_experts)`, blockDim.x = 32.
+    /// `y_hidden_packed` is laid out as `[expert, batch_col, intermediate/2]`;
+    /// output is `[batch_col, hidden_row]`. Multiple experts atomically
+    /// accumulate into the shared routed MoE output.
+    #[kernel]
+    pub unsafe fn moe_gemm_down_fp4_mxf4_batched(
+        y_hidden_packed: &[u8],
+        y_hidden_scales: &[u8],
+        down_ptrs: &[u64],
+        down_scale_ptrs: &[u64],
+        mut output: DisjointSlice<f32>,
+        intermediate_size: u32,
+        hidden_size: u32,
+        batch_cols: u32,
+        num_experts: u32,
+    ) {
+        static mut SMEM_A: SharedArray<u8, 512, 32> = SharedArray::UNINIT;
+        static mut SMEM_B: SharedArray<u8, 256, 32> = SharedArray::UNINIT;
+
+        let tid = thread::threadIdx_x() as usize;
+        let expert = thread::blockIdx_y() as usize;
+        let row_base = thread::blockIdx_x() as usize * 16;
+        let inter = intermediate_size as usize;
+        let hidden = hidden_size as usize;
+        let batch_cols = batch_cols as usize;
+        let num_experts = num_experts as usize;
+        if expert >= num_experts
+            || batch_cols == 0
+            || batch_cols > 8
+            || inter == 0
+            || !inter.is_multiple_of(64)
+        {
+            return;
+        }
+
+        let packed_cols = inter / 2;
+        let scale_cols = inter / 32;
+        let down_ptr = down_ptrs[expert] as *const u8;
+        let down_scale_ptr = down_scale_ptrs[expert] as *const u8;
+        let mut acc = [0.0f32; 4];
+
+        let mut kt = 0usize;
+        while kt < inter {
+            unsafe {
+                let a_dst = &raw mut SMEM_A as *mut u8;
+                let b_dst = &raw mut SMEM_B as *mut u8;
+                let mut i = tid;
+                while i < 512 {
+                    *a_dst.add(i) = 0;
+                    i += 32;
+                }
+                let mut i = tid;
+                while i < 128 {
+                    let k4 = i / 8;
+                    let col = i & 7;
+                    let dst = k4 * 16 + col * 2;
+                    if col < batch_cols {
+                        let src = (expert * batch_cols + col) * packed_cols + kt / 2 + k4 * 2;
+                        *b_dst.add(dst) = y_hidden_packed[src];
+                        *b_dst.add(dst + 1) = y_hidden_packed[src + 1];
+                    } else {
+                        *b_dst.add(dst) = 0;
+                        *b_dst.add(dst + 1) = 0;
+                    }
+                    i += 32;
+                }
+                let mut i = tid;
+                while i < 512 {
+                    let row_local = i / 32;
+                    let byte = i & 31;
+                    let row = row_base + row_local;
+                    if row < hidden {
+                        *a_dst.add(row_local * 32 + byte) =
+                            *down_ptr.add(row * packed_cols + kt / 2 + byte);
+                    }
+                    i += 32;
+                }
+            }
+            thread::sync_threads();
+
+            let a_frag: [u32; 4] = unsafe {
+                let q = tid / 8;
+                let row = (tid & 7) + if (q & 1) != 0 { 8 } else { 0 };
+                let col_b16 = if q >= 2 { 8 } else { 0 };
+                let addr =
+                    (&raw const SMEM_A as *const u8).add(row * 32 + col_b16 * 2) as *const u32;
+                cuda_device::wmma::ldmatrix_x4(addr)
+            };
+            let b_frag: [u32; 2] = unsafe {
+                let row = tid & 0x0F;
+                let addr = (&raw const SMEM_B as *const u8).add(row * 16) as *const u32;
+                cuda_device::wmma::ldmatrix_x2_trans(addr)
+            };
+            let group = tid / 4;
+            let scale_row = group + if (tid & 1) != 0 { 8 } else { 0 };
+            let logical_row = row_base + scale_row;
+            let col_for_scale = group;
+            let k_block = kt / 32;
+            let scale_a = if logical_row < hidden {
+                unsafe {
+                    (*down_scale_ptr.add(logical_row * scale_cols + k_block + 1) as u32) << 8
+                        | (*down_scale_ptr.add(logical_row * scale_cols + k_block) as u32)
+                }
+            } else {
+                (127u32 << 8) | 127u32
+            };
+            let scale_b = if col_for_scale < batch_cols {
+                let scale_base = (expert * batch_cols + col_for_scale) * scale_cols + k_block;
+                (y_hidden_scales[scale_base + 1] as u32) << 8 | (y_hidden_scales[scale_base] as u32)
+            } else {
+                (127u32 << 8) | 127u32
+            };
+            let d = unsafe {
+                mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0(
+                    [0.0f32; 4],
+                    a_frag,
+                    b_frag,
+                    scale_a,
+                    scale_b,
+                )
+            };
+            let mut j = 0usize;
+            while j < 4 {
+                acc[j] += d[j];
+                j += 1;
+            }
+            thread::sync_threads();
+            kt += 64;
+        }
+
+        let lane = tid;
+        let group = lane / 4;
+        let thr = lane % 4;
+        let out_ptr = output.as_mut_ptr();
+        let mut j = 0usize;
+        while j < 4 {
+            let row = row_base + group + if j >= 2 { 8 } else { 0 };
+            let col = thr * 2 + (j & 1);
+            if row < hidden && col < batch_cols {
+                let o = unsafe { DeviceAtomicF32::from_ptr(out_ptr.add(col * hidden + row)) };
+                let _ = o.fetch_add(acc[j], AtomicOrdering::Relaxed);
+            }
+            j += 1;
+        }
     }
 
     /// Experimental block-reduction gate+up FP4 GEMV.
@@ -3017,6 +3586,356 @@ pub mod kernels {
                 *hidden_ptr.add(d) = out;
             }
             d += bdim;
+        }
+    }
+
+    // ── P6.2: microscaled FP4 (mxf4) warp MMA smoke (sm_120a+) ───────────
+    //
+    // GB10 FP4 tensor-core path. Single-tile: C[16×8] = A[16×64] × B[64×8]
+    // in FP4 (E2M1) with E8M0 block scales via one
+    // `mma.sync.aligned.m16n8k64.row.col.kind::mxf4.block_scale.f32.e2m1.e2m1.f32.ue8m0`.
+    //
+    // Block size = 32 FP4 elements → K=64 = 2 scale blocks.
+    //
+    // Host packs:
+    //   a_packed: 16 rows × 32 bytes (64 FP4 elts/row, 2 nibbles/byte, low first).
+    //   b_packed:  8 cols × 32 bytes (64 FP4 elts/col), col-major.
+    //   a_scales: 16 rows × 2 bytes (one E8M0 per 32-elts block).
+    //   b_scales:  8 cols × 2 bytes.
+    //
+    // One CTA = one warp (32 threads). Grid: (1,1,1).
+    #[kernel]
+    pub unsafe fn fp4_mxf4_smoke(
+        a_packed: &[u8],             // 512 bytes: 16 × 32
+        b_packed: &[u8],             // 256 bytes:  8 × 32
+        a_scales: &[u8],             //  32 bytes: 16 × 2
+        b_scales: &[u8],             //  16 bytes:  8 × 2
+        mut out: DisjointSlice<f32>, // 16×8 = 128 f32
+    ) {
+        static mut SMEM_A: SharedArray<u8, 512, 32> = SharedArray::UNINIT;
+        static mut SMEM_B: SharedArray<u8, 256, 32> = SharedArray::UNINIT;
+
+        let tid = thread::threadIdx_x() as usize;
+
+        // Stage A (512 B) and B (256 B) into shared memory.
+        unsafe {
+            let a_dst = &raw mut SMEM_A as *mut u8;
+            let b_dst = &raw mut SMEM_B as *mut u8;
+            let mut i = tid;
+            while i < 512 {
+                *a_dst.add(i) = a_packed[i];
+                i += 32;
+            }
+            // Host B is packed by logical column: 8 columns × 32 bytes/column.
+            // ldmatrix consumes an 8-column b16 tile, so stage it as
+            // [k / 4, n] = 16 rows × 8 b16 columns in shared memory.
+            let mut i = tid;
+            while i < 128 {
+                let k4 = i / 8;
+                let col = i & 7;
+                let src = col * 32 + k4 * 2;
+                let dst = k4 * 16 + col * 2;
+                *b_dst.add(dst) = b_packed[src];
+                *b_dst.add(dst + 1) = b_packed[src + 1];
+                i += 32;
+            }
+        }
+        thread::sync_threads();
+
+        // Load A as four 8×8 b16 sub-tiles covering [m, k/4]:
+        //   q0 rows 0..7  cols 0..7,  q1 rows 8..15 cols 0..7,
+        //   q2 rows 0..7  cols 8..15, q3 rows 8..15 cols 8..15.
+        let a_frag: [u32; 4] = unsafe {
+            let q = tid / 8;
+            let row = (tid & 7) + if (q & 1) != 0 { 8 } else { 0 };
+            let col_b16 = if q >= 2 { 8 } else { 0 };
+            let addr = (&raw const SMEM_A as *const u8).add(row * 32 + col_b16 * 2) as *const u32;
+            cuda_device::wmma::ldmatrix_x4(addr)
+        };
+
+        // Load B as two 8×8 b16 sub-tiles covering [k/4, n]. The .trans
+        // form supplies the column-major B fragment expected by row.col MMA.
+        let b_frag: [u32; 2] = unsafe {
+            let row = tid & 0x0F;
+            let addr = (&raw const SMEM_B as *const u8).add(row * 16) as *const u32;
+            cuda_device::wmma::ldmatrix_x2_trans(addr)
+        };
+
+        // Scale factors: u32 packing two E8M0 block scales (block 0 low byte, block 1 high byte).
+        // All lanes supply the same value. Use row 0 / col 0 scales.
+        let scale_a: u32 = (a_scales[1] as u32) << 8 | (a_scales[0] as u32);
+        let scale_b: u32 = (b_scales[1] as u32) << 8 | (b_scales[0] as u32);
+
+        // D = A × B (accumulator starts at zero).
+        let d = unsafe {
+            mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0(
+                [0.0f32; 4],
+                a_frag,
+                b_frag,
+                scale_a,
+                scale_b,
+            )
+        };
+
+        // Write 16×8 result. m16n8k64 C fragment layout (same as m16n8k*):
+        //   lane: row = (lane/4) + (j>=2 ? 8 : 0), col = (lane%4)*2 + (j&1).
+        let lane = tid;
+        let group = lane / 4;
+        let thr = lane % 4;
+        let out_ptr = out.as_mut_ptr();
+        let mut j = 0usize;
+        while j < 4 {
+            let row = group + if j >= 2 { 8 } else { 0 };
+            let col = thr * 2 + (j & 1);
+            unsafe {
+                *out_ptr.add(row * 8 + col) = d[j];
+            }
+            j += 1;
+        }
+    }
+
+    /// Full 16×8×64 mxf4 tile with per-row/per-column E8M0 scales.
+    ///
+    /// For `.scale_vec::2X`, selector `{byte-id=0, thread-id=0}` reads the lower
+    /// two scale bytes from the selected lanes. A uses lanes `%4 == 0 || 1`
+    /// within each quad, giving two row scale vectors per quad; B uses lane
+    /// `%4 == 0`, giving one column scale vector per quad. Each scale register
+    /// packs K-block 0 in byte 0 and K-block 1 in byte 1.
+    #[kernel]
+    pub unsafe fn fp4_mxf4_full_tile(
+        a_packed: &[u8],             // 512 bytes: 16 × 32
+        b_packed: &[u8],             // 256 bytes:  8 × 32
+        a_scales: &[u8],             //  32 bytes: 16 × 2
+        b_scales: &[u8],             //  16 bytes:  8 × 2
+        mut out: DisjointSlice<f32>, // 16×8 = 128 f32
+    ) {
+        static mut SMEM_A: SharedArray<u8, 512, 32> = SharedArray::UNINIT;
+        static mut SMEM_B: SharedArray<u8, 256, 32> = SharedArray::UNINIT;
+
+        let tid = thread::threadIdx_x() as usize;
+        unsafe {
+            let a_dst = &raw mut SMEM_A as *mut u8;
+            let b_dst = &raw mut SMEM_B as *mut u8;
+            let mut i = tid;
+            while i < 512 {
+                *a_dst.add(i) = a_packed[i];
+                i += 32;
+            }
+            let mut i = tid;
+            while i < 128 {
+                let k4 = i / 8;
+                let col = i & 7;
+                let src = col * 32 + k4 * 2;
+                let dst = k4 * 16 + col * 2;
+                *b_dst.add(dst) = b_packed[src];
+                *b_dst.add(dst + 1) = b_packed[src + 1];
+                i += 32;
+            }
+        }
+        thread::sync_threads();
+
+        let a_frag: [u32; 4] = unsafe {
+            let q = tid / 8;
+            let row = (tid & 7) + if (q & 1) != 0 { 8 } else { 0 };
+            let col_b16 = if q >= 2 { 8 } else { 0 };
+            let addr = (&raw const SMEM_A as *const u8).add(row * 32 + col_b16 * 2) as *const u32;
+            cuda_device::wmma::ldmatrix_x4(addr)
+        };
+        let b_frag: [u32; 2] = unsafe {
+            let row = tid & 0x0F;
+            let addr = (&raw const SMEM_B as *const u8).add(row * 16) as *const u32;
+            cuda_device::wmma::ldmatrix_x2_trans(addr)
+        };
+
+        let group = tid / 4;
+        let row_for_scale = group + if (tid & 1) != 0 { 8 } else { 0 };
+        let col_for_scale = group;
+        let scale_a: u32 =
+            (a_scales[row_for_scale * 2 + 1] as u32) << 8 | (a_scales[row_for_scale * 2] as u32);
+        let scale_b: u32 =
+            (b_scales[col_for_scale * 2 + 1] as u32) << 8 | (b_scales[col_for_scale * 2] as u32);
+
+        let d = unsafe {
+            mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0(
+                [0.0f32; 4],
+                a_frag,
+                b_frag,
+                scale_a,
+                scale_b,
+            )
+        };
+
+        let lane = tid;
+        let group = lane / 4;
+        let thr = lane % 4;
+        let out_ptr = out.as_mut_ptr();
+        let mut j = 0usize;
+        while j < 4 {
+            let row = group + if j >= 2 { 8 } else { 0 };
+            let col = thr * 2 + (j & 1);
+            unsafe {
+                *out_ptr.add(row * 8 + col) = d[j];
+            }
+            j += 1;
+        }
+    }
+
+    /// One 8-row FP4 GEMV tile using mxf4 MMA.
+    ///
+    /// Computes `out[0..8] = A[8×64] × x[64]` using the lower 8 rows and col0
+    /// of one `m16n8k64` MMA. This is the decode-batch=1 building block for the
+    /// first MoE tensor-core path; it intentionally wastes the upper 8 rows and
+    /// N=7 columns until a wider batching/speculation path can use them.
+    #[kernel]
+    pub unsafe fn fp4_mxf4_gemv8_tile(
+        a_packed: &[u8],             // 256 bytes: 8 rows × 32
+        x_packed: &[u8],             //  32 bytes: one 64-element vector
+        a_scales: &[u8],             //  16 bytes: 8 rows × 2 K-block scales
+        x_scales: &[u8],             //   2 bytes: one vector × 2 K-block scales
+        mut out: DisjointSlice<f32>, // 8 f32
+    ) {
+        static mut SMEM_A: SharedArray<u8, 512, 32> = SharedArray::UNINIT;
+        static mut SMEM_B: SharedArray<u8, 256, 32> = SharedArray::UNINIT;
+
+        let tid = thread::threadIdx_x() as usize;
+
+        unsafe {
+            let a_dst = &raw mut SMEM_A as *mut u8;
+            let b_dst = &raw mut SMEM_B as *mut u8;
+            let mut i = tid;
+            while i < 512 {
+                *a_dst.add(i) = if i < 256 { a_packed[i] } else { 0 };
+                i += 32;
+            }
+            let mut i = tid;
+            while i < 128 {
+                let k4 = i / 8;
+                let col = i & 7;
+                let src = k4 * 2;
+                let dst = k4 * 16 + col * 2;
+                *b_dst.add(dst) = x_packed[src];
+                *b_dst.add(dst + 1) = x_packed[src + 1];
+                i += 32;
+            }
+        }
+        thread::sync_threads();
+
+        let a_frag: [u32; 4] = unsafe {
+            let q = tid / 8;
+            let row = (tid & 7) + if (q & 1) != 0 { 8 } else { 0 };
+            let col_b16 = if q >= 2 { 8 } else { 0 };
+            let addr = (&raw const SMEM_A as *const u8).add(row * 32 + col_b16 * 2) as *const u32;
+            cuda_device::wmma::ldmatrix_x4(addr)
+        };
+        let b_frag: [u32; 2] = unsafe {
+            let row = tid & 0x0F;
+            let addr = (&raw const SMEM_B as *const u8).add(row * 16) as *const u32;
+            cuda_device::wmma::ldmatrix_x2_trans(addr)
+        };
+
+        // Probe result: with the b0_t0 selector, lower output row r consumes
+        // scale data from lane r*4. Give every lane in the row's 4-lane group
+        // the same A scale so the mapping is robust to future minor variations.
+        let scale_row = tid / 4;
+        let scale_a: u32 =
+            (a_scales[scale_row * 2 + 1] as u32) << 8 | (a_scales[scale_row * 2] as u32);
+        let scale_b: u32 = (x_scales[1] as u32) << 8 | (x_scales[0] as u32);
+        let d = unsafe {
+            mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0(
+                [0.0f32; 4],
+                a_frag,
+                b_frag,
+                scale_a,
+                scale_b,
+            )
+        };
+
+        if (tid & 3) == 0 {
+            let row = tid / 4;
+            unsafe {
+                *out.as_mut_ptr().add(row) = d[0];
+            }
+        }
+    }
+
+    /// Scale-selector ABI probe for `mma_m16n8k64_mxf4...b0_t0_b0_t0`.
+    ///
+    /// `lane_a_scales` and `lane_b_scales` are `[32, 2]` E8M0 bytes. Each lane
+    /// supplies its own packed two-block scale register; the output reveals which
+    /// lane/byte the fixed `{byte=0, thread=0}` selectors actually consume.
+    #[kernel]
+    pub unsafe fn fp4_mxf4_scale_lane_probe(
+        a_packed: &[u8],             // 512 bytes: 16 × 32
+        b_packed: &[u8],             // 256 bytes:  8 × 32
+        lane_a_scales: &[u8],        //  64 bytes: 32 lanes × 2 K-block scales
+        lane_b_scales: &[u8],        //  64 bytes: 32 lanes × 2 K-block scales
+        mut out: DisjointSlice<f32>, // 16×8 = 128 f32
+    ) {
+        static mut SMEM_A: SharedArray<u8, 512, 32> = SharedArray::UNINIT;
+        static mut SMEM_B: SharedArray<u8, 256, 32> = SharedArray::UNINIT;
+
+        let tid = thread::threadIdx_x() as usize;
+
+        unsafe {
+            let a_dst = &raw mut SMEM_A as *mut u8;
+            let b_dst = &raw mut SMEM_B as *mut u8;
+            let mut i = tid;
+            while i < 512 {
+                *a_dst.add(i) = a_packed[i];
+                i += 32;
+            }
+            let mut i = tid;
+            while i < 128 {
+                let k4 = i / 8;
+                let col = i & 7;
+                let src = col * 32 + k4 * 2;
+                let dst = k4 * 16 + col * 2;
+                *b_dst.add(dst) = b_packed[src];
+                *b_dst.add(dst + 1) = b_packed[src + 1];
+                i += 32;
+            }
+        }
+        thread::sync_threads();
+
+        let a_frag: [u32; 4] = unsafe {
+            let q = tid / 8;
+            let row = (tid & 7) + if (q & 1) != 0 { 8 } else { 0 };
+            let col_b16 = if q >= 2 { 8 } else { 0 };
+            let addr = (&raw const SMEM_A as *const u8).add(row * 32 + col_b16 * 2) as *const u32;
+            cuda_device::wmma::ldmatrix_x4(addr)
+        };
+        let b_frag: [u32; 2] = unsafe {
+            let row = tid & 0x0F;
+            let addr = (&raw const SMEM_B as *const u8).add(row * 16) as *const u32;
+            cuda_device::wmma::ldmatrix_x2_trans(addr)
+        };
+
+        let scale_a: u32 =
+            (lane_a_scales[tid * 2 + 1] as u32) << 8 | (lane_a_scales[tid * 2] as u32);
+        let scale_b: u32 =
+            (lane_b_scales[tid * 2 + 1] as u32) << 8 | (lane_b_scales[tid * 2] as u32);
+        let d = unsafe {
+            mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0(
+                [0.0f32; 4],
+                a_frag,
+                b_frag,
+                scale_a,
+                scale_b,
+            )
+        };
+
+        let lane = tid;
+        let group = lane / 4;
+        let thr = lane % 4;
+        let out_ptr = out.as_mut_ptr();
+        let mut j = 0usize;
+        while j < 4 {
+            let row = group + if j >= 2 { 8 } else { 0 };
+            let col = thr * 2 + (j & 1);
+            unsafe {
+                *out_ptr.add(row * 8 + col) = d[j];
+            }
+            j += 1;
         }
     }
 }

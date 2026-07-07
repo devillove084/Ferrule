@@ -259,6 +259,7 @@ struct ExpertState {
     load_source: ExpertLoadSource,
     location: ExpertStorageTier,
     last_used_step: u64,
+    selected_count: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -289,6 +290,7 @@ impl ExpertStreamingPlanner {
                 load_source,
                 location,
                 last_used_step: 0,
+                selected_count: 0,
             },
         );
     }
@@ -360,21 +362,62 @@ impl ExpertStreamingPlanner {
             .collect()
     }
 
-    fn resident_experts_by_recency(&self, layer: usize) -> Vec<ExpertId> {
+    fn resident_experts_by_hotness(&self, layer: usize) -> Vec<ExpertId> {
         let mut experts = self
             .experts
             .iter()
             .filter_map(|(expert, state)| {
-                (expert.layer == layer && state.location.is_gpu_ready())
-                    .then_some((*expert, state.last_used_step))
+                (expert.layer == layer && state.location.is_gpu_ready()).then_some((
+                    *expert,
+                    state.selected_count,
+                    state.last_used_step,
+                ))
             })
             .collect::<Vec<_>>();
-        experts.sort_by(|(left, left_step), (right, right_step)| {
-            right_step
-                .cmp(left_step)
-                .then_with(|| left.expert.cmp(&right.expert))
-        });
-        experts.into_iter().map(|(expert, _)| expert).collect()
+        experts.sort_by(
+            |(left, left_count, left_step), (right, right_count, right_step)| {
+                right_count
+                    .cmp(left_count)
+                    .then_with(|| right_step.cmp(left_step))
+                    .then_with(|| left.expert.cmp(&right.expert))
+            },
+        );
+        experts.into_iter().map(|(expert, _, _)| expert).collect()
+    }
+
+    /// Per-layer routing-aware hotset, ordered from hottest to coldest.
+    ///
+    /// This intentionally only returns experts that have actually been selected
+    /// before. It avoids the old naive `0..N` prefetch pattern, which is not
+    /// correlated with DSV4 routing and can increase residency churn.
+    pub fn hot_experts(&self, layer: usize, count: usize) -> Vec<usize> {
+        if count == 0 {
+            return Vec::new();
+        }
+        let mut experts = self
+            .experts
+            .iter()
+            .filter_map(|(expert, state)| {
+                (expert.layer == layer && state.selected_count > 0).then_some((
+                    expert.expert,
+                    state.selected_count,
+                    state.last_used_step,
+                ))
+            })
+            .collect::<Vec<_>>();
+        experts.sort_by(
+            |(left, left_count, left_step), (right, right_count, right_step)| {
+                right_count
+                    .cmp(left_count)
+                    .then_with(|| right_step.cmp(left_step))
+                    .then_with(|| left.cmp(right))
+            },
+        );
+        experts
+            .into_iter()
+            .take(count)
+            .map(|(expert, _, _)| expert)
+            .collect()
     }
 
     pub fn plan_layer_step(
@@ -393,6 +436,12 @@ impl ExpertStreamingPlanner {
                 selected.len()
             )));
         }
+        for expert in &selected {
+            if let Some(state) = self.experts.get_mut(expert) {
+                state.selected_count = state.selected_count.saturating_add(1);
+                state.last_used_step = self.step;
+            }
+        }
 
         let mut target = selected.iter().copied().collect::<BTreeSet<_>>();
         let mut prefetched = Vec::new();
@@ -410,7 +459,7 @@ impl ExpertStreamingPlanner {
             prefetched.push(expert);
         }
 
-        let mut current_gpu = self.resident_experts_by_recency(layer);
+        let mut current_gpu = self.resident_experts_by_hotness(layer);
         for expert in current_gpu.iter().copied() {
             if target.len() >= self.policy.gpu_slots_per_layer {
                 break;
@@ -437,9 +486,6 @@ impl ExpertStreamingPlanner {
                     load_source: self.load_source_for(*expert)?.clone(),
                     reason: ExpertLoadReason::Selected,
                 });
-            }
-            if let Some(state) = self.experts.get_mut(expert) {
-                state.last_used_step = self.step;
             }
         }
         for expert in &prefetched {
@@ -1338,6 +1384,66 @@ mod tests {
             planner.resident_experts(0),
             vec![ExpertId::new(0, 0), ExpertId::new(0, 2)]
         );
+    }
+
+    #[test]
+    fn hotset_reports_observed_experts_by_frequency() {
+        let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
+            gpu_slots_per_layer: 3,
+            prefetch_per_layer: 0,
+            preserve_artifact_quantization: true,
+            allow_cpu_staging: false,
+            allow_remote_sources: false,
+        });
+        for expert in 0..4 {
+            planner.register_load_source(
+                ExpertId::new(0, expert),
+                ExpertLoadSource::LocalShard {
+                    path: PathBuf::from("model.safetensors"),
+                    offset: 0,
+                    bytes: 10,
+                },
+            );
+        }
+
+        let first = planner.plan_layer_step(0, &[1, 2], &[]).unwrap();
+        planner.commit_step(&first).unwrap();
+        let second = planner.plan_layer_step(0, &[1], &[]).unwrap();
+        planner.commit_step(&second).unwrap();
+
+        assert_eq!(planner.hot_experts(0, 3), vec![1, 2]);
+        assert!(planner.hot_experts(1, 3).is_empty());
+    }
+
+    #[test]
+    fn eviction_keeps_hot_resident_experts_before_cold_recent_ones() {
+        let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
+            gpu_slots_per_layer: 2,
+            prefetch_per_layer: 0,
+            preserve_artifact_quantization: true,
+            allow_cpu_staging: false,
+            allow_remote_sources: false,
+        });
+        for expert in 0..4 {
+            planner.register_load_source(
+                ExpertId::new(0, expert),
+                ExpertLoadSource::LocalShard {
+                    path: PathBuf::from("model.safetensors"),
+                    offset: 0,
+                    bytes: 10,
+                },
+            );
+        }
+
+        for selected in [[0], [0], [1]] {
+            let step = planner.plan_layer_step(0, &selected, &[]).unwrap();
+            planner.commit_step(&step).unwrap();
+        }
+        let step = planner.plan_layer_step(0, &[2], &[]).unwrap();
+
+        assert_eq!(step.loads.len(), 1);
+        assert_eq!(step.evictions.len(), 1);
+        assert_eq!(step.evictions[0].expert, ExpertId::new(0, 1));
     }
 
     #[test]

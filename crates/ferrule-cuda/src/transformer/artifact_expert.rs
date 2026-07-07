@@ -244,47 +244,53 @@ impl<'a> CudaPackedFp4ExpertExecutor<'a> {
         let cfg_mid = LaunchConfig::for_num_elems(mid as u32);
         let cfg_out = LaunchConfig::for_num_elems(out as u32);
 
-        cu(self.module.gemv_dual_fp4_e2m1_e8m0_off(
-            self.stream,
-            cfg_mid,
-            input,
-            expert.gate.packed,
-            expert.gate.scales,
-            &mut scratch.gate,
-            checked_u32(expert.gate.packed_offset(), "gate", "packed offset")?,
-            checked_u32(expert.gate.scale_offset(), "gate", "scale offset")?,
-            expert.up.packed,
-            expert.up.scales,
-            &mut scratch.up,
-            checked_u32(expert.up.packed_offset(), "up", "packed offset")?,
-            checked_u32(expert.up.scale_offset(), "up", "scale offset")?,
-            checked_u32(mid, "expert", "intermediate size")?,
-            checked_u32(expert.hidden_size(), "expert", "hidden size")?,
-        ))?;
+        cu(unsafe {
+            self.module.gemv_dual_fp4_e2m1_e8m0_off(
+                self.stream,
+                cfg_mid,
+                input,
+                expert.gate.packed,
+                expert.gate.scales,
+                &mut scratch.gate,
+                checked_u32(expert.gate.packed_offset(), "gate", "packed offset")?,
+                checked_u32(expert.gate.scale_offset(), "gate", "scale offset")?,
+                expert.up.packed,
+                expert.up.scales,
+                &mut scratch.up,
+                checked_u32(expert.up.packed_offset(), "up", "packed offset")?,
+                checked_u32(expert.up.scale_offset(), "up", "scale offset")?,
+                checked_u32(mid, "expert", "intermediate size")?,
+                checked_u32(expert.hidden_size(), "expert", "hidden size")?,
+            )
+        })?;
 
-        cu(self.module.swiglu_weighted_clamped(
-            self.stream,
-            cfg_mid,
-            &scratch.gate,
-            &scratch.up,
-            &mut scratch.hidden,
-            checked_u32(mid, "expert", "intermediate size")?,
-            route_weight,
-            self.swiglu_limit,
-        ))?;
+        cu(unsafe {
+            self.module.swiglu_weighted_clamped(
+                self.stream,
+                cfg_mid,
+                &scratch.gate,
+                &scratch.up,
+                &mut scratch.hidden,
+                checked_u32(mid, "expert", "intermediate size")?,
+                route_weight,
+                self.swiglu_limit,
+            )
+        })?;
 
-        cu(self.module.gemv_fp4_e2m1_e8m0_off(
-            self.stream,
-            cfg_out,
-            &scratch.hidden,
-            expert.down.packed,
-            expert.down.scales,
-            output,
-            checked_u32(out, "down", "output size")?,
-            checked_u32(expert.down.in_features(), "down", "input size")?,
-            checked_u32(expert.down.packed_offset(), "down", "packed offset")?,
-            checked_u32(expert.down.scale_offset(), "down", "scale offset")?,
-        ))
+        cu(unsafe {
+            self.module.gemv_fp4_e2m1_e8m0_off(
+                self.stream,
+                cfg_out,
+                &scratch.hidden,
+                expert.down.packed,
+                expert.down.scales,
+                output,
+                checked_u32(out, "down", "output size")?,
+                checked_u32(expert.down.in_features(), "down", "input size")?,
+                checked_u32(expert.down.packed_offset(), "down", "packed offset")?,
+                checked_u32(expert.down.scale_offset(), "down", "scale offset")?,
+            )
+        })
     }
 }
 

@@ -44,13 +44,15 @@ impl<'model> CudaTransformerExecutor<'model> {
     fn embed_token(&mut self, tid: u32) -> Result<()> {
         let _span = tracing::trace_span!("embed").entered();
         let cfg = LaunchConfig::for_num_elems(self.model.d as u32);
-        cu(self.model.module.embed_lookup(
-            &self.model.s,
-            cfg,
-            &self.model.emb,
-            &mut self.model.scratch.hidden,
-            tid,
-            self.model.d as u32,
-        ))
+        cu(unsafe {
+            self.model.module.embed_lookup(
+                &self.model.s,
+                cfg,
+                &self.model.emb,
+                &mut self.model.scratch.hidden,
+                tid,
+                self.model.d as u32,
+            )
+        })
     }
 }

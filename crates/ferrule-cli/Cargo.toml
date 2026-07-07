@@ -27,7 +27,7 @@ serde_json = "1"
 rustyline = "15"
 console = "0.15"
 tracing = "0.1"
-cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git", optional = true }
+cuda-core = { git = "https://github.com/devillove084/cuda-oxide.git", branch = "fp-and-graph-support", optional = true }
 
 [features]
 default = []

@@ -164,8 +164,13 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         warmup_tokens: usize,
         /// Number of routed experts per layer to predictively prefetch during decode.
+        /// Prefetch uses the per-layer routing hotset observed so far, not low expert IDs.
         #[arg(long, default_value_t = 0)]
         moe_prefetch_experts: usize,
+        /// Bound resident routed experts per layer to a routing-aware hotset.
+        /// 0 keeps the managed-memory default without planner eviction.
+        #[arg(long, default_value_t = 0)]
+        moe_hotset_experts: usize,
     },
     /// Probe real local DeepSeek-V4 HF shards through the DSV4-specific reference path.
     #[command(name = "deepseek-v4-probe")]
@@ -374,6 +379,7 @@ fn main() -> anyhow::Result<()> {
             json,
             warmup_tokens,
             moe_prefetch_experts,
+            moe_hotset_experts,
         } => cmd_deepseek_v4_generate(
             &model,
             &prompt,
@@ -389,6 +395,7 @@ fn main() -> anyhow::Result<()> {
             json,
             warmup_tokens,
             moe_prefetch_experts,
+            moe_hotset_experts,
         ),
         Command::DeepSeekV4Probe {
             model,
@@ -457,8 +464,8 @@ fn cmd_cuda() -> anyhow::Result<()> {
     let mut yd = DeviceBuffer::<f32>::zeroed(&s, d).map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
 
     for _ in 0..10 {
-        module
-            .gemv_f32(
+        unsafe {
+            module.gemv_f32(
                 &s,
                 LaunchConfig::for_num_elems(d as u32),
                 &xd,
@@ -467,14 +474,15 @@ fn cmd_cuda() -> anyhow::Result<()> {
                 d as u32,
                 d as u32,
             )
-            .map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
+        }
+        .map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
     }
 
     let t0 = std::time::Instant::now();
     let n_iter = 2000;
     for _ in 0..n_iter {
-        module
-            .gemv_f32(
+        unsafe {
+            module.gemv_f32(
                 &s,
                 LaunchConfig::for_num_elems(d as u32),
                 &xd,
@@ -483,7 +491,8 @@ fn cmd_cuda() -> anyhow::Result<()> {
                 d as u32,
                 d as u32,
             )
-            .map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
+        }
+        .map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
     }
     let gpu_ms = t0.elapsed().as_secs_f64() * 1000.0 / n_iter as f64;
 
@@ -493,8 +502,8 @@ fn cmd_cuda() -> anyhow::Result<()> {
     let t0 = std::time::Instant::now();
     let n_empty = 5000;
     for _ in 0..n_empty {
-        module
-            .compute_rms(
+        unsafe {
+            module.compute_rms(
                 &s,
                 LaunchConfig::for_num_elems(1u32),
                 &dummy,
@@ -502,7 +511,8 @@ fn cmd_cuda() -> anyhow::Result<()> {
                 1u32,
                 1e-5f32,
             )
-            .map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
+        }
+        .map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
     }
     let empty_us = t0.elapsed().as_secs_f64() * 1e6 / n_empty as f64;
 
@@ -511,8 +521,8 @@ fn cmd_cuda() -> anyhow::Result<()> {
     let t0 = std::time::Instant::now();
     let n_rms = 1000;
     for _ in 0..n_rms {
-        module
-            .compute_rms(
+        unsafe {
+            module.compute_rms(
                 &s,
                 LaunchConfig::for_num_elems(1u32),
                 &hidden_buf,
@@ -520,7 +530,8 @@ fn cmd_cuda() -> anyhow::Result<()> {
                 d as u32,
                 1e-5f32,
             )
-            .map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
+        }
+        .map_err(|e| anyhow::anyhow!("CUDA {e:?}"))?;
     }
     let rms_us = t0.elapsed().as_secs_f64() * 1e6 / n_rms as f64;
 

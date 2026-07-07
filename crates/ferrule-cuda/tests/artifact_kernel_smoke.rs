@@ -102,17 +102,19 @@ fn artifact_format_kernels_produce_expected_tiny_outputs() {
         "alloc batched FP4 output",
     );
     assert_cuda(
-        module.gemm_fp4_e2m1_e8m0(
-            &stream,
-            LaunchConfig::for_num_elems(2),
-            &x_dev,
-            &packed_dev,
-            &scales_dev,
-            &mut y_dev,
-            2,
-            1,
-            32,
-        ),
+        unsafe {
+            module.gemm_fp4_e2m1_e8m0(
+                &stream,
+                LaunchConfig::for_num_elems(2),
+                &x_dev,
+                &packed_dev,
+                &scales_dev,
+                &mut y_dev,
+                2,
+                1,
+                32,
+            )
+        },
         "batched FP4 GEMM launch",
     );
     let y = assert_cuda(y_dev.to_host_vec(&stream), "download batched FP4 output");
@@ -151,19 +153,21 @@ fn artifact_format_kernels_produce_expected_tiny_outputs() {
         "alloc MLA output",
     );
     assert_cuda(
-        module.mla_q_projection_f32(
-            &stream,
-            LaunchConfig::for_num_elems(q_dim as u32),
-            &hidden_dev,
-            &query_a_dev,
-            &query_b_dev,
-            &query_norm_dev,
-            &mut q_dev,
-            hidden_size as u32,
-            q_rank as u32,
-            q_dim as u32,
-            1e-6,
-        ),
+        unsafe {
+            module.mla_q_projection_f32(
+                &stream,
+                LaunchConfig::for_num_elems(q_dim as u32),
+                &hidden_dev,
+                &query_a_dev,
+                &query_b_dev,
+                &query_norm_dev,
+                &mut q_dev,
+                hidden_size as u32,
+                q_rank as u32,
+                q_dim as u32,
+                1e-6,
+            )
+        },
         "MLA Q projection launch",
     );
     let q = assert_cuda(q_dev.to_host_vec(&stream), "download MLA output");
@@ -183,16 +187,18 @@ fn artifact_format_kernels_produce_expected_tiny_outputs() {
     let cos_dev = assert_cuda(DeviceBuffer::from_host(&stream, &cos), "upload RoPE cos");
     let sin_dev = assert_cuda(DeviceBuffer::from_host(&stream, &sin), "upload RoPE sin");
     assert_cuda(
-        module.rope_yarn(
-            &stream,
-            LaunchConfig::for_num_elems((heads * rope_dim) as u32),
-            &mut qk_dev,
-            &cos_dev,
-            &sin_dev,
-            (heads * rope_dim) as u32,
-            rope_dim as u32,
-            rope_dim as u32,
-        ),
+        unsafe {
+            module.rope_yarn(
+                &stream,
+                LaunchConfig::for_num_elems((heads * rope_dim) as u32),
+                &mut qk_dev,
+                &cos_dev,
+                &sin_dev,
+                (heads * rope_dim) as u32,
+                rope_dim as u32,
+                rope_dim as u32,
+            )
+        },
         "RoPE/YaRN launch",
     );
     let qk_out = assert_cuda(qk_dev.to_host_vec(&stream), "download RoPE output");
@@ -225,22 +231,24 @@ fn artifact_format_kernels_produce_expected_tiny_outputs() {
         "alloc sparse attention output",
     );
     assert_cuda(
-        module.sparse_attn_tiled_sink_f32(
-            &stream,
-            LaunchConfig::for_num_elems(num_heads as u32),
-            &q_dev,
-            &kv_dev,
-            &topk_dev,
-            &sink_dev,
-            &mut out_dev,
-            num_heads as u32,
-            1,
-            kv_len as u32,
-            num_heads as u32,
-            head_dim as u32,
-            topk as u32,
-            0.5,
-        ),
+        unsafe {
+            module.sparse_attn_tiled_sink_f32(
+                &stream,
+                LaunchConfig::for_num_elems(num_heads as u32),
+                &q_dev,
+                &kv_dev,
+                &topk_dev,
+                &sink_dev,
+                &mut out_dev,
+                num_heads as u32,
+                1,
+                kv_len as u32,
+                num_heads as u32,
+                head_dim as u32,
+                topk as u32,
+                0.5,
+            )
+        },
         "sparse attention launch",
     );
     let out = assert_cuda(
@@ -295,19 +303,21 @@ fn artifact_format_kernels_produce_expected_tiny_outputs() {
         "alloc SwiGLU output",
     );
     assert_cuda(
-        module.swiglu_down_accumulate(
-            &stream,
-            LaunchConfig::for_num_elems(hidden as u32),
-            &gate_dev,
-            &up_dev,
-            &down_packed_dev,
-            &down_scales_dev,
-            &mut swiglu_out_dev,
-            intermediate as u32,
-            hidden as u32,
-            1.0,
-            10.0,
-        ),
+        unsafe {
+            module.swiglu_down_accumulate(
+                &stream,
+                LaunchConfig::for_num_elems(hidden as u32),
+                &gate_dev,
+                &up_dev,
+                &down_packed_dev,
+                &down_scales_dev,
+                &mut swiglu_out_dev,
+                intermediate as u32,
+                hidden as u32,
+                1.0,
+                10.0,
+            )
+        },
         "SwiGLU accumulate launch",
     );
     let swiglu_out = assert_cuda(

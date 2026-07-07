@@ -146,6 +146,20 @@ pub struct RuntimeTimingCounters {
     pub prefill_us: u64,
     pub decode_us: u64,
     pub graph_execute_us: u64,
+    /// MoE calls observed in the CUDA operator path.
+    pub moe_calls: u64,
+    pub moe_tc_calls: u64,
+    pub moe_scalar_calls: u64,
+    pub moe_reduce_calls: u64,
+    /// Env-gated GPU-synchronized MoE timings. These stay zero unless
+    /// `FERRULE_CUDA_MOE_TIMING=1` is set for the run.
+    pub moe_total_us: u64,
+    pub moe_pointer_upload_us: u64,
+    pub moe_input_prepare_us: u64,
+    pub moe_gate_up_us: u64,
+    pub moe_swiglu_us: u64,
+    pub moe_hidden_pack_us: u64,
+    pub moe_down_us: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

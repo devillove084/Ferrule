@@ -160,6 +160,10 @@ pub struct DeepSeekV4Config {
     pub index_head_dim: usize,
     pub index_topk: usize,
     pub compress_ratios: Vec<usize>,
+    pub dspark_block_size: usize,
+    pub dspark_noise_token_id: Option<u32>,
+    pub dspark_target_layer_ids: Vec<usize>,
+    pub dspark_markov_rank: Option<usize>,
 }
 
 impl DeepSeekV4Config {
@@ -181,6 +185,16 @@ impl DeepSeekV4Config {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_else(|| vec![0; deepseek_v4::NUM_LAYERS]);
+        let dspark_target_layer_ids = json
+            .get("dspark_target_layer_ids")
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_u64().map(|value| value as usize))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
 
         Ok(Self {
             hidden_size: usize_key(&json, &["hidden_size"]).unwrap_or(deepseek_v4::HIDDEN_SIZE),
@@ -235,6 +249,11 @@ impl DeepSeekV4Config {
                 .unwrap_or(deepseek_v4::INDEX_HEAD_DIM),
             index_topk: usize_key(&json, &["index_topk"]).unwrap_or(deepseek_v4::INDEX_TOPK),
             compress_ratios,
+            dspark_block_size: usize_key(&json, &["dspark_block_size"]).unwrap_or(1),
+            dspark_noise_token_id: usize_key(&json, &["dspark_noise_token_id"])
+                .map(|value| value as u32),
+            dspark_target_layer_ids,
+            dspark_markov_rank: usize_key(&json, &["dspark_markov_rank"]),
         })
     }
 
@@ -772,13 +791,37 @@ impl DeepSeekV4ArtifactModel {
         layer: usize,
         moe_prefetch_experts: usize,
     ) -> Result<DeepSeekV4LayerState> {
+        self.new_quality_first_layer_state_with_residency(layer, moe_prefetch_experts, 0)
+    }
+
+    pub fn new_quality_first_layer_state_with_residency(
+        &self,
+        layer: usize,
+        moe_prefetch_experts: usize,
+        moe_hotset_experts: usize,
+    ) -> Result<DeepSeekV4LayerState> {
+        let moe_hotset_experts = moe_hotset_experts.min(self.config.num_routed_experts);
         let moe_prefetch_experts = moe_prefetch_experts.min(self.config.num_routed_experts);
-        let policy = if moe_prefetch_experts == 0 {
-            // When managed memory is enabled, hold all experts per layer —
-            // the OS handles paging, so we never need to evict.
+        let policy = if moe_hotset_experts > 0 {
+            let gpu_slots_per_layer = moe_hotset_experts
+                .max(self.config.num_experts_per_tok)
+                .min(self.config.num_routed_experts);
+            ExpertStreamingPolicy {
+                gpu_slots_per_layer,
+                prefetch_per_layer: moe_prefetch_experts
+                    .min(gpu_slots_per_layer.saturating_sub(self.config.num_experts_per_tok)),
+                preserve_artifact_quantization: true,
+                allow_cpu_staging: true,
+                allow_remote_sources: false,
+            }
+        } else if moe_prefetch_experts == 0 {
+            // Keep this default aligned with CUDA expert uploads: FP4 experts use
+            // managed memory unless FERRULE_MANAGED_EXPERTS=0. With managed
+            // memory, resident handles are cheap enough to keep until an explicit
+            // hotset budget is requested, avoiding needless re-reads/re-uploads.
             let managed = std::env::var("FERRULE_MANAGED_EXPERTS")
                 .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-                .unwrap_or(false);
+                .unwrap_or(true);
             if managed {
                 ExpertStreamingPolicy {
                     gpu_slots_per_layer: self.config.num_routed_experts,
@@ -815,6 +858,17 @@ pub struct DeepSeekV4OperatorRuntimeCounters {
     pub device_to_host_bytes: u64,
     pub artifact_uploads: u64,
     pub artifact_upload_bytes: u64,
+    pub moe_calls: u64,
+    pub moe_tc_calls: u64,
+    pub moe_scalar_calls: u64,
+    pub moe_reduce_calls: u64,
+    pub moe_total_us: u64,
+    pub moe_pointer_upload_us: u64,
+    pub moe_input_prepare_us: u64,
+    pub moe_gate_up_us: u64,
+    pub moe_swiglu_us: u64,
+    pub moe_hidden_pack_us: u64,
+    pub moe_down_us: u64,
     pub expert_selected: u64,
     pub expert_loads: u64,
     pub expert_load_bytes: u64,
@@ -2048,6 +2102,8 @@ struct DeepSeekV4DecodeArena {
     hidden: Option<ferrule_cuda::context::CudaF32Buffer>,
     /// Pre-allocated MoE accumulator, reused across graph replays.
     moe_accumulator: Option<ferrule_cuda::context::CudaF32Buffer>,
+    /// Reusable routed MoE scratch/pointer buffers for the decode hot path.
+    moe_workspace: Option<ferrule_cuda::context::CudaMoeBatchedWorkspace>,
 }
 
 #[cfg(feature = "cuda")]
@@ -2096,6 +2152,17 @@ impl DeepSeekV4CudaOperatorCache {
             device_to_host_bytes: cuda.device_to_host_bytes,
             artifact_uploads: cuda.artifact_uploads,
             artifact_upload_bytes: cuda.artifact_upload_bytes,
+            moe_calls: cuda.moe_calls,
+            moe_tc_calls: cuda.moe_tc_calls,
+            moe_scalar_calls: cuda.moe_scalar_calls,
+            moe_reduce_calls: cuda.moe_reduce_calls,
+            moe_total_us: cuda.moe_total_us,
+            moe_pointer_upload_us: cuda.moe_pointer_upload_us,
+            moe_input_prepare_us: cuda.moe_input_prepare_us,
+            moe_gate_up_us: cuda.moe_gate_up_us,
+            moe_swiglu_us: cuda.moe_swiglu_us,
+            moe_hidden_pack_us: cuda.moe_hidden_pack_us,
+            moe_down_us: cuda.moe_down_us,
             expert_selected: self.expert_selected,
             expert_loads: self.expert_loads,
             expert_load_bytes: self.expert_load_bytes,
@@ -2981,7 +3048,9 @@ impl DeepSeekV4CudaOperatorCache {
                 }
             }
 
-            // Prepare shared FP8-quantized input (same for all experts).
+            // Get shapes from first expert. The workspace MoE path prepares the
+            // activation internally (direct FP4 packing for TC, FP8-in-f32 for
+            // scalar fallback), so there is no per-call prepared input buffer.
             let first_expert_id = ExpertId::new(layer, routes[0].expert);
             let first_expert = self.experts.get(&first_expert_id).ok_or_else(|| {
                 Error::Model(format!(
@@ -2989,14 +3058,7 @@ impl DeepSeekV4CudaOperatorCache {
                     first_expert_id.layer, first_expert_id.expert
                 ))
             })?;
-            let shared_input = self.ops.prepare_fp4_expert_input_from_device(
-                &first_expert.gate,
-                &first_expert.up,
-                &first_expert.down,
-                input,
-            )?;
 
-            // Get shapes from first expert.
             let intermediate_size = first_expert.gate.shape().out_features();
             let hidden_size = first_expert.down.shape().out_features();
 
@@ -3031,20 +3093,39 @@ impl DeepSeekV4CudaOperatorCache {
                 down_arr[i] = down_handles[i];
             }
 
-            let (_y_gate, _y_hidden, expert_out) = self.ops.moe_experts_batched_from_device(
-                &gate_arr,
+            let workspace_needs_init = match &self.decode_arena.moe_workspace {
+                Some(workspace) => {
+                    !workspace.matches(6, input.len(), intermediate_size, hidden_size)
+                }
+                None => true,
+            };
+            if workspace_needs_init {
+                self.decode_arena.moe_workspace = Some(self.ops.moe_batched_workspace(
+                    6,
+                    input.len(),
+                    intermediate_size,
+                    hidden_size,
+                )?);
+            }
+            let ops = &self.ops;
+            let workspace = self
+                .decode_arena
+                .moe_workspace
+                .as_mut()
+                .expect("MoE workspace initialized above");
+            ops.moe_experts_batched_add_into_from_device(
                 &gate_arr,
                 &up_arr,
                 &down_arr,
                 &route_weights_arr,
-                &shared_input,
+                input,
                 swiglu_limit,
                 num_experts.min(6),
                 intermediate_size,
                 hidden_size,
+                workspace,
+                &mut accumulator,
             )?;
-            // Accumulate expert output into the shared accumulator.
-            self.ops.saxpy_into(1.0, &expert_out, &mut accumulator)?;
         }
 
         planner.commit_step(&streaming)?;
@@ -3115,12 +3196,6 @@ impl DeepSeekV4CudaOperatorCache {
 
             let first_expert_id = ExpertId::new(layer, route_experts[0]);
             let first_expert = self.experts.get(&first_expert_id).expect("checked above");
-            let shared_input = self.ops.prepare_fp4_expert_input_from_device(
-                &first_expert.gate,
-                &first_expert.up,
-                &first_expert.down,
-                input,
-            )?;
             let intermediate_size = first_expert.gate.shape().out_features();
             let hidden_size = first_expert.down.shape().out_features();
 
@@ -3154,19 +3229,39 @@ impl DeepSeekV4CudaOperatorCache {
                 down_arr[i] = down_handles[i];
             }
 
-            let (_y_gate, _y_hidden, expert_out) = self.ops.moe_experts_batched_from_device(
-                &gate_arr,
+            let workspace_needs_init = match &self.decode_arena.moe_workspace {
+                Some(workspace) => {
+                    !workspace.matches(6, input.len(), intermediate_size, hidden_size)
+                }
+                None => true,
+            };
+            if workspace_needs_init {
+                self.decode_arena.moe_workspace = Some(self.ops.moe_batched_workspace(
+                    6,
+                    input.len(),
+                    intermediate_size,
+                    hidden_size,
+                )?);
+            }
+            let ops = &self.ops;
+            let workspace = self
+                .decode_arena
+                .moe_workspace
+                .as_mut()
+                .expect("MoE workspace initialized above");
+            ops.moe_experts_batched_add_into_from_device(
                 &gate_arr,
                 &up_arr,
                 &down_arr,
                 &route_weights_arr,
-                &shared_input,
+                input,
                 swiglu_limit,
                 num_experts.min(6),
                 intermediate_size,
                 hidden_size,
+                workspace,
+                accumulator,
             )?;
-            self.ops.saxpy_into(1.0, &expert_out, accumulator)?;
         }
 
         Ok(())
@@ -3904,6 +3999,10 @@ pub struct DeepSeekV4ReferenceOptions {
     pub output_head_chunk_rows: usize,
     pub expert_reader_max_tensor_bytes: u64,
     pub moe_prefetch_experts: usize,
+    /// Optional bounded per-layer resident hotset. `0` keeps the managed-memory
+    /// default (no planner eviction); non-zero clamps residency to at least
+    /// `num_experts_per_tok` and retains hottest routed experts first.
+    pub moe_hotset_experts: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3923,6 +4022,7 @@ impl Default for DeepSeekV4ReferenceOptions {
             output_head_chunk_rows: 1024,
             expert_reader_max_tensor_bytes: 64 * 1024 * 1024,
             moe_prefetch_experts: 0,
+            moe_hotset_experts: 0,
         }
     }
 }
@@ -4044,12 +4144,19 @@ impl DeepSeekV4ReferenceRunner {
         self.position = 0;
     }
 
-    fn predicted_experts_for_decode(&self) -> Vec<usize> {
+    fn predicted_experts_for_layer(&self, layer: usize) -> Vec<usize> {
         let count = self
             .options
             .moe_prefetch_experts
             .min(self.model.config.num_routed_experts);
-        (0..count).collect()
+        if count == 0 {
+            return Vec::new();
+        }
+        self.states
+            .get(layer)
+            .and_then(Option::as_ref)
+            .map(|state| state.expert_planner.hot_experts(layer, count))
+            .unwrap_or_default()
     }
 
     pub fn bound_layer_count(&self) -> usize {
@@ -4085,19 +4192,31 @@ impl DeepSeekV4ReferenceRunner {
     }
 
     fn decode_token_hidden_reference(&mut self, token_id: u32) -> Result<Vec<f32>> {
+        self.advance_token_hidden_reference(token_id, true)?
+            .ok_or_else(|| {
+                Error::Internal("DeepSeek-V4 reference decode did not materialize hidden".into())
+            })
+    }
+
+    fn advance_token_hidden_reference(
+        &mut self,
+        token_id: u32,
+        materialize_hidden: bool,
+    ) -> Result<Option<Vec<f32>>> {
         let mut hc_state = self.model.initial_hc_state_for_token(token_id)?;
-        let predicted_experts = self.predicted_experts_for_decode();
         for layer_idx in 0..self.options.max_layers {
             if self.layers[layer_idx].is_none() {
                 self.layers[layer_idx] = Some(self.model.bind_layer(layer_idx)?);
             }
             if self.states[layer_idx].is_none() {
                 self.states[layer_idx] =
-                    Some(self.model.new_quality_first_layer_state_with_prefetch(
+                    Some(self.model.new_quality_first_layer_state_with_residency(
                         layer_idx,
                         self.options.moe_prefetch_experts,
+                        self.options.moe_hotset_experts,
                     )?);
             }
+            let predicted_experts = self.predicted_experts_for_layer(layer_idx);
             let layer = self.layers[layer_idx].as_ref().expect("initialized above");
             let state = self.states[layer_idx].as_mut().expect("initialized above");
             let step = layer.decode_step_with_operators(
@@ -4113,21 +4232,31 @@ impl DeepSeekV4ReferenceRunner {
             hc_state = step.hc_state;
         }
         self.position += 1;
-        self.model
-            .normalized_hidden_from_hc_state_with_operators(&hc_state, &mut self.operators)
+        if !materialize_hidden {
+            return Ok(None);
+        }
+        Ok(Some(
+            self.model
+                .normalized_hidden_from_hc_state_with_operators(&hc_state, &mut self.operators)?,
+        ))
     }
 
     #[cfg(feature = "cuda")]
     fn decode_token_hidden_cuda(&mut self, token_id: u32) -> Result<Vec<f32>> {
-        let normed_dev = self.decode_token_hidden_cuda_device(token_id)?;
+        let normed_dev = self
+            .advance_token_hidden_cuda_device(token_id, true)?
+            .ok_or_else(|| {
+                Error::Internal("DeepSeek-V4 CUDA decode did not materialize hidden".into())
+            })?;
         self.operators.cuda_download_f32(&normed_dev)
     }
 
     #[cfg(feature = "cuda")]
-    fn decode_token_hidden_cuda_device(
+    fn advance_token_hidden_cuda_device(
         &mut self,
         token_id: u32,
-    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        materialize_hidden: bool,
+    ) -> Result<Option<ferrule_cuda::context::CudaF32Buffer>> {
         // For now, the graph capture path is structurally ready but the
         // decode step still contains host-side computation (rotary, KV cache,
         // expert streaming) that prevents full graph capture. We attempt
@@ -4167,6 +4296,10 @@ impl DeepSeekV4ReferenceRunner {
             let graph = decode_graph.as_ref().expect("checked above");
             graph.graph.launch(&stream)?;
 
+            *position += 1;
+            if !materialize_hidden {
+                return Ok(None);
+            }
             // hc_head + output_norm run after replay (not inside graph)
             // because they depend on the final hc_state_dev which is the
             // graph output buffer.
@@ -4182,26 +4315,26 @@ impl DeepSeekV4ReferenceRunner {
                 &model.output_norm,
                 model.config.norm_eps,
             )?;
-            *position += 1;
-            return Ok(normed_dev);
+            return Ok(Some(normed_dev));
         }
 
         let mut hc_state_dev = {
             let hc_state = self.model.initial_hc_state_for_token(token_id)?;
             self.operators.cuda_upload_f32(&hc_state)?
         };
-        let predicted_experts = self.predicted_experts_for_decode();
         for layer_idx in 0..self.options.max_layers {
             if self.layers[layer_idx].is_none() {
                 self.layers[layer_idx] = Some(self.model.bind_layer(layer_idx)?);
             }
             if self.states[layer_idx].is_none() {
                 self.states[layer_idx] =
-                    Some(self.model.new_quality_first_layer_state_with_prefetch(
+                    Some(self.model.new_quality_first_layer_state_with_residency(
                         layer_idx,
                         self.options.moe_prefetch_experts,
+                        self.options.moe_hotset_experts,
                     )?);
             }
+            let predicted_experts = self.predicted_experts_for_layer(layer_idx);
             let layer = self.layers[layer_idx].as_ref().expect("initialized above");
             let state = self.states[layer_idx].as_mut().expect("initialized above");
             hc_state_dev = layer.decode_step_device_hc_device(
@@ -4215,6 +4348,9 @@ impl DeepSeekV4ReferenceRunner {
             )?;
         }
         self.position += 1;
+        if !materialize_hidden {
+            return Ok(None);
+        }
         let hidden_dev = self.operators.cuda_hc_head_from_device(
             &hc_state_dev,
             1,
@@ -4227,7 +4363,7 @@ impl DeepSeekV4ReferenceRunner {
             &self.model.output_norm,
             self.model.config.norm_eps,
         )?;
-        Ok(normed_dev)
+        Ok(Some(normed_dev))
     }
 
     #[cfg(feature = "cuda")]
@@ -4241,16 +4377,16 @@ impl DeepSeekV4ReferenceRunner {
             }
             if self.states[layer_idx].is_none() {
                 self.states[layer_idx] =
-                    Some(self.model.new_quality_first_layer_state_with_prefetch(
+                    Some(self.model.new_quality_first_layer_state_with_residency(
                         layer_idx,
                         self.options.moe_prefetch_experts,
+                        self.options.moe_hotset_experts,
                     )?);
             }
         }
 
         let max_layers = self.options.max_layers;
         let position = self.position;
-        let predicted_experts = self.predicted_experts_for_decode();
 
         // ── Phase 1: Warmup pass (eager) ──
         // Run one full decode step to:
@@ -4267,6 +4403,7 @@ impl DeepSeekV4ReferenceRunner {
         };
         let mut layer_routes: Vec<(Vec<usize>, Vec<f32>)> = Vec::with_capacity(max_layers);
         for layer_idx in 0..max_layers {
+            let predicted_experts = self.predicted_experts_for_layer(layer_idx);
             let layer = self.layers[layer_idx].as_ref().expect("bound above");
             let state = self.states[layer_idx].as_mut().expect("bound above");
             hc_state_dev = layer.decode_step_device_hc_device(
@@ -4280,7 +4417,6 @@ impl DeepSeekV4ReferenceRunner {
             )?;
             // Capture the routes from this layer's MoE step.
             // The routes are stored in the operator cache's last routes.
-            let cache = self.operators.cuda.as_ref().expect("cuda initialized");
             // We need to get the routes from the last routed_moe_step.
             // Since we can't easily extract them from the cache, we'll
             // re-derive them from the router logits.
@@ -4298,7 +4434,6 @@ impl DeepSeekV4ReferenceRunner {
         // re-run the router for each layer and capture the routes.
         for layer_idx in 0..max_layers {
             let layer = self.layers[layer_idx].as_ref().expect("bound above");
-            let state = self.states[layer_idx].as_mut().expect("bound above");
             // The routes were already computed during warmup; we need to
             // extract them. Since the cache doesn't store them, we'll
             // use the experts that are now resident.
@@ -4394,7 +4529,11 @@ impl DeepSeekV4ReferenceRunner {
     ) -> Result<Vec<DeepSeekV4Logit>> {
         #[cfg(feature = "cuda")]
         if self.operators.backend == DeepSeekV4OperatorBackend::Cuda {
-            let hidden = self.decode_token_hidden_cuda_device(token_id)?;
+            let hidden = self
+                .advance_token_hidden_cuda_device(token_id, true)?
+                .ok_or_else(|| {
+                    Error::Internal("DeepSeek-V4 CUDA top-k did not materialize hidden".into())
+                })?;
             return self.model.topk_logits_for_hidden_device_with_operators(
                 &hidden,
                 top_k,
@@ -4412,9 +4551,17 @@ impl DeepSeekV4ReferenceRunner {
         )
     }
 
-    /// Advance the model session with a token without materializing lm_head logits.
+    /// Advance the model session with a token without materializing lm_head logits
+    /// or the final output hidden. This is the hot prompt/generated-token append
+    /// path used by interactive chat.
     pub fn feed_token(&mut self, token_id: u32) -> Result<()> {
-        self.decode_token_hidden(token_id).map(|_| ())
+        #[cfg(feature = "cuda")]
+        if self.operators.backend == DeepSeekV4OperatorBackend::Cuda {
+            self.advance_token_hidden_cuda_device(token_id, false)?;
+            return Ok(());
+        }
+        self.advance_token_hidden_reference(token_id, false)
+            .map(|_| ())
     }
 
     /// Correctness-first prefill fallback: execute prompt tokens one-by-one through
@@ -4428,8 +4575,12 @@ impl DeepSeekV4ReferenceRunner {
             ));
         }
         let mut hidden = Vec::new();
-        for &token_id in token_ids {
-            hidden = self.decode_token_hidden(token_id)?;
+        for (idx, &token_id) in token_ids.iter().enumerate() {
+            if idx + 1 == token_ids.len() {
+                hidden = self.decode_token_hidden(token_id)?;
+            } else {
+                self.feed_token(token_id)?;
+            }
         }
         Ok(hidden)
     }
@@ -4472,20 +4623,53 @@ impl DeepSeekV4ReferenceRunner {
         )
     }
 
+    /// Interactive prefill optimized for short chat turns on the CUDA backend.
+    ///
+    /// The existing batched prefill path is correctness-first and host-heavy. For
+    /// terminal chat, short prompts are faster when appended through the
+    /// device-resident decode chain: all prompt tokens except the last update KV
+    /// and MoE residency without materializing output hidden/logits; the last
+    /// prompt token materializes top-k for generation.
+    pub fn prefill_tokens_topk_interactive(
+        &mut self,
+        token_ids: &[u32],
+        top_k: usize,
+    ) -> Result<Vec<DeepSeekV4Logit>> {
+        if token_ids.is_empty() {
+            return Err(Error::Model(
+                "DeepSeek-V4 interactive prefill requires at least one token".into(),
+            ));
+        }
+        #[cfg(feature = "cuda")]
+        if self.operators.backend == DeepSeekV4OperatorBackend::Cuda {
+            for &token_id in &token_ids[..token_ids.len() - 1] {
+                self.feed_token(token_id)?;
+            }
+            return self.decode_token_topk(token_ids[token_ids.len() - 1], top_k);
+        }
+        self.prefill_tokens_topk_batched(token_ids, top_k)
+    }
+
     /// Public prefill entry point for chat/run integration.
     ///
-    /// At session start this follows the official DSV4 prefill shape: each layer sees
-    /// the full prompt segment with `start_pos == 0`, builds window/compressed/indexer
-    /// KV in bulk, and only then advances to the next layer. For non-zero session
-    /// positions we keep the verified sequential append path until a paged/persistent
-    /// multi-turn prefill cache is added.
+    /// Process a prompt segment through the existing session prefix.
+    ///
+    /// At session start this follows the official DSV4 prefill shape. For later
+    /// chat turns it keeps existing KV/compressor/expert residency and processes
+    /// the new segment layer-by-layer, matching the prefix-cache execution shape
+    /// used by serving engines instead of re-running the whole model once per
+    /// prompt token.
     pub fn prefill_tokens_hidden_batched(&mut self, token_ids: &[u32]) -> Result<Vec<f32>> {
         if token_ids.is_empty() {
             return Err(Error::Model(
                 "DeepSeek-V4 prefill requires at least one token".into(),
             ));
         }
-        if self.position != 0 || token_ids.len() == 1 {
+        if token_ids.len() == 1 {
+            return self.prefill_tokens_hidden(token_ids);
+        }
+        #[cfg(feature = "cuda")]
+        if self.position != 0 && self.operators.backend == DeepSeekV4OperatorBackend::Cuda {
             return self.prefill_tokens_hidden(token_ids);
         }
 
@@ -4497,11 +4681,13 @@ impl DeepSeekV4ReferenceRunner {
             }
             if self.states[layer_idx].is_none() {
                 self.states[layer_idx] =
-                    Some(self.model.new_quality_first_layer_state_with_prefetch(
+                    Some(self.model.new_quality_first_layer_state_with_residency(
                         layer_idx,
                         self.options.moe_prefetch_experts,
+                        self.options.moe_hotset_experts,
                     )?);
             }
+            let predicted_experts = self.predicted_experts_for_layer(layer_idx);
             let layer = self.layers[layer_idx].as_ref().expect("initialized above");
             let state = self.states[layer_idx].as_mut().expect("initialized above");
             hc_state = layer.prefill_start_with_operators(
@@ -4509,7 +4695,7 @@ impl DeepSeekV4ReferenceRunner {
                 &hc_state,
                 token_ids,
                 self.position,
-                &[],
+                &predicted_experts,
                 &self.expert_reader,
                 &self.expert_executor,
                 &mut self.operators,
@@ -5089,12 +5275,6 @@ impl DeepSeekV4Layer {
                 self.layer
             )));
         }
-        if start_pos != 0 {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} batched prefill currently supports start_pos=0, got {start_pos}",
-                self.layer
-            )));
-        }
         if hc_state.len() != tokens * self.hc_config.hc_hidden_size() {
             return Err(Error::Model(format!(
                 "DeepSeek-V4 layer {} batched HC input length mismatch: expected {}, got {}",
@@ -5114,12 +5294,21 @@ impl DeepSeekV4Layer {
             self.hc_config.norm_eps,
             "attn_norm",
         )?;
-        let attention_hidden = self.attention.prefill_start_with_operators(
-            &mut state.kv,
-            &attention_input,
-            start_pos,
-            operators,
-        )?;
+        let attention_hidden = if start_pos == 0 {
+            self.attention.prefill_start_with_operators(
+                &mut state.kv,
+                &attention_input,
+                start_pos,
+                operators,
+            )?
+        } else {
+            self.attention.prefill_segment_with_operators(
+                &mut state.kv,
+                &attention_input,
+                start_pos,
+                operators,
+            )?
+        };
         let after_attention = operators.hc_post(
             &attention_hidden,
             hc_state,
@@ -5611,10 +5800,7 @@ impl DeepSeekV4Attention {
     ) -> Result<Vec<f32>> {
         let cfg = self.config;
         if start_pos != 0 {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} attention batched prefill currently supports start_pos=0, got {start_pos}",
-                self.layer
-            )));
+            return self.prefill_segment_with_operators(cache, hidden, start_pos, operators);
         }
         if hidden.is_empty() || !hidden.len().is_multiple_of(cfg.hidden_size) {
             return Err(Error::Model(format!(
@@ -5629,6 +5815,33 @@ impl DeepSeekV4Attention {
         } else {
             self.prefill_start_compressed_with_operators(cache, hidden, start_pos, operators)
         }
+    }
+
+    pub fn prefill_segment_with_operators(
+        &self,
+        cache: &mut DeepSeekV4AttentionCache,
+        hidden: &[f32],
+        start_pos: usize,
+        operators: &mut DeepSeekV4OperatorContext,
+    ) -> Result<Vec<f32>> {
+        let cfg = self.config;
+        if hidden.is_empty() || !hidden.len().is_multiple_of(cfg.hidden_size) {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 layer {} segment prefill hidden length mismatch: hidden={} dim={}",
+                self.layer,
+                hidden.len(),
+                cfg.hidden_size
+            )));
+        }
+        let tokens = hidden.len() / cfg.hidden_size;
+        let mut out = Vec::with_capacity(tokens * cfg.hidden_size);
+        for token in 0..tokens {
+            let position = start_pos + token;
+            let row = &hidden[token * cfg.hidden_size..(token + 1) * cfg.hidden_size];
+            let attention = self.decode_step_with_operators(cache, row, position, operators)?;
+            out.extend_from_slice(&attention);
+        }
+        Ok(out)
     }
 
     fn prefill_start_no_compress_with_operators(
