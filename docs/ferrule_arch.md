@@ -24,7 +24,7 @@ be explicit runtime objects that can be scheduled against real hardware.
 9. [Quantization and WeightPack](#quantization-and-weightpack)
 10. [KV cache](#kv-cache)
 11. [Sampling and chat](#sampling-and-chat)
-12. [Server](#server)
+12. [Serving](#serving)
 13. [Composable engine architecture](#composable-engine-architecture)
 14. [Alignment targets](#alignment-targets)
 15. [Future: Elastic State Fabric](#future-elastic-state-fabric)
@@ -39,52 +39,43 @@ be explicit runtime objects that can be scheduled against real hardware.
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        ferrule-cli                                  │
-│  chat · run · gpu-run · info · bench-infer · compare-logits ·       │
-│  server · deepseek-v4-probe · deepseek-v4-generate · perplexity     │
-└──────────┬──────────────────────────────────────────┬───────────────┘
-           │                                          │
-           ▼                                          ▼
-┌─────────────────────┐  ┌──────────────────┐  ┌─────────────────────┐
-│  ferrule-runtime    │  │  ferrule-cuda    │  │  ferrule-bench      │
-│  runner · session   │  │  kernels · GPU   │  │  benchmarks · PK ·  │
-│  sampler · scheduler│  │  forward pass    │  │  reference smokes   │
-│  graph runtime      │  │  WeightPack      │  │  perplexity         │
-│  expert streaming   │  │  artifact ops    │  │  JSON reports       │
-│  expert residency   │  └──────────────────┘  └─────────────────────┘
-│  routed MoE         │
-│  KV cache · radix   │
-└──┬──────┬───────────┘
-   │      │
-   ▼      ▼
-┌──────┐ ┌──────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│ferrule│ │ferrule-graph │  │  ferrule-model   │  │  ferrule-storage │
-│-core │ │ opaque IR ·   │  │  OLMoE loader ·  │  │  vocabulary:     │
-│errors│ │ GraphProgram │  │  DSV4 descriptor │  │  StorageObjectId │
-│types │ │ shape registry│  │  families/ ·     │  │  Placement ·     │
-│      │ │              │  │  tokenizer ·     │  │  ObjectLocator · │
-│      │ │              │  │  policies        │  │  TransferEngine  │
-└──────┘ └──────────────┘  └──────┬───────────┘  └──────────────────┘
-                                   │
-                                   ▼
-                            ┌──────────────┐  ┌──────────────┐
-                            │ ferrule-quant│  │ ferrule-gguf │
-                            │ Q4/Q8/FP4/FP8│  │ safetensors  │
-                            │ mixed policy │  │ GGUF reader  │
-                            └──────────────┘  └──────────────┘
+│  args · display · chat · bench-interactive · cuda · inspect/probes   │
+│  Owns UX only: no handwritten generation loop, no unsafe kernels.    │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                     ferrule-runtime                                 │
+│  generation/session/sampling/scheduler/cache                        │
+│  graph IR + graph execution envelopes                               │
+│  storage/residency vocabulary + expert streaming/residency traits    │
+│  Owns algorithms over capability traits; owns no concrete model.     │
+└───────────────┬───────────────────────────────────┬─────────────────┘
+                │                                   │
+                ▼                                   ▼
+┌──────────────────────────────┐     ┌───────────────────────────────┐
+│         ferrule-model        │     │          ferrule-cuda          │
+│  model semantics             │     │  CUDA primitives/kernels       │
+│  artifact + semantic binding │     │  device utilities/counters     │
+│  runner capability traits    │     │  safe smoke benchmark API      │
+│  concrete OLMoE / DSV4 impls │     │  unsafe launch hidden here     │
+│  tokenizer + HF inventory    │     └───────────────────────────────┘
+└───────────────┬──────────────┘
+                │
+                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                     ferrule-common                                  │
+│  shared error/result, quant dtype vocabulary, lightweight utilities  │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 | Crate | Role |
 |---|---|
-| `ferrule-core` | shared errors, `QuantType`, observability |
-| `ferrule-storage` | storage/residency vocabulary types + traits (no backend deps) |
-| `ferrule-graph` | opaque graph IR, `GraphProgram`, shape registry |
-| `ferrule-gguf` | GGUF and safetensors readers |
-| `ferrule-quant` | Q4_0, Q8_0, FP4/FP8 artifact decoders, mixed precision policy |
-| `ferrule-model` | OLMoE loader, DSV4 descriptor, model-family tensor policies, tokenizer |
-| `ferrule-cuda` | cuda-oxide kernels, GPU forward pass, WeightPack reader, artifact operators |
-| `ferrule-runtime` | runner, session, sampler, scheduler, graph runtime, expert streaming/residency, KV cache, structured decoding |
-| `ferrule-bench` | benchmarks, PK harness, reference smokes, perplexity, JSON reports |
-| `ferrule-cli` | CLI commands |
+| `ferrule-common` | shared errors, `QuantType`, lightweight common vocabulary |
+| `ferrule-model` | model semantics, artifact/semantic binding, runner capability traits, concrete model implementations such as `models::deepseek_v4` |
+| `ferrule-runtime` | generation/session/sampling/scheduling, runtime graph IR, storage/residency vocabulary, expert streaming/residency, KV/cache; depends on capabilities, not concrete models |
+| `ferrule-cuda` | CUDA primitive/kernels/device utilities/counters and safe smoke benchmark entrypoints |
+| `ferrule-cli` | argument parsing, command dispatch, terminal/JSON output, model-specific diagnostics |
 
 ---
 
@@ -95,16 +86,15 @@ safetensors + tokenizer files
         ↓
 ferrule-model family descriptor + tensor inventory
         ↓
-Artifact-preserving runtime payloads
+Artifact-preserving model payloads
         ↓
-DSV4: direct HF artifact streaming + mmap + managed expert handles
-OLMoE: optional WeightPack cache / all-resident CUDA path
+ferrule-model concrete runner implements capability traits
         ↓
-DeepSeekV4ReferenceRunner / Engine-facing runner
+ferrule-runtime generation/session/scheduler algorithms over those traits
         ↓
-CUDA operator cache + session state + expert residency planner
+CUDA operator cache + model session state + expert residency planner
         ↓
-chat / one-shot generation / minimal server
+chat / one-shot generation / diagnostics
 ```
 
 Two execution paths coexist:
@@ -113,24 +103,36 @@ Two execution paths coexist:
    uploads all experts at startup as concatenated device buffers. It is the
    correctness fixture for router semantics and legacy CUDA kernels.
 
-2. **DSV4 interactive streaming path**: `DeepSeekV4ReferenceRunner` owns session
-   position and per-layer state. `DeepSeekV4CudaOperatorCache` owns CUDA operator
-   state, uploaded linears, norm/rope caches, device KV buffers, expert handles,
-   MoE workspaces, and counters. `ExpertStreamingPlanner` decides selected,
-   prefetched, loaded, and evicted `(layer, expert)` bundles.
+2. **DSV4 interactive streaming path**: `ferrule-model::models::deepseek_v4`
+   owns `DeepSeekV4ReferenceRunner`, session position, and per-layer model state.
+   `DeepSeekV4CudaOperatorCache` owns CUDA operator state, uploaded linears,
+   norm/rope caches, device KV buffers, expert handles, MoE workspaces, and
+   counters. Runtime generation only sees the runner capability traits.
+   `ExpertStreamingPlanner` decides selected, prefetched, loaded, and evicted
+   `(layer, expert)` bundles.
 
-Current DSV4 chat is a **single-process resident runner**, not yet a production
-serving engine:
+Current DSV4 execution is a **single-process resident runner**, not yet a production
+serving engine. Two UX paths exist:
 
 - `ferrule chat ... -q cuda --chat-template deepseek-v4 --temp 0` starts the REPL
   immediately and loads CPU-side DSV4 artifacts on a background thread.
+- `bench-interactive --runtime-driver` runs real full 43-layer DSV4 through
+  `ResidentTopKDriver`, proving the generic runtime spine over `TopKModelRunner`:
+  request admission, chunked prompt planning, decode action execution, token events,
+  finish reasons, and metadata KV free.
 - CUDA context/operator cache is initialized on the main thread when the model is
   first used.
-- Interactive prompt append uses `prefill_tokens_topk_interactive`: non-final
-  prompt tokens update session/KV/MoE state without materializing final
-  hidden/logits; the final prompt token materializes top-k for generation.
-- This improves terminal latency, but it is still token-by-token device append,
-  not true SGLang/vLLM-style CUDA chunked prefill.
+- Interactive prompt append uses `prefill_tokens_topk_interactive`, now routed
+  through the DSV4 batched/segment prefill core. Runtime non-final chunks call
+  `TopKModelRunner::prefill_tokens`, so they update session/KV/MoE state without
+  materializing hidden/logits; the final chunk materializes top-k for generation.
+- The runtime-driver DSV4 path currently uses `PagedSequenceKvCache` as
+  scheduler-owned metadata/lifecycle only. Physical CUDA KV/session state remains
+  owned by `DeepSeekV4ReferenceRunner`, so this is not yet CUDA paged attention.
+- This connects the serving-shaped spine and a first correctness-first segment
+  prefill vertical slice. It is not the final optimized CUDA prefill yet: the path
+  still has host `Vec<f32>` boundaries and per-token MoE routing inside a chunk;
+  true device-resident multi-column MoE/attention remains the next performance step.
 
 ---
 
@@ -191,9 +193,10 @@ Runtime handle store exposes executable objects to model code
 
 ### Current state
 
-- `ferrule-storage` provides backend-neutral vocabulary: `StorageObjectId`,
-  `ObjectLocator`, `Placement`, `ObjectReplica`, `ReplicaHandleId`,
-  `StorageCatalog`, `TransferEngine`, and policy scoring types.
+- `ferrule-runtime::storage` provides backend-neutral vocabulary:
+  `StorageObjectId`, `ObjectLocator`, `Placement`, `ObjectReplica`,
+  `ReplicaHandleId`, `StorageCatalog`, `TransferEngine`, and policy scoring
+  types.
 - `ExpertStreamingPlanner` is the active DSV4 strategy layer. It tracks per-layer
   expert state, recency, frequency, selected experts, predicted experts, loads,
   evictions, and committed residency.
@@ -393,8 +396,8 @@ hc_pre → attn_norm → attention → hc_post
 - True CUDA chunked/segment prefill over an existing prefix.
 - Fully device-resident compressor/indexer state and top-k.
 - Real FP4 GEMM utilization with `batch_cols > 1` and per-column routing.
-- Resident worker abstraction shared by CLI chat and server.
-- Paged KV, prefix/radix reuse, continuous batching, cancellation.
+- Paged KV, prefix/radix reuse, and continuous batching.
+- Rollback/KV rewind for cancellation and speculative branches.
 - DSpark proposal/verify/rollback loop.
 
 ---
@@ -454,10 +457,14 @@ class. CLI: `--quant q4-mixed`.
 
 ## KV cache
 
-- `KvCache` trait: `append`, `view`, `reset` with explicit `Handle`.
-- Contiguous per-session KV (current production path).
-- Radix prefix cache (module exists, not integrated with serving).
-- Paged KV allocator (planned, not built).
+- `KvCache` trait: legacy single-sequence append/view/reset.
+- `SequenceKvCache` trait: scheduler-facing allocation, free, per-sequence append,
+  logical length, and layer views through `KvHandle`.
+- Contiguous per-session KV (`ContiguousKvCache`, `MultiSessionKvCache`).
+- `PagedSequenceKvCache`: vLLM-style block-table manager over `PagedKvCache`, with
+  per-sequence `BlockTable` ownership and `SequenceKvCache` admission/free support.
+  CUDA paged-attention kernels are still future work.
+- Radix/prefix cache modules exist; serving integration is still future work.
 - KV quantization: FP16 first, then KIVI/KVQuant-style low-bit.
 
 ---
@@ -478,30 +485,43 @@ class. CLI: `--quant q4-mixed`.
   non-final prompt tokens update session state without final hidden/logits; the
   final prompt token produces top-k for generation.
 
-The next architecture step is to move this CLI-local behavior into a reusable
-resident `EngineWorker` so chat and server share the same SGLang-style execution
-shape.
+This now runs through reusable runtime boundaries over `TopKModelRunner`.
+`EngineWorker` exposes explicit `append_prompt` / `decode_next` phases with a
+concrete `TopKDecodeState`, typed finish reasons (`SequenceFinishReason`,
+re-exported as `TopKFinishReason` for top-k turns), minimal `cancel_decode`, and
+`EngineWorkerStats`. The serving spine is also connected: `ResidentScheduler` owns
+request admission and `SequenceState` lifecycle; `SequenceState` carries request id,
+KV handle, logical position, request sampling/stop/budget, and prefill cursor;
+`SchedulerAction` turns prefill/decode decisions into `ExecutionBatch`;
+`ResidentActionExecutor` can execute those actions against a single resident
+`TopKModelRunner` and return `ExecutionOutput`; and `ResidentTopKDriver` owns the
+end-to-end loop for token streaming, max-token/EOS/stop-string finish, and KV
+release. Chat and future serving can share this SGLang/vLLM-style execution shape
+without introducing a large engine framework yet.
 
 ---
 
-## Server
+## Serving
 
-Minimal OpenAI-compatible server exists:
+Serving is a design target, not an active CLI command in the current 5-crate
+workspace. The intended OpenAI-compatible surface is still:
 
 - `GET /health`
 - `GET /v1/models`
-- `POST /v1/chat/completions` (one request at a time)
+- `POST /v1/chat/completions`
 - SSE streaming (`stream: true`) with token text + final usage stats
 
-Current limitation: server does not yet use the new DSV4 resident/lazy chat path
-or a production worker loop. Production serving needs:
+Production serving needs:
 
-1. shared resident `EngineWorker` for chat and server;
-2. request/session/sequence lifecycle;
-3. paged KV and prefix/radix cache integration;
-4. chunked prefill scheduler;
-5. continuous batching for decode;
-6. cancellation, metrics, and structured output masks.
+1. shared resident `EngineWorker`/executor/driver boundaries for chat and serving;
+2. request/session/sequence lifecycle over `SequenceState`, `ResidentScheduler`,
+   `ResidentTopKDriver`, and `SchedulerAction`;
+3. paged KV block-table lifecycle through `PagedSequenceKvCache`;
+4. CUDA/backend binding for paged KV tables and prefix/radix reuse;
+5. true chunked prefill scheduler using `ExecutionBatch`;
+6. continuous batching for decode with a backend that natively understands multiple
+   sessions/KV handles;
+7. rollback/KV rewind, metrics, and structured output masks.
 
 ---
 
@@ -527,8 +547,8 @@ leak into scheduler/sampler/CLI.
 | `RouterPolicy` | dense top-k | bias/hash routing, EP |
 | `ExpertPolicy` | routed experts | shared experts, batching, EP |
 | `QuantPolicy` | Q4_0/Q8_0 WeightPack | GGUF K/IQ, FP4/FP8, mixed |
-| `KvPolicy` | contiguous per-session | paged KV, prefix/radix |
-| `SchedulerPolicy` | single request | continuous batching, preemption |
+| `KvPolicy` | contiguous + paged `SequenceKvCache` managers | CUDA paged attention, prefix/radix reuse |
+| `SchedulerPolicy` | resident scheduler actions over request/session state | continuous batching, preemption |
 | `ResidencyPolicy` | all resident if fits | expert streaming, host-staged |
 | `SpeculationPolicy` | none | MTP, DSpark, Eagle |
 
@@ -540,14 +560,14 @@ leak into scheduler/sampler/CLI.
 
 | Capability | Ferrule today | Target |
 |---|---|---|
-| Chat CLI | immediate REPL + DSV4 lazy artifact load + interactive append | resident worker with async warmup and first-token metrics |
+| Chat CLI | immediate REPL + DSV4 lazy artifact load + runtime `EngineWorker` phased append/decode execution, typed finish reasons, minimal cancel | rollback/KV rewind, async warmup, first-token metrics |
 | Prompt prefill | token-by-token device append for CUDA chat | CUDA chunked prefill over existing prefix |
 | Decode | ~0.9 tok/s short JSON DSV4; top-k device path | multi-token/speculative throughput + graph buckets |
 | Model metadata | `info`, DSV4 descriptor, DSpark metadata parse | engine-plan inspection and policy dump |
 | Quantization | Q4/Q8/FP4/FP8, mixed precision, artifact-preserving DSV4 | calibrated GGUF K/IQ + official quality gates |
 | Benchmarks | JSON decode summaries + chat stats | interactive benchmark, first-token, PK matrix |
 | Loading | safetensors + WeightPack; DSV4 background artifact load | resident worker warmup + artifact placement plan |
-| Serving | minimal OpenAI-compatible server | SGLang/vLLM-style worker, paged KV, batching |
+| Serving | resident scheduler/action executor/top-k driver and paged KV manager exist; no active CLI server command | SGLang/vLLM-style multi-session backend, CUDA paged KV, batching |
 | Offload | expert streaming + managed memory + hotset prefetch | budgeted placement, async overlap, long-run policy |
 
 ### Differentiation

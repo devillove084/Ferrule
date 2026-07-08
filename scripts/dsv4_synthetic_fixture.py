@@ -591,7 +591,8 @@ def main() -> None:
     print(f"  Data:     {total / 1e9:.2f} GB")
     print(f"  Tensors:  {len(weight_map)}")
     print(f"\nTest with:")
-    print(f"  cargo run -p ferrule-cli --release -- bench-infer {output} -n 1")
+    print(f"  cargo run -p ferrule-cli --release -- deepseek-v4-probe {output} --max-layers 0")
+    print(f"  cargo run -p ferrule-cli --release -- deepseek-v4-generate {output} --backend cpu --max-layers 1 --max-tokens 1")
 
 
 if __name__ == "__main__":

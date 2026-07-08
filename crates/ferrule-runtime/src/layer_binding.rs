@@ -10,38 +10,38 @@
 use std::path::Path;
 
 use ferrule_common::{Error, Result};
-use ferrule_model::families::HyperConnectionStage;
+use ferrule_model::semantic::HyperConnectionStage;
 use ferrule_model::{
     HfAttentionTensorInfo, HfHyperConnectionTensorInfo, HfRouterTensorInfo,
     HfSharedExpertTensorInfo, RouterKind,
 };
 
-use crate::artifact_binding::{
+use crate::graph::layer_binding::GraphLayerObjects;
+use ferrule_model::artifact::binding::{
     bind_attention_from_artifact_group, bind_attention_from_hf,
     bind_hyper_connection_from_artifact_group, bind_hyper_connection_from_hf,
     bind_layer_norms_from_artifact_group, bind_router_from_artifact_group, bind_router_from_hf,
     bind_shared_swiglu_ffn_from_artifact_group, bind_shared_swiglu_ffn_from_hf,
-    AttentionArtifactPayload, RouterArtifactPayload,
+    MlaAttentionArtifactPayload, RouterArtifactPayload,
 };
-use crate::artifact_tensor::ArtifactTensorReader;
-use crate::attention_backend::{
+use ferrule_model::artifact::tensor::ArtifactTensorReader;
+use ferrule_model::attention_backend::{
     sliding_window_topk_indices, sparse_attention_reference, SparseAttentionSpec,
 };
-use crate::expert_executor::CpuReferenceExpertExecutor;
-use crate::expert_handle::CpuExpertHandleStore;
-use crate::expert_routing::ExpertRouterPolicy;
-use crate::expert_streaming::{
-    ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader,
-};
-use crate::ffn::SwiGluFfnPayload;
-use crate::graph_layer_binding::GraphLayerObjects;
-use crate::hyper_connection::{
+use ferrule_model::ffn::SwiGluFfnPayload;
+use ferrule_model::hyper_connection::{
     hc_post_reference, hc_pre_reference, HyperConnectionConfig, HyperConnectionWeights,
 };
-use crate::routed_moe::{
+use ferrule_model::moe::executor::CpuReferenceExpertExecutor;
+use ferrule_model::moe::handle::CpuExpertHandleStore;
+use ferrule_model::moe::routed::{
     execute_routed_moe_with_artifact_router_reference_with_handles, RoutedMoeStepOutput,
 };
-use crate::transformer_plan::{FeedForwardStepPlan, TransformerLayerPlan};
+use ferrule_model::moe::routing::ExpertRouterPolicy;
+use ferrule_model::moe::streaming::{
+    ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader,
+};
+use ferrule_model::transformer_plan::{FeedForwardStepPlan, TransformerLayerPlan};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphLayerBindingOptions {
@@ -71,7 +71,7 @@ impl Default for GraphLayerBindingOptions {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayerArtifactBinding {
     pub layer: usize,
-    pub attention: AttentionArtifactPayload,
+    pub attention: MlaAttentionArtifactPayload,
     pub attention_norm: Option<Vec<f32>>,
     pub feed_forward_norm: Option<Vec<f32>>,
     pub hc_attention: HyperConnectionWeights,
@@ -334,7 +334,7 @@ fn infer_hc_mult_from_mix_hc(mix_hc: usize) -> Option<usize> {
 
 fn infer_attention_spec(
     layer_plan: &TransformerLayerPlan,
-    attention: &AttentionArtifactPayload,
+    attention: &MlaAttentionArtifactPayload,
     topk_override: Option<usize>,
 ) -> Result<SparseAttentionSpec> {
     let heads = layer_plan
@@ -561,7 +561,7 @@ impl ReferenceLayerExecutor {
 }
 
 fn execute_attention_decode_reference(
-    attention: &AttentionArtifactPayload,
+    attention: &MlaAttentionArtifactPayload,
     kv: &mut LayerKvState,
     input: &[f32],
     spec: SparseAttentionSpec,
@@ -647,10 +647,12 @@ mod tests {
     use ferrule_model::TensorRole;
 
     use super::*;
-    use crate::artifact_linear::ArtifactLinearPayload;
-    use crate::artifact_tensor::{ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice};
-    use crate::expert_executor::CpuReferenceExpertExecutor;
-    use crate::expert_streaming::{
+    use ferrule_model::artifact::linear::ArtifactLinearPayload;
+    use ferrule_model::artifact::tensor::{
+        ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice,
+    };
+    use ferrule_model::moe::executor::CpuReferenceExpertExecutor;
+    use ferrule_model::moe::streaming::{
         ExpertId, ExpertLoadSource, ExpertMatrixKind, ExpertStorageTier, ExpertStreamingPolicy,
         ExpertTensorComponent, ExpertTensorKey, ExpertTensorPayload, ExpertTensorSlice,
     };
@@ -750,8 +752,8 @@ mod tests {
         }
     }
 
-    fn tiny_attention_payload() -> AttentionArtifactPayload {
-        AttentionArtifactPayload {
+    fn tiny_attention_payload() -> MlaAttentionArtifactPayload {
+        MlaAttentionArtifactPayload {
             layer: 0,
             query_a: f32_linear(
                 TensorRole::AttentionLatentQueryA,

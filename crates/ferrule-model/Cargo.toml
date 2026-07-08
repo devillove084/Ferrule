@@ -9,8 +9,13 @@ readme = "../../README.md"
 keywords = ["llm", "inference", "moe", "cuda", "rust"]
 categories = ["science", "machine-learning"]
 
+[features]
+default = []
+cuda = ["dep:ferrule-cuda"]
+
 [dependencies]
 ferrule-common = { path = "../ferrule-common" }
+ferrule-cuda = { path = "../ferrule-cuda", optional = true }
 memmap2 = "0.9"
 byteorder = "1"
 half = "2"

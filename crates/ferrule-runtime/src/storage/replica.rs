@@ -15,8 +15,8 @@ pub type BackendId = String;
 
 /// Opaque reference to a backend-owned handle.
 ///
-/// The generic residency manager never dereferences this. The backend that owns
-/// the handle (e.g. `DeepSeekV4CudaOperatorCache.experts`) resolves it.
+/// The generic residency manager never dereferences this. The backend-owned
+/// handle store resolves it.
 ///
 /// `generation` must match the `ObjectReplica.generation` — if they differ, the
 /// handle is stale (the replica was evicted and the handle slot was reused).

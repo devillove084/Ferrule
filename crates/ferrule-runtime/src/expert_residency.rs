@@ -7,18 +7,19 @@
 //!    load/evict loop previously inlined in `routed_moe.rs` (CPU path) and
 //!    `deepseek_v4.rs` (CUDA path).
 //! 2. `apply_streaming_step` — one function that replaces both loops.
-//! 3. Adapters from existing expert types to `ferrule-storage` vocabulary types
+//! 3. Adapters from existing expert types to runtime storage vocabulary types
 //!    (`ExpertId → StorageObjectId`, `ExpertStorageTier → Placement`,
 //!    `ExpertLoadSource → ObjectLocator`).
 //!
-//! Phase 0: types and trait only. No call sites changed yet.
+//! Storage vocabulary lives in `crate::storage`; it is intentionally a runtime
+//! module rather than a separate workspace crate.
 
 use crate::storage::{
     DeviceMemoryKind, LocalPlacement, ModelRevision, ObjectLocator, Placement, StorageObjectId,
 };
 use ferrule_common::Result;
 
-use crate::expert_streaming::{
+use ferrule_model::moe::streaming::{
     ExpertId, ExpertLoadSource, ExpertMatrixKind as RuntimeExpertMatrixKind, ExpertStorageTier,
     ExpertStreamingReader, ExpertStreamingStep,
     ExpertTensorComponent as RuntimeExpertTensorComponent,
@@ -32,109 +33,98 @@ use crate::expert_streaming::{
 /// they are not carried by `ExpertId` today. In Phase 3, the planner will
 /// hold a `ModelRevision` and pass it through; for now, adapters use a
 /// placeholder.
-impl ExpertId {
-    /// Create a `StorageObjectId` for this expert bundle.
-    ///
-    /// `model_revision` identifies the model (config hash + quant policy).
-    /// `layout_version` identifies the artifact layout (WeightPack format
-    /// version or artifact format tag).
-    pub fn to_storage_object_id(
-        self,
-        model_revision: ModelRevision,
-        layout_version: u32,
-    ) -> StorageObjectId {
-        StorageObjectId::ExpertBundle {
-            model_revision,
-            layer: self.layer as u32,
-            expert: self.expert as u32,
-            layout_version,
-        }
+pub fn expert_id_to_storage_object_id(
+    expert: ExpertId,
+    model_revision: ModelRevision,
+    layout_version: u32,
+) -> StorageObjectId {
+    StorageObjectId::ExpertBundle {
+        model_revision,
+        layer: expert.layer as u32,
+        expert: expert.expert as u32,
+        layout_version,
     }
 }
 
 // ── Adapter: ExpertStorageTier → Placement ────────────────────────────
 
-impl ExpertStorageTier {
-    /// Map a runtime storage tier to a storage-vocabulary `Placement`.
-    ///
-    /// `Loading` maps to `Host` (staging) since it represents an in-flight
-    /// transfer that will land in a local tier.
-    pub fn to_placement(self) -> Placement {
-        match self {
-            Self::Gpu => Placement::Local(LocalPlacement::Device {
-                device_id: 0,
-                memory: DeviceMemoryKind::Vram,
-            }),
-            Self::Cpu => Placement::Local(LocalPlacement::Host { pinned: false }),
-            Self::HostMmap => Placement::Local(LocalPlacement::Host { pinned: false }),
-            Self::LocalStorage => Placement::Local(LocalPlacement::Disk { volume: None }),
-            Self::Remote => Placement::Remote(crate::storage::RemotePlacement {
-                endpoint: crate::storage::RemoteEndpoint {
-                    scheme: crate::storage::RemoteScheme::Http,
-                    host: String::new(),
-                    port: None,
-                },
-                region: None,
-            }),
-            Self::Loading => Placement::Local(LocalPlacement::Host { pinned: false }),
-        }
+/// Map a runtime storage tier to a storage-vocabulary `Placement`.
+///
+/// `Loading` maps to `Host` (staging) since it represents an in-flight
+/// transfer that will land in a local tier.
+pub fn expert_storage_tier_to_placement(tier: ExpertStorageTier) -> Placement {
+    match tier {
+        ExpertStorageTier::Gpu => Placement::Local(LocalPlacement::Device {
+            device_id: 0,
+            memory: DeviceMemoryKind::Vram,
+        }),
+        ExpertStorageTier::Cpu => Placement::Local(LocalPlacement::Host { pinned: false }),
+        ExpertStorageTier::HostMmap => Placement::Local(LocalPlacement::Host { pinned: false }),
+        ExpertStorageTier::LocalStorage => Placement::Local(LocalPlacement::Disk { volume: None }),
+        ExpertStorageTier::Remote => Placement::Remote(crate::storage::RemotePlacement {
+            endpoint: crate::storage::RemoteEndpoint {
+                scheme: crate::storage::RemoteScheme::Http,
+                host: String::new(),
+                port: None,
+            },
+            region: None,
+        }),
+        ExpertStorageTier::Loading => Placement::Local(LocalPlacement::Host { pinned: false }),
     }
 }
 
 // ── Adapter: ExpertLoadSource → ObjectLocator ─────────────────────────
 
-impl ExpertLoadSource {
-    /// Map a runtime load source to a storage-vocabulary `ObjectLocator`.
-    ///
-    /// `GpuResident` and `CpuResident` return `None` — they represent
-    /// already-resident objects, not fetchable locators.
-    pub fn to_locator(&self) -> Option<ObjectLocator> {
-        match self {
-            Self::GpuResident | Self::CpuResident => None,
-            Self::HostMmap {
-                artifact,
-                offset,
-                bytes,
-            } => Some(ObjectLocator::LocalMmap {
-                path: artifact.clone(),
-                offset: *offset,
-                bytes: *bytes,
-            }),
-            Self::LocalShard {
-                path,
-                offset,
-                bytes,
-            } => Some(ObjectLocator::LocalFile {
-                path: path.clone(),
-                offset: *offset,
-                bytes: *bytes,
-            }),
-            Self::LocalTensorSet { tensors } => {
-                // A tensor set is a composite; use the first tensor's path
-                // as the primary locator. The catalog can register multiple
-                // locators per object in the future.
-                tensors.first().map(|t| ObjectLocator::LocalFile {
-                    path: t.path.clone(),
-                    offset: t.offset,
-                    bytes: t.bytes,
-                })
-            }
-            Self::WeightPackChunk {
-                path,
-                offset,
-                bytes,
-            } => Some(ObjectLocator::WeightPack {
-                path: path.clone(),
-                chunk: String::new(),
-                offset: *offset,
-                bytes: *bytes,
-            }),
-            Self::Remote { uri, offset, bytes } => Some(ObjectLocator::RemoteObject {
-                uri: uri.clone(),
-                offset: *offset,
-                bytes: *bytes,
-            }),
+/// Map a runtime load source to a storage-vocabulary `ObjectLocator`.
+///
+/// `GpuResident` and `CpuResident` return `None` — they represent
+/// already-resident objects, not fetchable locators.
+pub fn expert_load_source_to_locator(source: &ExpertLoadSource) -> Option<ObjectLocator> {
+    match source {
+        ExpertLoadSource::GpuResident | ExpertLoadSource::CpuResident => None,
+        ExpertLoadSource::HostMmap {
+            artifact,
+            offset,
+            bytes,
+        } => Some(ObjectLocator::LocalMmap {
+            path: artifact.clone(),
+            offset: *offset,
+            bytes: *bytes,
+        }),
+        ExpertLoadSource::LocalShard {
+            path,
+            offset,
+            bytes,
+        } => Some(ObjectLocator::LocalFile {
+            path: path.clone(),
+            offset: *offset,
+            bytes: *bytes,
+        }),
+        ExpertLoadSource::LocalTensorSet { tensors } => {
+            // A tensor set is a composite; use the first tensor's path
+            // as the primary locator. The catalog can register multiple
+            // locators per object in the future.
+            tensors.first().map(|t| ObjectLocator::LocalFile {
+                path: t.path.clone(),
+                offset: t.offset,
+                bytes: t.bytes,
+            })
         }
+        ExpertLoadSource::WeightPackChunk {
+            path,
+            offset,
+            bytes,
+        } => Some(ObjectLocator::WeightPack {
+            path: path.clone(),
+            chunk: String::new(),
+            offset: *offset,
+            bytes: *bytes,
+        }),
+        ExpertLoadSource::Remote { uri, offset, bytes } => Some(ObjectLocator::RemoteObject {
+            uri: uri.clone(),
+            offset: *offset,
+            bytes: *bytes,
+        }),
     }
 }
 
@@ -167,14 +157,14 @@ impl From<RuntimeExpertTensorComponent> for crate::storage::id::ExpertTensorComp
 /// Backend that can load, evict, and report on resident experts.
 ///
 /// The planner produces an `ExpertStreamingStep`; the backend applies it.
-/// This replaces the duplicated loop that was inlined in
-/// `routed_moe.rs` (CPU) and `deepseek_v4.rs` (CUDA).
+/// This replaces duplicated CPU/CUDA load-evict-install loops with a single
+/// model-agnostic residency boundary.
 ///
 /// # Implementors
 ///
-/// - `CpuExpertHandleStore` — CPU reference path (stores artifact payloads)
-/// - `DeepSeekV4CudaOperatorCache` — CUDA path (uploads to device buffers)
-/// - `HostStagedExpertCache` (Phase 2) — host-staged bytes cache
+/// - CPU/reference stores that keep artifact payloads resident.
+/// - CUDA/device stores that upload to device buffers and retain opaque handles.
+/// - Host-staged caches that keep decoded bytes warm before device installation.
 pub trait ExpertResidencyBackend {
     /// Remove an expert's backend handle (eviction).
     fn evict(&mut self, expert: ExpertId) -> Result<()>;
@@ -225,138 +215,10 @@ pub fn apply_streaming_step(
 
 // ── Implementation for CpuExpertHandleStore ───────────────────────────
 
-use crate::expert_handle::{CpuExpertHandleStore, ExpertHandleStore};
-use crate::expert_streaming::ExpertComputeBundle;
-use std::collections::VecDeque;
+use ferrule_model::moe::handle::{CpuExpertHandleStore, ExpertHandleStore};
 
-// ── HostStagedExpertCache ────────────────────────────────────────────
-
-/// Host-side LRU cache of decoded expert compute bundles.
-///
-/// Sits between disk (`ExpertStreamingReader`) and the GPU upload path.
-/// When an expert is re-activated after eviction from VRAM, its bundle is
-/// served from host memory instead of re-reading from safetensors shards.
-///
-/// This directly targets the synthetic-fixture bottleneck of 243 disk reads
-/// across 5 forward passes (ROADMAP P4).
-#[derive(Debug)]
-pub struct HostStagedExpertCache {
-    entries: std::collections::HashMap<ExpertId, ExpertComputeBundle>,
-    order: VecDeque<ExpertId>,
-    capacity: usize,
-    hits: u64,
-    misses: u64,
-    evictions: u64,
-}
-
-impl HostStagedExpertCache {
-    /// Create a cache holding at most `capacity` expert bundles in host RAM.
-    pub fn new(capacity: usize) -> Self {
-        Self {
-            entries: std::collections::HashMap::new(),
-            order: VecDeque::new(),
-            capacity,
-            hits: 0,
-            misses: 0,
-            evictions: 0,
-        }
-    }
-
-    /// Look up a staged bundle, returning a clone if present.
-    ///
-    /// Cloning is intentional: the caller (CUDA upload path) needs an owned
-    /// bundle to upload, while the cache retains its copy for future hits.
-    /// Bundles are small (a few MB each for FP4 experts).
-    pub fn get(&mut self, expert: ExpertId) -> Option<ExpertComputeBundle> {
-        if self.entries.contains_key(&expert) {
-            self.hits += 1;
-            // Move to back (most-recently-used).
-            self.order.retain(|id| *id != expert);
-            self.order.push_back(expert);
-            self.entries.get(&expert).cloned()
-        } else {
-            self.misses += 1;
-            None
-        }
-    }
-
-    /// Insert a bundle, evicting the least-recently-used entry if at capacity.
-    pub fn insert(&mut self, bundle: ExpertComputeBundle) {
-        if self.capacity == 0 {
-            return;
-        }
-        let expert = bundle.expert;
-        if self.entries.contains_key(&expert) {
-            self.order.retain(|id| *id != expert);
-        } else if self.entries.len() >= self.capacity && self.capacity > 0 {
-            if let Some(evicted) = self.order.pop_front() {
-                self.entries.remove(&evicted);
-                self.evictions += 1;
-            }
-        }
-        self.entries.insert(expert, bundle);
-        self.order.push_back(expert);
-    }
-
-    /// Load an expert bundle from disk via the reader, caching the result.
-    ///
-    /// On cache hit, skips the disk read entirely. On miss, reads from disk
-    /// and inserts into the cache before returning.
-    pub fn get_or_load(
-        &mut self,
-        expert: ExpertId,
-        source: &ExpertLoadSource,
-        reader: &ExpertStreamingReader,
-    ) -> Result<ExpertComputeBundle> {
-        if let Some(bundle) = self.get(expert) {
-            return Ok(bundle);
-        }
-        let payload = reader.read_load_source(expert, source)?;
-        let bundle = ExpertComputeBundle::from_artifact_payload(payload)?;
-        self.insert(bundle.clone());
-        Ok(bundle)
-    }
-
-    /// Number of currently staged bundles.
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Whether the cache is empty.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    /// Cache hit count (experts served from host memory).
-    pub fn hits(&self) -> u64 {
-        self.hits
-    }
-
-    /// Cache miss count (experts that required a disk read).
-    pub fn misses(&self) -> u64 {
-        self.misses
-    }
-
-    /// Number of host-side evictions (LRU replacements).
-    pub fn evictions(&self) -> u64 {
-        self.evictions
-    }
-
-    /// Total bytes of all staged bundles.
-    pub fn total_bytes(&self) -> u64 {
-        self.entries.values().map(|b| b.total_bytes()).sum()
-    }
-}
-
-impl Default for HostStagedExpertCache {
-    fn default() -> Self {
-        // Default capacity: 256 expert bundles. At ~13 MB per FP4 expert
-        // (gate+up+down for DeepSeek-V4 Flash), this is ~3.4 GB host RAM.
-        // Larger cache reduces disk re-reads across decode tokens with
-        // different expert routing.
-        Self::new(256)
-    }
-}
+// Note: HostStagedExpertCache has been moved to ferrule-model::expert_streaming.
+// The runtime re-exports it via `ferrule_runtime::HostStagedExpertCache`.
 
 // ── CpuExpertHandleStore backend ─────────────────────────────────────
 
@@ -400,14 +262,14 @@ impl ExpertResidencyBackend for CpuExpertHandleStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expert_handle::CpuExpertHandleStore;
-    use crate::expert_streaming::{
-        ExpertId, ExpertLoadSource, ExpertStreamingPlanner, ExpertStreamingPolicy,
-        ExpertStreamingReader, ExpertTensorComponent, ExpertTensorKey, ExpertTensorSlice,
-    };
     use crate::storage::id::{
         ExpertMatrixKind as StorageExpertMatrixKind,
         ExpertTensorComponent as StorageExpertTensorComponent,
+    };
+    use ferrule_model::moe::handle::CpuExpertHandleStore;
+    use ferrule_model::moe::streaming::{
+        ExpertId, ExpertLoadSource, ExpertStreamingPlanner, ExpertStreamingPolicy,
+        ExpertTensorComponent, ExpertTensorKey, ExpertTensorSlice,
     };
     use std::path::PathBuf;
 
@@ -436,16 +298,12 @@ mod tests {
         }
     }
 
-    fn reader() -> ExpertStreamingReader {
-        ExpertStreamingReader::new(1024 * 1024)
-    }
-
     // ── Adapter tests ──
 
     #[test]
-    fn expert_id_to_storage_object_id() {
+    fn expert_id_maps_to_storage_object_id() {
         let id = expert_id(3, 7);
-        let storage_id = id.to_storage_object_id(ModelRevision(42), 2);
+        let storage_id = expert_id_to_storage_object_id(id, ModelRevision(42), 2);
         match storage_id {
             StorageObjectId::ExpertBundle {
                 layer,
@@ -464,25 +322,25 @@ mod tests {
 
     #[test]
     fn tier_to_placement_gpu() {
-        let p = ExpertStorageTier::Gpu.to_placement();
+        let p = expert_storage_tier_to_placement(ExpertStorageTier::Gpu);
         assert!(p.is_device());
     }
 
     #[test]
     fn tier_to_placement_cpu() {
-        let p = ExpertStorageTier::Cpu.to_placement();
+        let p = expert_storage_tier_to_placement(ExpertStorageTier::Cpu);
         assert!(p.is_host());
     }
 
     #[test]
     fn tier_to_placement_local_storage() {
-        let p = ExpertStorageTier::LocalStorage.to_placement();
+        let p = expert_storage_tier_to_placement(ExpertStorageTier::LocalStorage);
         assert!(p.is_disk());
     }
 
     #[test]
     fn tier_to_placement_remote() {
-        let p = ExpertStorageTier::Remote.to_placement();
+        let p = expert_storage_tier_to_placement(ExpertStorageTier::Remote);
         assert!(p.is_remote());
     }
 
@@ -493,7 +351,7 @@ mod tests {
             offset: 1024,
             bytes: 4096,
         };
-        let loc = src.to_locator().unwrap();
+        let loc = expert_load_source_to_locator(&src).unwrap();
         match loc {
             ObjectLocator::LocalFile {
                 path,
@@ -511,7 +369,7 @@ mod tests {
     #[test]
     fn load_source_to_locator_gpu_resident_is_none() {
         let src = ExpertLoadSource::GpuResident;
-        assert!(src.to_locator().is_none());
+        assert!(expert_load_source_to_locator(&src).is_none());
     }
 
     #[test]
@@ -521,7 +379,7 @@ mod tests {
             offset: 256,
             bytes: 2048,
         };
-        let loc = src.to_locator().unwrap();
+        let loc = expert_load_source_to_locator(&src).unwrap();
         assert!(matches!(loc, ObjectLocator::WeightPack { .. }));
     }
 
@@ -532,7 +390,7 @@ mod tests {
             offset: 0,
             bytes: 4096,
         };
-        let loc = src.to_locator().unwrap();
+        let loc = expert_load_source_to_locator(&src).unwrap();
         match loc {
             ObjectLocator::RemoteObject { uri, .. } => {
                 assert_eq!(uri, "s3://bucket/expert.bin");
@@ -582,7 +440,7 @@ mod tests {
         let mut store = CpuExpertHandleStore::new();
         let id = expert_id(0, 0);
         store
-            .insert_bundle(crate::expert_streaming::ExpertComputeBundle {
+            .insert_bundle(ferrule_model::moe::streaming::ExpertComputeBundle {
                 expert: id,
                 gate: make_gate_payload(id),
                 up: make_gate_payload(id),
@@ -602,7 +460,7 @@ mod tests {
         assert_eq!(store.resident_bytes(), 0);
 
         // Insert a resident handle manually.
-        use crate::expert_handle::{
+        use ferrule_model::moe::handle::{
             ExpertComputeHandle, ExpertResidentFormat, ResidentExpertHandle,
         };
         let id = expert_id(0, 0);
@@ -661,7 +519,7 @@ mod tests {
         // (We test the logic without the reader by checking is_resident.)
         let mut store = CpuExpertHandleStore::new();
         // Manually mark e0 as resident.
-        use crate::expert_handle::{
+        use ferrule_model::moe::handle::{
             ExpertComputeHandle, ExpertResidentFormat, ResidentExpertHandle,
         };
         store
@@ -681,8 +539,8 @@ mod tests {
         assert!(!store.is_resident(e0));
     }
 
-    fn make_gate_payload(expert: ExpertId) -> crate::expert_streaming::ExpertLinearPayload {
-        use crate::expert_streaming::{
+    fn make_gate_payload(expert: ExpertId) -> ferrule_model::moe::streaming::ExpertLinearPayload {
+        use ferrule_model::moe::streaming::{
             ExpertLinearFormat, ExpertLinearPayload, ExpertTensorPayload,
         };
         ExpertLinearPayload {
@@ -694,116 +552,5 @@ mod tests {
             scale: None,
             format: ExpertLinearFormat::Opaque,
         }
-    }
-
-    fn make_bundle(expert: ExpertId) -> crate::expert_streaming::ExpertComputeBundle {
-        crate::expert_streaming::ExpertComputeBundle {
-            expert,
-            gate: make_gate_payload(expert),
-            up: make_gate_payload(expert),
-            down: make_gate_payload(expert),
-        }
-    }
-
-    // ── HostStagedExpertCache tests ──
-
-    #[test]
-    fn host_staged_cache_insert_and_get() {
-        let mut cache = HostStagedExpertCache::new(4);
-        let id = expert_id(0, 0);
-        cache.insert(make_bundle(id));
-
-        assert_eq!(cache.len(), 1);
-        assert_eq!(cache.hits(), 0);
-        assert_eq!(cache.misses(), 0);
-
-        let got = cache.get(id);
-        assert!(got.is_some());
-        assert_eq!(cache.hits(), 1);
-        assert_eq!(cache.misses(), 0);
-    }
-
-    #[test]
-    fn host_staged_cache_miss_on_absent() {
-        let mut cache = HostStagedExpertCache::new(4);
-        let id = expert_id(0, 0);
-
-        let got = cache.get(id);
-        assert!(got.is_none());
-        assert_eq!(cache.misses(), 1);
-        assert_eq!(cache.hits(), 0);
-    }
-
-    #[test]
-    fn host_staged_cache_lru_eviction() {
-        let mut cache = HostStagedExpertCache::new(2);
-        let e0 = expert_id(0, 0);
-        let e1 = expert_id(0, 1);
-        let e2 = expert_id(0, 2);
-
-        cache.insert(make_bundle(e0));
-        cache.insert(make_bundle(e1));
-        assert_eq!(cache.len(), 2);
-
-        // Inserting e2 should evict e0 (least recently used).
-        cache.insert(make_bundle(e2));
-        assert_eq!(cache.len(), 2);
-        assert_eq!(cache.evictions(), 1);
-
-        // e0 should be gone, e1 and e2 present.
-        assert!(cache.get(e0).is_none());
-        assert!(cache.get(e1).is_some());
-        assert!(cache.get(e2).is_some());
-    }
-
-    #[test]
-    fn host_staged_cache_lru_access_promotes() {
-        let mut cache = HostStagedExpertCache::new(2);
-        let e0 = expert_id(0, 0);
-        let e1 = expert_id(0, 1);
-        let e2 = expert_id(0, 2);
-
-        cache.insert(make_bundle(e0));
-        cache.insert(make_bundle(e1));
-
-        // Access e0 to promote it to most-recently-used.
-        assert!(cache.get(e0).is_some());
-
-        // Inserting e2 should now evict e1 (not e0).
-        cache.insert(make_bundle(e2));
-        assert_eq!(cache.evictions(), 1);
-
-        assert!(cache.get(e0).is_some());
-        assert!(cache.get(e1).is_none());
-        assert!(cache.get(e2).is_some());
-    }
-
-    #[test]
-    fn host_staged_cache_total_bytes() {
-        let mut cache = HostStagedExpertCache::new(4);
-        let e0 = expert_id(0, 0);
-        cache.insert(make_bundle(e0));
-
-        // Each bundle has 3 payloads × 8 bytes = 24 bytes.
-        assert_eq!(cache.total_bytes(), 24);
-    }
-
-    #[test]
-    fn host_staged_cache_default_capacity() {
-        let cache = HostStagedExpertCache::default();
-        assert_eq!(cache.len(), 0);
-        assert!(cache.is_empty());
-    }
-
-    #[test]
-    fn host_staged_cache_zero_capacity_does_not_store() {
-        let mut cache = HostStagedExpertCache::new(0);
-        let id = expert_id(0, 0);
-        cache.insert(make_bundle(id));
-
-        assert_eq!(cache.len(), 0);
-        assert!(cache.is_empty());
-        assert!(cache.get(id).is_none());
-        assert_eq!(cache.misses(), 1);
     }
 }

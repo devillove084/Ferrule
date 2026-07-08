@@ -14,7 +14,6 @@ default = []
 
 [dependencies]
 ferrule-common = { path = "../ferrule-common" }
-ferrule-model = { path = "../ferrule-model" }
 rayon = "1.10"
 memmap2 = "0.9"
 tracing = "0.1"

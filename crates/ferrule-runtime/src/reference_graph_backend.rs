@@ -8,36 +8,34 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::backend_object_store::{
+    materialize_dense_hf_externals, BackendObject, BackendObjectStore,
+};
+use crate::graph::builder::{
+    build_graph_program_from_descriptor_with_options, GraphProgramBuildOptions,
+};
+use crate::graph::dialects::domain;
+use crate::graph::program::GraphProgram;
+use crate::graph::runtime::{ArtifactGroupKind, ExecutionBatch};
 use crate::graph::{
     AttributeMap, AttributeValue, ComputeGraph, DataType, ExternalKey, TensorData, TensorShape,
     ValueId, ValueMeta, ValueOrigin,
 };
-use ferrule_common::{Error, Result};
-use ferrule_model::{HfSafetensorsInventory, ModelDescriptor};
-
-use crate::artifact_binding::bind_hyper_connection_head_from_artifact_group;
-
-use crate::artifact_tensor::{
-    ArtifactDType, ArtifactTensorPayload, ArtifactTensorReader, ArtifactTensorSlice,
-};
-use crate::backend_object_store::{
-    materialize_dense_hf_externals, BackendObject, BackendObjectStore,
-};
-use crate::dialects::domain;
-use crate::expert_executor::CpuReferenceExpertExecutor;
-use crate::expert_streaming::{ExpertStreamingPolicy, ExpertStreamingReader};
-use crate::graph_builder::{
-    build_graph_program_from_descriptor_with_options, GraphProgramBuildOptions,
-};
-use crate::graph_program::GraphProgram;
-use crate::graph_runtime::{ArtifactGroupKind, ExecutionBatch};
-use crate::hyper_connection::{hc_head_reference, HyperConnectionConfig};
 use crate::layer_binding::{
     bind_layer_artifact_from_graph_objects, new_layer_execution_state_from_graph_objects,
     GraphLayerBindingOptions, LayerArtifactBinding, LayerExecutionState, ReferenceLayerExecutor,
 };
-use crate::session::SessionId;
-use crate::transformer_plan::TransformerLayerPlan;
+use crate::scheduling::session::SessionId;
+use ferrule_common::{Error, Result};
+use ferrule_model::artifact::binding::bind_hyper_connection_head_from_artifact_group;
+use ferrule_model::artifact::tensor::{
+    ArtifactDType, ArtifactTensorPayload, ArtifactTensorReader, ArtifactTensorSlice,
+};
+use ferrule_model::hyper_connection::{hc_head_reference, HyperConnectionConfig};
+use ferrule_model::moe::executor::CpuReferenceExpertExecutor;
+use ferrule_model::moe::streaming::{ExpertStreamingPolicy, ExpertStreamingReader};
+use ferrule_model::transformer_plan::TransformerLayerPlan;
+use ferrule_model::{HfSafetensorsInventory, ModelDescriptor};
 
 #[derive(Debug, Clone)]
 pub struct ReferenceGraphExecutor {
@@ -1456,7 +1454,7 @@ fn required_attention_dim(value: Option<usize>, name: &str, layer: usize) -> Res
 }
 
 fn batch_has_position(
-    rows: &[crate::graph_runtime::ExecutionRow],
+    rows: &[crate::graph::runtime::ExecutionRow],
     session_id: u64,
     position: usize,
 ) -> bool {
@@ -1491,21 +1489,21 @@ mod tests {
     };
 
     use super::*;
-    use crate::artifact_tensor::{ArtifactDType, ArtifactTensorSlice};
     use crate::backend_object_store::{
         ArtifactObjectGroup, BackendObject, BackendObjectStore, ExpertRegistryObject,
     };
-    use crate::dialects::transformer_ops;
-    use crate::expert_streaming::{
+    use crate::graph::dialects::transformer_ops;
+    use crate::graph::program::{GraphProgram, GraphProgramProfile};
+    use crate::graph::runtime::{
+        ArtifactGroupKind, ExecutionBatch, ExecutionSegment, ExternalBindingPlan, LogitsSelection,
+    };
+    use crate::scheduling::session::SessionId;
+    use ferrule_model::artifact::tensor::{ArtifactDType, ArtifactTensorSlice};
+    use ferrule_model::moe::streaming::{
         ExpertId, ExpertLoadSource, ExpertMatrixKind, ExpertTensorComponent, ExpertTensorKey,
         ExpertTensorPayload, ExpertTensorSlice,
     };
-    use crate::graph_program::{GraphProgram, GraphProgramProfile};
-    use crate::graph_runtime::{
-        ArtifactGroupKind, ExecutionBatch, ExecutionSegment, ExternalBindingPlan, LogitsSelection,
-    };
-    use crate::session::SessionId;
-    use crate::transformer_plan::{
+    use ferrule_model::transformer_plan::{
         AttentionStepPlan, ExpertResidencyMode, FeedForwardStepPlan, RuntimeEpilogue,
         RuntimePrologue, TransformerLayerPlan, TransformerRuntimePlan,
     };

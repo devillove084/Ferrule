@@ -126,6 +126,7 @@ pub struct HfSafetensorsShardSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HfSafetensorsInventory {
+    pub family: ModelFamily,
     pub total_size: Option<u64>,
     pub shard_count: usize,
     pub tensor_count: usize,
@@ -150,7 +151,7 @@ impl HfSafetensorsInventory {
         family: ModelFamily,
         index: &HfSafetensorsIndex,
     ) -> Result<Self> {
-        let policy = HfTensorPolicy::for_family(family);
+        let policy = HfTensorPolicy::for_family(family.clone());
         let mut tensors = Vec::with_capacity(index.tensor_count());
         let mut shard_summaries = Vec::new();
         let mut header_tensor_to_shard = BTreeMap::<String, String>::new();
@@ -234,6 +235,7 @@ impl HfSafetensorsInventory {
             .collect();
 
         Ok(Self {
+            family,
             total_size: index.total_size,
             shard_count: index.shard_count(),
             tensor_count: tensors.len(),
@@ -271,12 +273,12 @@ impl HfSafetensorsInventory {
             .unwrap_or(0)
     }
 
-    pub fn routed_expert_tensors(&self, family: &ModelFamily) -> Vec<HfRoutedExpertTensorInfo> {
+    pub fn routed_expert_tensors(&self) -> Vec<HfRoutedExpertTensorInfo> {
         self.tensors
             .iter()
             .filter_map(|tensor| {
-                families::parse_hf_routed_expert_tensor(family, &tensor.name).map(|descriptor| {
-                    HfRoutedExpertTensorInfo {
+                families::parse_hf_routed_expert_tensor(&self.family, &tensor.name).map(
+                    |descriptor| HfRoutedExpertTensorInfo {
                         descriptor,
                         name: tensor.name.clone(),
                         shard: tensor.shard.clone(),
@@ -285,18 +287,18 @@ impl HfSafetensorsInventory {
                         data_offset: tensor.data_offset,
                         file_offset: tensor.file_offset,
                         byte_size: tensor.byte_size,
-                    }
-                })
+                    },
+                )
             })
             .collect()
     }
 
-    pub fn shared_expert_tensors(&self, family: &ModelFamily) -> Vec<HfSharedExpertTensorInfo> {
+    pub fn shared_expert_tensors(&self) -> Vec<HfSharedExpertTensorInfo> {
         self.tensors
             .iter()
             .filter_map(|tensor| {
-                families::parse_hf_shared_expert_tensor(family, &tensor.name).map(|descriptor| {
-                    HfSharedExpertTensorInfo {
+                families::parse_hf_shared_expert_tensor(&self.family, &tensor.name).map(
+                    |descriptor| HfSharedExpertTensorInfo {
                         descriptor,
                         name: tensor.name.clone(),
                         shard: tensor.shard.clone(),
@@ -305,17 +307,17 @@ impl HfSafetensorsInventory {
                         data_offset: tensor.data_offset,
                         file_offset: tensor.file_offset,
                         byte_size: tensor.byte_size,
-                    }
-                })
+                    },
+                )
             })
             .collect()
     }
 
-    pub fn router_tensors(&self, family: &ModelFamily) -> Vec<HfRouterTensorInfo> {
+    pub fn router_tensors(&self) -> Vec<HfRouterTensorInfo> {
         self.tensors
             .iter()
             .filter_map(|tensor| {
-                families::parse_hf_router_tensor(family, &tensor.name).map(|descriptor| {
+                families::parse_hf_router_tensor(&self.family, &tensor.name).map(|descriptor| {
                     HfRouterTensorInfo {
                         descriptor,
                         name: tensor.name.clone(),
@@ -331,11 +333,11 @@ impl HfSafetensorsInventory {
             .collect()
     }
 
-    pub fn attention_tensors(&self, family: &ModelFamily) -> Vec<HfAttentionTensorInfo> {
+    pub fn attention_tensors(&self) -> Vec<HfAttentionTensorInfo> {
         self.tensors
             .iter()
             .filter_map(|tensor| {
-                families::parse_hf_attention_tensor(family, &tensor.name).map(|descriptor| {
+                families::parse_hf_attention_tensor(&self.family, &tensor.name).map(|descriptor| {
                     HfAttentionTensorInfo {
                         descriptor,
                         name: tensor.name.clone(),
@@ -351,12 +353,12 @@ impl HfSafetensorsInventory {
             .collect()
     }
 
-    pub fn dense_layer_tensors(&self, family: &ModelFamily) -> Vec<HfDenseLayerTensorInfo> {
+    pub fn dense_layer_tensors(&self) -> Vec<HfDenseLayerTensorInfo> {
         self.tensors
             .iter()
             .filter_map(|tensor| {
-                families::parse_hf_dense_layer_tensor(family, &tensor.name).map(|descriptor| {
-                    HfDenseLayerTensorInfo {
+                families::parse_hf_dense_layer_tensor(&self.family, &tensor.name).map(
+                    |descriptor| HfDenseLayerTensorInfo {
                         descriptor,
                         name: tensor.name.clone(),
                         shard: tensor.shard.clone(),
@@ -365,21 +367,18 @@ impl HfSafetensorsInventory {
                         data_offset: tensor.data_offset,
                         file_offset: tensor.file_offset,
                         byte_size: tensor.byte_size,
-                    }
-                })
+                    },
+                )
             })
             .collect()
     }
 
-    pub fn hyper_connection_tensors(
-        &self,
-        family: &ModelFamily,
-    ) -> Vec<HfHyperConnectionTensorInfo> {
+    pub fn hyper_connection_tensors(&self) -> Vec<HfHyperConnectionTensorInfo> {
         self.tensors
             .iter()
             .filter_map(|tensor| {
-                families::parse_hf_hyper_connection_tensor(family, &tensor.name).map(|descriptor| {
-                    HfHyperConnectionTensorInfo {
+                families::parse_hf_hyper_connection_tensor(&self.family, &tensor.name).map(
+                    |descriptor| HfHyperConnectionTensorInfo {
                         descriptor,
                         name: tensor.name.clone(),
                         shard: tensor.shard.clone(),
@@ -388,8 +387,8 @@ impl HfSafetensorsInventory {
                         data_offset: tensor.data_offset,
                         file_offset: tensor.file_offset,
                         byte_size: tensor.byte_size,
-                    }
-                })
+                    },
+                )
             })
             .collect()
     }
@@ -617,7 +616,7 @@ mod tests {
             1
         );
         assert_eq!(inventory.role_bytes(&TensorRole::SpeculativeProjection), 4);
-        let routed = inventory.routed_expert_tensors(&ModelFamily::DeepSeekV4);
+        let routed = inventory.routed_expert_tensors();
         assert_eq!(routed.len(), 1);
         assert_eq!(routed[0].descriptor.layer, 0);
         assert_eq!(routed[0].descriptor.expert, 3);

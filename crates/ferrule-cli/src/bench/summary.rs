@@ -11,8 +11,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use ferrule_runtime::backend_object_store::{BackendObject, BackendObjectStore};
-use ferrule_runtime::graph_program::GraphProgram;
-use ferrule_runtime::graph_runtime::{ExternalBindingKind, ExternalResidency};
+use ferrule_runtime::graph::program::GraphProgram;
+use ferrule_runtime::graph::runtime::{ExternalBindingKind, ExternalResidency};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphProgramSummary {

@@ -1,17 +1,17 @@
 //! Ferrule Storage and Residency vocabulary.
 //!
-//! Pure type definitions and traits for the storage/residency layer. This crate
-//! has no backend dependencies — no CUDA, no runtime, no model types. It defines
-//! the common vocabulary that `ferrule-runtime` and `ferrule-cuda` will use to
-//! coordinate object placement, transfer, and eviction.
+//! Pure type definitions and traits for the storage/residency layer. This module
+//! has no backend dependencies — no CUDA, no concrete model execution. It defines
+//! the common vocabulary runtime/backend code uses to coordinate object placement,
+//! transfer, and eviction.
 //!
 //! See `docs/storage-residency-architecture.md` for the full design.
 //!
 //! # Phase 0 scope
 //!
 //! Types and traits only. No execution behavior change. Adapters from existing
-//! `ExpertId` / `ExpertLoadSource` / `ExpertStorageTier` will live in
-//! `ferrule-runtime`, not here.
+//! `ExpertId` / `ExpertLoadSource` / `ExpertStorageTier` live in
+//! `ferrule-runtime::expert_residency`.
 
 pub mod catalog;
 pub mod descriptor;

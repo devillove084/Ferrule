@@ -1,16 +1,17 @@
 use crate::SamplingArgs;
-use ferrule_model::{ModelDescriptor, ModelFamily};
-use ferrule_runtime::{
+use ferrule_model::{
     detect_chat_template,
     models::deepseek_v4::{
         DeepSeekV4ArtifactModel, DeepSeekV4OperatorBackend, DeepSeekV4ReferenceOptions,
         DeepSeekV4ReferenceRunner,
     },
-    ChatTemplate, GenerationConfig, ModelRunner, SamplingConfig,
+    ChatTemplate, ModelDescriptor, ModelFamily, ModelRunner, PrefillMode,
+};
+use ferrule_runtime::{
+    GenerationConfig, LazyEngineWorker, SamplingConfig, SessionId, TopKDecodeStep, TopKFinishReason,
 };
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::thread::JoinHandle;
 use std::time::Instant;
 
 use super::info::print_model_info;
@@ -147,79 +148,6 @@ fn can_use_deepseek_v4_fast_greedy(
         && generation.logprobs_k == 0
 }
 
-struct DeepSeekV4LazyRunner {
-    backend: DeepSeekV4OperatorBackend,
-    options: DeepSeekV4ReferenceOptions,
-    loader: Option<JoinHandle<anyhow::Result<DeepSeekV4ArtifactModel>>>,
-    runner: Option<DeepSeekV4ReferenceRunner>,
-    load_started: Instant,
-    model_info_printed: bool,
-}
-
-impl DeepSeekV4LazyRunner {
-    fn loading(
-        model_path: PathBuf,
-        backend: DeepSeekV4OperatorBackend,
-        options: DeepSeekV4ReferenceOptions,
-    ) -> Self {
-        let load_path = model_path.clone();
-        let loader = std::thread::spawn(move || {
-            Ok(DeepSeekV4ArtifactModel::load_hf_with_limit(
-                &load_path,
-                128 * 1024 * 1024,
-            )?)
-        });
-        Self {
-            backend,
-            options,
-            loader: Some(loader),
-            runner: None,
-            load_started: Instant::now(),
-            model_info_printed: false,
-        }
-    }
-
-    fn position_if_loaded(&self) -> usize {
-        self.runner
-            .as_ref()
-            .map(DeepSeekV4ReferenceRunner::position)
-            .unwrap_or(0)
-    }
-
-    fn runner_mut_if_loaded(&mut self) -> Option<&mut DeepSeekV4ReferenceRunner> {
-        self.runner.as_mut()
-    }
-
-    fn ensure_loaded(&mut self) -> anyhow::Result<&mut DeepSeekV4ReferenceRunner> {
-        if self.runner.is_none() {
-            let loader = self
-                .loader
-                .take()
-                .ok_or_else(|| anyhow::anyhow!("DeepSeek-V4 model loader was not started"))?;
-            let model = loader
-                .join()
-                .map_err(|_| anyhow::anyhow!("DeepSeek-V4 model loader panicked"))??;
-            let runner = DeepSeekV4ReferenceRunner::new_with_operator_backend(
-                model,
-                self.options,
-                self.backend,
-            )?;
-            self.runner = Some(runner);
-        }
-        if !self.model_info_printed {
-            if let Some(runner) = self.runner.as_ref() {
-                print_model_info(&runner.model_info());
-                eprintln!(
-                    "[load] DeepSeek-V4 artifact loaded in {:.2}s; CUDA runtime initialized on first use",
-                    self.load_started.elapsed().as_secs_f64()
-                );
-            }
-            self.model_info_printed = true;
-        }
-        Ok(self.runner.as_mut().expect("runner initialized above"))
-    }
-}
-
 fn run_deepseek_v4_greedy_chat_loop_lazy(
     model_path: PathBuf,
     backend: DeepSeekV4OperatorBackend,
@@ -231,7 +159,13 @@ fn run_deepseek_v4_greedy_chat_loop_lazy(
     use console::style;
     use rustyline::error::ReadlineError;
 
-    let mut lazy_runner = DeepSeekV4LazyRunner::loading(model_path, backend, options);
+    let load_path = model_path.clone();
+    let mut lazy_engine = LazyEngineWorker::spawn(
+        SessionId(0),
+        move || DeepSeekV4ArtifactModel::load_hf_with_limit(&load_path, 128 * 1024 * 1024),
+        move |model| DeepSeekV4ReferenceRunner::new_with_operator_backend(model, options, backend),
+    );
+    let mut model_info_printed = false;
     println!(
         "{} Type /exit or Ctrl-D to quit. Template: {}. DeepSeek-V4 greedy top-k fast path.",
         style("Chat ready.").cyan(),
@@ -243,7 +177,6 @@ fn run_deepseek_v4_greedy_chat_loop_lazy(
     println!("  /reset      clear session state\n  /stats      show session stats\n  /experts    show DSV4 layer/cache stats\n  /ctx        show context window usage");
 
     let mut first_turn = true;
-    let mut generated_total = 0usize;
     let mut rl = rustyline::DefaultEditor::new()?;
     loop {
         let line = match rl.readline(&format!("{} ", style("You>").green().bold())) {
@@ -259,35 +192,36 @@ fn run_deepseek_v4_greedy_chat_loop_lazy(
             break;
         }
         if input == "/reset" || input == "/clear" {
-            if let Some(runner) = lazy_runner.runner_mut_if_loaded() {
-                runner.reset_session()?;
+            if let Some(worker) = lazy_engine.worker_mut() {
+                worker.reset()?;
             }
             first_turn = true;
-            generated_total = 0;
             println!("{} session reset.", style("Ferrule>").cyan().bold());
             continue;
         }
         if input == "/stats" {
-            if let Some(runner) = lazy_runner.runner.as_ref() {
+            if let Some(worker) = lazy_engine.worker() {
+                let stats = worker.stats();
                 println!(
-                    "{} position={} generated={} bound_layers={}",
+                    "{} position={} generated={} turns={} bound_layers={}",
                     style("Ferrule>").cyan().bold(),
-                    runner.position(),
-                    generated_total,
-                    runner.bound_layer_count()
+                    stats.position,
+                    stats.generated_tokens,
+                    stats.turns,
+                    stats.bound_layers.unwrap_or(0)
                 );
             } else {
                 println!(
                     "{} model loading for {:.1}s; generated=0 bound_layers=0",
                     style("Ferrule>").cyan().bold(),
-                    lazy_runner.load_started.elapsed().as_secs_f64()
+                    lazy_engine.load_started().elapsed().as_secs_f64()
                 );
             }
             continue;
         }
         if input == "/experts" {
-            if let Some(runner) = lazy_runner.runner.as_ref() {
-                match runner.expert_report() {
+            if let Some(worker) = lazy_engine.worker() {
+                match worker.expert_report() {
                     Some(report) => print!("{report}"),
                     None => println!(
                         "{} expert report not available.",
@@ -300,7 +234,7 @@ fn run_deepseek_v4_greedy_chat_loop_lazy(
             continue;
         }
         if input == "/ctx" {
-            let position = lazy_runner.position_if_loaded();
+            let position = lazy_engine.position_if_loaded();
             let usage_pct = if generation.ctx_size > 0 {
                 position as f64 / generation.ctx_size as f64 * 100.0
             } else {
@@ -317,122 +251,98 @@ fn run_deepseek_v4_greedy_chat_loop_lazy(
         }
 
         let _ = rl.add_history_entry(input);
-        let runner = lazy_runner.ensure_loaded()?;
-        let prompt = chat_template.format_turn(input, first_turn);
-        let prompt_tokens = runner.encode(&prompt)?;
-        ensure_deepseek_v4_context_room(
-            runner.position(),
-            prompt_tokens.len(),
-            generation.ctx_size,
-        )?;
-        first_turn = false;
-
-        let prefill_start = std::time::Instant::now();
-        let mut top = runner.prefill_tokens_topk_interactive(&prompt_tokens, 1)?;
-        if top.is_empty() {
-            println!();
-            continue;
+        let load_started = lazy_engine.load_started();
+        let worker = lazy_engine.ensure_loaded()?;
+        if !model_info_printed {
+            print_model_info(&worker.runner().model_info());
+            eprintln!(
+                "[load] DeepSeek-V4 artifact loaded in {:.2}s; CUDA runtime initialized on first use",
+                load_started.elapsed().as_secs_f64()
+            );
+            model_info_printed = true;
         }
+        let prompt = chat_template.format_turn(input, first_turn);
+        let prompt_tokens = worker.encode(&prompt)?;
+        first_turn = false;
 
         print!("{} ", style("Ferrule>").cyan().bold());
         std::io::stdout().flush()?;
 
-        let mut text = String::new();
-        let mut turn_generated = 0usize;
-        let mut stopped_by_eos = false;
-        let mut stopped_by_string = None;
-        let eos = runner.eos_token_id();
-        let decode_start = std::time::Instant::now();
-
-        for step in 0..generation.max_new_tokens {
-            if runner.position() >= generation.ctx_size {
-                break;
-            }
-            let Some(&next) = top.first() else {
-                break;
-            };
-
-            if sampling.verbose_tokens() {
-                eprint!("[{}:{:.4}]", next.token_id, next.logit);
-            }
-
-            if eos == Some(next.token_id) {
-                if generation.append_eos_to_session {
-                    runner.feed_token(next.token_id)?;
+        let turn_start = Instant::now();
+        let mut first_token_time = None;
+        let mut decode =
+            worker.append_prompt(&prompt_tokens, generation, PrefillMode::Interactive, 1)?;
+        let turn = loop {
+            match worker.decode_next(&mut decode)? {
+                TopKDecodeStep::Token(event) => {
+                    first_token_time.get_or_insert_with(|| turn_start.elapsed());
+                    if sampling.verbose_tokens() {
+                        eprint!("[{}:{:.4}]", event.token, event.logit);
+                    }
+                    print!("{}", event.text);
+                    std::io::stdout().flush()?;
                 }
-                stopped_by_eos = true;
-                break;
+                TopKDecodeStep::Finished(turn) => break turn,
             }
-
-            let piece = runner.decode(&[next.token_id]).unwrap_or_default();
-            print!("{piece}");
-            std::io::stdout().flush()?;
-            text.push_str(&piece);
-            turn_generated += 1;
-            generated_total += 1;
-
-            if let Some(stop) = matched_deepseek_v4_stop(&text, &generation.stop) {
-                runner.feed_token(next.token_id)?;
-                stopped_by_string = Some(stop.to_string());
-                break;
-            }
-
-            if step + 1 == generation.max_new_tokens {
-                runner.feed_token(next.token_id)?;
-                break;
-            }
-
-            top = runner.decode_token_topk(next.token_id, 1)?;
-        }
+        };
         println!();
 
         if generation.max_new_tokens == 0 {
             println!("{} max_new_tokens is 0.", style("Ferrule>").cyan().bold());
-        } else if !stopped_by_eos
-            && stopped_by_string.is_none()
-            && turn_generated == generation.max_new_tokens
-        {
+        } else if turn.finish_reason == TopKFinishReason::MaxTokens {
             println!(
                 "{} turn stopped at max_tokens; use a larger -n or /reset if the next turn looks malformed.",
                 style("Ferrule>").cyan().bold()
             );
         }
+        if turn.stopped_by_context {
+            println!(
+                "{} turn stopped because the context window is full.",
+                style("Ferrule>").cyan().bold()
+            );
+        }
+        let prefill_s = turn.prefill_time.as_secs_f64().max(1e-6);
+        let decode_s = turn.decode_time.as_secs_f64().max(1e-6);
+        let ttft_ms = first_token_time
+            .map(|duration| format!("{:.1}ms", duration.as_secs_f64() * 1000.0))
+            .unwrap_or_else(|| "n/a".into());
         println!(
-            "{} prefill={:.1}ms decode={:.1}ms pos={}",
+            "{} ttft={} prefill={:.1}ms ({:.2} tok/s) decode={:.1}ms ({:.2} tok/s) pos={}",
             style("stats>").dim(),
-            prefill_start.elapsed().as_secs_f64() * 1000.0,
-            decode_start.elapsed().as_secs_f64() * 1000.0,
-            runner.position()
+            ttft_ms,
+            turn.prefill_time.as_secs_f64() * 1000.0,
+            turn.prompt_tokens as f64 / prefill_s,
+            turn.decode_time.as_secs_f64() * 1000.0,
+            turn.tokens.len() as f64 / decode_s,
+            turn.final_position
         );
     }
 
     Ok(())
 }
 
-fn matched_deepseek_v4_stop<'a>(text: &str, stop: &'a [String]) -> Option<&'a str> {
-    stop.iter()
-        .find(|candidate| !candidate.is_empty() && text.ends_with(candidate.as_str()))
-        .map(String::as_str)
-}
-
-fn ensure_deepseek_v4_context_room(
-    current_tokens: usize,
-    new_tokens: usize,
-    ctx_size: usize,
-) -> anyhow::Result<()> {
-    if ctx_size == 0 {
-        anyhow::bail!("ctx_size must be greater than zero");
-    }
-    let requested = current_tokens.saturating_add(new_tokens);
-    if requested > ctx_size {
-        anyhow::bail!("context length {requested} exceeds ctx_size {ctx_size}");
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn deepseek_v4_runner_satisfies_resident_runtime_driver_bounds() {
+        use ferrule_model::TopKModelRunner;
+        use ferrule_runtime::{PagedSequenceKvCache, ResidentActionExecutor, ResidentTopKDriver};
+
+        fn assert_topk_runner<R: TopKModelRunner>() {}
+        fn assert_executor<R: TopKModelRunner>() {
+            let _ = std::mem::size_of::<ResidentActionExecutor<R>>();
+        }
+        fn assert_driver<R: TopKModelRunner>() {
+            let _ = std::mem::size_of::<ResidentTopKDriver<R, PagedSequenceKvCache>>();
+        }
+
+        assert_topk_runner::<DeepSeekV4ReferenceRunner>();
+        assert_executor::<DeepSeekV4ReferenceRunner>();
+        assert_driver::<DeepSeekV4ReferenceRunner>();
+    }
 
     #[test]
     fn test_resolve_template_override_known() {

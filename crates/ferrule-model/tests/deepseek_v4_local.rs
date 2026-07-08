@@ -48,7 +48,7 @@ fn local_deepseek_v4_flash_dspark_descriptor_smoke_if_present() {
         52_479_131_648
     );
     assert!(inventory.role_bytes(&TensorRole::SpeculativeProjection) > 0);
-    let routed_experts = inventory.routed_expert_tensors(&ModelFamily::DeepSeekV4);
+    let routed_experts = inventory.routed_expert_tensors();
     assert_eq!(routed_experts.len(), 66_048);
     assert!(routed_experts
         .iter()
@@ -132,7 +132,6 @@ fn local_deepseek_v4_flash_dspark_descriptor_smoke_if_present() {
     assert_missing(&plan, PolicyArea::Attention, "latent/compressed attention");
     assert_missing(&plan, PolicyArea::Attention, "attention sink");
     assert_missing(&plan, PolicyArea::Router, "hash-assisted routing");
-    assert_missing(&plan, PolicyArea::Expert, "shared experts");
     assert_missing(&plan, PolicyArea::Speculation, "speculative decoding");
     assert_missing(&plan, PolicyArea::Tokenizer, "external tokenizer/encoding");
 }

@@ -12,9 +12,8 @@
 //! can replace the CPU reference later without changing caller code.
 
 use ferrule_common::{Error, Result};
-
-use crate::artifact_linear::ArtifactLinearPayload;
-use crate::attention_backend::SparseAttentionSpec;
+use ferrule_model::artifact::linear::ArtifactLinearPayload;
+use ferrule_model::attention_backend::SparseAttentionSpec;
 
 // ── block sizes for cache tiling ─────────────────────────────────────────
 
@@ -314,7 +313,9 @@ mod tests {
     use ferrule_model::TensorRole;
 
     use super::*;
-    use crate::artifact_tensor::{ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice};
+    use ferrule_model::artifact::tensor::{
+        ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice,
+    };
 
     #[test]
     fn cpu_tiled_attention_produces_same_result_as_naive() {
@@ -336,7 +337,7 @@ mod tests {
             .unwrap();
 
         // Compare with naive reference
-        let ref_out = crate::attention_backend::sparse_attention_reference(
+        let ref_out = ferrule_model::attention_backend::sparse_attention_reference(
             &q,
             &kv,
             &indices,

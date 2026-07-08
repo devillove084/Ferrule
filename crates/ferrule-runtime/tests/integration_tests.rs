@@ -4,9 +4,10 @@
 
 use ferrule_common::Result;
 use ferrule_model::{AttentionKind, ModelFamily, WeightSource};
+use ferrule_model::{ModelInfo, ModelRunner};
 use ferrule_runtime::{
-    ContiguousKvCache, GenerationConfig, InferenceEngine, KvCache, ModelInfo, ModelRunner,
-    MultiSessionKvCache, SamplingConfig, Scheduler, SequenceState, SessionId,
+    ContiguousKvCache, GenerationConfig, InferenceEngine, KvCache, MultiSessionKvCache,
+    SamplingConfig, Scheduler, SequenceState, SessionId,
 };
 
 // ── Mock runner ─────────────────────────────────────────────────────────

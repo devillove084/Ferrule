@@ -6,7 +6,8 @@
 //! HF tensor naming: model.layers.{i}.self_attn.{q,k,v,o}_proj.weight
 //!                  model.layers.{i}.mlp.{gate,up,down}_proj.weight
 
-use crate::families::{common, DenseLayerTensorRef};
+use crate::families::common;
+use crate::semantic::DenseLayerTensorRef;
 use crate::tensor_policy::TensorClass;
 
 /// Classify a HuggingFace safetensors tensor name.

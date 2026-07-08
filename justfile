@@ -5,8 +5,11 @@
 #   just test-cuda  → CUDA tests via cargo oxide with detected arch
 #   just run-cuda ARGS... → CUDA build via cargo oxide, then run target/release/ferrule
 #   just chat MODEL → interactive chat (MODEL required)
-#   just test       → all tests
-#   just test-graph → compute graph IR tests
+#   just bench-interactive MODEL → multi-turn chat latency benchmark
+#   just dsv4-runtime-driver-bench → DSV4 benchmark through ResidentTopKDriver
+#   just dsv4-prefill-chunk-sweep → DSV4 runtime-driver prefill chunk sweep CSV/JSONL
+#   just test       → all workspace tests
+#   just test-graph → runtime graph IR tests
 
 # ── Default ────────────────────────────────────────────────────────────
 
@@ -87,7 +90,7 @@ oxide-test *args='':
 
 # ── Test ───────────────────────────────────────────────────────────────
 
-test: test-graph test-runtime test-model test-bench test-cuda test-cli
+test: test-graph test-runtime test-model test-cuda test-cli
 
 test-graph:
     cargo test -p ferrule-runtime graph
@@ -97,9 +100,6 @@ test-runtime:
 
 test-model:
     cargo test -p ferrule-model
-
-test-bench:
-    cargo test -p ferrule-bench
 
 test-cuda *args='':
     @if [ "{{ _use-cuda }}" != "1" ]; then \
@@ -131,7 +131,7 @@ fmt-fix:
     cargo fmt
 
 clippy:
-    cargo clippy -p ferrule-common -p ferrule-model -p ferrule-runtime -p ferrule-bench -p ferrule-cli -- -D warnings
+    cargo clippy -p ferrule-common -p ferrule-model -p ferrule-runtime -p ferrule-cli -- -D warnings
 
 clippy-cuda:
     cargo clippy -p ferrule-common -p ferrule-model -p ferrule-runtime -p ferrule-cli --features cuda -- -D warnings
@@ -176,17 +176,39 @@ run-cuda *args='':
 chat model quant='q4' *args='':
     just run-cuda chat {{ model }} -q {{ quant }} {{ args }}
 
-run model prompt *args='':
-    cargo run --release -p ferrule-cli -- run {{ model }} -p "{{ prompt }}" {{ args }}
+bench-interactive model *args='':
+    just run-cuda bench-interactive {{ model }} {{ args }}
 
-gpu-run model prompt='Hello' n='16' quant='q4' *args='':
-    just run-cuda gpu-run {{ model }} -p "{{ prompt }}" -n {{ n }} -q {{ quant }} {{ args }}
+dsv4-runtime-driver-bench prompt1='Hello' prompt2='Explain Ferrule in one sentence.' tokens='1' warmup='1' chunk='4096' layers='43' *args='':
+    @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
+    @echo "→ DSV4 ResidentTopKDriver benchmark via cargo oxide (arch: {{ _cuda-arch }}, tokens: {{ tokens }}, warmup: {{ warmup }}, chunk: {{ chunk }}, layers: {{ layers }})"
+    cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
+    ./target/release/ferrule bench-interactive models/DeepSeek-V4-Flash-DSpark -p "{{ prompt1 }}" -p "{{ prompt2 }}" -n {{ tokens }} --runtime-driver --warmup-tokens {{ warmup }} --prefill-chunk-size {{ chunk }} --max-layers {{ layers }} --json {{ args }}
 
-bench model prompt='Hello' n='128' quant='q4':
-    just run-cuda bench-infer {{ model }} -p "{{ prompt }}" -n {{ n }} -q {{ quant }} --json
+# Sweep runtime-driver prefill chunk sizes and write CSV + JSONL under target/.
+dsv4-runtime-driver-chunk-sweep chunks='1,2,4,8,16,4096' tokens='1' warmup='0' layers='43' output='target/dsv4-runtime-driver-chunk-sweep' sync='0' *args='':
+    @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
+    @echo "→ DSV4 ResidentTopKDriver chunk sweep (arch: {{ _cuda-arch }}, chunks: {{ chunks }}, tokens: {{ tokens }}, warmup: {{ warmup }}, layers: {{ layers }}, sync: {{ sync }})"
+    cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
+    @sync_arg=""; if [ "{{ sync }}" = "1" ] || [ "{{ sync }}" = "true" ] || [ "{{ sync }}" = "sync" ]; then sync_arg="--profile-sync"; fi; python3 scripts/dsv4_runtime_driver_chunk_sweep.py --model models/DeepSeek-V4-Flash-DSpark --chunks "{{ chunks }}" --max-tokens {{ tokens }} --warmup-tokens {{ warmup }} --max-layers {{ layers }} --bin ./target/release/ferrule --output-dir {{ output }} $sync_arg {{ args }}
 
-compare model prompt='The capital of France is' n='8' quant='q4':
-    just run-cuda compare-logits {{ model }} -p "{{ prompt }}" -n {{ n }} -q {{ quant }}
+# Short alias focused on Step-C prefill observation.
+dsv4-prefill-chunk-sweep chunks='1,2,4,8,16,4096' tokens='1' warmup='0' layers='43' output='target/dsv4-runtime-driver-chunk-sweep' sync='0' *args='':
+    just dsv4-runtime-driver-chunk-sweep "{{ chunks }}" "{{ tokens }}" "{{ warmup }}" "{{ layers }}" "{{ output }}" "{{ sync }}" {{ args }}
+
+test-dsv4-runtime-driver-local *args='':
+    @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: local DSV4 runtime-driver test requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
+    @echo "→ local DSV4 ResidentTopKDriver integration test via cargo oxide (arch: {{ _cuda-arch }})"
+    cargo oxide test --arch {{ _cuda-arch }} -- --features cuda,local-dsv4-tests --release -p ferrule-cli --test dsv4_resident_runtime_local -- --ignored --nocapture {{ args }}
+
+cuda:
+    cargo run -p ferrule-cli -- cuda
+
+inspect-weightpack path:
+    cargo run -p ferrule-cli -- inspect-weightpack {{ path }}
+
+expert-stream-smoke model layer='0' expert='0' *args='':
+    cargo run -p ferrule-cli -- expert-stream-smoke {{ model }} --layer {{ layer }} --expert {{ expert }} {{ args }}
 
 # Real local DeepSeek-V4/DSpark HF shard probes. DSpark is not used in the base
 # forward path; these run the DSV4-specific model boundary over local shards.
@@ -245,17 +267,8 @@ dsv4-chat tokens='64' *args='':
     @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
     @tokens="{{ tokens }}"; tokens="${tokens#tokens=}"; case "$tokens" in ''|*[!0-9]*) echo "error: dsv4-chat tokens must be an integer; use 'just dsv4-chat 64' or 'just dsv4-chat tokens=64'"; exit 2;; esac; echo "→ CUDA chat via cargo oxide build (arch: {{ _cuda-arch }}, tokens: $tokens)"; cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli; ./target/release/ferrule chat models/DeepSeek-V4-Flash-DSpark -q cuda -n "$tokens" --chat-template deepseek-v4 --temp 0 {{ args }}
 
-serve model quant='q4' port='8080':
-    just run-cuda server {{ model }} -q {{ quant }} --port {{ port }}
-
-perplexity model file:
-    cargo run --release -p ferrule-cli -- perplexity {{ model }} -f {{ file }}
-
 info model:
     cargo run --release -p ferrule-cli -- info {{ model }}
-
-inspect-cache path:
-    cargo run --release -p ferrule-cli -- inspect-cache {{ path }}
 
 # ── Clean ──────────────────────────────────────────────────────────────
 

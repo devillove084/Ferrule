@@ -7,7 +7,7 @@
 
 use ferrule_common::{Error, Result};
 
-use crate::artifact_linear::ArtifactLinearPayload;
+use crate::artifact::linear::ArtifactLinearPayload;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SwiGluFfnPayload {
@@ -59,8 +59,8 @@ mod tests {
     use crate::TensorRole;
 
     use super::*;
-    use crate::artifact_linear::ArtifactLinearPayload;
-    use crate::artifact_tensor::{ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice};
+    use crate::artifact::linear::ArtifactLinearPayload;
+    use crate::artifact::tensor::{ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice};
 
     #[test]
     fn swiglu_ffn_reference_executes_f32_linears() {

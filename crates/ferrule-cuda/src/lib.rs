@@ -10,9 +10,11 @@
 //! CUDA backend for Ferrule — kernels, forward pass, memory pool.
 //!
 //! Note: `graph` in this crate refers to CUDA driver graph capture/replay.
-//! Ferrule's device-independent compute graph IR lives in `ferrule-graph`.
+//! Ferrule's device-independent compute graph IR lives in `ferrule-runtime::graph`.
 
+pub mod benchmark;
 pub mod context;
+pub mod counters;
 pub mod graph;
 pub mod kernels;
 pub mod transformer;
@@ -23,5 +25,7 @@ pub use cuda_core::stream::CudaStream;
 /// Re-export `CudaContext` for the same reason.
 pub use cuda_core::CudaContext;
 
-// Re-export from context for backward compatibility.
+// Re-export common CUDA API surface for downstream crates.
+pub use benchmark::{run_gemv_rms_smoke_benchmark, run_smoke_benchmark, CudaSmokeBenchmark};
 pub use context::cuda_probe;
+pub use counters::CudaOpCounters;

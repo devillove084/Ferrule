@@ -8,22 +8,21 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::cache::kv::KvHandle;
+use crate::graph::program::GraphProgram;
+use crate::graph::runtime::{ArtifactGroupKind, ExternalBindingKind, ExternalBindingPlan};
 use crate::graph::ExternalKey;
 use ferrule_common::{Error, Result};
-use ferrule_model::families::{RoutedExpertMatrix, RoutedExpertTensorPart};
+use ferrule_model::artifact::tensor::ArtifactTensorSlice;
+use ferrule_model::moe::streaming::{
+    ExpertId, ExpertLoadSource, ExpertMatrixKind, ExpertTensorComponent, ExpertTensorKey,
+    ExpertTensorSlice,
+};
+use ferrule_model::semantic::{HyperConnectionStage, RoutedExpertMatrix, RoutedExpertTensorPart};
 use ferrule_model::{
     HfRoutedExpertTensorInfo, HfSafetensorsInventory, HfSafetensorsTensorInfo, ModelFamily,
     TensorRole,
 };
-
-use crate::artifact_tensor::ArtifactTensorSlice;
-use crate::expert_streaming::{
-    ExpertId, ExpertLoadSource, ExpertMatrixKind, ExpertTensorComponent, ExpertTensorKey,
-    ExpertTensorSlice,
-};
-use crate::graph_program::GraphProgram;
-use crate::graph_runtime::{ArtifactGroupKind, ExternalBindingKind, ExternalBindingPlan};
-use crate::kv::KvHandle;
 
 pub use ferrule_model::ArtifactObjectGroup;
 
@@ -214,7 +213,7 @@ fn materialize_hf_externals_inner(
 fn materialize_artifact_group(
     inventory: &HfSafetensorsInventory,
     model_dir: &Path,
-    family: &ModelFamily,
+    _family: &ModelFamily,
     group: ArtifactGroupKind,
     layer: Option<usize>,
 ) -> Result<Vec<ArtifactTensorSlice>> {
@@ -222,7 +221,7 @@ fn materialize_artifact_group(
         ArtifactGroupKind::Attention => {
             let layer = require_group_layer(group, layer)?;
             inventory
-                .attention_tensors(family)
+                .attention_tensors()
                 .into_iter()
                 .filter(|tensor| tensor.descriptor.layer == layer)
                 .map(|tensor| tensor.name)
@@ -253,16 +252,12 @@ fn materialize_artifact_group(
         | ArtifactGroupKind::HyperConnectionFeedForward => {
             let layer = require_group_layer(group, layer)?;
             let expected_stage = match group {
-                ArtifactGroupKind::HyperConnectionAttention => {
-                    ferrule_model::families::HyperConnectionStage::Attention
-                }
-                ArtifactGroupKind::HyperConnectionFeedForward => {
-                    ferrule_model::families::HyperConnectionStage::FeedForward
-                }
+                ArtifactGroupKind::HyperConnectionAttention => HyperConnectionStage::Attention,
+                ArtifactGroupKind::HyperConnectionFeedForward => HyperConnectionStage::FeedForward,
                 _ => unreachable!(),
             };
             inventory
-                .hyper_connection_tensors(family)
+                .hyper_connection_tensors()
                 .into_iter()
                 .filter(|tensor| {
                     tensor.descriptor.layer == Some(layer)
@@ -272,19 +267,18 @@ fn materialize_artifact_group(
                 .collect::<Vec<_>>()
         }
         ArtifactGroupKind::HyperConnectionHead => inventory
-            .hyper_connection_tensors(family)
+            .hyper_connection_tensors()
             .into_iter()
             .filter(|tensor| {
                 tensor.descriptor.layer.is_none()
-                    && tensor.descriptor.stage
-                        == ferrule_model::families::HyperConnectionStage::Head
+                    && tensor.descriptor.stage == HyperConnectionStage::Head
             })
             .map(|tensor| tensor.name)
             .collect::<Vec<_>>(),
         ArtifactGroupKind::Router => {
             let layer = require_group_layer(group, layer)?;
             inventory
-                .router_tensors(family)
+                .router_tensors()
                 .into_iter()
                 .filter(|tensor| tensor.descriptor.layer == layer)
                 .map(|tensor| tensor.name)
@@ -293,7 +287,7 @@ fn materialize_artifact_group(
         ArtifactGroupKind::SharedExpert => {
             let layer = require_group_layer(group, layer)?;
             inventory
-                .shared_expert_tensors(family)
+                .shared_expert_tensors()
                 .into_iter()
                 .filter(|tensor| tensor.descriptor.layer == layer)
                 .map(|tensor| tensor.name)
@@ -326,12 +320,12 @@ fn require_group_layer(group: ArtifactGroupKind, layer: Option<usize>) -> Result
 fn materialize_expert_registry(
     inventory: &HfSafetensorsInventory,
     model_dir: &Path,
-    family: &ModelFamily,
+    _family: &ModelFamily,
     layer: usize,
 ) -> Result<ExpertRegistryObject> {
     let mut grouped = BTreeMap::<ExpertId, Vec<ExpertTensorSlice>>::new();
     for tensor in inventory
-        .routed_expert_tensors(family)
+        .routed_expert_tensors()
         .into_iter()
         .filter(|tensor| tensor.descriptor.layer == layer)
     {

@@ -26,11 +26,13 @@ serde_json = "1"
 rustyline = "15"
 console = "0.15"
 tracing = "0.1"
-cuda-core = { git = "https://github.com/devillove084/cuda-oxide.git", branch = "fp-and-graph-support", optional = true }
 
 [features]
 default = []
-cuda = ["ferrule-cuda", "ferrule-runtime/cuda", "dep:cuda-core"]
+cuda = ["ferrule-cuda", "ferrule-runtime/cuda", "ferrule-model/cuda"]
+# Opt-in only: local ignored DSV4 runtime-driver tests require cargo-oxide,
+# CUDA hardware, and a large local `models/DeepSeek-V4-Flash-DSpark` artifact.
+local-dsv4-tests = ["cuda"]
 
 [lints]
 workspace = true

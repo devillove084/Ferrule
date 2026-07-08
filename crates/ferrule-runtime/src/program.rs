@@ -3,10 +3,10 @@
 //! A `GenerationProgram` chains text segments, unconstrained generation,
 //! and constrained generation into a single execution plan.
 
-use crate::constraint::TokenConstraint;
 use crate::generation::{GenerationConfig, InferenceEngine};
-use crate::runner::ModelRunner;
-use crate::sampler::SamplingConfig;
+use crate::sampling::constraint::TokenConstraint;
+use crate::sampling::sampler::SamplingConfig;
+use ferrule_model::runner::ModelRunner;
 
 /// A generation program: chain text and constrained segments.
 pub struct GenerationProgram {
@@ -134,7 +134,7 @@ impl Default for GenerationProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constraint::{AllowListConstraint, StopStringConstraint};
+    use crate::sampling::constraint::{AllowListConstraint, StopStringConstraint};
 
     #[test]
     fn build_empty_program() {

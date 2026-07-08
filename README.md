@@ -45,15 +45,16 @@ What works today:
 
 - **DeepSeek V4 Flash + DSpark local CUDA chat** through `ferrule chat` / `just dsv4-chat`.
 - Full 43-layer DSV4 greedy generation over local HF shards with strict `cuda` backend.
+- **DSV4 benchmark can run through the latest resident runtime spine** via `bench-interactive --runtime-driver`: `GenerateRequest -> ResidentScheduler -> SchedulerAction -> ExecutionBatch -> TopKModelRunner -> ExecutionOutput -> token events -> finish/free`.
 - Official DSV4 chat prompt wrapper (`<｜begin▁of▁sentence｜><｜User｜>...<｜Assistant｜></think>`).
 - DSV4 prefill semantics: HC/layer traversal, window KV, compressed KV, indexer KV.
 - Generic CUDA source operators for F32/BF16/FP8/FP4 linears, sparse attention,
   grouped output projection, HC pre/post/head, shared SwiGLU FFN, routed FP4
   experts, and lm_head top-k.
-- **Storage/residency vocabulary** (`ferrule-storage` crate): `StorageObjectId`,
-  `Placement`, `ObjectLocator`, `ObjectReplica`, `TransferEngine` trait — the
-  foundation for expert host-staging, frequency-aware eviction, and future
-  async/remote backends.
+- **Storage/residency vocabulary** (`ferrule-runtime::storage` module):
+  `StorageObjectId`, `Placement`, `ObjectLocator`, `ObjectReplica`,
+  `TransferEngine` trait — the foundation for expert host-staging,
+  frequency-aware eviction, and future async/remote backends.
 - **`ExpertResidencyBackend` trait**: unifies the duplicated load/evict loop
   between CPU and CUDA expert paths. One `apply_streaming_step()` function
   replaces two inline loops.
@@ -105,7 +106,7 @@ model structure, runtime state, and hardware placement.
 
 Near term: llama.cpp-level local usability with a more explicit runtime
 architecture — fast cached startup, sampling controls, templates, quality
-checks, benchmarks, a small local server, and source-preserving bring-up for
+checks, benchmarks, future local serving, and source-preserving bring-up for
 mainstream model families.
 
 Long term: a runtime substrate for edge-cloud LLM systems:
@@ -182,19 +183,19 @@ just chat models/OLMoE-Instruct q4 -n 256
 | Area | Status |
 |---|---|
 | Executable model fixture | OLMoE sparse MoE CUDA path via `GpuOlmoeRunner` |
-| Real large-model milestone | DeepSeek V4 Flash + DSpark full 43-layer CUDA greedy chat |
-| DSV4 execution boundary | `ferrule_runtime::models::deepseek_v4` owns HC, MLA, compressor/indexer, router, MoE, output semantics |
+| Real large-model milestone | DeepSeek V4 Flash + DSpark full 43-layer CUDA greedy chat plus `bench-interactive --runtime-driver` through `ResidentTopKDriver` |
+| DSV4 execution boundary | `ferrule-model::models::deepseek_v4` owns concrete HC, MLA, compressor/indexer, router, MoE, output semantics; runtime consumes `TopKModelRunner`/capability traits |
 | Expert streaming | `ExpertStreamingPlanner` + `ExpertStreamingReader` + `ExpertResidencyBackend` trait |
-| Storage/residency | `ferrule-storage` crate: vocabulary types + `StorageCatalog` + `TransferEngine` traits |
+| Storage/residency | `ferrule-runtime::storage` module: vocabulary types + `StorageCatalog` + `TransferEngine` traits |
 | Attention | OLMoE GQA executable; DSV4 MLA sparse attention correctness-first CUDA path |
 | Hyper-connections | DSV4 HC source binding + reference `hc_pre`/`hc_post`/`hc_head` |
 | KV cache | `KvCache` trait, contiguous per-session, radix prefix cache |
 | Quantization | Q4_0/Q8_0, FP4 E2M1 + E8M0 scales, FP8 E4M3FN, mixed precision policy |
 | WeightPack | mmap'd reader, streaming writer, zero-copy slices, WeightPack-only load path |
-| Runtime graph | Opaque IR, `GraphProgram`, `BackendObjectStore`, `ReferenceGraphBackend` |
+| Runtime graph | `ferrule-runtime::graph` opaque IR, `GraphProgram`, `BackendObjectStore`, `ReferenceGraphBackend` |
 | Sampling | temperature, top-k, top-p, min-p, repeat penalty, seed, stop strings, logprobs |
 | Chat templates | OLMoE, ChatML, Llama3, Qwen, DeepSeek-V4, Plain |
-| Server | minimal OpenAI-compatible `/v1/chat/completions` with SSE streaming |
+| Serving | design target; no active CLI server command in the current 5-crate workspace |
 | Structured decoding | token mask API, program-like generation API |
 | Speculation | DSpark/MTP metadata represented as generic speculation attachment policy |
 | Training/RL | design target, not implemented |
@@ -218,20 +219,24 @@ just check              # Quick check
 
 ```bash
 just dsv4-chat tokens=128                        # Interactive chat
+just dsv4-runtime-driver-bench                   # bench-interactive via ResidentTopKDriver
+# positional override: prompt1 prompt2 tokens warmup chunk layers
+just dsv4-runtime-driver-bench "Hello" "Explain Ferrule in one sentence." 1 0 2 43
+just test-dsv4-runtime-driver-local              # opt-in ignored local runtime-driver test
 just dsv4-cuda-generate Hello 2 4096 --chat       # One-shot generation
 just dsv4-cuda-first-token Hello 1               # First-token diagnostic
 just dsv4-cuda-probe "one two three" 3 1 0       # Layer-limited probe
 just dsv4-parity-json "Who are you?" output.json # Tokenizer parity JSON
 ```
 
-### OLMoE regression
+### Generic CLI surface
 
 ```bash
-just chat models/OLMoE-Instruct q4 -n 256        # Chat
-just gpu-run models/OLMoE-Instruct "Paris is" 16 q4  # One-shot
-just bench models/OLMoE-Instruct "Paris is" 64 q4    # Benchmark
-just compare models/OLMoE-Instruct "The capital of France is" 8 q4  # Logits diff
-just serve models/OLMoE-Instruct q4 8080         # Local server
+cargo run -p ferrule-cli -- info models/OLMoE-Instruct
+just chat models/OLMoE-Instruct q4 -n 256        # Interactive chat wrapper
+cargo run -p ferrule-cli -- cuda                 # CUDA probe + smoke benchmark
+cargo run -p ferrule-cli -- inspect-weightpack path/to/model.weightpack
+cargo run -p ferrule-cli -- expert-stream-smoke models/OLMoE-Instruct --layer 0 --expert 0
 ```
 
 ### Validation
@@ -254,8 +259,8 @@ just lint           # fmt + clippy
    golden tests, intermediate layer dumps.
 2. **Device-resident decode** — remove host `Vec<f32>` boundaries; decode arena,
    GPU-resident KV, expert residency.
-3. **Storage/residency integration** — wire `ferrule-storage` vocabulary into
-   execution: CUDA `ExpertResidencyBackend`, host-staged expert cache,
+3. **Storage/residency integration** — wire `ferrule-runtime::storage` vocabulary
+   into execution: CUDA `ExpertResidencyBackend`, host-staged expert cache,
    frequency-aware eviction.
 4. **Graph bridge** — coarse `transformer_layer` execution through
    `ReferenceGraphBackend`, then split into fine-grained semantic ops.

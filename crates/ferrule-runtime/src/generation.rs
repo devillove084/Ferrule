@@ -1,14 +1,18 @@
-use crate::runner::ModelRunner;
-use crate::sampler::{Logprobs, Sampler, SamplingConfig};
+use crate::sampling::sampler::{Logprobs, Sampler, SamplingConfig};
 use crate::stats::GenerateStats;
 use ferrule_common::{Error, Result};
-use std::time::Instant;
+use ferrule_model::runner::{ModelRunner, PrefillMode, TokenLogit, TopKModelRunner};
+use std::time::{Duration, Instant};
+
+pub use crate::scheduling::SequenceFinishReason as TopKFinishReason;
 
 #[derive(Debug, Clone)]
 pub struct GenerationConfig {
     pub max_new_tokens: usize,
     pub stop: Vec<String>,
-    /// Feed EOS into the backend session even when it is not emitted.
+    /// Stop generation when the backend emits its EOS token.
+    pub stop_at_eos: bool,
+    /// Feed EOS into the backend session when generation stops on EOS.
     pub append_eos_to_session: bool,
     /// If > 0, collect top-K logprobs for each generated token.
     pub logprobs_k: usize,
@@ -21,6 +25,7 @@ impl Default for GenerationConfig {
         Self {
             max_new_tokens: 16,
             stop: Vec::new(),
+            stop_at_eos: true,
             append_eos_to_session: true,
             logprobs_k: 0,
             ctx_size: 4096,
@@ -44,6 +49,30 @@ pub struct GenerationResult {
     pub stopped_by_eos: bool,
     pub stopped_by_string: Option<String>,
     pub all_logprobs: Vec<Logprobs>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TopKTokenEvent {
+    pub index: usize,
+    pub token: u32,
+    pub logit: f32,
+    pub text: String,
+}
+
+/// `TopKTurnResult` keeps legacy boolean helpers for compatibility, but
+/// schedulers and serving code should prefer `finish_reason`.
+#[derive(Debug, Clone)]
+pub struct TopKTurnResult {
+    pub prompt_tokens: usize,
+    pub tokens: Vec<u32>,
+    pub text: String,
+    pub prefill_time: Duration,
+    pub decode_time: Duration,
+    pub stopped_by_eos: bool,
+    pub stopped_by_string: Option<String>,
+    pub stopped_by_context: bool,
+    pub finish_reason: TopKFinishReason,
+    pub final_position: usize,
 }
 
 pub struct InferenceEngine<R: ModelRunner> {
@@ -157,7 +186,7 @@ impl<R: ModelRunner> InferenceEngine<R> {
             let next = self.sampler.sample(&logits, &self.history);
             self.history.push(next);
 
-            if self.runner.eos_token_id() == Some(next) {
+            if config.stop_at_eos && self.runner.eos_token_id() == Some(next) {
                 stopped_by_eos = true;
                 if config.append_eos_to_session {
                     let _ = self.runner.decode_token(next)?;
@@ -226,6 +255,136 @@ impl<R: ModelRunner> InferenceEngine<R> {
     }
 }
 
+/// Run one resident-session top-k generation turn.
+///
+/// This is the generic fast-path loop used by interactive chat and benchmarks.
+/// It is model-family agnostic: concrete runners expose only the `TopKModelRunner`
+/// capability, while runtime owns context checks, EOS/session feeding, stop-string
+/// handling, and timing.
+pub fn generate_topk_turn<R, F>(
+    runner: &mut R,
+    prompt_tokens: &[u32],
+    config: &GenerationConfig,
+    prefill_mode: PrefillMode,
+    top_k: usize,
+    on_token: F,
+) -> Result<TopKTurnResult>
+where
+    R: TopKModelRunner,
+    F: FnMut(&TopKTokenEvent) -> Result<()>,
+{
+    ensure_context_room(runner.position(), prompt_tokens.len(), config.ctx_size)?;
+
+    let prefill_start = Instant::now();
+    let top = runner.prefill_topk(prompt_tokens, top_k, prefill_mode)?;
+    let prefill_time = prefill_start.elapsed();
+
+    generate_topk_from_candidates(
+        runner,
+        top,
+        prompt_tokens.len(),
+        prefill_time,
+        config,
+        top_k,
+        on_token,
+    )
+}
+
+/// Run the generic top-k decode loop after the caller has already performed
+/// prefill and obtained initial candidates.
+///
+/// This lower-level primitive is useful for diagnostics that need to do
+/// model-specific setup around prefill (for example cache warmup or counter
+/// baselining) while still keeping EOS/session/context/stop handling in runtime.
+pub fn generate_topk_from_candidates<R, F>(
+    runner: &mut R,
+    initial_topk: Vec<TokenLogit>,
+    prompt_token_count: usize,
+    prefill_time: Duration,
+    config: &GenerationConfig,
+    top_k: usize,
+    mut on_token: F,
+) -> Result<TopKTurnResult>
+where
+    R: TopKModelRunner,
+    F: FnMut(&TopKTokenEvent) -> Result<()>,
+{
+    if top_k == 0 {
+        return Err(Error::Internal("top_k must be greater than zero".into()));
+    }
+    if config.ctx_size == 0 {
+        return Err(Error::Internal("ctx_size must be greater than zero".into()));
+    }
+
+    let decode_start = Instant::now();
+    let mut top = initial_topk;
+    let mut generated = Vec::new();
+    let mut text = String::new();
+    let mut stopped_by_eos = false;
+    let mut stopped_by_string = None;
+    let mut stopped_by_context = false;
+    let mut finish_reason = TopKFinishReason::MaxTokens;
+
+    for index in 0..config.max_new_tokens {
+        if runner.position() >= config.ctx_size {
+            stopped_by_context = true;
+            finish_reason = TopKFinishReason::Context;
+            break;
+        }
+        let Some(next) = top.first().copied() else {
+            finish_reason = TopKFinishReason::NoCandidate;
+            break;
+        };
+
+        if config.stop_at_eos && runner.eos_token_id() == Some(next.token_id) {
+            stopped_by_eos = true;
+            finish_reason = TopKFinishReason::Eos;
+            if config.append_eos_to_session {
+                runner.feed_token(next.token_id)?;
+            }
+            break;
+        }
+
+        let piece = runner.decode(&[next.token_id])?;
+        on_token(&TopKTokenEvent {
+            index,
+            token: next.token_id,
+            logit: next.logit,
+            text: piece.clone(),
+        })?;
+
+        generated.push(next.token_id);
+        text.push_str(&piece);
+
+        if let Some(stop) = matched_stop(&text, &config.stop) {
+            runner.feed_token(next.token_id)?;
+            stopped_by_string = Some(stop);
+            finish_reason = TopKFinishReason::StopString;
+            break;
+        }
+
+        if index + 1 == config.max_new_tokens {
+            runner.feed_token(next.token_id)?;
+            break;
+        }
+
+        top = runner.decode_topk(next.token_id, top_k)?;
+    }
+
+    Ok(TopKTurnResult {
+        prompt_tokens: prompt_token_count,
+        tokens: generated,
+        text,
+        prefill_time,
+        decode_time: decode_start.elapsed(),
+        stopped_by_eos,
+        stopped_by_string,
+        stopped_by_context,
+        finish_reason,
+        final_position: runner.position(),
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct PrefillOutput {
     pub tokens: Vec<u32>,
@@ -233,13 +392,17 @@ pub struct PrefillOutput {
     pub prefill_time: std::time::Duration,
 }
 
-fn matched_stop(text: &str, stop: &[String]) -> Option<String> {
+pub(crate) fn matched_stop(text: &str, stop: &[String]) -> Option<String> {
     stop.iter()
         .find(|candidate| !candidate.is_empty() && text.ends_with(candidate.as_str()))
         .cloned()
 }
 
-fn ensure_context_room(current_tokens: usize, new_tokens: usize, ctx_size: usize) -> Result<()> {
+pub(crate) fn ensure_context_room(
+    current_tokens: usize,
+    new_tokens: usize,
+    ctx_size: usize,
+) -> Result<()> {
     if ctx_size == 0 {
         return Err(Error::Internal("ctx_size must be greater than zero".into()));
     }

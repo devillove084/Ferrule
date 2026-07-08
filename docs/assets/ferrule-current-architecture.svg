@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="980" viewBox="0 0 1280 980" role="img" aria-labelledby="title desc">
   <title id="title">Ferrule Architecture</title>
-  <desc id="desc">Ferrule architecture: 10 crates in four layers — CLI, execution + backends, vocabulary + IR + model policies, foundation. Shows storage/residency vocabulary, expert streaming, graph runtime, and DSV4 execution path.</desc>
+  <desc id="desc">Ferrule architecture: 5 crates in layered modules — CLI, runtime algorithms, model semantics, CUDA backend, common foundation. Shows storage/residency vocabulary, expert streaming, runtime graph IR, and DSV4 execution path.</desc>
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
       <stop offset="0" stop-color="#08111f"/>
@@ -90,7 +90,7 @@
 
   <rect class="card" x="52" y="148" width="1176" height="52" rx="14"/>
   <text x="72" y="170" class="crateName">ferrule-cli</text>
-  <text x="72" y="190" class="small">chat · run · gpu-run · info · bench-infer · compare-logits · server · deepseek-v4-probe · deepseek-v4-generate · perplexity</text>
+  <text x="72" y="190" class="small">info · cuda · chat · bench-interactive · inspect-weightpack · expert-stream-smoke · deepseek-v4-probe · deepseek-v4-generate</text>
 
   <path class="arrow" d="M360 200 L360 224"/>
   <path class="arrow" d="M920 200 L920 224"/>
@@ -120,9 +120,9 @@
 
   <!-- Row 2: three modules -->
   <rect class="soft" x="68" y="328" width="178" height="54" rx="10"/>
-  <text x="80" y="346" class="small">Runner &amp; session</text>
-  <text x="80" y="362" class="tiny">ModelRunner trait</text>
-  <text x="80" y="374" class="tiny">GpuOlmoeRunner · DSV4Runner</text>
+  <text x="80" y="346" class="small">Generation &amp; session</text>
+    <text x="80" y="362" class="tiny">algorithms over capabilities</text>
+    <text x="80" y="374" class="tiny">no concrete model ownership</text>
 
   <rect class="soft" x="256" y="328" width="178" height="54" rx="10"/>
   <text x="268" y="346" class="small">KV cache</text>
@@ -134,15 +134,15 @@
   <text x="456" y="362" class="tiny">top-k · top-p · min-p · repeat</text>
   <text x="456" y="374" class="tiny">batching · preempt</text>
 
-  <!-- DSV4 model semantics block -->
-  <rect class="soft" x="68" y="394" width="568" height="126" rx="10"/>
-  <text x="80" y="414" class="small">DeepSeek V4 model semantics (models/deepseek_v4.rs)</text>
-  <text x="80" y="434" class="mono">hc_pre → attn_norm → attention → hc_post</text>
-  <text x="80" y="450" class="mono">→ hc_pre → ffn_norm → MoE → hc_post</text>
-  <text x="80" y="468" class="tiny">DeepSeekV4CudaOperatorCache</text>
-  <text x="80" y="482" class="tiny">experts: HashMap&lt;ExpertId, CudaFp4ExpertHandles&gt;</text>
-  <text x="80" y="496" class="tiny">planner · reader · counters</text>
-  <text x="80" y="512" class="tiny">hash/score routing · FP4 experts · MLA sparse attn</text>
+  <!-- runtime capability boundary -->
+    <rect class="soft" x="68" y="394" width="568" height="126" rx="10"/>
+    <text x="80" y="414" class="small">Runtime boundary</text>
+    <text x="80" y="434" class="mono">TopKModelRunner → generation loop → sampler/session</text>
+    <text x="80" y="450" class="mono">ExecutionBatch → GraphProgram → backend binding</text>
+    <text x="80" y="468" class="tiny">DeepSeek/OLMoE concrete runners live in ferrule-model</text>
+    <text x="80" y="482" class="tiny">runtime owns graph/storage/scheduling vocabulary</text>
+    <text x="80" y="496" class="tiny">CUDA handles stay behind backend/model caches</text>
+    <text x="80" y="512" class="tiny">semantic roles instead of raw model tensor names</text>
 
   <!-- ferrule-cuda -->
   <rect class="cardCuda" x="672" y="224" width="280" height="150" rx="18"/>
@@ -154,22 +154,22 @@
   <text x="692" y="342" class="small">RoPE · RMSNorm · router topk</text>
   <text x="692" y="360" class="small">embedding · lm_head · saxpy</text>
 
-  <!-- ferrule-bench -->
-  <rect class="card" x="672" y="390" width="280" height="88" rx="18"/>
-  <text x="692" y="414" class="crateName">ferrule-bench</text>
-  <text x="692" y="434" class="small">benchmarks · PK harness</text>
-  <text x="692" y="452" class="small">reference smokes · perplexity</text>
-  <text x="692" y="470" class="small">JSON reports · TransferCounters</text>
+  <!-- CLI diagnostics -->
+    <rect class="card" x="672" y="390" width="280" height="88" rx="18"/>
+    <text x="692" y="414" class="crateName">CLI diagnostics</text>
+    <text x="692" y="434" class="small">bench-interactive · JSON summaries</text>
+    <text x="692" y="452" class="small">DSV4 probe/generate diagnostics</text>
+    <text x="692" y="470" class="small">TransferCounters · runtime stats</text>
 
   <!-- arrow runtime → cuda -->
   <path class="arrow" d="M652 300 L672 300"/>
 
   <!-- ════════ LAYER 3 — VOCABULARY ════════ -->
-  <text x="54" y="552" class="layerLabel">LAYER 3 — VOCABULARY · IR · MODEL POLICIES</text>
+    <text x="54" y="552" class="layerLabel">LAYER 3 — RUNTIME MODULES · MODEL POLICIES</text>
 
-  <!-- ferrule-storage -->
+    <!-- runtime storage module -->
   <rect class="cardStorage" x="52" y="560" width="300" height="190" rx="18"/>
-  <text x="72" y="584" class="crateName">ferrule-storage</text>
+  <text x="72" y="584" class="crateName">runtime::storage</text>
   <rect x="180" y="572" width="56" height="18" rx="9" fill="url(#cyan)"/>
   <text x="190" y="585" class="pillText">NEW</text>
 
@@ -197,9 +197,9 @@
   <text x="220" y="720" class="tiny">ReplicaHandleId</text>
   <text x="220" y="732" class="tiny">TransferEngine trait</text>
 
-  <!-- ferrule-graph -->
+  <!-- runtime graph module -->
   <rect class="cardGraph" x="372" y="560" width="260" height="190" rx="18"/>
-  <text x="392" y="584" class="crateName">ferrule-graph</text>
+  <text x="392" y="584" class="crateName">runtime::graph</text>
 
   <rect class="softGraph" x="388" y="600" width="228" height="44" rx="10"/>
   <text x="400" y="618" class="small">Opaque graph IR</text>
@@ -232,7 +232,7 @@
   <text x="678" y="691" class="small">families/ · common.rs · deepseek_v4.rs</text>
 
   <rect class="soft" x="668" y="710" width="268" height="30" rx="10"/>
-  <text x="678" y="729" class="small">TokenizerHandle · EnginePlan · policies</text>
+  <text x="678" y="729" class="small">TokenizerHandle · runner capabilities</text>
 
   <!-- arrows: layer 3 → layer 2 -->
   <path class="arrowCyan" d="M202 560 L202 534 L380 534 L380 514"/>
@@ -243,16 +243,16 @@
   <text x="54" y="772" class="layerLabel">LAYER 4 — FOUNDATION</text>
 
   <rect class="card" x="52" y="780" width="200" height="50" rx="12"/>
-  <text x="72" y="802" class="crateName">ferrule-core</text>
-  <text x="72" y="820" class="small">Error · QuantType · observability</text>
+  <text x="72" y="802" class="crateName">ferrule-common</text>
+    <text x="72" y="820" class="small">Error · QuantType · common utils</text>
 
   <rect class="card" x="272" y="780" width="200" height="50" rx="12"/>
-  <text x="292" y="802" class="crateName">ferrule-quant</text>
-  <text x="292" y="820" class="small">Q4_0 · Q8_0 · FP4 · FP8 · mixed</text>
+  <text x="292" y="802" class="crateName">model::artifact</text>
+    <text x="292" y="820" class="small">Q4_0 · Q8_0 · FP4 · FP8 · binding</text>
 
   <rect class="card" x="492" y="780" width="200" height="50" rx="12"/>
-  <text x="512" y="802" class="crateName">ferrule-gguf</text>
-  <text x="512" y="820" class="small">safetensors reader · GGUF reader</text>
+  <text x="512" y="802" class="crateName">model::gguf/hf</text>
+    <text x="512" y="820" class="small">safetensors · GGUF readers</text>
 
   <!-- Storage tier hierarchy -->
   <rect class="cardStorage" x="720" y="780" width="508" height="110" rx="14"/>

@@ -6,7 +6,16 @@
 //! executors, and future autograd code interpret those op keys through their own
 //! registries/dialects.
 
+pub mod builder;
+pub mod dialects;
+pub mod layer_binding;
+pub mod program;
+pub mod runtime;
+pub mod shape_registry;
 pub mod template;
+pub mod translate;
+pub mod validation;
+
 pub use template::{GraphTemplate, TemplateInstantiation, TemplateValueRef};
 
 use std::collections::BTreeMap;

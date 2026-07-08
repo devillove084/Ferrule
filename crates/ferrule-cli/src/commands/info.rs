@@ -1,5 +1,4 @@
-use ferrule_model::{EnginePlan, ModelDescriptor, TensorClassCount, TransformerSpec};
-use ferrule_runtime::ModelInfo;
+use ferrule_model::{EnginePlan, ModelDescriptor, ModelInfo, TensorClassCount, TransformerSpec};
 use std::path::Path;
 
 // ── info ─────────────────────────────────────────────────────────────────────

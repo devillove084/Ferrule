@@ -43,12 +43,6 @@ pub struct InteractiveTrace {
     pub turns: Vec<GoldenTurn>,
 }
 
-impl InteractiveTrace {
-    pub fn from_json(json: &str) -> serde_json::Result<Self> {
-        serde_json::from_str(json)
-    }
-}
-
 /// Result of comparing a live interactive run against a golden trace.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InteractiveTraceComparison {

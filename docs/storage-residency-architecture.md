@@ -148,7 +148,7 @@ crates/ferrule-runtime/src/expert_streaming.rs
 
 This is the live planner. Used by:
 
-- `deepseek_v4.rs` — DSV4 decode/prefill MoE step
+- `crates/ferrule-model/src/models/deepseek_v4/` — DSV4 decode/prefill MoE step
 - `layer_binding.rs` — generic layer binding
 - `routed_moe.rs` — reference routed MoE execution
 - `inspect.rs` (CLI) — expert inspection
@@ -171,7 +171,7 @@ Its limitations (what the new design must fix without rewriting it wholesale):
 ### System 2: `DeepSeekV4CudaOperatorCache` — active, inline
 
 ```
-crates/ferrule-runtime/src/models/deepseek_v4.rs  (L1300+)
+crates/ferrule-model/src/models/deepseek_v4/cuda_cache.rs
   DeepSeekV4CudaOperatorCache {
     experts: HashMap<ExpertId, CudaFp4ExpertHandles>,
     expert_selected / expert_loads / expert_load_bytes / expert_evictions: u64
@@ -219,7 +219,7 @@ fit. The storage abstraction must accommodate both layouts.
 | `WeightPackReader` / `WeightPackSlice` | `ferrule-cuda/weightpack.rs` | mmap'd WeightPack package reader, zero-copy slices |
 | `BackendObjectStore` | `backend_object_store.rs` | Graph external → concrete object materialization |
 | `ExternalBindingKind` | `graph_runtime.rs` | Graph-side external binding enum (Weight/KvState/ArtifactTensor/ExpertRegistry/ResidentExpert/…) |
-| `TransferCounters` / `ExpertRuntimeCounters` | `ferrule-bench/summary.rs` | Bench-side H2D/expert counters |
+| `TransferCounters` / `ExpertRuntimeCounters` | `crates/ferrule-cli/src/bench/summary.rs` | CLI diagnostic H2D/expert counters |
 
 ### Naming conflict: `ResidencyPolicy`
 
@@ -1128,8 +1128,9 @@ under memory pressure) under one framework.
 
 - `expert_selected`, `expert_loads`, `expert_load_bytes`, `expert_evictions`
 
-`ferrule-bench` has `TransferCounters` (H2D/D2H bytes/copies) and
-`ExpertRuntimeCounters` (loads/load_bytes/evictions/selected/resident).
+`crates/ferrule-cli/src/bench/summary.rs` has `TransferCounters`
+(H2D/D2H bytes/copies) and `ExpertRuntimeCounters`
+(loads/load_bytes/evictions/selected/resident).
 
 ### Counters needed for v1 (Phase 2 acceptance gate)
 

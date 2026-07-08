@@ -3,24 +3,26 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use ferrule_model::{
-    families::{deepseek_v4, AttentionTensorKind, HyperConnectionStage, RouterTensorKind},
-    HfSafetensorsInventory, HfSafetensorsTensorInfo, ModelDescriptor, ModelFamily, TensorRole,
-};
-use ferrule_runtime::{
     bind_attention_from_artifact_group, bind_attention_from_hf,
     bind_hyper_connection_from_artifact_group, bind_hyper_connection_from_hf,
-    bind_hyper_connection_head_from_hf, bind_layer_artifact_from_hf,
-    bind_layer_norms_from_artifact_group, bind_router_from_artifact_group, bind_router_from_hf,
+    bind_hyper_connection_head_from_hf, bind_layer_norms_from_artifact_group,
+    bind_router_from_artifact_group, bind_router_from_hf,
     bind_shared_swiglu_ffn_from_artifact_group, bind_shared_swiglu_ffn_from_hf,
-    build_graph_program_from_descriptor, materialize_graph_hf_externals,
+    families::deepseek_v4,
     models::deepseek_v4::{
         DeepSeekV4ArtifactModel, DeepSeekV4ReferenceOptions, DeepSeekV4ReferenceRunner,
     },
-    validate_graph_program, ArtifactGroupKind, ArtifactLinearFormat, ArtifactLinearPayload,
-    ArtifactTensorReader, ArtifactTensorSlice, BackendObject, ExpertComputeBundle, ExpertId,
-    ExpertLinearFormat, ExpertLoadReason, ExpertLoadSource, ExpertRouterPolicy, ExpertStorageTier,
-    ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader, HyperConnectionConfig,
-    SparseAttentionSpec, TokenizerHandle,
+    semantic::{AttentionTensorKind, HyperConnectionStage, RouterTensorKind},
+    ArtifactGroupKind, ArtifactLinearFormat, ArtifactLinearPayload, ArtifactTensorReader,
+    ArtifactTensorSlice, ExpertComputeBundle, ExpertId, ExpertLinearFormat, ExpertLoadReason,
+    ExpertLoadSource, ExpertRouterPolicy, ExpertStorageTier, ExpertStreamingPlanner,
+    ExpertStreamingPolicy, ExpertStreamingReader, HfSafetensorsInventory, HfSafetensorsTensorInfo,
+    HyperConnectionConfig, ModelDescriptor, ModelFamily, SparseAttentionSpec, TensorRole,
+    TokenizerHandle,
+};
+use ferrule_runtime::{
+    bind_layer_artifact_from_hf, build_graph_program_from_descriptor,
+    materialize_graph_hf_externals, validate_graph_program, BackendObject,
 };
 
 #[test]
@@ -31,7 +33,7 @@ fn local_deepseek_v4_expert_streaming_reads_one_selected_expert_if_present() {
 
     let inventory = HfSafetensorsInventory::open(&model_dir, ModelFamily::DeepSeekV4)
         .expect("local DeepSeek V4 inventory should parse headers only");
-    let routed = inventory.routed_expert_tensors(&ModelFamily::DeepSeekV4);
+    let routed = inventory.routed_expert_tensors();
     assert_eq!(
         routed.len(),
         deepseek_v4::NUM_LAYERS * deepseek_v4::N_ROUTED_EXPERTS * 3 * 2
@@ -125,7 +127,7 @@ fn local_deepseek_v4_shared_expert_binds_real_layer0_if_present() {
 
     let inventory = HfSafetensorsInventory::open(&model_dir, ModelFamily::DeepSeekV4)
         .expect("local DeepSeek V4 inventory should parse headers only");
-    let shared = inventory.shared_expert_tensors(&ModelFamily::DeepSeekV4);
+    let shared = inventory.shared_expert_tensors();
     assert_eq!(shared.len(), deepseek_v4::NUM_LAYERS * 3 * 2);
 
     let ffn = bind_shared_swiglu_ffn_from_hf(
@@ -161,7 +163,7 @@ fn local_deepseek_v4_router_binds_hash_and_score_layers_if_present() {
 
     let inventory = HfSafetensorsInventory::open(&model_dir, ModelFamily::DeepSeekV4)
         .expect("local DeepSeek V4 inventory should parse headers only");
-    let routers = inventory.router_tensors(&ModelFamily::DeepSeekV4);
+    let routers = inventory.router_tensors();
     assert_eq!(
         routers
             .iter()
@@ -267,7 +269,7 @@ fn local_deepseek_v4_attention_and_hc_bind_real_artifacts_if_present() {
 
     let inventory = HfSafetensorsInventory::open(&model_dir, ModelFamily::DeepSeekV4)
         .expect("local DeepSeek V4 inventory should parse headers only");
-    let attention = inventory.attention_tensors(&ModelFamily::DeepSeekV4);
+    let attention = inventory.attention_tensors();
     let core_attention = attention
         .iter()
         .filter(|tensor| {
@@ -328,7 +330,7 @@ fn local_deepseek_v4_attention_and_hc_bind_real_artifacts_if_present() {
         .expect("layer 2 attention artifact payload should bind with compressor/indexer auxiliary");
     assert!(!layer2.auxiliary.is_empty());
 
-    let hc = inventory.hyper_connection_tensors(&ModelFamily::DeepSeekV4);
+    let hc = inventory.hyper_connection_tensors();
     assert_eq!(hc.len(), deepseek_v4::NUM_LAYERS * 6 + 3);
     let config = HyperConnectionConfig {
         hc_mult: deepseek_v4::HC_MULT,
@@ -387,10 +389,10 @@ fn local_deepseek_v4_layer_artifact_bundle_binds_real_layer0_if_present() {
 
     let inventory = HfSafetensorsInventory::open(&model_dir, ModelFamily::DeepSeekV4)
         .expect("local DeepSeek V4 inventory should parse headers only");
-    let attention = inventory.attention_tensors(&ModelFamily::DeepSeekV4);
-    let hc = inventory.hyper_connection_tensors(&ModelFamily::DeepSeekV4);
-    let routers = inventory.router_tensors(&ModelFamily::DeepSeekV4);
-    let shared = inventory.shared_expert_tensors(&ModelFamily::DeepSeekV4);
+    let attention = inventory.attention_tensors();
+    let hc = inventory.hyper_connection_tensors();
+    let routers = inventory.router_tensors();
+    let shared = inventory.shared_expert_tensors();
     let reader = ArtifactTensorReader::new(64 * 1024 * 1024);
     let config = HyperConnectionConfig {
         hc_mult: deepseek_v4::HC_MULT,

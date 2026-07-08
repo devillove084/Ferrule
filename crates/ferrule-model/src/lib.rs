@@ -1,37 +1,56 @@
 #![allow(clippy::needless_range_loop)]
 //! Model metadata, artifact formats, quantization, and model-family execution.
-pub mod artifact;
-pub mod artifact_binding;
-pub mod artifact_format;
-pub mod artifact_group;
-pub mod artifact_linear;
-pub mod artifact_tensor;
+//!
+//! ## Crate layout
+//!
+//! | Module | Responsibility |
+//! |---|---|
+//! | `spec` | Model family, attention kind, transformer spec enums |
+//! | `descriptor` | `ModelDescriptor` — parsed config.json + tokenizer + inventory |
+//! | `support` | Policy types, layout contracts, engine plans |
+//! | `families` | Per-family tensor name classification (HF/GGUF → semantic roles) |
+//! | `artifact` | Artifact inventory, index, binding, format decoding, tensor I/O |
+//! | `moe` | Expert streaming, handle stores, routing, MoE step orchestration |
+//! | `runner` | `ModelRunner` trait — the execution boundary |
+//! | `attention_backend` | Sparse attention reference + backend contracts |
+//! | `transformer_plan` | Semantic transformer layer/step runtime plan |
+//! | `hyper_connection` | Hyper-connection math (pre/post/head reference) |
+//! | `ffn` | SwiGLU FFN payload |
+//! | `models` | Concrete model implementations (e.g. DeepSeek-V4) |
+
+// ── Top-level modules ─────────────────────────────────────────────────────
+pub mod attention_backend;
 pub mod chat;
 pub mod descriptor;
-pub mod families;
 pub mod ffn;
-pub mod gguf;
 pub mod hyper_connection;
 pub mod precision;
-pub mod quant;
+pub mod runner;
+pub mod semantic;
 pub mod spec;
-pub mod support;
 pub mod tensor_policy;
 pub mod tokenizer;
+pub mod transformer_plan;
 
-// Re-exports
-pub use artifact::{
-    ArtifactFormat, ArtifactIdentity, DtypeCount, HfAttentionTensorInfo, HfDenseLayerTensorInfo,
-    HfFilePurpose, HfHyperConnectionTensorInfo, HfRepoFile, HfRoutedExpertTensorInfo,
-    HfRouterTensorInfo, HfSafetensorsArtifact, HfSafetensorsIndex, HfSafetensorsInventory,
-    HfSafetensorsShardSummary, HfSafetensorsTensorInfo, HfSharedExpertTensorInfo, InputArtifact,
-    TensorRoleCount,
-};
-pub use descriptor::ModelDescriptor;
+// ── Sub-directory modules ─────────────────────────────────────────────────
+pub mod artifact;
+pub mod families;
+pub mod gguf;
+pub mod models;
+pub mod moe;
+pub mod quant;
+pub mod support;
+
+// ── Re-exports: spec ──────────────────────────────────────────────────────
 pub use spec::{
     AttentionKind, ModelFamily, MoeSpec, QuantFormatCount, RouterKind, TransformerSemantics,
     TransformerSpec, WeightSource,
 };
+
+// ── Re-exports: descriptor ────────────────────────────────────────────────
+pub use descriptor::ModelDescriptor;
+
+// ── Re-exports: support ───────────────────────────────────────────────────
 pub use support::{
     validate_model_layout_bindings, AttentionLayout, AttentionPolicy, BoundRoleCount, EnginePlan,
     EnginePlanStatus, ExpertPolicy, FeedForwardKind, FeedForwardLayout, KvCacheShape, KvPolicy,
@@ -40,41 +59,99 @@ pub use support::{
     ResidencyPolicy, RoleScope, RouterPolicy, SpeculationMode, SpeculationPolicy, TensorBinding,
     TensorRole, TokenizerPolicy, ValidationPolicy,
 };
+
+// ── Re-exports: semantic ──────────────────────────────────────────────────
+pub use semantic::{
+    ArtifactTensorPart, AttentionTensorKind, AttentionTensorRef, DenseLayerTensorKind,
+    DenseLayerTensorRef, HyperConnectionStage, HyperConnectionTensorKind, HyperConnectionTensorRef,
+    RoutedExpertMatrix, RoutedExpertTensorPart, RoutedExpertTensorRef, RouterTensorKind,
+    RouterTensorRef, SharedExpertTensorRef,
+};
+
+// ── Re-exports: tensor_policy ─────────────────────────────────────────────
 pub use tensor_policy::{GgufTensorPolicy, HfTensorPolicy, TensorClass, TensorClassCount};
 
-// Re-exports from quant module
+// ── Re-exports: quant ─────────────────────────────────────────────────────
 pub use quant::{f16_to_f32, f32_to_f16, QMatrix};
 
-// Re-exports from moved runtime modules
-pub use artifact_binding::{
+// ── Re-exports: artifact ──────────────────────────────────────────────────
+#[allow(deprecated)]
+pub use artifact::{
     bind_attention_from_artifact_group, bind_attention_from_hf,
     bind_hyper_connection_from_artifact_group, bind_hyper_connection_from_hf,
     bind_hyper_connection_head_from_artifact_group, bind_hyper_connection_head_from_hf,
     bind_layer_norms_from_artifact_group, bind_router_from_artifact_group, bind_router_from_hf,
     bind_shared_swiglu_ffn_from_artifact_group, bind_shared_swiglu_ffn_from_hf,
-    AttentionArtifactPayload, LayerNormArtifactPayload, RouterArtifactPayload,
+    AttentionArtifactPayload, LayerNormArtifactPayload, MlaAttentionArtifactPayload,
+    RouterArtifactPayload,
 };
-pub use artifact_format::{
+pub use artifact::{
     decode_e8m0_scale, decode_fp4_e2m1_nibble, decode_fp4_e2m1_packed_low_first,
     decode_fp8_e4m3fn_byte, dequantize_fp4_e2m1_with_e8m0_scales,
     dequantize_fp8_e4m3fn_with_e8m0_scales, normalized_hadamard_transform_rows_in_place,
     simulate_fp4_e2m1_e8m0_activation_quant_in_place,
     simulate_fp8_e4m3fn_e8m0_activation_quant_in_place,
 };
-pub use artifact_group::{ArtifactGroupKind, ArtifactObjectGroup};
-pub use artifact_linear::{
+pub use artifact::{
     ArtifactActivationQuantization, ArtifactLinearExecutionPolicy, ArtifactLinearFormat,
     ArtifactLinearPayload,
 };
-pub use artifact_tensor::{
-    ArtifactDType, ArtifactTensorPayload, ArtifactTensorReader, ArtifactTensorSlice,
+pub use artifact::{
+    ArtifactDType, ArtifactFormat, ArtifactGroupKind, ArtifactIdentity, ArtifactObjectGroup,
+    ArtifactTensorPayload, ArtifactTensorReader, ArtifactTensorSlice, DtypeCount,
+    HfAttentionTensorInfo, HfDenseLayerTensorInfo, HfFilePurpose, HfHyperConnectionTensorInfo,
+    HfRepoFile, HfRoutedExpertTensorInfo, HfRouterTensorInfo, HfSafetensorsArtifact,
+    HfSafetensorsIndex, HfSafetensorsInventory, HfSafetensorsShardSummary, HfSafetensorsTensorInfo,
+    HfSharedExpertTensorInfo, InputArtifact, TensorRoleCount,
 };
-pub use chat::{detect_chat_template, ChatTemplate};
-pub use ffn::SwiGluFfnPayload;
+
+// ── Re-exports: moe ───────────────────────────────────────────────────────
+pub use moe::{
+    execute_routed_moe_reference, execute_routed_moe_reference_with_handles,
+    execute_routed_moe_with_artifact_router_reference,
+    execute_routed_moe_with_artifact_router_reference_with_handles, read_experts_concurrent,
+    reference_linear, CpuExpertHandleStore, CpuReferenceExpertExecutor, ExpertArtifactPayload,
+    ExpertComputeBundle, ExpertComputeHandle, ExpertEvictRequest, ExpertExecutor,
+    ExpertHandleStore, ExpertId, ExpertLinearFormat, ExpertLinearPayload, ExpertLoadReason,
+    ExpertLoadRequest, ExpertLoadSource, ExpertMatrixKind, ExpertResidentFormat, ExpertRoute,
+    ExpertRouterPolicy, ExpertStorageTier, ExpertStreamingPlanner, ExpertStreamingPolicy,
+    ExpertStreamingReader, ExpertStreamingStep, ExpertTelemetry, ExpertTensorComponent,
+    ExpertTensorKey, ExpertTensorPayload, ExpertTensorSlice, HostStagedExpertCache,
+    ResidentExpertHandle, RoutedMoeStepOutput, RouterScoreFunction, RouterSelectionPolicy,
+};
+
+// ── Re-exports: runner ────────────────────────────────────────────────────
+pub use runner::{
+    unsupported_runtime_message, ModelInfo, ModelRunner, PrefillMode, TokenLogit, TopKModelRunner,
+};
+
+// ── Re-exports: attention_backend ─────────────────────────────────────────
+pub use attention_backend::{
+    sliding_window_topk_indices, sparse_attention_reference, AttentionBackendKind,
+    AttentionBackendPlan, AttentionMaskKind, SparseAttentionSpec,
+};
+
+// ── Re-exports: transformer_plan ──────────────────────────────────────────
+pub use transformer_plan::{
+    AttentionStepPlan, ExpertResidencyMode, FeedForwardStepPlan, RuntimeAttachment,
+    RuntimeEpilogue, RuntimePrologue, TransformerLayerPlan, TransformerRuntimePlan,
+};
+
+// ── Re-exports: hyper_connection ──────────────────────────────────────────
 pub use hyper_connection::{
     hc_head_reference, hc_post_reference, hc_pre_reference, hc_split_sinkhorn_reference,
     HyperConnectionConfig, HyperConnectionHeadWeights, HyperConnectionPreOutput,
     HyperConnectionSplit, HyperConnectionWeights,
 };
+
+// ── Re-exports: ffn ───────────────────────────────────────────────────────
+pub use ffn::SwiGluFfnPayload;
+
+// ── Re-exports: chat ──────────────────────────────────────────────────────
+pub use chat::{detect_chat_template, ChatTemplate};
+
+// ── Re-exports: precision ─────────────────────────────────────────────────
 pub use precision::{PrecisionPolicy, QuantPreset, TensorDtypeOverride};
+
+// ── Re-exports: tokenizer ─────────────────────────────────────────────────
 pub use tokenizer::TokenizerHandle;
