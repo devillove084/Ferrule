@@ -118,20 +118,12 @@ fn missing_policies(contract: &ModelSupportContract) -> Vec<MissingPolicy> {
     let mut missing = Vec::new();
 
     match spec.family {
-        ModelFamily::Olmoe if matches!(spec.weight_source, WeightSource::Safetensors) => {}
-        ModelFamily::Olmoe => missing.push(MissingPolicy::new(
+        ModelFamily::Qwen3 | ModelFamily::QwenMoe | ModelFamily::DeepSeekV4
+            if matches!(spec.weight_source, WeightSource::Safetensors) => {}
+        ModelFamily::Qwen3 => missing.push(MissingPolicy::new(
             PolicyArea::Quantization,
-            "OLMoE execution currently expects safetensors/WeightPack startup, not direct GGUF execution",
+            "Qwen3 execution currently expects safetensors startup",
         )),
-        ModelFamily::Qwen3 => {
-            // Qwen3 is recognized but needs a model-family executor wired in
-            if !matches!(spec.weight_source, WeightSource::Safetensors) {
-                missing.push(MissingPolicy::new(
-                    PolicyArea::Quantization,
-                    "Qwen3 execution currently expects safetensors startup",
-                ));
-            }
-        }
         ModelFamily::Unknown(_) => missing.push(MissingPolicy::new(
             PolicyArea::ModelFamily,
             "unknown model family has no descriptor-to-layout binding",
@@ -165,7 +157,7 @@ fn missing_policies(contract: &ModelSupportContract) -> Vec<MissingPolicy> {
     }
 
     if spec.moe.has_shared_experts
-        && !matches!(spec.family, ModelFamily::Olmoe | ModelFamily::Qwen3)
+        && !matches!(spec.family, ModelFamily::Qwen3 | ModelFamily::DeepSeekV4)
     {
         missing.push(MissingPolicy::new(
             PolicyArea::Expert,

@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use ferrule_bench::{RuntimeBenchSummary, RuntimeCounters};
+use crate::bench::{RuntimeBenchSummary, RuntimeCounters};
 use ferrule_model::{HfSafetensorsInventory, ModelDescriptor};
 use ferrule_runtime::{
     models::deepseek_v4::{

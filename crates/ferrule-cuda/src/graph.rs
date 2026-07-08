@@ -19,7 +19,7 @@ use cuda_core::graph::{
 };
 use cuda_core::stream::CudaStream;
 use cuda_core::DriverError;
-use ferrule_core::{Error, Result};
+use ferrule_common::{Error, Result};
 use std::sync::Arc;
 
 /// Whether CUDA graph capture is enabled for decode.

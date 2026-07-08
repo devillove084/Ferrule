@@ -2,12 +2,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::OlmoeConfig;
-
 /// High-level model family understood by Ferrule's runtime boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModelFamily {
-    Olmoe,
     DeepSeekV4,
     DeepSeekV3,
     DeepSeekV2,
@@ -21,9 +18,7 @@ pub enum ModelFamily {
 impl ModelFamily {
     pub fn from_architecture(name: &str) -> Self {
         let n = normalize_name(name);
-        if n.contains("olmoe") {
-            Self::Olmoe
-        } else if n.contains("deepseek4") || n.contains("deepseekv4") {
+        if n.contains("deepseek4") || n.contains("deepseekv4") {
             Self::DeepSeekV4
         } else if n.contains("deepseek3") || n.contains("deepseekv3") {
             Self::DeepSeekV3
@@ -44,7 +39,6 @@ impl ModelFamily {
 
     pub fn as_str(&self) -> &str {
         match self {
-            Self::Olmoe => "OLMoE",
             Self::DeepSeekV4 => "DeepSeek-V4",
             Self::DeepSeekV3 => "DeepSeek-V3",
             Self::DeepSeekV2 => "DeepSeek-V2",
@@ -57,7 +51,7 @@ impl ModelFamily {
     }
 
     pub fn is_supported_runtime_family(&self) -> bool {
-        matches!(self, Self::Olmoe | Self::Qwen3)
+        matches!(self, Self::DeepSeekV4)
     }
 }
 
@@ -216,40 +210,6 @@ pub struct TransformerSpec {
 }
 
 impl TransformerSpec {
-    pub fn from_olmoe_config(config: &OlmoeConfig, weight_source: WeightSource) -> Self {
-        let attention = if config.num_kv_heads < config.num_heads {
-            AttentionKind::GroupedQuery
-        } else {
-            AttentionKind::DenseMha
-        };
-        Self {
-            family: ModelFamily::Olmoe,
-            architecture: Some("olmoe".into()),
-            weight_source,
-            hidden_size: Some(config.hidden_size),
-            num_layers: Some(config.num_layers),
-            vocab_size: Some(config.vocab_size),
-            num_heads: Some(config.num_heads),
-            num_kv_heads: Some(config.num_kv_heads),
-            head_dim: Some(config.head_dim),
-            attention,
-            moe: MoeSpec {
-                num_experts: Some(config.num_experts),
-                num_experts_per_tok: Some(config.num_experts_per_tok),
-                has_shared_experts: false,
-                router: RouterKind::DenseTopK,
-            },
-            semantics: TransformerSemantics {
-                norm_epsilon: Some(config.rms_norm_eps),
-                rope_theta: Some(config.rope_theta),
-                ..TransformerSemantics::default()
-            },
-            tensor_count: None,
-            quantization: Vec::new(),
-            notes: Vec::new(),
-        }
-    }
-
     pub fn supports_current_runtime(&self) -> bool {
         self.family.is_supported_runtime_family()
     }
@@ -279,8 +239,8 @@ mod tests {
     }
 
     #[test]
-    fn olmoe_is_current_runtime_family() {
-        assert!(ModelFamily::Olmoe.is_supported_runtime_family());
-        assert!(!ModelFamily::DeepSeekV4.is_supported_runtime_family());
+    fn deepseek_v4_is_supported_runtime_family() {
+        assert!(ModelFamily::DeepSeekV4.is_supported_runtime_family());
+        assert!(!ModelFamily::Qwen3.is_supported_runtime_family());
     }
 }

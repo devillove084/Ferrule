@@ -90,7 +90,7 @@ oxide-test *args='':
 test: test-graph test-runtime test-model test-bench test-cuda test-cli
 
 test-graph:
-    cargo test -p ferrule-graph
+    cargo test -p ferrule-runtime graph
 
 test-runtime:
     cargo test -p ferrule-runtime
@@ -131,10 +131,10 @@ fmt-fix:
     cargo fmt
 
 clippy:
-    cargo clippy -p ferrule-core -p ferrule-graph -p ferrule-model -p ferrule-runtime -p ferrule-bench -p ferrule-cli -- -D warnings
+    cargo clippy -p ferrule-common -p ferrule-model -p ferrule-runtime -p ferrule-bench -p ferrule-cli -- -D warnings
 
 clippy-cuda:
-    cargo clippy -p ferrule-core -p ferrule-graph -p ferrule-model -p ferrule-runtime -p ferrule-cli --features cuda -- -D warnings
+    cargo clippy -p ferrule-common -p ferrule-model -p ferrule-runtime -p ferrule-cli --features cuda -- -D warnings
 
 clippy-all: clippy clippy-cuda
     @echo "=== Clippy passed ==="

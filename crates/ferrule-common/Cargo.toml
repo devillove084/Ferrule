@@ -1,0 +1,19 @@
+[package]
+name = "ferrule-common"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "Ferrule — shared types, errors, and observability"
+repository = "https://github.com/ferrule/ferrule"
+readme = "../../README.md"
+keywords = ["llm", "inference", "moe", "cuda", "rust"]
+categories = ["science", "machine-learning"]
+
+[dependencies]
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+serde = { version = "1", features = ["derive"] }
+
+[lints]
+workspace = true

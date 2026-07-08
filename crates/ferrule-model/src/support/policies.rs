@@ -156,8 +156,8 @@ impl PolicySet {
                 has_chat_template: !deepseek_like,
             },
             validation: ValidationPolicy {
-                requires_reference_engine: !matches!(spec.family, ModelFamily::Olmoe),
-                supports_cpu_reference: matches!(spec.family, ModelFamily::Olmoe),
+                requires_reference_engine: true,
+                supports_cpu_reference: false,
             },
             semantics: spec.semantics.clone(),
         }

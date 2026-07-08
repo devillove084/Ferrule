@@ -212,11 +212,13 @@ startup → prompt append/prefill → first token → steady decode → serving/
       counters after prefill/warmup baseline subtraction.
 - [x] MoE timing counters behind `FERRULE_CUDA_MOE_TIMING=1`.
 - [x] DSV4 chat `stats>` line reports per-turn prefill/decode wall time.
-- [ ] Add a dedicated interactive benchmark command that feeds multiple turns and
-      reports time-to-REPL, artifact load, first-token latency, per-turn prefill,
-      per-turn decode, generated tok/s, and resident/cache counters.
-- [ ] Add golden interactive traces: token IDs and stop behavior for a fixed
-      two-turn prompt under greedy decoding.
+- [x] Add a dedicated interactive benchmark command (`bench-interactive`) that
+      feeds multiple turns and reports time-to-REPL, artifact load,
+      first-token latency, per-turn prefill, per-turn decode, generated tok/s,
+      and resident/cache counters.
+- [x] Add golden interactive traces (`configs/golden/`) with token IDs and stop
+      behavior for a fixed two-turn prompt under greedy decoding;
+      `bench-interactive --golden <path>` compares live output against golden.
 
 ### P1 — Resident interactive engine
 

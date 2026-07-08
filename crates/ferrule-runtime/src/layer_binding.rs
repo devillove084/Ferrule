@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use ferrule_core::{Error, Result};
+use ferrule_common::{Error, Result};
 use ferrule_model::families::HyperConnectionStage;
 use ferrule_model::{
     HfAttentionTensorInfo, HfHyperConnectionTensorInfo, HfRouterTensorInfo,

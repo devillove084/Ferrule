@@ -4,7 +4,7 @@
 //! draft/target policy. The base Transformer forward path remains unaware of the
 //! specific speculation method.
 
-use ferrule_core::Result;
+use ferrule_common::Result;
 use ferrule_model::{SpeculationMode, SpeculationPolicy as ModelSpeculationPolicy};
 
 pub trait DraftModel {
@@ -139,7 +139,7 @@ pub fn run_speculative_step(
 
 #[cfg(test)]
 mod tests {
-    use ferrule_core::Result;
+    use ferrule_common::Result;
 
     use super::*;
 

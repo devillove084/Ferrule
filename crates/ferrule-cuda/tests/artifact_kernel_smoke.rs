@@ -6,7 +6,7 @@
 
 use cuda_core::stream::CudaStream;
 use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig};
-use ferrule_core::Result;
+use ferrule_common::Result;
 use ferrule_cuda::context::{
     cuda_gemv_fp4_e2m1_e8m0, cuda_gemv_fp8_e4m3fn_e8m0_2d, cuda_sparse_attention_sink_f32,
 };
@@ -14,7 +14,7 @@ use ferrule_cuda::kernels::kernels;
 use std::sync::Arc;
 
 fn rc<T, E: std::fmt::Debug>(r: std::result::Result<T, E>) -> Result<T> {
-    r.map_err(|e| ferrule_core::Error::Internal(format!("{e:?}")))
+    r.map_err(|e| ferrule_common::Error::Internal(format!("{e:?}")))
 }
 
 fn has_cuda() -> bool {

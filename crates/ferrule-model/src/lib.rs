@@ -1,28 +1,31 @@
 #![allow(clippy::needless_range_loop)]
-//! Model metadata, weights, and tokenizer utilities.
+//! Model metadata, artifact formats, quantization, and model-family execution.
 pub mod artifact;
-pub mod config;
-pub mod conversion;
+pub mod artifact_binding;
+pub mod artifact_format;
+pub mod artifact_group;
+pub mod artifact_linear;
+pub mod artifact_tensor;
+pub mod chat;
 pub mod descriptor;
 pub mod families;
-pub mod loader;
+pub mod ffn;
+pub mod gguf;
+pub mod hyper_connection;
+pub mod precision;
+pub mod quant;
 pub mod spec;
 pub mod support;
 pub mod tensor_policy;
-pub mod weights;
+pub mod tokenizer;
 
-// Re-exports — keep the same public API surface while adding generic model metadata.
+// Re-exports
 pub use artifact::{
     ArtifactFormat, ArtifactIdentity, DtypeCount, HfAttentionTensorInfo, HfDenseLayerTensorInfo,
     HfFilePurpose, HfHyperConnectionTensorInfo, HfRepoFile, HfRoutedExpertTensorInfo,
     HfRouterTensorInfo, HfSafetensorsArtifact, HfSafetensorsIndex, HfSafetensorsInventory,
     HfSafetensorsShardSummary, HfSafetensorsTensorInfo, HfSharedExpertTensorInfo, InputArtifact,
     TensorRoleCount,
-};
-pub use config::OlmoeConfig;
-pub use conversion::{
-    ArtifactTarget, CalibrationSet, ConversionPlan, QuantizationFormat, QuantizationRecipe,
-    TensorRoleQuantPolicy,
 };
 pub use descriptor::ModelDescriptor;
 pub use spec::{
@@ -38,46 +41,40 @@ pub use support::{
     TensorRole, TokenizerPolicy, ValidationPolicy,
 };
 pub use tensor_policy::{GgufTensorPolicy, HfTensorPolicy, TensorClass, TensorClassCount};
-pub use weights::{AttnWeights, ExpertWeights, LayerWeights, LinearWeight};
 
-use ferrule_core::Result;
-use std::path::PathBuf;
-use tokenizers::Tokenizer;
+// Re-exports from quant module
+pub use quant::{f16_to_f32, f32_to_f16, QMatrix};
 
-pub struct OlmoeModel {
-    pub config: OlmoeConfig,
-    pub embed: Vec<f32>,
-    pub lm_head: Vec<f32>,
-    pub final_norm: Vec<f32>,
-    pub layers: Vec<LayerWeights>,
-    pub model_dir: PathBuf,
-    pub(crate) tokenizer: Tokenizer,
-}
-
-impl OlmoeModel {
-    pub fn encode(&self, text: &str) -> Result<Vec<u32>> {
-        self.tokenizer
-            .encode(text, false)
-            .map(|e| e.get_ids().to_vec())
-            .map_err(|e| ferrule_core::Error::Model(format!("encode: {e}")))
-    }
-
-    pub fn eos_token_id(&self) -> Option<u32> {
-        self.config.eos_token_id
-    }
-
-    pub fn decode(&self, ids: &[u32]) -> Result<String> {
-        self.tokenizer
-            .decode(ids, true)
-            .map_err(|e| ferrule_core::Error::Model(format!("decode: {e}")))
-    }
-
-    pub fn transformer_spec(&self) -> TransformerSpec {
-        TransformerSpec::from_olmoe_config(&self.config, WeightSource::Safetensors)
-    }
-
-    /// Extract the tokenizer, consuming the model.
-    pub fn into_tokenizer(self) -> Tokenizer {
-        self.tokenizer
-    }
-}
+// Re-exports from moved runtime modules
+pub use artifact_binding::{
+    bind_attention_from_artifact_group, bind_attention_from_hf,
+    bind_hyper_connection_from_artifact_group, bind_hyper_connection_from_hf,
+    bind_hyper_connection_head_from_artifact_group, bind_hyper_connection_head_from_hf,
+    bind_layer_norms_from_artifact_group, bind_router_from_artifact_group, bind_router_from_hf,
+    bind_shared_swiglu_ffn_from_artifact_group, bind_shared_swiglu_ffn_from_hf,
+    AttentionArtifactPayload, LayerNormArtifactPayload, RouterArtifactPayload,
+};
+pub use artifact_format::{
+    decode_e8m0_scale, decode_fp4_e2m1_nibble, decode_fp4_e2m1_packed_low_first,
+    decode_fp8_e4m3fn_byte, dequantize_fp4_e2m1_with_e8m0_scales,
+    dequantize_fp8_e4m3fn_with_e8m0_scales, normalized_hadamard_transform_rows_in_place,
+    simulate_fp4_e2m1_e8m0_activation_quant_in_place,
+    simulate_fp8_e4m3fn_e8m0_activation_quant_in_place,
+};
+pub use artifact_group::{ArtifactGroupKind, ArtifactObjectGroup};
+pub use artifact_linear::{
+    ArtifactActivationQuantization, ArtifactLinearExecutionPolicy, ArtifactLinearFormat,
+    ArtifactLinearPayload,
+};
+pub use artifact_tensor::{
+    ArtifactDType, ArtifactTensorPayload, ArtifactTensorReader, ArtifactTensorSlice,
+};
+pub use chat::{detect_chat_template, ChatTemplate};
+pub use ffn::SwiGluFfnPayload;
+pub use hyper_connection::{
+    hc_head_reference, hc_post_reference, hc_pre_reference, hc_split_sinkhorn_reference,
+    HyperConnectionConfig, HyperConnectionHeadWeights, HyperConnectionPreOutput,
+    HyperConnectionSplit, HyperConnectionWeights,
+};
+pub use precision::{PrecisionPolicy, QuantPreset, TensorDtypeOverride};
+pub use tokenizer::TokenizerHandle;

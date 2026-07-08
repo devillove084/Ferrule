@@ -1,6 +1,6 @@
 //! High-level graph program construction from model descriptors.
 
-use ferrule_core::{Error, Result};
+use ferrule_common::{Error, Result};
 use ferrule_model::{
     AttentionKind, FeedForwardKind, HfSafetensorsInventory, ModelDescriptor, WeightSource,
 };

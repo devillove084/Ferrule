@@ -3,7 +3,7 @@
 //! Separates KV storage policy (contiguous, paged, prefix-shared) from
 //! model forward kernels. First implementation: simple contiguous cache.
 
-use ferrule_core::{Error, Result};
+use ferrule_common::{Error, Result};
 
 /// Handle to a specific sequence's KV cache slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -1,0 +1,22 @@
+{
+  "label": "dsv4-interactive-two-turn-greedy",
+  "model": "models/DeepSeek-V4-Flash-DSpark",
+  "chat_template": "deepseek-v4",
+  "max_new_tokens": 1,
+  "turns": [
+    {
+      "prompt_text": "Hello",
+      "prompt_tokens": [],
+      "generated_tokens": [],
+      "stopped_by_eos": false,
+      "stopped_by_string": null
+    },
+    {
+      "prompt_text": "Hi",
+      "prompt_tokens": [],
+      "generated_tokens": [],
+      "stopped_by_eos": false,
+      "stopped_by_string": null
+    }
+  ]
+}

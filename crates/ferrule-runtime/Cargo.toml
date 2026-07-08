@@ -14,11 +14,8 @@ default = []
 cuda = ["dep:ferrule-cuda"]
 
 [dependencies]
-ferrule-core = { path = "../ferrule-core" }
-ferrule-storage = { path = "../ferrule-storage" }
-ferrule-graph = { path = "../ferrule-graph" }
+ferrule-common = { path = "../ferrule-common" }
 ferrule-model = { path = "../ferrule-model" }
-ferrule-quant = { path = "../ferrule-quant" }
 ferrule-cuda = { path = "../ferrule-cuda", optional = true }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }

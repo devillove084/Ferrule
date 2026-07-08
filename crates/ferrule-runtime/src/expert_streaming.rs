@@ -11,7 +11,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ferrule_core::{Error, Result};
+use ferrule_common::{Error, Result};
 use ferrule_model::families::{RoutedExpertMatrix, RoutedExpertTensorPart, RoutedExpertTensorRef};
 use ferrule_model::HfRoutedExpertTensorInfo;
 use rayon::prelude::*;

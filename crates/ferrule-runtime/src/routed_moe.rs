@@ -6,7 +6,7 @@
 //! path for tiny fixtures; CUDA will replace the executor/handle side while
 //! keeping the same routing and residency semantics.
 
-use ferrule_core::{Error, Result};
+use ferrule_common::{Error, Result};
 
 use crate::artifact_binding::RouterArtifactPayload;
 use crate::expert_executor::ExpertExecutor;

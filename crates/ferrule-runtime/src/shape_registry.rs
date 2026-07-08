@@ -1,9 +1,9 @@
 //! Shape inference for Ferrule transformer graph dialects.
 
-use ferrule_core::{Error, Result};
-use ferrule_graph::{
+use crate::graph::{
     AttributeMap, AttributeValue, DataType, Dim, OpKey, ShapeRegistry, TensorShape, ValueMeta,
 };
+use ferrule_common::{Error, Result};
 
 use crate::dialects::domain;
 

@@ -7,11 +7,11 @@
 
 use std::collections::BTreeMap;
 
-use ferrule_core::{Error, Result};
-use ferrule_graph::{
+use crate::graph::{
     AttributeMap, AttributeValue, ComputeGraph, DataType, Dim, ExternalKey, TensorShape, ValueId,
     ValueMeta,
 };
+use ferrule_common::{Error, Result};
 use ferrule_model::families::{ArtifactTensorPart, DenseLayerTensorKind};
 use ferrule_model::{
     AttentionKind, FeedForwardKind, HfDenseLayerTensorInfo, HfSafetensorsInventory,
@@ -928,7 +928,7 @@ fn add_kv_state(
 
 fn add_node_one(
     graph: &mut ComputeGraph,
-    op: ferrule_graph::OpKey,
+    op: crate::graph::OpKey,
     inputs: Vec<ValueId>,
     attrs: AttributeMap,
     output: ValueMeta,

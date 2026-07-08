@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use ferrule_core::{Error, Result};
+use ferrule_common::{Error, Result};
 
 use crate::expert_streaming::{
     ExpertArtifactPayload, ExpertComputeBundle, ExpertEvictRequest, ExpertId, ExpertStorageTier,

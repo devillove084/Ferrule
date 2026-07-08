@@ -6,7 +6,7 @@
 //! for Llama/Qwen-like models. This module defines that surface without concrete
 //! model-family tensor names.
 
-use ferrule_core::{Error, Result};
+use ferrule_common::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttentionBackendKind {

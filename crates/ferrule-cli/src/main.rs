@@ -1,25 +1,15 @@
 use clap::{Args, Parser, Subcommand};
-#[cfg(feature = "cuda")]
-use ferrule_runtime::{detect_chat_template, InferenceEngine, ModelGenerationDefaults};
-use ferrule_runtime::{GenerationConfig, ModelRunner, RuntimeRunner, SamplingConfig};
-use std::path::Path;
-#[cfg(feature = "cuda")]
-use std::sync::{Arc, Mutex};
 
+mod bench;
 mod commands;
-mod server;
 
-use commands::bench::cmd_bench_infer;
+use commands::bench_interactive::cmd_bench_interactive;
 use commands::chat::cmd_chat;
-use commands::compare::cmd_compare_logits;
-use commands::info::{cmd_info, print_model_info};
+use commands::info::cmd_info;
 use commands::inspect::{
     cmd_deepseek_v4_generate, cmd_deepseek_v4_probe, cmd_expert_stream_smoke,
     cmd_inspect_weightpack,
 };
-#[cfg(feature = "cuda")]
-use commands::run::parse_quant;
-use commands::run::{cmd_gpu_run, cmd_run};
 
 // ── CLI ────────────────────────────────────────────────────────────────────
 
@@ -34,36 +24,14 @@ struct Cli {
 enum Command {
     /// Print model architecture and vocabulary size.
     Info { model: String },
-    /// Run inference on CPU (FP32).
-    Run {
-        model: String,
-        #[arg(short = 'p', long, default_value = "The capital of France is")]
-        prompt: String,
-        #[arg(short = 'n', long, default_value = "16")]
-        max_tokens: usize,
-        #[command(flatten)]
-        sampling: SamplingArgs,
-    },
     /// Verify CUDA and benchmark GEMV.
     Cuda,
-    /// Run inference on GPU.
-    GpuRun {
-        model: String,
-        #[arg(short = 'p', long, default_value = "Hello")]
-        prompt: String,
-        #[arg(short = 'n', long, default_value = "4")]
-        max_tokens: usize,
-        #[arg(short = 'q', long, default_value = "q4")]
-        quant: String,
-        #[command(flatten)]
-        sampling: SamplingArgs,
-    },
     /// Interactive chat REPL.
     Chat {
         model: String,
         #[arg(short = 'n', long, default_value = "256")]
         max_tokens: usize,
-        #[arg(short = 'q', long, default_value = "q4")]
+        #[arg(short = 'q', long, default_value = "cuda")]
         quant: String,
         #[command(flatten)]
         sampling: SamplingArgs,
@@ -71,43 +39,25 @@ enum Command {
         #[arg(long = "chat-template")]
         chat_template: Option<String>,
     },
-    /// Benchmark prompt/decode throughput (no model-load timing).
-    BenchInfer {
+    /// Benchmark multi-turn interactive chat latency.
+    #[command(name = "bench-interactive")]
+    BenchInteractive {
         model: String,
-        #[arg(short = 'p', long, default_value = "Hello")]
-        prompt: String,
-        #[arg(short = 'n', long, default_value = "128")]
+        /// Prompts to feed, one per turn. Can be repeated.
+        #[arg(short = 'p', long = "prompt", default_value = "Hello")]
+        prompts: Vec<String>,
+        /// Max new tokens per turn.
+        #[arg(short = 'n', long = "max-tokens", default_value_t = 1)]
         max_tokens: usize,
-        #[arg(short = 'q', long, default_value = "q4")]
-        quant: String,
-        /// Warmup runs before measuring.
-        #[arg(long, default_value = "2")]
-        warmup: usize,
-        /// Repeat count for statistics.
-        #[arg(long, default_value = "3")]
-        repeat: usize,
+        /// Chat template name (e.g. deepseek-v4).
+        #[arg(long = "chat-template")]
+        chat_template: Option<String>,
+        /// Path to a golden interactive trace JSON for correctness comparison.
+        #[arg(long = "golden")]
+        golden: Option<String>,
         /// JSON output for machine consumption.
         #[arg(long)]
         json: bool,
-        /// Context window size for token limit warnings.
-        #[arg(long, default_value = "4096")]
-        ctx_size: usize,
-    },
-    /// Compare CPU FP32 vs GPU quantized logits for the same prompt.
-    CompareLogits {
-        model: String,
-        #[arg(short = 'p', long, default_value = "The capital of France is")]
-        prompt: String,
-        #[arg(short = 'n', long, default_value = "16")]
-        max_tokens: usize,
-        #[arg(short = 'q', long, default_value = "q4")]
-        quant: String,
-        /// Allow CPU and GPU to sample independently (no teacher forcing).
-        #[arg(long)]
-        free_run: bool,
-        /// Context window size for token limit warnings.
-        #[arg(long, default_value = "4096")]
-        ctx_size: usize,
     },
     /// Inspect a WeightPack file header.
     #[command(name = "inspect-weightpack")]
@@ -144,7 +94,7 @@ enum Command {
         /// Maximum single expert artifact read size.
         #[arg(long = "expert-max-slice-mb", default_value_t = 64)]
         expert_reader_max_slice_mb: u64,
-        /// Operator backend: cuda or cpu. cuda requires running via cargo oxide / just run-cuda.
+        /// Operator backend: cuda or cpu.
         #[arg(long, default_value = "cuda")]
         backend: String,
         /// Do not stop when eos_token_id is generated.
@@ -153,22 +103,19 @@ enum Command {
         /// Print generated token ids/logits to stderr.
         #[arg(long)]
         verbose_tokens: bool,
-        /// Wrap --prompt with the official DeepSeek-V4 chat encoding for a single user turn.
+        /// Wrap --prompt with the official DeepSeek-V4 chat encoding.
         #[arg(long)]
         chat: bool,
         /// Emit machine-readable benchmark counters instead of streamed text.
         #[arg(long)]
         json: bool,
-        /// Number of warmup decode tokens to run before timing. These tokens
-        /// populate GPU expert residency and are NOT counted in decode timing.
+        /// Number of warmup decode tokens before timing.
         #[arg(long, default_value_t = 0)]
         warmup_tokens: usize,
-        /// Number of routed experts per layer to predictively prefetch during decode.
-        /// Prefetch uses the per-layer routing hotset observed so far, not low expert IDs.
+        /// Number of routed experts per layer to predictively prefetch.
         #[arg(long, default_value_t = 0)]
         moe_prefetch_experts: usize,
-        /// Bound resident routed experts per layer to a routing-aware hotset.
-        /// 0 keeps the managed-memory default without planner eviction.
+        /// Bound resident routed experts per layer (0 = managed default).
         #[arg(long, default_value_t = 0)]
         moe_hotset_experts: usize,
     },
@@ -187,7 +134,7 @@ enum Command {
         /// Number of lm_head rows to print when not using --full-vocab-topk.
         #[arg(long, default_value_t = 16)]
         row_count: usize,
-        /// Top-K logits to print. With --full-vocab-topk this scans the whole vocab in chunks.
+        /// Top-K logits to print.
         #[arg(long, default_value_t = 8)]
         top_k: usize,
         /// Scan all lm_head rows in chunks and print full-vocab top-K.
@@ -202,7 +149,7 @@ enum Command {
         /// Maximum single expert artifact read size.
         #[arg(long = "expert-max-slice-mb", default_value_t = 64)]
         expert_reader_max_slice_mb: u64,
-        /// Operator backend: cpu or cuda. cuda requires running via cargo oxide / just run-cuda.
+        /// Operator backend: cpu or cuda.
         #[arg(long, default_value = "cpu")]
         backend: String,
         /// Optional official/reference JSON to compare prompt tokens and logits against.
@@ -211,28 +158,6 @@ enum Command {
         /// Absolute tolerance for --reference-json logit comparisons.
         #[arg(long = "reference-atol", default_value_t = 1e-3)]
         reference_atol: f32,
-    },
-    /// Start a minimal OpenAI-compatible HTTP server.
-    Server {
-        model: String,
-        #[arg(short = 'q', long, default_value = "q4")]
-        quant: String,
-        /// Host to bind.
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
-        /// Port to listen on.
-        #[arg(long, default_value = "8080")]
-        port: u16,
-    },
-    /// Compute perplexity over a text file (teacher-force, CPU only).
-    Perplexity {
-        model: String,
-        /// Text file to evaluate (one line = one prompt, or freeform).
-        #[arg(short = 'f', long)]
-        file: String,
-        /// Context window size for batching.
-        #[arg(long, default_value = "512")]
-        ctx_size: usize,
     },
 }
 
@@ -276,8 +201,8 @@ struct SamplingArgs {
 }
 
 impl SamplingArgs {
-    fn sampling_config(&self) -> SamplingConfig {
-        SamplingConfig {
+    fn sampling_config(&self) -> ferrule_runtime::SamplingConfig {
+        ferrule_runtime::SamplingConfig {
             temperature: self.temp,
             top_k: self.top_k,
             top_p: self.top_p,
@@ -288,13 +213,13 @@ impl SamplingArgs {
         }
     }
 
-    fn generation_config(&self, max_tokens: usize) -> GenerationConfig {
-        GenerationConfig {
+    fn generation_config(&self, max_tokens: usize) -> ferrule_runtime::GenerationConfig {
+        ferrule_runtime::GenerationConfig {
             max_new_tokens: max_tokens,
             stop: self.stop.clone(),
             logprobs_k: self.logprobs,
             ctx_size: self.ctx_size,
-            ..GenerationConfig::default()
+            ..ferrule_runtime::GenerationConfig::default()
         }
     }
 
@@ -306,24 +231,11 @@ impl SamplingArgs {
 // ── main ───────────────────────────────────────────────────────────────────
 
 fn main() -> anyhow::Result<()> {
-    ferrule_core::observability::init_tracing();
+    ferrule_common::observability::init_tracing();
     let cli = Cli::parse();
     match cli.command {
         Command::Info { model } => cmd_info(&model),
-        Command::Run {
-            model,
-            prompt,
-            max_tokens,
-            sampling,
-        } => cmd_run(&model, &prompt, max_tokens, &sampling),
         Command::Cuda => cmd_cuda(),
-        Command::GpuRun {
-            model,
-            prompt,
-            max_tokens,
-            quant,
-            sampling,
-        } => cmd_gpu_run(&model, &prompt, max_tokens, &quant, &sampling),
         Command::Chat {
             model,
             max_tokens,
@@ -337,26 +249,21 @@ fn main() -> anyhow::Result<()> {
             &sampling,
             chat_template.as_deref(),
         ),
-        Command::BenchInfer {
+        Command::BenchInteractive {
             model,
-            prompt,
+            prompts,
             max_tokens,
-            quant,
-            warmup,
-            repeat,
+            chat_template,
+            golden,
             json,
-            ctx_size,
-        } => cmd_bench_infer(
-            &model, &prompt, max_tokens, &quant, warmup, repeat, json, ctx_size,
-        ),
-        Command::CompareLogits {
-            model,
-            prompt,
+        } => cmd_bench_interactive(
+            &model,
+            &prompts,
             max_tokens,
-            quant,
-            free_run,
-            ctx_size,
-        } => cmd_compare_logits(&model, &prompt, max_tokens, &quant, free_run, ctx_size),
+            chat_template.as_deref(),
+            golden.as_deref(),
+            json,
+        ),
         Command::InspectWeightPack { path } => cmd_inspect_weightpack(&path),
         Command::ExpertStreamSmoke {
             model,
@@ -426,17 +333,6 @@ fn main() -> anyhow::Result<()> {
             reference_json.as_deref(),
             reference_atol,
         ),
-        Command::Server {
-            model,
-            quant,
-            host,
-            port,
-        } => cmd_server(&model, &quant, &host, port),
-        Command::Perplexity {
-            model,
-            file,
-            ctx_size,
-        } => cmd_perplexity(&model, &file, ctx_size),
     }
 }
 
@@ -445,7 +341,7 @@ fn main() -> anyhow::Result<()> {
 #[cfg(feature = "cuda")]
 fn cmd_cuda() -> anyhow::Result<()> {
     println!("=== CUDA Probe ===");
-    ferrule_cuda::forward::cuda_probe()?;
+    ferrule_cuda::cuda_probe()?;
 
     println!("\n=== GEMV Benchmark (2048×2048) ===");
     let d = 2048usize;
@@ -556,130 +452,6 @@ fn cmd_cuda() -> anyhow::Result<()> {
 #[cfg(not(feature = "cuda"))]
 fn cmd_cuda() -> anyhow::Result<()> {
     println!("cuda requires --features cuda");
-    Ok(())
-}
-
-// ── server ─────────────────────────────────────────────────────────────────
-
-#[cfg(feature = "cuda")]
-fn cmd_server(model_dir: &str, quant: &str, host: &str, port: u16) -> anyhow::Result<()> {
-    let qt = parse_quant(quant);
-    let template = detect_chat_template(Path::new(model_dir));
-
-    tracing::info!("Loading server model once (quant: {qt:?})...");
-    let runner = RuntimeRunner::load_with_quant(Path::new(model_dir), qt)?;
-    let mut sc = SamplingConfig::greedy();
-    if let Some(def) = ModelGenerationDefaults::load(Path::new(model_dir)) {
-        def.apply_to_config(&mut sc);
-    }
-    let engine = Arc::new(Mutex::new(InferenceEngine::new(runner, sc)));
-
-    let gen_fn: server::GenFn = Box::new({
-        let engine = engine.clone();
-        move |prompt: &str, max_tokens: usize| {
-            let gen_cfg = GenerationConfig {
-                max_new_tokens: max_tokens,
-                stop: Vec::new(),
-                logprobs_k: 0,
-                ..GenerationConfig::default()
-            };
-
-            let mut engine = engine
-                .lock()
-                .map_err(|_| anyhow::anyhow!("server engine mutex poisoned"))?;
-            let result = engine.generate_text(prompt, &gen_cfg, |_| Ok(()))?;
-
-            Ok((
-                result.text,
-                result.stats.prompt_tokens,
-                result.stats.generated_tokens,
-            ))
-        }
-    });
-
-    let stream_fn: server::StreamingGenFn = Box::new({
-        let engine = engine.clone();
-        move |prompt: &str, max_tokens: usize, on_token: Box<dyn Fn(&str) + Send>| {
-            let gen_cfg = GenerationConfig {
-                max_new_tokens: max_tokens,
-                stop: Vec::new(),
-                logprobs_k: 0,
-                ..GenerationConfig::default()
-            };
-
-            let mut engine = engine
-                .lock()
-                .map_err(|_| anyhow::anyhow!("server engine mutex poisoned"))?;
-            let result = engine.generate_text(prompt, &gen_cfg, |event| {
-                on_token(&event.text);
-                Ok(())
-            })?;
-
-            Ok((result.stats.prompt_tokens, result.stats.generated_tokens))
-        }
-    });
-
-    server::run(
-        gen_fn,
-        Some(stream_fn),
-        model_dir.to_string(),
-        template,
-        host,
-        port,
-    )
-}
-
-#[cfg(not(feature = "cuda"))]
-fn cmd_server(_model_dir: &str, _quant: &str, _host: &str, _port: u16) -> anyhow::Result<()> {
-    anyhow::bail!("server requires --features cuda")
-}
-
-// ── perplexity ──────────────────────────────────────────────────────────────
-
-fn cmd_perplexity(model_dir: &str, file: &str, ctx_size: usize) -> anyhow::Result<()> {
-    use ferrule_bench::perplexity;
-
-    let mut runner = RuntimeRunner::load(Path::new(model_dir))?;
-    print_model_info(&runner.model_info());
-
-    let text = std::fs::read_to_string(file).map_err(|e| anyhow::anyhow!("read {file}: {e}"))?;
-    let tokens = runner.encode(&text)?;
-    println!("File: {file}  tokens: {}", tokens.len());
-
-    // Chunk tokens into context windows
-    let total = tokens.len();
-    let mut sum_nll = 0.0f64;
-    let mut loss_tokens = 0usize;
-    let t0 = std::time::Instant::now();
-
-    for chunk_start in (0..total).step_by(ctx_size) {
-        let chunk_end = (chunk_start + ctx_size + 1).min(total); // +1 for next-token target
-        let chunk = &tokens[chunk_start..chunk_end];
-        if chunk.len() < 2 {
-            continue;
-        }
-
-        runner.reset_session()?;
-        let result =
-            perplexity::compute_perplexity(chunk, runner.model_info().vocab_size, |token| {
-                runner.decode_token(token)
-            })?;
-        sum_nll += result.sum_nll;
-        loss_tokens += result.loss_tokens;
-    }
-
-    let dur = t0.elapsed();
-    let perplexity = if loss_tokens > 0 {
-        (sum_nll / loss_tokens as f64).exp()
-    } else {
-        f64::INFINITY
-    };
-
-    println!(
-        "total_tokens={total}  loss_tokens={loss_tokens}  perplexity={perplexity:.2}  duration={:.1}s  tok/s={:.1}",
-        dur.as_secs_f64(),
-        total as f64 / dur.as_secs_f64().max(1e-6)
-    );
     Ok(())
 }
 

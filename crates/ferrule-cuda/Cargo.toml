@@ -13,14 +13,10 @@ categories = ["science", "machine-learning"]
 default = []
 
 [dependencies]
-ferrule-core = { path = "../ferrule-core" }
-ferrule-quant = { path = "../ferrule-quant" }
+ferrule-common = { path = "../ferrule-common" }
 ferrule-model = { path = "../ferrule-model" }
-ferrule-gguf = { path = "../ferrule-gguf" }
 rayon = "1.10"
 memmap2 = "0.9"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 tracing = "0.1"
 libm = "0.2"
 cuda-core = { git = "https://github.com/devillove084/cuda-oxide.git", branch = "fp-and-graph-support" }

@@ -8,13 +8,13 @@
 //! This crate keeps tokenization, prefill/decode state, sampling, and chat
 //! formatting out of the CLI so CPU and GPU backends share the same behavior.
 
-pub use ferrule_graph as graph;
+pub mod graph;
+pub mod storage;
 
 pub mod attention_backend;
 pub mod attention_kernel;
 pub mod backend_object_store;
-pub mod chat;
-pub mod config;
+pub use ferrule_model::chat;
 pub mod constraint;
 pub mod dialects;
 pub mod graph_builder;
@@ -32,29 +32,29 @@ pub mod execution {
 
 pub mod external_binding {
     pub use crate::graph_runtime::{
-        ArtifactGroupKind, ExternalBinding, ExternalBindingKind, ExternalBindingPlan,
-        ExternalResidency,
+        ExternalBinding, ExternalBindingKind, ExternalBindingPlan, ExternalResidency,
     };
+    pub use ferrule_model::ArtifactGroupKind;
 }
 
-pub mod artifact_binding;
-pub mod artifact_format;
-pub mod artifact_linear;
-pub mod artifact_tensor;
+pub use ferrule_model::artifact_binding;
+pub use ferrule_model::artifact_format;
+pub use ferrule_model::artifact_linear;
+pub use ferrule_model::artifact_tensor;
 pub mod expert_executor;
 pub mod expert_handle;
 pub mod expert_residency;
 pub mod expert_routing;
 pub mod expert_streaming;
 pub mod expert_telemetry;
-pub mod ffn;
+pub use ferrule_model::ffn;
 pub mod generation;
-pub mod hyper_connection;
+pub use ferrule_model::hyper_connection;
 pub mod kv;
 pub mod layer_binding;
 pub mod models;
 pub mod paged_kv;
-pub mod precision;
+pub use ferrule_model::precision;
 pub mod prefix_cache;
 pub mod profiler;
 pub mod program;
@@ -70,7 +70,7 @@ pub mod speculation;
 pub mod stats;
 pub mod structured;
 pub mod token_mask;
-pub mod tokenizer;
+pub use ferrule_model::tokenizer;
 pub mod transformer_plan;
 
 pub use attention_backend::{
@@ -84,7 +84,6 @@ pub use backend_object_store::{
     ExpertRegistryObject,
 };
 pub use chat::{detect_chat_template, ChatTemplate};
-pub use config::ModelGenerationDefaults;
 pub use expert_executor::{reference_linear, CpuReferenceExpertExecutor, ExpertExecutor};
 pub use expert_handle::{
     CpuExpertHandleStore, ExpertComputeHandle, ExpertHandleStore, ExpertResidentFormat,
@@ -149,7 +148,7 @@ pub use routed_moe::{
     execute_routed_moe_with_artifact_router_reference,
     execute_routed_moe_with_artifact_router_reference_with_handles, RoutedMoeStepOutput,
 };
-pub use runner::{unsupported_runtime_message, ModelInfo, ModelRunner, RuntimeRunner};
+pub use runner::{unsupported_runtime_message, ModelInfo, ModelRunner};
 pub use sampler::{Logprobs, Sampler, SamplingConfig};
 
 /// Argmax: return the index of the maximum logit value.
@@ -190,6 +189,3 @@ pub use transformer_plan::{
     AttentionStepPlan, ExpertResidencyMode, FeedForwardStepPlan, RuntimeAttachment,
     RuntimeEpilogue, RuntimePrologue, TransformerLayerPlan, TransformerRuntimePlan,
 };
-
-#[cfg(feature = "cuda")]
-pub use runner::GpuOlmoeRunner;

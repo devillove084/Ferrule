@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 
-use ferrule_core::{Error, Result};
+use ferrule_common::{Error, Result};
 
 use crate::families::{
     self, AttentionTensorRef, DenseLayerTensorRef, HyperConnectionTensorRef, RoutedExpertTensorRef,

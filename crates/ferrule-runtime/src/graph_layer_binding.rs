@@ -7,8 +7,8 @@
 //! can consume. It deliberately groups by semantic artifact kinds and layer
 //! metadata; it does not match raw checkpoint tensor names or model-family names.
 
-use ferrule_core::{Error, Result};
-use ferrule_graph::ExternalKey;
+use crate::graph::ExternalKey;
+use ferrule_common::{Error, Result};
 
 use crate::backend_object_store::{
     ArtifactObjectGroup, BackendObject, BackendObjectStore, ExpertRegistryObject,
@@ -152,7 +152,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
-    use ferrule_graph::ExternalKey;
+    use crate::graph::ExternalKey;
     use ferrule_model::TensorRole;
 
     use super::*;

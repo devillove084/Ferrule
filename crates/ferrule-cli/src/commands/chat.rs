@@ -6,8 +6,7 @@ use ferrule_runtime::{
         DeepSeekV4ArtifactModel, DeepSeekV4OperatorBackend, DeepSeekV4ReferenceOptions,
         DeepSeekV4ReferenceRunner,
     },
-    ChatTemplate, GenerationConfig, InferenceEngine, ModelGenerationDefaults, ModelRunner,
-    RuntimeRunner, SamplingConfig,
+    ChatTemplate, GenerationConfig, ModelRunner, SamplingConfig,
 };
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -15,7 +14,6 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use super::info::print_model_info;
-use super::run::{format_token_display, print_logprobs};
 
 // ── resolve_template ─────────────────────────────────────────────────────────
 
@@ -58,31 +56,17 @@ pub fn cmd_chat(
         resolve_template_for_family(model_path, &descriptor.spec.family, chat_template_override);
     let gen_cfg = sampling.generation_config(max_tokens);
 
-    if matches!(descriptor.spec.family, ModelFamily::DeepSeekV4) {
-        let backend = if matches!(quant.to_ascii_lowercase().as_str(), "cpu" | "f32" | "fp32") {
-            DeepSeekV4OperatorBackend::Cpu
-        } else {
-            DeepSeekV4OperatorBackend::Cuda
-        };
-        return run_deepseek_v4_chat(model_path, backend, &gen_cfg, template, sampling);
+    if !matches!(descriptor.spec.family, ModelFamily::DeepSeekV4) {
+        anyhow::bail!(
+            "chat currently only supports DeepSeek-V4 models; use deepseek-v4-generate or deepseek-v4-probe for diagnostics"
+        );
     }
-
-    let mut sc = sampling.sampling_config();
-    if let Some(def) = ModelGenerationDefaults::load(model_path) {
-        def.apply_to_config(&mut sc);
-    }
-
-    if matches!(quant.to_ascii_lowercase().as_str(), "cpu" | "f32" | "fp32") {
-        let runner = RuntimeRunner::load(model_path)?;
-        let engine = InferenceEngine::new(runner, sc);
-        run_chat_loop(engine, max_tokens, &gen_cfg, template, sampling)
+    let backend = if matches!(quant.to_ascii_lowercase().as_str(), "cpu" | "f32" | "fp32") {
+        DeepSeekV4OperatorBackend::Cpu
     } else {
-        let qt = super::run::parse_quant(quant);
-        tracing::info!("Uploading to GPU (quant: {qt:?})...");
-        let runner = RuntimeRunner::load_with_quant(model_path, qt)?;
-        let engine = InferenceEngine::new(runner, sc);
-        run_chat_loop(engine, max_tokens, &gen_cfg, template, sampling)
-    }
+        DeepSeekV4OperatorBackend::Cuda
+    };
+    run_deepseek_v4_chat(model_path, backend, &gen_cfg, template, sampling)
 }
 
 #[cfg(not(feature = "cuda"))]
@@ -111,19 +95,9 @@ pub fn cmd_chat(
             sampling,
         );
     }
-
-    let mut sc = sampling.sampling_config();
-    if let Some(def) = ModelGenerationDefaults::load(model_path) {
-        def.apply_to_config(&mut sc);
-    }
-
-    if matches!(quant.to_ascii_lowercase().as_str(), "cpu" | "f32" | "fp32") {
-        let runner = RuntimeRunner::load(model_path)?;
-        let engine = InferenceEngine::new(runner, sc);
-        run_chat_loop(engine, _max_tokens, &gen_cfg, template, sampling)
-    } else {
-        anyhow::bail!("chat -q {quant} requires --features cuda")
-    }
+    anyhow::bail!(
+        "chat currently only supports DeepSeek-V4 models; use deepseek-v4-generate or deepseek-v4-probe for diagnostics"
+    );
 }
 
 // ── DeepSeek-V4 chat ─────────────────────────────────────────────────────────
@@ -158,23 +132,9 @@ fn run_deepseek_v4_chat(
             sampling,
         )
     } else {
-        let runner = DeepSeekV4ReferenceRunner::load_hf_with_options_and_backend(
-            model_path,
-            128 * 1024 * 1024,
-            options,
-            backend,
-        )?;
-        eprintln!(
-            "note: DeepSeek-V4 non-greedy/logprob chat uses the full-logits path; use --temp 0 --repeat-penalty 1 --logprobs 0 for the top-k fast path"
+        anyhow::bail!(
+            "DeepSeek-V4 non-greedy/logprob chat is not yet supported; use --temp 0 --repeat-penalty 1 --logprobs 0 for the top-k fast path"
         );
-        let engine = InferenceEngine::new(runner, sampling_config);
-        run_chat_loop(
-            engine,
-            generation.max_new_tokens,
-            generation,
-            chat_template,
-            sampling,
-        )
     }
 }
 
@@ -467,126 +427,6 @@ fn ensure_deepseek_v4_context_room(
     if requested > ctx_size {
         anyhow::bail!("context length {requested} exceeds ctx_size {ctx_size}");
     }
-    Ok(())
-}
-
-// ── run_chat_loop ────────────────────────────────────────────────────────────
-
-pub fn run_chat_loop<R: ModelRunner>(
-    mut engine: InferenceEngine<R>,
-    _max_tokens: usize,
-    generation: &ferrule_runtime::GenerationConfig,
-    chat_template: ChatTemplate,
-    sampling: &SamplingArgs,
-) -> anyhow::Result<()> {
-    use console::style;
-    use rustyline::error::ReadlineError;
-
-    print_model_info(&engine.runner().model_info());
-    println!(
-        "{} Type /exit or Ctrl-D to quit. Template: {}.",
-        style("Chat ready.").cyan(),
-        chat_template.name()
-    );
-    println!("  /reset      clear session state\n  /stats      show session stats\n  /experts    show expert activation counts\n  /metrics    show observability metrics\n  /ctx        show context window usage");
-
-    let mut first_turn = true;
-    let mut rl = rustyline::DefaultEditor::new()?;
-    loop {
-        let line = match rl.readline(&format!("{} ", style("You>").green().bold())) {
-            Ok(line) => line,
-            Err(ReadlineError::Interrupted | ReadlineError::Eof) => break,
-            Err(err) => return Err(err.into()),
-        };
-        let input = line.trim();
-        if input.is_empty() {
-            continue;
-        }
-        if matches!(input, "/exit" | "/quit") {
-            break;
-        }
-        if input == "/reset" {
-            engine.reset_session()?;
-            first_turn = true;
-            println!("{} session reset.", style("Ferrule>").cyan().bold());
-            continue;
-        }
-        if input == "/stats" {
-            let hist = engine.history();
-            println!(
-                "{} session: {} tokens, {} generated",
-                style("Ferrule>").cyan().bold(),
-                hist.len(),
-                hist.len().saturating_sub(
-                    engine
-                        .runner()
-                        .encode(&chat_template.format_turn("", true))?
-                        .len()
-                )
-            );
-            continue;
-        }
-        if input == "/experts" {
-            match engine.runner().expert_report() {
-                Some(report) => print!("{report}"),
-                None => println!(
-                    "{} expert report not available (GPU MoE only).",
-                    style("Ferrule>").cyan().bold()
-                ),
-            }
-            continue;
-        }
-        if input == "/metrics" {
-            let snap = ferrule_core::observability::METRICS.snapshot();
-            println!("{} {}", style("Ferrule>").cyan().bold(), snap);
-            continue;
-        }
-        if input == "/ctx" {
-            let hist = engine.history();
-            let usage_pct = if generation.ctx_size > 0 {
-                hist.len() as f64 / generation.ctx_size as f64 * 100.0
-            } else {
-                0.0
-            };
-            println!(
-                "{} context: {} / {} tokens ({:.0}%)",
-                style("Ferrule>").cyan().bold(),
-                hist.len(),
-                generation.ctx_size,
-                usage_pct
-            );
-            continue;
-        }
-        let _ = rl.add_history_entry(input);
-
-        let prompt = chat_template.format_turn(input, first_turn);
-        let prefill = engine.prefill_text_checked(&prompt, generation.ctx_size)?;
-        first_turn = false;
-        if prefill.logits.is_empty() {
-            continue;
-        }
-
-        print!("{} ", style("Ferrule>").cyan().bold());
-        std::io::stdout().flush()?;
-        let _ = engine.generate_from_logits(
-            prefill.logits,
-            prefill.tokens.len(),
-            prefill.prefill_time,
-            generation,
-            |event| {
-                let disp =
-                    format_token_display(event.token, &event.text, sampling.verbose_tokens());
-                print!("{disp}");
-                std::io::stdout().flush()?;
-                if let Some(ref lp) = event.logprobs {
-                    print_logprobs(lp);
-                }
-                Ok(())
-            },
-        )?;
-        println!();
-    }
-
     Ok(())
 }
 

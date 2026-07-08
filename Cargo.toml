@@ -1,14 +1,9 @@
 [workspace]
 members = [
-  "crates/ferrule-core",
-  "crates/ferrule-storage",
-  "crates/ferrule-graph",
-  "crates/ferrule-gguf",
+  "crates/ferrule-common",
   "crates/ferrule-model",
-  "crates/ferrule-quant",
   "crates/ferrule-cuda",
   "crates/ferrule-runtime",
-  "crates/ferrule-bench",
   "crates/ferrule-cli",
 ]
 resolver = "2"

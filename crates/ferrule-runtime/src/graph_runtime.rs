@@ -74,8 +74,8 @@
 //! 3. Execute graph programs with `ExecutionBatch` inputs.
 //! 4. Keep legacy runners until graph-backed parity and performance are proven.
 
-use ferrule_core::{Error, Result};
-use ferrule_graph::{ExternalKey, ValueMeta};
+use ferrule_common::{Error, Result};
+use crate::graph::{ExternalKey, ValueMeta};
 use ferrule_model::TensorRole;
 
 use crate::kv::KvHandle;
@@ -238,30 +238,7 @@ impl ExecutionBatch {
 }
 
 /// Semantic artifact group represented by a graph external.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ArtifactGroupKind {
-    Attention,
-    LayerNorm,
-    HyperConnectionAttention,
-    HyperConnectionFeedForward,
-    HyperConnectionHead,
-    Router,
-    SharedExpert,
-}
-
-impl ArtifactGroupKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Attention => "attention",
-            Self::LayerNorm => "layer_norm",
-            Self::HyperConnectionAttention => "hyper_connection_attention",
-            Self::HyperConnectionFeedForward => "hyper_connection_feed_forward",
-            Self::HyperConnectionHead => "hyper_connection_head",
-            Self::Router => "router",
-            Self::SharedExpert => "shared_expert",
-        }
-    }
-}
+pub use ferrule_model::ArtifactGroupKind;
 
 /// Runtime/artifact object class represented by a graph external.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -408,7 +385,7 @@ impl ExternalBindingPlan {
 
 #[cfg(test)]
 mod tests {
-    use ferrule_graph::{DataType, ValueMeta};
+    use crate::graph::{DataType, ValueMeta};
 
     use super::*;
 

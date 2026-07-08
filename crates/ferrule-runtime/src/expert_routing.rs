@@ -6,7 +6,7 @@
 
 use std::cmp::Ordering;
 
-use ferrule_core::{Error, Result};
+use ferrule_common::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouterScoreFunction {

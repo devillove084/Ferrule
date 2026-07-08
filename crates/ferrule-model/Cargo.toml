@@ -10,8 +10,10 @@ keywords = ["llm", "inference", "moe", "cuda", "rust"]
 categories = ["science", "machine-learning"]
 
 [dependencies]
-ferrule-core = { path = "../ferrule-core" }
-ferrule-gguf = { path = "../ferrule-gguf" }
+ferrule-common = { path = "../ferrule-common" }
+memmap2 = "0.9"
+byteorder = "1"
+half = "2"
 tracing = "0.1"
 thiserror = "2"
 tokenizers = "0.21"

@@ -9,7 +9,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::Path;
 
-use ferrule_core::{Error, Result};
+use ferrule_common::{Error, Result};
 use ferrule_model::families::{deepseek_v4, HyperConnectionStage};
 use ferrule_model::{
     HfSafetensorsInventory, HfSafetensorsTensorInfo, ModelDescriptor, ModelFamily, TensorRole,
@@ -917,6 +917,7 @@ pub struct DeepSeekV4OperatorContext {
     cuda: Option<DeepSeekV4CudaOperatorCache>,
 }
 
+#[allow(dead_code)]
 impl DeepSeekV4OperatorContext {
     pub fn new(backend: DeepSeekV4OperatorBackend) -> Result<Self> {
         Ok(Self {

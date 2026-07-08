@@ -7,8 +7,7 @@ use std::time::{Duration, Instant};
 
 use cuda_core::stream::CudaStream;
 use cuda_core::{CudaContext, DeviceBuffer, DeviceCopy, LaunchConfig};
-use ferrule_core::{Error, Result};
-use ferrule_quant::QuantType;
+use ferrule_common::{Error, QuantType, Result};
 
 use crate::kernels::kernels::LoadedModule;
 use crate::transformer::artifact_expert::{
@@ -316,8 +315,9 @@ fn checked_u32(value: usize, label: &str, field: &str) -> Result<u32> {
         .map_err(|_| Error::Internal(format!("{label} {field} exceeds CUDA u32 ABI: {value}")))
 }
 
-// ── Kernel dispatch (selects Q4_0 vs Q2S at runtime) ─────────────────
+// ── Kernel dispatch (selects Q4_0 vs Q8_0 at runtime) ─────────────────
 
+#[allow(dead_code)]
 pub(crate) fn gemv_quant(
     m: &LoadedModule,
     s: &CudaStream,
@@ -333,11 +333,13 @@ pub(crate) fn gemv_quant(
     match qt {
         QuantType::Q4_0 => cu(unsafe { m.gemv_q4(s, cfg, x, packed, scales, y, n, k) }),
         QuantType::Q8_0 => cu(unsafe { m.gemv_q8(s, cfg, x, packed, scales, y, n, k) }),
-        QuantType::Q2S => cu(unsafe { m.gemv_q2(s, cfg, x, packed, scales, y, n, k) }),
-        QuantType::T1S => cu(unsafe { m.gemv_t1(s, cfg, x, packed, scales, y, n, k) }),
+        _ => Err(Error::Kernel(format!(
+            "unsupported quant type for gemv: {qt:?}"
+        ))),
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn gemv_quant_off(
     m: &LoadedModule,
     s: &CudaStream,
@@ -367,20 +369,9 @@ pub(crate) fn gemv_quant_off(
                 },
             )
         }
-        QuantType::Q2S => {
-            cu(
-                unsafe {
-                    m.gemv_q2_off(s, cfg, x, packed, scales, y, n, k, packed_off, scales_off)
-                },
-            )
-        }
-        QuantType::T1S => {
-            cu(
-                unsafe {
-                    m.gemv_t1_off(s, cfg, x, packed, scales, y, n, k, packed_off, scales_off)
-                },
-            )
-        }
+        _ => Err(Error::Kernel(format!(
+            "unsupported quant type for gemv_off: {qt:?}"
+        ))),
     }
 }
 

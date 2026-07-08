@@ -1,7 +1,7 @@
 use crate::runner::ModelRunner;
 use crate::sampler::{Logprobs, Sampler, SamplingConfig};
 use crate::stats::GenerateStats;
-use ferrule_core::{Error, Result};
+use ferrule_common::{Error, Result};
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
@@ -119,7 +119,7 @@ impl<R: ModelRunner> InferenceEngine<R> {
     where
         F: FnMut(&TokenEvent) -> Result<()>,
     {
-        ferrule_core::observability::METRICS.request_started();
+        ferrule_common::observability::METRICS.request_started();
         self.reset_session()?;
         let prefill = self.prefill_text_checked(prompt, config.ctx_size)?;
         self.generate_from_logits(
@@ -204,10 +204,10 @@ impl<R: ModelRunner> InferenceEngine<R> {
             logits = self.runner.decode_token(next)?;
         }
 
-        ferrule_core::observability::METRICS
+        ferrule_common::observability::METRICS
             .prompt_tokens
             .fetch_add(prompt_tokens as u64, std::sync::atomic::Ordering::Relaxed);
-        ferrule_core::observability::METRICS.request_finished();
+        ferrule_common::observability::METRICS.request_finished();
         let stats = GenerateStats {
             prompt_tokens,
             generated_tokens: generated.len(),

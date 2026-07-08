@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use ferrule_core::{Error, Result};
+use ferrule_common::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HfSafetensorsIndex {

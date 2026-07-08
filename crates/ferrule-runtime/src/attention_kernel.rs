@@ -11,7 +11,7 @@
 //! The `AttentionKernel` trait provides a dispatch boundary so CUDA tiled kernels
 //! can replace the CPU reference later without changing caller code.
 
-use ferrule_core::{Error, Result};
+use ferrule_common::{Error, Result};
 
 use crate::artifact_linear::ArtifactLinearPayload;
 use crate::attention_backend::SparseAttentionSpec;

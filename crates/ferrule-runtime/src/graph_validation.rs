@@ -2,8 +2,8 @@
 
 use std::collections::BTreeSet;
 
-use ferrule_core::{Error, Result};
-use ferrule_graph::{ExternalKey, ShapeRegistry, ValueMeta, ValueOrigin};
+use ferrule_common::{Error, Result};
+use crate::graph::{ExternalKey, ShapeRegistry, ValueMeta, ValueOrigin};
 
 use crate::graph_program::GraphProgram;
 use crate::shape_registry::TransformerShapeRegistry;

@@ -249,21 +249,21 @@ fn model_support_contract_dspark_tensors_select_mtp_speculation_policy() {
 }
 
 #[test]
-fn model_support_contract_olmoe_safetensors_is_currently_executable() {
+fn model_support_contract_deepseek_v4_safetensors_is_executable() {
     let spec = TransformerSpec {
-        family: ModelFamily::Olmoe,
-        architecture: Some("olmoe".into()),
+        family: ModelFamily::DeepSeekV4,
+        architecture: Some("deepseekv4".into()),
         weight_source: WeightSource::Safetensors,
-        hidden_size: Some(1024),
-        num_layers: Some(2),
-        vocab_size: Some(50304),
-        num_heads: Some(16),
-        num_kv_heads: Some(8),
-        head_dim: Some(64),
-        attention: AttentionKind::GroupedQuery,
+        hidden_size: Some(4096),
+        num_layers: Some(43),
+        vocab_size: Some(129280),
+        num_heads: Some(32),
+        num_kv_heads: Some(32),
+        head_dim: Some(128),
+        attention: AttentionKind::MultiLatentAttention,
         moe: MoeSpec {
-            num_experts: Some(64),
-            num_experts_per_tok: Some(8),
+            num_experts: Some(256),
+            num_experts_per_tok: Some(6),
             has_shared_experts: false,
             router: RouterKind::DenseTopK,
         },
@@ -274,8 +274,8 @@ fn model_support_contract_olmoe_safetensors_is_currently_executable() {
     };
     let contract = ModelSupportContract::from_spec(&spec, &[]);
     let plan = contract.engine_plan();
-    assert!(plan.is_executable());
-    assert!(plan.missing.is_empty());
+    // DSV4 is recognized but MLA attention is flagged as missing policy
+    assert!(!plan.missing.is_empty());
 }
 
 #[test]

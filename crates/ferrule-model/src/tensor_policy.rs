@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use ferrule_gguf::TensorInfo;
+use crate::gguf::TensorInfo;
 
 use crate::families;
 use crate::spec::ModelFamily;

@@ -8,8 +8,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use ferrule_core::{Error, Result};
-use ferrule_graph::ExternalKey;
+use crate::graph::ExternalKey;
+use ferrule_common::{Error, Result};
 use ferrule_model::families::{RoutedExpertMatrix, RoutedExpertTensorPart};
 use ferrule_model::{
     HfRoutedExpertTensorInfo, HfSafetensorsInventory, HfSafetensorsTensorInfo, ModelFamily,
@@ -25,12 +25,7 @@ use crate::graph_program::GraphProgram;
 use crate::graph_runtime::{ArtifactGroupKind, ExternalBindingKind, ExternalBindingPlan};
 use crate::kv::KvHandle;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArtifactObjectGroup {
-    pub kind: ArtifactGroupKind,
-    pub layer: Option<usize>,
-    pub tensors: Vec<ArtifactTensorSlice>,
-}
+pub use ferrule_model::ArtifactObjectGroup;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpertRegistryObject {

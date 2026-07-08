@@ -4,7 +4,7 @@
 //! Each session has a block table mapping logical positions → physical blocks.
 //! Attention kernels read the block table to gather K/V.
 
-use ferrule_core::Result;
+use ferrule_common::Result;
 
 /// KV cache dtype policy.
 #[derive(Debug, Clone, Copy)]
@@ -223,7 +223,7 @@ impl PagedKvCache {
         if block_idx >= table.num_blocks() {
             let new_block = self
                 .alloc_block()
-                .ok_or_else(|| ferrule_core::Error::Internal("KV block OOM".into()))?;
+                .ok_or_else(|| ferrule_common::Error::Internal("KV block OOM".into()))?;
             table.push(new_block, 0); // tokens will be counted by seq_len update
         }
 

@@ -291,22 +291,22 @@ mod tests {
     };
 
     #[test]
-    fn olmoe_contract_builds_generic_routed_plan_without_streaming() {
+    fn deepseek_v4_contract_builds_generic_routed_plan_without_streaming() {
         let contract = ModelSupportContract::from_spec(
             &TransformerSpec {
-                family: ModelFamily::Olmoe,
-                architecture: Some("olmoe".into()),
+                family: ModelFamily::DeepSeekV4,
+                architecture: Some("deepseekv4".into()),
                 weight_source: WeightSource::Safetensors,
-                hidden_size: Some(16),
+                hidden_size: Some(4096),
                 num_layers: Some(2),
                 vocab_size: Some(32),
                 num_heads: Some(4),
                 num_kv_heads: Some(2),
-                head_dim: Some(4),
-                attention: AttentionKind::GroupedQuery,
+                head_dim: Some(128),
+                attention: AttentionKind::MultiLatentAttention,
                 moe: MoeSpec {
-                    num_experts: Some(4),
-                    num_experts_per_tok: Some(2),
+                    num_experts: Some(256),
+                    num_experts_per_tok: Some(6),
                     has_shared_experts: false,
                     router: RouterKind::DenseTopK,
                 },
@@ -320,10 +320,13 @@ mod tests {
         let plan = TransformerRuntimePlan::from_contract(&contract);
         assert_eq!(plan.layer_count(), 2);
         assert_eq!(plan.step_count(), 7);
-        assert_eq!(plan.layers[0].attention.kind, AttentionKind::GroupedQuery);
+        assert_eq!(
+            plan.layers[0].attention.kind,
+            AttentionKind::MultiLatentAttention
+        );
         assert_eq!(
             plan.layers[0].attention.kv_shape,
-            KvCacheShape::GroupedKeysValues
+            KvCacheShape::LatentOrCompressed
         );
         assert_eq!(
             plan.layers[0].feed_forward.kind,
@@ -331,9 +334,9 @@ mod tests {
         );
         assert_eq!(
             plan.layers[0].feed_forward.expert_residency,
-            ExpertResidencyMode::AllResident
+            ExpertResidencyMode::Streamable
         );
-        assert!(!plan.requires_streaming_experts());
+        assert!(plan.requires_streaming_experts());
     }
 
     #[test]

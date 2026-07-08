@@ -8,11 +8,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use ferrule_core::{Error, Result};
-use ferrule_graph::{
+use crate::graph::{
     AttributeMap, AttributeValue, ComputeGraph, DataType, ExternalKey, TensorData, TensorShape,
     ValueId, ValueMeta, ValueOrigin,
 };
+use ferrule_common::{Error, Result};
 use ferrule_model::{HfSafetensorsInventory, ModelDescriptor};
 
 use crate::artifact_binding::bind_hyper_connection_head_from_artifact_group;
@@ -271,7 +271,7 @@ impl ReferenceGraphBackend {
         program: &GraphProgram,
         objects: &BackendObjectStore,
         batch: &ExecutionBatch,
-        op: &ferrule_graph::OpKey,
+        op: &crate::graph::OpKey,
         attrs: &AttributeMap,
         inputs: &[RuntimeValue],
     ) -> Result<Vec<RuntimeValue>> {
@@ -734,7 +734,7 @@ fn execute_node_dense(
     kv_states: &mut BTreeMap<ReferenceKvKey, ReferenceKvState>,
     program: &GraphProgram,
     batch: &ExecutionBatch,
-    op: &ferrule_graph::OpKey,
+    op: &crate::graph::OpKey,
     attrs: &AttributeMap,
     inputs: &[RuntimeValue],
 ) -> Result<Vec<RuntimeValue>> {
@@ -1311,7 +1311,7 @@ fn known_shape(meta: &ValueMeta) -> Result<Vec<usize>> {
         .dims()
         .iter()
         .map(|dim| match dim {
-            ferrule_graph::Dim::Known(value) => Ok(*value),
+            crate::graph::Dim::Known(value) => Ok(*value),
             other => Err(Error::Graph(format!(
                 "reference graph backend cannot materialize symbolic/dynamic constant shape {other:?}"
             ))),
@@ -1472,7 +1472,7 @@ fn silu(value: f32) -> f32 {
     value / (1.0 + (-value).exp())
 }
 
-fn is_op(op: &ferrule_graph::OpKey, domain: &str, name: &str) -> bool {
+fn is_op(op: &crate::graph::OpKey, domain: &str, name: &str) -> bool {
     op.domain() == domain && op.name() == name
 }
 
@@ -1482,7 +1482,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use ferrule_graph::{
+    use crate::graph::{
         AttributeMap, AttributeValue, ComputeGraph, DataType, ExternalKey, ValueMeta,
     };
     use ferrule_model::{

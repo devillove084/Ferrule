@@ -6,7 +6,7 @@
 //! expert handle to these buffers later.
 
 use cuda_core::{stream::CudaStream, DeviceBuffer, LaunchConfig};
-use ferrule_core::{Error, Result};
+use ferrule_common::{Error, Result};
 
 use crate::context::cu;
 use crate::kernels::kernels::LoadedModule;

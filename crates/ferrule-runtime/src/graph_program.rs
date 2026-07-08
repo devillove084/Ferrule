@@ -5,8 +5,8 @@
 //! compiled artifacts should hang off future cached program objects rather than
 //! being embedded in graph nodes.
 
-use ferrule_core::Result;
-use ferrule_graph::ComputeGraph;
+use ferrule_common::Result;
+use crate::graph::ComputeGraph;
 
 use crate::graph_runtime::ExternalBindingPlan;
 use crate::transformer_plan::TransformerRuntimePlan;

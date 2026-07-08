@@ -7,7 +7,7 @@
 //! should add CUDA executors that consume packed payloads directly instead of
 //! dequantizing whole experts to f32.
 
-use ferrule_core::{Error, Result};
+use ferrule_common::{Error, Result};
 
 use crate::artifact_format::dequantize_fp4_e2m1_with_e8m0_scales;
 use crate::artifact_linear::ArtifactActivationQuantization;

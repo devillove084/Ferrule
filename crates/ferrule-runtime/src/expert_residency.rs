@@ -13,10 +13,10 @@
 //!
 //! Phase 0: types and trait only. No call sites changed yet.
 
-use ferrule_core::Result;
-use ferrule_storage::{
+use crate::storage::{
     DeviceMemoryKind, LocalPlacement, ModelRevision, ObjectLocator, Placement, StorageObjectId,
 };
+use ferrule_common::Result;
 
 use crate::expert_streaming::{
     ExpertId, ExpertLoadSource, ExpertMatrixKind as RuntimeExpertMatrixKind, ExpertStorageTier,
@@ -68,9 +68,9 @@ impl ExpertStorageTier {
             Self::Cpu => Placement::Local(LocalPlacement::Host { pinned: false }),
             Self::HostMmap => Placement::Local(LocalPlacement::Host { pinned: false }),
             Self::LocalStorage => Placement::Local(LocalPlacement::Disk { volume: None }),
-            Self::Remote => Placement::Remote(ferrule_storage::RemotePlacement {
-                endpoint: ferrule_storage::RemoteEndpoint {
-                    scheme: ferrule_storage::RemoteScheme::Http,
+            Self::Remote => Placement::Remote(crate::storage::RemotePlacement {
+                endpoint: crate::storage::RemoteEndpoint {
+                    scheme: crate::storage::RemoteScheme::Http,
                     host: String::new(),
                     port: None,
                 },
@@ -140,7 +140,7 @@ impl ExpertLoadSource {
 
 // ── Adapter: ExpertMatrixKind ─────────────────────────────────────────
 
-impl From<RuntimeExpertMatrixKind> for ferrule_storage::id::ExpertMatrixKind {
+impl From<RuntimeExpertMatrixKind> for crate::storage::id::ExpertMatrixKind {
     fn from(kind: RuntimeExpertMatrixKind) -> Self {
         match kind {
             RuntimeExpertMatrixKind::Gate => Self::Gate,
@@ -152,7 +152,7 @@ impl From<RuntimeExpertMatrixKind> for ferrule_storage::id::ExpertMatrixKind {
 
 // ── Adapter: ExpertTensorComponent ────────────────────────────────────
 
-impl From<RuntimeExpertTensorComponent> for ferrule_storage::id::ExpertTensorComponent {
+impl From<RuntimeExpertTensorComponent> for crate::storage::id::ExpertTensorComponent {
     fn from(comp: RuntimeExpertTensorComponent) -> Self {
         match comp {
             RuntimeExpertTensorComponent::Weight => Self::Weight,
@@ -405,7 +405,7 @@ mod tests {
         ExpertId, ExpertLoadSource, ExpertStreamingPlanner, ExpertStreamingPolicy,
         ExpertStreamingReader, ExpertTensorComponent, ExpertTensorKey, ExpertTensorSlice,
     };
-    use ferrule_storage::id::{
+    use crate::storage::id::{
         ExpertMatrixKind as StorageExpertMatrixKind,
         ExpertTensorComponent as StorageExpertTensorComponent,
     };

@@ -1,11 +1,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use ferrule_core::{Error, Result};
-use ferrule_gguf::{GgufFile, GgufValue};
+use crate::gguf::{GgufFile, GgufValue};
+use ferrule_common::{Error, Result};
 
 use crate::artifact::{HfSafetensorsIndex, HfSafetensorsInventory};
-use crate::config::OlmoeConfig;
 use crate::families;
 use crate::spec::{
     AttentionKind, ModelFamily, MoeSpec, QuantFormatCount, RouterKind, TransformerSemantics,
@@ -85,12 +84,7 @@ impl ModelDescriptor {
             .map(ModelFamily::from_architecture)
             .unwrap_or_else(|| ModelFamily::Unknown("hf-transformer".into()));
 
-        let mut spec = if matches!(family, ModelFamily::Olmoe) {
-            let config = OlmoeConfig::from_json(&json)?;
-            TransformerSpec::from_olmoe_config(&config, WeightSource::Safetensors)
-        } else {
-            generic_hf_spec(&json, family, architecture.clone())
-        };
+        let mut spec = generic_hf_spec(&json, family, architecture.clone());
         if spec.architecture.is_none() {
             spec.architecture = architecture;
         }

@@ -3,8 +3,8 @@
 //! These helpers centralize stable opaque op names without turning graph nodes into
 //! Rust enum variants or exposing public per-op backend methods.
 
-use ferrule_core::Result;
-use ferrule_graph::OpKey;
+use crate::graph::OpKey;
+use ferrule_common::Result;
 
 pub mod domain {
     pub const TENSOR: &str = "ferrule.tensor";
@@ -14,7 +14,7 @@ pub mod domain {
 
 pub mod tensor_ops {
     use super::{op, Result};
-    use ferrule_graph::OpKey;
+    use crate::graph::OpKey;
 
     pub fn residual_add() -> Result<OpKey> {
         op(super::domain::TENSOR, "residual_add", 1)
@@ -23,7 +23,7 @@ pub mod tensor_ops {
 
 pub mod transformer_ops {
     use super::{op, Result};
-    use ferrule_graph::OpKey;
+    use crate::graph::OpKey;
 
     pub fn token_embedding() -> Result<OpKey> {
         op(super::domain::TRANSFORMER, "token_embedding", 1)
@@ -84,7 +84,7 @@ pub mod transformer_ops {
 
 pub mod state_ops {
     use super::{op, Result};
-    use ferrule_graph::OpKey;
+    use crate::graph::OpKey;
 
     pub fn kv_state() -> Result<OpKey> {
         op(super::domain::STATE, "kv_state", 1)
