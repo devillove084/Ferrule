@@ -2212,6 +2212,26 @@ impl DeepSeekV4OperatorContext {
     }
 
     #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_kv_write_window_rows_device(
+        &mut self,
+        layer: usize,
+        values: &ferrule_cuda::context::CudaF32Buffer,
+        start_position: usize,
+        rows: usize,
+        window_size: usize,
+        head_dim: usize,
+    ) -> Result<()> {
+        self.cuda_mut()?.kv_write_window_rows_device(
+            layer,
+            values,
+            start_position,
+            rows,
+            window_size,
+            head_dim,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
     pub(crate) fn cuda_kv_values_device(
         &self,
         layer: usize,

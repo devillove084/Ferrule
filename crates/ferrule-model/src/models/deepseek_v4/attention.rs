@@ -1212,8 +1212,8 @@ impl DeepSeekV4Attention {
         for token in 0..tokens {
             cache.window.append(start_pos + token, &zero_kv)?;
         }
-        operators.cuda_ensure_combined_kv_cache(self.layer, cache, 0)?;
-        operators.cuda_combined_kv_write_window_rows_device(
+        operators.cuda_ensure_kv_cache(self.layer, cfg.window_size, cfg.head_dim)?;
+        operators.cuda_kv_write_window_rows_device(
             self.layer,
             &values_dev,
             start_pos,

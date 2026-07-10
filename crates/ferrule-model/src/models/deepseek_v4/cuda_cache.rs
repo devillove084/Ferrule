@@ -4341,6 +4341,51 @@ impl DeepSeekV4CudaOperatorCache {
         self.ops.copy_f32_into_slot(kv_buffer, dst, offset)
     }
 
+    pub(crate) fn kv_write_window_rows_device(
+        &mut self,
+        layer: usize,
+        values: &ferrule_cuda::context::CudaF32Buffer,
+        start_position: usize,
+        rows: usize,
+        window_size: usize,
+        head_dim: usize,
+    ) -> Result<()> {
+        self.ensure_kv_cache(layer, window_size, head_dim)?;
+        if rows == 0 || values.len() != rows * head_dim {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 layer {layer} device KV rows mismatch: rows={rows} expected {}, got {}",
+                rows * head_dim,
+                values.len()
+            )));
+        }
+
+        {
+            let dst = self
+                .kv_cache
+                .get_mut(&layer)
+                .expect("inserted by ensure_kv_cache");
+            if start_position + rows <= window_size {
+                self.ops
+                    .copy_f32_into_slot(values, dst, start_position * head_dim)?;
+            } else {
+                for row in 0..rows {
+                    let row_indices = [row as i32];
+                    let row_indices_dev = self.ops.upload_i32_buffer(&row_indices)?;
+                    let row_dev =
+                        self.ops
+                            .gather_f32_rows(values, &row_indices_dev, 1, head_dim)?;
+                    let slot = (start_position + row) % window_size;
+                    self.ops
+                        .copy_f32_into_slot(&row_dev, dst, slot * head_dim)?;
+                }
+            }
+        }
+
+        let len = self.kv_len.get_mut(&layer).expect("inserted above");
+        *len = window_size.min((*len).max(start_position.saturating_add(rows)));
+        Ok(())
+    }
+
     /// Borrow the device-resident KV buffer for `layer`.
     #[allow(dead_code)]
     pub(crate) fn kv_values_device(&self, layer: usize) -> &ferrule_cuda::context::CudaF32Buffer {

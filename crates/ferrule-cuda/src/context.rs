@@ -5136,25 +5136,12 @@ impl CudaArtifactOperatorContext {
         rope_dim: u32,
         inverse: bool,
     ) -> Result<()> {
-        if rope_dim == 0 || rope_dim > head_dim {
-            return Ok(());
-        }
-        let total = heads * head_dim;
-        self.launched(unsafe {
-            self.module.rope_tail_yaarn(
-                &self.stream,
-                LaunchConfig::for_num_elems(total),
-                &mut qk.buffer,
-                &cos_table.buffer,
-                &sin_table.buffer,
-                total,
-                position,
-                heads,
-                head_dim,
-                rope_dim,
-                if inverse { 1u32 } else { 0u32 },
-            )
-        })
+        // Keep decode and batched prefill on the same pair-owned kernel. The old
+        // element-owned kernel let even/odd lanes read and write the same rotary
+        // pair concurrently, so decode could diverge from the race-free rows path.
+        self.rope_tail_rows_from_device(
+            qk, cos_table, sin_table, position, 1, heads, head_dim, rope_dim, inverse,
+        )
     }
 
     /// Apply DSV4-style tail rotary to batched rows laid out as
