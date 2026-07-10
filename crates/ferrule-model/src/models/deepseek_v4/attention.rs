@@ -2345,6 +2345,7 @@ impl DeepSeekV4Attention {
             4096,
         )?;
         let mut hidden_device = operators.cuda_upload_f32(hidden)?;
+        let mut kv_hidden_device = operators.cuda_clone_f32(&hidden_device)?;
 
         let q_latent_dev =
             operators.cuda_linear_matvec_from_device(&self.payload.query_a, &mut hidden_device)?;
@@ -2382,7 +2383,7 @@ impl DeepSeekV4Attention {
         )?;
 
         let kv_dev = operators
-            .cuda_linear_matvec_from_device(&self.payload.key_value, &mut hidden_device)?;
+            .cuda_linear_matvec_from_device(&self.payload.key_value, &mut kv_hidden_device)?;
         let kv_norm_name = format!("kv_norm_{layer_tag}");
         let mut kv_normed_dev = operators.cuda_rms_norm_device_cached(
             &kv_norm_name,
@@ -2603,8 +2604,10 @@ impl DeepSeekV4Attention {
             cfg.rope_params(),
             4096,
         )?;
-        // Clone the hidden device buffer so we can pass `&mut` to linear_matvec.
+        // Clone the hidden device buffer so each activation-quantized linear sees
+        // the original input; `cuda_linear_matvec_from_device` mutates its input.
         let mut hidden_device = operators.cuda_clone_f32(hidden_dev)?;
+        let mut kv_hidden_device = operators.cuda_clone_f32(hidden_dev)?;
 
         let stage_start = Instant::now();
         let q_latent_dev =
@@ -2676,7 +2679,7 @@ impl DeepSeekV4Attention {
 
         let stage_start = Instant::now();
         let kv_dev = operators
-            .cuda_linear_matvec_from_device(&self.payload.key_value, &mut hidden_device)?;
+            .cuda_linear_matvec_from_device(&self.payload.key_value, &mut kv_hidden_device)?;
         record_attention_stage(
             operators,
             self.layer,
@@ -3166,8 +3169,10 @@ impl DeepSeekV4Attention {
             4096,
         )?;
 
-        // Upload hidden once, reuse for both query and KV projections.
+        // Keep Q and KV projection inputs independent because device matvec
+        // applies activation quantization in-place.
         let mut hidden_device = operators.cuda_upload_f32(hidden)?;
+        let mut kv_hidden_device = operators.cuda_clone_f32(&hidden_device)?;
 
         // Query: query_a → rms_norm → query_b → head_norm (all on device)
         let q_latent_dev =
@@ -3201,7 +3206,7 @@ impl DeepSeekV4Attention {
 
         // KV: key_value → rms_norm → rotary (all on device), then append to device KV cache.
         let kv_dev = operators
-            .cuda_linear_matvec_from_device(&self.payload.key_value, &mut hidden_device)?;
+            .cuda_linear_matvec_from_device(&self.payload.key_value, &mut kv_hidden_device)?;
         let kv_norm_name = format!("kv_norm_{layer_tag}");
         let kv_normed_dev = operators.cuda_rms_norm_device_cached(
             &kv_norm_name,
@@ -3299,6 +3304,7 @@ impl DeepSeekV4Attention {
             4096,
         )?;
         let mut hidden_device = operators.cuda_clone_f32(hidden_dev)?;
+        let mut kv_hidden_device = operators.cuda_clone_f32(hidden_dev)?;
 
         // Query: query_a → rms_norm → query_b → head_norm (all on device)
         let stage_start = Instant::now();
@@ -3367,7 +3373,7 @@ impl DeepSeekV4Attention {
         // KV: key_value → rms_norm → rotary (all on device), then append to device KV cache.
         let stage_start = Instant::now();
         let kv_dev = operators
-            .cuda_linear_matvec_from_device(&self.payload.key_value, &mut hidden_device)?;
+            .cuda_linear_matvec_from_device(&self.payload.key_value, &mut kv_hidden_device)?;
         record_attention_stage(
             operators,
             self.layer,
