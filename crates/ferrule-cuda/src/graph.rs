@@ -119,7 +119,9 @@ pub fn capture_decode_graph(
     let _guard = CaptureModeGuard::new(CaptureMode::Relaxed).map_err(drv)?;
 
     // Begin capture.
-    stream.begin_capture(CaptureMode::Relaxed).map_err(drv)?;
+    stream
+        .begin_capture(CaptureMode::Relaxed)
+        .map_err(|err| Error::Internal(format!("CUDA graph begin_capture: {err:?}")))?;
 
     // Record the compute graph. If it errors, end capture + destroy to avoid
     // leaving the stream in a broken capture state.
@@ -129,10 +131,14 @@ pub fn capture_decode_graph(
     }
 
     // End capture and obtain the graph.
-    let graph = stream.end_capture().map_err(drv)?;
+    let graph = stream
+        .end_capture()
+        .map_err(|err| Error::Internal(format!("CUDA graph end_capture: {err:?}")))?;
 
     // Instantiate the graph for launch.
-    let exec = graph.instantiate().map_err(drv)?;
+    let exec = graph
+        .instantiate()
+        .map_err(|err| Error::Internal(format!("CUDA graph instantiate: {err:?}")))?;
 
     Ok(CudaGraphHandle {
         exec,

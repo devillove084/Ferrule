@@ -16,6 +16,7 @@
 
 pub mod executor;
 pub mod handle;
+pub mod prediction;
 pub mod routed;
 pub mod routing;
 pub mod streaming;
@@ -26,6 +27,12 @@ pub use handle::{
     CpuExpertHandleStore, ExpertComputeHandle, ExpertHandleStore, ExpertResidentFormat,
     ResidentExpertHandle,
 };
+pub use prediction::{
+    ExpertAccessEvent, ExpertAccessPhase, ExpertBatchAccessEvent, ExpertBatchExpertEvent,
+    ExpertCacheAction, ExpertHotsetPredictor, ExpertPredictContext, ExpertPrediction,
+    ExpertPredictionReason, ExpertPredictionStats, ExpertResidency, ExpertResidencyOutcome,
+    ScoreBasedExpertPredictor, ScoreBasedExpertPredictorConfig,
+};
 pub use routed::{
     execute_routed_moe_reference, execute_routed_moe_reference_with_handles,
     execute_routed_moe_with_artifact_router_reference,
@@ -33,10 +40,11 @@ pub use routed::{
 };
 pub use routing::{ExpertRoute, ExpertRouterPolicy, RouterScoreFunction, RouterSelectionPolicy};
 pub use streaming::{
-    read_experts_concurrent, ExpertArtifactPayload, ExpertComputeBundle, ExpertEvictRequest,
-    ExpertId, ExpertLinearFormat, ExpertLinearPayload, ExpertLoadReason, ExpertLoadRequest,
-    ExpertLoadSource, ExpertMatrixKind, ExpertStorageTier, ExpertStreamingPlanner,
-    ExpertStreamingPolicy, ExpertStreamingReader, ExpertStreamingStep, ExpertTensorComponent,
-    ExpertTensorKey, ExpertTensorPayload, ExpertTensorSlice, HostStagedExpertCache,
+    read_experts_concurrent, AsyncHostStagedExpertLoader, AsyncHostStagedExpertStats,
+    ExpertArtifactPayload, ExpertComputeBundle, ExpertEvictRequest, ExpertId, ExpertLinearFormat,
+    ExpertLinearPayload, ExpertLoadReason, ExpertLoadRequest, ExpertLoadSource, ExpertMatrixKind,
+    ExpertStorageTier, ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader,
+    ExpertStreamingStep, ExpertTensorComponent, ExpertTensorKey, ExpertTensorPayload,
+    ExpertTensorSlice, HostStagedExpertCache,
 };
 pub use telemetry::ExpertTelemetry;

@@ -1,6 +1,6 @@
 # Ferrule Roadmap
 
-_Last updated: 2026-07-08_
+_Last updated: 2026-07-10_
 
 Ferrule is a Rust-native, state-aware LLM runtime for edge inference. The current
 engineering center is **interactive, resident, CUDA-backed DeepSeek-V4 Flash /
@@ -225,7 +225,7 @@ The priority order is now based on the user-visible interactive path:
 startup → prompt append/prefill → first token → steady decode → serving/multi-session
 ```
 
-### P0 — Correctness and observability gates
+### P0 - Correctness and observability gates
 
 - [x] JSON benchmark summary for `deepseek-v4-generate --json` with decode-only
       counters after prefill/warmup baseline subtraction.
@@ -242,8 +242,13 @@ startup → prompt append/prefill → first token → steady decode → serving/
       counters, per-layer bind/state/prefill/decode/attention/MoE timing,
       attention-stage breakdown, output-head detail, and profiling sync controls
       (`FERRULE_DSV4_PROFILE_SYNC=1`, `FERRULE_CUDA_MOE_TIMING=1`).
+- [x] Prefill parity harness (`deepseek-v4-prefill-parity`): compares batched
+      device prefill vs token-loop append, capturing the last prompt token's HC
+      state after every layer and reporting the first diverging layer. Supports
+      `--chat`, `--atol`, `--cut`, `--json`, and `--backend`.  Results
+      documented in the GB10 measurement section below.
 
-### P1 — Resident interactive engine
+### P1 - Resident interactive engine
 
 Goal: match SGLang-style execution at the architecture level before chasing more
 micro-kernels: a long-lived engine owns model artifacts, CUDA context, KV/cache,
@@ -340,12 +345,16 @@ Do not fake DSpark batching; use real hidden columns and real per-column routes.
 - [x] FP4 `mxf4` Tensor Core path is integrated and default-on, with scalar
       fallback via `FERRULE_CUDA_MOE_TC=0`.
 - [x] Fused Tensor-Core SwiGLU output pack removes the separate hidden-pack stage.
-- [ ] Add layer-level prefill MoE batching, e.g. `routed_moe_prefill_batch`, to
-      replace the current per-token `routed_moe_step` loop.
-- [ ] Batch expert selection by layer, pre-load/upload selected experts once, and
-      submit multi-token / multi-column work instead of per-token expert work.
-- [ ] Keep a stronger per-layer resident hotset across warmup and measured turns;
-      prefetch selected/predicted experts and avoid eviction/reload churn.
+- [x] Add layer-level prefill MoE batching: `routed_moe_prefill_batch` replaces
+      the prefill `for token { routed_moe_step(...) }` loop.
+- [x] Group prefill routed MoE by expert and run real `batch_cols <= 8` Tensor
+      Core columns with gather/scatter row packing; shared FFN also has batched
+      row execution.
+- [x] Keep CUDA expert handles as an operator-cache hotset across warmup and
+      measured turns; per-sequence planner evictions no longer tear down global
+      GPU expert residency.
+- [ ] Extend routed MoE grouping beyond one-expert grouped GEMM toward a full
+      production token/expert scheduler with better packing and fewer tiny groups.
 - [ ] Generalize MoE kernels for real `batch_cols > 1` with per-column routing.
 - [ ] Convert DSpark/speculative blocks into real hidden columns before using GEMM
       as the main speed lever.
@@ -361,9 +370,38 @@ launch overhead becomes a meaningful fraction of latency.
 
 - [x] cuda-oxide fork exposes graph APIs and FP4 support; Ferrule also has raw
       graph handle scaffolding.
-- [ ] Pre-allocate all decode/prompt buffers needed by stable buckets.
-- [ ] Capture stable single-token decode buckets after compressor/indexer is
-      device-resident.
+- [x] Pre-allocate decode graph HC/attention/MoE scratch for the current CUDA
+      decode bucket; HC/RMS/attention query/output and MoE accumulators no longer
+      allocate inside capture.
+- [x] Capture/replay works for DSV4 single-token decode with `FERRULE_CUDA_GRAPH=1`.
+      DSV4 currently defaults to per-layer graph segments. Monolithic full-layer
+      capture is not a correctness path yet: with explicit arena preallocation it
+      can instantiate for 43 layers but produced the stale `[19923]` token in the
+      warmup workflow, so it stays disabled until it has independent parity tests.
+      Measured 2026-07-09 after capture-state isolation: 1/5/43-layer `Hello`
+      segmented graph probes all replay with correct token IDs; 43-layer warmup=0
+      emits `[30594]` with graph replay time around sub-ms, but first-token latency
+      is still dominated by graph warmup expert loading.
+- [x] Make graph capture state-clean across warmup-token workflows. Capture eager
+      resource/route warmup now runs on cloned layer states and commits only after
+      graph capture succeeds, so `--warmup-tokens 1` preserves residency without
+      advancing or corrupting the measured session. Measured 2026-07-09: 43-layer
+      graph + warmup=1 emits `[30594]`, replay `~0.9ms`, expert loads `152`
+      `~2.0GB`), matching the graph-off warmup correctness path.
+- [x] Treat current decode graphs as token-specific one-shot captures. Until graph
+      bucket input/route/KV patching lands, each graph is replayed once and then
+      retired before the next decode row. Measured 2026-07-09: 5-layer `n=2`
+      graph and eager both emit `[83484, 58545]`; graph path captures/replays twice.
+- [x] Add graph-capture phase counters to separate `capture_warmup`, `prepare`,
+      `record`, full-graph fallback, segment count, one-shot retires, and replay.
+      Measured 2026-07-09 on 43-layer segmented graph + warmup=1: total capture
+      `~1.11s`, eager capture warmup `~1.07s`, graph prepare `~14ms`, graph record
+      `~8ms`, replay `~0.83ms`, segments `43`. Therefore the next graph lever is
+      not graph recording itself; it is eliminating/patching the eager route/KV/MoE
+      warmup work.
+- [ ] Reduce graph capture/warmup cost: reuse resident hotsets without capture-time
+      expert churn and avoid recapturing heavyweight MoE paths when only session KV
+      state changes.
 - [ ] Capture prompt chunk buckets after true device-resident prefill exists.
 - [ ] Fuse low-rank attention projection + norm + rotary where profiler confirms
       launch overhead matters.
@@ -656,7 +694,187 @@ cargo oxide build --features cuda --arch sm_121a -- --release -p ferrule-cli
 `FERRULE_DSV4_PROFILE_SYNC=1` and `FERRULE_CUDA_MOE_TIMING=1` insert stream
 synchronizations and should not be used as headline throughput results.
 
-### Latest runtime-driver full-layer profile (2026-07-08)
+### Current runtime-driver full-layer profile after device-resident refactor (2026-07-10)
+
+Representative profile files:
+
+- `target/bench_interactive_residency_plan.json`
+- `target/bench_interactive_prefetch_counters2.json`
+- `target/bench_interactive_latest.json`
+- `target/bench_interactive_async_upload_hybrid_2.json`
+- `target/bench_interactive_pinned_default_43l.json`
+- `target/bench_interactive_pinned_selected_overlap_43l.json`
+- `target/bench_interactive_graph_probe_1l.json`
+- `target/bench_interactive_graph_prep_default_43l.json`
+- `target/bench_interactive_final_eager_43l_warmup1.json`
+- `target/bench_interactive_graph_parity_43l_warmup1.json`
+- `target/bench_interactive_graph_parity_5l_n2.json`
+- `target/bench_interactive_validate_eager_43l_warmup1.json`
+- `target/bench_interactive_validate_graph_43l_warmup1.json`
+- `target/bench_interactive_validate_graph_5l_n2.json`
+- `target/bench_interactive_debug_eager_43l_warmup0.json`
+- `target/bench_interactive_debug_eager_43l_batchcols1.json`
+- `target/bench_interactive_debug_eager_1l_warmup0.json`
+- `target/bench_interactive_debug_eager_5l_warmup0.json`
+- `target/bench_interactive_debug_eager_23l_warmup0.json`
+
+Command shape:
+
+```bash
+./target/release/ferrule bench-interactive models/DeepSeek-V4-Flash-DSpark \
+  -p Hello -n 1 \
+  --runtime-driver \
+  --warmup-tokens 1 \
+  --prefill-chunk-size 4096 \
+  --max-layers 43 \
+  --json
+```
+
+Last known-good measured state, with 43 layers and one generated token. This remains the performance reference, but the current revalidation below has exposed a correctness regression, so do **not** treat this row as the active correctness state until the prefill boundary issue is fixed:
+
+| Metric | Value | Interpretation |
+|---|---:|---|
+| `ttft` | **3.21s eager / 3.86s graph-guarded** | eager preserved-residency path is back to the intended ~3.2s band; graph parity guard adds D2H comparison overhead |
+| prefill wall time | **~2.11s eager / ~2.26s graph run** | prefill remains the dominant per-turn block |
+| decode step wall time | **~1.10s eager / ~1.60s graph-guarded** | eager decode is stable; graph replay is guarded because native 43L segmented replay diverges |
+| aggregate decode | **~0.91 tok/s eager** | full-depth decode remains far below target |
+| generated token | `[30594]` | last known-good 43-layer eager warmup=1 and graph warmup=1 result; 5-layer graph `n=2` remains `[83484, 58545]` |
+
+Last known-good layer/operator attribution:
+
+| Stage / counter | Value | Interpretation |
+|---|---:|---|
+| layer attention | **~1.45–1.54s** | no longer dominated by sparse attention itself |
+| layer MoE | **~1.52–1.66s** | still the largest execution-shape problem |
+| expert loads | **156 eager / 151 graph-guarded** | much lower than 919, but still too much for one `Hello`; run-to-run warm residency affects this number |
+| expert load bytes | **~2.09GB eager / ~2.02GB graph-guarded** | main remaining first-turn residency cost |
+| expert read | **~0.11–0.12s** | host read is not the main remaining MoE cost |
+| expert upload | **~0.47s default / ~0.55s overlap-gated** | dominant remaining MoE residency transfer/materialization cost |
+| MoE router | **~0.25–0.26s** | includes router linear/device-to-host route materialization |
+| MoE compute submit | **~0.10–0.18s** | no longer the old multi-second bottleneck |
+| kernel launches | **~5.3k** | down strongly from 14.5k, still graph/fusion work remains |
+| H2D copies | **~1.25k** | down from 7.5k; still includes expert/upload/control traffic |
+| D2H copies | **~485** | down from 6.0k; remaining copies are mostly routing/compressor/output bookkeeping |
+
+Last known-good attention profile after the latest device-resident work:
+
+| Attention stage | Time | Note |
+|---|---:|---|
+| `q_latent_download` | **0.000s** | decode indexer path no longer downloads q-latents |
+| `hidden_download` | **0.000s** | decode compressed path no longer downloads full hidden states |
+| `compressed_kv_upload` | **~0.001s** | decode combined/indexer KV uploads are now row/cached, not full-cache uploads |
+| `topk_build` | **~0.11s** | now mostly device indexer query/weights/top-k work, not host top-k upload |
+| `main_compress` | **~0.26s** | compressor still keeps CPU shadow state; not fully device-resident yet |
+| `indexer_compress` | **~0.15s** | same CPU-shadow limitation |
+| `output_b` | **~0.29s** | output projection is now a visible attention block |
+| `sparse_attention` | **~0.02s** | sparse attention kernel itself is not the bottleneck |
+
+Last known-good MoE prefetch/residency diagnosis after adding first-class residency classification:
+
+| Counter | Value | Interpretation |
+|---|---:|---|
+| `expert_selected` | **~1548** | routed expert selections across prefill/decode; includes repeated selections |
+| `expert_selected_load_requests` | **154–156** | selected experts for which planner emitted load/check work in the measured clean turn |
+| `expert_selected_resident_hits` | **13** | lookahead/prefetch converted 13 selected loads into resident hits |
+| `expert_selected_upload_hits` | **0** | no selected expert was caught while an async GPU upload ticket was in flight |
+| `expert_selected_host_staged_hits` | **0** | selected misses did not come from async host staging in this `Hello` run |
+| `expert_selected_cold_misses` | **141–143** | selected misses still discovered too late for prefetch to hide them |
+| `expert_upload_prefetch_submitted/completed/in_flight` | **13 / 13 / 0** | upload stream is active for predicted/host-staged prefetch; this produced the 13 selected resident hits |
+| `expert_selected_async_upload_submitted/completed/bytes` | **0 / 0 / 0** | selected-overlap is now host-staged-only; cold selected misses stay synchronous instead of taking the bad submit-then-wait path |
+| `expert_selected_upload_waits` | **0** | no selected upload wait on the measured path |
+| `expert_async_upload_bytes` | **~174MB** | async GPU upload now activates for lookahead prefetch |
+| `expert_pinned_cache_hits/misses/entries/bytes` | **0 / 13 / 25 / ~334MB** | new CUDA pinned expert source cache is populated; this prompt does not yet reuse a pinned source in the measured turn |
+| `moe_predicted_experts` | **13** | hotset predictions that made it into measured MoE prefetch work after clean warmup reset |
+| `moe_prefetch_loads/enqueued` | **26 / 26** | planner emitted prefetch work; half became host staging and half became async GPU uploads |
+| `moe_prefetch_skipped_cached_or_inflight` | **0** | current clean-turn counters are no longer dominated by warmup/session residue |
+| `expert_async_prefetch_submitted/completed/in_flight` | **13 / 13 / 0** | background host staging activates for the predicted experts before GPU upload |
+| `expert_host_cache_hits/entries/bytes` | **13 / 256 / ~3.42GB** | host-staged cache feeds predicted upload and remains the L2 expert tier |
+
+Implementation note: `ExpertResidencyPlan` is now model-agnostic in `moe::streaming`; CUDA MoE consumes it instead of mixing residency classification, host staging, selected materialization, and prefetch enqueue in one loop. Generic planning now calls this backend in-flight state `materializing`; the CUDA implementation maps it to `Uploading { event }`. Upload tickets own pinned host sources plus CUDA handles, record an event on a dedicated upload stream, and are finalized into the resident expert cache only after event completion. Completed prefetch uploads are now returned to the streaming planner via `commit_step_loaded` so planner residency does not lag backend residency. Immediate selected-miss pinned H2D upload was measured worse (`ttft ~4.26s`, `moe_expert_upload_s ~1.31s` for ~2GB), so the overlap path has been tightened: `FERRULE_DSV4_SELECTED_UPLOAD_OVERLAP=1` now overlaps only selected experts that are already host-staged, while cold selected misses use the faster synchronous materialization path. A CUDA pinned expert-source LRU (`FERRULE_DSV4_PINNED_EXPERT_CACHE_CAPACITY`, default 64) now backs async prefetch/selected-host-staged uploads, so upload tickets clone pinned Arc sources instead of re-pinning payload bytes. Runtime-driver warmup reset now has a precise state contract: preserve persistent weights/expert residency, but clear scheduler/session state, host KV state, CUDA window/combined/indexer KV caches, and graph/MoE scratch arenas. The earlier preserved-reset `[19923]` bug was stale device-side sequence cache contamination, not a model-routing change.
+
+Current revalidation regression and investigation path (2026-07-10): after the graph/reset fixes were revalidated from a fresh run, the 43-layer `Hello` path regressed to emitting `[19923]` in both eager and graph runs. This was the active blocker before more CUDA graph/fusion work.
+
+| Probe | Result | Interpretation |
+|---|---:|---|
+| 43L eager, `warmup=1` (`target/bench_interactive_validate_eager_43l_warmup1.json`) | `[19923]`, `ttft 3.116s`, prefill `2.094s`, decode `1.022s` | same fast path as last known-good, but wrong first generated token |
+| 43L graph, `warmup=1` (`target/bench_interactive_validate_graph_43l_warmup1.json`) | `[19923]`, `ttft 3.351s`, `cuda_graph_replays=1`, `fallbacks=0` | graph is not the root cause because eager is wrong too; native graph is faithfully replaying the now-wrong state |
+| 5L graph, `warmup=0`, `n=2` (`target/bench_interactive_validate_graph_5l_n2.json`) | `[83484, 58545]`, `fallbacks=0` | shallow graph stale-state guard still passes |
+| 43L eager, `warmup=0` (`target/bench_interactive_debug_eager_43l_warmup0.json`) | `[19923]`, `ttft 18.64s`, prefill `17.49s`, 856 cold expert loads | not caused by preserved-residency reset or warmup contamination |
+| 43L eager, `FERRULE_CUDA_MOE_PREFILL_BATCH_COLS=1` | `[19923]` | not caused by route-set tile size or multi-column MoE grouping alone |
+| 1L / 5L eager, `warmup=0` | `[83484]` | shallow prefill/top-k path still behaves consistently |
+| 23L eager, `warmup=0` | `[108527]` | output changes with depth before collapsing to `[19923]` at 43L; this is depth-sensitive full-prefill semantic drift |
+
+Important conclusion from the runtime-driver contract: with `max_new_tokens=1`, the emitted token is staged from the **prefill top-k row** and the following decode action only commits/feeds that token; it does not determine the first generated token. Therefore the active correctness bug is in the 43-layer prefill/final-logits boundary, not in decode logits and not primarily in graph replay. Decode counters still matter for the next token: current bad 43L runs show `moe_predicted_experts=0` and `expert_lookahead_prefetch_calls=0`, while the last known-good eager run had `moe_predicted_experts=13` and `lookahead=6/26`; however that cannot explain the first-token regression by itself because the first token already came from prefill.
+
+Previous narrowed hypotheses, in priority order:
+
+1. The device-resident batched prefill chain has a semantic mismatch in the final HC/head/logits boundary at full depth. Suspect areas are row ordering/last-token extraction, HC rows layout, CUDA `hc_head` rows, output norm rows, or a layer-deep attention/MoE state update that only becomes visible after many layers.
+2. Batched MoE prefill tile grouping is unlikely to be the only bug (`batch_cols=1` still fails), but MoE prefill may still differ from token-loop decode semantics in route weights, row gather/scatter, expert residency side effects, or shared-FFN accumulation.
+3. Reset/preserved expert residency is not the active first-token root cause (`warmup=0` still fails). Keep the sequence-cache clearing contract, but do not chase reset first.
+4. CUDA graph replay should stay secondary until eager 43L prefill is correct again. Graph correctness should be rechecked only after the eager prefill output returns to the expected 43L token.
+
+#### Prefill parity harness results (2026-07-10)
+
+The prefill parity harness (`deepseek-v4-prefill-parity`) was built per the next debugging route above. It compares batched/device prefill vs token-loop append, capturing the last prompt token's HC state after every layer.
+
+**`[19923]` could not be reproduced.** All current execution paths now produce `[30594]` ("你好") at 43L with `--chat`:
+
+| Command | 43L result |
+|---|---|
+| `deepseek-v4-generate -p Hello -n 1 --backend cuda --chat` | `[30594]` |
+| `bench-interactive -p Hello -n 1` (engine_worker) | `[30594]` |
+| `bench-interactive -p Hello -n 1 --runtime-driver` | `[30594]` |
+| `deepseek-v4-prefill-parity -p Hello --chat` (both paths) | `[30594]` |
+
+Without `--chat`, "Hello" is a single token `[19923]` and produces `[201]` at 43L.
+
+The `[19923]` regression was recorded earlier on 2026-07-10 from `target/bench_interactive_*.json` probe files. The codebase has since changed; the regression either self-resolved or was fixed by an intermediate commit. The probe JSON files in `target/` are stale artifacts from the earlier state.
+
+**Harness findings (multi-token chat prompt, 5 tokens):**
+
+Model `compress_ratios`:
+```
+[0, 0, 4, 128, 4, 128, ..., 4, 128, 4, 0, 0, 0]
+ L0 L1 L2 L3                  L39 L40 L41 L42
+```
+
+Divergence between batched and token-loop starts at **L0** (max_abs_diff=4.71e-2) -- this is **algorithmic**, not numerical noise. The divergence grows through the network (L5: 0.21, L20: 3.3, L42: 19.1). Despite the large hidden-state divergence, top-1 tokens still match at all cut points:
+
+| Cut | Batched top-1 | Token-loop top-1 | Match |
+|-----|---------------|-------------------|-------|
+| 1L  | `[83484]`     | `[83484]`         | yes   |
+| 5L  | `[83484]`     | `[83484]`         | yes   |
+| 23L | `[108527]`    | `[108527]`        | yes   |
+| 43L | `[30594]`     | `[30594]`         | yes   |
+
+The 1L/5L/23L values match the previously recorded eager-mode observations.
+
+**Single-token prompt (no `--chat`):** "Hello" -> `[19923]` (1 token). The batched path falls back to token-loop by construction, so both traces are identical. Minor numerical drift appears at L31 (1.14e-4, atol=1e-4) and amplifies through L42 (34.7). Top-1 matches at all cut points (1L/5L/23L/43L -> `[201]`).
+
+**Root-cause direction:** L0 is `compress_ratio=0` (non-compressed sliding-window attention). The divergence is between `prefill_start_no_compress_from_device` (batched, true multi-token attention with causal masking) and `decode_step_no_compress_from_device` (single-token, incremental KV append). For a causal model these should produce identical last-token outputs. The next step is to instrument the attention stage breakdown (Qa, QNorm, Qb, QNormHeads, KV projection, RoPE, sparse attention, output projection) within L0 to isolate which sub-stage first diverges.
+
+**Open question:** the `[19923]` active blocker may be resolved, but the L0 batched-vs-token-loop divergence is a real correctness risk. Even though top-1 currently matches, the hidden-state gap (up to 19 at L42) means any model weight or routing change could flip the top-1. The divergence should be fixed before relying on batched prefill for production.
+
+CUDA graph status (2026-07-10): graph instrumentation is useful and the replay/fallback counters are wired, but graph is no longer the first active correctness target. The last known-good graph runs showed native 43L replay can emit `[30594]` after current-window KV overwrite and graph-capture lookahead alignment, with `cuda_graph_replays=1` and default `cuda_graph_replay_fallbacks=0`. The current revalidation emits `[30594]` in both eager and graph, matching the last known-good result. Keep `FERRULE_DSV4_GRAPH_REPLAY_PARITY_GUARD=1` as an opt-in debug check; default graph output should remain native.
+
+Conclusion: the old framework-shape problems were real and are now substantially reduced:
+
+- prefill is device-chain/rows-batched instead of token-loop host `Vec<f32>` execution;
+- prefill MoE is tile/batched by route-set instead of per-token expert submit;
+- decode compressed/indexer attention no longer downloads `q_latent` or `hidden` for top-k;
+- indexer compressed KV has a persistent CUDA-side cache for decode top-k;
+- runtime/model boundary remains clean: runtime still does not own concrete DSV4 types.
+
+Eager 43L prefill now produces `[30594]` ("你好"), matching the last known-good result. The `[19923]` regression is no longer reproducible. The remaining correctness risk is the L0 batched-vs-token-loop divergence (4.7e-2 at L0, growing to 19 at L42); see the prefill parity harness results above. The next performance bottleneck is still **expert residency for first useful turn**, not generic scheduler overhead:
+
+1. Remaining `~1.7–2.1GB` selected expert materialization dominates first-token variance.
+2. Warmup hotset does not necessarily cover a different measured prompt (`warmup` vs `Hello`).
+3. Async host staging and async GPU upload are now mechanisms, but this profile mostly hits resident cache for predicted experts; the missing experts are selected misses discovered only after current-layer routing.
+4. Immediate selected-miss H2D is not a win; selected upload overlap is only useful when the expert is already host-staged and pinned-source reuse can amortize submission cost.
+5. Pinned host expert-source reuse is now present, but this prompt still has `0` pinned hits in the measured turn; prediction/host-staging must create reuse before it can improve TTFT.
+6. To approach 1-layer UX at 43 layers, the next framework work should be GPU-resident expert hotset policy, prompt/session-specific hotset capture/replay, better host-staged hit creation, and CUDA graph replay repair. For graph specifically, the next concrete task is not more counters: fix segmented replay parity by making graph inputs/state patching explicit (HC slot handoff, route buffers, attention KV snapshot/update contract) so stream capture sees only kernels/D2D copies and replay can be used as the semantic output without warmup fallback.
+
+### Historical runtime-driver full-layer profile before device-resident refactor (2026-07-08)
 
 Profile file:
 `target/dsv4-profile-l43-warm1-fine-sync-moe.json`.
@@ -754,6 +972,47 @@ Output head warm path is no longer the full-depth bottleneck:
 comes from full-depth model execution shape: host-heavy prefill/MoE boundaries,
 expert churn, attention WO-A projection, copies, and launch fragmentation.
 
+### First batched-prefill MoE / hotset cut (2026-07-08)
+
+Implementation cut:
+
+- prefill layer MoE no longer calls `routed_moe_step` in a token loop;
+- CUDA path routes the batch, plans residency by tile, groups tokens by selected
+  expert, gathers rows into compact device batches, runs `batch_cols <= 8` FP4 TC
+  expert execution, and scatter-adds results back to `[tokens, hidden]`;
+- shared FFN uses batched artifact-linear row execution;
+- CUDA expert handles are retained as an operator-cache hotset across warmup and
+  measured turns even when a fresh sequence planner asks to load them again.
+
+Warm measured command:
+
+```bash
+./target/release/ferrule bench-interactive models/DeepSeek-V4-Flash-DSpark \
+  -p Hello -n 1 \
+  --runtime-driver \
+  --warmup-tokens 1 \
+  --prefill-chunk-size 4096 \
+  --max-layers 43 \
+  --json
+```
+
+| Metric | Before profile | After batched MoE + hotset | Change |
+|---|---:|---:|---:|
+| `ttft` | ~15.03s | **9.94s** | ~1.5× faster |
+| prefill wall | ~13.82s | **8.95s** | ~1.5× faster |
+| decode step | ~1.21s | **0.99s** | modest faster |
+| layer MoE | ~6.94s | **2.60s** | ~2.7× faster |
+| `moe_compute_submit_s` | 2.326s | **1.276s** | lower submit/compute overhead |
+| `moe_expert_upload_s` | 2.504s | **0.499s** | hotset reuse working |
+| expert loads | 919 | **139** | much less reload churn |
+| expert load bytes | 12.286 GB | **1.858 GB** | much less transfer churn |
+| kernel launches | 14,537 | **12,639** | fewer, but still too many |
+
+This confirms the first vLLM/SGLang-style feature cut moved the bottleneck: the
+largest remaining blocks are now device-resident prefill boundaries, attention
+WO-A/output projection, compressor/indexer state, and many small grouped MoE
+submits for short prompts.
+
 ### Earlier JSON decode measurements (2026-07-07)
 
 All rows use `--prompt Hello --chat --warmup-tokens 4 --output-head-chunk-rows
@@ -844,15 +1103,16 @@ KV pages, scheduler state, and decode workers are resident and batched.
 | CUDA graph replay | reduces launch overhead after host boundaries are gone | later |
 | Paged KV + continuous batching | serving parity with SGLang/vLLM class engines | runtime skeleton done; CUDA/backend integration later |
 
-### Next-step priority list (2026-07-08)
+### Next-step priority list (2026-07-10)
 
 | Priority | Task | Why now |
 |---|---|---|
-| **P1** | True device-resident DSV4 prefill skeleton | Removes the biggest host `Vec<f32>` / hidden / HC boundary before kernel tuning |
-| **P2** | Batched multi-token / multi-column MoE prefill | Directly targets `compute_submit=2.326s`, expert upload/read time, copies, and launches |
-| **P3** | Expert residency / prefetch / hotset reuse | 919 expert loads / 12.286 GB for one `Hello` cannot produce good UX |
-| **P4** | Attention WO-A / `output_a` optimization | `output_a=2.30s` is the largest attention stage; sparse attention itself is not first |
-| **P5** | Device compressor/indexer/top-k state | Required by clean prefill and later graph capture |
+| **P0** | Isolate L0 attention stage divergence | Prefill parity harness shows batched vs token-loop diverges at L0 (4.7e-2) for multi-token prompts. `[19923]` active blocker is no longer reproducible (all paths now emit `[30594]`), but the L0 divergence is a real correctness risk. Need stage-level (Qa/QNorm/Qb/KV/RoPE/attn/output) comparison to find the first diverging sub-stage. |
+| **P1** | True device-resident DSV4 prefill skeleton | Remaining major host `Vec<f32>` / hidden / HC boundary before graph/kernel tuning |
+| **P2** | Improve grouped MoE packing beyond one-expert groups | Batched MoE landed, but `moe_calls=902` for short `Hello` shows too many tiny groups |
+| **P3** | Attention WO-A / `output_a` optimization | after MoE cut, attention/output projection is again a top block |
+| **P4** | Device compressor/indexer/top-k state | Required by clean prefill and later graph capture |
+| **P5** | Expert residency policy hardening | Hotset reuse landed for warm turns; next is memory-budgeted eviction/prefetch policy |
 | **P6** | CUDA graph buckets | Only after host routing/streaming/prefill boundaries are gone |
 | **P7** | DSpark proposal/verify/rollback state | Needed before using `dspark_block_size=5` honestly |
 | **P8** | CUDA paged KV + continuous batching | Runtime skeleton exists; backend/serving stage next |

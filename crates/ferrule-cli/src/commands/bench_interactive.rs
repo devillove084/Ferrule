@@ -25,6 +25,7 @@ use ferrule_model::{
         DeepSeekV4OperatorBackend, DeepSeekV4OperatorRuntimeCounters, DeepSeekV4OutputProfileStats,
         DeepSeekV4PrefillRuntimeStats, DeepSeekV4ReferenceOptions, DeepSeekV4ReferenceRunner,
     },
+    moe::ExpertPredictionStats,
     ChatTemplate, ModelRunner, PrefillMode,
 };
 #[cfg(feature = "cuda")]
@@ -45,6 +46,10 @@ struct RuntimeStepMeasurement {
     finished: usize,
     elapsed_us: u64,
     runner_position: usize,
+    dsv4_operator_counters: DeepSeekV4OperatorRuntimeCounters,
+    dsv4_layer_profile_stats: Vec<DeepSeekV4LayerProfileStats>,
+    dsv4_attention_profile_stats: Vec<DeepSeekV4AttentionProfileStats>,
+    dsv4_output_profile_stats: DeepSeekV4OutputProfileStats,
 }
 
 #[cfg(feature = "cuda")]
@@ -88,6 +93,16 @@ struct InteractiveBenchReport {
     warmup_us: u64,
     /// Warmup tokens actually generated.
     warmup_generated_tokens: usize,
+    /// Whether routing-hotset expert prewarm is enabled after warmup reset.
+    expert_prewarm_enabled: bool,
+    /// Wall time spent prewarming predicted/hot experts after warmup reset.
+    expert_prewarm_us: u64,
+    /// Experts actually uploaded by the prewarm stage.
+    expert_prewarm_experts: usize,
+    /// Expert load counter delta attributed to prewarm.
+    expert_prewarm_loads: u64,
+    /// Expert load bytes attributed to prewarm.
+    expert_prewarm_load_bytes: u64,
     /// Wall time from measured prompt submission to first emitted token.
     time_to_first_token_us: u64,
     turns: Vec<InteractiveTurnMeasurement>,
@@ -165,8 +180,8 @@ pub fn cmd_bench_interactive(
     let options = DeepSeekV4ReferenceOptions {
         max_layers,
         output_head_chunk_rows: 4096,
-        moe_prefetch_experts: 8,
-        moe_hotset_experts: 0,
+        moe_prefetch_experts: 32,
+        moe_hotset_experts: 48,
         ..DeepSeekV4ReferenceOptions::default()
     };
 
@@ -194,6 +209,7 @@ pub fn cmd_bench_interactive(
         dsv4_profile_sync: dsv4_profile_sync_enabled(),
         artifact_load_us,
         warmup_tokens,
+        expert_prewarm_enabled: dsv4_expert_prewarm_enabled(),
         ..Default::default()
     };
 
@@ -233,6 +249,11 @@ pub fn cmd_bench_interactive(
             "warmup_tokens": report.warmup_tokens,
             "warmup_s": report.warmup_us as f64 / 1_000_000.0,
             "warmup_generated_tokens": report.warmup_generated_tokens,
+            "expert_prewarm_enabled": report.expert_prewarm_enabled,
+            "expert_prewarm_s": report.expert_prewarm_us as f64 / 1_000_000.0,
+            "expert_prewarm_experts": report.expert_prewarm_experts,
+            "expert_prewarm_loads": report.expert_prewarm_loads,
+            "expert_prewarm_load_bytes": report.expert_prewarm_load_bytes,
             "time_to_first_token_s": report.time_to_first_token_us as f64 / 1_000_000.0,
             "total_turns": report.turns.len(),
             "total_prompt_tokens": report.total_prompt_tokens,
@@ -313,6 +334,14 @@ pub fn cmd_bench_interactive(
             report.warmup_tokens,
             report.warmup_generated_tokens,
             report.warmup_us as f64 / 1_000_000.0
+        );
+        println!(
+            "expert_prewarm:   enabled={} experts={} loads={} bytes={} in {:.3}s",
+            report.expert_prewarm_enabled,
+            report.expert_prewarm_experts,
+            report.expert_prewarm_loads,
+            report.expert_prewarm_load_bytes,
+            report.expert_prewarm_us as f64 / 1_000_000.0
         );
         println!(
             "time_to_first_token: {:.3}s",
@@ -456,6 +485,35 @@ pub fn cmd_bench_interactive(
 }
 
 #[cfg(feature = "cuda")]
+fn maybe_prewarm_runner(
+    runner: &mut DeepSeekV4ReferenceRunner,
+    report: &mut InteractiveBenchReport,
+) -> anyhow::Result<()> {
+    report.expert_prewarm_enabled = dsv4_expert_prewarm_enabled();
+    if !report.expert_prewarm_enabled {
+        return Ok(());
+    }
+    let counters_before = runner.operator_runtime_counters();
+    let start = Instant::now();
+    let warmed = runner.prewarm_predicted_experts()?;
+    let elapsed_us = duration_us(start.elapsed());
+    let counters_after = runner.operator_runtime_counters();
+    report.expert_prewarm_us = report.expert_prewarm_us.saturating_add(elapsed_us);
+    report.expert_prewarm_experts = report.expert_prewarm_experts.saturating_add(warmed);
+    report.expert_prewarm_loads = report.expert_prewarm_loads.saturating_add(
+        counters_after
+            .expert_loads
+            .saturating_sub(counters_before.expert_loads),
+    );
+    report.expert_prewarm_load_bytes = report.expert_prewarm_load_bytes.saturating_add(
+        counters_after
+            .expert_load_bytes
+            .saturating_sub(counters_before.expert_load_bytes),
+    );
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
 fn run_with_engine_worker(
     runner: DeepSeekV4ReferenceRunner,
     chat_template: &ChatTemplate,
@@ -490,6 +548,7 @@ fn run_with_engine_worker(
         report.warmup_us = duration_us(warmup_start.elapsed());
         report.warmup_generated_tokens = warmup_turn.tokens.len();
         engine.reset()?;
+        maybe_prewarm_runner(engine.runner_mut(), report)?;
     }
 
     let counters_baseline = engine.runner().operator_runtime_counters();
@@ -659,13 +718,16 @@ fn run_with_resident_driver(
             .saturating_add(warmup_tokens)
             .saturating_add(64),
     };
-    let mut driver = ResidentTopKDriver::with_configs(
-        runner,
-        PagedSequenceKvCache::new(1, 1, 1, 1),
-        scheduler_config,
-        executor_config,
-        driver_config,
-    );
+    let build_driver = |runner| {
+        ResidentTopKDriver::with_configs(
+            runner,
+            PagedSequenceKvCache::new(1, 1, 1, 1),
+            scheduler_config,
+            executor_config,
+            driver_config,
+        )
+    };
+    let mut driver = build_driver(runner);
 
     if warmup_tokens > 0 {
         let warmup_prompt = chat_template.format_turn("warmup", true);
@@ -677,7 +739,10 @@ fn run_with_resident_driver(
         report.warmup_us = duration_us(warmup_start.elapsed());
         report.warmup_generated_tokens = warmup_stats.emitted_tokens;
         let _ = driver.drain_finished();
-        driver.executor_mut().runner_mut().reset_session()?;
+        let mut runner = driver.into_runner();
+        runner.reset_session()?;
+        maybe_prewarm_runner(&mut runner, report)?;
+        driver = build_driver(runner);
     }
 
     let counters_baseline = driver.executor().runner().operator_runtime_counters();
@@ -729,6 +794,12 @@ fn run_with_resident_driver(
         let mut runtime_steps = Vec::new();
 
         loop {
+            let step_operator_counters_before =
+                driver.executor().runner().operator_runtime_counters();
+            let step_layer_profile_before = driver.executor().runner().layer_profile_stats();
+            let step_attention_profile_before =
+                driver.executor().runner().attention_profile_stats();
+            let step_output_profile_before = driver.executor().runner().output_profile_stats();
             let step_start = Instant::now();
             let step = driver.step(&mut |event| {
                 first_token_us.get_or_insert_with(|| duration_us(turn_start.elapsed()));
@@ -736,6 +807,22 @@ fn run_with_resident_driver(
                 Ok(())
             })?;
             let step_us = duration_us(step_start.elapsed());
+            let step_operator_counters = dsv4_operator_counters_delta(
+                step_operator_counters_before,
+                driver.executor().runner().operator_runtime_counters(),
+            );
+            let step_layer_profile_stats = dsv4_layer_profile_stats_delta(
+                &step_layer_profile_before,
+                &driver.executor().runner().layer_profile_stats(),
+            );
+            let step_attention_profile_stats = dsv4_attention_profile_stats_delta(
+                &step_attention_profile_before,
+                &driver.executor().runner().attention_profile_stats(),
+            );
+            let step_output_profile_stats = dsv4_output_profile_stats_delta(
+                step_output_profile_before,
+                driver.executor().runner().output_profile_stats(),
+            );
             match step {
                 ResidentDriverStep::Executed {
                     action_kind,
@@ -759,6 +846,10 @@ fn run_with_resident_driver(
                         finished,
                         elapsed_us: step_us,
                         runner_position: driver.executor().position(),
+                        dsv4_operator_counters: step_operator_counters,
+                        dsv4_layer_profile_stats: step_layer_profile_stats,
+                        dsv4_attention_profile_stats: step_attention_profile_stats,
+                        dsv4_output_profile_stats: step_output_profile_stats,
                     });
                 }
                 ResidentDriverStep::Idle => break,
@@ -1027,6 +1118,97 @@ fn dsv4_operator_counters_delta(
         moe_router_us: after.moe_router_us.saturating_sub(before.moe_router_us),
         moe_routing_us: after.moe_routing_us.saturating_sub(before.moe_routing_us),
         moe_plan_us: after.moe_plan_us.saturating_sub(before.moe_plan_us),
+        moe_predicted_experts: after
+            .moe_predicted_experts
+            .saturating_sub(before.moe_predicted_experts),
+        moe_prefetch_loads: after
+            .moe_prefetch_loads
+            .saturating_sub(before.moe_prefetch_loads),
+        moe_prefetch_enqueued: after
+            .moe_prefetch_enqueued
+            .saturating_sub(before.moe_prefetch_enqueued),
+        moe_prefetch_skipped_cached_or_inflight: after
+            .moe_prefetch_skipped_cached_or_inflight
+            .saturating_sub(before.moe_prefetch_skipped_cached_or_inflight),
+        moe_prefetch_resident: after
+            .moe_prefetch_resident
+            .saturating_sub(before.moe_prefetch_resident),
+        moe_prefetch_materializing: after
+            .moe_prefetch_materializing
+            .saturating_sub(before.moe_prefetch_materializing),
+        moe_prefetch_host_staged: after
+            .moe_prefetch_host_staged
+            .saturating_sub(before.moe_prefetch_host_staged),
+        moe_prefetch_in_flight: after
+            .moe_prefetch_in_flight
+            .saturating_sub(before.moe_prefetch_in_flight),
+        moe_prefetch_cold: after
+            .moe_prefetch_cold
+            .saturating_sub(before.moe_prefetch_cold),
+        expert_selected_resident_hits: after
+            .expert_selected_resident_hits
+            .saturating_sub(before.expert_selected_resident_hits),
+        expert_selected_upload_hits: after
+            .expert_selected_upload_hits
+            .saturating_sub(before.expert_selected_upload_hits),
+        expert_selected_host_staged_hits: after
+            .expert_selected_host_staged_hits
+            .saturating_sub(before.expert_selected_host_staged_hits),
+        expert_selected_host_staging_waits: after
+            .expert_selected_host_staging_waits
+            .saturating_sub(before.expert_selected_host_staging_waits),
+        expert_selected_host_staging_hits: after
+            .expert_selected_host_staging_hits
+            .saturating_sub(before.expert_selected_host_staging_hits),
+        expert_selected_host_staging_wait_us: after
+            .expert_selected_host_staging_wait_us
+            .saturating_sub(before.expert_selected_host_staging_wait_us),
+        expert_selected_cold_misses: after
+            .expert_selected_cold_misses
+            .saturating_sub(before.expert_selected_cold_misses),
+        expert_upload_prefetch_submitted: after
+            .expert_upload_prefetch_submitted
+            .saturating_sub(before.expert_upload_prefetch_submitted),
+        expert_upload_prefetch_completed: after
+            .expert_upload_prefetch_completed
+            .saturating_sub(before.expert_upload_prefetch_completed),
+        expert_upload_prefetch_in_flight: after.expert_upload_prefetch_in_flight,
+        expert_selected_async_upload_submitted: after
+            .expert_selected_async_upload_submitted
+            .saturating_sub(before.expert_selected_async_upload_submitted),
+        expert_selected_async_upload_completed: after
+            .expert_selected_async_upload_completed
+            .saturating_sub(before.expert_selected_async_upload_completed),
+        expert_selected_async_upload_bytes: after
+            .expert_selected_async_upload_bytes
+            .saturating_sub(before.expert_selected_async_upload_bytes),
+        expert_selected_upload_waits: after
+            .expert_selected_upload_waits
+            .saturating_sub(before.expert_selected_upload_waits),
+        expert_selected_upload_wait_us: after
+            .expert_selected_upload_wait_us
+            .saturating_sub(before.expert_selected_upload_wait_us),
+        expert_async_upload_bytes: after
+            .expert_async_upload_bytes
+            .saturating_sub(before.expert_async_upload_bytes),
+        expert_lookahead_prefetch_calls: after
+            .expert_lookahead_prefetch_calls
+            .saturating_sub(before.expert_lookahead_prefetch_calls),
+        expert_lookahead_prefetch_experts: after
+            .expert_lookahead_prefetch_experts
+            .saturating_sub(before.expert_lookahead_prefetch_experts),
+        expert_lookahead_prefetch_enqueued: after
+            .expert_lookahead_prefetch_enqueued
+            .saturating_sub(before.expert_lookahead_prefetch_enqueued),
+        expert_lookahead_prefetch_us: after
+            .expert_lookahead_prefetch_us
+            .saturating_sub(before.expert_lookahead_prefetch_us),
+        expert_planner_residency_syncs: after
+            .expert_planner_residency_syncs
+            .saturating_sub(before.expert_planner_residency_syncs),
+        expert_planner_residency_synced: after
+            .expert_planner_residency_synced
+            .saturating_sub(before.expert_planner_residency_synced),
         moe_cache_lookup_us: after
             .moe_cache_lookup_us
             .saturating_sub(before.moe_cache_lookup_us),
@@ -1078,6 +1260,9 @@ fn dsv4_operator_counters_delta(
             .output_head_merge_us
             .saturating_sub(before.output_head_merge_us),
         expert_selected: after.expert_selected.saturating_sub(before.expert_selected),
+        expert_selected_load_requests: after
+            .expert_selected_load_requests
+            .saturating_sub(before.expert_selected_load_requests),
         expert_loads: after.expert_loads.saturating_sub(before.expert_loads),
         expert_load_bytes: after
             .expert_load_bytes
@@ -1096,6 +1281,98 @@ fn dsv4_operator_counters_delta(
             .saturating_sub(before.expert_host_cache_evictions),
         expert_host_cache_entries: after.expert_host_cache_entries,
         expert_host_cache_bytes: after.expert_host_cache_bytes,
+        expert_pinned_cache_hits: after
+            .expert_pinned_cache_hits
+            .saturating_sub(before.expert_pinned_cache_hits),
+        expert_pinned_cache_misses: after
+            .expert_pinned_cache_misses
+            .saturating_sub(before.expert_pinned_cache_misses),
+        expert_pinned_cache_evictions: after
+            .expert_pinned_cache_evictions
+            .saturating_sub(before.expert_pinned_cache_evictions),
+        expert_pinned_cache_entries: after.expert_pinned_cache_entries,
+        expert_pinned_cache_bytes: after.expert_pinned_cache_bytes,
+        expert_cuda_resident_entries: after.expert_cuda_resident_entries,
+        expert_cuda_resident_bytes: after.expert_cuda_resident_bytes,
+        expert_async_prefetch_submitted: after
+            .expert_async_prefetch_submitted
+            .saturating_sub(before.expert_async_prefetch_submitted),
+        expert_async_prefetch_completed: after
+            .expert_async_prefetch_completed
+            .saturating_sub(before.expert_async_prefetch_completed),
+        expert_async_prefetch_failed: after
+            .expert_async_prefetch_failed
+            .saturating_sub(before.expert_async_prefetch_failed),
+        expert_async_prefetch_skipped: after
+            .expert_async_prefetch_skipped
+            .saturating_sub(before.expert_async_prefetch_skipped),
+        expert_async_prefetch_in_flight: after.expert_async_prefetch_in_flight,
+        cuda_graph_capture_attempts: after
+            .cuda_graph_capture_attempts
+            .saturating_sub(before.cuda_graph_capture_attempts),
+        cuda_graph_capture_successes: after
+            .cuda_graph_capture_successes
+            .saturating_sub(before.cuda_graph_capture_successes),
+        cuda_graph_capture_failures: after
+            .cuda_graph_capture_failures
+            .saturating_sub(before.cuda_graph_capture_failures),
+        cuda_graph_capture_us: after
+            .cuda_graph_capture_us
+            .saturating_sub(before.cuda_graph_capture_us),
+        cuda_graph_capture_warmup_us: after
+            .cuda_graph_capture_warmup_us
+            .saturating_sub(before.cuda_graph_capture_warmup_us),
+        cuda_graph_capture_prepare_us: after
+            .cuda_graph_capture_prepare_us
+            .saturating_sub(before.cuda_graph_capture_prepare_us),
+        cuda_graph_capture_record_us: after
+            .cuda_graph_capture_record_us
+            .saturating_sub(before.cuda_graph_capture_record_us),
+        cuda_graph_full_capture_failures: after
+            .cuda_graph_full_capture_failures
+            .saturating_sub(before.cuda_graph_full_capture_failures),
+        cuda_graph_captured_segments: after
+            .cuda_graph_captured_segments
+            .saturating_sub(before.cuda_graph_captured_segments),
+        cuda_graph_one_shot_retires: after
+            .cuda_graph_one_shot_retires
+            .saturating_sub(before.cuda_graph_one_shot_retires),
+        cuda_graph_replays: after
+            .cuda_graph_replays
+            .saturating_sub(before.cuda_graph_replays),
+        cuda_graph_replay_us: after
+            .cuda_graph_replay_us
+            .saturating_sub(before.cuda_graph_replay_us),
+        cuda_graph_replay_fallbacks: after
+            .cuda_graph_replay_fallbacks
+            .saturating_sub(before.cuda_graph_replay_fallbacks),
+        expert_predictor_stats: expert_prediction_stats_delta(
+            before.expert_predictor_stats,
+            after.expert_predictor_stats,
+        ),
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn expert_prediction_stats_delta(
+    before: ExpertPredictionStats,
+    after: ExpertPredictionStats,
+) -> ExpertPredictionStats {
+    ExpertPredictionStats {
+        predict_calls: after.predict_calls.saturating_sub(before.predict_calls),
+        predicted_experts: after
+            .predicted_experts
+            .saturating_sub(before.predicted_experts),
+        observe_calls: after.observe_calls.saturating_sub(before.observe_calls),
+        observed_experts: after
+            .observed_experts
+            .saturating_sub(before.observed_experts),
+        cold_miss_observations: after
+            .cold_miss_observations
+            .saturating_sub(before.cold_miss_observations),
+        transition_observations: after
+            .transition_observations
+            .saturating_sub(before.transition_observations),
     }
 }
 
@@ -1388,6 +1665,10 @@ fn runtime_step_json(step: &RuntimeStepMeasurement) -> serde_json::Value {
         "finished": step.finished,
         "elapsed_s": step.elapsed_us as f64 / 1_000_000.0,
         "runner_position": step.runner_position,
+        "dsv4_operator_counters": dsv4_operator_counters_json(&step.dsv4_operator_counters),
+        "dsv4_layer_profile_summary": dsv4_layer_profile_summary_json(&step.dsv4_layer_profile_stats),
+        "dsv4_attention_profile_summary": dsv4_attention_profile_summary_json(&step.dsv4_attention_profile_stats),
+        "dsv4_output_profile": dsv4_output_profile_stats_json(&step.dsv4_output_profile_stats),
     })
 }
 
@@ -1523,6 +1804,94 @@ fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> ser
         u64_field("moe_tc_calls", stats.moe_tc_calls);
         u64_field("moe_scalar_calls", stats.moe_scalar_calls);
         u64_field("moe_reduce_calls", stats.moe_reduce_calls);
+        u64_field("moe_predicted_experts", stats.moe_predicted_experts);
+        u64_field("moe_prefetch_loads", stats.moe_prefetch_loads);
+        u64_field("moe_prefetch_enqueued", stats.moe_prefetch_enqueued);
+        u64_field(
+            "moe_prefetch_skipped_cached_or_inflight",
+            stats.moe_prefetch_skipped_cached_or_inflight,
+        );
+        u64_field("moe_prefetch_resident", stats.moe_prefetch_resident);
+        u64_field(
+            "moe_prefetch_materializing",
+            stats.moe_prefetch_materializing,
+        );
+        u64_field("moe_prefetch_host_staged", stats.moe_prefetch_host_staged);
+        u64_field("moe_prefetch_in_flight", stats.moe_prefetch_in_flight);
+        u64_field("moe_prefetch_cold", stats.moe_prefetch_cold);
+        u64_field(
+            "expert_selected_resident_hits",
+            stats.expert_selected_resident_hits,
+        );
+        u64_field(
+            "expert_selected_upload_hits",
+            stats.expert_selected_upload_hits,
+        );
+        u64_field(
+            "expert_selected_host_staged_hits",
+            stats.expert_selected_host_staged_hits,
+        );
+        u64_field(
+            "expert_selected_host_staging_waits",
+            stats.expert_selected_host_staging_waits,
+        );
+        u64_field(
+            "expert_selected_host_staging_hits",
+            stats.expert_selected_host_staging_hits,
+        );
+        u64_field(
+            "expert_selected_host_staging_wait_us",
+            stats.expert_selected_host_staging_wait_us,
+        );
+        u64_field(
+            "expert_selected_cold_misses",
+            stats.expert_selected_cold_misses,
+        );
+        u64_field(
+            "expert_upload_prefetch_submitted",
+            stats.expert_upload_prefetch_submitted,
+        );
+        u64_field(
+            "expert_upload_prefetch_completed",
+            stats.expert_upload_prefetch_completed,
+        );
+        u64_field(
+            "expert_selected_async_upload_submitted",
+            stats.expert_selected_async_upload_submitted,
+        );
+        u64_field(
+            "expert_selected_async_upload_completed",
+            stats.expert_selected_async_upload_completed,
+        );
+        u64_field(
+            "expert_selected_async_upload_bytes",
+            stats.expert_selected_async_upload_bytes,
+        );
+        u64_field(
+            "expert_selected_upload_waits",
+            stats.expert_selected_upload_waits,
+        );
+        u64_field("expert_async_upload_bytes", stats.expert_async_upload_bytes);
+        u64_field(
+            "expert_lookahead_prefetch_calls",
+            stats.expert_lookahead_prefetch_calls,
+        );
+        u64_field(
+            "expert_lookahead_prefetch_experts",
+            stats.expert_lookahead_prefetch_experts,
+        );
+        u64_field(
+            "expert_lookahead_prefetch_enqueued",
+            stats.expert_lookahead_prefetch_enqueued,
+        );
+        u64_field(
+            "expert_planner_residency_syncs",
+            stats.expert_planner_residency_syncs,
+        );
+        u64_field(
+            "expert_planner_residency_synced",
+            stats.expert_planner_residency_synced,
+        );
         u64_field("output_head_calls", stats.output_head_calls);
         u64_field("output_head_chunks", stats.output_head_chunks);
         u64_field("output_head_rows", stats.output_head_rows);
@@ -1533,6 +1902,10 @@ fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> ser
             stats.output_head_hidden_uploads,
         );
         u64_field("expert_selected", stats.expert_selected);
+        u64_field(
+            "expert_selected_load_requests",
+            stats.expert_selected_load_requests,
+        );
         u64_field("expert_loads", stats.expert_loads);
         u64_field("expert_load_bytes", stats.expert_load_bytes);
         u64_field("expert_evictions", stats.expert_evictions);
@@ -1543,10 +1916,109 @@ fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> ser
             stats.expert_host_cache_evictions,
         );
         u64_field("expert_host_cache_bytes", stats.expert_host_cache_bytes);
+        u64_field("expert_pinned_cache_hits", stats.expert_pinned_cache_hits);
+        u64_field(
+            "expert_pinned_cache_misses",
+            stats.expert_pinned_cache_misses,
+        );
+        u64_field(
+            "expert_pinned_cache_evictions",
+            stats.expert_pinned_cache_evictions,
+        );
+        u64_field("expert_pinned_cache_bytes", stats.expert_pinned_cache_bytes);
+        u64_field(
+            "expert_cuda_resident_bytes",
+            stats.expert_cuda_resident_bytes,
+        );
+        u64_field(
+            "expert_async_prefetch_submitted",
+            stats.expert_async_prefetch_submitted,
+        );
+        u64_field(
+            "expert_async_prefetch_completed",
+            stats.expert_async_prefetch_completed,
+        );
+        u64_field(
+            "expert_async_prefetch_failed",
+            stats.expert_async_prefetch_failed,
+        );
+        u64_field(
+            "expert_async_prefetch_skipped",
+            stats.expert_async_prefetch_skipped,
+        );
+        u64_field(
+            "cuda_graph_capture_attempts",
+            stats.cuda_graph_capture_attempts,
+        );
+        u64_field(
+            "cuda_graph_capture_successes",
+            stats.cuda_graph_capture_successes,
+        );
+        u64_field(
+            "cuda_graph_capture_failures",
+            stats.cuda_graph_capture_failures,
+        );
+        u64_field(
+            "cuda_graph_full_capture_failures",
+            stats.cuda_graph_full_capture_failures,
+        );
+        u64_field(
+            "cuda_graph_captured_segments",
+            stats.cuda_graph_captured_segments,
+        );
+        u64_field(
+            "cuda_graph_one_shot_retires",
+            stats.cuda_graph_one_shot_retires,
+        );
+        u64_field("cuda_graph_replays", stats.cuda_graph_replays);
+        u64_field(
+            "cuda_graph_replay_fallbacks",
+            stats.cuda_graph_replay_fallbacks,
+        );
+        u64_field(
+            "expert_predictor_predict_calls",
+            stats.expert_predictor_stats.predict_calls,
+        );
+        u64_field(
+            "expert_predictor_predicted_experts",
+            stats.expert_predictor_stats.predicted_experts,
+        );
+        u64_field(
+            "expert_predictor_observe_calls",
+            stats.expert_predictor_stats.observe_calls,
+        );
+        u64_field(
+            "expert_predictor_observed_experts",
+            stats.expert_predictor_stats.observed_experts,
+        );
+        u64_field(
+            "expert_predictor_cold_miss_observations",
+            stats.expert_predictor_stats.cold_miss_observations,
+        );
+        u64_field(
+            "expert_predictor_transition_observations",
+            stats.expert_predictor_stats.transition_observations,
+        );
     }
     out.insert(
         "expert_host_cache_entries".into(),
         serde_json::Value::from(stats.expert_host_cache_entries),
+    );
+    out.insert(
+        "expert_pinned_cache_entries".into(),
+        serde_json::Value::from(stats.expert_pinned_cache_entries),
+    );
+    out.insert(
+        "expert_cuda_resident_entries".into(),
+        serde_json::Value::from(stats.expert_cuda_resident_entries),
+    );
+    out.insert(
+        "expert_async_prefetch_in_flight".into(),
+        serde_json::Value::from(stats.expert_async_prefetch_in_flight),
+    );
+    out.insert(
+        "expert_upload_prefetch_in_flight".into(),
+        serde_json::Value::from(stats.expert_upload_prefetch_in_flight),
     );
 
     {
@@ -1566,7 +2038,33 @@ fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> ser
         seconds_field("moe_router_s", stats.moe_router_us);
         seconds_field("moe_routing_s", stats.moe_routing_us);
         seconds_field("moe_plan_s", stats.moe_plan_us);
+        seconds_field(
+            "expert_lookahead_prefetch_s",
+            stats.expert_lookahead_prefetch_us,
+        );
         seconds_field("moe_cache_lookup_s", stats.moe_cache_lookup_us);
+        seconds_field(
+            "expert_selected_upload_wait_s",
+            stats.expert_selected_upload_wait_us,
+        );
+        seconds_field(
+            "expert_selected_host_staging_wait_s",
+            stats.expert_selected_host_staging_wait_us,
+        );
+        seconds_field("cuda_graph_capture_s", stats.cuda_graph_capture_us);
+        seconds_field(
+            "cuda_graph_capture_warmup_s",
+            stats.cuda_graph_capture_warmup_us,
+        );
+        seconds_field(
+            "cuda_graph_capture_prepare_s",
+            stats.cuda_graph_capture_prepare_us,
+        );
+        seconds_field(
+            "cuda_graph_capture_record_s",
+            stats.cuda_graph_capture_record_us,
+        );
+        seconds_field("cuda_graph_replay_s", stats.cuda_graph_replay_us);
         seconds_field("moe_expert_read_s", stats.moe_expert_read_us);
         seconds_field("moe_expert_upload_s", stats.moe_expert_upload_us);
         seconds_field("moe_shared_s", stats.moe_shared_us);
@@ -1628,6 +2126,16 @@ fn dsv4_profile_sync_enabled() -> bool {
         .map(|value| {
             let value = value.trim().to_ascii_lowercase();
             !(value.is_empty() || value == "0" || value == "false" || value == "off")
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(feature = "cuda")]
+fn dsv4_expert_prewarm_enabled() -> bool {
+    std::env::var("FERRULE_DSV4_EXPERT_PREWARM")
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            value == "1" || value == "true" || value == "on"
         })
         .unwrap_or(false)
 }

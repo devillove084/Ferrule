@@ -17,6 +17,7 @@ use crate::hyper_connection::{
 };
 use crate::moe::executor::ExpertExecutor;
 use crate::moe::handle::CpuExpertHandleStore;
+use crate::moe::prediction::{ExpertAccessPhase, ExpertBatchAccessEvent, ExpertPredictionStats};
 use crate::moe::routed::{
     execute_routed_moe_with_artifact_router_reference_with_handles, RoutedMoeStepOutput,
 };
@@ -169,6 +170,37 @@ pub struct DeepSeekV4OperatorRuntimeCounters {
     pub moe_router_us: u64,
     pub moe_routing_us: u64,
     pub moe_plan_us: u64,
+    pub moe_predicted_experts: u64,
+    pub moe_prefetch_loads: u64,
+    pub moe_prefetch_enqueued: u64,
+    pub moe_prefetch_skipped_cached_or_inflight: u64,
+    pub moe_prefetch_resident: u64,
+    pub moe_prefetch_materializing: u64,
+    pub moe_prefetch_host_staged: u64,
+    pub moe_prefetch_in_flight: u64,
+    pub moe_prefetch_cold: u64,
+    pub expert_selected_resident_hits: u64,
+    pub expert_selected_upload_hits: u64,
+    pub expert_selected_host_staged_hits: u64,
+    pub expert_selected_host_staging_waits: u64,
+    pub expert_selected_host_staging_hits: u64,
+    pub expert_selected_host_staging_wait_us: u64,
+    pub expert_selected_cold_misses: u64,
+    pub expert_upload_prefetch_submitted: u64,
+    pub expert_upload_prefetch_completed: u64,
+    pub expert_upload_prefetch_in_flight: usize,
+    pub expert_selected_async_upload_submitted: u64,
+    pub expert_selected_async_upload_completed: u64,
+    pub expert_selected_async_upload_bytes: u64,
+    pub expert_selected_upload_waits: u64,
+    pub expert_selected_upload_wait_us: u64,
+    pub expert_async_upload_bytes: u64,
+    pub expert_lookahead_prefetch_calls: u64,
+    pub expert_lookahead_prefetch_experts: u64,
+    pub expert_lookahead_prefetch_enqueued: u64,
+    pub expert_lookahead_prefetch_us: u64,
+    pub expert_planner_residency_syncs: u64,
+    pub expert_planner_residency_synced: u64,
     pub moe_cache_lookup_us: u64,
     pub moe_expert_read_us: u64,
     pub moe_expert_upload_us: u64,
@@ -188,6 +220,7 @@ pub struct DeepSeekV4OperatorRuntimeCounters {
     pub output_head_topk_us: u64,
     pub output_head_merge_us: u64,
     pub expert_selected: u64,
+    pub expert_selected_load_requests: u64,
     pub expert_loads: u64,
     pub expert_load_bytes: u64,
     pub expert_evictions: u64,
@@ -196,6 +229,32 @@ pub struct DeepSeekV4OperatorRuntimeCounters {
     pub expert_host_cache_evictions: u64,
     pub expert_host_cache_entries: usize,
     pub expert_host_cache_bytes: u64,
+    pub expert_pinned_cache_hits: u64,
+    pub expert_pinned_cache_misses: u64,
+    pub expert_pinned_cache_evictions: u64,
+    pub expert_pinned_cache_entries: usize,
+    pub expert_pinned_cache_bytes: u64,
+    pub expert_cuda_resident_entries: usize,
+    pub expert_cuda_resident_bytes: u64,
+    pub expert_async_prefetch_submitted: u64,
+    pub expert_async_prefetch_completed: u64,
+    pub expert_async_prefetch_failed: u64,
+    pub expert_async_prefetch_skipped: u64,
+    pub expert_async_prefetch_in_flight: usize,
+    pub cuda_graph_capture_attempts: u64,
+    pub cuda_graph_capture_successes: u64,
+    pub cuda_graph_capture_failures: u64,
+    pub cuda_graph_capture_us: u64,
+    pub cuda_graph_capture_warmup_us: u64,
+    pub cuda_graph_capture_prepare_us: u64,
+    pub cuda_graph_capture_record_us: u64,
+    pub cuda_graph_full_capture_failures: u64,
+    pub cuda_graph_captured_segments: u64,
+    pub cuda_graph_one_shot_retires: u64,
+    pub cuda_graph_replays: u64,
+    pub cuda_graph_replay_us: u64,
+    pub cuda_graph_replay_fallbacks: u64,
+    pub expert_predictor_stats: ExpertPredictionStats,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -250,6 +309,20 @@ pub struct DeepSeekV4OperatorContext {
     /// sampling elapsed wall time. This is expensive but gives attribution that
     /// includes queued GPU work instead of only host enqueue time.
     profile_sync: bool,
+    moe_access_events: Vec<ExpertBatchAccessEvent>,
+    cuda_graph_capture_attempts: u64,
+    cuda_graph_capture_successes: u64,
+    cuda_graph_capture_failures: u64,
+    cuda_graph_capture_us: u64,
+    cuda_graph_capture_warmup_us: u64,
+    cuda_graph_capture_prepare_us: u64,
+    cuda_graph_capture_record_us: u64,
+    cuda_graph_full_capture_failures: u64,
+    cuda_graph_captured_segments: u64,
+    cuda_graph_one_shot_retires: u64,
+    cuda_graph_replays: u64,
+    cuda_graph_replay_us: u64,
+    cuda_graph_replay_fallbacks: u64,
     #[cfg(feature = "cuda")]
     pub(crate) cuda: Option<DeepSeekV4CudaOperatorCache>,
 }
@@ -262,6 +335,20 @@ impl DeepSeekV4OperatorContext {
             layer_profiles: BTreeMap::new(),
             attention_profiles: BTreeMap::new(),
             profile_sync: dsv4_profile_sync_enabled(),
+            moe_access_events: Vec::new(),
+            cuda_graph_capture_attempts: 0,
+            cuda_graph_capture_successes: 0,
+            cuda_graph_capture_failures: 0,
+            cuda_graph_capture_us: 0,
+            cuda_graph_capture_warmup_us: 0,
+            cuda_graph_capture_prepare_us: 0,
+            cuda_graph_capture_record_us: 0,
+            cuda_graph_full_capture_failures: 0,
+            cuda_graph_captured_segments: 0,
+            cuda_graph_one_shot_retires: 0,
+            cuda_graph_replays: 0,
+            cuda_graph_replay_us: 0,
+            cuda_graph_replay_fallbacks: 0,
             #[cfg(feature = "cuda")]
             cuda: match backend {
                 DeepSeekV4OperatorBackend::Cpu => None,
@@ -275,10 +362,24 @@ impl DeepSeekV4OperatorContext {
     }
 
     pub fn runtime_counters(&self) -> DeepSeekV4OperatorRuntimeCounters {
-        match self.backend {
+        let mut counters = match self.backend {
             DeepSeekV4OperatorBackend::Cpu => DeepSeekV4OperatorRuntimeCounters::default(),
             DeepSeekV4OperatorBackend::Cuda => self.cuda_runtime_counters(),
-        }
+        };
+        counters.cuda_graph_capture_attempts = self.cuda_graph_capture_attempts;
+        counters.cuda_graph_capture_successes = self.cuda_graph_capture_successes;
+        counters.cuda_graph_capture_failures = self.cuda_graph_capture_failures;
+        counters.cuda_graph_capture_us = self.cuda_graph_capture_us;
+        counters.cuda_graph_capture_warmup_us = self.cuda_graph_capture_warmup_us;
+        counters.cuda_graph_capture_prepare_us = self.cuda_graph_capture_prepare_us;
+        counters.cuda_graph_capture_record_us = self.cuda_graph_capture_record_us;
+        counters.cuda_graph_full_capture_failures = self.cuda_graph_full_capture_failures;
+        counters.cuda_graph_captured_segments = self.cuda_graph_captured_segments;
+        counters.cuda_graph_one_shot_retires = self.cuda_graph_one_shot_retires;
+        counters.cuda_graph_replays = self.cuda_graph_replays;
+        counters.cuda_graph_replay_us = self.cuda_graph_replay_us;
+        counters.cuda_graph_replay_fallbacks = self.cuda_graph_replay_fallbacks;
+        counters
     }
 
     pub fn layer_profile_stats(&self) -> Vec<DeepSeekV4LayerProfileStats> {
@@ -291,6 +392,96 @@ impl DeepSeekV4OperatorContext {
 
     pub fn profile_sync_enabled(&self) -> bool {
         self.profile_sync
+    }
+
+    pub(crate) fn record_moe_access_event(&mut self, event: ExpertBatchAccessEvent) {
+        self.moe_access_events.push(event);
+    }
+
+    pub(crate) fn record_cuda_graph_capture_attempt(&mut self) {
+        self.cuda_graph_capture_attempts = self.cuda_graph_capture_attempts.saturating_add(1);
+    }
+
+    pub(crate) fn record_cuda_graph_capture_success(&mut self) {
+        self.cuda_graph_capture_successes = self.cuda_graph_capture_successes.saturating_add(1);
+    }
+
+    pub(crate) fn record_cuda_graph_capture_failure(&mut self) {
+        self.cuda_graph_capture_failures = self.cuda_graph_capture_failures.saturating_add(1);
+    }
+
+    pub(crate) fn record_cuda_graph_capture_elapsed(&mut self, elapsed: Duration) {
+        self.cuda_graph_capture_us = self
+            .cuda_graph_capture_us
+            .saturating_add(duration_us(elapsed));
+    }
+
+    pub(crate) fn record_cuda_graph_capture_warmup(&mut self, elapsed: Duration) {
+        self.cuda_graph_capture_warmup_us = self
+            .cuda_graph_capture_warmup_us
+            .saturating_add(duration_us(elapsed));
+    }
+
+    pub(crate) fn record_cuda_graph_capture_prepare(&mut self, elapsed: Duration) {
+        self.cuda_graph_capture_prepare_us = self
+            .cuda_graph_capture_prepare_us
+            .saturating_add(duration_us(elapsed));
+    }
+
+    pub(crate) fn record_cuda_graph_capture_record(&mut self, elapsed: Duration) {
+        self.cuda_graph_capture_record_us = self
+            .cuda_graph_capture_record_us
+            .saturating_add(duration_us(elapsed));
+    }
+
+    pub(crate) fn record_cuda_graph_full_capture_failure(&mut self) {
+        self.cuda_graph_full_capture_failures =
+            self.cuda_graph_full_capture_failures.saturating_add(1);
+    }
+
+    pub(crate) fn record_cuda_graph_captured_segments(&mut self, segments: usize) {
+        self.cuda_graph_captured_segments = self
+            .cuda_graph_captured_segments
+            .saturating_add(segments as u64);
+    }
+
+    pub(crate) fn record_cuda_graph_one_shot_retire(&mut self) {
+        self.cuda_graph_one_shot_retires = self.cuda_graph_one_shot_retires.saturating_add(1);
+    }
+
+    pub(crate) fn record_cuda_graph_replay(&mut self, elapsed: Duration) {
+        self.cuda_graph_replays = self.cuda_graph_replays.saturating_add(1);
+        self.cuda_graph_replay_us = self
+            .cuda_graph_replay_us
+            .saturating_add(duration_us(elapsed));
+    }
+
+    pub(crate) fn record_cuda_graph_replay_fallback(&mut self) {
+        self.cuda_graph_replay_fallbacks = self.cuda_graph_replay_fallbacks.saturating_add(1);
+    }
+
+    pub(crate) fn drain_moe_access_events(&mut self) -> Vec<ExpertBatchAccessEvent> {
+        let events = std::mem::take(&mut self.moe_access_events);
+        self.extend_cuda_moe_access_events(events)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn extend_cuda_moe_access_events(
+        &mut self,
+        mut events: Vec<ExpertBatchAccessEvent>,
+    ) -> Vec<ExpertBatchAccessEvent> {
+        if let Some(cuda) = self.cuda.as_mut() {
+            events.extend(cuda.drain_moe_access_events());
+        }
+        events
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    fn extend_cuda_moe_access_events(
+        &mut self,
+        events: Vec<ExpertBatchAccessEvent>,
+    ) -> Vec<ExpertBatchAccessEvent> {
+        events
     }
 
     pub(crate) fn finish_profile_stage(&mut self, start: Instant) -> Result<u64> {
@@ -472,6 +663,37 @@ impl DeepSeekV4OperatorContext {
         }
     }
 
+    pub(crate) fn linear_rows(
+        &mut self,
+        linear: &ArtifactLinearPayload,
+        input: &[f32],
+        rows: usize,
+    ) -> Result<Vec<f32>> {
+        let in_features = linear.format.in_features();
+        if rows == 0 || input.len() != rows * in_features {
+            return Err(Error::Model(format!(
+                "artifact linear {:?} rows input length mismatch: rows={} expected {}, got {}",
+                linear.role,
+                rows,
+                rows * in_features,
+                input.len()
+            )));
+        }
+        match self.backend {
+            DeepSeekV4OperatorBackend::Cpu => {
+                let mut output = Vec::with_capacity(rows * linear.format.out_features());
+                for row in 0..rows {
+                    let start = row * in_features;
+                    output.extend_from_slice(
+                        &linear.reference_matvec(&input[start..start + in_features])?,
+                    );
+                }
+                Ok(output)
+            }
+            DeepSeekV4OperatorBackend::Cuda => self.cuda_linear_rows(linear, input, rows),
+        }
+    }
+
     pub(crate) fn linear_topk(
         &mut self,
         linear: &ArtifactLinearPayload,
@@ -568,6 +790,134 @@ impl DeepSeekV4OperatorContext {
         self.cuda_grouped_output_a_from_device(output_a, context, cfg, layer)
     }
 
+    #[cfg(feature = "cuda")]
+    pub(crate) fn grouped_output_a_from_device_into(
+        &mut self,
+        output_a: &ArtifactLinearPayload,
+        context: &ferrule_cuda::context::CudaF32Buffer,
+        cfg: DeepSeekV4AttentionConfig,
+        layer: usize,
+        output: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        self.cuda_mut()?
+            .grouped_output_a_from_device_into(output_a, context, cfg, layer, output)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn grouped_output_a_rows_from_host(
+        &mut self,
+        output_a: &ArtifactLinearPayload,
+        context: &[f32],
+        rows: usize,
+        cfg: DeepSeekV4AttentionConfig,
+        layer: usize,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.cuda_mut()?
+            .grouped_output_a_rows_from_host(output_a, context, rows, cfg, layer)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn grouped_output_a_rows_from_device(
+        &mut self,
+        output_a: &ArtifactLinearPayload,
+        context: &ferrule_cuda::context::CudaF32Buffer,
+        rows: usize,
+        cfg: DeepSeekV4AttentionConfig,
+        layer: usize,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.cuda_mut()?
+            .grouped_output_a_rows_from_device(output_a, context, rows, cfg, layer)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn linear_rows_from_device(
+        &mut self,
+        linear: &ArtifactLinearPayload,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        rows: usize,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.cuda_mut()?
+            .linear_rows_from_device(linear, input, rows)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn linear_rows_from_device_to_host(
+        &mut self,
+        linear: &ArtifactLinearPayload,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        rows: usize,
+    ) -> Result<Vec<f32>> {
+        self.cuda_mut()?
+            .linear_rows_from_device_to_host(linear, input, rows)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn gather_f32_rows(
+        &mut self,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        indices: &[i32],
+        rows: usize,
+        row_dim: usize,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.cuda_mut()?
+            .gather_f32_rows(input, indices, rows, row_dim)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn concat_attention_values_device(
+        &mut self,
+        window_values: &ferrule_cuda::context::CudaF32Buffer,
+        compressed_values: &[f32],
+        window_rows: usize,
+        head_dim: usize,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.cuda_mut()?.concat_attention_values_device(
+            window_values,
+            compressed_values,
+            window_rows,
+            head_dim,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn concat_attention_values_device_buffers(
+        &mut self,
+        window_values: &ferrule_cuda::context::CudaF32Buffer,
+        compressed_values: &ferrule_cuda::context::CudaF32Buffer,
+        window_rows: usize,
+        head_dim: usize,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.cuda_mut()?.concat_attention_values_device_buffers(
+            window_values,
+            compressed_values,
+            window_rows,
+            head_dim,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_linear_rows(
+        &mut self,
+        linear: &ArtifactLinearPayload,
+        input: &[f32],
+        rows: usize,
+    ) -> Result<Vec<f32>> {
+        self.cuda_mut()?
+            .linear_rows_from_host_to_host(linear, input, rows)
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    pub(crate) fn cuda_linear_rows(
+        &mut self,
+        _linear: &ArtifactLinearPayload,
+        _input: &[f32],
+        _rows: usize,
+    ) -> Result<Vec<f32>> {
+        Err(Error::Model(
+            "DeepSeek-V4 CUDA backend requires ferrule-runtime/cuda feature".into(),
+        ))
+    }
+
     #[cfg(not(feature = "cuda"))]
     pub(crate) fn grouped_output_a_from_device(
         &mut self,
@@ -591,6 +941,38 @@ impl DeepSeekV4OperatorContext {
         match self.backend {
             DeepSeekV4OperatorBackend::Cpu => rms_norm(input, weight, eps, label),
             DeepSeekV4OperatorBackend::Cuda => self.cuda_rms_norm(input, weight, eps),
+        }
+    }
+
+    pub(crate) fn rms_norm_rows(
+        &mut self,
+        input: &[f32],
+        rows: usize,
+        weight: &[f32],
+        eps: f32,
+        label: &str,
+    ) -> Result<Vec<f32>> {
+        if rows == 0 || weight.is_empty() || input.len() != rows * weight.len() {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 {label} batched RMS length mismatch: rows={rows} input={} weight={}",
+                input.len(),
+                weight.len()
+            )));
+        }
+        match self.backend {
+            DeepSeekV4OperatorBackend::Cpu => {
+                let mut out = Vec::with_capacity(input.len());
+                for row in 0..rows {
+                    let start = row * weight.len();
+                    let normalized =
+                        rms_norm(&input[start..start + weight.len()], weight, eps, label)?;
+                    out.extend_from_slice(&normalized);
+                }
+                Ok(out)
+            }
+            DeepSeekV4OperatorBackend::Cuda => {
+                self.cuda_rms_norm_rows(input, rows, weight, eps, label)
+            }
         }
     }
 
@@ -697,6 +1079,186 @@ impl DeepSeekV4OperatorContext {
                 shared_expert,
             ),
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn routed_moe_prefill_batch(
+        &mut self,
+        layer: usize,
+        input: &[f32],
+        token_ids: &[u32],
+        router: &RouterArtifactPayload,
+        predicted_experts: &[usize],
+        router_policy: &ExpertRouterPolicy,
+        planner: &mut ExpertStreamingPlanner,
+        reader: &ExpertStreamingReader,
+        handles: &mut CpuExpertHandleStore,
+        expert_executor: &impl ExpertExecutor,
+        shared_expert: Option<&SwiGluFfnPayload>,
+    ) -> Result<Vec<f32>> {
+        match self.backend {
+            DeepSeekV4OperatorBackend::Cpu => {
+                let hidden = router.weight.format.in_features();
+                if input.len() != token_ids.len() * hidden {
+                    return Err(Error::Model(format!(
+                        "DeepSeek-V4 CPU MoE prefill input length mismatch: input={} expected {}x{}",
+                        input.len(),
+                        token_ids.len(),
+                        hidden
+                    )));
+                }
+                let mut output = Vec::with_capacity(input.len());
+                let mut routes_by_token = Vec::with_capacity(token_ids.len());
+                let mut streaming_steps = Vec::with_capacity(token_ids.len());
+                for (token_idx, &token_id) in token_ids.iter().enumerate() {
+                    let row = &input[token_idx * hidden..(token_idx + 1) * hidden];
+                    let moe = execute_routed_moe_with_artifact_router_reference_with_handles(
+                        layer,
+                        row,
+                        token_id,
+                        router,
+                        predicted_experts,
+                        router_policy,
+                        planner,
+                        reader,
+                        handles,
+                        expert_executor,
+                        shared_expert,
+                    )?;
+                    routes_by_token.push(moe.routes.clone());
+                    streaming_steps.push(moe.streaming.clone());
+                    output.extend_from_slice(&moe.output);
+                }
+                self.record_moe_access_event(ExpertBatchAccessEvent::from_routes_by_token(
+                    layer,
+                    ExpertAccessPhase::Prefill,
+                    token_ids.len(),
+                    &routes_by_token,
+                    &streaming_steps,
+                ));
+                Ok(output)
+            }
+            DeepSeekV4OperatorBackend::Cuda => self.cuda_routed_moe_prefill_batch(
+                layer,
+                input,
+                token_ids,
+                router,
+                predicted_experts,
+                router_policy,
+                planner,
+                reader,
+                handles,
+                shared_expert,
+            ),
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn routed_moe_prefill_batch_from_device(
+        &mut self,
+        layer: usize,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        token_ids: &[u32],
+        router: &RouterArtifactPayload,
+        predicted_experts: &[usize],
+        router_policy: &ExpertRouterPolicy,
+        planner: &mut ExpertStreamingPlanner,
+        reader: &ExpertStreamingReader,
+        handles: &mut CpuExpertHandleStore,
+        shared_expert: Option<&SwiGluFfnPayload>,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        if self.backend != DeepSeekV4OperatorBackend::Cuda {
+            return Err(Error::Model(
+                "DeepSeek-V4 device-resident MoE prefill requires CUDA backend".into(),
+            ));
+        }
+        let output = self.cuda_mut()?.routed_moe_prefill_batch_from_device(
+            layer,
+            input,
+            token_ids,
+            router,
+            predicted_experts,
+            router_policy,
+            planner,
+            reader,
+            handles,
+            shared_expert,
+        )?;
+        if let Some(cuda) = self.cuda.as_mut() {
+            self.moe_access_events
+                .extend(cuda.drain_moe_access_events());
+        }
+        Ok(output)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn prefetch_predicted_experts(
+        &mut self,
+        layer: usize,
+        predicted_experts: &[usize],
+        planner: &mut ExpertStreamingPlanner,
+        reader: &ExpertStreamingReader,
+        handles: &mut CpuExpertHandleStore,
+    ) -> Result<usize> {
+        if self.backend != DeepSeekV4OperatorBackend::Cuda {
+            return Ok(0);
+        }
+        self.cuda_mut()?.prefetch_predicted_experts(
+            layer,
+            predicted_experts,
+            planner,
+            reader,
+            handles,
+        )
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    pub(crate) fn prefetch_predicted_experts(
+        &mut self,
+        _layer: usize,
+        _predicted_experts: &[usize],
+        _planner: &mut ExpertStreamingPlanner,
+        _reader: &ExpertStreamingReader,
+        _handles: &mut CpuExpertHandleStore,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn prewarm_experts(
+        &mut self,
+        layer: usize,
+        experts: &[usize],
+        planner: &mut ExpertStreamingPlanner,
+        reader: &ExpertStreamingReader,
+        handles: &mut CpuExpertHandleStore,
+    ) -> Result<usize> {
+        if self.backend != DeepSeekV4OperatorBackend::Cuda {
+            return Ok(0);
+        }
+        self.cuda_mut()?
+            .prewarm_experts(layer, experts, planner, reader, handles)
+    }
+
+    pub(crate) fn clear_sequence_workspaces(&mut self) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        {
+            if self.backend == DeepSeekV4OperatorBackend::Cuda {
+                self.cuda_mut()?.clear_sequence_workspaces();
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn clear_expert_residency(&mut self) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        {
+            if self.backend == DeepSeekV4OperatorBackend::Cuda {
+                self.cuda_mut()?.clear_expert_residency()?;
+            }
+        }
+        Ok(())
     }
 
     #[cfg(feature = "cuda")]
@@ -874,6 +1436,19 @@ impl DeepSeekV4OperatorContext {
             .grouped_output_a_from_device(output_a, context, cfg, layer)
     }
 
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_grouped_output_a_from_device_into(
+        &mut self,
+        output_a: &ArtifactLinearPayload,
+        context: &ferrule_cuda::context::CudaF32Buffer,
+        cfg: DeepSeekV4AttentionConfig,
+        layer: usize,
+        output: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        self.cuda_mut()?
+            .grouped_output_a_from_device_into(output_a, context, cfg, layer, output)
+    }
+
     #[cfg(not(feature = "cuda"))]
     pub(crate) fn cuda_grouped_output_a_from_device(
         &mut self,
@@ -897,12 +1472,39 @@ impl DeepSeekV4OperatorContext {
         self.cuda_mut()?.rms_norm(input, weight, eps)
     }
 
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_rms_norm_rows(
+        &mut self,
+        input: &[f32],
+        rows: usize,
+        weight: &[f32],
+        eps: f32,
+        label: &str,
+    ) -> Result<Vec<f32>> {
+        self.cuda_mut()?
+            .rms_norm_rows_cached(label, input, rows, weight, eps)
+    }
+
     #[cfg(not(feature = "cuda"))]
     pub(crate) fn cuda_rms_norm(
         &mut self,
         _input: &[f32],
         _weight: &[f32],
         _eps: f32,
+    ) -> Result<Vec<f32>> {
+        Err(Error::Model(
+            "DeepSeek-V4 CUDA backend requires ferrule-runtime/cuda feature".into(),
+        ))
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    pub(crate) fn cuda_rms_norm_rows(
+        &mut self,
+        _input: &[f32],
+        _rows: usize,
+        _weight: &[f32],
+        _eps: f32,
+        _label: &str,
     ) -> Result<Vec<f32>> {
         Err(Error::Model(
             "DeepSeek-V4 CUDA backend requires ferrule-runtime/cuda feature".into(),
@@ -943,6 +1545,19 @@ impl DeepSeekV4OperatorContext {
     ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
         self.cuda_mut()?
             .rms_norm_heads_from_device(input, heads, head_dim, eps)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_rms_norm_heads_from_device_into(
+        &mut self,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        heads: usize,
+        head_dim: usize,
+        eps: f32,
+        output: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        self.cuda_mut()?
+            .rms_norm_heads_from_device_into(input, heads, head_dim, eps, output)
     }
 
     #[cfg(not(feature = "cuda"))]
@@ -1117,6 +1732,60 @@ impl DeepSeekV4OperatorContext {
         )
     }
 
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cuda_routed_moe_prefill_batch(
+        &mut self,
+        layer: usize,
+        input: &[f32],
+        token_ids: &[u32],
+        router: &RouterArtifactPayload,
+        predicted_experts: &[usize],
+        router_policy: &ExpertRouterPolicy,
+        planner: &mut ExpertStreamingPlanner,
+        reader: &ExpertStreamingReader,
+        handles: &mut CpuExpertHandleStore,
+        shared_expert: Option<&SwiGluFfnPayload>,
+    ) -> Result<Vec<f32>> {
+        let output = self.cuda_mut()?.routed_moe_prefill_batch(
+            layer,
+            input,
+            token_ids,
+            router,
+            predicted_experts,
+            router_policy,
+            planner,
+            reader,
+            handles,
+            shared_expert,
+        )?;
+        if let Some(cuda) = self.cuda.as_mut() {
+            self.moe_access_events
+                .extend(cuda.drain_moe_access_events());
+        }
+        Ok(output)
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cuda_routed_moe_prefill_batch(
+        &mut self,
+        _layer: usize,
+        _input: &[f32],
+        _token_ids: &[u32],
+        _router: &RouterArtifactPayload,
+        _predicted_experts: &[usize],
+        _router_policy: &ExpertRouterPolicy,
+        _planner: &mut ExpertStreamingPlanner,
+        _reader: &ExpertStreamingReader,
+        _handles: &mut CpuExpertHandleStore,
+        _shared_expert: Option<&SwiGluFfnPayload>,
+    ) -> Result<Vec<f32>> {
+        Err(Error::Model(
+            "DeepSeek-V4 CUDA backend requires ferrule-runtime/cuda feature".into(),
+        ))
+    }
+
     #[cfg(not(feature = "cuda"))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn cuda_routed_moe_step(
@@ -1151,6 +1820,17 @@ impl DeepSeekV4OperatorContext {
         self.cuda_mut()?.linear_matvec_from_device(linear, input)
     }
 
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_linear_matvec_from_device_into(
+        &mut self,
+        linear: &ArtifactLinearPayload,
+        input: &mut ferrule_cuda::context::CudaF32Buffer,
+        output: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        self.cuda_mut()?
+            .linear_matvec_from_device_into(linear, input, output)
+    }
+
     #[cfg(not(feature = "cuda"))]
     pub(crate) fn cuda_linear_matvec_from_device(
         &mut self,
@@ -1174,11 +1854,65 @@ impl DeepSeekV4OperatorContext {
             .rms_norm_device_cached(name, input, weight, eps)
     }
 
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_rms_norm_device_cached_into(
+        &mut self,
+        name: &str,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        weight: &[f32],
+        eps: f32,
+        output: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        self.cuda_mut()?
+            .rms_norm_device_cached_into(name, input, weight, eps, output)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_rms_norm_rows_device_cached(
+        &mut self,
+        name: &str,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        rows: usize,
+        weight: &[f32],
+        eps: f32,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.cuda_mut()?
+            .rms_norm_rows_device_cached(name, input, rows, weight, eps)
+    }
+
     #[cfg(not(feature = "cuda"))]
     pub(crate) fn cuda_rms_norm_device_cached(
         &mut self,
         _name: &str,
         _input: &(),
+        _weight: &[f32],
+        _eps: f32,
+    ) -> Result<()> {
+        Err(Error::Model(
+            "DeepSeek-V4 CUDA backend requires ferrule-runtime/cuda feature".into(),
+        ))
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    pub(crate) fn cuda_rms_norm_device_cached_into(
+        &mut self,
+        _name: &str,
+        _input: &(),
+        _weight: &[f32],
+        _eps: f32,
+        _output: &mut (),
+    ) -> Result<()> {
+        Err(Error::Model(
+            "DeepSeek-V4 CUDA backend requires ferrule-runtime/cuda feature".into(),
+        ))
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    pub(crate) fn cuda_rms_norm_rows_device_cached(
+        &mut self,
+        _name: &str,
+        _input: &(),
+        _rows: usize,
         _weight: &[f32],
         _eps: f32,
     ) -> Result<()> {
@@ -1216,6 +1950,34 @@ impl DeepSeekV4OperatorContext {
         src: &ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
         self.cuda_mut()?.ops.clone_f32_buffer(src)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_zero_f32(
+        &mut self,
+        len: usize,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.cuda_mut()?.ops.zero_f32_buffer(len)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_zero_i32(
+        &mut self,
+        len: usize,
+    ) -> Result<ferrule_cuda::context::CudaI32Buffer> {
+        self.cuda_mut()?.ops.zero_i32_buffer(len)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_copy_f32_into_slot(
+        &mut self,
+        src: &ferrule_cuda::context::CudaF32Buffer,
+        dst: &mut ferrule_cuda::context::CudaF32Buffer,
+        dst_offset_elements: usize,
+    ) -> Result<()> {
+        self.cuda_mut()?
+            .ops
+            .copy_f32_into_slot(src, dst, dst_offset_elements)
     }
 
     #[cfg(not(feature = "cuda"))]
@@ -1288,6 +2050,25 @@ impl DeepSeekV4OperatorContext {
             .hc_pre_from_device(name, state, weights, tokens, config)
     }
 
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cuda_hc_pre_from_device_into(
+        &mut self,
+        name: &str,
+        state: &ferrule_cuda::context::CudaF32Buffer,
+        weights: &HyperConnectionWeights,
+        tokens: usize,
+        config: HyperConnectionConfig,
+        hidden: &mut ferrule_cuda::context::CudaF32Buffer,
+        pre: &mut ferrule_cuda::context::CudaF32Buffer,
+        post: &mut ferrule_cuda::context::CudaF32Buffer,
+        comb: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        self.cuda_mut()?.hc_pre_from_device_into(
+            name, state, weights, tokens, config, hidden, pre, post, comb,
+        )
+    }
+
     #[cfg(not(feature = "cuda"))]
     pub(crate) fn cuda_hc_pre_from_device(
         &mut self,
@@ -1314,6 +2095,23 @@ impl DeepSeekV4OperatorContext {
     ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
         self.cuda_mut()?
             .hc_post_from_device(hidden, residual, split_post, split_comb, tokens, config)
+    }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cuda_hc_post_from_device_into(
+        &mut self,
+        hidden: &ferrule_cuda::context::CudaF32Buffer,
+        residual: &ferrule_cuda::context::CudaF32Buffer,
+        split_post: &ferrule_cuda::context::CudaF32Buffer,
+        split_comb: &ferrule_cuda::context::CudaF32Buffer,
+        tokens: usize,
+        config: HyperConnectionConfig,
+        output: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        self.cuda_mut()?.hc_post_from_device_into(
+            hidden, residual, split_post, split_comb, tokens, config, output,
+        )
     }
 
     #[cfg(not(feature = "cuda"))]
@@ -1401,6 +2199,19 @@ impl DeepSeekV4OperatorContext {
     }
 
     #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_kv_write_window_device(
+        &mut self,
+        layer: usize,
+        kv_buffer: &ferrule_cuda::context::CudaF32Buffer,
+        position: usize,
+        head_dim: usize,
+        window_size: usize,
+    ) -> Result<()> {
+        self.cuda_mut()?
+            .kv_write_window_device(layer, kv_buffer, position, head_dim, window_size)
+    }
+
+    #[cfg(feature = "cuda")]
     pub(crate) fn cuda_kv_values_device(
         &self,
         layer: usize,
@@ -1426,6 +2237,18 @@ impl DeepSeekV4OperatorContext {
     }
 
     #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_ensure_rope_tables_with_params(
+        &mut self,
+        name: &str,
+        rope_dim: usize,
+        rope: super::config::DeepSeekV4RopeParams,
+        max_positions: usize,
+    ) -> Result<()> {
+        self.cuda_mut()?
+            .ensure_rope_tables_with_params(name, rope_dim, rope, max_positions)
+    }
+
+    #[cfg(feature = "cuda")]
     pub(crate) fn cuda_rope_tail_from_device(
         &mut self,
         name: &str,
@@ -1442,7 +2265,63 @@ impl DeepSeekV4OperatorContext {
         let sin = cache.rope_sin_device(name);
         cache
             .ops
-            .rope_tail_from_device(qk, &cos, &sin, position, heads, head_dim, rope_dim, inverse)
+            .rope_tail_from_device(qk, cos, sin, position, heads, head_dim, rope_dim, inverse)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_rope_tail_rows_from_device(
+        &mut self,
+        name: &str,
+        qk: &mut ferrule_cuda::context::CudaF32Buffer,
+        start_position: u32,
+        rows: u32,
+        heads: u32,
+        head_dim: u32,
+        rope_dim: u32,
+        inverse: bool,
+    ) -> Result<()> {
+        self.cuda_rope_tail_rows_strided_from_device(
+            name,
+            qk,
+            start_position,
+            1,
+            rows,
+            heads,
+            head_dim,
+            rope_dim,
+            inverse,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_rope_tail_rows_strided_from_device(
+        &mut self,
+        name: &str,
+        qk: &mut ferrule_cuda::context::CudaF32Buffer,
+        start_position: u32,
+        position_stride: u32,
+        rows: u32,
+        heads: u32,
+        head_dim: u32,
+        rope_dim: u32,
+        inverse: bool,
+    ) -> Result<()> {
+        let cache = self.cuda_mut()?;
+        cache.ensure_rope_tables(name, rope_dim as usize, 0.0, 0)?;
+        let cos = cache.rope_cos_device(name);
+        let sin = cache.rope_sin_device(name);
+        cache.ops.rope_tail_rows_strided_from_device(
+            qk,
+            cos,
+            sin,
+            start_position,
+            position_stride,
+            rows,
+            heads,
+            head_dim,
+            rope_dim,
+            inverse,
+        )
     }
 
     #[cfg(feature = "cuda")]
@@ -1455,6 +2334,350 @@ impl DeepSeekV4OperatorContext {
         self.cuda_mut()?
             .ops
             .fp8_activation_quantize_buffer_in_place(values, row_width, block_size)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_attention_kv_qat_quantize_buffer_in_place(
+        &mut self,
+        values: &mut ferrule_cuda::context::CudaF32Buffer,
+        head_dim: usize,
+        rope_dim: usize,
+    ) -> Result<()> {
+        self.cuda_mut()?
+            .ops
+            .fp8_attention_kv_qat_quantize_buffer_in_place(values, head_dim, rope_dim)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_indexer_qat_quantize_buffer_in_place(
+        &mut self,
+        values: &mut ferrule_cuda::context::CudaF32Buffer,
+        row_width: usize,
+    ) -> Result<()> {
+        self.cuda_mut()?
+            .ops
+            .fp4_hadamard_qat_quantize_buffer_in_place(values, row_width)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_compressor_prefill_softmax_from_device(
+        &mut self,
+        kv_rows: &ferrule_cuda::context::CudaF32Buffer,
+        score_rows: &ferrule_cuda::context::CudaF32Buffer,
+        ape: &[f32],
+        groups: usize,
+        ratio: usize,
+        head_dim: usize,
+        out_dim: usize,
+        overlap: bool,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.cuda_mut()?.ops.compressor_prefill_softmax_from_device(
+            kv_rows, score_rows, ape, groups, ratio, head_dim, out_dim, overlap,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cuda_prefill_topk_indices_from_device(
+        &mut self,
+        query: Option<&ferrule_cuda::context::CudaF32Buffer>,
+        weights: Option<&ferrule_cuda::context::CudaF32Buffer>,
+        indexer_kv: Option<&ferrule_cuda::context::CudaF32Buffer>,
+        tokens: usize,
+        window_size: usize,
+        window_cols: usize,
+        extra_cols: usize,
+        value_offset: usize,
+        compress_ratio: usize,
+        compressed_len: usize,
+        index_heads: usize,
+        index_head_dim: usize,
+        weight_scale: f32,
+    ) -> Result<ferrule_cuda::context::CudaI32Buffer> {
+        self.cuda_mut()?.prefill_topk_indices_from_device(
+            query,
+            weights,
+            indexer_kv,
+            tokens,
+            window_size,
+            window_cols,
+            extra_cols,
+            value_offset,
+            compress_ratio,
+            compressed_len,
+            index_heads,
+            index_head_dim,
+            weight_scale,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cuda_prefill_topk_indices_fused_index_query_from_device(
+        &mut self,
+        query: &ferrule_cuda::context::CudaF32Buffer,
+        weights: &ferrule_cuda::context::CudaF32Buffer,
+        indexer_kv: &ferrule_cuda::context::CudaF32Buffer,
+        rope_name: &str,
+        tokens: usize,
+        window_size: usize,
+        window_cols: usize,
+        extra_cols: usize,
+        value_offset: usize,
+        compress_ratio: usize,
+        compressed_len: usize,
+        index_heads: usize,
+        index_head_dim: usize,
+        rope_dim: usize,
+        start_position: usize,
+        weight_scale: f32,
+    ) -> Result<ferrule_cuda::context::CudaI32Buffer> {
+        self.cuda_mut()?
+            .prefill_topk_indices_fused_index_query_from_device(
+                query,
+                weights,
+                indexer_kv,
+                rope_name,
+                tokens,
+                window_size,
+                window_cols,
+                extra_cols,
+                value_offset,
+                compress_ratio,
+                compressed_len,
+                index_heads,
+                index_head_dim,
+                rope_dim,
+                start_position,
+                weight_scale,
+            )
+    }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cuda_decode_topk_indices_from_device(
+        &mut self,
+        query: Option<&ferrule_cuda::context::CudaF32Buffer>,
+        weights: Option<&ferrule_cuda::context::CudaF32Buffer>,
+        indexer_kv: Option<&ferrule_cuda::context::CudaF32Buffer>,
+        position: usize,
+        window_len: usize,
+        window_size: usize,
+        extra_cols: usize,
+        value_offset: usize,
+        compressed_len: usize,
+        index_heads: usize,
+        index_head_dim: usize,
+        weight_scale: f32,
+    ) -> Result<ferrule_cuda::context::CudaI32Buffer> {
+        self.cuda_mut()?.decode_topk_indices_from_device(
+            query,
+            weights,
+            indexer_kv,
+            position,
+            window_len,
+            window_size,
+            extra_cols,
+            value_offset,
+            compressed_len,
+            index_heads,
+            index_head_dim,
+            weight_scale,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cuda_decode_topk_indices_from_device_into(
+        &mut self,
+        query: Option<&ferrule_cuda::context::CudaF32Buffer>,
+        weights: Option<&ferrule_cuda::context::CudaF32Buffer>,
+        indexer_kv: Option<&ferrule_cuda::context::CudaF32Buffer>,
+        empty_query: &ferrule_cuda::context::CudaF32Buffer,
+        empty_weights: &ferrule_cuda::context::CudaF32Buffer,
+        empty_kv: &ferrule_cuda::context::CudaF32Buffer,
+        position: usize,
+        window_len: usize,
+        window_size: usize,
+        extra_cols: usize,
+        value_offset: usize,
+        compressed_len: usize,
+        index_heads: usize,
+        index_head_dim: usize,
+        weight_scale: f32,
+        out: &mut ferrule_cuda::context::CudaI32Buffer,
+    ) -> Result<()> {
+        self.cuda_mut()?.decode_topk_indices_from_device_into(
+            query,
+            weights,
+            indexer_kv,
+            empty_query,
+            empty_weights,
+            empty_kv,
+            position,
+            window_len,
+            window_size,
+            extra_cols,
+            value_offset,
+            compressed_len,
+            index_heads,
+            index_head_dim,
+            weight_scale,
+            out,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cuda_decode_topk_indices_fused_index_query_from_indexer_cache_into(
+        &mut self,
+        query: &ferrule_cuda::context::CudaF32Buffer,
+        weights: &ferrule_cuda::context::CudaF32Buffer,
+        layer: usize,
+        rope_name: &str,
+        position: usize,
+        window_len: usize,
+        window_size: usize,
+        extra_cols: usize,
+        value_offset: usize,
+        compressed_len: usize,
+        index_heads: usize,
+        index_head_dim: usize,
+        rope_dim: usize,
+        weight_scale: f32,
+        out: &mut ferrule_cuda::context::CudaI32Buffer,
+    ) -> Result<()> {
+        self.cuda_mut()?
+            .decode_topk_indices_fused_index_query_from_indexer_cache_into(
+                query,
+                weights,
+                layer,
+                rope_name,
+                position,
+                window_len,
+                window_size,
+                extra_cols,
+                value_offset,
+                compressed_len,
+                index_heads,
+                index_head_dim,
+                rope_dim,
+                weight_scale,
+                out,
+            )
+    }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cuda_decode_topk_indices_fused_index_query_from_indexer_cache(
+        &mut self,
+        query: &ferrule_cuda::context::CudaF32Buffer,
+        weights: &ferrule_cuda::context::CudaF32Buffer,
+        layer: usize,
+        rope_name: &str,
+        position: usize,
+        window_len: usize,
+        window_size: usize,
+        extra_cols: usize,
+        value_offset: usize,
+        compressed_len: usize,
+        index_heads: usize,
+        index_head_dim: usize,
+        rope_dim: usize,
+        weight_scale: f32,
+    ) -> Result<ferrule_cuda::context::CudaI32Buffer> {
+        self.cuda_mut()?
+            .decode_topk_indices_fused_index_query_from_indexer_cache(
+                query,
+                weights,
+                layer,
+                rope_name,
+                position,
+                window_len,
+                window_size,
+                extra_cols,
+                value_offset,
+                compressed_len,
+                index_heads,
+                index_head_dim,
+                rope_dim,
+                weight_scale,
+            )
+    }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cuda_decode_topk_indices_from_indexer_cache_into(
+        &mut self,
+        query: &ferrule_cuda::context::CudaF32Buffer,
+        weights: &ferrule_cuda::context::CudaF32Buffer,
+        layer: usize,
+        empty_query: &ferrule_cuda::context::CudaF32Buffer,
+        empty_weights: &ferrule_cuda::context::CudaF32Buffer,
+        empty_kv: &ferrule_cuda::context::CudaF32Buffer,
+        position: usize,
+        window_len: usize,
+        window_size: usize,
+        extra_cols: usize,
+        value_offset: usize,
+        compressed_len: usize,
+        index_heads: usize,
+        index_head_dim: usize,
+        weight_scale: f32,
+        out: &mut ferrule_cuda::context::CudaI32Buffer,
+    ) -> Result<()> {
+        self.cuda_mut()?
+            .decode_topk_indices_from_indexer_cache_into(
+                query,
+                weights,
+                layer,
+                empty_query,
+                empty_weights,
+                empty_kv,
+                position,
+                window_len,
+                window_size,
+                extra_cols,
+                value_offset,
+                compressed_len,
+                index_heads,
+                index_head_dim,
+                weight_scale,
+                out,
+            )
+    }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cuda_decode_topk_indices_from_indexer_cache(
+        &mut self,
+        query: &ferrule_cuda::context::CudaF32Buffer,
+        weights: &ferrule_cuda::context::CudaF32Buffer,
+        layer: usize,
+        position: usize,
+        window_len: usize,
+        window_size: usize,
+        extra_cols: usize,
+        value_offset: usize,
+        compressed_len: usize,
+        index_heads: usize,
+        index_head_dim: usize,
+        weight_scale: f32,
+    ) -> Result<ferrule_cuda::context::CudaI32Buffer> {
+        self.cuda_mut()?.decode_topk_indices_from_indexer_cache(
+            query,
+            weights,
+            layer,
+            position,
+            window_len,
+            window_size,
+            extra_cols,
+            value_offset,
+            compressed_len,
+            index_heads,
+            index_head_dim,
+            weight_scale,
+        )
     }
 
     #[cfg(feature = "cuda")]
@@ -1526,6 +2749,44 @@ impl DeepSeekV4OperatorContext {
     }
 
     #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cuda_sparse_attention_with_device_query_and_values(
+        &mut self,
+        query: &ferrule_cuda::context::CudaF32Buffer,
+        values: &ferrule_cuda::context::CudaF32Buffer,
+        topk: &[isize],
+        sink: &[f32],
+        tokens: usize,
+        kv_len: usize,
+        spec: SparseAttentionSpec,
+        layer: usize,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.cuda_mut()?
+            .sparse_attention_with_device_query_and_values(
+                query, values, topk, sink, tokens, kv_len, spec, layer,
+            )
+    }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cuda_sparse_attention_with_device_query_values_topk(
+        &mut self,
+        query: &ferrule_cuda::context::CudaF32Buffer,
+        values: &ferrule_cuda::context::CudaF32Buffer,
+        topk: &ferrule_cuda::context::CudaI32Buffer,
+        sink: &[f32],
+        tokens: usize,
+        kv_len: usize,
+        spec: SparseAttentionSpec,
+        layer: usize,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.cuda_mut()?
+            .sparse_attention_with_device_query_values_topk(
+                query, values, topk, sink, tokens, kv_len, spec, layer,
+            )
+    }
+
+    #[cfg(feature = "cuda")]
     pub(crate) fn cuda_ensure_combined_kv_cache(
         &mut self,
         layer: usize,
@@ -1568,6 +2829,44 @@ impl DeepSeekV4OperatorContext {
     }
 
     #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_combined_kv_write_window_rows_device(
+        &mut self,
+        layer: usize,
+        values: &ferrule_cuda::context::CudaF32Buffer,
+        start_position: usize,
+        rows: usize,
+        window_size: usize,
+        head_dim: usize,
+    ) -> Result<()> {
+        self.cuda_mut()?.combined_kv_write_window_rows_device(
+            layer,
+            values,
+            start_position,
+            rows,
+            window_size,
+            head_dim,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_combined_kv_write_compressed_rows_device(
+        &mut self,
+        layer: usize,
+        values: &ferrule_cuda::context::CudaF32Buffer,
+        compressed_start: usize,
+        window_size: usize,
+        head_dim: usize,
+    ) -> Result<()> {
+        self.cuda_mut()?.combined_kv_write_compressed_rows_device(
+            layer,
+            values,
+            compressed_start,
+            window_size,
+            head_dim,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
     pub(crate) fn cuda_combined_kv_append_compressed_host(
         &mut self,
         layer: usize,
@@ -1586,6 +2885,45 @@ impl DeepSeekV4OperatorContext {
     }
 
     #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_ensure_indexer_kv_cache(
+        &mut self,
+        layer: usize,
+        compressed_capacity: usize,
+        index_head_dim: usize,
+    ) -> Result<()> {
+        self.cuda_mut()?
+            .ensure_indexer_kv_cache(layer, compressed_capacity, index_head_dim)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_indexer_kv_write_rows_device(
+        &mut self,
+        layer: usize,
+        values: &ferrule_cuda::context::CudaF32Buffer,
+        compressed_start: usize,
+        index_head_dim: usize,
+    ) -> Result<()> {
+        self.cuda_mut()?.indexer_kv_write_rows_device(
+            layer,
+            values,
+            compressed_start,
+            index_head_dim,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_indexer_kv_append_host(
+        &mut self,
+        layer: usize,
+        value: &[f32],
+        compressed_index: usize,
+        index_head_dim: usize,
+    ) -> Result<()> {
+        self.cuda_mut()?
+            .indexer_kv_append_host(layer, value, compressed_index, index_head_dim)
+    }
+
+    #[cfg(feature = "cuda")]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn cuda_sparse_attention_with_combined_kv(
         &mut self,
@@ -1599,5 +2937,58 @@ impl DeepSeekV4OperatorContext {
     ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
         self.cuda_mut()?
             .sparse_attention_with_combined_kv(query, layer, topk, sink, tokens, kv_len, spec)
+    }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cuda_sparse_attention_with_kv_cache_topk_into(
+        &mut self,
+        query: &ferrule_cuda::context::CudaF32Buffer,
+        layer: usize,
+        topk: &ferrule_cuda::context::CudaI32Buffer,
+        sink: &[f32],
+        tokens: usize,
+        kv_len: usize,
+        spec: SparseAttentionSpec,
+        output: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        self.cuda_mut()?.sparse_attention_with_kv_cache_topk_into(
+            query, layer, topk, sink, tokens, kv_len, spec, output,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cuda_sparse_attention_with_combined_kv_topk(
+        &mut self,
+        query: &ferrule_cuda::context::CudaF32Buffer,
+        layer: usize,
+        topk: &ferrule_cuda::context::CudaI32Buffer,
+        sink: &[f32],
+        tokens: usize,
+        kv_len: usize,
+        spec: SparseAttentionSpec,
+    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+        self.cuda_mut()?
+            .sparse_attention_with_combined_kv_topk(query, layer, topk, sink, tokens, kv_len, spec)
+    }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cuda_sparse_attention_with_combined_kv_topk_into(
+        &mut self,
+        query: &ferrule_cuda::context::CudaF32Buffer,
+        layer: usize,
+        topk: &ferrule_cuda::context::CudaI32Buffer,
+        sink: &[f32],
+        tokens: usize,
+        kv_len: usize,
+        spec: SparseAttentionSpec,
+        output: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        self.cuda_mut()?
+            .sparse_attention_with_combined_kv_topk_into(
+                query, layer, topk, sink, tokens, kv_len, spec, output,
+            )
     }
 }

@@ -106,10 +106,11 @@ pub fn cmd_chat(
 fn deepseek_v4_chat_options() -> DeepSeekV4ReferenceOptions {
     DeepSeekV4ReferenceOptions {
         output_head_chunk_rows: 4096,
-        // Match the ROADMAP interactive goal: use the observed per-layer hotset
-        // for predictive residency instead of naive low expert IDs. This improves
-        // steady chat turns while keeping FERRULE_CUDA_MOE_TC available for A/B.
-        moe_prefetch_experts: 8,
+        // Match the ROADMAP interactive goal: keep a bounded per-layer GPU hotset
+        // and feed it with predictor-driven lookahead prefetches instead of the
+        // old unbounded managed expert cache.
+        moe_prefetch_experts: 32,
+        moe_hotset_experts: 48,
         ..DeepSeekV4ReferenceOptions::default()
     }
 }

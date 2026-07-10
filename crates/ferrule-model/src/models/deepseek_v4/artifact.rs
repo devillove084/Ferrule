@@ -19,7 +19,10 @@ use crate::moe::streaming::{ExpertStreamingPlanner, ExpertStreamingPolicy};
 use crate::runner::ModelInfo;
 use crate::semantic::HyperConnectionStage;
 use crate::tokenizer::TokenizerHandle;
-use crate::{HfSafetensorsInventory, ModelDescriptor, ModelFamily, TensorRole, WeightSource};
+use crate::{
+    HfRoutedExpertTensorInfo, HfSafetensorsInventory, ModelDescriptor, ModelFamily, TensorRole,
+    WeightSource,
+};
 use ferrule_common::{Error, Result};
 
 use super::attention::{
@@ -69,6 +72,7 @@ pub struct DeepSeekV4ArtifactModel {
     pub output_head: ArtifactTensor2D,
     pub hc_head: HyperConnectionHeadWeights,
     inventory: HfSafetensorsInventory,
+    routed_expert_tensors_by_layer: Vec<Vec<HfRoutedExpertTensorInfo>>,
     max_tensor_bytes: u64,
 }
 
@@ -93,6 +97,13 @@ impl DeepSeekV4ArtifactModel {
         }
         let config = DeepSeekV4Config::from_hf_config(model_dir)?;
         let inventory = HfSafetensorsInventory::open(model_dir, ModelFamily::DeepSeekV4)?;
+        let mut routed_expert_tensors_by_layer = vec![Vec::new(); config.num_layers];
+        for tensor in inventory.routed_expert_tensors() {
+            let layer = tensor.descriptor.layer;
+            if layer < routed_expert_tensors_by_layer.len() {
+                routed_expert_tensors_by_layer[layer].push(tensor);
+            }
+        }
         let reader = ArtifactTensorReader::new(max_tensor_bytes);
         let tokenizer = TokenizerHandle::load(model_dir)?;
         let embedding = ArtifactTensor2D::from_slice(
@@ -124,6 +135,7 @@ impl DeepSeekV4ArtifactModel {
             output_head,
             hc_head,
             inventory,
+            routed_expert_tensors_by_layer,
             max_tensor_bytes,
         })
     }
@@ -496,13 +508,12 @@ impl DeepSeekV4ArtifactModel {
     ) -> Result<DeepSeekV4LayerState> {
         let attention_config = self.config.attention_config_for_layer(layer)?;
         let routed = self
-            .inventory
-            .routed_expert_tensors()
-            .into_iter()
-            .filter(|tensor| tensor.descriptor.layer == layer);
+            .routed_expert_tensors_by_layer
+            .get(layer)
+            .ok_or_else(|| Error::Model(format!("DeepSeek-V4 layer {layer} out of range")))?;
         let mut expert_planner = ExpertStreamingPlanner::new(policy);
-        let registered =
-            expert_planner.register_hf_routed_expert_tensor_sets(&self.descriptor.path, routed)?;
+        let registered = expert_planner
+            .register_hf_routed_expert_tensor_sets(&self.descriptor.path, routed.iter().cloned())?;
         if registered != self.config.num_routed_experts {
             return Err(Error::Model(format!(
                 "DeepSeek-V4 layer {layer} registered {registered} routed experts, expected {}",
@@ -512,7 +523,9 @@ impl DeepSeekV4ArtifactModel {
         Ok(DeepSeekV4LayerState {
             kv: DeepSeekV4AttentionCache::new(attention_config),
             expert_planner,
-            expert_handles: CpuExpertHandleStore::new(),
+            expert_handles: CpuExpertHandleStore::default(),
+            #[cfg(feature = "cuda")]
+            graph_arena: None,
         })
     }
 

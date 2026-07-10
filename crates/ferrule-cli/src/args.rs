@@ -112,10 +112,10 @@ pub(crate) enum Command {
         #[arg(long, default_value_t = 0)]
         warmup_tokens: usize,
         /// Number of routed experts per layer to predictively prefetch.
-        #[arg(long, default_value_t = 0)]
+        #[arg(long, default_value_t = 32)]
         moe_prefetch_experts: usize,
         /// Bound resident routed experts per layer (0 = managed default).
-        #[arg(long, default_value_t = 0)]
+        #[arg(long, default_value_t = 48)]
         moe_hotset_experts: usize,
     },
     /// Probe real local DeepSeek-V4 HF shards through the DSV4-specific reference path.
@@ -157,6 +157,38 @@ pub(crate) enum Command {
         /// Absolute tolerance for --reference-json logit comparisons.
         #[arg(long = "reference-atol", default_value_t = 1e-3)]
         reference_atol: f32,
+    },
+    /// Compare batched/device prefill vs token-loop append, reporting the first
+    /// diverging layer and top-1 token at cut points (1L/5L/23L/43L).
+    #[command(name = "deepseek-v4-prefill-parity")]
+    DeepSeekV4PrefillParity {
+        model: String,
+        #[arg(short = 'p', long, default_value = "Hello")]
+        prompt: String,
+        /// Number of DSV4 base layers to execute (should match the depth under test).
+        #[arg(long, default_value_t = 43)]
+        max_layers: usize,
+        /// Maximum single artifact tensor read size for top-level/layer tensors.
+        #[arg(long = "max-tensor-mb", default_value_t = 128)]
+        max_tensor_mb: u64,
+        /// Maximum single expert artifact read size.
+        #[arg(long = "expert-max-slice-mb", default_value_t = 64)]
+        expert_reader_max_slice_mb: u64,
+        /// Operator backend: cuda or cpu.
+        #[arg(long, default_value = "cuda")]
+        backend: String,
+        /// Wrap --prompt with the official DeepSeek-V4 chat encoding.
+        #[arg(long)]
+        chat: bool,
+        /// Absolute tolerance for HC state comparison.
+        #[arg(long, default_value_t = 1e-4)]
+        atol: f32,
+        /// Layer-depth cut points to report top-1 for. Can be repeated.
+        #[arg(long = "cut")]
+        cuts: Vec<usize>,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 

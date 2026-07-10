@@ -4,7 +4,7 @@
 //! consumes the resulting semantic shared-expert/router descriptors and produces
 //! runtime payloads: `SwiGluFfnPayload` and `RouterArtifactPayload`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::families::{
@@ -86,6 +86,46 @@ impl RouterArtifactPayload {
         }
         let start = row * self.hash_cols;
         Ok(Some(table[start..start + self.hash_cols].to_vec()))
+    }
+
+    pub fn hash_expert_union_for_tokens(
+        &self,
+        token_ids: &[u32],
+        per_token_limit: usize,
+        max_experts: usize,
+    ) -> Result<Option<Vec<usize>>> {
+        let Some(table) = &self.hash_table else {
+            return Ok(None);
+        };
+        if token_ids.is_empty() || per_token_limit == 0 || max_experts == 0 {
+            return Ok(Some(Vec::new()));
+        }
+
+        let per_token_limit = per_token_limit.min(self.hash_cols);
+        let mut seen = BTreeSet::new();
+        let mut experts = Vec::with_capacity(max_experts.min(token_ids.len() * per_token_limit));
+        for &token_id in token_ids {
+            let row = token_id as usize;
+            if row >= self.hash_rows {
+                return Err(Error::Model(format!(
+                    "router hash token id {row} exceeds table rows {} for layer {}",
+                    self.hash_rows, self.layer
+                )));
+            }
+            let start = row * self.hash_cols;
+            for &expert in table[start..start + self.hash_cols]
+                .iter()
+                .take(per_token_limit)
+            {
+                if seen.insert(expert) {
+                    experts.push(expert);
+                    if experts.len() >= max_experts {
+                        return Ok(Some(experts));
+                    }
+                }
+            }
+        }
+        Ok(Some(experts))
     }
 }
 
@@ -1228,6 +1268,29 @@ mod tests {
             hash_cols: 2,
         };
         assert_eq!(router.hash_experts_for_token(1).unwrap(), Some(vec![5, 6]));
+    }
+
+    #[test]
+    fn router_hash_expert_union_dedupes_in_prompt_order_and_caps() {
+        let router = RouterArtifactPayload {
+            layer: 0,
+            weight: synthetic_router_weight(),
+            bias: None,
+            hash_table: Some(vec![3, 4, 5, 4, 7, 8, 9, 3, 10]),
+            hash_rows: 3,
+            hash_cols: 3,
+        };
+
+        assert_eq!(
+            router
+                .hash_expert_union_for_tokens(&[0, 1, 2], 2, 4)
+                .unwrap(),
+            Some(vec![3, 4, 7, 9])
+        );
+        assert_eq!(
+            router.hash_expert_union_for_tokens(&[0, 1], 8, 8).unwrap(),
+            Some(vec![3, 4, 5, 7, 8])
+        );
     }
 
     #[test]

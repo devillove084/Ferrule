@@ -164,6 +164,10 @@ impl CpuExpertHandleStore {
             .map(ExpertComputeHandle::total_bytes)
             .sum()
     }
+
+    pub fn clear(&mut self) {
+        self.handles.clear();
+    }
 }
 
 impl ExpertHandleStore for CpuExpertHandleStore {

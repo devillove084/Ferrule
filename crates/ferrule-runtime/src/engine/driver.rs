@@ -164,6 +164,10 @@ where
         &mut self.executor
     }
 
+    pub fn into_runner(self) -> R {
+        self.executor.into_runner()
+    }
+
     pub fn config(&self) -> ResidentTopKDriverConfig {
         self.config
     }
@@ -562,11 +566,11 @@ mod tests {
         }
     }
 
-    fn driver_with_outputs(
-        outputs: Vec<Vec<TokenLogit>>,
+    fn driver_from_runner(
+        runner: MockTopKRunner,
     ) -> ResidentTopKDriver<MockTopKRunner, PagedSequenceKvCache> {
         ResidentTopKDriver::with_configs(
-            MockTopKRunner::new(outputs),
+            runner,
             PagedSequenceKvCache::new(1, 1, 8, 1),
             ResidentSchedulerConfig {
                 prefill_chunk_size: 2,
@@ -584,6 +588,12 @@ mod tests {
                 max_steps_per_run: 64,
             },
         )
+    }
+
+    fn driver_with_outputs(
+        outputs: Vec<Vec<TokenLogit>>,
+    ) -> ResidentTopKDriver<MockTopKRunner, PagedSequenceKvCache> {
+        driver_from_runner(MockTopKRunner::new(outputs))
     }
 
     #[test]
@@ -714,6 +724,27 @@ mod tests {
         assert_eq!(second[0].prompt_tokens_for_range(0..1).unwrap(), &[2]);
         assert_eq!(second[0].position, 4);
         assert_eq!(driver.executor().position(), 4);
+    }
+
+    #[test]
+    fn into_runner_allows_clean_driver_rebuild_after_warmup() {
+        let mut driver = driver_with_outputs(vec![top(b'w' as u32), top(b'm' as u32)]);
+        driver.submit_at_current_position(request(9, &[1], 1, Vec::new()));
+        driver.run_until_blocked(|_| Ok(())).unwrap();
+        let warmup = driver.drain_finished();
+        assert_eq!(warmup[0].position, 2);
+        assert_eq!(driver.executor().position(), 2);
+
+        let mut runner = driver.into_runner();
+        runner.reset_session().unwrap();
+        let mut driver = driver_from_runner(runner);
+        driver.submit_at_current_position(request(10, &[2], 1, Vec::new()));
+        driver.run_until_blocked(|_| Ok(())).unwrap();
+        let measured = driver.drain_finished();
+
+        assert_eq!(measured[0].prompt_tokens_for_range(0..1).unwrap(), &[2]);
+        assert_eq!(measured[0].position, 2);
+        assert_eq!(driver.executor().position(), 2);
     }
 
     #[test]

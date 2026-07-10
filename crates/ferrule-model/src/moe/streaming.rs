@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 
 use crate::semantic::{RoutedExpertMatrix, RoutedExpertTensorPart, RoutedExpertTensorRef};
 use crate::HfRoutedExpertTensorInfo;
@@ -362,6 +362,73 @@ impl ExpertStreamingPlanner {
             .collect()
     }
 
+    /// Reconcile the planner's residency view with a backend-owned GPU cache.
+    ///
+    /// CUDA keeps uploaded expert handles outside the per-sequence handle store so
+    /// they can survive request/session resets. After such a reset, the planner may
+    /// be stale in either direction:
+    ///
+    /// - it may have demoted experts that the backend still has resident;
+    /// - it may still mark experts GPU-resident after backend eviction.
+    ///
+    /// This method makes the planner's GPU view match the backend snapshot for the
+    /// given layer while preserving load sources and routing hotness. It returns the
+    /// number of experts promoted to GPU by the snapshot.
+    pub fn sync_gpu_residents(
+        &mut self,
+        layer: usize,
+        experts: impl IntoIterator<Item = usize>,
+    ) -> Result<usize> {
+        let expert_indices = experts.into_iter().collect::<Vec<_>>();
+        let backend_gpu = unique_ids(layer, &expert_indices)
+            .into_iter()
+            .filter(|expert| self.experts.contains_key(expert))
+            .collect::<BTreeSet<_>>();
+
+        for (expert, state) in self.experts.iter_mut() {
+            if expert.layer != layer
+                || !state.location.is_gpu_ready()
+                || backend_gpu.contains(expert)
+            {
+                continue;
+            }
+            let source_tier = state.load_source.tier();
+            state.location = if source_tier == ExpertStorageTier::Gpu {
+                ExpertStorageTier::LocalStorage
+            } else {
+                source_tier
+            };
+        }
+
+        let mut synced = 0usize;
+        for expert in backend_gpu {
+            if self.location(expert) != Some(ExpertStorageTier::Gpu) {
+                self.mark_resident(expert, ExpertStorageTier::Gpu)?;
+                synced = synced.saturating_add(1);
+            }
+        }
+        Ok(synced)
+    }
+
+    /// Clear sequence-scoped residency while preserving routing hotness.
+    ///
+    /// Session reset drops KV/cache handles, but warmup should still inform the
+    /// next request's predicted hotset. Demoting resident locations forces the
+    /// next step to emit load requests again; CUDA backends can satisfy those
+    /// requests from their process-global resident expert cache instead of disk.
+    pub fn clear_residency(&mut self) {
+        for state in self.experts.values_mut() {
+            if state.location.is_gpu_ready() {
+                let source_tier = state.load_source.tier();
+                state.location = if source_tier == ExpertStorageTier::Gpu {
+                    ExpertStorageTier::LocalStorage
+                } else {
+                    source_tier
+                };
+            }
+        }
+    }
+
     fn resident_experts_by_hotness(&self, layer: usize) -> Vec<ExpertId> {
         let mut experts = self
             .experts
@@ -509,11 +576,30 @@ impl ExpertStreamingPlanner {
     }
 
     pub fn commit_step(&mut self, step: &ExpertStreamingStep) -> Result<()> {
+        self.commit_step_loaded(step, step.loads.iter().map(|load| load.expert))
+    }
+
+    /// Commit a planner step after the backend has only materialized a subset of
+    /// requested loads.
+    ///
+    /// This is useful for latency-oriented backends that enqueue `Prefetch` loads
+    /// asynchronously: selected experts are still committed as GPU-resident for
+    /// correctness, while queued-but-not-ready prefetches remain at their source
+    /// tier until a later step actually consumes/uploads them.
+    pub fn commit_step_loaded(
+        &mut self,
+        step: &ExpertStreamingStep,
+        loaded: impl IntoIterator<Item = ExpertId>,
+    ) -> Result<()> {
         for eviction in &step.evictions {
-            self.mark_resident(eviction.expert, eviction.target)?;
+            if self.experts.contains_key(&eviction.expert) {
+                self.mark_resident(eviction.expert, eviction.target)?;
+            }
         }
-        for load in &step.loads {
-            self.mark_resident(load.expert, ExpertStorageTier::Gpu)?;
+        for expert in loaded {
+            if self.experts.contains_key(&expert) {
+                self.mark_resident(expert, ExpertStorageTier::Gpu)?;
+            }
         }
         Ok(())
     }
@@ -1082,6 +1168,311 @@ pub struct HostStagedExpertCache {
     evictions: u64,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AsyncHostStagedExpertStats {
+    pub submitted: u64,
+    pub completed: u64,
+    pub failed: u64,
+    pub skipped: u64,
+    pub in_flight: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpertResidencySelectedLoad {
+    pub expert: ExpertId,
+    pub load_source: ExpertLoadSource,
+    pub host_staged: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpertResidencyPrefetchLoad {
+    pub expert: ExpertId,
+    pub load_source: ExpertLoadSource,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExpertResidencyPlan {
+    pub selected_resident: Vec<ExpertId>,
+    pub selected_materializing: Vec<ExpertId>,
+    pub selected_host_staged: Vec<ExpertResidencySelectedLoad>,
+    /// Selected expert whose async host-staging read is already in flight.
+    /// Backends should wait for and reuse that read before falling back to a
+    /// duplicate synchronous disk read.
+    pub selected_in_flight: Vec<ExpertResidencySelectedLoad>,
+    pub selected_cold: Vec<ExpertResidencySelectedLoad>,
+    pub prefetch_resident: Vec<ExpertId>,
+    pub prefetch_materializing: Vec<ExpertId>,
+    pub prefetch_host_staged: Vec<ExpertId>,
+    pub prefetch_in_flight: Vec<ExpertId>,
+    pub prefetch_cold: Vec<ExpertResidencyPrefetchLoad>,
+}
+
+impl ExpertResidencyPlan {
+    pub fn selected_to_materialize(&self) -> impl Iterator<Item = &ExpertResidencySelectedLoad> {
+        self.selected_host_staged.iter().chain(&self.selected_cold)
+    }
+
+    pub fn selected_waiting_for_host_staging(
+        &self,
+    ) -> impl Iterator<Item = &ExpertResidencySelectedLoad> {
+        self.selected_in_flight.iter()
+    }
+
+    pub fn selected_miss_count(&self) -> usize {
+        self.selected_materializing.len()
+            + self.selected_host_staged.len()
+            + self.selected_in_flight.len()
+            + self.selected_cold.len()
+    }
+
+    pub fn selected_resident_count(&self) -> usize {
+        self.selected_resident.len()
+    }
+
+    pub fn prefetch_load_count(&self) -> usize {
+        self.prefetch_resident.len()
+            + self.prefetch_materializing.len()
+            + self.prefetch_host_staged.len()
+            + self.prefetch_in_flight.len()
+            + self.prefetch_cold.len()
+    }
+
+    pub fn prefetch_enqueue_count(&self) -> usize {
+        self.prefetch_cold.len()
+    }
+
+    pub fn prefetch_skipped_cached_or_inflight_count(&self) -> usize {
+        self.prefetch_resident.len()
+            + self.prefetch_materializing.len()
+            + self.prefetch_in_flight.len()
+    }
+}
+
+pub fn classify_expert_residency(
+    loads: &[ExpertLoadRequest],
+    is_gpu_resident: impl Fn(ExpertId) -> bool,
+    is_materializing: impl Fn(ExpertId) -> bool,
+    is_host_staged: impl Fn(ExpertId) -> bool,
+    is_in_flight: impl Fn(ExpertId) -> bool,
+) -> ExpertResidencyPlan {
+    let mut plan = ExpertResidencyPlan::default();
+    for load in loads {
+        let expert = load.expert;
+        match load.reason {
+            ExpertLoadReason::Selected => {
+                if is_gpu_resident(expert) {
+                    plan.selected_resident.push(expert);
+                } else if is_materializing(expert) {
+                    plan.selected_materializing.push(expert);
+                } else if is_host_staged(expert) {
+                    plan.selected_host_staged.push(ExpertResidencySelectedLoad {
+                        expert,
+                        load_source: load.load_source.clone(),
+                        host_staged: true,
+                    });
+                } else if is_in_flight(expert) {
+                    plan.selected_in_flight.push(ExpertResidencySelectedLoad {
+                        expert,
+                        load_source: load.load_source.clone(),
+                        host_staged: false,
+                    });
+                } else {
+                    plan.selected_cold.push(ExpertResidencySelectedLoad {
+                        expert,
+                        load_source: load.load_source.clone(),
+                        host_staged: false,
+                    });
+                }
+            }
+            ExpertLoadReason::Prefetch => {
+                if is_gpu_resident(expert) {
+                    plan.prefetch_resident.push(expert);
+                } else if is_materializing(expert) {
+                    plan.prefetch_materializing.push(expert);
+                } else if is_host_staged(expert) {
+                    plan.prefetch_host_staged.push(expert);
+                } else if is_in_flight(expert) {
+                    plan.prefetch_in_flight.push(expert);
+                } else {
+                    plan.prefetch_cold.push(ExpertResidencyPrefetchLoad {
+                        expert,
+                        load_source: load.load_source.clone(),
+                    });
+                }
+            }
+        }
+    }
+    plan
+}
+
+enum AsyncHostStagedExpertResult {
+    Loaded(ExpertComputeBundle),
+    Failed { expert: ExpertId, error: String },
+}
+
+impl AsyncHostStagedExpertResult {
+    fn expert(&self) -> ExpertId {
+        match self {
+            Self::Loaded(bundle) => bundle.expert,
+            Self::Failed { expert, .. } => *expert,
+        }
+    }
+}
+
+/// Best-effort asynchronous host staging for expert payloads.
+///
+/// The loader intentionally stops at host RAM. CUDA contexts/streams remain owned
+/// by the main thread; background workers only fault/read safetensors slices and
+/// build `ExpertComputeBundle`s. Main-thread MoE code drains completed bundles
+/// into `HostStagedExpertCache` before it decides whether a selected expert must
+/// synchronously read from disk.
+pub struct AsyncHostStagedExpertLoader {
+    tx: mpsc::Sender<AsyncHostStagedExpertResult>,
+    rx: mpsc::Receiver<AsyncHostStagedExpertResult>,
+    in_flight: BTreeSet<ExpertId>,
+    max_in_flight: usize,
+    submitted: u64,
+    completed: u64,
+    failed: u64,
+    skipped: u64,
+}
+
+impl AsyncHostStagedExpertLoader {
+    pub fn new(max_in_flight: usize) -> Self {
+        let (tx, rx) = mpsc::channel();
+        Self {
+            tx,
+            rx,
+            in_flight: BTreeSet::new(),
+            max_in_flight,
+            submitted: 0,
+            completed: 0,
+            failed: 0,
+            skipped: 0,
+        }
+    }
+
+    pub fn stats(&self) -> AsyncHostStagedExpertStats {
+        AsyncHostStagedExpertStats {
+            submitted: self.submitted,
+            completed: self.completed,
+            failed: self.failed,
+            skipped: self.skipped,
+            in_flight: self.in_flight.len(),
+        }
+    }
+
+    pub fn is_in_flight(&self, expert: ExpertId) -> bool {
+        self.in_flight.contains(&expert)
+    }
+
+    pub fn enqueue(
+        &mut self,
+        expert: ExpertId,
+        source: ExpertLoadSource,
+        reader: &ExpertStreamingReader,
+    ) -> bool {
+        if self.max_in_flight == 0
+            || self.in_flight.len() >= self.max_in_flight
+            || self.in_flight.contains(&expert)
+        {
+            self.skipped = self.skipped.saturating_add(1);
+            return false;
+        }
+        self.in_flight.insert(expert);
+        self.submitted = self.submitted.saturating_add(1);
+        let tx = self.tx.clone();
+        let reader = reader.clone();
+        rayon::spawn(move || {
+            let result = reader
+                .read_load_source_concurrent(expert, &source)
+                .and_then(ExpertComputeBundle::from_artifact_payload);
+            let message = match result {
+                Ok(bundle) => AsyncHostStagedExpertResult::Loaded(bundle),
+                Err(error) => AsyncHostStagedExpertResult::Failed {
+                    expert,
+                    error: error.to_string(),
+                },
+            };
+            let _ = tx.send(message);
+        });
+        true
+    }
+
+    pub fn drain_into(&mut self, cache: &mut HostStagedExpertCache) -> usize {
+        let mut completed_now = 0usize;
+        while let Ok(result) = self.rx.try_recv() {
+            if self.handle_result(result, cache) {
+                completed_now += 1;
+            }
+        }
+        completed_now
+    }
+
+    /// Wait for a specific in-flight host-staging read and move all completed
+    /// bundles observed while waiting into the host cache. Returns `true` when
+    /// the requested expert was successfully staged; `false` lets the caller
+    /// fall back to a synchronous read.
+    pub fn wait_for_into(
+        &mut self,
+        expert: ExpertId,
+        cache: &mut HostStagedExpertCache,
+    ) -> Result<bool> {
+        if !self.in_flight.contains(&expert) {
+            return Ok(false);
+        }
+        while self.in_flight.contains(&expert) {
+            match self.rx.recv() {
+                Ok(result) => {
+                    let completed_expert = result.expert();
+                    let loaded = self.handle_result(result, cache);
+                    if completed_expert == expert {
+                        return Ok(loaded);
+                    }
+                }
+                Err(_) => {
+                    self.in_flight.remove(&expert);
+                    self.failed = self.failed.saturating_add(1);
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(cache.contains(expert))
+    }
+
+    fn handle_result(
+        &mut self,
+        result: AsyncHostStagedExpertResult,
+        cache: &mut HostStagedExpertCache,
+    ) -> bool {
+        match result {
+            AsyncHostStagedExpertResult::Loaded(bundle) => {
+                self.in_flight.remove(&bundle.expert);
+                cache.insert(bundle);
+                self.completed = self.completed.saturating_add(1);
+                true
+            }
+            AsyncHostStagedExpertResult::Failed { expert, error } => {
+                self.in_flight.remove(&expert);
+                self.failed = self.failed.saturating_add(1);
+                tracing::debug!(
+                    layer = expert.layer,
+                    expert = expert.expert,
+                    error,
+                    "async expert host staging failed"
+                );
+                false
+            }
+        }
+    }
+}
+
+impl Default for AsyncHostStagedExpertLoader {
+    fn default() -> Self {
+        Self::new(64)
+    }
+}
+
 impl HostStagedExpertCache {
     /// Create a cache holding at most `capacity` expert bundles in host RAM.
     pub fn new(capacity: usize) -> Self {
@@ -1111,6 +1502,21 @@ impl HostStagedExpertCache {
             self.misses += 1;
             None
         }
+    }
+
+    pub fn contains(&self, expert: ExpertId) -> bool {
+        self.entries.contains_key(&expert)
+    }
+
+    pub fn expert_ids_for_layer(&self, layer: usize) -> Vec<usize> {
+        let mut experts = self
+            .entries
+            .keys()
+            .filter(|expert| expert.layer == layer)
+            .map(|expert| expert.expert)
+            .collect::<Vec<_>>();
+        experts.sort_unstable();
+        experts
     }
 
     /// Insert a bundle, evicting the least-recently-used entry if at capacity.
@@ -1203,6 +1609,100 @@ mod tests {
         assert_eq!(policy.prefetch_per_layer, 6);
         assert!(!policy.allow_cpu_staging);
         assert!(!policy.allow_remote_sources);
+    }
+
+    #[test]
+    fn classifies_expert_residency_before_backend_materialization() {
+        let source = ExpertLoadSource::LocalShard {
+            path: PathBuf::from("model.safetensors"),
+            offset: 0,
+            bytes: 10,
+        };
+        let loads = vec![
+            ExpertLoadRequest {
+                expert: ExpertId::new(0, 1),
+                load_source: source.clone(),
+                reason: ExpertLoadReason::Selected,
+            },
+            ExpertLoadRequest {
+                expert: ExpertId::new(0, 2),
+                load_source: source.clone(),
+                reason: ExpertLoadReason::Selected,
+            },
+            ExpertLoadRequest {
+                expert: ExpertId::new(0, 3),
+                load_source: source.clone(),
+                reason: ExpertLoadReason::Selected,
+            },
+            ExpertLoadRequest {
+                expert: ExpertId::new(0, 8),
+                load_source: source.clone(),
+                reason: ExpertLoadReason::Selected,
+            },
+            ExpertLoadRequest {
+                expert: ExpertId::new(0, 4),
+                load_source: source.clone(),
+                reason: ExpertLoadReason::Prefetch,
+            },
+            ExpertLoadRequest {
+                expert: ExpertId::new(0, 5),
+                load_source: source.clone(),
+                reason: ExpertLoadReason::Prefetch,
+            },
+            ExpertLoadRequest {
+                expert: ExpertId::new(0, 6),
+                load_source: source.clone(),
+                reason: ExpertLoadReason::Prefetch,
+            },
+            ExpertLoadRequest {
+                expert: ExpertId::new(0, 9),
+                load_source: source.clone(),
+                reason: ExpertLoadReason::Prefetch,
+            },
+            ExpertLoadRequest {
+                expert: ExpertId::new(0, 7),
+                load_source: source,
+                reason: ExpertLoadReason::Prefetch,
+            },
+        ];
+        let plan = classify_expert_residency(
+            &loads,
+            |expert| matches!(expert.expert, 1 | 4),
+            |expert| matches!(expert.expert, 8 | 9),
+            |expert| matches!(expert.expert, 2 | 5),
+            |expert| matches!(expert.expert, 3 | 6),
+        );
+
+        assert_eq!(plan.selected_resident, vec![ExpertId::new(0, 1)]);
+        assert_eq!(
+            plan.selected_host_staged
+                .iter()
+                .map(|load| load.expert)
+                .collect::<Vec<_>>(),
+            vec![ExpertId::new(0, 2)]
+        );
+        assert_eq!(plan.selected_materializing, vec![ExpertId::new(0, 8)]);
+        assert_eq!(
+            plan.selected_in_flight
+                .iter()
+                .map(|load| load.expert)
+                .collect::<Vec<_>>(),
+            vec![ExpertId::new(0, 3)]
+        );
+        assert!(plan.selected_cold.is_empty());
+        assert_eq!(plan.prefetch_materializing, vec![ExpertId::new(0, 9)]);
+        assert_eq!(plan.prefetch_host_staged, vec![ExpertId::new(0, 5)]);
+        assert_eq!(plan.prefetch_in_flight, vec![ExpertId::new(0, 6)]);
+        assert_eq!(
+            plan.prefetch_cold
+                .iter()
+                .map(|load| load.expert)
+                .collect::<Vec<_>>(),
+            vec![ExpertId::new(0, 7)]
+        );
+        assert_eq!(plan.selected_miss_count(), 3);
+        assert_eq!(plan.prefetch_enqueue_count(), 1);
+        assert_eq!(plan.prefetch_skipped_cached_or_inflight_count(), 3);
     }
 
     #[test]
@@ -1482,6 +1982,45 @@ mod tests {
     }
 
     #[test]
+    fn commit_step_loaded_keeps_unmaterialized_prefetches_non_resident() {
+        let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
+            gpu_slots_per_layer: 3,
+            prefetch_per_layer: 2,
+            preserve_artifact_quantization: true,
+            allow_cpu_staging: false,
+            allow_remote_sources: false,
+        });
+        for expert in 0..5 {
+            planner.register_load_source(
+                ExpertId::new(0, expert),
+                ExpertLoadSource::LocalShard {
+                    path: PathBuf::from("model.safetensors"),
+                    offset: 0,
+                    bytes: 10,
+                },
+            );
+        }
+
+        let step = planner.plan_layer_step(0, &[2], &[3, 4]).unwrap();
+        planner
+            .commit_step_loaded(&step, [ExpertId::new(0, 2)])
+            .unwrap();
+
+        assert_eq!(
+            planner.location(ExpertId::new(0, 2)),
+            Some(ExpertStorageTier::Gpu)
+        );
+        assert_ne!(
+            planner.location(ExpertId::new(0, 3)),
+            Some(ExpertStorageTier::Gpu)
+        );
+        assert_ne!(
+            planner.location(ExpertId::new(0, 4)),
+            Some(ExpertStorageTier::Gpu)
+        );
+    }
+
+    #[test]
     fn retains_recent_resident_experts_when_slots_are_available() {
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
             gpu_slots_per_layer: 2,
@@ -1541,6 +2080,168 @@ mod tests {
 
         assert_eq!(planner.hot_experts(0, 3), vec![1, 2]);
         assert!(planner.hot_experts(1, 3).is_empty());
+    }
+
+    #[test]
+    fn clear_residency_preserves_hotset_but_emits_loads_again() {
+        let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
+            gpu_slots_per_layer: 3,
+            prefetch_per_layer: 1,
+            preserve_artifact_quantization: true,
+            allow_cpu_staging: false,
+            allow_remote_sources: false,
+        });
+        for expert in 0..4 {
+            planner.register_load_source(
+                ExpertId::new(0, expert),
+                ExpertLoadSource::LocalShard {
+                    path: PathBuf::from("model.safetensors"),
+                    offset: 0,
+                    bytes: 10,
+                },
+            );
+        }
+
+        let first = planner.plan_layer_step(0, &[2, 1], &[]).unwrap();
+        planner.commit_step(&first).unwrap();
+        let second = planner.plan_layer_step(0, &[2], &[]).unwrap();
+        planner.commit_step(&second).unwrap();
+        assert_eq!(planner.hot_experts(0, 2), vec![2, 1]);
+        assert_eq!(planner.resident_experts(0).len(), 2);
+
+        planner.clear_residency();
+
+        assert!(planner.resident_experts(0).is_empty());
+        assert_eq!(planner.hot_experts(0, 2), vec![2, 1]);
+        let after_reset = planner
+            .plan_layer_step(0, &[3], &planner.hot_experts(0, 1))
+            .unwrap();
+        assert_eq!(after_reset.selected, vec![ExpertId::new(0, 3)]);
+        assert_eq!(after_reset.prefetched, vec![ExpertId::new(0, 2)]);
+        assert_eq!(after_reset.loads.len(), 2);
+        assert!(after_reset
+            .loads
+            .iter()
+            .all(|load| load.load_source.tier() == ExpertStorageTier::LocalStorage));
+    }
+
+    #[test]
+    fn sync_gpu_residents_restores_backend_cache_view_for_eviction() {
+        let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
+            gpu_slots_per_layer: 2,
+            prefetch_per_layer: 0,
+            preserve_artifact_quantization: true,
+            allow_cpu_staging: false,
+            allow_remote_sources: false,
+        });
+        for expert in 0..4 {
+            planner.register_load_source(
+                ExpertId::new(0, expert),
+                ExpertLoadSource::LocalShard {
+                    path: PathBuf::from("model.safetensors"),
+                    offset: 0,
+                    bytes: 10,
+                },
+            );
+        }
+
+        let first = planner.plan_layer_step(0, &[0, 1], &[]).unwrap();
+        planner.commit_step(&first).unwrap();
+        planner.clear_residency();
+        assert!(planner.resident_experts(0).is_empty());
+
+        let synced = planner.sync_gpu_residents(0, [0, 1]).unwrap();
+        assert_eq!(synced, 2);
+        assert_eq!(planner.resident_experts(0).len(), 2);
+
+        let next = planner.plan_layer_step(0, &[2], &[]).unwrap();
+        assert_eq!(next.loads.len(), 1);
+        assert_eq!(next.evictions.len(), 1);
+        assert!(matches!(
+            next.evictions[0].expert,
+            ExpertId {
+                layer: 0,
+                expert: 0
+            } | ExpertId {
+                layer: 0,
+                expert: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn sync_gpu_residents_demotes_planner_entries_missing_from_backend() {
+        let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
+            gpu_slots_per_layer: 3,
+            prefetch_per_layer: 0,
+            preserve_artifact_quantization: true,
+            allow_cpu_staging: false,
+            allow_remote_sources: false,
+        });
+        for expert in 0..3 {
+            planner.register_load_source(
+                ExpertId::new(0, expert),
+                ExpertLoadSource::LocalShard {
+                    path: PathBuf::from("model.safetensors"),
+                    offset: 0,
+                    bytes: 10,
+                },
+            );
+        }
+
+        let first = planner.plan_layer_step(0, &[0, 1], &[]).unwrap();
+        planner.commit_step(&first).unwrap();
+        assert_eq!(planner.resident_experts(0).len(), 2);
+
+        let promoted = planner.sync_gpu_residents(0, [1]).unwrap();
+        assert_eq!(promoted, 0);
+        assert_ne!(
+            planner.location(ExpertId::new(0, 0)),
+            Some(ExpertStorageTier::Gpu)
+        );
+        assert_eq!(
+            planner.location(ExpertId::new(0, 1)),
+            Some(ExpertStorageTier::Gpu)
+        );
+
+        let next = planner.plan_layer_step(0, &[0], &[]).unwrap();
+        assert_eq!(next.loads.len(), 1);
+        assert_eq!(next.loads[0].expert, ExpertId::new(0, 0));
+    }
+
+    #[test]
+    fn sync_gpu_residents_ignores_backend_entries_unknown_to_planner() {
+        let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
+            gpu_slots_per_layer: 2,
+            prefetch_per_layer: 0,
+            preserve_artifact_quantization: true,
+            allow_cpu_staging: false,
+            allow_remote_sources: false,
+        });
+        planner.register_load_source(
+            ExpertId::new(0, 1),
+            ExpertLoadSource::LocalShard {
+                path: PathBuf::from("model.safetensors"),
+                offset: 0,
+                bytes: 10,
+            },
+        );
+
+        let synced = planner.sync_gpu_residents(0, [1, 45]).unwrap();
+        assert_eq!(synced, 1);
+        assert_eq!(planner.resident_experts(0), vec![ExpertId::new(0, 1)]);
+
+        let step = ExpertStreamingStep {
+            layer: 0,
+            selected: Vec::new(),
+            prefetched: Vec::new(),
+            loads: Vec::new(),
+            evictions: Vec::new(),
+        };
+        planner
+            .commit_step_loaded(&step, [ExpertId::new(0, 1), ExpertId::new(0, 45)])
+            .unwrap();
+        assert_eq!(planner.resident_experts(0), vec![ExpertId::new(0, 1)]);
     }
 
     #[test]

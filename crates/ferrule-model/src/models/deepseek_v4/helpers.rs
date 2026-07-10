@@ -127,13 +127,7 @@ pub(crate) fn rms_norm_rows_with_operators(
             weight.len()
         )));
     }
-    let mut out = Vec::with_capacity(input.len());
-    for token in 0..tokens {
-        let row = &input[token * weight.len()..(token + 1) * weight.len()];
-        let normalized = operators.rms_norm(row, weight, eps, label)?;
-        out.extend_from_slice(&normalized);
-    }
-    Ok(out)
+    operators.rms_norm_rows(input, tokens, weight, eps, label)
 }
 
 pub(crate) fn quantize_attention_kv_for_qat_in_place(

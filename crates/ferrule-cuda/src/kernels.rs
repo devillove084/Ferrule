@@ -34,6 +34,31 @@ fn fast_rsqrt(x: f32) -> f32 {
     result
 }
 
+/// Fast sqrt. Use PTX directly to avoid host-arch inline asm emitted by some
+/// libm sqrt paths before cuda-oxide lowers math to device code.
+fn fast_sqrt(x: f32) -> f32 {
+    let result: f32;
+    unsafe {
+        ptx_asm!(
+            "sqrt.rn.f32 %0, %1;",
+            out("=f") result,
+            in("f") x,
+            options(register_only),
+        );
+    }
+    result
+}
+
+fn stable_softplus_f32(x: f32) -> f32 {
+    if x > 20.0 {
+        x
+    } else if x < -20.0 {
+        fast_exp(x)
+    } else {
+        libm::log1pf(fast_exp(x))
+    }
+}
+
 /// Fast sigmoid(x) = 1 / (1 + exp(-x)).
 fn fast_sigmoid(x: f32) -> f32 {
     if x < -16.0 {
@@ -326,6 +351,64 @@ pub mod kernels {
         }
     }
 
+    /// Batched grouped matvec for block-diagonal output-A layouts.
+    ///
+    /// `context` is `[rows, o_groups * group_in]`, `weight` is
+    /// `[output_latent_dim, group_in]`, and `output` is
+    /// `[rows, output_latent_dim]`. This is the prefill projection shape: all
+    /// token rows share the same grouped WO-A weights and differ only in the
+    /// context row.
+    #[kernel]
+    pub fn grouped_matvec_f32_rows(
+        context: &[f32],
+        weight: &[f32],
+        mut output: DisjointSlice<f32>,
+        rows: u32,
+        output_latent_dim: u32,
+        group_in: u32,
+        o_lora_rank: u32,
+    ) {
+        let i = thread::index_1d().get();
+        let total = rows as u64 * output_latent_dim as u64;
+        if (i as u64) >= total {
+            return;
+        }
+        let rows = rows as usize;
+        let output_latent_dim = output_latent_dim as usize;
+        let group_in = group_in as usize;
+        let o_lora_rank = o_lora_rank as usize;
+        if rows == 0 || o_lora_rank == 0 || output_latent_dim == 0 {
+            return;
+        }
+        let groups = output_latent_dim / o_lora_rank;
+        let token = i as usize / output_latent_dim;
+        let out_row = i as usize - token * output_latent_dim;
+        let group = out_row / o_lora_rank;
+        let context_start = token * groups * group_in + group * group_in;
+        let weight_start = out_row * group_in;
+        let mut dot0 = 0.0f32;
+        let mut dot1 = 0.0f32;
+        let mut dot2 = 0.0f32;
+        let mut dot3 = 0.0f32;
+        let mut j = 0usize;
+        let k4 = group_in - group_in % 4;
+        while j < k4 {
+            dot0 += context[context_start + j] * weight[weight_start + j];
+            dot1 += context[context_start + j + 1] * weight[weight_start + j + 1];
+            dot2 += context[context_start + j + 2] * weight[weight_start + j + 2];
+            dot3 += context[context_start + j + 3] * weight[weight_start + j + 3];
+            j += 4;
+        }
+        let mut dot = dot0 + dot1 + dot2 + dot3;
+        while j < group_in {
+            dot += context[context_start + j] * weight[weight_start + j];
+            j += 1;
+        }
+        if let Some(yi) = output.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
     fn f32_bytes_to_f32(b0: u8, b1: u8, b2: u8, b3: u8) -> f32 {
         f32::from_bits((b0 as u32) | ((b1 as u32) << 8) | ((b2 as u32) << 16) | ((b3 as u32) << 24))
     }
@@ -399,6 +482,100 @@ pub mod kernels {
         while j < k {
             let off = base + 2 * j;
             dot += x[j] * bf16_pair_to_f32(w[off], w[off + 1]);
+            j += 1;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
+    #[kernel]
+    pub fn gemm_f32_bytes(
+        x: &[f32],
+        w: &[u8],
+        mut y: DisjointSlice<f32>,
+        batch: u32,
+        n: u32,
+        k: u32,
+    ) {
+        let idx = thread::index_1d().get();
+        let total = batch as u64 * n as u64;
+        if (idx as u64) >= total {
+            return;
+        }
+        let b = (idx as u32 / n) as usize;
+        let row = (idx as u32 % n) as usize;
+        let k = k as usize;
+        let x_base = b * k;
+        let w_base = row * k * 4;
+        let mut dot0 = 0.0f32;
+        let mut dot1 = 0.0f32;
+        let mut dot2 = 0.0f32;
+        let mut dot3 = 0.0f32;
+        let mut j = 0usize;
+        let k4 = k - k % 4;
+        while j < k4 {
+            let o0 = w_base + 4 * j;
+            let o1 = w_base + 4 * (j + 1);
+            let o2 = w_base + 4 * (j + 2);
+            let o3 = w_base + 4 * (j + 3);
+            dot0 += x[x_base + j] * f32_bytes_to_f32(w[o0], w[o0 + 1], w[o0 + 2], w[o0 + 3]);
+            dot1 += x[x_base + j + 1] * f32_bytes_to_f32(w[o1], w[o1 + 1], w[o1 + 2], w[o1 + 3]);
+            dot2 += x[x_base + j + 2] * f32_bytes_to_f32(w[o2], w[o2 + 1], w[o2 + 2], w[o2 + 3]);
+            dot3 += x[x_base + j + 3] * f32_bytes_to_f32(w[o3], w[o3 + 1], w[o3 + 2], w[o3 + 3]);
+            j += 4;
+        }
+        let mut dot = dot0 + dot1 + dot2 + dot3;
+        while j < k {
+            let off = w_base + 4 * j;
+            dot += x[x_base + j] * f32_bytes_to_f32(w[off], w[off + 1], w[off + 2], w[off + 3]);
+            j += 1;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
+    #[kernel]
+    pub fn gemm_bf16_bytes(
+        x: &[f32],
+        w: &[u8],
+        mut y: DisjointSlice<f32>,
+        batch: u32,
+        n: u32,
+        k: u32,
+    ) {
+        let idx = thread::index_1d().get();
+        let total = batch as u64 * n as u64;
+        if (idx as u64) >= total {
+            return;
+        }
+        let b = (idx as u32 / n) as usize;
+        let row = (idx as u32 % n) as usize;
+        let k = k as usize;
+        let x_base = b * k;
+        let w_base = row * k * 2;
+        let mut dot0 = 0.0f32;
+        let mut dot1 = 0.0f32;
+        let mut dot2 = 0.0f32;
+        let mut dot3 = 0.0f32;
+        let mut j = 0usize;
+        let k4 = k - k % 4;
+        while j < k4 {
+            let o0 = w_base + 2 * j;
+            let o1 = w_base + 2 * (j + 1);
+            let o2 = w_base + 2 * (j + 2);
+            let o3 = w_base + 2 * (j + 3);
+            dot0 += x[x_base + j] * bf16_pair_to_f32(w[o0], w[o0 + 1]);
+            dot1 += x[x_base + j + 1] * bf16_pair_to_f32(w[o1], w[o1 + 1]);
+            dot2 += x[x_base + j + 2] * bf16_pair_to_f32(w[o2], w[o2 + 1]);
+            dot3 += x[x_base + j + 3] * bf16_pair_to_f32(w[o3], w[o3 + 1]);
+            j += 4;
+        }
+        let mut dot = dot0 + dot1 + dot2 + dot3;
+        while j < k {
+            let off = w_base + 2 * j;
+            dot += x[x_base + j] * bf16_pair_to_f32(w[off], w[off + 1]);
             j += 1;
         }
         if let Some(yi) = y.get_mut(thread::index_1d()) {
@@ -824,6 +1001,959 @@ pub mod kernels {
         }
     }
 
+    /// Simulate DSV4 attention KV QAT quantization in-place: each row is
+    /// `[non_rope | rope_tail]`; only the non-rope prefix is FP8-quantized.
+    #[kernel]
+    pub fn fp8_e4m3fn_e8m0_quantize_non_rope_f32_inplace(
+        mut values: DisjointSlice<f32>,
+        value_len: u32,
+        head_dim: u32,
+        rope_dim: u32,
+        block_size: u32,
+    ) {
+        let block_idx = thread::index_1d().get() as usize;
+        let value_len = value_len as usize;
+        let head_dim = head_dim as usize;
+        let rope_dim = rope_dim as usize;
+        let block_size = block_size as usize;
+        if head_dim == 0 || rope_dim > head_dim || block_size == 0 {
+            return;
+        }
+        let non_rope = head_dim - rope_dim;
+        if non_rope == 0 || value_len == 0 || !value_len.is_multiple_of(head_dim) {
+            return;
+        }
+        let effective_block_size = if non_rope.is_multiple_of(block_size) {
+            block_size
+        } else {
+            non_rope
+        };
+        let blocks_per_row = (non_rope + effective_block_size - 1) / effective_block_size;
+        let row = block_idx / blocks_per_row;
+        let rows = value_len / head_dim;
+        if row >= rows {
+            return;
+        }
+        let block = block_idx % blocks_per_row;
+        let row_base = row * head_dim;
+        let start = row_base + block * effective_block_size;
+        let end = (start + effective_block_size).min(row_base + non_rope);
+        let ptr = values.as_mut_ptr();
+        let mut amax = 1e-4f32;
+        let mut i = start;
+        while i < end {
+            let value = unsafe { *ptr.add(i) };
+            let abs_value = if value < 0.0 { -value } else { value };
+            if abs_value > amax {
+                amax = abs_value;
+            }
+            i += 1;
+        }
+        let scale = rounded_power_of_two_scale(amax, 448.0);
+        let mut i = start;
+        while i < end {
+            let value = unsafe { *ptr.add(i) };
+            let scaled = clamp_range(value / scale, -448.0, 448.0);
+            let quantized = quantize_fp8_e4m3fn_to_f32(scaled) * scale;
+            unsafe {
+                *ptr.add(i) = quantized;
+            }
+            i += 1;
+        }
+    }
+
+    /// Apply a normalized Walsh-Hadamard transform row-wise, then simulate
+    /// official block-wise FP4 E2M1 + E8M0 activation quantization in-place.
+    ///
+    /// This is used by the DSV4 indexer QAT path. One CUDA thread owns one row;
+    /// row widths are tiny powers of two (index head dim), so the serial row
+    /// transform is good enough and avoids global synchronization complexity.
+    #[kernel]
+    pub fn hadamard_fp4_e2m1_e8m0_quantize_f32_inplace(
+        mut values: DisjointSlice<f32>,
+        value_len: u32,
+        row_width: u32,
+        block_size: u32,
+    ) {
+        let row = thread::index_1d().get() as usize;
+        let value_len = value_len as usize;
+        let row_width = row_width as usize;
+        let block_size = block_size as usize;
+        if row_width == 0
+            || block_size == 0
+            || !row_width.is_power_of_two()
+            || !row_width.is_multiple_of(block_size)
+            || value_len == 0
+            || !value_len.is_multiple_of(row_width)
+        {
+            return;
+        }
+        let rows = value_len / row_width;
+        if row >= rows {
+            return;
+        }
+        let base = row * row_width;
+        let ptr = values.as_mut_ptr();
+
+        let mut span = 1usize;
+        while span < row_width {
+            let step = span * 2;
+            let mut start = 0usize;
+            while start < row_width {
+                let mut offset = 0usize;
+                while offset < span {
+                    let left = base + start + offset;
+                    let right = left + span;
+                    let a = unsafe { *ptr.add(left) };
+                    let b = unsafe { *ptr.add(right) };
+                    unsafe {
+                        *ptr.add(left) = a + b;
+                        *ptr.add(right) = a - b;
+                    }
+                    offset += 1;
+                }
+                start += step;
+            }
+            span = step;
+        }
+        let scale_h = fast_rsqrt(row_width as f32);
+        let mut i = 0usize;
+        while i < row_width {
+            unsafe {
+                *ptr.add(base + i) *= scale_h;
+            }
+            i += 1;
+        }
+
+        let blocks_per_row = row_width / block_size;
+        let mut block = 0usize;
+        while block < blocks_per_row {
+            let start = base + block * block_size;
+            let end = start + block_size;
+            let mut amax = 6.0 * pow2f(-126.0);
+            let mut j = start;
+            while j < end {
+                let value = unsafe { *ptr.add(j) };
+                let abs_value = if value < 0.0 { -value } else { value };
+                if abs_value > amax {
+                    amax = abs_value;
+                }
+                j += 1;
+            }
+            let scale_byte = e8m0_scale_byte_for_amax(amax, 6.0);
+            let scale = e8m0_scale(scale_byte);
+            let mut j = start;
+            while j < end {
+                let value = unsafe { *ptr.add(j) };
+                let scaled = clamp_range(value / scale, -6.0, 6.0);
+                let quantized = fp4_e2m1_value(quantize_fp4_e2m1_nibble(scaled)) * scale;
+                unsafe {
+                    *ptr.add(j) = quantized;
+                }
+                j += 1;
+            }
+            block += 1;
+        }
+    }
+
+    /// Build DSV4 prefill sparse-attention top-k indices on device.
+    ///
+    /// Output layout is `[tokens, window_cols + extra_cols]`. The window part
+    /// mirrors `window_topk_indices_prefill`; the extra part is either simple
+    /// compressed causal indices or indexer-routed top-k over compressed index KV.
+    #[kernel]
+    pub fn dsv4_prefill_topk_indices(
+        query: &[f32],
+        weights: &[f32],
+        indexer_kv: &[f32],
+        mut out: DisjointSlice<i32>,
+        tokens: u32,
+        window_size: u32,
+        window_cols: u32,
+        extra_cols: u32,
+        value_offset: u32,
+        compress_ratio: u32,
+        compressed_len: u32,
+        index_heads: u32,
+        index_head_dim: u32,
+        indexer_enabled: u32,
+        weight_scale: f32,
+    ) {
+        let token = thread::index_1d().get() as usize;
+        let tokens = tokens as usize;
+        if token >= tokens {
+            return;
+        }
+        let window_size = window_size as usize;
+        let window_cols = window_cols as usize;
+        let extra_cols = extra_cols as usize;
+        let value_offset = value_offset as usize;
+        let ratio = compress_ratio as usize;
+        let compressed_len = compressed_len as usize;
+        let heads = index_heads as usize;
+        let hd = index_head_dim as usize;
+        let total_cols = window_cols + extra_cols;
+        let out_ptr = out.as_mut_ptr();
+
+        let first = (token + 1).saturating_sub(window_size);
+        let mut col = 0usize;
+        while col < window_cols {
+            let idx = first + col;
+            let value = if idx <= token { idx as i32 } else { -1 };
+            unsafe {
+                *out_ptr.add(token * total_cols + col) = value;
+            }
+            col += 1;
+        }
+        if extra_cols == 0 || ratio == 0 {
+            return;
+        }
+
+        if indexer_enabled == 0 {
+            let visible = ((token + 1) / ratio).min(compressed_len);
+            let mut slot = 0usize;
+            while slot < extra_cols {
+                let value = if slot < visible {
+                    (value_offset + slot) as i32
+                } else {
+                    -1
+                };
+                unsafe {
+                    *out_ptr.add(token * total_cols + window_cols + slot) = value;
+                }
+                slot += 1;
+            }
+            return;
+        }
+
+        let visible = ((token + 1) / ratio).min(compressed_len);
+        let mut best_val = [f32::NEG_INFINITY; 512];
+        let mut best_idx = [-1i32; 512];
+        let take = extra_cols.min(512);
+        let mut idx = 0usize;
+        while idx < visible {
+            let mut score = 0.0f32;
+            let mut head = 0usize;
+            while head < heads {
+                let q_base = token * heads * hd + head * hd;
+                let kv_base = idx * hd;
+                let mut dot = 0.0f32;
+                let mut d = 0usize;
+                while d < hd {
+                    dot += query[q_base + d] * indexer_kv[kv_base + d];
+                    d += 1;
+                }
+                if dot < 0.0 {
+                    dot = 0.0;
+                }
+                score += dot * weights[token * heads + head] * weight_scale;
+                head += 1;
+            }
+            let mut pos = take;
+            while pos > 0 {
+                let prev = pos - 1;
+                let better = score > best_val[prev]
+                    || (score == best_val[prev]
+                        && (best_idx[prev] < 0 || (idx as i32) < best_idx[prev]));
+                if !better {
+                    break;
+                }
+                pos -= 1;
+            }
+            if pos < take {
+                let mut move_pos = take - 1;
+                while move_pos > pos {
+                    best_val[move_pos] = best_val[move_pos - 1];
+                    best_idx[move_pos] = best_idx[move_pos - 1];
+                    move_pos -= 1;
+                }
+                best_val[pos] = score;
+                best_idx[pos] = idx as i32;
+            }
+            idx += 1;
+        }
+        let mut slot = 0usize;
+        while slot < extra_cols {
+            let value = if slot < take && best_idx[slot] >= 0 && best_val[slot].is_finite() {
+                (value_offset + best_idx[slot] as usize) as i32
+            } else {
+                -1
+            };
+            unsafe {
+                *out_ptr.add(token * total_cols + window_cols + slot) = value;
+            }
+            slot += 1;
+        }
+    }
+
+    /// Fused variant for the indexer path: consumes untransformed index query
+    /// rows and applies RoPE + Hadamard/FP4-QAT in-register before top-k scoring.
+    /// This removes two separate query transform kernels and the intermediate
+    /// transformed-query global write/read from DSV4 prefill.
+    #[kernel]
+    pub fn dsv4_prefill_topk_indices_fused_index_query(
+        query: &[f32],
+        weights: &[f32],
+        indexer_kv: &[f32],
+        cos_table: &[f32],
+        sin_table: &[f32],
+        mut out: DisjointSlice<i32>,
+        tokens: u32,
+        window_size: u32,
+        window_cols: u32,
+        extra_cols: u32,
+        value_offset: u32,
+        compress_ratio: u32,
+        compressed_len: u32,
+        index_heads: u32,
+        index_head_dim: u32,
+        rope_dim: u32,
+        start_position: u32,
+        weight_scale: f32,
+    ) {
+        let token = thread::index_1d().get() as usize;
+        let tokens = tokens as usize;
+        if token >= tokens {
+            return;
+        }
+        let window_size = window_size as usize;
+        let window_cols = window_cols as usize;
+        let extra_cols = extra_cols as usize;
+        let value_offset = value_offset as usize;
+        let ratio = compress_ratio as usize;
+        let compressed_len = compressed_len as usize;
+        let heads = index_heads as usize;
+        let hd = index_head_dim as usize;
+        let rd = rope_dim as usize;
+        let total_cols = window_cols + extra_cols;
+        let out_ptr = out.as_mut_ptr();
+
+        let first = (token + 1).saturating_sub(window_size);
+        let mut col = 0usize;
+        while col < window_cols {
+            let idx = first + col;
+            let value = if idx <= token { idx as i32 } else { -1 };
+            unsafe {
+                *out_ptr.add(token * total_cols + col) = value;
+            }
+            col += 1;
+        }
+        if extra_cols == 0 || ratio == 0 || hd == 0 || hd > 256 || !hd.is_power_of_two() {
+            return;
+        }
+
+        let visible = ((token + 1) / ratio).min(compressed_len);
+        let mut best_val = [f32::NEG_INFINITY; 512];
+        let mut best_idx = [-1i32; 512];
+        let take = extra_cols.min(512);
+        let mut idx = 0usize;
+        while idx < visible {
+            let mut score = 0.0f32;
+            let mut head = 0usize;
+            while head < heads {
+                let mut q = [0.0f32; 256];
+                let q_base = token * heads * hd + head * hd;
+                let mut d = 0usize;
+                while d < hd {
+                    q[d] = query[q_base + d];
+                    d += 1;
+                }
+
+                if rd > 0 && rd <= hd && (rd & 1) == 0 {
+                    let tail_start = hd - rd;
+                    let rd2 = rd / 2;
+                    let position = start_position as usize + token;
+                    let mut pair = 0usize;
+                    while pair < rd2 {
+                        let base = tail_start + pair * 2;
+                        let x0 = q[base];
+                        let x1 = q[base + 1];
+                        let c = cos_table[position * rd2 + pair];
+                        let s = sin_table[position * rd2 + pair];
+                        q[base] = x0 * c - x1 * s;
+                        q[base + 1] = x0 * s + x1 * c;
+                        pair += 1;
+                    }
+                }
+
+                let mut span = 1usize;
+                while span < hd {
+                    let step = span * 2;
+                    let mut start = 0usize;
+                    while start < hd {
+                        let mut offset = 0usize;
+                        while offset < span {
+                            let left = start + offset;
+                            let right = left + span;
+                            let a = q[left];
+                            let b = q[right];
+                            q[left] = a + b;
+                            q[right] = a - b;
+                            offset += 1;
+                        }
+                        start += step;
+                    }
+                    span = step;
+                }
+                let scale_h = fast_rsqrt(hd as f32);
+                d = 0;
+                while d < hd {
+                    q[d] *= scale_h;
+                    d += 1;
+                }
+
+                let block_size = 32usize;
+                let blocks = hd / block_size;
+                let mut block = 0usize;
+                while block < blocks {
+                    let start = block * block_size;
+                    let end = start + block_size;
+                    let mut amax = 6.0 * pow2f(-126.0);
+                    let mut j = start;
+                    while j < end {
+                        let value = q[j];
+                        let abs_value = if value < 0.0 { -value } else { value };
+                        if abs_value > amax {
+                            amax = abs_value;
+                        }
+                        j += 1;
+                    }
+                    let scale_byte = e8m0_scale_byte_for_amax(amax, 6.0);
+                    let scale = e8m0_scale(scale_byte);
+                    j = start;
+                    while j < end {
+                        let value = q[j];
+                        let scaled = clamp_range(value / scale, -6.0, 6.0);
+                        q[j] = fp4_e2m1_value(quantize_fp4_e2m1_nibble(scaled)) * scale;
+                        j += 1;
+                    }
+                    block += 1;
+                }
+
+                let kv_base = idx * hd;
+                let mut dot = 0.0f32;
+                d = 0;
+                while d < hd {
+                    dot += q[d] * indexer_kv[kv_base + d];
+                    d += 1;
+                }
+                if dot < 0.0 {
+                    dot = 0.0;
+                }
+                score += dot * weights[token * heads + head] * weight_scale;
+                head += 1;
+            }
+            let mut pos = take;
+            while pos > 0 {
+                let prev = pos - 1;
+                let better = score > best_val[prev]
+                    || (score == best_val[prev]
+                        && (best_idx[prev] < 0 || (idx as i32) < best_idx[prev]));
+                if !better {
+                    break;
+                }
+                pos -= 1;
+            }
+            if pos < take {
+                let mut move_pos = take - 1;
+                while move_pos > pos {
+                    best_val[move_pos] = best_val[move_pos - 1];
+                    best_idx[move_pos] = best_idx[move_pos - 1];
+                    move_pos -= 1;
+                }
+                best_val[pos] = score;
+                best_idx[pos] = idx as i32;
+            }
+            idx += 1;
+        }
+        let mut slot = 0usize;
+        while slot < extra_cols {
+            let value = if slot < take && best_idx[slot] >= 0 && best_val[slot].is_finite() {
+                (value_offset + best_idx[slot] as usize) as i32
+            } else {
+                -1
+            };
+            unsafe {
+                *out_ptr.add(token * total_cols + window_cols + slot) = value;
+            }
+            slot += 1;
+        }
+    }
+
+    /// Build DSV4 decode sparse-attention top-k indices on device for the
+    /// combined KV layout `[window_size slots | compressed slots]`.
+    #[kernel]
+    pub fn dsv4_decode_topk_indices(
+        query: &[f32],
+        weights: &[f32],
+        indexer_kv: &[f32],
+        mut out: DisjointSlice<i32>,
+        position: u32,
+        window_len: u32,
+        window_size: u32,
+        extra_cols: u32,
+        value_offset: u32,
+        compressed_len: u32,
+        index_heads: u32,
+        index_head_dim: u32,
+        indexer_enabled: u32,
+        weight_scale: f32,
+    ) {
+        let total_cols = window_size as usize + extra_cols as usize;
+        if total_cols == 0 {
+            return;
+        }
+        let out_ptr = out.as_mut_ptr();
+        let window_len = window_len as usize;
+        let window_size = window_size as usize;
+        let position = position as usize;
+        let extra_cols = extra_cols as usize;
+        let value_offset = value_offset as usize;
+        let compressed_len = compressed_len as usize;
+        let heads = index_heads as usize;
+        let hd = index_head_dim as usize;
+
+        let mut col = 0usize;
+        if window_len < window_size {
+            while col < window_size {
+                let value = if col < window_len { col as i32 } else { -1 };
+                unsafe {
+                    *out_ptr.add(col) = value;
+                }
+                col += 1;
+            }
+        } else {
+            let slot = position % window_size;
+            let mut write = 0usize;
+            let mut idx = slot + 1;
+            while idx < window_size {
+                if write < window_size {
+                    unsafe {
+                        *out_ptr.add(write) = idx as i32;
+                    }
+                    write += 1;
+                }
+                idx += 1;
+            }
+            idx = 0;
+            while idx <= slot {
+                if write < window_size {
+                    unsafe {
+                        *out_ptr.add(write) = idx as i32;
+                    }
+                    write += 1;
+                }
+                idx += 1;
+            }
+        }
+
+        if extra_cols == 0 {
+            return;
+        }
+        if indexer_enabled == 0 {
+            let mut slot = 0usize;
+            while slot < extra_cols {
+                let value = if slot < compressed_len {
+                    (value_offset + slot) as i32
+                } else {
+                    -1
+                };
+                unsafe {
+                    *out_ptr.add(window_size + slot) = value;
+                }
+                slot += 1;
+            }
+            return;
+        }
+
+        let mut best_val = [f32::NEG_INFINITY; 512];
+        let mut best_idx = [-1i32; 512];
+        let take = extra_cols.min(512);
+        let mut idx = 0usize;
+        while idx < compressed_len {
+            let mut score = 0.0f32;
+            let mut head = 0usize;
+            while head < heads {
+                let q_base = head * hd;
+                let kv_base = idx * hd;
+                let mut dot = 0.0f32;
+                let mut d = 0usize;
+                while d < hd {
+                    dot += query[q_base + d] * indexer_kv[kv_base + d];
+                    d += 1;
+                }
+                if dot < 0.0 {
+                    dot = 0.0;
+                }
+                score += dot * weights[head] * weight_scale;
+                head += 1;
+            }
+            let mut pos = take;
+            while pos > 0 {
+                let prev = pos - 1;
+                let better = score > best_val[prev]
+                    || (score == best_val[prev]
+                        && (best_idx[prev] < 0 || (idx as i32) < best_idx[prev]));
+                if !better {
+                    break;
+                }
+                pos -= 1;
+            }
+            if pos < take {
+                let mut move_pos = take - 1;
+                while move_pos > pos {
+                    best_val[move_pos] = best_val[move_pos - 1];
+                    best_idx[move_pos] = best_idx[move_pos - 1];
+                    move_pos -= 1;
+                }
+                best_val[pos] = score;
+                best_idx[pos] = idx as i32;
+            }
+            idx += 1;
+        }
+        let mut slot = 0usize;
+        while slot < extra_cols {
+            let value = if slot < take && best_idx[slot] >= 0 && best_val[slot].is_finite() {
+                (value_offset + best_idx[slot] as usize) as i32
+            } else {
+                -1
+            };
+            unsafe {
+                *out_ptr.add(window_size + slot) = value;
+            }
+            slot += 1;
+        }
+    }
+
+    /// Fused decode indexer top-k: query rows are RoPE + Hadamard/FP4-QAT
+    /// transformed in-register before scanning compressed index KV.
+    #[kernel]
+    pub fn dsv4_decode_topk_indices_fused_index_query(
+        query: &[f32],
+        weights: &[f32],
+        indexer_kv: &[f32],
+        cos_table: &[f32],
+        sin_table: &[f32],
+        mut out: DisjointSlice<i32>,
+        position: u32,
+        window_len: u32,
+        window_size: u32,
+        extra_cols: u32,
+        value_offset: u32,
+        compressed_len: u32,
+        index_heads: u32,
+        index_head_dim: u32,
+        rope_dim: u32,
+        weight_scale: f32,
+    ) {
+        let total_cols = window_size as usize + extra_cols as usize;
+        if total_cols == 0 {
+            return;
+        }
+        let out_ptr = out.as_mut_ptr();
+        let window_len = window_len as usize;
+        let window_size = window_size as usize;
+        let position = position as usize;
+        let extra_cols = extra_cols as usize;
+        let value_offset = value_offset as usize;
+        let compressed_len = compressed_len as usize;
+        let heads = index_heads as usize;
+        let hd = index_head_dim as usize;
+        let rd = rope_dim as usize;
+
+        let mut col = 0usize;
+        if window_len < window_size {
+            while col < window_size {
+                let value = if col < window_len { col as i32 } else { -1 };
+                unsafe {
+                    *out_ptr.add(col) = value;
+                }
+                col += 1;
+            }
+        } else {
+            let slot = position % window_size;
+            let mut write = 0usize;
+            let mut idx = slot + 1;
+            while idx < window_size {
+                if write < window_size {
+                    unsafe {
+                        *out_ptr.add(write) = idx as i32;
+                    }
+                    write += 1;
+                }
+                idx += 1;
+            }
+            idx = 0;
+            while idx <= slot {
+                if write < window_size {
+                    unsafe {
+                        *out_ptr.add(write) = idx as i32;
+                    }
+                    write += 1;
+                }
+                idx += 1;
+            }
+        }
+
+        if extra_cols == 0 || hd == 0 || hd > 256 || !hd.is_power_of_two() {
+            return;
+        }
+        let mut best_val = [f32::NEG_INFINITY; 512];
+        let mut best_idx = [-1i32; 512];
+        let take = extra_cols.min(512);
+        let mut idx = 0usize;
+        while idx < compressed_len {
+            let mut score = 0.0f32;
+            let mut head = 0usize;
+            while head < heads {
+                let mut q = [0.0f32; 256];
+                let q_base = head * hd;
+                let mut d = 0usize;
+                while d < hd {
+                    q[d] = query[q_base + d];
+                    d += 1;
+                }
+
+                if rd > 0 && rd <= hd && (rd & 1) == 0 {
+                    let tail_start = hd - rd;
+                    let rd2 = rd / 2;
+                    let mut pair = 0usize;
+                    while pair < rd2 {
+                        let base = tail_start + pair * 2;
+                        let x0 = q[base];
+                        let x1 = q[base + 1];
+                        let c = cos_table[position * rd2 + pair];
+                        let s = sin_table[position * rd2 + pair];
+                        q[base] = x0 * c - x1 * s;
+                        q[base + 1] = x0 * s + x1 * c;
+                        pair += 1;
+                    }
+                }
+
+                let mut span = 1usize;
+                while span < hd {
+                    let step = span * 2;
+                    let mut start = 0usize;
+                    while start < hd {
+                        let mut offset = 0usize;
+                        while offset < span {
+                            let left = start + offset;
+                            let right = left + span;
+                            let a = q[left];
+                            let b = q[right];
+                            q[left] = a + b;
+                            q[right] = a - b;
+                            offset += 1;
+                        }
+                        start += step;
+                    }
+                    span = step;
+                }
+                let scale_h = fast_rsqrt(hd as f32);
+                d = 0;
+                while d < hd {
+                    q[d] *= scale_h;
+                    d += 1;
+                }
+
+                let block_size = 32usize;
+                let blocks = hd / block_size;
+                let mut block = 0usize;
+                while block < blocks {
+                    let start = block * block_size;
+                    let end = start + block_size;
+                    let mut amax = 6.0 * pow2f(-126.0);
+                    let mut j = start;
+                    while j < end {
+                        let value = q[j];
+                        let abs_value = if value < 0.0 { -value } else { value };
+                        if abs_value > amax {
+                            amax = abs_value;
+                        }
+                        j += 1;
+                    }
+                    let scale_byte = e8m0_scale_byte_for_amax(amax, 6.0);
+                    let scale = e8m0_scale(scale_byte);
+                    j = start;
+                    while j < end {
+                        let value = q[j];
+                        let scaled = clamp_range(value / scale, -6.0, 6.0);
+                        q[j] = fp4_e2m1_value(quantize_fp4_e2m1_nibble(scaled)) * scale;
+                        j += 1;
+                    }
+                    block += 1;
+                }
+
+                let kv_base = idx * hd;
+                let mut dot = 0.0f32;
+                d = 0;
+                while d < hd {
+                    dot += q[d] * indexer_kv[kv_base + d];
+                    d += 1;
+                }
+                if dot < 0.0 {
+                    dot = 0.0;
+                }
+                score += dot * weights[head] * weight_scale;
+                head += 1;
+            }
+            let mut pos = take;
+            while pos > 0 {
+                let prev = pos - 1;
+                let better = score > best_val[prev]
+                    || (score == best_val[prev]
+                        && (best_idx[prev] < 0 || (idx as i32) < best_idx[prev]));
+                if !better {
+                    break;
+                }
+                pos -= 1;
+            }
+            if pos < take {
+                let mut move_pos = take - 1;
+                while move_pos > pos {
+                    best_val[move_pos] = best_val[move_pos - 1];
+                    best_idx[move_pos] = best_idx[move_pos - 1];
+                    move_pos -= 1;
+                }
+                best_val[pos] = score;
+                best_idx[pos] = idx as i32;
+            }
+            idx += 1;
+        }
+        let mut slot = 0usize;
+        while slot < extra_cols {
+            let value = if slot < take && best_idx[slot] >= 0 && best_val[slot].is_finite() {
+                (value_offset + best_idx[slot] as usize) as i32
+            } else {
+                -1
+            };
+            unsafe {
+                *out_ptr.add(window_size + slot) = value;
+            }
+            slot += 1;
+        }
+    }
+
+    /// DSV4 compressor prefill softmax reduction.
+    ///
+    /// Inputs are row-major projected rows:
+    /// - non-overlap: `[tokens, head_dim]`
+    /// - overlap: `[tokens, 2 * head_dim]`, where previous/current halves are
+    ///   combined exactly like the CPU reference compressor.
+    ///
+    /// Output is `[groups=tokens/ratio, head_dim]` before compressor RMS/RoPE/QAT.
+    #[kernel]
+    pub fn dsv4_compressor_prefill_softmax(
+        kv_rows: &[f32],
+        score_rows: &[f32],
+        ape: &[f32],
+        mut output: DisjointSlice<f32>,
+        groups: u32,
+        ratio: u32,
+        head_dim: u32,
+        out_dim: u32,
+        overlap: u32,
+    ) {
+        let idx = thread::index_1d().get() as usize;
+        let groups = groups as usize;
+        let ratio = ratio as usize;
+        let head_dim = head_dim as usize;
+        let out_dim = out_dim as usize;
+        if groups == 0 || ratio == 0 || head_dim == 0 || out_dim == 0 {
+            return;
+        }
+        let total = groups * head_dim;
+        if idx >= total {
+            return;
+        }
+        let group = idx / head_dim;
+        let dim = idx - group * head_dim;
+        let rows = if overlap != 0 { 2 * ratio } else { ratio };
+
+        let mut max_score = f32::NEG_INFINITY;
+        let mut row = 0usize;
+        while row < rows {
+            let mut valid = true;
+            let (src_token, src_dim, ape_dim) = if overlap != 0 {
+                if row < ratio {
+                    if group == 0 {
+                        valid = false;
+                    }
+                    ((group.saturating_sub(1)) * ratio + row, dim, dim)
+                } else {
+                    let local = row - ratio;
+                    (group * ratio + local, head_dim + dim, head_dim + dim)
+                }
+            } else {
+                (group * ratio + row, dim, dim)
+            };
+            if valid {
+                let score = score_rows[src_token * out_dim + src_dim]
+                    + ape[(row % ratio) * out_dim + ape_dim];
+                if score > max_score {
+                    max_score = score;
+                }
+            }
+            row += 1;
+        }
+
+        let mut denom = 0.0f32;
+        row = 0;
+        while row < rows {
+            let mut valid = true;
+            let (src_token, src_dim, ape_dim) = if overlap != 0 {
+                if row < ratio {
+                    if group == 0 {
+                        valid = false;
+                    }
+                    ((group.saturating_sub(1)) * ratio + row, dim, dim)
+                } else {
+                    let local = row - ratio;
+                    (group * ratio + local, head_dim + dim, head_dim + dim)
+                }
+            } else {
+                (group * ratio + row, dim, dim)
+            };
+            if valid {
+                let score = score_rows[src_token * out_dim + src_dim]
+                    + ape[(row % ratio) * out_dim + ape_dim];
+                denom += fast_exp(score - max_score);
+            }
+            row += 1;
+        }
+
+        let mut out = 0.0f32;
+        if denom > 0.0 && denom.is_finite() {
+            row = 0;
+            while row < rows {
+                let mut valid = true;
+                let (src_token, src_dim, ape_dim) = if overlap != 0 {
+                    if row < ratio {
+                        if group == 0 {
+                            valid = false;
+                        }
+                        ((group.saturating_sub(1)) * ratio + row, dim, dim)
+                    } else {
+                        let local = row - ratio;
+                        (group * ratio + local, head_dim + dim, head_dim + dim)
+                    }
+                } else {
+                    (group * ratio + row, dim, dim)
+                };
+                if valid {
+                    let score = score_rows[src_token * out_dim + src_dim]
+                        + ape[(row % ratio) * out_dim + ape_dim];
+                    let weight = fast_exp(score - max_score) / denom;
+                    out += weight * kv_rows[src_token * out_dim + src_dim];
+                }
+                row += 1;
+            }
+        }
+        if let Some(o) = output.get_mut(thread::index_1d()) {
+            *o = out;
+        }
+    }
+
     /// Block-wise FP4 E2M1 + E8M0 activation quantization into packed bytes.
     ///
     /// `values` is row-major `[rows, row_width]`; `packed` is
@@ -932,6 +2062,54 @@ pub mod kernels {
             while j < end {
                 let w = fp8_e4m3fn_value(weight[row_weight + j]);
                 dot += x[j] * w * scale;
+                j += 1;
+            }
+            block += 1;
+        }
+        if let Some(yi) = y.get_mut(thread::index_1d()) {
+            *yi = dot;
+        }
+    }
+
+    /// Batched GEMM for FP8 E4M3FN weights with 2D E8M0 block scales.
+    /// Output layout is row-major `[batch, n]`.
+    #[kernel]
+    pub fn gemm_fp8_e4m3fn_e8m0_2d(
+        x: &[f32],
+        weight: &[u8],
+        scales: &[u8],
+        mut y: DisjointSlice<f32>,
+        batch: u32,
+        n: u32,
+        k: u32,
+        scale_cols: u32,
+        block_m: u32,
+        block_k: u32,
+    ) {
+        let idx = thread::index_1d().get();
+        let total = batch as u64 * n as u64;
+        if (idx as u64) >= total {
+            return;
+        }
+        let b = (idx as u32 / n) as usize;
+        let row = (idx as u32 % n) as usize;
+        let k = k as usize;
+        let sc = scale_cols as usize;
+        let bm = block_m as usize;
+        let bk = block_k as usize;
+        let input_off = b * k;
+        let row_weight = row * k;
+        let row_scales = (row / bm) * sc;
+        let mut dot = 0.0f32;
+        let mut block = 0usize;
+        while block < sc {
+            let scale = e8m0_scale(scales[row_scales + block]);
+            let start = block * bk;
+            let end = (start + bk).min(k);
+            let mut j = start;
+            while j < end {
+                let w = fp8_e4m3fn_value(weight[row_weight + j]);
+                dot += x[input_off + j] * w * scale;
                 j += 1;
             }
             block += 1;
@@ -1473,6 +2651,71 @@ pub mod kernels {
         }
     }
 
+    /// Gather row-major f32 rows from `src` into compact `dst`.
+    ///
+    /// `row_indices` has `rows` entries. `src` is `[src_rows, row_width]` and
+    /// `dst` is `[rows, row_width]`. This is the packing primitive for grouped
+    /// MoE prefill: tokens routed to one expert become contiguous columns for a
+    /// single batched expert execution.
+    #[kernel]
+    pub fn gather_f32_rows(
+        src: &[f32],
+        row_indices: &[i32],
+        mut dst: DisjointSlice<f32>,
+        rows: u32,
+        row_width: u32,
+    ) {
+        let i = thread::index_1d().get();
+        let total = rows as u64 * row_width as u64;
+        if (i as u64) >= total {
+            return;
+        }
+        let row_width = row_width as usize;
+        let dst_row = i as usize / row_width;
+        let col = i as usize - dst_row * row_width;
+        let src_row = row_indices[dst_row];
+        if src_row < 0 {
+            return;
+        }
+        let src_idx = src_row as usize * row_width + col;
+        let dst_ptr = dst.as_mut_ptr();
+        unsafe {
+            *dst_ptr.add(i as usize) = src[src_idx];
+        }
+    }
+
+    /// Scatter-add compact row-major f32 rows into `dst`.
+    ///
+    /// `src` is `[rows, row_width]`, `row_indices` maps each compact row to a
+    /// destination row in `dst`. Launches on one stream, so different expert
+    /// groups are ordered; within one launch each `(row,col)` is unique.
+    #[kernel]
+    pub fn scatter_add_f32_rows(
+        src: &[f32],
+        row_indices: &[i32],
+        mut dst: DisjointSlice<f32>,
+        rows: u32,
+        row_width: u32,
+    ) {
+        let i = thread::index_1d().get();
+        let total = rows as u64 * row_width as u64;
+        if (i as u64) >= total {
+            return;
+        }
+        let row_width = row_width as usize;
+        let src_row = i as usize / row_width;
+        let col = i as usize - src_row * row_width;
+        let dst_row = row_indices[src_row];
+        if dst_row < 0 {
+            return;
+        }
+        let dst_idx = dst_row as usize * row_width + col;
+        let dst_ptr = dst.as_mut_ptr();
+        unsafe {
+            *dst_ptr.add(dst_idx) += src[i as usize];
+        }
+    }
+
     /// Compute 1/sqrt(mean(x^2) + eps) through libdevice-backed float math.
     /// This matches llama.cpp's rsqrtf(var + eps) semantics without inline PTX.
     #[kernel]
@@ -1542,6 +2785,71 @@ pub mod kernels {
         while j < n {
             unsafe {
                 *y_ptr.add(j) = x[j] * rsqrt * w[j];
+            }
+            j += bdim;
+        }
+    }
+
+    /// Batched affine RMS normalize `[rows, row_dim]` with shared weight `[row_dim]`.
+    /// One CUDA block owns one row; this is the prefill shape for attention/FFN
+    /// RMS norms and avoids launching one single-row RMS kernel per token.
+    #[kernel]
+    pub fn rms_norm_rows_fused(
+        x: &[f32],
+        w: &[f32],
+        mut y: DisjointSlice<f32>,
+        rows: u32,
+        row_dim: u32,
+        eps: f32,
+    ) {
+        static mut SMEM: SharedArray<f32, 1024> = SharedArray::UNINIT;
+        let row = thread::blockIdx_x() as usize;
+        let rows = rows as usize;
+        if row >= rows {
+            return;
+        }
+        let tid = thread::threadIdx_x() as usize;
+        let bdim = thread::blockDim_x() as usize;
+        let dim = row_dim as usize;
+        let base = row * dim;
+
+        let mut sum = 0.0f32;
+        let mut j = tid;
+        while j < dim {
+            let v = x[base + j];
+            sum += v * v;
+            j += bdim;
+        }
+        unsafe {
+            SMEM[tid] = sum;
+        }
+        thread::sync_threads();
+
+        let mut stride = (bdim + 1) / 2;
+        while stride > 0 {
+            if tid < stride && tid + stride < bdim {
+                unsafe {
+                    SMEM[tid] += SMEM[tid + stride];
+                }
+            }
+            thread::sync_threads();
+            stride /= 2;
+        }
+
+        if tid == 0 {
+            let val = unsafe { SMEM[0] } / dim as f32 + eps;
+            unsafe {
+                SMEM[0] = fast_rsqrt(val);
+            }
+        }
+        thread::sync_threads();
+
+        let rsqrt = unsafe { SMEM[0] };
+        let y_ptr = y.as_mut_ptr();
+        let mut j = tid;
+        while j < dim {
+            unsafe {
+                *y_ptr.add(base + j) = x[base + j] * rsqrt * w[j];
             }
             j += bdim;
         }
@@ -1690,6 +2998,93 @@ pub mod kernels {
                     *idx_ptr.add(j) = top_idx[j];
                     *w_ptr.add(j) = top_val[j] / denom;
                 }
+            }
+        }
+    }
+
+    /// DeepSeek-V4 router top-k for score-top-k layers.
+    ///
+    /// Input logits are `[tokens, experts]`. For each token this computes
+    /// `score = sqrt(softplus(logit))`, selects top-k by `score + bias`, then
+    /// writes selected expert ids and normalized route weights as `[tokens, k]`
+    /// f32 buffers. Host-side residency only needs ids/weights; diagnostic route
+    /// scores stay CPU-reference-only for now.
+    #[kernel]
+    pub fn dsv4_router_topk_sqrt_softplus_rows(
+        logits: &[f32],
+        bias: &[f32],
+        mut indices: DisjointSlice<f32>,
+        mut weights: DisjointSlice<f32>,
+        tokens: u32,
+        experts: u32,
+        k: u32,
+        bias_enabled: u32,
+        route_scale: f32,
+    ) {
+        let row = thread::index_1d().get();
+        if row >= tokens as usize {
+            return;
+        }
+        let experts = experts as usize;
+        let k = k as usize;
+        if k == 0 || k > 64 {
+            return;
+        }
+        let row_offset = row * experts;
+        let out_offset = row * k;
+        let mut top_idx = [0i32; 64];
+        let mut top_score = [0.0f32; 64];
+        let mut selected = [false; 512];
+        let mut sum = 0.0f32;
+
+        for slot in 0..k {
+            let mut best_idx = 0usize;
+            let mut best_score = 0.0f32;
+            let mut best_selection = f32::NEG_INFINITY;
+            for expert in 0..experts {
+                if expert < 512 && selected[expert] {
+                    continue;
+                }
+                let logit = logits[row_offset + expert];
+                let softplus = stable_softplus_f32(logit);
+                let score = if softplus > 0.0 {
+                    fast_sqrt(softplus)
+                } else {
+                    0.0
+                };
+                let selection = if bias_enabled != 0 {
+                    score + bias[expert]
+                } else {
+                    score
+                };
+                if selection > best_selection
+                    || (selection == best_selection && expert < best_idx)
+                    || slot == 0 && best_selection == f32::NEG_INFINITY
+                {
+                    best_idx = expert;
+                    best_score = score;
+                    best_selection = selection;
+                }
+            }
+            if best_idx < 512 {
+                selected[best_idx] = true;
+            }
+            top_idx[slot] = best_idx as i32;
+            top_score[slot] = best_score;
+            sum += best_score;
+        }
+
+        let idx_ptr = indices.as_mut_ptr();
+        let w_ptr = weights.as_mut_ptr();
+        for slot in 0..k {
+            let weight = if sum > 0.0 && sum.is_finite() {
+                top_score[slot] / sum * route_scale
+            } else {
+                0.0
+            };
+            unsafe {
+                *idx_ptr.add(out_offset + slot) = top_idx[slot] as f32;
+                *w_ptr.add(out_offset + slot) = weight;
             }
         }
     }
@@ -2124,6 +3519,130 @@ pub mod kernels {
         };
         if let Some(o) = qk.get_mut(thread::index_1d()) {
             *o = val;
+        }
+    }
+
+    /// Batched tail rotary for `[rows, heads, head_dim]` device rows.
+    ///
+    /// One thread owns one rotary pair and writes both elements, avoiding the
+    /// read/write race that would happen if even/odd lanes updated a pair
+    /// independently. Position is `start_position + row`.
+    #[kernel]
+    pub fn rope_tail_yaarn_rows(
+        mut qk: DisjointSlice<f32>,
+        cos_table: &[f32],
+        sin_table: &[f32],
+        num_pairs: u32,
+        start_position: u32,
+        rows: u32,
+        heads: u32,
+        head_dim: u32,
+        rope_dim: u32,
+        inverse: u32,
+    ) {
+        let idx = thread::index_1d().get();
+        if (idx as u64) >= num_pairs as u64 {
+            return;
+        }
+        let hd = head_dim as usize;
+        let rd = rope_dim as usize;
+        let heads = heads as usize;
+        let rows = rows as usize;
+        if rows == 0 || heads == 0 || rd == 0 || rd > hd {
+            return;
+        }
+        let rd2 = rd / 2;
+        if rd2 == 0 {
+            return;
+        }
+        let pair_idx = idx as usize;
+        let pairs_per_row = heads * rd2;
+        let row = pair_idx / pairs_per_row;
+        if row >= rows {
+            return;
+        }
+        let rem = pair_idx - row * pairs_per_row;
+        let head = rem / rd2;
+        let pair = rem - head * rd2;
+        let position = start_position as usize + row;
+        let cos = cos_table[position * rd2 + pair];
+        let sin = sin_table[position * rd2 + pair];
+        let (s, c) = if inverse != 0 {
+            (-sin, cos)
+        } else {
+            (sin, cos)
+        };
+        let row_stride = heads * hd;
+        let tail_start = hd - rd;
+        let base = row * row_stride + head * hd + tail_start + pair * 2;
+        let ptr = qk.as_mut_ptr();
+        let x0 = unsafe { *ptr.add(base) };
+        let x1 = unsafe { *ptr.add(base + 1) };
+        unsafe {
+            *ptr.add(base) = x0 * c - x1 * s;
+            *ptr.add(base + 1) = x0 * s + x1 * c;
+        }
+    }
+
+    /// Batched tail rotary for `[rows, heads, head_dim]` where row position is
+    /// `start_position + row * position_stride`. This is needed by compressed
+    /// prefill, whose compressed rows correspond to source positions separated
+    /// by `compress_ratio`.
+    #[kernel]
+    pub fn rope_tail_yaarn_rows_strided(
+        mut qk: DisjointSlice<f32>,
+        cos_table: &[f32],
+        sin_table: &[f32],
+        num_pairs: u32,
+        start_position: u32,
+        position_stride: u32,
+        rows: u32,
+        heads: u32,
+        head_dim: u32,
+        rope_dim: u32,
+        inverse: u32,
+    ) {
+        let idx = thread::index_1d().get();
+        if (idx as u64) >= num_pairs as u64 {
+            return;
+        }
+        let hd = head_dim as usize;
+        let rd = rope_dim as usize;
+        let heads = heads as usize;
+        let rows = rows as usize;
+        if rows == 0 || heads == 0 || rd == 0 || rd > hd {
+            return;
+        }
+        let rd2 = rd / 2;
+        if rd2 == 0 {
+            return;
+        }
+        let pair_idx = idx as usize;
+        let pairs_per_row = heads * rd2;
+        let row = pair_idx / pairs_per_row;
+        if row >= rows {
+            return;
+        }
+        let rem = pair_idx - row * pairs_per_row;
+        let head = rem / rd2;
+        let pair = rem - head * rd2;
+        let position = start_position as usize + row * position_stride as usize;
+        let cos = cos_table[position * rd2 + pair];
+        let sin = sin_table[position * rd2 + pair];
+        let (s, c) = if inverse != 0 {
+            (-sin, cos)
+        } else {
+            (sin, cos)
+        };
+        let row_stride = heads * hd;
+        let tail_start = hd - rd;
+        let base = row * row_stride + head * hd + tail_start + pair * 2;
+        let ptr = qk.as_mut_ptr();
+        let x0 = unsafe { *ptr.add(base) };
+        let x1 = unsafe { *ptr.add(base + 1) };
+        unsafe {
+            *ptr.add(base) = x0 * c - x1 * s;
+            *ptr.add(base + 1) = x0 * s + x1 * c;
         }
     }
 
@@ -2567,7 +4086,7 @@ pub mod kernels {
             g = clamp_max(g, swiglu_limit);
             u = clamp_range(u, -swiglu_limit, swiglu_limit);
         }
-        let rw = route_weights[expert];
+        let rw = route_weights[expert * batch_cols + batch_col];
         let val = quantize_fp8_e4m3fn_to_f32(g * fast_sigmoid(g) * u * rw);
         let abs_value = if val < 0.0 { -val } else { val };
         unsafe {

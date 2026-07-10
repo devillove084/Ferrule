@@ -11,8 +11,8 @@ use commands::chat::cmd_chat;
 use commands::cuda::cmd_cuda;
 use commands::info::cmd_info;
 use commands::inspect::{
-    cmd_deepseek_v4_generate, cmd_deepseek_v4_probe, cmd_expert_stream_smoke,
-    cmd_inspect_weightpack,
+    cmd_deepseek_v4_generate, cmd_deepseek_v4_prefill_parity, cmd_deepseek_v4_probe,
+    cmd_expert_stream_smoke, cmd_inspect_weightpack,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -125,6 +125,29 @@ fn main() -> anyhow::Result<()> {
             &backend,
             reference_json.as_deref(),
             reference_atol,
+        ),
+        Command::DeepSeekV4PrefillParity {
+            model,
+            prompt,
+            max_layers,
+            max_tensor_mb,
+            expert_reader_max_slice_mb,
+            backend,
+            chat,
+            atol,
+            cuts,
+            json,
+        } => cmd_deepseek_v4_prefill_parity(
+            &model,
+            &prompt,
+            max_layers,
+            max_tensor_mb,
+            expert_reader_max_slice_mb,
+            &backend,
+            chat,
+            atol,
+            &cuts,
+            json,
         ),
     }
 }

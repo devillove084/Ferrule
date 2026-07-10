@@ -214,6 +214,8 @@ fn dsv4_layer_decode_step_runs_hc_attention_moe_shared_hc() {
         kv: DeepSeekV4AttentionCache::new(attention_cfg),
         expert_planner: planner,
         expert_handles: CpuExpertHandleStore::new(),
+        #[cfg(feature = "cuda")]
+        graph_arena: None,
     };
     let mut hc_state = vec![0.0f32; hc_config.hc_hidden_size()];
     hc_state[0] = 2.0;

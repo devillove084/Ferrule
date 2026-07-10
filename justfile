@@ -201,6 +201,12 @@ test-dsv4-runtime-driver-local *args='':
     @echo "→ local DSV4 ResidentTopKDriver integration test via cargo oxide (arch: {{ _cuda-arch }})"
     cargo oxide test --arch {{ _cuda-arch }} -- --features cuda,local-dsv4-tests --release -p ferrule-cli --test dsv4_resident_runtime_local -- --ignored --nocapture {{ args }}
 
+dsv4-prefill-parity model='models/DeepSeek-V4-Flash-DSpark' prompt='Hello' layers='43' backend='cuda' *args='':
+    @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
+    @echo "-> DSV4 prefill parity harness (arch: {{ _cuda-arch }}, layers: {{ layers }}, backend: {{ backend }})"
+    cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
+    ./target/release/ferrule deepseek-v4-prefill-parity {{ model }} -p "{{ prompt }}" --max-layers {{ layers }} --backend {{ backend }} {{ args }}
+
 cuda:
     cargo run -p ferrule-cli -- cuda
 
