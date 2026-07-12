@@ -7,16 +7,21 @@ use std::time::{Duration, Instant};
 
 use cuda_core::stream::CudaStream;
 use cuda_core::{CudaContext, CudaEvent, DeviceBuffer, DeviceCopy, LaunchConfig, PinnedHostBuffer};
-use ferrule_common::{Error, QuantType, Result};
+use ferrule_common::{Error, Result};
 
 pub use crate::counters::CudaFailpoints;
 pub use crate::counters::CudaOpCounters;
 use crate::counters::{CudaMoeExecutionPath, CudaOpCounterCells};
-use crate::kernels::{kernels::LoadedModule, DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS};
+use crate::kernels::{DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS, kernels::LoadedModule};
 use crate::transformer::artifact_expert::{
     CudaPackedFp4Expert, CudaPackedFp4ExpertScratch, CudaPackedFp4Linear,
 };
-use crate::transformer::sparse_attention::{CudaSparseAttentionExecutor, CudaSparseAttentionShape};
+use crate::transformer::combined_ring::CombinedRingTopkLayout;
+use crate::transformer::compressor_recurrent::CompressorRecurrentShape;
+use crate::transformer::sparse_attention::{
+    CudaSparseAttentionExecutor, CudaSparseAttentionShape, DualPlanePagedSparseAttentionLayout,
+    PagedSparseAttentionLayout,
+};
 
 /// Convert a CUDA result into a ferrule Result.
 pub(crate) fn cu<T, E: std::fmt::Debug>(r: std::result::Result<T, E>) -> Result<T> {
@@ -29,6 +34,53 @@ fn slice_bytes<T>(slice: &[T]) -> u64 {
 
 fn element_bytes<T>(len: usize) -> u64 {
     (len as u64).saturating_mul(std::mem::size_of::<T>() as u64)
+}
+
+fn f32_range_device_ptr(
+    buffer: &CudaF32Buffer,
+    offset: usize,
+    len: usize,
+    operation: &str,
+) -> Result<cuda_bindings::CUdeviceptr> {
+    let end = offset
+        .checked_add(len)
+        .ok_or_else(|| Error::Internal(format!("{operation} range overflow")))?;
+    if end > buffer.len {
+        return Err(Error::Internal(format!(
+            "{operation} out of bounds: buffer={} range={offset}..{end}",
+            buffer.len
+        )));
+    }
+    let byte_offset = offset
+        .checked_mul(std::mem::size_of::<f32>())
+        .ok_or_else(|| Error::Internal(format!("{operation} byte offset overflow")))?;
+    buffer
+        .buffer
+        .cu_deviceptr()
+        .checked_add(byte_offset as u64)
+        .ok_or_else(|| Error::Internal(format!("{operation} device pointer overflow")))
+}
+
+fn copy_f32_device_range(
+    stream: &CudaStream,
+    src: cuda_bindings::CUdeviceptr,
+    dst: cuda_bindings::CUdeviceptr,
+    len: usize,
+) -> Result<()> {
+    if len == 0 {
+        return Ok(());
+    }
+    let bytes = len
+        .checked_mul(std::mem::size_of::<f32>())
+        .ok_or_else(|| Error::Internal("CUDA f32 range copy byte size overflow".into()))?;
+    let result =
+        unsafe { cuda_bindings::cuMemcpyDtoDAsync_v2(dst, src, bytes, stream.cu_stream()) };
+    if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+        return Err(Error::Internal(format!(
+            "cuMemcpyDtoDAsync range failed: error {result}"
+        )));
+    }
+    Ok(())
 }
 
 fn duration_us(duration: Duration) -> u64 {
@@ -169,65 +221,76 @@ fn checked_u32(value: usize, label: &str, field: &str) -> Result<u32> {
         .map_err(|_| Error::Internal(format!("{label} {field} exceeds CUDA u32 ABI: {value}")))
 }
 
+#[derive(Clone, Copy)]
+struct Dsv4PagedDecodeRowsShape {
+    rows: usize,
+    window_size: usize,
+    index_topk: usize,
+    index_heads: usize,
+    index_head_dim: usize,
+}
+
+impl Dsv4PagedDecodeRowsShape {
+    fn elements(self) -> Result<usize> {
+        self.rows
+            .checked_mul(
+                self.window_size
+                    .checked_add(self.index_topk)
+                    .ok_or_else(|| {
+                        Error::Internal("CUDA paged decode rows column overflow".into())
+                    })?,
+            )
+            .ok_or_else(|| Error::Internal("CUDA paged decode rows output overflow".into()))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn validate_lengths(
+        self,
+        query: usize,
+        weights: usize,
+        block_offsets: usize,
+        row_sequence_ids: usize,
+        positions: usize,
+        window_lens: usize,
+        compressed_lens: usize,
+        logical_indices: usize,
+        plane_selectors: usize,
+    ) -> Result<usize> {
+        let query_len = self
+            .rows
+            .checked_mul(self.index_heads)
+            .and_then(|value| value.checked_mul(self.index_head_dim))
+            .ok_or_else(|| Error::Internal("CUDA paged decode rows query overflow".into()))?;
+        let weight_len = self
+            .rows
+            .checked_mul(self.index_heads)
+            .ok_or_else(|| Error::Internal("CUDA paged decode rows weights overflow".into()))?;
+        let elements = self.elements()?;
+        if self.rows == 0
+            || self.window_size == 0
+            || self.index_topk == 0
+            || self.index_topk > 512
+            || self.index_heads == 0
+            || self.index_head_dim == 0
+            || query != query_len
+            || weights != weight_len
+            || block_offsets < 2
+            || row_sequence_ids != self.rows
+            || positions != self.rows
+            || window_lens != self.rows
+            || compressed_lens != self.rows
+            || logical_indices != elements
+            || plane_selectors != elements
+        {
+            return Err(Error::Internal(
+                "CUDA paged decode rows indexer shape mismatch".into(),
+            ));
+        }
+        Ok(elements)
+    }
+}
+
 // ── Kernel dispatch (selects Q4_0 vs Q8_0 at runtime) ─────────────────
-
-#[allow(dead_code)]
-pub(crate) fn gemv_quant(
-    m: &LoadedModule,
-    s: &CudaStream,
-    qt: QuantType,
-    cfg: LaunchConfig,
-    x: &DeviceBuffer<f32>,
-    packed: &DeviceBuffer<u8>,
-    scales: &DeviceBuffer<f32>,
-    y: &mut DeviceBuffer<f32>,
-    n: u32,
-    k: u32,
-) -> Result<()> {
-    match qt {
-        QuantType::Q4_0 => cu(unsafe { m.gemv_q4(s, cfg, x, packed, scales, y, n, k) }),
-        QuantType::Q8_0 => cu(unsafe { m.gemv_q8(s, cfg, x, packed, scales, y, n, k) }),
-        _ => Err(Error::Kernel(format!(
-            "unsupported quant type for gemv: {qt:?}"
-        ))),
-    }
-}
-
-#[allow(dead_code)]
-pub(crate) fn gemv_quant_off(
-    m: &LoadedModule,
-    s: &CudaStream,
-    qt: QuantType,
-    cfg: LaunchConfig,
-    x: &DeviceBuffer<f32>,
-    packed: &DeviceBuffer<u8>,
-    scales: &DeviceBuffer<f32>,
-    y: &mut DeviceBuffer<f32>,
-    n: u32,
-    k: u32,
-    packed_off: u32,
-    scales_off: u32,
-) -> Result<()> {
-    match qt {
-        QuantType::Q4_0 => {
-            cu(
-                unsafe {
-                    m.gemv_q4_off(s, cfg, x, packed, scales, y, n, k, packed_off, scales_off)
-                },
-            )
-        }
-        QuantType::Q8_0 => {
-            cu(
-                unsafe {
-                    m.gemv_q8_off(s, cfg, x, packed, scales, y, n, k, packed_off, scales_off)
-                },
-            )
-        }
-        _ => Err(Error::Kernel(format!(
-            "unsupported quant type for gemv_off: {qt:?}"
-        ))),
-    }
-}
 
 // ── Device probe ──────────────────────────────────────────────────────
 
@@ -550,6 +613,38 @@ pub struct CudaF32Buffer {
     len: usize,
 }
 
+pub struct CudaCompressorRecurrentState {
+    kv_state: CudaF32Buffer,
+    score_state: CudaF32Buffer,
+    shape: CompressorRecurrentShape,
+}
+
+impl CudaCompressorRecurrentState {
+    pub fn ratio(&self) -> usize {
+        self.shape.ratio
+    }
+
+    pub fn head_dim(&self) -> usize {
+        self.shape.head_dim
+    }
+
+    pub fn out_dim(&self) -> usize {
+        self.shape.out_dim
+    }
+
+    pub fn overlap(&self) -> bool {
+        self.shape.overlap
+    }
+
+    pub fn kv_state(&self) -> &CudaF32Buffer {
+        &self.kv_state
+    }
+
+    pub fn score_state(&self) -> &CudaF32Buffer {
+        &self.score_state
+    }
+}
+
 /// Reusable workspace for artifact FP4 SwiGLU expert execution.
 pub struct CudaFp4ExpertWorkspace {
     scratch: CudaPackedFp4ExpertScratch,
@@ -747,6 +842,10 @@ impl CudaF32Buffer {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
+
+    pub fn as_device_buffer(&self) -> &DeviceBuffer<f32> {
+        &self.buffer
+    }
 }
 
 /// Opaque i32 device buffer used by sparse-attention top-k index sets and
@@ -754,6 +853,11 @@ impl CudaF32Buffer {
 pub struct CudaI32Buffer {
     buffer: DeviceBuffer<i32>,
     len: usize,
+}
+
+pub enum CombinedRingWindowLens<'a> {
+    PositionDerived,
+    Explicit(&'a CudaI32Buffer),
 }
 
 impl CudaI32Buffer {
@@ -1108,6 +1212,131 @@ impl CudaArtifactOperatorContext {
         Ok(())
     }
 
+    pub fn zero_f32_range(
+        &self,
+        buffer: &mut CudaF32Buffer,
+        offset: usize,
+        len: usize,
+    ) -> Result<()> {
+        let ptr = f32_range_device_ptr(buffer, offset, len, "zero_f32_range")?;
+        if len == 0 {
+            return Ok(());
+        }
+        let result =
+            unsafe { cuda_bindings::cuMemsetD32Async(ptr, 0, len, self.stream.cu_stream()) };
+        if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+            return Err(Error::Internal(format!(
+                "cuMemsetD32Async range failed: error {result}"
+            )));
+        }
+        self.counters.add_kernel_launch();
+        Ok(())
+    }
+
+    pub fn copy_f32_range(
+        &self,
+        src: &CudaF32Buffer,
+        src_offset: usize,
+        dst: &mut CudaF32Buffer,
+        dst_offset: usize,
+        len: usize,
+    ) -> Result<()> {
+        let src_ptr = f32_range_device_ptr(src, src_offset, len, "copy_f32_range source")?;
+        let dst_ptr = f32_range_device_ptr(dst, dst_offset, len, "copy_f32_range destination")?;
+        copy_f32_device_range(&self.stream, src_ptr, dst_ptr, len)
+    }
+
+    /// Copies two non-overlapping ranges within one device buffer.
+    pub fn copy_f32_within(
+        &self,
+        buffer: &mut CudaF32Buffer,
+        src_offset: usize,
+        dst_offset: usize,
+        len: usize,
+    ) -> Result<()> {
+        let src_end = src_offset
+            .checked_add(len)
+            .ok_or_else(|| Error::Internal("CUDA f32 within-copy source overflow".into()))?;
+        let dst_end = dst_offset
+            .checked_add(len)
+            .ok_or_else(|| Error::Internal("CUDA f32 within-copy destination overflow".into()))?;
+        if src_end > buffer.len || dst_end > buffer.len {
+            return Err(Error::Internal(format!(
+                "CUDA f32 within-copy out of bounds: buffer={} src={src_offset}..{src_end} dst={dst_offset}..{dst_end}",
+                buffer.len
+            )));
+        }
+        if len != 0 && src_offset < dst_end && dst_offset < src_end {
+            return Err(Error::Internal(
+                "CUDA f32 within-copy ranges must not overlap".into(),
+            ));
+        }
+        let src_ptr = f32_range_device_ptr(buffer, src_offset, len, "copy_f32_within source")?;
+        let dst_ptr = f32_range_device_ptr(buffer, dst_offset, len, "copy_f32_within destination")?;
+        copy_f32_device_range(&self.stream, src_ptr, dst_ptr, len)
+    }
+
+    pub fn download_f32_range(
+        &self,
+        buffer: &CudaF32Buffer,
+        offset: usize,
+        len: usize,
+    ) -> Result<Vec<f32>> {
+        self.check_capture_safe("device-to-host range download")?;
+        let src = f32_range_device_ptr(buffer, offset, len, "download_f32_range")?;
+        let mut values = vec![0.0f32; len];
+        if len == 0 {
+            return Ok(values);
+        }
+        let bytes = element_bytes::<f32>(len) as usize;
+        let result = unsafe {
+            cuda_bindings::cuMemcpyDtoHAsync_v2(
+                values.as_mut_ptr().cast(),
+                src,
+                bytes,
+                self.stream.cu_stream(),
+            )
+        };
+        if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+            return Err(Error::Internal(format!(
+                "cuMemcpyDtoHAsync range failed: error {result}"
+            )));
+        }
+        self.record_stream_wide_sync(self.stream.synchronize())?;
+        self.counters.add_device_to_host(bytes as u64);
+        Ok(values)
+    }
+
+    pub fn overwrite_f32_range(
+        &self,
+        src: &[f32],
+        dst: &mut CudaF32Buffer,
+        dst_offset: usize,
+    ) -> Result<()> {
+        self.check_capture_safe("host-to-device range upload")?;
+        let dst_ptr = f32_range_device_ptr(dst, dst_offset, src.len(), "overwrite_f32_range")?;
+        if src.is_empty() {
+            return Ok(());
+        }
+        let bytes = slice_bytes(src) as usize;
+        let result = unsafe {
+            cuda_bindings::cuMemcpyHtoDAsync_v2(
+                dst_ptr,
+                src.as_ptr().cast(),
+                bytes,
+                self.stream.cu_stream(),
+            )
+        };
+        if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+            return Err(Error::Internal(format!(
+                "cuMemcpyHtoDAsync range failed: error {result}"
+            )));
+        }
+        self.record_stream_wide_sync(self.stream.synchronize())?;
+        self.counters.add_host_to_device(bytes as u64);
+        Ok(())
+    }
+
     pub fn download_f32_buffer(&self, buffer: &CudaF32Buffer) -> Result<Vec<f32>> {
         self.download_f32(&buffer.buffer, buffer.len)
     }
@@ -1190,18 +1419,49 @@ impl CudaArtifactOperatorContext {
         })
     }
 
-    /// Copy `src` into `dst` device-to-device in place, element-for-element.
-    /// Used to refresh a pre-allocated top-k index buffer for graph capture.
-    pub fn copy_i32_into_buffer(&self, src: &[i32], dst: &mut CudaI32Buffer) -> Result<()> {
+    /// Overwrite an existing i32 device buffer without allocating.
+    pub fn overwrite_i32_buffer(&self, src: &[i32], dst: &mut CudaI32Buffer) -> Result<()> {
         if src.len() != dst.len {
             return Err(Error::Internal(format!(
-                "CUDA i32 copy length mismatch: src={} dst={}",
+                "CUDA i32 overwrite length mismatch: src={} dst={}",
                 src.len(),
                 dst.len
             )));
         }
         self.counters.add_host_to_device(slice_bytes(src));
         cu(dst.buffer.copy_from_host(&self.stream, src))
+    }
+
+    /// Overwrite the valid prefix of a capacity-sized i32 workspace.
+    pub fn overwrite_i32_prefix(&self, src: &[i32], dst: &mut CudaI32Buffer) -> Result<()> {
+        self.check_capture_safe("host-to-device i32 prefix upload")?;
+        if src.len() > dst.len {
+            return Err(Error::Internal(format!(
+                "CUDA i32 prefix overwrite exceeds capacity: src={} dst={}",
+                src.len(),
+                dst.len
+            )));
+        }
+        if src.is_empty() {
+            return Ok(());
+        }
+        let bytes = slice_bytes(src) as usize;
+        let result = unsafe {
+            cuda_bindings::cuMemcpyHtoDAsync_v2(
+                dst.buffer.cu_deviceptr(),
+                src.as_ptr().cast(),
+                bytes,
+                self.stream.cu_stream(),
+            )
+        };
+        if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+            return Err(Error::Internal(format!(
+                "cuMemcpyHtoDAsync i32 prefix failed: error {result}"
+            )));
+        }
+        self.record_stream_wide_sync(self.stream.synchronize())?;
+        self.counters.add_host_to_device(bytes as u64);
+        Ok(())
     }
 
     fn copy_u64_into_device_buffer(&self, src: &[u64], dst: &mut DeviceBuffer<u64>) -> Result<()> {
@@ -1336,6 +1596,170 @@ impl CudaArtifactOperatorContext {
                 &mut dst.buffer,
                 rows as u32,
                 row_width as u32,
+            )
+        })
+    }
+
+    /// Scatter `[rows, layout.elements_per_token]` values into one layer of a
+    /// contiguous paged plane. Row `r` uses packed block range
+    /// `block_offsets[r]..block_offsets[r + 1]` and logical row `positions[r]`.
+    /// A zero mask entry skips the corresponding row.
+    pub fn paged_plane_scatter_rows_from_device(
+        &self,
+        values: &CudaF32Buffer,
+        positions: &CudaI32Buffer,
+        block_slots: &CudaI32Buffer,
+        block_offsets: &CudaI32Buffer,
+        mask: Option<&CudaI32Buffer>,
+        plane: &mut CudaF32Buffer,
+        layout: crate::kv_page_pool::PagedPlaneLayout,
+    ) -> Result<()> {
+        self.paged_plane_scatter_selected_rows_from_device_impl(
+            values,
+            positions,
+            block_slots,
+            block_offsets,
+            None,
+            mask,
+            plane,
+            layout,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn paged_plane_scatter_selected_rows_from_device(
+        &self,
+        values: &CudaF32Buffer,
+        positions: &CudaI32Buffer,
+        block_slots: &CudaI32Buffer,
+        block_offsets: &CudaI32Buffer,
+        row_sequence_ids: &CudaI32Buffer,
+        mask: Option<&CudaI32Buffer>,
+        plane: &mut CudaF32Buffer,
+        layout: crate::kv_page_pool::PagedPlaneLayout,
+    ) -> Result<()> {
+        self.paged_plane_scatter_selected_rows_from_device_impl(
+            values,
+            positions,
+            block_slots,
+            block_offsets,
+            Some(row_sequence_ids),
+            mask,
+            plane,
+            layout,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn paged_plane_scatter_selected_rows_from_device_impl(
+        &self,
+        values: &CudaF32Buffer,
+        positions: &CudaI32Buffer,
+        block_slots: &CudaI32Buffer,
+        block_offsets: &CudaI32Buffer,
+        row_sequence_ids: Option<&CudaI32Buffer>,
+        mask: Option<&CudaI32Buffer>,
+        plane: &mut CudaF32Buffer,
+        layout: crate::kv_page_pool::PagedPlaneLayout,
+    ) -> Result<()> {
+        layout.validate()?;
+        let rows = positions.len;
+        let expected_values = rows.checked_mul(layout.elements_per_token).ok_or_else(|| {
+            Error::Internal("CUDA paged plane scatter value size overflow".into())
+        })?;
+        if values.len != expected_values {
+            return Err(Error::Internal(format!(
+                "CUDA paged plane scatter values length mismatch: got {} expected {expected_values} for rows={rows} row_dim={}",
+                values.len, layout.elements_per_token
+            )));
+        }
+        if block_offsets.len < 2 {
+            return Err(Error::Internal(format!(
+                "CUDA paged plane scatter requires at least one sequence, got {} offsets",
+                block_offsets.len
+            )));
+        }
+        if let Some(row_sequence_ids) = row_sequence_ids {
+            if row_sequence_ids.len != rows {
+                return Err(Error::Internal(format!(
+                    "CUDA paged plane scatter row selector length mismatch: got {} expected {rows}",
+                    row_sequence_ids.len
+                )));
+            }
+        } else if block_offsets.len != rows + 1 {
+            return Err(Error::Internal(format!(
+                "CUDA paged plane scatter identity mapping requires {} offsets, got {}",
+                rows + 1,
+                block_offsets.len
+            )));
+        }
+        if rows != 0 && block_slots.is_empty() {
+            return Err(Error::Internal(
+                "CUDA paged plane scatter requires block slots for non-empty rows".into(),
+            ));
+        }
+        if let Some(mask) = mask {
+            if mask.len != rows {
+                return Err(Error::Internal(format!(
+                    "CUDA paged plane scatter mask length mismatch: got {} expected {rows}",
+                    mask.len
+                )));
+            }
+        }
+        let slot_elements = layout
+            .layer_count
+            .checked_mul(layout.page_tokens)
+            .and_then(|value| value.checked_mul(layout.elements_per_token))
+            .ok_or_else(|| Error::Internal("CUDA paged plane scatter slot size overflow".into()))?;
+        if plane.len < slot_elements || !plane.len.is_multiple_of(slot_elements) {
+            return Err(Error::Internal(format!(
+                "CUDA paged plane scatter storage length {} is not a positive multiple of slot size {slot_elements}",
+                plane.len
+            )));
+        }
+        let plane_elements = checked_u32(plane.len, "CUDA paged plane scatter", "plane elements")?;
+        let rows = checked_u32(rows, "CUDA paged plane scatter", "rows")?;
+        let row_dim = checked_u32(
+            layout.elements_per_token,
+            "CUDA paged plane scatter",
+            "row_dim",
+        )?;
+        let num_elements = checked_u32(
+            expected_values,
+            "CUDA paged plane scatter",
+            "value elements",
+        )?;
+        if num_elements == 0 {
+            return Ok(());
+        }
+        let (row_sequence_buffer, use_row_sequence_ids) = match row_sequence_ids {
+            Some(row_sequence_ids) => (&row_sequence_ids.buffer, 1u32),
+            None => (&positions.buffer, 0u32),
+        };
+        let (mask_buffer, use_mask) = match mask {
+            Some(mask) => (&mask.buffer, 1u32),
+            None => (&positions.buffer, 0u32),
+        };
+        self.launched(unsafe {
+            self.module.paged_plane_scatter_rows_f32(
+                &self.stream,
+                LaunchConfig::for_num_elems(num_elements),
+                &values.buffer,
+                &positions.buffer,
+                &block_slots.buffer,
+                &block_offsets.buffer,
+                row_sequence_buffer,
+                mask_buffer,
+                &mut plane.buffer,
+                num_elements,
+                plane_elements,
+                rows,
+                row_dim,
+                layout.page_tokens as u32,
+                layout.layer_index as u32,
+                layout.layer_count as u32,
+                use_row_sequence_ids,
+                use_mask,
             )
         })
     }
@@ -2201,6 +2625,55 @@ impl CudaArtifactOperatorContext {
         ))
     }
 
+    pub fn topk_vocab_rows_from_device_into(
+        &self,
+        logits: &CudaF32Buffer,
+        rows: usize,
+        vocab: usize,
+        top_k: usize,
+        indices: &mut CudaF32Buffer,
+        values: &mut CudaF32Buffer,
+    ) -> Result<(Vec<f32>, Vec<f32>)> {
+        if rows == 0 || vocab == 0 || top_k == 0 || top_k > vocab || top_k > 40 {
+            return Err(Error::Internal(format!(
+                "CUDA vocab rows top-k requires rows>0 and k in 1..={}, got rows={rows} vocab={vocab} k={top_k}",
+                vocab.min(40)
+            )));
+        }
+        let logits_len = rows
+            .checked_mul(vocab)
+            .ok_or_else(|| Error::Internal("CUDA vocab rows top-k logits size overflow".into()))?;
+        let output_len = rows
+            .checked_mul(top_k)
+            .ok_or_else(|| Error::Internal("CUDA vocab rows top-k output size overflow".into()))?;
+        if logits.len != logits_len || indices.len < output_len || values.len < output_len {
+            return Err(Error::Internal(format!(
+                "CUDA vocab rows top-k workspace mismatch: logits={} indices={} values={} expected_logits={logits_len} expected_output={output_len}",
+                logits.len, indices.len, values.len
+            )));
+        }
+        self.launched(unsafe {
+            self.module.topk_vocab_rows(
+                &self.stream,
+                LaunchConfig {
+                    grid_dim: (checked_u32(rows, "topk_vocab_rows", "rows")?, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                &logits.buffer,
+                &mut indices.buffer,
+                &mut values.buffer,
+                checked_u32(rows, "topk_vocab_rows", "rows")?,
+                checked_u32(vocab, "topk_vocab_rows", "vocab")?,
+                checked_u32(top_k, "topk_vocab_rows", "top_k")?,
+            )
+        })?;
+        Ok((
+            self.download_f32(&indices.buffer, output_len)?,
+            self.download_f32(&values.buffer, output_len)?,
+        ))
+    }
+
     pub fn artifact_linear_topk_from_device(
         &self,
         handle: &CudaArtifactLinearHandle,
@@ -2382,6 +2855,208 @@ impl CudaArtifactOperatorContext {
         })
     }
 
+    pub fn create_compressor_recurrent_state(
+        &self,
+        ratio: usize,
+        head_dim: usize,
+        out_dim: usize,
+        overlap: bool,
+    ) -> Result<CudaCompressorRecurrentState> {
+        let shape = CompressorRecurrentShape {
+            ratio,
+            head_dim,
+            out_dim,
+            overlap,
+        };
+        shape.validate()?;
+        let state_elements = shape.state_elements()?;
+        let kv_state = self.zero_f32_buffer(state_elements)?;
+        let score_state = self.zero_f32_buffer(state_elements)?;
+        let mut state = CudaCompressorRecurrentState {
+            kv_state,
+            score_state,
+            shape,
+        };
+        self.reset_compressor_recurrent_state(&mut state)?;
+        Ok(state)
+    }
+
+    pub fn reset_compressor_recurrent_state(
+        &self,
+        state: &mut CudaCompressorRecurrentState,
+    ) -> Result<()> {
+        let state_elements = state.shape.state_elements()?;
+        self.launched(unsafe {
+            self.module.compressor_recurrent_reset_f32(
+                &self.stream,
+                LaunchConfig::for_num_elems(checked_u32(
+                    state_elements,
+                    "compressor recurrent reset",
+                    "state_elements",
+                )?),
+                &mut state.kv_state.buffer,
+                &mut state.score_state.buffer,
+                checked_u32(
+                    state_elements,
+                    "compressor recurrent reset",
+                    "state_elements",
+                )?,
+            )
+        })
+    }
+
+    pub fn compressor_recurrent_seed_prefill(
+        &self,
+        state: &mut CudaCompressorRecurrentState,
+        projected_kv_rows: &CudaF32Buffer,
+        projected_score_rows: &CudaF32Buffer,
+        ape: &CudaF32Buffer,
+        tokens: usize,
+    ) -> Result<usize> {
+        state.shape.validate()?;
+        let projected_elements = tokens
+            .checked_mul(state.shape.out_dim)
+            .ok_or_else(|| Error::Internal("compressor recurrent seed size overflow".into()))?;
+        if projected_kv_rows.len != projected_elements
+            || projected_score_rows.len != projected_elements
+            || ape.len != state.shape.ape_elements()?
+        {
+            return Err(Error::Internal(format!(
+                "compressor recurrent seed length mismatch: kv={} score={} ape={} expected projected={} ape={}",
+                projected_kv_rows.len,
+                projected_score_rows.len,
+                ape.len,
+                projected_elements,
+                state.shape.ape_elements()?
+            )));
+        }
+        let state_elements = state.shape.state_elements()?;
+        self.launched(unsafe {
+            self.module.compressor_recurrent_seed_prefill_f32(
+                &self.stream,
+                LaunchConfig::for_num_elems(checked_u32(
+                    state_elements,
+                    "compressor recurrent seed",
+                    "state_elements",
+                )?),
+                &projected_kv_rows.buffer,
+                &projected_score_rows.buffer,
+                &ape.buffer,
+                &mut state.kv_state.buffer,
+                &mut state.score_state.buffer,
+                checked_u32(tokens, "compressor recurrent seed", "tokens")?,
+                checked_u32(state.shape.ratio, "compressor recurrent seed", "ratio")?,
+                checked_u32(state.shape.out_dim, "compressor recurrent seed", "out_dim")?,
+                if state.shape.overlap { 1 } else { 0 },
+                checked_u32(
+                    state_elements,
+                    "compressor recurrent seed",
+                    "state_elements",
+                )?,
+            )
+        })?;
+        Ok(state.shape.prefill_groups(tokens))
+    }
+
+    pub fn compressor_recurrent_append_projected(
+        &self,
+        state: &mut CudaCompressorRecurrentState,
+        projected_kv: &CudaF32Buffer,
+        projected_score: &CudaF32Buffer,
+        ape: &CudaF32Buffer,
+        position: usize,
+    ) -> Result<bool> {
+        state.shape.validate()?;
+        if projected_kv.len != state.shape.out_dim
+            || projected_score.len != state.shape.out_dim
+            || ape.len != state.shape.ape_elements()?
+        {
+            return Err(Error::Internal(format!(
+                "compressor recurrent append length mismatch: kv={} score={} ape={} expected row={} ape={}",
+                projected_kv.len,
+                projected_score.len,
+                ape.len,
+                state.shape.out_dim,
+                state.shape.ape_elements()?
+            )));
+        }
+        self.launched(unsafe {
+            self.module.compressor_recurrent_append_projected_f32(
+                &self.stream,
+                LaunchConfig::for_num_elems(checked_u32(
+                    state.shape.out_dim,
+                    "compressor recurrent append",
+                    "out_dim",
+                )?),
+                &projected_kv.buffer,
+                &projected_score.buffer,
+                &ape.buffer,
+                &mut state.kv_state.buffer,
+                &mut state.score_state.buffer,
+                checked_u32(position, "compressor recurrent append", "position")?,
+                checked_u32(state.shape.ratio, "compressor recurrent append", "ratio")?,
+                checked_u32(
+                    state.shape.out_dim,
+                    "compressor recurrent append",
+                    "out_dim",
+                )?,
+                if state.shape.overlap { 1 } else { 0 },
+            )
+        })?;
+        Ok(state.shape.is_boundary(position))
+    }
+
+    /// Compresses the current recurrent window into `output` and advances the
+    /// overlap state in-place. This method performs no allocation or D2H copy.
+    pub fn compressor_recurrent_boundary_into(
+        &self,
+        state: &mut CudaCompressorRecurrentState,
+        output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        state.shape.validate()?;
+        if output.len != state.shape.head_dim {
+            return Err(Error::Internal(format!(
+                "compressor recurrent output length mismatch: got {} expected {}",
+                output.len, state.shape.head_dim
+            )));
+        }
+        self.launched(unsafe {
+            self.module.compressor_recurrent_softmax_f32(
+                &self.stream,
+                LaunchConfig::for_num_elems(checked_u32(
+                    state.shape.head_dim,
+                    "compressor recurrent boundary",
+                    "head_dim",
+                )?),
+                &state.kv_state.buffer,
+                &state.score_state.buffer,
+                &mut output.buffer,
+                checked_u32(state.shape.ratio, "compressor recurrent boundary", "ratio")?,
+                checked_u32(
+                    state.shape.head_dim,
+                    "compressor recurrent boundary",
+                    "head_dim",
+                )?,
+                checked_u32(
+                    state.shape.out_dim,
+                    "compressor recurrent boundary",
+                    "out_dim",
+                )?,
+                if state.shape.overlap { 1 } else { 0 },
+            )
+        })?;
+        if state.shape.overlap {
+            let half = state
+                .shape
+                .ratio
+                .checked_mul(state.shape.out_dim)
+                .ok_or_else(|| Error::Internal("compressor recurrent half overflow".into()))?;
+            self.copy_f32_within(&mut state.kv_state, half, 0, half)?;
+            self.copy_f32_within(&mut state.score_state, half, 0, half)?;
+        }
+        Ok(())
+    }
+
     pub fn compressor_prefill_softmax_from_device(
         &self,
         kv_rows: &CudaF32Buffer,
@@ -2486,87 +3161,51 @@ impl CudaArtifactOperatorContext {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn dsv4_prefill_topk_indices_from_device(
+    fn validate_paged_indexer_storage(
         &self,
-        query: Option<&CudaF32Buffer>,
-        weights: Option<&CudaF32Buffer>,
-        indexer_kv: Option<&CudaF32Buffer>,
-        tokens: usize,
-        window_size: usize,
-        window_cols: usize,
-        extra_cols: usize,
-        value_offset: usize,
-        compress_ratio: usize,
+        plane: &CudaF32Buffer,
+        block_slots: &CudaI32Buffer,
+        block_offsets: &CudaI32Buffer,
         compressed_len: usize,
-        index_heads: usize,
-        index_head_dim: usize,
-        weight_scale: f32,
-    ) -> Result<CudaI32Buffer> {
-        let total_cols = window_cols
-            .checked_add(extra_cols)
-            .ok_or_else(|| Error::Internal("CUDA DSV4 prefill topk column overflow".into()))?;
-        let mut output =
-            self.zero_i32_buffer(tokens.checked_mul(total_cols).ok_or_else(|| {
-                Error::Internal("CUDA DSV4 prefill topk output size overflow".into())
-            })?)?;
-
-        if let Some(fallback) = query.or(weights).or(indexer_kv) {
-            self.dsv4_prefill_topk_indices_from_device_into(
-                query,
-                weights,
-                indexer_kv,
-                fallback,
-                fallback,
-                fallback,
-                tokens,
-                window_size,
-                window_cols,
-                extra_cols,
-                value_offset,
-                compress_ratio,
-                compressed_len,
-                index_heads,
-                index_head_dim,
-                weight_scale,
-                &mut output,
-            )?;
-        } else {
-            let empty_query = self.zero_f32_buffer(1)?;
-            let empty_weights = self.zero_f32_buffer(1)?;
-            let empty_kv = self.zero_f32_buffer(1)?;
-            self.dsv4_prefill_topk_indices_from_device_into(
-                query,
-                weights,
-                indexer_kv,
-                &empty_query,
-                &empty_weights,
-                &empty_kv,
-                tokens,
-                window_size,
-                window_cols,
-                extra_cols,
-                value_offset,
-                compress_ratio,
-                compressed_len,
-                index_heads,
-                index_head_dim,
-                weight_scale,
-                &mut output,
-            )?;
+        layout: crate::kv_page_pool::PagedPlaneLayout,
+    ) -> Result<()> {
+        layout.validate()?;
+        if block_offsets.len != 2 {
+            return Err(Error::Internal(format!(
+                "CUDA paged indexer requires one sequence block range (2 offsets), got {}",
+                block_offsets.len
+            )));
         }
-        Ok(output)
+        let required_pages = compressed_len.div_ceil(layout.page_tokens);
+        if block_slots.len < required_pages {
+            return Err(Error::Internal(format!(
+                "CUDA paged indexer block table too short: need {required_pages}, got {}",
+                block_slots.len
+            )));
+        }
+        let slot_elements = layout
+            .layer_count
+            .checked_mul(layout.page_tokens)
+            .and_then(|value| value.checked_mul(layout.elements_per_token))
+            .ok_or_else(|| Error::Internal("CUDA paged indexer slot size overflow".into()))?;
+        if plane.len < slot_elements || !plane.len.is_multiple_of(slot_elements) {
+            return Err(Error::Internal(format!(
+                "CUDA paged indexer plane length {} is not a positive multiple of slot size {slot_elements}",
+                plane.len
+            )));
+        }
+        checked_u32(compressed_len, "CUDA paged indexer", "compressed_len")?;
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn dsv4_prefill_topk_indices_from_device_into(
+    pub fn dsv4_prefill_topk_indices_paged_indexer_from_device_into(
         &self,
-        query: Option<&CudaF32Buffer>,
-        weights: Option<&CudaF32Buffer>,
-        indexer_kv: Option<&CudaF32Buffer>,
-        fallback_empty_query: &CudaF32Buffer,
-        fallback_empty_weights: &CudaF32Buffer,
-        fallback_empty_kv: &CudaF32Buffer,
+        query: &CudaF32Buffer,
+        weights: &CudaF32Buffer,
+        indexer_plane: &CudaF32Buffer,
+        block_slots: &CudaI32Buffer,
+        block_offsets: &CudaI32Buffer,
         tokens: usize,
         window_size: usize,
         window_cols: usize,
@@ -2576,154 +3215,92 @@ impl CudaArtifactOperatorContext {
         compressed_len: usize,
         index_heads: usize,
         index_head_dim: usize,
+        page_tokens: usize,
+        layer_index: usize,
+        layer_count: usize,
         weight_scale: f32,
         output: &mut CudaI32Buffer,
     ) -> Result<()> {
-        if tokens == 0 {
+        let layout = crate::kv_page_pool::PagedPlaneLayout {
+            page_tokens,
+            elements_per_token: index_head_dim,
+            layer_index,
+            layer_count,
+        };
+        self.validate_paged_indexer_storage(
+            indexer_plane,
+            block_slots,
+            block_offsets,
+            compressed_len,
+            layout,
+        )?;
+        if tokens == 0 || compress_ratio == 0 || extra_cols == 0 || extra_cols > 512 {
             return Err(Error::Internal(
-                "CUDA DSV4 prefill topk requires tokens > 0".into(),
+                "invalid CUDA paged prefill indexer shape".into(),
             ));
         }
-        if window_cols > window_size || window_cols > tokens {
-            return Err(Error::Internal(format!(
-                "invalid CUDA DSV4 prefill topk window: tokens={tokens} window_size={window_size} window_cols={window_cols}"
-            )));
-        }
-        if compress_ratio == 0 && extra_cols != 0 {
-            return Err(Error::Internal(format!(
-                "invalid CUDA DSV4 prefill topk compression: ratio=0 extra_cols={extra_cols}"
-            )));
-        }
-        if extra_cols > 512 {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 prefill topk supports at most 512 extra columns, got {extra_cols}"
-            )));
-        }
+        let query_len = tokens
+            .checked_mul(index_heads)
+            .and_then(|value| value.checked_mul(index_head_dim))
+            .ok_or_else(|| Error::Internal("CUDA paged prefill query size overflow".into()))?;
+        let weight_len = tokens
+            .checked_mul(index_heads)
+            .ok_or_else(|| Error::Internal("CUDA paged prefill weight size overflow".into()))?;
         let total_cols = window_cols
             .checked_add(extra_cols)
-            .ok_or_else(|| Error::Internal("CUDA DSV4 prefill topk column overflow".into()))?;
-        if total_cols == 0 {
+            .ok_or_else(|| Error::Internal("CUDA paged prefill column overflow".into()))?;
+        let output_len = tokens
+            .checked_mul(total_cols)
+            .ok_or_else(|| Error::Internal("CUDA paged prefill output overflow".into()))?;
+        if window_cols > window_size
+            || window_cols > tokens
+            || query.len != query_len
+            || weights.len != weight_len
+            || output.len < output_len
+        {
             return Err(Error::Internal(
-                "CUDA DSV4 prefill topk requires at least one column".into(),
+                "CUDA paged prefill indexer buffer mismatch".into(),
             ));
         }
-        if compressed_len > 0 && extra_cols == 0 {
-            return Err(Error::Internal(format!(
-                "invalid CUDA DSV4 prefill topk: compressed_len={compressed_len} extra_cols=0"
-            )));
-        }
-
-        let indexer_enabled = query.is_some() || weights.is_some() || indexer_kv.is_some();
-        let query = if indexer_enabled {
-            let query = query.ok_or_else(|| {
-                Error::Internal("CUDA DSV4 prefill topk missing indexer query".into())
-            })?;
-            let expected = tokens
-                .checked_mul(index_heads)
-                .and_then(|v| v.checked_mul(index_head_dim))
-                .ok_or_else(|| Error::Internal("CUDA DSV4 prefill query size overflow".into()))?;
-            if query.len != expected {
-                return Err(Error::Internal(format!(
-                    "CUDA DSV4 prefill indexer query length mismatch: got {} expected {expected}",
-                    query.len
-                )));
-            }
-            query
-        } else {
-            if fallback_empty_query.is_empty() {
-                return Err(Error::Internal(
-                    "CUDA DSV4 prefill topk fallback query buffer must be non-empty".into(),
-                ));
-            }
-            fallback_empty_query
-        };
-        let weights = if indexer_enabled {
-            let weights = weights.ok_or_else(|| {
-                Error::Internal("CUDA DSV4 prefill topk missing indexer weights".into())
-            })?;
-            let expected = tokens
-                .checked_mul(index_heads)
-                .ok_or_else(|| Error::Internal("CUDA DSV4 prefill weight size overflow".into()))?;
-            if weights.len != expected {
-                return Err(Error::Internal(format!(
-                    "CUDA DSV4 prefill indexer weight length mismatch: got {} expected {expected}",
-                    weights.len
-                )));
-            }
-            weights
-        } else {
-            if fallback_empty_weights.is_empty() {
-                return Err(Error::Internal(
-                    "CUDA DSV4 prefill topk fallback weights buffer must be non-empty".into(),
-                ));
-            }
-            fallback_empty_weights
-        };
-        let indexer_kv = if indexer_enabled {
-            let indexer_kv = indexer_kv.ok_or_else(|| {
-                Error::Internal("CUDA DSV4 prefill topk missing indexer KV".into())
-            })?;
-            let expected = compressed_len.checked_mul(index_head_dim).ok_or_else(|| {
-                Error::Internal("CUDA DSV4 prefill index KV size overflow".into())
-            })?;
-            if indexer_kv.len != expected {
-                return Err(Error::Internal(format!(
-                    "CUDA DSV4 prefill indexer KV length mismatch: got {} expected {expected}",
-                    indexer_kv.len
-                )));
-            }
-            indexer_kv
-        } else {
-            if fallback_empty_kv.is_empty() {
-                return Err(Error::Internal(
-                    "CUDA DSV4 prefill topk fallback KV buffer must be non-empty".into(),
-                ));
-            }
-            fallback_empty_kv
-        };
-
-        let expected_output = tokens
-            .checked_mul(total_cols)
-            .ok_or_else(|| Error::Internal("CUDA DSV4 prefill topk output size overflow".into()))?;
-        if output.len < expected_output {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 prefill topk output too small: need {expected_output}, got {}",
-                output.len
-            )));
-        }
         self.launched(unsafe {
-            self.module.dsv4_prefill_topk_indices(
+            self.module.dsv4_prefill_topk_indices_paged_indexer(
                 &self.stream,
                 LaunchConfig {
-                    grid_dim: (tokens as u32, 1, 1),
+                    grid_dim: (checked_u32(tokens, "CUDA paged prefill", "tokens")?, 1, 1),
                     block_dim: (256, 1, 1),
                     shared_mem_bytes: 0,
                 },
                 &query.buffer,
                 &weights.buffer,
-                &indexer_kv.buffer,
+                &indexer_plane.buffer,
+                &block_slots.buffer,
+                &block_offsets.buffer,
                 &mut output.buffer,
-                tokens as u32,
-                window_size as u32,
-                window_cols as u32,
-                extra_cols as u32,
-                value_offset as u32,
-                compress_ratio as u32,
-                compressed_len as u32,
-                index_heads as u32,
-                index_head_dim as u32,
-                if indexer_enabled { 1u32 } else { 0u32 },
+                checked_u32(tokens, "CUDA paged prefill", "tokens")?,
+                checked_u32(window_size, "CUDA paged prefill", "window_size")?,
+                checked_u32(window_cols, "CUDA paged prefill", "window_cols")?,
+                checked_u32(extra_cols, "CUDA paged prefill", "extra_cols")?,
+                checked_u32(value_offset, "CUDA paged prefill", "value_offset")?,
+                checked_u32(compress_ratio, "CUDA paged prefill", "compress_ratio")?,
+                checked_u32(compressed_len, "CUDA paged prefill", "compressed_len")?,
+                checked_u32(index_heads, "CUDA paged prefill", "index_heads")?,
+                checked_u32(index_head_dim, "CUDA paged prefill", "index_head_dim")?,
+                checked_u32(page_tokens, "CUDA paged prefill", "page_tokens")?,
+                checked_u32(layer_index, "CUDA paged prefill", "layer_index")?,
+                checked_u32(layer_count, "CUDA paged prefill", "layer_count")?,
                 weight_scale,
             )
         })
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn dsv4_prefill_topk_indices_fused_index_query_from_device_into(
+    pub fn dsv4_prefill_topk_indices_fused_index_query_paged_indexer_from_device_into(
         &self,
         query: &CudaF32Buffer,
         weights: &CudaF32Buffer,
-        indexer_kv: &CudaF32Buffer,
+        indexer_plane: &CudaF32Buffer,
+        block_slots: &CudaI32Buffer,
+        block_offsets: &CudaI32Buffer,
         cos_table: &CudaF32Buffer,
         sin_table: &CudaF32Buffer,
         tokens: usize,
@@ -2737,414 +3314,336 @@ impl CudaArtifactOperatorContext {
         index_head_dim: usize,
         rope_dim: usize,
         start_position: usize,
+        page_tokens: usize,
+        layer_index: usize,
+        layer_count: usize,
         weight_scale: f32,
         output: &mut CudaI32Buffer,
     ) -> Result<()> {
-        if tokens == 0 {
-            return Err(Error::Internal(
-                "CUDA DSV4 fused prefill topk requires tokens > 0".into(),
-            ));
-        }
-        if window_cols > window_size || window_cols > tokens {
-            return Err(Error::Internal(format!(
-                "invalid CUDA DSV4 fused prefill topk window: tokens={tokens} window_size={window_size} window_cols={window_cols}"
-            )));
-        }
-        if compress_ratio == 0 || extra_cols == 0 || compressed_len == 0 {
-            return Err(Error::Internal(format!(
-                "invalid CUDA DSV4 fused prefill topk compression: ratio={compress_ratio} extra_cols={extra_cols} compressed_len={compressed_len}"
-            )));
-        }
-        if extra_cols > 512 {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 fused prefill topk supports at most 512 extra columns, got {extra_cols}"
-            )));
-        }
-        if index_head_dim == 0
-            || index_head_dim > 256
-            || !index_head_dim.is_power_of_two()
-            || !index_head_dim.is_multiple_of(32)
-            || rope_dim > index_head_dim
-            || !rope_dim.is_multiple_of(2)
-        {
-            return Err(Error::Internal(format!(
-                "invalid CUDA DSV4 fused prefill indexer shape: heads={index_heads} head_dim={index_head_dim} rope_dim={rope_dim}"
-            )));
-        }
-        let total_cols = window_cols.checked_add(extra_cols).ok_or_else(|| {
-            Error::Internal("CUDA DSV4 fused prefill topk column overflow".into())
-        })?;
-        if total_cols == 0 {
-            return Err(Error::Internal(
-                "CUDA DSV4 fused prefill topk requires at least one column".into(),
-            ));
-        }
-        let expected_query = tokens
+        let layout = crate::kv_page_pool::PagedPlaneLayout {
+            page_tokens,
+            elements_per_token: index_head_dim,
+            layer_index,
+            layer_count,
+        };
+        self.validate_paged_indexer_storage(
+            indexer_plane,
+            block_slots,
+            block_offsets,
+            compressed_len,
+            layout,
+        )?;
+        let query_len = tokens
             .checked_mul(index_heads)
             .and_then(|v| v.checked_mul(index_head_dim))
-            .ok_or_else(|| Error::Internal("CUDA DSV4 fused prefill query size overflow".into()))?;
-        if query.len != expected_query {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 fused prefill query length mismatch: got {} expected {expected_query}",
-                query.len
-            )));
-        }
-        let expected_weights = tokens.checked_mul(index_heads).ok_or_else(|| {
-            Error::Internal("CUDA DSV4 fused prefill weights size overflow".into())
-        })?;
-        if weights.len != expected_weights {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 fused prefill weights length mismatch: got {} expected {expected_weights}",
-                weights.len
-            )));
-        }
-        let expected_kv = compressed_len.checked_mul(index_head_dim).ok_or_else(|| {
-            Error::Internal("CUDA DSV4 fused prefill index KV size overflow".into())
-        })?;
-        if indexer_kv.len != expected_kv {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 fused prefill index KV length mismatch: got {} expected {expected_kv}",
-                indexer_kv.len
-            )));
-        }
-        let rd2 = rope_dim / 2;
-        let required_rope = start_position
+            .ok_or_else(|| Error::Internal("CUDA fused paged prefill query overflow".into()))?;
+        let weight_len = tokens
+            .checked_mul(index_heads)
+            .ok_or_else(|| Error::Internal("CUDA fused paged prefill weights overflow".into()))?;
+        let output_len = tokens
+            .checked_mul(window_cols.checked_add(extra_cols).ok_or_else(|| {
+                Error::Internal("CUDA fused paged prefill columns overflow".into())
+            })?)
+            .ok_or_else(|| Error::Internal("CUDA fused paged prefill output overflow".into()))?;
+        let rope_len = start_position
             .checked_add(tokens)
-            .and_then(|v| v.checked_mul(rd2))
-            .ok_or_else(|| Error::Internal("CUDA DSV4 fused prefill rope size overflow".into()))?;
-        if rd2 > 0 && (cos_table.len < required_rope || sin_table.len < required_rope) {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 fused prefill rope table too small: need {required_rope}, cos={} sin={}",
-                cos_table.len, sin_table.len
-            )));
-        }
-
-        let expected_output = tokens.checked_mul(total_cols).ok_or_else(|| {
-            Error::Internal("CUDA DSV4 fused prefill topk output size overflow".into())
-        })?;
-        if output.len < expected_output {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 fused prefill topk output too small: need {expected_output}, got {}",
-                output.len
-            )));
-        }
-        self.launched(unsafe {
-            self.module.dsv4_prefill_topk_indices_fused_index_query(
-                &self.stream,
-                LaunchConfig::for_num_elems(tokens as u32),
-                &query.buffer,
-                &weights.buffer,
-                &indexer_kv.buffer,
-                &cos_table.buffer,
-                &sin_table.buffer,
-                &mut output.buffer,
-                tokens as u32,
-                window_size as u32,
-                window_cols as u32,
-                extra_cols as u32,
-                value_offset as u32,
-                compress_ratio as u32,
-                compressed_len as u32,
-                index_heads as u32,
-                index_head_dim as u32,
-                rope_dim as u32,
-                start_position as u32,
-                weight_scale,
-            )
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn dsv4_decode_topk_indices_fused_index_query_from_device(
-        &self,
-        query: &CudaF32Buffer,
-        weights: &CudaF32Buffer,
-        indexer_kv: &CudaF32Buffer,
-        cos_table: &CudaF32Buffer,
-        sin_table: &CudaF32Buffer,
-        position: usize,
-        window_len: usize,
-        window_size: usize,
-        extra_cols: usize,
-        value_offset: usize,
-        compressed_len: usize,
-        index_heads: usize,
-        index_head_dim: usize,
-        rope_dim: usize,
-        weight_scale: f32,
-    ) -> Result<CudaI32Buffer> {
-        let total_cols = window_size
-            .checked_add(extra_cols)
-            .ok_or_else(|| Error::Internal("CUDA DSV4 fused decode topk column overflow".into()))?;
-        let mut out = self.zero_i32_buffer(total_cols)?;
-        self.dsv4_decode_topk_indices_fused_index_query_from_device_into(
-            query,
-            weights,
-            indexer_kv,
-            cos_table,
-            sin_table,
-            position,
-            window_len,
-            window_size,
-            extra_cols,
-            value_offset,
-            compressed_len,
-            index_heads,
-            index_head_dim,
-            rope_dim,
-            weight_scale,
-            &mut out,
-        )?;
-        Ok(out)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn dsv4_decode_topk_indices_fused_index_query_from_device_into(
-        &self,
-        query: &CudaF32Buffer,
-        weights: &CudaF32Buffer,
-        indexer_kv: &CudaF32Buffer,
-        cos_table: &CudaF32Buffer,
-        sin_table: &CudaF32Buffer,
-        position: usize,
-        window_len: usize,
-        window_size: usize,
-        extra_cols: usize,
-        value_offset: usize,
-        compressed_len: usize,
-        index_heads: usize,
-        index_head_dim: usize,
-        rope_dim: usize,
-        weight_scale: f32,
-        out: &mut CudaI32Buffer,
-    ) -> Result<()> {
-        if window_size == 0 {
-            return Err(Error::Internal(
-                "CUDA DSV4 fused decode topk requires window_size > 0".into(),
-            ));
-        }
-        if window_len > window_size {
-            return Err(Error::Internal(format!(
-                "invalid CUDA DSV4 fused decode topk window: len={window_len} window_size={window_size}"
-            )));
-        }
-        if extra_cols == 0 || compressed_len == 0 {
-            return Err(Error::Internal(format!(
-                "invalid CUDA DSV4 fused decode topk compression: extra_cols={extra_cols} compressed_len={compressed_len}"
-            )));
-        }
-        if extra_cols > 512 {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 fused decode topk supports at most 512 extra columns, got {extra_cols}"
-            )));
-        }
-        if index_head_dim == 0
+            .and_then(|v| v.checked_mul(rope_dim / 2))
+            .ok_or_else(|| Error::Internal("CUDA fused paged prefill rope overflow".into()))?;
+        if tokens == 0
+            || compress_ratio == 0
+            || extra_cols == 0
+            || extra_cols > 512
+            || index_head_dim == 0
             || index_head_dim > 256
             || !index_head_dim.is_power_of_two()
             || !index_head_dim.is_multiple_of(32)
             || rope_dim > index_head_dim
             || !rope_dim.is_multiple_of(2)
+            || window_cols > window_size
+            || window_cols > tokens
+            || query.len != query_len
+            || weights.len != weight_len
+            || output.len < output_len
+            || cos_table.len < rope_len
+            || sin_table.len < rope_len
         {
-            return Err(Error::Internal(format!(
-                "invalid CUDA DSV4 fused decode indexer shape: heads={index_heads} head_dim={index_head_dim} rope_dim={rope_dim}"
-            )));
+            return Err(Error::Internal(
+                "CUDA fused paged prefill indexer shape mismatch".into(),
+            ));
         }
-        let total_cols = window_size
-            .checked_add(extra_cols)
-            .ok_or_else(|| Error::Internal("CUDA DSV4 fused decode topk column overflow".into()))?;
-        if out.len < total_cols {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 fused decode topk output too small: need {total_cols}, got {}",
-                out.len
-            )));
-        }
-        let expected_query = index_heads
-            .checked_mul(index_head_dim)
-            .ok_or_else(|| Error::Internal("CUDA DSV4 fused decode query size overflow".into()))?;
-        if query.len != expected_query {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 fused decode query length mismatch: got {} expected {expected_query}",
-                query.len
-            )));
-        }
-        if expected_query > DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 fused decode query requires {expected_query} shared elements, maximum is {DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS}"
-            )));
-        }
-        if weights.len != index_heads {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 fused decode weights length mismatch: got {} expected {index_heads}",
-                weights.len
-            )));
-        }
-        let expected_kv = compressed_len.checked_mul(index_head_dim).ok_or_else(|| {
-            Error::Internal("CUDA DSV4 fused decode index KV size overflow".into())
-        })?;
-        if indexer_kv.len < expected_kv {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 fused decode index KV length mismatch: got {} expected at least {expected_kv}",
-                indexer_kv.len
-            )));
-        }
-        let rd2 = rope_dim / 2;
-        let required_rope = position
-            .checked_add(1)
-            .and_then(|v| v.checked_mul(rd2))
-            .ok_or_else(|| Error::Internal("CUDA DSV4 fused decode rope size overflow".into()))?;
-        if rd2 > 0 && (cos_table.len < required_rope || sin_table.len < required_rope) {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 fused decode rope table too small: need {required_rope}, cos={} sin={}",
-                cos_table.len, sin_table.len
-            )));
-        }
-
         self.launched(unsafe {
-            self.module.dsv4_decode_topk_indices_fused_index_query(
+            self.module
+                .dsv4_prefill_topk_indices_fused_index_query_paged_indexer(
+                    &self.stream,
+                    LaunchConfig::for_num_elems(checked_u32(
+                        tokens,
+                        "CUDA fused paged prefill",
+                        "tokens",
+                    )?),
+                    &query.buffer,
+                    &weights.buffer,
+                    &indexer_plane.buffer,
+                    &block_slots.buffer,
+                    &block_offsets.buffer,
+                    &cos_table.buffer,
+                    &sin_table.buffer,
+                    &mut output.buffer,
+                    checked_u32(tokens, "CUDA fused paged prefill", "tokens")?,
+                    checked_u32(window_size, "CUDA fused paged prefill", "window_size")?,
+                    checked_u32(window_cols, "CUDA fused paged prefill", "window_cols")?,
+                    checked_u32(extra_cols, "CUDA fused paged prefill", "extra_cols")?,
+                    checked_u32(value_offset, "CUDA fused paged prefill", "value_offset")?,
+                    checked_u32(compress_ratio, "CUDA fused paged prefill", "compress_ratio")?,
+                    checked_u32(compressed_len, "CUDA fused paged prefill", "compressed_len")?,
+                    checked_u32(index_heads, "CUDA fused paged prefill", "index_heads")?,
+                    checked_u32(index_head_dim, "CUDA fused paged prefill", "index_head_dim")?,
+                    checked_u32(rope_dim, "CUDA fused paged prefill", "rope_dim")?,
+                    checked_u32(start_position, "CUDA fused paged prefill", "start_position")?,
+                    checked_u32(page_tokens, "CUDA fused paged prefill", "page_tokens")?,
+                    checked_u32(layer_index, "CUDA fused paged prefill", "layer_index")?,
+                    checked_u32(layer_count, "CUDA fused paged prefill", "layer_count")?,
+                    weight_scale,
+                )
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn dsv4_decode_topk_indices_paged_indexer_from_device_into(
+        &self,
+        query: &CudaF32Buffer,
+        weights: &CudaF32Buffer,
+        indexer_plane: &CudaF32Buffer,
+        block_slots: &CudaI32Buffer,
+        block_offsets: &CudaI32Buffer,
+        position: usize,
+        window_len: usize,
+        window_size: usize,
+        extra_cols: usize,
+        value_offset: usize,
+        compressed_len: usize,
+        index_heads: usize,
+        index_head_dim: usize,
+        page_tokens: usize,
+        layer_index: usize,
+        layer_count: usize,
+        weight_scale: f32,
+        output: &mut CudaI32Buffer,
+    ) -> Result<()> {
+        let layout = crate::kv_page_pool::PagedPlaneLayout {
+            page_tokens,
+            elements_per_token: index_head_dim,
+            layer_index,
+            layer_count,
+        };
+        self.validate_paged_indexer_storage(
+            indexer_plane,
+            block_slots,
+            block_offsets,
+            compressed_len,
+            layout,
+        )?;
+        let query_len = index_heads
+            .checked_mul(index_head_dim)
+            .ok_or_else(|| Error::Internal("CUDA paged decode query overflow".into()))?;
+        let output_len = window_size
+            .checked_add(extra_cols)
+            .ok_or_else(|| Error::Internal("CUDA paged decode columns overflow".into()))?;
+        if window_size == 0
+            || window_len > window_size
+            || extra_cols == 0
+            || extra_cols > 512
+            || query.len != query_len
+            || weights.len != index_heads
+            || output.len < output_len
+        {
+            return Err(Error::Internal(
+                "CUDA paged decode indexer shape mismatch".into(),
+            ));
+        }
+        self.launched(unsafe {
+            self.module.dsv4_decode_topk_indices_paged_indexer(
                 &self.stream,
                 one_block_config(256),
                 &query.buffer,
                 &weights.buffer,
-                &indexer_kv.buffer,
-                &cos_table.buffer,
-                &sin_table.buffer,
-                &mut out.buffer,
-                position as u32,
-                window_len as u32,
-                window_size as u32,
-                extra_cols as u32,
-                value_offset as u32,
-                compressed_len as u32,
-                index_heads as u32,
-                index_head_dim as u32,
-                rope_dim as u32,
+                &indexer_plane.buffer,
+                &block_slots.buffer,
+                &block_offsets.buffer,
+                &mut output.buffer,
+                checked_u32(position, "CUDA paged decode", "position")?,
+                checked_u32(window_len, "CUDA paged decode", "window_len")?,
+                checked_u32(window_size, "CUDA paged decode", "window_size")?,
+                checked_u32(extra_cols, "CUDA paged decode", "extra_cols")?,
+                checked_u32(value_offset, "CUDA paged decode", "value_offset")?,
+                checked_u32(compressed_len, "CUDA paged decode", "compressed_len")?,
+                checked_u32(index_heads, "CUDA paged decode", "index_heads")?,
+                checked_u32(index_head_dim, "CUDA paged decode", "index_head_dim")?,
+                checked_u32(page_tokens, "CUDA paged decode", "page_tokens")?,
+                checked_u32(layer_index, "CUDA paged decode", "layer_index")?,
+                checked_u32(layer_count, "CUDA paged decode", "layer_count")?,
                 weight_scale,
             )
         })
     }
 
-    pub fn dsv4_decode_topk_indices_from_device(
+    #[allow(clippy::too_many_arguments)]
+    pub fn dsv4_decode_topk_indices_paged_indexer_rows_from_device(
         &self,
-        query: Option<&CudaF32Buffer>,
-        weights: Option<&CudaF32Buffer>,
-        indexer_kv: Option<&CudaF32Buffer>,
-        position: usize,
-        window_len: usize,
+        query: &CudaF32Buffer,
+        weights: &CudaF32Buffer,
+        indexer_plane: &CudaF32Buffer,
+        block_slots: &CudaI32Buffer,
+        block_offsets: &CudaI32Buffer,
+        row_sequence_ids: &CudaI32Buffer,
+        positions: &CudaI32Buffer,
+        window_lens: &CudaI32Buffer,
+        compressed_lens: &CudaI32Buffer,
+        rows: usize,
         window_size: usize,
-        extra_cols: usize,
-        value_offset: usize,
-        compressed_len: usize,
+        index_topk: usize,
         index_heads: usize,
         index_head_dim: usize,
+        page_tokens: usize,
+        layer_index: usize,
+        layer_count: usize,
         weight_scale: f32,
-    ) -> Result<CudaI32Buffer> {
-        if window_size == 0 {
-            return Err(Error::Internal(
-                "CUDA DSV4 decode topk requires window_size > 0".into(),
-            ));
+    ) -> Result<(CudaI32Buffer, CudaI32Buffer)> {
+        let elements = Dsv4PagedDecodeRowsShape {
+            rows,
+            window_size,
+            index_topk,
+            index_heads,
+            index_head_dim,
         }
-        if window_len > window_size {
-            return Err(Error::Internal(format!(
-                "invalid CUDA DSV4 decode topk window: len={window_len} window_size={window_size}"
-            )));
-        }
-        let indexer_enabled = query.is_some() || weights.is_some() || indexer_kv.is_some();
-        if indexer_enabled && extra_cols > 512 {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 decode indexer topk supports at most 512 extra columns, got {extra_cols}"
-            )));
-        }
-        let total_cols = window_size
-            .checked_add(extra_cols)
-            .ok_or_else(|| Error::Internal("CUDA DSV4 decode topk column overflow".into()))?;
-        let empty_query;
-        let empty_weights;
-        let empty_kv;
-        let query = if indexer_enabled {
-            let query = query.ok_or_else(|| {
-                Error::Internal("CUDA DSV4 decode topk missing indexer query".into())
-            })?;
-            let expected = index_heads
-                .checked_mul(index_head_dim)
-                .ok_or_else(|| Error::Internal("CUDA DSV4 decode query size overflow".into()))?;
-            if query.len != expected {
-                return Err(Error::Internal(format!(
-                    "CUDA DSV4 decode indexer query length mismatch: got {} expected {expected}",
-                    query.len
-                )));
-            }
-            query
-        } else {
-            empty_query = self.zero_f32_buffer(1)?;
-            &empty_query
-        };
-        let weights = if indexer_enabled {
-            let weights = weights.ok_or_else(|| {
-                Error::Internal("CUDA DSV4 decode topk missing indexer weights".into())
-            })?;
-            if weights.len != index_heads {
-                return Err(Error::Internal(format!(
-                    "CUDA DSV4 decode indexer weights length mismatch: got {} expected {index_heads}",
-                    weights.len
-                )));
-            }
-            weights
-        } else {
-            empty_weights = self.zero_f32_buffer(1)?;
-            &empty_weights
-        };
-        let indexer_kv = if indexer_enabled {
-            let indexer_kv = indexer_kv.ok_or_else(|| {
-                Error::Internal("CUDA DSV4 decode topk missing indexer KV".into())
-            })?;
-            let expected = compressed_len
-                .checked_mul(index_head_dim)
-                .ok_or_else(|| Error::Internal("CUDA DSV4 decode index KV size overflow".into()))?;
-            if indexer_kv.len < expected {
-                return Err(Error::Internal(format!(
-                    "CUDA DSV4 decode indexer KV length mismatch: got {} expected at least {expected}",
-                    indexer_kv.len
-                )));
-            }
-            indexer_kv
-        } else {
-            empty_kv = self.zero_f32_buffer(1)?;
-            &empty_kv
-        };
-
-        let mut out = self.zero_i32_buffer(total_cols)?;
-        self.launched(unsafe {
-            self.module.dsv4_decode_topk_indices(
-                &self.stream,
-                one_block_config(256),
-                &query.buffer,
-                &weights.buffer,
-                &indexer_kv.buffer,
-                &mut out.buffer,
-                position as u32,
-                window_len as u32,
-                window_size as u32,
-                extra_cols as u32,
-                value_offset as u32,
-                compressed_len as u32,
-                index_heads as u32,
-                index_head_dim as u32,
-                if indexer_enabled { 1u32 } else { 0u32 },
-                weight_scale,
-            )
-        })?;
-        Ok(out)
+        .elements()?;
+        let mut logical_indices = self.zero_i32_buffer(elements)?;
+        let mut plane_selectors = self.zero_i32_buffer(elements)?;
+        self.dsv4_decode_topk_indices_paged_indexer_rows_from_device_into(
+            query,
+            weights,
+            indexer_plane,
+            block_slots,
+            block_offsets,
+            row_sequence_ids,
+            positions,
+            window_lens,
+            compressed_lens,
+            rows,
+            window_size,
+            index_topk,
+            index_heads,
+            index_head_dim,
+            page_tokens,
+            layer_index,
+            layer_count,
+            weight_scale,
+            &mut logical_indices,
+            &mut plane_selectors,
+        )?;
+        Ok((logical_indices, plane_selectors))
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn dsv4_decode_topk_indices_from_device_into(
+    pub fn dsv4_decode_topk_indices_paged_indexer_rows_from_device_into(
         &self,
-        query: Option<&CudaF32Buffer>,
-        weights: Option<&CudaF32Buffer>,
-        indexer_kv: Option<&CudaF32Buffer>,
-        empty_query: &CudaF32Buffer,
-        empty_weights: &CudaF32Buffer,
-        empty_kv: &CudaF32Buffer,
+        query: &CudaF32Buffer,
+        weights: &CudaF32Buffer,
+        indexer_plane: &CudaF32Buffer,
+        block_slots: &CudaI32Buffer,
+        block_offsets: &CudaI32Buffer,
+        row_sequence_ids: &CudaI32Buffer,
+        positions: &CudaI32Buffer,
+        window_lens: &CudaI32Buffer,
+        compressed_lens: &CudaI32Buffer,
+        rows: usize,
+        window_size: usize,
+        index_topk: usize,
+        index_heads: usize,
+        index_head_dim: usize,
+        page_tokens: usize,
+        layer_index: usize,
+        layer_count: usize,
+        weight_scale: f32,
+        logical_indices: &mut CudaI32Buffer,
+        plane_selectors: &mut CudaI32Buffer,
+    ) -> Result<()> {
+        let layout = crate::kv_page_pool::PagedPlaneLayout {
+            page_tokens,
+            elements_per_token: index_head_dim,
+            layer_index,
+            layer_count,
+        };
+        layout.validate()?;
+        let slot_elements = layer_count
+            .checked_mul(page_tokens)
+            .and_then(|value| value.checked_mul(index_head_dim))
+            .ok_or_else(|| Error::Internal("CUDA paged decode rows slot size overflow".into()))?;
+        if indexer_plane.len < slot_elements || !indexer_plane.len.is_multiple_of(slot_elements) {
+            return Err(Error::Internal(format!(
+                "CUDA paged decode rows plane length {} is not a positive multiple of slot size {slot_elements}",
+                indexer_plane.len
+            )));
+        }
+        Dsv4PagedDecodeRowsShape {
+            rows,
+            window_size,
+            index_topk,
+            index_heads,
+            index_head_dim,
+        }
+        .validate_lengths(
+            query.len,
+            weights.len,
+            block_offsets.len,
+            row_sequence_ids.len,
+            positions.len,
+            window_lens.len,
+            compressed_lens.len,
+            logical_indices.len,
+            plane_selectors.len,
+        )?;
+        self.launched(unsafe {
+            self.module.dsv4_decode_topk_indices_paged_indexer_rows(
+                &self.stream,
+                LaunchConfig {
+                    grid_dim: (checked_u32(rows, "CUDA paged decode rows", "rows")?, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                &query.buffer,
+                &weights.buffer,
+                &indexer_plane.buffer,
+                &block_slots.buffer,
+                &block_offsets.buffer,
+                &row_sequence_ids.buffer,
+                &positions.buffer,
+                &window_lens.buffer,
+                &compressed_lens.buffer,
+                &mut logical_indices.buffer,
+                &mut plane_selectors.buffer,
+                checked_u32(rows, "CUDA paged decode rows", "rows")?,
+                checked_u32(window_size, "CUDA paged decode rows", "window_size")?,
+                checked_u32(index_topk, "CUDA paged decode rows", "index_topk")?,
+                checked_u32(index_heads, "CUDA paged decode rows", "index_heads")?,
+                checked_u32(index_head_dim, "CUDA paged decode rows", "index_head_dim")?,
+                checked_u32(page_tokens, "CUDA paged decode rows", "page_tokens")?,
+                checked_u32(layer_index, "CUDA paged decode rows", "layer_index")?,
+                checked_u32(layer_count, "CUDA paged decode rows", "layer_count")?,
+                weight_scale,
+            )
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn dsv4_decode_topk_indices_fused_index_query_paged_indexer_from_device_into(
+        &self,
+        query: &CudaF32Buffer,
+        weights: &CudaF32Buffer,
+        indexer_plane: &CudaF32Buffer,
+        block_slots: &CudaI32Buffer,
+        block_offsets: &CudaI32Buffer,
+        cos_table: &CudaF32Buffer,
+        sin_table: &CudaF32Buffer,
         position: usize,
         window_len: usize,
         window_size: usize,
@@ -3153,102 +3652,84 @@ impl CudaArtifactOperatorContext {
         compressed_len: usize,
         index_heads: usize,
         index_head_dim: usize,
+        rope_dim: usize,
+        page_tokens: usize,
+        layer_index: usize,
+        layer_count: usize,
         weight_scale: f32,
-        out: &mut CudaI32Buffer,
+        output: &mut CudaI32Buffer,
     ) -> Result<()> {
-        if window_size == 0 {
+        let layout = crate::kv_page_pool::PagedPlaneLayout {
+            page_tokens,
+            elements_per_token: index_head_dim,
+            layer_index,
+            layer_count,
+        };
+        self.validate_paged_indexer_storage(
+            indexer_plane,
+            block_slots,
+            block_offsets,
+            compressed_len,
+            layout,
+        )?;
+        let query_len = index_heads
+            .checked_mul(index_head_dim)
+            .ok_or_else(|| Error::Internal("CUDA fused paged decode query overflow".into()))?;
+        let output_len = window_size
+            .checked_add(extra_cols)
+            .ok_or_else(|| Error::Internal("CUDA fused paged decode columns overflow".into()))?;
+        let rope_len = position
+            .checked_add(1)
+            .and_then(|v| v.checked_mul(rope_dim / 2))
+            .ok_or_else(|| Error::Internal("CUDA fused paged decode rope overflow".into()))?;
+        if window_size == 0
+            || window_len > window_size
+            || extra_cols == 0
+            || extra_cols > 512
+            || index_head_dim == 0
+            || index_head_dim > 256
+            || !index_head_dim.is_power_of_two()
+            || !index_head_dim.is_multiple_of(32)
+            || rope_dim > index_head_dim
+            || !rope_dim.is_multiple_of(2)
+            || query.len != query_len
+            || weights.len != index_heads
+            || output.len < output_len
+            || cos_table.len < rope_len
+            || sin_table.len < rope_len
+            || query_len > DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS
+        {
             return Err(Error::Internal(
-                "CUDA DSV4 decode topk requires window_size > 0".into(),
+                "CUDA fused paged decode indexer shape mismatch".into(),
             ));
         }
-        if window_len > window_size {
-            return Err(Error::Internal(format!(
-                "invalid CUDA DSV4 decode topk window: len={window_len} window_size={window_size}"
-            )));
-        }
-        let indexer_enabled = query.is_some() || weights.is_some() || indexer_kv.is_some();
-        if indexer_enabled && extra_cols > 512 {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 decode indexer topk supports at most 512 extra columns, got {extra_cols}"
-            )));
-        }
-        let total_cols = window_size
-            .checked_add(extra_cols)
-            .ok_or_else(|| Error::Internal("CUDA DSV4 decode topk column overflow".into()))?;
-        if out.len < total_cols {
-            return Err(Error::Internal(format!(
-                "CUDA DSV4 decode topk output too small: need {total_cols}, got {}",
-                out.len
-            )));
-        }
-        let query = if indexer_enabled {
-            let query = query.ok_or_else(|| {
-                Error::Internal("CUDA DSV4 decode topk missing indexer query".into())
-            })?;
-            let expected = index_heads
-                .checked_mul(index_head_dim)
-                .ok_or_else(|| Error::Internal("CUDA DSV4 decode query size overflow".into()))?;
-            if query.len != expected {
-                return Err(Error::Internal(format!(
-                    "CUDA DSV4 decode indexer query length mismatch: got {} expected {expected}",
-                    query.len
-                )));
-            }
-            query
-        } else {
-            empty_query
-        };
-        let weights = if indexer_enabled {
-            let weights = weights.ok_or_else(|| {
-                Error::Internal("CUDA DSV4 decode topk missing indexer weights".into())
-            })?;
-            if weights.len != index_heads {
-                return Err(Error::Internal(format!(
-                    "CUDA DSV4 decode indexer weights length mismatch: got {} expected {index_heads}",
-                    weights.len
-                )));
-            }
-            weights
-        } else {
-            empty_weights
-        };
-        let indexer_kv = if indexer_enabled {
-            let indexer_kv = indexer_kv.ok_or_else(|| {
-                Error::Internal("CUDA DSV4 decode topk missing indexer KV".into())
-            })?;
-            let expected = compressed_len
-                .checked_mul(index_head_dim)
-                .ok_or_else(|| Error::Internal("CUDA DSV4 decode index KV size overflow".into()))?;
-            if indexer_kv.len < expected {
-                return Err(Error::Internal(format!(
-                    "CUDA DSV4 decode indexer KV length mismatch: got {} expected at least {expected}",
-                    indexer_kv.len
-                )));
-            }
-            indexer_kv
-        } else {
-            empty_kv
-        };
-
         self.launched(unsafe {
-            self.module.dsv4_decode_topk_indices(
-                &self.stream,
-                one_block_config(256),
-                &query.buffer,
-                &weights.buffer,
-                &indexer_kv.buffer,
-                &mut out.buffer,
-                position as u32,
-                window_len as u32,
-                window_size as u32,
-                extra_cols as u32,
-                value_offset as u32,
-                compressed_len as u32,
-                index_heads as u32,
-                index_head_dim as u32,
-                if indexer_enabled { 1u32 } else { 0u32 },
-                weight_scale,
-            )
+            self.module
+                .dsv4_decode_topk_indices_fused_index_query_paged_indexer(
+                    &self.stream,
+                    one_block_config(256),
+                    &query.buffer,
+                    &weights.buffer,
+                    &indexer_plane.buffer,
+                    &block_slots.buffer,
+                    &block_offsets.buffer,
+                    &cos_table.buffer,
+                    &sin_table.buffer,
+                    &mut output.buffer,
+                    checked_u32(position, "CUDA fused paged decode", "position")?,
+                    checked_u32(window_len, "CUDA fused paged decode", "window_len")?,
+                    checked_u32(window_size, "CUDA fused paged decode", "window_size")?,
+                    checked_u32(extra_cols, "CUDA fused paged decode", "extra_cols")?,
+                    checked_u32(value_offset, "CUDA fused paged decode", "value_offset")?,
+                    checked_u32(compressed_len, "CUDA fused paged decode", "compressed_len")?,
+                    checked_u32(index_heads, "CUDA fused paged decode", "index_heads")?,
+                    checked_u32(index_head_dim, "CUDA fused paged decode", "index_head_dim")?,
+                    checked_u32(rope_dim, "CUDA fused paged decode", "rope_dim")?,
+                    checked_u32(page_tokens, "CUDA fused paged decode", "page_tokens")?,
+                    checked_u32(layer_index, "CUDA fused paged decode", "layer_index")?,
+                    checked_u32(layer_count, "CUDA fused paged decode", "layer_count")?,
+                    weight_scale,
+                )
         })
     }
 
@@ -5061,324 +5542,6 @@ impl CudaArtifactOperatorContext {
         )
     }
 
-    /// Batched MoE: process all selected experts in 3 kernel launches
-    /// instead of 3 × num_experts launches.
-    ///
-    /// `expert_handles`: one per selected expert, each containing gate/up/down.
-    /// `route_weights`: per-expert routing weight.
-    /// `input`: shared device input buffer (already FP8-quantized).
-    /// `output`: pre-zeroed accumulator, `[hidden_size]` f32.
-    /// Returns the same `output` buffer with accumulated expert outputs.
-    pub fn moe_experts_batched_from_device(
-        &self,
-        _expert_handles: &[&CudaArtifactLinearHandle; 6],
-        gate_handles: &[&CudaArtifactLinearHandle; 6],
-        up_handles: &[&CudaArtifactLinearHandle; 6],
-        down_handles: &[&CudaArtifactLinearHandle; 6],
-        route_weights: &[f32; 6],
-        input: &CudaF32Buffer,
-        swiglu_limit: f32,
-        num_experts: usize,
-        intermediate_size: usize,
-        hidden_size: usize,
-    ) -> Result<(CudaF32Buffer, CudaF32Buffer, CudaF32Buffer)> {
-        if num_experts == 0 || num_experts > 6 {
-            return Err(Error::Internal(format!(
-                "MoE batched expects 1..=6 experts, got {num_experts}"
-            )));
-        }
-        // Pack device pointers into u64 arrays.
-        let gate_ptrs: Vec<u64> = gate_handles[..num_experts]
-            .iter()
-            .map(|h| h.weight.cu_deviceptr())
-            .collect();
-        let gate_scale_ptrs: Vec<u64> = gate_handles[..num_experts]
-            .iter()
-            .map(|h| h.scale.as_ref().expect("gate scale").cu_deviceptr())
-            .collect();
-        let up_ptrs: Vec<u64> = up_handles[..num_experts]
-            .iter()
-            .map(|h| h.weight.cu_deviceptr())
-            .collect();
-        let up_scale_ptrs: Vec<u64> = up_handles[..num_experts]
-            .iter()
-            .map(|h| h.scale.as_ref().expect("up scale").cu_deviceptr())
-            .collect();
-        let down_ptrs: Vec<u64> = down_handles[..num_experts]
-            .iter()
-            .map(|h| h.weight.cu_deviceptr())
-            .collect();
-        let down_scale_ptrs: Vec<u64> = down_handles[..num_experts]
-            .iter()
-            .map(|h| h.scale.as_ref().expect("down scale").cu_deviceptr())
-            .collect();
-
-        let gate_ptrs_d = self.upload_u64_buffer(&gate_ptrs)?;
-        let gate_scale_ptrs_d = self.upload_u64_buffer(&gate_scale_ptrs)?;
-        let up_ptrs_d = self.upload_u64_buffer(&up_ptrs)?;
-        let up_scale_ptrs_d = self.upload_u64_buffer(&up_scale_ptrs)?;
-        let down_ptrs_d = self.upload_u64_buffer(&down_ptrs)?;
-        let down_scale_ptrs_d = self.upload_u64_buffer(&down_scale_ptrs)?;
-        let route_weights_d = self.upload_f32_buffer(route_weights)?;
-        let route_slots: Vec<i32> = (0..num_experts).map(|slot| slot as i32).collect();
-        let route_slots_d = self.upload_i32(&route_slots)?;
-
-        let total_inter = num_experts
-            .checked_mul(intermediate_size)
-            .ok_or_else(|| Error::Internal("CUDA legacy MoE intermediate size overflow".into()))?;
-        let total_expert_output = num_experts
-            .checked_mul(hidden_size)
-            .ok_or_else(|| Error::Internal("CUDA legacy MoE down scratch size overflow".into()))?;
-        let mut y_gate = self.uninitialized_device_buffer::<f32>(total_inter)?;
-        let mut y_up = self.uninitialized_device_buffer::<f32>(total_inter)?;
-        let mut y_hidden = self.uninitialized_device_buffer::<f32>(total_inter)?;
-        let mut expert_output = self.uninitialized_device_buffer::<f32>(total_expert_output)?;
-        let mut output = self.zeroed_device_buffer::<f32>(hidden_size)?;
-
-        let block = 256u32;
-        let reduce_block = 128u32;
-        let use_reduce = std::env::var("FERRULE_CUDA_MOE_REDUCE")
-            .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
-            .unwrap_or(false);
-        // FP4 mxf4 Tensor Core path is the default hot path. It is still under-utilized
-        // at batch_cols=1, but avoids the scalar FP4 decode loop and remains env-gated
-        // for A/B: set FERRULE_CUDA_MOE_TC=0 to force the scalar fallback.
-        let use_tensor_core = !use_reduce
-            && input.len.is_multiple_of(64)
-            && std::env::var("FERRULE_CUDA_MOE_TC")
-                .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
-                .unwrap_or(true);
-        let grid_inter = (
-            (intermediate_size as u32 + block - 1) / block,
-            num_experts as u32,
-            1,
-        );
-        let grid_hidden = (
-            (hidden_size as u32 + block - 1) / block,
-            num_experts as u32,
-            1,
-        );
-        let grid_inter_reduce = (intermediate_size as u32, num_experts as u32, 1);
-        let grid_hidden_reduce = (hidden_size as u32, num_experts as u32, 1);
-        let grid_inter_tc = (intermediate_size.div_ceil(16) as u32, num_experts as u32, 1);
-        let grid_hidden_tc = (hidden_size.div_ceil(16) as u32, num_experts as u32, 1);
-
-        // Launch 1: gate+up GEMM/GEMV. The tensor-core kernel is GEMM-ready
-        // (`batch_cols <= 8`) and currently runs with one decode column.
-        if use_reduce {
-            self.launched(unsafe {
-                self.module.moe_gemv_dual_fp4_batched_reduce(
-                    &self.stream,
-                    LaunchConfig {
-                        grid_dim: grid_inter_reduce,
-                        block_dim: (reduce_block, 1, 1),
-                        shared_mem_bytes: 0,
-                    },
-                    &input.buffer,
-                    &gate_ptrs_d,
-                    &gate_scale_ptrs_d,
-                    &up_ptrs_d,
-                    &up_scale_ptrs_d,
-                    &mut y_gate,
-                    &mut y_up,
-                    intermediate_size as u32,
-                    input.len as u32,
-                    num_experts as u32,
-                )
-            })?;
-        } else if use_tensor_core {
-            let mut x_packed = self.uninitialized_device_buffer::<u8>(input.len / 2)?;
-            let mut x_scales = self.uninitialized_device_buffer::<u8>(input.len / 32)?;
-            self.launched(unsafe {
-                self.module.fp4_e2m1_e8m0_quantize_f32_packed(
-                    &self.stream,
-                    LaunchConfig::for_num_elems((input.len / 32) as u32),
-                    &input.buffer,
-                    &mut x_packed,
-                    &mut x_scales,
-                    0,
-                    input.len as u32,
-                    input.len as u32,
-                    32,
-                )
-            })?;
-            self.launched(unsafe {
-                self.module.moe_gemm_dual_fp4_mxf4_batched(
-                    &self.stream,
-                    LaunchConfig {
-                        grid_dim: grid_inter_tc,
-                        block_dim: (32, 1, 1),
-                        shared_mem_bytes: 0,
-                    },
-                    &x_packed,
-                    &x_scales,
-                    &gate_ptrs_d,
-                    &gate_scale_ptrs_d,
-                    &up_ptrs_d,
-                    &up_scale_ptrs_d,
-                    &mut y_gate,
-                    &mut y_up,
-                    intermediate_size as u32,
-                    input.len as u32,
-                    1,
-                    num_experts as u32,
-                )
-            })?;
-        } else {
-            self.launched(unsafe {
-                self.module.moe_gemv_dual_fp4_batched(
-                    &self.stream,
-                    LaunchConfig {
-                        grid_dim: grid_inter,
-                        block_dim: (block, 1, 1),
-                        shared_mem_bytes: 0,
-                    },
-                    &input.buffer,
-                    &gate_ptrs_d,
-                    &gate_scale_ptrs_d,
-                    &up_ptrs_d,
-                    &up_scale_ptrs_d,
-                    &mut y_gate,
-                    &mut y_up,
-                    intermediate_size as u32,
-                    input.len as u32,
-                    num_experts as u32,
-                )
-            })?;
-        }
-
-        // Launch 2: SwiGLU + FP8 quantize
-        self.launched(unsafe {
-            self.module.moe_swiglu_fp8_batched(
-                &self.stream,
-                LaunchConfig {
-                    grid_dim: grid_inter,
-                    block_dim: (block, 1, 1),
-                    shared_mem_bytes: 0,
-                },
-                &y_gate,
-                &y_up,
-                &route_weights_d.buffer,
-                &mut y_hidden,
-                intermediate_size as u32,
-                num_experts as u32,
-                swiglu_limit,
-                ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE as u32,
-            )
-        })?;
-
-        // Launch 3: down GEMM/GEMV into expert-major scratch.
-        if use_reduce {
-            self.launched(unsafe {
-                self.module.moe_gemv_down_fp4_batched_reduce(
-                    &self.stream,
-                    LaunchConfig {
-                        grid_dim: grid_hidden_reduce,
-                        block_dim: (reduce_block, 1, 1),
-                        shared_mem_bytes: 0,
-                    },
-                    &y_hidden,
-                    &down_ptrs_d,
-                    &down_scale_ptrs_d,
-                    &mut expert_output,
-                    intermediate_size as u32,
-                    hidden_size as u32,
-                    num_experts as u32,
-                )
-            })?;
-        } else if use_tensor_core {
-            let mut y_hidden_packed = self.uninitialized_device_buffer::<u8>(total_inter / 2)?;
-            let mut y_hidden_scales = self.uninitialized_device_buffer::<u8>(total_inter / 32)?;
-            self.launched(unsafe {
-                self.module.fp4_e2m1_e8m0_quantize_f32_packed(
-                    &self.stream,
-                    LaunchConfig::for_num_elems((total_inter / 32) as u32),
-                    &y_hidden,
-                    &mut y_hidden_packed,
-                    &mut y_hidden_scales,
-                    0,
-                    total_inter as u32,
-                    intermediate_size as u32,
-                    32,
-                )
-            })?;
-            self.launched(unsafe {
-                self.module.moe_gemm_down_fp4_mxf4_batched(
-                    &self.stream,
-                    LaunchConfig {
-                        grid_dim: grid_hidden_tc,
-                        block_dim: (32, 1, 1),
-                        shared_mem_bytes: 0,
-                    },
-                    &y_hidden_packed,
-                    &y_hidden_scales,
-                    &down_ptrs_d,
-                    &down_scale_ptrs_d,
-                    &mut expert_output,
-                    intermediate_size as u32,
-                    hidden_size as u32,
-                    1,
-                    num_experts as u32,
-                )
-            })?;
-        } else {
-            self.launched(unsafe {
-                self.module.moe_gemv_down_fp4_batched(
-                    &self.stream,
-                    LaunchConfig {
-                        grid_dim: grid_hidden,
-                        block_dim: (block, 1, 1),
-                        shared_mem_bytes: 0,
-                    },
-                    &y_hidden,
-                    &down_ptrs_d,
-                    &down_scale_ptrs_d,
-                    &mut expert_output,
-                    intermediate_size as u32,
-                    hidden_size as u32,
-                    num_experts as u32,
-                )
-            })?;
-        }
-
-        // Launch 4: deterministic rank-ordered reduction into the accumulator.
-        self.launched(unsafe {
-            self.module.moe_reduce_expert_outputs_ranked(
-                &self.stream,
-                LaunchConfig::for_num_elems(hidden_size as u32),
-                &expert_output,
-                &route_slots_d,
-                &mut output,
-                0,
-                hidden_size as u32,
-                1,
-                num_experts as u32,
-                num_experts as u32,
-            )
-        })?;
-
-        Ok((
-            CudaF32Buffer {
-                buffer: y_gate,
-                len: total_inter,
-            },
-            CudaF32Buffer {
-                buffer: y_hidden,
-                len: total_inter,
-            },
-            CudaF32Buffer {
-                buffer: output,
-                len: hidden_size,
-            },
-        ))
-    }
-
-    fn upload_u64_buffer(&self, values: &[u64]) -> Result<DeviceBuffer<u64>> {
-        let buffer = cu(DeviceBuffer::<u64>::from_host(&self.stream, values))?;
-        self.counters.add_host_to_device((values.len() * 8) as u64);
-        Ok(buffer)
-    }
-
     pub fn rms_norm(&self, input: &[f32], weight: &[f32], eps: f32) -> Result<Vec<f32>> {
         if input.len() != weight.len() || input.is_empty() {
             return Err(Error::Internal(format!(
@@ -5723,33 +5886,6 @@ impl CudaArtifactOperatorContext {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn hc_pre_single_f32(
-        &self,
-        state: &[f32],
-        function: &[f32],
-        scale: &[f32],
-        base: &[f32],
-        hc_mult: usize,
-        hidden_size: usize,
-        sinkhorn_iters: usize,
-        eps: f32,
-        norm_eps: f32,
-    ) -> Result<(Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>)> {
-        self.hc_pre_f32(
-            state,
-            function,
-            scale,
-            base,
-            1,
-            hc_mult,
-            hidden_size,
-            sinkhorn_iters,
-            eps,
-            norm_eps,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
     pub fn hc_post_from_device_into(
         &self,
         hidden: &CudaF32Buffer,
@@ -5837,26 +5973,6 @@ impl CudaArtifactOperatorContext {
         self.download_f32(&out, tokens * hc_dim)
     }
 
-    pub fn hc_post_single_f32(
-        &self,
-        hidden: &[f32],
-        residual: &[f32],
-        split_post: &[f32],
-        split_comb: &[f32],
-        hc_mult: usize,
-        hidden_size: usize,
-    ) -> Result<Vec<f32>> {
-        self.hc_post_f32(
-            hidden,
-            residual,
-            split_post,
-            split_comb,
-            1,
-            hc_mult,
-            hidden_size,
-        )
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub fn hc_head_f32(
         &self,
@@ -5917,30 +6033,6 @@ impl CudaArtifactOperatorContext {
         self.download_f32(&hidden, tokens * hidden_size)
     }
 
-    pub fn hc_head_single_f32(
-        &self,
-        state: &[f32],
-        function: &[f32],
-        scale: &[f32],
-        base: &[f32],
-        hc_mult: usize,
-        hidden_size: usize,
-        eps: f32,
-        norm_eps: f32,
-    ) -> Result<Vec<f32>> {
-        self.hc_head_f32(
-            state,
-            function,
-            scale,
-            base,
-            1,
-            hc_mult,
-            hidden_size,
-            eps,
-            norm_eps,
-        )
-    }
-
     /// Device-resident `hc_head`: state and weights are already on device,
     /// output stays on device. This is the HC terminal projection applied
     /// after all transformer layers.
@@ -5993,7 +6085,7 @@ impl CudaArtifactOperatorContext {
         if tokens == 0
             || hc_mult == 0
             || hc_mult > 16
-            || state.len != tokens * hc_dim
+            || state.len < tokens * hc_dim
             || function.len != hc_mult * hc_dim
             || scale.len != 1
             || base.len != hc_mult
@@ -6001,11 +6093,7 @@ impl CudaArtifactOperatorContext {
         {
             return Err(Error::Internal(format!(
                 "CUDA HC head device shape mismatch: tokens={tokens} state={} function={} scale={} base={} output={} hc={hc_mult} hidden={hidden_size}",
-                state.len,
-                function.len,
-                scale.len,
-                base.len,
-                hidden.len,
+                state.len, function.len, scale.len, base.len, hidden.len,
             )));
         }
         self.launched(unsafe {
@@ -6365,6 +6453,310 @@ impl CudaArtifactOperatorContext {
         }
     }
 
+    pub fn convert_combined_ring_topk_indices_into(
+        &self,
+        combined: &CudaI32Buffer,
+        window_lens: CombinedRingWindowLens<'_>,
+        layout: CombinedRingTopkLayout,
+        logical_indices: &mut CudaI32Buffer,
+        plane_selectors: &mut CudaI32Buffer,
+    ) -> Result<()> {
+        layout.validate()?;
+        let elements = layout.elements()?;
+        if combined.len < elements
+            || logical_indices.len != elements
+            || plane_selectors.len != elements
+        {
+            return Err(Error::Internal(format!(
+                "combined ring conversion length mismatch: input={} logical={} selectors={} expected={elements}",
+                combined.len, logical_indices.len, plane_selectors.len
+            )));
+        }
+        let (row_window_lens, explicit) = match window_lens {
+            CombinedRingWindowLens::PositionDerived => (combined, 0u32),
+            CombinedRingWindowLens::Explicit(values) => {
+                if values.len != layout.rows {
+                    return Err(Error::Internal(format!(
+                        "combined ring row window length mismatch: got {} expected {}",
+                        values.len, layout.rows
+                    )));
+                }
+                (values, 1u32)
+            }
+        };
+        self.launched(unsafe {
+            self.module.convert_combined_ring_topk_indices(
+                &self.stream,
+                LaunchConfig::for_num_elems(checked_u32(
+                    elements,
+                    "combined ring conversion",
+                    "elements",
+                )?),
+                &combined.buffer,
+                &row_window_lens.buffer,
+                &mut logical_indices.buffer,
+                &mut plane_selectors.buffer,
+                checked_u32(elements, "combined ring conversion", "elements")?,
+                checked_u32(layout.rows, "combined ring conversion", "rows")?,
+                checked_u32(layout.topk, "combined ring conversion", "topk")?,
+                checked_u32(
+                    layout.start_position,
+                    "combined ring conversion",
+                    "start_position",
+                )?,
+                checked_u32(
+                    layout.position_stride,
+                    "combined ring conversion",
+                    "position_stride",
+                )?,
+                checked_u32(
+                    layout.window_size,
+                    "combined ring conversion",
+                    "window_size",
+                )?,
+                explicit,
+            )
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn dual_plane_paged_sparse_attention_sink_from_device(
+        &self,
+        query: &CudaF32Buffer,
+        first_plane: &CudaF32Buffer,
+        second_plane: &CudaF32Buffer,
+        block_slots: &CudaI32Buffer,
+        sequence_block_offsets: &CudaI32Buffer,
+        sequence_kv_lens: &CudaI32Buffer,
+        topk: &CudaI32Buffer,
+        selectors: &CudaI32Buffer,
+        sink: &CudaF32Buffer,
+        layout: DualPlanePagedSparseAttentionLayout,
+    ) -> Result<CudaF32Buffer> {
+        let mut output = self.zero_f32_buffer(layout.base.output_elements()?)?;
+        self.dual_plane_paged_sparse_attention_sink_from_device_into(
+            query,
+            first_plane,
+            second_plane,
+            block_slots,
+            sequence_block_offsets,
+            sequence_kv_lens,
+            topk,
+            selectors,
+            sink,
+            layout,
+            &mut output,
+        )?;
+        Ok(output)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn dual_plane_paged_sparse_attention_sink_from_device_into(
+        &self,
+        query: &CudaF32Buffer,
+        first_plane: &CudaF32Buffer,
+        second_plane: &CudaF32Buffer,
+        block_slots: &CudaI32Buffer,
+        sequence_block_offsets: &CudaI32Buffer,
+        sequence_kv_lens: &CudaI32Buffer,
+        topk: &CudaI32Buffer,
+        selectors: &CudaI32Buffer,
+        sink: &CudaF32Buffer,
+        layout: DualPlanePagedSparseAttentionLayout,
+        output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        layout.validate_buffer_lengths(
+            query.len,
+            first_plane.len,
+            second_plane.len,
+            block_slots.len,
+            sequence_block_offsets.len,
+            sequence_kv_lens.len,
+            topk.len,
+            selectors.len,
+            sink.len,
+            output.len,
+        )?;
+        CudaSparseAttentionExecutor::new(&self.module, &self.stream)
+            .dual_plane_paged_sparse_attention_sink_f32(
+                &query.buffer,
+                &first_plane.buffer,
+                &second_plane.buffer,
+                &block_slots.buffer,
+                &sequence_block_offsets.buffer,
+                &sequence_kv_lens.buffer,
+                None,
+                &topk.buffer,
+                &selectors.buffer,
+                &sink.buffer,
+                &mut output.buffer,
+                layout,
+            )?;
+        self.record_kernel_launch();
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn dual_plane_paged_sparse_attention_selected_rows_from_device_into(
+        &self,
+        query: &CudaF32Buffer,
+        first_plane: &CudaF32Buffer,
+        second_plane: &CudaF32Buffer,
+        block_slots: &CudaI32Buffer,
+        sequence_block_offsets: &CudaI32Buffer,
+        sequence_kv_lens: &CudaI32Buffer,
+        row_sequence_ids: &CudaI32Buffer,
+        row_kv_lens: &CudaI32Buffer,
+        topk: &CudaI32Buffer,
+        selectors: &CudaI32Buffer,
+        sink: &CudaF32Buffer,
+        layout: DualPlanePagedSparseAttentionLayout,
+        output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        layout.validate_selected_buffer_lengths(
+            query.len,
+            first_plane.len,
+            second_plane.len,
+            block_slots.len,
+            sequence_block_offsets.len,
+            sequence_kv_lens.len,
+            row_sequence_ids.len,
+            row_kv_lens.len,
+            topk.len,
+            selectors.len,
+            sink.len,
+            output.len,
+        )?;
+        CudaSparseAttentionExecutor::new(&self.module, &self.stream)
+            .dual_plane_paged_sparse_attention_sink_f32(
+                &query.buffer,
+                &first_plane.buffer,
+                &second_plane.buffer,
+                &block_slots.buffer,
+                &sequence_block_offsets.buffer,
+                &sequence_kv_lens.buffer,
+                Some((&row_sequence_ids.buffer, &row_kv_lens.buffer)),
+                &topk.buffer,
+                &selectors.buffer,
+                &sink.buffer,
+                &mut output.buffer,
+                layout,
+            )?;
+        self.record_kernel_launch();
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn paged_sparse_attention_sink_from_device(
+        &self,
+        query: &CudaF32Buffer,
+        plane: &CudaF32Buffer,
+        block_slots: &CudaI32Buffer,
+        sequence_block_offsets: &CudaI32Buffer,
+        sequence_kv_lens: &CudaI32Buffer,
+        topk: &CudaI32Buffer,
+        sink: &CudaF32Buffer,
+        layout: PagedSparseAttentionLayout,
+    ) -> Result<CudaF32Buffer> {
+        let mut output = self.zero_f32_buffer(layout.output_elements()?)?;
+        self.paged_sparse_attention_sink_from_device_into(
+            query,
+            plane,
+            block_slots,
+            sequence_block_offsets,
+            sequence_kv_lens,
+            topk,
+            sink,
+            layout,
+            &mut output,
+        )?;
+        Ok(output)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn paged_sparse_attention_sink_from_device_into(
+        &self,
+        query: &CudaF32Buffer,
+        plane: &CudaF32Buffer,
+        block_slots: &CudaI32Buffer,
+        sequence_block_offsets: &CudaI32Buffer,
+        sequence_kv_lens: &CudaI32Buffer,
+        topk: &CudaI32Buffer,
+        sink: &CudaF32Buffer,
+        layout: PagedSparseAttentionLayout,
+        output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        layout.validate_buffer_lengths(
+            query.len,
+            plane.len,
+            block_slots.len,
+            sequence_block_offsets.len,
+            sequence_kv_lens.len,
+            topk.len,
+            sink.len,
+            output.len,
+        )?;
+        CudaSparseAttentionExecutor::new(&self.module, &self.stream)
+            .paged_sparse_attention_sink_f32(
+                &query.buffer,
+                &plane.buffer,
+                &block_slots.buffer,
+                &sequence_block_offsets.buffer,
+                &sequence_kv_lens.buffer,
+                None,
+                &topk.buffer,
+                &sink.buffer,
+                &mut output.buffer,
+                layout,
+            )?;
+        self.record_kernel_launch();
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn paged_sparse_attention_selected_rows_from_device_into(
+        &self,
+        query: &CudaF32Buffer,
+        plane: &CudaF32Buffer,
+        block_slots: &CudaI32Buffer,
+        sequence_block_offsets: &CudaI32Buffer,
+        sequence_kv_lens: &CudaI32Buffer,
+        row_sequence_ids: &CudaI32Buffer,
+        row_kv_lens: &CudaI32Buffer,
+        topk: &CudaI32Buffer,
+        sink: &CudaF32Buffer,
+        layout: PagedSparseAttentionLayout,
+        output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        layout.validate_selected_buffer_lengths(
+            query.len,
+            plane.len,
+            block_slots.len,
+            sequence_block_offsets.len,
+            sequence_kv_lens.len,
+            row_sequence_ids.len,
+            row_kv_lens.len,
+            topk.len,
+            sink.len,
+            output.len,
+        )?;
+        CudaSparseAttentionExecutor::new(&self.module, &self.stream)
+            .paged_sparse_attention_sink_f32(
+                &query.buffer,
+                &plane.buffer,
+                &block_slots.buffer,
+                &sequence_block_offsets.buffer,
+                &sequence_kv_lens.buffer,
+                Some((&row_sequence_ids.buffer, &row_kv_lens.buffer)),
+                &topk.buffer,
+                &sink.buffer,
+                &mut output.buffer,
+                layout,
+            )?;
+        self.record_kernel_launch();
+        Ok(())
+    }
+
     pub fn sparse_attention_sink_from_device(
         &self,
         query: &CudaF32Buffer,
@@ -6496,6 +6888,71 @@ impl CudaArtifactOperatorContext {
                 pairs,
                 start_position,
                 position_stride,
+                rows,
+                heads,
+                head_dim,
+                rope_dim,
+                if inverse { 1u32 } else { 0u32 },
+            )
+        })
+    }
+
+    /// Apply DSV4-style tail rotary to `[rows, heads, head_dim]` using one
+    /// arbitrary device-resident position per row.
+    pub fn rope_tail_rows_indexed_from_device(
+        &self,
+        qk: &mut CudaF32Buffer,
+        cos_table: &CudaF32Buffer,
+        sin_table: &CudaF32Buffer,
+        positions: &CudaI32Buffer,
+        rows: u32,
+        heads: u32,
+        head_dim: u32,
+        rope_dim: u32,
+        inverse: bool,
+    ) -> Result<()> {
+        if positions.len != rows as usize {
+            return Err(Error::Internal(format!(
+                "CUDA indexed rope positions length mismatch: got {} expected rows={rows}",
+                positions.len
+            )));
+        }
+        if rows == 0 || heads == 0 || rope_dim == 0 || rope_dim > head_dim {
+            return Ok(());
+        }
+        let expected = (rows as usize)
+            .checked_mul(heads as usize)
+            .and_then(|value| value.checked_mul(head_dim as usize))
+            .ok_or_else(|| Error::Internal("CUDA indexed rope row size overflow".into()))?;
+        if qk.len != expected {
+            return Err(Error::Internal(format!(
+                "CUDA indexed rope rows length mismatch: len={} expected rows={} heads={} head_dim={}",
+                qk.len, rows, heads, head_dim
+            )));
+        }
+        let table_width = (rope_dim / 2) as usize;
+        if table_width == 0 {
+            return Ok(());
+        }
+        if cos_table.len != sin_table.len || !cos_table.len.is_multiple_of(table_width) {
+            return Err(Error::Internal(format!(
+                "CUDA indexed rope table shape mismatch: cos={} sin={} row_width={table_width}",
+                cos_table.len, sin_table.len
+            )));
+        }
+        let pairs = rows
+            .checked_mul(heads)
+            .and_then(|value| value.checked_mul(rope_dim / 2))
+            .ok_or_else(|| Error::Internal("CUDA indexed rope pair count overflow".into()))?;
+        self.launched(unsafe {
+            self.module.rope_tail_yaarn_rows_indexed(
+                &self.stream,
+                LaunchConfig::for_num_elems(pairs),
+                &mut qk.buffer,
+                &cos_table.buffer,
+                &sin_table.buffer,
+                &positions.buffer,
+                pairs,
                 rows,
                 heads,
                 head_dim,
@@ -6708,6 +7165,205 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dsv4_paged_decode_rows_shape_accepts_fixed_stride_outputs() {
+        let shape = Dsv4PagedDecodeRowsShape {
+            rows: 3,
+            window_size: 4,
+            index_topk: 2,
+            index_heads: 2,
+            index_head_dim: 8,
+        };
+        assert_eq!(
+            shape
+                .validate_lengths(48, 6, 4, 3, 3, 3, 3, 18, 18)
+                .unwrap(),
+            18
+        );
+    }
+
+    #[test]
+    fn dsv4_paged_decode_rows_shape_rejects_bad_metadata_and_overflow() {
+        let shape = Dsv4PagedDecodeRowsShape {
+            rows: 2,
+            window_size: 4,
+            index_topk: 3,
+            index_heads: 1,
+            index_head_dim: 4,
+        };
+        assert!(shape.validate_lengths(8, 2, 2, 1, 2, 2, 2, 14, 14).is_err());
+        assert!(shape.validate_lengths(8, 2, 3, 2, 2, 2, 2, 14, 13).is_err());
+
+        let overflow = Dsv4PagedDecodeRowsShape {
+            rows: usize::MAX,
+            window_size: 2,
+            index_topk: 1,
+            index_heads: 1,
+            index_head_dim: 1,
+        };
+        assert!(overflow.elements().is_err());
+    }
+
+    fn apply_indexed_rope_cpu(
+        qk: &mut [f32],
+        cos_table: &[f32],
+        sin_table: &[f32],
+        positions: &[i32],
+        heads: usize,
+        head_dim: usize,
+        rope_dim: usize,
+        inverse: bool,
+    ) {
+        let table_width = rope_dim / 2;
+        let row_stride = heads * head_dim;
+        let tail_start = head_dim - rope_dim;
+        for (row, &position) in positions.iter().enumerate() {
+            let position = position as usize;
+            for head in 0..heads {
+                for pair in 0..table_width {
+                    let table_offset = position * table_width + pair;
+                    let cos = cos_table[table_offset];
+                    let sin = if inverse {
+                        -sin_table[table_offset]
+                    } else {
+                        sin_table[table_offset]
+                    };
+                    let base = row * row_stride + head * head_dim + tail_start + pair * 2;
+                    let x0 = qk[base];
+                    let x1 = qk[base + 1];
+                    qk[base] = x0 * cos - x1 * sin;
+                    qk[base + 1] = x0 * sin + x1 * cos;
+                }
+            }
+        }
+    }
+
+    fn rope_test_tables(positions: usize, rope_dim: usize) -> (Vec<f32>, Vec<f32>) {
+        let table_width = rope_dim / 2;
+        let mut cos = Vec::with_capacity(positions * table_width);
+        let mut sin = Vec::with_capacity(positions * table_width);
+        for position in 0..positions {
+            for pair in 0..table_width {
+                let angle = position as f32 * 0.19 + pair as f32 * 0.07;
+                cos.push(angle.cos());
+                sin.push(angle.sin());
+            }
+        }
+        (cos, sin)
+    }
+
+    #[test]
+    fn indexed_rope_cpu_reference_matches_strided_row_positions() {
+        const ROWS: usize = 3;
+        const HEADS: usize = 2;
+        const HEAD_DIM: usize = 6;
+        const ROPE_DIM: usize = 4;
+        let input: Vec<f32> = (0..ROWS * HEADS * HEAD_DIM)
+            .map(|index| index as f32 * 0.125 - 1.5)
+            .collect();
+        let (cos, sin) = rope_test_tables(8, ROPE_DIM);
+        let indexed_positions = [1, 3, 5];
+        let strided_positions: Vec<i32> = (0..ROWS).map(|row| 1 + row as i32 * 2).collect();
+
+        for inverse in [false, true] {
+            let mut indexed = input.clone();
+            let mut strided = input.clone();
+            apply_indexed_rope_cpu(
+                &mut indexed,
+                &cos,
+                &sin,
+                &indexed_positions,
+                HEADS,
+                HEAD_DIM,
+                ROPE_DIM,
+                inverse,
+            );
+            apply_indexed_rope_cpu(
+                &mut strided,
+                &cos,
+                &sin,
+                &strided_positions,
+                HEADS,
+                HEAD_DIM,
+                ROPE_DIM,
+                inverse,
+            );
+            assert_eq!(indexed, strided);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn indexed_rope_cuda_matches_cpu_and_supports_inverse() {
+        const ROWS: usize = 3;
+        const HEADS: usize = 2;
+        const HEAD_DIM: usize = 6;
+        const ROPE_DIM: usize = 4;
+        let context = CudaArtifactOperatorContext::new().unwrap();
+        let input: Vec<f32> = (0..ROWS * HEADS * HEAD_DIM)
+            .map(|index| index as f32 * 0.125 - 1.5)
+            .collect();
+        let positions_host = [4, 0, 3];
+        let (cos, sin) = rope_test_tables(5, ROPE_DIM);
+        let mut expected = input.clone();
+        apply_indexed_rope_cpu(
+            &mut expected,
+            &cos,
+            &sin,
+            &positions_host,
+            HEADS,
+            HEAD_DIM,
+            ROPE_DIM,
+            false,
+        );
+        let mut actual = context.upload_f32_buffer(&input).unwrap();
+        let cos = context.upload_f32_buffer(&cos).unwrap();
+        let sin = context.upload_f32_buffer(&sin).unwrap();
+        let positions = context.upload_i32_buffer(&positions_host).unwrap();
+
+        context
+            .rope_tail_rows_indexed_from_device(
+                &mut actual,
+                &cos,
+                &sin,
+                &positions,
+                ROWS as u32,
+                HEADS as u32,
+                HEAD_DIM as u32,
+                ROPE_DIM as u32,
+                false,
+            )
+            .unwrap();
+        let forward = context.download_f32_buffer(&actual).unwrap();
+        for (index, (actual, expected)) in forward.iter().zip(&expected).enumerate() {
+            assert!(
+                (actual - expected).abs() <= 1e-6,
+                "forward mismatch at {index}: actual={actual} expected={expected}"
+            );
+        }
+
+        context
+            .rope_tail_rows_indexed_from_device(
+                &mut actual,
+                &cos,
+                &sin,
+                &positions,
+                ROWS as u32,
+                HEADS as u32,
+                HEAD_DIM as u32,
+                ROPE_DIM as u32,
+                true,
+            )
+            .unwrap();
+        let round_trip = context.download_f32_buffer(&actual).unwrap();
+        for (index, (actual, expected)) in round_trip.iter().zip(&input).enumerate() {
+            assert!(
+                (actual - expected).abs() <= 2e-6,
+                "inverse mismatch at {index}: actual={actual} expected={expected}"
+            );
+        }
+    }
+
+    #[test]
     fn cuda_probe_compiles() {
         // This test just verifies the function signature compiles.
         // cuda_probe requires a real GPU to succeed, so we only
@@ -6821,7 +7477,7 @@ mod tests {
         let x = vec![1.0f32, 0.5, -1.0, 3.0];
         let weight: Vec<u8> = vec![0x38, 0x40, 0xb8, 0x00, 0x38, 0x38, 0x00, 0x00]; // 1.0,2.0,-1.0,0.0,1.0,1.0,0,0
         let scales: Vec<u8> = vec![127, 128, 126, 127]; // 1.0, 2.0, 0.5, 1.0
-                                                        // expected: row0 = 1.0*1.0*1.0 + 0.5*2.0*1.0 + (-1.0)*(-1.0)*0.5 + 3.0*0.0*0.5 = 1.0+1.0+0.5+0 = 2.5
+        // expected: row0 = 1.0*1.0*1.0 + 0.5*2.0*1.0 + (-1.0)*(-1.0)*0.5 + 3.0*0.0*0.5 = 1.0+1.0+0.5+0 = 2.5
         match cuda_gemv_fp8_e4m3fn_e8m0_2d(&x, &weight, &scales, 2, 4, 1, 2) {
             Ok(actual) => {
                 assert!(actual.len() >= 1);

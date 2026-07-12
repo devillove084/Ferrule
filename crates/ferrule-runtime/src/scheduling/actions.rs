@@ -24,6 +24,12 @@ pub enum LogitsSelection {
 /// graph-backed runner.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SchedulerAction {
+    /// One native execution batch. Prefill rows are packed first, followed by
+    /// decode rows; either side may be empty, but not both.
+    Execute {
+        prefills: Vec<PrefillChunkAction>,
+        decodes: Vec<DecodeAction>,
+    },
     PrefillChunk(PrefillChunkAction),
     DecodeBatch(Vec<DecodeAction>),
     Finish {

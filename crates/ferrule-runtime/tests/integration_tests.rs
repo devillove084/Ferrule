@@ -292,6 +292,7 @@ fn resident_scheduler_with_multi_session_kv_admits_and_finishes() {
         prefill_chunk_size: 8,
         max_active_sequences: 1,
         max_decode_batch: 1,
+        ..Default::default()
     });
     let mut kv = MultiSessionKvCache::new(2, 4, 8, 4);
     scheduler.submit(scheduler_request(1, Some(SessionId(100)), vec![1, 2]));
@@ -348,6 +349,7 @@ fn resident_scheduler_preserves_fifo_across_admission_and_finish() {
         prefill_chunk_size: 8,
         max_active_sequences: 1,
         max_decode_batch: 1,
+        ..Default::default()
     });
     let mut kv = MultiSessionKvCache::new(1, 1, 4, 1);
     scheduler.submit(scheduler_request(10, None, vec![10]));

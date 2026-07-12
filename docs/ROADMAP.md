@@ -1,18 +1,17 @@
 # Ferrule Execution Roadmap
 
-_Last updated: 2026-07-11_
+_Last updated: 2026-07-13_
 
 This is the canonical forward-looking roadmap for Ferrule. Historical bring-up
-notes, old profiles, and the previous long-form roadmap are preserved in
-[`docs/history/ROADMAP-2026-07-11.md`](history/ROADMAP-2026-07-11.md).
+notes and old profiles belong in version history rather than the active
+architecture documentation.
 
 Related canonical documents:
 
 - [`execution-engine-architecture.md`](execution-engine-architecture.md) — implemented
   E1 execution ABI plus target prepared plans, sequence state, arenas, device
   pipeline, paged KV, residency, and graph design.
-- [`status/2026-07-11-gb10-dsv4.md`](status/2026-07-11-gb10-dsv4.md) — current
-  verified correctness and GB10 performance baseline.
+
 - [`ferrule_arch.md`](ferrule_arch.md) — repository-wide architecture and model
   bring-up boundaries.
 - [`runtime-graph-architecture.md`](runtime-graph-architecture.md) —
@@ -120,13 +119,13 @@ D2H, and `368k` device allocations. Those are ownership/lifetime problems to rem
 through the planned prepared pipeline and persistent arenas, not reasons to weaken
 correctness or add more one-off scalar kernels.
 
-These numbers are a correctness/performance baseline, not a serving claim. The
-current runtime-driver path is still single-sequence, runtime paged KV is metadata
-only, cross-layer prefill returns through host memory, compressor/router/residency
-retain host control points, and DSV4 decode is eager-only. Stable CUDA graph buckets
-are an E7 deliverable. The earlier five-token `17.47–17.75s` prefill and `0.80–0.824 tok/s` decode snapshot
-predates this kernel cut and must be rerun before being presented as current
-headline throughput.
+These numbers remain a historical single-sequence performance baseline, not the
+current serving architecture. E4 now owns native packed decode, ragged prefill, and
+mixed batches; E5 owns authoritative physical paged multi-plane CUDA KV with COW,
+preemption/restore, and exact-prefix sharing. Compressor/router/residency still retain
+host control points, and stable CUDA graph buckets remain an E7 deliverable. The
+earlier five-token `17.47–17.75s` prefill and `0.80–0.824 tok/s` decode snapshot
+predates this kernel cut and must not be presented as current headline throughput.
 
 ---
 
@@ -137,7 +136,7 @@ headline throughput.
 | `EnginePlan` | Existing model support/policy report. It says what a model requires; it is not an executable plan. |
 | `GraphProgram` | Device-independent semantic graph IR plus external bindings. It is not a CUDA prepared plan. |
 | `PreparedModelPlan` | Immutable model-global executable description: validated layer recipes, typed prepared handles, expert catalog, KV schema, and capabilities. |
-| `PreparedStepBinding` | Short-lived dynamic binding for positions, logical lengths, KV slots/pages, route counts, expert generations, and logits intent. |
+
 | `SequenceExecutionState` | Backend/model state for one logical sequence: committed cursor, attention/compressor/indexer state, physical KV binding, and speculation state. |
 | `PersistentArena` | Reusable scratch and stable metadata buffers keyed by phase/shape bucket. It is not authoritative sequence state. |
 | `ExecutionBatch` | Packed/ragged execution command containing explicit sequence spans, positions, state slots, KV bindings, forward phases, and logits requests. |
@@ -162,8 +161,9 @@ flowchart TD
     E0[E0 Complete: correctness and observability] --> E1[E1 Complete: Execution ABI v2]
     E1 --> E2[E2 Complete: PreparedModelPlan and PersistentArena]
     E2 --> E3[E3 Complete: Per-sequence execution state]
-    E3 --> E4[E4 Native multi-session and ragged execution]
-    E4 --> E5[E5 Physical paged multi-plane KV]
+    E3[E3 Complete: Per-sequence execution state]
+    E3 --> E4[E4 Complete: Native multi-session and ragged execution]
+    E4 --> E5[E5 Complete: Physical paged multi-plane KV]
     E4 --> E6[E6 Device router and runtime residency]
     E5 --> E7[E7 Stable CUDA graph buckets]
     E6 --> E7
@@ -312,10 +312,9 @@ The completed E0 architecture-migration gate and its frozen oracle/counter basel
 - [x] Runtime-private `ScheduledBatch` retains request/session/KV correlation while
   public output contains only `input_row`; prefill lowering moves the action token
   `Vec` into the batch with `mem::take` rather than cloning model data.
-- [x] `TopKCompatibilityExecutor` remains an explicit one-sequence compatibility
-  executor over `TopKModelRunner`. Its truthful capabilities reject
-  mixed/multi-sequence/paged-KV/full-logits requests, and the DSV4 CUDA path
-  validates its real `max_top_k = 40` before mutation.
+- [x] E1 introduced a temporary one-sequence `TopKCompatibilityExecutor` over
+  `TopKModelRunner`; E4 deleted it after `ResidentTopKDriver` migrated to the
+  generic native multi-session executor. DSV4 still validates `max_top_k = 40`.
 - [x] The old graph-specific execution ABI is deleted. Reference `GraphProgram`
   execution consumes the shared batch vocabulary through an explicit
   `ReferenceGraphSequenceState` slice, while its low-level `TensorData` output
@@ -327,8 +326,7 @@ The completed E0 architecture-migration gate and its frozen oracle/counter basel
   `graph::external_bindings`.
 - [x] Model mutation, output-contract, runtime-commit, token-callback, and output
   application failures enter fail/poison handling. A failed KV free keeps ownership
-  in the failed ledger, and a poisoned compatibility executor cannot yield its
-  runner.
+  in the failed ledger, and a poisoned executor cannot yield its runner.
 - [x] The migration changed neither DSV4 mathematics nor CUDA kernels.
 
 ### Correctness exit gate
@@ -336,8 +334,8 @@ The completed E0 architecture-migration gate and its frozen oracle/counter basel
 - [x] Validation covers ragged spans, mixed mode, duplicate state slots, phase and
   capability limits, position continuity, block ranges, write slots, and strict
   top-k/full output contracts.
-- [x] The single-sequence compatibility executor preserves resident-driver and
-  eager behavior, including DSV4's real CUDA top-k limit.
+- [x] The E1 single-sequence migration path preserved resident-driver and eager
+  behavior, including DSV4's real CUDA top-k limit; E4 later removed that adapter.
 - [x] No duplicate public `ExecutionBatch` definition remains after migration;
   reference graph state is passed explicitly.
 - [x] Failure paths do not silently return a mutated compatibility runner as clean.
@@ -471,9 +469,10 @@ E2 prepared model and arena ownership.
 - [x] Add generation-bound `begin_step` / `commit_step` / poison semantics; decode
   and batched prefill publish the committed cursor only after successful hidden/KV
   work.
-- [x] Add reset reuse/release modes, host-semantic lifecycle guards, and
-  operator-aware D2D checkpoint/restore/fork, with stale-binding invalidation and
-  poisoned-state rejection.
+- [x] Add reset reuse/release modes, host-semantic lifecycle guards, stale-binding
+  invalidation, and poisoned-state rejection. E3's temporary model-local D2D
+  checkpoint/fork mechanism was deleted after E5 made page rollback,
+  preempt/restore, and exact-prefix COW authoritative.
 - [x] Add focused cursor isolation, interleaving, stale-binding, and failed-step
   tests.
 - [x] Move physical CUDA window/combined/indexer KV from backend-global layer maps
@@ -544,9 +543,10 @@ E2 prepared model and arena ownership.
 - `cargo test -p ferrule-runtime --lib --tests`: 211 unit tests, 15 local
   integration tests, 12 runtime integration tests, and 8 storage tests pass.
 - CUDA failpoint fire-once/disarm passes through `cargo oxide`.
-- Real DSV4 CUDA gates pass for transition-failure poison isolation, serial
-  two-sequence bit-exact isolation and release/shutdown, D2D checkpoint/restore,
-  eager decode correctness, and L0 prefill parity.
+- Real DSV4 CUDA gates established transition-failure poison isolation, serial
+  two-sequence bit-exact isolation, release/shutdown, eager decode correctness, and
+  L0 prefill parity. E4/E5 supersede the old D2D checkpoint gate with packed
+  multi-session and page-managed rollback/COW gates.
 
 ### Not in E3
 
@@ -555,13 +555,73 @@ E2 prepared model and arena ownership.
 
 ---
 
-## E4 — Native multi-session and ragged execution
+## E4 - Native multi-session and ragged execution
 
-**Status: planned.**
+**Status: complete.**
 
 ### Depends on
 
 E3 explicit sequence state.
+
+### Implementation checkpoint
+
+- [x] Add `MultiSessionRunner` trait in `ferrule-model/src/runner.rs` extending
+  `TopKModelRunner` with `with_sequence_state`, `fork_sequence_state`,
+  `reset_sequence_state`, `release_sequence_state`, and
+  `multi_session_capabilities`. DSV4 implements this trait; the runtime executor
+  is fully generic.
+- [x] Add `NativeMultiSessionExecutor<R: MultiSessionRunner>` in
+  `ferrule-runtime/src/engine/native_executor.rs`. It accepts multi-sequence
+  decode, ragged prefill, and mixed prefill/decode batches through the neutral
+  `ExecutionBatch` ABI. Each sequence is routed through `with_sequence_state`,
+  and output rows are correlated by `input_row`.
+- [x] Rewrite `ResidentTopKDriver` to use `NativeMultiSessionExecutor` instead
+  of `TopKCompatibilityExecutor`. The driver now requires `R: MultiSessionRunner`,
+  manages per-session `R::SequenceState` objects (forked on admission, released
+  on finish/cancel/fail), and routes execution through the native executor.
+- [x] Implement decode-priority token-budget scheduling with round-robin prefill
+  fairness. `SchedulerAction::Execute` packs multiple ragged prefills plus decode
+  rows up to `max_batch_tokens`, and lowers true `Prefill`/`Decode`/`Mixed` batches.
+- [x] DSV4 `DeepSeekV4Runner` implements `MultiSessionRunner` with truthful
+  `max_sequences = usize::MAX`, `supports_mixed = true`, and
+  `logits_row_policy = LastPerSequence`.
+- [x] Update CLI (`bench_interactive`) and local DSV4 test to use the new
+  driver API (`executor().runner()` instead of `compatibility_executor()`).
+- [x] Delete the production single-token/append-prefill decode fallback. One-token
+  and appended segments now use the same batched prefill pipeline; the explicit
+  token-loop layer trace remains only as a differential oracle.
+- [x] Add native batch-vs-serial exact-output/state tests, sequence reset isolation,
+  mixed row-correlation tests, and scheduler token-budget tests. The real 1-layer
+  DSV4 CUDA ragged batch-vs-serial/reset-isolation gate passes locally.
+- [x] Add a model-neutral whole-batch override and three-phase backend transaction
+  hooks to `MultiSessionRunner`. The generic serial path remains the correctness
+  fallback; a packed backend can consume the complete `ExecutionBatch` without
+  leaking model-specific types into runtime.
+- [x] DSV4 now overrides the whole-batch hook for CUDA paged decode batches of two
+  or more sequences. Execution is layer-major: HC pre/post, RMS normalization,
+  deterministic segmented MoE, final HC/norm, and chunked output-head top-k operate
+  on packed rows. Output-head rows preserve single-row tie ordering and reuse exact
+  `(batch_rows, top_k)` workspaces across changing batch sizes.
+- [x] Real local DSV4 CUDA batch-2 and batch-4 resident waves are bit-exact with a
+  serial single-sequence baseline for both token IDs and logit bit patterns. Native
+  packed counters prove the whole-batch hook was used after page reuse.
+- [x] Packed decode attention is now a real rows pipeline for both compressed and
+  non-compressed layers: Qa/Qb/KV and index-query projections, indexed RoPE,
+  window/main/indexer paged scatters, paged indexer top-k, and single/dual-plane
+  sparse attention execute over packed rows. Non-compressed layers no longer switch
+  paged bindings per row; only fixed-size recurrent compressor transitions remain
+  sequence-owned.
+- [x] The local batch-2/4 gate now proves bit-exact token/logit output, fewer
+  launches and H2D metadata copies per token than paged serial dispatch, zero
+  warm batch-4 device allocations, and higher aggregate batch-4 throughput.
+- [x] The DSV4 whole-batch override now uses one mode-neutral packed pipeline for
+  decode, ragged prefill, and mixed prefill/decode. Row-to-sequence selectors and
+  per-row causal visible lengths address shared sequence page tables without
+  duplicating mutable state; only recurrent compressor transitions remain ordered
+  sequence-major. A real local mixed/ragged gate is bit-exact with serial execution.
+- [x] Current core validation: 239 runtime unit tests and 176 model unit tests pass;
+  the required CUDA kernel gate and real local packed decode, ragged/mixed, and
+  exact-prefix/COW gates pass.
 
 ### Deliverables
 
@@ -573,8 +633,8 @@ E3 explicit sequence state.
 - Batch HC/attention/MoE over real sequence rows.
 - Preserve deterministic route-rank reduction for each sequence/token.
 - Add token-budget, fairness, and decode-latency-aware scheduling.
-- Use private contiguous KV first if necessary to isolate batch correctness from
-  physical paging.
+- Keep physical paging behind the model-neutral batch ABI; E5 supplies the
+  authoritative implementation without changing E4 scheduler semantics.
 
 ### Correctness exit gate
 
@@ -591,17 +651,84 @@ E3 explicit sequence state.
 
 ### Not in E4
 
-- Do not claim paged attention, prefix reuse, or preemption yet.
+- Physical page allocation, paged attention, prefix reuse, and preemption are E5
+  responsibilities rather than E4 scheduler responsibilities.
 
 ---
 
-## E5 — Physical paged multi-plane KV
+## E5 - Physical paged multi-plane KV
 
-**Status: planned.**
+**Status: complete.**
 
 ### Depends on
 
 E3 sequence ownership and E4 batch bindings.
+
+### Implementation checkpoint
+
+- [x] Add model-agnostic `KvLayoutSchema` trait, `KvPlaneDescriptor`,
+  `KvPageId`, and `KvReservation` types in `ferrule-common/src/execution.rs`.
+  Models implement `KvLayoutSchema` to describe their KV planes (window,
+  compressed, indexer, metadata), page size, and max sequence length.
+- [x] Add `KvPageManager` in `ferrule-runtime/src/cache/page_manager.rs` as the
+  logical page allocation, free-list, refcount, and block-table owner. It implements
+  reserve -> commit/rollback, OOM-safe partial reservation cleanup, page reuse,
+  stale-generation rejection, shared-prefix fork, partial-tail COW, preempt/restore,
+  compact block/write bindings, and utilization/fragmentation stats.
+- [x] Implement DSV4 `KvLayoutSchema` planes for window latent KV, compressed/main
+  KV, indexer KV, compressor metadata, and indexer metadata.
+- [x] Connect optional `KvPageManager` transactions to `ResidentTopKDriver`:
+  admission allocates, execute reserves, failure rolls back, success commits, and
+  finish/fail releases. A truthful `Paged` backend receives compact block IDs and
+  write slots through `ExecutionBatch`; DSV4 reports `Paged` only after its bounded
+  physical pool has been configured.
+- [x] Add page boundary, >4096, growth, partial-OOM rollback, COW rollback,
+  preempt/restore, refcount, reuse, and DSV4 window-ring-wrap tests. Exact-prefix
+  fork additionally validates the expected committed position and all refcount
+  increments before publishing, including failure-atomic stale-position and
+  refcount-overflow tests.
+- [x] Add model-neutral `CudaKvPagePool` with one preallocated contiguous buffer per
+  token-scaled plane, fixed physical slots, compact page-table lowering, range-only
+  COW, failure-atomic reserve/commit/rollback, page reuse, host preempt/restore,
+  utilization, and external-fragmentation counters. Pool growth never copies history.
+- [x] Extend the generic runner/executor/driver lifecycle with backend physical
+  `prepare -> execute -> commit/rollback` hooks. Runtime `KvReservation` objects are
+  passed through unchanged, so CUDA does not infer or duplicate COW/refcount policy;
+  runtime also forwards page IDs whose global refcount reaches zero for physical reuse.
+  Packed logical and physical commits validate the complete batch before publishing,
+  preventing partial multi-sequence commit or stranded provisional slots.
+- [x] Add model-neutral single- and dual-plane paged sparse-attention kernels,
+  compact combined-ring index conversion, and paged-plane address validation. Add
+  DSV4 paged indexer top-k variants without changing their query/RoPE/ranking math.
+- [x] Wire provisional DSV4 window, main-compressed, and indexer data-plane writes to
+  physical slots. Paged decode reads window/main data directly through paged attention
+  and reads indexer data through paged top-k kernels; it does not gather KV history.
+- [x] Real `cargo oxide` CUDA tests pass for COW/rollback isolation, page-boundary and
+  non-zero-layer paged attention parity, dual-plane ring conversion, and paged indexer
+  parity. The full required CUDA kernel gate also passes.
+- [x] Move compressor/indexer recurrent sequence metadata and append state to
+  device-resident sequence state. Recurrent prefill seed is one kernel and recurrent
+  decode append/boundary handling no longer performs D2H/H2D metadata round trips.
+- [x] Connect model-neutral physical preempt/restore hooks through runner, executor,
+  scheduler, and `ResidentTopKDriver`. Only exclusively referenced pages are evicted;
+  backend-owned host snapshots are restored exactly or released when runtime refcounts
+  reach zero. The driver preempt/restore continuation test passes.
+- [x] Fresh serving admission constructs position-zero model state directly instead
+  of forking the runner default session. Diagnostics use explicit page-managed
+  sequences; serving prefix forks use the exact prepared/publish transaction.
+- [x] Connect exact-prefix fork as one prepared driver transaction across scheduler
+  state, model recurrent state, and the runtime block table. DSV4 copies only
+  O(layers) continuation metadata, shares physical prefix pages, rebuilds bindings
+  on the next batch, and uses partial-tail COW on suffix append. A real local CUDA
+  fork/COW gate is bit-exact with full serial execution and verifies page reuse.
+- [x] Delete fallback contiguous DSV4 `kv_cache`, `combined_kv_cache`, and
+  `indexer_kv_cache` storage and all growth/copy paths. CUDA prefill, decode, mixed
+  execution, inspect/generate/chat, parity, and long-context diagnostics now require
+  resident or diagnostic page-managed bindings. CPU/reference host caches remain
+  correctness infrastructure only.
+- [x] Delete obsolete model checkpoint/restore and recurrent D2D clone APIs. Runtime
+  reserve/rollback, physical preempt/restore, and exact-prefix COW are the only
+  serving recovery/sharing semantics.
 
 ### Deliverables
 

@@ -9,13 +9,13 @@ pub mod common;
 pub mod deepseek_v4;
 pub mod qwen3;
 
+use crate::TransformerSpec;
 use crate::semantic::{
     AttentionTensorRef, DenseLayerTensorRef, HyperConnectionTensorRef, RoutedExpertTensorRef,
     RouterTensorRef, SharedExpertTensorRef,
 };
 use crate::spec::ModelFamily;
 use crate::tensor_policy::{TensorClass, TensorClassCount};
-use crate::TransformerSpec;
 
 pub fn classify_hf_tensor(family: &ModelFamily, name: &str) -> TensorClass {
     match family {

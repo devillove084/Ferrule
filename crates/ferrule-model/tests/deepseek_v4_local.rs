@@ -50,12 +50,16 @@ fn local_deepseek_v4_flash_dspark_descriptor_smoke_if_present() {
     assert!(inventory.role_bytes(&TensorRole::SpeculativeProjection) > 0);
     let routed_experts = inventory.routed_expert_tensors();
     assert_eq!(routed_experts.len(), 66_048);
-    assert!(routed_experts
-        .iter()
-        .all(|tensor| tensor.descriptor.layer < 43 && tensor.descriptor.expert < 256));
-    assert!(routed_experts
-        .iter()
-        .all(|tensor| tensor.file_offset > tensor.data_offset));
+    assert!(
+        routed_experts
+            .iter()
+            .all(|tensor| tensor.descriptor.layer < 43 && tensor.descriptor.expert < 256)
+    );
+    assert!(
+        routed_experts
+            .iter()
+            .all(|tensor| tensor.file_offset > tensor.data_offset)
+    );
 
     let descriptor = ModelDescriptor::load(&model_dir)
         .expect("local DeepSeek V4 descriptor should load without tensor payloads");
@@ -76,22 +80,28 @@ fn local_deepseek_v4_flash_dspark_descriptor_smoke_if_present() {
     assert_eq!(descriptor.spec.moe.router, RouterKind::HashAssistedTopK);
     assert!(descriptor.spec.moe.has_shared_experts);
     assert_eq!(descriptor.spec.tensor_count, Some(72_317));
-    assert!(descriptor
-        .spec
-        .notes
-        .iter()
-        .any(|note| note.contains("DSpark attachment metadata")));
+    assert!(
+        descriptor
+            .spec
+            .notes
+            .iter()
+            .any(|note| note.contains("DSpark attachment metadata"))
+    );
 
-    assert!(descriptor
-        .spec
-        .notes
-        .iter()
-        .any(|note| note.contains("HF safetensors header inventory")));
-    assert!(descriptor
-        .spec
-        .quantization
-        .iter()
-        .any(|item| item.format == "F8_E4M3"));
+    assert!(
+        descriptor
+            .spec
+            .notes
+            .iter()
+            .any(|note| note.contains("HF safetensors header inventory"))
+    );
+    assert!(
+        descriptor
+            .spec
+            .quantization
+            .iter()
+            .any(|item| item.format == "F8_E4M3")
+    );
 
     assert_eq!(tensor_class_count(&descriptor, &TensorClass::Unknown), 0);
     assert_eq!(

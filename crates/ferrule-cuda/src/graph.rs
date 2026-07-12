@@ -13,12 +13,12 @@
 //!
 //! Feature-gated behind `FERRULE_CUDA_GRAPH=1`.
 
+use cuda_core::DriverError;
 use cuda_core::graph::{
     CachedGraphExec, CaptureMode, CaptureModeGuard, CudaGraph, CudaGraphExec, CudaStreamCaptureExt,
     GraphStrategy,
 };
 use cuda_core::stream::CudaStream;
-use cuda_core::DriverError;
 use ferrule_common::{Error, Result};
 use std::sync::Arc;
 
@@ -240,31 +240,43 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    fn set_graph_env(value: Option<&str>) {
+        // SAFETY: every test mutation of FERRULE_CUDA_GRAPH in this process is
+        // serialized by ENV_LOCK, and callers hold that lock for the complete
+        // mutation/read/restore interval.
+        unsafe {
+            match value {
+                Some(value) => std::env::set_var("FERRULE_CUDA_GRAPH", value),
+                None => std::env::remove_var("FERRULE_CUDA_GRAPH"),
+            }
+        }
+    }
+
     // ── Feature flag tests ─────────────────────────────────────────
 
     #[test]
     fn cuda_graph_enabled_defaults_false() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("FERRULE_CUDA_GRAPH");
+        set_graph_env(None);
         assert!(!cuda_graph_enabled());
     }
 
     #[test]
     fn cuda_graph_enabled_when_env_set() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("FERRULE_CUDA_GRAPH", "1");
+        set_graph_env(Some("1"));
         assert!(cuda_graph_enabled());
-        std::env::remove_var("FERRULE_CUDA_GRAPH");
+        set_graph_env(None);
     }
 
     #[test]
     fn cuda_graph_disabled_by_false_env_values() {
         let _guard = ENV_LOCK.lock().unwrap();
         for value in ["", "0", "false", "off", " FALSE "] {
-            std::env::set_var("FERRULE_CUDA_GRAPH", value);
+            set_graph_env(Some(value));
             assert!(!cuda_graph_enabled(), "value {value:?} must disable graphs");
         }
-        std::env::remove_var("FERRULE_CUDA_GRAPH");
+        set_graph_env(None);
     }
 
     // ── Graph capture tests (require CUDA device) ──────────────────

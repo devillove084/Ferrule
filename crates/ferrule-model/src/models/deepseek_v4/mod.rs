@@ -47,11 +47,11 @@ pub use operators::{
     DeepSeekV4OperatorRuntimeCounters,
 };
 pub use prepared::{
-    prepare, DeepSeekV4ExecutionPolicy, DeepSeekV4ExpertCatalog, DeepSeekV4KvLayoutSchema,
-    DeepSeekV4PreparedModelPlan, DeepSeekV4PreparedResources,
+    DeepSeekV4ExecutionPolicy, DeepSeekV4KvLayoutSchema, DeepSeekV4PreparedModelPlan,
+    DeepSeekV4PreparedResources, prepare,
 };
 pub use runner::{
     DeepSeekV4LayerRuntimeStats, DeepSeekV4OutputProfileStats, DeepSeekV4PrefillRuntimeStats,
     DeepSeekV4PrepareOptions, DeepSeekV4Runner,
 };
-pub use sequence::{DeepSeekV4SequenceCheckpoint, DeepSeekV4SequenceExecutionState};
+pub use sequence::DeepSeekV4SequenceExecutionState;

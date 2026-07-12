@@ -575,9 +575,11 @@ mod tests {
                 .unwrap();
         }
         // Next token needs a new block → OOM
-        assert!(cache
-            .session_append(&mut table, 0, &[1.0; 2], &[2.0; 2])
-            .is_err());
+        assert!(
+            cache
+                .session_append(&mut table, 0, &[1.0; 2], &[2.0; 2])
+                .is_err()
+        );
     }
 
     #[test]

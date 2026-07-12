@@ -4,12 +4,17 @@ use super::attention::*;
 use super::config::*;
 use super::helpers::*;
 use super::layer::*;
+use super::runner::{
+    PackedBatchMetadata, begin_packed_sequence_steps, commit_packed_sequence_steps,
+    poison_packed_sequence_steps,
+};
 use super::sequence::DeepSeekV4SequenceExecutionState;
 
 use std::path::{Path, PathBuf};
 
+use crate::TensorRole;
 use crate::artifact::binding::{MlaAttentionArtifactPayload, RouterArtifactPayload};
-use crate::artifact::linear::{artifact_linear_cache_key, ArtifactLinearPayload};
+use crate::artifact::linear::{ArtifactLinearPayload, artifact_linear_cache_key};
 use crate::artifact::tensor::{ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice};
 use crate::families::deepseek_v4;
 use crate::ffn::SwiGluFfnPayload;
@@ -21,7 +26,9 @@ use crate::moe::streaming::{
     ExpertStreamingReader, ExpertTensorComponent, ExpertTensorKey, ExpertTensorPayload,
     ExpertTensorSlice,
 };
-use crate::TensorRole;
+use ferrule_common::execution::{
+    ExecutionBatch, ExecutionSequence, ForwardMode, ForwardPhase, LogitsRequest, StateSlot,
+};
 
 #[test]
 fn attention_shape_contract_accepts_official_dimensions() {
@@ -260,6 +267,143 @@ fn dsv4_arena_shapes_deduplicate_43_layers_without_merging_compressor_variants()
     assert_ne!(layer_to_variant[19], layer_to_variant[20]);
     assert_ne!(layer_to_variant[29], layer_to_variant[30]);
     assert_ne!(layer_to_variant[41], layer_to_variant[42]);
+}
+
+#[test]
+fn packed_metadata_lowers_ragged_prefill_with_non_dense_state_slots() {
+    let batch = packed_metadata_batch(
+        ForwardMode::Prefill,
+        vec![
+            ExecutionSequence::new(StateSlot::new(3), ForwardPhase::Prefill, 0..3, 4, 7, 0..0),
+            ExecutionSequence::new(StateSlot::new(1), ForwardPhase::Prefill, 3..5, 0, 2, 0..0),
+        ],
+    );
+
+    let metadata = PackedBatchMetadata::lower(&batch, 4).unwrap();
+
+    assert_eq!(metadata.mode, ForwardMode::Prefill);
+    assert_eq!(metadata.max_query_tokens, 3);
+    assert_eq!(metadata.row_to_sequence, vec![0, 0, 0, 1, 1]);
+    assert_eq!(metadata.sequence_major_rows, vec![0, 1, 2, 3, 4]);
+    assert_eq!(metadata.sequences[0].state_index, 3);
+    assert_eq!(metadata.sequences[0].query, 0..3);
+    assert_eq!(metadata.sequences[1].state_index, 1);
+    assert_eq!(metadata.sequences[1].query, 3..5);
+    #[cfg(feature = "cuda")]
+    assert!(!metadata.supports_native_cuda());
+}
+
+#[test]
+fn packed_metadata_lowers_mixed_rows_without_changing_sequence_order() {
+    let batch = packed_metadata_batch(
+        ForwardMode::Mixed,
+        vec![
+            ExecutionSequence::new(StateSlot::new(2), ForwardPhase::Prefill, 0..2, 5, 7, 0..0),
+            ExecutionSequence::new(StateSlot::new(0), ForwardPhase::Decode, 2..3, 11, 12, 0..0),
+        ],
+    );
+
+    let metadata = PackedBatchMetadata::lower(&batch, 3).unwrap();
+
+    assert_eq!(metadata.mode, ForwardMode::Mixed);
+    assert_eq!(metadata.row_to_sequence, vec![0, 0, 1]);
+    assert_eq!(metadata.max_query_tokens, 2);
+    assert_eq!(metadata.sequences[1].query, 2..3);
+    #[cfg(feature = "cuda")]
+    assert!(metadata.supports_native_cuda());
+}
+
+#[test]
+fn ragged_prefill_commits_each_sequence_once_by_query_length() {
+    let batch = packed_metadata_batch(
+        ForwardMode::Prefill,
+        vec![
+            ExecutionSequence::new(StateSlot::new(2), ForwardPhase::Prefill, 0..3, 0, 3, 0..0),
+            ExecutionSequence::new(StateSlot::new(0), ForwardPhase::Prefill, 3..5, 0, 2, 0..0),
+        ],
+    );
+    let metadata = PackedBatchMetadata::lower(&batch, 3).unwrap();
+    let mut states = (0..3)
+        .map(|_| DeepSeekV4SequenceExecutionState::new(Vec::new(), 8))
+        .collect::<Vec<_>>();
+
+    let bindings = begin_packed_sequence_steps(&states, &metadata).unwrap();
+    assert_eq!(bindings.len(), 2);
+    commit_packed_sequence_steps(&mut states, &metadata, bindings).unwrap();
+
+    assert_eq!(states[2].position(), 3);
+    assert_eq!(states[0].position(), 2);
+    assert_eq!(states[1].position(), 0);
+    assert!(
+        !states
+            .iter()
+            .any(DeepSeekV4SequenceExecutionState::is_poisoned)
+    );
+}
+
+#[test]
+fn mixed_failure_poisons_each_sequence_once_without_committing_rows() {
+    let batch = packed_metadata_batch(
+        ForwardMode::Mixed,
+        vec![
+            ExecutionSequence::new(StateSlot::new(1), ForwardPhase::Prefill, 0..2, 0, 2, 0..0),
+            ExecutionSequence::new(StateSlot::new(0), ForwardPhase::Decode, 2..3, 0, 1, 0..0),
+        ],
+    );
+    let metadata = PackedBatchMetadata::lower(&batch, 2).unwrap();
+    let mut states = (0..2)
+        .map(|_| DeepSeekV4SequenceExecutionState::new(Vec::new(), 8))
+        .collect::<Vec<_>>();
+
+    let bindings = begin_packed_sequence_steps(&states, &metadata).unwrap();
+    poison_packed_sequence_steps(&mut states, &metadata, &bindings);
+
+    assert_eq!(states[0].position(), 0);
+    assert_eq!(states[1].position(), 0);
+    assert!(states[0].is_poisoned());
+    assert!(states[1].is_poisoned());
+}
+
+#[test]
+fn packed_metadata_rejects_query_gaps_and_reused_state_slots() {
+    let gap = packed_metadata_batch(
+        ForwardMode::Prefill,
+        vec![ExecutionSequence::new(
+            StateSlot::new(0),
+            ForwardPhase::Prefill,
+            1..2,
+            0,
+            1,
+            0..0,
+        )],
+    );
+    assert!(PackedBatchMetadata::lower(&gap, 1).is_err());
+
+    let reused = packed_metadata_batch(
+        ForwardMode::Decode,
+        vec![
+            ExecutionSequence::new(StateSlot::new(0), ForwardPhase::Decode, 0..1, 0, 1, 0..0),
+            ExecutionSequence::new(StateSlot::new(0), ForwardPhase::Decode, 1..2, 0, 1, 0..0),
+        ],
+    );
+    assert!(PackedBatchMetadata::lower(&reused, 1).is_err());
+}
+
+fn packed_metadata_batch(mode: ForwardMode, sequences: Vec<ExecutionSequence>) -> ExecutionBatch {
+    let rows = sequences
+        .iter()
+        .map(|sequence| sequence.query.end as usize)
+        .max()
+        .unwrap_or(0);
+    ExecutionBatch::new(
+        mode,
+        vec![0; rows],
+        vec![0; rows],
+        vec![None; rows],
+        vec![LogitsRequest::None; rows],
+        sequences,
+        Vec::new(),
+    )
 }
 
 #[test]

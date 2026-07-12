@@ -1,21 +1,21 @@
 //! Resident request/session scheduler.
 //!
 //! This module ties together the runtime vocabulary that was previously adjacent
-//! but not connected: `GenerateRequest`, `SequenceState`, `SequenceKvCache`,
+//! but not connected: `GenerateRequest`, `SequenceState`, `SequenceSlotPool`,
 //! `SchedulerAction`, neutral execution lowering, and runtime output correlation.
 //!
 //! It is intentionally synchronous and single-process. It does not execute a
 //! model and does not know concrete model families; it only decides which
-//! resident sequence should prefill/decode next and owns KV allocation lifecycle.
+//! resident sequence should prefill/decode next and owns slot allocation lifecycle.
 
 use std::collections::{BTreeMap, VecDeque};
 
 use ferrule_common::execution::{LogitsOutput, TokenLogit};
 use ferrule_common::{Error, Result};
 
-use crate::cache::SequenceKvCache;
+use crate::cache::{KvHandle, SequenceSlotPool};
 
-use super::actions::{plan_prefill_chunk, DecodeAction, PrefillChunkAction, SchedulerAction};
+use super::actions::{DecodeAction, PrefillChunkAction, SchedulerAction, plan_prefill_chunk};
 use super::session::{GenerateRequest, SequenceFinishReason, SequenceState, SessionId};
 
 #[derive(Debug, Clone)]
@@ -45,6 +45,13 @@ pub struct ResidentSchedulerConfig {
     pub prefill_chunk_size: usize,
     pub max_active_sequences: usize,
     pub max_decode_batch: usize,
+    /// Maximum total packed tokens in one execution batch. Zero means no limit.
+    /// This bounds the combined prefill + decode token count per batch.
+    pub max_batch_tokens: usize,
+    /// When true, the scheduler may combine prefill and decode sequences into
+    /// one mixed execution batch. When false, prefill and decode are dispatched
+    /// as separate batches.
+    pub allow_mixed_batches: bool,
 }
 
 impl Default for ResidentSchedulerConfig {
@@ -53,6 +60,8 @@ impl Default for ResidentSchedulerConfig {
             prefill_chunk_size: super::actions::DEFAULT_CHUNK_SIZE,
             max_active_sequences: 1,
             max_decode_batch: 1,
+            max_batch_tokens: super::actions::DEFAULT_CHUNK_SIZE,
+            allow_mixed_batches: true,
         }
     }
 }
@@ -63,7 +72,35 @@ impl ResidentSchedulerConfig {
             prefill_chunk_size: self.prefill_chunk_size.max(1),
             max_active_sequences: self.max_active_sequences.max(1),
             max_decode_batch: self.max_decode_batch.max(1),
+            max_batch_tokens: self.max_batch_tokens,
+            allow_mixed_batches: self.allow_mixed_batches,
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SuspendedSequenceSchedule {
+    sequence: SequenceState,
+    was_prefill_ready: bool,
+    was_decode_ready: bool,
+}
+
+/// Scheduler half of an exact-prefix fork, validated but not yet visible.
+#[derive(Debug)]
+pub(crate) struct PreparedSequenceFork {
+    source_session_id: SessionId,
+    target: SequenceState,
+}
+
+impl PreparedSequenceFork {
+    pub(crate) fn target_session_id(&self) -> SessionId {
+        self.target.session_id
+    }
+}
+
+impl SuspendedSequenceSchedule {
+    pub fn session_id(&self) -> SessionId {
+        self.sequence.session_id
     }
 }
 
@@ -115,9 +152,8 @@ impl ResidentScheduler {
     /// Submit a request turn whose prompt should append to an already-resident
     /// backend session at `position_start`.
     ///
-    /// This is the bridge needed by single-runner resident backends such as the
-    /// current DSV4 runner: the runner owns the physical session/KV state, while
-    /// the scheduler owns request-turn accounting and metadata KV lifecycle.
+    /// The runner owns the physical session/KV state, while the scheduler owns
+    /// request-turn accounting and model-neutral slot lifecycle.
     pub fn submit_at_position(&mut self, request: GenerateRequest, position_start: usize) {
         self.total_submitted = self.total_submitted.saturating_add(1);
         self.waiting
@@ -164,6 +200,107 @@ impl ResidentScheduler {
         self.active.get_mut(&session_id)
     }
 
+    /// Returns the session IDs of all active sequences in arbitrary order.
+    pub fn active_session_ids(&self) -> Vec<SessionId> {
+        self.active.keys().copied().collect()
+    }
+
+    /// Validate and build scheduler metadata for an exact-prefix fork without
+    /// publishing the target or changing the source candidate.
+    pub(crate) fn prepare_fork_session_exact(
+        &self,
+        source_session_id: SessionId,
+        target_session_id: SessionId,
+        request: &GenerateRequest,
+        expected_position: usize,
+        kv_handle: KvHandle,
+    ) -> Result<PreparedSequenceFork> {
+        if source_session_id == target_session_id {
+            return Err(Error::Execution(
+                "fork source and target sessions must differ".into(),
+            ));
+        }
+        if request.session_id != Some(target_session_id) {
+            return Err(Error::Execution(format!(
+                "fork target request must name target session {target_session_id:?}"
+            )));
+        }
+        if self.active.contains_key(&target_session_id)
+            || self
+                .waiting
+                .iter()
+                .any(|waiting| waiting.request.session_id == Some(target_session_id))
+        {
+            return Err(Error::Execution(format!(
+                "fork target session {target_session_id:?} already exists"
+            )));
+        }
+        if self.active.len() >= self.config.max_active_sequences {
+            return Err(Error::Execution(
+                "resident scheduler has no active-sequence capacity for fork target".into(),
+            ));
+        }
+        let source = self.active.get(&source_session_id).ok_or_else(|| {
+            Error::Execution(format!(
+                "fork source session {source_session_id:?} is not active"
+            ))
+        })?;
+        let mut target = source.fork_exact(target_session_id, request, expected_position)?;
+        target.bind_kv(kv_handle);
+        Ok(PreparedSequenceFork {
+            source_session_id,
+            target,
+        })
+    }
+
+    /// Publish a fully prepared fork. All fallible validation happens in prepare.
+    pub(crate) fn publish_fork_session_exact(&mut self, prepared: PreparedSequenceFork) {
+        if let Some(source) = self.active.get_mut(&prepared.source_session_id) {
+            source.next_decode_token = None;
+            source.next_decode_logit = None;
+        }
+        self.remove_from_queue(prepared.source_session_id, QueueKind::Decode);
+        let target_session_id = prepared.target.session_id;
+        if !prepared.target.prompt_prefill_done() {
+            self.prefill_queue.push_back(target_session_id);
+        }
+        let previous = self.active.insert(target_session_id, prepared.target);
+        debug_assert!(
+            previous.is_none(),
+            "prepared fork target must remain absent"
+        );
+    }
+
+    /// Remove a sequence from runnable queues without finishing or releasing it.
+    pub fn suspend_sequence(&mut self, session_id: SessionId) -> Result<SuspendedSequenceSchedule> {
+        let was_prefill_ready = self.prefill_queue.contains(&session_id);
+        let was_decode_ready = self.decode_ready.contains(&session_id);
+        let sequence = self.remove_active_sequence(session_id)?;
+        Ok(SuspendedSequenceSchedule {
+            sequence,
+            was_prefill_ready,
+            was_decode_ready,
+        })
+    }
+
+    /// Return a suspended sequence to the same runnable queue it occupied.
+    pub fn restore_suspended(&mut self, suspended: SuspendedSequenceSchedule) -> Result<()> {
+        let session_id = suspended.sequence.session_id;
+        if self.active.contains_key(&session_id) {
+            return Err(Error::Internal(format!(
+                "cannot restore already-active resident session {session_id:?}"
+            )));
+        }
+        if suspended.was_prefill_ready {
+            self.prefill_queue.push_back(session_id);
+        }
+        if suspended.was_decode_ready {
+            self.decode_ready.push_back(session_id);
+        }
+        self.active.insert(session_id, suspended.sequence);
+        Ok(())
+    }
+
     pub fn drain_finished(&mut self) -> Vec<SequenceState> {
         std::mem::take(&mut self.finished)
     }
@@ -183,9 +320,9 @@ impl ResidentScheduler {
             && self.decode_ready.is_empty()
     }
 
-    pub fn admit_waiting<C>(&mut self, kv_cache: &mut C) -> Result<usize>
+    pub fn admit_waiting<C>(&mut self, slot_pool: &mut C) -> Result<usize>
     where
-        C: SequenceKvCache,
+        C: SequenceSlotPool,
     {
         let mut admitted = 0;
         while self.active.len() < self.config.max_active_sequences {
@@ -201,7 +338,7 @@ impl ResidentScheduler {
                 )));
             }
 
-            let kv_handle = match kv_cache.alloc_sequence() {
+            let kv_handle = match slot_pool.alloc_slot() {
                 Ok(handle) => handle,
                 Err(_) => {
                     self.waiting.push_front(waiting);
@@ -223,12 +360,12 @@ impl ResidentScheduler {
         Ok(admitted)
     }
 
-    pub fn next_prefill_action<C>(&mut self, kv_cache: &mut C) -> Result<Option<SchedulerAction>>
+    pub fn next_prefill_action<C>(&mut self, slot_pool: &mut C) -> Result<Option<SchedulerAction>>
     where
-        C: SequenceKvCache,
+        C: SequenceSlotPool,
     {
         if self.prefill_queue.is_empty() {
-            self.admit_waiting(kv_cache)?;
+            self.admit_waiting(slot_pool)?;
         }
 
         while let Some(session_id) = self.prefill_queue.front().copied() {
@@ -250,14 +387,73 @@ impl ResidentScheduler {
     /// prefill chunks for token latency. Callers that need stricter prefill-first
     /// behavior can keep using `next_prefill_action` and `next_decode_action`
     /// directly.
-    pub fn next_action<C>(&mut self, kv_cache: &mut C) -> Result<Option<SchedulerAction>>
+    pub fn next_action<C>(&mut self, slot_pool: &mut C) -> Result<Option<SchedulerAction>>
     where
-        C: SequenceKvCache,
+        C: SequenceSlotPool,
     {
+        if self.config.allow_mixed_batches {
+            return self.next_native_action(slot_pool);
+        }
         if let Some(action) = self.next_decode_action()? {
             return Ok(Some(action));
         }
-        self.next_prefill_action(kv_cache)
+        self.next_prefill_action(slot_pool)
+    }
+
+    fn next_native_action<C>(&mut self, slot_pool: &mut C) -> Result<Option<SchedulerAction>>
+    where
+        C: SequenceSlotPool,
+    {
+        self.admit_waiting(slot_pool)?;
+        let budget = if self.config.max_batch_tokens == 0 {
+            usize::MAX
+        } else {
+            self.config.max_batch_tokens
+        };
+        let mut remaining = budget;
+        let mut decodes = Vec::new();
+        while remaining > 0 && decodes.len() < self.config.max_decode_batch {
+            let Some(session_id) = self.decode_ready.pop_front() else {
+                break;
+            };
+            let Some(sequence) = self.active.get(&session_id) else {
+                continue;
+            };
+            let Some(token_id) = sequence.next_decode_token else {
+                continue;
+            };
+            decodes.push(DecodeAction::from_sequence(sequence, token_id));
+            remaining -= 1;
+        }
+
+        let mut prefills = Vec::new();
+        let candidates = self.prefill_queue.len();
+        for _ in 0..candidates {
+            if remaining == 0 {
+                break;
+            }
+            let Some(session_id) = self.prefill_queue.pop_front() else {
+                break;
+            };
+            let Some(sequence) = self.active.get(&session_id) else {
+                continue;
+            };
+            if sequence.prompt_prefill_done() {
+                continue;
+            }
+            let chunk = self.config.prefill_chunk_size.min(remaining);
+            if let Some(action) = PrefillChunkAction::from_sequence(sequence, chunk)? {
+                remaining -= action.tokens.len();
+                prefills.push(action);
+                self.prefill_queue.push_back(session_id);
+            }
+        }
+
+        if prefills.is_empty() && decodes.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(SchedulerAction::Execute { prefills, decodes }))
+        }
     }
 
     pub fn commit_prefill_action(&mut self, action: &PrefillChunkAction) -> Result<()> {
@@ -369,6 +565,15 @@ impl ResidentScheduler {
     /// separate from state commits.
     pub fn commit_action(&mut self, action: &SchedulerAction) -> Result<usize> {
         match action {
+            SchedulerAction::Execute { prefills, decodes } => {
+                let mut committed = 0;
+                for prefill in prefills {
+                    self.commit_prefill_action(prefill)?;
+                    committed += prefill.token_range.len();
+                }
+                committed += self.commit_decode_batch(decodes)?;
+                Ok(committed)
+            }
             SchedulerAction::PrefillChunk(prefill) => {
                 self.commit_prefill_action(prefill)?;
                 Ok(prefill.token_range.len())
@@ -382,14 +587,14 @@ impl ResidentScheduler {
         &mut self,
         session_id: SessionId,
         reason: SequenceFinishReason,
-        kv_cache: &mut C,
+        slot_pool: &mut C,
     ) -> Result<SchedulerAction>
     where
-        C: SequenceKvCache,
+        C: SequenceSlotPool,
     {
         let mut sequence = self.remove_active_sequence(session_id)?;
         if let Some(handle) = sequence.kv_handle {
-            if let Err(error) = kv_cache.free_sequence(handle) {
+            if let Err(error) = slot_pool.free_slot(handle) {
                 sequence.mark_error();
                 self.failed.push(sequence);
                 return Err(error);
@@ -409,14 +614,14 @@ impl ResidentScheduler {
     pub fn cancel_sequence<C>(
         &mut self,
         session_id: SessionId,
-        kv_cache: &mut C,
+        slot_pool: &mut C,
     ) -> Result<SchedulerAction>
     where
-        C: SequenceKvCache,
+        C: SequenceSlotPool,
     {
         let mut sequence = self.remove_active_sequence(session_id)?;
         if let Some(handle) = sequence.kv_handle {
-            if let Err(error) = kv_cache.free_sequence(handle) {
+            if let Err(error) = slot_pool.free_slot(handle) {
                 sequence.mark_error();
                 self.failed.push(sequence);
                 return Err(error);
@@ -433,16 +638,16 @@ impl ResidentScheduler {
     }
 
     /// Remove one sequence from scheduling after backend execution may have
-    /// partially committed state. Metadata KV is released when possible; a failed
+    /// partially committed state. Its slot is released when possible; a failed
     /// release leaves the handle attached to the terminal error record.
-    pub fn fail_sequence<C>(&mut self, session_id: SessionId, kv_cache: &mut C) -> Result<()>
+    pub fn fail_sequence<C>(&mut self, session_id: SessionId, slot_pool: &mut C) -> Result<()>
     where
-        C: SequenceKvCache,
+        C: SequenceSlotPool,
     {
         let mut sequence = self.remove_active_sequence(session_id)?;
         sequence.mark_error();
         let release_result = if let Some(handle) = sequence.kv_handle {
-            match kv_cache.free_sequence(handle) {
+            match slot_pool.free_slot(handle) {
                 Ok(()) => {
                     sequence.clear_kv();
                     Ok(())
@@ -457,12 +662,17 @@ impl ResidentScheduler {
     }
 
     /// Fail every sequence referenced by an action. Cleanup is attempted for all
-    /// rows even if one metadata KV release fails.
-    pub fn fail_action<C>(&mut self, action: &SchedulerAction, kv_cache: &mut C) -> Result<usize>
+    /// rows even if one slot release fails.
+    pub fn fail_action<C>(&mut self, action: &SchedulerAction, slot_pool: &mut C) -> Result<usize>
     where
-        C: SequenceKvCache,
+        C: SequenceSlotPool,
     {
         let session_ids: Vec<SessionId> = match action {
+            SchedulerAction::Execute { prefills, decodes } => prefills
+                .iter()
+                .map(|action| action.session_id)
+                .chain(decodes.iter().map(|action| action.session_id))
+                .collect(),
             SchedulerAction::PrefillChunk(prefill) => vec![prefill.session_id],
             SchedulerAction::DecodeBatch(actions) => {
                 actions.iter().map(|action| action.session_id).collect()
@@ -481,7 +691,7 @@ impl ResidentScheduler {
             if !self.active.contains_key(&session_id) {
                 continue;
             }
-            match self.fail_sequence(session_id, kv_cache) {
+            match self.fail_sequence(session_id, slot_pool) {
                 Ok(()) => failed += 1,
                 Err(error) => {
                     failed += 1;
@@ -557,9 +767,7 @@ mod tests {
     use ferrule_common::execution::LogitsOutput;
     use ferrule_model::TokenLogit;
 
-    use crate::cache::{
-        KvCacheLayout, KvHandle, KvLayerView, MultiSessionKvCache, SequenceKvCache,
-    };
+    use crate::cache::{KvHandle, MultiSessionKvCache, SequenceSlotPool};
     use crate::sampling::SamplingConfig;
     use crate::scheduling::RequestId;
 
@@ -578,48 +786,13 @@ mod tests {
 
     struct FailingFreeKvCache;
 
-    impl SequenceKvCache for FailingFreeKvCache {
-        fn storage_layout(&self) -> KvCacheLayout {
-            KvCacheLayout::SingleContiguous
-        }
-
-        fn layer_count(&self) -> usize {
-            1
-        }
-
-        fn entry_dim(&self) -> usize {
-            1
-        }
-
-        fn sequence_capacity(&self, _handle: KvHandle) -> usize {
-            4
-        }
-
-        fn alloc_sequence(&mut self) -> Result<KvHandle> {
+    impl SequenceSlotPool for FailingFreeKvCache {
+        fn alloc_slot(&mut self) -> Result<KvHandle> {
             Ok(KvHandle(0))
         }
 
-        fn free_sequence(&mut self, _handle: KvHandle) -> Result<()> {
-            Err(Error::Internal("simulated KV free failure".into()))
-        }
-
-        fn append_to_sequence(
-            &mut self,
-            _handle: KvHandle,
-            _layer: usize,
-            _pos: usize,
-            _k: &[f32],
-            _v: &[f32],
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        fn layer_view(&self, _handle: KvHandle, _layer: usize) -> Result<KvLayerView<'_>> {
-            Err(Error::Internal("unused failing cache layer view".into()))
-        }
-
-        fn sequence_len(&self, _handle: KvHandle) -> usize {
-            0
+        fn free_slot(&mut self, _handle: KvHandle) -> Result<()> {
+            Err(Error::Internal("simulated slot free failure".into()))
         }
     }
 
@@ -629,6 +802,7 @@ mod tests {
             prefill_chunk_size: 2,
             max_active_sequences: 2,
             max_decode_batch: 2,
+            ..Default::default()
         });
         let mut kv = MultiSessionKvCache::new(1, 1, 8, 2);
         scheduler.submit(request(10, vec![1, 2, 3]));
@@ -665,9 +839,11 @@ mod tests {
             token_id: 99,
             logit: 1.0,
         }]);
-        assert!(scheduler
-            .stage_greedy_decode_from_logits(SessionId(1), &logits)
-            .unwrap());
+        assert!(
+            scheduler
+                .stage_greedy_decode_from_logits(SessionId(1), &logits)
+                .unwrap()
+        );
         assert_eq!(scheduler.decode_ready_len(), 1);
 
         let SchedulerAction::DecodeBatch(actions) = scheduler
@@ -701,6 +877,7 @@ mod tests {
             prefill_chunk_size: 4,
             max_active_sequences: 2,
             max_decode_batch: 2,
+            ..Default::default()
         });
         let mut kv = MultiSessionKvCache::new(1, 1, 8, 2);
         scheduler.submit(request(1, vec![1]));
@@ -725,6 +902,38 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert_eq!(actions[0].token_id, 10);
         assert_eq!(actions[1].token_id, 20);
+    }
+
+    #[test]
+    fn native_scheduler_enforces_token_budget_and_mixes_decode_with_ragged_prefill() {
+        let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
+            prefill_chunk_size: 8,
+            max_active_sequences: 2,
+            max_decode_batch: 2,
+            max_batch_tokens: 3,
+            allow_mixed_batches: true,
+        });
+        let mut kv = MultiSessionKvCache::new(1, 1, 16, 2);
+        scheduler.submit(request(1, vec![1]));
+        scheduler.submit(request(2, vec![2, 3, 4, 5, 6]));
+        scheduler.admit_waiting(&mut kv).unwrap();
+
+        let first = scheduler.next_prefill_action(&mut kv).unwrap().unwrap();
+        let SchedulerAction::PrefillChunk(first_prefill) = &first else {
+            panic!("expected initial prefill");
+        };
+        let decode_session = first_prefill.session_id;
+        scheduler.commit_action(&first).unwrap();
+        scheduler.stage_decode_token(decode_session, 99).unwrap();
+
+        let action = scheduler.next_action(&mut kv).unwrap().unwrap();
+        let SchedulerAction::Execute { prefills, decodes } = action else {
+            panic!("expected native execution action");
+        };
+        assert_eq!(decodes.len(), 1);
+        assert_eq!(prefills.len(), 1);
+        assert_eq!(prefills[0].tokens.len(), 2);
+        assert_eq!(decodes.len() + prefills[0].tokens.len(), 3);
     }
 
     #[test]
@@ -763,9 +972,11 @@ mod tests {
         scheduler.commit_prefill_action(&prefill).unwrap();
 
         let logits = LogitsOutput::Full(vec![0.1, 2.0, 1.5]);
-        assert!(scheduler
-            .stage_greedy_decode_from_logits(SessionId(1), &logits)
-            .unwrap());
+        assert!(
+            scheduler
+                .stage_greedy_decode_from_logits(SessionId(1), &logits)
+                .unwrap()
+        );
         let Some(SchedulerAction::DecodeBatch(actions)) = scheduler.next_decode_action().unwrap()
         else {
             panic!("expected decode batch");
@@ -774,7 +985,7 @@ mod tests {
     }
 
     #[test]
-    fn finish_and_cancel_preserve_sequence_ownership_when_kv_free_fails() {
+    fn finish_and_cancel_preserve_sequence_ownership_when_slot_free_fails() {
         for cancel in [false, true] {
             let mut scheduler = ResidentScheduler::default();
             let mut kv = FailingFreeKvCache;
@@ -786,7 +997,7 @@ mod tests {
             } else {
                 scheduler.finish_sequence(SessionId(1), SequenceFinishReason::MaxTokens, &mut kv)
             };
-            assert!(format!("{}", result.unwrap_err()).contains("KV free failure"));
+            assert!(format!("{}", result.unwrap_err()).contains("slot free failure"));
             assert_eq!(scheduler.active_len(), 0);
             assert_eq!(scheduler.failed_len(), 1);
             let failed = scheduler.drain_failed();
@@ -804,6 +1015,7 @@ mod tests {
             prefill_chunk_size: 4,
             max_active_sequences: 2,
             max_decode_batch: 2,
+            ..Default::default()
         });
         let mut kv = MultiSessionKvCache::new(1, 1, 4, 1);
         scheduler.submit(request(1, vec![1]));

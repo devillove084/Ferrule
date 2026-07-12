@@ -17,9 +17,9 @@ use crate::artifact::format::{
 };
 #[cfg(feature = "cuda")]
 use crate::artifact::tensor::artifact_2d_row_slice_descriptor;
-#[cfg(any(feature = "cuda", test))]
-use crate::artifact::tensor::{artifact_tensor_slice_cache_key, ArtifactTensorSlice};
 use crate::artifact::tensor::{ArtifactDType, ArtifactTensorPayload};
+#[cfg(any(feature = "cuda", test))]
+use crate::artifact::tensor::{ArtifactTensorSlice, artifact_tensor_slice_cache_key};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArtifactLinearFormat {

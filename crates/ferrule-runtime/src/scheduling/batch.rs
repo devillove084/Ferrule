@@ -8,7 +8,7 @@ use ferrule_common::execution::{
 };
 use ferrule_common::{Error, Result};
 
-use crate::cache::KvHandle;
+use crate::cache::{KvHandle, KvReservationBindings};
 
 use super::actions::{LogitsSelection, SchedulerAction};
 use super::session::{RequestId, SessionId};
@@ -37,6 +37,12 @@ impl ScheduledBatch {
         top_k: NonZeroU32,
     ) -> Result<Option<Self>> {
         match action {
+            SchedulerAction::Execute { prefills, decodes } => {
+                if prefills.is_empty() && decodes.is_empty() {
+                    return Ok(None);
+                }
+                Self::from_execute(prefills, decodes, top_k).map(Some)
+            }
             SchedulerAction::PrefillChunk(action) => Self::from_prefill(action, top_k).map(Some),
             SchedulerAction::DecodeBatch(actions) if actions.is_empty() => Ok(None),
             SchedulerAction::DecodeBatch(actions) => {
@@ -89,6 +95,54 @@ impl ScheduledBatch {
             .find(|sequence| sequence.state_slot == execution_sequence.state_slot)
     }
 
+    pub(crate) fn bind_paged_kv(&mut self, bindings: &[KvReservationBindings]) -> Result<()> {
+        if bindings.len() != self.execution.sequences().len() {
+            return Err(execution_error(format!(
+                "paged bindings have {} sequences for {} execution sequences",
+                bindings.len(),
+                self.execution.sequences().len()
+            )));
+        }
+        let mut block_ids = Vec::new();
+        let mut write_slots = vec![None; self.execution.len()];
+        let mut sequences = Vec::with_capacity(bindings.len());
+        for (sequence, binding) in self.execution.sequences().iter().zip(bindings) {
+            let query_start = usize::try_from(sequence.query.start)
+                .map_err(|_| execution_error("paged query start exceeds usize"))?;
+            let query_end = usize::try_from(sequence.query.end)
+                .map_err(|_| execution_error("paged query end exceeds usize"))?;
+            if binding.write_slots.len() != query_end - query_start {
+                return Err(execution_error(
+                    "paged write-slot count does not match query",
+                ));
+            }
+            for (row, slot) in (query_start..query_end).zip(&binding.write_slots) {
+                write_slots[row] = Some(*slot);
+            }
+            let block_start = checked_u32(block_ids.len(), "paged block start")?;
+            block_ids.extend_from_slice(&binding.block_ids);
+            let block_end = checked_u32(block_ids.len(), "paged block end")?;
+            sequences.push(ExecutionSequence::new(
+                sequence.state_slot,
+                sequence.phase,
+                sequence.query.clone(),
+                sequence.context_len,
+                sequence.sequence_len,
+                block_start..block_end,
+            ));
+        }
+        self.execution = ExecutionBatch::new(
+            self.execution.mode(),
+            self.execution.token_ids().to_vec(),
+            self.execution.positions().to_vec(),
+            write_slots,
+            self.execution.logits().to_vec(),
+            sequences,
+            block_ids,
+        );
+        Ok(())
+    }
+
     /// Validates neutral output shape and then its runtime correlation.
     pub(crate) fn validate_output(&self, output: &ExecutionOutput) -> Result<()> {
         output.validate(&self.execution)?;
@@ -104,6 +158,135 @@ impl ScheduledBatch {
         }
 
         Ok(())
+    }
+
+    fn from_execute(
+        prefills: &mut [super::actions::PrefillChunkAction],
+        decodes: &[super::actions::DecodeAction],
+        top_k: NonZeroU32,
+    ) -> Result<Self> {
+        let total_rows = prefills
+            .iter()
+            .try_fold(decodes.len(), |total, action| {
+                total.checked_add(action.tokens.len())
+            })
+            .ok_or_else(|| execution_error("native execution row count overflow"))?;
+        checked_u32(total_rows, "native execution row count")?;
+
+        for action in prefills.iter() {
+            if action.token_range.end < action.token_range.start
+                || action.token_range.len() != action.tokens.len()
+                || action.tokens.is_empty()
+            {
+                return Err(execution_error(format!(
+                    "invalid prefill action for session {:?}: range {:?}, tokens {}",
+                    action.session_id,
+                    action.token_range,
+                    action.tokens.len()
+                )));
+            }
+            checked_u32(action.position_start, "prefill position")?;
+        }
+        for action in decodes {
+            checked_u32(action.position, "decode position")?;
+        }
+
+        let mut token_ids = Vec::with_capacity(total_rows);
+        let mut positions = Vec::with_capacity(total_rows);
+        let mut logits = Vec::with_capacity(total_rows);
+        let mut execution_sequences = Vec::with_capacity(prefills.len() + decodes.len());
+        let mut scheduled_sequences = Vec::with_capacity(prefills.len() + decodes.len());
+        let mut row = 0usize;
+        let mut state_index = 0usize;
+
+        for action in prefills.iter_mut() {
+            let start = checked_u32(row, "prefill input row")?;
+            let context_len = checked_u32(action.position_start, "prefill position")?;
+            let query_len = checked_u32(action.tokens.len(), "prefill token count")?;
+            let end = start
+                .checked_add(query_len)
+                .ok_or_else(|| execution_error("prefill row range overflow"))?;
+            let sequence_len = context_len
+                .checked_add(query_len)
+                .ok_or_else(|| execution_error("prefill sequence length overflow"))?;
+            let state_slot = StateSlot::new(checked_u32(state_index, "state slot")?);
+
+            token_ids.extend(std::mem::take(&mut action.tokens));
+            positions.extend(context_len..sequence_len);
+            logits.extend(prefill_logits(action.logits, query_len as usize, top_k));
+            execution_sequences.push(ExecutionSequence::new(
+                state_slot,
+                ForwardPhase::Prefill,
+                start..end,
+                context_len,
+                sequence_len,
+                0..0,
+            ));
+            scheduled_sequences.push(ScheduledSequence {
+                state_slot,
+                request_id: action.request_id,
+                session_id: action.session_id,
+                kv_handle: action.kv_handle,
+            });
+            row += query_len as usize;
+            state_index += 1;
+        }
+
+        for action in decodes {
+            let start = checked_u32(row, "decode input row")?;
+            let end = start
+                .checked_add(1)
+                .ok_or_else(|| execution_error("decode row range overflow"))?;
+            let context_len = checked_u32(action.position, "decode position")?;
+            let sequence_len = context_len
+                .checked_add(1)
+                .ok_or_else(|| execution_error("decode sequence length overflow"))?;
+            let state_slot = StateSlot::new(checked_u32(state_index, "state slot")?);
+            token_ids.push(action.token_id);
+            positions.push(context_len);
+            logits.push(if action.require_logits {
+                LogitsRequest::TopK(top_k)
+            } else {
+                LogitsRequest::None
+            });
+            execution_sequences.push(ExecutionSequence::new(
+                state_slot,
+                ForwardPhase::Decode,
+                start..end,
+                context_len,
+                sequence_len,
+                0..0,
+            ));
+            scheduled_sequences.push(ScheduledSequence {
+                state_slot,
+                request_id: action.request_id,
+                session_id: action.session_id,
+                kv_handle: action.kv_handle,
+            });
+            row += 1;
+            state_index += 1;
+        }
+
+        let mode = if prefills.is_empty() {
+            ForwardMode::Decode
+        } else if decodes.is_empty() {
+            ForwardMode::Prefill
+        } else {
+            ForwardMode::Mixed
+        };
+        Self::validate_correlation_parts(&execution_sequences, &scheduled_sequences, total_rows)?;
+        Ok(Self {
+            execution: ExecutionBatch::new(
+                mode,
+                token_ids,
+                positions,
+                vec![None; total_rows],
+                logits,
+                execution_sequences,
+                Vec::new(),
+            ),
+            sequences: scheduled_sequences,
+        })
     }
 
     fn from_prefill(
@@ -510,9 +693,11 @@ mod tests {
             reason: SequenceFinishReason::Eos,
         };
         let expected_finish = finish.clone();
-        assert!(ScheduledBatch::from_action(&mut finish, top_k())
-            .unwrap()
-            .is_none());
+        assert!(
+            ScheduledBatch::from_action(&mut finish, top_k())
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(finish, expected_finish);
 
         let mut cancel = SchedulerAction::Cancel {
@@ -520,15 +705,19 @@ mod tests {
             session_id: SessionId(2),
         };
         let expected_cancel = cancel.clone();
-        assert!(ScheduledBatch::from_action(&mut cancel, top_k())
-            .unwrap()
-            .is_none());
+        assert!(
+            ScheduledBatch::from_action(&mut cancel, top_k())
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(cancel, expected_cancel);
 
         let mut empty_decode = SchedulerAction::DecodeBatch(Vec::new());
-        assert!(ScheduledBatch::from_action(&mut empty_decode, top_k())
-            .unwrap()
-            .is_none());
+        assert!(
+            ScheduledBatch::from_action(&mut empty_decode, top_k())
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(empty_decode, SchedulerAction::DecodeBatch(Vec::new()));
     }
 

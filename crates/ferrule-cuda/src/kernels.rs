@@ -6,12 +6,11 @@
 //! inline-PTX JIT issues on newer GPUs.
 
 use cuda_device::{
-    cuda_module, kernel, ptx_asm, thread,
+    DisjointSlice, SharedArray, cuda_module, kernel, ptx_asm, thread,
     wmma::{
         mma_m16n8k16_f32_bf16, mma_m16n8k32_f32_e4m3_e4m3,
         mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0,
     },
-    DisjointSlice, SharedArray,
 };
 
 const LN_2_F32: f32 = core::f32::consts::LN_2;
@@ -20,6 +19,177 @@ pub(crate) const DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS: usize = 8192;
 /// Device exp(x). cuda-oxide lowers this to libdevice (`__nv_expf`) on GPU.
 fn fast_exp(x: f32) -> f32 {
     libm::expf(x)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paged_plane_row_offset(
+    plane_elements: usize,
+    block_slots: &[i32],
+    block_offsets: &[i32],
+    sequence: usize,
+    logical_row: usize,
+    page_tokens: usize,
+    elements_per_token: usize,
+    layer_index: usize,
+    layer_count: usize,
+) -> usize {
+    if page_tokens == 0 || elements_per_token == 0 || layer_index >= layer_count {
+        return usize::MAX;
+    }
+    let start = match block_offsets.get(sequence) {
+        Some(value) if *value >= 0 => *value as usize,
+        _ => return usize::MAX,
+    };
+    let end = match block_offsets.get(sequence + 1) {
+        Some(value) if *value >= 0 => *value as usize,
+        _ => return usize::MAX,
+    };
+    let entry = match start.checked_add(logical_row / page_tokens) {
+        Some(value) if value < end => value,
+        _ => return usize::MAX,
+    };
+    let slot = match block_slots.get(entry) {
+        Some(value) if *value >= 0 => *value as u64,
+        _ => return usize::MAX,
+    };
+    let page_tokens = page_tokens as u64;
+    let width = elements_per_token as u64;
+    let slot_stride = match (layer_count as u64)
+        .checked_mul(page_tokens)
+        .and_then(|value| value.checked_mul(width))
+    {
+        Some(value) => value,
+        None => return usize::MAX,
+    };
+    let layer_stride = match page_tokens.checked_mul(width) {
+        Some(value) => value,
+        None => return usize::MAX,
+    };
+    let offset = match slot
+        .checked_mul(slot_stride)
+        .and_then(|value| value.checked_add(layer_index as u64 * layer_stride))
+        .and_then(|value| value.checked_add((logical_row % page_tokens as usize) as u64 * width))
+    {
+        Some(value) => value,
+        None => return usize::MAX,
+    };
+    match offset.checked_add(width) {
+        Some(end) if end <= plane_elements as u64 => offset as usize,
+        _ => usize::MAX,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paged_row_sequence(
+    row_sequence_ids: &[i32],
+    row: usize,
+    default_sequence: usize,
+    use_row_sequence_ids: u32,
+) -> usize {
+    if use_row_sequence_ids == 0 {
+        default_sequence
+    } else {
+        row_sequence_ids
+            .get(row)
+            .and_then(|value| usize::try_from(*value).ok())
+            .unwrap_or(usize::MAX)
+    }
+}
+
+fn paged_row_visible_token(
+    logical_token: i32,
+    row_kv_lens: &[i32],
+    row: usize,
+    use_row_kv_lens: u32,
+) -> i32 {
+    if use_row_kv_lens == 0 {
+        return logical_token;
+    }
+    match row_kv_lens.get(row) {
+        Some(visible_len) if logical_token >= 0 && logical_token < *visible_len => logical_token,
+        _ => -1,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paged_sparse_kv_offset(
+    block_slots: &[i32],
+    sequence_block_offsets: &[i32],
+    sequence_kv_lens: &[i32],
+    sequence: usize,
+    logical_token: i32,
+    page_tokens: usize,
+    elements_per_token: usize,
+    head_dim: usize,
+    layer_index: usize,
+    layer_count: usize,
+    plane_elements: usize,
+) -> usize {
+    if logical_token < 0
+        || page_tokens == 0
+        || elements_per_token < head_dim
+        || layer_index >= layer_count
+    {
+        return usize::MAX;
+    }
+    let kv_len = match sequence_kv_lens.get(sequence) {
+        Some(value) if *value >= 0 => *value as usize,
+        _ => return usize::MAX,
+    };
+    let logical_token = logical_token as usize;
+    if logical_token >= kv_len {
+        return usize::MAX;
+    }
+    let block_start = match sequence_block_offsets.get(sequence) {
+        Some(value) if *value >= 0 => *value as usize,
+        _ => return usize::MAX,
+    };
+    let block_end = match sequence_block_offsets.get(sequence + 1) {
+        Some(value) if *value >= 0 => *value as usize,
+        _ => return usize::MAX,
+    };
+    let block_entry = match block_start.checked_add(logical_token / page_tokens) {
+        Some(value) => value,
+        None => return usize::MAX,
+    };
+    if block_entry >= block_end {
+        return usize::MAX;
+    }
+    let physical_slot = match block_slots.get(block_entry) {
+        Some(value) if *value >= 0 => *value as u64,
+        _ => return usize::MAX,
+    };
+    let page_tokens = page_tokens as u64;
+    let elements_per_token = elements_per_token as u64;
+    let slot_stride = match (layer_count as u64)
+        .checked_mul(page_tokens)
+        .and_then(|value| value.checked_mul(elements_per_token))
+    {
+        Some(value) => value,
+        None => return usize::MAX,
+    };
+    let layer_stride = match page_tokens.checked_mul(elements_per_token) {
+        Some(value) => value,
+        None => return usize::MAX,
+    };
+    let token_in_page = (logical_token % page_tokens as usize) as u64;
+    let offset = match physical_slot
+        .checked_mul(slot_stride)
+        .and_then(|value| value.checked_add(layer_index as u64 * layer_stride))
+        .and_then(|value| value.checked_add(token_in_page * elements_per_token))
+    {
+        Some(value) => value,
+        None => return usize::MAX,
+    };
+    let end = match offset.checked_add(head_dim as u64) {
+        Some(value) => value,
+        None => return usize::MAX,
+    };
+    if end > plane_elements as u64 {
+        usize::MAX
+    } else {
+        offset as usize
+    }
 }
 
 /// Fast reciprocal sqrt. This stays as inline PTX because libm::sqrtf uses
@@ -264,11 +434,7 @@ fn nearest_fp8_subnormal_positive(magnitude: f32) -> f32 {
 }
 
 fn clamp_max(x: f32, max_value: f32) -> f32 {
-    if x > max_value {
-        max_value
-    } else {
-        x
-    }
+    if x > max_value { max_value } else { x }
 }
 
 fn clamp_range(x: f32, min_value: f32, max_value: f32) -> f32 {
@@ -1303,16 +1469,60 @@ pub mod kernels {
         }
     }
 
-    /// Build DSV4 prefill sparse-attention top-k indices on device.
-    ///
-    /// Output layout is `[tokens, window_cols + extra_cols]`. The window part
-    /// mirrors `window_topk_indices_prefill`; the extra part is either simple
-    /// compressed causal indices or indexer-routed top-k over compressed index KV.
     #[kernel]
-    pub fn dsv4_prefill_topk_indices(
+    pub fn dsv4_prefill_topk_indices_paged_indexer(
+        query: &[f32],
+        weights: &[f32],
+        indexer_plane: &[f32],
+        block_slots: &[i32],
+        block_offsets: &[i32],
+        out: DisjointSlice<i32>,
+        tokens: u32,
+        window_size: u32,
+        window_cols: u32,
+        extra_cols: u32,
+        value_offset: u32,
+        compress_ratio: u32,
+        compressed_len: u32,
+        index_heads: u32,
+        index_head_dim: u32,
+        page_tokens: u32,
+        layer_index: u32,
+        layer_count: u32,
+        weight_scale: f32,
+    ) {
+        dsv4_prefill_topk_indices_impl(
+            query,
+            weights,
+            indexer_plane,
+            block_slots,
+            block_offsets,
+            out,
+            tokens,
+            window_size,
+            window_cols,
+            extra_cols,
+            value_offset,
+            compress_ratio,
+            compressed_len,
+            index_heads,
+            index_head_dim,
+            1,
+            page_tokens,
+            layer_index,
+            layer_count,
+            1,
+            weight_scale,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dsv4_prefill_topk_indices_impl(
         query: &[f32],
         weights: &[f32],
         indexer_kv: &[f32],
+        block_slots: &[i32],
+        block_offsets: &[i32],
         mut out: DisjointSlice<i32>,
         tokens: u32,
         window_size: u32,
@@ -1324,6 +1534,10 @@ pub mod kernels {
         index_heads: u32,
         index_head_dim: u32,
         indexer_enabled: u32,
+        page_tokens: u32,
+        layer_index: u32,
+        layer_count: u32,
+        paged_indexer: u32,
         weight_scale: f32,
     ) {
         static mut CANDIDATE_SCORES: SharedArray<f32, 256> = SharedArray::UNINIT;
@@ -1396,11 +1610,27 @@ pub mod kernels {
             let idx = chunk_start + tid;
             let mut score = f32::NEG_INFINITY;
             if idx < visible {
-                score = 0.0;
+                let kv_base = if paged_indexer != 0 {
+                    paged_plane_row_offset(
+                        indexer_kv.len(),
+                        block_slots,
+                        block_offsets,
+                        0,
+                        idx,
+                        page_tokens as usize,
+                        hd,
+                        layer_index as usize,
+                        layer_count as usize,
+                    )
+                } else {
+                    idx * hd
+                };
+                if kv_base != usize::MAX {
+                    score = 0.0;
+                }
                 let mut head = 0usize;
-                while head < heads {
+                while head < heads && kv_base != usize::MAX {
                     let q_base = token * heads * hd + head * hd;
-                    let kv_base = idx * hd;
                     let mut dot = 0.0f32;
                     let mut d = 0usize;
                     while d < hd {
@@ -1489,7 +1719,7 @@ pub mod kernels {
         indexer_kv: &[f32],
         cos_table: &[f32],
         sin_table: &[f32],
-        mut out: DisjointSlice<i32>,
+        out: DisjointSlice<i32>,
         tokens: u32,
         window_size: u32,
         window_cols: u32,
@@ -1504,6 +1734,119 @@ pub mod kernels {
         weight_scale: f32,
     ) {
         let token = thread::index_1d().get() as usize;
+        dsv4_prefill_topk_indices_fused_index_query_impl(
+            token,
+            query,
+            weights,
+            indexer_kv,
+            &[],
+            &[],
+            cos_table,
+            sin_table,
+            out,
+            tokens,
+            window_size,
+            window_cols,
+            extra_cols,
+            value_offset,
+            compress_ratio,
+            compressed_len,
+            index_heads,
+            index_head_dim,
+            rope_dim,
+            start_position,
+            1,
+            0,
+            1,
+            0,
+            weight_scale,
+        )
+    }
+
+    #[kernel]
+    pub fn dsv4_prefill_topk_indices_fused_index_query_paged_indexer(
+        query: &[f32],
+        weights: &[f32],
+        indexer_plane: &[f32],
+        block_slots: &[i32],
+        block_offsets: &[i32],
+        cos_table: &[f32],
+        sin_table: &[f32],
+        out: DisjointSlice<i32>,
+        tokens: u32,
+        window_size: u32,
+        window_cols: u32,
+        extra_cols: u32,
+        value_offset: u32,
+        compress_ratio: u32,
+        compressed_len: u32,
+        index_heads: u32,
+        index_head_dim: u32,
+        rope_dim: u32,
+        start_position: u32,
+        page_tokens: u32,
+        layer_index: u32,
+        layer_count: u32,
+        weight_scale: f32,
+    ) {
+        let token = thread::index_1d().get() as usize;
+        dsv4_prefill_topk_indices_fused_index_query_impl(
+            token,
+            query,
+            weights,
+            indexer_plane,
+            block_slots,
+            block_offsets,
+            cos_table,
+            sin_table,
+            out,
+            tokens,
+            window_size,
+            window_cols,
+            extra_cols,
+            value_offset,
+            compress_ratio,
+            compressed_len,
+            index_heads,
+            index_head_dim,
+            rope_dim,
+            start_position,
+            page_tokens,
+            layer_index,
+            layer_count,
+            1,
+            weight_scale,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dsv4_prefill_topk_indices_fused_index_query_impl(
+        token: usize,
+        query: &[f32],
+        weights: &[f32],
+        indexer_kv: &[f32],
+        block_slots: &[i32],
+        block_offsets: &[i32],
+        cos_table: &[f32],
+        sin_table: &[f32],
+        mut out: DisjointSlice<i32>,
+        tokens: u32,
+        window_size: u32,
+        window_cols: u32,
+        extra_cols: u32,
+        value_offset: u32,
+        compress_ratio: u32,
+        compressed_len: u32,
+        index_heads: u32,
+        index_head_dim: u32,
+        rope_dim: u32,
+        start_position: u32,
+        page_tokens: u32,
+        layer_index: u32,
+        layer_count: u32,
+        paged_indexer: u32,
+        weight_scale: f32,
+    ) {
         let tokens = tokens as usize;
         if token >= tokens {
             return;
@@ -1622,7 +1965,25 @@ pub mod kernels {
                     block += 1;
                 }
 
-                let kv_base = idx * hd;
+                let kv_base = if paged_indexer != 0 {
+                    paged_plane_row_offset(
+                        indexer_kv.len(),
+                        block_slots,
+                        block_offsets,
+                        0,
+                        idx,
+                        page_tokens as usize,
+                        hd,
+                        layer_index as usize,
+                        layer_count as usize,
+                    )
+                } else {
+                    idx * hd
+                };
+                if kv_base == usize::MAX {
+                    score = f32::NEG_INFINITY;
+                    break;
+                }
                 let mut dot = 0.0f32;
                 d = 0;
                 while d < hd {
@@ -1672,14 +2033,139 @@ pub mod kernels {
         }
     }
 
-    /// Build DSV4 decode sparse-attention top-k indices on device for the
-    /// combined KV layout `[window_size slots | compressed slots]`.
     #[kernel]
-    pub fn dsv4_decode_topk_indices(
+    pub fn dsv4_decode_topk_indices_paged_indexer(
+        query: &[f32],
+        weights: &[f32],
+        indexer_plane: &[f32],
+        block_slots: &[i32],
+        block_offsets: &[i32],
+        out: DisjointSlice<i32>,
+        position: u32,
+        window_len: u32,
+        window_size: u32,
+        extra_cols: u32,
+        value_offset: u32,
+        compressed_len: u32,
+        index_heads: u32,
+        index_head_dim: u32,
+        page_tokens: u32,
+        layer_index: u32,
+        layer_count: u32,
+        weight_scale: f32,
+    ) {
+        dsv4_decode_topk_indices_impl(
+            query,
+            weights,
+            indexer_plane,
+            block_slots,
+            block_offsets,
+            out,
+            core::ptr::null_mut(),
+            0,
+            0,
+            0,
+            position,
+            window_len,
+            window_size,
+            extra_cols,
+            value_offset,
+            compressed_len,
+            index_heads,
+            index_head_dim,
+            1,
+            page_tokens,
+            layer_index,
+            layer_count,
+            1,
+            0,
+            weight_scale,
+        )
+    }
+
+    /// Multi-sequence paged decode indexer. Each CUDA block handles one row
+    /// and emits logical indices plus the corresponding KV-plane selector.
+    #[kernel]
+    pub fn dsv4_decode_topk_indices_paged_indexer_rows(
+        query: &[f32],
+        weights: &[f32],
+        indexer_plane: &[f32],
+        block_slots: &[i32],
+        block_offsets: &[i32],
+        row_sequence_ids: &[i32],
+        positions: &[i32],
+        window_lens: &[i32],
+        compressed_lens: &[i32],
+        logical_indices: DisjointSlice<i32>,
+        mut plane_selectors: DisjointSlice<i32>,
+        rows: u32,
+        window_size: u32,
+        index_topk: u32,
+        index_heads: u32,
+        index_head_dim: u32,
+        page_tokens: u32,
+        layer_index: u32,
+        layer_count: u32,
+        weight_scale: f32,
+    ) {
+        let row = thread::blockIdx_x() as usize;
+        if row >= rows as usize {
+            return;
+        }
+        let position = positions.get(row).copied().unwrap_or(-1);
+        let window_len = window_lens.get(row).copied().unwrap_or(-1);
+        let compressed_len = compressed_lens.get(row).copied().unwrap_or(-1);
+        let sequence = row_sequence_ids
+            .get(row)
+            .and_then(|value| usize::try_from(*value).ok())
+            .unwrap_or(usize::MAX);
+        let valid_metadata =
+            sequence != usize::MAX && position >= 0 && window_len >= 0 && compressed_len >= 0;
+        dsv4_decode_topk_indices_impl(
+            query,
+            weights,
+            indexer_plane,
+            block_slots,
+            block_offsets,
+            logical_indices,
+            plane_selectors.as_mut_ptr(),
+            row,
+            row,
+            sequence,
+            position.max(0) as u32,
+            if valid_metadata { window_len as u32 } else { 0 },
+            window_size,
+            index_topk,
+            0,
+            if valid_metadata {
+                compressed_len as u32
+            } else {
+                0
+            },
+            index_heads,
+            index_head_dim,
+            1,
+            page_tokens,
+            layer_index,
+            layer_count,
+            1,
+            if valid_metadata { 1 } else { 2 },
+            weight_scale,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dsv4_decode_topk_indices_impl(
         query: &[f32],
         weights: &[f32],
         indexer_kv: &[f32],
+        block_slots: &[i32],
+        block_offsets: &[i32],
         mut out: DisjointSlice<i32>,
+        selector_ptr: *mut i32,
+        output_row: usize,
+        query_row: usize,
+        sequence: usize,
         position: u32,
         window_len: u32,
         window_size: u32,
@@ -1689,6 +2175,11 @@ pub mod kernels {
         index_heads: u32,
         index_head_dim: u32,
         indexer_enabled: u32,
+        page_tokens: u32,
+        layer_index: u32,
+        layer_count: u32,
+        paged_indexer: u32,
+        logical_output: u32,
         weight_scale: f32,
     ) {
         static mut CANDIDATE_SCORES: SharedArray<f32, 256> = SharedArray::UNINIT;
@@ -1705,6 +2196,7 @@ pub mod kernels {
             return;
         }
         let out_ptr = out.as_mut_ptr();
+        let output_base = output_row * total_cols;
         let window_len = window_len as usize;
         let window_size = window_size as usize;
         let position = position as usize;
@@ -1713,15 +2205,26 @@ pub mod kernels {
         let compressed_len = compressed_len as usize;
         let heads = index_heads as usize;
         let hd = index_head_dim as usize;
+        let query_base = query_row * heads * hd;
+        let weight_base = query_row * heads;
 
         let mut col = tid;
         while col < window_size {
-            let value = if window_len < window_size {
-                if col < window_len {
-                    col as i32
+            let mut selector = -1i32;
+            let value = if logical_output == 2 {
+                -1
+            } else if logical_output != 0 {
+                if window_len <= window_size
+                    && window_len <= position.saturating_add(1)
+                    && col < window_len
+                {
+                    selector = 0;
+                    (position + 1 - window_len + col) as i32
                 } else {
                     -1
                 }
+            } else if window_len < window_size {
+                if col < window_len { col as i32 } else { -1 }
             } else {
                 let current_slot = position % window_size;
                 let first_slot = if current_slot + 1 == window_size {
@@ -1732,7 +2235,10 @@ pub mod kernels {
                 ((first_slot + col) % window_size) as i32
             };
             unsafe {
-                *out_ptr.add(col) = value;
+                *out_ptr.add(output_base + col) = value;
+                if logical_output != 0 {
+                    *selector_ptr.add(output_base + col) = selector;
+                }
             }
             col += bdim;
         }
@@ -1749,7 +2255,7 @@ pub mod kernels {
                     -1
                 };
                 unsafe {
-                    *out_ptr.add(window_size + slot) = value;
+                    *out_ptr.add(output_base + window_size + slot) = value;
                 }
                 slot += bdim;
             }
@@ -1772,11 +2278,27 @@ pub mod kernels {
             let idx = chunk_start + tid;
             let mut score = f32::NEG_INFINITY;
             if idx < compressed_len {
-                score = 0.0;
+                let kv_base = if paged_indexer != 0 {
+                    paged_plane_row_offset(
+                        indexer_kv.len(),
+                        block_slots,
+                        block_offsets,
+                        sequence,
+                        idx,
+                        page_tokens as usize,
+                        hd,
+                        layer_index as usize,
+                        layer_count as usize,
+                    )
+                } else {
+                    idx * hd
+                };
+                if kv_base != usize::MAX {
+                    score = 0.0;
+                }
                 let mut head = 0usize;
-                while head < heads {
-                    let q_base = head * hd;
-                    let kv_base = idx * hd;
+                while head < heads && kv_base != usize::MAX {
+                    let q_base = query_base + head * hd;
                     let mut dot = 0.0f32;
                     let mut d = 0usize;
                     while d < hd {
@@ -1786,7 +2308,7 @@ pub mod kernels {
                     if dot < 0.0 {
                         dot = 0.0;
                     }
-                    score += dot * weights[head] * weight_scale;
+                    score += dot * weights[weight_base + head] * weight_scale;
                     head += 1;
                 }
             }
@@ -1842,25 +2364,84 @@ pub mod kernels {
             } else {
                 (-1, f32::NEG_INFINITY)
             };
-            let value = if best_idx >= 0 && best_score.is_finite() {
-                (value_offset + best_idx as usize) as i32
+            let valid = best_idx >= 0 && best_score.is_finite();
+            let value = if valid {
+                if logical_output != 0 {
+                    best_idx
+                } else {
+                    (value_offset + best_idx as usize) as i32
+                }
             } else {
                 -1
             };
             unsafe {
-                *out_ptr.add(window_size + slot) = value;
+                *out_ptr.add(output_base + window_size + slot) = value;
+                if logical_output != 0 {
+                    *selector_ptr.add(output_base + window_size + slot) =
+                        if valid { 1 } else { -1 };
+                }
             }
             slot += bdim;
         }
     }
 
-    /// Fused decode indexer top-k: query rows are RoPE + Hadamard/FP4-QAT
-    /// transformed in-register before scanning compressed index KV.
     #[kernel]
-    pub fn dsv4_decode_topk_indices_fused_index_query(
+    pub fn dsv4_decode_topk_indices_fused_index_query_paged_indexer(
+        query: &[f32],
+        weights: &[f32],
+        indexer_plane: &[f32],
+        block_slots: &[i32],
+        block_offsets: &[i32],
+        cos_table: &[f32],
+        sin_table: &[f32],
+        out: DisjointSlice<i32>,
+        position: u32,
+        window_len: u32,
+        window_size: u32,
+        extra_cols: u32,
+        value_offset: u32,
+        compressed_len: u32,
+        index_heads: u32,
+        index_head_dim: u32,
+        rope_dim: u32,
+        page_tokens: u32,
+        layer_index: u32,
+        layer_count: u32,
+        weight_scale: f32,
+    ) {
+        dsv4_decode_topk_indices_fused_index_query_impl(
+            query,
+            weights,
+            indexer_plane,
+            block_slots,
+            block_offsets,
+            cos_table,
+            sin_table,
+            out,
+            position,
+            window_len,
+            window_size,
+            extra_cols,
+            value_offset,
+            compressed_len,
+            index_heads,
+            index_head_dim,
+            rope_dim,
+            page_tokens,
+            layer_index,
+            layer_count,
+            1,
+            weight_scale,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dsv4_decode_topk_indices_fused_index_query_impl(
         query: &[f32],
         weights: &[f32],
         indexer_kv: &[f32],
+        block_slots: &[i32],
+        block_offsets: &[i32],
         cos_table: &[f32],
         sin_table: &[f32],
         mut out: DisjointSlice<i32>,
@@ -1873,6 +2454,10 @@ pub mod kernels {
         index_heads: u32,
         index_head_dim: u32,
         rope_dim: u32,
+        page_tokens: u32,
+        layer_index: u32,
+        layer_count: u32,
+        paged_indexer: u32,
         weight_scale: f32,
     ) {
         static mut QUERY_SCRATCH: SharedArray<f32, DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS> =
@@ -1904,11 +2489,7 @@ pub mod kernels {
         let mut col = tid;
         while col < window_size {
             let value = if window_len < window_size {
-                if col < window_len {
-                    col as i32
-                } else {
-                    -1
-                }
+                if col < window_len { col as i32 } else { -1 }
             } else {
                 let current_slot = position % window_size;
                 let first_slot = if current_slot + 1 == window_size {
@@ -2048,7 +2629,25 @@ pub mod kernels {
                 let mut head = 0usize;
                 while head < heads {
                     let q_base = head * hd;
-                    let kv_base = idx * hd;
+                    let kv_base = if paged_indexer != 0 {
+                        paged_plane_row_offset(
+                            indexer_kv.len(),
+                            block_slots,
+                            block_offsets,
+                            0,
+                            idx,
+                            page_tokens as usize,
+                            hd,
+                            layer_index as usize,
+                            layer_count as usize,
+                        )
+                    } else {
+                        idx * hd
+                    };
+                    if kv_base == usize::MAX {
+                        score = f32::NEG_INFINITY;
+                        break;
+                    }
                     let mut dot = 0.0f32;
                     let mut d = 0usize;
                     while d < hd {
@@ -2243,6 +2842,173 @@ pub mod kernels {
         }
         if let Some(o) = output.get_mut(thread::index_1d()) {
             *o = out;
+        }
+    }
+
+    #[kernel]
+    pub fn compressor_recurrent_reset_f32(
+        mut kv_state: DisjointSlice<f32>,
+        mut score_state: DisjointSlice<f32>,
+        state_elements: u32,
+    ) {
+        let index = thread::index_1d().get() as usize;
+        if index >= state_elements as usize {
+            return;
+        }
+        if let Some(value) = kv_state.get_mut(thread::index_1d()) {
+            *value = 0.0;
+        }
+        if let Some(value) = score_state.get_mut(thread::index_1d()) {
+            *value = f32::NEG_INFINITY;
+        }
+    }
+
+    #[kernel]
+    pub fn compressor_recurrent_append_projected_f32(
+        projected_kv: &[f32],
+        projected_score: &[f32],
+        ape: &[f32],
+        mut kv_state: DisjointSlice<f32>,
+        mut score_state: DisjointSlice<f32>,
+        position: u32,
+        ratio: u32,
+        out_dim: u32,
+        overlap: u32,
+    ) {
+        let dim = thread::index_1d().get() as usize;
+        let ratio = ratio as usize;
+        let out_dim = out_dim as usize;
+        if dim >= out_dim || ratio == 0 {
+            return;
+        }
+        let position = position as usize;
+        let local_row = position % ratio;
+        let state_row = if overlap != 0 {
+            ratio + local_row
+        } else {
+            local_row
+        };
+        let state_index = state_row * out_dim + dim;
+        let ape_index = local_row * out_dim + dim;
+        let kv_ptr = kv_state.as_mut_ptr();
+        let score_ptr = score_state.as_mut_ptr();
+        unsafe {
+            *kv_ptr.add(state_index) = projected_kv[dim];
+            *score_ptr.add(state_index) = projected_score[dim] + ape[ape_index];
+        }
+    }
+
+    #[kernel]
+    pub fn compressor_recurrent_seed_prefill_f32(
+        projected_kv_rows: &[f32],
+        projected_score_rows: &[f32],
+        ape: &[f32],
+        mut kv_state: DisjointSlice<f32>,
+        mut score_state: DisjointSlice<f32>,
+        tokens: u32,
+        ratio: u32,
+        out_dim: u32,
+        overlap: u32,
+        state_elements: u32,
+    ) {
+        let index = thread::index_1d().get() as usize;
+        let ratio = ratio as usize;
+        let out_dim = out_dim as usize;
+        if index >= state_elements as usize || ratio == 0 || out_dim == 0 {
+            return;
+        }
+        let tokens = tokens as usize;
+        let state_row = index / out_dim;
+        let dim = index % out_dim;
+        let remainder = tokens % ratio;
+        let cutoff = tokens - remainder;
+        let mut source_token = usize::MAX;
+        let mut ape_row = 0usize;
+        if overlap != 0 && cutoff >= ratio && state_row < ratio {
+            source_token = cutoff - ratio + state_row;
+            ape_row = state_row;
+        } else {
+            let state_offset = if overlap != 0 { ratio } else { 0 };
+            if state_row >= state_offset && state_row < state_offset + remainder {
+                let local = state_row - state_offset;
+                source_token = cutoff + local;
+                ape_row = local;
+            }
+        }
+        let kv_ptr = kv_state.as_mut_ptr();
+        let score_ptr = score_state.as_mut_ptr();
+        unsafe {
+            if source_token == usize::MAX {
+                *kv_ptr.add(index) = 0.0;
+                *score_ptr.add(index) = f32::NEG_INFINITY;
+            } else {
+                let source = source_token * out_dim + dim;
+                *kv_ptr.add(index) = projected_kv_rows[source];
+                *score_ptr.add(index) = projected_score_rows[source] + ape[ape_row * out_dim + dim];
+            }
+        }
+    }
+
+    #[kernel]
+    pub fn compressor_recurrent_softmax_f32(
+        kv_state: &[f32],
+        score_state: &[f32],
+        mut output: DisjointSlice<f32>,
+        ratio: u32,
+        head_dim: u32,
+        out_dim: u32,
+        overlap: u32,
+    ) {
+        let dim = thread::index_1d().get() as usize;
+        let ratio = ratio as usize;
+        let head_dim = head_dim as usize;
+        let out_dim = out_dim as usize;
+        if dim >= head_dim || ratio == 0 {
+            return;
+        }
+        let rows = if overlap != 0 { 2 * ratio } else { ratio };
+        let mut max_score = f32::NEG_INFINITY;
+        let mut row = 0usize;
+        while row < rows {
+            let src_dim = if overlap != 0 && row >= ratio {
+                head_dim + dim
+            } else {
+                dim
+            };
+            let score = score_state[row * out_dim + src_dim];
+            if score > max_score {
+                max_score = score;
+            }
+            row += 1;
+        }
+        let mut denominator = 0.0f32;
+        row = 0;
+        while row < rows {
+            let src_dim = if overlap != 0 && row >= ratio {
+                head_dim + dim
+            } else {
+                dim
+            };
+            denominator += fast_exp(score_state[row * out_dim + src_dim] - max_score);
+            row += 1;
+        }
+        let mut compressed = 0.0f32;
+        if denominator > 0.0 && denominator.is_finite() {
+            row = 0;
+            while row < rows {
+                let src_dim = if overlap != 0 && row >= ratio {
+                    head_dim + dim
+                } else {
+                    dim
+                };
+                let index = row * out_dim + src_dim;
+                let weight = fast_exp(score_state[index] - max_score) / denominator;
+                compressed += weight * kv_state[index];
+                row += 1;
+            }
+        }
+        if let Some(value) = output.get_mut(thread::index_1d()) {
+            *value = compressed;
         }
     }
 
@@ -3749,6 +4515,77 @@ pub mod kernels {
         }
     }
 
+    /// Converts combined `[window ring | compressed]` indices into logical
+    /// token indices plus plane selectors without reading any KV values.
+    #[kernel]
+    pub fn convert_combined_ring_topk_indices(
+        combined: &[i32],
+        row_window_lens: &[i32],
+        mut logical_indices: DisjointSlice<i32>,
+        mut plane_selectors: DisjointSlice<i32>,
+        elements: u32,
+        rows: u32,
+        topk: u32,
+        start_position: u32,
+        position_stride: u32,
+        window_size: u32,
+        explicit_window_lens: u32,
+    ) {
+        let index = thread::index_1d().get() as usize;
+        if index >= elements as usize || topk == 0 || window_size == 0 {
+            return;
+        }
+        let logical_ptr = logical_indices.as_mut_ptr();
+        let selector_ptr = plane_selectors.as_mut_ptr();
+        let row = index / topk as usize;
+        if row >= rows as usize {
+            return;
+        }
+        let position = start_position as u64 + row as u64 * position_stride as u64;
+        let window_size = window_size as u64;
+        let maximum_visible = (position + 1).min(window_size);
+        let valid_window_len = if explicit_window_lens != 0 {
+            match row_window_lens.get(row) {
+                Some(value) if *value >= 0 && (*value as u64) <= maximum_visible => *value as u64,
+                _ => 0,
+            }
+        } else {
+            maximum_visible
+        };
+        let combined_index = combined.get(index).copied().unwrap_or(-1);
+        let mut logical = -1i32;
+        let mut selector = -1i32;
+        if combined_index >= 0 {
+            let combined_index = combined_index as u64;
+            if combined_index >= window_size {
+                let compressed = combined_index - window_size;
+                if compressed <= i32::MAX as u64 {
+                    logical = compressed as i32;
+                    selector = 1;
+                }
+            } else if position < window_size {
+                if combined_index < valid_window_len && combined_index <= position {
+                    logical = combined_index as i32;
+                    selector = 0;
+                }
+            } else {
+                let current_slot = position % window_size;
+                let age = (current_slot + window_size - combined_index) % window_size;
+                if age < valid_window_len {
+                    let absolute = position - age;
+                    if absolute <= i32::MAX as u64 {
+                        logical = absolute as i32;
+                        selector = 0;
+                    }
+                }
+            }
+        }
+        unsafe {
+            *logical_ptr.add(index) = logical;
+            *selector_ptr.add(index) = selector;
+        }
+    }
+
     // ── Sparse attention with sink ────────────────────────────────────
 
     /// Tiled sparse attention with online softmax and attention sink.
@@ -3950,84 +4787,692 @@ pub mod kernels {
         }
     }
 
-    // ── Attention scores (GQA-aware) ──────────────────────────────────
-
+    /// Paged sparse attention over one contiguous physical plane. Each thread
+    /// owns one `(query_token, head)` pair and resolves logical top-k tokens
+    /// through the sequence's packed physical block table.
     #[kernel]
-    pub fn attn_scores(
+    pub fn paged_sparse_attn_tiled_sink_f32(
         q: &[f32],
-        k_cache: &[f32],
-        mut scores: DisjointSlice<f32>,
-        seq_len: u32,
-        nh: u32,
-        nkv: u32,
-        hd: u32,
-        sm_scale: f32,
+        plane: &[f32],
+        block_slots: &[i32],
+        sequence_block_offsets: &[i32],
+        sequence_kv_lens: &[i32],
+        row_sequence_ids: &[i32],
+        row_kv_lens: &[i32],
+        topk: &[i32],
+        sink: &[f32],
+        mut output: DisjointSlice<f32>,
+        num_pairs: u32,
+        tokens_per_sequence: u32,
+        heads: u32,
+        head_dim: u32,
+        topk_len: u32,
+        page_tokens: u32,
+        elements_per_token: u32,
+        layer_index: u32,
+        layer_count: u32,
+        use_row_sequence_ids: u32,
+        use_row_kv_lens: u32,
+        softmax_scale: f32,
     ) {
-        let i = thread::index_1d().get();
-        let nh = nh as usize;
-        let nkv = nkv as usize;
-        let hd = hd as usize;
-        let sl = seq_len as usize;
-        let total = nh * sl;
-        if (i as u64) >= total as u64 {
+        let pair = thread::index_1d().get() as usize;
+        if pair >= num_pairs as usize {
             return;
         }
-        let h = i as usize / sl;
-        let p = i as usize % sl;
-        let n_rep = nh / nkv;
-        let kv_h = h / n_rep;
-        let mut dot = 0.0f32;
-        for j in 0..hd {
-            dot += q[h * hd + j] * k_cache[p * nkv * hd + kv_h * hd + j];
+        let heads = heads as usize;
+        let token = pair / heads;
+        let head = pair % heads;
+        let sequence = paged_row_sequence(
+            row_sequence_ids,
+            token,
+            token / tokens_per_sequence as usize,
+            use_row_sequence_ids,
+        );
+        let head_dim = head_dim as usize;
+        let topk_len = topk_len as usize;
+        let q_offset = pair * head_dim;
+        let topk_offset = token * topk_len;
+        let sink_value = sink.get(head).copied().unwrap_or(f32::NEG_INFINITY);
+
+        let mut max_score = sink_value;
+        let mut topk_slot = 0usize;
+        while topk_slot < topk_len {
+            let logical_token = paged_row_visible_token(
+                topk.get(topk_offset + topk_slot).copied().unwrap_or(-1),
+                row_kv_lens,
+                token,
+                use_row_kv_lens,
+            );
+            let kv_offset = paged_sparse_kv_offset(
+                block_slots,
+                sequence_block_offsets,
+                sequence_kv_lens,
+                sequence,
+                logical_token,
+                page_tokens as usize,
+                elements_per_token as usize,
+                head_dim,
+                layer_index as usize,
+                layer_count as usize,
+                plane.len(),
+            );
+            if kv_offset != usize::MAX {
+                let mut dot = 0.0f32;
+                let mut dimension = 0usize;
+                while dimension < head_dim {
+                    dot += q[q_offset + dimension] * plane[kv_offset + dimension];
+                    dimension += 1;
+                }
+                let score = dot * softmax_scale;
+                if score > max_score {
+                    max_score = score;
+                }
+            }
+            topk_slot += 1;
         }
-        if let Some(s) = scores.get_mut(thread::index_1d()) {
-            *s = dot * sm_scale;
+
+        let output_offset = pair * head_dim;
+        let output_ptr = output.as_mut_ptr();
+        let mut dimension = 0usize;
+        while dimension < head_dim {
+            unsafe {
+                *output_ptr.add(output_offset + dimension) = 0.0;
+            }
+            dimension += 1;
+        }
+        let mut denominator = fast_exp(sink_value - max_score);
+        let mut topk_slot = 0usize;
+        while topk_slot < topk_len {
+            let logical_token = paged_row_visible_token(
+                topk.get(topk_offset + topk_slot).copied().unwrap_or(-1),
+                row_kv_lens,
+                token,
+                use_row_kv_lens,
+            );
+            let kv_offset = paged_sparse_kv_offset(
+                block_slots,
+                sequence_block_offsets,
+                sequence_kv_lens,
+                sequence,
+                logical_token,
+                page_tokens as usize,
+                elements_per_token as usize,
+                head_dim,
+                layer_index as usize,
+                layer_count as usize,
+                plane.len(),
+            );
+            if kv_offset != usize::MAX {
+                let mut dot = 0.0f32;
+                let mut dimension = 0usize;
+                while dimension < head_dim {
+                    dot += q[q_offset + dimension] * plane[kv_offset + dimension];
+                    dimension += 1;
+                }
+                let weight = fast_exp(dot * softmax_scale - max_score);
+                denominator += weight;
+                let mut dimension = 0usize;
+                while dimension < head_dim {
+                    unsafe {
+                        *output_ptr.add(output_offset + dimension) +=
+                            weight * plane[kv_offset + dimension];
+                    }
+                    dimension += 1;
+                }
+            }
+            topk_slot += 1;
+        }
+        let mut dimension = 0usize;
+        while dimension < head_dim {
+            unsafe {
+                *output_ptr.add(output_offset + dimension) /= denominator;
+            }
+            dimension += 1;
         }
     }
 
-    // ── Attention: weighted V combine with inline softmax (GQA-aware) ──
-    /// Fuses softmax(scores) + Σ softmax_i × V_i into one kernel.
-    /// Eliminates CPU round-trip for softmax (cf. llama.cpp flash-attn patterns).
+    /// Warp-specialized paged sparse attention for a 512-element value vector.
     #[kernel]
-    pub fn attn_combine_softmax(
-        scores: &[f32],
-        v_cache: &[f32],
-        mut out: DisjointSlice<f32>,
-        seq_len: u32,
-        nh: u32,
-        nkv: u32,
-        hd: u32,
+    pub fn paged_sparse_attn_warp_sink_f32_d512(
+        q: &[f32],
+        plane: &[f32],
+        block_slots: &[i32],
+        sequence_block_offsets: &[i32],
+        sequence_kv_lens: &[i32],
+        row_sequence_ids: &[i32],
+        row_kv_lens: &[i32],
+        topk: &[i32],
+        sink: &[f32],
+        mut output: DisjointSlice<f32>,
+        num_pairs: u32,
+        tokens_per_sequence: u32,
+        heads: u32,
+        topk_len: u32,
+        page_tokens: u32,
+        elements_per_token: u32,
+        layer_index: u32,
+        layer_count: u32,
+        use_row_sequence_ids: u32,
+        use_row_kv_lens: u32,
+        softmax_scale: f32,
     ) {
-        let i = thread::index_1d().get();
-        let nh = nh as usize;
-        let nkv = nkv as usize;
-        let hd = hd as usize;
-        let sl = seq_len as usize;
-        let total = nh * hd;
-        if i >= total {
+        let pair = thread::blockIdx_x() as usize;
+        let lane = thread::threadIdx_x() as usize;
+        if pair >= num_pairs as usize || lane >= 32 {
             return;
         }
-        let h = i as usize / hd;
-        let d = i as usize % hd;
-        let n_rep = nh / nkv;
-        let kv_h = h / n_rep;
-        // Inline softmax: max → exp-sum → weighted combine
-        let mut max_s = f32::NEG_INFINITY;
-        for p in 0..sl {
-            let s = scores[h * sl + p];
-            if s > max_s {
-                max_s = s;
+        let heads = heads as usize;
+        let token = pair / heads;
+        let head = pair % heads;
+        let sequence = paged_row_sequence(
+            row_sequence_ids,
+            token,
+            token / tokens_per_sequence as usize,
+            use_row_sequence_ids,
+        );
+        let topk_len = topk_len as usize;
+        let topk_offset = token * topk_len;
+        let q_offset = pair * 512;
+        let mut q_values = [0.0f32; 16];
+        let mut output_values = [0.0f32; 16];
+        let mut local = 0usize;
+        while local < 16 {
+            q_values[local] = q[q_offset + lane + local * 32];
+            local += 1;
+        }
+
+        let sink_value = sink.get(head).copied().unwrap_or(f32::NEG_INFINITY);
+        let mut max_score = sink_value;
+        let mut topk_slot = 0usize;
+        while topk_slot < topk_len {
+            let logical_token = paged_row_visible_token(
+                topk.get(topk_offset + topk_slot).copied().unwrap_or(-1),
+                row_kv_lens,
+                token,
+                use_row_kv_lens,
+            );
+            let kv_offset = paged_sparse_kv_offset(
+                block_slots,
+                sequence_block_offsets,
+                sequence_kv_lens,
+                sequence,
+                logical_token,
+                page_tokens as usize,
+                elements_per_token as usize,
+                512,
+                layer_index as usize,
+                layer_count as usize,
+                plane.len(),
+            );
+            if kv_offset != usize::MAX {
+                let mut partial = 0.0f32;
+                let mut local = 0usize;
+                while local < 16 {
+                    partial += q_values[local] * plane[kv_offset + lane + local * 32];
+                    local += 1;
+                }
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 16);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 8);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 4);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 2);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 1);
+                let score = partial * softmax_scale;
+                if score > max_score {
+                    max_score = score;
+                }
             }
+            topk_slot += 1;
         }
-        let mut sum_w = 0.0f32;
-        let mut val = 0.0f32;
-        for p in 0..sl {
-            let w = fast_exp(scores[h * sl + p] - max_s);
-            sum_w += w;
-            val += w * v_cache[p * nkv * hd + kv_h * hd + d];
+
+        let mut denominator = fast_exp(sink_value - max_score);
+        let mut topk_slot = 0usize;
+        while topk_slot < topk_len {
+            let logical_token = paged_row_visible_token(
+                topk.get(topk_offset + topk_slot).copied().unwrap_or(-1),
+                row_kv_lens,
+                token,
+                use_row_kv_lens,
+            );
+            let kv_offset = paged_sparse_kv_offset(
+                block_slots,
+                sequence_block_offsets,
+                sequence_kv_lens,
+                sequence,
+                logical_token,
+                page_tokens as usize,
+                elements_per_token as usize,
+                512,
+                layer_index as usize,
+                layer_count as usize,
+                plane.len(),
+            );
+            if kv_offset != usize::MAX {
+                let mut kv_values = [0.0f32; 16];
+                let mut partial = 0.0f32;
+                let mut local = 0usize;
+                while local < 16 {
+                    let value = plane[kv_offset + lane + local * 32];
+                    kv_values[local] = value;
+                    partial += q_values[local] * value;
+                    local += 1;
+                }
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 16);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 8);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 4);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 2);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 1);
+                let weight = fast_exp(partial * softmax_scale - max_score);
+                denominator += weight;
+                let mut local = 0usize;
+                while local < 16 {
+                    output_values[local] += weight * kv_values[local];
+                    local += 1;
+                }
+            }
+            topk_slot += 1;
         }
-        if let Some(o) = out.get_mut(thread::index_1d()) {
-            *o = val / sum_w;
+
+        let output_offset = pair * 512;
+        let output_ptr = output.as_mut_ptr();
+        let mut local = 0usize;
+        while local < 16 {
+            unsafe {
+                *output_ptr.add(output_offset + lane + local * 32) =
+                    output_values[local] / denominator;
+            }
+            local += 1;
+        }
+    }
+
+    /// Dual-plane paged sparse attention. A selector beside each top-k entry
+    /// chooses plane zero or one; both planes share the physical block table.
+    #[kernel]
+    pub fn dual_plane_paged_sparse_attn_tiled_sink_f32(
+        q: &[f32],
+        first_plane: &[f32],
+        second_plane: &[f32],
+        block_slots: &[i32],
+        sequence_block_offsets: &[i32],
+        sequence_kv_lens: &[i32],
+        row_sequence_ids: &[i32],
+        row_kv_lens: &[i32],
+        topk: &[i32],
+        selectors: &[i32],
+        sink: &[f32],
+        mut output: DisjointSlice<f32>,
+        num_pairs: u32,
+        tokens_per_sequence: u32,
+        heads: u32,
+        head_dim: u32,
+        topk_len: u32,
+        page_tokens: u32,
+        first_elements_per_token: u32,
+        second_elements_per_token: u32,
+        layer_index: u32,
+        layer_count: u32,
+        use_row_sequence_ids: u32,
+        use_row_kv_lens: u32,
+        softmax_scale: f32,
+    ) {
+        let pair = thread::index_1d().get() as usize;
+        if pair >= num_pairs as usize {
+            return;
+        }
+        let heads = heads as usize;
+        let token = pair / heads;
+        let head = pair % heads;
+        let sequence = paged_row_sequence(
+            row_sequence_ids,
+            token,
+            token / tokens_per_sequence as usize,
+            use_row_sequence_ids,
+        );
+        let head_dim = head_dim as usize;
+        let topk_len = topk_len as usize;
+        let q_offset = pair * head_dim;
+        let topk_offset = token * topk_len;
+        let sink_value = sink.get(head).copied().unwrap_or(f32::NEG_INFINITY);
+        let mut max_score = sink_value;
+        let mut item = 0usize;
+        while item < topk_len {
+            let entry = topk_offset + item;
+            let selector = selectors.get(entry).copied().unwrap_or(-1);
+            let logical_token = paged_row_visible_token(
+                topk.get(entry).copied().unwrap_or(-1),
+                row_kv_lens,
+                token,
+                use_row_kv_lens,
+            );
+            let kv_offset = if selector == 0 {
+                paged_sparse_kv_offset(
+                    block_slots,
+                    sequence_block_offsets,
+                    sequence_kv_lens,
+                    sequence,
+                    logical_token,
+                    page_tokens as usize,
+                    first_elements_per_token as usize,
+                    head_dim,
+                    layer_index as usize,
+                    layer_count as usize,
+                    first_plane.len(),
+                )
+            } else if selector == 1 {
+                paged_sparse_kv_offset(
+                    block_slots,
+                    sequence_block_offsets,
+                    sequence_kv_lens,
+                    sequence,
+                    logical_token,
+                    page_tokens as usize,
+                    second_elements_per_token as usize,
+                    head_dim,
+                    layer_index as usize,
+                    layer_count as usize,
+                    second_plane.len(),
+                )
+            } else {
+                usize::MAX
+            };
+            if kv_offset != usize::MAX {
+                let mut dot = 0.0f32;
+                let mut d = 0usize;
+                while d < head_dim {
+                    let value = if selector == 0 {
+                        first_plane[kv_offset + d]
+                    } else {
+                        second_plane[kv_offset + d]
+                    };
+                    dot += q[q_offset + d] * value;
+                    d += 1;
+                }
+                let score = dot * softmax_scale;
+                if score > max_score {
+                    max_score = score;
+                }
+            }
+            item += 1;
+        }
+
+        let out_offset = pair * head_dim;
+        let out_ptr = output.as_mut_ptr();
+        let mut d = 0usize;
+        while d < head_dim {
+            unsafe { *out_ptr.add(out_offset + d) = 0.0 };
+            d += 1;
+        }
+        let mut denominator = fast_exp(sink_value - max_score);
+        item = 0;
+        while item < topk_len {
+            let entry = topk_offset + item;
+            let selector = selectors.get(entry).copied().unwrap_or(-1);
+            let logical_token = paged_row_visible_token(
+                topk.get(entry).copied().unwrap_or(-1),
+                row_kv_lens,
+                token,
+                use_row_kv_lens,
+            );
+            let kv_offset = if selector == 0 {
+                paged_sparse_kv_offset(
+                    block_slots,
+                    sequence_block_offsets,
+                    sequence_kv_lens,
+                    sequence,
+                    logical_token,
+                    page_tokens as usize,
+                    first_elements_per_token as usize,
+                    head_dim,
+                    layer_index as usize,
+                    layer_count as usize,
+                    first_plane.len(),
+                )
+            } else if selector == 1 {
+                paged_sparse_kv_offset(
+                    block_slots,
+                    sequence_block_offsets,
+                    sequence_kv_lens,
+                    sequence,
+                    logical_token,
+                    page_tokens as usize,
+                    second_elements_per_token as usize,
+                    head_dim,
+                    layer_index as usize,
+                    layer_count as usize,
+                    second_plane.len(),
+                )
+            } else {
+                usize::MAX
+            };
+            if kv_offset != usize::MAX {
+                let mut dot = 0.0f32;
+                let mut d = 0usize;
+                while d < head_dim {
+                    let value = if selector == 0 {
+                        first_plane[kv_offset + d]
+                    } else {
+                        second_plane[kv_offset + d]
+                    };
+                    dot += q[q_offset + d] * value;
+                    d += 1;
+                }
+                let weight = fast_exp(dot * softmax_scale - max_score);
+                denominator += weight;
+                d = 0;
+                while d < head_dim {
+                    let value = if selector == 0 {
+                        first_plane[kv_offset + d]
+                    } else {
+                        second_plane[kv_offset + d]
+                    };
+                    unsafe { *out_ptr.add(out_offset + d) += weight * value };
+                    d += 1;
+                }
+            }
+            item += 1;
+        }
+        d = 0;
+        while d < head_dim {
+            unsafe { *out_ptr.add(out_offset + d) /= denominator };
+            d += 1;
+        }
+    }
+
+    /// Warp-specialized dual-plane paged sparse attention for 512-element rows.
+    #[kernel]
+    pub fn dual_plane_paged_sparse_attn_warp_sink_f32_d512(
+        q: &[f32],
+        first_plane: &[f32],
+        second_plane: &[f32],
+        block_slots: &[i32],
+        sequence_block_offsets: &[i32],
+        sequence_kv_lens: &[i32],
+        row_sequence_ids: &[i32],
+        row_kv_lens: &[i32],
+        topk: &[i32],
+        selectors: &[i32],
+        sink: &[f32],
+        mut output: DisjointSlice<f32>,
+        num_pairs: u32,
+        tokens_per_sequence: u32,
+        heads: u32,
+        topk_len: u32,
+        page_tokens: u32,
+        first_elements_per_token: u32,
+        second_elements_per_token: u32,
+        layer_index: u32,
+        layer_count: u32,
+        use_row_sequence_ids: u32,
+        use_row_kv_lens: u32,
+        softmax_scale: f32,
+    ) {
+        let pair = thread::blockIdx_x() as usize;
+        let lane = thread::threadIdx_x() as usize;
+        if pair >= num_pairs as usize || lane >= 32 {
+            return;
+        }
+        let heads = heads as usize;
+        let token = pair / heads;
+        let head = pair % heads;
+        let sequence = paged_row_sequence(
+            row_sequence_ids,
+            token,
+            token / tokens_per_sequence as usize,
+            use_row_sequence_ids,
+        );
+        let topk_len = topk_len as usize;
+        let topk_offset = token * topk_len;
+        let mut q_values = [0.0f32; 16];
+        let mut output_values = [0.0f32; 16];
+        let mut local = 0usize;
+        while local < 16 {
+            q_values[local] = q[pair * 512 + lane + local * 32];
+            local += 1;
+        }
+        let sink_value = sink.get(head).copied().unwrap_or(f32::NEG_INFINITY);
+        let mut max_score = sink_value;
+        let mut item = 0usize;
+        while item < topk_len {
+            let entry = topk_offset + item;
+            let selector = selectors.get(entry).copied().unwrap_or(-1);
+            let logical_token = paged_row_visible_token(
+                topk.get(entry).copied().unwrap_or(-1),
+                row_kv_lens,
+                token,
+                use_row_kv_lens,
+            );
+            let kv_offset = if selector == 0 {
+                paged_sparse_kv_offset(
+                    block_slots,
+                    sequence_block_offsets,
+                    sequence_kv_lens,
+                    sequence,
+                    logical_token,
+                    page_tokens as usize,
+                    first_elements_per_token as usize,
+                    512,
+                    layer_index as usize,
+                    layer_count as usize,
+                    first_plane.len(),
+                )
+            } else if selector == 1 {
+                paged_sparse_kv_offset(
+                    block_slots,
+                    sequence_block_offsets,
+                    sequence_kv_lens,
+                    sequence,
+                    logical_token,
+                    page_tokens as usize,
+                    second_elements_per_token as usize,
+                    512,
+                    layer_index as usize,
+                    layer_count as usize,
+                    second_plane.len(),
+                )
+            } else {
+                usize::MAX
+            };
+            if kv_offset != usize::MAX {
+                let mut partial = 0.0f32;
+                local = 0;
+                while local < 16 {
+                    let value = if selector == 0 {
+                        first_plane[kv_offset + lane + local * 32]
+                    } else {
+                        second_plane[kv_offset + lane + local * 32]
+                    };
+                    partial += q_values[local] * value;
+                    local += 1;
+                }
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 16);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 8);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 4);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 2);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 1);
+                let score = partial * softmax_scale;
+                if score > max_score {
+                    max_score = score;
+                }
+            }
+            item += 1;
+        }
+        let mut denominator = fast_exp(sink_value - max_score);
+        item = 0;
+        while item < topk_len {
+            let entry = topk_offset + item;
+            let selector = selectors.get(entry).copied().unwrap_or(-1);
+            let logical_token = paged_row_visible_token(
+                topk.get(entry).copied().unwrap_or(-1),
+                row_kv_lens,
+                token,
+                use_row_kv_lens,
+            );
+            let kv_offset = if selector == 0 {
+                paged_sparse_kv_offset(
+                    block_slots,
+                    sequence_block_offsets,
+                    sequence_kv_lens,
+                    sequence,
+                    logical_token,
+                    page_tokens as usize,
+                    first_elements_per_token as usize,
+                    512,
+                    layer_index as usize,
+                    layer_count as usize,
+                    first_plane.len(),
+                )
+            } else if selector == 1 {
+                paged_sparse_kv_offset(
+                    block_slots,
+                    sequence_block_offsets,
+                    sequence_kv_lens,
+                    sequence,
+                    logical_token,
+                    page_tokens as usize,
+                    second_elements_per_token as usize,
+                    512,
+                    layer_index as usize,
+                    layer_count as usize,
+                    second_plane.len(),
+                )
+            } else {
+                usize::MAX
+            };
+            if kv_offset != usize::MAX {
+                let mut values = [0.0f32; 16];
+                let mut partial = 0.0f32;
+                local = 0;
+                while local < 16 {
+                    let value = if selector == 0 {
+                        first_plane[kv_offset + lane + local * 32]
+                    } else {
+                        second_plane[kv_offset + lane + local * 32]
+                    };
+                    values[local] = value;
+                    partial += q_values[local] * value;
+                    local += 1;
+                }
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 16);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 8);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 4);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 2);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 1);
+                let weight = fast_exp(partial * softmax_scale - max_score);
+                denominator += weight;
+                local = 0;
+                while local < 16 {
+                    output_values[local] += weight * values[local];
+                    local += 1;
+                }
+            }
+            item += 1;
+        }
+        let out_ptr = output.as_mut_ptr();
+        local = 0;
+        while local < 16 {
+            unsafe {
+                *out_ptr.add(pair * 512 + lane + local * 32) = output_values[local] / denominator
+            };
+            local += 1;
         }
     }
 
@@ -4089,6 +5534,70 @@ pub mod kernels {
                 unsafe {
                     *idx_ptr.add(j) = best_idx[j] as f32;
                     *val_ptr.add(j) = best_val[j];
+                }
+            }
+        }
+    }
+
+    /// Find per-row top-k token indices and values from row-major vocab logits.
+    /// One block owns each row and uses the same scan/insertion semantics as
+    /// `topk_vocab`, including lower-token-id precedence for equal logits.
+    #[kernel]
+    pub fn topk_vocab_rows(
+        logits: &[f32],
+        mut out_idx: DisjointSlice<f32>,
+        mut out_val: DisjointSlice<f32>,
+        rows: u32,
+        vocab: u32,
+        k: u32,
+    ) {
+        static mut SMEM: SharedArray<f32, 1024> = SharedArray::UNINIT;
+        let row = thread::blockIdx_x() as usize;
+        let tid = thread::threadIdx_x() as usize;
+        let rows = rows as usize;
+        let vocab = vocab as usize;
+        let k = k as usize;
+        let chunk = 1024usize;
+
+        if row < rows && tid == 0 {
+            let mut best_val = [f32::NEG_INFINITY; 40];
+            let mut best_idx = [0u32; 40];
+            let row_offset = row * vocab;
+
+            let mut cursor = 0usize;
+            while cursor < vocab {
+                let n = (vocab - cursor).min(chunk);
+                for i in 0..n {
+                    unsafe {
+                        SMEM[i] = logits[row_offset + cursor + i];
+                    }
+                }
+                for i in 0..n {
+                    let v = unsafe { SMEM[i] };
+                    let gid = (cursor + i) as u32;
+                    let mut pos = k;
+                    while pos > 0 && v > best_val[pos - 1] {
+                        pos -= 1;
+                    }
+                    if pos < k {
+                        for j in (pos + 1..k).rev() {
+                            best_val[j] = best_val[j - 1];
+                            best_idx[j] = best_idx[j - 1];
+                        }
+                        best_val[pos] = v;
+                        best_idx[pos] = gid;
+                    }
+                }
+                cursor += n;
+            }
+
+            let output_offset = row * k;
+            let idx_ptr = out_idx.as_mut_ptr();
+            let val_ptr = out_val.as_mut_ptr();
+            for j in 0..k {
+                unsafe {
+                    *idx_ptr.add(output_offset + j) = best_idx[j] as f32;
+                    *val_ptr.add(output_offset + j) = best_val[j];
                 }
             }
         }
@@ -4186,6 +5695,74 @@ pub mod kernels {
         unsafe {
             *ptr.add(head_idx * hd + d2) = out0;
             *ptr.add(head_idx * hd + d2 + 1) = out1;
+        }
+    }
+
+    /// Scatter dense rows into one layer of contiguous paged-plane storage.
+    ///
+    /// `row_sequence_ids[row]` selects a sequence, while `positions[row]` selects
+    /// its logical row within the packed block table. One thread owns
+    /// one value, so the complete operation uses a single kernel launch.
+    #[kernel]
+    pub fn paged_plane_scatter_rows_f32(
+        values: &[f32],
+        positions: &[i32],
+        block_slots: &[i32],
+        block_offsets: &[i32],
+        row_sequence_ids: &[i32],
+        mask: &[i32],
+        mut plane: DisjointSlice<f32>,
+        num_elements: u32,
+        plane_elements: u32,
+        rows: u32,
+        row_dim: u32,
+        page_tokens: u32,
+        layer_index: u32,
+        layer_count: u32,
+        use_row_sequence_ids: u32,
+        use_mask: u32,
+    ) {
+        let idx = thread::index_1d().get();
+        if (idx as u64) >= num_elements as u64 || row_dim == 0 {
+            return;
+        }
+        let row_dim = row_dim as usize;
+        let row = idx as usize / row_dim;
+        if row >= rows as usize {
+            return;
+        }
+        if use_mask != 0 {
+            match mask.get(row) {
+                Some(value) if *value != 0 => {}
+                _ => return,
+            }
+        }
+        let logical_row = match positions.get(row) {
+            Some(value) if *value >= 0 => *value as usize,
+            _ => return,
+        };
+        let sequence = paged_row_sequence(row_sequence_ids, row, row, use_row_sequence_ids);
+        let base = paged_plane_row_offset(
+            plane_elements as usize,
+            block_slots,
+            block_offsets,
+            sequence,
+            logical_row,
+            page_tokens as usize,
+            row_dim,
+            layer_index as usize,
+            layer_count as usize,
+        );
+        if base == usize::MAX {
+            return;
+        }
+        let column = idx as usize - row * row_dim;
+        let value = match values.get(idx as usize) {
+            Some(value) => *value,
+            None => return,
+        };
+        unsafe {
+            *plane.as_mut_ptr().add(base + column) = value;
         }
     }
 
@@ -4352,6 +5929,81 @@ pub mod kernels {
         let position = start_position as usize + row * position_stride as usize;
         let cos = cos_table[position * rd2 + pair];
         let sin = sin_table[position * rd2 + pair];
+        let (s, c) = if inverse != 0 {
+            (-sin, cos)
+        } else {
+            (sin, cos)
+        };
+        let row_stride = heads * hd;
+        let tail_start = hd - rd;
+        let base = row * row_stride + head * hd + tail_start + pair * 2;
+        let ptr = qk.as_mut_ptr();
+        let x0 = unsafe { *ptr.add(base) };
+        let x1 = unsafe { *ptr.add(base + 1) };
+        unsafe {
+            *ptr.add(base) = x0 * c - x1 * s;
+            *ptr.add(base + 1) = x0 * s + x1 * c;
+        }
+    }
+
+    /// Batched tail rotary for `[rows, heads, head_dim]` with an arbitrary
+    /// device-resident position for every row.
+    #[kernel]
+    pub fn rope_tail_yaarn_rows_indexed(
+        mut qk: DisjointSlice<f32>,
+        cos_table: &[f32],
+        sin_table: &[f32],
+        positions: &[i32],
+        num_pairs: u32,
+        rows: u32,
+        heads: u32,
+        head_dim: u32,
+        rope_dim: u32,
+        inverse: u32,
+    ) {
+        let idx = thread::index_1d().get();
+        if (idx as u64) >= num_pairs as u64 {
+            return;
+        }
+        let hd = head_dim as usize;
+        let rd = rope_dim as usize;
+        let heads = heads as usize;
+        let rows = rows as usize;
+        if rows == 0 || heads == 0 || rd == 0 || rd > hd {
+            return;
+        }
+        let rd2 = rd / 2;
+        if rd2 == 0 {
+            return;
+        }
+        let pair_idx = idx as usize;
+        let pairs_per_row = heads * rd2;
+        let row = pair_idx / pairs_per_row;
+        if row >= rows {
+            return;
+        }
+        let position = match positions.get(row) {
+            Some(value) if *value >= 0 => *value as usize,
+            _ => return,
+        };
+        let rem = pair_idx - row * pairs_per_row;
+        let head = rem / rd2;
+        let pair = rem - head * rd2;
+        let table_offset = match position
+            .checked_mul(rd2)
+            .and_then(|base| base.checked_add(pair))
+        {
+            Some(value) => value,
+            None => return,
+        };
+        let cos = match cos_table.get(table_offset) {
+            Some(value) => *value,
+            None => return,
+        };
+        let sin = match sin_table.get(table_offset) {
+            Some(value) => *value,
+            None => return,
+        };
         let (s, c) = if inverse != 0 {
             (-sin, cos)
         } else {
@@ -5997,297 +7649,6 @@ pub mod kernels {
         }
     }
 
-    #[kernel]
-    pub fn hc_pre_single_f32(
-        state: &[f32],
-        function: &[f32],
-        scale: &[f32],
-        base: &[f32],
-        mut hidden: DisjointSlice<f32>,
-        mut split_pre: DisjointSlice<f32>,
-        mut split_post: DisjointSlice<f32>,
-        mut split_comb: DisjointSlice<f32>,
-        hc_mult: u32,
-        hidden_size: u32,
-        mix_hc: u32,
-        sinkhorn_iters: u32,
-        eps: f32,
-        norm_eps: f32,
-    ) {
-        static mut SUM: SharedArray<f32, 1024> = SharedArray::UNINIT;
-        static mut MIX: SharedArray<f32, 128> = SharedArray::UNINIT;
-        static mut PRE: SharedArray<f32, 16> = SharedArray::UNINIT;
-        static mut COMB: SharedArray<f32, 256> = SharedArray::UNINIT;
-        let tid = thread::threadIdx_x() as usize;
-        let bdim = thread::blockDim_x() as usize;
-        let hc = hc_mult as usize;
-        let dim = hidden_size as usize;
-        let mix = mix_hc as usize;
-        let hc_dim = hc * dim;
-        if hc == 0 || hc > 16 || mix > 128 || hc * hc > 256 {
-            return;
-        }
-
-        let mut sum = 0.0f32;
-        let mut j = tid;
-        while j < hc_dim {
-            let v = state[j];
-            sum += v * v;
-            j += bdim;
-        }
-        unsafe {
-            SUM[tid] = sum;
-        }
-        thread::sync_threads();
-        let mut stride = (bdim + 1) / 2;
-        while stride > 0 {
-            if tid < stride && tid + stride < bdim {
-                unsafe {
-                    SUM[tid] += SUM[tid + stride];
-                }
-            }
-            thread::sync_threads();
-            stride /= 2;
-        }
-        if tid == 0 {
-            let val = unsafe { SUM[0] } / hc_dim as f32 + norm_eps;
-            unsafe {
-                SUM[0] = fast_rsqrt(val);
-            }
-        }
-        thread::sync_threads();
-        let rms = unsafe { SUM[0] };
-
-        if tid < mix {
-            let mut dot = 0.0f32;
-            let row = tid;
-            for col in 0..hc_dim {
-                dot += function[row * hc_dim + col] * state[col];
-            }
-            unsafe {
-                MIX[row] = dot * rms;
-            }
-        }
-        thread::sync_threads();
-
-        if tid == 0 {
-            for copy in 0..hc {
-                let pre = fast_sigmoid(unsafe { MIX[copy] } * scale[0] + base[copy]) + eps;
-                let post =
-                    2.0 * fast_sigmoid(unsafe { MIX[hc + copy] } * scale[1] + base[hc + copy]);
-                unsafe {
-                    PRE[copy] = pre;
-                }
-                let pre_ptr = split_pre.as_mut_ptr();
-                let post_ptr = split_post.as_mut_ptr();
-                unsafe {
-                    *pre_ptr.add(copy) = pre;
-                    *post_ptr.add(copy) = post;
-                }
-            }
-
-            for row in 0..hc {
-                let mut row_max = f32::NEG_INFINITY;
-                for col in 0..hc {
-                    let idx = row * hc + col;
-                    let v = unsafe { MIX[2 * hc + idx] } * scale[2] + base[2 * hc + idx];
-                    unsafe {
-                        COMB[idx] = v;
-                    }
-                    if v > row_max {
-                        row_max = v;
-                    }
-                }
-                let mut row_sum = 0.0f32;
-                for col in 0..hc {
-                    let idx = row * hc + col;
-                    let v = fast_exp(unsafe { COMB[idx] } - row_max);
-                    unsafe {
-                        COMB[idx] = v;
-                    }
-                    row_sum += v;
-                }
-                for col in 0..hc {
-                    let idx = row * hc + col;
-                    unsafe {
-                        COMB[idx] /= row_sum;
-                        COMB[idx] += eps;
-                    }
-                }
-            }
-
-            for col in 0..hc {
-                let mut col_sum = 0.0f32;
-                for row in 0..hc {
-                    col_sum += unsafe { COMB[row * hc + col] };
-                }
-                for row in 0..hc {
-                    let idx = row * hc + col;
-                    unsafe {
-                        COMB[idx] /= col_sum + eps;
-                    }
-                }
-            }
-            let mut iter = 1u32;
-            while iter < sinkhorn_iters {
-                for row in 0..hc {
-                    let mut row_sum = 0.0f32;
-                    for col in 0..hc {
-                        row_sum += unsafe { COMB[row * hc + col] };
-                    }
-                    for col in 0..hc {
-                        let idx = row * hc + col;
-                        unsafe {
-                            COMB[idx] /= row_sum + eps;
-                        }
-                    }
-                }
-                for col in 0..hc {
-                    let mut col_sum = 0.0f32;
-                    for row in 0..hc {
-                        col_sum += unsafe { COMB[row * hc + col] };
-                    }
-                    for row in 0..hc {
-                        let idx = row * hc + col;
-                        unsafe {
-                            COMB[idx] /= col_sum + eps;
-                        }
-                    }
-                }
-                iter += 1;
-            }
-
-            let comb_ptr = split_comb.as_mut_ptr();
-            for idx in 0..hc * hc {
-                unsafe {
-                    *comb_ptr.add(idx) = COMB[idx];
-                }
-            }
-        }
-        thread::sync_threads();
-
-        let hidden_ptr = hidden.as_mut_ptr();
-        let mut d = tid;
-        while d < dim {
-            let mut out = 0.0f32;
-            for copy in 0..hc {
-                out += unsafe { PRE[copy] } * state[copy * dim + d];
-            }
-            unsafe {
-                *hidden_ptr.add(d) = out;
-            }
-            d += bdim;
-        }
-    }
-
-    #[kernel]
-    pub fn hc_post_single_f32(
-        hidden: &[f32],
-        residual: &[f32],
-        split_post: &[f32],
-        split_comb: &[f32],
-        mut output: DisjointSlice<f32>,
-        hc_mult: u32,
-        hidden_size: u32,
-    ) {
-        let idx = thread::index_1d().get();
-        let hc = hc_mult as usize;
-        let dim = hidden_size as usize;
-        let total = hc * dim;
-        if (idx as u64) >= total as u64 {
-            return;
-        }
-        let idx = idx as usize;
-        let copy = idx / dim;
-        let d = idx % dim;
-        let mut comb_row_sum = 0.0f32;
-        for k in 0..hc {
-            comb_row_sum += split_comb[copy * hc + k];
-        }
-        if let Some(o) = output.get_mut(thread::index_1d()) {
-            *o = split_post[copy] * hidden[d] + comb_row_sum * residual[idx];
-        }
-    }
-
-    #[kernel]
-    pub fn hc_head_single_f32(
-        state: &[f32],
-        function: &[f32],
-        scale: &[f32],
-        base: &[f32],
-        mut hidden: DisjointSlice<f32>,
-        hc_mult: u32,
-        hidden_size: u32,
-        eps: f32,
-        norm_eps: f32,
-    ) {
-        static mut SUM: SharedArray<f32, 1024> = SharedArray::UNINIT;
-        static mut PRE: SharedArray<f32, 16> = SharedArray::UNINIT;
-        let tid = thread::threadIdx_x() as usize;
-        let bdim = thread::blockDim_x() as usize;
-        let hc = hc_mult as usize;
-        let dim = hidden_size as usize;
-        let hc_dim = hc * dim;
-        if hc == 0 || hc > 16 {
-            return;
-        }
-
-        let mut sum = 0.0f32;
-        let mut j = tid;
-        while j < hc_dim {
-            let v = state[j];
-            sum += v * v;
-            j += bdim;
-        }
-        unsafe {
-            SUM[tid] = sum;
-        }
-        thread::sync_threads();
-        let mut stride = (bdim + 1) / 2;
-        while stride > 0 {
-            if tid < stride && tid + stride < bdim {
-                unsafe {
-                    SUM[tid] += SUM[tid + stride];
-                }
-            }
-            thread::sync_threads();
-            stride /= 2;
-        }
-        if tid == 0 {
-            let val = unsafe { SUM[0] } / hc_dim as f32 + norm_eps;
-            unsafe {
-                SUM[0] = fast_rsqrt(val);
-            }
-        }
-        thread::sync_threads();
-        let rms = unsafe { SUM[0] };
-
-        if tid < hc {
-            let mut dot = 0.0f32;
-            let row = tid;
-            for col in 0..hc_dim {
-                dot += function[row * hc_dim + col] * state[col];
-            }
-            unsafe {
-                PRE[row] = fast_sigmoid(dot * rms * scale[0] + base[row]) + eps;
-            }
-        }
-        thread::sync_threads();
-
-        let hidden_ptr = hidden.as_mut_ptr();
-        let mut d = tid;
-        while d < dim {
-            let mut out = 0.0f32;
-            for copy in 0..hc {
-                out += unsafe { PRE[copy] } * state[copy * dim + d];
-            }
-            unsafe {
-                *hidden_ptr.add(d) = out;
-            }
-            d += bdim;
-        }
-    }
-
     // ── P6.2: microscaled FP4 (mxf4) warp MMA smoke (sm_120a+) ───────────
     //
     // GB10 FP4 tensor-core path. Single-tile: C[16×8] = A[16×64] × B[64×8]
@@ -6636,5 +7997,33 @@ pub mod kernels {
             }
             j += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::paged_plane_row_offset;
+
+    #[test]
+    fn paged_plane_row_offset_addresses_flattened_sequences() {
+        let block_slots = [4, 1, 3];
+        let block_offsets = [0, 2, 3];
+
+        assert_eq!(
+            paged_plane_row_offset(60, &block_slots, &block_offsets, 0, 0, 2, 3, 1, 2),
+            54
+        );
+        assert_eq!(
+            paged_plane_row_offset(60, &block_slots, &block_offsets, 0, 3, 2, 3, 1, 2),
+            21
+        );
+        assert_eq!(
+            paged_plane_row_offset(60, &block_slots, &block_offsets, 1, 1, 2, 3, 1, 2),
+            45
+        );
+        assert_eq!(
+            paged_plane_row_offset(60, &block_slots, &block_offsets, 1, 2, 2, 3, 1, 2),
+            usize::MAX
+        );
     }
 }

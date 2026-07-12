@@ -428,24 +428,30 @@ mod tests {
 
     #[test]
     fn is_immutable_for_loadable_objects() {
-        assert!(StorageObjectId::ExpertBundle {
-            model_revision: rev(1),
-            layer: 0,
-            expert: 0,
-            layout_version: 1
-        }
-        .is_immutable());
+        assert!(
+            StorageObjectId::ExpertBundle {
+                model_revision: rev(1),
+                layer: 0,
+                expert: 0,
+                layout_version: 1
+            }
+            .is_immutable()
+        );
 
-        assert!(!StorageObjectId::KvPage {
-            session: 0,
-            page: 0
-        }
-        .is_immutable());
-        assert!(!StorageObjectId::DecodeArenaBuffer {
-            device_id: 0,
-            slot: 0
-        }
-        .is_immutable());
+        assert!(
+            !StorageObjectId::KvPage {
+                session: 0,
+                page: 0
+            }
+            .is_immutable()
+        );
+        assert!(
+            !StorageObjectId::DecodeArenaBuffer {
+                device_id: 0,
+                slot: 0
+            }
+            .is_immutable()
+        );
     }
 
     #[test]

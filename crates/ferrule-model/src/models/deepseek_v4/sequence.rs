@@ -11,6 +11,15 @@ use crate::moe::prediction::ScoreBasedExpertPredictor;
 
 use super::layer::DeepSeekV4LayerState;
 
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DeepSeekV4PagedKvBinding {
+    pub(crate) physical_block_slots: Vec<i32>,
+    pub(crate) sequence_len: usize,
+    pub(crate) page_tokens: usize,
+    pub(crate) layer_count: usize,
+}
+
 /// Per-sequence execution state.
 ///
 /// This object owns all mutable DeepSeek-V4 per-sequence resources while the
@@ -24,6 +33,8 @@ pub struct DeepSeekV4SequenceExecutionState {
     pub(crate) layers: Vec<DeepSeekV4LayerState>,
     /// Sequence-specific expert prediction state.
     pub(crate) predictor: ScoreBasedExpertPredictor,
+    #[cfg(feature = "cuda")]
+    pub(crate) paged_kv_binding: Option<DeepSeekV4PagedKvBinding>,
 }
 
 impl DeepSeekV4SequenceExecutionState {
@@ -33,6 +44,8 @@ impl DeepSeekV4SequenceExecutionState {
             core: SequenceStateCore::new(),
             layers,
             predictor: ScoreBasedExpertPredictor::new(max_layers, num_routed_experts),
+            #[cfg(feature = "cuda")]
+            paged_kv_binding: None,
         }
     }
 
@@ -90,28 +103,11 @@ impl DeepSeekV4SequenceExecutionState {
 
     fn finish_reset(&mut self) {
         self.predictor.clear();
+        #[cfg(feature = "cuda")]
+        {
+            self.paged_kv_binding = None;
+        }
         self.core.reset();
-    }
-}
-
-/// A snapshot of sequence state for checkpoint/restore.
-///
-/// Graph and diagnostics are not part of a checkpoint. Physical CUDA KV is
-/// sequence-owned but still requires a separate operator-aware D2D checkpoint API.
-#[derive(Debug)]
-pub struct DeepSeekV4SequenceCheckpoint {
-    pub(crate) core: SequenceStateCore,
-    pub(crate) layers: Vec<DeepSeekV4LayerState>,
-    pub(crate) predictor: ScoreBasedExpertPredictor,
-}
-
-impl DeepSeekV4SequenceCheckpoint {
-    pub fn generation(&self) -> u64 {
-        self.core.generation()
-    }
-
-    pub fn position(&self) -> usize {
-        self.core.position()
     }
 }
 

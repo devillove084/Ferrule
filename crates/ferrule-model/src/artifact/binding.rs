@@ -45,12 +45,6 @@ pub struct MlaAttentionArtifactPayload {
     pub auxiliary: Vec<ArtifactTensorSlice>,
 }
 
-#[deprecated(
-    since = "0.2.0",
-    note = "use MlaAttentionArtifactPayload; the payload is MLA-specific, not generic attention"
-)]
-pub type AttentionArtifactPayload = MlaAttentionArtifactPayload;
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayerNormArtifactPayload {
     pub layer: usize,

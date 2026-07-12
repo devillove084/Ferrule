@@ -5,7 +5,7 @@
 //! not model-family tensor names. Scheduler/residency code can map a resident
 //! expert handle to these buffers later.
 
-use cuda_core::{stream::CudaStream, DeviceBuffer, LaunchConfig};
+use cuda_core::{DeviceBuffer, LaunchConfig, stream::CudaStream};
 use ferrule_common::{Error, Result};
 
 use crate::context::cu;

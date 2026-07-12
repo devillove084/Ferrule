@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use crate::TensorRole;
 use crate::artifact::binding::MlaAttentionArtifactPayload;
 use crate::artifact::linear::{
     ArtifactActivationQuantization, ArtifactLinearExecutionPolicy, ArtifactLinearFormat,
@@ -11,7 +12,6 @@ use crate::attention_backend::SparseAttentionSpec;
 use crate::families::deepseek_v4;
 use crate::ffn::SwiGluFfnPayload;
 use crate::hyper_connection::HyperConnectionConfig;
-use crate::TensorRole;
 use ferrule_common::{Error, Result};
 
 use super::helpers::{f32_key, usize_key};

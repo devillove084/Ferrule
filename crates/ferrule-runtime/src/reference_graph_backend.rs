@@ -10,10 +10,10 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use crate::backend_object_store::{
-    materialize_graph_hf_externals, BackendObject, BackendObjectStore,
+    BackendObject, BackendObjectStore, materialize_graph_hf_externals,
 };
 use crate::graph::builder::{
-    build_graph_program_from_descriptor_with_options, GraphProgramBuildOptions,
+    GraphProgramBuildOptions, build_graph_program_from_descriptor_with_options,
 };
 use crate::graph::dialects::domain;
 use crate::graph::external_bindings::ArtifactGroupKind;
@@ -23,9 +23,9 @@ use crate::graph::{
     ValueId, ValueMeta, ValueOrigin,
 };
 use crate::layer_binding::{
-    bind_layer_artifact_from_graph_objects, new_layer_expert_runtime_from_graph_objects,
     GraphLayerBindingOptions, LayerArtifactBinding, LayerExecutionState, LayerExpertRuntime,
-    ReferenceLayerExecutor,
+    ReferenceLayerExecutor, bind_layer_artifact_from_graph_objects,
+    new_layer_expert_runtime_from_graph_objects,
 };
 use ferrule_common::execution::{
     ExecutionBatch, ExecutionCapabilities, ExecutionSequence, KvBindingMode, LogitsRequest,
@@ -36,7 +36,7 @@ use ferrule_model::artifact::binding::bind_hyper_connection_head_from_artifact_g
 use ferrule_model::artifact::tensor::{
     ArtifactDType, ArtifactTensorPayload, ArtifactTensorReader, ArtifactTensorSlice,
 };
-use ferrule_model::hyper_connection::{hc_head_reference, HyperConnectionConfig};
+use ferrule_model::hyper_connection::{HyperConnectionConfig, hc_head_reference};
 use ferrule_model::moe::executor::CpuReferenceExpertExecutor;
 use ferrule_model::moe::streaming::{ExpertStreamingPolicy, ExpertStreamingReader};
 use ferrule_model::semantic_plan::TransformerLayerSemantic;
@@ -272,7 +272,7 @@ impl ReferenceGraphBackend {
                 return Err(Error::Graph(format!(
                     "graph value {} has not been produced yet",
                     id.index()
-                )))
+                )));
             }
         };
         values.insert(id, value.clone());
@@ -1186,10 +1186,7 @@ fn causal_attention(
         if state.key_width != k_width || state.value_width != v_width {
             return Err(Error::Graph(format!(
                 "reference KV state width changed for layer {} state slot {}: existing key={} value={}, new key={k_width} value={v_width}",
-                layer.index,
-                state_index,
-                state.key_width,
-                state.value_width
+                layer.index, state_index, state.key_width, state.value_width
             )));
         }
         let k_base = row * k_width;
@@ -1608,8 +1605,8 @@ mod tests {
         Ok(())
     }
 
-    fn tiny_embedding_head_fixture(
-    ) -> Result<(GraphProgram, BackendObjectStore, ExecutionBatch, PathBuf)> {
+    fn tiny_embedding_head_fixture()
+    -> Result<(GraphProgram, BackendObjectStore, ExecutionBatch, PathBuf)> {
         let dir = unique_temp_dir("ferrule-reference-graph-backend");
         std::fs::create_dir_all(&dir).unwrap();
         let artifact_path = dir.join("tiny.safetensors.payload");
@@ -1701,8 +1698,8 @@ mod tests {
         Ok((program, objects, batch, dir))
     }
 
-    fn tiny_semantic_layer_fixture(
-    ) -> Result<(GraphProgram, BackendObjectStore, ExecutionBatch, PathBuf)> {
+    fn tiny_semantic_layer_fixture()
+    -> Result<(GraphProgram, BackendObjectStore, ExecutionBatch, PathBuf)> {
         let dir = unique_temp_dir("ferrule-reference-semantic-layer");
         std::fs::create_dir_all(&dir).unwrap();
         let artifact_path = dir.join("semantic-layer.bin");

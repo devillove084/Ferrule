@@ -102,7 +102,10 @@ fn print_engine_plan(plan: &EnginePlan) {
         plan.policies.router.kind,
         plan.policies.expert.kind,
         plan.policies.quant.weight_source,
-        fmt_residency(plan.policies.residency.streaming_allowed, plan.policies.residency.all_resident_required),
+        fmt_residency(
+            plan.policies.residency.streaming_allowed,
+            plan.policies.residency.all_resident_required
+        ),
         plan.policies.speculation.mode,
     );
     if plan.missing.is_empty() {

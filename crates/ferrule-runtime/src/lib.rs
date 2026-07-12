@@ -19,7 +19,7 @@
 //! | `scheduling` | Resident request scheduling, action planning, and session lifecycle |
 //! | `storage` | Storage residency: catalog, placement, transfer, policy |
 //! | `generation` | `InferenceEngine` and top-k prefill/decode loops over runner capabilities |
-//! | `engine` | Resident `EngineWorker` / lazy worker lifecycle over `TopKModelRunner` |
+//! | `engine` | Native resident multi-session driver and executor lifecycle |
 //! | `program` | `GenerationProgram` — chained constrained generation |
 //! | `speculation` | Draft/target model speculation framework |
 //! | `profiler` | Kernel profiling and timing regions |
@@ -53,27 +53,24 @@ pub mod stats;
 // ── Convenience re-exports ────────────────────────────────────────────────
 pub use attention_kernel::AttentionKernel;
 pub use backend_object_store::{
-    materialize_graph_hf_externals, materialize_hf_externals, materialize_hf_externals_for_family,
-    BackendObject, BackendObjectStore, ExpertRegistryObject,
+    BackendObject, BackendObjectStore, ExpertRegistryObject, materialize_graph_hf_externals,
+    materialize_hf_externals, materialize_hf_externals_for_family,
 };
 pub use cache::{
-    BlockId, BlockTable, ContiguousKvCache, KvCache, KvCacheDtype, KvCacheLayout, KvHandle,
-    KvLayerView, MultiSessionKvCache, PagedKvCache, PagedSequenceKvCache, SequenceKvCache,
-    BLOCK_SIZE,
+    BLOCK_SIZE, BlockId, BlockTable, ContiguousKvCache, FixedSequenceSlotPool, KvCache,
+    KvCacheDtype, KvCacheLayout, KvHandle, KvLayerView, MultiSessionKvCache, PagedKvCache,
+    PagedSequenceKvCache, SequenceKvCache, SequenceSlotPool,
 };
 pub use engine::{
-    EngineWorker, EngineWorkerStats, LazyEngineWorker, ResidentActionKind, ResidentDriverStep,
-    ResidentTokenEvent, ResidentTopKDriver, ResidentTopKDriverConfig, ResidentTopKDriverStats,
-    TopKCompatibilityExecutor, TopKCompatibilityExecutorConfig, TopKDecodeState, TopKDecodeStep,
+    NativeMultiSessionExecutor, PageManagedDiagnosticHarness, ResidentActionKind,
+    ResidentDriverStep, ResidentTokenEvent, ResidentTopKDriver, ResidentTopKDriverConfig,
+    ResidentTopKDriverStats,
 };
-pub use generation::{
-    generate_topk_from_candidates, GenerationConfig, GenerationResult, InferenceEngine, TokenEvent,
-    TopKFinishReason, TopKTokenEvent, TopKTurnResult,
-};
+pub use generation::{GenerationConfig, GenerationResult, InferenceEngine, TokenEvent};
 pub use graph::builder::{
-    build_graph_program_from_descriptor, build_graph_program_from_descriptor_with_options,
-    build_graph_program_from_semantic_plan, build_graph_program_from_semantic_plan_with_options,
-    GraphProgramBuildOptions,
+    GraphProgramBuildOptions, build_graph_program_from_descriptor,
+    build_graph_program_from_descriptor_with_options, build_graph_program_from_semantic_plan,
+    build_graph_program_from_semantic_plan_with_options,
 };
 pub use graph::external_bindings::{
     ExternalBinding, ExternalBindingKind, ExternalBindingPlan, ExternalResidency,
@@ -82,19 +79,19 @@ pub use graph::layer_binding::{GraphLayerObjects, GraphObjectRef};
 pub use graph::program::{GraphProgram, GraphProgramProfile};
 pub use graph::shape_registry::TransformerShapeRegistry;
 pub use graph::translate::{
+    DenseGraphTranslationOptions, SemanticGraphTranslationOptions,
     build_dense_decoder_graph_program, build_dense_decoder_graph_program_with_options,
     build_semantic_transformer_graph_program,
     build_semantic_transformer_graph_program_with_options, uses_semantic_artifact_groups,
-    DenseGraphTranslationOptions, SemanticGraphTranslationOptions,
 };
 pub use graph::validation::{
-    validate_graph_program, validate_graph_program_with_registry, GraphValidationReport,
+    GraphValidationReport, validate_graph_program, validate_graph_program_with_registry,
 };
 
 pub use layer_binding::{
-    bind_layer_artifact_from_graph_objects, bind_layer_artifact_from_hf,
-    new_layer_expert_runtime_from_graph_objects, GraphLayerBindingOptions, LayerArtifactBinding,
-    LayerExecutionState, LayerExpertRuntime, LayerKvState, LayerStepOutput, ReferenceLayerExecutor,
+    GraphLayerBindingOptions, LayerArtifactBinding, LayerExecutionState, LayerExpertRuntime,
+    LayerKvState, LayerStepOutput, ReferenceLayerExecutor, bind_layer_artifact_from_graph_objects,
+    bind_layer_artifact_from_hf, new_layer_expert_runtime_from_graph_objects,
 };
 
 pub use profiler::{KernelProfiler, Profiler, TimedRegion};
@@ -107,15 +104,15 @@ pub use sampling::{JsonConstraint, MaxLengthConstraint, SamplerMask, TokenConstr
 pub use sampling::{Logprobs, Sampler, SamplingConfig};
 
 pub use scheduling::{
-    plan_prefill_chunk, DecodeAction, LogitsSelection, PrefillChunkAction, ResidentScheduler,
-    ResidentSchedulerConfig, SchedulerAction,
+    DecodeAction, LogitsSelection, PrefillChunkAction, ResidentScheduler, ResidentSchedulerConfig,
+    SchedulerAction, plan_prefill_chunk,
 };
 pub use scheduling::{
     GenerateRequest, RequestId, SequenceFinishReason, SequenceState, SequenceStatus, SessionId,
 };
 
 pub use speculation::{
-    run_speculative_step, DraftModel, SpeculationMetrics, SpeculativeDecodingPolicy,
-    SpeculativeStepOutput, TargetModel,
+    DraftModel, SpeculationMetrics, SpeculativeDecodingPolicy, SpeculativeStepOutput, TargetModel,
+    run_speculative_step,
 };
 pub use stats::GenerateStats;

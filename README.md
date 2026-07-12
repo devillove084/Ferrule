@@ -24,8 +24,7 @@
   <a href="docs/ferrule_arch.md">Architecture</a> ·
   <a href="docs/execution-engine-architecture.md">Execution Engine</a> ·
   <a href="docs/ROADMAP.md">Roadmap</a> ·
-  <a href="docs/storage-residency-architecture.md">Storage</a> ·
-  <a href="docs/status/2026-07-11-gb10-dsv4.md">GB10 Status</a>
+  <a href="docs/storage-residency-architecture.md">Storage</a>
 </p>
 
 ---
@@ -33,8 +32,9 @@
 ## Current milestone
 
 Ferrule has a real local CUDA DeepSeek-V4 Flash + DSpark path on GB10. The current
-milestone is no longer merely “a token can be generated”: batched prefill and
-token-loop append are now bit-exact through all 43 layers on the local model.
+milestone includes native packed decode, ragged prefill, mixed batches, and physical
+paged multi-plane KV. Token-loop execution is retained only as an explicit
+page-managed differential oracle.
 
 Verified on `models/DeepSeek-V4-Flash-DSpark` with `sm_121a`:
 
@@ -46,28 +46,23 @@ Verified on `models/DeepSeek-V4-Flash-DSpark` with `sm_121a`:
 - full 43-layer greedy chat/generation, FP4 Tensor Core MoE, GPU compressor
   numerics, and deterministic route-ranked reduction are active.
 
-The E1 ABI and E3 sequence-state phase are complete. Ferrule now has a
-dependency-neutral `ExecutionBatch` plus explicit per-sequence semantic and physical
-CUDA state with transactional commit/poison semantics, D2D checkpoint/fork, serial
-sequence switching, release, and backend shutdown. The retained
-`TopKCompatibilityExecutor` remains the legacy one-default-sequence adapter while
-broader concrete prepared-plan integration continues in E2.
+E1–E5 are complete. Ferrule now has a dependency-neutral `ExecutionBatch`, prepared
+plans and persistent arenas, explicit per-sequence state, token-budgeted native
+multi-session execution, and authoritative runtime/CUDA page transactions. Exact
+prefixes share physical pages with partial-tail COW; rollback and preempt/restore
+replace model-local CUDA checkpoint copies.
 
 The architecture is **not** yet vLLM/SGLang-class serving:
 
-- DSV4 has isolated explicit sequence state, but runtime paged KV is still
-  metadata/lifecycle only;
-- scheduler batches are still rejected by the legacy single-sequence executor;
-- router/residency remain host controlled;
-- DSV4 decode always uses the device-resident eager path; there is no current DSV4
-  CUDA graph mode. Stable graph buckets belong to E7.
+- router and expert residency remain host controlled;
+- DSV4 uses device-resident eager execution but has no stable graph buckets yet;
+- device sampling, fusion, radix lookup policy, and an active server command remain
+  future work.
 
-The next sequence-execution step is E4 native multi-session/ragged execution,
-followed by physical multi-plane paged KV, device routing/residency, E7 stable graph
-buckets, and fusion. See the
-[execution engine design](docs/execution-engine-architecture.md),
-[roadmap](docs/ROADMAP.md), and
-[GB10 status snapshot](docs/status/2026-07-11-gb10-dsv4.md).
+Next are E6 device routing/runtime residency, E7 stable graph buckets, and E8 fusion,
+device sampling, and competitive validation. See the
+[execution engine design](docs/execution-engine-architecture.md) and
+[roadmap](docs/ROADMAP.md).
 
 ---
 
@@ -76,7 +71,7 @@ buckets, and fusion. See the
 | Feature | Why it matters |
 |---|---|
 | **Policy-composed model descriptions** | Model families map source tensors into semantic attention, FFN/MoE, KV, residency, quantization, and speculation policies. DSV4 now separates fully prepared layers, backend expert runtime, explicit sequence state, and reusable eager arenas. |
-| **Neutral execution ABI** | One public `ExecutionBatch` expresses packed/ragged rows, phases, state slots, KV bindings, and strict logits intent; runtime correlation stays private. Native multi-session execution remains later work. |
+| **Neutral execution ABI** | One public `ExecutionBatch` expresses packed/ragged rows, phases, state slots, KV bindings, and strict logits intent; runtime correlation stays private and native multi-session execution consumes it directly. |
 | **MoE-first execution** | Router logits, hash/top-k selection, selected experts, shared experts, and DSV4 expert-streaming mechanisms are explicit objects rather than opaque kernel details. Cross-request residency coordination is still planned. |
 | **Storage/residency vocabulary** | `StorageObjectId`, `ObjectLocator`, `Placement`, `ObjectReplica` provide typed storage vocabulary. DSV4 currently uses a model-local planner; runtime-owned budget/eviction coordination is an E6 target. |
 | **cuda-oxide kernels** | Custom CUDA kernels integrated with the Rust runtime: quantized GEMV, packed FP4 expert execution, sparse attention, artifact-preserving operators. |
@@ -176,14 +171,14 @@ just chat models/OLMoE-Instruct q4 -n 256
 | Area | Status |
 |---|---|
 | Executable model fixture | OLMoE sparse MoE CUDA path via `GpuOlmoeRunner` |
-| Real large-model milestone | DeepSeek V4 Flash + DSpark full 43-layer CUDA greedy chat plus `bench-interactive --runtime-driver` through `ResidentTopKDriver` |
-| Execution ABI | E1 complete: one public `ferrule-common::execution::ExecutionBatch`, prepared-executor traits, runtime-private `ScheduledBatch`, and strict capability/output validation |
-| DSV4 execution boundary | `ferrule-model::models::deepseek_v4` owns concrete HC, MLA, compressor/indexer, router, MoE, output semantics; runtime uses the single-sequence `TopKCompatibilityExecutor` over `TopKModelRunner` while E2 prepared resources remain in progress |
+| Real large-model milestone | DeepSeek V4 Flash + DSpark full 43-layer CUDA greedy chat plus `bench-interactive` through `ResidentTopKDriver` |
+| Execution ABI | E1–E4 complete: public `ExecutionBatch`, prepared-executor traits, runtime-private `ScheduledBatch`, strict validation, and native packed multi-session execution |
+| DSV4 execution boundary | The model owns HC/MLA/compressor/router/MoE math; runtime remains model-neutral and owns scheduling plus logical page lifecycle through generic traits |
 | Expert streaming | `ExpertStreamingPlanner` + `ExpertStreamingReader` + `ExpertResidencyBackend` trait |
 | Storage/residency | `ferrule-runtime::storage` module: vocabulary types + `StorageCatalog` + `TransferEngine` traits |
 | Attention | OLMoE GQA executable; DSV4 MLA sparse attention correctness-first CUDA path |
 | Hyper-connections | DSV4 HC source binding + reference `hc_pre`/`hc_post`/`hc_head` |
-| KV cache | Legacy `KvCache`, scheduler-facing contiguous/paged metadata managers, and radix/prefix modules; DSV4 CUDA attention does not yet consume page tables |
+| KV cache | E5 complete: `KvPageManager` plus bounded CUDA multi-plane pools, paged attention/indexer kernels, rollback, COW, preempt/restore, and exact-prefix sharing; host caches are reference infrastructure |
 | Quantization | Q4_0/Q8_0, FP4 E2M1 + E8M0 scales, FP8 E4M3FN, mixed precision policy |
 | WeightPack | mmap'd reader, streaming writer, zero-copy slices, WeightPack-only load path |
 | Runtime graph | `ferrule-runtime::graph` opaque IR, `GraphProgram`, `BackendObjectStore`, and `ReferenceGraphExecutor::execute` with caller-owned `ReferenceGraphSequenceState` |
@@ -270,9 +265,8 @@ just lint           # fmt + clippy
 | Document | Content |
 |---|---|
 | [Architecture](docs/ferrule_arch.md) | Repository crates, model boundaries, current runtime, serving direction, and alignment targets |
-| [Execution Engine](docs/execution-engine-architecture.md) | E1 implemented neutral ABI and E2+ target ownership: prepared plans, sequence state, arenas, device pipeline, paged KV, residency, and graph buckets |
+| [Execution Engine](docs/execution-engine-architecture.md) | E1–E5 implemented ownership: neutral ABI, prepared plans, sequence state, arenas, native batching, and physical paged KV; E6–E8 targets follow |
 | [Roadmap](docs/ROADMAP.md) | Canonical E0–E8 dependency plan with phase-owned correctness/performance gates and non-goals |
-| [GB10 DSV4 Status](docs/status/2026-07-11-gb10-dsv4.md) | Verified real-model parity, continuation, performance data, closed E0 evidence, and the E1 ABI checkpoint |
 | [Storage & Residency](docs/storage-residency-architecture.md) | Current/target expert residency ownership, slots, leases, transfers, policy, metrics, and E6 migration |
 | [Runtime Graph](docs/runtime-graph-architecture.md) | Device-independent graph IR, `GraphNode`, dialects, `GraphProgram`, external bindings, and explicit reference execution state |
 

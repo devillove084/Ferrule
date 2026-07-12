@@ -9,11 +9,11 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::cache::kv::KvHandle;
+use crate::graph::ExternalKey;
 use crate::graph::external_bindings::{
     ArtifactGroupKind, ExternalBindingKind, ExternalBindingPlan,
 };
 use crate::graph::program::GraphProgram;
-use crate::graph::ExternalKey;
 use ferrule_common::{Error, Result};
 use ferrule_model::artifact::tensor::ArtifactTensorSlice;
 use ferrule_model::moe::streaming::{

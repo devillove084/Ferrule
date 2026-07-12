@@ -5,13 +5,15 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
+use ferrule_common::execution::{KvCowReplacement, KvLayoutSchema, KvPageId};
 use ferrule_common::{Error, Result};
 
+use crate::TensorRole;
 use crate::artifact::binding::RouterArtifactPayload;
-use crate::artifact::linear::{artifact_linear_cache_key, artifact_linear_row_cache_key};
 use crate::artifact::linear::{
     ArtifactActivationQuantization, ArtifactLinearFormat, ArtifactLinearPayload,
 };
+use crate::artifact::linear::{artifact_linear_cache_key, artifact_linear_row_cache_key};
 use crate::artifact::tensor::{ArtifactTensorReader, ArtifactTensorSlice};
 use crate::attention_backend::SparseAttentionSpec;
 use crate::ffn::SwiGluFfnPayload;
@@ -27,19 +29,19 @@ use crate::moe::routing::{
     ExpertRoute, ExpertRouterPolicy, RouterScoreFunction, RouterSelectionPolicy,
 };
 use crate::moe::streaming::{
-    classify_expert_residency, read_experts_concurrent, AsyncHostStagedExpertLoader,
-    ExpertComputeBundle, ExpertEvictRequest, ExpertId, ExpertLinearFormat, ExpertLinearPayload,
-    ExpertLoadRequest, ExpertMatrixKind, ExpertResidencyPlan, ExpertResidencySelectedLoad,
-    ExpertStorageTier, ExpertStreamingPlanner, ExpertStreamingReader, ExpertStreamingStep,
-    HostStagedExpertCache,
+    AsyncHostStagedExpertLoader, ExpertComputeBundle, ExpertEvictRequest, ExpertId,
+    ExpertLinearFormat, ExpertLinearPayload, ExpertLoadRequest, ExpertMatrixKind,
+    ExpertResidencyPlan, ExpertResidencySelectedLoad, ExpertStorageTier, ExpertStreamingPlanner,
+    ExpertStreamingReader, ExpertStreamingStep, HostStagedExpertCache, classify_expert_residency,
+    read_experts_concurrent,
 };
 use crate::runner::TokenLogit;
-use crate::TensorRole;
 
 use super::config::{DeepSeekV4AttentionConfig, DeepSeekV4RopeParams};
 use super::helpers::{check_linear, rank_logits_desc, yarn_frequency};
 use super::operators::DeepSeekV4OperatorRuntimeCounters;
-use super::prepared::DeepSeekV4ExecutionPolicy;
+use super::prepared::{DeepSeekV4ExecutionPolicy, DeepSeekV4KvLayoutSchema};
+use super::sequence::DeepSeekV4PagedKvBinding;
 
 const DSV4_ROPE_TABLE_MIN_CAPACITY: usize = 4096;
 
@@ -128,33 +130,23 @@ fn rope_table_capacity(required_positions: usize) -> Result<usize> {
         })
 }
 
-/// Device-resident KV ownership for one DeepSeek-V4 sequence/layer window.
+/// Device-resident recurrent compressor state owned by one DeepSeek-V4 layer.
 ///
-/// This state deliberately lives with the host-semantic window cache rather than
-/// the operator backend, so concurrent/forked sequences cannot address each
-/// other's CUDA buffers through a backend-global layer key.
+/// Historical KV values live exclusively in the runtime-managed page pool.
 #[cfg(feature = "cuda")]
 #[derive(Default)]
 pub(crate) struct DeepSeekV4CudaSequenceKvState {
-    /// Device-resident window KV cache: `[window_size * head_dim]` f32.
-    pub(crate) kv_cache: Option<ferrule_cuda::context::CudaF32Buffer>,
-    /// Current device KV length, capped at `window_size`.
-    pub(crate) kv_len: usize,
-    /// Device-resident `[window KV | compressed KV]` values.
-    pub(crate) combined_kv_cache: Option<ferrule_cuda::context::CudaF32Buffer>,
-    /// Compressed slots allocated in `combined_kv_cache`.
-    pub(crate) combined_kv_compressed_capacity: usize,
-    /// Device-resident compressed indexer KV values.
-    pub(crate) indexer_kv_cache: Option<ferrule_cuda::context::CudaF32Buffer>,
-    /// Compressed slots allocated in `indexer_kv_cache`.
-    pub(crate) indexer_kv_capacity: usize,
+    pub(crate) main_compressor_recurrent: Option<ferrule_cuda::CudaCompressorRecurrentState>,
+    pub(crate) main_compressor_needs_reset: bool,
+    pub(crate) indexer_compressor_recurrent: Option<ferrule_cuda::CudaCompressorRecurrentState>,
+    pub(crate) indexer_compressor_needs_reset: bool,
 }
 
 #[cfg(feature = "cuda")]
 impl DeepSeekV4CudaSequenceKvState {
-    /// Reset sequence validity while retaining allocations for reuse.
     pub(crate) fn reset_for_reuse(&mut self) {
-        self.kv_len = 0;
+        self.main_compressor_needs_reset = self.main_compressor_recurrent.is_some();
+        self.indexer_compressor_needs_reset = self.indexer_compressor_recurrent.is_some();
     }
 }
 
@@ -162,15 +154,14 @@ impl DeepSeekV4CudaSequenceKvState {
 impl std::fmt::Debug for DeepSeekV4CudaSequenceKvState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DeepSeekV4CudaSequenceKvState")
-            .field("has_kv_cache", &self.kv_cache.is_some())
-            .field("kv_len", &self.kv_len)
-            .field("has_combined_kv_cache", &self.combined_kv_cache.is_some())
             .field(
-                "combined_kv_compressed_capacity",
-                &self.combined_kv_compressed_capacity,
+                "has_main_compressor_recurrent",
+                &self.main_compressor_recurrent.is_some(),
             )
-            .field("has_indexer_kv_cache", &self.indexer_kv_cache.is_some())
-            .field("indexer_kv_capacity", &self.indexer_kv_capacity)
+            .field(
+                "has_indexer_compressor_recurrent",
+                &self.indexer_compressor_recurrent.is_some(),
+            )
             .finish()
     }
 }
@@ -182,6 +173,10 @@ pub(crate) struct DeepSeekV4CudaOperatorCache {
     expert_upload_inflight: usize,
     device_router_topk: bool,
     moe_segment_batch: usize,
+    kv_page_pool: Option<ferrule_cuda::CudaKvPagePool>,
+    pending_kv_reservations: Vec<ferrule_cuda::KvPoolReservation>,
+    active_paged_kv: Option<ActivePagedKvBinding>,
+    cached_paged_kv: HashMap<(usize, usize, usize, usize), ActivePagedKvBinding>,
     linears: HashMap<String, ferrule_cuda::context::CudaArtifactLinearHandle>,
     experts: HashMap<ExpertId, CudaFp4ExpertHandles>,
     recycled_experts: Vec<CudaFp4ExpertHandles>,
@@ -210,12 +205,17 @@ pub(crate) struct DeepSeekV4CudaOperatorCache {
     /// Each entry records its parameters and growable position capacity so a
     /// same-name shape/configuration mismatch cannot be silently reused.
     rope_tables: HashMap<String, CudaRopeTable>,
-    /// Pre-allocated top-k index buffer `[window_size]` i32 for device-resident
-    /// sparse attention.
-    topk_buffer: Option<ferrule_cuda::context::CudaI32Buffer>,
-    output_head_logits: HashMap<usize, ferrule_cuda::context::CudaF32Buffer>,
-    output_head_indices: Option<ferrule_cuda::context::CudaF32Buffer>,
-    output_head_values: Option<ferrule_cuda::context::CudaF32Buffer>,
+    /// Exact-shape top-k index buffers for device-resident sparse attention.
+    /// Packed prefill and decode use different row counts and must not evict each
+    /// other's warm buffer.
+    topk_buffers: HashMap<usize, ferrule_cuda::context::CudaI32Buffer>,
+    paged_topk_logical: Option<ferrule_cuda::context::CudaI32Buffer>,
+    paged_topk_selectors: Option<ferrule_cuda::context::CudaI32Buffer>,
+    output_head_logits: HashMap<(usize, usize), ferrule_cuda::context::CudaF32Buffer>,
+    output_head_linear_workspaces:
+        HashMap<usize, ferrule_cuda::context::CudaArtifactLinearWorkspace>,
+    output_head_indices: HashMap<usize, ferrule_cuda::context::CudaF32Buffer>,
+    output_head_values: HashMap<usize, ferrule_cuda::context::CudaF32Buffer>,
     output_head_calls: u64,
     output_head_chunks: u64,
     output_head_rows: u64,
@@ -279,14 +279,28 @@ struct HcDeviceWeights {
 }
 
 #[cfg(feature = "cuda")]
+struct ActivePagedKvBinding {
+    physical_block_slots: Vec<i32>,
+    block_slots_device: ferrule_cuda::context::CudaI32Buffer,
+    block_offsets_device: ferrule_cuda::context::CudaI32Buffer,
+    kv_len_device: ferrule_cuda::context::CudaI32Buffer,
+    row_sequence_ids_device: ferrule_cuda::context::CudaI32Buffer,
+    page_tokens: usize,
+    layer_count: usize,
+    sequence_count: usize,
+}
+
+#[cfg(feature = "cuda")]
 #[derive(Default)]
 struct DeepSeekV4DecodeArena {
     hidden: Option<ferrule_cuda::context::CudaF32Buffer>,
-    hc_input: Option<ferrule_cuda::context::CudaF32Buffer>,
-    final_hidden: Option<ferrule_cuda::context::CudaF32Buffer>,
-    final_norm: Option<ferrule_cuda::context::CudaF32Buffer>,
-    /// Reusable routed MoE scratch/pointer buffers for the eager decode hot path.
-    moe_workspace: Option<ferrule_cuda::context::CudaMoeBatchedWorkspace>,
+    hc_inputs: HashMap<usize, ferrule_cuda::context::CudaF32Buffer>,
+    final_hiddens: HashMap<usize, ferrule_cuda::context::CudaF32Buffer>,
+    final_norms: HashMap<usize, ferrule_cuda::context::CudaF32Buffer>,
+    topk_rows: HashMap<usize, ferrule_cuda::context::CudaF32Buffer>,
+    /// Reusable routed MoE scratch/pointer buffers keyed by exact execution shape.
+    moe_workspaces:
+        HashMap<(usize, usize, usize, usize), ferrule_cuda::context::CudaMoeBatchedWorkspace>,
 }
 
 #[cfg(feature = "cuda")]
@@ -294,6 +308,7 @@ pub(crate) struct DeepSeekV4DecodeBuffers {
     pub(crate) hc_input: ferrule_cuda::context::CudaF32Buffer,
     pub(crate) final_hidden: ferrule_cuda::context::CudaF32Buffer,
     pub(crate) final_norm: ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) topk_row: ferrule_cuda::context::CudaF32Buffer,
 }
 
 #[cfg(feature = "cuda")]
@@ -489,6 +504,81 @@ fn duration_us(d: Duration) -> u64 {
     d.as_micros().min(u128::from(u64::MAX)) as u64
 }
 
+fn validate_output_head_rows_request(
+    shape: &[usize],
+    hidden_len: usize,
+    batch_rows: usize,
+    top_k: usize,
+    chunk_rows: usize,
+) -> Result<(usize, usize)> {
+    if shape.len() != 2 {
+        return Err(Error::Model(format!(
+            "DeepSeek-V4 CUDA output head expects 2D slice, got {shape:?}"
+        )));
+    }
+    if chunk_rows == 0 {
+        return Err(Error::Model(
+            "DeepSeek-V4 CUDA output-head chunk_rows must be > 0".into(),
+        ));
+    }
+    if top_k > 40 {
+        return Err(Error::Model(format!(
+            "DeepSeek-V4 CUDA output-head top-k supports k<=40, got {top_k}"
+        )));
+    }
+    let vocab_rows = shape[0];
+    let hidden_cols = shape[1];
+    let expected_hidden = batch_rows.checked_mul(hidden_cols).ok_or_else(|| {
+        Error::Model("DeepSeek-V4 CUDA output-head batch input size overflow".into())
+    })?;
+    if hidden_len != expected_hidden {
+        return Err(Error::Model(format!(
+            "DeepSeek-V4 CUDA output-head rows input mismatch: expected {batch_rows}x{hidden_cols}={expected_hidden}, got {hidden_len}"
+        )));
+    }
+    Ok((vocab_rows, hidden_cols))
+}
+
+fn merge_output_head_chunk(
+    top_by_row: &mut [Vec<TokenLogit>],
+    indices: &[f32],
+    values: &[f32],
+    chunk_k: usize,
+    token_offset: usize,
+    top_k: usize,
+) -> Result<()> {
+    let expected = top_by_row
+        .len()
+        .checked_mul(chunk_k)
+        .ok_or_else(|| Error::Model("DeepSeek-V4 output-head top-k merge size overflow".into()))?;
+    if indices.len() != expected || values.len() != expected {
+        return Err(Error::Model(format!(
+            "DeepSeek-V4 output-head top-k merge shape mismatch: rows={} k={chunk_k} indices={} values={}",
+            top_by_row.len(),
+            indices.len(),
+            values.len()
+        )));
+    }
+    for (row, top) in top_by_row.iter_mut().enumerate() {
+        let row_start = row * chunk_k;
+        for slot in 0..chunk_k {
+            let local_token = indices[row_start + slot] as usize;
+            let token_id =
+                u32::try_from(token_offset.checked_add(local_token).ok_or_else(|| {
+                    Error::Model("DeepSeek-V4 output-head token id overflow".into())
+                })?)
+                .map_err(|_| Error::Model("DeepSeek-V4 output-head token id exceeds u32".into()))?;
+            top.push(TokenLogit {
+                token_id,
+                logit: values[row_start + slot],
+            });
+        }
+        top.sort_by(rank_logits_desc);
+        top.truncate(top_k);
+    }
+    Ok(())
+}
+
 #[cfg(feature = "cuda")]
 impl DeepSeekV4CudaOperatorCache {
     pub(crate) fn new(policy: &DeepSeekV4ExecutionPolicy) -> Result<Self> {
@@ -498,6 +588,10 @@ impl DeepSeekV4CudaOperatorCache {
             expert_upload_inflight: policy.expert_upload_inflight(),
             device_router_topk: policy.device_router_topk(),
             moe_segment_batch: policy.moe_segment_batch(),
+            kv_page_pool: None,
+            pending_kv_reservations: Vec::new(),
+            active_paged_kv: None,
+            cached_paged_kv: HashMap::new(),
             linears: HashMap::new(),
             experts: HashMap::new(),
             recycled_experts: Vec::new(),
@@ -517,10 +611,13 @@ impl DeepSeekV4CudaOperatorCache {
             router_bias_buffers: HashMap::new(),
             grouped_wo_a_weights: HashMap::new(),
             rope_tables: HashMap::new(),
-            topk_buffer: None,
+            topk_buffers: HashMap::new(),
+            paged_topk_logical: None,
+            paged_topk_selectors: None,
             output_head_logits: HashMap::new(),
-            output_head_indices: None,
-            output_head_values: None,
+            output_head_linear_workspaces: HashMap::new(),
+            output_head_indices: HashMap::new(),
+            output_head_values: HashMap::new(),
             output_head_calls: 0,
             output_head_chunks: 0,
             output_head_rows: 0,
@@ -577,87 +674,344 @@ impl DeepSeekV4CudaOperatorCache {
         })
     }
 
+    pub(crate) fn configure_kv_page_pool(
+        &mut self,
+        schema: &DeepSeekV4KvLayoutSchema,
+        max_pages: usize,
+    ) -> Result<()> {
+        if !self.pending_kv_reservations.is_empty() {
+            return Err(Error::Model(
+                "cannot reconfigure DeepSeek-V4 KV pool with a pending batch".into(),
+            ));
+        }
+        let data_planes = schema.planes().get(..3).ok_or_else(|| {
+            Error::Model("DeepSeek-V4 KV schema is missing token-scaled data planes".into())
+        })?;
+        self.kv_page_pool = Some(ferrule_cuda::CudaKvPagePool::new(
+            &self.ops,
+            data_planes,
+            schema.page_size(),
+            max_pages,
+        )?);
+        Ok(())
+    }
+
+    pub(crate) fn has_kv_page_pool(&self) -> bool {
+        self.kv_page_pool.is_some()
+    }
+
+    pub(crate) fn prepare_kv_pages(
+        &mut self,
+        reservations: &[(Vec<KvPageId>, Option<KvCowReplacement>)],
+    ) -> Result<()> {
+        if !self.pending_kv_reservations.is_empty() {
+            return Err(Error::Model(
+                "DeepSeek-V4 CUDA KV batch is already pending".into(),
+            ));
+        }
+        let pool = self.kv_page_pool.as_mut().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        })?;
+        for (pages, cow) in reservations {
+            match pool.reserve(&self.ops, pages, *cow) {
+                Ok(reservation) => self.pending_kv_reservations.push(reservation),
+                Err(error) => {
+                    for reservation in self.pending_kv_reservations.drain(..) {
+                        let _ = pool.rollback(&self.ops, reservation);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn lower_paged_binding(
+        &self,
+        block_ids: &[ferrule_common::execution::KvBlockId],
+        sequence_len: usize,
+    ) -> Result<DeepSeekV4PagedKvBinding> {
+        let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        })?;
+        let mut physical_block_slots = Vec::with_capacity(block_ids.len());
+        for block in block_ids {
+            let page = KvPageId(block.get());
+            let slot = pool.physical_slot(page).or_else(|| {
+                self.pending_kv_reservations
+                    .iter()
+                    .find_map(|reservation| pool.pending_slot(reservation, page))
+            });
+            let slot = slot.ok_or_else(|| {
+                Error::Model(format!(
+                    "DeepSeek-V4 KV page {} has no committed or provisional physical slot",
+                    page.0
+                ))
+            })?;
+            physical_block_slots.push(i32::try_from(slot).map_err(|_| {
+                Error::Model("DeepSeek-V4 physical KV slot exceeds i32 ABI".into())
+            })?);
+        }
+        Ok(DeepSeekV4PagedKvBinding {
+            physical_block_slots,
+            sequence_len,
+            page_tokens: pool.page_tokens(),
+            layer_count: pool.planes().first().map_or(0, |plane| plane.layer_count),
+        })
+    }
+
+    pub(crate) fn activate_paged_binding(
+        &mut self,
+        binding: Option<&DeepSeekV4PagedKvBinding>,
+    ) -> Result<()> {
+        match binding {
+            Some(binding) => self.activate_paged_bindings(&[binding]),
+            None => {
+                if let Some(active) = self.active_paged_kv.take() {
+                    let shape = (
+                        active.block_slots_device.len(),
+                        active.block_offsets_device.len(),
+                        active.kv_len_device.len(),
+                        active.row_sequence_ids_device.len(),
+                    );
+                    self.cached_paged_kv.insert(shape, active);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Activate one flattened ragged page table with an identity row selector.
+    pub(crate) fn activate_paged_bindings(
+        &mut self,
+        bindings: &[&DeepSeekV4PagedKvBinding],
+    ) -> Result<()> {
+        let row_sequence_ids = (0..bindings.len()).collect::<Vec<_>>();
+        self.activate_paged_bindings_for_rows(bindings, &row_sequence_ids)
+    }
+
+    /// Activate sequence-owned page tables plus an independent packed-row selector.
+    pub(crate) fn activate_paged_bindings_for_rows(
+        &mut self,
+        bindings: &[&DeepSeekV4PagedKvBinding],
+        row_sequence_ids: &[usize],
+    ) -> Result<()> {
+        if bindings.is_empty() {
+            return self.activate_paged_binding(None);
+        }
+        let page_tokens = bindings[0].page_tokens;
+        let layer_count = bindings[0].layer_count;
+        if page_tokens == 0 || layer_count == 0 {
+            return Err(Error::Model(
+                "DeepSeek-V4 paged binding has invalid page/layer metadata".into(),
+            ));
+        }
+
+        let total_blocks = bindings.iter().try_fold(0usize, |total, binding| {
+            if binding.page_tokens != page_tokens || binding.layer_count != layer_count {
+                return Err(Error::Model(
+                    "DeepSeek-V4 packed paged bindings use incompatible layouts".into(),
+                ));
+            }
+            total
+                .checked_add(binding.physical_block_slots.len())
+                .ok_or_else(|| Error::Model("DeepSeek-V4 packed block table overflow".into()))
+        })?;
+        let mut physical_block_slots = Vec::with_capacity(total_blocks);
+        let mut block_offsets = Vec::with_capacity(bindings.len() + 1);
+        let mut kv_lens = Vec::with_capacity(bindings.len());
+        block_offsets.push(0);
+        for binding in bindings {
+            physical_block_slots.extend_from_slice(&binding.physical_block_slots);
+            block_offsets.push(i32::try_from(physical_block_slots.len()).map_err(|_| {
+                Error::Model("DeepSeek-V4 packed block table exceeds i32 ABI".into())
+            })?);
+            kv_lens.push(
+                i32::try_from(binding.sequence_len).map_err(|_| {
+                    Error::Model("DeepSeek-V4 sequence length exceeds i32 ABI".into())
+                })?,
+            );
+        }
+
+        if row_sequence_ids.is_empty()
+            || row_sequence_ids
+                .iter()
+                .any(|sequence| *sequence >= bindings.len())
+        {
+            return Err(Error::Model(
+                "DeepSeek-V4 packed row selector references a missing sequence".into(),
+            ));
+        }
+        let row_sequence_ids = row_sequence_ids
+            .iter()
+            .map(|sequence| {
+                i32::try_from(*sequence)
+                    .map_err(|_| Error::Model("DeepSeek-V4 row sequence ID exceeds i32 ABI".into()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let shape = (
+            physical_block_slots.len(),
+            block_offsets.len(),
+            kv_lens.len(),
+            row_sequence_ids.len(),
+        );
+        if self.active_paged_kv.as_ref().is_some_and(|active| {
+            (
+                active.block_slots_device.len(),
+                active.block_offsets_device.len(),
+                active.kv_len_device.len(),
+                active.row_sequence_ids_device.len(),
+            ) != shape
+        }) {
+            if let Some(active) = self.active_paged_kv.take() {
+                let old_shape = (
+                    active.block_slots_device.len(),
+                    active.block_offsets_device.len(),
+                    active.kv_len_device.len(),
+                    active.row_sequence_ids_device.len(),
+                );
+                self.cached_paged_kv.insert(old_shape, active);
+            }
+        }
+        if self.active_paged_kv.is_none() {
+            self.active_paged_kv = self.cached_paged_kv.remove(&shape);
+        }
+        let same_shape = self.active_paged_kv.is_some();
+        if same_shape {
+            let active = self
+                .active_paged_kv
+                .as_mut()
+                .expect("same-shape active paged binding exists");
+            self.ops
+                .overwrite_i32_buffer(&physical_block_slots, &mut active.block_slots_device)?;
+            self.ops
+                .overwrite_i32_buffer(&block_offsets, &mut active.block_offsets_device)?;
+            self.ops
+                .overwrite_i32_buffer(&kv_lens, &mut active.kv_len_device)?;
+            self.ops
+                .overwrite_i32_buffer(&row_sequence_ids, &mut active.row_sequence_ids_device)?;
+            active.physical_block_slots = physical_block_slots;
+            active.page_tokens = page_tokens;
+            active.layer_count = layer_count;
+            active.sequence_count = bindings.len();
+        } else {
+            self.active_paged_kv = Some(ActivePagedKvBinding {
+                block_slots_device: self.ops.upload_i32_buffer(&physical_block_slots)?,
+                block_offsets_device: self.ops.upload_i32_buffer(&block_offsets)?,
+                kv_len_device: self.ops.upload_i32_buffer(&kv_lens)?,
+                row_sequence_ids_device: self.ops.upload_i32_buffer(&row_sequence_ids)?,
+                physical_block_slots,
+                page_tokens,
+                layer_count,
+                sequence_count: bindings.len(),
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn commit_kv_pages(&mut self) -> Result<()> {
+        let pool = self.kv_page_pool.as_mut().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        })?;
+        pool.commit_many(std::mem::take(&mut self.pending_kv_reservations))
+    }
+
+    pub(crate) fn rollback_kv_pages(&mut self) -> Result<()> {
+        let Some(pool) = self.kv_page_pool.as_mut() else {
+            if self.pending_kv_reservations.is_empty() {
+                return Ok(());
+            }
+            return Err(Error::Model(
+                "DeepSeek-V4 pending KV pages have no physical pool".into(),
+            ));
+        };
+        let mut first_error = None;
+        for reservation in self.pending_kv_reservations.drain(..) {
+            if let Err(error) = pool.rollback(&self.ops, reservation) {
+                first_error.get_or_insert(error);
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) fn release_kv_pages(&mut self, pages: &[KvPageId]) -> Result<()> {
+        let Some(pool) = self.kv_page_pool.as_mut() else {
+            return Ok(());
+        };
+        for page in pages {
+            if pool.physical_slot(*page).is_some() || pool.has_snapshot(*page) {
+                pool.release(&self.ops, *page)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn preempt_kv_pages(&mut self, pages: &[KvPageId]) -> Result<()> {
+        if pages.is_empty() {
+            return Ok(());
+        }
+        let pool = self.kv_page_pool.as_mut().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        })?;
+        pool.preempt(&self.ops, pages).map(|_| ())
+    }
+
+    pub(crate) fn restore_kv_pages(&mut self, pages: &[KvPageId]) -> Result<()> {
+        if pages.is_empty() {
+            return Ok(());
+        }
+        let pool = self.kv_page_pool.as_mut().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        })?;
+        pool.restore(&self.ops, pages)
+    }
+
     pub(crate) fn take_decode_buffers(
         &mut self,
         hc_len: usize,
         hidden_len: usize,
+        topk_row_len: usize,
     ) -> Result<DeepSeekV4DecodeBuffers> {
-        if self
-            .decode_arena
-            .hc_input
-            .as_ref()
-            .is_none_or(|buffer| buffer.len() != hc_len)
-        {
-            self.decode_arena.hc_input = Some(self.ops.zero_f32_buffer(hc_len)?);
-        }
-        if self
-            .decode_arena
-            .final_hidden
-            .as_ref()
-            .is_none_or(|buffer| buffer.len() != hidden_len)
-        {
-            self.decode_arena.final_hidden = Some(self.ops.zero_f32_buffer(hidden_len)?);
-        }
-        if self
-            .decode_arena
-            .final_norm
-            .as_ref()
-            .is_none_or(|buffer| buffer.len() != hidden_len)
-        {
-            self.decode_arena.final_norm = Some(self.ops.zero_f32_buffer(hidden_len)?);
-        }
+        let hc_input = match self.decode_arena.hc_inputs.remove(&hc_len) {
+            Some(buffer) => buffer,
+            None => self.ops.zero_f32_buffer(hc_len)?,
+        };
+        let final_hidden = match self.decode_arena.final_hiddens.remove(&hidden_len) {
+            Some(buffer) => buffer,
+            None => self.ops.zero_f32_buffer(hidden_len)?,
+        };
+        let final_norm = match self.decode_arena.final_norms.remove(&hidden_len) {
+            Some(buffer) => buffer,
+            None => self.ops.zero_f32_buffer(hidden_len)?,
+        };
+        let topk_row = match self.decode_arena.topk_rows.remove(&topk_row_len) {
+            Some(buffer) => buffer,
+            None => self.ops.zero_f32_buffer(topk_row_len)?,
+        };
         Ok(DeepSeekV4DecodeBuffers {
-            hc_input: self
-                .decode_arena
-                .hc_input
-                .take()
-                .expect("decode HC input initialized above"),
-            final_hidden: self
-                .decode_arena
-                .final_hidden
-                .take()
-                .expect("decode final hidden initialized above"),
-            final_norm: self
-                .decode_arena
-                .final_norm
-                .take()
-                .expect("decode final norm initialized above"),
+            hc_input,
+            final_hidden,
+            final_norm,
+            topk_row,
         })
     }
 
     pub(crate) fn restore_decode_buffers(&mut self, buffers: DeepSeekV4DecodeBuffers) {
-        debug_assert!(self.decode_arena.hc_input.is_none());
-        debug_assert!(self.decode_arena.final_hidden.is_none());
-        debug_assert!(self.decode_arena.final_norm.is_none());
-        self.decode_arena.hc_input = Some(buffers.hc_input);
-        self.decode_arena.final_hidden = Some(buffers.final_hidden);
-        self.decode_arena.final_norm = Some(buffers.final_norm);
-    }
-
-    pub(crate) fn clone_sequence_kv_state(
-        &mut self,
-        source: &DeepSeekV4CudaSequenceKvState,
-    ) -> Result<DeepSeekV4CudaSequenceKvState> {
-        fn clone_buffer(
-            ops: &mut ferrule_cuda::context::CudaArtifactOperatorContext,
-            source: &Option<ferrule_cuda::context::CudaF32Buffer>,
-        ) -> Result<Option<ferrule_cuda::context::CudaF32Buffer>> {
-            let Some(source) = source else {
-                return Ok(None);
-            };
-            let mut destination = ops.zero_f32_buffer(source.len())?;
-            ops.copy_f32_into_slot(source, &mut destination, 0)?;
-            Ok(Some(destination))
-        }
-
-        Ok(DeepSeekV4CudaSequenceKvState {
-            kv_cache: clone_buffer(&mut self.ops, &source.kv_cache)?,
-            kv_len: source.kv_len,
-            combined_kv_cache: clone_buffer(&mut self.ops, &source.combined_kv_cache)?,
-            combined_kv_compressed_capacity: source.combined_kv_compressed_capacity,
-            indexer_kv_cache: clone_buffer(&mut self.ops, &source.indexer_kv_cache)?,
-            indexer_kv_capacity: source.indexer_kv_capacity,
-        })
+        self.decode_arena
+            .hc_inputs
+            .insert(buffers.hc_input.len(), buffers.hc_input);
+        self.decode_arena
+            .final_hiddens
+            .insert(buffers.final_hidden.len(), buffers.final_hidden);
+        self.decode_arena
+            .final_norms
+            .insert(buffers.final_norm.len(), buffers.final_norm);
+        self.decode_arena
+            .topk_rows
+            .insert(buffers.topk_row.len(), buffers.topk_row);
     }
 
     pub(crate) fn drain_moe_access_events(&mut self) -> Vec<ExpertBatchAccessEvent> {
@@ -726,7 +1080,7 @@ impl DeepSeekV4CudaOperatorCache {
         self.ops.sync_upload_stream()?;
         self.ops.sync_stream()?;
         self.decode_arena = DeepSeekV4DecodeArena::default();
-        self.topk_buffer = None;
+        self.topk_buffers.clear();
         self.linears.clear();
         self.norm_weights.clear();
         self.compressor_ape_buffers.clear();
@@ -1498,28 +1852,6 @@ impl DeepSeekV4CudaOperatorCache {
             .rms_norm_rows_from_device_into(input, rows, weight_buf, eps, output)
     }
 
-    /// Batched device-to-device RMS norm with cached affine weight.
-    pub(crate) fn rms_norm_rows_device_cached(
-        &mut self,
-        name: &str,
-        input: &ferrule_cuda::context::CudaF32Buffer,
-        rows: usize,
-        weight: &[f32],
-        eps: f32,
-    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
-        if rows == 0 || input.len() != rows * weight.len() {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 CUDA RMS device rows length mismatch: rows={rows} input={} weight={}",
-                input.len(),
-                weight.len()
-            )));
-        }
-        self.ensure_norm_uploaded(name, weight)?;
-        let weight_buf = self.norm_weights.get(name).expect("inserted above");
-        self.ops
-            .rms_norm_rows_from_device(input, rows, weight_buf, eps)
-    }
-
     /// Ensure HC weights (function, scale, base) are uploaded once and cached.
     pub(crate) fn ensure_hc_weights_uploaded(
         &mut self,
@@ -1772,23 +2104,32 @@ impl DeepSeekV4CudaOperatorCache {
         if top_k == 0 {
             return Ok(Vec::new());
         }
-        if chunk_rows == 0 {
-            return Err(Error::Model(
-                "DeepSeek-V4 CUDA output-head chunk_rows must be > 0".into(),
-            ));
+        let mut rows =
+            self.output_head_topk_chunks_rows(slice, hidden, 1, top_k, chunk_rows, reader)?;
+        Ok(rows.pop().expect("one output-head input row requested"))
+    }
+
+    pub(crate) fn output_head_topk_chunks_rows(
+        &mut self,
+        slice: &ArtifactTensorSlice,
+        hidden: &[f32],
+        batch_rows: usize,
+        top_k: usize,
+        chunk_rows: usize,
+        reader: &ArtifactTensorReader,
+    ) -> Result<Vec<Vec<TokenLogit>>> {
+        validate_output_head_rows_request(
+            &slice.shape,
+            hidden.len(),
+            batch_rows,
+            top_k,
+            chunk_rows,
+        )?;
+        if batch_rows == 0 {
+            return Ok(Vec::new());
         }
-        if slice.shape.len() != 2 {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 CUDA output head expects 2D slice, got {:?}",
-                slice.shape
-            )));
-        }
-        let hidden_cols = slice.shape[1];
-        if hidden.len() != hidden_cols {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 CUDA output head input mismatch: expected {hidden_cols}, got {}",
-                hidden.len()
-            )));
+        if top_k == 0 {
+            return Ok((0..batch_rows).map(|_| Vec::new()).collect());
         }
 
         let upload_start = Instant::now();
@@ -1813,9 +2154,10 @@ impl DeepSeekV4CudaOperatorCache {
         self.output_head_hidden_upload_us = self
             .output_head_hidden_upload_us
             .saturating_add(duration_us(upload_start.elapsed()));
-        let result = self.output_head_topk_chunks_with_device(
+        let result = self.output_head_topk_chunks_rows_with_device(
             slice,
             &hidden_device,
+            batch_rows,
             top_k,
             chunk_rows,
             reader,
@@ -1832,12 +2174,41 @@ impl DeepSeekV4CudaOperatorCache {
         chunk_rows: usize,
         reader: &ArtifactTensorReader,
     ) -> Result<Vec<TokenLogit>> {
-        let vocab_rows =
-            slice.shape.first().copied().ok_or_else(|| {
-                Error::Model("DeepSeek-V4 CUDA output head expects 2D slice".into())
-            })?;
+        if top_k == 0 {
+            return Ok(Vec::new());
+        }
+        let mut rows = self.output_head_topk_chunks_rows_with_device(
+            slice, hidden, 1, top_k, chunk_rows, reader,
+        )?;
+        Ok(rows.pop().expect("one output-head device row requested"))
+    }
+
+    pub(crate) fn output_head_topk_chunks_rows_with_device(
+        &mut self,
+        slice: &ArtifactTensorSlice,
+        hidden: &ferrule_cuda::context::CudaF32Buffer,
+        batch_rows: usize,
+        top_k: usize,
+        chunk_rows: usize,
+        reader: &ArtifactTensorReader,
+    ) -> Result<Vec<Vec<TokenLogit>>> {
+        let (vocab_rows, _) = validate_output_head_rows_request(
+            &slice.shape,
+            hidden.len(),
+            batch_rows,
+            top_k,
+            chunk_rows,
+        )?;
+        if batch_rows == 0 {
+            return Ok(Vec::new());
+        }
+        if top_k == 0 {
+            return Ok((0..batch_rows).map(|_| Vec::new()).collect());
+        }
         self.output_head_calls = self.output_head_calls.saturating_add(1);
-        let mut top = Vec::<TokenLogit>::new();
+        let mut top = (0..batch_rows)
+            .map(|_| Vec::<TokenLogit>::new())
+            .collect::<Vec<_>>();
         let mut start = 0usize;
         while start < vocab_rows {
             let rows = chunk_rows.min(vocab_rows - start);
@@ -1872,45 +2243,74 @@ impl DeepSeekV4CudaOperatorCache {
                 self.output_head_cache_hits = self.output_head_cache_hits.saturating_add(1);
             }
             let chunk_k = top_k.min(rows);
-            if !self.output_head_logits.contains_key(&rows) {
-                let logits = self.ops.zero_f32_buffer(rows)?;
-                self.output_head_logits.insert(rows, logits);
+            let logits_key = (batch_rows, rows);
+            if !self.output_head_logits.contains_key(&logits_key) {
+                let logits_len = batch_rows.checked_mul(rows).ok_or_else(|| {
+                    Error::Model("DeepSeek-V4 output-head logits workspace overflow".into())
+                })?;
+                let logits = self.ops.zero_f32_buffer(logits_len)?;
+                self.output_head_logits.insert(logits_key, logits);
             }
-            if self
-                .output_head_indices
-                .as_ref()
-                .is_none_or(|buffer| buffer.len() < top_k)
+            let output_len = batch_rows.checked_mul(chunk_k).ok_or_else(|| {
+                Error::Model("DeepSeek-V4 output-head top-k workspace overflow".into())
+            })?;
+            if !self.output_head_indices.contains_key(&output_len) {
+                self.output_head_indices
+                    .insert(output_len, self.ops.zero_f32_buffer(output_len)?);
+                self.output_head_values
+                    .insert(output_len, self.ops.zero_f32_buffer(output_len)?);
+            }
+            if !self
+                .output_head_linear_workspaces
+                .contains_key(&hidden.len())
             {
-                self.output_head_indices = Some(self.ops.zero_f32_buffer(top_k)?);
-                self.output_head_values = Some(self.ops.zero_f32_buffer(top_k)?);
+                let workspace = self
+                    .ops
+                    .artifact_linear_workspace(batch_rows, hidden.len() / batch_rows)?;
+                self.output_head_linear_workspaces
+                    .insert(hidden.len(), workspace);
             }
             let handle = self.linears.get(&key).expect("inserted above");
             let logits = self
                 .output_head_logits
-                .get_mut(&rows)
-                .expect("output-head logits workspace initialized above");
+                .get_mut(&logits_key)
+                .expect("output-head rows logits workspace initialized above");
             let indices = self
                 .output_head_indices
-                .as_mut()
-                .expect("output-head indices workspace initialized above");
+                .get_mut(&output_len)
+                .expect("output-head rows indices workspace initialized above");
             let values = self
                 .output_head_values
-                .as_mut()
-                .expect("output-head values workspace initialized above");
+                .get_mut(&output_len)
+                .expect("output-head rows values workspace initialized above");
+            let linear_workspace = self
+                .output_head_linear_workspaces
+                .get_mut(&hidden.len())
+                .expect("output-head linear workspace initialized above");
             let topk_start = Instant::now();
-            let chunk_top = self.ops.artifact_linear_topk_from_device_into(
-                handle, hidden, chunk_k, logits, indices, values,
+            self.ops
+                .artifact_linear_rows_from_device_into_with_scratch(
+                    handle,
+                    hidden,
+                    batch_rows,
+                    logits,
+                    linear_workspace,
+                )?;
+            let (chunk_indices, chunk_values) = self.ops.topk_vocab_rows_from_device_into(
+                logits, batch_rows, rows, chunk_k, indices, values,
             )?;
             self.output_head_topk_us = self
                 .output_head_topk_us
                 .saturating_add(duration_us(topk_start.elapsed()));
             let merge_start = Instant::now();
-            top.extend(chunk_top.into_iter().map(|(token_id, logit)| TokenLogit {
-                token_id: token_id + start as u32,
-                logit,
-            }));
-            top.sort_by(rank_logits_desc);
-            top.truncate(top_k);
+            merge_output_head_chunk(
+                &mut top,
+                &chunk_indices,
+                &chunk_values,
+                chunk_k,
+                start,
+                top_k,
+            )?;
             self.output_head_merge_us = self
                 .output_head_merge_us
                 .saturating_add(duration_us(merge_start.elapsed()));
@@ -2015,6 +2415,7 @@ impl DeepSeekV4CudaOperatorCache {
         layer: usize,
         input_dev: &ferrule_cuda::context::CudaF32Buffer,
         token_ids: &[u32],
+        row_to_sequence: Option<&[usize]>,
         router: &RouterArtifactPayload,
         predicted_experts: &[usize],
         router_policy: &ExpertRouterPolicy,
@@ -2037,11 +2438,18 @@ impl DeepSeekV4CudaOperatorCache {
                 "CUDA routed MoE prefill batch requires at least one token".into(),
             ));
         }
+        if row_to_sequence.is_some_and(|sequences| sequences.len() != tokens) {
+            return Err(Error::Model(
+                "CUDA routed MoE packed row/sequence metadata mismatch".into(),
+            ));
+        }
         let hidden_size = router.weight.format.in_features();
         if input_dev.len() != tokens * hidden_size {
             return Err(Error::Model(format!(
                 "CUDA routed MoE prefill device input length mismatch: input={} expected {} tokens x {} hidden",
-                input_dev.len(), tokens, hidden_size
+                input_dev.len(),
+                tokens,
+                hidden_size
             )));
         }
 
@@ -2117,6 +2525,7 @@ impl DeepSeekV4CudaOperatorCache {
             layer,
             input_dev,
             &routes_by_token,
+            row_to_sequence,
             predicted_experts,
             planner,
             reader,
@@ -2143,6 +2552,7 @@ impl DeepSeekV4CudaOperatorCache {
         layer: usize,
         input_dev: &ferrule_cuda::context::CudaF32Buffer,
         routes_by_token: &[Vec<ExpertRoute>],
+        row_to_sequence: Option<&[usize]>,
         predicted_experts: &[usize],
         planner: &mut ExpertStreamingPlanner,
         reader: &ExpertStreamingReader,
@@ -2181,7 +2591,7 @@ impl DeepSeekV4CudaOperatorCache {
             )));
         }
 
-        let mut routes_by_expert = BTreeMap::<usize, Vec<(i32, i32, f32)>>::new();
+        let mut routes_by_expert = BTreeMap::<usize, Vec<(usize, i32, i32, f32)>>::new();
         for (token, routes) in routes_by_token.iter().enumerate() {
             if routes.len() != routes_per_token {
                 return Err(Error::Internal(format!(
@@ -2197,6 +2607,7 @@ impl DeepSeekV4CudaOperatorCache {
                         Error::Internal("CUDA segmented MoE route index overflow".into())
                     })?;
                 routes_by_expert.entry(route.expert).or_default().push((
+                    row_to_sequence.map_or(0, |sequences| sequences[token]),
                     token as i32,
                     route_index as i32,
                     route.weight,
@@ -2331,25 +2742,34 @@ impl DeepSeekV4CudaOperatorCache {
                         "CUDA segmented MoE missing route records for expert {expert}"
                     ))
                 })?;
-                for records in records.chunks(8) {
-                    segment_expert_slots.push(slot as i32);
-                    for column in 0..8 {
-                        if let Some(&(token, route, weight)) = records.get(column) {
-                            let route_index = route as usize;
-                            if std::mem::replace(&mut route_seen[route_index], true) {
-                                return Err(Error::Internal(format!(
-                                    "CUDA segmented MoE duplicate route index {route_index}"
-                                )));
+                let mut sequence_start = 0;
+                while sequence_start < records.len() {
+                    let sequence = records[sequence_start].0;
+                    let mut sequence_end = sequence_start + 1;
+                    while sequence_end < records.len() && records[sequence_end].0 == sequence {
+                        sequence_end += 1;
+                    }
+                    for records in records[sequence_start..sequence_end].chunks(8) {
+                        segment_expert_slots.push(slot as i32);
+                        for column in 0..8 {
+                            if let Some(&(_, token, route, weight)) = records.get(column) {
+                                let route_index = route as usize;
+                                if std::mem::replace(&mut route_seen[route_index], true) {
+                                    return Err(Error::Internal(format!(
+                                        "CUDA segmented MoE duplicate route index {route_index}"
+                                    )));
+                                }
+                                segment_token_indices.push(token);
+                                segment_route_indices.push(route);
+                                segment_route_weights.push(weight);
+                            } else {
+                                segment_token_indices.push(-1);
+                                segment_route_indices.push(-1);
+                                segment_route_weights.push(0.0);
                             }
-                            segment_token_indices.push(token);
-                            segment_route_indices.push(route);
-                            segment_route_weights.push(weight);
-                        } else {
-                            segment_token_indices.push(-1);
-                            segment_route_indices.push(-1);
-                            segment_route_weights.push(0.0);
                         }
                     }
+                    sequence_start = sequence_end;
                 }
             }
 
@@ -2664,25 +3084,27 @@ impl DeepSeekV4CudaOperatorCache {
                 down_arr[i] = down_handles[i];
             }
 
-            let workspace_needs_init = match &self.decode_arena.moe_workspace {
-                Some(workspace) => {
-                    !workspace.matches(6, input.len(), intermediate_size, hidden_size)
-                }
-                None => true,
-            };
-            if workspace_needs_init {
-                self.decode_arena.moe_workspace = Some(self.ops.moe_batched_workspace(
+            let workspace_key = (6, input.len(), intermediate_size, hidden_size);
+            if !self
+                .decode_arena
+                .moe_workspaces
+                .contains_key(&workspace_key)
+            {
+                let workspace = self.ops.moe_batched_workspace(
                     6,
                     input.len(),
                     intermediate_size,
                     hidden_size,
-                )?);
+                )?;
+                self.decode_arena
+                    .moe_workspaces
+                    .insert(workspace_key, workspace);
             }
             let ops = &self.ops;
             let workspace = self
                 .decode_arena
-                .moe_workspace
-                .as_mut()
+                .moe_workspaces
+                .get_mut(&workspace_key)
                 .expect("MoE workspace initialized above");
             self.moe_workspace_us = self
                 .moe_workspace_us
@@ -2875,15 +3297,171 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn sparse_attention_with_combined_kv_topk_into(
+    pub(crate) fn paged_window_sparse_attention_rows_into(
         &mut self,
-        state: &DeepSeekV4CudaSequenceKvState,
+        query: &ferrule_cuda::context::CudaF32Buffer,
+        positions: &[usize],
+        row_kv_lens: &ferrule_cuda::context::CudaI32Buffer,
+        sink: &[f32],
+        rows: usize,
+        layer: usize,
+        spec: SparseAttentionSpec,
+        output: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        if positions.len() != rows || row_kv_lens.len() != rows {
+            return Err(Error::Model(format!(
+                "packed window attention row metadata mismatch: positions={} visible_lens={} rows={rows}",
+                positions.len(),
+                row_kv_lens.len()
+            )));
+        }
+        let elements = rows
+            .checked_mul(spec.topk)
+            .ok_or_else(|| Error::Model("packed window top-k size overflow".into()))?;
+        let mut logical = vec![-1i32; elements];
+        for (row, position) in positions.iter().copied().enumerate() {
+            let kv_len = position
+                .checked_add(1)
+                .ok_or_else(|| Error::Model("packed window position overflow".into()))?;
+            let start = kv_len.saturating_sub(spec.topk);
+            for (output, index) in logical[row * spec.topk..(row + 1) * spec.topk]
+                .iter_mut()
+                .zip(start..kv_len)
+            {
+                *output = i32::try_from(index)
+                    .map_err(|_| Error::Model("packed window index exceeds i32 ABI".into()))?;
+            }
+        }
+        self.ensure_topk_buffer(elements)?;
+        self.ops.overwrite_i32_buffer(
+            &logical,
+            self.topk_buffers.get_mut(&elements).expect("ensured above"),
+        )?;
+        let sink_name = format!("sink_L{layer}");
+        self.ensure_sink_buffer(&sink_name, sink)?;
+        let active = self.active_paged_kv.as_ref().ok_or_else(|| {
+            Error::Model("packed window attention requires an active paged binding".into())
+        })?;
+        if active.row_sequence_ids_device.len() != rows {
+            return Err(Error::Model(format!(
+                "packed window attention selector rows mismatch: got {} expected {rows}",
+                active.row_sequence_ids_device.len()
+            )));
+        }
+        let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        })?;
+        let plane = pool
+            .plane_storage(0)
+            .ok_or_else(|| Error::Model("window KV plane is missing".into()))?;
+        let descriptor = &pool.planes()[0];
+        let layout = ferrule_cuda::PagedSparseAttentionLayout {
+            batch_size: rows,
+            tokens_per_sequence: 1,
+            heads: spec.heads,
+            head_dim: spec.head_dim,
+            topk: spec.topk,
+            page_tokens: active.page_tokens,
+            elements_per_token: descriptor.elements_per_token,
+            layer_index: layer,
+            layer_count: active.layer_count,
+            softmax_scale: spec.softmax_scale,
+        };
+        self.ops
+            .paged_sparse_attention_selected_rows_from_device_into(
+                query,
+                plane,
+                &active.block_slots_device,
+                &active.block_offsets_device,
+                &active.kv_len_device,
+                &active.row_sequence_ids_device,
+                row_kv_lens,
+                self.topk_buffers.get(&elements).expect("filled above"),
+                self.sink_buffers.get(&sink_name).expect("inserted above"),
+                layout,
+                output,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn dual_plane_paged_sparse_attention_rows_into(
+        &mut self,
+        query: &ferrule_cuda::context::CudaF32Buffer,
+        topk: &ferrule_cuda::context::CudaI32Buffer,
+        selectors: &ferrule_cuda::context::CudaI32Buffer,
+        row_kv_lens: &ferrule_cuda::context::CudaI32Buffer,
+        sink: &[f32],
+        rows: usize,
+        layer: usize,
+        spec: SparseAttentionSpec,
+        output: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        let sink_name = format!("sink_L{layer}");
+        self.ensure_sink_buffer(&sink_name, sink)?;
+        let active = self.active_paged_kv.as_ref().ok_or_else(|| {
+            Error::Model("packed sparse attention requires an active paged binding".into())
+        })?;
+        if active.row_sequence_ids_device.len() != rows || row_kv_lens.len() != rows {
+            return Err(Error::Model(format!(
+                "packed sparse attention row metadata mismatch: selectors={} visible_lens={} expected={rows}",
+                active.row_sequence_ids_device.len(),
+                row_kv_lens.len()
+            )));
+        }
+        let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        })?;
+        let first = pool
+            .plane_storage(0)
+            .ok_or_else(|| Error::Model("window KV plane is missing".into()))?;
+        let second = pool
+            .plane_storage(1)
+            .ok_or_else(|| Error::Model("compressed KV plane is missing".into()))?;
+        let first_descriptor = &pool.planes()[0];
+        let second_descriptor = &pool.planes()[1];
+        let layout = ferrule_cuda::DualPlanePagedSparseAttentionLayout {
+            base: ferrule_cuda::PagedSparseAttentionLayout {
+                batch_size: rows,
+                tokens_per_sequence: 1,
+                heads: spec.heads,
+                head_dim: spec.head_dim,
+                topk: spec.topk,
+                page_tokens: active.page_tokens,
+                elements_per_token: first_descriptor.elements_per_token,
+                layer_index: layer,
+                layer_count: active.layer_count,
+                softmax_scale: spec.softmax_scale,
+            },
+            second_elements_per_token: second_descriptor.elements_per_token,
+        };
+        self.ops
+            .dual_plane_paged_sparse_attention_selected_rows_from_device_into(
+                query,
+                first,
+                second,
+                &active.block_slots_device,
+                &active.block_offsets_device,
+                &active.kv_len_device,
+                &active.row_sequence_ids_device,
+                row_kv_lens,
+                topk,
+                selectors,
+                self.sink_buffers.get(&sink_name).expect("inserted above"),
+                layout,
+                output,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn sparse_attention_with_paged_kv_topk_into(
+        &mut self,
         query: &ferrule_cuda::context::CudaF32Buffer,
         layer: usize,
+        position: usize,
+        window_size: usize,
         topk: &ferrule_cuda::context::CudaI32Buffer,
         sink: &[f32],
         tokens: usize,
-        kv_len: usize,
         spec: SparseAttentionSpec,
         output: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
@@ -2894,31 +3472,83 @@ impl DeepSeekV4CudaOperatorCache {
                 tokens * spec.topk
             )));
         }
-        let shape = ferrule_cuda::transformer::sparse_attention::CudaSparseAttentionShape {
-            batch_size: 1,
-            tokens_per_batch: tokens,
-            kv_len,
-            heads: spec.heads,
-            head_dim: spec.head_dim,
-            topk: spec.topk,
-            softmax_scale: spec.softmax_scale,
-        };
-        let sink_name = format!("sink_L{layer}");
-        self.ensure_sink_buffer(&sink_name, sink)?;
-        let values = state.combined_kv_cache.as_ref().ok_or_else(|| {
-            Error::Model(format!(
-                "DeepSeek-V4 layer {layer} missing sequence-owned combined KV device cache"
-            ))
-        })?;
-        let sink_buf = self.sink_buffers.get(&sink_name).expect("inserted above");
-        self.ops.sparse_attention_sink_from_device_into(
-            query,
-            values,
-            topk.as_device_buffer(),
-            sink_buf,
-            shape,
-            output,
-        )
+        let (page_tokens, layer_count) = self
+            .active_paged_kv
+            .as_ref()
+            .map(|active| (active.page_tokens, active.layer_count))
+            .ok_or_else(|| {
+                Error::Model("DeepSeek-V4 sparse attention requires an active paged binding".into())
+            })?;
+        {
+            let elements = tokens
+                .checked_mul(spec.topk)
+                .ok_or_else(|| Error::Model("paged combined top-k size overflow".into()))?;
+            if self
+                .paged_topk_logical
+                .as_ref()
+                .is_none_or(|buffer| buffer.len() != elements)
+            {
+                self.paged_topk_logical = Some(self.ops.zero_i32_buffer(elements)?);
+                self.paged_topk_selectors = Some(self.ops.zero_i32_buffer(elements)?);
+            }
+            self.ops.convert_combined_ring_topk_indices_into(
+                topk,
+                ferrule_cuda::CombinedRingWindowLens::PositionDerived,
+                ferrule_cuda::CombinedRingTopkLayout {
+                    rows: tokens,
+                    topk: spec.topk,
+                    start_position: position,
+                    position_stride: 1,
+                    window_size,
+                },
+                self.paged_topk_logical.as_mut().expect("ensured above"),
+                self.paged_topk_selectors.as_mut().expect("ensured above"),
+            )?;
+            let sink_name = format!("sink_L{layer}");
+            self.ensure_sink_buffer(&sink_name, sink)?;
+            let active = self.active_paged_kv.as_ref().expect("validated above");
+            let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
+                Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+            })?;
+            let first = pool
+                .plane_storage(0)
+                .ok_or_else(|| Error::Model("window KV plane is missing".into()))?;
+            let second = pool
+                .plane_storage(1)
+                .ok_or_else(|| Error::Model("compressed KV plane is missing".into()))?;
+            let first_descriptor = &pool.planes()[0];
+            let second_descriptor = &pool.planes()[1];
+            let layout = ferrule_cuda::DualPlanePagedSparseAttentionLayout {
+                base: ferrule_cuda::PagedSparseAttentionLayout {
+                    batch_size: 1,
+                    tokens_per_sequence: tokens,
+                    heads: spec.heads,
+                    head_dim: spec.head_dim,
+                    topk: spec.topk,
+                    page_tokens,
+                    elements_per_token: first_descriptor.elements_per_token,
+                    layer_index: layer,
+                    layer_count,
+                    softmax_scale: spec.softmax_scale,
+                },
+                second_elements_per_token: second_descriptor.elements_per_token,
+            };
+            return self
+                .ops
+                .dual_plane_paged_sparse_attention_sink_from_device_into(
+                    query,
+                    first,
+                    second,
+                    &active.block_slots_device,
+                    &active.block_offsets_device,
+                    &active.kv_len_device,
+                    self.paged_topk_logical.as_ref().expect("ensured above"),
+                    self.paged_topk_selectors.as_ref().expect("ensured above"),
+                    self.sink_buffers.get(&sink_name).expect("inserted above"),
+                    layout,
+                    output,
+                );
+        }
     }
 
     /// Batched device-resident grouped output_a into caller-owned output.
@@ -3019,6 +3649,102 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub(crate) fn compressor_recurrent_seed_prefill(
+        &mut self,
+        state: &mut Option<ferrule_cuda::CudaCompressorRecurrentState>,
+        needs_reset: &mut bool,
+        name: &str,
+        kv_rows: &ferrule_cuda::context::CudaF32Buffer,
+        score_rows: &ferrule_cuda::context::CudaF32Buffer,
+        ape: &[f32],
+        tokens: usize,
+        ratio: usize,
+        head_dim: usize,
+        out_dim: usize,
+        overlap: bool,
+    ) -> Result<usize> {
+        if !self.compressor_ape_buffers.contains_key(name) {
+            self.compressor_ape_buffers
+                .insert(name.to_string(), self.ops.upload_f32_buffer(ape)?);
+        }
+        if state.is_none() {
+            *state = Some(
+                self.ops
+                    .create_compressor_recurrent_state(ratio, head_dim, out_dim, overlap)?,
+            );
+        }
+        let state = state.as_mut().expect("created above");
+        if state.ratio() != ratio
+            || state.head_dim() != head_dim
+            || state.out_dim() != out_dim
+            || state.overlap() != overlap
+        {
+            return Err(Error::Model(
+                "DeepSeek-V4 compressor recurrent state shape mismatch".into(),
+            ));
+        }
+        if *needs_reset {
+            self.ops.reset_compressor_recurrent_state(state)?;
+            *needs_reset = false;
+        }
+        let ape = self
+            .compressor_ape_buffers
+            .get(name)
+            .expect("inserted above");
+        self.ops
+            .compressor_recurrent_seed_prefill(state, kv_rows, score_rows, ape, tokens)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn compressor_recurrent_append_into(
+        &mut self,
+        state: &mut Option<ferrule_cuda::CudaCompressorRecurrentState>,
+        needs_reset: &mut bool,
+        name: &str,
+        projected_kv: &ferrule_cuda::context::CudaF32Buffer,
+        projected_score: &ferrule_cuda::context::CudaF32Buffer,
+        ape: &[f32],
+        position: usize,
+        ratio: usize,
+        head_dim: usize,
+        out_dim: usize,
+        overlap: bool,
+        compressed: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<bool> {
+        if !self.compressor_ape_buffers.contains_key(name) {
+            self.compressor_ape_buffers
+                .insert(name.to_string(), self.ops.upload_f32_buffer(ape)?);
+        }
+        if state.is_none() {
+            *state = Some(
+                self.ops
+                    .create_compressor_recurrent_state(ratio, head_dim, out_dim, overlap)?,
+            );
+        }
+        let state = state.as_mut().expect("created above");
+        if *needs_reset {
+            self.ops.reset_compressor_recurrent_state(state)?;
+            *needs_reset = false;
+        }
+        let ape = self
+            .compressor_ape_buffers
+            .get(name)
+            .expect("inserted above");
+        let boundary = self.ops.compressor_recurrent_append_projected(
+            state,
+            projected_kv,
+            projected_score,
+            ape,
+            position,
+        )?;
+        if boundary {
+            self.ops
+                .compressor_recurrent_boundary_into(state, compressed)?;
+        }
+        Ok(boundary)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn compressor_prefill_softmax_from_device_into(
         &mut self,
         name: &str,
@@ -3062,15 +3788,35 @@ impl DeepSeekV4CudaOperatorCache {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn prefill_topk_indices_from_device_into(
+    pub(crate) fn write_topk_indices(
         &mut self,
-        query: Option<&ferrule_cuda::context::CudaF32Buffer>,
-        weights: Option<&ferrule_cuda::context::CudaF32Buffer>,
-        indexer_kv: Option<&ferrule_cuda::context::CudaF32Buffer>,
-        empty_query: &ferrule_cuda::context::CudaF32Buffer,
-        empty_weights: &ferrule_cuda::context::CudaF32Buffer,
-        empty_kv: &ferrule_cuda::context::CudaF32Buffer,
+        indices: &[isize],
+        output: &mut ferrule_cuda::context::CudaI32Buffer,
+    ) -> Result<()> {
+        if output.len() < indices.len() {
+            return Err(Error::Model(format!(
+                "CUDA top-k output too small: need {}, got {}",
+                indices.len(),
+                output.len()
+            )));
+        }
+        let indices = indices
+            .iter()
+            .copied()
+            .map(|index| {
+                i32::try_from(index)
+                    .map_err(|_| Error::Model(format!("CUDA top-k index exceeds i32 ABI: {index}")))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.ops.overwrite_i32_prefix(&indices, output)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prefill_topk_indices_paged_indexer_into(
+        &mut self,
+        query: &ferrule_cuda::context::CudaF32Buffer,
+        weights: &ferrule_cuda::context::CudaF32Buffer,
+        layer: usize,
         tokens: usize,
         window_size: usize,
         window_cols: usize,
@@ -3083,33 +3829,45 @@ impl DeepSeekV4CudaOperatorCache {
         weight_scale: f32,
         output: &mut ferrule_cuda::context::CudaI32Buffer,
     ) -> Result<()> {
-        self.ops.dsv4_prefill_topk_indices_from_device_into(
-            query,
-            weights,
-            indexer_kv,
-            empty_query,
-            empty_weights,
-            empty_kv,
-            tokens,
-            window_size,
-            window_cols,
-            extra_cols,
-            value_offset,
-            compress_ratio,
-            compressed_len,
-            index_heads,
-            index_head_dim,
-            weight_scale,
-            output,
-        )
+        let active = self.active_paged_kv.as_ref().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 prefill indexer requires an active paged binding".into())
+        })?;
+        let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        })?;
+        let indexer_plane = pool
+            .plane_storage(2)
+            .ok_or_else(|| Error::Model("indexer KV plane is missing".into()))?;
+        self.ops
+            .dsv4_prefill_topk_indices_paged_indexer_from_device_into(
+                query,
+                weights,
+                indexer_plane,
+                &active.block_slots_device,
+                &active.block_offsets_device,
+                tokens,
+                window_size,
+                window_cols,
+                extra_cols,
+                value_offset,
+                compress_ratio,
+                compressed_len,
+                index_heads,
+                index_head_dim,
+                active.page_tokens,
+                layer,
+                active.layer_count,
+                weight_scale,
+                output,
+            )
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn prefill_topk_indices_fused_index_query_from_device_into(
+    pub(crate) fn prefill_topk_indices_fused_index_query_paged_indexer_into(
         &mut self,
         query: &ferrule_cuda::context::CudaF32Buffer,
         weights: &ferrule_cuda::context::CudaF32Buffer,
-        indexer_kv: &ferrule_cuda::context::CudaF32Buffer,
+        layer: usize,
         rope_name: &str,
         tokens: usize,
         window_size: usize,
@@ -3129,13 +3887,24 @@ impl DeepSeekV4CudaOperatorCache {
             Error::Model("DeepSeek-V4 prefill indexer RoPE position overflow".into())
         })?;
         self.require_rope_tables(rope_name, rope_dim, required_positions)?;
+        let active = self.active_paged_kv.as_ref().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 prefill indexer requires an active paged binding".into())
+        })?;
+        let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        })?;
+        let indexer_plane = pool
+            .plane_storage(2)
+            .ok_or_else(|| Error::Model("indexer KV plane is missing".into()))?;
         let cos = self.rope_cos_device(rope_name);
         let sin = self.rope_sin_device(rope_name);
         self.ops
-            .dsv4_prefill_topk_indices_fused_index_query_from_device_into(
+            .dsv4_prefill_topk_indices_fused_index_query_paged_indexer_from_device_into(
                 query,
                 weights,
-                indexer_kv,
+                indexer_plane,
+                &active.block_slots_device,
+                &active.block_offsets_device,
                 cos,
                 sin,
                 tokens,
@@ -3149,55 +3918,79 @@ impl DeepSeekV4CudaOperatorCache {
                 index_head_dim,
                 rope_dim,
                 start_position,
+                active.page_tokens,
+                layer,
+                active.layer_count,
                 weight_scale,
                 output,
             )
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn decode_topk_indices_from_device_into(
+    pub(crate) fn decode_topk_indices_paged_indexer_rows_into(
         &mut self,
-        query: Option<&ferrule_cuda::context::CudaF32Buffer>,
-        weights: Option<&ferrule_cuda::context::CudaF32Buffer>,
-        indexer_kv: Option<&ferrule_cuda::context::CudaF32Buffer>,
-        empty_query: &ferrule_cuda::context::CudaF32Buffer,
-        empty_weights: &ferrule_cuda::context::CudaF32Buffer,
-        empty_kv: &ferrule_cuda::context::CudaF32Buffer,
-        position: usize,
-        window_len: usize,
+        query: &ferrule_cuda::context::CudaF32Buffer,
+        weights: &ferrule_cuda::context::CudaF32Buffer,
+        positions: &ferrule_cuda::context::CudaI32Buffer,
+        window_lens: &ferrule_cuda::context::CudaI32Buffer,
+        compressed_lens: &ferrule_cuda::context::CudaI32Buffer,
+        layer: usize,
         window_size: usize,
-        extra_cols: usize,
-        value_offset: usize,
-        compressed_len: usize,
+        index_topk: usize,
         index_heads: usize,
         index_head_dim: usize,
         weight_scale: f32,
-        out: &mut ferrule_cuda::context::CudaI32Buffer,
+        logical_indices: &mut ferrule_cuda::context::CudaI32Buffer,
+        plane_selectors: &mut ferrule_cuda::context::CudaI32Buffer,
     ) -> Result<()> {
-        self.ops.dsv4_decode_topk_indices_from_device_into(
-            query,
-            weights,
-            indexer_kv,
-            empty_query,
-            empty_weights,
-            empty_kv,
-            position,
-            window_len,
-            window_size,
-            extra_cols,
-            value_offset,
-            compressed_len,
-            index_heads,
-            index_head_dim,
-            weight_scale,
-            out,
-        )
+        let rows = positions.len();
+        if window_lens.len() != rows || compressed_lens.len() != rows {
+            return Err(Error::Model(
+                "packed decode top-k row metadata is inconsistent".into(),
+            ));
+        }
+        let active = self.active_paged_kv.as_ref().ok_or_else(|| {
+            Error::Model("packed decode top-k requires an active paged binding".into())
+        })?;
+        if active.row_sequence_ids_device.len() != rows {
+            return Err(Error::Model(
+                "packed decode top-k selector row count is inconsistent".into(),
+            ));
+        }
+        let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        })?;
+        let indexer_plane = pool
+            .plane_storage(2)
+            .ok_or_else(|| Error::Model("indexer KV plane is missing".into()))?;
+        self.ops
+            .dsv4_decode_topk_indices_paged_indexer_rows_from_device_into(
+                query,
+                weights,
+                indexer_plane,
+                &active.block_slots_device,
+                &active.block_offsets_device,
+                &active.row_sequence_ids_device,
+                positions,
+                window_lens,
+                compressed_lens,
+                rows,
+                window_size,
+                index_topk,
+                index_heads,
+                index_head_dim,
+                active.page_tokens,
+                layer,
+                active.layer_count,
+                weight_scale,
+                logical_indices,
+                plane_selectors,
+            )
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn decode_topk_indices_fused_index_query_from_indexer_cache_into(
+    pub(crate) fn decode_topk_indices_fused_index_query_paged_indexer_into(
         &mut self,
-        state: &DeepSeekV4CudaSequenceKvState,
         query: &ferrule_cuda::context::CudaF32Buffer,
         weights: &ferrule_cuda::context::CudaF32Buffer,
         layer: usize,
@@ -3218,43 +4011,51 @@ impl DeepSeekV4CudaOperatorCache {
             Error::Model("DeepSeek-V4 decode indexer RoPE position overflow".into())
         })?;
         self.require_rope_tables(rope_name, rope_dim, required_positions)?;
-        let indexer_kv = state.indexer_kv_cache.as_ref().ok_or_else(|| {
-            Error::Model(format!(
-                "DeepSeek-V4 layer {layer} missing sequence-owned indexer KV device cache"
-            ))
-        })?;
-        let cos = self.rope_cos_device(rope_name);
-        let sin = self.rope_sin_device(rope_name);
-        self.ops
-            .dsv4_decode_topk_indices_fused_index_query_from_device_into(
-                query,
-                weights,
-                indexer_kv,
-                cos,
-                sin,
-                position,
-                window_len,
-                window_size,
-                extra_cols,
-                value_offset,
-                compressed_len,
-                index_heads,
-                index_head_dim,
-                rope_dim,
-                weight_scale,
-                out,
-            )
+        {
+            let active = self.active_paged_kv.as_ref().ok_or_else(|| {
+                Error::Model("DeepSeek-V4 decode indexer requires an active paged binding".into())
+            })?;
+            let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
+                Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+            })?;
+            let indexer_plane = pool
+                .plane_storage(2)
+                .ok_or_else(|| Error::Model("indexer KV plane is missing".into()))?;
+            let cos = self.rope_cos_device(rope_name);
+            let sin = self.rope_sin_device(rope_name);
+            return self
+                .ops
+                .dsv4_decode_topk_indices_fused_index_query_paged_indexer_from_device_into(
+                    query,
+                    weights,
+                    indexer_plane,
+                    &active.block_slots_device,
+                    &active.block_offsets_device,
+                    cos,
+                    sin,
+                    position,
+                    window_len,
+                    window_size,
+                    extra_cols,
+                    value_offset,
+                    compressed_len,
+                    index_heads,
+                    index_head_dim,
+                    rope_dim,
+                    active.page_tokens,
+                    layer,
+                    active.layer_count,
+                    weight_scale,
+                    out,
+                );
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn decode_topk_indices_from_indexer_cache_into(
+    pub(crate) fn decode_topk_indices_from_paged_indexer_into(
         &mut self,
-        state: &DeepSeekV4CudaSequenceKvState,
         query: &ferrule_cuda::context::CudaF32Buffer,
         weights: &ferrule_cuda::context::CudaF32Buffer,
-        empty_query: &ferrule_cuda::context::CudaF32Buffer,
-        empty_weights: &ferrule_cuda::context::CudaF32Buffer,
-        empty_kv: &ferrule_cuda::context::CudaF32Buffer,
         layer: usize,
         position: usize,
         window_len: usize,
@@ -3267,29 +4068,39 @@ impl DeepSeekV4CudaOperatorCache {
         weight_scale: f32,
         out: &mut ferrule_cuda::context::CudaI32Buffer,
     ) -> Result<()> {
-        let indexer_kv = state.indexer_kv_cache.as_ref().ok_or_else(|| {
-            Error::Model(format!(
-                "DeepSeek-V4 layer {layer} missing sequence-owned indexer KV device cache"
-            ))
-        })?;
-        self.decode_topk_indices_from_device_into(
-            Some(query),
-            Some(weights),
-            Some(indexer_kv),
-            empty_query,
-            empty_weights,
-            empty_kv,
-            position,
-            window_len,
-            window_size,
-            extra_cols,
-            value_offset,
-            compressed_len,
-            index_heads,
-            index_head_dim,
-            weight_scale,
-            out,
-        )
+        {
+            let active = self.active_paged_kv.as_ref().ok_or_else(|| {
+                Error::Model("DeepSeek-V4 decode indexer requires an active paged binding".into())
+            })?;
+            let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
+                Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+            })?;
+            let indexer_plane = pool
+                .plane_storage(2)
+                .ok_or_else(|| Error::Model("indexer KV plane is missing".into()))?;
+            return self
+                .ops
+                .dsv4_decode_topk_indices_paged_indexer_from_device_into(
+                    query,
+                    weights,
+                    indexer_plane,
+                    &active.block_slots_device,
+                    &active.block_offsets_device,
+                    position,
+                    window_len,
+                    window_size,
+                    extra_cols,
+                    value_offset,
+                    compressed_len,
+                    index_heads,
+                    index_head_dim,
+                    active.page_tokens,
+                    layer,
+                    active.layer_count,
+                    weight_scale,
+                    out,
+                );
+        }
     }
 
     pub(crate) fn gather_f32_rows(
@@ -3309,464 +4120,139 @@ impl DeepSeekV4CudaOperatorCache {
         self.ops.gather_f32_rows(input, &indices_dev, rows, row_dim)
     }
 
-    // ── Device-resident window KV cache ───────────────────────────────
-
-    /// Ensure a `[window_size * head_dim]` f32 device buffer exists for
-    /// `layer`, zero-initialized. Idempotent.
-    #[allow(dead_code)]
-    pub(crate) fn ensure_kv_cache(
+    pub(crate) fn paged_scatter_rows_from_device(
         &mut self,
-        state: &mut DeepSeekV4CudaSequenceKvState,
-        _layer: usize,
-        window_size: usize,
-        head_dim: usize,
-    ) -> Result<()> {
-        if state.kv_cache.is_none() {
-            state.kv_cache = Some(self.ops.zero_f32_buffer(window_size * head_dim)?);
-            state.kv_len = 0;
-        }
-        Ok(())
-    }
-
-    /// Append a single-token KV vector (already on device) into the slot for
-    /// `position` using a device-to-device copy, then advance the cached
-    /// length. `kv_buffer` must be `[head_dim]` f32.
-    #[allow(dead_code)]
-    pub(crate) fn kv_append_device(
-        &mut self,
-        state: &mut DeepSeekV4CudaSequenceKvState,
-        layer: usize,
-        kv_buffer: &ferrule_cuda::context::CudaF32Buffer,
-        position: usize,
-        head_dim: usize,
-        window_size: usize,
-    ) -> Result<()> {
-        self.ensure_kv_cache(state, layer, window_size, head_dim)?;
-        if kv_buffer.len() != head_dim {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} device KV append length mismatch: expected {head_dim}, got {}",
-                kv_buffer.len()
-            )));
-        }
-        let slot = position % window_size;
-        let offset = slot * head_dim;
-        let dst = state
-            .kv_cache
-            .as_mut()
-            .expect("inserted by ensure_kv_cache");
-        self.ops.copy_f32_into_slot(kv_buffer, dst, offset)?;
-        state.kv_len = window_size.min(state.kv_len + 1);
-        Ok(())
-    }
-
-    pub(crate) fn kv_write_window_rows_device(
-        &mut self,
-        state: &mut DeepSeekV4CudaSequenceKvState,
+        plane: usize,
         layer: usize,
         values: &ferrule_cuda::context::CudaF32Buffer,
-        start_position: usize,
-        rows: usize,
-        window_size: usize,
-        head_dim: usize,
+        positions: &ferrule_cuda::context::CudaI32Buffer,
+        mask: Option<&ferrule_cuda::context::CudaI32Buffer>,
+        row_dim: usize,
     ) -> Result<()> {
-        self.ensure_kv_cache(state, layer, window_size, head_dim)?;
-        if rows == 0 || values.len() != rows * head_dim {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} device KV rows mismatch: rows={rows} expected {}, got {}",
-                rows * head_dim,
-                values.len()
-            )));
-        }
-
-        {
-            let dst = state
-                .kv_cache
-                .as_mut()
-                .expect("inserted by ensure_kv_cache");
-            if start_position + rows <= window_size {
-                self.ops
-                    .copy_f32_into_slot(values, dst, start_position * head_dim)?;
-            } else {
-                for row in 0..rows {
-                    let row_indices = [row as i32];
-                    let row_indices_dev = self.ops.upload_i32_buffer(&row_indices)?;
-                    let row_dev =
-                        self.ops
-                            .gather_f32_rows(values, &row_indices_dev, 1, head_dim)?;
-                    let slot = (start_position + row) % window_size;
-                    self.ops
-                        .copy_f32_into_slot(&row_dev, dst, slot * head_dim)?;
-                }
-            }
-        }
-
-        state.kv_len = window_size.min(state.kv_len.max(start_position.saturating_add(rows)));
-        Ok(())
-    }
-
-    /// Borrow the device-resident KV buffer for `layer`.
-    #[allow(dead_code)]
-    pub(crate) fn kv_values_device<'a>(
-        &self,
-        state: &'a DeepSeekV4CudaSequenceKvState,
-    ) -> &'a ferrule_cuda::context::CudaF32Buffer {
-        state
-            .kv_cache
-            .as_ref()
-            .expect("kv cache must be ensured before reading")
-    }
-
-    pub(crate) fn ensure_combined_kv_cache(
-        &mut self,
-        state: &mut DeepSeekV4CudaSequenceKvState,
-        layer: usize,
-        window_values: &[f32],
-        head_dim: usize,
-        compressed_values: &[f32],
-        compressed_capacity: usize,
-    ) -> Result<()> {
-        if state.combined_kv_cache.is_some()
-            && state.combined_kv_compressed_capacity >= compressed_capacity
-        {
-            return Ok(());
-        }
-
-        let compressed_len = compressed_values.len().checked_div(head_dim).unwrap_or(0);
-        let requested_capacity = compressed_capacity.max(compressed_len).max(16);
-        let capacity = requested_capacity
-            .checked_next_power_of_two()
-            .ok_or_else(|| {
-                Error::Model(format!(
-                    "DeepSeek-V4 layer {layer} combined KV capacity overflow: requested={requested_capacity}"
-                ))
-            })?;
-        let compressed_elements = capacity.checked_mul(head_dim).ok_or_else(|| {
-            Error::Model(format!(
-                "DeepSeek-V4 layer {layer} combined KV element count overflow: capacity={capacity} head_dim={head_dim}"
-            ))
+        let active = self.active_paged_kv.as_ref().ok_or_else(|| {
+            Error::Model("packed paged KV scatter requires an active binding".into())
         })?;
-        let buffer_len = window_values
-            .len()
-            .checked_add(compressed_elements)
-            .ok_or_else(|| {
-                Error::Model(format!(
-                    "DeepSeek-V4 layer {layer} combined KV buffer length overflow"
-                ))
-            })?;
-        if u64::try_from(buffer_len).unwrap_or(u64::MAX) > u64::from(u32::MAX) + 1 {
+        if active.row_sequence_ids_device.len() != positions.len()
+            || values.len() != positions.len() * row_dim
+        {
+            return Err(Error::Model(
+                "packed paged KV scatter row metadata is inconsistent".into(),
+            ));
+        }
+        if mask.is_some_and(|mask| mask.len() != positions.len()) {
+            return Err(Error::Model(
+                "packed paged KV scatter mask length is inconsistent".into(),
+            ));
+        }
+        let pool = self.kv_page_pool.as_mut().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        })?;
+        let descriptor = pool
+            .planes()
+            .get(plane)
+            .ok_or_else(|| Error::Model(format!("paged KV plane {plane} is missing")))?;
+        if descriptor.elements_per_token != row_dim || descriptor.layer_count != active.layer_count
+        {
             return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} combined KV buffer exceeds CUDA u32 element indexing: {buffer_len}"
+                "paged KV plane {plane} layout mismatch: row_dim={row_dim}/{} layers={}/{}",
+                descriptor.elements_per_token, active.layer_count, descriptor.layer_count
             )));
         }
-
-        // Keep the installed device buffer and capacity metadata untouched until
-        // replacement allocation and D2D preservation both succeed. The host
-        // window is intentionally only a metadata shadow on CUDA paths, so it
-        // cannot reconstruct the old device values after a failed growth.
-        let buffer = if let Some(old) = state.combined_kv_cache.as_ref() {
-            let mut replacement = self.ops.zero_f32_buffer(buffer_len)?;
-            self.ops.copy_f32_into_slot(old, &mut replacement, 0)?;
-            replacement
-        } else {
-            let mut values = Vec::new();
-            values.try_reserve_exact(buffer_len).map_err(|error| {
-                Error::Model(format!(
-                    "DeepSeek-V4 layer {layer} combined KV host allocation failed for {buffer_len} elements: {error}"
-                ))
-            })?;
-            values.resize(buffer_len, 0.0f32);
-            values[..window_values.len()].copy_from_slice(window_values);
-            let compressed_offset = window_values.len();
-            values[compressed_offset..compressed_offset + compressed_values.len()]
-                .copy_from_slice(compressed_values);
-            self.ops.upload_f32_buffer(&values)?
+        let layout = ferrule_cuda::PagedPlaneLayout {
+            page_tokens: active.page_tokens,
+            elements_per_token: row_dim,
+            layer_index: layer,
+            layer_count: active.layer_count,
         };
-        state.combined_kv_cache = Some(buffer);
-        state.combined_kv_compressed_capacity = capacity;
-        Ok(())
+        self.ops.paged_plane_scatter_selected_rows_from_device(
+            values,
+            positions,
+            &active.block_slots_device,
+            &active.block_offsets_device,
+            &active.row_sequence_ids_device,
+            mask,
+            pool.plane_storage_mut(plane)
+                .expect("validated paged KV plane"),
+            layout,
+        )
     }
 
-    pub(crate) fn combined_kv_append_window_device(
+    pub(crate) fn paged_write_rows(
         &mut self,
-        state: &mut DeepSeekV4CudaSequenceKvState,
-        layer: usize,
-        kv_dev: &ferrule_cuda::context::CudaF32Buffer,
-        position: usize,
-        window_size: usize,
-        head_dim: usize,
-    ) -> Result<()> {
-        if kv_dev.len() != head_dim {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} combined window KV device append mismatch: expected {head_dim}, got {}",
-                kv_dev.len()
-            )));
-        }
-        let dst = state.combined_kv_cache.as_mut().ok_or_else(|| {
-            Error::Model(format!(
-                "DeepSeek-V4 layer {layer} missing sequence-owned combined KV device cache"
-            ))
-        })?;
-        let slot = position % window_size;
-        self.ops.copy_f32_into_slot(kv_dev, dst, slot * head_dim)
-    }
-
-    pub(crate) fn combined_kv_write_window_rows_device(
-        &mut self,
-        state: &mut DeepSeekV4CudaSequenceKvState,
+        plane: usize,
         layer: usize,
         values: &ferrule_cuda::context::CudaF32Buffer,
         start_position: usize,
         rows: usize,
-        window_size: usize,
-        head_dim: usize,
+        row_dim: usize,
     ) -> Result<()> {
-        if rows == 0 || values.len() != rows * head_dim {
+        let active = self.active_paged_kv.as_ref().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA KV write requires an active paged binding".into())
+        })?;
+        if values.len() != rows.saturating_mul(row_dim) {
+            return Err(Error::Model("paged KV source row shape mismatch".into()));
+        }
+        if layer >= active.layer_count || active.page_tokens == 0 {
+            return Err(Error::Model(
+                "paged KV layer/page metadata is invalid".into(),
+            ));
+        }
+        if active.sequence_count != 1 {
+            return Err(Error::Model(
+                "contiguous-row paged write cannot target a packed multi-sequence binding".into(),
+            ));
+        }
+        let slots = active.physical_block_slots.clone();
+        let page_tokens = active.page_tokens;
+        let pool = self.kv_page_pool.as_mut().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        })?;
+        let descriptor = pool
+            .planes()
+            .get(plane)
+            .ok_or_else(|| Error::Model(format!("paged KV plane {plane} is missing")))?;
+        if descriptor.elements_per_token != row_dim || descriptor.layer_count != active.layer_count
+        {
             return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} combined window KV rows mismatch: rows={rows} expected {}, got {}",
-                rows * head_dim,
-                values.len()
+                "paged KV plane {plane} layout mismatch: row_dim={row_dim}/{} layers={}/{}",
+                descriptor.elements_per_token, active.layer_count, descriptor.layer_count
             )));
         }
-        let dst = state.combined_kv_cache.as_mut().ok_or_else(|| {
-            Error::Model(format!(
-                "DeepSeek-V4 layer {layer} missing sequence-owned combined KV device cache"
-            ))
-        })?;
-        if start_position + rows <= window_size {
-            return self
-                .ops
-                .copy_f32_into_slot(values, dst, start_position * head_dim);
-        }
+        let page_elements = pool
+            .page_elements(plane)
+            .ok_or_else(|| Error::Model(format!("paged KV plane {plane} has no storage")))?;
+        let layer_stride = page_tokens
+            .checked_mul(row_dim)
+            .ok_or_else(|| Error::Model("paged KV layer stride overflow".into()))?;
         for row in 0..rows {
-            let row_indices = [row as i32];
-            let row_indices_dev = self.ops.upload_i32_buffer(&row_indices)?;
-            let row_dev = self
-                .ops
-                .gather_f32_rows(values, &row_indices_dev, 1, head_dim)?;
-            let slot = (start_position + row) % window_size;
-            self.ops
-                .copy_f32_into_slot(&row_dev, dst, slot * head_dim)?;
-        }
-        Ok(())
-    }
-
-    pub(crate) fn combined_kv_write_compressed_rows_device(
-        &mut self,
-        state: &mut DeepSeekV4CudaSequenceKvState,
-        layer: usize,
-        values: &ferrule_cuda::context::CudaF32Buffer,
-        compressed_start: usize,
-        window_size: usize,
-        head_dim: usize,
-    ) -> Result<()> {
-        if !values.len().is_multiple_of(head_dim) {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} combined compressed rows length {} is not divisible by head_dim {head_dim}",
-                values.len()
-            )));
-        }
-        let rows = values.len() / head_dim;
-        if rows == 0 {
-            return Ok(());
-        }
-        let capacity = state.combined_kv_compressed_capacity;
-        if compressed_start + rows > capacity {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} compressed KV rows [{}..{}) exceed device capacity {capacity}",
-                compressed_start,
-                compressed_start + rows
-            )));
-        }
-        let dst = state.combined_kv_cache.as_mut().ok_or_else(|| {
-            Error::Model(format!(
-                "DeepSeek-V4 layer {layer} missing sequence-owned combined KV device cache"
-            ))
-        })?;
-        let offset = (window_size + compressed_start) * head_dim;
-        self.ops.copy_f32_into_slot(values, dst, offset)
-    }
-
-    pub(crate) fn combined_kv_append_compressed_host(
-        &mut self,
-        state: &mut DeepSeekV4CudaSequenceKvState,
-        layer: usize,
-        value: &[f32],
-        compressed_index: usize,
-        window_size: usize,
-        head_dim: usize,
-    ) -> Result<()> {
-        if value.len() != head_dim {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} combined compressed KV append mismatch: expected {head_dim}, got {}",
-                value.len()
-            )));
-        }
-        let capacity = state.combined_kv_compressed_capacity;
-        if compressed_index >= capacity {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} compressed KV index {compressed_index} exceeds device capacity {capacity}"
-            )));
-        }
-        let src = self.ops.upload_f32_buffer(value)?;
-        let dst = state.combined_kv_cache.as_mut().ok_or_else(|| {
-            Error::Model(format!(
-                "DeepSeek-V4 layer {layer} missing sequence-owned combined KV device cache"
-            ))
-        })?;
-        let offset = (window_size + compressed_index) * head_dim;
-        self.ops.copy_f32_into_slot(&src, dst, offset)
-    }
-
-    pub(crate) fn ensure_indexer_kv_cache(
-        &mut self,
-        state: &mut DeepSeekV4CudaSequenceKvState,
-        layer: usize,
-        compressed_capacity: usize,
-        index_head_dim: usize,
-    ) -> Result<()> {
-        if index_head_dim == 0 {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} indexer KV cache requires non-zero head dim"
-            )));
-        }
-        if compressed_capacity == 0 {
-            return Ok(());
-        }
-        let current_capacity = state.indexer_kv_capacity;
-        if state.indexer_kv_cache.is_some() && current_capacity >= compressed_capacity {
-            return Ok(());
-        }
-
-        let requested_capacity = compressed_capacity.max(16);
-        let capacity = requested_capacity
-            .checked_next_power_of_two()
-            .ok_or_else(|| {
+            let position = start_position
+                .checked_add(row)
+                .ok_or_else(|| Error::Model("paged KV position overflow".into()))?;
+            let logical_page = position / page_tokens;
+            let token_in_page = position % page_tokens;
+            let physical_slot = *slots.get(logical_page).ok_or_else(|| {
                 Error::Model(format!(
-                    "DeepSeek-V4 layer {layer} indexer KV capacity overflow: requested={requested_capacity}"
+                    "paged KV position {position} has no physical block"
                 ))
             })?;
-        let buffer_len = capacity.checked_mul(index_head_dim).ok_or_else(|| {
-            Error::Model(format!(
-                "DeepSeek-V4 layer {layer} indexer KV element count overflow: capacity={capacity} index_head_dim={index_head_dim}"
-            ))
-        })?;
-        if u64::try_from(buffer_len).unwrap_or(u64::MAX) > u64::from(u32::MAX) + 1 {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} indexer KV buffer exceeds CUDA u32 element indexing: {buffer_len}"
-            )));
+            if physical_slot < 0 {
+                return Err(Error::Model("paged KV block slot is negative".into()));
+            }
+            let destination = (physical_slot as usize)
+                .checked_mul(page_elements)
+                .and_then(|offset| offset.checked_add(layer.checked_mul(layer_stride)?))
+                .and_then(|offset| offset.checked_add(token_in_page.checked_mul(row_dim)?))
+                .ok_or_else(|| Error::Model("paged KV destination overflow".into()))?;
+            self.ops.copy_f32_range(
+                values,
+                row * row_dim,
+                pool.plane_storage_mut(plane)
+                    .expect("validated paged KV plane"),
+                destination,
+                row_dim,
+            )?;
         }
-
-        // Do not remove the authoritative buffer until replacement allocation and
-        // preservation have both been accepted by the CUDA stream. Any validation,
-        // allocation, or copy-launch error leaves the installed buffer/capacity intact.
-        let mut replacement = self.ops.zero_f32_buffer(buffer_len)?;
-        if let Some(old) = state.indexer_kv_cache.as_ref() {
-            self.ops.copy_f32_into_slot(old, &mut replacement, 0)?;
-        }
-        state.indexer_kv_cache = Some(replacement);
-        state.indexer_kv_capacity = capacity;
         Ok(())
-    }
-
-    pub(crate) fn indexer_kv_write_rows_device(
-        &mut self,
-        state: &mut DeepSeekV4CudaSequenceKvState,
-        layer: usize,
-        values: &ferrule_cuda::context::CudaF32Buffer,
-        compressed_start: usize,
-        index_head_dim: usize,
-    ) -> Result<()> {
-        if index_head_dim == 0 || !values.len().is_multiple_of(index_head_dim) {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} indexer KV rows length {} is not divisible by index_head_dim {index_head_dim}",
-                values.len()
-            )));
-        }
-        let rows = values.len() / index_head_dim;
-        if rows == 0 {
-            return Ok(());
-        }
-        let capacity = state.indexer_kv_capacity;
-        if compressed_start + rows > capacity {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} indexer KV rows [{}..{}) exceed device capacity {capacity}",
-                compressed_start,
-                compressed_start + rows
-            )));
-        }
-        let dst = state.indexer_kv_cache.as_mut().ok_or_else(|| {
-            Error::Model(format!(
-                "DeepSeek-V4 layer {layer} missing sequence-owned indexer KV device cache"
-            ))
-        })?;
-        self.ops
-            .copy_f32_into_slot(values, dst, compressed_start * index_head_dim)
-    }
-
-    pub(crate) fn indexer_kv_append_host(
-        &mut self,
-        state: &mut DeepSeekV4CudaSequenceKvState,
-        layer: usize,
-        value: &[f32],
-        compressed_index: usize,
-        index_head_dim: usize,
-    ) -> Result<()> {
-        if value.len() != index_head_dim {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} indexer KV append mismatch: expected {index_head_dim}, got {}",
-                value.len()
-            )));
-        }
-        let capacity = state.indexer_kv_capacity;
-        if compressed_index >= capacity {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} indexer KV index {compressed_index} exceeds device capacity {capacity}"
-            )));
-        }
-        let src = self.ops.upload_f32_buffer(value)?;
-        let dst = state.indexer_kv_cache.as_mut().ok_or_else(|| {
-            Error::Model(format!(
-                "DeepSeek-V4 layer {layer} missing sequence-owned indexer KV device cache"
-            ))
-        })?;
-        self.ops
-            .copy_f32_into_slot(&src, dst, compressed_index * index_head_dim)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn combined_kv_values_device<'a>(
-        &self,
-        state: &'a DeepSeekV4CudaSequenceKvState,
-        layer: usize,
-    ) -> Result<&'a ferrule_cuda::context::CudaF32Buffer> {
-        state.combined_kv_cache.as_ref().ok_or_else(|| {
-            Error::Model(format!(
-                "DeepSeek-V4 layer {layer} missing sequence-owned combined KV device cache"
-            ))
-        })
-    }
-
-    // ── Precomputed rope cos/sin tables ──────────────────────────────
-
-    /// Ensure a typed `[capacity, rope_dim/2]` RoPE table can address every
-    /// position below `required_positions`. Tables retain the historical 4096
-    /// initial allocation, then grow geometrically beyond it. Rebuilding is
-    /// failure-atomic: the old table remains installed until both replacement
-    /// buffers have been generated and uploaded successfully.
-    #[allow(dead_code)]
-    pub(crate) fn ensure_rope_tables(
-        &mut self,
-        name: &str,
-        rope_dim: usize,
-        rope_theta: f32,
-        required_positions: usize,
-    ) -> Result<()> {
-        self.ensure_rope_tables_with_params(
-            name,
-            rope_dim,
-            DeepSeekV4RopeParams::plain(rope_theta),
-            required_positions,
-        )
     }
 
     pub(crate) fn ensure_rope_tables_with_params(
@@ -3919,6 +4405,42 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub(crate) fn rope_tail_rows_indexed_from_device(
+        &mut self,
+        name: &str,
+        qk: &mut ferrule_cuda::context::CudaF32Buffer,
+        positions: &ferrule_cuda::context::CudaI32Buffer,
+        max_position: usize,
+        heads: u32,
+        head_dim: u32,
+        rope_dim: u32,
+        inverse: bool,
+    ) -> Result<()> {
+        if positions.is_empty() || heads == 0 || rope_dim == 0 {
+            return Ok(());
+        }
+        let required_positions = max_position
+            .checked_add(1)
+            .ok_or_else(|| Error::Model("DeepSeek-V4 indexed RoPE position overflow".into()))?;
+        self.require_rope_tables(name, rope_dim as usize, required_positions)?;
+        let table = self
+            .rope_tables
+            .get(name)
+            .expect("rope tables required immediately above");
+        self.ops.rope_tail_rows_indexed_from_device(
+            qk,
+            &table.cos,
+            &table.sin,
+            positions,
+            positions.len() as u32,
+            heads,
+            head_dim,
+            rope_dim,
+            inverse,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn rope_tail_rows_strided_from_device(
         &mut self,
         name: &str,
@@ -3962,64 +4484,37 @@ impl DeepSeekV4CudaOperatorCache {
 
     // ── Device-resident top-k index buffer ───────────────────────────
 
-    /// Ensure a `[window_size]` i32 device buffer is allocated for top-k
-    /// indices. Idempotent.
-    #[allow(dead_code)]
-    pub(crate) fn ensure_topk_buffer(&mut self, window_size: usize) -> Result<()> {
-        if self.topk_buffer.is_none() {
-            self.topk_buffer = Some(self.ops.zero_i32_buffer(window_size)?);
+    /// Ensure an exact-shape i32 device buffer is allocated for top-k indices.
+    pub(crate) fn ensure_topk_buffer(&mut self, elements: usize) -> Result<()> {
+        if !self.topk_buffers.contains_key(&elements) {
+            self.topk_buffers
+                .insert(elements, self.ops.zero_i32_buffer(elements)?);
         }
         Ok(())
     }
 
-    /// Fill the cached top-k buffer for `position` and the current KV length,
-    /// mirroring `DeepSeekV4WindowKvCache::topk_indices`. Slots beyond the
-    /// valid range are set to `-1`.
-    #[allow(dead_code)]
-    pub(crate) fn fill_topk_buffer(
-        &mut self,
-        state: &DeepSeekV4CudaSequenceKvState,
-        position: usize,
-        window_size: usize,
-    ) -> Result<&ferrule_cuda::context::CudaI32Buffer> {
+    fn fill_paged_window_topk(&mut self, position: usize, window_size: usize) -> Result<()> {
         self.ensure_topk_buffer(window_size)?;
-        let kv_len = state.kv_len;
+        let kv_len = position
+            .checked_add(1)
+            .ok_or_else(|| Error::Model("paged attention position overflow".into()))?;
+        let start = kv_len.saturating_sub(window_size);
         let mut indices = vec![-1i32; window_size];
-        if kv_len != 0 {
-            if kv_len < window_size {
-                let take = kv_len.min(window_size);
-                for slot in 0..take {
-                    indices[slot] = slot as i32;
-                }
-            } else {
-                let slot = position % window_size;
-                let mut write = 0usize;
-                for idx in slot + 1..window_size {
-                    if write < window_size {
-                        indices[write] = idx as i32;
-                        write += 1;
-                    }
-                }
-                for idx in 0..=slot {
-                    if write < window_size {
-                        indices[write] = idx as i32;
-                        write += 1;
-                    }
-                }
-            }
+        for (output, logical) in indices.iter_mut().zip(start..kv_len) {
+            *output = i32::try_from(logical)
+                .map_err(|_| Error::Model("paged attention index exceeds i32 ABI".into()))?;
         }
-        let buf = self
-            .topk_buffer
-            .as_mut()
-            .expect("inserted by ensure_topk_buffer");
-        self.ops.copy_i32_into_buffer(&indices, buf)?;
-        Ok(self.topk_buffer.as_ref().expect("filled above"))
+        self.ops.overwrite_i32_buffer(
+            &indices,
+            self.topk_buffers
+                .get_mut(&window_size)
+                .expect("ensured above"),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn sparse_attention_topk_from_device_into(
         &mut self,
-        state: &DeepSeekV4CudaSequenceKvState,
         query: &ferrule_cuda::context::CudaF32Buffer,
         layer: usize,
         position: usize,
@@ -4028,46 +4523,195 @@ impl DeepSeekV4CudaOperatorCache {
         shape: ferrule_cuda::transformer::sparse_attention::CudaSparseAttentionShape,
         output: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
-        self.fill_topk_buffer(state, position, window_size)?;
-        let sink_name = format!("sink_L{layer}");
-        self.ensure_sink_buffer(&sink_name, sink)?;
-        let topk = self.topk_buffer.as_ref().expect("filled above");
-        let kv_values = state
-            .kv_cache
+        let (page_tokens, layer_count) = self
+            .active_paged_kv
             .as_ref()
-            .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA KV cache is not initialized".into()))?;
-        let sink_buf = self.sink_buffers.get(&sink_name).expect("inserted above");
-        self.ops.sparse_attention_sink_from_device_into(
-            query,
-            kv_values,
-            topk.as_device_buffer(),
-            sink_buf,
-            shape,
-            output,
-        )
+            .map(|active| (active.page_tokens, active.layer_count))
+            .ok_or_else(|| {
+                Error::Model("DeepSeek-V4 sparse attention requires an active paged binding".into())
+            })?;
+        {
+            self.fill_paged_window_topk(position, window_size)?;
+            let sink_name = format!("sink_L{layer}");
+            self.ensure_sink_buffer(&sink_name, sink)?;
+            let active = self.active_paged_kv.as_ref().expect("validated above");
+            let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
+                Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+            })?;
+            let plane = pool
+                .plane_storage(0)
+                .ok_or_else(|| Error::Model("DeepSeek-V4 window KV plane is missing".into()))?;
+            let descriptor = pool
+                .planes()
+                .first()
+                .ok_or_else(|| Error::Model("DeepSeek-V4 window KV schema is missing".into()))?;
+            let layout = ferrule_cuda::PagedSparseAttentionLayout {
+                batch_size: 1,
+                tokens_per_sequence: 1,
+                heads: shape.heads,
+                head_dim: shape.head_dim,
+                topk: shape.topk,
+                page_tokens,
+                elements_per_token: descriptor.elements_per_token,
+                layer_index: layer,
+                layer_count,
+                softmax_scale: shape.softmax_scale,
+            };
+            return self.ops.paged_sparse_attention_sink_from_device_into(
+                query,
+                plane,
+                &active.block_slots_device,
+                &active.block_offsets_device,
+                &active.kv_len_device,
+                self.topk_buffers.get(&window_size).expect("filled above"),
+                self.sink_buffers.get(&sink_name).expect("inserted above"),
+                layout,
+                output,
+            );
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::attention::DeepSeekV4AttentionCache;
+
     use super::super::helpers::apply_rotary_tail_scaled;
     use super::*;
 
     #[test]
-    fn sequence_kv_reset_retains_capacity_metadata() {
-        let mut state = DeepSeekV4CudaSequenceKvState {
-            kv_len: 7,
-            combined_kv_compressed_capacity: 32,
-            indexer_kv_capacity: 64,
-            ..DeepSeekV4CudaSequenceKvState::default()
-        };
+    fn output_head_rows_shape_validation_is_explicit() {
+        assert_eq!(
+            validate_output_head_rows_request(&[128, 4], 12, 3, 8, 32).unwrap(),
+            (128, 4)
+        );
+        assert!(validate_output_head_rows_request(&[128], 12, 3, 8, 32).is_err());
+        assert!(validate_output_head_rows_request(&[128, 4], 11, 3, 8, 32).is_err());
+        assert!(validate_output_head_rows_request(&[128, 4], 12, 3, 8, 0).is_err());
+        assert!(validate_output_head_rows_request(&[128, 4], 12, 3, 41, 32).is_err());
+        assert_eq!(
+            validate_output_head_rows_request(&[128, 4], 0, 0, 0, 32).unwrap(),
+            (128, 4)
+        );
+    }
 
-        state.reset_for_reuse();
+    #[test]
+    fn output_head_rows_merge_is_stable_and_row_local() -> Result<()> {
+        let mut top = vec![Vec::new(), Vec::new()];
+        merge_output_head_chunk(
+            &mut top,
+            &[0.0, 1.0, 0.0, 1.0],
+            &[5.0, 5.0, 1.0, 4.0],
+            2,
+            0,
+            3,
+        )?;
+        merge_output_head_chunk(
+            &mut top,
+            &[0.0, 1.0, 0.0, 1.0],
+            &[5.0, 4.0, 4.0, 6.0],
+            2,
+            2,
+            3,
+        )?;
 
-        assert_eq!(state.kv_len, 0);
-        assert_eq!(state.combined_kv_compressed_capacity, 32);
-        assert_eq!(state.indexer_kv_capacity, 64);
+        let row_zero = top[0]
+            .iter()
+            .map(|item| (item.token_id, item.logit))
+            .collect::<Vec<_>>();
+        let row_one = top[1]
+            .iter()
+            .map(|item| (item.token_id, item.logit))
+            .collect::<Vec<_>>();
+        assert_eq!(row_zero, vec![(0, 5.0), (1, 5.0), (2, 5.0)]);
+        assert_eq!(row_one, vec![(3, 6.0), (1, 4.0), (2, 4.0)]);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires cargo-oxide and CUDA"]
+    fn packed_paged_scatter_rows_handles_mixed_compressor_and_page_boundaries() -> Result<()> {
+        let mut operators =
+            DeepSeekV4CudaOperatorCache::new(&DeepSeekV4ExecutionPolicy::default())?;
+        let planes = [
+            ferrule_common::execution::KvPlaneDescriptor {
+                name: "window".into(),
+                elements_per_token: 2,
+                layer_count: 1,
+            },
+            ferrule_common::execution::KvPlaneDescriptor {
+                name: "main".into(),
+                elements_per_token: 2,
+                layer_count: 1,
+            },
+            ferrule_common::execution::KvPlaneDescriptor {
+                name: "indexer".into(),
+                elements_per_token: 1,
+                layer_count: 1,
+            },
+        ];
+        operators.kv_page_pool = Some(ferrule_cuda::CudaKvPagePool::new(
+            &operators.ops,
+            &planes,
+            2,
+            4,
+        )?);
+        let block_slots = vec![0, 1, 2, 3];
+        let block_offsets = vec![0, 2, 4];
+        let kv_lens = vec![2, 3];
+        operators.active_paged_kv = Some(ActivePagedKvBinding {
+            physical_block_slots: block_slots.clone(),
+            block_slots_device: operators.ops.upload_i32_buffer(&block_slots)?,
+            block_offsets_device: operators.ops.upload_i32_buffer(&block_offsets)?,
+            kv_len_device: operators.ops.upload_i32_buffer(&kv_lens)?,
+            row_sequence_ids_device: operators.ops.upload_i32_buffer(&[0, 1])?,
+            page_tokens: 2,
+            layer_count: 1,
+            sequence_count: 2,
+        });
+
+        let window = operators.ops.upload_f32_buffer(&[10.0, 11.0, 20.0, 21.0])?;
+        let window_positions = operators.ops.upload_i32_buffer(&[1, 2])?;
+        operators.paged_scatter_rows_from_device(0, 0, &window, &window_positions, None, 2)?;
+        let main = operators.ops.upload_f32_buffer(&[30.0, 31.0, 40.0, 41.0])?;
+        let compressed_positions = operators.ops.upload_i32_buffer(&[0, 0])?;
+        let main_mask = operators.ops.upload_i32_buffer(&[1, 0])?;
+        operators.paged_scatter_rows_from_device(
+            1,
+            0,
+            &main,
+            &compressed_positions,
+            Some(&main_mask),
+            2,
+        )?;
+        let indexer = operators.ops.upload_f32_buffer(&[50.0, 60.0])?;
+        let indexer_mask = operators.ops.upload_i32_buffer(&[0, 1])?;
+        operators.paged_scatter_rows_from_device(
+            2,
+            0,
+            &indexer,
+            &compressed_positions,
+            Some(&indexer_mask),
+            1,
+        )?;
+        operators.ops.sync_stream()?;
+
+        let pool = operators.kv_page_pool.as_ref().expect("configured pool");
+        let window = operators
+            .ops
+            .download_f32_buffer(pool.plane_storage(0).expect("window plane"))?;
+        let main = operators
+            .ops
+            .download_f32_buffer(pool.plane_storage(1).expect("main plane"))?;
+        let indexer = operators
+            .ops
+            .download_f32_buffer(pool.plane_storage(2).expect("indexer plane"))?;
+        assert_eq!(&window[2..4], &[10.0, 11.0]);
+        assert_eq!(&window[12..14], &[20.0, 21.0]);
+        assert_eq!(&main[0..2], &[30.0, 31.0]);
+        assert_eq!(&main[8..10], &[0.0, 0.0]);
+        assert_eq!(indexer[0], 0.0);
+        assert_eq!(indexer[4], 60.0);
+        Ok(())
     }
 
     #[test]
@@ -4134,128 +4778,6 @@ mod tests {
             .expect_err("same-name RoPE parameter mismatch must be rejected");
         assert!(mismatch.to_string().contains("identity mismatch"));
 
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "requires cargo-oxide and CUDA"]
-    fn combined_kv_growth_preserves_device_values() -> Result<()> {
-        let cfg = DeepSeekV4AttentionConfig {
-            hidden_size: 2,
-            num_heads: 1,
-            head_dim: 2,
-            q_lora_rank: 2,
-            rope_head_dim: 2,
-            o_groups: 1,
-            o_lora_rank: 2,
-            window_size: 2,
-            compress_ratio: 4,
-            norm_eps: 1.0e-5,
-            rope_theta: 10_000.0,
-            compress_rope_theta: 10_000.0,
-            original_seq_len: 2,
-            rope_factor: 1.0,
-            beta_fast: 1,
-            beta_slow: 1,
-            index_n_heads: 1,
-            index_head_dim: 2,
-            index_topk: 1,
-        };
-        let cache = DeepSeekV4AttentionCache::new(cfg);
-        let mut state = DeepSeekV4CudaSequenceKvState::default();
-        let mut operators =
-            DeepSeekV4CudaOperatorCache::new(&DeepSeekV4ExecutionPolicy::default())?;
-
-        operators.ensure_combined_kv_cache(
-            &mut state,
-            0,
-            cache.window.values_full(),
-            cache.window.head_dim,
-            &cache.compressed,
-            16,
-        )?;
-        let window = operators.ops.upload_f32_buffer(&[1.0, 2.0, 3.0, 4.0])?;
-        operators.combined_kv_write_window_rows_device(&mut state, 0, &window, 0, 2, 2, 2)?;
-        let last_compressed = operators.ops.upload_f32_buffer(&[9.0, 10.0])?;
-        operators.combined_kv_write_compressed_rows_device(
-            &mut state,
-            0,
-            &last_compressed,
-            15,
-            2,
-            2,
-        )?;
-
-        operators.ensure_combined_kv_cache(
-            &mut state,
-            0,
-            cache.window.values_full(),
-            cache.window.head_dim,
-            &cache.compressed,
-            17,
-        )?;
-        let values = operators
-            .ops
-            .download_f32_buffer(operators.combined_kv_values_device(&state, 0)?)?;
-        assert_eq!(&values[..4], &[1.0, 2.0, 3.0, 4.0]);
-        let last_compressed_offset = (2 + 15) * 2;
-        assert_eq!(
-            &values[last_compressed_offset..last_compressed_offset + 2],
-            &[9.0, 10.0]
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "requires cargo-oxide and CUDA"]
-    fn indexer_kv_growth_preserves_device_values() -> Result<()> {
-        let mut state = DeepSeekV4CudaSequenceKvState::default();
-        let mut operators =
-            DeepSeekV4CudaOperatorCache::new(&DeepSeekV4ExecutionPolicy::default())?;
-        operators.ensure_indexer_kv_cache(&mut state, 0, 16, 2)?;
-        let values = operators.ops.upload_f32_buffer(&[1.0, 2.0, 9.0, 10.0])?;
-        operators.indexer_kv_write_rows_device(&mut state, 0, &values, 0, 2)?;
-
-        operators.ensure_indexer_kv_cache(&mut state, 0, 17, 2)?;
-        assert_eq!(state.indexer_kv_capacity, 32);
-        let actual = operators.ops.download_f32_buffer(
-            state
-                .indexer_kv_cache
-                .as_ref()
-                .expect("indexer cache grown above"),
-        )?;
-        assert_eq!(&actual[..4], &[1.0, 2.0, 9.0, 10.0]);
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "requires cargo-oxide and CUDA"]
-    fn indexer_kv_growth_failure_keeps_installed_device_values() -> Result<()> {
-        let mut state = DeepSeekV4CudaSequenceKvState::default();
-        let mut operators =
-            DeepSeekV4CudaOperatorCache::new(&DeepSeekV4ExecutionPolicy::default())?;
-        operators.ensure_indexer_kv_cache(&mut state, 0, 16, 2)?;
-        let values = operators.ops.upload_f32_buffer(&[1.0, 2.0, 9.0, 10.0])?;
-        operators.indexer_kv_write_rows_device(&mut state, 0, &values, 0, 2)?;
-
-        // Inject an incompatible growth request: the replacement has only 16 f32
-        // slots while the installed buffer has 32. The D2D copy validation fails
-        // before launch and must not remove the authoritative old buffer.
-        state.indexer_kv_capacity = 8;
-        let error = operators
-            .ensure_indexer_kv_cache(&mut state, 0, 9, 1)
-            .expect_err("injected undersized replacement must fail");
-        assert!(error.to_string().contains("copy out of bounds"));
-        assert_eq!(state.indexer_kv_capacity, 8);
-        let actual = operators.ops.download_f32_buffer(
-            state
-                .indexer_kv_cache
-                .as_ref()
-                .expect("failed growth must retain installed indexer cache"),
-        )?;
-        assert_eq!(actual.len(), 32);
-        assert_eq!(&actual[..4], &[1.0, 2.0, 9.0, 10.0]);
         Ok(())
     }
 }

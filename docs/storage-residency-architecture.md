@@ -2,9 +2,7 @@
 
 _Status: canonical target design; current implementation is partial_
 
-_Last updated: 2026-07-11_
-
-Historical version: [`docs/history/storage-residency-architecture-2026-07-11.md`](history/storage-residency-architecture-2026-07-11.md).
+_Last updated: 2026-07-13_
 
 This document defines storage/residency ownership after the execution-engine
 refactor. It is intentionally narrower than the previous survey: it describes

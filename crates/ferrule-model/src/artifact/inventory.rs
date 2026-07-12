@@ -10,7 +10,7 @@ use crate::semantic::{
     RouterTensorRef, SharedExpertTensorRef,
 };
 use crate::spec::ModelFamily;
-use crate::support::{tensor_role_for_class, TensorRole};
+use crate::support::{TensorRole, tensor_role_for_class};
 use crate::tensor_policy::{HfTensorPolicy, TensorClass, TensorClassCount};
 
 use super::index::HfSafetensorsIndex;

@@ -4,10 +4,15 @@ use std::time::{Duration, Instant};
 
 use crate::bench::{RuntimeBenchSummary, RuntimeCounters};
 use ferrule_model::{
+    ChatTemplate, ModelExecutionBackend, ModelRunner,
     models::deepseek_v4::{DeepSeekV4PrepareOptions, DeepSeekV4Runner},
-    ChatTemplate, ModelExecutionBackend, PrefillMode, TopKModelRunner,
 };
-use ferrule_runtime::{generate_topk_from_candidates, GenerationConfig};
+use ferrule_runtime::{
+    GenerateRequest, RequestId, ResidentActionKind, ResidentDriverStep, ResidentSchedulerConfig,
+    ResidentTopKDriverConfig, SamplingConfig, SessionId,
+};
+
+use crate::commands::resident::build_resident_topk_driver;
 
 use super::stats::print_deepseek_v4_runtime_stats;
 
@@ -78,7 +83,59 @@ pub fn cmd_deepseek_v4_generate(
         println!("--- output ---");
     }
 
+    let scheduler_config = ResidentSchedulerConfig {
+        prefill_chunk_size: prompt_tokens.len().max(1),
+        max_active_sequences: 1,
+        max_decode_batch: 1,
+        ..Default::default()
+    };
+    let build_driver = |runner: DeepSeekV4Runner, ctx_size: usize, token_budget: usize| {
+        let schema = runner.kv_layout_schema().clone();
+        build_resident_topk_driver(
+            runner,
+            Box::new(schema),
+            scheduler_config,
+            ResidentTopKDriverConfig {
+                ctx_size,
+                stop_at_eos,
+                // Preserve this command's historical EOS behavior.
+                append_eos_to_session: false,
+                max_steps_per_run: ctx_size.saturating_add(token_budget).saturating_add(64),
+            },
+        )
+    };
+
+    // Warmup uses its own explicit session and driver. Rebuilding the driver keeps
+    // warmed expert residency while preventing warmup KV/session state and driver
+    // counters from entering the measured run.
+    if max_new_tokens > 0 && warmup_tokens > 0 {
+        let warmup_ctx = prompt_tokens.len().saturating_add(warmup_tokens).max(1);
+        let mut warmup_driver = build_driver(runner, warmup_ctx, warmup_tokens)?;
+        warmup_driver.submit(GenerateRequest {
+            id: RequestId(0),
+            session_id: Some(SessionId(u64::MAX)),
+            prompt_tokens: prompt_tokens.clone(),
+            sampling: SamplingConfig::greedy(),
+            max_new_tokens: warmup_tokens,
+            stop: Vec::new(),
+        });
+        let warmup_start = Instant::now();
+        warmup_driver.run_until_blocked(|_| Ok(()))?;
+        let _ = warmup_driver.drain_finished();
+        if !json {
+            eprintln!(
+                "[warmup] {warmup_tokens} tokens in {:.3}s",
+                warmup_start.elapsed().as_secs_f64()
+            );
+        }
+        runner = warmup_driver.into_runner()?;
+        runner.reset_session()?;
+    }
+
+    let measured_ctx = prompt_tokens.len().saturating_add(max_new_tokens).max(1);
+    let mut driver = build_driver(runner, measured_ctx, max_new_tokens)?;
     let mut generated = Vec::new();
+    let mut final_position = driver.executor().runner().position();
     let mut prefill_elapsed = Duration::ZERO;
     let mut decode_elapsed = Duration::ZERO;
     let mut decode_counters_baseline: Option<
@@ -86,76 +143,60 @@ pub fn cmd_deepseek_v4_generate(
     > = None;
 
     if max_new_tokens > 0 {
-        let prefill_start = Instant::now();
-        let top = runner.prefill_topk(&prompt_tokens, 1, PrefillMode::Batched)?;
-        prefill_elapsed = prefill_start.elapsed();
-        if top.is_empty() {
-            anyhow::bail!("DSV4 generation produced no candidate after prefill");
-        }
-
-        // ── Warmup: populate GPU expert residency ───────────────────────
-        // Run extra decode tokens that are NOT counted in decode timing.
-        // This loads + uploads experts into GPU residency so the timed
-        // decode loop hits resident experts instead of cold-loading from disk.
-        if warmup_tokens > 0 {
-            let warmup_start = Instant::now();
-            let mut warmup_top = top.clone();
-            for _ in 0..warmup_tokens {
-                let Some(next) = warmup_top.first().copied() else {
-                    break;
-                };
-                warmup_top = runner.decode_topk(next.token_id, 1)?;
-            }
-            if !json {
-                eprintln!(
-                    "[warmup] {warmup_tokens} tokens in {:.3}s",
-                    warmup_start.elapsed().as_secs_f64()
-                );
-            }
-        }
-        // Baseline after prefill + optional warmup. JSON counters below report
-        // only the timed decode loop, matching `decode_seconds`/`decode_tok_per_s`.
-        decode_counters_baseline = Some(runner.operator_runtime_counters());
-
-        let generation = GenerationConfig {
+        driver.submit(GenerateRequest {
+            id: RequestId(1),
+            session_id: Some(SessionId(1)),
+            prompt_tokens: prompt_tokens.clone(),
+            sampling: SamplingConfig::greedy(),
             max_new_tokens,
             stop: Vec::new(),
-            stop_at_eos,
-            // Keep this diagnostic command's old behavior: when stopping at EOS,
-            // do not perform an extra model step just to append EOS to session.
-            append_eos_to_session: false,
-            logprobs_k: 0,
-            // This diagnostic command historically did not enforce a user ctx
-            // window; let the runner/model limits be the effective constraint.
-            ctx_size: usize::MAX,
-        };
-        let turn = generate_topk_from_candidates(
-            &mut runner,
-            top,
-            prompt_tokens.len(),
-            prefill_elapsed,
-            &generation,
-            1,
-            |event| {
+        });
+
+        loop {
+            let step_start = Instant::now();
+            let step = driver.step(&mut |event| {
                 if verbose_tokens {
                     eprintln!(
                         "[{}] token={} logit={:.6}",
-                        event.index, event.token, event.logit
+                        event.index,
+                        event.token,
+                        event.logit.unwrap_or(f32::NAN)
                     );
                 }
                 if !json {
                     print!("{}", event.text);
                     std::io::stdout().flush()?;
                 }
+                generated.push(event.token);
                 Ok(())
-            },
-        )?;
-        generated = turn.tokens;
-        prefill_elapsed = turn.prefill_time;
-        decode_elapsed = turn.decode_time;
+            })?;
+            let step_elapsed = step_start.elapsed();
+            match step {
+                ResidentDriverStep::Executed { action_kind, .. } => match action_kind {
+                    ResidentActionKind::Prefill | ResidentActionKind::Mixed => {
+                        prefill_elapsed += step_elapsed;
+                        decode_counters_baseline =
+                            Some(driver.executor().runner().operator_runtime_counters());
+                    }
+                    ResidentActionKind::Decode => decode_elapsed += step_elapsed,
+                    ResidentActionKind::Finish | ResidentActionKind::Cancel => {}
+                },
+                ResidentDriverStep::Idle => break,
+                ResidentDriverStep::Blocked => {
+                    anyhow::bail!("resident runtime driver blocked during DSV4 generation")
+                }
+            }
+        }
+
+        let finished = driver.drain_finished();
+        let sequence = finished.last().ok_or_else(|| {
+            anyhow::anyhow!("resident runtime driver produced no finished sequence")
+        })?;
+        final_position = sequence.position;
     }
 
     let elapsed = prefill_elapsed + decode_elapsed;
+    let runner = driver.executor().runner();
     if json {
         let layer_stats = runner.layer_runtime_stats();
         let resident_experts = layer_stats.iter().map(|stat| stat.resident_experts).sum();
@@ -353,7 +394,7 @@ pub fn cmd_deepseek_v4_generate(
             "moe_prefetch_experts": moe_prefetch_experts,
             "moe_hotset_experts": moe_hotset_experts,
             "bound_layers": runner.bound_layer_count(),
-            "position": runner.position(),
+            "position": final_position,
             "layers": layers,
             "load_seconds": load_elapsed.as_secs_f64(),
             "prefill_seconds": prefill_elapsed.as_secs_f64(),
@@ -366,7 +407,7 @@ pub fn cmd_deepseek_v4_generate(
         println!();
         println!("--- stats ---");
         println!("generated_tokens: {:?}", generated);
-        println!("position:   {}", runner.position());
+        println!("position:   {final_position}");
         println!("bound layers: {}", runner.bound_layer_count());
         print_deepseek_v4_runtime_stats(&runner);
         println!("run:        {:.3} ms", elapsed.as_secs_f64() * 1000.0);

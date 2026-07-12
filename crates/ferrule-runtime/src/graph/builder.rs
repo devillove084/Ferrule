@@ -7,9 +7,9 @@ use ferrule_model::{
 
 use crate::graph::program::GraphProgram;
 use crate::graph::translate::{
+    DenseGraphTranslationOptions, SemanticGraphTranslationOptions,
     build_dense_decoder_graph_program_with_options,
     build_semantic_transformer_graph_program_with_options, uses_semantic_artifact_groups,
-    DenseGraphTranslationOptions, SemanticGraphTranslationOptions,
 };
 use crate::graph::validation::validate_graph_program;
 use ferrule_model::semantic_plan::TransformerSemanticPlan;

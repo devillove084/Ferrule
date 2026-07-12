@@ -3,7 +3,12 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use ferrule_model::{
-    bind_attention_from_artifact_group, bind_attention_from_hf,
+    ArtifactGroupKind, ArtifactLinearFormat, ArtifactLinearPayload, ArtifactTensorReader,
+    ArtifactTensorSlice, ExpertComputeBundle, ExpertId, ExpertLinearFormat, ExpertLoadReason,
+    ExpertLoadSource, ExpertRouterPolicy, ExpertStorageTier, ExpertStreamingPlanner,
+    ExpertStreamingPolicy, ExpertStreamingReader, HfSafetensorsInventory, HfSafetensorsTensorInfo,
+    HyperConnectionConfig, ModelDescriptor, ModelFamily, SparseAttentionSpec, TensorRole,
+    TokenizerHandle, bind_attention_from_artifact_group, bind_attention_from_hf,
     bind_hyper_connection_from_artifact_group, bind_hyper_connection_from_hf,
     bind_hyper_connection_head_from_hf, bind_layer_norms_from_artifact_group,
     bind_router_from_artifact_group, bind_router_from_hf,
@@ -11,16 +16,10 @@ use ferrule_model::{
     families::deepseek_v4,
     models::deepseek_v4::{DeepSeekV4ArtifactModel, DeepSeekV4PrepareOptions, DeepSeekV4Runner},
     semantic::{AttentionTensorKind, HyperConnectionStage, RouterTensorKind},
-    ArtifactGroupKind, ArtifactLinearFormat, ArtifactLinearPayload, ArtifactTensorReader,
-    ArtifactTensorSlice, ExpertComputeBundle, ExpertId, ExpertLinearFormat, ExpertLoadReason,
-    ExpertLoadSource, ExpertRouterPolicy, ExpertStorageTier, ExpertStreamingPlanner,
-    ExpertStreamingPolicy, ExpertStreamingReader, HfSafetensorsInventory, HfSafetensorsTensorInfo,
-    HyperConnectionConfig, ModelDescriptor, ModelFamily, SparseAttentionSpec, TensorRole,
-    TokenizerHandle,
 };
 use ferrule_runtime::{
-    bind_layer_artifact_from_hf, build_graph_program_from_descriptor,
-    materialize_graph_hf_externals, validate_graph_program, BackendObject,
+    BackendObject, bind_layer_artifact_from_hf, build_graph_program_from_descriptor,
+    materialize_graph_hf_externals, validate_graph_program,
 };
 
 #[test]
@@ -58,10 +57,11 @@ fn local_deepseek_v4_expert_streaming_reads_one_selected_expert_if_present() {
         .plan_layer_step(0, &[0, 1, 2, 3, 4, 5], &[])
         .expect("selected experts should be plannable");
     assert_eq!(step.loads.len(), 6);
-    assert!(step
-        .loads
-        .iter()
-        .all(|load| load.reason == ExpertLoadReason::Selected));
+    assert!(
+        step.loads
+            .iter()
+            .all(|load| load.reason == ExpertLoadReason::Selected)
+    );
 
     let load = step
         .loads
@@ -89,14 +89,18 @@ fn local_deepseek_v4_expert_streaming_reads_one_selected_expert_if_present() {
             .sum::<u64>(),
         load.load_source.bytes()
     );
-    assert!(payload
-        .tensors
-        .iter()
-        .any(|tensor| tensor.slice.dtype == "I8"));
-    assert!(payload
-        .tensors
-        .iter()
-        .any(|tensor| tensor.slice.dtype == "F8_E8M0"));
+    assert!(
+        payload
+            .tensors
+            .iter()
+            .any(|tensor| tensor.slice.dtype == "I8")
+    );
+    assert!(
+        payload
+            .tensors
+            .iter()
+            .any(|tensor| tensor.slice.dtype == "F8_E8M0")
+    );
     let bundle = ExpertComputeBundle::from_artifact_payload(payload)
         .expect("artifact slices should form a FP4 expert compute bundle");
     assert_eq!(
@@ -201,9 +205,10 @@ fn local_deepseek_v4_router_binds_hash_and_score_layers_if_present() {
         .expect("token 0 should be in hash table")
         .expect("layer 0 should have a hash table");
     assert_eq!(hash.len(), deepseek_v4::NUM_EXPERTS_PER_TOK);
-    assert!(hash
-        .iter()
-        .all(|expert| *expert < deepseek_v4::N_ROUTED_EXPERTS));
+    assert!(
+        hash.iter()
+            .all(|expert| *expert < deepseek_v4::N_ROUTED_EXPERTS)
+    );
 
     let score_router = bind_router_from_hf(&model_dir, 3, &routers, &reader)
         .expect("layer 3 score router should bind");
@@ -448,11 +453,13 @@ fn local_deepseek_v4_semantic_graph_materializes_artifact_groups_if_present() {
     let program = build_graph_program_from_descriptor(&descriptor)
         .expect("semantic graph program should build through generic graph builder");
     validate_graph_program(&program).expect("semantic graph program should validate");
-    assert!(program.graph.nodes().iter().all(|node| !node
-        .op()
-        .name()
-        .to_ascii_lowercase()
-        .contains("deepseek")));
+    assert!(
+        program.graph.nodes().iter().all(|node| !node
+            .op()
+            .name()
+            .to_ascii_lowercase()
+            .contains("deepseek"))
+    );
     assert!(program.bindings.entries().iter().all(|binding| {
         let name = binding.key.name();
         !name.contains("layers.0.attn.wq_a") && !name.contains("model.layers.0")
@@ -491,31 +498,41 @@ fn local_deepseek_v4_semantic_graph_materializes_artifact_groups_if_present() {
     assert_eq!(layer0.layer, 0);
     assert_eq!(layer0.attention.kind, ArtifactGroupKind::Attention);
     assert!(!layer0.attention.tensors.is_empty());
-    assert!(!layer0
-        .layer_norms
-        .expect("layer 0 stage norm artifacts should aggregate")
-        .tensors
-        .is_empty());
-    assert!(!layer0
-        .hc_attention
-        .expect("layer 0 HC attention artifacts should aggregate")
-        .tensors
-        .is_empty());
-    assert!(!layer0
-        .hc_feed_forward
-        .expect("layer 0 HC FFN artifacts should aggregate")
-        .tensors
-        .is_empty());
-    assert!(!layer0
-        .router
-        .expect("layer 0 router artifacts should aggregate")
-        .tensors
-        .is_empty());
-    assert!(!layer0
-        .shared_expert
-        .expect("layer 0 shared expert artifacts should aggregate")
-        .tensors
-        .is_empty());
+    assert!(
+        !layer0
+            .layer_norms
+            .expect("layer 0 stage norm artifacts should aggregate")
+            .tensors
+            .is_empty()
+    );
+    assert!(
+        !layer0
+            .hc_attention
+            .expect("layer 0 HC attention artifacts should aggregate")
+            .tensors
+            .is_empty()
+    );
+    assert!(
+        !layer0
+            .hc_feed_forward
+            .expect("layer 0 HC FFN artifacts should aggregate")
+            .tensors
+            .is_empty()
+    );
+    assert!(
+        !layer0
+            .router
+            .expect("layer 0 router artifacts should aggregate")
+            .tensors
+            .is_empty()
+    );
+    assert!(
+        !layer0
+            .shared_expert
+            .expect("layer 0 shared expert artifacts should aggregate")
+            .tensors
+            .is_empty()
+    );
     assert!(layer0.uses_hyper_connection());
     assert!(layer0.uses_routed_experts());
     assert!(layer0.uses_shared_expert());

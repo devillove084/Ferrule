@@ -7,10 +7,13 @@
 use std::path::Path;
 use std::time::Instant;
 
+use ferrule_common::execution::ForwardPhase;
 use ferrule_model::{
-    models::deepseek_v4::{DeepSeekV4PrepareOptions, DeepSeekV4Runner},
     ChatTemplate, ModelExecutionBackend,
+    models::deepseek_v4::{DeepSeekV4PrepareOptions, DeepSeekV4Runner},
 };
+
+use crate::commands::resident::build_page_managed_diagnostic_harness;
 
 /// Default layer-depth cut points reported by the parity harness.
 const DEFAULT_CUTS: &[usize] = &[1, 5, 23, 43];
@@ -46,7 +49,7 @@ pub fn cmd_deepseek_v4_prefill_parity(
     };
 
     let load_start = Instant::now();
-    let mut runner = DeepSeekV4Runner::load_hf_with_options_and_backend(
+    let runner = DeepSeekV4Runner::load_hf_with_options_and_backend(
         model_path,
         max_tensor_mb.saturating_mul(1024 * 1024),
         options,
@@ -77,10 +80,21 @@ pub fn cmd_deepseek_v4_prefill_parity(
         println!("--- batched prefill ---");
     }
 
+    let schema = runner.kv_layout_schema().clone();
+    let mut diagnostic =
+        build_page_managed_diagnostic_harness(runner, Box::new(schema), token_ids.len(), 2)?;
+    let batched_sequence = diagnostic.create_sequence(0)?;
+    let token_loop_sequence = diagnostic.create_sequence(0)?;
+
     // ── Batched trace ───────────────────────────────────────────────────
     let batched_start = Instant::now();
-    let batched_trace = runner.prefill_batched_layer_hc_trace(&token_ids)?;
-    let batched_checkpoints = runner.take_parity_checkpoints();
+    let batched_trace = diagnostic.execute_sequence_step(
+        batched_sequence,
+        ForwardPhase::Prefill,
+        &token_ids,
+        |runner| runner.prefill_batched_layer_hc_trace(&token_ids),
+    )?;
+    let batched_checkpoints = diagnostic.runner_mut().take_parity_checkpoints();
     let batched_elapsed = batched_start.elapsed();
 
     if !json {
@@ -91,15 +105,27 @@ pub fn cmd_deepseek_v4_prefill_parity(
         );
     }
 
-    // ── Reset and run token-loop trace ──────────────────────────────────
-    runner.reset()?;
-
+    // ── Independent page-managed token-loop oracle ──────────────────────
     if !json {
         println!("--- token-loop prefill ---");
     }
     let token_loop_start = Instant::now();
-    let token_loop_trace = runner.prefill_token_loop_layer_hc_trace(&token_ids)?;
-    let token_loop_checkpoints = runner.take_parity_checkpoints();
+    for &token_id in &token_ids[..token_ids.len() - 1] {
+        diagnostic.execute_sequence_step(
+            token_loop_sequence,
+            ForwardPhase::Decode,
+            std::slice::from_ref(&token_id),
+            |runner| runner.feed_token(token_id),
+        )?;
+    }
+    let last_token = token_ids[token_ids.len() - 1];
+    let token_loop_trace = diagnostic.execute_sequence_step(
+        token_loop_sequence,
+        ForwardPhase::Decode,
+        std::slice::from_ref(&last_token),
+        |runner| runner.decode_token_layer_hc_trace(last_token),
+    )?;
+    let token_loop_checkpoints = diagnostic.runner_mut().take_parity_checkpoints();
     let token_loop_elapsed = token_loop_start.elapsed();
 
     if !json {
@@ -172,11 +198,8 @@ pub fn cmd_deepseek_v4_prefill_parity(
         }
         let hc_idx = cut - 1;
 
-        runner.reset()?;
-        let batched_top1 = top1_from_hc(&mut runner, &batched_trace[hc_idx])?;
-        runner.reset()?;
-        let token_loop_top1 = top1_from_hc(&mut runner, &token_loop_trace[hc_idx])?;
-        runner.reset()?;
+        let batched_top1 = top1_from_hc(diagnostic.runner_mut(), &batched_trace[hc_idx])?;
+        let token_loop_top1 = top1_from_hc(diagnostic.runner_mut(), &token_loop_trace[hc_idx])?;
 
         let match_str = if batched_top1 == token_loop_top1 {
             "MATCH"
@@ -216,7 +239,7 @@ pub fn cmd_deepseek_v4_prefill_parity(
     if json {
         let summary = serde_json::json!({
             "model": model_dir,
-            "backend": runner.operator_backend().as_str(),
+            "backend": diagnostic.runner().operator_backend().as_str(),
             "prompt": prompt,
             "chat_prompt": chat_prompt,
             "prompt_tokens": token_ids,

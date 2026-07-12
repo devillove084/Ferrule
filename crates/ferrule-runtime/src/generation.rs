@@ -1,10 +1,8 @@
 use crate::sampling::sampler::{Logprobs, Sampler, SamplingConfig};
 use crate::stats::GenerateStats;
 use ferrule_common::{Error, Result};
-use ferrule_model::runner::{ModelRunner, TokenLogit, TopKModelRunner};
-use std::time::{Duration, Instant};
-
-pub use crate::scheduling::SequenceFinishReason as TopKFinishReason;
+use ferrule_model::runner::ModelRunner;
+use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub struct GenerationConfig {
@@ -49,30 +47,6 @@ pub struct GenerationResult {
     pub stopped_by_eos: bool,
     pub stopped_by_string: Option<String>,
     pub all_logprobs: Vec<Logprobs>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TopKTokenEvent {
-    pub index: usize,
-    pub token: u32,
-    pub logit: f32,
-    pub text: String,
-}
-
-/// `TopKTurnResult` keeps legacy boolean helpers for compatibility, but
-/// schedulers and serving code should prefer `finish_reason`.
-#[derive(Debug, Clone)]
-pub struct TopKTurnResult {
-    pub prompt_tokens: usize,
-    pub tokens: Vec<u32>,
-    pub text: String,
-    pub prefill_time: Duration,
-    pub decode_time: Duration,
-    pub stopped_by_eos: bool,
-    pub stopped_by_string: Option<String>,
-    pub stopped_by_context: bool,
-    pub finish_reason: TopKFinishReason,
-    pub final_position: usize,
 }
 
 pub struct InferenceEngine<R: ModelRunner> {
@@ -253,101 +227,6 @@ impl<R: ModelRunner> InferenceEngine<R> {
             all_logprobs,
         })
     }
-}
-
-/// Run the generic top-k decode loop after the caller has already performed
-/// prefill and obtained initial candidates.
-///
-/// This lower-level primitive is useful for diagnostics that need to do
-/// model-specific setup around prefill (for example cache warmup or counter
-/// baselining) while still keeping EOS/session/context/stop handling in runtime.
-pub fn generate_topk_from_candidates<R, F>(
-    runner: &mut R,
-    initial_topk: Vec<TokenLogit>,
-    prompt_token_count: usize,
-    prefill_time: Duration,
-    config: &GenerationConfig,
-    top_k: usize,
-    mut on_token: F,
-) -> Result<TopKTurnResult>
-where
-    R: TopKModelRunner,
-    F: FnMut(&TopKTokenEvent) -> Result<()>,
-{
-    if top_k == 0 {
-        return Err(Error::Internal("top_k must be greater than zero".into()));
-    }
-    if config.ctx_size == 0 {
-        return Err(Error::Internal("ctx_size must be greater than zero".into()));
-    }
-
-    let decode_start = Instant::now();
-    let mut top = initial_topk;
-    let mut generated = Vec::new();
-    let mut text = String::new();
-    let mut stopped_by_eos = false;
-    let mut stopped_by_string = None;
-    let mut stopped_by_context = false;
-    let mut finish_reason = TopKFinishReason::MaxTokens;
-
-    for index in 0..config.max_new_tokens {
-        if runner.position() >= config.ctx_size {
-            stopped_by_context = true;
-            finish_reason = TopKFinishReason::Context;
-            break;
-        }
-        let Some(next) = top.first().copied() else {
-            finish_reason = TopKFinishReason::NoCandidate;
-            break;
-        };
-
-        if config.stop_at_eos && runner.eos_token_id() == Some(next.token_id) {
-            stopped_by_eos = true;
-            finish_reason = TopKFinishReason::Eos;
-            if config.append_eos_to_session {
-                runner.feed_token(next.token_id)?;
-            }
-            break;
-        }
-
-        let piece = runner.decode(&[next.token_id])?;
-        on_token(&TopKTokenEvent {
-            index,
-            token: next.token_id,
-            logit: next.logit,
-            text: piece.clone(),
-        })?;
-
-        generated.push(next.token_id);
-        text.push_str(&piece);
-
-        if let Some(stop) = matched_stop(&text, &config.stop) {
-            runner.feed_token(next.token_id)?;
-            stopped_by_string = Some(stop);
-            finish_reason = TopKFinishReason::StopString;
-            break;
-        }
-
-        if index + 1 == config.max_new_tokens {
-            runner.feed_token(next.token_id)?;
-            break;
-        }
-
-        top = runner.decode_topk(next.token_id, top_k)?;
-    }
-
-    Ok(TopKTurnResult {
-        prompt_tokens: prompt_token_count,
-        tokens: generated,
-        text,
-        prefill_time,
-        decode_time: decode_start.elapsed(),
-        stopped_by_eos,
-        stopped_by_string,
-        stopped_by_context,
-        finish_reason,
-        final_position: runner.position(),
-    })
 }
 
 #[derive(Debug, Clone)]

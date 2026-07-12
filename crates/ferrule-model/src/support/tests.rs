@@ -93,31 +93,40 @@ fn model_support_contract_dense_layout_is_not_deepseek_shaped() {
     let layer = &contract.layout.layers[0];
     assert_eq!(layer.attention.kind, AttentionKind::GroupedQuery);
     assert_eq!(layer.attention.kv_shape, KvCacheShape::GroupedKeysValues);
-    assert!(layer
-        .attention
-        .required_roles
-        .contains(&TensorRole::AttentionQuery));
-    assert!(layer
-        .attention
-        .required_roles
-        .contains(&TensorRole::AttentionOutput));
-    assert!(!layer
-        .attention
-        .required_roles
-        .iter()
-        .any(TensorRole::is_attention_latent));
+    assert!(
+        layer
+            .attention
+            .required_roles
+            .contains(&TensorRole::AttentionQuery)
+    );
+    assert!(
+        layer
+            .attention
+            .required_roles
+            .contains(&TensorRole::AttentionOutput)
+    );
+    assert!(
+        !layer
+            .attention
+            .required_roles
+            .iter()
+            .any(TensorRole::is_attention_latent)
+    );
     assert_eq!(layer.feed_forward.kind, FeedForwardKind::DenseMlp);
-    assert!(layer
-        .feed_forward
-        .required_roles
-        .contains(&TensorRole::DenseMlpGate));
+    assert!(
+        layer
+            .feed_forward
+            .required_roles
+            .contains(&TensorRole::DenseMlpGate)
+    );
 
     let plan = contract.engine_plan();
     assert_eq!(plan.status, EnginePlanStatus::MetadataOnly);
-    assert!(plan
-        .missing
-        .iter()
-        .any(|item| item.area == PolicyArea::ModelFamily));
+    assert!(
+        plan.missing
+            .iter()
+            .any(|item| item.area == PolicyArea::ModelFamily)
+    );
 }
 
 #[test]
@@ -129,22 +138,30 @@ fn model_support_contract_moe_layout_expresses_shared_experts_generically() {
         layer.feed_forward.kind,
         FeedForwardKind::RoutedAndSharedExperts
     );
-    assert!(layer
-        .feed_forward
-        .required_roles
-        .contains(&TensorRole::RouterLogits));
-    assert!(layer
-        .feed_forward
-        .required_roles
-        .contains(&TensorRole::RoutedExpertGate));
-    assert!(layer
-        .feed_forward
-        .required_roles
-        .contains(&TensorRole::SharedExpertDown));
-    assert!(!layer
-        .feed_forward
-        .required_roles
-        .contains(&TensorRole::HashRouterTable));
+    assert!(
+        layer
+            .feed_forward
+            .required_roles
+            .contains(&TensorRole::RouterLogits)
+    );
+    assert!(
+        layer
+            .feed_forward
+            .required_roles
+            .contains(&TensorRole::RoutedExpertGate)
+    );
+    assert!(
+        layer
+            .feed_forward
+            .required_roles
+            .contains(&TensorRole::SharedExpertDown)
+    );
+    assert!(
+        !layer
+            .feed_forward
+            .required_roles
+            .contains(&TensorRole::HashRouterTable)
+    );
 }
 
 #[test]
@@ -190,18 +207,21 @@ fn model_support_contract_deepseek_binding_stays_semantic() {
 
     let plan = contract.engine_plan();
     assert_eq!(plan.status, EnginePlanStatus::MetadataOnly);
-    assert!(plan
-        .missing
-        .iter()
-        .any(|item| item.area == PolicyArea::Attention));
-    assert!(plan
-        .missing
-        .iter()
-        .any(|item| item.area == PolicyArea::Quantization));
-    assert!(plan
-        .missing
-        .iter()
-        .any(|item| item.area == PolicyArea::Router));
+    assert!(
+        plan.missing
+            .iter()
+            .any(|item| item.area == PolicyArea::Attention)
+    );
+    assert!(
+        plan.missing
+            .iter()
+            .any(|item| item.area == PolicyArea::Quantization)
+    );
+    assert!(
+        plan.missing
+            .iter()
+            .any(|item| item.area == PolicyArea::Router)
+    );
 }
 
 #[test]
@@ -238,14 +258,16 @@ fn model_support_contract_dspark_tensors_select_mtp_speculation_policy() {
 
     let plan = contract.engine_plan();
     assert_eq!(plan.status, EnginePlanStatus::MetadataOnly);
-    assert!(plan
-        .missing
-        .iter()
-        .any(|item| item.area == PolicyArea::Attention && item.reason.contains("attention sink")));
-    assert!(plan
-        .missing
-        .iter()
-        .any(|item| item.area == PolicyArea::Speculation));
+    assert!(
+        plan.missing.iter().any(
+            |item| item.area == PolicyArea::Attention && item.reason.contains("attention sink")
+        )
+    );
+    assert!(
+        plan.missing
+            .iter()
+            .any(|item| item.area == PolicyArea::Speculation)
+    );
 }
 
 #[test]
@@ -285,8 +307,9 @@ fn model_support_contract_unknown_family_is_unsupported() {
     let contract = ModelSupportContract::from_spec(&spec, &[]);
     let plan = contract.engine_plan();
     assert_eq!(plan.status, EnginePlanStatus::Unsupported);
-    assert!(plan
-        .missing
-        .iter()
-        .any(|item| item.area == PolicyArea::ModelFamily));
+    assert!(
+        plan.missing
+            .iter()
+            .any(|item| item.area == PolicyArea::ModelFamily)
+    );
 }

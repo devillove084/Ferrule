@@ -8,5 +8,5 @@ pub mod interactive_trace;
 pub mod summary;
 
 #[cfg(feature = "cuda")]
-pub use interactive_trace::{compare_interactive_trace, GoldenTurn, InteractiveTrace};
+pub use interactive_trace::{GoldenTurn, InteractiveTrace, compare_interactive_trace};
 pub use summary::{RuntimeBenchSummary, RuntimeCounters};

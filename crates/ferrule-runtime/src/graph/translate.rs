@@ -417,7 +417,7 @@ fn validate_semantic_plan(plan: &TransformerSemanticPlan) -> Result<()> {
                 return Err(Error::Graph(format!(
                     "semantic graph translator does not support attention kind {} in layer {}",
                     layer.attention.kind, layer.index
-                )))
+                )));
             }
         }
         match layer.feed_forward.kind {
@@ -428,7 +428,7 @@ fn validate_semantic_plan(plan: &TransformerSemanticPlan) -> Result<()> {
                 return Err(Error::Graph(format!(
                     "semantic graph translator does not support feed-forward kind {} in layer {}",
                     layer.feed_forward.kind, layer.index
-                )))
+                )));
             }
         }
     }
@@ -550,7 +550,7 @@ fn validate_dense_plan(plan: &TransformerSemanticPlan) -> Result<()> {
                 return Err(Error::Graph(format!(
                     "dense graph translator does not support attention kind {} in layer {}",
                     layer.attention.kind, layer.index
-                )))
+                )));
             }
         }
         if layer.feed_forward.kind != FeedForwardKind::DenseMlp {
@@ -1016,8 +1016,8 @@ mod tests {
 
     use ferrule_model::support::tensor_role_for_class;
     use ferrule_model::{
-        families, HfSafetensorsShardSummary, ModelFamily, MoeSpec, PolicySet, RouterKind,
-        TensorClassCount, TensorRoleCount, TransformerSpec, WeightSource,
+        HfSafetensorsShardSummary, ModelFamily, MoeSpec, PolicySet, RouterKind, TensorClassCount,
+        TensorRoleCount, TransformerSpec, WeightSource, families,
     };
 
     use crate::graph::validation::validate_graph_program;
@@ -1042,9 +1042,11 @@ mod tests {
         assert!(op_names.contains(&"transformer_state_init"));
         assert!(op_names.contains(&"transformer_layer"));
         assert!(op_names.contains(&"output_projection"));
-        assert!(op_names
-            .iter()
-            .all(|name| !name.to_ascii_lowercase().contains("deepseek")));
+        assert!(
+            op_names
+                .iter()
+                .all(|name| !name.to_ascii_lowercase().contains("deepseek"))
+        );
 
         assert_has_artifact_group(&program, ArtifactGroupKind::Attention, Some(0));
         assert_has_artifact_group(
@@ -1064,11 +1066,13 @@ mod tests {
             binding.kind,
             ExternalBindingKind::ExpertRegistry
         ) && binding.layer == Some(0)));
-        assert!(program
-            .bindings
-            .entries()
-            .iter()
-            .any(|binding| matches!(binding.kind, ExternalBindingKind::KvState)));
+        assert!(
+            program
+                .bindings
+                .entries()
+                .iter()
+                .any(|binding| matches!(binding.kind, ExternalBindingKind::KvState))
+        );
         assert!(program.bindings.entries().iter().all(|binding| {
             let name = binding.key.name();
             !name.contains("layers.0.attn.wq_a") && !name.contains("model.layers.0")

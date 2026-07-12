@@ -1,6 +1,4 @@
-use ferrule_common::execution::{
-    ExecutionBatch, ForwardMode, ForwardPhase, KvWriteSlot, LogitsRequest,
-};
+use ferrule_common::execution::{ExecutionBatch, ForwardMode, ForwardPhase};
 use ferrule_common::{Error, Result};
 
 /// Exact aggregate execution shape used to select persistent resources.
@@ -51,11 +49,6 @@ impl ExecutionShapeKey {
         self.mode
     }
 
-    /// Alias for callers that describe aggregate mode as the invocation phase.
-    pub const fn phase(self) -> ForwardMode {
-        self.mode
-    }
-
     pub const fn batch_tokens(self) -> usize {
         self.batch_tokens
     }
@@ -66,103 +59,6 @@ impl ExecutionShapeKey {
 
     pub const fn max_query_tokens(self) -> usize {
         self.max_query_tokens
-    }
-}
-
-/// Borrowed dynamic binding for one prepared execution invocation.
-///
-/// Token IDs, positions, KV slots, and logits intent remain borrowed from the
-/// caller's [`ExecutionBatch`]; construction never clones its packed vectors.
-#[derive(Debug, Clone, Copy)]
-pub struct PreparedStepBinding<'a> {
-    plan_generation: u64,
-    shape: ExecutionShapeKey,
-    token_ids: &'a [u32],
-    positions: &'a [u32],
-    kv_write_slots: &'a [Option<KvWriteSlot>],
-    route_count: usize,
-    expert_generation: u64,
-    logits: &'a [LogitsRequest],
-}
-
-impl<'a> PreparedStepBinding<'a> {
-    /// Binds an explicitly selected exact shape to the borrowed batch metadata.
-    pub fn new(
-        plan_generation: u64,
-        shape: ExecutionShapeKey,
-        batch: &'a ExecutionBatch,
-        route_count: usize,
-        expert_generation: u64,
-    ) -> Result<Self> {
-        let actual_shape = ExecutionShapeKey::from_batch(batch)?;
-        if shape != actual_shape {
-            return Err(execution_error(format!(
-                "prepared step shape {shape:?} does not match execution batch shape {actual_shape:?}"
-            )));
-        }
-        Ok(Self {
-            plan_generation,
-            shape,
-            token_ids: batch.token_ids(),
-            positions: batch.positions(),
-            kv_write_slots: batch.kv_write_slots(),
-            route_count,
-            expert_generation,
-            logits: batch.logits(),
-        })
-    }
-
-    /// Derives and freezes the exact shape directly from the borrowed batch.
-    pub fn from_batch(
-        plan_generation: u64,
-        batch: &'a ExecutionBatch,
-        route_count: usize,
-        expert_generation: u64,
-    ) -> Result<Self> {
-        let shape = ExecutionShapeKey::from_batch(batch)?;
-        Self::new(
-            plan_generation,
-            shape,
-            batch,
-            route_count,
-            expert_generation,
-        )
-    }
-
-    pub const fn plan_generation(&self) -> u64 {
-        self.plan_generation
-    }
-
-    pub const fn phase(&self) -> ForwardMode {
-        self.shape.mode
-    }
-
-    pub const fn shape(&self) -> ExecutionShapeKey {
-        self.shape
-    }
-
-    pub const fn token_ids(&self) -> &'a [u32] {
-        self.token_ids
-    }
-
-    pub const fn positions(&self) -> &'a [u32] {
-        self.positions
-    }
-
-    pub const fn kv_write_slots(&self) -> &'a [Option<KvWriteSlot>] {
-        self.kv_write_slots
-    }
-
-    pub const fn route_count(&self) -> usize {
-        self.route_count
-    }
-
-    pub const fn expert_generation(&self) -> u64 {
-        self.expert_generation
-    }
-
-    pub const fn logits(&self) -> &'a [LogitsRequest] {
-        self.logits
     }
 }
 
@@ -260,87 +156,4 @@ fn validate_basic_batch_shape(batch: &ExecutionBatch) -> Result<()> {
 
 fn execution_error(message: impl Into<String>) -> Error {
     Error::Execution(message.into())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::num::NonZeroU32;
-
-    use ferrule_common::execution::{ExecutionSequence, StateSlot};
-
-    use super::*;
-
-    fn batch() -> ExecutionBatch {
-        ExecutionBatch::new(
-            ForwardMode::Prefill,
-            vec![11, 12],
-            vec![3, 4],
-            vec![None, None],
-            vec![
-                LogitsRequest::None,
-                LogitsRequest::TopK(NonZeroU32::new(2).unwrap()),
-            ],
-            vec![ExecutionSequence::new(
-                StateSlot::new(0),
-                ForwardPhase::Prefill,
-                0..2,
-                3,
-                5,
-                0..0,
-            )],
-            Vec::new(),
-        )
-    }
-
-    #[test]
-    fn binding_borrows_packed_vectors_and_freezes_metadata() {
-        let batch = batch();
-        let binding = PreparedStepBinding::from_batch(7, &batch, 16, 9).unwrap();
-        assert_eq!(binding.plan_generation(), 7);
-        assert_eq!(binding.phase(), ForwardMode::Prefill);
-        assert_eq!(binding.route_count(), 16);
-        assert_eq!(binding.expert_generation(), 9);
-        assert!(std::ptr::eq(
-            binding.token_ids().as_ptr(),
-            batch.token_ids().as_ptr()
-        ));
-        assert!(std::ptr::eq(
-            binding.positions().as_ptr(),
-            batch.positions().as_ptr()
-        ));
-    }
-
-    #[test]
-    fn binding_rejects_mismatched_shape() {
-        let batch = batch();
-        let wrong = ExecutionShapeKey::new(ForwardMode::Prefill, 1, 1, 2);
-        assert!(matches!(
-            PreparedStepBinding::new(0, wrong, &batch, 0, 0),
-            Err(Error::Execution(_))
-        ));
-    }
-
-    #[test]
-    fn binding_rejects_invalid_parallel_lengths() {
-        let invalid = ExecutionBatch::new(
-            ForwardMode::Decode,
-            vec![1],
-            Vec::new(),
-            vec![None],
-            vec![LogitsRequest::None],
-            vec![ExecutionSequence::new(
-                StateSlot::new(0),
-                ForwardPhase::Decode,
-                0..1,
-                0,
-                1,
-                0..0,
-            )],
-            Vec::new(),
-        );
-        assert!(matches!(
-            PreparedStepBinding::from_batch(0, &invalid, 0, 0),
-            Err(Error::Execution(_))
-        ));
-    }
 }

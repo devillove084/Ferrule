@@ -45,8 +45,7 @@ pub mod support;
 // ── Re-exports: execution ─────────────────────────────────────────────────
 pub use execution::{
     ArenaLease, ExecutionShapeKey, ModelExecutionBackend, PersistentArenaPool,
-    PersistentArenaPoolStats, PreparedModel, PreparedStepBinding, SequenceStateCore,
-    SequenceStepBinding,
+    PersistentArenaPoolStats, PreparedModel, SequenceStateCore, SequenceStepBinding,
 };
 
 // ── Re-exports: spec ──────────────────────────────────────────────────────
@@ -60,12 +59,12 @@ pub use descriptor::ModelDescriptor;
 
 // ── Re-exports: support ───────────────────────────────────────────────────
 pub use support::{
-    validate_model_layout_bindings, AttentionLayout, AttentionPolicy, BoundRoleCount, EnginePlan,
-    EnginePlanStatus, ExpertPolicy, FeedForwardKind, FeedForwardLayout, KvCacheShape, KvPolicy,
-    LayerLayout, LayoutValidationReport, MissingPolicy, MissingRequiredRole, ModelLayout,
-    ModelSupportContract, OptionalRoleStatus, ParallelismPlan, PolicyArea, PolicySet, QuantPolicy,
-    ResidencyPolicy, RoleScope, RouterPolicy, SpeculationMode, SpeculationPolicy, TensorBinding,
-    TensorRole, TokenizerPolicy, ValidationPolicy,
+    AttentionLayout, AttentionPolicy, BoundRoleCount, EnginePlan, EnginePlanStatus, ExpertPolicy,
+    FeedForwardKind, FeedForwardLayout, KvCacheShape, KvPolicy, LayerLayout,
+    LayoutValidationReport, MissingPolicy, MissingRequiredRole, ModelLayout, ModelSupportContract,
+    OptionalRoleStatus, ParallelismPlan, PolicyArea, PolicySet, QuantPolicy, ResidencyPolicy,
+    RoleScope, RouterPolicy, SpeculationMode, SpeculationPolicy, TensorBinding, TensorRole,
+    TokenizerPolicy, ValidationPolicy, validate_model_layout_bindings,
 };
 
 // ── Re-exports: semantic ──────────────────────────────────────────────────
@@ -80,26 +79,9 @@ pub use semantic::{
 pub use tensor_policy::{GgufTensorPolicy, HfTensorPolicy, TensorClass, TensorClassCount};
 
 // ── Re-exports: quant ─────────────────────────────────────────────────────
-pub use quant::{f16_to_f32, f32_to_f16, QMatrix};
+pub use quant::{QMatrix, f16_to_f32, f32_to_f16};
 
 // ── Re-exports: artifact ──────────────────────────────────────────────────
-#[allow(deprecated)]
-pub use artifact::{
-    bind_attention_from_artifact_group, bind_attention_from_hf,
-    bind_hyper_connection_from_artifact_group, bind_hyper_connection_from_hf,
-    bind_hyper_connection_head_from_artifact_group, bind_hyper_connection_head_from_hf,
-    bind_layer_norms_from_artifact_group, bind_router_from_artifact_group, bind_router_from_hf,
-    bind_shared_swiglu_ffn_from_artifact_group, bind_shared_swiglu_ffn_from_hf,
-    AttentionArtifactPayload, LayerNormArtifactPayload, MlaAttentionArtifactPayload,
-    RouterArtifactPayload,
-};
-pub use artifact::{
-    decode_e8m0_scale, decode_fp4_e2m1_nibble, decode_fp4_e2m1_packed_low_first,
-    decode_fp8_e4m3fn_byte, dequantize_fp4_e2m1_with_e8m0_scales,
-    dequantize_fp8_e4m3fn_with_e8m0_scales, normalized_hadamard_transform_rows_in_place,
-    simulate_fp4_e2m1_e8m0_activation_quant_in_place,
-    simulate_fp8_e4m3fn_e8m0_activation_quant_in_place,
-};
 pub use artifact::{
     ArtifactActivationQuantization, ArtifactLinearExecutionPolicy, ArtifactLinearFormat,
     ArtifactLinearPayload,
@@ -112,30 +94,46 @@ pub use artifact::{
     HfSafetensorsIndex, HfSafetensorsInventory, HfSafetensorsShardSummary, HfSafetensorsTensorInfo,
     HfSharedExpertTensorInfo, InputArtifact, TensorRoleCount,
 };
+pub use artifact::{
+    LayerNormArtifactPayload, MlaAttentionArtifactPayload, RouterArtifactPayload,
+    bind_attention_from_artifact_group, bind_attention_from_hf,
+    bind_hyper_connection_from_artifact_group, bind_hyper_connection_from_hf,
+    bind_hyper_connection_head_from_artifact_group, bind_hyper_connection_head_from_hf,
+    bind_layer_norms_from_artifact_group, bind_router_from_artifact_group, bind_router_from_hf,
+    bind_shared_swiglu_ffn_from_artifact_group, bind_shared_swiglu_ffn_from_hf,
+};
+pub use artifact::{
+    decode_e8m0_scale, decode_fp4_e2m1_nibble, decode_fp4_e2m1_packed_low_first,
+    decode_fp8_e4m3fn_byte, dequantize_fp4_e2m1_with_e8m0_scales,
+    dequantize_fp8_e4m3fn_with_e8m0_scales, normalized_hadamard_transform_rows_in_place,
+    simulate_fp4_e2m1_e8m0_activation_quant_in_place,
+    simulate_fp8_e4m3fn_e8m0_activation_quant_in_place,
+};
 
 // ── Re-exports: moe ───────────────────────────────────────────────────────
 pub use moe::{
-    execute_routed_moe_reference, execute_routed_moe_reference_with_handles,
-    execute_routed_moe_with_artifact_router_reference,
+    CpuExpertHandleStore, CpuReferenceExpertExecutor, ExpertArtifactPayload, ExpertComputeBundle,
+    ExpertComputeHandle, ExpertEvictRequest, ExpertExecutor, ExpertHandleStore, ExpertId,
+    ExpertLinearFormat, ExpertLinearPayload, ExpertLoadReason, ExpertLoadRequest, ExpertLoadSource,
+    ExpertMatrixKind, ExpertResidentFormat, ExpertRoute, ExpertRouterPolicy, ExpertStorageTier,
+    ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader, ExpertStreamingStep,
+    ExpertTelemetry, ExpertTensorComponent, ExpertTensorKey, ExpertTensorPayload,
+    ExpertTensorSlice, HostStagedExpertCache, ResidentExpertHandle, RoutedMoeStepOutput,
+    RouterScoreFunction, RouterSelectionPolicy, execute_routed_moe_reference,
+    execute_routed_moe_reference_with_handles, execute_routed_moe_with_artifact_router_reference,
     execute_routed_moe_with_artifact_router_reference_with_handles, read_experts_concurrent,
-    reference_linear, CpuExpertHandleStore, CpuReferenceExpertExecutor, ExpertArtifactPayload,
-    ExpertComputeBundle, ExpertComputeHandle, ExpertEvictRequest, ExpertExecutor,
-    ExpertHandleStore, ExpertId, ExpertLinearFormat, ExpertLinearPayload, ExpertLoadReason,
-    ExpertLoadRequest, ExpertLoadSource, ExpertMatrixKind, ExpertResidentFormat, ExpertRoute,
-    ExpertRouterPolicy, ExpertStorageTier, ExpertStreamingPlanner, ExpertStreamingPolicy,
-    ExpertStreamingReader, ExpertStreamingStep, ExpertTelemetry, ExpertTensorComponent,
-    ExpertTensorKey, ExpertTensorPayload, ExpertTensorSlice, HostStagedExpertCache,
-    ResidentExpertHandle, RoutedMoeStepOutput, RouterScoreFunction, RouterSelectionPolicy,
+    reference_linear,
 };
 
 // ── Re-exports: runner ────────────────────────────────────────────────────
 pub use runner::{
-    unsupported_runtime_message, ModelInfo, ModelRunner, PrefillMode, TokenLogit, TopKModelRunner,
+    ModelInfo, ModelRunner, MultiSessionRunner, PrefillMode, TokenLogit, TopKModelRunner,
+    unsupported_runtime_message,
 };
 
 // ── Re-exports: attention_backend ─────────────────────────────────────────
 pub use attention_backend::{
-    sliding_window_topk_indices, sparse_attention_reference, SparseAttentionSpec,
+    SparseAttentionSpec, sliding_window_topk_indices, sparse_attention_reference,
 };
 
 // ── Re-exports: semantic plan ─────────────────────────────────────────────
@@ -146,16 +144,16 @@ pub use semantic_plan::{
 
 // ── Re-exports: hyper_connection ──────────────────────────────────────────
 pub use hyper_connection::{
-    hc_head_reference, hc_post_reference, hc_pre_reference, hc_split_sinkhorn_reference,
     HyperConnectionConfig, HyperConnectionHeadWeights, HyperConnectionPreOutput,
-    HyperConnectionSplit, HyperConnectionWeights,
+    HyperConnectionSplit, HyperConnectionWeights, hc_head_reference, hc_post_reference,
+    hc_pre_reference, hc_split_sinkhorn_reference,
 };
 
 // ── Re-exports: ffn ───────────────────────────────────────────────────────
 pub use ffn::SwiGluFfnPayload;
 
 // ── Re-exports: chat ──────────────────────────────────────────────────────
-pub use chat::{detect_chat_template, ChatTemplate};
+pub use chat::{ChatTemplate, detect_chat_template};
 
 // ── Re-exports: precision ─────────────────────────────────────────────────
 pub use precision::{PrecisionPolicy, QuantPreset, TensorDtypeOverride};

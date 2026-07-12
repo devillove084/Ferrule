@@ -11,7 +11,7 @@ pub mod policies;
 pub mod roles;
 pub mod validation;
 
-pub use binding::{tensor_role_for_class, TensorBinding};
+pub use binding::{TensorBinding, tensor_role_for_class};
 pub use contract::ModelSupportContract;
 pub use layout::{AttentionLayout, FeedForwardLayout, LayerLayout, ModelLayout};
 pub use plan::{EnginePlan, EnginePlanStatus, MissingPolicy, PolicyArea};
@@ -22,8 +22,8 @@ pub use policies::{
 };
 pub use roles::{FeedForwardKind, KvCacheShape, TensorRole};
 pub use validation::{
-    validate_model_layout_bindings, BoundRoleCount, LayoutValidationReport, MissingRequiredRole,
-    OptionalRoleStatus, RoleScope,
+    BoundRoleCount, LayoutValidationReport, MissingRequiredRole, OptionalRoleStatus, RoleScope,
+    validate_model_layout_bindings,
 };
 
 #[cfg(test)]

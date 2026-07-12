@@ -44,15 +44,13 @@ pub use inventory::{
 };
 
 // Re-exports — binding
-#[allow(deprecated)]
 pub use binding::{
+    LayerNormArtifactPayload, MlaAttentionArtifactPayload, RouterArtifactPayload,
     bind_attention_from_artifact_group, bind_attention_from_hf,
     bind_hyper_connection_from_artifact_group, bind_hyper_connection_from_hf,
     bind_hyper_connection_head_from_artifact_group, bind_hyper_connection_head_from_hf,
     bind_layer_norms_from_artifact_group, bind_router_from_artifact_group, bind_router_from_hf,
     bind_shared_swiglu_ffn_from_artifact_group, bind_shared_swiglu_ffn_from_hf,
-    AttentionArtifactPayload, LayerNormArtifactPayload, MlaAttentionArtifactPayload,
-    RouterArtifactPayload,
 };
 
 // Re-exports — format

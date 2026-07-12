@@ -1,10 +1,13 @@
 use std::path::Path;
 use std::time::Instant;
 
+use ferrule_common::execution::ForwardPhase;
 use ferrule_model::{
-    models::deepseek_v4::{DeepSeekV4PrepareOptions, DeepSeekV4Runner},
     ModelExecutionBackend,
+    models::deepseek_v4::{DeepSeekV4PrepareOptions, DeepSeekV4Runner},
 };
+
+use crate::commands::resident::build_page_managed_diagnostic_harness;
 
 use super::stats::print_deepseek_v4_runtime_stats;
 
@@ -36,7 +39,7 @@ pub fn cmd_deepseek_v4_probe(
 
     let operator_backend = ModelExecutionBackend::parse(backend)?;
     let load_start = Instant::now();
-    let mut runner = DeepSeekV4Runner::load_hf_with_options_and_backend(
+    let runner = DeepSeekV4Runner::load_hf_with_options_and_backend(
         model_path,
         max_tensor_mb.saturating_mul(1024 * 1024),
         options,
@@ -61,7 +64,10 @@ pub fn cmd_deepseek_v4_probe(
         runner.model().config.num_heads,
         runner.model().config.head_dim,
         runner.model().config.window_size,
-        runner.model().config.compress_ratios
+        runner
+            .model()
+            .config
+            .compress_ratios
             .iter()
             .filter(|&&ratio| ratio != 0)
             .count()
@@ -89,9 +95,19 @@ pub fn cmd_deepseek_v4_probe(
     }
     println!("load:       {:.3} ms", load_elapsed.as_secs_f64() * 1000.0);
 
+    let schema = runner.kv_layout_schema().clone();
+    let mut diagnostic =
+        build_page_managed_diagnostic_harness(runner, Box::new(schema), token_ids.len(), 1)?;
+    let sequence = diagnostic.create_sequence(0)?;
+
     let run_start = Instant::now();
     if full_vocab_topk {
-        let top = runner.prefill_tokens_topk_batched(&token_ids, top_k)?;
+        let top = diagnostic.execute_sequence_step(
+            sequence,
+            ForwardPhase::Prefill,
+            &token_ids,
+            |runner| runner.prefill_tokens_topk_batched(&token_ids, top_k),
+        )?;
         if let Some(path) = reference_json {
             compare_deepseek_v4_probe_reference(
                 path,
@@ -104,16 +120,17 @@ pub fn cmd_deepseek_v4_probe(
             )?;
         }
         let elapsed = run_start.elapsed();
-        println!("position:   {}", runner.position());
-        println!("bound layers: {}", runner.bound_layer_count());
-        print_deepseek_v4_runtime_stats(&runner);
+        println!("position:   {}", token_ids.len());
+        println!("bound layers: {}", diagnostic.runner().bound_layer_count());
+        print_deepseek_v4_runtime_stats(diagnostic.runner());
         println!(
             "run:        {:.3} ms (batched prefill + full-vocab top-{top_k})",
             elapsed.as_secs_f64() * 1000.0
         );
         println!("top logits:");
         for item in top {
-            let piece = runner
+            let piece = diagnostic
+                .runner()
                 .model()
                 .tokenizer
                 .decode(&[item.token_id])
@@ -121,8 +138,14 @@ pub fn cmd_deepseek_v4_probe(
             println!("  {:>8}: {:>12.6}  {:?}", item.token_id, item.logit, piece);
         }
     } else {
-        let logits =
-            runner.prefill_tokens_logits_row_range_batched(&token_ids, start_row, row_count)?;
+        let logits = diagnostic.execute_sequence_step(
+            sequence,
+            ForwardPhase::Prefill,
+            &token_ids,
+            |runner| {
+                runner.prefill_tokens_logits_row_range_batched(&token_ids, start_row, row_count)
+            },
+        )?;
         let row_logits = logits
             .iter()
             .copied()
@@ -144,9 +167,9 @@ pub fn cmd_deepseek_v4_probe(
             )?;
         }
         let elapsed = run_start.elapsed();
-        println!("position:   {}", runner.position());
-        println!("bound layers: {}", runner.bound_layer_count());
-        print_deepseek_v4_runtime_stats(&runner);
+        println!("position:   {}", token_ids.len());
+        println!("bound layers: {}", diagnostic.runner().bound_layer_count());
+        print_deepseek_v4_runtime_stats(diagnostic.runner());
         println!(
             "run:        {:.3} ms (batched prefill + lm_head rows [{}, {}))",
             elapsed.as_secs_f64() * 1000.0,
@@ -156,7 +179,8 @@ pub fn cmd_deepseek_v4_probe(
         println!("row logits:");
         for (offset, logit) in logits.iter().enumerate() {
             let token_id = (start_row + offset) as u32;
-            let piece = runner
+            let piece = diagnostic
+                .runner()
                 .model()
                 .tokenizer
                 .decode(&[token_id])
@@ -176,7 +200,8 @@ pub fn cmd_deepseek_v4_probe(
             ranked.truncate(top_k.min(ranked.len()));
             println!("top logits in row range:");
             for (token_id, logit) in ranked {
-                let piece = runner
+                let piece = diagnostic
+                    .runner()
                     .model()
                     .tokenizer
                     .decode(&[token_id])

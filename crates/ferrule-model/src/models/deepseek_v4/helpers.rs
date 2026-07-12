@@ -16,7 +16,7 @@ use ferrule_common::{Error, Result};
 
 use super::attention::DeepSeekV4IndexerPayload;
 use super::config::{
-    with_deepseek_v4_linear_execution_policy, DeepSeekV4AttentionConfig, DeepSeekV4RopeParams,
+    DeepSeekV4AttentionConfig, DeepSeekV4RopeParams, with_deepseek_v4_linear_execution_policy,
 };
 use super::operators::DeepSeekV4OperatorContext;
 use crate::runner::TokenLogit;

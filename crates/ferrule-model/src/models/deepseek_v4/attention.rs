@@ -5,6 +5,8 @@ use std::time::Instant;
 use crate::artifact::binding::MlaAttentionArtifactPayload;
 use crate::artifact::linear::ArtifactLinearPayload;
 use crate::artifact::tensor::{ArtifactTensorReader, ArtifactTensorSlice};
+#[cfg(feature = "cuda")]
+use crate::attention_backend::SparseAttentionSpec;
 
 use ferrule_common::{Error, Result};
 
@@ -19,6 +21,8 @@ use super::helpers::{
     read_aux_tensor, read_aux_tensor_f32, two_dim_shape_from_payload, window_topk_indices_prefill,
 };
 use super::operators::{DeepSeekV4AttentionProfileStage, DeepSeekV4OperatorContext};
+#[cfg(feature = "cuda")]
+use super::sequence::DeepSeekV4PagedKvBinding;
 use crate::TensorRole;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -236,17 +240,71 @@ impl DeepSeekV4CompressorDecodeArena {
         payload: &DeepSeekV4CompressorPayload,
         hidden_size: usize,
         rows: usize,
+        independent_sequences: bool,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<Self> {
         let ops = &operators.cuda_mut()?.ops;
-        let groups = rows / payload.compress_ratio;
+        let boundary_rows = if independent_sequences {
+            rows
+        } else {
+            rows / payload.compress_ratio
+        };
         Ok(Self {
             kv_input: ops.zero_f32_buffer(rows * hidden_size)?,
             score_input: ops.zero_f32_buffer(rows * hidden_size)?,
             kv: ops.zero_f32_buffer(rows * payload.wkv.format.out_features())?,
             score: ops.zero_f32_buffer(rows * payload.wgate.format.out_features())?,
-            compressed: ops.zero_f32_buffer(groups * payload.head_dim)?,
-            normalized: ops.zero_f32_buffer(groups * payload.head_dim)?,
+            compressed: ops.zero_f32_buffer(boundary_rows * payload.head_dim)?,
+            normalized: ops.zero_f32_buffer(boundary_rows * payload.head_dim)?,
+        })
+    }
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) struct DeepSeekV4AttentionRowsTransitionArena {
+    input: ferrule_cuda::context::CudaF32Buffer,
+    main_compressor: Option<DeepSeekV4CompressorDecodeArena>,
+    indexer_compressor: Option<DeepSeekV4CompressorDecodeArena>,
+}
+
+#[cfg(feature = "cuda")]
+impl DeepSeekV4AttentionRowsTransitionArena {
+    pub(crate) fn new(
+        attention: &DeepSeekV4Attention,
+        operators: &mut DeepSeekV4OperatorContext,
+    ) -> Result<Self> {
+        let cfg = attention.config;
+        let main_compressor = attention
+            .compressed
+            .as_ref()
+            .map(|payload| {
+                DeepSeekV4CompressorDecodeArena::new(
+                    &payload.compressor,
+                    cfg.hidden_size,
+                    1,
+                    true,
+                    operators,
+                )
+            })
+            .transpose()?;
+        let indexer_compressor = attention
+            .compressed
+            .as_ref()
+            .and_then(|payload| payload.indexer.as_ref())
+            .map(|indexer| {
+                DeepSeekV4CompressorDecodeArena::new(
+                    &indexer.compressor,
+                    cfg.hidden_size,
+                    1,
+                    true,
+                    operators,
+                )
+            })
+            .transpose()?;
+        Ok(Self {
+            input: operators.cuda_mut()?.ops.zero_f32_buffer(cfg.hidden_size)?,
+            main_compressor,
+            indexer_compressor,
         })
     }
 }
@@ -264,10 +322,16 @@ pub(crate) struct DeepSeekV4AttentionDecodeArena {
     kv: ferrule_cuda::context::CudaF32Buffer,
     index_query: ferrule_cuda::context::CudaF32Buffer,
     index_weights: ferrule_cuda::context::CudaF32Buffer,
+    positions: ferrule_cuda::context::CudaI32Buffer,
+    window_lens: ferrule_cuda::context::CudaI32Buffer,
+    compressed_lens: ferrule_cuda::context::CudaI32Buffer,
+    visible_lens: ferrule_cuda::context::CudaI32Buffer,
+    main_positions: ferrule_cuda::context::CudaI32Buffer,
+    main_mask: ferrule_cuda::context::CudaI32Buffer,
+    indexer_positions: ferrule_cuda::context::CudaI32Buffer,
+    indexer_mask: ferrule_cuda::context::CudaI32Buffer,
     topk: ferrule_cuda::context::CudaI32Buffer,
-    empty_query: ferrule_cuda::context::CudaF32Buffer,
-    empty_weights: ferrule_cuda::context::CudaF32Buffer,
-    empty_kv: ferrule_cuda::context::CudaF32Buffer,
+    topk_selectors: ferrule_cuda::context::CudaI32Buffer,
     context: ferrule_cuda::context::CudaF32Buffer,
     latent: ferrule_cuda::context::CudaF32Buffer,
     pub(crate) output: ferrule_cuda::context::CudaF32Buffer,
@@ -282,6 +346,7 @@ impl DeepSeekV4AttentionDecodeArena {
     pub(crate) fn new(
         attention: &DeepSeekV4Attention,
         rows: usize,
+        independent_sequences: bool,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<Self> {
         let cfg = attention.config;
@@ -293,6 +358,7 @@ impl DeepSeekV4AttentionDecodeArena {
                     &payload.compressor,
                     cfg.hidden_size,
                     rows,
+                    independent_sequences,
                     operators,
                 )
             })
@@ -306,6 +372,7 @@ impl DeepSeekV4AttentionDecodeArena {
                     &indexer.compressor,
                     cfg.hidden_size,
                     rows,
+                    independent_sequences,
                     operators,
                 )
             })
@@ -313,6 +380,8 @@ impl DeepSeekV4AttentionDecodeArena {
         let ops = &operators.cuda_mut()?.ops;
         let compressed_rows = if cfg.compress_ratio == 0 {
             0
+        } else if independent_sequences {
+            rows
         } else {
             rows / cfg.compress_ratio
         };
@@ -335,10 +404,16 @@ impl DeepSeekV4AttentionDecodeArena {
             kv: ops.zero_f32_buffer(rows * cfg.head_dim)?,
             index_query: ops.zero_f32_buffer(rows * cfg.index_n_heads * cfg.index_head_dim)?,
             index_weights: ops.zero_f32_buffer(rows * cfg.index_n_heads)?,
+            positions: ops.zero_i32_buffer(rows)?,
+            window_lens: ops.zero_i32_buffer(rows)?,
+            compressed_lens: ops.zero_i32_buffer(rows)?,
+            visible_lens: ops.zero_i32_buffer(rows)?,
+            main_positions: ops.zero_i32_buffer(rows)?,
+            main_mask: ops.zero_i32_buffer(rows)?,
+            indexer_positions: ops.zero_i32_buffer(rows)?,
+            indexer_mask: ops.zero_i32_buffer(rows)?,
             topk: ops.zero_i32_buffer(rows * (cfg.window_size + cfg.index_topk))?,
-            empty_query: ops.zero_f32_buffer(1)?,
-            empty_weights: ops.zero_f32_buffer(1)?,
-            empty_kv: ops.zero_f32_buffer(1)?,
+            topk_selectors: ops.zero_i32_buffer(rows * (cfg.window_size + cfg.index_topk))?,
             context: ops.zero_f32_buffer(rows * cfg.q_full_dim())?,
             latent: ops.zero_f32_buffer(rows * cfg.output_latent_dim())?,
             output: ops.zero_f32_buffer(rows * cfg.hidden_size)?,
@@ -348,6 +423,17 @@ impl DeepSeekV4AttentionDecodeArena {
             indexer_compressor,
         })
     }
+}
+
+#[cfg(feature = "cuda")]
+fn decode_metadata_i32(values: &[usize], label: &str) -> Result<Vec<i32>> {
+    values
+        .iter()
+        .map(|&value| {
+            i32::try_from(value)
+                .map_err(|_| Error::Model(format!("packed decode {label} exceeds i32 ABI")))
+        })
+        .collect()
 }
 
 impl DeepSeekV4Attention {
@@ -505,7 +591,11 @@ impl DeepSeekV4Attention {
         if cache.window.head_dim != cfg.head_dim || cache.window.window_size != cfg.window_size {
             return Err(Error::Model(format!(
                 "DeepSeek-V4 layer {} KV cache shape mismatch: cache window={} head_dim={}, expected window={} head_dim={}",
-                self.layer, cache.window.window_size, cache.window.head_dim, cfg.window_size, cfg.head_dim
+                self.layer,
+                cache.window.window_size,
+                cache.window.head_dim,
+                cfg.window_size,
+                cfg.head_dim
             )));
         }
 
@@ -676,7 +766,11 @@ impl DeepSeekV4Attention {
         if cache.window.head_dim != cfg.head_dim || cache.window.window_size != cfg.window_size {
             return Err(Error::Model(format!(
                 "DeepSeek-V4 layer {} KV cache shape mismatch: cache window={} head_dim={}, expected window={} head_dim={}",
-                self.layer, cache.window.window_size, cache.window.head_dim, cfg.window_size, cfg.head_dim
+                self.layer,
+                cache.window.window_size,
+                cache.window.head_dim,
+                cfg.window_size,
+                cfg.head_dim
             )));
         }
         let compressed = self.compressed.as_ref().ok_or_else(|| {
@@ -1081,7 +1175,11 @@ impl DeepSeekV4Attention {
         if cache.window.head_dim != cfg.head_dim || cache.window.window_size != cfg.window_size {
             return Err(Error::Model(format!(
                 "DeepSeek-V4 layer {} KV cache shape mismatch: cache window={} head_dim={}, expected window={} head_dim={}",
-                self.layer, cache.window.window_size, cache.window.head_dim, cfg.window_size, cfg.head_dim
+                self.layer,
+                cache.window.window_size,
+                cache.window.head_dim,
+                cfg.window_size,
+                cfg.head_dim
             )));
         }
         let layer_tag = format!("attn_L{}", self.layer);
@@ -1230,19 +1328,12 @@ impl DeepSeekV4Attention {
         for token in 0..tokens {
             cache.window.append(start_pos + token, &zero_kv)?;
         }
-        operators.cuda_mut()?.ensure_kv_cache(
-            cache.window.cuda_state_mut(),
-            self.layer,
-            cfg.window_size,
-            cfg.head_dim,
-        )?;
-        operators.cuda_mut()?.kv_write_window_rows_device(
-            cache.window.cuda_state_mut(),
+        operators.cuda_mut()?.paged_write_rows(
+            0,
             self.layer,
             &arena.kv,
             start_pos,
             tokens,
-            cfg.window_size,
             cfg.head_dim,
         )?;
         record_attention_stage(
@@ -1254,27 +1345,10 @@ impl DeepSeekV4Attention {
 
         let stage_start = Instant::now();
         let topk_cols = tokens.min(cfg.window_size);
+        let topk = window_topk_indices_prefill(cfg.window_size, tokens);
         operators
             .cuda_mut()?
-            .prefill_topk_indices_from_device_into(
-                None,
-                None,
-                None,
-                &arena.empty_query,
-                &arena.empty_weights,
-                &arena.empty_kv,
-                tokens,
-                cfg.window_size,
-                topk_cols,
-                0,
-                tokens,
-                cfg.compress_ratio,
-                0,
-                0,
-                0,
-                1.0,
-                &mut arena.topk,
-            )?;
+            .write_topk_indices(&topk, &mut arena.topk)?;
         record_attention_stage(
             operators,
             self.layer,
@@ -1319,7 +1393,11 @@ impl DeepSeekV4Attention {
         if cache.window.head_dim != cfg.head_dim || cache.window.window_size != cfg.window_size {
             return Err(Error::Model(format!(
                 "DeepSeek-V4 layer {} KV cache shape mismatch: cache window={} head_dim={}, expected window={} head_dim={}",
-                self.layer, cache.window.window_size, cache.window.head_dim, cfg.window_size, cfg.head_dim
+                self.layer,
+                cache.window.window_size,
+                cache.window.head_dim,
+                cfg.window_size,
+                cfg.head_dim
             )));
         }
         let compressed = self.compressed.as_ref().ok_or_else(|| {
@@ -1504,8 +1582,9 @@ impl DeepSeekV4Attention {
         if let Some(indexer) = compressed.indexer.as_ref() {
             let indexer_compressed_start = cache.indexer_compressed_len(cfg.index_head_dim);
             let stage_start = Instant::now();
-            let indexer_values = {
-                let state = cache.indexer_compressor.as_mut().ok_or_else(|| {
+            let indexer_groups = {
+                let (compressor_state, window) = (&mut cache.indexer_compressor, &mut cache.window);
+                let state = compressor_state.as_mut().ok_or_else(|| {
                     Error::Model(format!(
                         "DeepSeek-V4 layer {} missing indexer compressor state",
                         self.layer
@@ -1517,6 +1596,7 @@ impl DeepSeekV4Attention {
                         self.layer
                     ))
                 })?;
+                let cuda = window.cuda_state_mut();
                 state.prefill_start_device_output_into(
                     &indexer.compressor,
                     hidden_dev,
@@ -1526,6 +1606,8 @@ impl DeepSeekV4Attention {
                     &format!("indexer_compress_norm_L{}", self.layer),
                     compressor_arena,
                     &mut arena.linear_workspace,
+                    &mut cuda.indexer_compressor_recurrent,
+                    &mut cuda.indexer_compressor_needs_reset,
                     operators,
                 )?
             };
@@ -1535,23 +1617,10 @@ impl DeepSeekV4Attention {
                 DeepSeekV4AttentionProfileStage::IndexerCompress,
                 stage_start,
             )?;
-            if indexer_values.len() % cfg.index_head_dim != 0 {
-                return Err(Error::Model(format!(
-                    "DeepSeek-V4 layer {} indexer prefill compressed length {} is not divisible by {}",
-                    self.layer,
-                    indexer_values.len(),
-                    cfg.index_head_dim
-                )));
-            }
-            if !indexer_values.is_empty() {
-                operators.capture_parity_checkpoint_host_rows(
-                    self.layer,
-                    "attn_indexer_compressed",
-                    &indexer_values,
-                    cfg.index_head_dim,
-                )?;
-            }
-            cache.indexer_compressed.extend_from_slice(&indexer_values);
+            cache.indexer_compressed.resize(
+                cache.indexer_compressed.len() + indexer_groups * cfg.index_head_dim,
+                0.0,
+            );
             let indexer_rows = arena
                 .indexer_compressor
                 .as_ref()
@@ -1559,14 +1628,8 @@ impl DeepSeekV4Attention {
                 .normalized
                 .len()
                 / cfg.index_head_dim;
-            operators.cuda_mut()?.ensure_indexer_kv_cache(
-                cache.window.cuda_state_mut(),
-                self.layer,
-                indexer_compressed_start + indexer_rows,
-                cfg.index_head_dim,
-            )?;
-            operators.cuda_mut()?.indexer_kv_write_rows_device(
-                cache.window.cuda_state_mut(),
+            operators.cuda_mut()?.paged_write_rows(
+                2,
                 self.layer,
                 &arena
                     .indexer_compressor
@@ -1574,14 +1637,16 @@ impl DeepSeekV4Attention {
                     .expect("indexer compressor arena exists")
                     .normalized,
                 indexer_compressed_start,
+                indexer_rows,
                 cfg.index_head_dim,
             )?;
         }
 
         let stage_start = Instant::now();
         let compressed_start = cache.compressed_len();
-        let main_compressed = {
-            let state = cache.main_compressor.as_mut().ok_or_else(|| {
+        let main_groups = {
+            let (compressor_state, window) = (&mut cache.main_compressor, &mut cache.window);
+            let state = compressor_state.as_mut().ok_or_else(|| {
                 Error::Model(format!(
                     "DeepSeek-V4 layer {} missing main compressor state",
                     self.layer
@@ -1593,6 +1658,7 @@ impl DeepSeekV4Attention {
                     self.layer
                 ))
             })?;
+            let cuda = window.cuda_state_mut();
             state.prefill_start_device_output_into(
                 &compressed.compressor,
                 hidden_dev,
@@ -1602,6 +1668,8 @@ impl DeepSeekV4Attention {
                 &format!("main_compress_norm_L{}", self.layer),
                 compressor_arena,
                 &mut arena.linear_workspace,
+                &mut cuda.main_compressor_recurrent,
+                &mut cuda.main_compressor_needs_reset,
                 operators,
             )?
         };
@@ -1611,61 +1679,32 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::MainCompress,
             stage_start,
         )?;
-        if main_compressed.len() % cfg.head_dim != 0 {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} main prefill compressed length {} is not divisible by {}",
-                self.layer,
-                main_compressed.len(),
-                cfg.head_dim
-            )));
-        }
-        if !main_compressed.is_empty() {
-            operators.capture_parity_checkpoint_host_rows(
-                self.layer,
-                "attn_main_compressed",
-                &main_compressed,
-                cfg.head_dim,
-            )?;
-        }
-        cache.compressed.extend_from_slice(&main_compressed);
+        cache
+            .compressed
+            .resize(cache.compressed.len() + main_groups * cfg.head_dim, 0.0);
 
         let stage_start = Instant::now();
-        let compressed_len = cache.compressed_len();
-        {
-            let compressed_values = &cache.compressed;
-            let (state, window_values, head_dim) = cache.window.cuda_state_and_host_values();
-            operators.cuda_mut()?.ensure_combined_kv_cache(
-                state,
-                self.layer,
-                window_values,
-                head_dim,
-                compressed_values,
-                compressed_len,
-            )?;
-        }
-        operators.cuda_mut()?.combined_kv_write_window_rows_device(
-            cache.window.cuda_state_mut(),
+        operators.cuda_mut()?.paged_write_rows(
+            0,
             self.layer,
             &arena.kv,
             start_pos,
             tokens,
-            cfg.window_size,
             cfg.head_dim,
         )?;
-        operators
-            .cuda_mut()?
-            .combined_kv_write_compressed_rows_device(
-                cache.window.cuda_state_mut(),
-                self.layer,
-                &arena
-                    .main_compressor
-                    .as_ref()
-                    .expect("main compressor arena exists")
-                    .normalized,
-                compressed_start,
-                cfg.window_size,
-                cfg.head_dim,
-            )?;
+        let main_compressed = &arena
+            .main_compressor
+            .as_ref()
+            .expect("main compressor arena exists")
+            .normalized;
+        operators.cuda_mut()?.paged_write_rows(
+            1,
+            self.layer,
+            main_compressed,
+            compressed_start,
+            main_compressed.len() / cfg.head_dim,
+            cfg.head_dim,
+        )?;
         record_attention_stage(
             operators,
             self.layer,
@@ -1699,27 +1738,10 @@ impl DeepSeekV4Attention {
             }
             let indexer_cols = cfg.index_topk.min(compressed_len);
             if indexer_cols == 0 {
+                let topk = window_topk_indices_prefill(cfg.window_size, tokens);
                 operators
                     .cuda_mut()?
-                    .prefill_topk_indices_from_device_into(
-                        None,
-                        None,
-                        None,
-                        &arena.empty_query,
-                        &arena.empty_weights,
-                        &arena.empty_kv,
-                        tokens,
-                        cfg.window_size,
-                        window_cols,
-                        0,
-                        compressed_offset,
-                        cfg.compress_ratio,
-                        0,
-                        0,
-                        0,
-                        1.0,
-                        &mut arena.topk,
-                    )?;
+                    .write_topk_indices(&topk, &mut arena.topk)?;
             } else {
                 operators.cuda_mut()?.linear_rows_from_device_into(
                     &indexer.wq_b,
@@ -1748,10 +1770,10 @@ impl DeepSeekV4Attention {
                 if dsv4_fused_indexer_topk_supported(operators, cfg, index_rope_dim) {
                     operators
                         .cuda_mut()?
-                        .prefill_topk_indices_fused_index_query_from_device_into(
+                        .prefill_topk_indices_fused_index_query_paged_indexer_into(
                             &arena.index_query,
                             &arena.index_weights,
-                            indexer_kv,
+                            self.layer,
                             &index_rope_name,
                             tokens,
                             cfg.window_size,
@@ -1787,13 +1809,10 @@ impl DeepSeekV4Attention {
                         )?;
                     operators
                         .cuda_mut()?
-                        .prefill_topk_indices_from_device_into(
-                            Some(&arena.index_query),
-                            Some(&arena.index_weights),
-                            Some(indexer_kv),
-                            &arena.empty_query,
-                            &arena.empty_weights,
-                            &arena.empty_kv,
+                        .prefill_topk_indices_paged_indexer_into(
+                            &arena.index_query,
+                            &arena.index_weights,
+                            self.layer,
                             tokens,
                             cfg.window_size,
                             window_cols,
@@ -1810,27 +1829,21 @@ impl DeepSeekV4Attention {
             }
             window_cols + indexer_cols
         } else {
+            let mut topk = window_topk_indices_prefill(cfg.window_size, tokens);
+            let (compressed_topk, compressed_cols) =
+                compress_topk_indices_prefill(cfg.compress_ratio, tokens, compressed_offset);
+            if compressed_cols > 0 {
+                topk = concat_topk_rows(
+                    &topk,
+                    window_cols,
+                    &compressed_topk,
+                    compressed_cols,
+                    tokens,
+                )?;
+            }
             operators
                 .cuda_mut()?
-                .prefill_topk_indices_from_device_into(
-                    None,
-                    None,
-                    None,
-                    &arena.empty_query,
-                    &arena.empty_weights,
-                    &arena.empty_kv,
-                    tokens,
-                    cfg.window_size,
-                    window_cols,
-                    main_compressed_len,
-                    compressed_offset,
-                    cfg.compress_ratio,
-                    main_compressed_len,
-                    0,
-                    0,
-                    1.0,
-                    &mut arena.topk,
-                )?;
+                .write_topk_indices(&topk, &mut arena.topk)?;
             window_cols + main_compressed_len
         };
         record_attention_stage(
@@ -2015,7 +2028,11 @@ impl DeepSeekV4Attention {
         if cache.window.head_dim != cfg.head_dim || cache.window.window_size != cfg.window_size {
             return Err(Error::Model(format!(
                 "DeepSeek-V4 layer {} KV cache shape mismatch: cache window={} head_dim={}, expected window={} head_dim={}",
-                self.layer, cache.window.window_size, cache.window.head_dim, cfg.window_size, cfg.head_dim
+                self.layer,
+                cache.window.window_size,
+                cache.window.head_dim,
+                cfg.window_size,
+                cfg.head_dim
             )));
         }
         let compressed = self.compressed.as_ref().ok_or_else(|| {
@@ -2159,7 +2176,7 @@ impl DeepSeekV4Attention {
         position: usize,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
-        let mut arena = DeepSeekV4AttentionDecodeArena::new(self, 1, operators)?;
+        let mut arena = DeepSeekV4AttentionDecodeArena::new(self, 1, true, operators)?;
         self.decode_step_from_device_into(cache, hidden_dev, position, operators, &mut arena)?;
         Ok(arena.output)
     }
@@ -2199,60 +2216,56 @@ impl DeepSeekV4Attention {
             ))
         })?;
         let rope = cfg.rope_params();
-        self.decode_step_compressed_from_device_into(
+        let positions_i32 = decode_metadata_i32(&[position], "position")?;
+        operators
+            .cuda_mut()?
+            .ops
+            .overwrite_i32_prefix(&positions_i32, &mut arena.positions)?;
+        self.project_decode_rows_from_device_into(hidden_dev, position, operators, arena)?;
+        self.decode_step_compressed_projected_continuation(
             cache, hidden_dev, position, operators, cfg, compressed, rope, arena,
-        )
+        )?;
+        self.project_decode_context_rows_from_device_into(position, operators, arena)
     }
 
-    /// CUDA fully device-resident compressed attention path.
-    ///
-    /// Accepts the hidden state as a `CudaF32Buffer` and returns the output as a
-    /// `CudaF32Buffer`, eliminating
-    /// the D2H+H2D round-trip at the call boundary (4 syncs → 0 in steady state).
-    ///
-    /// Remaining host syncs are now limited to compressor CPU-shadow state
-    /// maintenance and MoE/router bookkeeping outside this attention function.
-    /// q-latent/hidden downloads and top-k uploads have been removed from this
-    /// decode path; indexer compressed KV is served from a CUDA-side cache.
     #[cfg(feature = "cuda")]
-    #[allow(clippy::too_many_arguments)]
-    fn decode_step_compressed_from_device_into(
+    fn project_decode_rows_from_device_into(
         &self,
-        cache: &mut DeepSeekV4AttentionCache,
         hidden_dev: &ferrule_cuda::context::CudaF32Buffer,
-        position: usize,
+        max_position: usize,
         operators: &mut DeepSeekV4OperatorContext,
-        cfg: DeepSeekV4AttentionConfig,
-        compressed: &DeepSeekV4CompressedAttentionPayload,
-        rope: DeepSeekV4RopeParams,
         arena: &mut DeepSeekV4AttentionDecodeArena,
     ) -> Result<()> {
+        let cfg = self.config;
+        let rows = arena.positions.len();
+        if rows == 0 || hidden_dev.len() != rows * cfg.hidden_size {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 layer {} packed attention input mismatch: rows={rows} expected={} got={}",
+                self.layer,
+                rows * cfg.hidden_size,
+                hidden_dev.len()
+            )));
+        }
+        let required_positions = max_position
+            .checked_add(1)
+            .ok_or_else(|| Error::Model("DeepSeek-V4 packed RoPE position overflow".into()))?;
         let layer_tag = format!("attn_L{}", self.layer);
         let rope_name = format!("rope_{layer_tag}");
-        operators.record_attention_call(self.layer, 1);
-        let rope_positions = required_rope_positions(position, 1, 1)?;
+        operators.record_attention_call(self.layer, rows);
         operators.cuda_mut()?.ensure_rope_tables_with_params(
             &rope_name,
             cfg.rope_head_dim,
             cfg.rope_params(),
-            rope_positions,
+            required_positions,
         )?;
-        // Activation-quantized linears mutate their input, so refresh caller-owned
-        // scratch with D2D copies before each projection.
-        operators
-            .cuda_mut()?
-            .ops
-            .copy_f32_into_slot(hidden_dev, &mut arena.hidden_a, 0)?;
-        operators
-            .cuda_mut()?
-            .ops
-            .copy_f32_into_slot(hidden_dev, &mut arena.hidden_b, 0)?;
 
         let stage_start = Instant::now();
-        operators.cuda_mut()?.linear_matvec_from_device_into(
+        operators.cuda_mut()?.linear_rows_from_device_into(
             &self.payload.query_a,
-            &mut arena.hidden_a,
+            hidden_dev,
+            rows,
             &mut arena.q_latent,
+            &mut arena.linear_workspace,
         )?;
         record_attention_stage(
             operators,
@@ -2266,11 +2279,12 @@ impl DeepSeekV4Attention {
             &arena.q_latent,
             cfg.q_lora_rank,
         )?;
-        let q_norm_name = format!("q_norm_{layer_tag}");
+
         let stage_start = Instant::now();
-        operators.cuda_mut()?.rms_norm_device_cached_into(
-            &q_norm_name,
+        operators.cuda_mut()?.rms_norm_rows_device_cached_into(
+            &format!("q_norm_{layer_tag}"),
             &arena.q_latent,
+            rows,
             &self.payload.query_norm,
             cfg.norm_eps,
             &mut arena.q_norm,
@@ -2287,17 +2301,24 @@ impl DeepSeekV4Attention {
             &arena.q_norm,
             cfg.q_lora_rank,
         )?;
-        if compressed.indexer.is_some() {
+        if self
+            .compressed
+            .as_ref()
+            .is_some_and(|value| value.indexer.is_some())
+        {
             operators
                 .cuda_mut()?
                 .ops
                 .copy_f32_into_slot(&arena.q_norm, &mut arena.q_indexer, 0)?;
         }
+
         let stage_start = Instant::now();
-        operators.cuda_mut()?.linear_matvec_from_device_into(
+        operators.cuda_mut()?.linear_rows_from_device_into(
             &self.payload.query_b,
-            &mut arena.q_norm,
+            &arena.q_norm,
+            rows,
             &mut arena.query_raw,
+            &mut arena.linear_workspace,
         )?;
         record_attention_stage(
             operators,
@@ -2308,7 +2329,7 @@ impl DeepSeekV4Attention {
         let stage_start = Instant::now();
         operators.cuda_mut()?.rms_norm_heads_from_device_into(
             &arena.query_raw,
-            cfg.num_heads,
+            rows * cfg.num_heads,
             cfg.head_dim,
             cfg.norm_eps,
             &mut arena.query,
@@ -2320,10 +2341,11 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
         let stage_start = Instant::now();
-        operators.cuda_mut()?.rope_tail_from_device(
+        operators.cuda_mut()?.rope_tail_rows_indexed_from_device(
             &rope_name,
             &mut arena.query,
-            position as u32,
+            &arena.positions,
+            max_position,
             cfg.num_heads as u32,
             cfg.head_dim as u32,
             cfg.rope_head_dim as u32,
@@ -2343,10 +2365,12 @@ impl DeepSeekV4Attention {
         )?;
 
         let stage_start = Instant::now();
-        operators.cuda_mut()?.linear_matvec_from_device_into(
+        operators.cuda_mut()?.linear_rows_from_device_into(
             &self.payload.key_value,
-            &mut arena.hidden_b,
+            hidden_dev,
+            rows,
             &mut arena.kv_raw,
+            &mut arena.linear_workspace,
         )?;
         record_attention_stage(
             operators,
@@ -2354,11 +2378,11 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvProj,
             stage_start,
         )?;
-        let kv_norm_name = format!("kv_norm_{layer_tag}");
         let stage_start = Instant::now();
-        operators.cuda_mut()?.rms_norm_device_cached_into(
-            &kv_norm_name,
+        operators.cuda_mut()?.rms_norm_rows_device_cached_into(
+            &format!("kv_norm_{layer_tag}"),
             &arena.kv_raw,
+            rows,
             &self.payload.key_value_norm,
             cfg.norm_eps,
             &mut arena.kv,
@@ -2369,12 +2393,12 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvNorm,
             stage_start,
         )?;
-        // Device-side rotary + QAT: no D2H needed.
         let stage_start = Instant::now();
-        operators.cuda_mut()?.rope_tail_from_device(
+        operators.cuda_mut()?.rope_tail_rows_indexed_from_device(
             &rope_name,
             &mut arena.kv,
-            position as u32,
+            &arena.positions,
+            max_position,
             1,
             cfg.head_dim as u32,
             cfg.rope_head_dim as u32,
@@ -2394,34 +2418,608 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvRopeQuant,
             stage_start,
         )?;
-        operators.capture_parity_checkpoint_rows(self.layer, "attn_kv", &arena.kv, cfg.head_dim)?;
-        // Append to device combined KV cache (no D2H/H2D round-trip).
+        operators.capture_parity_checkpoint_rows(self.layer, "attn_kv", &arena.kv, cfg.head_dim)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn project_decode_context_rows_from_device_into(
+        &self,
+        max_position: usize,
+        operators: &mut DeepSeekV4OperatorContext,
+        arena: &mut DeepSeekV4AttentionDecodeArena,
+    ) -> Result<()> {
+        let cfg = self.config;
+        let rows = arena.positions.len();
+        let rope_name = format!("rope_attn_L{}", self.layer);
         let stage_start = Instant::now();
-        let required_compressed_capacity =
-            cache.compressed_len().checked_add(1).ok_or_else(|| {
-                Error::Model(format!(
-                    "DeepSeek-V4 layer {} compressed KV capacity overflow",
-                    self.layer
-                ))
-            })?;
-        {
-            let compressed_values = &cache.compressed;
-            let (state, window_values, head_dim) = cache.window.cuda_state_and_host_values();
-            operators.cuda_mut()?.ensure_combined_kv_cache(
-                state,
+        operators.cuda_mut()?.rope_tail_rows_indexed_from_device(
+            &rope_name,
+            &mut arena.context,
+            &arena.positions,
+            max_position,
+            cfg.num_heads as u32,
+            cfg.head_dim as u32,
+            cfg.rope_head_dim as u32,
+            true,
+        )?;
+        record_attention_stage(
+            operators,
+            self.layer,
+            DeepSeekV4AttentionProfileStage::ContextRope,
+            stage_start,
+        )?;
+        operators.capture_parity_checkpoint_last_row(
+            self.layer,
+            "attn_context_rope",
+            &arena.context,
+            cfg.q_full_dim(),
+        )?;
+        let stage_start = Instant::now();
+        operators
+            .cuda_mut()?
+            .grouped_output_a_rows_from_device_into(
+                &self.payload.output_a,
+                &arena.context,
+                rows,
+                cfg,
                 self.layer,
-                window_values,
-                head_dim,
-                compressed_values,
-                required_compressed_capacity,
+                &mut arena.latent,
+            )?;
+        record_attention_stage(
+            operators,
+            self.layer,
+            DeepSeekV4AttentionProfileStage::OutputA,
+            stage_start,
+        )?;
+        operators.capture_parity_checkpoint_last_row(
+            self.layer,
+            "attn_output_a",
+            &arena.latent,
+            self.payload.output_b.format.in_features(),
+        )?;
+        let stage_start = Instant::now();
+        operators.cuda_mut()?.linear_rows_from_device_into(
+            &self.payload.output_b,
+            &arena.latent,
+            rows,
+            &mut arena.output,
+            &mut arena.linear_workspace,
+        )?;
+        record_attention_stage(
+            operators,
+            self.layer,
+            DeepSeekV4AttentionProfileStage::OutputB,
+            stage_start,
+        )?;
+        operators.capture_parity_checkpoint_last_row(
+            self.layer,
+            "attn_output",
+            &arena.output,
+            cfg.hidden_size,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn packed_rows_from_device_into(
+        &self,
+        caches: &mut [&mut DeepSeekV4AttentionCache],
+        hidden_dev: &ferrule_cuda::context::CudaF32Buffer,
+        positions: &[usize],
+        row_to_sequence: &[usize],
+        sequence_major_rows: &[usize],
+        sequence_prefill: &[bool],
+        paged_bindings: &[DeepSeekV4PagedKvBinding],
+        operators: &mut DeepSeekV4OperatorContext,
+        arena: &mut DeepSeekV4AttentionDecodeArena,
+        transition: &mut DeepSeekV4AttentionRowsTransitionArena,
+    ) -> Result<()> {
+        let rows = positions.len();
+        if rows == 0
+            || row_to_sequence.len() != rows
+            || sequence_major_rows.len() != rows
+            || caches.len() != paged_bindings.len()
+            || sequence_prefill.len() != caches.len()
+            || row_to_sequence
+                .iter()
+                .any(|sequence| *sequence >= caches.len())
+        {
+            return Err(Error::Model(
+                "DeepSeek-V4 packed attention row/sequence metadata is inconsistent".into(),
+            ));
+        }
+        let visible_lens = positions
+            .iter()
+            .map(|position| {
+                position
+                    .checked_add(1)
+                    .and_then(|length| i32::try_from(length).ok())
+                    .ok_or_else(|| {
+                        Error::Model("packed attention visible length exceeds i32 ABI".into())
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if self.config.compress_ratio == 0 {
+            let cfg = self.config;
+            let max_position = positions
+                .iter()
+                .copied()
+                .max()
+                .ok_or_else(|| Error::Model("packed decode positions are empty".into()))?;
+            let positions_i32 = decode_metadata_i32(positions, "position")?;
+            {
+                let ops = &operators.cuda_mut()?.ops;
+                ops.overwrite_i32_prefix(&positions_i32, &mut arena.positions)?;
+                ops.overwrite_i32_prefix(&visible_lens, &mut arena.visible_lens)?;
+            }
+            self.project_decode_rows_from_device_into(hidden_dev, max_position, operators, arena)?;
+            let zero_kv = vec![0.0f32; cfg.head_dim];
+            for &row in sequence_major_rows {
+                let sequence = row_to_sequence[row];
+                caches[sequence].window.append(positions[row], &zero_kv)?;
+            }
+            operators.cuda_mut()?.paged_scatter_rows_from_device(
+                0,
+                self.layer,
+                &arena.kv,
+                &arena.positions,
+                None,
+                cfg.head_dim,
+            )?;
+            let attention_topk = positions
+                .iter()
+                .map(|position| position.saturating_add(1).min(cfg.window_size))
+                .max()
+                .ok_or_else(|| Error::Model("packed attention positions are empty".into()))?;
+            let stage_start = Instant::now();
+            operators
+                .cuda_mut()?
+                .paged_window_sparse_attention_rows_into(
+                    &arena.query,
+                    positions,
+                    &arena.visible_lens,
+                    &self.payload.attention_sink,
+                    rows,
+                    self.layer,
+                    SparseAttentionSpec {
+                        heads: cfg.num_heads,
+                        head_dim: cfg.head_dim,
+                        topk: attention_topk,
+                        softmax_scale: (cfg.head_dim as f32).powf(-0.5),
+                        has_attention_sink: !self.payload.attention_sink.is_empty(),
+                    },
+                    &mut arena.context,
+                )?;
+            record_attention_stage(
+                operators,
+                self.layer,
+                DeepSeekV4AttentionProfileStage::SparseAttention,
+                stage_start,
+            )?;
+            return self.project_decode_context_rows_from_device_into(
+                max_position,
+                operators,
+                arena,
+            );
+        }
+
+        let compressed = self.compressed.as_ref().ok_or_else(|| {
+            Error::Model(format!(
+                "DeepSeek-V4 layer {} has compressed config without payload",
+                self.layer
+            ))
+        })?;
+        let cfg = self.config;
+        let rope = cfg.rope_params();
+        let max_position = positions
+            .iter()
+            .copied()
+            .max()
+            .ok_or_else(|| Error::Model("packed decode positions are empty".into()))?;
+        let positions_i32 = decode_metadata_i32(positions, "position")?;
+        {
+            let ops = &operators.cuda_mut()?.ops;
+            ops.overwrite_i32_prefix(&positions_i32, &mut arena.positions)?;
+            ops.overwrite_i32_prefix(&visible_lens, &mut arena.visible_lens)?;
+        }
+        self.project_decode_rows_from_device_into(hidden_dev, max_position, operators, arena)?;
+        if sequence_prefill.iter().any(|prefill| *prefill) {
+            if let Some(indexer) = compressed.indexer.as_ref() {
+                let projected = arena
+                    .indexer_compressor
+                    .as_mut()
+                    .expect("indexer compressor arena exists");
+                operators.cuda_mut()?.linear_rows_from_device_into(
+                    &indexer.compressor.wkv,
+                    hidden_dev,
+                    rows,
+                    &mut projected.kv,
+                    &mut arena.linear_workspace,
+                )?;
+                operators.cuda_mut()?.linear_rows_from_device_into(
+                    &indexer.compressor.wgate,
+                    hidden_dev,
+                    rows,
+                    &mut projected.score,
+                    &mut arena.linear_workspace,
+                )?;
+            }
+            let projected = arena
+                .main_compressor
+                .as_mut()
+                .expect("main compressor arena exists");
+            operators.cuda_mut()?.linear_rows_from_device_into(
+                &compressed.compressor.wkv,
+                hidden_dev,
+                rows,
+                &mut projected.kv,
+                &mut arena.linear_workspace,
+            )?;
+            operators.cuda_mut()?.linear_rows_from_device_into(
+                &compressed.compressor.wgate,
+                hidden_dev,
+                rows,
+                &mut projected.score,
+                &mut arena.linear_workspace,
             )?;
         }
-        operators.cuda_mut()?.combined_kv_append_window_device(
-            cache.window.cuda_state_mut(),
+        (|| -> Result<()> {
+            let zero_kv = vec![0.0f32; cfg.head_dim];
+            operators.cuda_mut()?.paged_scatter_rows_from_device(
+                0,
+                self.layer,
+                &arena.kv,
+                &arena.positions,
+                None,
+                cfg.head_dim,
+            )?;
+
+            let mut main_positions = vec![0i32; rows];
+            let mut main_mask = vec![0i32; rows];
+            let mut indexer_positions = vec![0i32; rows];
+            let mut indexer_mask = vec![0i32; rows];
+            let mut window_lens = vec![0usize; rows];
+            let mut compressed_lens = vec![0usize; rows];
+            for &row in sequence_major_rows {
+                let sequence = row_to_sequence[row];
+                let cache = &mut caches[sequence];
+                cache.window.append(positions[row], &zero_kv)?;
+                operators.cuda_mut()?.ops.copy_f32_range(
+                    hidden_dev,
+                    row * cfg.hidden_size,
+                    &mut transition.input,
+                    0,
+                    cfg.hidden_size,
+                )?;
+
+                if let Some(indexer) = compressed.indexer.as_ref() {
+                    let new_indexer_kv = {
+                        let (compressor_state, window) =
+                            (&mut cache.indexer_compressor, &mut cache.window);
+                        let state = compressor_state.as_mut().ok_or_else(|| {
+                            Error::Model(format!(
+                                "DeepSeek-V4 layer {} missing indexer compressor state",
+                                self.layer
+                            ))
+                        })?;
+                        let scratch = transition.indexer_compressor.as_mut().ok_or_else(|| {
+                            Error::Internal(format!(
+                                "DeepSeek-V4 layer {} missing indexer compressor row arena",
+                                self.layer
+                            ))
+                        })?;
+                        let cuda = window.cuda_state_mut();
+                        if sequence_prefill[sequence] {
+                            let projected = arena
+                                .indexer_compressor
+                                .as_ref()
+                                .expect("indexer compressor arena exists");
+                            state.append_projected_step_from_device_into(
+                                &indexer.compressor,
+                                &projected.kv,
+                                &projected.score,
+                                row,
+                                positions[row],
+                                cfg.rope_head_dim,
+                                rope,
+                                &format!("rope_indexer_compress_L{}", self.layer),
+                                &format!("indexer_compress_norm_L{}", self.layer),
+                                &mut cuda.indexer_compressor_recurrent,
+                                &mut cuda.indexer_compressor_needs_reset,
+                                operators,
+                                scratch,
+                            )?
+                        } else {
+                            state.append_step_from_device_into(
+                                &indexer.compressor,
+                                &transition.input,
+                                positions[row],
+                                cfg.rope_head_dim,
+                                rope,
+                                &format!("rope_indexer_compress_L{}", self.layer),
+                                &format!("indexer_compress_norm_L{}", self.layer),
+                                &mut cuda.indexer_compressor_recurrent,
+                                &mut cuda.indexer_compressor_needs_reset,
+                                operators,
+                                scratch,
+                            )?
+                        }
+                    };
+                    operators.fail_compressor_transition_if_armed(true)?;
+                    if new_indexer_kv {
+                        let index = cache.indexer_compressed_len(cfg.index_head_dim);
+                        cache
+                            .indexer_compressed
+                            .resize(cache.indexer_compressed.len() + cfg.index_head_dim, 0.0);
+                        indexer_positions[row] = i32::try_from(index).map_err(|_| {
+                            Error::Model("packed indexer position exceeds i32 ABI".into())
+                        })?;
+                        indexer_mask[row] = 1;
+                        operators.cuda_mut()?.ops.copy_f32_range(
+                            &transition
+                                .indexer_compressor
+                                .as_ref()
+                                .expect("indexer compressor row arena exists")
+                                .normalized,
+                            0,
+                            &mut arena
+                                .indexer_compressor
+                                .as_mut()
+                                .expect("indexer compressor arena exists")
+                                .normalized,
+                            row * cfg.index_head_dim,
+                            cfg.index_head_dim,
+                        )?;
+                    }
+                }
+
+                let new_main_kv = {
+                    let (compressor_state, window) =
+                        (&mut cache.main_compressor, &mut cache.window);
+                    let state = compressor_state.as_mut().ok_or_else(|| {
+                        Error::Model(format!(
+                            "DeepSeek-V4 layer {} missing main compressor state",
+                            self.layer
+                        ))
+                    })?;
+                    let scratch = transition.main_compressor.as_mut().ok_or_else(|| {
+                        Error::Internal(format!(
+                            "DeepSeek-V4 layer {} missing main compressor row arena",
+                            self.layer
+                        ))
+                    })?;
+                    let cuda = window.cuda_state_mut();
+                    if sequence_prefill[sequence] {
+                        let projected = arena
+                            .main_compressor
+                            .as_ref()
+                            .expect("main compressor arena exists");
+                        state.append_projected_step_from_device_into(
+                            &compressed.compressor,
+                            &projected.kv,
+                            &projected.score,
+                            row,
+                            positions[row],
+                            cfg.rope_head_dim,
+                            rope,
+                            &format!("rope_main_compress_L{}", self.layer),
+                            &format!("main_compress_norm_L{}", self.layer),
+                            &mut cuda.main_compressor_recurrent,
+                            &mut cuda.main_compressor_needs_reset,
+                            operators,
+                            scratch,
+                        )?
+                    } else {
+                        state.append_step_from_device_into(
+                            &compressed.compressor,
+                            &transition.input,
+                            positions[row],
+                            cfg.rope_head_dim,
+                            rope,
+                            &format!("rope_main_compress_L{}", self.layer),
+                            &format!("main_compress_norm_L{}", self.layer),
+                            &mut cuda.main_compressor_recurrent,
+                            &mut cuda.main_compressor_needs_reset,
+                            operators,
+                            scratch,
+                        )?
+                    }
+                };
+                operators.fail_compressor_transition_if_armed(false)?;
+                if new_main_kv {
+                    let index = cache.compressed_len();
+                    cache
+                        .compressed
+                        .resize(cache.compressed.len() + cfg.head_dim, 0.0);
+                    main_positions[row] = i32::try_from(index).map_err(|_| {
+                        Error::Model("packed main compressed position exceeds i32 ABI".into())
+                    })?;
+                    main_mask[row] = 1;
+                    operators.cuda_mut()?.ops.copy_f32_range(
+                        &transition
+                            .main_compressor
+                            .as_ref()
+                            .expect("main compressor row arena exists")
+                            .normalized,
+                        0,
+                        &mut arena
+                            .main_compressor
+                            .as_mut()
+                            .expect("main compressor arena exists")
+                            .normalized,
+                        row * cfg.head_dim,
+                        cfg.head_dim,
+                    )?;
+                }
+                window_lens[row] = cache.window.len;
+                if compressed.indexer.is_some() {
+                    compressed_lens[row] = cache.indexer_compressed_len(cfg.index_head_dim);
+                }
+            }
+
+            {
+                let ops = &operators.cuda_mut()?.ops;
+                ops.overwrite_i32_prefix(&main_positions, &mut arena.main_positions)?;
+                ops.overwrite_i32_prefix(&main_mask, &mut arena.main_mask)?;
+                ops.overwrite_i32_prefix(&indexer_positions, &mut arena.indexer_positions)?;
+                ops.overwrite_i32_prefix(&indexer_mask, &mut arena.indexer_mask)?;
+            }
+            operators.cuda_mut()?.paged_scatter_rows_from_device(
+                1,
+                self.layer,
+                &arena
+                    .main_compressor
+                    .as_ref()
+                    .expect("main compressor arena exists")
+                    .normalized,
+                &arena.main_positions,
+                Some(&arena.main_mask),
+                cfg.head_dim,
+            )?;
+            if compressed.indexer.is_some() {
+                operators.cuda_mut()?.paged_scatter_rows_from_device(
+                    2,
+                    self.layer,
+                    &arena
+                        .indexer_compressor
+                        .as_ref()
+                        .expect("indexer compressor arena exists")
+                        .normalized,
+                    &arena.indexer_positions,
+                    Some(&arena.indexer_mask),
+                    cfg.index_head_dim,
+                )?;
+            }
+
+            if let Some(indexer) = compressed.indexer.as_ref() {
+                operators.cuda_mut()?.linear_rows_from_device_into(
+                    &indexer.wq_b,
+                    &arena.q_indexer,
+                    rows,
+                    &mut arena.index_query,
+                    &mut arena.linear_workspace,
+                )?;
+                let index_rope_dim = cfg.rope_head_dim.min(cfg.index_head_dim);
+                let index_rope_name = format!("rope_indexer_query_L{}", self.layer);
+                let required_positions = positions
+                    .iter()
+                    .copied()
+                    .max()
+                    .and_then(|position| position.checked_add(1))
+                    .ok_or_else(|| Error::Model("packed indexer RoPE position overflow".into()))?;
+                operators.cuda_mut()?.ensure_rope_tables_with_params(
+                    &index_rope_name,
+                    index_rope_dim,
+                    cfg.rope_params(),
+                    required_positions,
+                )?;
+                operators.cuda_mut()?.rope_tail_rows_indexed_from_device(
+                    &index_rope_name,
+                    &mut arena.index_query,
+                    &arena.positions,
+                    max_position,
+                    cfg.index_n_heads as u32,
+                    cfg.index_head_dim as u32,
+                    index_rope_dim as u32,
+                    false,
+                )?;
+                operators
+                    .cuda_mut()?
+                    .ops
+                    .fp4_hadamard_qat_quantize_buffer_in_place(
+                        &mut arena.index_query,
+                        cfg.index_head_dim,
+                    )?;
+                operators.cuda_mut()?.linear_rows_from_device_into(
+                    &indexer.weights_proj,
+                    hidden_dev,
+                    rows,
+                    &mut arena.index_weights,
+                    &mut arena.linear_workspace,
+                )?;
+            }
+            let window_lens_i32 = decode_metadata_i32(&window_lens, "window length")?;
+            let compressed_lens_i32 = decode_metadata_i32(&compressed_lens, "compressed length")?;
+            {
+                let ops = &operators.cuda_mut()?.ops;
+                ops.overwrite_i32_prefix(&window_lens_i32, &mut arena.window_lens)?;
+                ops.overwrite_i32_prefix(&compressed_lens_i32, &mut arena.compressed_lens)?;
+            }
+            let weight_scale =
+                (cfg.index_head_dim as f32).powf(-0.5) * (cfg.index_n_heads as f32).powf(-0.5);
+            operators
+                .cuda_mut()?
+                .decode_topk_indices_paged_indexer_rows_into(
+                    &arena.index_query,
+                    &arena.index_weights,
+                    &arena.positions,
+                    &arena.window_lens,
+                    &arena.compressed_lens,
+                    self.layer,
+                    cfg.window_size,
+                    cfg.index_topk,
+                    cfg.index_n_heads,
+                    cfg.index_head_dim,
+                    weight_scale,
+                    &mut arena.topk,
+                    &mut arena.topk_selectors,
+                )?;
+            operators
+                .cuda_mut()?
+                .dual_plane_paged_sparse_attention_rows_into(
+                    &arena.query,
+                    &arena.topk,
+                    &arena.topk_selectors,
+                    &arena.visible_lens,
+                    &self.payload.attention_sink,
+                    rows,
+                    self.layer,
+                    cfg.sparse_spec_with_topk(cfg.window_size + cfg.index_topk),
+                    &mut arena.context,
+                )?;
+            operators.capture_parity_checkpoint_last_row(
+                self.layer,
+                "attn_context",
+                &arena.context,
+                cfg.q_full_dim(),
+            )?;
+            Ok(())
+        })()?;
+        self.project_decode_context_rows_from_device_into(max_position, operators, arena)
+    }
+
+    /// CUDA fully device-resident compressed attention path.
+    ///
+    /// Accepts the hidden state as a `CudaF32Buffer` and returns the output as a
+    /// `CudaF32Buffer`, eliminating
+    /// the D2H+H2D round-trip at the call boundary (4 syncs → 0 in steady state).
+    ///
+    /// Remaining host syncs are now limited to compressor CPU-shadow state
+    /// maintenance and MoE/router bookkeeping outside this attention function.
+    /// q-latent/hidden downloads and top-k uploads have been removed from this
+    /// decode path; indexer compressed KV is served from the runtime page pool.
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    fn decode_step_compressed_projected_continuation(
+        &self,
+        cache: &mut DeepSeekV4AttentionCache,
+        hidden_dev: &ferrule_cuda::context::CudaF32Buffer,
+        position: usize,
+        operators: &mut DeepSeekV4OperatorContext,
+        cfg: DeepSeekV4AttentionConfig,
+        compressed: &DeepSeekV4CompressedAttentionPayload,
+        rope: DeepSeekV4RopeParams,
+        arena: &mut DeepSeekV4AttentionDecodeArena,
+    ) -> Result<()> {
+        let rope_positions = required_rope_positions(position, 1, 1)?;
+        // Append to device combined KV cache (no D2H/H2D round-trip).
+        let stage_start = Instant::now();
+        operators.cuda_mut()?.paged_write_rows(
+            0,
             self.layer,
             &arena.kv,
             position,
-            cfg.window_size,
+            1,
             cfg.head_dim,
         )?;
         // Still need host-side cache.window.append for topk_indices,
@@ -2437,7 +3035,8 @@ impl DeepSeekV4Attention {
         if let Some(indexer) = compressed.indexer.as_ref() {
             let stage_start = Instant::now();
             let new_indexer_kv = {
-                let state = cache.indexer_compressor.as_mut().ok_or_else(|| {
+                let (compressor_state, window) = (&mut cache.indexer_compressor, &mut cache.window);
+                let state = compressor_state.as_mut().ok_or_else(|| {
                     Error::Model(format!(
                         "DeepSeek-V4 layer {} missing indexer compressor state",
                         self.layer
@@ -2449,6 +3048,7 @@ impl DeepSeekV4Attention {
                         self.layer
                     ))
                 })?;
+                let cuda = window.cuda_state_mut();
                 state.append_step_from_device_into(
                     &indexer.compressor,
                     hidden_dev,
@@ -2457,6 +3057,8 @@ impl DeepSeekV4Attention {
                     rope,
                     &format!("rope_indexer_compress_L{}", self.layer),
                     &format!("indexer_compress_norm_L{}", self.layer),
+                    &mut cuda.indexer_compressor_recurrent,
+                    &mut cuda.indexer_compressor_needs_reset,
                     operators,
                     scratch,
                 )?
@@ -2468,27 +3070,21 @@ impl DeepSeekV4Attention {
                 stage_start,
             )?;
             operators.fail_compressor_transition_if_armed(true)?;
-            if let Some(value) = new_indexer_kv {
+            if new_indexer_kv {
                 let compressed_index = cache.indexer_compressed_len(cfg.index_head_dim);
-                operators.capture_parity_checkpoint_host_rows(
+                cache
+                    .indexer_compressed
+                    .resize(cache.indexer_compressed.len() + cfg.index_head_dim, 0.0);
+                operators.cuda_mut()?.paged_write_rows(
+                    2,
                     self.layer,
-                    "attn_indexer_compressed",
-                    &value,
-                    cfg.index_head_dim,
-                )?;
-                cache.append_indexer_compressed(&value, cfg.index_head_dim)?;
-                let indexer_compressed_len = cache.indexer_compressed_len(cfg.index_head_dim);
-                operators.cuda_mut()?.ensure_indexer_kv_cache(
-                    cache.window.cuda_state_mut(),
-                    self.layer,
-                    indexer_compressed_len,
-                    cfg.index_head_dim,
-                )?;
-                operators.cuda_mut()?.indexer_kv_append_host(
-                    cache.window.cuda_state_mut(),
-                    self.layer,
-                    &value,
+                    &arena
+                        .indexer_compressor
+                        .as_ref()
+                        .expect("indexer compressor arena exists")
+                        .normalized,
                     compressed_index,
+                    1,
                     cfg.index_head_dim,
                 )?;
             }
@@ -2496,7 +3092,8 @@ impl DeepSeekV4Attention {
 
         let stage_start = Instant::now();
         let new_main_kv = {
-            let state = cache.main_compressor.as_mut().ok_or_else(|| {
+            let (compressor_state, window) = (&mut cache.main_compressor, &mut cache.window);
+            let state = compressor_state.as_mut().ok_or_else(|| {
                 Error::Model(format!(
                     "DeepSeek-V4 layer {} missing main compressor state",
                     self.layer
@@ -2508,6 +3105,7 @@ impl DeepSeekV4Attention {
                     self.layer
                 ))
             })?;
+            let cuda = window.cuda_state_mut();
             state.append_step_from_device_into(
                 &compressed.compressor,
                 hidden_dev,
@@ -2516,6 +3114,8 @@ impl DeepSeekV4Attention {
                 rope,
                 &format!("rope_main_compress_L{}", self.layer),
                 &format!("main_compress_norm_L{}", self.layer),
+                &mut cuda.main_compressor_recurrent,
+                &mut cuda.main_compressor_needs_reset,
                 operators,
                 scratch,
             )?
@@ -2527,29 +3127,27 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
         operators.fail_compressor_transition_if_armed(false)?;
-        if let Some(value) = new_main_kv.as_ref() {
-            operators.capture_parity_checkpoint_host_rows(
-                self.layer,
-                "attn_main_compressed",
-                value,
-                cfg.head_dim,
-            )?;
-            cache.append_compressed(value)?;
+        if new_main_kv {
+            cache
+                .compressed
+                .resize(cache.compressed.len() + cfg.head_dim, 0.0);
         }
 
         // Combined KV cache window append already done above (device path).
         // Only compressed KV append remains here.
-        if let Some(value) = new_main_kv.as_ref() {
+        if new_main_kv {
             let stage_start = Instant::now();
-            // The pre-compressor ensure above reserved old_len + 1 before host
-            // state advanced, avoiding an allocation on this committed path.
             let compressed_index = cache.compressed_len().saturating_sub(1);
-            operators.cuda_mut()?.combined_kv_append_compressed_host(
-                cache.window.cuda_state_mut(),
+            operators.cuda_mut()?.paged_write_rows(
+                1,
                 self.layer,
-                value,
+                &arena
+                    .main_compressor
+                    .as_ref()
+                    .expect("main compressor arena exists")
+                    .normalized,
                 compressed_index,
-                cfg.window_size,
+                1,
                 cfg.head_dim,
             )?;
             record_attention_stage(
@@ -2566,24 +3164,10 @@ impl DeepSeekV4Attention {
             let compressed_len = cache.indexer_compressed_len(cfg.index_head_dim);
             let indexer_cols = cfg.index_topk.min(compressed_len);
             if indexer_cols == 0 {
-                operators.cuda_mut()?.decode_topk_indices_from_device_into(
-                    None,
-                    None,
-                    None,
-                    &arena.empty_query,
-                    &arena.empty_weights,
-                    &arena.empty_kv,
-                    position,
-                    window_len,
-                    cfg.window_size,
-                    0,
-                    cfg.window_size,
-                    0,
-                    0,
-                    0,
-                    1.0,
-                    &mut arena.topk,
-                )?;
+                let topk = cache.window.topk_indices(position, cfg.window_size);
+                operators
+                    .cuda_mut()?
+                    .write_topk_indices(&topk, &mut arena.topk)?;
                 cfg.window_size
             } else {
                 operators.cuda_mut()?.linear_matvec_from_device_into(
@@ -2604,12 +3188,6 @@ impl DeepSeekV4Attention {
                     cfg.rope_params(),
                     rope_positions,
                 )?;
-                operators.cuda_mut()?.ensure_indexer_kv_cache(
-                    cache.window.cuda_state_mut(),
-                    self.layer,
-                    compressed_len,
-                    cfg.index_head_dim,
-                )?;
                 sync_attention_profile_checkpoint(
                     operators,
                     self.layer,
@@ -2629,8 +3207,7 @@ impl DeepSeekV4Attention {
                 if dsv4_fused_indexer_decode_topk_supported(operators, cfg, index_rope_dim) {
                     operators
                         .cuda_mut()?
-                        .decode_topk_indices_fused_index_query_from_indexer_cache_into(
-                            cache.window.cuda_state(),
+                        .decode_topk_indices_fused_index_query_paged_indexer_into(
                             &arena.index_query,
                             &arena.index_weights,
                             self.layer,
@@ -2666,13 +3243,9 @@ impl DeepSeekV4Attention {
                         )?;
                     operators
                         .cuda_mut()?
-                        .decode_topk_indices_from_indexer_cache_into(
-                            cache.window.cuda_state(),
+                        .decode_topk_indices_from_paged_indexer_into(
                             &arena.index_query,
                             &arena.index_weights,
-                            &arena.empty_query,
-                            &arena.empty_weights,
-                            &arena.empty_kv,
                             self.layer,
                             position,
                             window_len,
@@ -2690,24 +3263,11 @@ impl DeepSeekV4Attention {
             }
         } else {
             let compressed_len = cache.compressed_len();
-            operators.cuda_mut()?.decode_topk_indices_from_device_into(
-                None,
-                None,
-                None,
-                &arena.empty_query,
-                &arena.empty_weights,
-                &arena.empty_kv,
-                position,
-                window_len,
-                cfg.window_size,
-                compressed_len,
-                cfg.window_size,
-                compressed_len,
-                0,
-                0,
-                1.0,
-                &mut arena.topk,
-            )?;
+            let mut topk = cache.window.topk_indices(position, cfg.window_size);
+            topk.extend((0..compressed_len).map(|index| (cfg.window_size + index) as isize));
+            operators
+                .cuda_mut()?
+                .write_topk_indices(&topk, &mut arena.topk)?;
             cfg.window_size + compressed_len
         };
         record_attention_stage(
@@ -2720,14 +3280,14 @@ impl DeepSeekV4Attention {
         let stage_start = Instant::now();
         operators
             .cuda_mut()?
-            .sparse_attention_with_combined_kv_topk_into(
-                cache.window.cuda_state(),
+            .sparse_attention_with_paged_kv_topk_into(
                 &arena.query,
                 self.layer,
+                position,
+                cfg.window_size,
                 &arena.topk,
                 &self.payload.attention_sink,
                 1,
-                cache.kv_len_for_attention(),
                 cfg.sparse_spec_with_topk(topk_len),
                 &mut arena.context,
             )?;
@@ -2742,69 +3302,6 @@ impl DeepSeekV4Attention {
             "attn_context",
             &arena.context,
             cfg.q_full_dim(),
-        )?;
-        let stage_start = Instant::now();
-        operators.cuda_mut()?.rope_tail_from_device(
-            &rope_name,
-            &mut arena.context,
-            position as u32,
-            cfg.num_heads as u32,
-            cfg.head_dim as u32,
-            cfg.rope_head_dim as u32,
-            true,
-        )?;
-        record_attention_stage(
-            operators,
-            self.layer,
-            DeepSeekV4AttentionProfileStage::ContextRope,
-            stage_start,
-        )?;
-        operators.capture_parity_checkpoint_last_row(
-            self.layer,
-            "attn_context_rope",
-            &arena.context,
-            cfg.q_full_dim(),
-        )?;
-        let stage_start = Instant::now();
-        operators
-            .cuda_mut()?
-            .grouped_output_a_rows_from_device_into(
-                &self.payload.output_a,
-                &arena.context,
-                1,
-                cfg,
-                self.layer,
-                &mut arena.latent,
-            )?;
-        record_attention_stage(
-            operators,
-            self.layer,
-            DeepSeekV4AttentionProfileStage::OutputA,
-            stage_start,
-        )?;
-        operators.capture_parity_checkpoint_last_row(
-            self.layer,
-            "attn_output_a",
-            &arena.latent,
-            self.payload.output_b.format.in_features(),
-        )?;
-        let stage_start = Instant::now();
-        operators.cuda_mut()?.linear_matvec_from_device_into(
-            &self.payload.output_b,
-            &mut arena.latent,
-            &mut arena.output,
-        )?;
-        record_attention_stage(
-            operators,
-            self.layer,
-            DeepSeekV4AttentionProfileStage::OutputB,
-            stage_start,
-        )?;
-        operators.capture_parity_checkpoint_last_row(
-            self.layer,
-            "attn_output",
-            &arena.output,
-            cfg.hidden_size,
         )?;
         Ok(())
     }
@@ -3069,19 +3566,13 @@ impl DeepSeekV4Attention {
         )?;
         // Append to device KV cache.
         let stage_start = Instant::now();
-        operators.cuda_mut()?.ensure_kv_cache(
-            cache.cuda_state_mut(),
-            self.layer,
-            cfg.window_size,
-            cfg.head_dim,
-        )?;
-        operators.cuda_mut()?.kv_append_device(
-            cache.cuda_state_mut(),
+        operators.cuda_mut()?.paged_write_rows(
+            0,
             self.layer,
             &arena.kv,
             position,
+            1,
             cfg.head_dim,
-            cfg.window_size,
         )?;
         cache.record_device_append();
         record_attention_stage(
@@ -3106,7 +3597,6 @@ impl DeepSeekV4Attention {
         operators
             .cuda_mut()?
             .sparse_attention_topk_from_device_into(
-                cache.cuda_state(),
                 &arena.query,
                 self.layer,
                 position,
@@ -3327,6 +3817,21 @@ impl DeepSeekV4AttentionCache {
         }
     }
 
+    /// Fork continuation metadata for a runtime-shared paged prefix.
+    ///
+    /// Historical window/compressed/indexer values are deliberately absent: the
+    /// runtime page table is authoritative and the next packed batch rebuilds its
+    /// paged binding.
+    pub(crate) fn fork_paged_prefix_metadata(&self) -> Self {
+        Self {
+            window: DeepSeekV4WindowKvCache::new(self.window.window_size, self.window.head_dim),
+            compressed: Vec::new(),
+            indexer_compressed: Vec::new(),
+            main_compressor: self.main_compressor.clone(),
+            indexer_compressor: self.indexer_compressor.clone(),
+        }
+    }
+
     fn append_compressed(&mut self, value: &[f32]) -> Result<()> {
         if value.len() != self.window.head_dim {
             return Err(Error::Model(format!(
@@ -3392,60 +3897,6 @@ impl DeepSeekV4CompressorState {
         self.score_state.fill(f32::NEG_INFINITY);
     }
 
-    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
-    fn update_prefill_shadow_state(
-        &mut self,
-        payload: &DeepSeekV4CompressorPayload,
-        tokens: usize,
-        kv_rows: &[f32],
-        score_rows: &[f32],
-    ) -> Result<usize> {
-        if kv_rows.len() != tokens * self.out_dim || score_rows.len() != tokens * self.out_dim {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 compressor prefill rows shadow length mismatch: kv={} score={} expected {}x{}",
-                kv_rows.len(),
-                score_rows.len(),
-                tokens,
-                self.out_dim
-            )));
-        }
-        self.kv_state.fill(0.0);
-        self.score_state.fill(f32::NEG_INFINITY);
-
-        let remainder = tokens % self.ratio;
-        let cutoff = tokens - remainder;
-        let groups = cutoff / self.ratio;
-        let state_offset = if self.overlap { self.ratio } else { 0 };
-
-        if self.overlap && cutoff >= self.ratio {
-            for row in 0..self.ratio {
-                let src_token = cutoff - self.ratio + row;
-                let src = src_token * self.out_dim;
-                let dst = row * self.out_dim;
-                self.kv_state[dst..dst + self.out_dim]
-                    .copy_from_slice(&kv_rows[src..src + self.out_dim]);
-                for dim in 0..self.out_dim {
-                    self.score_state[dst + dim] =
-                        score_rows[src + dim] + payload.ape[row * payload.ape_cols + dim];
-                }
-            }
-        }
-        if remainder > 0 {
-            for row in 0..remainder {
-                let src_token = cutoff + row;
-                let src = src_token * self.out_dim;
-                let dst = (state_offset + row) * self.out_dim;
-                self.kv_state[dst..dst + self.out_dim]
-                    .copy_from_slice(&kv_rows[src..src + self.out_dim]);
-                for dim in 0..self.out_dim {
-                    self.score_state[dst + dim] =
-                        score_rows[src + dim] + payload.ape[row * payload.ape_cols + dim];
-                }
-            }
-        }
-        Ok(groups)
-    }
-
     fn prefill_start(
         &mut self,
         payload: &DeepSeekV4CompressorPayload,
@@ -3495,8 +3946,10 @@ impl DeepSeekV4CompressorState {
         norm_name: &str,
         arena: &mut DeepSeekV4CompressorDecodeArena,
         linear_workspace: &mut ferrule_cuda::context::CudaArtifactLinearWorkspace,
+        recurrent_state: &mut Option<ferrule_cuda::CudaCompressorRecurrentState>,
+        recurrent_needs_reset: &mut bool,
         operators: &mut DeepSeekV4OperatorContext,
-    ) -> Result<Vec<f32>> {
+    ) -> Result<usize> {
         if payload.compress_ratio != self.ratio
             || payload.head_dim != self.head_dim
             || payload.overlap != self.overlap
@@ -3533,16 +3986,22 @@ impl DeepSeekV4CompressorState {
             linear_workspace,
         )?;
 
-        // The decode append path still keeps a compact CPU shadow state. We only
-        // download projected rows for that shadow; compression itself stays on GPU.
-        let kv_rows = operators.cuda_mut()?.ops.download_f32_buffer(&arena.kv)?;
-        let score_rows = operators
-            .cuda_mut()?
-            .ops
-            .download_f32_buffer(&arena.score)?;
-        let groups = self.update_prefill_shadow_state(payload, tokens, &kv_rows, &score_rows)?;
+        let ape_name = format!("{norm_name}::recurrent_ape");
+        let groups = operators.cuda_mut()?.compressor_recurrent_seed_prefill(
+            recurrent_state,
+            recurrent_needs_reset,
+            &ape_name,
+            &arena.kv,
+            &arena.score,
+            &payload.ape,
+            tokens,
+            self.ratio,
+            self.head_dim,
+            self.out_dim,
+            self.overlap,
+        )?;
         if groups == 0 {
-            return Ok(Vec::new());
+            return Ok(0);
         }
 
         let ape_name = format!("{norm_name}::ape");
@@ -3602,10 +4061,7 @@ impl DeepSeekV4CompressorState {
                     effective_rope_dim,
                 )?;
         }
-        operators
-            .cuda_mut()?
-            .ops
-            .download_f32_buffer(&arena.normalized)
+        Ok(groups)
     }
 
     fn prefill_start_projected(
@@ -3759,9 +4215,11 @@ impl DeepSeekV4CompressorState {
         rope: DeepSeekV4RopeParams,
         rope_name: &str,
         norm_name: &str,
+        recurrent_state: &mut Option<ferrule_cuda::CudaCompressorRecurrentState>,
+        recurrent_needs_reset: &mut bool,
         operators: &mut DeepSeekV4OperatorContext,
         scratch: &mut DeepSeekV4CompressorDecodeArena,
-    ) -> Result<Option<Vec<f32>>> {
+    ) -> Result<bool> {
         self.validate_append_payload(payload)?;
         operators
             .cuda_mut()?
@@ -3781,25 +4239,157 @@ impl DeepSeekV4CompressorState {
             &mut scratch.score_input,
             &mut scratch.score,
         )?;
-        let kv = operators.cuda_mut()?.ops.download_f32_buffer(&scratch.kv)?;
-        let score = operators
-            .cuda_mut()?
-            .ops
-            .download_f32_buffer(&scratch.score)?;
-        if !self.append_projected_state(payload, kv, score, position)? {
-            return Ok(None);
-        }
-        let compressed = self.compress_current_window_device(
+        self.finish_projected_step_from_device_into(
             payload,
-            position + 1 - self.ratio,
+            position,
             rope_dim,
             rope,
             rope_name,
             norm_name,
+            recurrent_state,
+            recurrent_needs_reset,
             operators,
+            scratch,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    fn append_projected_step_from_device_into(
+        &mut self,
+        payload: &DeepSeekV4CompressorPayload,
+        projected_kv: &ferrule_cuda::context::CudaF32Buffer,
+        projected_score: &ferrule_cuda::context::CudaF32Buffer,
+        row: usize,
+        position: usize,
+        rope_dim: usize,
+        rope: DeepSeekV4RopeParams,
+        rope_name: &str,
+        norm_name: &str,
+        recurrent_state: &mut Option<ferrule_cuda::CudaCompressorRecurrentState>,
+        recurrent_needs_reset: &mut bool,
+        operators: &mut DeepSeekV4OperatorContext,
+        scratch: &mut DeepSeekV4CompressorDecodeArena,
+    ) -> Result<bool> {
+        self.validate_append_payload(payload)?;
+        let offset = row
+            .checked_mul(self.out_dim)
+            .ok_or_else(|| Error::Model("compressor projected row offset overflow".into()))?;
+        if projected_kv.len() < offset + self.out_dim
+            || projected_score.len() < offset + self.out_dim
+        {
+            return Err(Error::Model(
+                "compressor projected packed rows are too short".into(),
+            ));
+        }
+        operators.cuda_mut()?.ops.copy_f32_range(
+            projected_kv,
+            offset,
+            &mut scratch.kv,
+            0,
+            self.out_dim,
         )?;
-        self.advance_overlap_state();
-        Ok(Some(compressed))
+        operators.cuda_mut()?.ops.copy_f32_range(
+            projected_score,
+            offset,
+            &mut scratch.score,
+            0,
+            self.out_dim,
+        )?;
+        self.finish_projected_step_from_device_into(
+            payload,
+            position,
+            rope_dim,
+            rope,
+            rope_name,
+            norm_name,
+            recurrent_state,
+            recurrent_needs_reset,
+            operators,
+            scratch,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    fn finish_projected_step_from_device_into(
+        &mut self,
+        payload: &DeepSeekV4CompressorPayload,
+        position: usize,
+        rope_dim: usize,
+        rope: DeepSeekV4RopeParams,
+        rope_name: &str,
+        norm_name: &str,
+        recurrent_state: &mut Option<ferrule_cuda::CudaCompressorRecurrentState>,
+        recurrent_needs_reset: &mut bool,
+        operators: &mut DeepSeekV4OperatorContext,
+        scratch: &mut DeepSeekV4CompressorDecodeArena,
+    ) -> Result<bool> {
+        let ape_name = format!("{norm_name}::recurrent_ape");
+        let boundary = operators.cuda_mut()?.compressor_recurrent_append_into(
+            recurrent_state,
+            recurrent_needs_reset,
+            &ape_name,
+            &scratch.kv,
+            &scratch.score,
+            &payload.ape,
+            position,
+            self.ratio,
+            self.head_dim,
+            self.out_dim,
+            self.overlap,
+            &mut scratch.compressed,
+        )?;
+        if !boundary {
+            return Ok(false);
+        }
+        operators.cuda_mut()?.rms_norm_rows_device_cached_into(
+            norm_name,
+            &scratch.compressed,
+            1,
+            &payload.norm,
+            1e-6,
+            &mut scratch.normalized,
+        )?;
+        let compressed_position = position + 1 - self.ratio;
+        let effective_rope_dim = rope_dim.min(self.head_dim);
+        let rope_positions = required_rope_positions(compressed_position, self.ratio, 1)?;
+        operators.cuda_mut()?.ensure_rope_tables_with_params(
+            rope_name,
+            effective_rope_dim,
+            rope,
+            rope_positions,
+        )?;
+        operators.cuda_mut()?.rope_tail_rows_strided_from_device(
+            rope_name,
+            &mut scratch.normalized,
+            compressed_position as u32,
+            self.ratio as u32,
+            1,
+            1,
+            self.head_dim as u32,
+            effective_rope_dim as u32,
+            false,
+        )?;
+        if payload.rotate_for_indexer {
+            operators
+                .cuda_mut()?
+                .ops
+                .fp4_hadamard_qat_quantize_buffer_in_place(
+                    &mut scratch.normalized,
+                    self.head_dim,
+                )?;
+        } else {
+            operators
+                .cuda_mut()?
+                .ops
+                .fp8_attention_kv_qat_quantize_buffer_in_place(
+                    &mut scratch.normalized,
+                    self.head_dim,
+                    effective_rope_dim,
+                )?;
+        }
+        Ok(true)
     }
 
     fn validate_append_payload(&self, payload: &DeepSeekV4CompressorPayload) -> Result<()> {
@@ -3971,79 +4561,6 @@ impl DeepSeekV4CompressorState {
         )?;
         Ok(out)
     }
-
-    #[cfg(feature = "cuda")]
-    #[allow(clippy::too_many_arguments)]
-    fn compress_current_window_device(
-        &self,
-        payload: &DeepSeekV4CompressorPayload,
-        compressed_position: usize,
-        rope_dim: usize,
-        rope: DeepSeekV4RopeParams,
-        rope_name: &str,
-        norm_name: &str,
-        operators: &mut DeepSeekV4OperatorContext,
-    ) -> Result<Vec<f32>> {
-        let (rows, kv_rows, score_rows) = self.current_window_rows();
-        let kv_rows_dev = operators.cuda_mut()?.ops.upload_f32_buffer(&kv_rows)?;
-        let score_rows_dev = operators.cuda_mut()?.ops.upload_f32_buffer(&score_rows)?;
-        let zero_ape = vec![0.0f32; rows * self.head_dim];
-        let mut compressed = operators
-            .cuda_mut()?
-            .ops
-            .compressor_prefill_softmax_from_device(
-                &kv_rows_dev,
-                &score_rows_dev,
-                &zero_ape,
-                1,
-                rows,
-                self.head_dim,
-                self.head_dim,
-                false,
-            )?;
-        compressed = operators.cuda_mut()?.rms_norm_rows_device_cached(
-            norm_name,
-            &compressed,
-            1,
-            &payload.norm,
-            1e-6,
-        )?;
-        let effective_rope_dim = rope_dim.min(self.head_dim);
-        let rope_positions = required_rope_positions(compressed_position, self.ratio, 1)?;
-        operators.cuda_mut()?.ensure_rope_tables_with_params(
-            rope_name,
-            effective_rope_dim,
-            rope,
-            rope_positions,
-        )?;
-        operators.cuda_mut()?.rope_tail_rows_strided_from_device(
-            rope_name,
-            &mut compressed,
-            compressed_position as u32,
-            self.ratio as u32,
-            1,
-            1,
-            self.head_dim as u32,
-            effective_rope_dim as u32,
-            false,
-        )?;
-        if payload.rotate_for_indexer {
-            operators
-                .cuda_mut()?
-                .ops
-                .fp4_hadamard_qat_quantize_buffer_in_place(&mut compressed, self.head_dim)?;
-        } else {
-            operators
-                .cuda_mut()?
-                .ops
-                .fp8_attention_kv_qat_quantize_buffer_in_place(
-                    &mut compressed,
-                    self.head_dim,
-                    effective_rope_dim,
-                )?;
-        }
-        operators.cuda_mut()?.ops.download_f32_buffer(&compressed)
-    }
 }
 
 pub struct DeepSeekV4WindowKvCache {
@@ -4182,25 +4699,8 @@ impl DeepSeekV4WindowKvCache {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn cuda_state(&self) -> &DeepSeekV4CudaSequenceKvState {
-        &self.cuda
-    }
-
-    #[cfg(feature = "cuda")]
     pub(crate) fn cuda_state_mut(&mut self) -> &mut DeepSeekV4CudaSequenceKvState {
         &mut self.cuda
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(crate) fn replace_cuda_state(&mut self, state: DeepSeekV4CudaSequenceKvState) {
-        self.cuda = state;
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(crate) fn cuda_state_and_host_values(
-        &mut self,
-    ) -> (&mut DeepSeekV4CudaSequenceKvState, &[f32], usize) {
-        (&mut self.cuda, &self.values, self.head_dim)
     }
 }
 
@@ -4208,29 +4708,62 @@ impl DeepSeekV4WindowKvCache {
 mod tests {
     use super::*;
 
+    fn fork_test_config() -> DeepSeekV4AttentionConfig {
+        DeepSeekV4AttentionConfig {
+            hidden_size: 4,
+            num_heads: 1,
+            head_dim: 2,
+            q_lora_rank: 2,
+            rope_head_dim: 0,
+            o_groups: 1,
+            o_lora_rank: 2,
+            window_size: 4,
+            compress_ratio: 2,
+            norm_eps: 1e-6,
+            rope_theta: 10_000.0,
+            compress_rope_theta: 10_000.0,
+            original_seq_len: 16,
+            rope_factor: 1.0,
+            beta_fast: 32,
+            beta_slow: 1,
+            index_n_heads: 1,
+            index_head_dim: 2,
+            index_topk: 1,
+        }
+    }
+
+    #[test]
+    fn paged_prefix_fork_copies_recurrent_metadata_without_history() -> Result<()> {
+        let mut source = DeepSeekV4AttentionCache::new(fork_test_config());
+        source.window.append(0, &[1.0, 2.0])?;
+        source.compressed.extend_from_slice(&[3.0, 4.0]);
+        source.indexer_compressed.extend_from_slice(&[5.0, 6.0]);
+        source.main_compressor.as_mut().unwrap().kv_state[0] = 7.0;
+
+        let fork = source.fork_paged_prefix_metadata();
+        assert!(fork.window.is_empty());
+        assert!(fork.window.values_full().iter().all(|value| *value == 0.0));
+        assert!(fork.compressed.is_empty());
+        assert!(fork.indexer_compressed.is_empty());
+        assert_eq!(fork.main_compressor, source.main_compressor);
+        assert_eq!(
+            fork.main_compressor.as_ref().unwrap().kv_state[0],
+            7.0,
+            "compressor recurrent continuation must be retained"
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn window_kv_clone_copies_host_semantics_independently() -> Result<()> {
         let mut original = DeepSeekV4WindowKvCache::new(2, 2);
         original.append(0, &[1.0, 2.0])?;
-        #[cfg(feature = "cuda")]
-        {
-            original.cuda.kv_len = 1;
-            original.cuda.combined_kv_compressed_capacity = 32;
-            original.cuda.indexer_kv_capacity = 64;
-        }
 
         let mut cloned = original.clone();
         assert_eq!(cloned, original);
         #[cfg(feature = "cuda")]
-        {
-            assert!(cloned.cuda.kv_cache.is_none());
-            assert_eq!(cloned.cuda.kv_len, 0);
-            assert!(cloned.cuda.combined_kv_cache.is_none());
-            assert_eq!(cloned.cuda.combined_kv_compressed_capacity, 0);
-            assert!(cloned.cuda.indexer_kv_cache.is_none());
-            assert_eq!(cloned.cuda.indexer_kv_capacity, 0);
-            assert_eq!(cloned, original, "CUDA metadata is excluded from equality");
-        }
+        assert_eq!(cloned, original, "CUDA metadata is excluded from equality");
 
         cloned.append(1, &[3.0, 4.0])?;
         assert_ne!(cloned, original);

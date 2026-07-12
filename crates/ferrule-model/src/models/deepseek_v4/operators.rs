@@ -8,19 +8,19 @@ use ferrule_common::{Error, Result};
 use crate::artifact::binding::RouterArtifactPayload;
 use crate::artifact::linear::ArtifactLinearPayload;
 use crate::artifact::tensor::{ArtifactTensorReader, ArtifactTensorSlice};
-use crate::attention_backend::{sparse_attention_reference, SparseAttentionSpec};
+use crate::attention_backend::{SparseAttentionSpec, sparse_attention_reference};
 use crate::execution::ModelExecutionBackend;
 use crate::ffn::SwiGluFfnPayload;
 use crate::hyper_connection::{
-    hc_head_reference, hc_post_reference, hc_pre_reference, HyperConnectionConfig,
-    HyperConnectionHeadWeights, HyperConnectionPreOutput, HyperConnectionSplit,
-    HyperConnectionWeights,
+    HyperConnectionConfig, HyperConnectionHeadWeights, HyperConnectionPreOutput,
+    HyperConnectionSplit, HyperConnectionWeights, hc_head_reference, hc_post_reference,
+    hc_pre_reference,
 };
 use crate::moe::executor::ExpertExecutor;
 use crate::moe::handle::CpuExpertHandleStore;
 use crate::moe::prediction::{ExpertAccessPhase, ExpertBatchAccessEvent, ExpertPredictionStats};
 use crate::moe::routed::{
-    execute_routed_moe_with_artifact_router_reference_with_handles, RoutedMoeStepOutput,
+    RoutedMoeStepOutput, execute_routed_moe_with_artifact_router_reference_with_handles,
 };
 use crate::moe::routing::ExpertRouterPolicy;
 use crate::moe::streaming::{ExpertStreamingPlanner, ExpertStreamingReader};
@@ -296,6 +296,19 @@ impl DeepSeekV4OperatorContext {
     }
 
     #[cfg(feature = "cuda")]
+    pub(crate) fn capture_parity_checkpoint_host(
+        &mut self,
+        layer: usize,
+        stage: &str,
+        values: &[f32],
+    ) {
+        if self.parity_checkpoint_selected(layer, stage) {
+            self.parity_checkpoints
+                .insert(stage.to_string(), values.to_vec());
+        }
+    }
+
+    #[cfg(feature = "cuda")]
     fn parity_checkpoint_selected(&self, layer: usize, stage: &str) -> bool {
         let Some((selected_layer, selected_stage)) = &self.parity_checkpoint_selection else {
             return false;
@@ -350,30 +363,6 @@ impl DeepSeekV4OperatorContext {
             .entry(stage.to_string())
             .or_default()
             .extend(host);
-        Ok(())
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(crate) fn capture_parity_checkpoint_host_rows(
-        &mut self,
-        layer: usize,
-        stage: &str,
-        values: &[f32],
-        row_width: usize,
-    ) -> Result<()> {
-        if !self.parity_checkpoint_selected(layer, stage) {
-            return Ok(());
-        }
-        if row_width == 0 || values.is_empty() || !values.len().is_multiple_of(row_width) {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 parity checkpoint {stage} has invalid row shape: len={} row_width={row_width}",
-                values.len()
-            )));
-        }
-        self.parity_checkpoints
-            .entry(stage.to_string())
-            .or_default()
-            .extend_from_slice(values);
         Ok(())
     }
 
@@ -865,6 +854,7 @@ impl DeepSeekV4OperatorContext {
         layer: usize,
         input: &ferrule_cuda::context::CudaF32Buffer,
         token_ids: &[u32],
+        row_to_sequence: Option<&[usize]>,
         router: &RouterArtifactPayload,
         predicted_experts: &[usize],
         router_policy: &ExpertRouterPolicy,
@@ -890,6 +880,7 @@ impl DeepSeekV4OperatorContext {
             layer,
             input,
             token_ids,
+            row_to_sequence,
             router,
             predicted_experts,
             router_policy,

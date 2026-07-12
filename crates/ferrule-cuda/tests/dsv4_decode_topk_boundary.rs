@@ -1,6 +1,5 @@
 //! Numerical and long-context boundary regressions for DSV4 device top-k kernels.
 
-use cuda_core::CudaContext;
 use ferrule_cuda::context::CudaArtifactOperatorContext;
 use std::sync::{Mutex, MutexGuard};
 
@@ -12,206 +11,199 @@ fn cuda_test_guard() -> MutexGuard<'static, ()> {
         .expect("CUDA DSV4 decode top-k test lock poisoned")
 }
 
-fn has_cuda() -> bool {
-    CudaContext::new(0).is_ok()
-}
+#[allow(clippy::too_many_arguments)]
+fn paged_decode_rows_reference(
+    query: &[f32],
+    weights: &[f32],
+    indexer_plane: &[f32],
+    block_slots: &[i32],
+    block_offsets: &[i32],
+    row_sequence_ids: &[i32],
+    positions: &[i32],
+    window_lens: &[i32],
+    compressed_lens: &[i32],
+    window_size: usize,
+    index_topk: usize,
+    index_heads: usize,
+    index_head_dim: usize,
+    page_tokens: usize,
+    weight_scale: f32,
+) -> (Vec<i32>, Vec<i32>) {
+    let rows = positions.len();
+    let cols = window_size + index_topk;
+    let mut logical = vec![-1; rows * cols];
+    let mut selectors = vec![-1; rows * cols];
 
-fn expected_indices(position: usize, window_size: usize, extra_cols: usize) -> Vec<i32> {
-    let slot = position % window_size;
-    let mut expected = Vec::with_capacity(window_size + extra_cols);
-    expected.extend(((slot + 1)..window_size).map(|index| index as i32));
-    expected.extend((0..=slot).map(|index| index as i32));
-    expected.extend((0..extra_cols).map(|index| (window_size + index) as i32));
-    expected
-}
-
-#[test]
-fn decode_topk_kernels_handle_dsv4_4096_boundary() {
-    let _guard = cuda_test_guard();
-    if !has_cuda() {
-        eprintln!("skipping: no CUDA device");
-        return;
-    }
-
-    const POSITION: usize = 4096;
-    const WINDOW_SIZE: usize = 128;
-    const EXTRA_COLS: usize = 512;
-    const COMPRESSED_LEN: usize = 1024;
-    const INDEX_HEADS: usize = 64;
-    const INDEX_HEAD_DIM: usize = 128;
-    const ROPE_DIM: usize = 64;
-
-    let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
-    // Zero scores make every compressed candidate tie. The kernels' stable
-    // tie-break must therefore select compressed indices 0..512 in order.
-    let query = context
-        .upload_f32_buffer(&vec![0.0; INDEX_HEADS * INDEX_HEAD_DIM])
-        .expect("upload index query");
-    let weights = context
-        .upload_f32_buffer(&vec![1.0; INDEX_HEADS])
-        .expect("upload index weights");
-    let indexer_kv = context
-        .upload_f32_buffer(&vec![0.0; COMPRESSED_LEN * INDEX_HEAD_DIM])
-        .expect("upload indexer KV");
-    let expected = expected_indices(POSITION, WINDOW_SIZE, EXTRA_COLS);
-
-    let scalar = context
-        .dsv4_decode_topk_indices_from_device(
-            Some(&query),
-            Some(&weights),
-            Some(&indexer_kv),
-            POSITION,
-            WINDOW_SIZE,
-            WINDOW_SIZE,
-            EXTRA_COLS,
-            WINDOW_SIZE,
-            COMPRESSED_LEN,
-            INDEX_HEADS,
-            INDEX_HEAD_DIM,
-            1.0,
-        )
-        .expect("launch scalar decode top-k");
-    context
-        .sync_stream()
-        .expect("synchronize scalar decode top-k");
-    let scalar = context
-        .download_i32_buffer(&scalar)
-        .expect("download scalar decode top-k");
-    assert_eq!(scalar, expected, "scalar decode top-k indices");
-
-    let rope_rows = POSITION + 1;
-    let rope_cols = ROPE_DIM / 2;
-    let cos = context
-        .upload_f32_buffer(&vec![1.0; rope_rows * rope_cols])
-        .expect("upload cosine table");
-    let sin = context
-        .upload_f32_buffer(&vec![0.0; rope_rows * rope_cols])
-        .expect("upload sine table");
-    let fused = context
-        .dsv4_decode_topk_indices_fused_index_query_from_device(
-            &query,
-            &weights,
-            &indexer_kv,
-            &cos,
-            &sin,
-            POSITION,
-            WINDOW_SIZE,
-            WINDOW_SIZE,
-            EXTRA_COLS,
-            WINDOW_SIZE,
-            COMPRESSED_LEN,
-            INDEX_HEADS,
-            INDEX_HEAD_DIM,
-            ROPE_DIM,
-            1.0,
-        )
-        .expect("launch fused decode top-k");
-    context
-        .sync_stream()
-        .expect("synchronize fused decode top-k");
-    let fused = context
-        .download_i32_buffer(&fused)
-        .expect("download fused decode top-k");
-    assert_eq!(fused, expected, "fused decode top-k indices");
-}
-
-#[test]
-fn prefill_topk_matches_stable_cpu_reference() {
-    let _guard = cuda_test_guard();
-    if !has_cuda() {
-        eprintln!("skipping: no CUDA device");
-        return;
-    }
-
-    const TOKENS: usize = 9;
-    const WINDOW_SIZE: usize = 4;
-    const EXTRA_COLS: usize = 3;
-    const COMPRESS_RATIO: usize = 2;
-    const COMPRESSED_LEN: usize = 4;
-    const INDEX_HEADS: usize = 2;
-    const INDEX_HEAD_DIM: usize = 4;
-    const WEIGHT_SCALE: f32 = 0.125;
-
-    let query = (0..TOKENS * INDEX_HEADS * INDEX_HEAD_DIM)
-        .map(|index| ((index * 17 % 29) as f32 - 14.0) * 0.0625)
-        .collect::<Vec<_>>();
-    let weights = (0..TOKENS * INDEX_HEADS)
-        .map(|index| if index % 3 == 0 { -0.75 } else { 1.25 })
-        .collect::<Vec<_>>();
-    let indexer_kv = (0..COMPRESSED_LEN * INDEX_HEAD_DIM)
-        .map(|index| ((index * 11 % 23) as f32 - 11.0) * 0.125)
-        .collect::<Vec<_>>();
-
-    let mut expected = vec![-1i32; TOKENS * (WINDOW_SIZE + EXTRA_COLS)];
-    for token in 0..TOKENS {
-        let row = token * (WINDOW_SIZE + EXTRA_COLS);
-        let first = (token + 1).saturating_sub(WINDOW_SIZE);
-        for col in 0..WINDOW_SIZE {
-            let index = first + col;
-            if index <= token {
-                expected[row + col] = index as i32;
+    for row in 0..rows {
+        let output_base = row * cols;
+        let position = usize::try_from(positions[row]).expect("non-negative position");
+        let window_len = usize::try_from(window_lens[row]).expect("non-negative window len");
+        for col in 0..window_size {
+            if window_len <= window_size && window_len <= position + 1 && col < window_len {
+                logical[output_base + col] = (position + 1 - window_len + col) as i32;
+                selectors[output_base + col] = 0;
             }
         }
 
-        let visible = ((token + 1) / COMPRESS_RATIO).min(COMPRESSED_LEN);
-        let mut candidates = (0..visible)
-            .map(|index| {
-                let mut score = 0.0f32;
-                for head in 0..INDEX_HEADS {
-                    let q_base = (token * INDEX_HEADS + head) * INDEX_HEAD_DIM;
-                    let kv_base = index * INDEX_HEAD_DIM;
-                    let mut dot = 0.0f32;
-                    for dim in 0..INDEX_HEAD_DIM {
-                        dot += query[q_base + dim] * indexer_kv[kv_base + dim];
-                    }
-                    score += dot.max(0.0) * weights[token * INDEX_HEADS + head] * WEIGHT_SCALE;
+        let compressed_len =
+            usize::try_from(compressed_lens[row]).expect("non-negative compressed len");
+        let sequence = usize::try_from(row_sequence_ids[row]).expect("valid row sequence ID");
+        let block_start = usize::try_from(block_offsets[sequence]).expect("valid block start");
+        let block_end = usize::try_from(block_offsets[sequence + 1]).expect("valid block end");
+        let mut candidates = Vec::with_capacity(compressed_len);
+        for index in 0..compressed_len {
+            let block_entry = block_start + index / page_tokens;
+            if block_entry >= block_end {
+                continue;
+            }
+            let physical_slot =
+                usize::try_from(block_slots[block_entry]).expect("valid physical slot");
+            let kv_base = (physical_slot * page_tokens + index % page_tokens) * index_head_dim;
+            let mut score = 0.0f32;
+            for head in 0..index_heads {
+                let query_base = (row * index_heads + head) * index_head_dim;
+                let mut dot = 0.0f32;
+                for dim in 0..index_head_dim {
+                    dot += query[query_base + dim] * indexer_plane[kv_base + dim];
                 }
-                (index, score)
-            })
-            .collect::<Vec<_>>();
+                score += dot.max(0.0) * weights[row * index_heads + head] * weight_scale;
+            }
+            if score.is_finite() {
+                candidates.push((index, score));
+            }
+        }
         candidates.sort_by(|(left_index, left_score), (right_index, right_score)| {
             right_score
                 .total_cmp(left_score)
                 .then_with(|| left_index.cmp(right_index))
         });
-        for (slot, (index, score)) in candidates.into_iter().take(EXTRA_COLS).enumerate() {
-            if score.is_finite() {
-                expected[row + WINDOW_SIZE + slot] = (TOKENS + index) as i32;
-            }
+        for (slot, (index, _)) in candidates.into_iter().take(index_topk).enumerate() {
+            logical[output_base + window_size + slot] = index as i32;
+            selectors[output_base + window_size + slot] = 1;
         }
     }
 
+    (logical, selectors)
+}
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn paged_decode_rows_matches_stable_cpu_reference() {
+    const ROWS: usize = 3;
+    const WINDOW_SIZE: usize = 4;
+    const INDEX_TOPK: usize = 3;
+    const INDEX_HEADS: usize = 1;
+    const INDEX_HEAD_DIM: usize = 4;
+    const PAGE_TOKENS: usize = 2;
+
+    let query = [
+        1.0, 1.0, 1.0, 0.0, // row 0
+        0.0, 1.0, 0.0, 1.0, // row 1
+        1.0, 0.0, 0.0, 0.0, // row 2 (no compressed candidates)
+    ];
+    let weights = [1.0, 1.0, 1.0];
+    // Physical slots are deliberately not in sequence order. Both non-empty
+    // rows cross a page boundary; row 1 has a partially occupied final page.
+    let indexer_plane = [
+        -1.0, 0.0, 0.0, 0.0, // slot 0: row 0, logical compressed 2
+        0.0, 0.0, 1.0, 0.0, // slot 0: row 0, logical compressed 3
+        1.0, 0.0, 0.0, 0.0, // slot 1: row 0, logical compressed 0
+        0.0, 1.0, 0.0, 0.0, // slot 1: row 0, logical compressed 1
+        0.0, -1.0, 0.0, 2.0, // slot 2: row 1, logical compressed 2
+        0.0, 0.0, 0.0, 0.0, // slot 2 padding
+        0.0, 0.0, 0.0, 1.0, // slot 3: row 1, logical compressed 0
+        0.0, 2.0, 0.0, 0.0, // slot 3: row 1, logical compressed 1
+    ];
+    let block_slots = [1, 0, 3, 2];
+    let block_offsets = [0, 2, 4, 4];
+    let row_sequence_ids = [1, 0, 1];
+    let positions = [5, 8, 0];
+    let window_lens = [4, 3, 1];
+    let compressed_lens = [4, 3, 0];
+    let expected = paged_decode_rows_reference(
+        &query,
+        &weights,
+        &indexer_plane,
+        &block_slots,
+        &block_offsets,
+        &row_sequence_ids,
+        &positions,
+        &window_lens,
+        &compressed_lens,
+        WINDOW_SIZE,
+        INDEX_TOPK,
+        INDEX_HEADS,
+        INDEX_HEAD_DIM,
+        PAGE_TOKENS,
+        1.0,
+    );
+
+    let _guard = cuda_test_guard();
     let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
     let query = context
         .upload_f32_buffer(&query)
-        .expect("upload prefill index query");
+        .expect("upload row queries");
     let weights = context
         .upload_f32_buffer(&weights)
-        .expect("upload prefill index weights");
-    let indexer_kv = context
-        .upload_f32_buffer(&indexer_kv)
-        .expect("upload prefill indexer KV");
-    let actual = context
-        .dsv4_prefill_topk_indices_from_device(
-            Some(&query),
-            Some(&weights),
-            Some(&indexer_kv),
-            TOKENS,
+        .expect("upload row weights");
+    let indexer_plane = context
+        .upload_f32_buffer(&indexer_plane)
+        .expect("upload paged indexer plane");
+    let block_slots = context
+        .upload_i32_buffer(&block_slots)
+        .expect("upload flattened block slots");
+    let block_offsets = context
+        .upload_i32_buffer(&block_offsets)
+        .expect("upload block offsets");
+    let row_sequence_ids = context
+        .upload_i32_buffer(&row_sequence_ids)
+        .expect("upload row sequence IDs");
+    let positions = context
+        .upload_i32_buffer(&positions)
+        .expect("upload positions");
+    let window_lens = context
+        .upload_i32_buffer(&window_lens)
+        .expect("upload window lengths");
+    let compressed_lens = context
+        .upload_i32_buffer(&compressed_lens)
+        .expect("upload compressed lengths");
+
+    let (logical, selectors) = context
+        .dsv4_decode_topk_indices_paged_indexer_rows_from_device(
+            &query,
+            &weights,
+            &indexer_plane,
+            &block_slots,
+            &block_offsets,
+            &row_sequence_ids,
+            &positions,
+            &window_lens,
+            &compressed_lens,
+            ROWS,
             WINDOW_SIZE,
-            WINDOW_SIZE,
-            EXTRA_COLS,
-            TOKENS,
-            COMPRESS_RATIO,
-            COMPRESSED_LEN,
+            INDEX_TOPK,
             INDEX_HEADS,
             INDEX_HEAD_DIM,
-            WEIGHT_SCALE,
+            PAGE_TOKENS,
+            0,
+            1,
+            1.0,
         )
-        .expect("launch prefill top-k");
-    context.sync_stream().expect("synchronize prefill top-k");
-    let actual = context
-        .download_i32_buffer(&actual)
-        .expect("download prefill top-k");
+        .expect("launch paged decode rows");
+    context
+        .sync_stream()
+        .expect("synchronize paged decode rows");
 
-    assert_eq!(actual, expected, "prefill top-k indices");
+    assert_eq!(
+        context
+            .download_i32_buffer(&logical)
+            .expect("download logical indices"),
+        expected.0
+    );
+    assert_eq!(
+        context
+            .download_i32_buffer(&selectors)
+            .expect("download plane selectors"),
+        expected.1
+    );
 }

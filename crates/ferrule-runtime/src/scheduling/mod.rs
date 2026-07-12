@@ -11,8 +11,8 @@ pub mod resident;
 pub mod session;
 
 pub use actions::{
-    plan_prefill_chunk, DecodeAction, LogitsSelection, PrefillChunkAction, SchedulerAction,
-    DEFAULT_CHUNK_SIZE,
+    DEFAULT_CHUNK_SIZE, DecodeAction, LogitsSelection, PrefillChunkAction, SchedulerAction,
+    plan_prefill_chunk,
 };
 pub(crate) use batch::ScheduledBatch;
 pub use resident::{ResidentScheduler, ResidentSchedulerConfig};

@@ -17,24 +17,26 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "cuda")]
-use crate::bench::{compare_interactive_trace, GoldenTurn, InteractiveTrace};
+use crate::bench::{GoldenTurn, InteractiveTrace, compare_interactive_trace};
 #[cfg(feature = "cuda")]
 use ferrule_model::{
+    ChatTemplate, ModelExecutionBackend, ModelRunner,
     models::deepseek_v4::{
         DeepSeekV4ArtifactModel, DeepSeekV4AttentionProfileStats, DeepSeekV4LayerProfileStats,
         DeepSeekV4OperatorRuntimeCounters, DeepSeekV4OutputProfileStats,
         DeepSeekV4PrefillRuntimeStats, DeepSeekV4PrepareOptions, DeepSeekV4Runner,
     },
     moe::ExpertPredictionStats,
-    ChatTemplate, ModelExecutionBackend, ModelRunner, PrefillMode,
 };
 #[cfg(feature = "cuda")]
 use ferrule_runtime::{
-    EngineWorker, GenerateRequest, GenerationConfig, PagedSequenceKvCache, RequestId,
-    ResidentActionKind, ResidentDriverStep, ResidentSchedulerConfig, ResidentTopKDriver,
-    ResidentTopKDriverConfig, ResidentTopKDriverStats, SamplingConfig, SessionId,
-    TopKCompatibilityExecutorConfig, TopKDecodeStep,
+    GenerateRequest, GenerationConfig, RequestId, ResidentActionKind, ResidentDriverStep,
+    ResidentSchedulerConfig, ResidentTopKDriverConfig, ResidentTopKDriverStats, SamplingConfig,
+    SessionId,
 };
+
+#[cfg(feature = "cuda")]
+use super::resident::build_resident_topk_driver;
 
 /// A single turn measurement captured by the interactive benchmark.
 #[cfg(feature = "cuda")]
@@ -152,7 +154,6 @@ pub fn cmd_bench_interactive(
     prompts: &[String],
     max_new_tokens: usize,
     chat_template_override: Option<&str>,
-    runtime_driver: bool,
     warmup_tokens: usize,
     max_layers: usize,
     prefill_chunk_size: usize,
@@ -198,11 +199,7 @@ pub fn cmd_bench_interactive(
         max_new_tokens,
         max_layers,
         prefill_chunk_size,
-        runtime_path: if runtime_driver {
-            "resident_topk_driver".into()
-        } else {
-            "engine_worker".into()
-        },
+        runtime_path: "resident_topk_driver".into(),
         dsv4_profile_sync: runner.execution_policy().profile_sync(),
         artifact_load_us,
         warmup_tokens,
@@ -210,27 +207,15 @@ pub fn cmd_bench_interactive(
         ..Default::default()
     };
 
-    if runtime_driver {
-        run_with_resident_driver(
-            runner,
-            &chat_template,
-            &gen_cfg,
-            prompts,
-            warmup_tokens,
-            json,
-            &mut report,
-        )?;
-    } else {
-        run_with_engine_worker(
-            runner,
-            &chat_template,
-            &gen_cfg,
-            prompts,
-            warmup_tokens,
-            json,
-            &mut report,
-        )?;
-    }
+    run_with_resident_driver(
+        runner,
+        &chat_template,
+        &gen_cfg,
+        prompts,
+        warmup_tokens,
+        json,
+        &mut report,
+    )?;
 
     // ── Output ────────────────────────────────────────────────────────────
     if json {
@@ -359,7 +344,8 @@ pub fn cmd_bench_interactive(
                 turn.prefill_us as f64 / 1_000_000.0,
                 turn.prompt_tokens.len() as f64 / (turn.prefill_us as f64 / 1_000_000.0).max(1e-6),
                 turn.decode_us as f64 / 1_000_000.0,
-                turn.generated_tokens.len() as f64 / (turn.decode_us as f64 / 1_000_000.0).max(1e-6),
+                turn.generated_tokens.len() as f64
+                    / (turn.decode_us as f64 / 1_000_000.0).max(1e-6),
                 turn.final_position
             );
             println!(
@@ -391,7 +377,7 @@ pub fn cmd_bench_interactive(
             let prefill = turn.dsv4_prefill_stats;
             if prefill.logits_calls > 0 || prefill.no_logits_calls > 0 {
                 println!(
-                    "  dsv4_prefill: logits={}/{} no_logits={}/{} start_seg={}/{} append_seg={}/{} token_fallback={}/{}",
+                    "  dsv4_prefill: logits={}/{} no_logits={}/{} start_seg={}/{} append_seg={}/{}",
                     prefill.logits_calls,
                     prefill.logits_tokens,
                     prefill.no_logits_calls,
@@ -399,9 +385,7 @@ pub fn cmd_bench_interactive(
                     prefill.start_segment_calls,
                     prefill.start_segment_tokens,
                     prefill.append_segment_calls,
-                    prefill.append_segment_tokens,
-                    prefill.token_fallback_calls,
-                    prefill.token_fallback_tokens
+                    prefill.append_segment_tokens
                 );
             }
             if !turn.dsv4_layer_profile_stats.is_empty() {
@@ -409,7 +393,10 @@ pub fn cmd_bench_interactive(
                 let attention = sum_attention_profile_stats(&turn.dsv4_attention_profile_stats);
                 println!(
                     "  dsv4_profile: layer_total={:.3}s attention={:.3}s moe={:.3}s output_topk={:.3}s attn_sparse={:.3}s attn_main_comp={:.3}s",
-                    summary.prefill_total_us.saturating_add(summary.decode_total_us) as f64 / 1_000_000.0,
+                    summary
+                        .prefill_total_us
+                        .saturating_add(summary.decode_total_us) as f64
+                        / 1_000_000.0,
                     summary.attention_us as f64 / 1_000_000.0,
                     summary.moe_us as f64 / 1_000_000.0,
                     turn.dsv4_output_profile_stats.lm_head_topk_us as f64 / 1_000_000.0,
@@ -440,7 +427,7 @@ pub fn cmd_bench_interactive(
             report.runtime_driver_stats.emitted_tokens
         );
         println!(
-            "dsv4_prefill:              logits={}/{} no_logits={}/{} start_seg={}/{} append_seg={}/{} token_fallback={}/{}",
+            "dsv4_prefill:              logits={}/{} no_logits={}/{} start_seg={}/{} append_seg={}/{}",
             report.dsv4_prefill_stats.logits_calls,
             report.dsv4_prefill_stats.logits_tokens,
             report.dsv4_prefill_stats.no_logits_calls,
@@ -448,16 +435,17 @@ pub fn cmd_bench_interactive(
             report.dsv4_prefill_stats.start_segment_calls,
             report.dsv4_prefill_stats.start_segment_tokens,
             report.dsv4_prefill_stats.append_segment_calls,
-            report.dsv4_prefill_stats.append_segment_tokens,
-            report.dsv4_prefill_stats.token_fallback_calls,
-            report.dsv4_prefill_stats.token_fallback_tokens
+            report.dsv4_prefill_stats.append_segment_tokens
         );
         if !report.dsv4_layer_profile_stats.is_empty() {
             let summary = sum_layer_profile_stats(&report.dsv4_layer_profile_stats);
             let attention = sum_attention_profile_stats(&report.dsv4_attention_profile_stats);
             println!(
                 "dsv4_profile:              layer_total={:.3}s attention={:.3}s moe={:.3}s state_init={:.3}s output_topk={:.3}s attn_sparse={:.3}s attn_main_comp={:.3}s",
-                summary.prefill_total_us.saturating_add(summary.decode_total_us) as f64 / 1_000_000.0,
+                summary
+                    .prefill_total_us
+                    .saturating_add(summary.decode_total_us) as f64
+                    / 1_000_000.0,
                 summary.attention_us as f64 / 1_000_000.0,
                 summary.moe_us as f64 / 1_000_000.0,
                 summary.state_init_us as f64 / 1_000_000.0,
@@ -509,182 +497,6 @@ fn maybe_prewarm_runner(
 }
 
 #[cfg(feature = "cuda")]
-fn run_with_engine_worker(
-    runner: DeepSeekV4Runner,
-    chat_template: &ChatTemplate,
-    gen_cfg: &GenerationConfig,
-    prompts: &[String],
-    warmup_tokens: usize,
-    json: bool,
-    report: &mut InteractiveBenchReport,
-) -> anyhow::Result<()> {
-    let mut engine = EngineWorker::new(runner);
-
-    if warmup_tokens > 0 {
-        let warmup_cfg = GenerationConfig {
-            max_new_tokens: warmup_tokens,
-            ..gen_cfg.clone()
-        };
-        let warmup_prompt = chat_template.format_turn("warmup", true);
-        let warmup_prompt_tokens = engine.encode(&warmup_prompt)?;
-        let warmup_start = Instant::now();
-        let mut decode = engine.append_prompt(
-            &warmup_prompt_tokens,
-            &warmup_cfg,
-            PrefillMode::Interactive,
-            1,
-        )?;
-        let warmup_turn = loop {
-            match engine.decode_next(&mut decode)? {
-                TopKDecodeStep::Token(_) => {}
-                TopKDecodeStep::Finished(turn) => break turn,
-            }
-        };
-        report.warmup_us = duration_us(warmup_start.elapsed());
-        report.warmup_generated_tokens = warmup_turn.tokens.len();
-        engine.reset()?;
-        maybe_prewarm_runner(engine.runner_mut(), report)?;
-    }
-
-    let counters_baseline = engine.runner().operator_runtime_counters();
-    let prefill_stats_baseline = engine.runner().prefill_runtime_stats();
-    let layer_profile_baseline = engine.runner().layer_profile_stats();
-    let attention_profile_baseline = engine.runner().attention_profile_stats();
-    let output_profile_baseline = engine.runner().output_profile_stats();
-    let mut first_token_measured = false;
-    let mut total_prefill_us: u64 = 0;
-    let mut total_decode_us: u64 = 0;
-    let mut total_prompt_tokens = 0usize;
-    let mut total_generated = 0usize;
-
-    for (turn_idx, prompt_text) in prompts.iter().enumerate() {
-        let first_turn = turn_idx == 0;
-        let full_prompt = chat_template.format_turn(prompt_text, first_turn);
-        let prompt_tokens = engine.encode(&full_prompt)?;
-
-        if prompt_tokens.is_empty() {
-            if !json {
-                eprintln!(
-                    "[bench] turn {} prompt encoded to zero tokens, skipping",
-                    turn_idx
-                );
-            }
-            continue;
-        }
-
-        let turn_operator_counters_before = engine.runner().operator_runtime_counters();
-        let turn_prefill_stats_before = engine.runner().prefill_runtime_stats();
-        let turn_layer_profile_before = engine.runner().layer_profile_stats();
-        let turn_attention_profile_before = engine.runner().attention_profile_stats();
-        let turn_output_profile_before = engine.runner().output_profile_stats();
-        let turn_start = Instant::now();
-        let mut first_token_us = None;
-        let mut decode =
-            engine.append_prompt(&prompt_tokens, gen_cfg, PrefillMode::Interactive, 1)?;
-        let turn = loop {
-            match engine.decode_next(&mut decode)? {
-                TopKDecodeStep::Token(_) => {
-                    first_token_us.get_or_insert_with(|| duration_us(turn_start.elapsed()));
-                }
-                TopKDecodeStep::Finished(turn) => break turn,
-            }
-        };
-        let prefill_us = duration_us(turn.prefill_time);
-        let decode_us = duration_us(turn.decode_time);
-        let first_token_us = first_token_us.unwrap_or_else(|| duration_us(turn_start.elapsed()));
-        if !first_token_measured {
-            report.time_to_first_token_us = first_token_us;
-            first_token_measured = true;
-        }
-
-        total_prefill_us = total_prefill_us.saturating_add(prefill_us);
-        total_decode_us = total_decode_us.saturating_add(decode_us);
-        total_prompt_tokens = total_prompt_tokens.saturating_add(prompt_tokens.len());
-        total_generated = total_generated.saturating_add(turn.tokens.len());
-        report.final_position = turn.final_position;
-
-        let turn_operator_counters = dsv4_operator_counters_delta(
-            turn_operator_counters_before,
-            engine.runner().operator_runtime_counters(),
-        );
-        let turn_prefill_stats = dsv4_prefill_stats_delta(
-            turn_prefill_stats_before,
-            engine.runner().prefill_runtime_stats(),
-        );
-        let turn_layer_profile_stats = dsv4_layer_profile_stats_delta(
-            &turn_layer_profile_before,
-            &engine.runner().layer_profile_stats(),
-        );
-        let turn_attention_profile_stats = dsv4_attention_profile_stats_delta(
-            &turn_attention_profile_before,
-            &engine.runner().attention_profile_stats(),
-        );
-        let turn_output_profile_stats = dsv4_output_profile_stats_delta(
-            turn_output_profile_before,
-            engine.runner().output_profile_stats(),
-        );
-
-        report.turns.push(InteractiveTurnMeasurement {
-            prompt_text: prompt_text.clone(),
-            prompt_tokens,
-            first_token_us,
-            prefill_us,
-            decode_us,
-            generated_tokens: turn.tokens,
-            final_position: turn.final_position,
-            finish_reason: turn.finish_reason.as_str().to_string(),
-            stopped_by_eos: turn.stopped_by_eos,
-            stopped_by_string: turn.stopped_by_string,
-            runtime_driver_stats: ResidentTopKDriverStats::default(),
-            dsv4_operator_counters: turn_operator_counters,
-            dsv4_prefill_stats: turn_prefill_stats,
-            dsv4_layer_profile_stats: turn_layer_profile_stats,
-            dsv4_attention_profile_stats: turn_attention_profile_stats,
-            dsv4_output_profile_stats: turn_output_profile_stats,
-            runtime_steps: Vec::new(),
-        });
-    }
-
-    let counters_now = engine.runner().operator_runtime_counters();
-    report.dsv4_operator_counters = dsv4_operator_counters_delta(counters_baseline, counters_now);
-    report.dsv4_prefill_stats = dsv4_prefill_stats_delta(
-        prefill_stats_baseline,
-        engine.runner().prefill_runtime_stats(),
-    );
-    report.dsv4_layer_profile_stats = dsv4_layer_profile_stats_delta(
-        &layer_profile_baseline,
-        &engine.runner().layer_profile_stats(),
-    );
-    report.dsv4_attention_profile_stats = dsv4_attention_profile_stats_delta(
-        &attention_profile_baseline,
-        &engine.runner().attention_profile_stats(),
-    );
-    report.dsv4_output_profile_stats = dsv4_output_profile_stats_delta(
-        output_profile_baseline,
-        engine.runner().output_profile_stats(),
-    );
-    let layer_stats = engine.runner().layer_runtime_stats();
-    finish_report_counters(
-        report,
-        total_prefill_us,
-        total_decode_us,
-        total_prompt_tokens,
-        total_generated,
-        counters_baseline.expert_loads,
-        counters_baseline.expert_load_bytes,
-        counters_baseline.expert_evictions,
-        counters_now.expert_loads,
-        counters_now.expert_load_bytes,
-        counters_now.expert_evictions,
-        counters_now.expert_host_cache_entries,
-        counters_now.expert_host_cache_bytes,
-        layer_stats.iter().map(|s| s.resident_experts).sum(),
-        layer_stats.iter().map(|s| s.resident_expert_bytes).sum(),
-    );
-    Ok(())
-}
-
-#[cfg(feature = "cuda")]
 fn run_with_resident_driver(
     runner: DeepSeekV4Runner,
     chat_template: &ChatTemplate,
@@ -698,10 +510,7 @@ fn run_with_resident_driver(
         prefill_chunk_size: report.prefill_chunk_size.max(1),
         max_active_sequences: 1,
         max_decode_batch: 1,
-    };
-    let compatibility_executor_config = TopKCompatibilityExecutorConfig {
-        top_k: 1,
-        prefill_mode: PrefillMode::Interactive,
+        ..Default::default()
     };
     let driver_config = ResidentTopKDriverConfig {
         ctx_size: gen_cfg.ctx_size,
@@ -713,26 +522,24 @@ fn run_with_resident_driver(
             .saturating_add(warmup_tokens)
             .saturating_add(64),
     };
-    let build_driver = |runner| {
-        ResidentTopKDriver::with_configs(
-            runner,
-            PagedSequenceKvCache::new(1, 1, 1, 1),
-            scheduler_config,
-            compatibility_executor_config,
-            driver_config,
-        )
+    let build_driver = |runner: DeepSeekV4Runner| {
+        let schema = runner.kv_layout_schema().clone();
+        build_resident_topk_driver(runner, Box::new(schema), scheduler_config, driver_config)
     };
-    let mut driver = build_driver(runner);
+    let mut driver = build_driver(runner)?;
 
     if warmup_tokens > 0 {
         let warmup_prompt = chat_template.format_turn("warmup", true);
-        let warmup_prompt_tokens = driver
-            .compatibility_executor()
-            .runner()
-            .encode(&warmup_prompt)?;
-        let warmup_request = driver_request(0, warmup_prompt_tokens, warmup_tokens, &gen_cfg.stop);
+        let warmup_prompt_tokens = driver.executor().runner().encode(&warmup_prompt)?;
+        let warmup_request = driver_request(
+            0,
+            SessionId(u64::MAX),
+            warmup_prompt_tokens,
+            warmup_tokens,
+            &gen_cfg.stop,
+        );
         let warmup_start = Instant::now();
-        driver.submit_at_current_position(warmup_request);
+        driver.submit(warmup_request);
         let warmup_stats = driver.run_until_blocked(|_| Ok(()))?;
         report.warmup_us = duration_us(warmup_start.elapsed());
         report.warmup_generated_tokens = warmup_stats.emitted_tokens;
@@ -740,30 +547,15 @@ fn run_with_resident_driver(
         let mut runner = driver.into_runner()?;
         runner.reset_session()?;
         maybe_prewarm_runner(&mut runner, report)?;
-        driver = build_driver(runner);
+        driver = build_driver(runner)?;
     }
 
-    let counters_baseline = driver
-        .compatibility_executor()
-        .runner()
-        .operator_runtime_counters();
+    let counters_baseline = driver.executor().runner().operator_runtime_counters();
     let driver_stats_baseline = driver.stats().clone();
-    let prefill_stats_baseline = driver
-        .compatibility_executor()
-        .runner()
-        .prefill_runtime_stats();
-    let layer_profile_baseline = driver
-        .compatibility_executor()
-        .runner()
-        .layer_profile_stats();
-    let attention_profile_baseline = driver
-        .compatibility_executor()
-        .runner()
-        .attention_profile_stats();
-    let output_profile_baseline = driver
-        .compatibility_executor()
-        .runner()
-        .output_profile_stats();
+    let prefill_stats_baseline = driver.executor().runner().prefill_runtime_stats();
+    let layer_profile_baseline = driver.executor().runner().layer_profile_stats();
+    let attention_profile_baseline = driver.executor().runner().attention_profile_stats();
+    let output_profile_baseline = driver.executor().runner().output_profile_stats();
     let mut first_token_measured = false;
     let mut total_prefill_us: u64 = 0;
     let mut total_decode_us: u64 = 0;
@@ -773,10 +565,7 @@ fn run_with_resident_driver(
     for (turn_idx, prompt_text) in prompts.iter().enumerate() {
         let first_turn = turn_idx == 0;
         let full_prompt = chat_template.format_turn(prompt_text, first_turn);
-        let prompt_tokens = driver
-            .compatibility_executor()
-            .runner()
-            .encode(&full_prompt)?;
+        let prompt_tokens = driver.executor().runner().encode(&full_prompt)?;
 
         if prompt_tokens.is_empty() {
             if !json {
@@ -790,32 +579,18 @@ fn run_with_resident_driver(
 
         let request = driver_request(
             turn_idx as u64 + 1,
+            SessionId(0),
             prompt_tokens.clone(),
             gen_cfg.max_new_tokens,
             &gen_cfg.stop,
         );
         let turn_driver_stats_before = driver.stats().clone();
-        let turn_operator_counters_before = driver
-            .compatibility_executor()
-            .runner()
-            .operator_runtime_counters();
-        let turn_prefill_stats_before = driver
-            .compatibility_executor()
-            .runner()
-            .prefill_runtime_stats();
-        let turn_layer_profile_before = driver
-            .compatibility_executor()
-            .runner()
-            .layer_profile_stats();
-        let turn_attention_profile_before = driver
-            .compatibility_executor()
-            .runner()
-            .attention_profile_stats();
-        let turn_output_profile_before = driver
-            .compatibility_executor()
-            .runner()
-            .output_profile_stats();
-        driver.submit_at_current_position(request);
+        let turn_operator_counters_before = driver.executor().runner().operator_runtime_counters();
+        let turn_prefill_stats_before = driver.executor().runner().prefill_runtime_stats();
+        let turn_layer_profile_before = driver.executor().runner().layer_profile_stats();
+        let turn_attention_profile_before = driver.executor().runner().attention_profile_stats();
+        let turn_output_profile_before = driver.executor().runner().output_profile_stats();
+        driver.submit(request);
 
         let turn_start = Instant::now();
         let mut first_token_us = None;
@@ -825,22 +600,12 @@ fn run_with_resident_driver(
         let mut runtime_steps = Vec::new();
 
         loop {
-            let step_operator_counters_before = driver
-                .compatibility_executor()
-                .runner()
-                .operator_runtime_counters();
-            let step_layer_profile_before = driver
-                .compatibility_executor()
-                .runner()
-                .layer_profile_stats();
-            let step_attention_profile_before = driver
-                .compatibility_executor()
-                .runner()
-                .attention_profile_stats();
-            let step_output_profile_before = driver
-                .compatibility_executor()
-                .runner()
-                .output_profile_stats();
+            let step_operator_counters_before =
+                driver.executor().runner().operator_runtime_counters();
+            let step_layer_profile_before = driver.executor().runner().layer_profile_stats();
+            let step_attention_profile_before =
+                driver.executor().runner().attention_profile_stats();
+            let step_output_profile_before = driver.executor().runner().output_profile_stats();
             let step_start = Instant::now();
             let step = driver.step(&mut |event| {
                 first_token_us.get_or_insert_with(|| duration_us(turn_start.elapsed()));
@@ -850,31 +615,19 @@ fn run_with_resident_driver(
             let step_us = duration_us(step_start.elapsed());
             let step_operator_counters = dsv4_operator_counters_delta(
                 step_operator_counters_before,
-                driver
-                    .compatibility_executor()
-                    .runner()
-                    .operator_runtime_counters(),
+                driver.executor().runner().operator_runtime_counters(),
             );
             let step_layer_profile_stats = dsv4_layer_profile_stats_delta(
                 &step_layer_profile_before,
-                &driver
-                    .compatibility_executor()
-                    .runner()
-                    .layer_profile_stats(),
+                &driver.executor().runner().layer_profile_stats(),
             );
             let step_attention_profile_stats = dsv4_attention_profile_stats_delta(
                 &step_attention_profile_before,
-                &driver
-                    .compatibility_executor()
-                    .runner()
-                    .attention_profile_stats(),
+                &driver.executor().runner().attention_profile_stats(),
             );
             let step_output_profile_stats = dsv4_output_profile_stats_delta(
                 step_output_profile_before,
-                driver
-                    .compatibility_executor()
-                    .runner()
-                    .output_profile_stats(),
+                driver.executor().runner().output_profile_stats(),
             );
             match step {
                 ResidentDriverStep::Executed {
@@ -890,6 +643,9 @@ fn run_with_resident_driver(
                         ResidentActionKind::Decode => {
                             decode_us = decode_us.saturating_add(step_us);
                         }
+                        ResidentActionKind::Mixed => {
+                            prefill_us = prefill_us.saturating_add(step_us);
+                        }
                         ResidentActionKind::Finish | ResidentActionKind::Cancel => {}
                     }
                     runtime_steps.push(RuntimeStepMeasurement {
@@ -898,7 +654,7 @@ fn run_with_resident_driver(
                         staged,
                         finished,
                         elapsed_us: step_us,
-                        runner_position: driver.compatibility_executor().position(),
+                        runner_position: driver.executor().runner().position(),
                         dsv4_operator_counters: step_operator_counters,
                         dsv4_layer_profile_stats: step_layer_profile_stats,
                         dsv4_attention_profile_stats: step_attention_profile_stats,
@@ -946,38 +702,23 @@ fn run_with_resident_driver(
             resident_driver_stats_delta(turn_driver_stats_before, driver.stats().clone());
         let turn_operator_counters = dsv4_operator_counters_delta(
             turn_operator_counters_before,
-            driver
-                .compatibility_executor()
-                .runner()
-                .operator_runtime_counters(),
+            driver.executor().runner().operator_runtime_counters(),
         );
         let turn_prefill_stats = dsv4_prefill_stats_delta(
             turn_prefill_stats_before,
-            driver
-                .compatibility_executor()
-                .runner()
-                .prefill_runtime_stats(),
+            driver.executor().runner().prefill_runtime_stats(),
         );
         let turn_layer_profile_stats = dsv4_layer_profile_stats_delta(
             &turn_layer_profile_before,
-            &driver
-                .compatibility_executor()
-                .runner()
-                .layer_profile_stats(),
+            &driver.executor().runner().layer_profile_stats(),
         );
         let turn_attention_profile_stats = dsv4_attention_profile_stats_delta(
             &turn_attention_profile_before,
-            &driver
-                .compatibility_executor()
-                .runner()
-                .attention_profile_stats(),
+            &driver.executor().runner().attention_profile_stats(),
         );
         let turn_output_profile_stats = dsv4_output_profile_stats_delta(
             turn_output_profile_before,
-            driver
-                .compatibility_executor()
-                .runner()
-                .output_profile_stats(),
+            driver.executor().runner().output_profile_stats(),
         );
 
         report.turns.push(InteractiveTurnMeasurement {
@@ -1003,45 +744,27 @@ fn run_with_resident_driver(
         });
     }
 
-    let counters_now = driver
-        .compatibility_executor()
-        .runner()
-        .operator_runtime_counters();
+    let counters_now = driver.executor().runner().operator_runtime_counters();
     report.runtime_driver_stats =
         resident_driver_stats_delta(driver_stats_baseline, driver.stats().clone());
     report.dsv4_operator_counters = dsv4_operator_counters_delta(counters_baseline, counters_now);
     report.dsv4_prefill_stats = dsv4_prefill_stats_delta(
         prefill_stats_baseline,
-        driver
-            .compatibility_executor()
-            .runner()
-            .prefill_runtime_stats(),
+        driver.executor().runner().prefill_runtime_stats(),
     );
     report.dsv4_layer_profile_stats = dsv4_layer_profile_stats_delta(
         &layer_profile_baseline,
-        &driver
-            .compatibility_executor()
-            .runner()
-            .layer_profile_stats(),
+        &driver.executor().runner().layer_profile_stats(),
     );
     report.dsv4_attention_profile_stats = dsv4_attention_profile_stats_delta(
         &attention_profile_baseline,
-        &driver
-            .compatibility_executor()
-            .runner()
-            .attention_profile_stats(),
+        &driver.executor().runner().attention_profile_stats(),
     );
     report.dsv4_output_profile_stats = dsv4_output_profile_stats_delta(
         output_profile_baseline,
-        driver
-            .compatibility_executor()
-            .runner()
-            .output_profile_stats(),
+        driver.executor().runner().output_profile_stats(),
     );
-    let layer_stats = driver
-        .compatibility_executor()
-        .runner()
-        .layer_runtime_stats();
+    let layer_stats = driver.executor().runner().layer_runtime_stats();
     finish_report_counters(
         report,
         total_prefill_us,
@@ -1065,13 +788,14 @@ fn run_with_resident_driver(
 #[cfg(feature = "cuda")]
 fn driver_request(
     id: u64,
+    session_id: SessionId,
     prompt_tokens: Vec<u32>,
     max_new_tokens: usize,
     stop: &[String],
 ) -> GenerateRequest {
     GenerateRequest {
         id: RequestId(id),
-        session_id: Some(SessionId(0)),
+        session_id: Some(session_id),
         prompt_tokens,
         sampling: SamplingConfig::greedy(),
         max_new_tokens,
@@ -1132,6 +856,7 @@ fn resident_action_kind_name(kind: ResidentActionKind) -> &'static str {
     match kind {
         ResidentActionKind::Prefill => "prefill",
         ResidentActionKind::Decode => "decode",
+        ResidentActionKind::Mixed => "mixed",
         ResidentActionKind::Finish => "finish",
         ResidentActionKind::Cancel => "cancel",
     }
@@ -1545,6 +1270,24 @@ fn dsv4_output_profile_stats_delta(
     after: DeepSeekV4OutputProfileStats,
 ) -> DeepSeekV4OutputProfileStats {
     DeepSeekV4OutputProfileStats {
+        packed_prefill_batches: after
+            .packed_prefill_batches
+            .saturating_sub(before.packed_prefill_batches),
+        packed_prefill_rows: after
+            .packed_prefill_rows
+            .saturating_sub(before.packed_prefill_rows),
+        packed_decode_batches: after
+            .packed_decode_batches
+            .saturating_sub(before.packed_decode_batches),
+        packed_decode_rows: after
+            .packed_decode_rows
+            .saturating_sub(before.packed_decode_rows),
+        packed_mixed_batches: after
+            .packed_mixed_batches
+            .saturating_sub(before.packed_mixed_batches),
+        packed_mixed_rows: after
+            .packed_mixed_rows
+            .saturating_sub(before.packed_mixed_rows),
         final_hc_head_calls: after
             .final_hc_head_calls
             .saturating_sub(before.final_hc_head_calls),
@@ -1594,12 +1337,6 @@ fn dsv4_prefill_stats_delta(
         append_segment_tokens: after
             .append_segment_tokens
             .saturating_sub(before.append_segment_tokens),
-        token_fallback_calls: after
-            .token_fallback_calls
-            .saturating_sub(before.token_fallback_calls),
-        token_fallback_tokens: after
-            .token_fallback_tokens
-            .saturating_sub(before.token_fallback_tokens),
     }
 }
 
@@ -2092,8 +1829,6 @@ fn dsv4_prefill_stats_json(stats: &DeepSeekV4PrefillRuntimeStats) -> serde_json:
         "start_segment_tokens": stats.start_segment_tokens,
         "append_segment_calls": stats.append_segment_calls,
         "append_segment_tokens": stats.append_segment_tokens,
-        "token_fallback_calls": stats.token_fallback_calls,
-        "token_fallback_tokens": stats.token_fallback_tokens,
     })
 }
 
@@ -2103,7 +1838,6 @@ pub fn cmd_bench_interactive(
     _prompts: &[String],
     _max_new_tokens: usize,
     _chat_template_override: Option<&str>,
-    _runtime_driver: bool,
     _warmup_tokens: usize,
     _max_layers: usize,
     _prefill_chunk_size: usize,
@@ -2113,7 +1847,6 @@ pub fn cmd_bench_interactive(
     anyhow::bail!("bench-interactive requires --features cuda")
 }
 
-#[cfg(feature = "cuda")]
 #[cfg(feature = "cuda")]
 fn dsv4_expert_prewarm_enabled() -> bool {
     std::env::var("FERRULE_DSV4_EXPERT_PREWARM")

@@ -22,7 +22,7 @@ pub mod routing;
 pub mod streaming;
 pub mod telemetry;
 
-pub use executor::{reference_linear, CpuReferenceExpertExecutor, ExpertExecutor};
+pub use executor::{CpuReferenceExpertExecutor, ExpertExecutor, reference_linear};
 pub use handle::{
     CpuExpertHandleStore, ExpertComputeHandle, ExpertHandleStore, ExpertResidentFormat,
     ResidentExpertHandle,
@@ -34,17 +34,17 @@ pub use prediction::{
     ScoreBasedExpertPredictor, ScoreBasedExpertPredictorConfig,
 };
 pub use routed::{
-    execute_routed_moe_reference, execute_routed_moe_reference_with_handles,
+    RoutedMoeStepOutput, execute_routed_moe_reference, execute_routed_moe_reference_with_handles,
     execute_routed_moe_with_artifact_router_reference,
-    execute_routed_moe_with_artifact_router_reference_with_handles, RoutedMoeStepOutput,
+    execute_routed_moe_with_artifact_router_reference_with_handles,
 };
 pub use routing::{ExpertRoute, ExpertRouterPolicy, RouterScoreFunction, RouterSelectionPolicy};
 pub use streaming::{
-    read_experts_concurrent, AsyncHostStagedExpertLoader, AsyncHostStagedExpertStats,
-    ExpertArtifactPayload, ExpertComputeBundle, ExpertEvictRequest, ExpertId, ExpertLinearFormat,
-    ExpertLinearPayload, ExpertLoadReason, ExpertLoadRequest, ExpertLoadSource, ExpertMatrixKind,
-    ExpertStorageTier, ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader,
-    ExpertStreamingStep, ExpertTensorComponent, ExpertTensorKey, ExpertTensorPayload,
-    ExpertTensorSlice, HostStagedExpertCache,
+    AsyncHostStagedExpertLoader, AsyncHostStagedExpertStats, ExpertArtifactPayload,
+    ExpertComputeBundle, ExpertEvictRequest, ExpertId, ExpertLinearFormat, ExpertLinearPayload,
+    ExpertLoadReason, ExpertLoadRequest, ExpertLoadSource, ExpertMatrixKind, ExpertStorageTier,
+    ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader, ExpertStreamingStep,
+    ExpertTensorComponent, ExpertTensorKey, ExpertTensorPayload, ExpertTensorSlice,
+    HostStagedExpertCache, read_experts_concurrent,
 };
 pub use telemetry::ExpertTelemetry;

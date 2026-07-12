@@ -1,6 +1,6 @@
 # Ferrule Execution Engine Architecture
 
-_Status: E1–E3 complete; E4 native ragged multi-session execution is next_
+_Status: E1–E5 complete; E6–E8 planned_
 
 _Last updated: 2026-07-12_
 
@@ -61,11 +61,10 @@ The current full path is approximately:
 
 ```text
 ResidentScheduler
-  → SchedulerAction
+  → token-budgeted SchedulerAction::Execute
   → runtime-private ScheduledBatch correlation
   → ferrule-common::execution::ExecutionBatch
-  → TopKCompatibilityExecutor
-  → TopKModelRunner
+  → NativeMultiSessionExecutor<MultiSessionRunner>
   → DeepSeekV4Runner
   → per-layer host control
   → DeepSeekV4OperatorContext
@@ -75,42 +74,32 @@ ResidentScheduler
 
 The names imply layering, but state ownership crosses those boundaries.
 
-### 2.1 The neutral ABI still wraps an implicit compatibility sequence
+### 2.1 The neutral ABI supports batching, but DSV4 dispatch is still serial
 
-The scheduler now lowers through the shared `ExecutionBatch`, but
-`TopKModelRunner` still exposes an implicit state machine:
+The scheduler and `NativeMultiSessionExecutor` accept multi-session ragged prefill,
+decode, and mixed `ExecutionBatch` inputs. `MultiSessionRunner` also has a whole-batch
+override so a model backend can consume packed rows and physical KV bindings directly.
 
-- `position()`;
-- `feed_token()`;
-- `prefill_tokens()`;
-- `prefill_topk()`;
-- `decode_topk()`.
+The generic correctness path still swaps one explicit sequence state at a time and
+invokes `TopKModelRunner` primitives. DSV4 has not yet replaced that fallback with one
+packed HC/attention/MoE pipeline across real sequence rows. Consequently E4's
+batch-2/4 throughput and launch-reduction gates remain open even though scheduling,
+row correlation, and sequence isolation are implemented.
 
-Its truthful `ExecutionCapabilities` therefore reject:
+### 2.2 Physical data pages exist, but recurrent metadata migration is incomplete
 
-- a prefill batch containing multiple sessions;
-- a decode batch with more than one row;
-- a mixed prefill/decode batch;
-- full logits and physical paged-KV bindings.
+Runtime `KvPageManager` is the authoritative logical allocator/refcount/block-table
+owner. The CUDA backend now has a model-neutral preallocated multi-plane physical
+pool with provisional reserve/commit/rollback, COW, reuse, preempt/restore, compact
+page metadata, and direct paged attention/indexer kernels. Runtime reservations and
+zero-refcount release deltas flow through the generic runner transaction boundary.
 
-Runtime request/session/KV correlation remains private in `ScheduledBatch`; public
-model output identifies only `input_row`. The compatibility adapter uses
-`KvBindingMode::None`, so DSV4 CUDA kernels still do not consume physical write
-slots or block tables.
-
-### 2.2 Runtime KV and physical DSV4 KV are separate ledgers
-
-Runtime owns `SequenceKvCache` / `PagedSequenceKvCache` lifecycle metadata. The
-active DSV4 CUDA path keeps physical state in layer-keyed maps inside
-`DeepSeekV4CudaOperatorCache`:
-
-- window KV and valid length;
-- combined window/compressed KV and capacity;
-- indexer KV and capacity.
-
-Those maps do not include sequence identity. Runtime allocation/free, prefix
-sharing, preemption, and block tables therefore do not affect the physical CUDA
-state used by attention.
+DSV4's window, main-compressed, and indexer data planes have paged write/read lowering.
+However, compressor/indexer recurrent state is fixed per sequence rather than
+per-token page data and still has host transfers. Contiguous DSV4 buffers therefore
+remain as the unconfigured fallback, and DSV4 truthfully reports
+`KvBindingMode::None` until every prefill/append mode and recurrent metadata path is
+physical-page authoritative.
 
 ### 2.3 DSV4 runner owns unrelated lifetimes
 
@@ -525,13 +514,11 @@ lifecycle, and only crate-private `ScheduledBatch` carries runtime correlation.
 
 ### 5.7 Implemented compatibility and graph boundaries
 
-`TopKCompatibilityExecutor<R: TopKModelRunner>` implements the retained truthful
-one-sequence compatibility path; it is not a native multi-session executor. It
-rejects mixed mode and multi-sequence work, accepts one decode row, uses
-`KvBindingMode::None` and `LogitsRowPolicy::LastPerSequence`, and rejects full
-logits. It validates capabilities, positions, phases, output intent, and the
-runner's top-k limit before mutation. The real DSV4 CUDA runner reports
-`max_top_k = 40`.
+E1 initially used `TopKCompatibilityExecutor<R: TopKModelRunner>` as a bounded
+single-sequence migration adapter. E4 deleted that adapter after the resident driver
+migrated to `NativeMultiSessionExecutor<R: MultiSessionRunner>`. The native path
+validates capabilities, positions, phases, output intent, and the runner's top-k
+limit before mutation; DSV4 reports `max_top_k = 40`.
 
 Mutation or post-mutation output-contract errors poison the adapter. Driver failures
 in model execution, output correlation, runtime commit, token callback, finish, or
@@ -990,7 +977,19 @@ reserve → execute → commit
 Prefix/radix caches consume the same page owner. They do not own separate physical
 block lifecycles.
 
-### 10.3 Required tests
+### 10.3 Current implementation checkpoint
+
+- `CudaKvPagePool` preallocates one contiguous storage buffer per token-scaled plane;
+- COW copies only one physical slot range and rollback never publishes provisional pages;
+- single- and dual-plane sparse attention resolve logical rows through physical slots;
+- combined ring indices are converted to absolute logical rows and plane selectors on device;
+- DSV4 indexer top-k has direct paged-plane variants;
+- real CUDA parity tests cover page boundaries, non-zero layers, COW isolation,
+  dual-plane ring conversion, and indexer lookup;
+- recurrent compressor/indexer metadata still needs a device-resident per-sequence
+  arena before DSV4 can publish `KvBindingMode::Paged` and delete contiguous fallbacks.
+
+### 10.4 Required tests
 
 - page boundary and ring wrap;
 - compressed/indexer capacity boundary;
@@ -1327,8 +1326,11 @@ This document maps directly to [`ROADMAP.md`](ROADMAP.md):
    and enforce zero-allocation warm decode/prefill buckets on GB10.
 6. [x] E3: extract explicit sequence state, transactional lifecycle, D2D
    checkpoint/restore/fork, and backend-global expert runtime.
-7. E4: native ragged/multi-sequence execution over private contiguous KV first.
-8. E5: connect runtime reservations to physical multi-plane CUDA pages.
+7. [x] E4: native packed decode, ragged prefill, and mixed multi-sequence execution
+   through one model-neutral `ExecutionBatch` path.
+8. [x] E5: authoritative runtime reservations connected to physical multi-plane CUDA
+   pages, including rollback, COW, preempt/restore, and exact-prefix sharing; obsolete
+   contiguous CUDA KV and model checkpoint paths are deleted.
 9. E6: move routing/grouping device-side and residency policy to runtime.
 10. E7: cache stable piecewise graph buckets.
 11. E8: fuse and compare only after the execution shape is stable.

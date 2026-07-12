@@ -18,24 +18,24 @@ use ferrule_model::{
 
 use crate::graph::layer_binding::GraphLayerObjects;
 use ferrule_model::artifact::binding::{
-    bind_attention_from_artifact_group, bind_attention_from_hf,
-    bind_hyper_connection_from_artifact_group, bind_hyper_connection_from_hf,
-    bind_layer_norms_from_artifact_group, bind_router_from_artifact_group, bind_router_from_hf,
+    MlaAttentionArtifactPayload, RouterArtifactPayload, bind_attention_from_artifact_group,
+    bind_attention_from_hf, bind_hyper_connection_from_artifact_group,
+    bind_hyper_connection_from_hf, bind_layer_norms_from_artifact_group,
+    bind_router_from_artifact_group, bind_router_from_hf,
     bind_shared_swiglu_ffn_from_artifact_group, bind_shared_swiglu_ffn_from_hf,
-    MlaAttentionArtifactPayload, RouterArtifactPayload,
 };
 use ferrule_model::artifact::tensor::ArtifactTensorReader;
 use ferrule_model::attention_backend::{
-    sliding_window_topk_indices, sparse_attention_reference, SparseAttentionSpec,
+    SparseAttentionSpec, sliding_window_topk_indices, sparse_attention_reference,
 };
 use ferrule_model::ffn::SwiGluFfnPayload;
 use ferrule_model::hyper_connection::{
-    hc_post_reference, hc_pre_reference, HyperConnectionConfig, HyperConnectionWeights,
+    HyperConnectionConfig, HyperConnectionWeights, hc_post_reference, hc_pre_reference,
 };
 use ferrule_model::moe::executor::CpuReferenceExpertExecutor;
 use ferrule_model::moe::handle::CpuExpertHandleStore;
 use ferrule_model::moe::routed::{
-    execute_routed_moe_with_artifact_router_reference_with_handles, RoutedMoeStepOutput,
+    RoutedMoeStepOutput, execute_routed_moe_with_artifact_router_reference_with_handles,
 };
 use ferrule_model::moe::routing::ExpertRouterPolicy;
 use ferrule_model::moe::streaming::{

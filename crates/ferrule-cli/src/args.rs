@@ -39,16 +39,14 @@ pub(crate) enum Command {
         /// Chat template name (e.g. deepseek-v4).
         #[arg(long = "chat-template")]
         chat_template: Option<String>,
-        /// Route the benchmark through the ResidentTopKDriver serving spine.
-        #[arg(long = "runtime-driver")]
-        runtime_driver: bool,
+
         /// Number of warmup decode tokens before measured turns.
         #[arg(long, default_value_t = 0)]
         warmup_tokens: usize,
         /// Number of DSV4 base layers to execute.
         #[arg(long, default_value_t = 43)]
         max_layers: usize,
-        /// Runtime scheduler prefill chunk size for --runtime-driver.
+        /// Runtime scheduler prefill chunk size.
         #[arg(long = "prefill-chunk-size", default_value_t = 4096)]
         prefill_chunk_size: usize,
         /// Path to a golden interactive trace JSON for correctness comparison.

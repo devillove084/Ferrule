@@ -277,7 +277,7 @@ fn classify_tensor_name(name: &str) -> TensorClass {
         | "model.embed_tokens.weight"
         | "embed.weight" => return TensorClass::TokenEmbedding,
         "output_norm.weight" | "model.norm.weight" | "norm.weight" => {
-            return TensorClass::OutputNorm
+            return TensorClass::OutputNorm;
         }
         "output.weight" | "lm_head.weight" | "head.weight" => return TensorClass::OutputHead,
         _ => {}
@@ -788,9 +788,10 @@ mod tests {
             "dspark_markov_rank": 256
         });
         refine_hf_spec(&mut spec, &json);
-        assert!(spec
-            .notes
-            .iter()
-            .any(|note| note.contains("DSpark attachment metadata")));
+        assert!(
+            spec.notes
+                .iter()
+                .any(|note| note.contains("DSpark attachment metadata"))
+        );
     }
 }

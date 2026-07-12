@@ -55,6 +55,72 @@ impl<'a> KvLayerView<'a> {
     }
 }
 
+/// Model-neutral allocator for resident sequence slots.
+///
+/// Scheduling only owns the lifecycle of logical slots; model runners and KV
+/// backends remain responsible for the storage bound to those slots.
+pub trait SequenceSlotPool {
+    fn alloc_slot(&mut self) -> Result<KvHandle>;
+    fn free_slot(&mut self, handle: KvHandle) -> Result<()>;
+}
+
+/// Lightweight fixed-capacity sequence slot pool with no model or KV storage.
+#[derive(Debug, Clone)]
+pub struct FixedSequenceSlotPool {
+    free_slots: Vec<usize>,
+    allocated: Vec<bool>,
+}
+
+impl FixedSequenceSlotPool {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            free_slots: (0..capacity).rev().collect(),
+            allocated: vec![false; capacity],
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.allocated.len()
+    }
+
+    pub fn active_count(&self) -> usize {
+        self.capacity() - self.free_slots.len()
+    }
+
+    pub fn available(&self) -> usize {
+        self.free_slots.len()
+    }
+}
+
+impl SequenceSlotPool for FixedSequenceSlotPool {
+    fn alloc_slot(&mut self) -> Result<KvHandle> {
+        let slot = self
+            .free_slots
+            .pop()
+            .ok_or_else(|| Error::Internal("no free sequence slots".into()))?;
+        self.allocated[slot] = true;
+        Ok(KvHandle(slot))
+    }
+
+    fn free_slot(&mut self, handle: KvHandle) -> Result<()> {
+        let Some(allocated) = self.allocated.get_mut(handle.0) else {
+            return Err(Error::Internal(format!(
+                "sequence slot {} out of range",
+                handle.0
+            )));
+        };
+        if !*allocated {
+            return Err(Error::Internal(format!(
+                "sequence slot {} is not allocated",
+                handle.0
+            )));
+        }
+        *allocated = false;
+        self.free_slots.push(handle.0);
+        Ok(())
+    }
+}
+
 /// Sequence-oriented KV cache API.
 ///
 /// This is the boundary Ferrule should grow toward for vLLM/SGLang-like serving:
@@ -77,6 +143,19 @@ pub trait SequenceKvCache {
     ) -> Result<()>;
     fn layer_view(&self, handle: KvHandle, layer: usize) -> Result<KvLayerView<'_>>;
     fn sequence_len(&self, handle: KvHandle) -> usize;
+}
+
+impl<T> SequenceSlotPool for T
+where
+    T: SequenceKvCache,
+{
+    fn alloc_slot(&mut self) -> Result<KvHandle> {
+        self.alloc_sequence()
+    }
+
+    fn free_slot(&mut self, handle: KvHandle) -> Result<()> {
+        self.free_sequence(handle)
+    }
 }
 
 /// Trait for legacy single-sequence KV cache backends.
@@ -367,6 +446,31 @@ mod tests {
         let h3 = KvHandle(6);
         assert_eq!(h1, h2);
         assert_ne!(h1, h3);
+    }
+
+    #[test]
+    fn fixed_sequence_slot_pool_allocates_frees_and_reuses() {
+        let mut pool = FixedSequenceSlotPool::new(2);
+        assert_eq!(pool.capacity(), 2);
+        assert_eq!(pool.available(), 2);
+
+        let first = pool.alloc_slot().unwrap();
+        let second = pool.alloc_slot().unwrap();
+        assert_eq!((first, second), (KvHandle(0), KvHandle(1)));
+        assert_eq!(pool.active_count(), 2);
+        assert!(pool.alloc_slot().is_err());
+
+        pool.free_slot(first).unwrap();
+        assert_eq!(pool.alloc_slot().unwrap(), first);
+        assert!(pool.free_slot(KvHandle(3)).is_err());
+    }
+
+    #[test]
+    fn sequence_kv_cache_adapts_to_slot_pool() {
+        let mut cache = ContiguousKvCache::new(1, 1, 1);
+        let handle = SequenceSlotPool::alloc_slot(&mut cache).unwrap();
+        assert_eq!(handle, KvHandle(0));
+        SequenceSlotPool::free_slot(&mut cache, handle).unwrap();
     }
 
     #[test]

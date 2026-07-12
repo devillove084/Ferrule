@@ -4,7 +4,9 @@ use std::env as process_environment;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use ferrule_common::execution::{ExecutionCapabilities, KvBindingMode, LogitsRowPolicy};
+use ferrule_common::execution::{
+    ExecutionCapabilities, KvBindingMode, KvLayoutSchema, KvPlaneDescriptor, LogitsRowPolicy,
+};
 use ferrule_common::{Error, Result};
 
 use crate::execution::PreparedModel;
@@ -47,6 +49,9 @@ pub struct DeepSeekV4KvLayoutSchema {
     window_size: usize,
     head_dim: usize,
     compress_ratios: Box<[usize]>,
+    planes: Box<[KvPlaneDescriptor]>,
+    page_size: usize,
+    max_sequence_len: usize,
 }
 
 impl DeepSeekV4KvLayoutSchema {
@@ -70,35 +75,26 @@ impl DeepSeekV4KvLayoutSchema {
         self.head_dim
     }
 
+    pub const fn page_size(&self) -> usize {
+        self.page_size
+    }
+
     pub fn compress_ratios(&self) -> &[usize] {
         &self.compress_ratios
     }
 }
 
-/// Immutable description of the routed-expert namespace bound by a plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DeepSeekV4ExpertCatalog {
-    layer_count: usize,
-    experts_per_layer: usize,
-    experts_per_token: usize,
-    hash_layer_count: usize,
-}
-
-impl DeepSeekV4ExpertCatalog {
-    pub const fn layer_count(&self) -> usize {
-        self.layer_count
+impl KvLayoutSchema for DeepSeekV4KvLayoutSchema {
+    fn planes(&self) -> &[KvPlaneDescriptor] {
+        &self.planes
     }
 
-    pub const fn experts_per_layer(&self) -> usize {
-        self.experts_per_layer
+    fn page_size(&self) -> usize {
+        self.page_size
     }
 
-    pub const fn experts_per_token(&self) -> usize {
-        self.experts_per_token
-    }
-
-    pub const fn hash_layer_count(&self) -> usize {
-        self.hash_layer_count
+    fn max_sequence_len(&self) -> usize {
+        self.max_sequence_len
     }
 }
 
@@ -318,7 +314,6 @@ pub struct DeepSeekV4PreparedResources {
     options: DeepSeekV4PrepareOptions,
     layers: Box<[DeepSeekV4Layer]>,
     kv_layout: DeepSeekV4KvLayoutSchema,
-    expert_catalog: DeepSeekV4ExpertCatalog,
     policy: DeepSeekV4ExecutionPolicy,
 }
 
@@ -337,10 +332,6 @@ impl DeepSeekV4PreparedResources {
 
     pub const fn kv_layout(&self) -> &DeepSeekV4KvLayoutSchema {
         &self.kv_layout
-    }
-
-    pub const fn expert_catalog(&self) -> &DeepSeekV4ExpertCatalog {
-        &self.expert_catalog
     }
 
     pub const fn policy(&self) -> &DeepSeekV4ExecutionPolicy {
@@ -372,12 +363,55 @@ pub fn prepare(
         layers.push(model.bind_layer(layer)?);
     }
 
+    let max_compress_ratio = model
+        .config
+        .compress_ratios
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(0);
+    let main_metadata_width = 4usize
+        .saturating_mul(max_compress_ratio)
+        .saturating_mul(model.config.head_dim);
+    let indexer_metadata_width = 4usize
+        .saturating_mul(max_compress_ratio)
+        .saturating_mul(model.config.index_head_dim);
     let kv_layout = DeepSeekV4KvLayoutSchema {
         binding_mode: KvBindingMode::None,
-        max_sequences: 1,
+        max_sequences: usize::MAX,
         layer_count: options.max_layers,
         window_size: model.config.window_size,
         head_dim: model.config.head_dim,
+        planes: vec![
+            KvPlaneDescriptor {
+                name: "window_latent_kv",
+                elements_per_token: model.config.head_dim,
+                layer_count: options.max_layers,
+            },
+            KvPlaneDescriptor {
+                name: "compressed_main_kv",
+                elements_per_token: model.config.head_dim,
+                layer_count: options.max_layers,
+            },
+            KvPlaneDescriptor {
+                name: "indexer_kv",
+                elements_per_token: model.config.index_head_dim,
+                layer_count: options.max_layers,
+            },
+            KvPlaneDescriptor {
+                name: "compressor_metadata",
+                elements_per_token: main_metadata_width,
+                layer_count: options.max_layers,
+            },
+            KvPlaneDescriptor {
+                name: "indexer_metadata",
+                elements_per_token: indexer_metadata_width,
+                layer_count: options.max_layers,
+            },
+        ]
+        .into_boxed_slice(),
+        page_size: 16,
+        max_sequence_len: u32::MAX as usize,
         compress_ratios: (0..options.max_layers)
             .map(|layer| {
                 model
@@ -390,18 +424,11 @@ pub fn prepare(
             .collect::<Vec<_>>()
             .into_boxed_slice(),
     };
-    let expert_catalog = DeepSeekV4ExpertCatalog {
-        layer_count: options.max_layers,
-        experts_per_layer: model.config.num_routed_experts,
-        experts_per_token: model.config.num_experts_per_tok,
-        hash_layer_count: options.max_layers.min(model.config.num_hash_layers),
-    };
     let resources = DeepSeekV4PreparedResources {
         model,
         options,
         layers: layers.into_boxed_slice(),
         kv_layout,
-        expert_catalog,
         policy,
     };
 
@@ -550,6 +577,52 @@ mod tests {
             capabilities.logits_row_policy,
             LogitsRowPolicy::LastPerSequence
         );
+    }
+
+    #[test]
+    fn dsv4_kv_schema_publishes_all_physical_planes() {
+        let schema = DeepSeekV4KvLayoutSchema {
+            binding_mode: KvBindingMode::None,
+            max_sequences: 8,
+            layer_count: 2,
+            window_size: 128,
+            head_dim: 64,
+            compress_ratios: vec![4, 2].into_boxed_slice(),
+            planes: vec![
+                KvPlaneDescriptor {
+                    name: "window_latent_kv",
+                    elements_per_token: 64,
+                    layer_count: 2,
+                },
+                KvPlaneDescriptor {
+                    name: "compressed_main_kv",
+                    elements_per_token: 64,
+                    layer_count: 2,
+                },
+                KvPlaneDescriptor {
+                    name: "indexer_kv",
+                    elements_per_token: 32,
+                    layer_count: 2,
+                },
+                KvPlaneDescriptor {
+                    name: "compressor_metadata",
+                    elements_per_token: 1024,
+                    layer_count: 2,
+                },
+                KvPlaneDescriptor {
+                    name: "indexer_metadata",
+                    elements_per_token: 512,
+                    layer_count: 2,
+                },
+            ]
+            .into_boxed_slice(),
+            page_size: 16,
+            max_sequence_len: u32::MAX as usize,
+        };
+        assert_eq!(schema.planes().len(), 5);
+        assert_eq!(schema.page_size(), 16);
+        assert_eq!(schema.pages_for_tokens(4097), 257);
+        assert_eq!(schema.planes()[2].name, "indexer_kv");
     }
 
     #[test]

@@ -1,6 +1,8 @@
 //! DeepSeek-V4 runner: ModelRunner implementation.
 
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(any(feature = "cuda", test))]
+use std::ops::Range;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -10,13 +12,18 @@ use crate::execution::{ExecutionShapeKey, PersistentArenaPool};
 use crate::moe::executor::CpuReferenceExpertExecutor;
 use crate::moe::prediction::{
     ExpertAccessPhase, ExpertBatchAccessEvent, ExpertHotsetPredictor, ExpertPredictContext,
-    ExpertPredictionStats,
 };
 use crate::moe::routed::RoutedMoeStepOutput;
 use crate::moe::streaming::ExpertStreamingReader;
-use crate::runner::{ModelInfo, ModelRunner, PrefillMode, TokenLogit, TopKModelRunner};
+use crate::runner::{
+    ModelInfo, ModelRunner, MultiSessionRunner, PrefillMode, TokenLogit, TopKModelRunner,
+};
+#[cfg(any(feature = "cuda", test))]
+use ferrule_common::execution::{ExecutionBatch, ForwardMode, ForwardPhase};
 #[cfg(feature = "cuda")]
-use ferrule_common::execution::ForwardMode;
+use ferrule_common::execution::{
+    ExecutionOutput, LogitsOutput, LogitsRequest, LogitsRow, TokenLogit as ExecutionTokenLogit,
+};
 use ferrule_common::{Error, Result};
 
 use super::artifact::DeepSeekV4ArtifactModel;
@@ -31,8 +38,8 @@ use super::operators::{
     DeepSeekV4OperatorRuntimeCounters,
 };
 pub use super::prepared::DeepSeekV4PrepareOptions;
-use super::prepared::{prepare, DeepSeekV4ExecutionPolicy, DeepSeekV4PreparedModelPlan};
-use super::sequence::{DeepSeekV4SequenceCheckpoint, DeepSeekV4SequenceExecutionState};
+use super::prepared::{DeepSeekV4ExecutionPolicy, DeepSeekV4PreparedModelPlan, prepare};
+use super::sequence::DeepSeekV4SequenceExecutionState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeepSeekV4LayerRuntimeStats {
@@ -46,6 +53,12 @@ pub struct DeepSeekV4LayerRuntimeStats {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DeepSeekV4OutputProfileStats {
+    pub packed_prefill_batches: u64,
+    pub packed_prefill_rows: u64,
+    pub packed_decode_batches: u64,
+    pub packed_decode_rows: u64,
+    pub packed_mixed_batches: u64,
+    pub packed_mixed_rows: u64,
     pub final_hc_head_calls: u64,
     pub final_hc_head_us: u64,
     pub final_norm_calls: u64,
@@ -74,9 +87,6 @@ pub struct DeepSeekV4PrefillRuntimeStats {
     /// Segment prefill appended to an existing resident session prefix.
     pub append_segment_calls: u64,
     pub append_segment_tokens: u64,
-    /// Token-by-token fallback calls/tokens that still use decode/feed primitives.
-    pub token_fallback_calls: u64,
-    pub token_fallback_tokens: u64,
 }
 
 pub struct DeepSeekV4Runner {
@@ -114,6 +124,140 @@ enum CudaDecodeOutput {
     Feed,
     Hidden(Vec<f32>),
     TopK(Vec<TokenLogit>),
+}
+
+/// Model-local lowering of model-neutral packed execution metadata.
+///
+/// Rows remain in packed query order. `sequences` supplies the mutable state and
+/// query range for each sequence, while `row_to_sequence` makes row-owned CUDA
+/// work independent of the aggregate forward mode.
+#[cfg(any(feature = "cuda", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PackedBatchMetadata {
+    pub(super) mode: ForwardMode,
+    pub(super) sequences: Vec<PackedSequenceMetadata>,
+    pub(super) row_to_sequence: Vec<usize>,
+    pub(super) sequence_major_rows: Vec<usize>,
+    pub(super) max_query_tokens: usize,
+}
+
+#[cfg(any(feature = "cuda", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PackedSequenceMetadata {
+    pub(super) state_index: usize,
+    pub(super) phase: ForwardPhase,
+    pub(super) query: Range<usize>,
+}
+
+#[cfg(any(feature = "cuda", test))]
+impl PackedBatchMetadata {
+    pub(super) fn lower(batch: &ExecutionBatch, state_count: usize) -> Result<Self> {
+        let mut sequences = Vec::with_capacity(batch.sequences().len());
+        let mut row_to_sequence = vec![usize::MAX; batch.len()];
+        let mut sequence_major_rows = Vec::with_capacity(batch.len());
+        let mut expected_start = 0usize;
+        let mut max_query_tokens = 0usize;
+        let mut state_indices = BTreeSet::new();
+
+        for (sequence_index, sequence) in batch.sequences().iter().enumerate() {
+            let state_index = sequence
+                .state_slot
+                .try_as_usize()
+                .map_err(|_| Error::Model("DeepSeek-V4 state slot exceeds usize".into()))?;
+            if state_index >= state_count {
+                return Err(Error::Model(format!(
+                    "DeepSeek-V4 state slot {state_index} is missing from {state_count} states"
+                )));
+            }
+            if !state_indices.insert(state_index) {
+                return Err(Error::Model(format!(
+                    "DeepSeek-V4 state slot {state_index} is referenced more than once"
+                )));
+            }
+            let start = usize::try_from(sequence.query.start)
+                .map_err(|_| Error::Model("DeepSeek-V4 query start exceeds usize".into()))?;
+            let end = usize::try_from(sequence.query.end)
+                .map_err(|_| Error::Model("DeepSeek-V4 query end exceeds usize".into()))?;
+            if start != expected_start || start >= end || end > batch.len() {
+                return Err(Error::Model(format!(
+                    "DeepSeek-V4 sequence {sequence_index} query range {start}..{end} does not densely cover packed rows from {expected_start}"
+                )));
+            }
+            for row in start..end {
+                row_to_sequence[row] = sequence_index;
+                sequence_major_rows.push(row);
+            }
+            max_query_tokens = max_query_tokens.max(end - start);
+            expected_start = end;
+            sequences.push(PackedSequenceMetadata {
+                state_index,
+                phase: sequence.phase,
+                query: start..end,
+            });
+        }
+        if expected_start != batch.len() {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 sequence queries cover {expected_start} of {} packed rows",
+                batch.len()
+            )));
+        }
+
+        Ok(Self {
+            mode: batch.mode(),
+            sequences,
+            row_to_sequence,
+            sequence_major_rows,
+            max_query_tokens,
+        })
+    }
+
+    /// Native CUDA keeps row-owned projection/HC/MoE work packed while mutable
+    /// recurrent state is advanced once per sequence in query order.
+    #[cfg(feature = "cuda")]
+    pub(super) fn supports_native_cuda(&self) -> bool {
+        self.row_to_sequence.len() >= 2
+            && self.sequences.len() >= 2
+            && self.sequence_major_rows.len() == self.row_to_sequence.len()
+            && self
+                .row_to_sequence
+                .iter()
+                .all(|sequence| *sequence < self.sequences.len())
+    }
+}
+
+#[cfg(any(feature = "cuda", test))]
+pub(super) fn begin_packed_sequence_steps(
+    states: &[DeepSeekV4SequenceExecutionState],
+    metadata: &PackedBatchMetadata,
+) -> Result<Vec<crate::execution::SequenceStepBinding>> {
+    metadata
+        .sequences
+        .iter()
+        .map(|sequence| states[sequence.state_index].begin_step())
+        .collect()
+}
+
+#[cfg(any(feature = "cuda", test))]
+pub(super) fn poison_packed_sequence_steps(
+    states: &mut [DeepSeekV4SequenceExecutionState],
+    metadata: &PackedBatchMetadata,
+    bindings: &[crate::execution::SequenceStepBinding],
+) {
+    for (sequence, binding) in metadata.sequences.iter().zip(bindings.iter().copied()) {
+        states[sequence.state_index].poison_step(binding);
+    }
+}
+
+#[cfg(any(feature = "cuda", test))]
+pub(super) fn commit_packed_sequence_steps(
+    states: &mut [DeepSeekV4SequenceExecutionState],
+    metadata: &PackedBatchMetadata,
+    bindings: Vec<crate::execution::SequenceStepBinding>,
+) -> Result<()> {
+    for (sequence, binding) in metadata.sequences.iter().zip(bindings) {
+        states[sequence.state_index].commit_step(binding, sequence.query.len())?;
+    }
+    Ok(())
 }
 
 impl ExpertPredictionInput<'_> {
@@ -209,6 +353,10 @@ impl DeepSeekV4Runner {
         self.plan.resources().policy()
     }
 
+    pub fn kv_layout_schema(&self) -> &super::prepared::DeepSeekV4KvLayoutSchema {
+        self.plan.resources().kv_layout()
+    }
+
     pub fn operator_backend(&self) -> ModelExecutionBackend {
         self.operators.backend()
     }
@@ -248,43 +396,56 @@ impl DeepSeekV4Runner {
         self.sequence.core.position()
     }
 
-    /// Create an independent checkpoint, including D2D copies of physical CUDA KV.
-    pub fn checkpoint_sequence_state(&mut self) -> Result<DeepSeekV4SequenceCheckpoint> {
-        self.sequence.begin_step()?;
-        let layers = clone_sequence_layers(&mut self.operators, &self.sequence.layers)?;
-        Ok(DeepSeekV4SequenceCheckpoint {
-            core: self.sequence.core.clone(),
+    /// Construct a fresh serving sequence without cloning default-session KV.
+    pub fn create_sequence_state(&self) -> Result<DeepSeekV4SequenceExecutionState> {
+        let resources = self.plan.resources();
+        let mut layers = Vec::with_capacity(resources.prepare_options().max_layers);
+        for layer in 0..resources.prepare_options().max_layers {
+            layers.push(resources.model().new_layer_sequence_state(layer)?);
+        }
+        Ok(DeepSeekV4SequenceExecutionState::new(
             layers,
-            predictor: self.sequence.predictor.clone(),
-        })
+            resources.model().config.num_routed_experts,
+        ))
     }
 
-    /// Restore a checkpoint without sharing its physical CUDA buffers.
-    pub fn restore_sequence_state(
-        &mut self,
-        checkpoint: &DeepSeekV4SequenceCheckpoint,
-    ) -> Result<()> {
-        if checkpoint.layers.len() != self.sequence.max_layers() {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 checkpoint layer count {} does not match runner layer count {}",
-                checkpoint.layers.len(),
-                self.sequence.max_layers()
+    /// Fork the default runner sequence as a runtime-shared paged prefix.
+    pub fn fork_sequence_state(&mut self) -> Result<DeepSeekV4SequenceExecutionState> {
+        let position = self.sequence.position();
+        Self::fork_sequence_state_from_explicit(&self.sequence, position)
+    }
+
+    fn fork_sequence_state_from_explicit(
+        source: &DeepSeekV4SequenceExecutionState,
+        expected_position: usize,
+    ) -> Result<DeepSeekV4SequenceExecutionState> {
+        source.begin_step()?;
+        if source.position() != expected_position {
+            return Err(Error::Execution(format!(
+                "DeepSeek-V4 exact fork expected committed position {expected_position}, source is at {}",
+                source.position()
             )));
         }
-        let layers = clone_sequence_layers(&mut self.operators, &checkpoint.layers)?;
-        self.sequence.layers = layers;
-        self.sequence.predictor = checkpoint.predictor.clone();
-        self.sequence.core.restore_from(&checkpoint.core);
-        Ok(())
-    }
-
-    /// Fork the default runner sequence, including independent physical CUDA KV.
-    pub fn fork_sequence_state(&mut self) -> Result<DeepSeekV4SequenceExecutionState> {
-        self.sequence.begin_step()?;
+        let mut layers = Vec::new();
+        layers
+            .try_reserve_exact(source.layers.len())
+            .map_err(|error| {
+                Error::Model(format!(
+                    "DeepSeek-V4 paged fork layer metadata allocation failed: {error}"
+                ))
+            })?;
+        layers.extend(
+            source
+                .layers
+                .iter()
+                .map(DeepSeekV4LayerState::fork_paged_prefix_metadata),
+        );
         Ok(DeepSeekV4SequenceExecutionState {
-            core: self.sequence.core.forked()?,
-            layers: clone_sequence_layers(&mut self.operators, &self.sequence.layers)?,
-            predictor: self.sequence.predictor.clone(),
+            core: source.core.forked()?,
+            layers,
+            predictor: source.predictor.clone(),
+            #[cfg(feature = "cuda")]
+            paged_kv_binding: None,
         })
     }
 
@@ -307,7 +468,24 @@ impl DeepSeekV4Runner {
         }
         state.begin_step()?;
         std::mem::swap(&mut self.sequence, state);
+        #[cfg(feature = "cuda")]
+        if self.operators.backend() == ModelExecutionBackend::Cuda {
+            if let Err(error) = self
+                .operators
+                .cuda_mut()?
+                .activate_paged_binding(self.sequence.paged_kv_binding.as_ref())
+            {
+                std::mem::swap(&mut self.sequence, state);
+                return Err(error);
+            }
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| execute(self)));
+        #[cfg(feature = "cuda")]
+        if self.operators.backend() == ModelExecutionBackend::Cuda {
+            if let Ok(cuda) = self.operators.cuda_mut() {
+                let _ = cuda.activate_paged_binding(None);
+            }
+        }
         std::mem::swap(&mut self.sequence, state);
         match result {
             Ok(result) => result,
@@ -324,6 +502,15 @@ impl DeepSeekV4Runner {
             self.operators.cuda_mut()?.ops.sync_stream()?;
         }
         state.release_capacity();
+        Ok(())
+    }
+
+    /// Reset a sequence state for reuse with a new logical sequence.
+    pub fn reset_sequence_state(
+        &mut self,
+        state: &mut DeepSeekV4SequenceExecutionState,
+    ) -> Result<()> {
+        state.reset_for_reuse();
         Ok(())
     }
 
@@ -623,10 +810,6 @@ impl DeepSeekV4Runner {
         Ok(Some(predictions))
     }
 
-    pub fn expert_prediction_stats(&self) -> ExpertPredictionStats {
-        self.sequence.predictor.stats()
-    }
-
     #[cfg(feature = "cuda")]
     pub fn prewarm_predicted_experts(&mut self) -> Result<usize> {
         if self.operators.backend() != ModelExecutionBackend::Cuda {
@@ -808,10 +991,11 @@ impl DeepSeekV4Runner {
             #[cfg(feature = "cuda")]
             if self.operators.backend() == ModelExecutionBackend::Cuda {
                 let hidden_len = tokens * self.plan.resources().model().config.hidden_size;
-                let mut buffers = self
-                    .operators
-                    .cuda_mut()?
-                    .take_decode_buffers(hc_state.len(), hidden_len)?;
+                let mut buffers = self.operators.cuda_mut()?.take_decode_buffers(
+                    hc_state.len(),
+                    hidden_len,
+                    self.plan.resources().model().config.hidden_size,
+                )?;
                 let execution = (|| {
                     self.operators
                         .cuda_mut()?
@@ -823,6 +1007,12 @@ impl DeepSeekV4Runner {
                         self.plan.resources().model().config.hc_config(),
                         &self.plan.resources().model().hc_head,
                         &mut buffers.final_hidden,
+                    )?;
+                    self.operators.capture_parity_checkpoint_last_row(
+                        0,
+                        "final_hidden",
+                        &buffers.final_hidden,
+                        self.plan.resources().model().config.hidden_size,
                     )?;
                     self.operators
                         .cuda_mut()?
@@ -864,6 +1054,9 @@ impl DeepSeekV4Runner {
             self.plan.resources().model().config.norm_eps,
             "output_norm",
         )?;
+        #[cfg(feature = "cuda")]
+        self.operators
+            .capture_parity_checkpoint_host(0, "final_norm", &normed);
         self.output_profile.final_norm_calls =
             self.output_profile.final_norm_calls.saturating_add(1);
         self.output_profile.final_norm_us = self
@@ -890,6 +1083,309 @@ impl DeepSeekV4Runner {
             .as_mut()
             .expect("CUDA cache exists for CUDA decode")
             .restore_decode_buffers(buffers);
+    }
+
+    #[cfg(feature = "cuda")]
+    fn run_cuda_packed_batch_uncommitted(
+        &mut self,
+        states: &mut [DeepSeekV4SequenceExecutionState],
+        batch: &ExecutionBatch,
+        metadata: &PackedBatchMetadata,
+    ) -> Result<ExecutionOutput> {
+        let rows = batch.len();
+        if !metadata.supports_native_cuda() {
+            return Err(Error::Model(
+                "DeepSeek-V4 CUDA packed shell does not support this batch shape yet".into(),
+            ));
+        }
+        for (sequence_index, sequence) in metadata.sequences.iter().enumerate() {
+            let state = &states[sequence.state_index];
+            for (offset, row) in sequence.query.clone().enumerate() {
+                let expected = state.position().checked_add(offset).ok_or_else(|| {
+                    Error::Model("DeepSeek-V4 packed sequence position overflow".into())
+                })?;
+                if expected != batch.positions()[row] as usize {
+                    return Err(Error::Model(format!(
+                        "DeepSeek-V4 packed sequence {sequence_index} row {row} position mismatch: expected={expected} batch={}",
+                        batch.positions()[row]
+                    )));
+                }
+            }
+            if state.paged_kv_binding.is_none() {
+                return Err(Error::Model(format!(
+                    "DeepSeek-V4 packed sequence {sequence_index} has no prepared paged binding"
+                )));
+            }
+        }
+
+        let requested_logit_rows = batch
+            .logits()
+            .iter()
+            .enumerate()
+            .filter_map(|(row, request)| matches!(request, LogitsRequest::TopK(_)).then_some(row))
+            .collect::<Vec<_>>();
+        let max_top_k = batch
+            .logits()
+            .iter()
+            .filter_map(|request| match request {
+                LogitsRequest::TopK(k) => Some(k.get() as usize),
+                LogitsRequest::None => None,
+                LogitsRequest::Full => None,
+            })
+            .max()
+            .unwrap_or(0);
+        let bindings = begin_packed_sequence_steps(states, metadata)?;
+        let paged_bindings = metadata
+            .sequences
+            .iter()
+            .map(|sequence| {
+                states[sequence.state_index]
+                    .paged_kv_binding
+                    .clone()
+                    .expect("validated above")
+            })
+            .collect::<Vec<_>>();
+        let sequence_prefill = metadata
+            .sequences
+            .iter()
+            .map(|sequence| sequence.phase == ForwardPhase::Prefill)
+            .collect::<Vec<_>>();
+        let positions = batch
+            .positions()
+            .iter()
+            .map(|position| *position as usize)
+            .collect::<Vec<_>>();
+        let mut hc_state = Vec::new();
+        for token_id in batch.token_ids() {
+            hc_state.extend(
+                self.plan
+                    .resources()
+                    .model()
+                    .initial_hc_state_for_token(*token_id)?,
+            );
+        }
+        let max_layers = self.plan.resources().prepare_options().max_layers;
+        let hidden_size = self.plan.resources().model().config.hidden_size;
+        let hc_row_size = hc_state.len() / rows;
+
+        self.operators.check_cuda_arena_acquire()?;
+
+        let arena_key = ExecutionShapeKey::new(
+            metadata.mode,
+            rows,
+            metadata.sequences.len(),
+            metadata.max_query_tokens,
+        );
+        let mut arena_lease = {
+            let layers = self.plan.resources().layers();
+            let operators = &mut self.operators;
+            self.layer_arena_pool.acquire(arena_key, || {
+                DeepSeekV4LayerArenaVariants::try_build_for_packed_mode(
+                    layers,
+                    metadata.mode,
+                    rows,
+                    operators,
+                )
+            })?
+        };
+
+        let mut decode_buffers = self.operators.cuda_mut()?.take_decode_buffers(
+            rows * hc_row_size,
+            hidden_size,
+            hidden_size,
+        )?;
+
+        let execution = (|| -> Result<Vec<Vec<TokenLogit>>> {
+            self.operators
+                .cuda_mut()?
+                .ops
+                .overwrite_f32_buffer(&hc_state, &mut decode_buffers.hc_input)?;
+            let binding_refs = paged_bindings.iter().collect::<Vec<_>>();
+            self.operators
+                .cuda_mut()?
+                .activate_paged_bindings_for_rows(&binding_refs, &metadata.row_to_sequence)?;
+
+            for layer_idx in 0..max_layers {
+                let arena = arena_lease
+                    .get_mut()
+                    .get_for_layer_mut(layer_idx)
+                    .expect("pooled layer arena variants match prepared layers");
+                let requested_states = metadata
+                    .sequences
+                    .iter()
+                    .map(|sequence| sequence.state_index)
+                    .collect::<BTreeSet<_>>();
+                let mut available_states = states
+                    .iter_mut()
+                    .enumerate()
+                    .filter(|(state_index, _)| requested_states.contains(state_index))
+                    .collect::<BTreeMap<_, _>>();
+                let mut layer_states = metadata
+                    .sequences
+                    .iter()
+                    .map(|sequence| {
+                        available_states
+                            .remove(&sequence.state_index)
+                            .map(|state| &mut state.layers[layer_idx])
+                            .ok_or_else(|| {
+                                Error::Model(format!(
+                                    "DeepSeek-V4 state slot {} is referenced more than once",
+                                    sequence.state_index
+                                ))
+                            })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                self.plan.resources().layers()[layer_idx].packed_rows_device_hc_device(
+                    &mut layer_states,
+                    &metadata.row_to_sequence,
+                    &metadata.sequence_major_rows,
+                    &sequence_prefill,
+                    &paged_bindings,
+                    &mut self.expert_runtimes[layer_idx],
+                    arena,
+                    &mut decode_buffers.hc_input,
+                    batch.token_ids(),
+                    &positions,
+                    &[],
+                    &self.expert_reader,
+                    &mut self.operators,
+                )?;
+            }
+            if max_top_k == 0 {
+                return Ok(vec![Vec::new(); rows]);
+            }
+            let mut logits = vec![Vec::new(); rows];
+            for &row in &requested_logit_rows {
+                if row != 0 {
+                    self.operators.cuda_mut()?.ops.copy_f32_within(
+                        &mut decode_buffers.hc_input,
+                        row * hc_row_size,
+                        0,
+                        hc_row_size,
+                    )?;
+                }
+                self.operators.cuda_mut()?.hc_head_from_device_into(
+                    &decode_buffers.hc_input,
+                    1,
+                    self.plan.resources().model().config.hc_config(),
+                    &self.plan.resources().model().hc_head,
+                    &mut decode_buffers.final_hidden,
+                )?;
+                self.operators.capture_parity_checkpoint_last_row(
+                    0,
+                    "final_hidden",
+                    &decode_buffers.final_hidden,
+                    hidden_size,
+                )?;
+                let sequence = metadata.row_to_sequence[row];
+                if sequence_prefill[sequence] {
+                    let final_hidden = self
+                        .operators
+                        .cuda_mut()?
+                        .ops
+                        .download_f32_buffer(&decode_buffers.final_hidden)?;
+                    let final_norm = self.operators.rms_norm(
+                        &final_hidden,
+                        &self.plan.resources().model().output_norm,
+                        self.plan.resources().model().config.norm_eps,
+                        "output_norm",
+                    )?;
+                    self.operators
+                        .capture_parity_checkpoint_host(0, "final_norm", &final_norm);
+                    self.operators
+                        .cuda_mut()?
+                        .ops
+                        .overwrite_f32_buffer(&final_norm, &mut decode_buffers.topk_row)?;
+                } else {
+                    self.operators.cuda_mut()?.rms_norm_device_cached_into(
+                        "output_norm",
+                        &decode_buffers.final_hidden,
+                        &self.plan.resources().model().output_norm,
+                        self.plan.resources().model().config.norm_eps,
+                        &mut decode_buffers.topk_row,
+                    )?;
+                }
+                logits[row] = self
+                    .plan
+                    .resources()
+                    .model()
+                    .topk_logits_for_hidden_device_with_operators(
+                        &decode_buffers.topk_row,
+                        max_top_k,
+                        self.plan
+                            .resources()
+                            .prepare_options()
+                            .output_head_chunk_rows,
+                        &mut self.operators,
+                    )?;
+            }
+            Ok(logits)
+        })();
+
+        drop(arena_lease);
+        let _ = self.operators.cuda_mut()?.activate_paged_binding(None);
+        self.restore_cuda_decode_buffers(decode_buffers);
+        let logits = match execution {
+            Ok(logits) => logits,
+            Err(error) => {
+                poison_packed_sequence_steps(states, metadata, &bindings);
+                return Err(error);
+            }
+        };
+
+        let mut output_rows = Vec::new();
+        for (row, request) in batch.logits().iter().copied().enumerate() {
+            if let LogitsRequest::TopK(k) = request {
+                output_rows.push(LogitsRow::new(
+                    row as u32,
+                    LogitsOutput::TopK(
+                        logits[row]
+                            .iter()
+                            .take(k.get() as usize)
+                            .map(|item| ExecutionTokenLogit {
+                                token_id: item.token_id,
+                                logit: item.logit,
+                            })
+                            .collect(),
+                    ),
+                ));
+            }
+        }
+        let output = ExecutionOutput::new(output_rows);
+        if let Err(error) =
+            output.validate_with_capabilities(batch, &self.multi_session_capabilities())
+        {
+            poison_packed_sequence_steps(states, metadata, &bindings);
+            return Err(error);
+        }
+        commit_packed_sequence_steps(states, metadata, bindings)?;
+        match metadata.mode {
+            ForwardMode::Prefill => {
+                self.output_profile.packed_prefill_batches =
+                    self.output_profile.packed_prefill_batches.saturating_add(1);
+                self.output_profile.packed_prefill_rows = self
+                    .output_profile
+                    .packed_prefill_rows
+                    .saturating_add(rows as u64);
+            }
+            ForwardMode::Decode => {
+                self.output_profile.packed_decode_batches =
+                    self.output_profile.packed_decode_batches.saturating_add(1);
+                self.output_profile.packed_decode_rows = self
+                    .output_profile
+                    .packed_decode_rows
+                    .saturating_add(rows as u64);
+            }
+            ForwardMode::Mixed => {
+                self.output_profile.packed_mixed_batches =
+                    self.output_profile.packed_mixed_batches.saturating_add(1);
+                self.output_profile.packed_mixed_rows = self
+                    .output_profile
+                    .packed_mixed_rows
+                    .saturating_add(rows as u64);
+            }
+        }
+        Ok(output)
     }
 
     #[cfg(feature = "cuda")]
@@ -955,10 +1451,11 @@ impl DeepSeekV4Runner {
         }
 
         let hidden_size = self.plan.resources().model().config.hidden_size;
-        let mut decode_buffers = self
-            .operators
-            .cuda_mut()?
-            .take_decode_buffers(hc_state.len(), hidden_size)?;
+        let mut decode_buffers = self.operators.cuda_mut()?.take_decode_buffers(
+            hc_state.len(),
+            hidden_size,
+            hidden_size,
+        )?;
         let layer_result: Result<Vec<RoutedMoeStepOutput>> = {
             let layers = self.plan.resources().layers();
             let position = self.sequence.core.position();
@@ -1162,41 +1659,13 @@ impl DeepSeekV4Runner {
             .map(|_| ())
     }
 
-    /// Correctness-first prefill fallback: execute prompt tokens one-by-one through
-    /// the decode path while preserving KV/compressor state. This is intentionally
-    /// not the production batched prefill kernel, but it exercises real DSV4 weights
-    /// and keeps semantics close to the official causal path.
-    pub fn prefill_tokens_hidden(&mut self, token_ids: &[u32]) -> Result<Vec<f32>> {
-        if token_ids.is_empty() {
-            return Err(Error::Model(
-                "DeepSeek-V4 prefill requires at least one token".into(),
-            ));
-        }
-        self.prefill_stats.token_fallback_calls =
-            self.prefill_stats.token_fallback_calls.saturating_add(1);
-        self.prefill_stats.token_fallback_tokens = self
-            .prefill_stats
-            .token_fallback_tokens
-            .saturating_add(token_ids.len() as u64);
-
-        let mut hidden = Vec::new();
-        for (idx, &token_id) in token_ids.iter().enumerate() {
-            if idx + 1 == token_ids.len() {
-                hidden = self.decode_token_hidden(token_id)?;
-            } else {
-                self.feed_token(token_id)?;
-            }
-        }
-        Ok(hidden)
-    }
-
     pub fn prefill_tokens_logits_row_range(
         &mut self,
         token_ids: &[u32],
         start_row: usize,
         row_count: usize,
     ) -> Result<Vec<f32>> {
-        let hidden = self.prefill_tokens_hidden(token_ids)?;
+        let hidden = self.prefill_tokens_hidden_batched(token_ids)?;
         self.plan
             .resources()
             .model()
@@ -1204,41 +1673,6 @@ impl DeepSeekV4Runner {
                 &hidden,
                 start_row,
                 row_count,
-                &mut self.operators,
-            )
-    }
-
-    pub fn prefill_tokens_logits(&mut self, token_ids: &[u32]) -> Result<Vec<f32>> {
-        let hidden = self.prefill_tokens_hidden(token_ids)?;
-        self.plan
-            .resources()
-            .model()
-            .logits_for_hidden_chunked_with_operators(
-                &hidden,
-                self.plan
-                    .resources()
-                    .prepare_options()
-                    .output_head_chunk_rows,
-                &mut self.operators,
-            )
-    }
-
-    pub fn prefill_tokens_topk(
-        &mut self,
-        token_ids: &[u32],
-        top_k: usize,
-    ) -> Result<Vec<TokenLogit>> {
-        let hidden = self.prefill_tokens_hidden(token_ids)?;
-        self.plan
-            .resources()
-            .model()
-            .topk_logits_for_hidden_with_operators(
-                &hidden,
-                top_k,
-                self.plan
-                    .resources()
-                    .prepare_options()
-                    .output_head_chunk_rows,
                 &mut self.operators,
             )
     }
@@ -1401,7 +1835,12 @@ impl DeepSeekV4Runner {
             let layers = self.plan.resources().layers();
             let operators = &mut self.operators;
             self.layer_arena_pool.acquire(arena_key, || {
-                DeepSeekV4LayerArenaVariants::try_build(layers, tokens, operators)
+                DeepSeekV4LayerArenaVariants::try_build_for_mode(
+                    layers,
+                    ForwardMode::Prefill,
+                    tokens,
+                    operators,
+                )
             })
         } {
             Ok(lease) => lease,
@@ -1417,10 +1856,11 @@ impl DeepSeekV4Runner {
         }
 
         let hidden_size = self.plan.resources().model().config.hidden_size;
-        let mut buffers = self
-            .operators
-            .cuda_mut()?
-            .take_decode_buffers(hc_state.len(), tokens * hidden_size)?;
+        let mut buffers = self.operators.cuda_mut()?.take_decode_buffers(
+            hc_state.len(),
+            tokens * hidden_size,
+            hidden_size,
+        )?;
         let execution = (|| {
             self.operators
                 .cuda_mut()?
@@ -1483,13 +1923,6 @@ impl DeepSeekV4Runner {
             .batched_tokens
             .saturating_add(token_ids.len() as u64);
 
-        if token_ids.len() == 1 {
-            self.prefill_stats.token_fallback_calls =
-                self.prefill_stats.token_fallback_calls.saturating_add(1);
-            self.prefill_stats.token_fallback_tokens =
-                self.prefill_stats.token_fallback_tokens.saturating_add(1);
-            return self.feed_token(token_ids[0]);
-        }
         let _ = self.prefill_tokens_hc_states_batched(token_ids)?;
         Ok(())
     }
@@ -1514,9 +1947,6 @@ impl DeepSeekV4Runner {
             return Err(Error::Model(
                 "DeepSeek-V4 prefill requires at least one token".into(),
             ));
-        }
-        if token_ids.len() == 1 {
-            return self.prefill_tokens_hidden(token_ids);
         }
         let (hc_state, tokens) = self.prefill_tokens_hc_states_batched(token_ids)?;
         self.normalized_last_hidden_profiled(&hc_state, tokens)
@@ -1869,34 +2299,6 @@ fn push_candidate_experts(
     }
 }
 
-fn clone_sequence_layers(
-    operators: &mut DeepSeekV4OperatorContext,
-    layers: &[DeepSeekV4LayerState],
-) -> Result<Vec<DeepSeekV4LayerState>> {
-    let mut cloned = Vec::new();
-    cloned.try_reserve_exact(layers.len()).map_err(|error| {
-        Error::Model(format!(
-            "DeepSeek-V4 sequence layer clone allocation failed: {error}"
-        ))
-    })?;
-    for layer in layers {
-        let destination = layer.clone();
-        #[cfg(feature = "cuda")]
-        let destination = {
-            let mut destination = destination;
-            let physical = operators
-                .cuda_mut()?
-                .clone_sequence_kv_state(layer.kv.window.cuda_state())?;
-            destination.kv.window.replace_cuda_state(physical);
-            destination
-        };
-        #[cfg(not(feature = "cuda"))]
-        let _ = operators;
-        cloned.push(destination);
-    }
-    Ok(cloned)
-}
-
 fn duration_us(duration: Duration) -> u64 {
     duration.as_micros().min(u128::from(u64::MAX)) as u64
 }
@@ -1991,5 +2393,247 @@ impl TopKModelRunner for DeepSeekV4Runner {
 
     fn decode_topk(&mut self, token_id: u32, top_k: usize) -> Result<Vec<TokenLogit>> {
         self.decode_token_topk(token_id, top_k)
+    }
+}
+
+impl MultiSessionRunner for DeepSeekV4Runner {
+    type SequenceState = DeepSeekV4SequenceExecutionState;
+
+    fn configure_kv_page_capacity(&mut self, max_pages: usize) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        if self.operators.backend() == ModelExecutionBackend::Cuda {
+            let schema = self.plan.resources().kv_layout().clone();
+            self.operators
+                .cuda_mut()?
+                .configure_kv_page_pool(&schema, max_pages)?;
+        }
+        #[cfg(not(feature = "cuda"))]
+        let _ = max_pages;
+        Ok(())
+    }
+
+    fn release_kv_pages(&mut self, pages: &[ferrule_common::execution::KvPageId]) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        if self.operators.cuda.is_some() {
+            self.operators.cuda_mut()?.release_kv_pages(pages)?;
+        }
+        #[cfg(not(feature = "cuda"))]
+        let _ = pages;
+        Ok(())
+    }
+
+    fn preempt_kv_pages(&mut self, pages: &[ferrule_common::execution::KvPageId]) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        if self.operators.cuda.is_some() {
+            self.operators.cuda_mut()?.preempt_kv_pages(pages)?;
+        }
+        #[cfg(not(feature = "cuda"))]
+        let _ = pages;
+        Ok(())
+    }
+
+    fn restore_kv_pages(&mut self, pages: &[ferrule_common::execution::KvPageId]) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        if self.operators.cuda.is_some() {
+            self.operators.cuda_mut()?.restore_kv_pages(pages)?;
+        }
+        #[cfg(not(feature = "cuda"))]
+        let _ = pages;
+        Ok(())
+    }
+
+    fn prepare_multi_session_batch(
+        &mut self,
+        states: &mut [Self::SequenceState],
+        batch: &ferrule_common::execution::ExecutionBatch,
+        kv_reservations: &[ferrule_common::execution::KvReservation],
+    ) -> Result<bool> {
+        #[cfg(feature = "cuda")]
+        if self
+            .operators
+            .cuda
+            .as_ref()
+            .is_some_and(|cuda| cuda.has_kv_page_pool())
+            && !batch.kv_block_ids().is_empty()
+        {
+            if kv_reservations.len() != batch.sequences().len() {
+                return Err(Error::Model(format!(
+                    "DeepSeek-V4 paged batch has {} sequences but {} KV reservations",
+                    batch.sequences().len(),
+                    kv_reservations.len()
+                )));
+            }
+            let physical = kv_reservations
+                .iter()
+                .map(|reservation| {
+                    (
+                        reservation.newly_allocated.clone(),
+                        reservation.cow_replacement,
+                    )
+                })
+                .collect::<Vec<_>>();
+            self.operators.cuda_mut()?.prepare_kv_pages(&physical)?;
+            let lowered = (|| -> Result<Vec<_>> {
+                batch
+                    .sequences()
+                    .iter()
+                    .map(|sequence| {
+                        let state_index = sequence.state_slot.try_as_usize().map_err(|_| {
+                            Error::Model("DeepSeek-V4 state slot exceeds usize".into())
+                        })?;
+                        if state_index >= states.len() {
+                            return Err(Error::Model(format!(
+                                "DeepSeek-V4 state slot {state_index} is missing during paged prepare"
+                            )));
+                        }
+                        let block_start = usize::try_from(sequence.block_table.start)
+                            .map_err(|_| Error::Model("KV block range exceeds usize".into()))?;
+                        let block_end = usize::try_from(sequence.block_table.end)
+                            .map_err(|_| Error::Model("KV block range exceeds usize".into()))?;
+                        let binding = self.operators.cuda_mut()?.lower_paged_binding(
+                            &batch.kv_block_ids()[block_start..block_end],
+                            sequence.sequence_len as usize,
+                        )?;
+                        Ok((state_index, binding))
+                    })
+                    .collect()
+            })();
+            let lowered = match lowered {
+                Ok(lowered) => lowered,
+                Err(error) => {
+                    let _ = self.operators.cuda_mut()?.rollback_kv_pages();
+                    return Err(error);
+                }
+            };
+            for (state_index, binding) in lowered {
+                states[state_index].paged_kv_binding = Some(binding);
+            }
+            return Ok(true);
+        }
+        let _ = (states, batch, kv_reservations);
+        Ok(false)
+    }
+
+    fn commit_multi_session_batch(&mut self) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        if self
+            .operators
+            .cuda
+            .as_ref()
+            .is_some_and(|cuda| cuda.has_kv_page_pool())
+        {
+            self.operators.cuda_mut()?.commit_kv_pages()?;
+        }
+        Ok(())
+    }
+
+    fn rollback_multi_session_batch(&mut self) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        if self.operators.cuda.is_some() {
+            self.operators.cuda_mut()?.rollback_kv_pages()?;
+        }
+        Ok(())
+    }
+
+    fn execute_multi_session_batch(
+        &mut self,
+        states: &mut [Self::SequenceState],
+        batch: &ferrule_common::execution::ExecutionBatch,
+    ) -> Result<Option<ferrule_common::execution::ExecutionOutput>> {
+        #[cfg(not(feature = "cuda"))]
+        let _ = (states, batch);
+        #[cfg(feature = "cuda")]
+        if self.operators.backend() == ModelExecutionBackend::Cuda
+            && self
+                .operators
+                .cuda
+                .as_ref()
+                .is_some_and(|cuda| cuda.has_kv_page_pool())
+            && !batch
+                .logits()
+                .iter()
+                .any(|request| matches!(request, LogitsRequest::Full))
+        {
+            let metadata = PackedBatchMetadata::lower(batch, states.len())?;
+            if metadata.supports_native_cuda() {
+                return self
+                    .run_cuda_packed_batch_uncommitted(states, batch, &metadata)
+                    .map(Some);
+            }
+        }
+        Ok(None)
+    }
+
+    fn create_sequence_state(&mut self) -> Result<Self::SequenceState> {
+        DeepSeekV4Runner::create_sequence_state(self)
+    }
+
+    fn with_sequence_state<T>(
+        &mut self,
+        state: &mut Self::SequenceState,
+        execute: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        DeepSeekV4Runner::with_sequence_state(self, state, execute)
+    }
+
+    fn fork_sequence_state(&mut self) -> Result<Self::SequenceState> {
+        DeepSeekV4Runner::fork_sequence_state(self)
+    }
+
+    fn fork_sequence_state_from(
+        &mut self,
+        source: &Self::SequenceState,
+        expected_position: usize,
+    ) -> Result<Self::SequenceState> {
+        Self::fork_sequence_state_from_explicit(source, expected_position)
+    }
+
+    fn reset_sequence_state(&mut self, state: &mut Self::SequenceState) -> Result<()> {
+        DeepSeekV4Runner::reset_sequence_state(self, state)
+    }
+
+    fn release_sequence_state(&mut self, state: Self::SequenceState) -> Result<()> {
+        DeepSeekV4Runner::release_sequence_state(self, state)
+    }
+
+    fn multi_session_capabilities(&self) -> ferrule_common::execution::ExecutionCapabilities {
+        let max_top_k = u32::try_from(self.max_top_k()).unwrap_or(u32::MAX);
+        let vocab_size = self.model_info().vocab_size;
+        let full_logits_width = u32::try_from(vocab_size)
+            .ok()
+            .and_then(std::num::NonZeroU32::new);
+        let max_packed_rows = usize::try_from(u32::MAX).unwrap_or(usize::MAX);
+
+        ferrule_common::execution::ExecutionCapabilities {
+            max_batch_tokens: max_packed_rows,
+            max_sequences: usize::MAX,
+            max_prefill_query_tokens_per_sequence: max_packed_rows,
+            max_decode_query_tokens_per_sequence: 1,
+            max_top_k: std::num::NonZeroU32::new(max_top_k),
+            supports_prefill: true,
+            supports_decode: true,
+            supports_mixed: true,
+            full_logits_width,
+            kv_binding_mode: {
+                #[cfg(feature = "cuda")]
+                {
+                    if self
+                        .operators
+                        .cuda
+                        .as_ref()
+                        .is_some_and(|cuda| cuda.has_kv_page_pool())
+                    {
+                        ferrule_common::execution::KvBindingMode::Paged
+                    } else {
+                        ferrule_common::execution::KvBindingMode::None
+                    }
+                }
+                #[cfg(not(feature = "cuda"))]
+                {
+                    ferrule_common::execution::KvBindingMode::None
+                }
+            },
+            logits_row_policy: ferrule_common::execution::LogitsRowPolicy::LastPerSequence,
+        }
     }
 }

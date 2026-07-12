@@ -8,18 +8,18 @@
 //!   FERRULE_LOG_FORMAT=json             → JSON log output
 //!   FERRULE_METRICS_INTERVAL=5          → periodic metrics dump interval (seconds)
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 // ── Tracing init ───────────────────────────────────────────────────────
 
 /// Initialize tracing subscriber. Call once at program start.
 pub fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
-    use tracing_subscriber::EnvFilter;
 
     let env_filter =
         EnvFilter::try_from_env("FERRULE_LOG").unwrap_or_else(|_| EnvFilter::new("info"));

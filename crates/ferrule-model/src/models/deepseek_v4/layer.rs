@@ -13,14 +13,18 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::moe::streaming::{ExpertStreamingPlanner, ExpertStreamingReader};
+#[cfg(feature = "cuda")]
+use ferrule_common::execution::ForwardMode;
 use ferrule_common::{Error, Result};
 
-#[cfg(feature = "cuda")]
-use super::attention::DeepSeekV4AttentionDecodeArena;
 use super::attention::{DeepSeekV4Attention, DeepSeekV4AttentionCache};
+#[cfg(feature = "cuda")]
+use super::attention::{DeepSeekV4AttentionDecodeArena, DeepSeekV4AttentionRowsTransitionArena};
 use super::config::DeepSeekV4AttentionConfig;
 use super::helpers::rms_norm_rows_with_operators;
 use super::operators::{DeepSeekV4LayerProfileStage, DeepSeekV4OperatorContext};
+#[cfg(feature = "cuda")]
+use super::sequence::DeepSeekV4PagedKvBinding;
 
 pub struct DeepSeekV4Layer {
     pub layer: usize,
@@ -586,6 +590,192 @@ impl DeepSeekV4Layer {
         Ok(DeepSeekV4LayerDeviceStepOutput { moe })
     }
 
+    /// Layer-major packed decode. HC, attention data-path kernels,
+    /// normalization, and MoE execute over all rows together. Only the
+    /// sequence-owned compressor recurrent transitions remain row-serial.
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn packed_rows_device_hc_device(
+        &self,
+        states: &mut [&mut DeepSeekV4LayerState],
+        row_to_sequence: &[usize],
+        sequence_major_rows: &[usize],
+        sequence_prefill: &[bool],
+        paged_bindings: &[DeepSeekV4PagedKvBinding],
+        expert_runtime: &mut DeepSeekV4LayerExpertRuntime,
+        arena: &mut DeepSeekV4LayerArena,
+        hc_state_dev: &mut ferrule_cuda::context::CudaF32Buffer,
+        token_ids: &[u32],
+        positions: &[usize],
+        predicted_experts: &[usize],
+        expert_reader: &ExpertStreamingReader,
+        operators: &mut DeepSeekV4OperatorContext,
+    ) -> Result<()> {
+        let rows = token_ids.len();
+        if rows < 2
+            || positions.len() != rows
+            || row_to_sequence.len() != rows
+            || sequence_major_rows.len() != rows
+            || states.len() != paged_bindings.len()
+            || sequence_prefill.len() != states.len()
+            || row_to_sequence
+                .iter()
+                .any(|sequence| *sequence >= states.len())
+        {
+            return Err(Error::Model(
+                "DeepSeek-V4 packed row/sequence metadata is inconsistent".into(),
+            ));
+        }
+        let layer_tag = format!("L{}", self.layer);
+        operators.cuda_mut()?.hc_pre_from_device_into(
+            &format!("hc_attn_{layer_tag}"),
+            hc_state_dev,
+            &self.hc_attention,
+            rows,
+            self.hc_config,
+            &mut arena.attn_hidden,
+            &mut arena.attn_pre,
+            &mut arena.attn_post,
+            &mut arena.attn_comb,
+        )?;
+        operators.capture_parity_checkpoint_last_row(
+            self.layer,
+            "attention_hc_hidden",
+            &arena.attn_hidden,
+            self.hc_config.hidden_size,
+        )?;
+        operators.cuda_mut()?.rms_norm_rows_device_cached_into(
+            &format!("attn_norm_{layer_tag}"),
+            &arena.attn_hidden,
+            rows,
+            &self.attn_norm,
+            self.hc_config.norm_eps,
+            &mut arena.attn_norm,
+        )?;
+
+        operators.capture_parity_checkpoint_last_row(
+            self.layer,
+            "attention_input",
+            &arena.attn_norm,
+            self.hc_config.hidden_size,
+        )?;
+
+        let transition = arena.attention_transition.as_mut().ok_or_else(|| {
+            Error::Internal("packed decode arena is missing attention transition scratch".into())
+        })?;
+
+        let mut attention_caches = states
+            .iter_mut()
+            .map(|state| &mut state.kv)
+            .collect::<Vec<_>>();
+        self.attention.packed_rows_from_device_into(
+            &mut attention_caches,
+            &arena.attn_norm,
+            positions,
+            row_to_sequence,
+            sequence_major_rows,
+            sequence_prefill,
+            paged_bindings,
+            operators,
+            &mut arena.attention,
+            transition,
+        )?;
+
+        operators.cuda_mut()?.hc_post_from_device_into(
+            &arena.attention.output,
+            hc_state_dev,
+            &arena.attn_post,
+            &arena.attn_comb,
+            rows,
+            self.hc_config,
+            &mut arena.after_attn,
+        )?;
+        operators.capture_parity_checkpoint_last_row(
+            self.layer,
+            "after_attention",
+            &arena.after_attn,
+            self.hc_config.hc_hidden_size(),
+        )?;
+        operators.cuda_mut()?.hc_pre_from_device_into(
+            &format!("hc_ffn_{layer_tag}"),
+            &arena.after_attn,
+            &self.hc_feed_forward,
+            rows,
+            self.hc_config,
+            &mut arena.ffn_hidden,
+            &mut arena.ffn_pre,
+            &mut arena.ffn_post,
+            &mut arena.ffn_comb,
+        )?;
+        operators.cuda_mut()?.rms_norm_rows_device_cached_into(
+            &format!("ffn_norm_{layer_tag}"),
+            &arena.ffn_hidden,
+            rows,
+            &self.ffn_norm,
+            self.hc_config.norm_eps,
+            &mut arena.ffn_norm,
+        )?;
+        operators.capture_parity_checkpoint_last_row(
+            self.layer,
+            "ffn_input",
+            &arena.ffn_norm,
+            self.hc_config.hidden_size,
+        )?;
+        if !predicted_experts.is_empty() {
+            operators.prefetch_predicted_experts(
+                self.layer,
+                predicted_experts,
+                &mut expert_runtime.expert_planner,
+                expert_reader,
+                &mut expert_runtime.expert_handles,
+            )?;
+        }
+        operators.routed_moe_prefill_batch_from_device_into(
+            self.layer,
+            &arena.ffn_norm,
+            token_ids,
+            Some(row_to_sequence),
+            &self.router,
+            predicted_experts,
+            &self.router_policy,
+            &mut expert_runtime.expert_planner,
+            expert_reader,
+            &mut expert_runtime.expert_handles,
+            &self.shared_ffn,
+            &mut arena.router_logits,
+            &mut arena.router_indices,
+            &mut arena.router_weights,
+            &mut arena.attention.linear_workspace,
+            &mut arena.shared_workspace,
+            &mut arena.moe_segment_workspace,
+            &mut arena.moe_route_output,
+            &mut arena.moe_output,
+        )?;
+        operators.capture_parity_checkpoint_last_row(
+            self.layer,
+            "moe_output",
+            &arena.moe_output,
+            self.hc_config.hidden_size,
+        )?;
+        operators.cuda_mut()?.hc_post_from_device_into(
+            &arena.moe_output,
+            &arena.after_attn,
+            &arena.ffn_post,
+            &arena.ffn_comb,
+            rows,
+            self.hc_config,
+            &mut arena.layer_output,
+        )?;
+        operators.capture_parity_checkpoint_last_row(
+            self.layer,
+            "layer_output",
+            &arena.layer_output,
+            self.hc_config.hc_hidden_size(),
+        )?;
+        std::mem::swap(hc_state_dev, &mut arena.layer_output);
+        Ok(())
+    }
+
     #[cfg(feature = "cuda")]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prefill_start_cuda_device_chain_into(
@@ -748,6 +938,7 @@ impl DeepSeekV4Layer {
             self.layer,
             &arena.ffn_norm,
             token_ids,
+            None,
             &self.router,
             predicted_experts,
             &self.router_policy,
@@ -996,6 +1187,7 @@ pub(crate) struct DeepSeekV4LayerArena {
     ffn_comb: ferrule_cuda::context::CudaF32Buffer,
     ffn_norm: ferrule_cuda::context::CudaF32Buffer,
     attention: DeepSeekV4AttentionDecodeArena,
+    attention_transition: Option<DeepSeekV4AttentionRowsTransitionArena>,
     router_input: ferrule_cuda::context::CudaF32Buffer,
     router_logits: ferrule_cuda::context::CudaF32Buffer,
     router_indices: ferrule_cuda::context::CudaF32Buffer,
@@ -1023,17 +1215,52 @@ impl DeepSeekV4LayerArenaVariants {
         rows: usize,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<Self> {
+        Self::try_build_for_mode(layers, ForwardMode::Decode, rows, operators)
+    }
+
+    pub(crate) fn try_build_for_mode(
+        layers: &[DeepSeekV4Layer],
+        mode: ForwardMode,
+        rows: usize,
+        operators: &mut DeepSeekV4OperatorContext,
+    ) -> Result<Self> {
+        Self::try_build_with_row_transitions(
+            layers,
+            mode,
+            rows,
+            mode == ForwardMode::Decode,
+            operators,
+        )
+    }
+
+    pub(crate) fn try_build_for_packed_mode(
+        layers: &[DeepSeekV4Layer],
+        mode: ForwardMode,
+        rows: usize,
+        operators: &mut DeepSeekV4OperatorContext,
+    ) -> Result<Self> {
+        Self::try_build_with_row_transitions(layers, mode, rows, true, operators)
+    }
+
+    fn try_build_with_row_transitions(
+        layers: &[DeepSeekV4Layer],
+        mode: ForwardMode,
+        rows: usize,
+        independent_rows: bool,
+        operators: &mut DeepSeekV4OperatorContext,
+    ) -> Result<Self> {
         let (layer_to_variant, representative_layers) = layer_arena_variant_layout(layers);
         let mut arenas = Vec::with_capacity(representative_layers.len());
         for layer_idx in representative_layers {
             arenas.push(DeepSeekV4LayerArena::new(
                 &layers[layer_idx],
                 rows,
+                independent_rows,
                 operators,
             )?);
         }
         eprintln!(
-            "[ferrule] DSV4 arena bucket rows={rows}: {} layers -> {} unique scratch arenas",
+            "[ferrule] DSV4 arena bucket mode={mode:?} rows={rows}: {} layers -> {} unique scratch arenas",
             layers.len(),
             arenas.len()
         );
@@ -1064,6 +1291,7 @@ impl DeepSeekV4LayerArena {
     pub(crate) fn new(
         layer: &DeepSeekV4Layer,
         rows: usize,
+        independent_rows: bool,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<Self> {
         let config = layer.hc_config;
@@ -1087,7 +1315,15 @@ impl DeepSeekV4LayerArena {
             ffn_post: operators.cuda_mut()?.ops.zero_f32_buffer(rows * hc)?,
             ffn_comb: operators.cuda_mut()?.ops.zero_f32_buffer(rows * comb)?,
             ffn_norm: operators.cuda_mut()?.ops.zero_f32_buffer(rows * hidden)?,
-            attention: DeepSeekV4AttentionDecodeArena::new(&layer.attention, rows, operators)?,
+            attention: DeepSeekV4AttentionDecodeArena::new(
+                &layer.attention,
+                rows,
+                independent_rows,
+                operators,
+            )?,
+            attention_transition: (rows > 1)
+                .then(|| DeepSeekV4AttentionRowsTransitionArena::new(&layer.attention, operators))
+                .transpose()?,
             router_input: operators.cuda_mut()?.ops.zero_f32_buffer(rows * hidden)?,
             router_logits: operators
                 .cuda_mut()?
@@ -1131,6 +1367,13 @@ impl DeepSeekV4LayerState {
 
     pub fn reset_sequence(&mut self) {
         self.kv.reset_sequence();
+    }
+
+    pub(crate) fn fork_paged_prefix_metadata(&self) -> Self {
+        Self {
+            attention_config: self.attention_config,
+            kv: self.kv.fork_paged_prefix_metadata(),
+        }
     }
 
     pub fn release_sequence_capacity(&mut self) {

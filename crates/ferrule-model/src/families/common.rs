@@ -13,7 +13,7 @@ pub fn classify_hf_tensor(name: &str) -> TensorClass {
         | "model.embed_tokens.weight"
         | "embed.weight" => return TensorClass::TokenEmbedding,
         "output_norm.weight" | "model.norm.weight" | "norm.weight" => {
-            return TensorClass::OutputNorm
+            return TensorClass::OutputNorm;
         }
         "output.weight" | "lm_head.weight" | "head.weight" => return TensorClass::OutputHead,
         _ => {}

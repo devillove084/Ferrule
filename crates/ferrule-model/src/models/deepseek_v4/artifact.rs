@@ -24,8 +24,8 @@ use ferrule_common::{Error, Result};
 
 use super::attention::{DeepSeekV4Attention, DeepSeekV4CompressedAttentionPayload};
 use super::config::{
-    with_deepseek_v4_attention_execution_policies, with_deepseek_v4_swiglu_execution_policies,
-    DeepSeekV4Config,
+    DeepSeekV4Config, with_deepseek_v4_attention_execution_policies,
+    with_deepseek_v4_swiglu_execution_policies,
 };
 use super::helpers::{
     decode_tensor_f32, decode_vector_f32, rank_logits_desc, read_named_vector_f32,

@@ -11,6 +11,6 @@ mod sequence;
 
 pub use arena::{ArenaLease, PersistentArenaPool, PersistentArenaPoolStats};
 pub use backend::ModelExecutionBackend;
-pub use binding::{ExecutionShapeKey, PreparedStepBinding};
+pub use binding::ExecutionShapeKey;
 pub use plan::PreparedModel;
 pub use sequence::{SequenceStateCore, SequenceStepBinding};

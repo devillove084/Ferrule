@@ -9,10 +9,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 
-use crate::semantic::{RoutedExpertMatrix, RoutedExpertTensorPart, RoutedExpertTensorRef};
 use crate::HfRoutedExpertTensorInfo;
+use crate::semantic::{RoutedExpertMatrix, RoutedExpertTensorPart, RoutedExpertTensorRef};
 use ferrule_common::{Error, Result};
 use rayon::prelude::*;
 
@@ -817,7 +817,7 @@ impl ExpertStreamingReader {
                 return Err(Error::Model(format!(
                     "expert streaming reader does not support artifact tier {:?} yet",
                     other.tier()
-                )))
+                )));
             }
         };
         Ok(ExpertArtifactPayload { expert, tensors })
@@ -954,7 +954,7 @@ impl ExpertStreamingReader {
                 return Err(Error::Model(format!(
                     "expert streaming reader does not support artifact tier {:?} yet",
                     other.tier()
-                )))
+                )));
             }
         };
         for slice in &slices {
@@ -1937,10 +1937,11 @@ mod tests {
             vec![ExpertId::new(0, 1), ExpertId::new(0, 3)]
         );
         assert_eq!(step.loads.len(), 2);
-        assert!(step
-            .loads
-            .iter()
-            .all(|load| load.reason == ExpertLoadReason::Selected));
+        assert!(
+            step.loads
+                .iter()
+                .all(|load| load.reason == ExpertLoadReason::Selected)
+        );
         planner.commit_step(&step).unwrap();
         assert_eq!(
             planner.location(ExpertId::new(0, 1)),
@@ -2119,10 +2120,12 @@ mod tests {
         assert_eq!(after_reset.selected, vec![ExpertId::new(0, 3)]);
         assert_eq!(after_reset.prefetched, vec![ExpertId::new(0, 2)]);
         assert_eq!(after_reset.loads.len(), 2);
-        assert!(after_reset
-            .loads
-            .iter()
-            .all(|load| load.load_source.tier() == ExpertStorageTier::LocalStorage));
+        assert!(
+            after_reset
+                .loads
+                .iter()
+                .all(|load| load.load_source.tier() == ExpertStorageTier::LocalStorage)
+        );
     }
 
     #[test]
@@ -2304,10 +2307,11 @@ mod tests {
         let step = planner.plan_layer_step(0, &[2, 3], &[]).unwrap();
         assert_eq!(step.loads.len(), 2);
         assert_eq!(step.evictions.len(), 2);
-        assert!(step
-            .evictions
-            .iter()
-            .all(|evict| evict.target == ExpertStorageTier::LocalStorage));
+        assert!(
+            step.evictions
+                .iter()
+                .all(|evict| evict.target == ExpertStorageTier::LocalStorage)
+        );
         planner.commit_step(&step).unwrap();
         assert_eq!(
             planner.resident_experts(0),
@@ -2367,9 +2371,10 @@ mod tests {
             );
         }
         let err = planner.plan_layer_step(0, &[0, 1], &[]).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("selected experts must be available"));
+        assert!(
+            err.to_string()
+                .contains("selected experts must be available")
+        );
     }
 
     fn fp4_payload(

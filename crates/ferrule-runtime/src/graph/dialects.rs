@@ -13,7 +13,7 @@ pub mod domain {
 }
 
 pub mod tensor_ops {
-    use super::{op, Result};
+    use super::{Result, op};
     use crate::graph::OpKey;
 
     pub fn residual_add() -> Result<OpKey> {
@@ -22,7 +22,7 @@ pub mod tensor_ops {
 }
 
 pub mod transformer_ops {
-    use super::{op, Result};
+    use super::{Result, op};
     use crate::graph::OpKey;
 
     pub fn token_embedding() -> Result<OpKey> {
@@ -83,7 +83,7 @@ pub mod transformer_ops {
 }
 
 pub mod state_ops {
-    use super::{op, Result};
+    use super::{Result, op};
     use crate::graph::OpKey;
 
     pub fn kv_state() -> Result<OpKey> {

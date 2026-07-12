@@ -282,6 +282,49 @@ impl SequenceState {
         self.finish_reason = None;
     }
 
+    /// Build unpublished scheduler metadata for an exact committed-prefix fork.
+    pub(crate) fn fork_exact(
+        &self,
+        target_session_id: SessionId,
+        request: &GenerateRequest,
+        expected_position: usize,
+    ) -> Result<Self> {
+        if self.position != expected_position {
+            return Err(Error::Execution(format!(
+                "session fork expected committed position {expected_position}, source is at {}",
+                self.position
+            )));
+        }
+        if self.tokens.len() < expected_position {
+            return Err(Error::Internal(format!(
+                "session {:?} has {} tracked tokens at committed position {expected_position}",
+                self.session_id,
+                self.tokens.len()
+            )));
+        }
+        let mut tokens = self.tokens[..expected_position].to_vec();
+        tokens.extend_from_slice(&request.prompt_tokens);
+        Ok(Self {
+            request_id: Some(request.id),
+            session_id: target_session_id,
+            kv_handle: None,
+            position: expected_position,
+            tokens,
+            generated: 0,
+            status: SequenceStatus::Running,
+            finish_reason: None,
+            sampling: request.sampling.clone(),
+            max_new_tokens: request.max_new_tokens,
+            stop: request.stop.clone(),
+            prompt_len: request.prompt_tokens.len(),
+            prompt_cursor: 0,
+            next_decode_token: None,
+            next_decode_logit: None,
+            generated_text: String::new(),
+            total_generated: self.total_generated,
+        })
+    }
+
     /// Mark the current turn as finished with a structured terminal reason.
     pub fn mark_finished(&mut self, reason: SequenceFinishReason) {
         self.status = match reason {

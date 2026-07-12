@@ -755,10 +755,10 @@ impl ExecutionOutput {
                     Some(maximum) if *k <= maximum => {}
                     Some(maximum) => {
                         return Err(execution_error(format!(
-                                "input row {input_row} requests top-k {}, exceeding capability limit {}",
-                                k.get(),
-                                maximum.get()
-                            )));
+                            "input row {input_row} requests top-k {}, exceeding capability limit {}",
+                            k.get(),
+                            maximum.get()
+                        )));
                     }
                     None => {
                         return Err(execution_error(format!(
@@ -928,6 +928,79 @@ pub trait ModelBatchExecutor {
 
 fn execution_error(message: impl Into<String>) -> Error {
     Error::Execution(message.into())
+}
+
+// ── E5: Physical paged KV layout schema ───────────────────────────────────
+
+/// Describes one logical KV plane (e.g. window, compressed, indexer).
+///
+/// Each plane has its own element width and page-size semantics. The runtime
+/// page manager allocates pages per plane; the backend maps them to physical
+/// device buffers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct KvPlaneDescriptor {
+    /// Human-readable plane name for diagnostics (e.g. "window", "compressed").
+    pub name: &'static str,
+    /// Number of f32-equivalent elements per token in this plane.
+    pub elements_per_token: usize,
+    /// Number of layers this plane spans (usually equal to the model layer count).
+    pub layer_count: usize,
+}
+
+/// Model-supplied schema describing how the model's KV cache is laid out
+/// across physical pages.
+///
+/// The runtime `KvPageManager` uses this schema to compute page requirements
+/// and allocate pages. The backend uses it to size physical pools.
+///
+/// This trait is model-agnostic. Concrete models (DSV4, Qwen3, etc.) implement
+/// it to describe their specific KV planes.
+pub trait KvLayoutSchema: std::fmt::Debug {
+    /// All KV planes this model requires.
+    fn planes(&self) -> &[KvPlaneDescriptor];
+
+    /// Page size in tokens. All planes use the same page granularity.
+    fn page_size(&self) -> usize;
+
+    /// Maximum sequence length the schema supports.
+    fn max_sequence_len(&self) -> usize;
+
+    /// Number of pages needed for a sequence of `token_count` tokens.
+    fn pages_for_tokens(&self, token_count: usize) -> usize {
+        let page_size = self.page_size();
+        (token_count + page_size - 1) / page_size
+    }
+}
+
+/// A logical KV page identifier within one plane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct KvPageId(pub u32);
+
+/// One delayed copy-on-write replacement of a shared tail page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KvCowReplacement {
+    pub logical_page: usize,
+    pub source: KvPageId,
+    pub replacement: KvPageId,
+}
+
+/// Reservation of pages for one sequence before execution.
+///
+/// Pages are reserved before model execution and committed only after
+/// successful completion. A failure rolls back all newly allocated pages.
+#[derive(Debug, Clone)]
+pub struct KvReservation {
+    /// State slot this reservation belongs to.
+    pub state_slot: StateSlot,
+    /// Position range covered by this reservation.
+    pub positions: std::ops::Range<usize>,
+    /// Newly allocated page IDs that will be committed on success or rolled
+    /// back on failure.
+    pub newly_allocated: Vec<KvPageId>,
+    /// Generation of the sequence state when the reservation was made.
+    pub generation: u64,
+    /// Delayed COW replacement for a partially filled shared tail page.
+    pub cow_replacement: Option<KvCowReplacement>,
 }
 
 #[cfg(test)]

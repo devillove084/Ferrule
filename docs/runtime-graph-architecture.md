@@ -298,8 +298,8 @@ ResidentScheduler
   → crate-private ScheduledBatch
        ├─ ExecutionBatch: packed tokens/positions/write slots/logits intent
        └─ runtime-only request/session/KV correlation
-  → TopKCompatibilityExecutor today
-  → native ModelBatchExecutor after E2/E3/E4
+  → NativeMultiSessionExecutor<MultiSessionRunner>
+  → KvPageManager + backend physical-page transaction
 ```
 
 The public batch uses ragged `ExecutionSequence` spans plus opaque `StateSlot`,
@@ -312,12 +312,12 @@ Reference graph execution consumes the same `ExecutionBatch` but receives
 silently persisting slot zero or conflating semantic external resources with mutable
 sequence/KV state.
 
-The retained serving-shaped path terminates in
-`TopKCompatibilityExecutor<R: TopKModelRunner>`. It truthfully supports only one
-implicit runner sequence and is not a native multi-session `ModelBatchExecutor`.
-E2 prepares reusable resources and arenas, E3 introduces model-native explicit
-sequence state, and E4 allows scheduler-formed ragged/multi-session work to reach
-one native device pipeline.
+The serving path terminates in
+`NativeMultiSessionExecutor<R: MultiSessionRunner>`. E2 supplies prepared resources
+and arenas, E3 supplies explicit model sequence state, E4 lowers scheduler-formed
+ragged/mixed work into one native device pipeline, and E5 binds runtime reservations
+to authoritative physical multi-plane pages. Graph IR remains independent of these
+mutable serving lifecycles.
 
 ## Runtime contract 2: `ExternalBindingPlan`
 
@@ -468,18 +468,17 @@ ferrule-runtime/src/scheduling
   actions.rs                      SchedulerAction and action planning vocabulary
   batch.rs                        crate-private ScheduledBatch correlation/lowering
   session.rs                      GenerateRequest, SequenceState, finish reasons
-  resident.rs                     ResidentScheduler over SequenceKvCache
+  resident.rs                     token-budgeted ResidentScheduler over sequence slots
 
 ferrule-runtime/src/cache
-  kv.rs                           contiguous + multi-session SequenceKvCache
-  paged_kv.rs                     PagedKvCache + PagedSequenceKvCache block tables
-  prefix_cache.rs / radix_cache.rs prefix/radix cache direction
+  page_manager.rs                 authoritative reservations/refcounts/block tables/COW
+  kv.rs / paged_kv.rs             CPU/reference cache and slot-pool infrastructure
+  prefix_cache.rs / radix_cache.rs future lookup-policy integration
 
 ferrule-runtime/src/engine
-  worker.rs                       explicit EngineWorker append/decode phases
-  topk_compatibility.rs           single-sequence compatibility executor
-  driver.rs                       request -> token event -> finish/free-KV loop
-  lazy.rs                         artifact-only background load + foreground runner construction
+  native_executor.rs              neutral packed multi-session execution and KV hooks
+  driver.rs                       request -> page transaction -> token/finish lifecycle
+  diagnostic.rs                   explicit page-managed differential diagnostics
 
 ferrule-runtime
   backend_object_store.rs         materialized HF/semantic externals
@@ -501,8 +500,8 @@ The immediate goal is not simply to add another model name. The goal is to build
 | Capability | Current/target Ferrule abstraction |
 |---|---|
 | Public execution ABI | sole `ferrule-common::execution::ExecutionBatch` and `ExecutionOutput` |
-| Current compatibility execution | `ResidentScheduler -> ScheduledBatch -> TopKCompatibilityExecutor` |
-| Native continuous batching target | E3/E4 explicit sequence state and native `ModelBatchExecutor` |
+| Current native execution | `ResidentScheduler -> ScheduledBatch -> NativeMultiSessionExecutor` |
+| Physical KV lifecycle | `KvPageManager -> runner backend hooks -> CudaKvPagePool` |
 | Reusable graph construction | `GraphTemplate -> ComputeGraph -> GraphProgram` |
 | External resource separation | `ExternalKey + ExternalBindingPlan + BackendObjectStore` |
 | Paged KV direction | runtime reservation plus one physical multi-plane binding lifecycle |
@@ -577,11 +576,11 @@ Phase 5: CUDA prepared lowering — after E2/E3 ownership
 
 Phase 6: graph-backed native ModelBatchExecutor — after parity
   - Consume explicit sequence state and the sole neutral batch ABI
-  - Keep OLMoE and DeepSeekV4 compatibility paths until native parity exists
+  - Preserve model-neutral reference executors as differential oracles
 
 Phase 7: serving, speculation, and training/autograd
-  - Bind physical paged KV block tables into explicit sequence state
-  - Replace the single-sequence TopK compatibility path with native multi-session execution
+  - [x] Bind physical paged KV block tables into explicit sequence state
+  - [x] Replace the single-sequence compatibility path with native multi-session execution
   - Add DSpark-style speculation through generic Speculation bindings
   - Add GradientRegistry
   - Generate backward graph or tape

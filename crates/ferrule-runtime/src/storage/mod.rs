@@ -26,7 +26,7 @@ pub mod transfer;
 
 pub use catalog::{InMemoryStorageCatalog, StorageCatalog, StorageCatalogBuilder};
 pub use descriptor::{StorageMutability, StorageObjectDescriptor, StorageObjectKind};
-pub use id::{ModelRevision, StorageObjectId, TensorRole, WeightPackId, ID_VARIANT_EXPERT_BUNDLE};
+pub use id::{ID_VARIANT_EXPERT_BUNDLE, ModelRevision, StorageObjectId, TensorRole, WeightPackId};
 pub use layout::{ExpertBundleLayout, KvPageLayout, StorageLayout, TensorLayout};
 pub use locator::ObjectLocator;
 pub use placement::{

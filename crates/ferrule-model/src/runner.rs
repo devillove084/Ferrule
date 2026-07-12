@@ -1,6 +1,10 @@
+use ferrule_common::execution::{
+    ExecutionBatch, ExecutionCapabilities, ExecutionOutput, KvReservation,
+};
+
 use crate::{EnginePlan, ModelDescriptor};
-pub use ferrule_common::execution::TokenLogit;
 use ferrule_common::Result;
+pub use ferrule_common::execution::TokenLogit;
 
 // ── ModelInfo ─────────────────────────────────────────────────────────────
 
@@ -106,6 +110,133 @@ pub trait TopKModelRunner: ModelRunner {
         mode: PrefillMode,
     ) -> Result<Vec<TokenLogit>>;
     fn decode_topk(&mut self, token_id: u32, top_k: usize) -> Result<Vec<TokenLogit>>;
+}
+
+/// A model runner that supports explicit per-sequence state for multi-session
+/// execution.
+///
+/// This trait extends [`TopKModelRunner`] with the ability to swap sequence state
+/// in and out of the runner, enabling multiple independent sequences to share
+/// one set of prepared resources (weights, expert residency, arenas).
+///
+/// Models implement this trait; the runtime crate provides a generic
+/// [`NativeMultiSessionExecutor`] that works over any `MultiSessionRunner`.
+///
+/// [`NativeMultiSessionExecutor`]: ../../ferrule_runtime/engine/struct.NativeMultiSessionExecutor.html
+pub trait MultiSessionRunner: TopKModelRunner {
+    /// Per-sequence execution state (position, KV, predictor, etc.).
+    type SequenceState;
+
+    /// Execute a closure against an explicit sequence state instead of the
+    /// runner's default session. The state is swapped in for the duration of
+    /// the closure and swapped back afterwards, even on panic.
+    ///
+    /// The closure receives `&mut Self` so it can call any runner method
+    /// (`prefill_tokens`, `decode_topk`, `feed_token`, etc.) and those methods
+    /// will operate on the swapped-in sequence.
+    fn with_sequence_state<T>(
+        &mut self,
+        state: &mut Self::SequenceState,
+        execute: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T>;
+
+    /// Create a fresh independent sequence state at position zero.
+    ///
+    /// Serving admission should use this hook rather than cloning the runner's
+    /// default session. The default preserves compatibility for runners that do
+    /// not yet distinguish fresh construction from an explicit state fork.
+    fn create_sequence_state(&mut self) -> Result<Self::SequenceState> {
+        self.fork_sequence_state()
+    }
+
+    /// Create an independent sequence state forked from the runner's default
+    /// session, including any model-owned continuation state.
+    fn fork_sequence_state(&mut self) -> Result<Self::SequenceState>;
+
+    /// Prepare an independent state from an explicit committed source state.
+    ///
+    /// This hook is model-family neutral and must not mutate `source`. Paged KV
+    /// bytes remain owned by the runtime/backend page pool; implementations copy
+    /// only model-owned continuation metadata needed at `expected_position`.
+    fn fork_sequence_state_from(
+        &mut self,
+        source: &Self::SequenceState,
+        expected_position: usize,
+    ) -> Result<Self::SequenceState>;
+
+    /// Reset a sequence state for reuse with a new logical sequence.
+    fn reset_sequence_state(&mut self, state: &mut Self::SequenceState) -> Result<()>;
+
+    /// Release a sequence state and its physical capacity.
+    fn release_sequence_state(&mut self, state: Self::SequenceState) -> Result<()>;
+
+    /// Configure the maximum number of backend physical KV pages. Runners that
+    /// own a physical page pool override this hook; metadata-only runners ignore it.
+    fn configure_kv_page_capacity(&mut self, _max_pages: usize) -> Result<()> {
+        Ok(())
+    }
+
+    /// Release backend physical slots or suspended snapshots after runtime
+    /// refcounts reach zero.
+    fn release_kv_pages(&mut self, _pages: &[ferrule_common::execution::KvPageId]) -> Result<()> {
+        Ok(())
+    }
+
+    /// Move exclusively owned pages out of backend device residency. Backends
+    /// retain any opaque host snapshots required by `restore_kv_pages`.
+    fn preempt_kv_pages(&mut self, _pages: &[ferrule_common::execution::KvPageId]) -> Result<()> {
+        Ok(())
+    }
+
+    /// Restore pages previously moved out of backend device residency.
+    fn restore_kv_pages(&mut self, _pages: &[ferrule_common::execution::KvPageId]) -> Result<()> {
+        Ok(())
+    }
+
+    /// Reserve backend-owned physical resources for one packed batch.
+    ///
+    /// A successful prepare remains provisional until
+    /// [`commit_multi_session_batch`](Self::commit_multi_session_batch). Backends
+    /// must leave the previously committed view unchanged when prepare fails.
+    fn prepare_multi_session_batch(
+        &mut self,
+        _states: &mut [Self::SequenceState],
+        _batch: &ExecutionBatch,
+        _kv_reservations: &[KvReservation],
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Publish resources prepared for the current batch after the runtime KV
+    /// transaction has committed.
+    fn commit_multi_session_batch(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Discard resources prepared for the current batch. This must be safe after
+    /// model execution fails and must restore the previous committed KV view.
+    fn rollback_multi_session_batch(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Execute a complete packed multi-session batch in one backend pipeline.
+    ///
+    /// Model families with native ragged/mixed execution override this method and
+    /// consume the authoritative row positions, page tables, and KV write slots
+    /// directly from `batch`. Returning `Ok(None)` selects the generic serial
+    /// correctness path in `ferrule-runtime`; it must not be reported as native
+    /// packed execution by performance gates.
+    fn execute_multi_session_batch(
+        &mut self,
+        _states: &mut [Self::SequenceState],
+        _batch: &ExecutionBatch,
+    ) -> Result<Option<ExecutionOutput>> {
+        Ok(None)
+    }
+
+    /// Truthful capabilities for multi-session execution. This should report
+    /// `max_sequences > 1` and `supports_mixed` accurately for this backend.
+    fn multi_session_capabilities(&self) -> ExecutionCapabilities;
 }
 
 // ── Engine-plan helpers ──────────────────────────────────────────────────

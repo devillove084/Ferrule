@@ -243,11 +243,13 @@ mod tests {
             ),
         ];
         let report = validate_model_layout_bindings(&layout, &bindings);
-        assert!(report
-            .missing_required
-            .iter()
-            .any(|missing| missing.scope == RoleScope::Layer { index: 0 }
-                && missing.role == TensorRole::AttentionSink));
+        assert!(
+            report
+                .missing_required
+                .iter()
+                .any(|missing| missing.scope == RoleScope::Layer { index: 0 }
+                    && missing.role == TensorRole::AttentionSink)
+        );
     }
 
     fn binding(tensor_class: TensorClass, role: TensorRole, tensors: usize) -> TensorBinding {

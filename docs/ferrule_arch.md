@@ -126,24 +126,21 @@ serving engine. Two UX paths exist:
 
 - `ferrule chat ... -q cuda --chat-template deepseek-v4 --temp 0` starts the REPL
   immediately and loads CPU-side DSV4 artifacts on a background thread.
-- `bench-interactive --runtime-driver` runs real full 43-layer DSV4 through
-  `ResidentTopKDriver`, proving the generic runtime spine over `TopKModelRunner`:
-  request admission, chunked prompt planning, decode action execution, token events,
-  finish reasons, and metadata KV free.
+- `bench-interactive` runs real full 43-layer DSV4 through `ResidentTopKDriver`,
+  proving request admission, token-budgeted ragged/mixed scheduling, packed execution,
+  token events, finish reasons, and authoritative physical KV release.
 - CUDA context/operator cache is initialized on the main thread when the model is
   first used.
 - Interactive prompt append uses `prefill_tokens_topk_interactive`, now routed
   through the DSV4 batched/segment prefill core. Runtime non-final chunks call
   `TopKModelRunner::prefill_tokens`, so they update session/KV/MoE state without
   materializing hidden/logits; the final chunk materializes top-k for generation.
-- The runtime-driver DSV4 path currently uses `PagedSequenceKvCache` as
-  scheduler-owned metadata/lifecycle only. Physical CUDA KV/session state remains
-  owned by `DeepSeekV4Runner`, so this is not yet CUDA paged attention.
-- This connects the serving-shaped spine to a correctness-verified DSV4 path.
-  Batched prefill MoE and deterministic route-ranked reduction now exist, but the
-  outer prefill loop still returns HC rows through host memory between layers,
-  compressor/router/residency retain host control points, and the executor remains
-  single-sequence.
+- `KvPageManager` is the sole logical block-table/refcount owner; DSV4 binds its
+  model-neutral schema to preallocated CUDA multi-plane page pools. Reserve, execute,
+  commit/rollback, COW, preempt/restore, and exact-prefix sharing use one lifecycle.
+- Packed decode, ragged prefill, and mixed prefill/decode share one rows pipeline.
+  Compressor/router/residency still retain host control points and are addressed by
+  E6; stable graph buckets remain E7 work.
 
 ---
 
@@ -522,14 +519,17 @@ class. CLI: `--quant q4-mixed`.
 
 ## KV cache
 
-- `KvCache` trait: legacy single-sequence append/view/reset.
-- `SequenceKvCache` trait: scheduler-facing allocation, free, per-sequence append,
-  logical length, and layer views through `KvHandle`.
-- Contiguous per-session KV (`ContiguousKvCache`, `MultiSessionKvCache`).
-- `PagedSequenceKvCache`: vLLM-style block-table manager over `PagedKvCache`, with
-  per-sequence `BlockTable` ownership and `SequenceKvCache` admission/free support.
-  CUDA paged-attention kernels are still future work.
-- Radix/prefix cache modules exist; serving integration is still future work.
+- `KvPageManager`: serving authority for logical allocation, free lists, refcounts,
+  block tables, generations, reservations, rollback, COW, and preempt/restore.
+- `CudaKvPagePool`: bounded physical multi-plane CUDA storage with compact block-table
+  lowering; growth allocates pages and never copies full history.
+- DSV4 paged window/main/indexer scatters, indexer top-k, and single/dual-plane sparse
+  attention consume active page bindings directly.
+- `ContiguousKvCache`, `MultiSessionKvCache`, `PagedKvCache`, and
+  `PagedSequenceKvCache` remain CPU/reference test infrastructure, not production
+  DSV4 CUDA ownership.
+- Exact-prefix serving forks share pages and use partial-tail COW. Radix lookup
+  integration remains future work.
 - KV quantization: FP16 first, then KIVI/KVQuant-style low-bit.
 
 ---
@@ -550,20 +550,19 @@ class. CLI: `--quant q4-mixed`.
   non-final prompt tokens update session state without final hidden/logits; the
   final prompt token produces top-k for generation.
 
-`EngineWorker` exposes explicit `append_prompt` / `decode_next` phases with typed
-finish reasons, minimal cancel, and stats. `ResidentScheduler` owns request
-admission and logical `SequenceState`; runtime lowers `SchedulerAction` into a
-crate-private `ScheduledBatch`, which preserves request/session/KV correlation.
-`TopKCompatibilityExecutor` consumes its neutral `ExecutionBatch` through the
-retained `TopKModelRunner` interface, and `ResidentTopKDriver` closes the
-single-sequence token/finish loop.
+`ResidentScheduler` owns request admission and logical `SequenceState`; runtime
+lowers token-budgeted `SchedulerAction`s into a crate-private `ScheduledBatch` that
+preserves request/session/KV correlation. `NativeMultiSessionExecutor` consumes the
+neutral `ExecutionBatch`, and `ResidentTopKDriver` coordinates explicit model states
+with `KvPageManager` and backend physical-page transactions. Chat retains resident
+sessions across turns; token-loop execution exists only inside the page-managed
+differential diagnostic harness.
 
-This proves the control-plane spine, not vLLM/SGLang-class execution. The public ABI
-replacement is complete, but the compatibility executor still rejects multi-row
-and mixed work, runtime KV handles do not bind physical DSV4 CUDA KV, and sampling
-remains tied to that path. E2 prepares reusable model resources and arenas; E3/E4
-replace the implicit runner state with native sequence and multi-session execution.
-See [`execution-engine-architecture.md`](execution-engine-architecture.md).
+E1–E5 now provide the execution ABI, prepared resources/arenas, explicit sequence
+state, native packed multi-session execution, and authoritative physical paged KV.
+E6–E8 still own device routing/residency, stable CUDA graphs, fusion, device sampling,
+and competitive serving validation. See
+[`execution-engine-architecture.md`](execution-engine-architecture.md).
 
 ---
 
@@ -636,10 +635,10 @@ leak into scheduler, sampler, CLI, or the neutral execution ABI.
 | Capability | Ferrule today | Target |
 |---|---|---|
 | Correctness | real DSV4 43L batched/token-loop is bit-exact; continuation `[30594,1175]` | preserve oracle through every ownership and kernel migration; add long-context, graph, failure, and multi-sequence gates |
-| Execution ABI | sole packed/ragged `ferrule-common::execution::ExecutionBatch`, private `ScheduledBatch`, and single-sequence `TopKCompatibilityExecutor` over `TopKModelRunner` | E2 prepared resources, E3 native explicit DSV4 sequence state, then E4 ragged/multi-session `ModelBatchExecutor` |
-| Prompt prefill | per-layer batched CUDA, but cross-layer HC returns through host and append can token-loop | whole-model device ping-pong plus native ragged chunked prefill |
-| Decode | device layer path at ~0.8 tok/s cold single-sequence | multi-row decode, device routing/residency, stable graph buckets, device sampling |
-| KV | runtime metadata paged cache plus separate layer-keyed CUDA KV | one physical paged multi-plane lifecycle with reservation/COW/prefix/preemption |
+| Execution ABI | sole packed/ragged `ExecutionBatch`, private `ScheduledBatch`, and native `MultiSessionRunner`/`NativeMultiSessionExecutor` | preserve the neutral ABI through E6–E8 |
+| Prompt prefill | native paged ragged/mixed CUDA rows pipeline; token loop is diagnostic-only | remove remaining host-controlled compressor/router/residency points |
+| Decode | native packed multi-row paged decode with exact batch-2/4 serial parity | device routing/residency, stable graph buckets, device sampling |
+| KV | authoritative physical paged multi-plane lifecycle with reservation/COW/prefix/preemption | radix lookup policy and later low-bit KV formats |
 | MoE residency | model-local planner plus CUDA resident/staged/pinned/upload caches | runtime cross-request coordinator and stable backend expert indirection |
 | CUDA graph | no current DSV4 graph mode; device-resident eager decode only | E7 long-lived piecewise buckets over the eager device pipeline |
 | Serving | control-plane scheduler/driver proof; no active server command | native multi-session executor, physical KV, streaming/cancel/metrics |
