@@ -1,77 +1,38 @@
-//! DeepSeek-V4 reference runner: ModelRunner implementation.
+//! DeepSeek-V4 runner: ModelRunner implementation.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use crate::families::deepseek_v4;
+use crate::execution::ModelExecutionBackend;
+#[cfg(feature = "cuda")]
+use crate::execution::{ExecutionShapeKey, PersistentArenaPool};
 use crate::moe::executor::CpuReferenceExpertExecutor;
 use crate::moe::prediction::{
     ExpertAccessPhase, ExpertBatchAccessEvent, ExpertHotsetPredictor, ExpertPredictContext,
-    ExpertPredictionStats, ScoreBasedExpertPredictor,
+    ExpertPredictionStats,
 };
 use crate::moe::routed::RoutedMoeStepOutput;
 use crate::moe::streaming::ExpertStreamingReader;
 use crate::runner::{ModelInfo, ModelRunner, PrefillMode, TokenLogit, TopKModelRunner};
+#[cfg(feature = "cuda")]
+use ferrule_common::execution::ForwardMode;
 use ferrule_common::{Error, Result};
 
 use super::artifact::DeepSeekV4ArtifactModel;
 use super::config::deepseek_v4_linear_activation_quantization;
-use super::layer::{DeepSeekV4Layer, DeepSeekV4LayerState};
+#[cfg(feature = "cuda")]
+use super::cuda_cache::DeepSeekV4DecodeBuffers;
+#[cfg(feature = "cuda")]
+use super::layer::DeepSeekV4LayerArenaVariants;
+use super::layer::{DeepSeekV4LayerExpertRuntime, DeepSeekV4LayerState};
 use super::operators::{
-    DeepSeekV4AttentionProfileStats, DeepSeekV4LayerProfileStats, DeepSeekV4Logit,
-    DeepSeekV4OperatorBackend, DeepSeekV4OperatorContext, DeepSeekV4OperatorRuntimeCounters,
+    DeepSeekV4AttentionProfileStats, DeepSeekV4LayerProfileStats, DeepSeekV4OperatorContext,
+    DeepSeekV4OperatorRuntimeCounters,
 };
-
-fn dsv4_preserve_expert_residency_on_reset() -> bool {
-    std::env::var("FERRULE_DSV4_PRESERVE_EXPERT_RESIDENCY_ON_RESET")
-        .map(|value| {
-            let value = value.trim().to_ascii_lowercase();
-            !(value.is_empty() || value == "0" || value == "false" || value == "off")
-        })
-        .unwrap_or(true)
-}
-
-#[cfg(feature = "cuda")]
-fn dsv4_graph_after_preserved_reset_enabled() -> bool {
-    std::env::var("FERRULE_DSV4_GRAPH_AFTER_PRESERVED_RESET")
-        .map(|value| {
-            let value = value.trim().to_ascii_lowercase();
-            !(value.is_empty() || value == "0" || value == "false" || value == "off")
-        })
-        .unwrap_or(true)
-}
-
-#[cfg(feature = "cuda")]
-fn dsv4_graph_replay_parity_guard_enabled() -> bool {
-    std::env::var("FERRULE_DSV4_GRAPH_REPLAY_PARITY_GUARD")
-        .map(|value| {
-            let value = value.trim().to_ascii_lowercase();
-            !(value.is_empty() || value == "0" || value == "false" || value == "off")
-        })
-        .unwrap_or(false)
-}
-
-#[cfg(feature = "cuda")]
-fn dsv4_graph_replay_parity_abs_tol() -> f32 {
-    std::env::var("FERRULE_DSV4_GRAPH_REPLAY_PARITY_ABS_TOL")
-        .ok()
-        .and_then(|value| value.parse::<f32>().ok())
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .unwrap_or(1.0e-3)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DeepSeekV4ReferenceOptions {
-    pub max_layers: usize,
-    pub output_head_chunk_rows: usize,
-    pub expert_reader_max_tensor_bytes: u64,
-    pub moe_prefetch_experts: usize,
-    /// Optional bounded per-layer resident hotset. `0` keeps the managed-memory
-    /// default (no planner eviction); non-zero clamps residency to at least
-    /// `num_experts_per_tok` and retains hottest routed experts first.
-    pub moe_hotset_experts: usize,
-}
+pub use super::prepared::DeepSeekV4PrepareOptions;
+use super::prepared::{prepare, DeepSeekV4ExecutionPolicy, DeepSeekV4PreparedModelPlan};
+use super::sequence::{DeepSeekV4SequenceCheckpoint, DeepSeekV4SequenceExecutionState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeepSeekV4LayerRuntimeStats {
@@ -118,77 +79,41 @@ pub struct DeepSeekV4PrefillRuntimeStats {
     pub token_fallback_tokens: u64,
 }
 
-impl Default for DeepSeekV4ReferenceOptions {
-    fn default() -> Self {
-        Self {
-            max_layers: deepseek_v4::NUM_LAYERS,
-            output_head_chunk_rows: 1024,
-            expert_reader_max_tensor_bytes: 64 * 1024 * 1024,
-            moe_prefetch_experts: 0,
-            moe_hotset_experts: 0,
-        }
-    }
-}
-
-pub struct DeepSeekV4ReferenceRunner {
-    pub model: DeepSeekV4ArtifactModel,
-    pub options: DeepSeekV4ReferenceOptions,
+pub struct DeepSeekV4Runner {
+    plan: DeepSeekV4PreparedModelPlan,
     operators: DeepSeekV4OperatorContext,
-    layers: Vec<Option<DeepSeekV4Layer>>,
-    states: Vec<Option<DeepSeekV4LayerState>>,
-    position: usize,
+    /// Backend-global expert residency shared by all serially executed sequences.
+    expert_runtimes: Vec<DeepSeekV4LayerExpertRuntime>,
+    #[cfg(feature = "cuda")]
+    layer_arena_pool: PersistentArenaPool<ExecutionShapeKey, DeepSeekV4LayerArenaVariants>,
+    /// E3: per-sequence state. The runner wraps one default sequence.
+    sequence: DeepSeekV4SequenceExecutionState,
     prefill_stats: DeepSeekV4PrefillRuntimeStats,
     output_profile: DeepSeekV4OutputProfileStats,
     expert_reader: ExpertStreamingReader,
     expert_executor: CpuReferenceExpertExecutor,
-    expert_predictor: ScoreBasedExpertPredictor,
-    #[cfg(feature = "cuda")]
-    decode_graph: Option<DeepSeekV4DecodeGraph>,
-    #[cfg(feature = "cuda")]
-    decode_graph_disabled: bool,
-    #[cfg(feature = "cuda")]
-    decode_graph_segmented_only: bool,
-}
-
-#[cfg(feature = "cuda")]
-pub(crate) struct DeepSeekV4DecodeGraph {
-    /// Captured CUDA graph segments for one decode step.
-    /// Usually one full-step graph; falls back to per-layer segments when the driver
-    /// rejects a monolithic graph instantiation.
-    graphs: Vec<ferrule_cuda::graph::CudaGraphHandle>,
-    /// Initial HC state buffer captured by the graph. Kept alive for replay pointer stability.
-    _initial_hc_state: ferrule_cuda::context::CudaF32Buffer,
-    /// Ping-pong HC state buffers used between layers and kept alive for graph replay.
-    hc_slots: Vec<ferrule_cuda::context::CudaF32Buffer>,
-    /// Index into `hc_slots` containing the final layer output.
-    final_hc_slot: usize,
-    /// Per-layer MoE accumulators captured by graph nodes. Kept alive for graph replay pointer stability.
-    _moe_accumulators: Vec<ferrule_cuda::context::CudaF32Buffer>,
-    /// Final HC state produced by the eager capture warmup. This is only used by
-    /// the opt-in debug parity guard; default replay uses the native graph output.
-    warmup_final_hc_state: ferrule_cuda::context::CudaF32Buffer,
-    /// Captured routes/KV position are still token-specific, so this graph is a
-    /// safe one-shot until bucketed graph input patching lands.
-    replays_remaining: usize,
-}
-
-#[cfg(feature = "cuda")]
-impl DeepSeekV4DecodeGraph {
-    fn final_hc_state(&self) -> Result<&ferrule_cuda::context::CudaF32Buffer> {
-        self.hc_slots.get(self.final_hc_slot).ok_or_else(|| {
-            Error::Internal(format!(
-                "DSV4 decode graph final HC slot {} missing from {} slots",
-                self.final_hc_slot,
-                self.hc_slots.len()
-            ))
-        })
-    }
+    shutdown: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
 enum ExpertPredictionInput<'a> {
     Prefill { token_ids: &'a [u32] },
     Decode { token_id: u32 },
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Copy)]
+enum CudaDecodeCompletion {
+    Feed,
+    DownloadHidden,
+    TopK(usize),
+}
+
+#[cfg(feature = "cuda")]
+enum CudaDecodeOutput {
+    Feed,
+    Hidden(Vec<f32>),
+    TopK(Vec<TokenLogit>),
 }
 
 impl ExpertPredictionInput<'_> {
@@ -200,64 +125,58 @@ impl ExpertPredictionInput<'_> {
     }
 }
 
-impl DeepSeekV4ReferenceRunner {
-    pub fn new(
-        model: DeepSeekV4ArtifactModel,
-        options: DeepSeekV4ReferenceOptions,
-    ) -> Result<Self> {
-        Self::new_with_operator_backend(model, options, DeepSeekV4OperatorBackend::Cpu)
+impl DeepSeekV4Runner {
+    pub fn new(model: DeepSeekV4ArtifactModel, options: DeepSeekV4PrepareOptions) -> Result<Self> {
+        Self::new_with_operator_backend(model, options, ModelExecutionBackend::Cpu)
     }
 
     pub fn new_with_operator_backend(
         model: DeepSeekV4ArtifactModel,
-        options: DeepSeekV4ReferenceOptions,
-        operator_backend: DeepSeekV4OperatorBackend,
+        options: DeepSeekV4PrepareOptions,
+        operator_backend: ModelExecutionBackend,
     ) -> Result<Self> {
-        if options.max_layers > model.config.num_layers {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 reference runner max_layers {} exceeds model layers {}",
-                options.max_layers, model.config.num_layers
-            )));
+        let plan = prepare(model, options)?;
+        let options = *plan.resources().prepare_options();
+        let policy = plan.resources().policy();
+        let model = plan.resources().model();
+        let mut operators = DeepSeekV4OperatorContext::new(operator_backend, policy)?;
+        let mut layer_states = Vec::with_capacity(options.max_layers);
+        let mut expert_runtimes = Vec::with_capacity(options.max_layers);
+        for layer_idx in 0..options.max_layers {
+            let state_start = Instant::now();
+            layer_states.push(model.new_layer_sequence_state(layer_idx)?);
+            expert_runtimes.push(model.new_quality_first_layer_expert_runtime_with_residency(
+                layer_idx,
+                options.moe_prefetch_experts,
+                options.moe_hotset_experts,
+            )?);
+            operators.record_layer_state_init(layer_idx, duration_us(state_start.elapsed()));
         }
-        if options.output_head_chunk_rows == 0 {
-            return Err(Error::Model(
-                "DeepSeek-V4 reference runner output_head_chunk_rows must be > 0".into(),
-            ));
-        }
-        let mut layers = Vec::new();
-        layers.resize_with(options.max_layers, || None);
-        let mut states = Vec::new();
-        states.resize_with(options.max_layers, || None);
+
+        let sequence =
+            DeepSeekV4SequenceExecutionState::new(layer_states, model.config.num_routed_experts);
         let swiglu_limit = model.config.swiglu_limit;
         let expert_reader_max_tensor_bytes = options.expert_reader_max_tensor_bytes;
-        let expert_predictor =
-            ScoreBasedExpertPredictor::new(options.max_layers, model.config.num_routed_experts);
         Ok(Self {
-            model,
-            options,
-            operators: DeepSeekV4OperatorContext::new(operator_backend)?,
-            layers,
-            states,
-            position: 0,
+            plan,
+            operators,
+            expert_runtimes,
+            #[cfg(feature = "cuda")]
+            layer_arena_pool: PersistentArenaPool::new(),
+            sequence,
             prefill_stats: DeepSeekV4PrefillRuntimeStats::default(),
             output_profile: DeepSeekV4OutputProfileStats::default(),
             expert_reader: ExpertStreamingReader::new(expert_reader_max_tensor_bytes),
             expert_executor: CpuReferenceExpertExecutor::new(swiglu_limit)
                 .with_activation_quantization(deepseek_v4_linear_activation_quantization()),
-            expert_predictor,
-            #[cfg(feature = "cuda")]
-            decode_graph: None,
-            #[cfg(feature = "cuda")]
-            decode_graph_disabled: false,
-            #[cfg(feature = "cuda")]
-            decode_graph_segmented_only: true,
+            shutdown: false,
         })
     }
 
     pub fn load_hf_with_options(
         model_dir: &Path,
         max_tensor_bytes: u64,
-        options: DeepSeekV4ReferenceOptions,
+        options: DeepSeekV4PrepareOptions,
     ) -> Result<Self> {
         Self::new(
             DeepSeekV4ArtifactModel::load_hf_with_limit(model_dir, max_tensor_bytes)?,
@@ -268,8 +187,8 @@ impl DeepSeekV4ReferenceRunner {
     pub fn load_hf_with_options_and_backend(
         model_dir: &Path,
         max_tensor_bytes: u64,
-        options: DeepSeekV4ReferenceOptions,
-        operator_backend: DeepSeekV4OperatorBackend,
+        options: DeepSeekV4PrepareOptions,
+        operator_backend: ModelExecutionBackend,
     ) -> Result<Self> {
         Self::new_with_operator_backend(
             DeepSeekV4ArtifactModel::load_hf_with_limit(model_dir, max_tensor_bytes)?,
@@ -278,18 +197,39 @@ impl DeepSeekV4ReferenceRunner {
         )
     }
 
-    pub fn operator_backend(&self) -> DeepSeekV4OperatorBackend {
+    pub fn model(&self) -> &DeepSeekV4ArtifactModel {
+        self.plan.resources().model()
+    }
+
+    pub fn prepare_options(&self) -> &DeepSeekV4PrepareOptions {
+        self.plan.resources().prepare_options()
+    }
+
+    pub fn execution_policy(&self) -> &DeepSeekV4ExecutionPolicy {
+        self.plan.resources().policy()
+    }
+
+    pub fn operator_backend(&self) -> ModelExecutionBackend {
         self.operators.backend()
+    }
+
+    #[cfg(feature = "cuda")]
+    pub fn cuda_failpoints(&self) -> Result<&ferrule_cuda::CudaFailpoints> {
+        self.operators.cuda_failpoints()
     }
 
     pub fn operator_runtime_counters(&self) -> DeepSeekV4OperatorRuntimeCounters {
         let mut counters = self.operators.runtime_counters();
-        counters.expert_predictor_stats = self.expert_predictor.stats();
+        counters.expert_predictor_stats = self.sequence.predictor.stats();
         counters
     }
 
     pub fn prefill_runtime_stats(&self) -> DeepSeekV4PrefillRuntimeStats {
         self.prefill_stats
+    }
+
+    pub fn take_parity_checkpoints(&mut self) -> BTreeMap<String, Vec<f32>> {
+        self.operators.take_parity_checkpoints()
     }
 
     pub fn layer_profile_stats(&self) -> Vec<DeepSeekV4LayerProfileStats> {
@@ -305,62 +245,130 @@ impl DeepSeekV4ReferenceRunner {
     }
 
     pub fn position(&self) -> usize {
-        self.position
+        self.sequence.core.position()
     }
 
-    pub fn reset(&mut self) -> Result<()> {
-        let preserve_expert_residency = self.operators.backend() == DeepSeekV4OperatorBackend::Cuda
-            && dsv4_preserve_expert_residency_on_reset();
-        #[cfg(feature = "cuda")]
-        let cuda_graph_requested = ferrule_cuda::graph::cuda_graph_enabled();
-        #[cfg(feature = "cuda")]
-        let graph_after_preserved_reset = dsv4_graph_after_preserved_reset_enabled();
-        #[cfg(feature = "cuda")]
-        {
-            if self.decode_graph.is_some() {
-                self.operators.cuda_mut()?.ops.sync_stream()?;
-            }
-            self.decode_graph = None;
-            self.decode_graph_disabled =
-                preserve_expert_residency && cuda_graph_requested && !graph_after_preserved_reset;
+    /// Create an independent checkpoint, including D2D copies of physical CUDA KV.
+    pub fn checkpoint_sequence_state(&mut self) -> Result<DeepSeekV4SequenceCheckpoint> {
+        self.sequence.begin_step()?;
+        let layers = clone_sequence_layers(&mut self.operators, &self.sequence.layers)?;
+        Ok(DeepSeekV4SequenceCheckpoint {
+            core: self.sequence.core.clone(),
+            layers,
+            predictor: self.sequence.predictor.clone(),
+        })
+    }
+
+    /// Restore a checkpoint without sharing its physical CUDA buffers.
+    pub fn restore_sequence_state(
+        &mut self,
+        checkpoint: &DeepSeekV4SequenceCheckpoint,
+    ) -> Result<()> {
+        if checkpoint.layers.len() != self.sequence.max_layers() {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 checkpoint layer count {} does not match runner layer count {}",
+                checkpoint.layers.len(),
+                self.sequence.max_layers()
+            )));
         }
-        for state in self.states.iter_mut().flatten() {
-            state.reset_sequence_with_expert_residency(preserve_expert_residency);
-        }
-        if preserve_expert_residency {
-            self.operators.clear_sequence_workspaces()?;
-        } else {
-            self.operators.clear_expert_residency()?;
-        }
-        self.position = 0;
+        let layers = clone_sequence_layers(&mut self.operators, &checkpoint.layers)?;
+        self.sequence.layers = layers;
+        self.sequence.predictor = checkpoint.predictor.clone();
+        self.sequence.core.restore_from(&checkpoint.core);
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
-    fn ensure_layer_ready(&mut self, layer_idx: usize) -> Result<()> {
-        if layer_idx >= self.options.max_layers {
+    /// Fork the default runner sequence, including independent physical CUDA KV.
+    pub fn fork_sequence_state(&mut self) -> Result<DeepSeekV4SequenceExecutionState> {
+        self.sequence.begin_step()?;
+        Ok(DeepSeekV4SequenceExecutionState {
+            core: self.sequence.core.forked()?,
+            layers: clone_sequence_layers(&mut self.operators, &self.sequence.layers)?,
+            predictor: self.sequence.predictor.clone(),
+        })
+    }
+
+    /// Execute serially with an explicit sequence while retaining the runner's
+    /// prepared layers, weights, expert residency, and backend scratch resources.
+    pub fn with_sequence_state<T>(
+        &mut self,
+        state: &mut DeepSeekV4SequenceExecutionState,
+        execute: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        if self.shutdown {
+            return Err(Error::Model("DeepSeek-V4 runner is shut down".into()));
+        }
+        if state.max_layers() != self.sequence.max_layers() {
             return Err(Error::Model(format!(
-                "DeepSeek-V4 layer index {layer_idx} exceeds configured max_layers {}",
-                self.options.max_layers
+                "DeepSeek-V4 sequence layer count {} does not match runner layer count {}",
+                state.max_layers(),
+                self.sequence.max_layers()
             )));
         }
-        if self.layers[layer_idx].is_none() {
-            let bind_start = Instant::now();
-            self.layers[layer_idx] = Some(self.model.bind_layer(layer_idx)?);
-            self.operators
-                .record_layer_bind(layer_idx, duration_us(bind_start.elapsed()));
+        state.begin_step()?;
+        std::mem::swap(&mut self.sequence, state);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| execute(self)));
+        std::mem::swap(&mut self.sequence, state);
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
         }
-        if self.states[layer_idx].is_none() {
-            let state_start = Instant::now();
-            self.states[layer_idx] =
-                Some(self.model.new_quality_first_layer_state_with_residency(
-                    layer_idx,
-                    self.options.moe_prefetch_experts,
-                    self.options.moe_hotset_experts,
-                )?);
-            self.operators
-                .record_layer_state_init(layer_idx, duration_us(state_start.elapsed()));
+    }
+
+    pub fn release_sequence_state(
+        &mut self,
+        mut state: DeepSeekV4SequenceExecutionState,
+    ) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        if self.operators.backend() == ModelExecutionBackend::Cuda {
+            self.operators.cuda_mut()?.ops.sync_stream()?;
         }
+        state.release_capacity();
+        Ok(())
+    }
+
+    pub fn shutdown(&mut self) -> Result<()> {
+        if self.shutdown {
+            return Ok(());
+        }
+        self.sequence.release_capacity();
+        self.expert_runtimes.clear();
+        #[cfg(feature = "cuda")]
+        self.layer_arena_pool.clear();
+        self.operators.shutdown()?;
+        self.shutdown = true;
+        Ok(())
+    }
+
+    fn run_sequence_step<T>(
+        &mut self,
+        rows: usize,
+        step: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        if self.shutdown {
+            return Err(Error::Model("DeepSeek-V4 runner is shut down".into()));
+        }
+        let binding = self.sequence.begin_step()?;
+        match step(self) {
+            Ok(output) => {
+                if let Err(error) = self.sequence.commit_step(binding, rows) {
+                    self.sequence.poison_step(binding);
+                    return Err(error);
+                }
+                Ok(output)
+            }
+            Err(error) => {
+                self.sequence.poison_step(binding);
+                Err(error)
+            }
+        }
+    }
+
+    pub fn reset(&mut self) -> Result<()> {
+        if self.shutdown {
+            return Err(Error::Model("DeepSeek-V4 runner is shut down".into()));
+        }
+        self.sequence.reset_for_reuse();
         Ok(())
     }
 
@@ -379,9 +387,11 @@ impl DeepSeekV4ReferenceRunner {
         use_router_hash: bool,
     ) -> Result<Vec<usize>> {
         let count = self
-            .options
+            .plan
+            .resources()
+            .prepare_options()
             .moe_prefetch_experts
-            .min(self.model.config.num_routed_experts);
+            .min(self.plan.resources().model().config.num_routed_experts);
         if count == 0 {
             return Ok(Vec::new());
         }
@@ -411,54 +421,53 @@ impl DeepSeekV4ReferenceRunner {
             .collect::<BTreeSet<_>>();
 
         if use_router_hash
-            && self.operators.backend() == DeepSeekV4OperatorBackend::Cuda
-            && layer < self.model.config.num_hash_layers
+            && self.operators.backend() == ModelExecutionBackend::Cuda
+            && layer < self.plan.resources().model().config.num_hash_layers
         {
-            if let Some(layer_ref) = self.layers.get(layer).and_then(Option::as_ref) {
-                match input {
-                    ExpertPredictionInput::Decode { token_id } => {
-                        if let Some(hash_experts) =
-                            layer_ref.router.hash_experts_for_token(token_id)?
-                        {
-                            push_candidate_experts(
-                                &mut predicted,
-                                &mut excluded,
-                                hash_experts
-                                    .into_iter()
-                                    .take(self.model.config.num_experts_per_tok),
-                                count,
-                                self.model.config.num_routed_experts,
-                            );
-                        }
-                    }
-                    ExpertPredictionInput::Prefill { token_ids }
-                        if self.prefill_hash_lookahead_enabled() =>
-                    {
-                        if let Some(hash_experts) = layer_ref.router.hash_expert_union_for_tokens(
-                            token_ids,
-                            self.model.config.num_experts_per_tok,
+            let layer_ref = self.plan.resources().layers().get(layer).ok_or_else(|| {
+                Error::Internal(format!("DeepSeek-V4 prepared layer {layer} is missing"))
+            })?;
+            match input {
+                ExpertPredictionInput::Decode { token_id } => {
+                    if let Some(hash_experts) = layer_ref.router.hash_experts_for_token(token_id)? {
+                        push_candidate_experts(
+                            &mut predicted,
+                            &mut excluded,
+                            hash_experts
+                                .into_iter()
+                                .take(self.plan.resources().model().config.num_experts_per_tok),
                             count,
-                        )? {
-                            push_candidate_experts(
-                                &mut predicted,
-                                &mut excluded,
-                                hash_experts,
-                                count,
-                                self.model.config.num_routed_experts,
-                            );
-                        }
+                            self.plan.resources().model().config.num_routed_experts,
+                        );
                     }
-                    ExpertPredictionInput::Prefill { .. } => {}
                 }
+                ExpertPredictionInput::Prefill { token_ids }
+                    if self.prefill_hash_lookahead_enabled() =>
+                {
+                    if let Some(hash_experts) = layer_ref.router.hash_expert_union_for_tokens(
+                        token_ids,
+                        self.plan.resources().model().config.num_experts_per_tok,
+                        count,
+                    )? {
+                        push_candidate_experts(
+                            &mut predicted,
+                            &mut excluded,
+                            hash_experts,
+                            count,
+                            self.plan.resources().model().config.num_routed_experts,
+                        );
+                    }
+                }
+                ExpertPredictionInput::Prefill { .. } => {}
             }
         }
 
         if predicted.len() < count {
-            for prediction in self.expert_predictor.predict(ExpertPredictContext {
+            for prediction in self.sequence.predictor.predict(ExpertPredictContext {
                 layer,
                 phase,
                 budget: count,
-                num_experts: self.model.config.num_routed_experts,
+                num_experts: self.plan.resources().model().config.num_routed_experts,
                 resident: &resident,
                 materializing: &materializing,
                 host_staged: &host_staged,
@@ -473,17 +482,21 @@ impl DeepSeekV4ReferenceRunner {
         }
 
         if predicted.len() < count {
-            if let Some(state) = self.states.get(layer).and_then(Option::as_ref) {
-                push_candidate_experts(
-                    &mut predicted,
-                    &mut excluded,
-                    state
-                        .expert_planner
-                        .hot_experts(layer, self.model.config.num_routed_experts),
-                    count,
-                    self.model.config.num_routed_experts,
-                );
-            }
+            let expert_runtime = self.expert_runtimes.get(layer).ok_or_else(|| {
+                Error::Internal(format!(
+                    "DeepSeek-V4 layer expert runtime {layer} is missing"
+                ))
+            })?;
+            push_candidate_experts(
+                &mut predicted,
+                &mut excluded,
+                expert_runtime.expert_planner.hot_experts(
+                    layer,
+                    self.plan.resources().model().config.num_routed_experts,
+                ),
+                count,
+                self.plan.resources().model().config.num_routed_experts,
+            );
         }
         Ok(predicted)
     }
@@ -494,7 +507,8 @@ impl DeepSeekV4ReferenceRunner {
         phase: ExpertAccessPhase,
         moe: &RoutedMoeStepOutput,
     ) {
-        self.expert_predictor
+        self.sequence
+            .predictor
             .observe_batch(ExpertBatchAccessEvent::from_routes(
                 layer,
                 phase,
@@ -506,46 +520,26 @@ impl DeepSeekV4ReferenceRunner {
 
     fn observe_pending_moe_access_events(&mut self) {
         for event in self.operators.drain_moe_access_events() {
-            self.expert_predictor.observe_batch(event);
+            self.sequence.predictor.observe_batch(event);
         }
     }
 
     fn lookahead_prefetch_enabled(&self) -> bool {
-        std::env::var("FERRULE_DSV4_LOOKAHEAD_PREFETCH")
-            .map(|value| {
-                let value = value.trim().to_ascii_lowercase();
-                !(value.is_empty() || value == "0" || value == "false" || value == "off")
-            })
-            .unwrap_or(true)
+        self.plan.resources().policy().lookahead_prefetch()
     }
 
     #[cfg(feature = "cuda")]
     fn hash_decode_prefetch_window_enabled(&self) -> bool {
-        std::env::var("FERRULE_DSV4_HASH_PREFETCH_WINDOW")
-            .map(|value| {
-                let value = value.trim().to_ascii_lowercase();
-                value == "1" || value == "true" || value == "on"
-            })
-            .unwrap_or(false)
+        self.plan.resources().policy().hash_decode_prefetch_window()
     }
 
     #[cfg(feature = "cuda")]
     fn decode_lookahead_prefetch_enabled(&self) -> bool {
-        std::env::var("FERRULE_DSV4_DECODE_LOOKAHEAD_PREFETCH")
-            .map(|value| {
-                let value = value.trim().to_ascii_lowercase();
-                !(value.is_empty() || value == "0" || value == "false" || value == "off")
-            })
-            .unwrap_or(true)
+        self.plan.resources().policy().decode_lookahead_prefetch()
     }
 
     fn prefill_hash_lookahead_enabled(&self) -> bool {
-        std::env::var("FERRULE_DSV4_PREFILL_HASH_LOOKAHEAD")
-            .map(|value| {
-                let value = value.trim().to_ascii_lowercase();
-                value == "1" || value == "true" || value == "on"
-            })
-            .unwrap_or(false)
+        self.plan.resources().policy().prefill_hash_lookahead()
     }
 
     fn prepare_predicted_experts_for_layer(
@@ -554,39 +548,42 @@ impl DeepSeekV4ReferenceRunner {
         predicted_experts: &[usize],
     ) -> Result<()> {
         if predicted_experts.is_empty()
-            || self.options.moe_prefetch_experts == 0
+            || self.plan.resources().prepare_options().moe_prefetch_experts == 0
             || !self.lookahead_prefetch_enabled()
         {
             return Ok(());
         }
-        let Some(state) = self.states.get_mut(layer).and_then(Option::as_mut) else {
-            return Ok(());
-        };
+        let expert_runtime = self.expert_runtimes.get_mut(layer).ok_or_else(|| {
+            Error::Internal(format!(
+                "DeepSeek-V4 layer expert runtime {layer} is missing"
+            ))
+        })?;
         self.operators.prefetch_predicted_experts(
             layer,
             predicted_experts,
-            &mut state.expert_planner,
+            &mut expert_runtime.expert_planner,
             &self.expert_reader,
-            &mut state.expert_handles,
+            &mut expert_runtime.expert_handles,
         )?;
         Ok(())
     }
 
     #[cfg(feature = "cuda")]
     fn prepare_hash_decode_prefetch_window(&mut self, token_id: u32) -> Result<()> {
-        if self.operators.backend() != DeepSeekV4OperatorBackend::Cuda
-            || self.options.moe_prefetch_experts == 0
+        if self.operators.backend() != ModelExecutionBackend::Cuda
+            || self.plan.resources().prepare_options().moe_prefetch_experts == 0
             || !self.lookahead_prefetch_enabled()
             || !self.hash_decode_prefetch_window_enabled()
         {
             return Ok(());
         }
         let layers = self
-            .options
+            .plan
+            .resources()
+            .prepare_options()
             .max_layers
-            .min(self.model.config.num_hash_layers);
+            .min(self.plan.resources().model().config.num_hash_layers);
         for layer_idx in 0..layers {
-            self.ensure_layer_ready(layer_idx)?;
             let predicted_experts = self.predicted_experts_for_layer(
                 layer_idx,
                 ExpertPredictionInput::Decode { token_id },
@@ -601,17 +598,17 @@ impl DeepSeekV4ReferenceRunner {
         &mut self,
         token_id: u32,
     ) -> Result<Option<Vec<Vec<usize>>>> {
-        if self.operators.backend() != DeepSeekV4OperatorBackend::Cuda
-            || self.options.moe_prefetch_experts == 0
+        if self.operators.backend() != ModelExecutionBackend::Cuda
+            || self.plan.resources().prepare_options().moe_prefetch_experts == 0
             || !self.lookahead_prefetch_enabled()
             || !self.decode_lookahead_prefetch_enabled()
         {
             return Ok(None);
         }
 
-        let mut predictions = Vec::with_capacity(self.options.max_layers);
-        for layer_idx in 0..self.options.max_layers {
-            self.ensure_layer_ready(layer_idx)?;
+        let mut predictions =
+            Vec::with_capacity(self.plan.resources().prepare_options().max_layers);
+        for layer_idx in 0..self.plan.resources().prepare_options().max_layers {
             // Use predictor/hotset only here. Router hash lookahead remains opt-in
             // because the older hash-window path can alter residency too
             // aggressively for short interactive correctness probes.
@@ -627,70 +624,58 @@ impl DeepSeekV4ReferenceRunner {
     }
 
     pub fn expert_prediction_stats(&self) -> ExpertPredictionStats {
-        self.expert_predictor.stats()
+        self.sequence.predictor.stats()
     }
 
     #[cfg(feature = "cuda")]
     pub fn prewarm_predicted_experts(&mut self) -> Result<usize> {
-        if self.operators.backend() != DeepSeekV4OperatorBackend::Cuda {
+        if self.operators.backend() != ModelExecutionBackend::Cuda {
             return Ok(0);
         }
         let count = self
-            .options
+            .plan
+            .resources()
+            .prepare_options()
             .moe_prefetch_experts
-            .max(self.options.moe_hotset_experts)
-            .min(self.model.config.num_routed_experts);
+            .max(self.plan.resources().prepare_options().moe_hotset_experts)
+            .min(self.plan.resources().model().config.num_routed_experts);
         if count == 0 {
             return Ok(0);
         }
         let mut warmed = 0usize;
-        for layer_idx in 0..self.options.max_layers {
-            if self.layers[layer_idx].is_none() {
-                self.layers[layer_idx] = Some(self.model.bind_layer(layer_idx)?);
-            }
-            if self.states[layer_idx].is_none() {
-                self.states[layer_idx] =
-                    Some(self.model.new_quality_first_layer_state_with_residency(
-                        layer_idx,
-                        self.options.moe_prefetch_experts,
-                        self.options.moe_hotset_experts,
-                    )?);
-            }
-            let predicted = if count >= self.model.config.num_routed_experts {
-                (0..self.model.config.num_routed_experts).collect::<Vec<_>>()
+        for layer_idx in 0..self.plan.resources().prepare_options().max_layers {
+            let predicted = if count >= self.plan.resources().model().config.num_routed_experts {
+                (0..self.plan.resources().model().config.num_routed_experts).collect::<Vec<_>>()
             } else {
-                self.states
-                    .get(layer_idx)
-                    .and_then(Option::as_ref)
-                    .map(|state| state.expert_planner.hot_experts(layer_idx, count))
-                    .unwrap_or_default()
+                self.expert_runtimes[layer_idx]
+                    .expert_planner
+                    .hot_experts(layer_idx, count)
             };
             if predicted.is_empty() {
                 continue;
             }
-            let state = self.states[layer_idx].as_mut().expect("initialized above");
+            let expert_runtime = &mut self.expert_runtimes[layer_idx];
             warmed = warmed.saturating_add(self.operators.prewarm_experts(
                 layer_idx,
                 &predicted,
-                &mut state.expert_planner,
+                &mut expert_runtime.expert_planner,
                 &self.expert_reader,
-                &mut state.expert_handles,
+                &mut expert_runtime.expert_handles,
             )?);
         }
         Ok(warmed)
     }
 
     pub fn bound_layer_count(&self) -> usize {
-        self.layers.iter().filter(|layer| layer.is_some()).count()
+        self.plan.resources().layers().len()
     }
 
     pub fn layer_runtime_stats(&self) -> Vec<DeepSeekV4LayerRuntimeStats> {
         let mut stats = Vec::new();
-        for layer_idx in 0..self.options.max_layers {
-            let (Some(layer), Some(state)) = (&self.layers[layer_idx], &self.states[layer_idx])
-            else {
-                continue;
-            };
+        for layer_idx in 0..self.plan.resources().prepare_options().max_layers {
+            let layer = &self.plan.resources().layers()[layer_idx];
+            let state = &self.sequence.layers[layer_idx];
+            let expert_runtime = &self.expert_runtimes[layer_idx];
             let index_head_dim = layer.attention.config.index_head_dim;
             let (resident_experts, resident_expert_bytes) = {
                 #[cfg(feature = "cuda")]
@@ -699,16 +684,16 @@ impl DeepSeekV4ReferenceRunner {
                         cache.resident_expert_stats_for_layer(layer_idx)
                     } else {
                         (
-                            state.expert_handles.len(),
-                            state.expert_handles.total_bytes(),
+                            expert_runtime.expert_handles.len(),
+                            expert_runtime.expert_handles.total_bytes(),
                         )
                     }
                 }
                 #[cfg(not(feature = "cuda"))]
                 {
                     (
-                        state.expert_handles.len(),
-                        state.expert_handles.total_bytes(),
+                        expert_runtime.expert_handles.len(),
+                        expert_runtime.expert_handles.total_bytes(),
                     )
                 }
             };
@@ -726,7 +711,7 @@ impl DeepSeekV4ReferenceRunner {
 
     pub fn decode_token_hidden(&mut self, token_id: u32) -> Result<Vec<f32>> {
         #[cfg(feature = "cuda")]
-        if self.operators.backend == DeepSeekV4OperatorBackend::Cuda {
+        if self.operators.backend == ModelExecutionBackend::Cuda {
             return self.decode_token_hidden_cuda(token_id);
         }
         self.decode_token_hidden_reference(token_id)
@@ -744,37 +729,36 @@ impl DeepSeekV4ReferenceRunner {
         token_id: u32,
         materialize_hidden: bool,
     ) -> Result<Option<Vec<f32>>> {
-        let mut hc_state = self.model.initial_hc_state_for_token(token_id)?;
-        for layer_idx in 0..self.options.max_layers {
-            if self.layers[layer_idx].is_none() {
-                let bind_start = Instant::now();
-                self.layers[layer_idx] = Some(self.model.bind_layer(layer_idx)?);
-                self.operators
-                    .record_layer_bind(layer_idx, duration_us(bind_start.elapsed()));
-            }
-            if self.states[layer_idx].is_none() {
-                let state_start = Instant::now();
-                self.states[layer_idx] =
-                    Some(self.model.new_quality_first_layer_state_with_residency(
-                        layer_idx,
-                        self.options.moe_prefetch_experts,
-                        self.options.moe_hotset_experts,
-                    )?);
-                self.operators
-                    .record_layer_state_init(layer_idx, duration_us(state_start.elapsed()));
-            }
+        self.run_sequence_step(1, |runner| {
+            runner.advance_token_hidden_reference_uncommitted(token_id, materialize_hidden)
+        })
+    }
+
+    fn advance_token_hidden_reference_uncommitted(
+        &mut self,
+        token_id: u32,
+        materialize_hidden: bool,
+    ) -> Result<Option<Vec<f32>>> {
+        let mut hc_state = self
+            .plan
+            .resources()
+            .model()
+            .initial_hc_state_for_token(token_id)?;
+        for layer_idx in 0..self.plan.resources().prepare_options().max_layers {
             let predicted_experts = self.predicted_experts_for_layer(
                 layer_idx,
                 ExpertPredictionInput::Decode { token_id },
             )?;
             self.prepare_predicted_experts_for_layer(layer_idx, &predicted_experts)?;
-            let layer = self.layers[layer_idx].as_ref().expect("initialized above");
-            let state = self.states[layer_idx].as_mut().expect("initialized above");
+            let layer = &self.plan.resources().layers()[layer_idx];
+            let state = &mut self.sequence.layers[layer_idx];
+            let expert_runtime = &mut self.expert_runtimes[layer_idx];
             let step = layer.decode_step_with_operators(
                 state,
+                expert_runtime,
                 &hc_state,
                 token_id,
-                self.position,
+                self.sequence.core.position(),
                 &predicted_experts,
                 &self.expert_reader,
                 &self.expert_executor,
@@ -783,7 +767,6 @@ impl DeepSeekV4ReferenceRunner {
             self.observe_moe_step(layer_idx, ExpertAccessPhase::Decode, &step.moe);
             hc_state = step.hc_state;
         }
-        self.position += 1;
         if !materialize_hidden {
             return Ok(None);
         }
@@ -795,33 +778,65 @@ impl DeepSeekV4ReferenceRunner {
         hc_state: &[f32],
         tokens: usize,
     ) -> Result<Vec<f32>> {
-        if tokens == 0 || hc_state.len() != tokens * self.model.config.hc_config().hc_hidden_size()
+        if tokens == 0
+            || hc_state.len()
+                != tokens
+                    * self
+                        .plan
+                        .resources()
+                        .model()
+                        .config
+                        .hc_config()
+                        .hc_hidden_size()
         {
             return Err(Error::Model(format!(
                 "DeepSeek-V4 HC head input mismatch: tokens={tokens} len={} expected {}",
                 hc_state.len(),
-                tokens * self.model.config.hc_config().hc_hidden_size()
+                tokens
+                    * self
+                        .plan
+                        .resources()
+                        .model()
+                        .config
+                        .hc_config()
+                        .hc_hidden_size()
             )));
         }
 
         let hc_head_start = Instant::now();
         let hidden = {
             #[cfg(feature = "cuda")]
-            if self.operators.backend() == DeepSeekV4OperatorBackend::Cuda {
-                let state_buf = self.operators.cuda_upload_f32(hc_state)?;
-                let hidden_buf = self.operators.cuda_hc_head_from_device(
-                    &state_buf,
-                    tokens,
-                    self.model.config.hc_config(),
-                    &self.model.hc_head,
-                )?;
-                self.operators.cuda_download_f32(&hidden_buf)?
+            if self.operators.backend() == ModelExecutionBackend::Cuda {
+                let hidden_len = tokens * self.plan.resources().model().config.hidden_size;
+                let mut buffers = self
+                    .operators
+                    .cuda_mut()?
+                    .take_decode_buffers(hc_state.len(), hidden_len)?;
+                let execution = (|| {
+                    self.operators
+                        .cuda_mut()?
+                        .ops
+                        .overwrite_f32_buffer(hc_state, &mut buffers.hc_input)?;
+                    self.operators.cuda_mut()?.hc_head_from_device_into(
+                        &buffers.hc_input,
+                        tokens,
+                        self.plan.resources().model().config.hc_config(),
+                        &self.plan.resources().model().hc_head,
+                        &mut buffers.final_hidden,
+                    )?;
+                    self.operators
+                        .cuda_mut()?
+                        .ops
+                        .download_f32_buffer(&buffers.final_hidden)
+                })();
+                self.operators.cuda_mut()?.restore_decode_buffers(buffers);
+                execution?
             } else {
                 self.operators.hc_head(
                     hc_state,
                     tokens,
-                    self.model.config.hc_config(),
-                    &self.model.hc_head,
+                    self.plan.resources().model().config.hc_config(),
+                    &self.plan.resources().model().hc_head,
                 )?
             }
             #[cfg(not(feature = "cuda"))]
@@ -829,8 +844,8 @@ impl DeepSeekV4ReferenceRunner {
                 self.operators.hc_head(
                     hc_state,
                     tokens,
-                    self.model.config.hc_config(),
-                    &self.model.hc_head,
+                    self.plan.resources().model().config.hc_config(),
+                    &self.plan.resources().model().hc_head,
                 )?
             }
         };
@@ -841,12 +856,12 @@ impl DeepSeekV4ReferenceRunner {
             .final_hc_head_us
             .saturating_add(self.operators.finish_profile_stage(hc_head_start)?);
 
-        let start = (tokens - 1) * self.model.config.hidden_size;
+        let start = (tokens - 1) * self.plan.resources().model().config.hidden_size;
         let norm_start = Instant::now();
         let normed = self.operators.rms_norm(
-            &hidden[start..start + self.model.config.hidden_size],
-            &self.model.output_norm,
-            self.model.config.norm_eps,
+            &hidden[start..start + self.plan.resources().model().config.hidden_size],
+            &self.plan.resources().model().output_norm,
+            self.plan.resources().model().config.norm_eps,
             "output_norm",
         )?;
         self.output_profile.final_norm_calls =
@@ -860,489 +875,206 @@ impl DeepSeekV4ReferenceRunner {
 
     #[cfg(feature = "cuda")]
     fn decode_token_hidden_cuda(&mut self, token_id: u32) -> Result<Vec<f32>> {
-        let normed_dev = self
-            .advance_token_hidden_cuda_device(token_id, true)?
-            .ok_or_else(|| {
-                Error::Internal("DeepSeek-V4 CUDA decode did not materialize hidden".into())
-            })?;
-        self.operators.cuda_download_f32(&normed_dev)
+        match self.run_cuda_decode(token_id, CudaDecodeCompletion::DownloadHidden)? {
+            CudaDecodeOutput::Hidden(hidden) => Ok(hidden),
+            _ => Err(Error::Internal(
+                "DeepSeek-V4 CUDA hidden decode returned the wrong completion".into(),
+            )),
+        }
     }
 
     #[cfg(feature = "cuda")]
-    fn advance_token_hidden_cuda_device(
+    fn restore_cuda_decode_buffers(&mut self, buffers: DeepSeekV4DecodeBuffers) {
+        self.operators
+            .cuda
+            .as_mut()
+            .expect("CUDA cache exists for CUDA decode")
+            .restore_decode_buffers(buffers);
+    }
+
+    #[cfg(feature = "cuda")]
+    fn run_cuda_decode(
         &mut self,
         token_id: u32,
-        materialize_hidden: bool,
-    ) -> Result<Option<ferrule_cuda::context::CudaF32Buffer>> {
-        // The current graph captures one concrete decode row: token id,
-        // position, routes, and prepared KV/cache pointers are fixed. Drop it
-        // before the next row so we never replay stale token-specific work.
-        // A later bucketed graph path should patch input/KV/route buffers
-        // instead of recapturing.
-        if self
-            .decode_graph
-            .as_ref()
-            .map(|graph| graph.replays_remaining == 0)
-            .unwrap_or(false)
-        {
-            self.operators.cuda_mut()?.ops.sync_stream()?;
-            self.operators.record_cuda_graph_one_shot_retire();
-            self.decode_graph = None;
-        }
+        completion: CudaDecodeCompletion,
+    ) -> Result<CudaDecodeOutput> {
+        self.run_sequence_step(1, |runner| {
+            runner.run_cuda_decode_uncommitted(token_id, completion)
+        })
+    }
 
-        if ferrule_cuda::graph::cuda_graph_enabled()
-            && self.decode_graph.is_none()
-            && !self.decode_graph_disabled
-        {
-            self.operators.record_cuda_graph_capture_attempt();
-            let capture_start = Instant::now();
-            match self.try_capture_decode_graph(token_id) {
-                Ok(()) => {
-                    self.operators.record_cuda_graph_capture_success();
-                }
-                Err(e) => {
-                    self.operators.record_cuda_graph_capture_failure();
-                    self.decode_graph_disabled = true;
-                    eprintln!(
-                        "[ferrule] CUDA graph capture failed, falling back to eager decode: {e}"
-                    );
-                }
-            }
-            self.operators
-                .record_cuda_graph_capture_elapsed(capture_start.elapsed());
-        }
-
-        if self.decode_graph.is_some() {
-            // Replay the captured graph: all 43 layer decode steps execute
-            // as a single graph launch with no per-kernel host overhead.
-            let stream = self.operators.cuda_stream_clone()?;
-
-            // Split borrow: graph state is mutable, operators/model/profile are disjoint.
-            let DeepSeekV4ReferenceRunner {
-                decode_graph,
-                operators,
-                model,
-                position,
-                output_profile,
-                ..
-            } = self;
-            let graph = decode_graph.as_mut().expect("checked above");
-            let replay_start = Instant::now();
-            for graph_segment in &graph.graphs {
-                graph_segment.launch(&stream)?;
-            }
-            operators.record_cuda_graph_replay(replay_start.elapsed());
-            graph.replays_remaining = graph.replays_remaining.saturating_sub(1);
-
-            let mut use_warmup_final_hc = false;
-            if dsv4_graph_replay_parity_guard_enabled() {
-                let replay_hc = operators.cuda_download_f32(graph.final_hc_state()?)?;
-                let warmup_hc = operators.cuda_download_f32(&graph.warmup_final_hc_state)?;
-                let max_abs_diff = replay_hc
-                    .iter()
-                    .zip(warmup_hc.iter())
-                    .map(|(left, right)| (left - right).abs())
-                    .fold(0.0f32, f32::max);
-                let parity_failed = replay_hc.len() != warmup_hc.len()
-                    || !max_abs_diff.is_finite()
-                    || max_abs_diff > dsv4_graph_replay_parity_abs_tol();
-                if parity_failed {
-                    operators.record_cuda_graph_replay_fallback();
-                    use_warmup_final_hc = true;
-                    eprintln!(
-                        "[ferrule] CUDA graph replay parity guard fell back to warmup output: final_hc_len replay={} warmup={} max_abs_diff={max_abs_diff:.6e}",
-                        replay_hc.len(),
-                        warmup_hc.len()
-                    );
-                }
-            }
-
-            *position += 1;
-            if !materialize_hidden {
-                return Ok(None);
-            }
-            // hc_head + output_norm run after replay (not inside graph). The parity
-            // guard is opt-in debugging; by default native graph output is used.
-            let final_hc_state = if use_warmup_final_hc {
-                &graph.warmup_final_hc_state
-            } else {
-                graph.final_hc_state()?
-            };
-            let final_hc_start = Instant::now();
-            let hidden_dev = operators.cuda_hc_head_from_device(
-                final_hc_state,
-                1,
-                model.config.hc_config(),
-                &model.hc_head,
-            )?;
-            output_profile.final_hc_head_calls =
-                output_profile.final_hc_head_calls.saturating_add(1);
-            output_profile.final_hc_head_us = output_profile
-                .final_hc_head_us
-                .saturating_add(operators.finish_profile_stage(final_hc_start)?);
-            let final_norm_start = Instant::now();
-            let normed_dev = operators.cuda_rms_norm_device_cached(
-                "output_norm",
-                &hidden_dev,
-                &model.output_norm,
-                model.config.norm_eps,
-            )?;
-            output_profile.final_norm_calls = output_profile.final_norm_calls.saturating_add(1);
-            output_profile.final_norm_us = output_profile
-                .final_norm_us
-                .saturating_add(operators.finish_profile_stage(final_norm_start)?);
-            return Ok(Some(normed_dev));
-        }
-
-        let mut hc_state_dev = {
-            let hc_state = self.model.initial_hc_state_for_token(token_id)?;
-            self.operators.cuda_upload_f32(&hc_state)?
-        };
+    #[cfg(feature = "cuda")]
+    fn run_cuda_decode_uncommitted(
+        &mut self,
+        token_id: u32,
+        completion: CudaDecodeCompletion,
+    ) -> Result<CudaDecodeOutput> {
+        let hc_state = self
+            .plan
+            .resources()
+            .model()
+            .initial_hc_state_for_token(token_id)?;
+        let max_layers = self.plan.resources().prepare_options().max_layers;
         let decode_lookahead_predictions = self.prepare_decode_lookahead_prefetch(token_id)?;
         self.prepare_hash_decode_prefetch_window(token_id)?;
-        for layer_idx in 0..self.options.max_layers {
-            self.ensure_layer_ready(layer_idx)?;
+        let mut layer_predictions = Vec::with_capacity(max_layers);
+        for layer_idx in 0..max_layers {
             let predicted_experts = self.predicted_experts_for_layer(
                 layer_idx,
                 ExpertPredictionInput::Decode { token_id },
             )?;
             // The all-layer lookahead above is deliberately predictor/hotset-only.
             // Keep the original per-layer prepare so current-token hash experts are
-            // still available to the actual MoE plan.
-            if decode_lookahead_predictions.is_none() {
+            // still available to the actual MoE plan. All preparation happens before
+            // the arena lease so one lease can cover the complete execution step.
+            if decode_lookahead_predictions.is_none() || !predicted_experts.is_empty() {
                 self.prepare_predicted_experts_for_layer(layer_idx, &predicted_experts)?;
-            } else if !predicted_experts.is_empty() {
-                self.prepare_predicted_experts_for_layer(layer_idx, &predicted_experts)?;
             }
-            let layer = self.layers[layer_idx].as_ref().expect("initialized above");
-            let state = self.states[layer_idx].as_mut().expect("initialized above");
-            let step = layer.decode_step_device_hc_device(
-                state,
-                &hc_state_dev,
-                token_id,
-                self.position,
-                &predicted_experts,
-                &self.expert_reader,
-                &mut self.operators,
-            )?;
-            self.observe_moe_step(layer_idx, ExpertAccessPhase::Decode, &step.moe);
-            hc_state_dev = step.hc_state;
-        }
-        self.position += 1;
-        if !materialize_hidden {
-            return Ok(None);
-        }
-        let final_hc_start = Instant::now();
-        let hidden_dev = self.operators.cuda_hc_head_from_device(
-            &hc_state_dev,
-            1,
-            self.model.config.hc_config(),
-            &self.model.hc_head,
-        )?;
-        self.output_profile.final_hc_head_calls =
-            self.output_profile.final_hc_head_calls.saturating_add(1);
-        self.output_profile.final_hc_head_us = self
-            .output_profile
-            .final_hc_head_us
-            .saturating_add(self.operators.finish_profile_stage(final_hc_start)?);
-        let final_norm_start = Instant::now();
-        let normed_dev = self.operators.cuda_rms_norm_device_cached(
-            "output_norm",
-            &hidden_dev,
-            &self.model.output_norm,
-            self.model.config.norm_eps,
-        )?;
-        self.output_profile.final_norm_calls =
-            self.output_profile.final_norm_calls.saturating_add(1);
-        self.output_profile.final_norm_us = self
-            .output_profile
-            .final_norm_us
-            .saturating_add(self.operators.finish_profile_stage(final_norm_start)?);
-        Ok(Some(normed_dev))
-    }
-
-    #[cfg(feature = "cuda")]
-    fn try_capture_decode_graph(&mut self, token_id: u32) -> Result<()> {
-        use ferrule_cuda::graph::capture_decode_graph;
-
-        // Ensure all layers are bound before capture.
-        for layer_idx in 0..self.options.max_layers {
-            if self.layers[layer_idx].is_none() {
-                self.layers[layer_idx] = Some(self.model.bind_layer(layer_idx)?);
-            }
-            if self.states[layer_idx].is_none() {
-                self.states[layer_idx] =
-                    Some(self.model.new_quality_first_layer_state_with_residency(
-                        layer_idx,
-                        self.options.moe_prefetch_experts,
-                        self.options.moe_hotset_experts,
-                    )?);
-            }
+            layer_predictions.push(predicted_experts);
         }
 
-        let max_layers = self.options.max_layers;
-        let position = self.position;
-        let mut capture_states: Vec<DeepSeekV4LayerState> = self
-            .states
-            .iter()
-            .take(max_layers)
-            .map(|state| state.as_ref().expect("bound above").clone())
-            .collect();
-
-        // ── Phase 1: Warmup pass (eager, isolated state) ──
-        // Run one full decode step to:
-        // - Pre-allocate all device buffers (KV cache, combined KV, topk, sink)
-        // - Upload all weights (HC, norm, attention linears, rope tables)
-        // - Determine per-layer routing (expert selection + route weights)
-        // - Populate KV cache and compressor state
-        //
-        // This pass intentionally runs against `capture_states`, not live
-        // `self.states`. On graph-capture failure the measured session remains
-        // untouched and falls back to eager decode. On success we commit
-        // `capture_states` exactly once as the semantic state transition for
-        // the decode token; replay only materializes the output hidden/logits.
-        // After warmup, all idempotent resource checks will return early,
-        // so the capture pass only records kernel launches.
-        let warmup_start = Instant::now();
-        let mut hc_state_dev = {
-            let hc_state = self.model.initial_hc_state_for_token(token_id)?;
-            self.operators.cuda_upload_f32(&hc_state)?
+        self.operators.check_cuda_arena_acquire()?;
+        let arena_key = ExecutionShapeKey::new(ForwardMode::Decode, 1, 1, 1);
+        let mut arena_lease = match {
+            let layers = self.plan.resources().layers();
+            let operators = &mut self.operators;
+            self.layer_arena_pool.acquire(arena_key, || {
+                DeepSeekV4LayerArenaVariants::try_build(layers, 1, operators)
+            })
+        } {
+            Ok(lease) => lease,
+            Err(error) => {
+                self.operators.record_cuda_arena_pool_miss(false)?;
+                return Err(error);
+            }
         };
-        // Keep graph capture's residency preparation aligned with eager decode.
-        // Without this, capture may see an empty predictor/hotset path and record
-        // a different expert-residency shape from the eager runtime path.
-        let _ = self.prepare_decode_lookahead_prefetch(token_id)?;
-        self.prepare_hash_decode_prefetch_window(token_id)?;
-        let mut layer_routes: Vec<(Vec<usize>, Vec<f32>)> = Vec::with_capacity(max_layers);
-        let mut layer_moe_steps: Vec<RoutedMoeStepOutput> = Vec::with_capacity(max_layers);
-        for layer_idx in 0..max_layers {
-            let predicted_experts = self.predicted_experts_for_layer(
-                layer_idx,
-                ExpertPredictionInput::Decode { token_id },
-            )?;
-            let layer = self.layers[layer_idx].as_ref().expect("bound above");
-            let state = capture_states
-                .get_mut(layer_idx)
-                .expect("capture state initialized above");
-            let step = layer.decode_step_device_hc_device(
-                state,
-                &hc_state_dev,
-                token_id,
-                position,
-                &predicted_experts,
-                &self.expert_reader,
-                &mut self.operators,
-            )?;
-            hc_state_dev = step.hc_state;
-            layer_routes.push((
-                step.moe
-                    .routes
-                    .iter()
-                    .map(|route| route.expert)
-                    .collect::<Vec<_>>(),
-                step.moe
-                    .routes
-                    .iter()
-                    .map(|route| route.weight)
-                    .collect::<Vec<_>>(),
-            ));
-            layer_moe_steps.push(step.moe);
-        }
-        self.operators
-            .record_cuda_graph_capture_warmup(warmup_start.elapsed());
-        let warmup_final_hc_state = hc_state_dev;
-
-        let prepare_start = Instant::now();
-        for layer_idx in 0..max_layers {
-            let layer = self.layers[layer_idx].as_ref().expect("bound above");
-            let (experts, weights) = &layer_routes[layer_idx];
-            self.operators
-                .cuda
-                .as_mut()
-                .expect("cuda initialized")
-                .prepare_routed_moe_graph_safe(
-                    self.model.config.hidden_size,
-                    experts,
-                    weights,
-                    layer.layer,
-                )?;
-        }
-
-        // ── Phase 2: Capture pass (graph-safe) ──
-        // All buffers referenced by graph nodes must outlive capture and remain
-        // stable across replay. Keep them in `DeepSeekV4DecodeGraph` instead of
-        // returning/dropping transient per-layer buffers.
-        if max_layers == 0 {
-            return Err(Error::Internal(
-                "DSV4 decode graph capture requires at least one layer".into(),
-            ));
-        }
-        let hc_state_init = self.model.initial_hc_state_for_token(token_id)?;
-        let initial_hc_state = self.operators.cuda_upload_f32(&hc_state_init)?;
-        let hc_dim = self.model.config.hc_config().hc_hidden_size();
-        let mut hc_slots: Vec<ferrule_cuda::context::CudaF32Buffer> = Vec::with_capacity(2);
-        hc_slots.push(self.operators.cuda_zero_f32(hc_dim)?);
-        hc_slots.push(self.operators.cuda_zero_f32(hc_dim)?);
-
-        // Pre-allocate per-layer MoE accumulators before capture.
-        let hidden_size = self.model.config.hidden_size;
-        let mut moe_accumulators: Vec<ferrule_cuda::context::CudaF32Buffer> =
-            Vec::with_capacity(max_layers);
-        for _ in 0..max_layers {
-            moe_accumulators.push(self.operators.cuda_zero_f32(hidden_size)?);
-        }
-
-        // Ensure all layer/attention graph arenas are allocated before stream
-        // capture. The old monolithic-fail-then-segment fallback accidentally
-        // did this during the failed full capture; make it explicit so direct
-        // segmented capture is capture-safe and deterministic.
-        for layer_idx in 0..max_layers {
-            let layer = self.layers[layer_idx].as_ref().expect("bound above");
-            let state = capture_states
-                .get_mut(layer_idx)
-                .expect("capture state initialized above");
-            state.ensure_graph_arena(
-                layer.hc_config,
-                layer.attention.config,
-                &mut self.operators,
-            )?;
-        }
-
-        // Ensure graph-safe pointer/route-weight workspaces prepared above are
-        // visible before stream capture records kernels that consume them.
-        self.operators.cuda_mut()?.ops.sync_stream()?;
-
-        // Clone the stream for capture.
-        let stream = self.operators.cuda_stream_clone()?;
-        self.operators
-            .record_cuda_graph_capture_prepare(prepare_start.elapsed());
-
-        macro_rules! capture_layer {
-            ($layer_idx:expr, $next_hc_slot:expr) => {{
-                let layer_idx = $layer_idx;
-                tracing::debug!("graph capture: layer {}", layer_idx);
-                let layer = self.layers[layer_idx].as_ref().expect("bound above");
-                let state = capture_states
-                    .get_mut(layer_idx)
-                    .expect("capture state initialized above");
-                let (experts, weights) = &layer_routes[layer_idx];
-                let moe_accum = &mut moe_accumulators[layer_idx];
-                if layer_idx == 0 {
-                    let output_hc = &mut hc_slots[$next_hc_slot];
-                    layer.decode_step_graph_safe(
-                        state,
-                        &initial_hc_state,
-                        position,
-                        experts,
-                        weights,
-                        &mut self.operators,
-                        moe_accum,
-                        output_hc,
-                    )
-                } else if $next_hc_slot == 0 {
-                    let (slot0, slot1) = hc_slots.split_at_mut(1);
-                    layer.decode_step_graph_safe(
-                        state,
-                        &slot1[0],
-                        position,
-                        experts,
-                        weights,
-                        &mut self.operators,
-                        moe_accum,
-                        &mut slot0[0],
-                    )
-                } else {
-                    let (slot0, slot1) = hc_slots.split_at_mut(1);
-                    layer.decode_step_graph_safe(
-                        state,
-                        &slot0[0],
-                        position,
-                        experts,
-                        weights,
-                        &mut self.operators,
-                        moe_accum,
-                        &mut slot1[0],
-                    )
-                }
-                .map_err(|err| {
-                    Error::Internal(format!(
-                        "DSV4 decode graph capture layer {layer_idx} failed: {err}"
-                    ))
-                })
-            }};
-        }
-
-        let capture_record_start = Instant::now();
-        let mut next_hc_slot = 0usize;
-        let (graphs, final_hc_slot) = if self.decode_graph_segmented_only {
-            let mut graphs = Vec::with_capacity(max_layers);
-            for layer_idx in 0..max_layers {
-                let graph = capture_decode_graph(&stream, || {
-                    capture_layer!(layer_idx, next_hc_slot)?;
-                    Ok(())
-                })?;
-                graphs.push(graph);
-                next_hc_slot = 1 - next_hc_slot;
-            }
-            self.operators
-                .record_cuda_graph_captured_segments(graphs.len());
-            (graphs, 1 - next_hc_slot)
+        if arena_lease.reused() {
+            self.operators.record_cuda_arena_pool_hit()?;
         } else {
-            let full_graph = capture_decode_graph(&stream, || {
-                for layer_idx in 0..max_layers {
-                    capture_layer!(layer_idx, next_hc_slot)?;
-                    next_hc_slot = 1 - next_hc_slot;
-                }
-                Ok(())
-            });
+            self.operators.record_cuda_arena_pool_miss(true)?;
+        }
 
-            match full_graph {
-                Ok(graph) => {
-                    self.operators.record_cuda_graph_captured_segments(1);
-                    (vec![graph], 1 - next_hc_slot)
+        let hidden_size = self.plan.resources().model().config.hidden_size;
+        let mut decode_buffers = self
+            .operators
+            .cuda_mut()?
+            .take_decode_buffers(hc_state.len(), hidden_size)?;
+        let layer_result: Result<Vec<RoutedMoeStepOutput>> = {
+            let layers = self.plan.resources().layers();
+            let position = self.sequence.core.position();
+            let states = &mut self.sequence.layers;
+            let expert_runtimes = &mut self.expert_runtimes;
+            let expert_reader = &self.expert_reader;
+            let operators = &mut self.operators;
+            (|| {
+                operators
+                    .cuda_mut()?
+                    .ops
+                    .overwrite_f32_buffer(&hc_state, &mut decode_buffers.hc_input)?;
+                let mut layer_moe_steps = Vec::with_capacity(max_layers);
+                for layer_idx in 0..max_layers {
+                    let arena = arena_lease
+                        .get_mut()
+                        .get_for_layer_mut(layer_idx)
+                        .expect("pooled layer arena variants match prepared layers");
+                    let step = layers[layer_idx].decode_step_device_hc_device(
+                        &mut states[layer_idx],
+                        &mut expert_runtimes[layer_idx],
+                        arena,
+                        &mut decode_buffers.hc_input,
+                        token_id,
+                        position,
+                        &layer_predictions[layer_idx],
+                        expert_reader,
+                        operators,
+                    )?;
+                    layer_moe_steps.push(step.moe);
                 }
-                Err(full_err) => {
-                    self.decode_graph_segmented_only = true;
-                    self.operators.record_cuda_graph_full_capture_failure();
-                    eprintln!(
-                        "[ferrule] CUDA full decode graph capture failed, trying per-layer graph segments: {full_err}"
-                    );
-                    let mut graphs = Vec::with_capacity(max_layers);
-                    next_hc_slot = 0;
-                    for layer_idx in 0..max_layers {
-                        let graph = capture_decode_graph(&stream, || {
-                            capture_layer!(layer_idx, next_hc_slot)?;
-                            Ok(())
-                        })?;
-                        graphs.push(graph);
-                        next_hc_slot = 1 - next_hc_slot;
-                    }
-                    self.operators
-                        .record_cuda_graph_captured_segments(graphs.len());
-                    (graphs, 1 - next_hc_slot)
-                }
+                Ok(layer_moe_steps)
+            })()
+        };
+        drop(arena_lease);
+        let layer_moe_steps = match layer_result {
+            Ok(steps) => steps,
+            Err(error) => {
+                self.restore_cuda_decode_buffers(decode_buffers);
+                return Err(error);
             }
         };
-        self.operators
-            .record_cuda_graph_capture_record(capture_record_start.elapsed());
-
-        for (layer_idx, state) in capture_states.into_iter().enumerate() {
-            self.states[layer_idx] = Some(state);
-        }
         for (layer_idx, moe) in layer_moe_steps.iter().enumerate() {
             self.observe_moe_step(layer_idx, ExpertAccessPhase::Decode, moe);
         }
 
-        self.decode_graph = Some(DeepSeekV4DecodeGraph {
-            graphs,
-            _initial_hc_state: initial_hc_state,
-            hc_slots,
-            final_hc_slot,
-            _moe_accumulators: moe_accumulators,
-            warmup_final_hc_state,
-            replays_remaining: 1,
-        });
-        Ok(())
+        let result = (|| {
+            if matches!(completion, CudaDecodeCompletion::Feed) {
+                return Ok(CudaDecodeOutput::Feed);
+            }
+
+            let final_hc_start = Instant::now();
+            self.operators.cuda_mut()?.hc_head_from_device_into(
+                &decode_buffers.hc_input,
+                1,
+                self.plan.resources().model().config.hc_config(),
+                &self.plan.resources().model().hc_head,
+                &mut decode_buffers.final_hidden,
+            )?;
+            self.output_profile.final_hc_head_calls =
+                self.output_profile.final_hc_head_calls.saturating_add(1);
+            self.output_profile.final_hc_head_us = self
+                .output_profile
+                .final_hc_head_us
+                .saturating_add(self.operators.finish_profile_stage(final_hc_start)?);
+
+            let final_norm_start = Instant::now();
+            self.operators.cuda_mut()?.rms_norm_device_cached_into(
+                "output_norm",
+                &decode_buffers.final_hidden,
+                &self.plan.resources().model().output_norm,
+                self.plan.resources().model().config.norm_eps,
+                &mut decode_buffers.final_norm,
+            )?;
+            self.output_profile.final_norm_calls =
+                self.output_profile.final_norm_calls.saturating_add(1);
+            self.output_profile.final_norm_us = self
+                .output_profile
+                .final_norm_us
+                .saturating_add(self.operators.finish_profile_stage(final_norm_start)?);
+
+            match completion {
+                CudaDecodeCompletion::Feed => unreachable!("handled before finalization"),
+                CudaDecodeCompletion::DownloadHidden => self
+                    .operators
+                    .cuda_mut()?
+                    .ops
+                    .download_f32_buffer(&decode_buffers.final_norm)
+                    .map(CudaDecodeOutput::Hidden),
+                CudaDecodeCompletion::TopK(top_k) => {
+                    let topk_start = Instant::now();
+                    let logits = self
+                        .plan
+                        .resources()
+                        .model()
+                        .topk_logits_for_hidden_device_with_operators(
+                            &decode_buffers.final_norm,
+                            top_k,
+                            self.plan
+                                .resources()
+                                .prepare_options()
+                                .output_head_chunk_rows,
+                            &mut self.operators,
+                        )?;
+                    self.output_profile.lm_head_topk_calls =
+                        self.output_profile.lm_head_topk_calls.saturating_add(1);
+                    self.output_profile.lm_head_topk_us = self
+                        .output_profile
+                        .lm_head_topk_us
+                        .saturating_add(self.operators.finish_profile_stage(topk_start)?);
+                    Ok(CudaDecodeOutput::TopK(logits))
+                }
+            }
+        })();
+        self.restore_cuda_decode_buffers(decode_buffers);
+        result
     }
 
     pub fn decode_token_logits_row_range(
@@ -1352,59 +1084,58 @@ impl DeepSeekV4ReferenceRunner {
         row_count: usize,
     ) -> Result<Vec<f32>> {
         let hidden = self.decode_token_hidden(token_id)?;
-        self.model.logits_for_hidden_row_range_with_operators(
-            &hidden,
-            start_row,
-            row_count,
-            &mut self.operators,
-        )
+        self.plan
+            .resources()
+            .model()
+            .logits_for_hidden_row_range_with_operators(
+                &hidden,
+                start_row,
+                row_count,
+                &mut self.operators,
+            )
     }
 
     pub fn decode_token_logits(&mut self, token_id: u32) -> Result<Vec<f32>> {
         let hidden = self.decode_token_hidden(token_id)?;
-        self.model.logits_for_hidden_chunked_with_operators(
-            &hidden,
-            self.options.output_head_chunk_rows,
-            &mut self.operators,
-        )
+        self.plan
+            .resources()
+            .model()
+            .logits_for_hidden_chunked_with_operators(
+                &hidden,
+                self.plan
+                    .resources()
+                    .prepare_options()
+                    .output_head_chunk_rows,
+                &mut self.operators,
+            )
     }
 
-    pub fn decode_token_topk(
-        &mut self,
-        token_id: u32,
-        top_k: usize,
-    ) -> Result<Vec<DeepSeekV4Logit>> {
+    pub fn decode_token_topk(&mut self, token_id: u32, top_k: usize) -> Result<Vec<TokenLogit>> {
         #[cfg(feature = "cuda")]
-        if self.operators.backend == DeepSeekV4OperatorBackend::Cuda {
-            let hidden = self
-                .advance_token_hidden_cuda_device(token_id, true)?
-                .ok_or_else(|| {
-                    Error::Internal("DeepSeek-V4 CUDA top-k did not materialize hidden".into())
-                })?;
-            let topk_start = Instant::now();
-            let logits = self.model.topk_logits_for_hidden_device_with_operators(
-                &hidden,
-                top_k,
-                self.options.output_head_chunk_rows,
-                &mut self.operators,
-            )?;
-            self.output_profile.lm_head_topk_calls =
-                self.output_profile.lm_head_topk_calls.saturating_add(1);
-            self.output_profile.lm_head_topk_us = self
-                .output_profile
-                .lm_head_topk_us
-                .saturating_add(self.operators.finish_profile_stage(topk_start)?);
-            return Ok(logits);
+        if self.operators.backend == ModelExecutionBackend::Cuda {
+            return match self.run_cuda_decode(token_id, CudaDecodeCompletion::TopK(top_k))? {
+                CudaDecodeOutput::TopK(logits) => Ok(logits),
+                _ => Err(Error::Internal(
+                    "DeepSeek-V4 CUDA top-k decode returned the wrong completion".into(),
+                )),
+            };
         }
 
         let hidden = self.decode_token_hidden(token_id)?;
         let topk_start = Instant::now();
-        let logits = self.model.topk_logits_for_hidden_with_operators(
-            &hidden,
-            top_k,
-            self.options.output_head_chunk_rows,
-            &mut self.operators,
-        )?;
+        let logits = self
+            .plan
+            .resources()
+            .model()
+            .topk_logits_for_hidden_with_operators(
+                &hidden,
+                top_k,
+                self.plan
+                    .resources()
+                    .prepare_options()
+                    .output_head_chunk_rows,
+                &mut self.operators,
+            )?;
         self.output_profile.lm_head_topk_calls =
             self.output_profile.lm_head_topk_calls.saturating_add(1);
         self.output_profile.lm_head_topk_us = self
@@ -1419,9 +1150,13 @@ impl DeepSeekV4ReferenceRunner {
     /// path used by interactive chat.
     pub fn feed_token(&mut self, token_id: u32) -> Result<()> {
         #[cfg(feature = "cuda")]
-        if self.operators.backend == DeepSeekV4OperatorBackend::Cuda {
-            self.advance_token_hidden_cuda_device(token_id, false)?;
-            return Ok(());
+        if self.operators.backend == ModelExecutionBackend::Cuda {
+            return match self.run_cuda_decode(token_id, CudaDecodeCompletion::Feed)? {
+                CudaDecodeOutput::Feed => Ok(()),
+                _ => Err(Error::Internal(
+                    "DeepSeek-V4 CUDA feed returned the wrong completion".into(),
+                )),
+            };
         }
         self.advance_token_hidden_reference(token_id, false)
             .map(|_| ())
@@ -1462,35 +1197,50 @@ impl DeepSeekV4ReferenceRunner {
         row_count: usize,
     ) -> Result<Vec<f32>> {
         let hidden = self.prefill_tokens_hidden(token_ids)?;
-        self.model.logits_for_hidden_row_range_with_operators(
-            &hidden,
-            start_row,
-            row_count,
-            &mut self.operators,
-        )
+        self.plan
+            .resources()
+            .model()
+            .logits_for_hidden_row_range_with_operators(
+                &hidden,
+                start_row,
+                row_count,
+                &mut self.operators,
+            )
     }
 
     pub fn prefill_tokens_logits(&mut self, token_ids: &[u32]) -> Result<Vec<f32>> {
         let hidden = self.prefill_tokens_hidden(token_ids)?;
-        self.model.logits_for_hidden_chunked_with_operators(
-            &hidden,
-            self.options.output_head_chunk_rows,
-            &mut self.operators,
-        )
+        self.plan
+            .resources()
+            .model()
+            .logits_for_hidden_chunked_with_operators(
+                &hidden,
+                self.plan
+                    .resources()
+                    .prepare_options()
+                    .output_head_chunk_rows,
+                &mut self.operators,
+            )
     }
 
     pub fn prefill_tokens_topk(
         &mut self,
         token_ids: &[u32],
         top_k: usize,
-    ) -> Result<Vec<DeepSeekV4Logit>> {
+    ) -> Result<Vec<TokenLogit>> {
         let hidden = self.prefill_tokens_hidden(token_ids)?;
-        self.model.topk_logits_for_hidden_with_operators(
-            &hidden,
-            top_k,
-            self.options.output_head_chunk_rows,
-            &mut self.operators,
-        )
+        self.plan
+            .resources()
+            .model()
+            .topk_logits_for_hidden_with_operators(
+                &hidden,
+                top_k,
+                self.plan
+                    .resources()
+                    .prepare_options()
+                    .output_head_chunk_rows,
+                &mut self.operators,
+            )
     }
 
     /// Interactive prefill optimized for short chat turns on the CUDA backend.
@@ -1504,7 +1254,7 @@ impl DeepSeekV4ReferenceRunner {
         &mut self,
         token_ids: &[u32],
         top_k: usize,
-    ) -> Result<Vec<DeepSeekV4Logit>> {
+    ) -> Result<Vec<TokenLogit>> {
         if token_ids.is_empty() {
             return Err(Error::Model(
                 "DeepSeek-V4 interactive prefill requires at least one token".into(),
@@ -1529,13 +1279,22 @@ impl DeepSeekV4ReferenceRunner {
     /// used by serving engines instead of re-running the whole model once per
     /// prompt token.
     fn prefill_tokens_hc_states_batched(&mut self, token_ids: &[u32]) -> Result<(Vec<f32>, usize)> {
+        self.run_sequence_step(token_ids.len(), |runner| {
+            runner.prefill_tokens_hc_states_batched_uncommitted(token_ids)
+        })
+    }
+
+    fn prefill_tokens_hc_states_batched_uncommitted(
+        &mut self,
+        token_ids: &[u32],
+    ) -> Result<(Vec<f32>, usize)> {
         if token_ids.is_empty() {
             return Err(Error::Model(
                 "DeepSeek-V4 prefill requires at least one token".into(),
             ));
         }
         let tokens = token_ids.len();
-        let start_pos = self.position;
+        let start_pos = self.sequence.core.position();
         if start_pos == 0 {
             self.prefill_stats.start_segment_calls =
                 self.prefill_stats.start_segment_calls.saturating_add(1);
@@ -1552,34 +1311,34 @@ impl DeepSeekV4ReferenceRunner {
                 .saturating_add(tokens as u64);
         }
 
-        let mut hc_state = self.model.initial_hc_state_for_tokens(token_ids)?;
-        for layer_idx in 0..self.options.max_layers {
-            if self.layers[layer_idx].is_none() {
-                let bind_start = Instant::now();
-                self.layers[layer_idx] = Some(self.model.bind_layer(layer_idx)?);
-                self.operators
-                    .record_layer_bind(layer_idx, duration_us(bind_start.elapsed()));
-            }
-            if self.states[layer_idx].is_none() {
-                let state_start = Instant::now();
-                self.states[layer_idx] =
-                    Some(self.model.new_quality_first_layer_state_with_residency(
-                        layer_idx,
-                        self.options.moe_prefetch_experts,
-                        self.options.moe_hotset_experts,
-                    )?);
-                self.operators
-                    .record_layer_state_init(layer_idx, duration_us(state_start.elapsed()));
-            }
+        // ── Slice D: cross-layer device-resident prefill ──
+        // Keep HC/hidden rows on device across all layers. Only download the
+        // final HC state when the caller needs it as Vec<f32>.
+        #[cfg(feature = "cuda")]
+        if self.operators.backend == ModelExecutionBackend::Cuda {
+            let hc_state = self.prefill_tokens_hc_states_device(token_ids, start_pos, None)?;
+            return Ok((hc_state, tokens));
+        }
+
+        let mut hc_state = self
+            .plan
+            .resources()
+            .model()
+            .initial_hc_state_for_tokens(token_ids)?;
+        let report_progress = self.plan.resources().policy().prefill_progress();
+        for layer_idx in 0..self.plan.resources().prepare_options().max_layers {
+            let layer_start = report_progress.then(Instant::now);
             let predicted_experts = self.predicted_experts_for_layer(
                 layer_idx,
                 ExpertPredictionInput::Prefill { token_ids },
             )?;
             self.prepare_predicted_experts_for_layer(layer_idx, &predicted_experts)?;
-            let layer = self.layers[layer_idx].as_ref().expect("initialized above");
-            let state = self.states[layer_idx].as_mut().expect("initialized above");
+            let layer = &self.plan.resources().layers()[layer_idx];
+            let state = &mut self.sequence.layers[layer_idx];
+            let expert_runtime = &mut self.expert_runtimes[layer_idx];
             hc_state = layer.prefill_start_with_operators(
                 state,
+                expert_runtime,
                 &hc_state,
                 token_ids,
                 start_pos,
@@ -1589,9 +1348,122 @@ impl DeepSeekV4ReferenceRunner {
                 &mut self.operators,
             )?;
             self.observe_pending_moe_access_events();
+            if let Some(layer_start) = layer_start {
+                let counters = self.operator_runtime_counters();
+                eprintln!(
+                    "[ferrule] DSV4 prefill layer {}/{} complete in {:?}: kernels={} allocations={} h2d={}B d2h={}B expert_loads={} expert_load_bytes={}",
+                    layer_idx + 1,
+                    self.plan.resources().prepare_options().max_layers,
+                    layer_start.elapsed(),
+                    counters.kernel_launches,
+                    counters.device_allocations,
+                    counters.host_to_device_bytes,
+                    counters.device_to_host_bytes,
+                    counters.expert_loads,
+                    counters.expert_load_bytes,
+                );
+            }
         }
-        self.position += tokens;
         Ok((hc_state, tokens))
+    }
+
+    /// Cross-layer device-resident prefill (Slice D).
+    ///
+    /// Executes one exact-shape prefill bucket through the shared persistent
+    /// layer arena. Trace downloads are opt-in and never affect normal execution.
+    #[cfg(feature = "cuda")]
+    fn prefill_tokens_hc_states_device(
+        &mut self,
+        token_ids: &[u32],
+        start_pos: usize,
+        mut layer_trace: Option<&mut Vec<Vec<f32>>>,
+    ) -> Result<Vec<f32>> {
+        let hc_state = self
+            .plan
+            .resources()
+            .model()
+            .initial_hc_state_for_tokens(token_ids)?;
+        let tokens = token_ids.len();
+        let max_layers = self.plan.resources().prepare_options().max_layers;
+        let mut layer_predictions = Vec::with_capacity(max_layers);
+        for layer_idx in 0..max_layers {
+            let predicted_experts = self.predicted_experts_for_layer(
+                layer_idx,
+                ExpertPredictionInput::Prefill { token_ids },
+            )?;
+            self.prepare_predicted_experts_for_layer(layer_idx, &predicted_experts)?;
+            layer_predictions.push(predicted_experts);
+        }
+
+        self.operators.check_cuda_arena_acquire()?;
+        let arena_key = ExecutionShapeKey::new(ForwardMode::Prefill, tokens, 1, tokens);
+        let mut arena_lease = match {
+            let layers = self.plan.resources().layers();
+            let operators = &mut self.operators;
+            self.layer_arena_pool.acquire(arena_key, || {
+                DeepSeekV4LayerArenaVariants::try_build(layers, tokens, operators)
+            })
+        } {
+            Ok(lease) => lease,
+            Err(error) => {
+                self.operators.record_cuda_arena_pool_miss(false)?;
+                return Err(error);
+            }
+        };
+        if arena_lease.reused() {
+            self.operators.record_cuda_arena_pool_hit()?;
+        } else {
+            self.operators.record_cuda_arena_pool_miss(true)?;
+        }
+
+        let hidden_size = self.plan.resources().model().config.hidden_size;
+        let mut buffers = self
+            .operators
+            .cuda_mut()?
+            .take_decode_buffers(hc_state.len(), tokens * hidden_size)?;
+        let execution = (|| {
+            self.operators
+                .cuda_mut()?
+                .ops
+                .overwrite_f32_buffer(&hc_state, &mut buffers.hc_input)?;
+            for layer_idx in 0..max_layers {
+                let layer = &self.plan.resources().layers()[layer_idx];
+                let arena = arena_lease
+                    .get_mut()
+                    .get_for_layer_mut(layer_idx)
+                    .expect("pooled layer arena variants match prepared layers");
+                layer.prefill_start_cuda_device_chain_into(
+                    &mut self.sequence.layers[layer_idx],
+                    &mut self.expert_runtimes[layer_idx],
+                    arena,
+                    &mut buffers.hc_input,
+                    token_ids,
+                    start_pos,
+                    &layer_predictions[layer_idx],
+                    &self.expert_reader,
+                    &mut self.operators,
+                )?;
+                if let Some(trace) = layer_trace.as_deref_mut() {
+                    let host = self
+                        .operators
+                        .cuda_mut()?
+                        .ops
+                        .download_f32_buffer(&buffers.hc_input)?;
+                    let hc_dim = layer.hc_config.hc_hidden_size();
+                    let last_start = (tokens - 1) * hc_dim;
+                    trace.push(host[last_start..last_start + hc_dim].to_vec());
+                }
+            }
+            self.operators
+                .cuda_mut()?
+                .ops
+                .download_f32_buffer(&buffers.hc_input)
+        })();
+        drop(arena_lease);
+        self.operators.cuda_mut()?.restore_decode_buffers(buffers);
+        let hc_state = execution?;
+        self.observe_pending_moe_access_events();
+        Ok(hc_state)
     }
 
     pub fn prefill_tokens_no_logits_batched(&mut self, token_ids: &[u32]) -> Result<()> {
@@ -1652,11 +1524,17 @@ impl DeepSeekV4ReferenceRunner {
 
     pub fn prefill_tokens_logits_batched(&mut self, token_ids: &[u32]) -> Result<Vec<f32>> {
         let hidden = self.prefill_tokens_hidden_batched(token_ids)?;
-        self.model.logits_for_hidden_chunked_with_operators(
-            &hidden,
-            self.options.output_head_chunk_rows,
-            &mut self.operators,
-        )
+        self.plan
+            .resources()
+            .model()
+            .logits_for_hidden_chunked_with_operators(
+                &hidden,
+                self.plan
+                    .resources()
+                    .prepare_options()
+                    .output_head_chunk_rows,
+                &mut self.operators,
+            )
     }
 
     pub fn prefill_tokens_logits_row_range_batched(
@@ -1666,19 +1544,22 @@ impl DeepSeekV4ReferenceRunner {
         row_count: usize,
     ) -> Result<Vec<f32>> {
         let hidden = self.prefill_tokens_hidden_batched(token_ids)?;
-        self.model.logits_for_hidden_row_range_with_operators(
-            &hidden,
-            start_row,
-            row_count,
-            &mut self.operators,
-        )
+        self.plan
+            .resources()
+            .model()
+            .logits_for_hidden_row_range_with_operators(
+                &hidden,
+                start_row,
+                row_count,
+                &mut self.operators,
+            )
     }
 
     pub fn prefill_tokens_topk_batched(
         &mut self,
         token_ids: &[u32],
         top_k: usize,
-    ) -> Result<Vec<DeepSeekV4Logit>> {
+    ) -> Result<Vec<TokenLogit>> {
         self.prefill_stats.logits_calls = self.prefill_stats.logits_calls.saturating_add(1);
         self.prefill_stats.logits_tokens = self
             .prefill_stats
@@ -1692,12 +1573,19 @@ impl DeepSeekV4ReferenceRunner {
 
         let hidden = self.prefill_tokens_hidden_batched(token_ids)?;
         let topk_start = Instant::now();
-        let logits = self.model.topk_logits_for_hidden_with_operators(
-            &hidden,
-            top_k,
-            self.options.output_head_chunk_rows,
-            &mut self.operators,
-        )?;
+        let logits = self
+            .plan
+            .resources()
+            .model()
+            .topk_logits_for_hidden_with_operators(
+                &hidden,
+                top_k,
+                self.plan
+                    .resources()
+                    .prepare_options()
+                    .output_head_chunk_rows,
+                &mut self.operators,
+            )?;
         self.output_profile.lm_head_topk_calls =
             self.output_profile.lm_head_topk_calls.saturating_add(1);
         self.output_profile.lm_head_topk_us = self
@@ -1725,28 +1613,55 @@ impl DeepSeekV4ReferenceRunner {
             ));
         }
         let tokens = token_ids.len();
-        let start_pos = self.position;
-        let hc_dim = self.model.config.hc_config().hc_hidden_size();
-
         // Single-token: the batched path falls back to the token-loop, so the
         // two traces are identical by construction.
         if tokens == 1 {
             return self.prefill_token_loop_layer_hc_trace(token_ids);
         }
+        self.run_sequence_step(tokens, |runner| {
+            runner.prefill_batched_layer_hc_trace_uncommitted(token_ids)
+        })
+    }
 
-        let mut hc_state = self.model.initial_hc_state_for_tokens(token_ids)?;
-        let mut trace = Vec::with_capacity(self.options.max_layers);
-        for layer_idx in 0..self.options.max_layers {
-            self.ensure_layer_bound_and_state(layer_idx)?;
+    fn prefill_batched_layer_hc_trace_uncommitted(
+        &mut self,
+        token_ids: &[u32],
+    ) -> Result<Vec<Vec<f32>>> {
+        let tokens = token_ids.len();
+        let start_pos = self.sequence.core.position();
+        #[cfg(feature = "cuda")]
+        if self.operators.backend == ModelExecutionBackend::Cuda {
+            let mut trace = Vec::with_capacity(self.plan.resources().prepare_options().max_layers);
+            let _hc_state =
+                self.prefill_tokens_hc_states_device(token_ids, start_pos, Some(&mut trace))?;
+            return Ok(trace);
+        }
+
+        let hc_dim = self
+            .plan
+            .resources()
+            .model()
+            .config
+            .hc_config()
+            .hc_hidden_size();
+        let mut hc_state = self
+            .plan
+            .resources()
+            .model()
+            .initial_hc_state_for_tokens(token_ids)?;
+        let mut trace = Vec::with_capacity(self.plan.resources().prepare_options().max_layers);
+        for layer_idx in 0..self.plan.resources().prepare_options().max_layers {
             let predicted_experts = self.predicted_experts_for_layer(
                 layer_idx,
                 ExpertPredictionInput::Prefill { token_ids },
             )?;
             self.prepare_predicted_experts_for_layer(layer_idx, &predicted_experts)?;
-            let layer = self.layers[layer_idx].as_ref().expect("bound above");
-            let state = self.states[layer_idx].as_mut().expect("state above");
+            let layer = &self.plan.resources().layers()[layer_idx];
+            let state = &mut self.sequence.layers[layer_idx];
+            let expert_runtime = &mut self.expert_runtimes[layer_idx];
             hc_state = layer.prefill_start_with_operators(
                 state,
+                expert_runtime,
                 &hc_state,
                 token_ids,
                 start_pos,
@@ -1760,7 +1675,6 @@ impl DeepSeekV4ReferenceRunner {
             let last_start = (tokens - 1) * hc_dim;
             trace.push(hc_state[last_start..last_start + hc_dim].to_vec());
         }
-        self.position += tokens;
         Ok(trace)
     }
 
@@ -1792,30 +1706,37 @@ impl DeepSeekV4ReferenceRunner {
     /// `advance_token_hidden_*`.  Used by the prefill parity harness for the
     /// last prompt token.
     pub fn decode_token_layer_hc_trace(&mut self, token_id: u32) -> Result<Vec<Vec<f32>>> {
-        #[cfg(feature = "cuda")]
-        if self.operators.backend == DeepSeekV4OperatorBackend::Cuda {
-            return self.decode_token_layer_hc_trace_cuda(token_id);
-        }
-        self.decode_token_layer_hc_trace_reference(token_id)
+        self.run_sequence_step(1, |runner| {
+            #[cfg(feature = "cuda")]
+            if runner.operators.backend == ModelExecutionBackend::Cuda {
+                return runner.decode_token_layer_hc_trace_cuda(token_id);
+            }
+            runner.decode_token_layer_hc_trace_reference(token_id)
+        })
     }
 
     fn decode_token_layer_hc_trace_reference(&mut self, token_id: u32) -> Result<Vec<Vec<f32>>> {
-        let mut hc_state = self.model.initial_hc_state_for_token(token_id)?;
-        let mut trace = Vec::with_capacity(self.options.max_layers);
-        for layer_idx in 0..self.options.max_layers {
-            self.ensure_layer_bound_and_state(layer_idx)?;
+        let mut hc_state = self
+            .plan
+            .resources()
+            .model()
+            .initial_hc_state_for_token(token_id)?;
+        let mut trace = Vec::with_capacity(self.plan.resources().prepare_options().max_layers);
+        for layer_idx in 0..self.plan.resources().prepare_options().max_layers {
             let predicted_experts = self.predicted_experts_for_layer(
                 layer_idx,
                 ExpertPredictionInput::Decode { token_id },
             )?;
             self.prepare_predicted_experts_for_layer(layer_idx, &predicted_experts)?;
-            let layer = self.layers[layer_idx].as_ref().expect("bound above");
-            let state = self.states[layer_idx].as_mut().expect("state above");
+            let layer = &self.plan.resources().layers()[layer_idx];
+            let state = &mut self.sequence.layers[layer_idx];
+            let expert_runtime = &mut self.expert_runtimes[layer_idx];
             let step = layer.decode_step_with_operators(
                 state,
+                expert_runtime,
                 &hc_state,
                 token_id,
-                self.position,
+                self.sequence.core.position(),
                 &predicted_experts,
                 &self.expert_reader,
                 &self.expert_executor,
@@ -1825,19 +1746,25 @@ impl DeepSeekV4ReferenceRunner {
             hc_state = step.hc_state;
             trace.push(hc_state.clone());
         }
-        self.position += 1;
         Ok(trace)
     }
 
     #[cfg(feature = "cuda")]
     fn decode_token_layer_hc_trace_cuda(&mut self, token_id: u32) -> Result<Vec<Vec<f32>>> {
         let mut hc_state_dev = {
-            let hc_state = self.model.initial_hc_state_for_token(token_id)?;
-            self.operators.cuda_upload_f32(&hc_state)?
+            let hc_state = self
+                .plan
+                .resources()
+                .model()
+                .initial_hc_state_for_token(token_id)?;
+            self.operators
+                .cuda_mut()?
+                .ops
+                .upload_f32_buffer(&hc_state)?
         };
-        let mut trace = Vec::with_capacity(self.options.max_layers);
-        for layer_idx in 0..self.options.max_layers {
-            self.ensure_layer_ready(layer_idx)?;
+        let max_layers = self.plan.resources().prepare_options().max_layers;
+        let mut layer_predictions = Vec::with_capacity(max_layers);
+        for layer_idx in 0..max_layers {
             let predicted_experts = self.predicted_experts_for_layer(
                 layer_idx,
                 ExpertPredictionInput::Decode { token_id },
@@ -1845,64 +1772,83 @@ impl DeepSeekV4ReferenceRunner {
             if !predicted_experts.is_empty() {
                 self.prepare_predicted_experts_for_layer(layer_idx, &predicted_experts)?;
             }
-            let layer = self.layers[layer_idx].as_ref().expect("bound above");
-            let state = self.states[layer_idx].as_mut().expect("state above");
+            layer_predictions.push(predicted_experts);
+        }
+
+        self.operators.check_cuda_arena_acquire()?;
+        let arena_key = ExecutionShapeKey::new(ForwardMode::Decode, 1, 1, 1);
+        let mut arena_lease = match {
+            let layers = self.plan.resources().layers();
+            let operators = &mut self.operators;
+            self.layer_arena_pool.acquire(arena_key, || {
+                DeepSeekV4LayerArenaVariants::try_build(layers, 1, operators)
+            })
+        } {
+            Ok(lease) => lease,
+            Err(error) => {
+                self.operators.record_cuda_arena_pool_miss(false)?;
+                return Err(error);
+            }
+        };
+        if arena_lease.reused() {
+            self.operators.record_cuda_arena_pool_hit()?;
+        } else {
+            self.operators.record_cuda_arena_pool_miss(true)?;
+        }
+
+        let mut trace = Vec::with_capacity(max_layers);
+        let mut layer_moe_steps = Vec::with_capacity(max_layers);
+        for layer_idx in 0..max_layers {
+            let layer = &self.plan.resources().layers()[layer_idx];
+            let state = &mut self.sequence.layers[layer_idx];
+            let expert_runtime = &mut self.expert_runtimes[layer_idx];
+            let arena = arena_lease
+                .get_mut()
+                .get_for_layer_mut(layer_idx)
+                .expect("pooled layer arena variants match prepared layers");
             let step = layer.decode_step_device_hc_device(
                 state,
-                &hc_state_dev,
+                expert_runtime,
+                arena,
+                &mut hc_state_dev,
                 token_id,
-                self.position,
-                &predicted_experts,
+                self.sequence.core.position(),
+                &layer_predictions[layer_idx],
                 &self.expert_reader,
                 &mut self.operators,
             )?;
-            self.observe_moe_step(layer_idx, ExpertAccessPhase::Decode, &step.moe);
-            hc_state_dev = step.hc_state;
-            trace.push(self.operators.cuda_download_f32(&hc_state_dev)?);
+            layer_moe_steps.push(step.moe);
+            trace.push(
+                self.operators
+                    .cuda_mut()?
+                    .ops
+                    .download_f32_buffer(&hc_state_dev)?,
+            );
         }
-        self.position += 1;
+        drop(arena_lease);
+        for (layer_idx, moe) in layer_moe_steps.iter().enumerate() {
+            self.observe_moe_step(layer_idx, ExpertAccessPhase::Decode, moe);
+        }
         Ok(trace)
     }
 
     /// Convenience: run the last-token HC trace through hc_head + output_norm
     /// + lm_head top-k, returning the top-1 token id.  Mirrors what
     /// `prefill_tokens_topk_batched` does with the final hidden.
-    pub fn topk_from_hc_trace(&mut self, hc_state: &[f32]) -> Result<Vec<DeepSeekV4Logit>> {
+    pub fn topk_from_hc_trace(&mut self, hc_state: &[f32]) -> Result<Vec<TokenLogit>> {
         let hidden = self.normalized_last_hidden_profiled(hc_state, 1)?;
-        self.model.topk_logits_for_hidden_with_operators(
-            &hidden,
-            1,
-            self.options.output_head_chunk_rows,
-            &mut self.operators,
-        )
-    }
-}
-
-/// Private helper: ensure a layer is bound and its state is initialised.
-///
-/// Both the batched and token-loop traces call this; it is a small extraction
-/// of the common bind/state code that was previously duplicated in
-/// `prefill_tokens_hc_states_batched` and `advance_token_hidden_reference`.
-impl DeepSeekV4ReferenceRunner {
-    fn ensure_layer_bound_and_state(&mut self, layer_idx: usize) -> Result<()> {
-        if self.layers[layer_idx].is_none() {
-            let bind_start = Instant::now();
-            self.layers[layer_idx] = Some(self.model.bind_layer(layer_idx)?);
-            self.operators
-                .record_layer_bind(layer_idx, duration_us(bind_start.elapsed()));
-        }
-        if self.states[layer_idx].is_none() {
-            let state_start = Instant::now();
-            self.states[layer_idx] =
-                Some(self.model.new_quality_first_layer_state_with_residency(
-                    layer_idx,
-                    self.options.moe_prefetch_experts,
-                    self.options.moe_hotset_experts,
-                )?);
-            self.operators
-                .record_layer_state_init(layer_idx, duration_us(state_start.elapsed()));
-        }
-        Ok(())
+        self.plan
+            .resources()
+            .model()
+            .topk_logits_for_hidden_with_operators(
+                &hidden,
+                1,
+                self.plan
+                    .resources()
+                    .prepare_options()
+                    .output_head_chunk_rows,
+                &mut self.operators,
+            )
     }
 }
 
@@ -1923,33 +1869,51 @@ fn push_candidate_experts(
     }
 }
 
-fn duration_us(d: Duration) -> u64 {
-    d.as_micros().min(u128::from(u64::MAX)) as u64
+fn clone_sequence_layers(
+    operators: &mut DeepSeekV4OperatorContext,
+    layers: &[DeepSeekV4LayerState],
+) -> Result<Vec<DeepSeekV4LayerState>> {
+    let mut cloned = Vec::new();
+    cloned.try_reserve_exact(layers.len()).map_err(|error| {
+        Error::Model(format!(
+            "DeepSeek-V4 sequence layer clone allocation failed: {error}"
+        ))
+    })?;
+    for layer in layers {
+        let destination = layer.clone();
+        #[cfg(feature = "cuda")]
+        let destination = {
+            let mut destination = destination;
+            let physical = operators
+                .cuda_mut()?
+                .clone_sequence_kv_state(layer.kv.window.cuda_state())?;
+            destination.kv.window.replace_cuda_state(physical);
+            destination
+        };
+        #[cfg(not(feature = "cuda"))]
+        let _ = operators;
+        cloned.push(destination);
+    }
+    Ok(cloned)
 }
 
-fn generic_token_logits(logits: Vec<DeepSeekV4Logit>) -> Vec<TokenLogit> {
-    logits
-        .into_iter()
-        .map(|logit| TokenLogit {
-            token_id: logit.token_id,
-            logit: logit.logit,
-        })
-        .collect()
+fn duration_us(duration: Duration) -> u64 {
+    duration.as_micros().min(u128::from(u64::MAX)) as u64
 }
 
-impl ModelRunner for DeepSeekV4ReferenceRunner {
+impl ModelRunner for DeepSeekV4Runner {
     fn model_info(&self) -> ModelInfo {
-        let mut info = self.model.model_info();
+        let mut info = self.plan.resources().model().model_info();
         info.backend = self.operator_backend().as_str();
         info
     }
 
     fn encode(&self, text: &str) -> Result<Vec<u32>> {
-        self.model.tokenizer.encode(text)
+        self.plan.resources().model().tokenizer.encode(text)
     }
 
     fn decode(&self, tokens: &[u32]) -> Result<String> {
-        self.model.tokenizer.decode(tokens)
+        self.plan.resources().model().tokenizer.decode(tokens)
     }
 
     fn prefill(&mut self, tokens: &[u32]) -> Result<Vec<f32>> {
@@ -1965,11 +1929,11 @@ impl ModelRunner for DeepSeekV4ReferenceRunner {
     }
 
     fn eos_token_id(&self) -> Option<u32> {
-        self.model.tokenizer.eos_token_id()
+        self.plan.resources().model().tokenizer.eos_token_id()
     }
 
     fn bound_layer_count(&self) -> Option<usize> {
-        Some(DeepSeekV4ReferenceRunner::bound_layer_count(self))
+        Some(DeepSeekV4Runner::bound_layer_count(self))
     }
 
     fn expert_report(&self) -> Option<String> {
@@ -1993,13 +1957,17 @@ impl ModelRunner for DeepSeekV4ReferenceRunner {
     }
 }
 
-impl TopKModelRunner for DeepSeekV4ReferenceRunner {
+impl TopKModelRunner for DeepSeekV4Runner {
     fn position(&self) -> usize {
-        self.position()
+        self.sequence.core.position()
     }
 
     fn feed_token(&mut self, token_id: u32) -> Result<()> {
-        DeepSeekV4ReferenceRunner::feed_token(self, token_id)
+        DeepSeekV4Runner::feed_token(self, token_id)
+    }
+
+    fn max_top_k(&self) -> usize {
+        40
     }
 
     fn prefill_tokens(&mut self, token_ids: &[u32], mode: PrefillMode) -> Result<()> {
@@ -2015,15 +1983,13 @@ impl TopKModelRunner for DeepSeekV4ReferenceRunner {
         top_k: usize,
         mode: PrefillMode,
     ) -> Result<Vec<TokenLogit>> {
-        let logits = match mode {
-            PrefillMode::Batched => self.prefill_tokens_topk_batched(token_ids, top_k)?,
-            PrefillMode::Interactive => self.prefill_tokens_topk_interactive(token_ids, top_k)?,
-        };
-        Ok(generic_token_logits(logits))
+        match mode {
+            PrefillMode::Batched => self.prefill_tokens_topk_batched(token_ids, top_k),
+            PrefillMode::Interactive => self.prefill_tokens_topk_interactive(token_ids, top_k),
+        }
     }
 
     fn decode_topk(&mut self, token_id: u32, top_k: usize) -> Result<Vec<TokenLogit>> {
         self.decode_token_topk(token_id, top_k)
-            .map(generic_token_logits)
     }
 }

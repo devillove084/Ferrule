@@ -15,6 +15,10 @@ use crate::artifact::format::{
     dequantize_fp4_e2m1_with_e8m0_scales, dequantize_fp8_e4m3fn_with_e8m0_scales,
     simulate_fp8_e4m3fn_e8m0_activation_quant_in_place,
 };
+#[cfg(feature = "cuda")]
+use crate::artifact::tensor::artifact_2d_row_slice_descriptor;
+#[cfg(any(feature = "cuda", test))]
+use crate::artifact::tensor::{artifact_tensor_slice_cache_key, ArtifactTensorSlice};
 use crate::artifact::tensor::{ArtifactDType, ArtifactTensorPayload};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,6 +225,72 @@ impl ArtifactLinearPayload {
                 )
             }
         }
+    }
+}
+
+#[cfg(any(feature = "cuda", test))]
+pub(crate) fn artifact_linear_cache_key(linear: &ArtifactLinearPayload) -> String {
+    artifact_linear_cache_key_from_parts(
+        &linear.weight.slice,
+        linear.scale.as_ref().map(|scale| &scale.slice),
+        &linear.format,
+    )
+}
+
+#[cfg(any(feature = "cuda", test))]
+pub(crate) fn artifact_linear_cache_key_from_parts(
+    weight: &ArtifactTensorSlice,
+    scale: Option<&ArtifactTensorSlice>,
+    format: &ArtifactLinearFormat,
+) -> String {
+    let scale_key = scale
+        .map(artifact_tensor_slice_cache_key)
+        .unwrap_or_else(|| "<none>".into());
+    format!(
+        "weight={}::scale={}::format={:?}",
+        artifact_tensor_slice_cache_key(weight),
+        scale_key,
+        format
+    )
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn artifact_linear_row_cache_key(
+    slice: &ArtifactTensorSlice,
+    start_row: usize,
+    row_count: usize,
+) -> Result<String> {
+    let row_slice = artifact_2d_row_slice_descriptor(slice, start_row, row_count)?;
+    let format = artifact_unscaled_2d_linear_format(&row_slice)?;
+    Ok(artifact_linear_cache_key_from_parts(
+        &row_slice, None, &format,
+    ))
+}
+
+#[cfg(feature = "cuda")]
+fn artifact_unscaled_2d_linear_format(slice: &ArtifactTensorSlice) -> Result<ArtifactLinearFormat> {
+    if slice.shape.len() != 2 {
+        return Err(Error::Model(format!(
+            "artifact linear '{}' cache-key format expects 2D shape, got {:?}",
+            slice.name, slice.shape
+        )));
+    }
+    let out_features = slice.shape[0];
+    let in_features = slice.shape[1];
+    match slice.dtype {
+        ArtifactDType::F32 => Ok(ArtifactLinearFormat::F32 {
+            out_features,
+            in_features,
+        }),
+        ArtifactDType::Bf16 => Ok(ArtifactLinearFormat::Bf16 {
+            out_features,
+            in_features,
+        }),
+        _ => Err(Error::Model(format!(
+            "artifact linear '{}' dtype {} cannot be used as an unscaled output-head row chunk",
+            slice.name,
+            slice.dtype.as_str()
+        ))),
     }
 }
 

@@ -74,7 +74,10 @@ pub use linear::{
 };
 
 // Re-exports — tensor
-pub use tensor::{ArtifactDType, ArtifactTensorPayload, ArtifactTensorReader, ArtifactTensorSlice};
+pub use tensor::{
+    ArtifactDType, ArtifactMatrixSlice, ArtifactTensorPayload, ArtifactTensorReader,
+    ArtifactTensorSlice,
+};
 
 #[cfg(test)]
 mod tests;

@@ -1,10 +1,10 @@
-//! Runtime-side Transformer execution plan.
+//! Semantic Transformer execution plan.
 //!
 //! `ferrule-model` owns model-family detection, tensor-name classification, and
-//! semantic layout. This module turns that semantic contract into the ordered
-//! runtime steps an executor must implement. It intentionally contains no
-//! DeepSeek tensor names and no OLMoE fields: family adapters produce roles and
-//! policies; runtime executors consume this plan.
+//! semantic layout. This module turns that contract into ordered, model-neutral
+//! Transformer semantics. It intentionally contains no DeepSeek tensor names and
+//! no OLMoE fields: family adapters produce roles and policies; runtime executors
+//! consume the resulting semantic plan.
 
 use crate::{
     AttentionKind, FeedForwardKind, KvCacheShape, ModelFamily, ModelSupportContract, PolicySet,
@@ -12,7 +12,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct TransformerRuntimePlan {
+pub struct TransformerSemanticPlan {
     pub family: ModelFamily,
     pub architecture: Option<String>,
     pub hidden_size: Option<usize>,
@@ -20,18 +20,18 @@ pub struct TransformerRuntimePlan {
     pub num_heads: Option<usize>,
     pub num_kv_heads: Option<usize>,
     pub head_dim: Option<usize>,
-    pub prologue: RuntimePrologue,
-    pub layers: Vec<TransformerLayerPlan>,
-    pub epilogue: RuntimeEpilogue,
+    pub prologue: SemanticPrologue,
+    pub layers: Vec<TransformerLayerSemantic>,
+    pub epilogue: SemanticEpilogue,
     pub policies: PolicySet,
-    pub attachments: Vec<RuntimeAttachment>,
+    pub attachments: Vec<SemanticAttachment>,
 }
 
-impl TransformerRuntimePlan {
+impl TransformerSemanticPlan {
     pub fn from_contract(contract: &ModelSupportContract) -> Self {
         let layout = &contract.layout;
         let spec = &contract.spec;
-        let prologue = RuntimePrologue {
+        let prologue = SemanticPrologue {
             token_embedding: layout.token_embedding.clone(),
         };
         let semantics = &contract.policies.semantics;
@@ -48,10 +48,10 @@ impl TransformerRuntimePlan {
                     &layer.feed_forward.router,
                     semantics.num_hash_layers,
                 );
-                TransformerLayerPlan {
+                TransformerLayerSemantic {
                     index: layer.index,
                     pre_norm_roles: layer.norms.clone(),
-                    attention: AttentionStepPlan {
+                    attention: AttentionSemantic {
                         kind: layer.attention.kind.clone(),
                         kv_shape: layer.attention.kv_shape.clone(),
                         num_heads: spec.num_heads,
@@ -87,7 +87,7 @@ impl TransformerRuntimePlan {
                             .any(|role| matches!(role, TensorRole::AttentionSink))
                             || matches!(layer.attention.kind, AttentionKind::MultiLatentAttention),
                     },
-                    feed_forward: FeedForwardStepPlan {
+                    feed_forward: FeedForwardSemantic {
                         kind: layer.feed_forward.kind.clone(),
                         router,
                         num_experts: spec.moe.num_experts,
@@ -102,9 +102,9 @@ impl TransformerRuntimePlan {
                                 | FeedForwardKind::RoutedAndSharedExperts
                         ) && contract.policies.residency.streaming_allowed
                         {
-                            ExpertResidencyMode::Streamable
+                            ExpertResidency::Streamable
                         } else {
-                            ExpertResidencyMode::AllResident
+                            ExpertResidency::AllResident
                         },
                         has_shared_experts: matches!(
                             layer.feed_forward.kind,
@@ -118,7 +118,7 @@ impl TransformerRuntimePlan {
                 }
             })
             .collect();
-        let epilogue = RuntimeEpilogue {
+        let epilogue = SemanticEpilogue {
             output_norm: layout
                 .output_roles
                 .iter()
@@ -130,7 +130,7 @@ impl TransformerRuntimePlan {
                 .find(|role| matches!(role, TensorRole::OutputHead))
                 .cloned(),
         };
-        let attachments = runtime_attachments(contract);
+        let attachments = semantic_attachments(contract);
         Self {
             family: spec.family.clone(),
             architecture: spec.architecture.clone(),
@@ -162,7 +162,7 @@ impl TransformerRuntimePlan {
     pub fn requires_streaming_experts(&self) -> bool {
         self.layers
             .iter()
-            .any(|layer| layer.feed_forward.expert_residency == ExpertResidencyMode::Streamable)
+            .any(|layer| layer.feed_forward.expert_residency == ExpertResidency::Streamable)
     }
 
     pub fn uses_hash_routing(&self) -> bool {
@@ -179,16 +179,16 @@ impl TransformerRuntimePlan {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimePrologue {
+pub struct SemanticPrologue {
     pub token_embedding: TensorRole,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct TransformerLayerPlan {
+pub struct TransformerLayerSemantic {
     pub index: usize,
     pub pre_norm_roles: Vec<TensorRole>,
-    pub attention: AttentionStepPlan,
-    pub feed_forward: FeedForwardStepPlan,
+    pub attention: AttentionSemantic,
+    pub feed_forward: FeedForwardSemantic,
     pub auxiliary_roles: Vec<TensorRole>,
     pub norm_epsilon: f32,
     pub hyper_connection_epsilon: f32,
@@ -196,7 +196,7 @@ pub struct TransformerLayerPlan {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct AttentionStepPlan {
+pub struct AttentionSemantic {
     pub kind: AttentionKind,
     pub kv_shape: KvCacheShape,
     pub num_heads: Option<usize>,
@@ -221,7 +221,7 @@ pub struct AttentionStepPlan {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct FeedForwardStepPlan {
+pub struct FeedForwardSemantic {
     pub kind: FeedForwardKind,
     pub router: RouterKind,
     pub num_experts: Option<usize>,
@@ -230,24 +230,24 @@ pub struct FeedForwardStepPlan {
     pub optional_roles: Vec<TensorRole>,
     pub swiglu_limit: Option<f32>,
     pub route_scale: Option<f32>,
-    pub expert_residency: ExpertResidencyMode,
+    pub expert_residency: ExpertResidency,
     pub has_shared_experts: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExpertResidencyMode {
+pub enum ExpertResidency {
     AllResident,
     Streamable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeEpilogue {
+pub struct SemanticEpilogue {
     pub output_norm: Option<TensorRole>,
     pub output_head: Option<TensorRole>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RuntimeAttachment {
+pub enum SemanticAttachment {
     MultiTokenPrediction { roles: Vec<TensorRole> },
     DraftModel,
 }
@@ -266,10 +266,10 @@ fn layer_router_kind(
     }
 }
 
-fn runtime_attachments(contract: &ModelSupportContract) -> Vec<RuntimeAttachment> {
+fn semantic_attachments(contract: &ModelSupportContract) -> Vec<SemanticAttachment> {
     match contract.policies.speculation.mode {
         SpeculationMode::None => Vec::new(),
-        SpeculationMode::DraftModel => vec![RuntimeAttachment::DraftModel],
+        SpeculationMode::DraftModel => vec![SemanticAttachment::DraftModel],
         SpeculationMode::MultiTokenPrediction => {
             let mut roles = contract
                 .bound_roles()
@@ -277,7 +277,7 @@ fn runtime_attachments(contract: &ModelSupportContract) -> Vec<RuntimeAttachment
                 .filter(TensorRole::is_speculative)
                 .collect::<Vec<_>>();
             roles.sort();
-            vec![RuntimeAttachment::MultiTokenPrediction { roles }]
+            vec![SemanticAttachment::MultiTokenPrediction { roles }]
         }
     }
 }
@@ -317,7 +317,7 @@ mod tests {
             },
             &[],
         );
-        let plan = TransformerRuntimePlan::from_contract(&contract);
+        let plan = TransformerSemanticPlan::from_contract(&contract);
         assert_eq!(plan.layer_count(), 2);
         assert_eq!(plan.step_count(), 7);
         assert_eq!(
@@ -334,7 +334,7 @@ mod tests {
         );
         assert_eq!(
             plan.layers[0].feed_forward.expert_residency,
-            ExpertResidencyMode::Streamable
+            ExpertResidency::Streamable
         );
         assert!(plan.requires_streaming_experts());
     }
@@ -369,7 +369,7 @@ mod tests {
             },
             &[],
         );
-        let plan = TransformerRuntimePlan::from_contract(&contract);
+        let plan = TransformerSemanticPlan::from_contract(&contract);
         assert_eq!(plan.family, ModelFamily::DeepSeekV4);
         assert_eq!(plan.layer_count(), 43);
         assert!(plan.requires_streaming_experts());
@@ -391,13 +391,13 @@ mod tests {
         );
         assert_eq!(
             plan.layers[0].feed_forward.expert_residency,
-            ExpertResidencyMode::Streamable
+            ExpertResidency::Streamable
         );
         assert!(plan.layers[0].feed_forward.has_shared_experts);
     }
 
     #[test]
-    fn dspark_mtp_attachment_is_planned_as_runtime_attachment() {
+    fn dspark_mtp_attachment_is_planned_as_semantic_attachment() {
         let contract = ModelSupportContract::from_spec(
             &TransformerSpec {
                 family: ModelFamily::DeepSeekV4,
@@ -436,9 +436,9 @@ mod tests {
                 },
             ],
         );
-        let plan = TransformerRuntimePlan::from_contract(&contract);
+        let plan = TransformerSemanticPlan::from_contract(&contract);
         assert_eq!(plan.attachments.len(), 1);
-        let RuntimeAttachment::MultiTokenPrediction { roles } = &plan.attachments[0] else {
+        let SemanticAttachment::MultiTokenPrediction { roles } = &plan.attachments[0] else {
             panic!("expected MTP attachment");
         };
         assert!(roles.contains(&TensorRole::SpeculativeProjection));

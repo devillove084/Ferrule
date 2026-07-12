@@ -1,16 +1,16 @@
+use ferrule_common::execution::ExecutionOutput;
 use ferrule_common::{Error, Result};
 use ferrule_model::TopKModelRunner;
 
 use crate::cache::SequenceKvCache;
 use crate::generation::matched_stop;
-use crate::graph::runtime::{ExecutionOutput, RowLogits};
 use crate::scheduling::resident::greedy_candidate;
 use crate::scheduling::{
-    DecodeAction, GenerateRequest, ResidentScheduler, ResidentSchedulerConfig, SchedulerAction,
-    SequenceFinishReason, SequenceState, SessionId,
+    DecodeAction, GenerateRequest, ResidentScheduler, ResidentSchedulerConfig, ScheduledBatch,
+    SchedulerAction, SequenceFinishReason, SequenceState, SessionId,
 };
 
-use super::{ResidentActionExecutor, ResidentActionExecutorConfig};
+use super::{TopKCompatibilityExecutor, TopKCompatibilityExecutorConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResidentTopKDriverConfig {
@@ -77,7 +77,7 @@ pub enum ResidentActionKind {
     Cancel,
 }
 
-/// Synchronous resident top-k driver over scheduler + KV + action executor.
+/// Synchronous resident top-k driver over scheduler + KV + compatibility executor.
 ///
 /// This is the first end-to-end serving-shaped loop in runtime. It remains concrete
 /// and synchronous: no async server, no trait-object framework, and no concrete
@@ -91,7 +91,7 @@ where
 {
     scheduler: ResidentScheduler,
     kv_cache: C,
-    executor: ResidentActionExecutor<R>,
+    compatibility_executor: TopKCompatibilityExecutor<R>,
     config: ResidentTopKDriverConfig,
     stats: ResidentTopKDriverStats,
 }
@@ -105,7 +105,7 @@ where
         Self::with_parts(
             ResidentScheduler::default(),
             kv_cache,
-            ResidentActionExecutor::new(runner),
+            TopKCompatibilityExecutor::new(runner),
             ResidentTopKDriverConfig::default(),
         )
     }
@@ -114,27 +114,27 @@ where
         runner: R,
         kv_cache: C,
         scheduler_config: ResidentSchedulerConfig,
-        executor_config: ResidentActionExecutorConfig,
+        compatibility_executor_config: TopKCompatibilityExecutorConfig,
         driver_config: ResidentTopKDriverConfig,
     ) -> Self {
         Self::with_parts(
             ResidentScheduler::new(scheduler_config),
             kv_cache,
-            ResidentActionExecutor::with_config(runner, executor_config),
+            TopKCompatibilityExecutor::with_config(runner, compatibility_executor_config),
             driver_config,
         )
     }
 
-    pub fn with_parts(
+    fn with_parts(
         scheduler: ResidentScheduler,
         kv_cache: C,
-        executor: ResidentActionExecutor<R>,
+        compatibility_executor: TopKCompatibilityExecutor<R>,
         config: ResidentTopKDriverConfig,
     ) -> Self {
         Self {
             scheduler,
             kv_cache,
-            executor,
+            compatibility_executor,
             config,
             stats: ResidentTopKDriverStats::default(),
         }
@@ -144,36 +144,55 @@ where
         &self.scheduler
     }
 
-    pub fn scheduler_mut(&mut self) -> &mut ResidentScheduler {
-        &mut self.scheduler
-    }
-
     pub fn kv_cache(&self) -> &C {
         &self.kv_cache
     }
 
-    pub fn kv_cache_mut(&mut self) -> &mut C {
-        &mut self.kv_cache
+    pub fn compatibility_executor(&self) -> &TopKCompatibilityExecutor<R> {
+        &self.compatibility_executor
     }
 
-    pub fn executor(&self) -> &ResidentActionExecutor<R> {
-        &self.executor
-    }
-
-    pub fn executor_mut(&mut self) -> &mut ResidentActionExecutor<R> {
-        &mut self.executor
-    }
-
-    pub fn into_runner(self) -> R {
-        self.executor.into_runner()
-    }
-
-    pub fn config(&self) -> ResidentTopKDriverConfig {
-        self.config
+    pub fn into_runner(self) -> Result<R> {
+        if !self.scheduler.is_idle() {
+            return Err(Error::Execution(
+                "cannot extract resident runner while scheduler work is still active".into(),
+            ));
+        }
+        self.compatibility_executor.into_runner()
     }
 
     pub fn stats(&self) -> &ResidentTopKDriverStats {
         &self.stats
+    }
+
+    /// Validate scheduler policy against the truthful capabilities of the legacy
+    /// single-sequence compatibility executor before any queue entry is consumed.
+    pub fn validate_configuration(&self) -> Result<()> {
+        let capabilities = self.compatibility_executor.capabilities();
+        let scheduler = self.scheduler.config();
+        if scheduler.max_active_sequences > capabilities.max_sequences {
+            return Err(Error::Execution(format!(
+                "resident TopK driver config allows {} active sequences, but its compatibility executor supports {}",
+                scheduler.max_active_sequences, capabilities.max_sequences
+            )));
+        }
+        if scheduler.max_decode_batch > capabilities.max_sequences {
+            return Err(Error::Execution(format!(
+                "resident TopK driver config allows decode batch {}, but its compatibility executor supports {} sequence",
+                scheduler.max_decode_batch, capabilities.max_sequences
+            )));
+        }
+        let requested_top_k = self.compatibility_executor.default_top_k()?;
+        if capabilities
+            .max_top_k
+            .is_some_and(|maximum| requested_top_k > maximum)
+        {
+            return Err(Error::Execution(format!(
+                "resident TopK driver requests top-k {}, exceeding executor capability",
+                requested_top_k.get()
+            )));
+        }
+        Ok(())
     }
 
     pub fn submit(&mut self, request: GenerateRequest) {
@@ -186,7 +205,7 @@ where
     /// lives inside the runner. It prevents the scheduler from planning the next
     /// prompt at position 0 after a previous turn advanced the runner.
     pub fn submit_at_current_position(&mut self, request: GenerateRequest) {
-        let position_start = self.executor.position();
+        let position_start = self.compatibility_executor.position();
         self.scheduler.submit_at_position(request, position_start);
     }
 
@@ -194,11 +213,16 @@ where
         self.scheduler.drain_finished()
     }
 
+    pub fn drain_failed(&mut self) -> Vec<SequenceState> {
+        self.scheduler.drain_failed()
+    }
+
     pub fn step<F>(&mut self, on_token: &mut F) -> Result<ResidentDriverStep>
     where
         F: FnMut(&ResidentTokenEvent) -> Result<()>,
     {
-        let Some(action) = self.scheduler.next_action(&mut self.kv_cache)? else {
+        self.validate_configuration()?;
+        let Some(mut action) = self.scheduler.next_action(&mut self.kv_cache)? else {
             return Ok(if self.scheduler.is_idle() {
                 ResidentDriverStep::Idle
             } else {
@@ -208,28 +232,88 @@ where
 
         let action_kind = action_kind(&action);
         let rows = action_rows(&action);
-        let output = self.executor.execute_action(&action)?;
-        self.scheduler.commit_action(&action)?;
+        let scheduled = match ScheduledBatch::from_action(
+            &mut action,
+            self.compatibility_executor.default_top_k()?,
+        ) {
+            Ok(scheduled) => scheduled,
+            Err(error) => return Err(self.abort_action(&action, error, false, "batch lowering")),
+        };
+        let output = match scheduled.as_ref() {
+            Some(batch) => match self.compatibility_executor.execute_batch(batch.execution()) {
+                Ok(output) => Some(output),
+                Err(execution_error) => {
+                    let poisoned = self.compatibility_executor.is_poisoned();
+                    return Err(self.abort_action(
+                        &action,
+                        execution_error,
+                        poisoned,
+                        "model execution",
+                    ));
+                }
+            },
+            None => None,
+        };
+
+        if let (Some(batch), Some(output)) = (scheduled.as_ref(), output.as_ref()) {
+            if let Err(contract_error) = batch.validate_output(output) {
+                return Err(self.abort_action(
+                    &action,
+                    contract_error,
+                    true,
+                    "model output contract",
+                ));
+            }
+        } else if scheduled.is_some() != output.is_some() {
+            let error =
+                Error::Internal("scheduled execution and model output presence diverged".into());
+            return Err(self.abort_action(&action, error, true, "model output presence"));
+        }
+
+        if let Err(commit_error) = self.scheduler.commit_action(&action) {
+            return Err(self.abort_action(&action, commit_error, true, "runtime commit"));
+        }
         self.stats.actions += 1;
         match &action {
             SchedulerAction::PrefillChunk(prefill) => {
                 self.stats.prefill_chunks += 1;
-                self.stats.prefill_tokens += prefill.tokens.len();
+                self.stats.prefill_tokens += prefill.token_range.len();
             }
             SchedulerAction::DecodeBatch(actions) => {
                 self.stats.decode_steps += actions.len();
-                self.emit_committed_decode_tokens(actions, on_token)?;
+                if let Err(error) = self.emit_committed_decode_tokens(actions, on_token) {
+                    return Err(self.abort_action(&action, error, true, "token emission"));
+                }
             }
             SchedulerAction::Finish { .. } | SchedulerAction::Cancel { .. } => {}
         }
 
-        let mut finished = self.finish_after_decode_action(&action)?;
-        let staged = if let Some(output) = output.as_ref() {
-            let outcome = self.apply_execution_output(output)?;
-            finished += outcome.finished;
-            outcome.staged
-        } else {
-            0
+        let action_finish = match self.finish_after_decode_action(&action) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                return Err(self.abort_action(&action, error, true, "sequence finish"));
+            }
+        };
+        let mut finished = action_finish.finished;
+        let staged = match (scheduled.as_ref(), output.as_ref()) {
+            (Some(batch), Some(output)) => {
+                let outcome =
+                    match self.apply_execution_output(batch, output, &action_finish.session_ids) {
+                        Ok(outcome) => outcome,
+                        Err(error) => {
+                            return Err(self.abort_action(
+                                &action,
+                                error,
+                                true,
+                                "output application",
+                            ));
+                        }
+                    };
+                finished += outcome.finished;
+                outcome.staged
+            }
+            (None, None) => 0,
+            _ => unreachable!("scheduled/output presence was validated before commit"),
         };
 
         Ok(ResidentDriverStep::Executed {
@@ -238,6 +322,25 @@ where
             staged,
             finished,
         })
+    }
+
+    fn abort_action(
+        &mut self,
+        action: &SchedulerAction,
+        error: Error,
+        poison_executor: bool,
+        stage: &'static str,
+    ) -> Error {
+        if poison_executor && !self.compatibility_executor.is_poisoned() {
+            self.compatibility_executor
+                .poison_after_output_contract(&error);
+        }
+        match self.scheduler.fail_action(action, &mut self.kv_cache) {
+            Ok(_) => error,
+            Err(cleanup_error) => Error::Internal(format!(
+                "{stage} failed ({error}); error-state cleanup also failed ({cleanup_error})"
+            )),
+        }
     }
 
     pub fn run_until_blocked<F>(&mut self, mut on_token: F) -> Result<ResidentTopKDriverStats>
@@ -267,7 +370,10 @@ where
         F: FnMut(&ResidentTokenEvent) -> Result<()>,
     {
         for action in actions {
-            let text = self.executor.runner().decode(&[action.token_id])?;
+            let text = self
+                .compatibility_executor
+                .runner()
+                .decode(&[action.token_id])?;
             let sequence = self
                 .scheduler
                 .active_sequence_mut(action.session_id)
@@ -294,12 +400,15 @@ where
         Ok(())
     }
 
-    fn finish_after_decode_action(&mut self, action: &SchedulerAction) -> Result<usize> {
+    fn finish_after_decode_action(
+        &mut self,
+        action: &SchedulerAction,
+    ) -> Result<ActionFinishOutcome> {
         let SchedulerAction::DecodeBatch(actions) = action else {
-            return Ok(0);
+            return Ok(ActionFinishOutcome::default());
         };
 
-        let mut finished = 0;
+        let mut outcome = ActionFinishOutcome::default();
         for action in actions {
             let Some(sequence) = self.scheduler.active_sequence(action.session_id) else {
                 continue;
@@ -315,21 +424,75 @@ where
                 self.scheduler
                     .finish_sequence(action.session_id, reason, &mut self.kv_cache)?;
                 self.stats.finished_sequences += 1;
-                finished += 1;
+                outcome.finished += 1;
+                outcome.session_ids.push(action.session_id);
             }
         }
-        Ok(finished)
+        Ok(outcome)
     }
 
-    fn apply_execution_output(&mut self, output: &ExecutionOutput) -> Result<OutputOutcome> {
+    fn apply_execution_output(
+        &mut self,
+        scheduled: &ScheduledBatch,
+        output: &ExecutionOutput,
+        action_finished_sessions: &[SessionId],
+    ) -> Result<OutputOutcome> {
         let mut outcome = OutputOutcome::default();
-        for (_, row) in output.logits_rows() {
-            let Some(sequence) = self.scheduler.active_sequence(row.session_id) else {
-                continue;
+        for row in &output.logits {
+            let correlation = scheduled
+                .sequence_for_input_row(row.input_row)
+                .copied()
+                .ok_or_else(|| {
+                    Error::Execution(format!(
+                        "output input row {} has no scheduled sequence",
+                        row.input_row
+                    ))
+                })?;
+            let execution_sequence = scheduled
+                .execution()
+                .sequences()
+                .iter()
+                .find(|sequence| sequence.query.contains(&row.input_row))
+                .ok_or_else(|| {
+                    Error::Execution(format!(
+                        "output input row {} has no execution sequence span",
+                        row.input_row
+                    ))
+                })?;
+            let session_id = correlation.session_id;
+            let Some(sequence) = self.scheduler.active_sequence(session_id) else {
+                if action_finished_sessions.contains(&session_id) {
+                    // The just-committed token ended the sequence (for example via
+                    // a stop string), so its already-computed next-token logits are
+                    // intentionally discarded after successful correlation.
+                    continue;
+                }
+                return Err(Error::Execution(format!(
+                    "output for input row {} references inactive session {:?}",
+                    row.input_row, session_id
+                )));
             };
+            if sequence.request_id != correlation.request_id {
+                return Err(Error::Execution(format!(
+                    "output correlation request mismatch for session {:?}: active {:?}, scheduled {:?}",
+                    session_id, sequence.request_id, correlation.request_id
+                )));
+            }
+            if sequence.kv_handle != correlation.kv_handle {
+                return Err(Error::Execution(format!(
+                    "output correlation KV mismatch for session {:?}: active {:?}, scheduled {:?}",
+                    session_id, sequence.kv_handle, correlation.kv_handle
+                )));
+            }
+            if sequence.position != execution_sequence.sequence_len as usize {
+                return Err(Error::Execution(format!(
+                    "output correlation position mismatch for session {:?}: active {}, executed {}",
+                    session_id, sequence.position, execution_sequence.sequence_len
+                )));
+            }
             if sequence.generated >= sequence.max_new_tokens {
                 self.scheduler.finish_sequence(
-                    row.session_id,
+                    session_id,
                     SequenceFinishReason::MaxTokens,
                     &mut self.kv_cache,
                 )?;
@@ -339,7 +502,7 @@ where
             }
             if sequence.position >= self.config.ctx_size {
                 self.scheduler.finish_sequence(
-                    row.session_id,
+                    session_id,
                     SequenceFinishReason::Context,
                     &mut self.kv_cache,
                 )?;
@@ -350,7 +513,7 @@ where
 
             let Some(candidate) = greedy_candidate(&row.logits) else {
                 self.scheduler.finish_sequence(
-                    row.session_id,
+                    session_id,
                     SequenceFinishReason::NoCandidate,
                     &mut self.kv_cache,
                 )?;
@@ -360,16 +523,27 @@ where
             };
 
             if self.config.stop_at_eos
-                && self.executor.runner().eos_token_id() == Some(candidate.token_id)
+                && self.compatibility_executor.runner().eos_token_id() == Some(candidate.token_id)
             {
                 if self.config.append_eos_to_session {
-                    self.executor.runner_mut().feed_token(candidate.token_id)?;
-                    if let Some(sequence) = self.scheduler.active_sequence_mut(row.session_id) {
+                    if let Err(execution_error) =
+                        self.compatibility_executor.feed_token(candidate.token_id)
+                    {
+                        if let Err(cleanup_error) =
+                            self.scheduler.fail_sequence(session_id, &mut self.kv_cache)
+                        {
+                            return Err(Error::Internal(format!(
+                                "EOS state update failed ({execution_error}); error-state cleanup also failed ({cleanup_error})"
+                            )));
+                        }
+                        return Err(execution_error);
+                    }
+                    if let Some(sequence) = self.scheduler.active_sequence_mut(session_id) {
                         sequence.advance_position(1);
                     }
                 }
                 self.scheduler.finish_sequence(
-                    row.session_id,
+                    session_id,
                     SequenceFinishReason::Eos,
                     &mut self.kv_cache,
                 )?;
@@ -379,24 +553,21 @@ where
             }
 
             self.scheduler.stage_decode_candidate(
-                row.session_id,
+                session_id,
                 candidate.token_id,
                 Some(candidate.logit),
             )?;
             self.stats.staged_tokens += 1;
             outcome.staged += 1;
         }
-
-        if output
-            .rows()
-            .iter()
-            .all(|row| matches!(row.logits, RowLogits::None))
-        {
-            // No-op: decode actions with require_logits=false are terminal-token fast paths;
-            // finish_after_decode_action already closed max-token sequences.
-        }
         Ok(outcome)
     }
+}
+
+#[derive(Default)]
+struct ActionFinishOutcome {
+    finished: usize,
+    session_ids: Vec<SessionId>,
 }
 
 #[derive(Default)]
@@ -416,7 +587,7 @@ fn action_kind(action: &SchedulerAction) -> ResidentActionKind {
 
 fn action_rows(action: &SchedulerAction) -> usize {
     match action {
-        SchedulerAction::PrefillChunk(prefill) => prefill.tokens.len(),
+        SchedulerAction::PrefillChunk(prefill) => prefill.token_range.len(),
         SchedulerAction::DecodeBatch(actions) => actions.len(),
         SchedulerAction::Finish { .. } | SchedulerAction::Cancel { .. } => 0,
     }
@@ -426,7 +597,7 @@ fn action_rows(action: &SchedulerAction) -> usize {
 mod tests {
     use std::collections::VecDeque;
 
-    use ferrule_common::Result;
+    use ferrule_common::{Error, Result};
     use ferrule_model::{ModelInfo, ModelRunner, PrefillMode, TokenLogit};
 
     use crate::cache::PagedSequenceKvCache;
@@ -442,6 +613,8 @@ mod tests {
         outputs: VecDeque<Vec<TokenLogit>>,
         fed: Vec<u32>,
         prefills: Vec<Vec<u32>>,
+        fail_next_mutation: bool,
+        mutation_calls: usize,
     }
 
     impl MockTopKRunner {
@@ -452,6 +625,24 @@ mod tests {
                 outputs: outputs.into(),
                 fed: Vec::new(),
                 prefills: Vec::new(),
+                fail_next_mutation: false,
+                mutation_calls: 0,
+            }
+        }
+
+        fn failing_next_mutation(mut self) -> Self {
+            self.fail_next_mutation = true;
+            self
+        }
+
+        fn complete_mutation<T>(&mut self, value: T) -> Result<T> {
+            self.mutation_calls += 1;
+            if std::mem::take(&mut self.fail_next_mutation) {
+                Err(Error::Model(
+                    "simulated failure after partial runner mutation".into(),
+                ))
+            } else {
+                Ok(value)
             }
         }
 
@@ -523,7 +714,7 @@ mod tests {
         fn feed_token(&mut self, token_id: u32) -> Result<()> {
             self.fed.push(token_id);
             self.position += 1;
-            Ok(())
+            self.complete_mutation(())
         }
 
         fn prefill_topk(
@@ -534,7 +725,8 @@ mod tests {
         ) -> Result<Vec<TokenLogit>> {
             self.prefills.push(token_ids.to_vec());
             self.position += token_ids.len();
-            Ok(self.next_output())
+            let output = self.next_output();
+            self.complete_mutation(output)
         }
 
         fn decode_topk(&mut self, token_id: u32, _top_k: usize) -> Result<Vec<TokenLogit>> {
@@ -577,7 +769,7 @@ mod tests {
                 max_active_sequences: 1,
                 max_decode_batch: 1,
             },
-            ResidentActionExecutorConfig {
+            TopKCompatibilityExecutorConfig {
                 top_k: 1,
                 prefill_mode: PrefillMode::Interactive,
             },
@@ -660,7 +852,7 @@ mod tests {
             runner,
             PagedSequenceKvCache::new(1, 1, 4, 1),
             ResidentSchedulerConfig::default(),
-            ResidentActionExecutorConfig::default(),
+            TopKCompatibilityExecutorConfig::default(),
             ResidentTopKDriverConfig::default(),
         );
         driver.submit(request(3, &[1], 4, Vec::new()));
@@ -673,7 +865,7 @@ mod tests {
             .unwrap();
 
         assert!(events.is_empty());
-        assert_eq!(driver.executor().runner().position(), 2);
+        assert_eq!(driver.compatibility_executor().runner().position(), 2);
         let finished = driver.drain_finished();
         assert_eq!(finished[0].finish_reason, Some(SequenceFinishReason::Eos));
         assert_eq!(finished[0].tokens, vec![1]);
@@ -685,8 +877,11 @@ mod tests {
         driver.submit(request(4, &[1], 1, Vec::new()));
         driver.run_until_blocked(|_| Ok(())).unwrap();
 
-        assert_eq!(driver.executor().runner().outputs.len(), 0);
-        assert_eq!(driver.executor().runner().fed, vec![b'a' as u32]);
+        assert_eq!(driver.compatibility_executor().runner().outputs.len(), 0);
+        assert_eq!(
+            driver.compatibility_executor().runner().fed,
+            vec![b'a' as u32]
+        );
         let finished = driver.drain_finished();
         assert_eq!(
             finished[0].finish_reason,
@@ -700,7 +895,7 @@ mod tests {
         driver.submit(request(5, &[1], 0, Vec::new()));
         driver.run_until_blocked(|_| Ok(())).unwrap();
 
-        assert!(driver.executor().runner().fed.is_empty());
+        assert!(driver.compatibility_executor().runner().fed.is_empty());
         let finished = driver.drain_finished();
         assert_eq!(
             finished[0].finish_reason,
@@ -716,14 +911,14 @@ mod tests {
         driver.run_until_blocked(|_| Ok(())).unwrap();
         let first = driver.drain_finished();
         assert_eq!(first[0].position, 2);
-        assert_eq!(driver.executor().position(), 2);
+        assert_eq!(driver.compatibility_executor().position(), 2);
 
         driver.submit_at_current_position(request(8, &[2], 1, Vec::new()));
         driver.run_until_blocked(|_| Ok(())).unwrap();
         let second = driver.drain_finished();
         assert_eq!(second[0].prompt_tokens_for_range(0..1).unwrap(), &[2]);
         assert_eq!(second[0].position, 4);
-        assert_eq!(driver.executor().position(), 4);
+        assert_eq!(driver.compatibility_executor().position(), 4);
     }
 
     #[test]
@@ -733,9 +928,9 @@ mod tests {
         driver.run_until_blocked(|_| Ok(())).unwrap();
         let warmup = driver.drain_finished();
         assert_eq!(warmup[0].position, 2);
-        assert_eq!(driver.executor().position(), 2);
+        assert_eq!(driver.compatibility_executor().position(), 2);
 
-        let mut runner = driver.into_runner();
+        let mut runner = driver.into_runner().unwrap();
         runner.reset_session().unwrap();
         let mut driver = driver_from_runner(runner);
         driver.submit_at_current_position(request(10, &[2], 1, Vec::new()));
@@ -744,7 +939,93 @@ mod tests {
 
         assert_eq!(measured[0].prompt_tokens_for_range(0..1).unwrap(), &[2]);
         assert_eq!(measured[0].position, 2);
-        assert_eq!(driver.executor().position(), 2);
+        assert_eq!(driver.compatibility_executor().position(), 2);
+    }
+
+    #[test]
+    fn driver_moves_partially_executed_sequence_to_error_state() {
+        let runner = MockTopKRunner::new(vec![top(b'a' as u32)]).failing_next_mutation();
+        let mut driver = driver_from_runner(runner);
+        driver.submit(request(11, &[1, 2], 1, Vec::new()));
+
+        let error = driver.step(&mut |_| Ok(())).unwrap_err();
+        assert!(format!("{error}").contains("simulated failure"));
+        assert!(driver.compatibility_executor().is_poisoned());
+        assert_eq!(driver.compatibility_executor().position(), 2);
+        assert_eq!(driver.compatibility_executor().runner().mutation_calls, 1);
+        assert_eq!(driver.scheduler().active_len(), 0);
+        assert_eq!(driver.scheduler().failed_len(), 1);
+        assert_eq!(driver.kv_cache().active_count(), 0);
+
+        let failed = driver.drain_failed();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].status, SequenceStatus::Error);
+        assert_eq!(failed[0].position, 0, "runtime metadata was not committed");
+        assert_eq!(failed[0].kv_handle, None);
+
+        driver.submit_at_current_position(request(12, &[3], 1, Vec::new()));
+        let error = driver.step(&mut |_| Ok(())).unwrap_err();
+        assert!(format!("{error}").contains("resident executor is poisoned"));
+        assert_eq!(driver.compatibility_executor().runner().mutation_calls, 1);
+        let failed = driver.drain_failed();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].status, SequenceStatus::Error);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn lowering_failure_moves_dequeued_sequence_to_failed_state() {
+        let mut runner = MockTopKRunner::new(Vec::new());
+        runner.position = u32::MAX as usize + 1;
+        let mut driver = driver_from_runner(runner);
+        driver.submit_at_current_position(request(13, &[1], 1, Vec::new()));
+
+        let error = driver.step(&mut |_| Ok(())).unwrap_err();
+        assert!(format!("{error}").contains("neutral u32 ABI"));
+        assert!(!driver.compatibility_executor().is_poisoned());
+        assert_eq!(driver.scheduler().active_len(), 0);
+        assert_eq!(driver.scheduler().failed_len(), 1);
+        assert_eq!(driver.kv_cache().active_count(), 0);
+        assert_eq!(driver.compatibility_executor().runner().mutation_calls, 0);
+    }
+
+    #[test]
+    fn callback_failure_poison_fails_committed_sequence_and_blocks_runner_extraction() {
+        let mut driver = driver_with_outputs(vec![top(b'a' as u32), top(b'b' as u32)]);
+        driver.submit(request(14, &[1], 3, Vec::new()));
+
+        let error = driver
+            .run_until_blocked(|_| Err(Error::Internal("simulated callback failure".into())))
+            .unwrap_err();
+        assert!(format!("{error}").contains("callback failure"));
+        assert!(driver.compatibility_executor().is_poisoned());
+        assert_eq!(driver.scheduler().active_len(), 0);
+        assert_eq!(driver.scheduler().failed_len(), 1);
+        assert_eq!(driver.kv_cache().active_count(), 0);
+        assert!(driver.into_runner().is_err());
+    }
+
+    #[test]
+    fn driver_rejects_unsupported_scheduler_width_before_consuming_work() {
+        let mut driver = ResidentTopKDriver::with_configs(
+            MockTopKRunner::new(Vec::new()),
+            PagedSequenceKvCache::new(1, 1, 4, 2),
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 2,
+                max_active_sequences: 2,
+                max_decode_batch: 2,
+            },
+            TopKCompatibilityExecutorConfig::default(),
+            ResidentTopKDriverConfig::default(),
+        );
+        driver.submit(request(13, &[1, 2], 1, Vec::new()));
+
+        let error = driver.step(&mut |_| Ok(())).unwrap_err();
+        assert!(format!("{error}").contains("allows 2 active sequences"));
+        assert_eq!(driver.scheduler().waiting_len(), 1);
+        assert_eq!(driver.scheduler().active_len(), 0);
+        assert_eq!(driver.kv_cache().active_count(), 0);
+        assert_eq!(driver.compatibility_executor().runner().mutation_calls, 0);
     }
 
     #[test]
@@ -753,7 +1034,7 @@ mod tests {
             MockTopKRunner::new(Vec::new()),
             PagedSequenceKvCache::new(1, 1, 1, 0),
             ResidentSchedulerConfig::default(),
-            ResidentActionExecutorConfig::default(),
+            TopKCompatibilityExecutorConfig::default(),
             ResidentTopKDriverConfig::default(),
         );
         driver.submit(request(6, &[1], 1, Vec::new()));

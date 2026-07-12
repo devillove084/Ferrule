@@ -58,7 +58,7 @@ impl ModelDescriptor {
         )))
     }
 
-    /// Build the generic model support contract used by runtime planning.
+    /// Build the generic model support contract used by semantic planning.
     ///
     /// This keeps model-specific tensor names at the descriptor/binding boundary.
     /// Generic executors should consume semantic roles and policies from the

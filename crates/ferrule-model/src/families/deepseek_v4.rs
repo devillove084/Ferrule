@@ -38,12 +38,9 @@ pub const INDEX_HEAD_DIM: usize = 128;
 pub const INDEX_TOPK: usize = 512;
 pub const DSPARK_BLOCK_SIZE: usize = 5;
 
-pub fn is_hash_routed_layer(layer: usize) -> bool {
-    layer < NUM_HASH_LAYERS
-}
-
-use super::{
-    common, ArtifactTensorPart, AttentionTensorKind, AttentionTensorRef, HyperConnectionStage,
+use super::common;
+use crate::semantic::{
+    ArtifactTensorPart, AttentionTensorKind, AttentionTensorRef, HyperConnectionStage,
     HyperConnectionTensorKind, HyperConnectionTensorRef, RoutedExpertMatrix,
     RoutedExpertTensorPart, RoutedExpertTensorRef, RouterTensorKind, RouterTensorRef,
     SharedExpertTensorRef,

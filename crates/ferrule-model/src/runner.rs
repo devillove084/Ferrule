@@ -1,4 +1,5 @@
 use crate::{EnginePlan, ModelDescriptor};
+pub use ferrule_common::execution::TokenLogit;
 use ferrule_common::Result;
 
 // ── ModelInfo ─────────────────────────────────────────────────────────────
@@ -36,12 +37,6 @@ impl ModelInfo {
 }
 
 // ── ModelRunner trait ────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TokenLogit {
-    pub token_id: u32,
-    pub logit: f32,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefillMode {
@@ -84,6 +79,12 @@ pub trait ModelRunner {
 pub trait TopKModelRunner: ModelRunner {
     fn position(&self) -> usize;
     fn feed_token(&mut self, token_id: u32) -> Result<()>;
+
+    /// Maximum top-k request the active backend can validate before mutating
+    /// sequence state. Backends with a smaller kernel limit must override this.
+    fn max_top_k(&self) -> usize {
+        usize::MAX
+    }
 
     /// Append prompt tokens without requiring logits for the last row.
     ///

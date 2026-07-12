@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use crate::families::{
+use crate::semantic::{
     ArtifactTensorPart, AttentionTensorKind, HyperConnectionStage, HyperConnectionTensorKind,
     RoutedExpertMatrix, RoutedExpertTensorPart, RouterTensorKind,
 };
@@ -1248,7 +1248,7 @@ fn decode_indices_usize(payload: &ArtifactTensorPayload) -> Result<Vec<usize>> {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use crate::families::{
+    use crate::semantic::{
         ArtifactTensorPart, AttentionTensorKind, AttentionTensorRef, HyperConnectionStage,
         HyperConnectionTensorKind, HyperConnectionTensorRef, RouterTensorRef,
         SharedExpertTensorRef,

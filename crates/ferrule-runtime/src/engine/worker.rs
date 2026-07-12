@@ -146,10 +146,6 @@ impl<R: TopKModelRunner> EngineWorker<R> {
         &mut self.runner
     }
 
-    pub fn into_runner(self) -> R {
-        self.runner
-    }
-
     pub fn session(&self) -> &SequenceState {
         &self.session
     }
@@ -290,14 +286,6 @@ impl<R: TopKModelRunner> EngineWorker<R> {
         Ok(TopKDecodeStep::Token(event))
     }
 
-    pub fn finish_decode(&mut self, state: &mut TopKDecodeState) -> TopKTurnResult {
-        state
-            .finish_reason
-            .get_or_insert(TopKFinishReason::MaxTokens);
-        state.finished = true;
-        self.finish_decode_state(state)
-    }
-
     pub fn cancel_decode(&mut self, state: &mut TopKDecodeState) -> TopKTurnResult {
         if state.finished {
             state
@@ -329,30 +317,6 @@ impl<R: TopKModelRunner> EngineWorker<R> {
             stopped_by_context: state.stopped_by_context,
             finish_reason,
             final_position: self.runner.position(),
-        }
-    }
-
-    /// Execute one resident-session top-k turn and update runtime session metadata.
-    ///
-    /// This remains as a compatibility convenience over the explicit
-    /// `append_prompt` + `decode_next` phases.
-    pub fn generate_turn<F>(
-        &mut self,
-        prompt_tokens: &[u32],
-        config: &GenerationConfig,
-        prefill_mode: PrefillMode,
-        top_k: usize,
-        mut on_token: F,
-    ) -> Result<TopKTurnResult>
-    where
-        F: FnMut(&TopKTokenEvent) -> Result<()>,
-    {
-        let mut state = self.append_prompt(prompt_tokens, config, prefill_mode, top_k)?;
-        loop {
-            match self.decode_next(&mut state)? {
-                TopKDecodeStep::Token(event) => on_token(&event)?,
-                TopKDecodeStep::Finished(result) => return Ok(result),
-            }
         }
     }
 }

@@ -9,26 +9,36 @@ training should share one native systems foundation. Router decisions, selected
 experts, quantized weights, KV cache, expert residency, and rollout state should
 be explicit runtime objects that can be scheduled against real hardware.
 
+Canonical execution documents:
+
+- [`execution-engine-architecture.md`](execution-engine-architecture.md) defines
+  `ExecutionBatch`, prepared plans, sequence state, persistent arenas, physical KV,
+  residency ownership, and eager/graph unification.
+- [`ROADMAP.md`](ROADMAP.md) defines the E0–E8 implementation order and gates.
+- [`status/2026-07-11-gb10-dsv4.md`](status/2026-07-11-gb10-dsv4.md) records the
+  current verified DSV4 correctness/performance baseline.
+
 ---
 
 ## Table of Contents
 
 1. [Crate layout](#crate-layout)
 2. [Current runtime](#current-runtime)
-3. [Runtime graph](#runtime-graph)
-4. [Storage and residency](#storage-and-residency)
-5. [Model-family boundary](#model-family-boundary)
-6. [OLMoE forward pass](#olmoe-forward-pass)
-7. [GPU runtime](#gpu-runtime)
-8. [DeepSeek V4 execution](#deepseek-v4-execution)
-9. [Quantization and WeightPack](#quantization-and-weightpack)
-10. [KV cache](#kv-cache)
-11. [Sampling and chat](#sampling-and-chat)
-12. [Serving](#serving)
-13. [Composable engine architecture](#composable-engine-architecture)
-14. [Alignment targets](#alignment-targets)
-15. [Future: Elastic State Fabric](#future-elastic-state-fabric)
-16. [Future: training and RL](#future-training-and-rl)
+3. [Execution engine target](#execution-engine-target)
+4. [Runtime graph](#runtime-graph)
+5. [Storage and residency](#storage-and-residency)
+6. [Model-family boundary](#model-family-boundary)
+7. [OLMoE forward pass](#olmoe-forward-pass)
+8. [GPU runtime](#gpu-runtime)
+9. [DeepSeek V4 execution](#deepseek-v4-execution)
+10. [Quantization and WeightPack](#quantization-and-weightpack)
+11. [KV cache](#kv-cache)
+12. [Sampling and chat](#sampling-and-chat)
+13. [Serving](#serving)
+14. [Composable engine architecture](#composable-engine-architecture)
+15. [Alignment targets](#alignment-targets)
+16. [Future: Elastic State Fabric](#future-elastic-state-fabric)
+17. [Future: training and RL](#future-training-and-rl)
 
 ---
 
@@ -47,7 +57,7 @@ be explicit runtime objects that can be scheduled against real hardware.
 ┌─────────────────────────────────────────────────────────────────────┐
 │                     ferrule-runtime                                 │
 │  generation/session/sampling/scheduler/cache                        │
-│  graph IR + graph execution envelopes                               │
+│  graph IR + private ScheduledBatch correlation/lowering             │
 │  storage/residency vocabulary + expert streaming/residency traits    │
 │  Owns algorithms over capability traits; owns no concrete model.     │
 └───────────────┬───────────────────────────────────┬─────────────────┘
@@ -65,16 +75,16 @@ be explicit runtime objects that can be scheduled against real hardware.
                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                     ferrule-common                                  │
-│  shared error/result, quant dtype vocabulary, lightweight utilities  │
+│  shared error/result, quant vocabulary, sole neutral execution ABI   │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 | Crate | Role |
 |---|---|
-| `ferrule-common` | shared errors, `QuantType`, lightweight common vocabulary |
-| `ferrule-model` | model semantics, artifact/semantic binding, runner capability traits, concrete model implementations such as `models::deepseek_v4` |
-| `ferrule-runtime` | generation/session/sampling/scheduling, runtime graph IR, storage/residency vocabulary, expert streaming/residency, KV/cache; depends on capabilities, not concrete models |
-| `ferrule-cuda` | CUDA primitive/kernels/device utilities/counters and safe smoke benchmark entrypoints |
+| `ferrule-common` | shared errors, `QuantType`, lightweight vocabulary, and the sole public dependency-neutral execution ABI |
+| `ferrule-model` | model semantics, artifact binding, prepared model/lowering policy, CPU reference, and concrete model implementations such as `models::deepseek_v4` |
+| `ferrule-runtime` | generation/session/sampling/scheduling, logical sequence/KV lifecycle, runtime graph IR, storage/residency and executable-cache policy; depends on capabilities, not concrete models |
+| `ferrule-cuda` | CUDA allocations/pools, streams/events, primitives/kernels, physical device resources, counters, and CUDA graph execs |
 | `ferrule-cli` | argument parsing, command dispatch, terminal/JSON output, model-specific diagnostics |
 
 ---
@@ -104,7 +114,7 @@ Two execution paths coexist:
    correctness fixture for router semantics and legacy CUDA kernels.
 
 2. **DSV4 interactive streaming path**: `ferrule-model::models::deepseek_v4`
-   owns `DeepSeekV4ReferenceRunner`, session position, and per-layer model state.
+   owns `DeepSeekV4Runner`, session position, and per-layer model state.
    `DeepSeekV4CudaOperatorCache` owns CUDA operator state, uploaded linears,
    norm/rope caches, device KV buffers, expert handles, MoE workspaces, and
    counters. Runtime generation only sees the runner capability traits.
@@ -128,11 +138,38 @@ serving engine. Two UX paths exist:
   materializing hidden/logits; the final chunk materializes top-k for generation.
 - The runtime-driver DSV4 path currently uses `PagedSequenceKvCache` as
   scheduler-owned metadata/lifecycle only. Physical CUDA KV/session state remains
-  owned by `DeepSeekV4ReferenceRunner`, so this is not yet CUDA paged attention.
-- This connects the serving-shaped spine and a first correctness-first segment
-  prefill vertical slice. It is not the final optimized CUDA prefill yet: the path
-  still has host `Vec<f32>` boundaries and per-token MoE routing inside a chunk;
-  true device-resident multi-column MoE/attention remains the next performance step.
+  owned by `DeepSeekV4Runner`, so this is not yet CUDA paged attention.
+- This connects the serving-shaped spine to a correctness-verified DSV4 path.
+  Batched prefill MoE and deterministic route-ranked reduction now exist, but the
+  outer prefill loop still returns HC rows through host memory between layers,
+  compressor/router/residency retain host control points, and the executor remains
+  single-sequence.
+
+---
+
+## Execution engine target
+
+The next architecture is not another runner façade. It separates four lifetimes:
+
+```text
+PreparedModelPlan          immutable model-global recipes and typed handles
+SequenceExecutionState     one logical sequence's committed model/KV state
+PersistentArena            reusable phase/shape-bucket scratch and metadata
+ExecutionBatch             one packed/ragged invocation over explicit states
+```
+
+Runtime lowers scheduled requests into `ExecutionBatch`; a prepared executor
+borrows explicit sequence states and an arena lease; CUDA owns physical buffers,
+streams/events, pages, expert slots, and graph execs. Eager and graph modes call the
+same allocation-free device stages.
+
+E1–E3 implemented the neutral `ExecutionBatch`, prepared resources and reusable
+arenas, and model-native per-sequence semantic/physical state with explicit
+lifecycle. Native ragged/multi-session execution follows in E4. The DSV4 state split,
+arena contents, unified device pipeline, paged multi-plane KV, device
+routing/residency, graph buckets, and module migration are specified in
+[`execution-engine-architecture.md`](execution-engine-architecture.md).
+Implementation order and hard gates are in [`ROADMAP.md`](ROADMAP.md).
 
 ---
 
@@ -150,20 +187,29 @@ token_ids, positions
   → logits_select
 ```
 
-Current shape: coarse — one `transformer_layer` node per layer. The graph
-execution bridge (`ReferenceGraphBackend`) lowers this to existing components:
+Current shape: coarse — one `transformer_layer` node per layer. The reference graph
+bridge requires caller-owned state and the sole neutral execution ABI:
 
 ```
 GraphProgram + BackendObjectStore
+  + &mut [ReferenceGraphSequenceState]
+  + &ferrule_common::execution::ExecutionBatch
+  → ReferenceGraphExecutor::execute(...)
   → GraphLayerObjects (aggregated by ArtifactGroupKind + layer)
-  → typed artifact binders (attention, HC, router, shared FFN)
-  → existing layer components (attention, HC, MoE, KV)
-  → cached per graph program/layer
+  → typed artifact binders and existing attention/HC/MoE/KV components
+  → Vec<TensorData>
 ```
 
-Next step: split `transformer_layer` into fine-grained semantic ops
-(`layer_hc_pre`, `rms_norm`, `latent_attention`, `router_select`,
-`routed_moe`, `shared_ffn`, `residual_merge`). See `docs/ROADMAP.md` P2.
+The low-level tensor result is not `ModelBatchExecutor::ExecutionOutput`, and the
+reference executor does not hide mutable state in an implicit default slot.
+
+Future graph-IR work may split `transformer_layer` into fine-grained semantic ops
+(`layer_hc_pre`, `rms_norm`, `latent_attention`, `router_select`, `routed_moe`,
+`shared_ffn`, `residual_merge`). This is independent of the immediate execution
+ownership work: graph lowering must consume the neutral prepared-executor ABI rather
+than create a second sequence/KV lifecycle. See
+[`runtime-graph-architecture.md`](runtime-graph-architecture.md) and
+[`execution-engine-architecture.md`](execution-engine-architecture.md).
 
 Graph invariants:
 
@@ -298,7 +344,11 @@ This fixed the previous OLMoE-Instruct chat degeneration.
 1. legacy OLMoE kernels over Q4/Q8/all-resident buffers;
 2. artifact-preserving DSV4 operators over FP4/FP8/BF16/F32 payloads.
 
-Persistent DSV4 CUDA state is owned by `DeepSeekV4CudaOperatorCache`:
+Current (transitional) DSV4 CUDA state is owned by `DeepSeekV4CudaOperatorCache`.
+This is intentionally not the target ownership boundary: it still mixes prepared
+resources, one sequence's physical state, expert handles, scratch, and diagnostics.
+The split into `PreparedModelPlan`, `SequenceExecutionState`, and `PersistentArena`
+is specified in [`execution-engine-architecture.md`](execution-engine-architecture.md).
 
 - one CUDA context and stream through `CudaArtifactOperatorContext`;
 - uploaded/cached artifact linears and norm weights;
@@ -316,15 +366,16 @@ Key current kernels/operators:
 | `moe_gemm_dual_fp4_mxf4_batched` | FP4 mxf4 Tensor Core gate/up path |
 | `moe_swiglu_fp4_packed_batched` | fused SwiGLU + route weight + FP4 pack |
 | `moe_gemm_down_fp4_mxf4_batched` | FP4 mxf4 Tensor Core down projection |
-| `moe_gemv_*_batched` | scalar/reduce FP4 fallback paths |
+| `moe_gemv_*_batched` | legacy FP4 scalar/reduction diagnostic primitives; not a complete end-to-end fallback |
 | `rms_norm_*`, `rope_tail_from_device` | device norm/rotary pieces |
 | `sparse_attention_sink_from_device` | sparse attention over device query/value buffers |
 | `artifact_linear_topk_from_device` | greedy output-head top-k without full logits download |
 
-The FP4 Tensor Core path is correct and default-on (`FERRULE_CUDA_MOE_TC=0` forces
-scalar fallback), but it is still under-utilized because current decode feeds
-`batch_cols=1`. True GEMM utilization requires real prompt/speculative columns
-and per-column routing.
+The FP4 Tensor Core path is correct and default-on. `FERRULE_CUDA_MOE_TC=0` is a
+legacy decode diagnostic that currently rejects batched prefill, not a complete
+scalar fallback. Decode still often has one real token column; sustained GEMM
+utilization requires native multi-sequence/prefill columns and device-side
+per-column routing.
 
 ---
 
@@ -349,16 +400,13 @@ chat/generate token or prompt segment
   → device output-head top-k for greedy decode
 ```
 
-Interactive chat adds a short-turn optimization:
+Interactive chat avoids final logits for non-final prompt work and routes fresh
+prompt prefill through the batched DSV4 core. The final prompt row materializes
+requested top-k only when generation needs it.
 
-```text
-prompt tokens except last: feed_token() fast append, no final hidden/logits
-last prompt token: decode_token_topk(), materialize top-k
-new generated tokens: print token, then feed_token() if it must be committed
-```
-
-This reduces repeated final projection work, but it is still not true chunked
-prefill. Every prompt token currently performs a full-layer append pass.
+This is still not whole-model device-resident chunked serving prefill: HC rows cross
+host memory between layers, and appended segments can fall back to token-wise decode
+execution. Native ragged prefill is an E4 target.
 
 ### DSV4 layer order
 
@@ -374,29 +422,46 @@ hc_pre → attn_norm → attention → hc_post
 - Artifact inventory and binding for attention, HC, routers, shared experts, and
   routed experts from local HF shards.
 - Hash-routed early layers and score/bias routed later layers.
-- Managed-memory FP4 expert residency with mmap + host-staged cache.
-- Device-resident hot decode chain for single-token greedy decode.
-- FP4 `mxf4` Tensor Core MoE path with scalar fallback.
-- Routing-aware expert hotset/prefetch counters.
-- JSON decode benchmark counters and chat per-turn stats.
+- Managed-memory FP4 expert residency with mmap, host-staged, pinned, and in-flight
+  upload mechanisms.
+- Device-resident single-token layer execution and per-layer batched prefill.
+- FP4 `mxf4` Tensor Core MoE path, grouped prefill columns, and deterministic
+  route-ranked device reduction.
+- GPU compressor softmax/RMS/RoPE/QAT numerics matching token-loop execution.
+- Typed growable RoPE resources and failure-atomic combined-KV growth.
+- Full 43-layer batched/token-loop bit-exact parity and stable prefill→decode
+  continuation.
+- Routing/residency counters, JSON benchmark attribution, and layer/attention
+  parity checkpoints.
+
+`FERRULE_CUDA_MOE_TC=0` is a legacy decode diagnostic and currently rejects
+batched prefill; it is not a complete production scalar fallback.
 
 ### Measured current behavior
 
-- Best short JSON decode observed: **0.910 tok/s** for 8 decode tokens + 4 warmup
-  with TC default and no prefetch.
-- 16-token TC + hot prefetch observed: **0.864 tok/s**.
-- Two-turn terminal pipe after interactive append:
-  - REPL ready immediately; artifact load ~0.82s in background;
-  - first turn `Hello`, `-n 1`: prefill 23.65s, decode/feed 1.28s;
-  - second turn `Hi`, `-n 1`: prefill 5.88s, decode/feed 1.09s.
+Current GB10 cold correctness baseline for the five-token chat prompt:
+
+- prefill: approximately **17.47–17.75s**;
+- decode: approximately **0.80–0.824 tok/s**;
+- first token: approximately **18.76–19.01s**;
+- generated continuation: `[30594, 1175]`.
+
+Three independent 43-layer parity runs report every layer `max_abs_diff=0.0`.
+Detailed commands and results are in
+[`status/2026-07-11-gb10-dsv4.md`](status/2026-07-11-gb10-dsv4.md).
 
 ### What's missing
 
-- Official DSV4 numeric parity and output-quality gate.
-- True CUDA chunked/segment prefill over an existing prefix.
-- Fully device-resident compressor/indexer state and top-k.
-- Real FP4 GEMM utilization with `batch_cols > 1` and per-column routing.
-- Paged KV, prefix/radix reuse, and continuous batching.
+- Whole-model device-resident prefill HC/hidden ping-pong; current layer boundaries
+  still cross host memory.
+- Explicit prepared plan, persistent arena, and per-sequence execution state.
+- Native multi-session/ragged/mixed execution instead of a single implicit runner
+  session.
+- Physical CUDA paged multi-plane KV, prefix/radix reuse, and preemption.
+- Fully device-resident compressor metadata, router/grouping, and stable expert
+  indirection under a runtime residency coordinator.
+- E7 long-lived piecewise CUDA graph buckets; DSV4 currently has no CUDA graph
+  execution mode and always uses device-resident eager decode.
 - Rollback/KV rewind for cancellation and speculative branches.
 - DSpark proposal/verify/rollback loop.
 
@@ -485,19 +550,20 @@ class. CLI: `--quant q4-mixed`.
   non-final prompt tokens update session state without final hidden/logits; the
   final prompt token produces top-k for generation.
 
-This now runs through reusable runtime boundaries over `TopKModelRunner`.
-`EngineWorker` exposes explicit `append_prompt` / `decode_next` phases with a
-concrete `TopKDecodeState`, typed finish reasons (`SequenceFinishReason`,
-re-exported as `TopKFinishReason` for top-k turns), minimal `cancel_decode`, and
-`EngineWorkerStats`. The serving spine is also connected: `ResidentScheduler` owns
-request admission and `SequenceState` lifecycle; `SequenceState` carries request id,
-KV handle, logical position, request sampling/stop/budget, and prefill cursor;
-`SchedulerAction` turns prefill/decode decisions into `ExecutionBatch`;
-`ResidentActionExecutor` can execute those actions against a single resident
-`TopKModelRunner` and return `ExecutionOutput`; and `ResidentTopKDriver` owns the
-end-to-end loop for token streaming, max-token/EOS/stop-string finish, and KV
-release. Chat and future serving can share this SGLang/vLLM-style execution shape
-without introducing a large engine framework yet.
+`EngineWorker` exposes explicit `append_prompt` / `decode_next` phases with typed
+finish reasons, minimal cancel, and stats. `ResidentScheduler` owns request
+admission and logical `SequenceState`; runtime lowers `SchedulerAction` into a
+crate-private `ScheduledBatch`, which preserves request/session/KV correlation.
+`TopKCompatibilityExecutor` consumes its neutral `ExecutionBatch` through the
+retained `TopKModelRunner` interface, and `ResidentTopKDriver` closes the
+single-sequence token/finish loop.
+
+This proves the control-plane spine, not vLLM/SGLang-class execution. The public ABI
+replacement is complete, but the compatibility executor still rejects multi-row
+and mixed work, runtime KV handles do not bind physical DSV4 CUDA KV, and sampling
+remains tied to that path. E2 prepares reusable model resources and arenas; E3/E4
+replace the implicit runner state with native sequence and multi-session execution.
+See [`execution-engine-architecture.md`](execution-engine-architecture.md).
 
 ---
 
@@ -511,25 +577,29 @@ workspace. The intended OpenAI-compatible surface is still:
 - `POST /v1/chat/completions`
 - SSE streaming (`stream: true`) with token text + final usage stats
 
-Production serving needs:
+Production serving needs, in dependency order:
 
-1. shared resident `EngineWorker`/executor/driver boundaries for chat and serving;
-2. request/session/sequence lifecycle over `SequenceState`, `ResidentScheduler`,
-   `ResidentTopKDriver`, and `SchedulerAction`;
-3. paged KV block-table lifecycle through `PagedSequenceKvCache`;
-4. CUDA/backend binding for paged KV tables and prefix/radix reuse;
-5. true chunked prefill scheduler using `ExecutionBatch`;
-6. continuous batching for decode with a backend that natively understands multiple
-   sessions/KV handles;
-7. rollback/KV rewind, metrics, and structured output masks.
+1. the completed E1–E3 neutral ABI, prepared resources/arenas, and explicit backend
+   sequence state behind the compatibility driver;
+2. E4 native multi-session/ragged execution, where runtime correlation binds every
+   row to a real backend sequence state rather than an implicit runner;
+3. E5 physical multi-plane paged KV, then prefix/radix reuse and preemption;
+4. E6 device router/grouping and a runtime residency coordinator with stable expert
+   indirection;
+5. E7 reusable graph buckets over the same eager `*_into` stages;
+6. cancellation/rollback, metrics, structured-output masks, and an HTTP/SSE surface.
+
+`PagedSequenceKvCache` is only the current logical block-table manager; it is not
+sufficient to claim physical paged attention or continuous batching.
 
 ---
 
 ## Composable engine architecture
 
-The engine composes model-family policies into an `EnginePlan`:
+The engine first composes model-family policies into an `EnginePlan`, which is a
+support/compatibility report rather than an executable instance:
 
-```
+```text
 ModelDescriptor → ModelLayout → ModelSupportContract → EnginePlan {
   ModelFamilyPolicy, AttentionPolicy, RouterPolicy, ExpertPolicy,
   QuantPolicy, KvPolicy, SchedulerPolicy, ParallelismPlan,
@@ -537,20 +607,25 @@ ModelDescriptor → ModelLayout → ModelSupportContract → EnginePlan {
 }
 ```
 
+A later `PreparedModelPlan` binds that report to validated immutable artifacts,
+typed backend handles, a KV schema, and supported execution capabilities. Dynamic
+sequence bindings and batch shapes do not belong to either plan; they belong to
+`SequenceExecutionState`, `ExecutionBatch`, and `PersistentArena` leases.
+
 Configuration switches (`engine`, `attention`, `kv`, `parallel`, `residency`,
 `speculation`) map to typed policy objects. Model-specific assumptions must not
-leak into scheduler/sampler/CLI.
+leak into scheduler, sampler, CLI, or the neutral execution ABI.
 
-| Policy | Near-term default | Future |
+| Policy | Current evidence | Execution target |
 |---|---|---|
-| `AttentionPolicy` | GQA RoPE | CSA/HCA/MLA, Flash prefill |
-| `RouterPolicy` | dense top-k | bias/hash routing, EP |
-| `ExpertPolicy` | routed experts | shared experts, batching, EP |
-| `QuantPolicy` | Q4_0/Q8_0 WeightPack | GGUF K/IQ, FP4/FP8, mixed |
-| `KvPolicy` | contiguous + paged `SequenceKvCache` managers | CUDA paged attention, prefix/radix reuse |
-| `SchedulerPolicy` | resident scheduler actions over request/session state | continuous batching, preemption |
-| `ResidencyPolicy` | all resident if fits | expert streaming, host-staged |
-| `SpeculationPolicy` | none | MTP, DSpark, Eagle |
+| `AttentionPolicy` | OLMoE GQA; DSV4 MLA/sparse attention and compressed/indexer semantics | prepared attention recipes and physical multi-plane paged KV |
+| `RouterPolicy` | dense top-k plus DSV4 hash and score/bias routing | device top-k, token/expert grouping, EP only after local batching is real |
+| `ExpertPolicy` | routed/shared DSV4 experts with grouped prefill kernel path | packed multi-sequence grouped execution and stable expert indirection |
+| `QuantPolicy` | Q4/Q8 WeightPack; DSV4 FP4/FP8 artifact path | calibration/quality gates; new formats only after hot-path ownership stabilizes |
+| `KvPolicy` | legacy contiguous KV plus scheduler-facing paged metadata | physical CUDA paged multi-plane KV, prefix/COW/preemption |
+| `SchedulerPolicy` | resident action scheduling over request/session metadata | native ragged prefill, multi-row decode, fairness and preemption |
+| `ResidencyPolicy` | DSV4 model-local planner and staged/pinned/managed mechanisms | runtime-owned budget coordinator, leases, generations, stable backend slots |
+| `SpeculationPolicy` | DSpark/MTP attachment metadata | isolated proposal/verify/rollback after sequence and KV rollback are safe |
 
 ---
 
@@ -560,15 +635,15 @@ leak into scheduler/sampler/CLI.
 
 | Capability | Ferrule today | Target |
 |---|---|---|
-| Chat CLI | immediate REPL + DSV4 lazy artifact load + runtime `EngineWorker` phased append/decode execution, typed finish reasons, minimal cancel | rollback/KV rewind, async warmup, first-token metrics |
-| Prompt prefill | token-by-token device append for CUDA chat | CUDA chunked prefill over existing prefix |
-| Decode | ~0.9 tok/s short JSON DSV4; top-k device path | multi-token/speculative throughput + graph buckets |
-| Model metadata | `info`, DSV4 descriptor, DSpark metadata parse | engine-plan inspection and policy dump |
-| Quantization | Q4/Q8/FP4/FP8, mixed precision, artifact-preserving DSV4 | calibrated GGUF K/IQ + official quality gates |
-| Benchmarks | JSON decode summaries + chat stats | interactive benchmark, first-token, PK matrix |
-| Loading | safetensors + WeightPack; DSV4 background artifact load | resident worker warmup + artifact placement plan |
-| Serving | resident scheduler/action executor/top-k driver and paged KV manager exist; no active CLI server command | SGLang/vLLM-style multi-session backend, CUDA paged KV, batching |
-| Offload | expert streaming + managed memory + hotset prefetch | budgeted placement, async overlap, long-run policy |
+| Correctness | real DSV4 43L batched/token-loop is bit-exact; continuation `[30594,1175]` | preserve oracle through every ownership and kernel migration; add long-context, graph, failure, and multi-sequence gates |
+| Execution ABI | sole packed/ragged `ferrule-common::execution::ExecutionBatch`, private `ScheduledBatch`, and single-sequence `TopKCompatibilityExecutor` over `TopKModelRunner` | E2 prepared resources, E3 native explicit DSV4 sequence state, then E4 ragged/multi-session `ModelBatchExecutor` |
+| Prompt prefill | per-layer batched CUDA, but cross-layer HC returns through host and append can token-loop | whole-model device ping-pong plus native ragged chunked prefill |
+| Decode | device layer path at ~0.8 tok/s cold single-sequence | multi-row decode, device routing/residency, stable graph buckets, device sampling |
+| KV | runtime metadata paged cache plus separate layer-keyed CUDA KV | one physical paged multi-plane lifecycle with reservation/COW/prefix/preemption |
+| MoE residency | model-local planner plus CUDA resident/staged/pinned/upload caches | runtime cross-request coordinator and stable backend expert indirection |
+| CUDA graph | no current DSV4 graph mode; device-resident eager decode only | E7 long-lived piecewise buckets over the eager device pipeline |
+| Serving | control-plane scheduler/driver proof; no active server command | native multi-session executor, physical KV, streaming/cancel/metrics |
+| Quantization | Q4/Q8/FP4/FP8, mixed precision, artifact-preserving DSV4 | calibrated quality gates and additional formats only after execution ownership stabilizes |
 
 ### Differentiation
 

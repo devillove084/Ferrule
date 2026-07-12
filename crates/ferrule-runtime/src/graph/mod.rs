@@ -8,9 +8,9 @@
 
 pub mod builder;
 pub mod dialects;
+pub mod external_bindings;
 pub mod layer_binding;
 pub mod program;
-pub mod runtime;
 pub mod shape_registry;
 pub mod template;
 pub mod translate;
@@ -27,10 +27,6 @@ use ferrule_common::{Error, Result};
 pub struct ValueId(usize);
 
 impl ValueId {
-    pub const fn from_raw(raw: usize) -> Self {
-        Self(raw)
-    }
-
     pub const fn index(self) -> usize {
         self.0
     }
@@ -41,10 +37,6 @@ impl ValueId {
 pub struct NodeId(usize);
 
 impl NodeId {
-    pub const fn from_raw(raw: usize) -> Self {
-        Self(raw)
-    }
-
     pub const fn index(self) -> usize {
         self.0
     }
@@ -388,37 +380,6 @@ impl TensorData {
     }
 }
 
-/// Runtime-provided object bound to an [`ExternalKey`].
-#[derive(Debug, Clone, PartialEq)]
-pub enum ExternalValue {
-    Tensor(TensorData),
-    Opaque { kind: String, debug_name: String },
-}
-
-/// External bindings supplied at execution time.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ExternalHandles {
-    values: BTreeMap<ExternalKey, ExternalValue>,
-}
-
-impl ExternalHandles {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn insert(&mut self, key: ExternalKey, value: ExternalValue) -> Option<ExternalValue> {
-        self.values.insert(key, value)
-    }
-
-    pub fn get(&self, key: &ExternalKey) -> Option<&ExternalValue> {
-        self.values.get(key)
-    }
-
-    pub fn values(&self) -> &BTreeMap<ExternalKey, ExternalValue> {
-        &self.values
-    }
-}
-
 /// Device-independent graph: values, opaque nodes, graph inputs, graph outputs.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ComputeGraph {
@@ -638,16 +599,6 @@ impl ComputeGraph {
     }
 }
 
-/// Backend boundary: execute a whole graph, not individual concrete ops.
-pub trait GraphBackend {
-    fn execute(
-        &mut self,
-        graph: &ComputeGraph,
-        external: &ExternalHandles,
-        inputs: &[TensorData],
-    ) -> Result<Vec<TensorData>>;
-}
-
 /// Shape/type inference registry for an op dialect.
 pub trait ShapeRegistry {
     fn infer_outputs(
@@ -708,7 +659,7 @@ mod tests {
         let err = graph
             .add_node(
                 op,
-                vec![ValueId::from_raw(99)],
+                vec![ValueId(99)],
                 AttributeMap::new(),
                 vec![ValueMeta::tensor(DataType::F32, [1])],
             )

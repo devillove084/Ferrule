@@ -105,32 +105,56 @@ impl<'a> CudaSparseAttentionExecutor<'a> {
         shape: CudaSparseAttentionShape,
     ) -> Result<()> {
         shape.validate()?;
-        cu(unsafe {
-            self.module.sparse_attn_tiled_sink_f32(
-                self.stream,
-                LaunchConfig::for_num_elems((shape.tokens() * shape.heads) as u32),
-                q,
-                kv,
-                topk,
-                sink,
-                output,
-                checked_u32(
-                    shape.tokens() * shape.heads,
-                    "sparse attention",
-                    "num_pairs",
-                )?,
-                checked_u32(
-                    shape.tokens_per_batch,
-                    "sparse attention",
-                    "tokens_per_batch",
-                )?,
-                checked_u32(shape.kv_len, "sparse attention", "kv_len")?,
-                checked_u32(shape.heads, "sparse attention", "heads")?,
-                checked_u32(shape.head_dim, "sparse attention", "head_dim")?,
-                checked_u32(shape.topk, "sparse attention", "topk")?,
-                shape.softmax_scale,
-            )
-        })
+        let num_pairs = checked_u32(
+            shape.tokens() * shape.heads,
+            "sparse attention",
+            "num_pairs",
+        )?;
+        if shape.head_dim == 512 {
+            cu(unsafe {
+                self.module.sparse_attn_warp_sink_f32_d512(
+                    self.stream,
+                    LaunchConfig {
+                        grid_dim: (num_pairs, 1, 1),
+                        block_dim: (32, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    q,
+                    kv,
+                    topk,
+                    sink,
+                    output,
+                    num_pairs,
+                    checked_u32(shape.kv_len, "sparse attention", "kv_len")?,
+                    checked_u32(shape.heads, "sparse attention", "heads")?,
+                    checked_u32(shape.topk, "sparse attention", "topk")?,
+                    shape.softmax_scale,
+                )
+            })
+        } else {
+            cu(unsafe {
+                self.module.sparse_attn_tiled_sink_f32(
+                    self.stream,
+                    LaunchConfig::for_num_elems(num_pairs),
+                    q,
+                    kv,
+                    topk,
+                    sink,
+                    output,
+                    num_pairs,
+                    checked_u32(
+                        shape.tokens_per_batch,
+                        "sparse attention",
+                        "tokens_per_batch",
+                    )?,
+                    checked_u32(shape.kv_len, "sparse attention", "kv_len")?,
+                    checked_u32(shape.heads, "sparse attention", "heads")?,
+                    checked_u32(shape.head_dim, "sparse attention", "head_dim")?,
+                    checked_u32(shape.topk, "sparse attention", "topk")?,
+                    shape.softmax_scale,
+                )
+            })
+        }
     }
 }
 

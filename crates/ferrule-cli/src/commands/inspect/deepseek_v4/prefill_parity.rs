@@ -8,10 +8,8 @@ use std::path::Path;
 use std::time::Instant;
 
 use ferrule_model::{
-    models::deepseek_v4::{
-        DeepSeekV4OperatorBackend, DeepSeekV4ReferenceOptions, DeepSeekV4ReferenceRunner,
-    },
-    ChatTemplate,
+    models::deepseek_v4::{DeepSeekV4PrepareOptions, DeepSeekV4Runner},
+    ChatTemplate, ModelExecutionBackend,
 };
 
 /// Default layer-depth cut points reported by the parity harness.
@@ -31,14 +29,15 @@ pub fn cmd_deepseek_v4_prefill_parity(
     json: bool,
 ) -> anyhow::Result<()> {
     let model_path = Path::new(model_dir);
-    let options = DeepSeekV4ReferenceOptions {
+    let options = DeepSeekV4PrepareOptions {
         max_layers,
         output_head_chunk_rows: 4096,
         expert_reader_max_tensor_bytes: expert_reader_max_slice_mb.saturating_mul(1024 * 1024),
         moe_prefetch_experts: 0,
         moe_hotset_experts: 0,
+        ..DeepSeekV4PrepareOptions::default()
     };
-    let operator_backend = DeepSeekV4OperatorBackend::parse(backend)?;
+    let operator_backend = ModelExecutionBackend::parse(backend)?;
 
     let encoded_prompt = if chat_prompt {
         ChatTemplate::DeepSeekV4.format_turn(prompt, true)
@@ -47,7 +46,7 @@ pub fn cmd_deepseek_v4_prefill_parity(
     };
 
     let load_start = Instant::now();
-    let mut runner = DeepSeekV4ReferenceRunner::load_hf_with_options_and_backend(
+    let mut runner = DeepSeekV4Runner::load_hf_with_options_and_backend(
         model_path,
         max_tensor_mb.saturating_mul(1024 * 1024),
         options,
@@ -55,7 +54,7 @@ pub fn cmd_deepseek_v4_prefill_parity(
     )?;
     let load_elapsed = load_start.elapsed();
 
-    let token_ids = runner.model.tokenizer.encode(&encoded_prompt)?;
+    let token_ids = runner.model().tokenizer.encode(&encoded_prompt)?;
     if token_ids.is_empty() {
         anyhow::bail!("prompt encoded to zero tokens");
     }
@@ -81,6 +80,7 @@ pub fn cmd_deepseek_v4_prefill_parity(
     // ── Batched trace ───────────────────────────────────────────────────
     let batched_start = Instant::now();
     let batched_trace = runner.prefill_batched_layer_hc_trace(&token_ids)?;
+    let batched_checkpoints = runner.take_parity_checkpoints();
     let batched_elapsed = batched_start.elapsed();
 
     if !json {
@@ -99,6 +99,7 @@ pub fn cmd_deepseek_v4_prefill_parity(
     }
     let token_loop_start = Instant::now();
     let token_loop_trace = runner.prefill_token_loop_layer_hc_trace(&token_ids)?;
+    let token_loop_checkpoints = runner.take_parity_checkpoints();
     let token_loop_elapsed = token_loop_start.elapsed();
 
     if !json {
@@ -141,6 +142,21 @@ pub fn cmd_deepseek_v4_prefill_parity(
                 "  L{:>2}  batched_len={:<6} token_loop_len={:<6} max_abs_diff={:.6e}{flag}",
                 report.layer, report.batched_len, report.token_loop_len, report.max_abs_diff
             );
+        }
+    }
+
+    let checkpoint_diffs = batched_checkpoints
+        .iter()
+        .filter_map(|(stage, batched)| {
+            token_loop_checkpoints
+                .get(stage)
+                .map(|token_loop| (stage.clone(), max_abs_difference(batched, token_loop)))
+        })
+        .collect::<Vec<_>>();
+    if !json && !checkpoint_diffs.is_empty() {
+        println!("--- selected layer checkpoints ---");
+        for (stage, diff) in &checkpoint_diffs {
+            println!("  {stage:<20} max_abs_diff={diff:.6e}");
         }
     }
 
@@ -223,6 +239,12 @@ pub fn cmd_deepseek_v4_prefill_parity(
                     "diverged": r.diverged,
                 })
             }).collect::<Vec<_>>(),
+            "checkpoint_diffs": checkpoint_diffs.iter().map(|(stage, diff)| {
+                serde_json::json!({
+                    "stage": stage,
+                    "max_abs_diff": diff,
+                })
+            }).collect::<Vec<_>>(),
             "cut_results": cut_results.iter().map(|c| {
                 serde_json::json!({
                     "cut": c.cut,
@@ -254,7 +276,11 @@ struct CutResult {
 }
 
 fn max_abs_difference(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() {
+    if a.len() != b.len()
+        || a.iter()
+            .zip(b.iter())
+            .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
         return f32::INFINITY;
     }
     a.iter()
@@ -263,7 +289,23 @@ fn max_abs_difference(a: &[f32], b: &[f32]) -> f32 {
         .fold(0.0f32, f32::max)
 }
 
-fn top1_from_hc(runner: &mut DeepSeekV4ReferenceRunner, hc_state: &[f32]) -> anyhow::Result<u32> {
+fn top1_from_hc(runner: &mut DeepSeekV4Runner, hc_state: &[f32]) -> anyhow::Result<u32> {
     let topk = runner.topk_from_hc_trace(hc_state)?;
     Ok(topk.first().map(|logit| logit.token_id).unwrap_or(u32::MAX))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::max_abs_difference;
+
+    #[test]
+    fn max_abs_difference_rejects_non_finite_values() {
+        assert!(max_abs_difference(&[f32::NAN], &[f32::NAN]).is_infinite());
+        assert!(max_abs_difference(&[f32::INFINITY], &[f32::INFINITY]).is_infinite());
+    }
+
+    #[test]
+    fn max_abs_difference_reports_finite_difference() {
+        assert_eq!(max_abs_difference(&[1.0, -2.0], &[1.25, -2.5]), 0.5);
+    }
 }

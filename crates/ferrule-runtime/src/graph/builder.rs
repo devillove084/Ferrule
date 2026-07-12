@@ -12,7 +12,7 @@ use crate::graph::translate::{
     DenseGraphTranslationOptions, SemanticGraphTranslationOptions,
 };
 use crate::graph::validation::validate_graph_program;
-use ferrule_model::transformer_plan::TransformerRuntimePlan;
+use ferrule_model::semantic_plan::TransformerSemanticPlan;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphProgramBuildOptions {
@@ -49,44 +49,44 @@ pub fn build_graph_program_from_descriptor_with_options(
         )));
     }
     let contract = descriptor.support_contract();
-    let runtime_plan = TransformerRuntimePlan::from_contract(&contract);
+    let semantic_plan = TransformerSemanticPlan::from_contract(&contract);
     let inventory = HfSafetensorsInventory::open(&descriptor.path, descriptor.spec.family.clone())?;
-    build_graph_program_from_runtime_plan_with_options(&runtime_plan, &inventory, options)
+    build_graph_program_from_semantic_plan_with_options(&semantic_plan, &inventory, options)
 }
 
-pub fn build_graph_program_from_runtime_plan(
-    runtime_plan: &TransformerRuntimePlan,
+pub fn build_graph_program_from_semantic_plan(
+    semantic_plan: &TransformerSemanticPlan,
     inventory: &HfSafetensorsInventory,
 ) -> Result<GraphProgram> {
-    build_graph_program_from_runtime_plan_with_options(
-        runtime_plan,
+    build_graph_program_from_semantic_plan_with_options(
+        semantic_plan,
         inventory,
         GraphProgramBuildOptions::default(),
     )
 }
 
-pub fn build_graph_program_from_runtime_plan_with_options(
-    runtime_plan: &TransformerRuntimePlan,
+pub fn build_graph_program_from_semantic_plan_with_options(
+    semantic_plan: &TransformerSemanticPlan,
     inventory: &HfSafetensorsInventory,
     options: GraphProgramBuildOptions,
 ) -> Result<GraphProgram> {
-    let program = if is_dense_decoder_plan(runtime_plan) {
-        build_dense_decoder_graph_program_with_options(runtime_plan, inventory, options.dense)?
-    } else if uses_semantic_artifact_groups(runtime_plan) {
+    let program = if is_dense_decoder_plan(semantic_plan) {
+        build_dense_decoder_graph_program_with_options(semantic_plan, inventory, options.dense)?
+    } else if uses_semantic_artifact_groups(semantic_plan) {
         build_semantic_transformer_graph_program_with_options(
-            runtime_plan,
+            semantic_plan,
             inventory,
             options.semantic,
         )?
     } else {
         return Err(Error::Graph(format!(
             "no graph translator registered for family={} attention={:?} feed_forward={:?}",
-            runtime_plan.family,
-            runtime_plan
+            semantic_plan.family,
+            semantic_plan
                 .layers
                 .first()
                 .map(|layer| &layer.attention.kind),
-            runtime_plan
+            semantic_plan
                 .layers
                 .first()
                 .map(|layer| &layer.feed_forward.kind)
@@ -99,8 +99,8 @@ pub fn build_graph_program_from_runtime_plan_with_options(
     Ok(program)
 }
 
-fn is_dense_decoder_plan(runtime_plan: &TransformerRuntimePlan) -> bool {
-    runtime_plan.layers.iter().all(|layer| {
+fn is_dense_decoder_plan(semantic_plan: &TransformerSemanticPlan) -> bool {
+    semantic_plan.layers.iter().all(|layer| {
         matches!(
             layer.attention.kind,
             AttentionKind::DenseMha | AttentionKind::GroupedQuery

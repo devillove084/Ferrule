@@ -9,8 +9,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::cache::kv::KvHandle;
+use crate::graph::external_bindings::{
+    ArtifactGroupKind, ExternalBindingKind, ExternalBindingPlan,
+};
 use crate::graph::program::GraphProgram;
-use crate::graph::runtime::{ArtifactGroupKind, ExternalBindingKind, ExternalBindingPlan};
 use crate::graph::ExternalKey;
 use ferrule_common::{Error, Result};
 use ferrule_model::artifact::tensor::ArtifactTensorSlice;
@@ -83,14 +85,6 @@ impl BackendObjectStore {
     }
 }
 
-pub fn materialize_dense_hf_externals(
-    program: &GraphProgram,
-    inventory: &HfSafetensorsInventory,
-    model_dir: &Path,
-) -> Result<BackendObjectStore> {
-    materialize_graph_hf_externals(program, inventory, model_dir)
-}
-
 pub fn materialize_graph_hf_externals(
     program: &GraphProgram,
     inventory: &HfSafetensorsInventory,
@@ -100,7 +94,7 @@ pub fn materialize_graph_hf_externals(
         &program.bindings,
         inventory,
         model_dir,
-        &program.runtime_plan.family,
+        &program.semantic_plan.family,
     )
 }
 

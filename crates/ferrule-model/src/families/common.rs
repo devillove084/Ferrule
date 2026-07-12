@@ -1,6 +1,5 @@
+use crate::semantic::{ArtifactTensorPart, DenseLayerTensorKind, DenseLayerTensorRef};
 use crate::tensor_policy::TensorClass;
-
-use super::{ArtifactTensorPart, DenseLayerTensorKind, DenseLayerTensorRef};
 
 /// Common tensor-name policy for dense Transformer-style HF/GGUF names.
 ///

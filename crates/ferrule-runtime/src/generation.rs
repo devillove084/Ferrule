@@ -1,7 +1,7 @@
 use crate::sampling::sampler::{Logprobs, Sampler, SamplingConfig};
 use crate::stats::GenerateStats;
 use ferrule_common::{Error, Result};
-use ferrule_model::runner::{ModelRunner, PrefillMode, TokenLogit, TopKModelRunner};
+use ferrule_model::runner::{ModelRunner, TokenLogit, TopKModelRunner};
 use std::time::{Duration, Instant};
 
 pub use crate::scheduling::SequenceFinishReason as TopKFinishReason;
@@ -253,41 +253,6 @@ impl<R: ModelRunner> InferenceEngine<R> {
             all_logprobs,
         })
     }
-}
-
-/// Run one resident-session top-k generation turn.
-///
-/// This is the generic fast-path loop used by interactive chat and benchmarks.
-/// It is model-family agnostic: concrete runners expose only the `TopKModelRunner`
-/// capability, while runtime owns context checks, EOS/session feeding, stop-string
-/// handling, and timing.
-pub fn generate_topk_turn<R, F>(
-    runner: &mut R,
-    prompt_tokens: &[u32],
-    config: &GenerationConfig,
-    prefill_mode: PrefillMode,
-    top_k: usize,
-    on_token: F,
-) -> Result<TopKTurnResult>
-where
-    R: TopKModelRunner,
-    F: FnMut(&TopKTokenEvent) -> Result<()>,
-{
-    ensure_context_room(runner.position(), prompt_tokens.len(), config.ctx_size)?;
-
-    let prefill_start = Instant::now();
-    let top = runner.prefill_topk(prompt_tokens, top_k, prefill_mode)?;
-    let prefill_time = prefill_start.elapsed();
-
-    generate_topk_from_candidates(
-        runner,
-        top,
-        prompt_tokens.len(),
-        prefill_time,
-        config,
-        top_k,
-        on_token,
-    )
 }
 
 /// Run the generic top-k decode loop after the caller has already performed

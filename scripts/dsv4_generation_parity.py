@@ -151,7 +151,7 @@ def main() -> None:
             "prefill_start_pos": 0,
             "decode_start": "after the first forward over the full prompt segment",
             "official_generate_loop": "for cur_pos in range(min_prompt_len, total_len): next = model.forward(tokens[:, prev_pos:cur_pos], prev_pos)[0]",
-            "ferrule_expected_path": "DeepSeekV4ReferenceRunner::prefill_tokens_*_batched followed by decode_token_*",
+            "ferrule_expected_path": "DeepSeekV4Runner::prefill_tokens_*_batched followed by decode_token_*",
         },
         "cases": cases,
     }

@@ -18,7 +18,8 @@ use super::attention::DeepSeekV4IndexerPayload;
 use super::config::{
     with_deepseek_v4_linear_execution_policy, DeepSeekV4AttentionConfig, DeepSeekV4RopeParams,
 };
-use super::operators::{DeepSeekV4Logit, DeepSeekV4OperatorContext};
+use super::operators::DeepSeekV4OperatorContext;
+use crate::runner::TokenLogit;
 
 pub(crate) fn bind_aux_linear(
     auxiliary: &[ArtifactTensorSlice],
@@ -100,16 +101,6 @@ pub(crate) fn check_len(layer: usize, label: &str, got: usize, expected: usize) 
         )));
     }
     Ok(())
-}
-
-#[cfg(feature = "cuda")]
-pub(crate) fn sparse_topk_i32(topk: &[isize]) -> Result<Vec<i32>> {
-    topk.iter()
-        .map(|&idx| {
-            i32::try_from(idx)
-                .map_err(|_| Error::Model(format!("sparse top-k index {idx} exceeds i32 CUDA ABI")))
-        })
-        .collect()
 }
 
 pub(crate) fn rms_norm_rows_with_operators(
@@ -733,7 +724,7 @@ pub(crate) fn f32_key(json: &serde_json::Value, keys: &[&str]) -> Option<f32> {
     })
 }
 
-pub(crate) fn rank_logits_desc(left: &DeepSeekV4Logit, right: &DeepSeekV4Logit) -> Ordering {
+pub(crate) fn rank_logits_desc(left: &TokenLogit, right: &TokenLogit) -> Ordering {
     right
         .logit
         .total_cmp(&left.logit)
@@ -742,24 +733,4 @@ pub(crate) fn rank_logits_desc(left: &DeepSeekV4Logit, right: &DeepSeekV4Logit) 
 
 pub(crate) fn dot(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(a, b)| a * b).sum()
-}
-
-#[cfg(feature = "cuda")]
-#[allow(dead_code)]
-pub(crate) fn accumulate_output(target: &mut Option<Vec<f32>>, value: Vec<f32>) -> Result<()> {
-    if let Some(target) = target {
-        if target.len() != value.len() {
-            return Err(Error::Model(format!(
-                "output accumulation length mismatch: accumulated={}, next={}",
-                target.len(),
-                value.len()
-            )));
-        }
-        for (dst, value) in target.iter_mut().zip(value) {
-            *dst += value;
-        }
-    } else {
-        *target = Some(value);
-    }
-    Ok(())
 }

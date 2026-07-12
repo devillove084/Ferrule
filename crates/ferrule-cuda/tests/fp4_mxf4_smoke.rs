@@ -399,6 +399,7 @@ fn fp4_activation_pack_kernel_matches_cpu_reference() {
             &values_dev,
             &mut packed_dev,
             &mut scales_dev,
+            0,
             values.len() as u32,
             COLS as u32,
             BLOCK as u32,

@@ -102,6 +102,108 @@ impl ArtifactTensorSlice {
     }
 }
 
+#[cfg(feature = "cuda")]
+pub(crate) fn artifact_2d_row_slice_descriptor(
+    slice: &ArtifactTensorSlice,
+    start_row: usize,
+    row_count: usize,
+) -> Result<ArtifactTensorSlice> {
+    if slice.shape.len() != 2 {
+        return Err(Error::Model(format!(
+            "artifact tensor '{}' row descriptor expects 2D shape, got {:?}",
+            slice.name, slice.shape
+        )));
+    }
+    let rows = slice.shape[0];
+    let cols = slice.shape[1];
+    let end_row = start_row.checked_add(row_count).ok_or_else(|| {
+        Error::Model(format!(
+            "artifact tensor '{}' row descriptor overflows: start={start_row} count={row_count}",
+            slice.name
+        ))
+    })?;
+    if row_count == 0 || start_row >= rows || end_row > rows {
+        return Err(Error::Model(format!(
+            "artifact tensor '{}' invalid row descriptor: start={start_row} count={row_count} rows={rows}",
+            slice.name
+        )));
+    }
+    let elem_bytes = slice.dtype.element_size_bytes().ok_or_else(|| {
+        Error::Model(format!(
+            "artifact tensor '{}' has unknown dtype {} for row descriptor",
+            slice.name,
+            slice.dtype.as_str()
+        ))
+    })?;
+    let row_bytes = cols.checked_mul(elem_bytes).ok_or_else(|| {
+        Error::Model(format!(
+            "artifact tensor '{}' row descriptor byte size overflows for cols={cols} elem_bytes={elem_bytes}",
+            slice.name
+        ))
+    })?;
+    let byte_offset = start_row.checked_mul(row_bytes).ok_or_else(|| {
+        Error::Model(format!(
+            "artifact tensor '{}' row descriptor offset overflows",
+            slice.name
+        ))
+    })?;
+    let bytes = row_count.checked_mul(row_bytes).ok_or_else(|| {
+        Error::Model(format!(
+            "artifact tensor '{}' row descriptor byte count overflows",
+            slice.name
+        ))
+    })?;
+    let mut row_slice = slice.clone();
+    row_slice.offset = slice
+        .offset
+        .checked_add(byte_offset as u64)
+        .ok_or_else(|| {
+            Error::Model(format!(
+                "artifact tensor '{}' absolute row descriptor offset overflows",
+                slice.name
+            ))
+        })?;
+    row_slice.bytes = bytes as u64;
+    row_slice.shape = vec![row_count, cols];
+    Ok(row_slice)
+}
+
+#[cfg(any(feature = "cuda", test))]
+pub(crate) fn artifact_tensor_slice_cache_key(slice: &ArtifactTensorSlice) -> String {
+    format!(
+        "{}@{}+{}:{:?}:{:?}",
+        slice.path.display(),
+        slice.offset,
+        slice.bytes,
+        slice.dtype,
+        slice.shape
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactMatrixSlice {
+    pub slice: ArtifactTensorSlice,
+    pub rows: usize,
+    pub cols: usize,
+}
+
+impl ArtifactMatrixSlice {
+    pub fn from_slice(slice: ArtifactTensorSlice, label: &str) -> Result<Self> {
+        let [rows, cols]: [usize; 2] =
+            slice
+                .shape
+                .clone()
+                .try_into()
+                .map_err(|shape: Vec<usize>| {
+                    Error::Model(format!(
+                        "artifact matrix {label} '{}' expects 2D shape, got {:?}",
+                        slice.name, shape
+                    ))
+                })?;
+        Ok(Self { slice, rows, cols })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactTensorPayload {
     pub slice: ArtifactTensorSlice,
@@ -266,6 +368,40 @@ mod tests {
             ArtifactDType::from_safetensors_dtype("I64"),
             ArtifactDType::I64
         );
+    }
+
+    #[test]
+    fn matrix_slice_tracks_dimensions() {
+        let slice = ArtifactTensorSlice {
+            name: "matrix.weight".into(),
+            role: TensorRole::OutputHead,
+            path: PathBuf::from("model.safetensors"),
+            offset: 16,
+            bytes: 24,
+            dtype: ArtifactDType::Bf16,
+            shape: vec![3, 4],
+        };
+        let matrix = ArtifactMatrixSlice::from_slice(slice.clone(), "output head").unwrap();
+        assert_eq!(matrix.slice, slice);
+        assert_eq!(matrix.rows, 3);
+        assert_eq!(matrix.cols, 4);
+    }
+
+    #[test]
+    fn matrix_slice_reports_model_neutral_shape_error() {
+        let slice = ArtifactTensorSlice {
+            name: "vector.weight".into(),
+            role: TensorRole::OutputHead,
+            path: PathBuf::from("model.safetensors"),
+            offset: 0,
+            bytes: 8,
+            dtype: ArtifactDType::Bf16,
+            shape: vec![4],
+        };
+        let err = ArtifactMatrixSlice::from_slice(slice, "output head").unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("artifact matrix output head 'vector.weight' expects 2D shape"));
+        assert!(!message.contains("DeepSeek"));
     }
 
     #[test]

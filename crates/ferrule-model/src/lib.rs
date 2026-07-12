@@ -22,15 +22,16 @@
 pub mod attention_backend;
 pub mod chat;
 pub mod descriptor;
+pub mod execution;
 pub mod ffn;
 pub mod hyper_connection;
 pub mod precision;
 pub mod runner;
 pub mod semantic;
+pub mod semantic_plan;
 pub mod spec;
 pub mod tensor_policy;
 pub mod tokenizer;
-pub mod transformer_plan;
 
 // ── Sub-directory modules ─────────────────────────────────────────────────
 pub mod artifact;
@@ -40,6 +41,13 @@ pub mod models;
 pub mod moe;
 pub mod quant;
 pub mod support;
+
+// ── Re-exports: execution ─────────────────────────────────────────────────
+pub use execution::{
+    ArenaLease, ExecutionShapeKey, ModelExecutionBackend, PersistentArenaPool,
+    PersistentArenaPoolStats, PreparedModel, PreparedStepBinding, SequenceStateCore,
+    SequenceStepBinding,
+};
 
 // ── Re-exports: spec ──────────────────────────────────────────────────────
 pub use spec::{
@@ -127,14 +135,13 @@ pub use runner::{
 
 // ── Re-exports: attention_backend ─────────────────────────────────────────
 pub use attention_backend::{
-    sliding_window_topk_indices, sparse_attention_reference, AttentionBackendKind,
-    AttentionBackendPlan, AttentionMaskKind, SparseAttentionSpec,
+    sliding_window_topk_indices, sparse_attention_reference, SparseAttentionSpec,
 };
 
-// ── Re-exports: transformer_plan ──────────────────────────────────────────
-pub use transformer_plan::{
-    AttentionStepPlan, ExpertResidencyMode, FeedForwardStepPlan, RuntimeAttachment,
-    RuntimeEpilogue, RuntimePrologue, TransformerLayerPlan, TransformerRuntimePlan,
+// ── Re-exports: semantic plan ─────────────────────────────────────────────
+pub use semantic_plan::{
+    AttentionSemantic, ExpertResidency, FeedForwardSemantic, SemanticAttachment, SemanticEpilogue,
+    SemanticPrologue, TransformerLayerSemantic, TransformerSemanticPlan,
 };
 
 // ── Re-exports: hyper_connection ──────────────────────────────────────────

@@ -4,8 +4,9 @@ use std::path::Path;
 
 use ferrule_common::{Error, Result};
 
-use crate::families::{
-    self, AttentionTensorRef, DenseLayerTensorRef, HyperConnectionTensorRef, RoutedExpertTensorRef,
+use crate::families;
+use crate::semantic::{
+    AttentionTensorRef, DenseLayerTensorRef, HyperConnectionTensorRef, RoutedExpertTensorRef,
     RouterTensorRef, SharedExpertTensorRef,
 };
 use crate::spec::ModelFamily;

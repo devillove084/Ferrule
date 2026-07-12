@@ -4,10 +4,8 @@ use std::time::{Duration, Instant};
 
 use crate::bench::{RuntimeBenchSummary, RuntimeCounters};
 use ferrule_model::{
-    models::deepseek_v4::{
-        DeepSeekV4OperatorBackend, DeepSeekV4ReferenceOptions, DeepSeekV4ReferenceRunner,
-    },
-    ChatTemplate, PrefillMode, TopKModelRunner,
+    models::deepseek_v4::{DeepSeekV4PrepareOptions, DeepSeekV4Runner},
+    ChatTemplate, ModelExecutionBackend, PrefillMode, TopKModelRunner,
 };
 use ferrule_runtime::{generate_topk_from_candidates, GenerationConfig};
 
@@ -34,16 +32,17 @@ pub fn cmd_deepseek_v4_generate(
     moe_hotset_experts: usize,
 ) -> anyhow::Result<()> {
     let model_path = Path::new(model_dir);
-    let options = DeepSeekV4ReferenceOptions {
+    let options = DeepSeekV4PrepareOptions {
         max_layers,
         output_head_chunk_rows,
         expert_reader_max_tensor_bytes: expert_reader_max_slice_mb.saturating_mul(1024 * 1024),
         moe_prefetch_experts,
         moe_hotset_experts,
+        ..DeepSeekV4PrepareOptions::default()
     };
-    let operator_backend = DeepSeekV4OperatorBackend::parse(backend)?;
+    let operator_backend = ModelExecutionBackend::parse(backend)?;
     let load_start = Instant::now();
-    let mut runner = DeepSeekV4ReferenceRunner::load_hf_with_options_and_backend(
+    let mut runner = DeepSeekV4Runner::load_hf_with_options_and_backend(
         model_path,
         max_tensor_mb.saturating_mul(1024 * 1024),
         options,
@@ -56,7 +55,7 @@ pub fn cmd_deepseek_v4_generate(
     } else {
         prompt.to_string()
     };
-    let prompt_tokens = runner.model.tokenizer.encode(&encoded_prompt)?;
+    let prompt_tokens = runner.model().tokenizer.encode(&encoded_prompt)?;
     if prompt_tokens.is_empty() {
         anyhow::bail!("prompt encoded to zero tokens");
     }

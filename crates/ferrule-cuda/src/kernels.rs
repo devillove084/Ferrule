@@ -6,13 +6,16 @@
 //! inline-PTX JIT issues on newer GPUs.
 
 use cuda_device::{
-    atomic::{AtomicOrdering, DeviceAtomicF32},
     cuda_module, kernel, ptx_asm, thread,
-    wmma::mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0,
+    wmma::{
+        mma_m16n8k16_f32_bf16, mma_m16n8k32_f32_e4m3_e4m3,
+        mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0,
+    },
     DisjointSlice, SharedArray,
 };
 
 const LN_2_F32: f32 = core::f32::consts::LN_2;
+pub(crate) const DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS: usize = 8192;
 
 /// Device exp(x). cuda-oxide lowers this to libdevice (`__nv_expf`) on GPU.
 fn fast_exp(x: f32) -> f32 {
@@ -142,6 +145,32 @@ fn quantize_fp8_e4m3fn_to_f32(value: f32) -> f32 {
     let abs_value = if value < 0.0 { -value } else { value };
     let magnitude = if abs_value > 448.0 { 448.0 } else { abs_value };
     sign * nearest_fp8_e4m3fn_positive(magnitude)
+}
+
+#[inline(always)]
+fn quantize_fp8_e4m3fn_byte(value: f32) -> u8 {
+    let sign = if value.to_bits() & 0x8000_0000 != 0 {
+        0x80
+    } else {
+        0
+    };
+    if value == 0.0 {
+        return sign;
+    }
+    if !value.is_finite() {
+        return sign | 0x7f;
+    }
+    let abs_value = if value < 0.0 { -value } else { value };
+    let magnitude = if abs_value > 448.0 { 448.0 } else { abs_value };
+    let quantized = nearest_fp8_e4m3fn_positive(magnitude);
+    if quantized < 1.0 / 64.0 {
+        let mantissa = libm::roundf(quantized * 512.0) as u8;
+        return sign | if mantissa > 7 { 7 } else { mantissa };
+    }
+    let bits = quantized.to_bits();
+    let exponent = (((bits >> 23) & 0xff) as i32 - 127 + 7) as u8;
+    let mantissa = ((bits >> 20) & 0x07) as u8;
+    sign | (exponent << 3) | mantissa
 }
 
 fn e8m0_scale_byte_for_amax(amax: f32, quant_max: f32) -> u8 {
@@ -406,6 +435,124 @@ pub mod kernels {
         }
         if let Some(yi) = output.get_mut(thread::index_1d()) {
             *yi = dot;
+        }
+    }
+
+    /// DSV4 grouped WO-A using the official BF16 einsum semantics and a
+    /// `m16n8k16` Tensor Core tile. Checkpoint weights stay in FP8+E8M0 form;
+    /// each weight tile is dequantized directly to BF16 in shared memory.
+    ///
+    /// Grid: `(ceil(output_latent_dim / 16), ceil(rows / 8))`, one warp per CTA.
+    #[kernel]
+    pub unsafe fn grouped_output_a_bf16_mma_from_fp8(
+        context: &[f32],
+        weight: &[u8],
+        weight_scales: &[u8],
+        mut output: DisjointSlice<f32>,
+        rows: u32,
+        output_latent_dim: u32,
+        group_in: u32,
+        o_lora_rank: u32,
+        scale_cols: u32,
+    ) {
+        static mut SMEM_A: SharedArray<u8, 512, 32> = SharedArray::UNINIT;
+        static mut SMEM_B: SharedArray<u8, 256, 32> = SharedArray::UNINIT;
+
+        let tid = thread::threadIdx_x() as usize;
+        let out_base = thread::blockIdx_x() as usize * 16;
+        let token_base = thread::blockIdx_y() as usize * 8;
+        let rows = rows as usize;
+        let output_latent_dim = output_latent_dim as usize;
+        let group_in = group_in as usize;
+        let o_lora_rank = o_lora_rank as usize;
+        let scale_cols = scale_cols as usize;
+        if rows == 0
+            || output_latent_dim == 0
+            || group_in == 0
+            || o_lora_rank == 0
+            || scale_cols == 0
+            || !group_in.is_multiple_of(16)
+        {
+            return;
+        }
+        let groups = output_latent_dim / o_lora_rank;
+        let group = out_base / o_lora_rank;
+        let mut acc = [0.0f32; 4];
+        let mut k_base = 0usize;
+        while k_base < group_in {
+            let weight_scale = if out_base < output_latent_dim {
+                e8m0_scale(weight_scales[(out_base / 128) * scale_cols + k_base / 128])
+            } else {
+                1.0
+            };
+            unsafe {
+                let a_dst = &raw mut SMEM_A as *mut u16;
+                let b_dst = &raw mut SMEM_B as *mut u16;
+                let mut i = tid;
+                while i < 256 {
+                    let row_local = i / 16;
+                    let k_local = i & 15;
+                    let out_row = out_base + row_local;
+                    let value = if out_row < output_latent_dim {
+                        fp8_e4m3fn_value(weight[out_row * group_in + k_base + k_local])
+                            * weight_scale
+                    } else {
+                        0.0
+                    };
+                    *a_dst.add(i) = cuda_device::tcgen05::f32_to_bf16_rne(value);
+                    i += 32;
+                }
+                let mut i = tid;
+                while i < 128 {
+                    let k_local = i / 8;
+                    let col = i & 7;
+                    let value = if token_base + col < rows {
+                        context[(token_base + col) * groups * group_in
+                            + group * group_in
+                            + k_base
+                            + k_local]
+                    } else {
+                        0.0
+                    };
+                    *b_dst.add(i) = cuda_device::tcgen05::f32_to_bf16_rne(value);
+                    i += 32;
+                }
+            }
+            thread::sync_threads();
+
+            let a_frag: [u32; 4] = unsafe {
+                let q = tid / 8;
+                let row = (tid & 7) + if (q & 1) != 0 { 8 } else { 0 };
+                let col_b16 = if q >= 2 { 8 } else { 0 };
+                let addr =
+                    (&raw const SMEM_A as *const u8).add(row * 32 + col_b16 * 2) as *const u32;
+                cuda_device::wmma::ldmatrix_x4(addr)
+            };
+            let b_frag: [u32; 2] = unsafe {
+                let row = tid & 0x0f;
+                let addr = (&raw const SMEM_B as *const u8).add(row * 16) as *const u32;
+                cuda_device::wmma::ldmatrix_x2_trans(addr)
+            };
+            acc = unsafe { mma_m16n8k16_f32_bf16(acc, a_frag, b_frag) };
+            thread::sync_threads();
+            k_base += 16;
+        }
+
+        let lane_group = tid / 4;
+        let lane_col = tid & 3;
+        let out_ptr = output.as_mut_ptr();
+        let mut j = 0usize;
+        while j < 4 {
+            let out_row = out_base + lane_group + if j >= 2 { 8 } else { 0 };
+            let col = lane_col * 2 + (j & 1);
+            if out_row < output_latent_dim && token_base + col < rows {
+                let rounded = cuda_device::tcgen05::f32_to_bf16_rne(acc[j]);
+                unsafe {
+                    *out_ptr.add((token_base + col) * output_latent_dim + out_row) =
+                        f32::from_bits((rounded as u32) << 16);
+                }
+            }
+            j += 1;
         }
     }
 
@@ -1179,9 +1326,15 @@ pub mod kernels {
         indexer_enabled: u32,
         weight_scale: f32,
     ) {
-        let token = thread::index_1d().get() as usize;
+        static mut CANDIDATE_SCORES: SharedArray<f32, 256> = SharedArray::UNINIT;
+        static mut BEST_SCORES: SharedArray<f32, 512> = SharedArray::UNINIT;
+        static mut BEST_INDICES: SharedArray<i32, 512> = SharedArray::UNINIT;
+
+        let token = thread::blockIdx_x() as usize;
+        let tid = thread::threadIdx_x() as usize;
+        let bdim = thread::blockDim_x() as usize;
         let tokens = tokens as usize;
-        if token >= tokens {
+        if token >= tokens || bdim == 0 || bdim > 256 {
             return;
         }
         let window_size = window_size as usize;
@@ -1196,14 +1349,14 @@ pub mod kernels {
         let out_ptr = out.as_mut_ptr();
 
         let first = (token + 1).saturating_sub(window_size);
-        let mut col = 0usize;
+        let mut col = tid;
         while col < window_cols {
             let idx = first + col;
             let value = if idx <= token { idx as i32 } else { -1 };
             unsafe {
                 *out_ptr.add(token * total_cols + col) = value;
             }
-            col += 1;
+            col += bdim;
         }
         if extra_cols == 0 || ratio == 0 {
             return;
@@ -1211,7 +1364,7 @@ pub mod kernels {
 
         if indexer_enabled == 0 {
             let visible = ((token + 1) / ratio).min(compressed_len);
-            let mut slot = 0usize;
+            let mut slot = tid;
             while slot < extra_cols {
                 let value = if slot < visible {
                     (value_offset + slot) as i32
@@ -1221,68 +1374,107 @@ pub mod kernels {
                 unsafe {
                     *out_ptr.add(token * total_cols + window_cols + slot) = value;
                 }
-                slot += 1;
+                slot += bdim;
             }
             return;
         }
 
         let visible = ((token + 1) / ratio).min(compressed_len);
-        let mut best_val = [f32::NEG_INFINITY; 512];
-        let mut best_idx = [-1i32; 512];
         let take = extra_cols.min(512);
-        let mut idx = 0usize;
-        while idx < visible {
-            let mut score = 0.0f32;
-            let mut head = 0usize;
-            while head < heads {
-                let q_base = token * heads * hd + head * hd;
-                let kv_base = idx * hd;
-                let mut dot = 0.0f32;
-                let mut d = 0usize;
-                while d < hd {
-                    dot += query[q_base + d] * indexer_kv[kv_base + d];
-                    d += 1;
-                }
-                if dot < 0.0 {
-                    dot = 0.0;
-                }
-                score += dot * weights[token * heads + head] * weight_scale;
-                head += 1;
+        let mut slot = tid;
+        while slot < take {
+            unsafe {
+                BEST_SCORES[slot] = f32::NEG_INFINITY;
+                BEST_INDICES[slot] = -1;
             }
-            let mut pos = take;
-            while pos > 0 {
-                let prev = pos - 1;
-                let better = score > best_val[prev]
-                    || (score == best_val[prev]
-                        && (best_idx[prev] < 0 || (idx as i32) < best_idx[prev]));
-                if !better {
-                    break;
-                }
-                pos -= 1;
-            }
-            if pos < take {
-                let mut move_pos = take - 1;
-                while move_pos > pos {
-                    best_val[move_pos] = best_val[move_pos - 1];
-                    best_idx[move_pos] = best_idx[move_pos - 1];
-                    move_pos -= 1;
-                }
-                best_val[pos] = score;
-                best_idx[pos] = idx as i32;
-            }
-            idx += 1;
+            slot += bdim;
         }
-        let mut slot = 0usize;
+        thread::sync_threads();
+
+        let mut chunk_start = 0usize;
+        while chunk_start < visible {
+            let idx = chunk_start + tid;
+            let mut score = f32::NEG_INFINITY;
+            if idx < visible {
+                score = 0.0;
+                let mut head = 0usize;
+                while head < heads {
+                    let q_base = token * heads * hd + head * hd;
+                    let kv_base = idx * hd;
+                    let mut dot = 0.0f32;
+                    let mut d = 0usize;
+                    while d < hd {
+                        dot += query[q_base + d] * indexer_kv[kv_base + d];
+                        d += 1;
+                    }
+                    if dot < 0.0 {
+                        dot = 0.0;
+                    }
+                    score += dot * weights[token * heads + head] * weight_scale;
+                    head += 1;
+                }
+            }
+            unsafe {
+                CANDIDATE_SCORES[tid] = score;
+            }
+            thread::sync_threads();
+
+            if tid == 0 {
+                let chunk_len = (visible - chunk_start).min(bdim);
+                let mut candidate = 0usize;
+                while candidate < chunk_len {
+                    let candidate_idx = (chunk_start + candidate) as i32;
+                    let candidate_score = unsafe { CANDIDATE_SCORES[candidate] };
+                    let mut pos = take;
+                    while pos > 0 {
+                        let prev = pos - 1;
+                        let prev_score = unsafe { BEST_SCORES[prev] };
+                        let prev_idx = unsafe { BEST_INDICES[prev] };
+                        let better = candidate_score > prev_score
+                            || (candidate_score == prev_score
+                                && (prev_idx < 0 || candidate_idx < prev_idx));
+                        if !better {
+                            break;
+                        }
+                        pos -= 1;
+                    }
+                    if pos < take {
+                        let mut move_pos = take - 1;
+                        while move_pos > pos {
+                            unsafe {
+                                BEST_SCORES[move_pos] = BEST_SCORES[move_pos - 1];
+                                BEST_INDICES[move_pos] = BEST_INDICES[move_pos - 1];
+                            }
+                            move_pos -= 1;
+                        }
+                        unsafe {
+                            BEST_SCORES[pos] = candidate_score;
+                            BEST_INDICES[pos] = candidate_idx;
+                        }
+                    }
+                    candidate += 1;
+                }
+            }
+            thread::sync_threads();
+            chunk_start += bdim;
+        }
+
+        slot = tid;
         while slot < extra_cols {
-            let value = if slot < take && best_idx[slot] >= 0 && best_val[slot].is_finite() {
-                (value_offset + best_idx[slot] as usize) as i32
+            let (best_idx, best_score) = if slot < take {
+                unsafe { (BEST_INDICES[slot], BEST_SCORES[slot]) }
+            } else {
+                (-1, f32::NEG_INFINITY)
+            };
+            let value = if best_idx >= 0 && best_score.is_finite() {
+                (value_offset + best_idx as usize) as i32
             } else {
                 -1
             };
             unsafe {
                 *out_ptr.add(token * total_cols + window_cols + slot) = value;
             }
-            slot += 1;
+            slot += bdim;
         }
     }
 
@@ -1499,6 +1691,15 @@ pub mod kernels {
         indexer_enabled: u32,
         weight_scale: f32,
     ) {
+        static mut CANDIDATE_SCORES: SharedArray<f32, 256> = SharedArray::UNINIT;
+        static mut BEST_SCORES: SharedArray<f32, 512> = SharedArray::UNINIT;
+        static mut BEST_INDICES: SharedArray<i32, 512> = SharedArray::UNINIT;
+
+        let tid = thread::threadIdx_x() as usize;
+        let bdim = thread::blockDim_x() as usize;
+        if bdim == 0 || bdim > 256 {
+            return;
+        }
         let total_cols = window_size as usize + extra_cols as usize;
         if total_cols == 0 {
             return;
@@ -1513,45 +1714,34 @@ pub mod kernels {
         let heads = index_heads as usize;
         let hd = index_head_dim as usize;
 
-        let mut col = 0usize;
-        if window_len < window_size {
-            while col < window_size {
-                let value = if col < window_len { col as i32 } else { -1 };
-                unsafe {
-                    *out_ptr.add(col) = value;
+        let mut col = tid;
+        while col < window_size {
+            let value = if window_len < window_size {
+                if col < window_len {
+                    col as i32
+                } else {
+                    -1
                 }
-                col += 1;
+            } else {
+                let current_slot = position % window_size;
+                let first_slot = if current_slot + 1 == window_size {
+                    0
+                } else {
+                    current_slot + 1
+                };
+                ((first_slot + col) % window_size) as i32
+            };
+            unsafe {
+                *out_ptr.add(col) = value;
             }
-        } else {
-            let slot = position % window_size;
-            let mut write = 0usize;
-            let mut idx = slot + 1;
-            while idx < window_size {
-                if write < window_size {
-                    unsafe {
-                        *out_ptr.add(write) = idx as i32;
-                    }
-                    write += 1;
-                }
-                idx += 1;
-            }
-            idx = 0;
-            while idx <= slot {
-                if write < window_size {
-                    unsafe {
-                        *out_ptr.add(write) = idx as i32;
-                    }
-                    write += 1;
-                }
-                idx += 1;
-            }
+            col += bdim;
         }
 
         if extra_cols == 0 {
             return;
         }
         if indexer_enabled == 0 {
-            let mut slot = 0usize;
+            let mut slot = tid;
             while slot < extra_cols {
                 let value = if slot < compressed_len {
                     (value_offset + slot) as i32
@@ -1561,67 +1751,106 @@ pub mod kernels {
                 unsafe {
                     *out_ptr.add(window_size + slot) = value;
                 }
-                slot += 1;
+                slot += bdim;
             }
             return;
         }
 
-        let mut best_val = [f32::NEG_INFINITY; 512];
-        let mut best_idx = [-1i32; 512];
         let take = extra_cols.min(512);
-        let mut idx = 0usize;
-        while idx < compressed_len {
-            let mut score = 0.0f32;
-            let mut head = 0usize;
-            while head < heads {
-                let q_base = head * hd;
-                let kv_base = idx * hd;
-                let mut dot = 0.0f32;
-                let mut d = 0usize;
-                while d < hd {
-                    dot += query[q_base + d] * indexer_kv[kv_base + d];
-                    d += 1;
-                }
-                if dot < 0.0 {
-                    dot = 0.0;
-                }
-                score += dot * weights[head] * weight_scale;
-                head += 1;
+        let mut slot = tid;
+        while slot < take {
+            unsafe {
+                BEST_SCORES[slot] = f32::NEG_INFINITY;
+                BEST_INDICES[slot] = -1;
             }
-            let mut pos = take;
-            while pos > 0 {
-                let prev = pos - 1;
-                let better = score > best_val[prev]
-                    || (score == best_val[prev]
-                        && (best_idx[prev] < 0 || (idx as i32) < best_idx[prev]));
-                if !better {
-                    break;
-                }
-                pos -= 1;
-            }
-            if pos < take {
-                let mut move_pos = take - 1;
-                while move_pos > pos {
-                    best_val[move_pos] = best_val[move_pos - 1];
-                    best_idx[move_pos] = best_idx[move_pos - 1];
-                    move_pos -= 1;
-                }
-                best_val[pos] = score;
-                best_idx[pos] = idx as i32;
-            }
-            idx += 1;
+            slot += bdim;
         }
-        let mut slot = 0usize;
+        thread::sync_threads();
+
+        let mut chunk_start = 0usize;
+        while chunk_start < compressed_len {
+            let idx = chunk_start + tid;
+            let mut score = f32::NEG_INFINITY;
+            if idx < compressed_len {
+                score = 0.0;
+                let mut head = 0usize;
+                while head < heads {
+                    let q_base = head * hd;
+                    let kv_base = idx * hd;
+                    let mut dot = 0.0f32;
+                    let mut d = 0usize;
+                    while d < hd {
+                        dot += query[q_base + d] * indexer_kv[kv_base + d];
+                        d += 1;
+                    }
+                    if dot < 0.0 {
+                        dot = 0.0;
+                    }
+                    score += dot * weights[head] * weight_scale;
+                    head += 1;
+                }
+            }
+            unsafe {
+                CANDIDATE_SCORES[tid] = score;
+            }
+            thread::sync_threads();
+
+            if tid == 0 {
+                let chunk_len = (compressed_len - chunk_start).min(bdim);
+                let mut candidate = 0usize;
+                while candidate < chunk_len {
+                    let candidate_idx = (chunk_start + candidate) as i32;
+                    let candidate_score = unsafe { CANDIDATE_SCORES[candidate] };
+                    let mut pos = take;
+                    while pos > 0 {
+                        let prev = pos - 1;
+                        let prev_score = unsafe { BEST_SCORES[prev] };
+                        let prev_idx = unsafe { BEST_INDICES[prev] };
+                        let better = candidate_score > prev_score
+                            || (candidate_score == prev_score
+                                && (prev_idx < 0 || candidate_idx < prev_idx));
+                        if !better {
+                            break;
+                        }
+                        pos -= 1;
+                    }
+                    if pos < take {
+                        let mut move_pos = take - 1;
+                        while move_pos > pos {
+                            unsafe {
+                                BEST_SCORES[move_pos] = BEST_SCORES[move_pos - 1];
+                                BEST_INDICES[move_pos] = BEST_INDICES[move_pos - 1];
+                            }
+                            move_pos -= 1;
+                        }
+                        unsafe {
+                            BEST_SCORES[pos] = candidate_score;
+                            BEST_INDICES[pos] = candidate_idx;
+                        }
+                    }
+                    candidate += 1;
+                }
+            }
+            thread::sync_threads();
+            chunk_start += bdim;
+        }
+
+        slot = tid;
         while slot < extra_cols {
-            let value = if slot < take && best_idx[slot] >= 0 && best_val[slot].is_finite() {
-                (value_offset + best_idx[slot] as usize) as i32
+            let (best_idx, best_score) = if slot < take {
+                unsafe { (BEST_INDICES[slot], BEST_SCORES[slot]) }
+            } else {
+                (-1, f32::NEG_INFINITY)
+            };
+            let value = if best_idx >= 0 && best_score.is_finite() {
+                (value_offset + best_idx as usize) as i32
             } else {
                 -1
             };
             unsafe {
                 *out_ptr.add(window_size + slot) = value;
             }
-            slot += 1;
+            slot += bdim;
         }
     }
 
@@ -1646,6 +1875,17 @@ pub mod kernels {
         rope_dim: u32,
         weight_scale: f32,
     ) {
+        static mut QUERY_SCRATCH: SharedArray<f32, DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS> =
+            SharedArray::UNINIT;
+        static mut CANDIDATE_SCORES: SharedArray<f32, 256> = SharedArray::UNINIT;
+        static mut BEST_SCORES: SharedArray<f32, 512> = SharedArray::UNINIT;
+        static mut BEST_INDICES: SharedArray<i32, 512> = SharedArray::UNINIT;
+
+        let tid = thread::threadIdx_x() as usize;
+        let bdim = thread::blockDim_x() as usize;
+        if bdim == 0 || bdim > 256 {
+            return;
+        }
         let total_cols = window_size as usize + extra_cols as usize;
         if total_cols == 0 {
             return;
@@ -1661,176 +1901,228 @@ pub mod kernels {
         let hd = index_head_dim as usize;
         let rd = rope_dim as usize;
 
-        let mut col = 0usize;
-        if window_len < window_size {
-            while col < window_size {
-                let value = if col < window_len { col as i32 } else { -1 };
-                unsafe {
-                    *out_ptr.add(col) = value;
+        let mut col = tid;
+        while col < window_size {
+            let value = if window_len < window_size {
+                if col < window_len {
+                    col as i32
+                } else {
+                    -1
                 }
-                col += 1;
+            } else {
+                let current_slot = position % window_size;
+                let first_slot = if current_slot + 1 == window_size {
+                    0
+                } else {
+                    current_slot + 1
+                };
+                ((first_slot + col) % window_size) as i32
+            };
+            unsafe {
+                *out_ptr.add(col) = value;
             }
-        } else {
-            let slot = position % window_size;
-            let mut write = 0usize;
-            let mut idx = slot + 1;
-            while idx < window_size {
-                if write < window_size {
-                    unsafe {
-                        *out_ptr.add(write) = idx as i32;
-                    }
-                    write += 1;
-                }
-                idx += 1;
-            }
-            idx = 0;
-            while idx <= slot {
-                if write < window_size {
-                    unsafe {
-                        *out_ptr.add(write) = idx as i32;
-                    }
-                    write += 1;
-                }
-                idx += 1;
-            }
+            col += bdim;
         }
 
-        if extra_cols == 0 || hd == 0 || hd > 256 || !hd.is_power_of_two() {
+        if extra_cols == 0
+            || heads == 0
+            || hd == 0
+            || hd > 256
+            || !hd.is_power_of_two()
+            || rd > hd
+            || !rd.is_multiple_of(2)
+            || heads > DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS / hd
+        {
             return;
         }
-        let mut best_val = [f32::NEG_INFINITY; 512];
-        let mut best_idx = [-1i32; 512];
-        let take = extra_cols.min(512);
-        let mut idx = 0usize;
-        while idx < compressed_len {
-            let mut score = 0.0f32;
-            let mut head = 0usize;
-            while head < heads {
-                let mut q = [0.0f32; 256];
-                let q_base = head * hd;
-                let mut d = 0usize;
-                while d < hd {
-                    q[d] = query[q_base + d];
-                    d += 1;
-                }
 
-                if rd > 0 && rd <= hd && (rd & 1) == 0 {
-                    let tail_start = hd - rd;
-                    let rd2 = rd / 2;
-                    let mut pair = 0usize;
-                    while pair < rd2 {
-                        let base = tail_start + pair * 2;
-                        let x0 = q[base];
-                        let x1 = q[base + 1];
-                        let c = cos_table[position * rd2 + pair];
-                        let s = sin_table[position * rd2 + pair];
-                        q[base] = x0 * c - x1 * s;
-                        q[base + 1] = x0 * s + x1 * c;
-                        pair += 1;
-                    }
-                }
-
-                let mut span = 1usize;
-                while span < hd {
-                    let step = span * 2;
-                    let mut start = 0usize;
-                    while start < hd {
-                        let mut offset = 0usize;
-                        while offset < span {
-                            let left = start + offset;
-                            let right = left + span;
-                            let a = q[left];
-                            let b = q[right];
-                            q[left] = a + b;
-                            q[right] = a - b;
-                            offset += 1;
-                        }
-                        start += step;
-                    }
-                    span = step;
-                }
-                let scale_h = fast_rsqrt(hd as f32);
-                d = 0;
-                while d < hd {
-                    q[d] *= scale_h;
-                    d += 1;
-                }
-
-                let block_size = 32usize;
-                let blocks = hd / block_size;
-                let mut block = 0usize;
-                while block < blocks {
-                    let start = block * block_size;
-                    let end = start + block_size;
-                    let mut amax = 6.0 * pow2f(-126.0);
-                    let mut j = start;
-                    while j < end {
-                        let value = q[j];
-                        let abs_value = if value < 0.0 { -value } else { value };
-                        if abs_value > amax {
-                            amax = abs_value;
-                        }
-                        j += 1;
-                    }
-                    let scale_byte = e8m0_scale_byte_for_amax(amax, 6.0);
-                    let scale = e8m0_scale(scale_byte);
-                    j = start;
-                    while j < end {
-                        let value = q[j];
-                        let scaled = clamp_range(value / scale, -6.0, 6.0);
-                        q[j] = fp4_e2m1_value(quantize_fp4_e2m1_nibble(scaled)) * scale;
-                        j += 1;
-                    }
-                    block += 1;
-                }
-
-                let kv_base = idx * hd;
-                let mut dot = 0.0f32;
-                d = 0;
-                while d < hd {
-                    dot += q[d] * indexer_kv[kv_base + d];
-                    d += 1;
-                }
-                if dot < 0.0 {
-                    dot = 0.0;
-                }
-                score += dot * weights[head] * weight_scale;
-                head += 1;
+        let query_len = heads * hd;
+        let mut query_index = tid;
+        while query_index < query_len {
+            unsafe {
+                QUERY_SCRATCH[query_index] = query[query_index];
             }
-            let mut pos = take;
-            while pos > 0 {
-                let prev = pos - 1;
-                let better = score > best_val[prev]
-                    || (score == best_val[prev]
-                        && (best_idx[prev] < 0 || (idx as i32) < best_idx[prev]));
-                if !better {
-                    break;
-                }
-                pos -= 1;
-            }
-            if pos < take {
-                let mut move_pos = take - 1;
-                while move_pos > pos {
-                    best_val[move_pos] = best_val[move_pos - 1];
-                    best_idx[move_pos] = best_idx[move_pos - 1];
-                    move_pos -= 1;
-                }
-                best_val[pos] = score;
-                best_idx[pos] = idx as i32;
-            }
-            idx += 1;
+            query_index += bdim;
         }
-        let mut slot = 0usize;
+        thread::sync_threads();
+
+        if rd > 0 {
+            let rd2 = rd / 2;
+            let pairs = heads * rd2;
+            let tail_start = hd - rd;
+            let mut pair_index = tid;
+            while pair_index < pairs {
+                let head = pair_index / rd2;
+                let pair = pair_index % rd2;
+                let base = head * hd + tail_start + pair * 2;
+                let x0 = unsafe { QUERY_SCRATCH[base] };
+                let x1 = unsafe { QUERY_SCRATCH[base + 1] };
+                let c = cos_table[position * rd2 + pair];
+                let s = sin_table[position * rd2 + pair];
+                unsafe {
+                    QUERY_SCRATCH[base] = x0 * c - x1 * s;
+                    QUERY_SCRATCH[base + 1] = x0 * s + x1 * c;
+                }
+                pair_index += bdim;
+            }
+            thread::sync_threads();
+        }
+
+        let butterflies_per_head = hd / 2;
+        let total_butterflies = heads * butterflies_per_head;
+        let mut span = 1usize;
+        while span < hd {
+            let mut butterfly = tid;
+            while butterfly < total_butterflies {
+                let head = butterfly / butterflies_per_head;
+                let within_head = butterfly % butterflies_per_head;
+                let group = within_head / span;
+                let offset = within_head % span;
+                let left = head * hd + group * span * 2 + offset;
+                let right = left + span;
+                let a = unsafe { QUERY_SCRATCH[left] };
+                let b = unsafe { QUERY_SCRATCH[right] };
+                unsafe {
+                    QUERY_SCRATCH[left] = a + b;
+                    QUERY_SCRATCH[right] = a - b;
+                }
+                butterfly += bdim;
+            }
+            thread::sync_threads();
+            span *= 2;
+        }
+
+        let block_size = 32usize;
+        let blocks_per_head = hd / block_size;
+        let total_blocks = heads * blocks_per_head;
+        let scale_h = fast_rsqrt(hd as f32);
+        let mut block = tid;
+        while block < total_blocks {
+            let start = block * block_size;
+            let end = start + block_size;
+            let mut amax = 6.0 * pow2f(-126.0);
+            let mut j = start;
+            while j < end {
+                let value = unsafe { QUERY_SCRATCH[j] } * scale_h;
+                unsafe {
+                    QUERY_SCRATCH[j] = value;
+                }
+                let abs_value = if value < 0.0 { -value } else { value };
+                if abs_value > amax {
+                    amax = abs_value;
+                }
+                j += 1;
+            }
+            let scale_byte = e8m0_scale_byte_for_amax(amax, 6.0);
+            let scale = e8m0_scale(scale_byte);
+            j = start;
+            while j < end {
+                let value = unsafe { QUERY_SCRATCH[j] };
+                let scaled = clamp_range(value / scale, -6.0, 6.0);
+                unsafe {
+                    QUERY_SCRATCH[j] = fp4_e2m1_value(quantize_fp4_e2m1_nibble(scaled)) * scale;
+                }
+                j += 1;
+            }
+            block += bdim;
+        }
+        thread::sync_threads();
+
+        let take = extra_cols.min(512);
+        let mut slot = tid;
+        while slot < take {
+            unsafe {
+                BEST_SCORES[slot] = f32::NEG_INFINITY;
+                BEST_INDICES[slot] = -1;
+            }
+            slot += bdim;
+        }
+        thread::sync_threads();
+
+        let mut chunk_start = 0usize;
+        while chunk_start < compressed_len {
+            let idx = chunk_start + tid;
+            let mut score = f32::NEG_INFINITY;
+            if idx < compressed_len {
+                score = 0.0;
+                let mut head = 0usize;
+                while head < heads {
+                    let q_base = head * hd;
+                    let kv_base = idx * hd;
+                    let mut dot = 0.0f32;
+                    let mut d = 0usize;
+                    while d < hd {
+                        dot += unsafe { QUERY_SCRATCH[q_base + d] } * indexer_kv[kv_base + d];
+                        d += 1;
+                    }
+                    if dot < 0.0 {
+                        dot = 0.0;
+                    }
+                    score += dot * weights[head] * weight_scale;
+                    head += 1;
+                }
+            }
+            unsafe {
+                CANDIDATE_SCORES[tid] = score;
+            }
+            thread::sync_threads();
+
+            if tid == 0 {
+                let chunk_len = (compressed_len - chunk_start).min(bdim);
+                let mut candidate = 0usize;
+                while candidate < chunk_len {
+                    let candidate_idx = (chunk_start + candidate) as i32;
+                    let candidate_score = unsafe { CANDIDATE_SCORES[candidate] };
+                    let mut pos = take;
+                    while pos > 0 {
+                        let prev = pos - 1;
+                        let prev_score = unsafe { BEST_SCORES[prev] };
+                        let prev_idx = unsafe { BEST_INDICES[prev] };
+                        let better = candidate_score > prev_score
+                            || (candidate_score == prev_score
+                                && (prev_idx < 0 || candidate_idx < prev_idx));
+                        if !better {
+                            break;
+                        }
+                        pos -= 1;
+                    }
+                    if pos < take {
+                        let mut move_pos = take - 1;
+                        while move_pos > pos {
+                            unsafe {
+                                BEST_SCORES[move_pos] = BEST_SCORES[move_pos - 1];
+                                BEST_INDICES[move_pos] = BEST_INDICES[move_pos - 1];
+                            }
+                            move_pos -= 1;
+                        }
+                        unsafe {
+                            BEST_SCORES[pos] = candidate_score;
+                            BEST_INDICES[pos] = candidate_idx;
+                        }
+                    }
+                    candidate += 1;
+                }
+            }
+            thread::sync_threads();
+            chunk_start += bdim;
+        }
+
+        slot = tid;
         while slot < extra_cols {
-            let value = if slot < take && best_idx[slot] >= 0 && best_val[slot].is_finite() {
-                (value_offset + best_idx[slot] as usize) as i32
+            let (best_idx, best_score) = if slot < take {
+                unsafe { (BEST_INDICES[slot], BEST_SCORES[slot]) }
+            } else {
+                (-1, f32::NEG_INFINITY)
+            };
+            let value = if best_idx >= 0 && best_score.is_finite() {
+                (value_offset + best_idx as usize) as i32
             } else {
                 -1
             };
             unsafe {
                 *out_ptr.add(window_size + slot) = value;
             }
-            slot += 1;
+            slot += bdim;
         }
     }
 
@@ -1965,11 +2257,13 @@ pub mod kernels {
         values: &[f32],
         mut packed: DisjointSlice<u8>,
         mut scales: DisjointSlice<u8>,
+        value_offset: u32,
         value_len: u32,
         row_width: u32,
         block_size: u32,
     ) {
         let block_idx = thread::index_1d().get() as usize;
+        let value_offset = value_offset as usize;
         let value_len = value_len as usize;
         let row_width = row_width as usize;
         let block_size = block_size as usize;
@@ -1980,7 +2274,10 @@ pub mod kernels {
         {
             return;
         }
-        if value_len == 0 || !value_len.is_multiple_of(row_width) {
+        if value_len == 0
+            || !value_len.is_multiple_of(row_width)
+            || value_offset.saturating_add(value_len) > values.len()
+        {
             return;
         }
         let blocks_per_row = row_width / block_size;
@@ -1996,7 +2293,7 @@ pub mod kernels {
         let mut amax = 0.0f32;
         let mut i = start;
         while i < end {
-            let value = values[i];
+            let value = values[value_offset + i];
             let abs_value = if value < 0.0 { -value } else { value };
             if abs_value > amax {
                 amax = abs_value;
@@ -2014,8 +2311,8 @@ pub mod kernels {
         let packed_ptr = packed.as_mut_ptr();
         let mut j = 0usize;
         while j < block_size {
-            let v0 = values[start + j] / scale;
-            let v1 = values[start + j + 1] / scale;
+            let v0 = values[value_offset + start + j] / scale;
+            let v1 = values[value_offset + start + j + 1] / scale;
             let n0 = quantize_fp4_e2m1_nibble(v0);
             let n1 = quantize_fp4_e2m1_nibble(v1);
             unsafe {
@@ -2026,6 +2323,69 @@ pub mod kernels {
     }
 
     // ── Artifact FP8 E4M3FN + E8M0 GEMV ────────────────────────────────
+
+    /// Block-wise FP8 E4M3FN + E8M0 activation quantization into raw bytes.
+    ///
+    /// `values` and `packed` are row-major `[rows, row_width]`; `scales` is
+    /// `[rows, row_width / block_size]`. The production artifact MMA path uses
+    /// 128-value blocks to match the model's activation quantization contract.
+    #[kernel]
+    pub fn fp8_e4m3fn_e8m0_quantize_f32_packed(
+        values: &[f32],
+        mut packed: DisjointSlice<u8>,
+        mut scales: DisjointSlice<u8>,
+        value_len: u32,
+        row_width: u32,
+        block_size: u32,
+    ) {
+        let block_idx = thread::index_1d().get() as usize;
+        let value_len = value_len as usize;
+        let row_width = row_width as usize;
+        let block_size = block_size as usize;
+        if value_len == 0
+            || row_width == 0
+            || block_size == 0
+            || !value_len.is_multiple_of(row_width)
+            || !row_width.is_multiple_of(block_size)
+        {
+            return;
+        }
+        let blocks_per_row = row_width / block_size;
+        let total_blocks = value_len / block_size;
+        if block_idx >= total_blocks {
+            return;
+        }
+        let row = block_idx / blocks_per_row;
+        let block = block_idx % blocks_per_row;
+        let start = row * row_width + block * block_size;
+        let end = start + block_size;
+
+        let mut amax = 1e-4f32;
+        let mut i = start;
+        while i < end {
+            let value = values[i];
+            let abs_value = if value < 0.0 { -value } else { value };
+            if abs_value > amax {
+                amax = abs_value;
+            }
+            i += 1;
+        }
+        let scale_byte = e8m0_scale_byte_for_amax(amax, 448.0);
+        let scale = e8m0_scale(scale_byte);
+        unsafe {
+            *scales.as_mut_ptr().add(row * blocks_per_row + block) = scale_byte;
+        }
+
+        let packed_ptr = packed.as_mut_ptr();
+        let mut i = start;
+        while i < end {
+            let scaled = clamp_range(values[i] / scale, -448.0, 448.0);
+            unsafe {
+                *packed_ptr.add(i) = quantize_fp8_e4m3fn_byte(scaled);
+            }
+            i += 1;
+        }
+    }
 
     /// GEMV for FP8 E4M3FN weights with 2D E8M0 block scales.
     /// weight: [out_features, in_features] u8
@@ -2116,6 +2476,263 @@ pub mod kernels {
         }
         if let Some(yi) = y.get_mut(thread::index_1d()) {
             *yi = dot;
+        }
+    }
+
+    /// Batched FP8 artifact GEMM using Blackwell `m16n8k32` Tensor Cores.
+    ///
+    /// Grid: `(ceil(n / 16), ceil(batch / 8))`, one warp per CTA. Weight rows
+    /// form MMA A; eight activation rows form MMA B columns. Four K32 MMA
+    /// operations are folded before applying the model's K128 E8M0 scales.
+    #[kernel]
+    pub unsafe fn gemm_fp8_e4m3fn_e8m0_2d_mma(
+        x_packed: &[u8],
+        x_scales: &[u8],
+        weight: &[u8],
+        weight_scales: &[u8],
+        mut y: DisjointSlice<f32>,
+        batch: u32,
+        n: u32,
+        k: u32,
+        scale_cols: u32,
+    ) {
+        static mut SMEM_A: SharedArray<u8, 512, 32> = SharedArray::UNINIT;
+        static mut SMEM_B: SharedArray<u8, 256, 32> = SharedArray::UNINIT;
+
+        let tid = thread::threadIdx_x() as usize;
+        let row_base = thread::blockIdx_x() as usize * 16;
+        let batch_base = thread::blockIdx_y() as usize * 8;
+        let batch = batch as usize;
+        let n = n as usize;
+        let k = k as usize;
+        let scale_cols = scale_cols as usize;
+        if batch == 0 || n == 0 || k == 0 || scale_cols == 0 || !k.is_multiple_of(128) {
+            return;
+        }
+
+        let mut acc = [0.0f32; 4];
+        let mut scale_block = 0usize;
+        while scale_block < scale_cols {
+            let k_base = scale_block * 128;
+            let mut block_acc = [0.0f32; 4];
+            let mut k_sub = 0usize;
+            while k_sub < 128 {
+                unsafe {
+                    let a_dst = &raw mut SMEM_A as *mut u8;
+                    let b_dst = &raw mut SMEM_B as *mut u8;
+                    let mut i = tid;
+                    while i < 512 {
+                        let row_local = i / 32;
+                        let byte = i & 31;
+                        let row = row_base + row_local;
+                        *a_dst.add(i) = if row < n {
+                            weight[row * k + k_base + k_sub + byte]
+                        } else {
+                            0
+                        };
+                        i += 32;
+                    }
+                    let mut i = tid;
+                    while i < 128 {
+                        let k_pair = i / 8;
+                        let col = i & 7;
+                        let dst = k_pair * 16 + col * 2;
+                        if batch_base + col < batch {
+                            let src = (batch_base + col) * k + k_base + k_sub + k_pair * 2;
+                            *b_dst.add(dst) = x_packed[src];
+                            *b_dst.add(dst + 1) = x_packed[src + 1];
+                        } else {
+                            *b_dst.add(dst) = 0;
+                            *b_dst.add(dst + 1) = 0;
+                        }
+                        i += 32;
+                    }
+                }
+                thread::sync_threads();
+
+                let a_frag: [u32; 4] = unsafe {
+                    let q = tid / 8;
+                    let row = (tid & 7) + if (q & 1) != 0 { 8 } else { 0 };
+                    let col_b16 = if q >= 2 { 8 } else { 0 };
+                    let addr =
+                        (&raw const SMEM_A as *const u8).add(row * 32 + col_b16 * 2) as *const u32;
+                    cuda_device::wmma::ldmatrix_x4(addr)
+                };
+                let b_frag: [u32; 2] = unsafe {
+                    let row = tid & 0x0f;
+                    let addr = (&raw const SMEM_B as *const u8).add(row * 16) as *const u32;
+                    cuda_device::wmma::ldmatrix_x2_trans(addr)
+                };
+                block_acc = unsafe { mma_m16n8k32_f32_e4m3_e4m3(block_acc, a_frag, b_frag) };
+                thread::sync_threads();
+                k_sub += 32;
+            }
+
+            let weight_scale = if row_base < n {
+                e8m0_scale(weight_scales[(row_base / 128) * scale_cols + scale_block])
+            } else {
+                1.0
+            };
+            let lane_col = tid & 3;
+            let mut j = 0usize;
+            while j < 4 {
+                let col = lane_col * 2 + (j & 1);
+                if batch_base + col < batch {
+                    let x_scale =
+                        e8m0_scale(x_scales[(batch_base + col) * scale_cols + scale_block]);
+                    acc[j] += block_acc[j] * weight_scale * x_scale;
+                }
+                j += 1;
+            }
+            scale_block += 1;
+        }
+
+        let group = tid / 4;
+        let lane_col = tid & 3;
+        let out_ptr = y.as_mut_ptr();
+        let mut j = 0usize;
+        while j < 4 {
+            let row = row_base + group + if j >= 2 { 8 } else { 0 };
+            let col = lane_col * 2 + (j & 1);
+            if row < n && batch_base + col < batch {
+                unsafe {
+                    *out_ptr.add((batch_base + col) * n + row) = acc[j];
+                }
+            }
+            j += 1;
+        }
+    }
+
+    /// Allocation-free single-row variant used by decode and CUDA graphs.
+    /// It quantizes each K128 activation block cooperatively into shared memory
+    /// and uses the exact same MMA/scale fold as the batched rows kernel.
+    #[kernel]
+    pub unsafe fn gemv_fp8_e4m3fn_e8m0_2d_mma_from_f32(
+        x: &[f32],
+        weight: &[u8],
+        weight_scales: &[u8],
+        mut y: DisjointSlice<f32>,
+        n: u32,
+        k: u32,
+        scale_cols: u32,
+    ) {
+        static mut SMEM_A: SharedArray<u8, 512, 32> = SharedArray::UNINIT;
+        static mut SMEM_B: SharedArray<u8, 256, 32> = SharedArray::UNINIT;
+        static mut SMEM_X_SCALE: SharedArray<u8, 1> = SharedArray::UNINIT;
+
+        let tid = thread::threadIdx_x() as usize;
+        let row_base = thread::blockIdx_x() as usize * 16;
+        let n = n as usize;
+        let k = k as usize;
+        let scale_cols = scale_cols as usize;
+        if n == 0 || k == 0 || scale_cols == 0 || !k.is_multiple_of(128) {
+            return;
+        }
+
+        let mut acc = [0.0f32; 4];
+        let mut scale_block = 0usize;
+        while scale_block < scale_cols {
+            let k_base = scale_block * 128;
+            if tid == 0 {
+                let mut amax = 1e-4f32;
+                let mut i = 0usize;
+                while i < 128 {
+                    let value = x[k_base + i];
+                    let abs_value = if value < 0.0 { -value } else { value };
+                    if abs_value > amax {
+                        amax = abs_value;
+                    }
+                    i += 1;
+                }
+                unsafe {
+                    *(&raw mut SMEM_X_SCALE as *mut u8) = e8m0_scale_byte_for_amax(amax, 448.0);
+                }
+            }
+            thread::sync_threads();
+            let x_scale_byte = unsafe { *(&raw const SMEM_X_SCALE as *const u8) };
+            let x_scale = e8m0_scale(x_scale_byte);
+            let mut block_acc = [0.0f32; 4];
+            let mut k_sub = 0usize;
+            while k_sub < 128 {
+                unsafe {
+                    let a_dst = &raw mut SMEM_A as *mut u8;
+                    let b_dst = &raw mut SMEM_B as *mut u8;
+                    let mut i = tid;
+                    while i < 512 {
+                        let row_local = i / 32;
+                        let byte = i & 31;
+                        let row = row_base + row_local;
+                        *a_dst.add(i) = if row < n {
+                            weight[row * k + k_base + k_sub + byte]
+                        } else {
+                            0
+                        };
+                        i += 32;
+                    }
+                    let mut i = tid;
+                    while i < 128 {
+                        let k_pair = i / 8;
+                        let col = i & 7;
+                        let dst = k_pair * 16 + col * 2;
+                        if col == 0 {
+                            let src = k_base + k_sub + k_pair * 2;
+                            let v0 = clamp_range(x[src] / x_scale, -448.0, 448.0);
+                            let v1 = clamp_range(x[src + 1] / x_scale, -448.0, 448.0);
+                            *b_dst.add(dst) = quantize_fp8_e4m3fn_byte(v0);
+                            *b_dst.add(dst + 1) = quantize_fp8_e4m3fn_byte(v1);
+                        } else {
+                            *b_dst.add(dst) = 0;
+                            *b_dst.add(dst + 1) = 0;
+                        }
+                        i += 32;
+                    }
+                }
+                thread::sync_threads();
+
+                let a_frag: [u32; 4] = unsafe {
+                    let q = tid / 8;
+                    let row = (tid & 7) + if (q & 1) != 0 { 8 } else { 0 };
+                    let col_b16 = if q >= 2 { 8 } else { 0 };
+                    let addr =
+                        (&raw const SMEM_A as *const u8).add(row * 32 + col_b16 * 2) as *const u32;
+                    cuda_device::wmma::ldmatrix_x4(addr)
+                };
+                let b_frag: [u32; 2] = unsafe {
+                    let row = tid & 0x0f;
+                    let addr = (&raw const SMEM_B as *const u8).add(row * 16) as *const u32;
+                    cuda_device::wmma::ldmatrix_x2_trans(addr)
+                };
+                block_acc = unsafe { mma_m16n8k32_f32_e4m3_e4m3(block_acc, a_frag, b_frag) };
+                thread::sync_threads();
+                k_sub += 32;
+            }
+
+            let weight_scale = if row_base < n {
+                e8m0_scale(weight_scales[(row_base / 128) * scale_cols + scale_block])
+            } else {
+                1.0
+            };
+            let mut j = 0usize;
+            while j < 4 {
+                acc[j] += block_acc[j] * weight_scale * x_scale;
+                j += 1;
+            }
+            scale_block += 1;
+        }
+
+        if tid & 3 == 0 {
+            let group = tid / 4;
+            let out_ptr = y.as_mut_ptr();
+            if row_base + group < n {
+                unsafe {
+                    *out_ptr.add(row_base + group) = acc[0];
+                }
+            }
+            if row_base + group + 8 < n {
+                unsafe {
+                    *out_ptr.add(row_base + group + 8) = acc[2];
+                }
+            }
         }
     }
 
@@ -3227,6 +3844,112 @@ pub mod kernels {
         }
     }
 
+    /// DSV4-specialized sparse attention: one warp owns one `(token, head)`
+    /// pair and each lane owns 16 of the 512 output dimensions. Dot products
+    /// use a warp butterfly reduction; output accumulators stay in registers
+    /// across the full top-k loop.
+    #[kernel]
+    pub fn sparse_attn_warp_sink_f32_d512(
+        q: &[f32],
+        kv: &[f32],
+        topk: &[i32],
+        sink: &[f32],
+        mut output: DisjointSlice<f32>,
+        num_pairs: u32,
+        kv_len: u32,
+        heads: u32,
+        topk_len: u32,
+        softmax_scale: f32,
+    ) {
+        let pair = thread::blockIdx_x() as usize;
+        let lane = thread::threadIdx_x() as usize;
+        if pair >= num_pairs as usize || lane >= 32 {
+            return;
+        }
+        let heads = heads as usize;
+        let token = pair / heads;
+        let head = pair % heads;
+        let topk_len = topk_len as usize;
+        let kv_len = kv_len as usize;
+        let q_off = pair * 512;
+        let topk_off = token * topk_len;
+
+        let mut q_values = [0.0f32; 16];
+        let mut output_values = [0.0f32; 16];
+        let mut local = 0usize;
+        while local < 16 {
+            q_values[local] = q[q_off + lane + local * 32];
+            local += 1;
+        }
+
+        let sink_value = sink.get(head).copied().unwrap_or(f32::NEG_INFINITY);
+        let mut max_score = sink_value;
+        let mut slot = 0usize;
+        while slot < topk_len {
+            let kv_index = topk[topk_off + slot];
+            if kv_index >= 0 && (kv_index as usize) < kv_len {
+                let kv_off = kv_index as usize * 512;
+                let mut partial = 0.0f32;
+                let mut local = 0usize;
+                while local < 16 {
+                    partial += q_values[local] * kv[kv_off + lane + local * 32];
+                    local += 1;
+                }
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 16);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 8);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 4);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 2);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 1);
+                let score = partial * softmax_scale;
+                if score > max_score {
+                    max_score = score;
+                }
+            }
+            slot += 1;
+        }
+
+        let mut denominator = fast_exp(sink_value - max_score);
+        let mut slot = 0usize;
+        while slot < topk_len {
+            let kv_index = topk[topk_off + slot];
+            if kv_index >= 0 && (kv_index as usize) < kv_len {
+                let kv_off = kv_index as usize * 512;
+                let mut kv_values = [0.0f32; 16];
+                let mut partial = 0.0f32;
+                let mut local = 0usize;
+                while local < 16 {
+                    let value = kv[kv_off + lane + local * 32];
+                    kv_values[local] = value;
+                    partial += q_values[local] * value;
+                    local += 1;
+                }
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 16);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 8);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 4);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 2);
+                partial += cuda_device::warp::shuffle_xor_f32(partial, 1);
+                let weight = fast_exp(partial * softmax_scale - max_score);
+                denominator += weight;
+                let mut local = 0usize;
+                while local < 16 {
+                    output_values[local] += weight * kv_values[local];
+                    local += 1;
+                }
+            }
+            slot += 1;
+        }
+
+        let out_off = pair * 512;
+        let out_ptr = output.as_mut_ptr();
+        let mut local = 0usize;
+        while local < 16 {
+            unsafe {
+                *out_ptr.add(out_off + lane + local * 32) = output_values[local] / denominator;
+            }
+            local += 1;
+        }
+    }
+
     // ── Attention scores (GQA-aware) ──────────────────────────────────
 
     #[kernel]
@@ -4132,18 +4855,18 @@ pub mod kernels {
         }
     }
 
-    /// Batched down FP4 GEMV + accumulate for all selected experts.
+    /// Batched down FP4 GEMV for all selected experts.
     ///
     /// Grid: `(ceil(hidden_size / 256), num_experts)`.
     /// Each thread computes one output element for one expert, reading from
-    /// the expert's down weights and the shared `y_hidden` buffer.
-    /// Accumulates into `output` (which must be pre-zeroed).
+    /// the expert's down weights and the shared `y_hidden` buffer. Results
+    /// overwrite expert-major scratch `[expert, 0, hidden_row]`.
     #[kernel]
     pub fn moe_gemv_down_fp4_batched(
         y_hidden: &[f32],
         down_ptrs: &[u64],
         down_scale_ptrs: &[u64],
-        mut output: DisjointSlice<f32>,
+        mut expert_output: DisjointSlice<f32>,
         intermediate_size: u32,
         hidden_size: u32,
         num_experts: u32,
@@ -4181,26 +4904,24 @@ pub mod kernels {
             }
             block += 1;
         }
-        // Multiple experts can update the same output row concurrently, so this
-        // accumulation must be atomic in the batched expert grid.
-        let o_ptr = output.as_mut_ptr();
-        let o = unsafe { DeviceAtomicF32::from_ptr(o_ptr.add(row)) };
-        let _ = o.fetch_add(dot, AtomicOrdering::Relaxed);
+        let out_off = expert * hidden_size as usize + row;
+        unsafe {
+            *expert_output.as_mut_ptr().add(out_off) = dot;
+        }
     }
 
     /// Batched down FP4 GEMM using Blackwell mxf4 Tensor Cores.
     ///
     /// Grid: `(ceil(hidden_size / 16), num_experts)`, blockDim.x = 32.
     /// `y_hidden_packed` is laid out as `[expert, batch_col, intermediate/2]`;
-    /// output is `[batch_col, hidden_row]`. Multiple experts atomically
-    /// accumulate into the shared routed MoE output.
+    /// results overwrite expert-major scratch `[expert, batch_col, hidden_row]`.
     #[kernel]
     pub unsafe fn moe_gemm_down_fp4_mxf4_batched(
         y_hidden_packed: &[u8],
         y_hidden_scales: &[u8],
         down_ptrs: &[u64],
         down_scale_ptrs: &[u64],
-        mut output: DisjointSlice<f32>,
+        mut expert_output: DisjointSlice<f32>,
         intermediate_size: u32,
         hidden_size: u32,
         batch_cols: u32,
@@ -4323,14 +5044,16 @@ pub mod kernels {
         let lane = tid;
         let group = lane / 4;
         let thr = lane % 4;
-        let out_ptr = output.as_mut_ptr();
+        let out_ptr = expert_output.as_mut_ptr();
         let mut j = 0usize;
         while j < 4 {
             let row = row_base + group + if j >= 2 { 8 } else { 0 };
             let col = thr * 2 + (j & 1);
             if row < hidden && col < batch_cols {
-                let o = unsafe { DeviceAtomicF32::from_ptr(out_ptr.add(col * hidden + row)) };
-                let _ = o.fetch_add(acc[j], AtomicOrdering::Relaxed);
+                let out_off = (expert * batch_cols + col) * hidden + row;
+                unsafe {
+                    *out_ptr.add(out_off) = acc[j];
+                }
             }
             j += 1;
         }
@@ -4428,17 +5151,17 @@ pub mod kernels {
         }
     }
 
-    /// Experimental block-reduction down FP4 GEMV with one atomic add per
-    /// `(expert, output row)`.
+    /// Experimental block-reduction down FP4 GEMV.
     ///
-    /// Grid: `(hidden_size, num_experts)`. Gated by
+    /// Grid: `(hidden_size, num_experts)`. Each block overwrites one element in
+    /// expert-major scratch `[expert, 0, hidden_row]`. Gated by
     /// `FERRULE_CUDA_MOE_REDUCE=1` on the host side for A/B testing.
     #[kernel]
     pub fn moe_gemv_down_fp4_batched_reduce(
         y_hidden: &[f32],
         down_ptrs: &[u64],
         down_scale_ptrs: &[u64],
-        mut output: DisjointSlice<f32>,
+        mut expert_output: DisjointSlice<f32>,
         intermediate_size: u32,
         hidden_size: u32,
         num_experts: u32,
@@ -4497,9 +5220,466 @@ pub mod kernels {
         }
 
         if tid == 0 {
-            let o_ptr = output.as_mut_ptr();
-            let o = unsafe { DeviceAtomicF32::from_ptr(o_ptr.add(row)) };
-            let _ = o.fetch_add(unsafe { SUM[0] }, AtomicOrdering::Relaxed);
+            let out_off = expert * hidden_size as usize + row;
+            unsafe {
+                *expert_output.as_mut_ptr().add(out_off) = SUM[0];
+            }
+        }
+    }
+
+    /// Deterministically reduce routed expert outputs into an existing output.
+    ///
+    /// `expert_output` is `[expert, batch_col, hidden]`, `route_slots` is
+    /// `[batch_col, rank]`, and `output` is `[batch_col, hidden]`. One thread
+    /// exclusively owns each output element and folds contributions in rank
+    /// order, starting from the existing output value.
+    #[kernel]
+    pub fn moe_reduce_expert_outputs_ranked(
+        expert_output: &[f32],
+        route_slots: &[i32],
+        mut output: DisjointSlice<f32>,
+        output_offset: u32,
+        hidden_size: u32,
+        batch_cols: u32,
+        routes_per_col: u32,
+        num_experts: u32,
+    ) {
+        let index = thread::index_1d().get();
+        let total = hidden_size as u64 * batch_cols as u64;
+        if (index as u64) >= total
+            || hidden_size == 0
+            || batch_cols == 0
+            || routes_per_col == 0
+            || routes_per_col > num_experts
+        {
+            return;
+        }
+
+        let hidden = hidden_size as usize;
+        let batch_cols = batch_cols as usize;
+        let routes_per_col = routes_per_col as usize;
+        let num_experts = num_experts as usize;
+        let col = index / hidden;
+        let row = index - col * hidden;
+        let output_off = output_offset as usize + col * hidden + row;
+        let output_ptr = output.as_mut_ptr();
+        let mut acc = unsafe { *output_ptr.add(output_off) };
+        let mut rank = 0usize;
+        while rank < routes_per_col {
+            let slot = route_slots[col * routes_per_col + rank];
+            if slot < 0 || slot as usize >= num_experts {
+                return;
+            }
+            let expert_off = (slot as usize * batch_cols + col) * hidden + row;
+            acc += expert_output[expert_off];
+            rank += 1;
+        }
+        unsafe {
+            *output_ptr.add(output_off) = acc;
+        }
+    }
+
+    /// Expert-major segment gate+up FP4 GEMM using Blackwell mxf4 Tensor Cores.
+    ///
+    /// Grid: `(ceil(intermediate_size / 16), num_segments)`, blockDim.x = 32.
+    /// Each segment owns eight columns and one resident expert slot. Input columns
+    /// gather from the full-token packed input through `segment_token_indices`;
+    /// `-1` padding columns are materialized as zero.
+    #[kernel]
+    pub unsafe fn moe_gemm_dual_fp4_mxf4_segmented(
+        x_packed: &[u8],
+        x_scales: &[u8],
+        gate_ptrs: &[u64],
+        gate_scale_ptrs: &[u64],
+        up_ptrs: &[u64],
+        up_scale_ptrs: &[u64],
+        segment_expert_slots: &[i32],
+        segment_token_indices: &[i32],
+        mut y_gate: DisjointSlice<f32>,
+        mut y_up: DisjointSlice<f32>,
+        n: u32,
+        k: u32,
+        num_tokens: u32,
+        num_experts: u32,
+        num_segments: u32,
+    ) {
+        static mut SMEM_A: SharedArray<u8, 512, 32> = SharedArray::UNINIT;
+        static mut SMEM_B: SharedArray<u8, 256, 32> = SharedArray::UNINIT;
+
+        let tid = thread::threadIdx_x() as usize;
+        let segment = thread::blockIdx_y() as usize;
+        let row_base = thread::blockIdx_x() as usize * 16;
+        let n = n as usize;
+        let k = k as usize;
+        let num_tokens = num_tokens as usize;
+        let num_experts = num_experts as usize;
+        let num_segments = num_segments as usize;
+        if tid >= 32
+            || segment >= num_segments
+            || num_tokens == 0
+            || num_experts == 0
+            || k == 0
+            || !k.is_multiple_of(64)
+        {
+            return;
+        }
+        let expert_slot = segment_expert_slots[segment];
+        if expert_slot < 0 || expert_slot as usize >= num_experts {
+            return;
+        }
+        let expert = expert_slot as usize;
+
+        let packed_cols = k / 2;
+        let scale_cols = k / 32;
+        let gate_ptr = gate_ptrs[expert] as *const u8;
+        let gate_scale_ptr = gate_scale_ptrs[expert] as *const u8;
+        let up_ptr = up_ptrs[expert] as *const u8;
+        let up_scale_ptr = up_scale_ptrs[expert] as *const u8;
+        let mut acc_gate = [0.0f32; 4];
+        let mut acc_up = [0.0f32; 4];
+
+        let mut kt = 0usize;
+        while kt < k {
+            unsafe {
+                let a_dst = &raw mut SMEM_A as *mut u8;
+                let b_dst = &raw mut SMEM_B as *mut u8;
+                let mut i = tid;
+                while i < 512 {
+                    *a_dst.add(i) = 0;
+                    i += 32;
+                }
+                let mut i = tid;
+                while i < 128 {
+                    let k4 = i / 8;
+                    let col = i & 7;
+                    let dst = k4 * 16 + col * 2;
+                    let token = segment_token_indices[segment * 8 + col];
+                    if token >= 0 && (token as usize) < num_tokens {
+                        let src = token as usize * packed_cols + kt / 2 + k4 * 2;
+                        *b_dst.add(dst) = x_packed[src];
+                        *b_dst.add(dst + 1) = x_packed[src + 1];
+                    } else {
+                        *b_dst.add(dst) = 0;
+                        *b_dst.add(dst + 1) = 0;
+                    }
+                    i += 32;
+                }
+                let mut i = tid;
+                while i < 512 {
+                    let row_local = i / 32;
+                    let byte = i & 31;
+                    let row = row_base + row_local;
+                    if row < n {
+                        *a_dst.add(row_local * 32 + byte) =
+                            *gate_ptr.add(row * packed_cols + kt / 2 + byte);
+                    }
+                    i += 32;
+                }
+            }
+            thread::sync_threads();
+
+            let b_frag: [u32; 2] = unsafe {
+                let row = tid & 0x0f;
+                let addr = (&raw const SMEM_B as *const u8).add(row * 16) as *const u32;
+                cuda_device::wmma::ldmatrix_x2_trans(addr)
+            };
+            let a_frag_gate: [u32; 4] = unsafe {
+                let q = tid / 8;
+                let row = (tid & 7) + if (q & 1) != 0 { 8 } else { 0 };
+                let col_b16 = if q >= 2 { 8 } else { 0 };
+                let addr =
+                    (&raw const SMEM_A as *const u8).add(row * 32 + col_b16 * 2) as *const u32;
+                cuda_device::wmma::ldmatrix_x4(addr)
+            };
+            let group = tid / 4;
+            let scale_row = group + if (tid & 1) != 0 { 8 } else { 0 };
+            let logical_row = row_base + scale_row;
+            let k_block = kt / 32;
+            let scale_a_gate = if logical_row < n {
+                unsafe {
+                    (*gate_scale_ptr.add(logical_row * scale_cols + k_block + 1) as u32) << 8
+                        | (*gate_scale_ptr.add(logical_row * scale_cols + k_block) as u32)
+                }
+            } else {
+                (127u32 << 8) | 127u32
+            };
+            let token = segment_token_indices[segment * 8 + group];
+            let scale_b = if token >= 0 && (token as usize) < num_tokens {
+                let scale_base = token as usize * scale_cols + k_block;
+                (x_scales[scale_base + 1] as u32) << 8 | (x_scales[scale_base] as u32)
+            } else {
+                (127u32 << 8) | 127u32
+            };
+            let d_gate = unsafe {
+                mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0(
+                    [0.0f32; 4],
+                    a_frag_gate,
+                    b_frag,
+                    scale_a_gate,
+                    scale_b,
+                )
+            };
+            let mut j = 0usize;
+            while j < 4 {
+                acc_gate[j] += d_gate[j];
+                j += 1;
+            }
+            thread::sync_threads();
+
+            unsafe {
+                let a_dst = &raw mut SMEM_A as *mut u8;
+                let mut i = tid;
+                while i < 512 {
+                    *a_dst.add(i) = 0;
+                    i += 32;
+                }
+                let mut i = tid;
+                while i < 512 {
+                    let row_local = i / 32;
+                    let byte = i & 31;
+                    let row = row_base + row_local;
+                    if row < n {
+                        *a_dst.add(row_local * 32 + byte) =
+                            *up_ptr.add(row * packed_cols + kt / 2 + byte);
+                    }
+                    i += 32;
+                }
+            }
+            thread::sync_threads();
+
+            let a_frag_up: [u32; 4] = unsafe {
+                let q = tid / 8;
+                let row = (tid & 7) + if (q & 1) != 0 { 8 } else { 0 };
+                let col_b16 = if q >= 2 { 8 } else { 0 };
+                let addr =
+                    (&raw const SMEM_A as *const u8).add(row * 32 + col_b16 * 2) as *const u32;
+                cuda_device::wmma::ldmatrix_x4(addr)
+            };
+            let scale_a_up = if logical_row < n {
+                unsafe {
+                    (*up_scale_ptr.add(logical_row * scale_cols + k_block + 1) as u32) << 8
+                        | (*up_scale_ptr.add(logical_row * scale_cols + k_block) as u32)
+                }
+            } else {
+                (127u32 << 8) | 127u32
+            };
+            let d_up = unsafe {
+                mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0(
+                    [0.0f32; 4],
+                    a_frag_up,
+                    b_frag,
+                    scale_a_up,
+                    scale_b,
+                )
+            };
+            let mut j = 0usize;
+            while j < 4 {
+                acc_up[j] += d_up[j];
+                j += 1;
+            }
+            thread::sync_threads();
+            kt += 64;
+        }
+
+        let group = tid / 4;
+        let thread_in_group = tid % 4;
+        let gate_ptr_out = y_gate.as_mut_ptr();
+        let up_ptr_out = y_up.as_mut_ptr();
+        let mut j = 0usize;
+        while j < 4 {
+            let row = row_base + group + if j >= 2 { 8 } else { 0 };
+            let col = thread_in_group * 2 + (j & 1);
+            if row < n {
+                let out_off = (segment * 8 + col) * n + row;
+                unsafe {
+                    *gate_ptr_out.add(out_off) = acc_gate[j];
+                    *up_ptr_out.add(out_off) = acc_up[j];
+                }
+            }
+            j += 1;
+        }
+    }
+
+    /// Expert-major segment down FP4 GEMM using Blackwell mxf4 Tensor Cores.
+    ///
+    /// Grid: `(ceil(hidden_size / 16), num_segments)`, blockDim.x = 32. Hidden
+    /// activations are `[segment, 8, intermediate]`. Each real column scatters
+    /// directly to `route_output[route_index, hidden]`; `-1` padding is skipped.
+    #[kernel]
+    pub unsafe fn moe_gemm_down_fp4_mxf4_segmented(
+        y_hidden_packed: &[u8],
+        y_hidden_scales: &[u8],
+        down_ptrs: &[u64],
+        down_scale_ptrs: &[u64],
+        segment_expert_slots: &[i32],
+        segment_route_indices: &[i32],
+        mut route_output: DisjointSlice<f32>,
+        intermediate_size: u32,
+        hidden_size: u32,
+        num_experts: u32,
+        num_segments: u32,
+        num_routes: u32,
+    ) {
+        static mut SMEM_A: SharedArray<u8, 512, 32> = SharedArray::UNINIT;
+        static mut SMEM_B: SharedArray<u8, 256, 32> = SharedArray::UNINIT;
+
+        let tid = thread::threadIdx_x() as usize;
+        let segment = thread::blockIdx_y() as usize;
+        let row_base = thread::blockIdx_x() as usize * 16;
+        let inter = intermediate_size as usize;
+        let hidden = hidden_size as usize;
+        let num_experts = num_experts as usize;
+        let num_segments = num_segments as usize;
+        let num_routes = num_routes as usize;
+        if tid >= 32
+            || segment >= num_segments
+            || num_experts == 0
+            || num_routes == 0
+            || inter == 0
+            || !inter.is_multiple_of(64)
+        {
+            return;
+        }
+        let expert_slot = segment_expert_slots[segment];
+        if expert_slot < 0 || expert_slot as usize >= num_experts {
+            return;
+        }
+        let expert = expert_slot as usize;
+
+        let packed_cols = inter / 2;
+        let scale_cols = inter / 32;
+        let down_ptr = down_ptrs[expert] as *const u8;
+        let down_scale_ptr = down_scale_ptrs[expert] as *const u8;
+        let mut acc = [0.0f32; 4];
+
+        let mut kt = 0usize;
+        while kt < inter {
+            unsafe {
+                let a_dst = &raw mut SMEM_A as *mut u8;
+                let b_dst = &raw mut SMEM_B as *mut u8;
+                let mut i = tid;
+                while i < 512 {
+                    *a_dst.add(i) = 0;
+                    i += 32;
+                }
+                let mut i = tid;
+                while i < 128 {
+                    let k4 = i / 8;
+                    let col = i & 7;
+                    let dst = k4 * 16 + col * 2;
+                    let src = (segment * 8 + col) * packed_cols + kt / 2 + k4 * 2;
+                    *b_dst.add(dst) = y_hidden_packed[src];
+                    *b_dst.add(dst + 1) = y_hidden_packed[src + 1];
+                    i += 32;
+                }
+                let mut i = tid;
+                while i < 512 {
+                    let row_local = i / 32;
+                    let byte = i & 31;
+                    let row = row_base + row_local;
+                    if row < hidden {
+                        *a_dst.add(row_local * 32 + byte) =
+                            *down_ptr.add(row * packed_cols + kt / 2 + byte);
+                    }
+                    i += 32;
+                }
+            }
+            thread::sync_threads();
+
+            let a_frag: [u32; 4] = unsafe {
+                let q = tid / 8;
+                let row = (tid & 7) + if (q & 1) != 0 { 8 } else { 0 };
+                let col_b16 = if q >= 2 { 8 } else { 0 };
+                let addr =
+                    (&raw const SMEM_A as *const u8).add(row * 32 + col_b16 * 2) as *const u32;
+                cuda_device::wmma::ldmatrix_x4(addr)
+            };
+            let b_frag: [u32; 2] = unsafe {
+                let row = tid & 0x0f;
+                let addr = (&raw const SMEM_B as *const u8).add(row * 16) as *const u32;
+                cuda_device::wmma::ldmatrix_x2_trans(addr)
+            };
+            let group = tid / 4;
+            let scale_row = group + if (tid & 1) != 0 { 8 } else { 0 };
+            let logical_row = row_base + scale_row;
+            let k_block = kt / 32;
+            let scale_a = if logical_row < hidden {
+                unsafe {
+                    (*down_scale_ptr.add(logical_row * scale_cols + k_block + 1) as u32) << 8
+                        | (*down_scale_ptr.add(logical_row * scale_cols + k_block) as u32)
+                }
+            } else {
+                (127u32 << 8) | 127u32
+            };
+            let scale_base = (segment * 8 + group) * scale_cols + k_block;
+            let scale_b = (y_hidden_scales[scale_base + 1] as u32) << 8
+                | (y_hidden_scales[scale_base] as u32);
+            let d = unsafe {
+                mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0(
+                    [0.0f32; 4],
+                    a_frag,
+                    b_frag,
+                    scale_a,
+                    scale_b,
+                )
+            };
+            let mut j = 0usize;
+            while j < 4 {
+                acc[j] += d[j];
+                j += 1;
+            }
+            thread::sync_threads();
+            kt += 64;
+        }
+
+        let group = tid / 4;
+        let thread_in_group = tid % 4;
+        let output_ptr = route_output.as_mut_ptr();
+        let mut j = 0usize;
+        while j < 4 {
+            let row = row_base + group + if j >= 2 { 8 } else { 0 };
+            let col = thread_in_group * 2 + (j & 1);
+            let route = segment_route_indices[segment * 8 + col];
+            if row < hidden && route >= 0 && (route as usize) < num_routes {
+                let output_off = route as usize * hidden + row;
+                unsafe {
+                    *output_ptr.add(output_off) = acc[j];
+                }
+            }
+            j += 1;
+        }
+    }
+
+    /// Deterministically reduce route-major outputs into an existing token output.
+    /// One thread owns one `(token, hidden-row)` and performs `rank=0..K` in order.
+    #[kernel]
+    pub fn moe_reduce_route_outputs_ranked(
+        route_output: &[f32],
+        mut output: DisjointSlice<f32>,
+        tokens: u32,
+        routes_per_token: u32,
+        hidden_size: u32,
+    ) {
+        let index = thread::index_1d().get();
+        let total = tokens as u64 * hidden_size as u64;
+        if (index as u64) >= total || tokens == 0 || routes_per_token == 0 || hidden_size == 0 {
+            return;
+        }
+
+        let hidden = hidden_size as usize;
+        let routes_per_token = routes_per_token as usize;
+        let token = index / hidden;
+        let row = index - token * hidden;
+        let output_ptr = output.as_mut_ptr();
+        let mut acc = unsafe { *output_ptr.add(index) };
+        let mut rank = 0usize;
+        while rank < routes_per_token {
+            let route = token * routes_per_token + rank;
+            acc += route_output[route * hidden + row];
+            rank += 1;
+        }
+        unsafe {
+            *output_ptr.add(index) = acc;
         }
     }
 

@@ -1,5 +1,5 @@
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use ferrule_common::{Error, Result};
 use ferrule_model::TopKModelRunner;
@@ -7,13 +7,6 @@ use ferrule_model::TopKModelRunner;
 use crate::scheduling::SessionId;
 
 use super::worker::EngineWorker;
-
-/// Load-state snapshot for a lazy resident worker.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct LazyEngineLoadStats {
-    pub loaded: bool,
-    pub load_elapsed: Duration,
-}
 
 /// Generic background artifact loader for a resident `EngineWorker`.
 ///
@@ -60,13 +53,6 @@ where
 
     pub fn load_started(&self) -> Instant {
         self.load_started
-    }
-
-    pub fn load_stats(&self) -> LazyEngineLoadStats {
-        LazyEngineLoadStats {
-            loaded: self.is_loaded(),
-            load_elapsed: self.load_started.elapsed(),
-        }
     }
 
     pub fn worker(&self) -> Option<&EngineWorker<R>> {

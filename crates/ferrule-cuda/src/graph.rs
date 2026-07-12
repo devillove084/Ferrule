@@ -25,7 +25,12 @@ use std::sync::Arc;
 /// Whether CUDA graph capture is enabled for decode.
 /// Set FERRULE_CUDA_GRAPH=1 to enable (experimental).
 pub fn cuda_graph_enabled() -> bool {
-    std::env::var_os("FERRULE_CUDA_GRAPH").is_some()
+    std::env::var("FERRULE_CUDA_GRAPH")
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            !(value.is_empty() || value == "0" || value == "false" || value == "off")
+        })
+        .unwrap_or(false)
 }
 
 /// Whether FlashAttention-style kernels should be used.
@@ -249,6 +254,16 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("FERRULE_CUDA_GRAPH", "1");
         assert!(cuda_graph_enabled());
+        std::env::remove_var("FERRULE_CUDA_GRAPH");
+    }
+
+    #[test]
+    fn cuda_graph_disabled_by_false_env_values() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        for value in ["", "0", "false", "off", " FALSE "] {
+            std::env::set_var("FERRULE_CUDA_GRAPH", value);
+            assert!(!cuda_graph_enabled(), "value {value:?} must disable graphs");
+        }
         std::env::remove_var("FERRULE_CUDA_GRAPH");
     }
 

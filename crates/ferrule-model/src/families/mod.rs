@@ -9,18 +9,13 @@ pub mod common;
 pub mod deepseek_v4;
 pub mod qwen3;
 
+use crate::semantic::{
+    AttentionTensorRef, DenseLayerTensorRef, HyperConnectionTensorRef, RoutedExpertTensorRef,
+    RouterTensorRef, SharedExpertTensorRef,
+};
 use crate::spec::ModelFamily;
 use crate::tensor_policy::{TensorClass, TensorClassCount};
 use crate::TransformerSpec;
-
-// Compatibility surface: these semantic tensor refs belong to `crate::semantic`,
-// while family modules own only concrete checkpoint-name parsing/classification.
-pub use crate::semantic::{
-    ArtifactTensorPart, AttentionTensorKind, AttentionTensorRef, DenseLayerTensorKind,
-    DenseLayerTensorRef, HyperConnectionStage, HyperConnectionTensorKind, HyperConnectionTensorRef,
-    RoutedExpertMatrix, RoutedExpertTensorPart, RoutedExpertTensorRef, RouterTensorKind,
-    RouterTensorRef, SharedExpertTensorRef,
-};
 
 pub fn classify_hf_tensor(family: &ModelFamily, name: &str) -> TensorClass {
     match family {
@@ -103,7 +98,7 @@ pub fn parse_hf_dense_layer_tensor(
     name: &str,
 ) -> Option<DenseLayerTensorRef> {
     match family {
-        ModelFamily::Qwen3 | ModelFamily::QwenMoe => qwen3::parse_hf_dense_layer_tensor(name),
+        ModelFamily::Qwen3 | ModelFamily::QwenMoe => common::parse_hf_dense_layer_tensor(name),
         ModelFamily::DeepSeekV4 => None,
         _ => common::parse_hf_dense_layer_tensor(name),
     }

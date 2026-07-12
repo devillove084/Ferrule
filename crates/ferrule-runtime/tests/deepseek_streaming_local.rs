@@ -9,9 +9,7 @@ use ferrule_model::{
     bind_router_from_artifact_group, bind_router_from_hf,
     bind_shared_swiglu_ffn_from_artifact_group, bind_shared_swiglu_ffn_from_hf,
     families::deepseek_v4,
-    models::deepseek_v4::{
-        DeepSeekV4ArtifactModel, DeepSeekV4ReferenceOptions, DeepSeekV4ReferenceRunner,
-    },
+    models::deepseek_v4::{DeepSeekV4ArtifactModel, DeepSeekV4PrepareOptions, DeepSeekV4Runner},
     semantic::{AttentionTensorKind, HyperConnectionStage, RouterTensorKind},
     ArtifactGroupKind, ArtifactLinearFormat, ArtifactLinearPayload, ArtifactTensorReader,
     ArtifactTensorSlice, ExpertComputeBundle, ExpertId, ExpertLinearFormat, ExpertLoadReason,
@@ -460,25 +458,25 @@ fn local_deepseek_v4_semantic_graph_materializes_artifact_groups_if_present() {
         !name.contains("layers.0.attn.wq_a") && !name.contains("model.layers.0")
     }));
     assert_eq!(
-        program.runtime_plan.layers[0].feed_forward.router,
+        program.semantic_plan.layers[0].feed_forward.router,
         ferrule_model::RouterKind::HashAssistedTopK
     );
     assert_eq!(
-        program.runtime_plan.layers[deepseek_v4::NUM_HASH_LAYERS]
+        program.semantic_plan.layers[deepseek_v4::NUM_HASH_LAYERS]
             .feed_forward
             .router,
         ferrule_model::RouterKind::DenseTopK
     );
     assert_eq!(
-        program.runtime_plan.layers[0].feed_forward.swiglu_limit,
+        program.semantic_plan.layers[0].feed_forward.swiglu_limit,
         Some(deepseek_v4::SWIGLU_LIMIT)
     );
     assert_eq!(
-        program.runtime_plan.layers[0].feed_forward.route_scale,
+        program.semantic_plan.layers[0].feed_forward.route_scale,
         Some(deepseek_v4::ROUTED_SCALING_FACTOR)
     );
     assert_eq!(
-        program.runtime_plan.layers[0].attention.window_size,
+        program.semantic_plan.layers[0].attention.window_size,
         Some(deepseek_v4::SLIDING_WINDOW)
     );
 
@@ -658,49 +656,49 @@ fn local_deepseek_v4_model_reads_real_embedding_and_output_head_rows_if_present(
 }
 
 #[test]
-fn local_deepseek_v4_reference_runner_decodes_top_level_logits_rows_if_present() {
+fn local_deepseek_v4_runner_decodes_top_level_logits_rows_if_present() {
     let Some(model_dir) = local_deepseek_v4_dir() else {
         return;
     };
 
-    let options = DeepSeekV4ReferenceOptions {
+    let options = DeepSeekV4PrepareOptions {
         max_layers: 0,
         output_head_chunk_rows: 8,
         expert_reader_max_tensor_bytes: 64 * 1024 * 1024,
         moe_prefetch_experts: 0,
         moe_hotset_experts: 0,
+        ..DeepSeekV4PrepareOptions::default()
     };
-    let mut runner =
-        DeepSeekV4ReferenceRunner::load_hf_with_options(&model_dir, 64 * 1024 * 1024, options)
-            .expect("local DeepSeek V4 reference runner should load real top-level artifacts");
+    let mut runner = DeepSeekV4Runner::load_hf_with_options(&model_dir, 64 * 1024 * 1024, options)
+        .expect("local DeepSeek V4 runner should load real top-level artifacts");
     let logits = runner
         .decode_token_logits_row_range(0, 0, 8)
         .expect("max_layers=0 runner should produce real top-level logits row range");
     assert_eq!(logits.len(), 8);
     assert_eq!(runner.position(), 1);
     assert!(logits.iter().all(|value| value.is_finite()));
-    runner.reset();
+    runner.reset().expect("runner reset should succeed");
     assert_eq!(runner.position(), 0);
 }
 
 #[test]
-fn local_deepseek_v4_reference_runner_prefills_prompt_top_level_if_present() {
+fn local_deepseek_v4_runner_prefills_prompt_top_level_if_present() {
     let Some(model_dir) = local_deepseek_v4_dir() else {
         return;
     };
 
-    let options = DeepSeekV4ReferenceOptions {
+    let options = DeepSeekV4PrepareOptions {
         max_layers: 0,
         output_head_chunk_rows: 8,
         expert_reader_max_tensor_bytes: 64 * 1024 * 1024,
         moe_prefetch_experts: 0,
         moe_hotset_experts: 0,
+        ..DeepSeekV4PrepareOptions::default()
     };
-    let mut runner =
-        DeepSeekV4ReferenceRunner::load_hf_with_options(&model_dir, 64 * 1024 * 1024, options)
-            .expect("local DeepSeek V4 reference runner should load real top-level artifacts");
+    let mut runner = DeepSeekV4Runner::load_hf_with_options(&model_dir, 64 * 1024 * 1024, options)
+        .expect("local DeepSeek V4 runner should load real top-level artifacts");
     let token_ids = runner
-        .model
+        .model()
         .tokenizer
         .encode("Ferrule DSV4 prefill smoke")
         .expect("local tokenizer should encode prompt");
@@ -716,21 +714,21 @@ fn local_deepseek_v4_reference_runner_prefills_prompt_top_level_if_present() {
 
 #[test]
 #[ignore = "expensive: executes real DSV4 layer-0 CPU reference path over local shards"]
-fn local_deepseek_v4_reference_runner_decodes_one_real_layer_if_present() {
+fn local_deepseek_v4_runner_decodes_one_real_layer_if_present() {
     let Some(model_dir) = local_deepseek_v4_dir() else {
         return;
     };
 
-    let options = DeepSeekV4ReferenceOptions {
+    let options = DeepSeekV4PrepareOptions {
         max_layers: 1,
         output_head_chunk_rows: 8,
         expert_reader_max_tensor_bytes: 64 * 1024 * 1024,
         moe_prefetch_experts: 0,
         moe_hotset_experts: 0,
+        ..DeepSeekV4PrepareOptions::default()
     };
-    let mut runner =
-        DeepSeekV4ReferenceRunner::load_hf_with_options(&model_dir, 128 * 1024 * 1024, options)
-            .expect("local DeepSeek V4 reference runner should load real artifacts");
+    let mut runner = DeepSeekV4Runner::load_hf_with_options(&model_dir, 128 * 1024 * 1024, options)
+        .expect("local DeepSeek V4 runner should load real artifacts");
     let logits = runner
         .decode_token_logits_row_range(0, 0, 1)
         .expect("layer-0 reference path should produce one logit row");
@@ -840,15 +838,18 @@ fn local_deepseek_v4_layer_state_registers_real_routed_expert_artifacts_if_prese
     let model = DeepSeekV4ArtifactModel::load_hf_with_limit(&model_dir, 64 * 1024 * 1024)
         .expect("local DeepSeek V4 artifact model should bind top-level state");
     let state = model
-        .new_quality_first_layer_state(0)
-        .expect("local DeepSeek V4 layer state should register real routed expert artifacts");
+        .new_layer_sequence_state(0)
+        .expect("local DeepSeek V4 layer sequence state should initialize");
+    let expert_runtime = model
+        .new_quality_first_layer_expert_runtime_with_residency(0, 0, 0)
+        .expect("local DeepSeek V4 expert runtime should register routed artifacts");
     assert_eq!(state.kv.len(), 0);
     assert_eq!(
-        state.expert_planner.location(ExpertId::new(0, 0)),
+        expert_runtime.expert_planner.location(ExpertId::new(0, 0)),
         Some(ExpertStorageTier::LocalStorage)
     );
     assert_eq!(
-        state
+        expert_runtime
             .expert_planner
             .location(ExpertId::new(0, deepseek_v4::N_ROUTED_EXPERTS - 1)),
         Some(ExpertStorageTier::LocalStorage)

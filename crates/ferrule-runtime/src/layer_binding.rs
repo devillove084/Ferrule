@@ -41,7 +41,7 @@ use ferrule_model::moe::routing::ExpertRouterPolicy;
 use ferrule_model::moe::streaming::{
     ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader,
 };
-use ferrule_model::transformer_plan::{FeedForwardStepPlan, TransformerLayerPlan};
+use ferrule_model::semantic_plan::{FeedForwardSemantic, TransformerLayerSemantic};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphLayerBindingOptions {
@@ -107,7 +107,7 @@ impl LayerArtifactBinding {
 
     pub fn bind_from_graph_objects(
         objects: &GraphLayerObjects<'_>,
-        layer_plan: &TransformerLayerPlan,
+        layer_plan: &TransformerLayerSemantic,
         reader: &ArtifactTensorReader,
         options: GraphLayerBindingOptions,
     ) -> Result<Self> {
@@ -281,28 +281,24 @@ pub fn bind_layer_artifact_from_hf(
 
 pub fn bind_layer_artifact_from_graph_objects(
     objects: &GraphLayerObjects<'_>,
-    layer_plan: &TransformerLayerPlan,
+    layer_plan: &TransformerLayerSemantic,
     reader: &ArtifactTensorReader,
     options: GraphLayerBindingOptions,
 ) -> Result<LayerArtifactBinding> {
     LayerArtifactBinding::bind_from_graph_objects(objects, layer_plan, reader, options)
 }
 
-pub fn new_layer_execution_state_from_graph_objects(
+pub fn new_layer_expert_runtime_from_graph_objects(
     objects: &GraphLayerObjects<'_>,
-    binding: &LayerArtifactBinding,
     policy: ExpertStreamingPolicy,
-) -> Result<LayerExecutionState> {
+) -> Result<LayerExpertRuntime> {
     let mut planner = ExpertStreamingPlanner::new(policy);
     if let Some(registry) = objects.expert_registry {
         for (expert, load_source) in &registry.experts {
             planner.register_load_source(*expert, load_source.clone());
         }
     }
-    Ok(LayerExecutionState::new(
-        binding.attention_spec.head_dim,
-        planner,
-    ))
+    Ok(LayerExpertRuntime::new(planner))
 }
 
 fn infer_hc_mult(group: &crate::backend_object_store::ArtifactObjectGroup) -> Result<usize> {
@@ -333,7 +329,7 @@ fn infer_hc_mult_from_mix_hc(mix_hc: usize) -> Option<usize> {
 }
 
 fn infer_attention_spec(
-    layer_plan: &TransformerLayerPlan,
+    layer_plan: &TransformerLayerSemantic,
     attention: &MlaAttentionArtifactPayload,
     topk_override: Option<usize>,
 ) -> Result<SparseAttentionSpec> {
@@ -374,7 +370,7 @@ fn infer_attention_spec(
 }
 
 fn router_policy_from_plan(
-    plan: &FeedForwardStepPlan,
+    plan: &FeedForwardSemantic,
     router: &RouterArtifactPayload,
     route_scale: f32,
 ) -> ExpertRouterPolicy {
@@ -440,14 +436,25 @@ impl LayerKvState {
 #[derive(Debug, Clone)]
 pub struct LayerExecutionState {
     pub kv: LayerKvState,
+}
+
+impl LayerExecutionState {
+    pub fn new(head_dim: usize) -> Self {
+        Self {
+            kv: LayerKvState::new(head_dim),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LayerExpertRuntime {
     pub expert_planner: ExpertStreamingPlanner,
     pub expert_handles: CpuExpertHandleStore,
 }
 
-impl LayerExecutionState {
-    pub fn new(head_dim: usize, expert_planner: ExpertStreamingPlanner) -> Self {
+impl LayerExpertRuntime {
+    pub fn new(expert_planner: ExpertStreamingPlanner) -> Self {
         Self {
-            kv: LayerKvState::new(head_dim),
             expert_planner,
             expert_handles: CpuExpertHandleStore::new(),
         }
@@ -486,6 +493,7 @@ impl ReferenceLayerExecutor {
         &self,
         binding: &LayerArtifactBinding,
         state: &mut LayerExecutionState,
+        expert_runtime: &mut LayerExpertRuntime,
         hc_state: &[f32],
         token_id: u32,
         predicted_experts: &[usize],
@@ -538,9 +546,9 @@ impl ReferenceLayerExecutor {
             &binding.router,
             predicted_experts,
             &binding.router_policy,
-            &mut state.expert_planner,
+            &mut expert_runtime.expert_planner,
             &self.expert_reader,
-            &mut state.expert_handles,
+            &mut expert_runtime.expert_handles,
             &self.expert_executor,
             binding.shared_ffn.as_ref(),
         )?;
@@ -684,13 +692,14 @@ mod tests {
             ExpertStreamingReader::new(4096),
             CpuReferenceExpertExecutor::default(),
         );
-        let mut state = LayerExecutionState::new(32, planner);
+        let mut state = LayerExecutionState::new(32);
+        let mut expert_runtime = LayerExpertRuntime::new(planner);
         let mut input = vec![0.0f32; config.hc_hidden_size()];
         input[0] = 2.0;
         input[33] = 3.0;
 
         let first = executor
-            .execute_decode_step(&binding, &mut state, &input, 0, &[])
+            .execute_decode_step(&binding, &mut state, &mut expert_runtime, &input, 0, &[])
             .unwrap();
         assert_eq!(first.attention_hidden.len(), 32);
         assert_eq!(first.feed_forward_hidden.len(), 32);
@@ -703,12 +712,12 @@ mod tests {
         assert!(first.feed_forward_hidden[0] > 0.0);
 
         let second = executor
-            .execute_decode_step(&binding, &mut state, &input, 0, &[])
+            .execute_decode_step(&binding, &mut state, &mut expert_runtime, &input, 0, &[])
             .unwrap();
         assert_eq!(state.kv.len(), 2);
         assert_eq!(second.moe.streaming.loads.len(), 0);
         assert_eq!(
-            state.expert_planner.location(ExpertId::new(0, 0)),
+            expert_runtime.expert_planner.location(ExpertId::new(0, 0)),
             Some(ExpertStorageTier::Gpu)
         );
 

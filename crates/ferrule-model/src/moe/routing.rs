@@ -178,11 +178,17 @@ fn validate_policy(
                 hash_experts.len()
             )));
         }
-        for &expert in hash_experts.iter().take(policy.top_k) {
+        for (rank, &expert) in hash_experts.iter().take(policy.top_k).enumerate() {
             if expert >= logits.len() {
                 return Err(Error::Model(format!(
                     "hash router expert id {expert} exceeds expert count {}",
                     logits.len()
+                )));
+            }
+            if hash_experts[..rank].contains(&expert) {
+                return Err(Error::Model(format!(
+                    "hash router selected duplicate expert id {expert} within the first {} routes",
+                    policy.top_k
                 )));
             }
         }
@@ -333,6 +339,15 @@ mod tests {
         let policy = ExpertRouterPolicy::sqrt_softplus_hash(1, 1.0);
         let err = policy.route(&[0.0, 1.0], None, Some(&[2])).unwrap_err();
         assert!(err.to_string().contains("exceeds expert count"));
+    }
+
+    #[test]
+    fn hash_router_rejects_duplicate_selected_experts() {
+        let policy = ExpertRouterPolicy::sqrt_softplus_hash(2, 1.0);
+        let err = policy
+            .route(&[0.0, 1.0, 2.0], None, Some(&[1, 1, 2]))
+            .unwrap_err();
+        assert!(err.to_string().contains("duplicate expert id 1"));
     }
 
     fn assert_close(actual: f32, expected: f32) {

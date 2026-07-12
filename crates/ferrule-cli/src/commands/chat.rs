@@ -1,11 +1,8 @@
 use crate::SamplingArgs;
 use ferrule_model::{
     detect_chat_template,
-    models::deepseek_v4::{
-        DeepSeekV4ArtifactModel, DeepSeekV4OperatorBackend, DeepSeekV4ReferenceOptions,
-        DeepSeekV4ReferenceRunner,
-    },
-    ChatTemplate, ModelDescriptor, ModelFamily, ModelRunner, PrefillMode,
+    models::deepseek_v4::{DeepSeekV4ArtifactModel, DeepSeekV4PrepareOptions, DeepSeekV4Runner},
+    ChatTemplate, ModelDescriptor, ModelExecutionBackend, ModelFamily, ModelRunner, PrefillMode,
 };
 use ferrule_runtime::{
     GenerationConfig, LazyEngineWorker, SamplingConfig, SessionId, TopKDecodeStep, TopKFinishReason,
@@ -63,9 +60,9 @@ pub fn cmd_chat(
         );
     }
     let backend = if matches!(quant.to_ascii_lowercase().as_str(), "cpu" | "f32" | "fp32") {
-        DeepSeekV4OperatorBackend::Cpu
+        ModelExecutionBackend::Cpu
     } else {
-        DeepSeekV4OperatorBackend::Cuda
+        ModelExecutionBackend::Cuda
     };
     run_deepseek_v4_chat(model_path, backend, &gen_cfg, template, sampling)
 }
@@ -90,7 +87,7 @@ pub fn cmd_chat(
         }
         return run_deepseek_v4_chat(
             model_path,
-            DeepSeekV4OperatorBackend::Cpu,
+            ModelExecutionBackend::Cpu,
             &gen_cfg,
             template,
             sampling,
@@ -103,21 +100,21 @@ pub fn cmd_chat(
 
 // ── DeepSeek-V4 chat ─────────────────────────────────────────────────────────
 
-fn deepseek_v4_chat_options() -> DeepSeekV4ReferenceOptions {
-    DeepSeekV4ReferenceOptions {
+fn deepseek_v4_chat_options() -> DeepSeekV4PrepareOptions {
+    DeepSeekV4PrepareOptions {
         output_head_chunk_rows: 4096,
         // Match the ROADMAP interactive goal: keep a bounded per-layer GPU hotset
         // and feed it with predictor-driven lookahead prefetches instead of the
         // old unbounded managed expert cache.
         moe_prefetch_experts: 32,
         moe_hotset_experts: 48,
-        ..DeepSeekV4ReferenceOptions::default()
+        ..DeepSeekV4PrepareOptions::default()
     }
 }
 
 fn run_deepseek_v4_chat(
     model_path: &Path,
-    backend: DeepSeekV4OperatorBackend,
+    backend: ModelExecutionBackend,
     generation: &GenerationConfig,
     chat_template: ChatTemplate,
     sampling: &SamplingArgs,
@@ -151,8 +148,8 @@ fn can_use_deepseek_v4_fast_greedy(
 
 fn run_deepseek_v4_greedy_chat_loop_lazy(
     model_path: PathBuf,
-    backend: DeepSeekV4OperatorBackend,
-    options: DeepSeekV4ReferenceOptions,
+    backend: ModelExecutionBackend,
+    options: DeepSeekV4PrepareOptions,
     generation: &GenerationConfig,
     chat_template: ChatTemplate,
     sampling: &SamplingArgs,
@@ -164,7 +161,7 @@ fn run_deepseek_v4_greedy_chat_loop_lazy(
     let mut lazy_engine = LazyEngineWorker::spawn(
         SessionId(0),
         move || DeepSeekV4ArtifactModel::load_hf_with_limit(&load_path, 128 * 1024 * 1024),
-        move |model| DeepSeekV4ReferenceRunner::new_with_operator_backend(model, options, backend),
+        move |model| DeepSeekV4Runner::new_with_operator_backend(model, options, backend),
     );
     let mut model_info_printed = false;
     println!(
@@ -325,25 +322,6 @@ fn run_deepseek_v4_greedy_chat_loop_lazy(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(feature = "cuda")]
-    #[test]
-    fn deepseek_v4_runner_satisfies_resident_runtime_driver_bounds() {
-        use ferrule_model::TopKModelRunner;
-        use ferrule_runtime::{PagedSequenceKvCache, ResidentActionExecutor, ResidentTopKDriver};
-
-        fn assert_topk_runner<R: TopKModelRunner>() {}
-        fn assert_executor<R: TopKModelRunner>() {
-            let _ = std::mem::size_of::<ResidentActionExecutor<R>>();
-        }
-        fn assert_driver<R: TopKModelRunner>() {
-            let _ = std::mem::size_of::<ResidentTopKDriver<R, PagedSequenceKvCache>>();
-        }
-
-        assert_topk_runner::<DeepSeekV4ReferenceRunner>();
-        assert_executor::<DeepSeekV4ReferenceRunner>();
-        assert_driver::<DeepSeekV4ReferenceRunner>();
-    }
 
     #[test]
     fn test_resolve_template_override_known() {

@@ -13,7 +13,7 @@ use ferrule_common::{Error, Result};
 use crate::backend_object_store::{
     ArtifactObjectGroup, BackendObject, BackendObjectStore, ExpertRegistryObject,
 };
-use crate::graph::runtime::ArtifactGroupKind;
+use crate::graph::external_bindings::ArtifactGroupKind;
 
 /// A backend object reference together with the graph external key that produced it.
 #[derive(Debug, Clone, Copy)]

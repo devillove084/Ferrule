@@ -1,29 +1,9 @@
-//! Attention backend contracts and reference kernels.
+//! Sparse attention specification and reference helpers.
 //!
-//! Some supported attention layouts are not plain dense causal MHA. The runtime
-//! needs a generic attention surface that can route to: CPU/reference correctness,
-//! sparse FlashAttention-style CUDA for MLA/compressed KV, or dense FlashAttention
-//! for Llama/Qwen-like models. This module defines that surface without concrete
-//! model-family tensor names.
+//! These model-neutral helpers describe and evaluate sparse attention without
+//! coupling the model crate to concrete runtime backend selection.
 
 use ferrule_common::{Error, Result};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AttentionBackendKind {
-    /// Scalar CPU/reference implementation for golden tests.
-    Reference,
-    /// Sparse top-k gather + online-softmax style CUDA backend.
-    CudaSparseFlash,
-    /// Dense causal/windowed CUDA backend for standard MHA/GQA families.
-    CudaDenseFlash,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AttentionMaskKind {
-    ExplicitTopK,
-    SlidingWindow { window_size: usize },
-    Causal,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SparseAttentionSpec {
@@ -49,37 +29,6 @@ impl SparseAttentionSpec {
             )));
         }
         Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct AttentionBackendPlan {
-    pub backend: AttentionBackendKind,
-    pub mask: AttentionMaskKind,
-    pub sparse: Option<SparseAttentionSpec>,
-}
-
-impl AttentionBackendPlan {
-    pub fn sparse_flash_with_sink(heads: usize, head_dim: usize, topk: usize) -> Self {
-        Self {
-            backend: AttentionBackendKind::CudaSparseFlash,
-            mask: AttentionMaskKind::ExplicitTopK,
-            sparse: Some(SparseAttentionSpec {
-                heads,
-                head_dim,
-                topk,
-                softmax_scale: (head_dim as f32).powf(-0.5),
-                has_attention_sink: true,
-            }),
-        }
-    }
-
-    pub fn reference_sparse(spec: SparseAttentionSpec) -> Self {
-        Self {
-            backend: AttentionBackendKind::Reference,
-            mask: AttentionMaskKind::ExplicitTopK,
-            sparse: Some(spec),
-        }
     }
 }
 

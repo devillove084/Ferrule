@@ -1,4 +1,4 @@
-//! Model/runtime-plan to graph translation.
+//! Model/semantic-plan to graph translation.
 //!
 //! The first concrete translator is intentionally narrow: dense decoder models
 //! with MHA/GQA attention and dense SwiGLU FFN. It emits opaque graph nodes and a
@@ -19,11 +19,11 @@ use ferrule_model::{
 };
 
 use crate::graph::dialects::{tensor_ops, transformer_ops};
-use crate::graph::program::{GraphProgram, GraphProgramProfile};
-use crate::graph::runtime::{
+use crate::graph::external_bindings::{
     ArtifactGroupKind, ExternalBinding, ExternalBindingKind, ExternalBindingPlan, ExternalResidency,
 };
-use ferrule_model::transformer_plan::{TransformerLayerPlan, TransformerRuntimePlan};
+use crate::graph::program::{GraphProgram, GraphProgramProfile};
+use ferrule_model::semantic_plan::{TransformerLayerSemantic, TransformerSemanticPlan};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DenseGraphTranslationOptions {
@@ -48,7 +48,7 @@ pub struct SemanticGraphTranslationOptions {
 }
 
 pub fn build_semantic_transformer_graph_program(
-    plan: &TransformerRuntimePlan,
+    plan: &TransformerSemanticPlan,
     inventory: &HfSafetensorsInventory,
 ) -> Result<GraphProgram> {
     build_semantic_transformer_graph_program_with_options(
@@ -59,19 +59,19 @@ pub fn build_semantic_transformer_graph_program(
 }
 
 pub fn build_semantic_transformer_graph_program_with_options(
-    plan: &TransformerRuntimePlan,
+    plan: &TransformerSemanticPlan,
     inventory: &HfSafetensorsInventory,
     options: SemanticGraphTranslationOptions,
 ) -> Result<GraphProgram> {
     validate_semantic_plan(plan)?;
     let hidden_size = plan.hidden_size.ok_or_else(|| {
         Error::Graph(
-            "semantic graph translation requires hidden_size in TransformerRuntimePlan".into(),
+            "semantic graph translation requires hidden_size in TransformerSemanticPlan".into(),
         )
     })?;
     let vocab_size = plan.vocab_size.ok_or_else(|| {
         Error::Graph(
-            "semantic graph translation requires vocab_size in TransformerRuntimePlan".into(),
+            "semantic graph translation requires vocab_size in TransformerSemanticPlan".into(),
         )
     })?;
 
@@ -266,7 +266,7 @@ pub fn build_semantic_transformer_graph_program_with_options(
 }
 
 pub fn build_dense_decoder_graph_program(
-    plan: &TransformerRuntimePlan,
+    plan: &TransformerSemanticPlan,
     inventory: &HfSafetensorsInventory,
 ) -> Result<GraphProgram> {
     build_dense_decoder_graph_program_with_options(
@@ -277,18 +277,20 @@ pub fn build_dense_decoder_graph_program(
 }
 
 pub fn build_dense_decoder_graph_program_with_options(
-    plan: &TransformerRuntimePlan,
+    plan: &TransformerSemanticPlan,
     inventory: &HfSafetensorsInventory,
     options: DenseGraphTranslationOptions,
 ) -> Result<GraphProgram> {
     validate_dense_plan(plan)?;
     let hidden_size = plan.hidden_size.ok_or_else(|| {
         Error::Graph(
-            "dense graph translation requires hidden_size in TransformerRuntimePlan".into(),
+            "dense graph translation requires hidden_size in TransformerSemanticPlan".into(),
         )
     })?;
     let vocab_size = plan.vocab_size.ok_or_else(|| {
-        Error::Graph("dense graph translation requires vocab_size in TransformerRuntimePlan".into())
+        Error::Graph(
+            "dense graph translation requires vocab_size in TransformerSemanticPlan".into(),
+        )
     })?;
 
     let dense_tensors = dense_tensor_map(inventory, plan)?;
@@ -400,7 +402,7 @@ pub fn build_dense_decoder_graph_program_with_options(
     GraphProgram::new(graph, bindings, plan.clone(), options.profile)
 }
 
-fn validate_semantic_plan(plan: &TransformerRuntimePlan) -> Result<()> {
+fn validate_semantic_plan(plan: &TransformerSemanticPlan) -> Result<()> {
     if !uses_semantic_artifact_groups(plan) {
         return Err(Error::Graph(
             "semantic graph translator requires non-dense attention or routed experts".into(),
@@ -433,7 +435,7 @@ fn validate_semantic_plan(plan: &TransformerRuntimePlan) -> Result<()> {
     Ok(())
 }
 
-pub fn uses_semantic_artifact_groups(plan: &TransformerRuntimePlan) -> bool {
+pub fn uses_semantic_artifact_groups(plan: &TransformerSemanticPlan) -> bool {
     plan.layers.iter().any(|layer| {
         matches!(layer.attention.kind, AttentionKind::MultiLatentAttention)
             || matches!(
@@ -447,7 +449,7 @@ pub fn uses_semantic_artifact_groups(plan: &TransformerRuntimePlan) -> bool {
     })
 }
 
-fn layer_uses_hyper_connection(layer: &TransformerLayerPlan) -> bool {
+fn layer_uses_hyper_connection(layer: &TransformerLayerSemantic) -> bool {
     matches!(layer.attention.kind, AttentionKind::MultiLatentAttention)
         && matches!(
             layer.feed_forward.kind,
@@ -455,7 +457,7 @@ fn layer_uses_hyper_connection(layer: &TransformerLayerPlan) -> bool {
         )
 }
 
-fn layer_attrs(layer: &TransformerLayerPlan) -> AttributeMap {
+fn layer_attrs(layer: &TransformerLayerSemantic) -> AttributeMap {
     let mut values = attrs([
         ("layer", AttributeValue::UInt(layer.index as u64)),
         (
@@ -540,7 +542,7 @@ fn layer_attrs(layer: &TransformerLayerPlan) -> AttributeMap {
     values
 }
 
-fn validate_dense_plan(plan: &TransformerRuntimePlan) -> Result<()> {
+fn validate_dense_plan(plan: &TransformerSemanticPlan) -> Result<()> {
     for layer in &plan.layers {
         match layer.attention.kind {
             AttentionKind::DenseMha | AttentionKind::GroupedQuery => {}
@@ -566,7 +568,7 @@ fn translate_dense_layer(
     graph: &mut ComputeGraph,
     bindings: &mut ExternalBindingPlan,
     tensors: &DenseTensorMap,
-    layer: &TransformerLayerPlan,
+    layer: &TransformerLayerSemantic,
     hidden: ValueId,
     positions: ValueId,
     hidden_meta: &ValueMeta,
@@ -787,7 +789,7 @@ type DenseTensorMap = BTreeMap<DenseTensorKey, HfDenseLayerTensorInfo>;
 
 fn dense_tensor_map(
     inventory: &HfSafetensorsInventory,
-    _plan: &TransformerRuntimePlan,
+    _plan: &TransformerSemanticPlan,
 ) -> Result<DenseTensorMap> {
     let mut tensors = BTreeMap::new();
     for tensor in inventory.dense_layer_tensors() {
@@ -1019,9 +1021,8 @@ mod tests {
     };
 
     use crate::graph::validation::validate_graph_program;
-    use ferrule_model::transformer_plan::{
-        AttentionStepPlan, ExpertResidencyMode, FeedForwardStepPlan, RuntimeEpilogue,
-        RuntimePrologue,
+    use ferrule_model::semantic_plan::{
+        AttentionSemantic, ExpertResidency, FeedForwardSemantic, SemanticEpilogue, SemanticPrologue,
     };
 
     #[test]
@@ -1090,7 +1091,7 @@ mod tests {
         );
     }
 
-    fn semantic_latent_routed_plan() -> TransformerRuntimePlan {
+    fn semantic_latent_routed_plan() -> TransformerSemanticPlan {
         let spec = TransformerSpec {
             family: ModelFamily::DeepSeekV4,
             architecture: Some("semantic-latent-routed-test".into()),
@@ -1113,7 +1114,7 @@ mod tests {
             quantization: Vec::new(),
             notes: Vec::new(),
         };
-        TransformerRuntimePlan {
+        TransformerSemanticPlan {
             family: spec.family.clone(),
             architecture: spec.architecture.clone(),
             hidden_size: spec.hidden_size,
@@ -1121,13 +1122,13 @@ mod tests {
             num_heads: spec.num_heads,
             num_kv_heads: spec.num_kv_heads,
             head_dim: spec.head_dim,
-            prologue: RuntimePrologue {
+            prologue: SemanticPrologue {
                 token_embedding: TensorRole::TokenEmbedding,
             },
-            layers: vec![TransformerLayerPlan {
+            layers: vec![TransformerLayerSemantic {
                 index: 0,
                 pre_norm_roles: Vec::new(),
-                attention: AttentionStepPlan {
+                attention: AttentionSemantic {
                     kind: AttentionKind::MultiLatentAttention,
                     kv_shape: ferrule_model::KvCacheShape::LatentOrCompressed,
                     num_heads: Some(2),
@@ -1150,7 +1151,7 @@ mod tests {
                     needs_sparse_indices: true,
                     needs_attention_sink: true,
                 },
-                feed_forward: FeedForwardStepPlan {
+                feed_forward: FeedForwardSemantic {
                     kind: FeedForwardKind::RoutedAndSharedExperts,
                     router: RouterKind::HashAssistedTopK,
                     num_experts: Some(4),
@@ -1159,7 +1160,7 @@ mod tests {
                     optional_roles: Vec::new(),
                     swiglu_limit: None,
                     route_scale: None,
-                    expert_residency: ExpertResidencyMode::Streamable,
+                    expert_residency: ExpertResidency::Streamable,
                     has_shared_experts: true,
                 },
                 auxiliary_roles: Vec::new(),
@@ -1167,7 +1168,7 @@ mod tests {
                 hyper_connection_epsilon: 1e-6,
                 hyper_connection_sinkhorn_iters: 4,
             }],
-            epilogue: RuntimeEpilogue {
+            epilogue: SemanticEpilogue {
                 output_norm: Some(TensorRole::OutputNorm),
                 output_head: Some(TensorRole::OutputHead),
             },

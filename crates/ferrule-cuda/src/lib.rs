@@ -28,4 +28,6 @@ pub use cuda_core::CudaContext;
 // Re-export common CUDA API surface for downstream crates.
 pub use benchmark::{run_gemv_rms_smoke_benchmark, run_smoke_benchmark, CudaSmokeBenchmark};
 pub use context::cuda_probe;
+pub use context::CudaFailpoints;
+pub use context::CudaSwiGLUWorkspace;
 pub use counters::CudaOpCounters;

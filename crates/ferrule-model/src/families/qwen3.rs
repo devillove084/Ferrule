@@ -6,8 +6,6 @@
 //! HF tensor naming: model.layers.{i}.self_attn.{q,k,v,o}_proj.weight
 //!                  model.layers.{i}.mlp.{gate,up,down}_proj.weight
 
-use crate::families::common;
-use crate::semantic::DenseLayerTensorRef;
 use crate::tensor_policy::TensorClass;
 
 /// Classify a HuggingFace safetensors tensor name.
@@ -74,10 +72,6 @@ pub fn classify_hf_tensor(name: &str) -> TensorClass {
 }
 
 /// Classify a GGUF tensor name (llama.cpp naming convention).
-pub fn parse_hf_dense_layer_tensor(name: &str) -> Option<DenseLayerTensorRef> {
-    common::parse_hf_dense_layer_tensor(name)
-}
-
 pub fn classify_gguf_tensor(name: &str) -> TensorClass {
     let lower = name.to_lowercase();
     if lower.contains("attn_q") {

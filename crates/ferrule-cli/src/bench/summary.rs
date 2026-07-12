@@ -11,8 +11,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use ferrule_runtime::backend_object_store::{BackendObject, BackendObjectStore};
+use ferrule_runtime::graph::external_bindings::{ExternalBindingKind, ExternalResidency};
 use ferrule_runtime::graph::program::GraphProgram;
-use ferrule_runtime::graph::runtime::{ExternalBindingKind, ExternalResidency};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphProgramSummary {
@@ -39,7 +39,7 @@ impl GraphProgramSummary {
     pub fn from_program(program: &GraphProgram) -> Self {
         let mut summary = Self {
             name: program.graph.name().unwrap_or("<unnamed>").to_string(),
-            layers: program.runtime_plan.layer_count(),
+            layers: program.semantic_plan.layer_count(),
             nodes: program.graph.nodes().len(),
             values: program.graph.values().len(),
             inputs: program.graph.inputs().len(),

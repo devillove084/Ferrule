@@ -279,6 +279,24 @@ impl ScoreBasedExpertPredictor {
         }
     }
 
+    pub fn num_experts(&self) -> usize {
+        self.num_experts
+    }
+
+    pub fn num_layers(&self) -> usize {
+        self.num_layers
+    }
+
+    /// Clear all session/workload/cold-miss state. Used by sequence reset.
+    pub fn clear(&mut self) {
+        self.session_scores.fill(0.0);
+        self.global_scores.fill(0.0);
+        self.workload_scores.fill(0.0);
+        self.cold_miss_scores.fill(0.0);
+        self.transition_scores.clear();
+        self.last_layer = None;
+    }
+
     pub fn score_for(&self, layer: usize, expert: usize) -> Option<f32> {
         self.index(layer, expert).map(|idx| {
             self.config.session_weight * self.session_scores[idx]

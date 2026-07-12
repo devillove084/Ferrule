@@ -10,15 +10,17 @@ use ferrule_common::{Error, Result};
 use crate::artifact::linear::ArtifactLinearPayload;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct SwiGluFfnPayload {
-    pub gate: ArtifactLinearPayload,
-    pub up: ArtifactLinearPayload,
-    pub down: ArtifactLinearPayload,
+pub struct SwiGluFfn<L> {
+    pub gate: L,
+    pub up: L,
+    pub down: L,
     /// `0.0` disables clipping; positive values apply model-family-specific clipping.
     pub swiglu_limit: f32,
 }
 
-impl SwiGluFfnPayload {
+pub type SwiGluFfnPayload = SwiGluFfn<ArtifactLinearPayload>;
+
+impl SwiGluFfn<ArtifactLinearPayload> {
     pub fn reference_execute(&self, input: &[f32], output_scale: f32) -> Result<Vec<f32>> {
         let mut gate = self.gate.reference_matvec(input)?;
         let mut up = self.up.reference_matvec(input)?;
@@ -61,6 +63,19 @@ mod tests {
     use super::*;
     use crate::artifact::linear::ArtifactLinearPayload;
     use crate::artifact::tensor::{ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice};
+
+    #[test]
+    fn swiglu_ffn_is_generic_over_linear_representation() {
+        let ffn = SwiGluFfn {
+            gate: "gate",
+            up: "up",
+            down: "down",
+            swiglu_limit: 0.0,
+        };
+        assert_eq!(ffn.gate, "gate");
+        assert_eq!(ffn.up, "up");
+        assert_eq!(ffn.down, "down");
+    }
 
     #[test]
     fn swiglu_ffn_reference_executes_f32_linears() {

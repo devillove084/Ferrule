@@ -1,21 +1,20 @@
 #![cfg(test)]
 
-use super::artifact::*;
 use super::attention::*;
 use super::config::*;
 use super::helpers::*;
 use super::layer::*;
+use super::sequence::DeepSeekV4SequenceExecutionState;
 
 use std::path::{Path, PathBuf};
 
 use crate::artifact::binding::{MlaAttentionArtifactPayload, RouterArtifactPayload};
-use crate::artifact::linear::ArtifactLinearPayload;
+use crate::artifact::linear::{artifact_linear_cache_key, ArtifactLinearPayload};
 use crate::artifact::tensor::{ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice};
 use crate::families::deepseek_v4;
 use crate::ffn::SwiGluFfnPayload;
 use crate::hyper_connection::{HyperConnectionConfig, HyperConnectionWeights};
 use crate::moe::executor::CpuReferenceExpertExecutor;
-use crate::moe::handle::CpuExpertHandleStore;
 use crate::moe::routing::ExpertRouterPolicy;
 use crate::moe::streaming::{
     ExpertId, ExpertLoadSource, ExpertMatrixKind, ExpertStreamingPlanner, ExpertStreamingPolicy,
@@ -210,13 +209,8 @@ fn dsv4_layer_decode_step_runs_hc_attention_moe_shared_hc() {
 
     let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy::quality_first(1));
     register_tiny_expert(&dir, &mut planner, 0, 0, 0x42, 0x43, 0x22);
-    let mut state = DeepSeekV4LayerState {
-        kv: DeepSeekV4AttentionCache::new(attention_cfg),
-        expert_planner: planner,
-        expert_handles: CpuExpertHandleStore::new(),
-        #[cfg(feature = "cuda")]
-        graph_arena: None,
-    };
+    let mut expert_runtime = DeepSeekV4LayerExpertRuntime::new(planner);
+    let mut state = DeepSeekV4LayerState::new(attention_cfg);
     let mut hc_state = vec![0.0f32; hc_config.hc_hidden_size()];
     hc_state[0] = 2.0;
     hc_state[33] = 3.0;
@@ -224,6 +218,7 @@ fn dsv4_layer_decode_step_runs_hc_attention_moe_shared_hc() {
     let output = layer
         .decode_step_reference(
             &mut state,
+            &mut expert_runtime,
             &hc_state,
             0,
             0,
@@ -241,6 +236,44 @@ fn dsv4_layer_decode_step_runs_hc_attention_moe_shared_hc() {
     assert!(output.hc_state.iter().all(|value| value.is_finite()));
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dsv4_arena_shapes_deduplicate_43_layers_without_merging_compressor_variants() {
+    let mut layers = Vec::with_capacity(43);
+    for layer in 0..20 {
+        layers.push(arena_shape_test_layer(layer, 0, None));
+    }
+    for layer in 20..30 {
+        layers.push(arena_shape_test_layer(layer, 2, None));
+    }
+    for layer in 30..42 {
+        layers.push(arena_shape_test_layer(layer, 4, Some(2)));
+    }
+    layers.push(arena_shape_test_layer(42, 4, Some(4)));
+
+    let (layer_to_variant, representatives) = layer_arena_variant_layout(&layers);
+    assert_eq!(layer_to_variant.len(), 43);
+    assert_eq!(representatives.len(), 4);
+    assert!(representatives.len() < layers.len());
+    assert_eq!(layer_to_variant[0], layer_to_variant[19]);
+    assert_ne!(layer_to_variant[19], layer_to_variant[20]);
+    assert_ne!(layer_to_variant[29], layer_to_variant[30]);
+    assert_ne!(layer_to_variant[41], layer_to_variant[42]);
+}
+
+#[test]
+fn release_capacity_preserves_initialized_layer_slots() {
+    let cfg = official_tiny_cfg();
+    let mut state = DeepSeekV4LayerState::new(cfg);
+    state.kv.compressed.reserve(128);
+    let mut sequence = DeepSeekV4SequenceExecutionState::new(vec![state], 1);
+
+    sequence.release_capacity();
+
+    assert_eq!(sequence.layers.len(), 1);
+    assert_eq!(sequence.layers[0].kv.compressed.capacity(), 0);
+    assert!(sequence.layers[0].kv.is_empty());
 }
 
 fn official_tiny_cfg() -> DeepSeekV4AttentionConfig {
@@ -455,6 +488,88 @@ fn tiny_compressor_payload(
             hidden_size,
             &vec![0.0; head_dim * hidden_size],
         ),
+    }
+}
+
+fn arena_shape_test_layer(
+    layer: usize,
+    compress_ratio: usize,
+    index_head_dim: Option<usize>,
+) -> DeepSeekV4Layer {
+    let hc_config = HyperConnectionConfig {
+        hc_mult: 2,
+        hidden_size: 32,
+        sinkhorn_iters: 3,
+        eps: 1e-6,
+        norm_eps: 1e-6,
+    };
+    let cfg = DeepSeekV4AttentionConfig {
+        hidden_size: 32,
+        num_heads: 1,
+        head_dim: 32,
+        q_lora_rank: 4,
+        rope_head_dim: 0,
+        o_groups: 1,
+        o_lora_rank: 4,
+        window_size: 4,
+        compress_ratio,
+        norm_eps: 1e-6,
+        rope_theta: 10_000.0,
+        compress_rope_theta: 160_000.0,
+        original_seq_len: 0,
+        rope_factor: 1.0,
+        beta_fast: 32,
+        beta_slow: 1,
+        index_n_heads: 2,
+        index_head_dim: index_head_dim.unwrap_or(2),
+        index_topk: 4,
+    };
+    let compressed = (compress_ratio != 0).then(|| DeepSeekV4CompressedAttentionPayload {
+        compressor: tiny_compressor_payload(compress_ratio, cfg.hidden_size, cfg.head_dim),
+        indexer: index_head_dim.map(|head_dim| {
+            let mut compressor = tiny_compressor_payload(compress_ratio, cfg.hidden_size, head_dim);
+            compressor.rotate_for_indexer = true;
+            DeepSeekV4IndexerPayload {
+                compressor,
+                wq_b: f32_linear(
+                    TensorRole::AuxIndexer,
+                    "indexer.wq_b",
+                    cfg.index_n_heads * head_dim,
+                    cfg.q_lora_rank,
+                ),
+                weights_proj: f32_linear(
+                    TensorRole::AuxIndexer,
+                    "indexer.weights_proj",
+                    cfg.index_n_heads,
+                    cfg.hidden_size,
+                ),
+            }
+        }),
+    });
+    DeepSeekV4Layer {
+        layer,
+        hc_config,
+        attn_norm: vec![1.0; cfg.hidden_size],
+        ffn_norm: vec![1.0; cfg.hidden_size],
+        attention: DeepSeekV4Attention::new_with_compressed(
+            layer,
+            cfg,
+            attention_payload_for_vertical_cfg(cfg),
+            compressed,
+        )
+        .unwrap(),
+        hc_attention: zero_hc_weights(hc_config),
+        hc_feed_forward: zero_hc_weights(hc_config),
+        router: RouterArtifactPayload {
+            layer,
+            weight: f32_linear(TensorRole::RouterLogits, "router", 256, cfg.hidden_size),
+            bias: None,
+            hash_table: None,
+            hash_rows: 0,
+            hash_cols: 0,
+        },
+        shared_ffn: tiny_shared_ffn_32(),
+        router_policy: ExpertRouterPolicy::sqrt_softplus_score_topk(6, 1.0),
     }
 }
 

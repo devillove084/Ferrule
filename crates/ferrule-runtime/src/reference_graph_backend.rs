@@ -6,26 +6,31 @@
 //! `BackendObjectStore`.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use crate::backend_object_store::{
-    materialize_dense_hf_externals, BackendObject, BackendObjectStore,
+    materialize_graph_hf_externals, BackendObject, BackendObjectStore,
 };
 use crate::graph::builder::{
     build_graph_program_from_descriptor_with_options, GraphProgramBuildOptions,
 };
 use crate::graph::dialects::domain;
+use crate::graph::external_bindings::ArtifactGroupKind;
 use crate::graph::program::GraphProgram;
-use crate::graph::runtime::{ArtifactGroupKind, ExecutionBatch};
 use crate::graph::{
     AttributeMap, AttributeValue, ComputeGraph, DataType, ExternalKey, TensorData, TensorShape,
     ValueId, ValueMeta, ValueOrigin,
 };
 use crate::layer_binding::{
-    bind_layer_artifact_from_graph_objects, new_layer_execution_state_from_graph_objects,
-    GraphLayerBindingOptions, LayerArtifactBinding, LayerExecutionState, ReferenceLayerExecutor,
+    bind_layer_artifact_from_graph_objects, new_layer_expert_runtime_from_graph_objects,
+    GraphLayerBindingOptions, LayerArtifactBinding, LayerExecutionState, LayerExpertRuntime,
+    ReferenceLayerExecutor,
 };
-use crate::scheduling::session::SessionId;
+use ferrule_common::execution::{
+    ExecutionBatch, ExecutionCapabilities, ExecutionSequence, KvBindingMode, LogitsRequest,
+    LogitsRowPolicy,
+};
 use ferrule_common::{Error, Result};
 use ferrule_model::artifact::binding::bind_hyper_connection_head_from_artifact_group;
 use ferrule_model::artifact::tensor::{
@@ -34,8 +39,38 @@ use ferrule_model::artifact::tensor::{
 use ferrule_model::hyper_connection::{hc_head_reference, HyperConnectionConfig};
 use ferrule_model::moe::executor::CpuReferenceExpertExecutor;
 use ferrule_model::moe::streaming::{ExpertStreamingPolicy, ExpertStreamingReader};
-use ferrule_model::transformer_plan::TransformerLayerPlan;
+use ferrule_model::semantic_plan::TransformerLayerSemantic;
 use ferrule_model::{HfSafetensorsInventory, ModelDescriptor};
+
+/// Mutable execution state owned by one logical sequence.
+///
+/// A [`ferrule_common::execution::StateSlot`] selects an entry in the state slice
+/// supplied to a single execution call; it is never persisted as a service ID.
+#[derive(Debug, Clone, Default)]
+pub struct ReferenceGraphSequenceState {
+    layer_states: BTreeMap<usize, LayerExecutionState>,
+    kv_states: BTreeMap<usize, ReferenceKvState>,
+}
+
+impl ReferenceGraphSequenceState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Clears all transformer-layer and reference KV state for this sequence.
+    pub fn clear(&mut self) {
+        self.layer_states.clear();
+        self.kv_states.clear();
+    }
+
+    /// Returns the number of persisted KV rows for `layer`.
+    pub fn kv_state_rows(&self, layer: usize) -> usize {
+        self.kv_states
+            .get(&layer)
+            .map(ReferenceKvState::len)
+            .unwrap_or(0)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ReferenceGraphExecutor {
@@ -73,13 +108,18 @@ impl ReferenceGraphExecutor {
         let program = build_graph_program_from_descriptor_with_options(descriptor, options)?;
         let inventory =
             HfSafetensorsInventory::open(&descriptor.path, descriptor.spec.family.clone())?;
-        let objects = materialize_dense_hf_externals(&program, &inventory, &descriptor.path)?;
+        let objects = materialize_graph_hf_externals(&program, &inventory, &descriptor.path)?;
         Ok(Self::new(program, objects, max_artifact_bytes))
     }
 
-    pub fn execute(&mut self, batch: &ExecutionBatch) -> Result<Vec<TensorData>> {
+    /// Executes a neutral packed batch against caller-owned sequence states.
+    pub fn execute(
+        &mut self,
+        states: &mut [ReferenceGraphSequenceState],
+        batch: &ExecutionBatch,
+    ) -> Result<Vec<TensorData>> {
         self.backend
-            .execute_program(&self.program, &self.objects, batch)
+            .execute_program(&self.program, &self.objects, states, batch)
     }
 
     pub fn program(&self) -> &GraphProgram {
@@ -97,14 +137,6 @@ impl ReferenceGraphExecutor {
     pub fn backend_mut(&mut self) -> &mut ReferenceGraphBackend {
         &mut self.backend
     }
-
-    pub fn clear_session_kv_state(&mut self, session_id: SessionId) {
-        self.backend.clear_session_kv_state(session_id);
-    }
-
-    pub fn clear_kv_state(&mut self) {
-        self.backend.clear_kv_state();
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -112,8 +144,7 @@ pub struct ReferenceGraphBackend {
     reader: ArtifactTensorReader,
     artifact_cache: BTreeMap<ExternalKey, TensorF32>,
     layer_binding_cache: BTreeMap<usize, Arc<LayerArtifactBinding>>,
-    layer_states: BTreeMap<ReferenceLayerStateKey, LayerExecutionState>,
-    kv_states: BTreeMap<ReferenceKvKey, ReferenceKvState>,
+    layer_expert_runtimes: BTreeMap<usize, LayerExpertRuntime>,
 }
 
 impl ReferenceGraphBackend {
@@ -122,54 +153,54 @@ impl ReferenceGraphBackend {
             reader: ArtifactTensorReader::new(max_artifact_bytes),
             artifact_cache: BTreeMap::new(),
             layer_binding_cache: BTreeMap::new(),
-            layer_states: BTreeMap::new(),
-            kv_states: BTreeMap::new(),
-        }
-    }
-
-    pub fn with_reader(reader: ArtifactTensorReader) -> Self {
-        Self {
-            reader,
-            artifact_cache: BTreeMap::new(),
-            layer_binding_cache: BTreeMap::new(),
-            layer_states: BTreeMap::new(),
-            kv_states: BTreeMap::new(),
+            layer_expert_runtimes: BTreeMap::new(),
         }
     }
 
     pub fn clear_cache(&mut self) {
         self.artifact_cache.clear();
         self.layer_binding_cache.clear();
+        self.layer_expert_runtimes.clear();
     }
 
-    pub fn clear_kv_state(&mut self) {
-        self.kv_states.clear();
-        self.layer_states.clear();
+    /// Shape capabilities independent of a concrete graph program. A graph program
+    /// returns full logits tensors, not a neutral top-k payload, so top-k requests
+    /// are deliberately unsupported here.
+    pub fn capabilities(&self) -> ExecutionCapabilities {
+        ExecutionCapabilities {
+            max_batch_tokens: usize::MAX,
+            max_sequences: usize::MAX,
+            max_prefill_query_tokens_per_sequence: usize::MAX,
+            max_decode_query_tokens_per_sequence: usize::MAX,
+            max_top_k: None,
+            supports_prefill: true,
+            supports_decode: true,
+            supports_mixed: true,
+            full_logits_width: None,
+            kv_binding_mode: KvBindingMode::None,
+            logits_row_policy: LogitsRowPolicy::Any,
+        }
     }
 
-    pub fn clear_session_kv_state(&mut self, session_id: SessionId) {
-        self.kv_states
-            .retain(|key, _| key.session_id != session_id.0);
-        self.layer_states
-            .retain(|key, _| key.session_id != session_id.0);
-    }
-
-    pub fn kv_state_rows(&self, layer: usize, session_id: SessionId) -> usize {
-        self.kv_states
-            .get(&ReferenceKvKey {
-                layer,
-                session_id: session_id.0,
-            })
-            .map(ReferenceKvState::len)
-            .unwrap_or(0)
+    /// Program-specific capabilities include the validated full-vocabulary width.
+    pub fn capabilities_for_program(&self, program: &GraphProgram) -> ExecutionCapabilities {
+        let mut capabilities = self.capabilities();
+        capabilities.full_logits_width = program
+            .semantic_plan
+            .vocab_size
+            .and_then(|width| u32::try_from(width).ok())
+            .and_then(NonZeroU32::new);
+        capabilities
     }
 
     pub fn execute_program(
         &mut self,
         program: &GraphProgram,
         objects: &BackendObjectStore,
+        states: &mut [ReferenceGraphSequenceState],
         batch: &ExecutionBatch,
     ) -> Result<Vec<TensorData>> {
+        batch.validate(states.len(), &self.capabilities_for_program(program))?;
         program.graph.validate()?;
         if program.graph.inputs().len() != 2 {
             return Err(Error::Graph(format!(
@@ -187,8 +218,15 @@ impl ReferenceGraphBackend {
                     self.resolve_value(&program.graph, objects, batch, &mut values, *input)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let outputs =
-                self.execute_node(program, objects, batch, node.op(), node.attrs(), &inputs)?;
+            let outputs = self.execute_node(
+                program,
+                objects,
+                states,
+                batch,
+                node.op(),
+                node.attrs(),
+                &inputs,
+            )?;
             if outputs.len() != node.outputs().len() {
                 return Err(Error::Graph(format!(
                     "op {}::{} produced {} outputs, graph expects {}",
@@ -268,6 +306,7 @@ impl ReferenceGraphBackend {
         &mut self,
         program: &GraphProgram,
         objects: &BackendObjectStore,
+        states: &mut [ReferenceGraphSequenceState],
         batch: &ExecutionBatch,
         op: &crate::graph::OpKey,
         attrs: &AttributeMap,
@@ -293,6 +332,7 @@ impl ReferenceGraphBackend {
                 self.transformer_layer(
                     program,
                     objects,
+                    states,
                     batch,
                     layer,
                     inputs
@@ -311,7 +351,7 @@ impl ReferenceGraphBackend {
                 self.output_projection(program, objects, inputs)?,
             )]);
         }
-        execute_node_dense(&mut self.kv_states, program, batch, op, attrs, inputs)
+        execute_node_dense(states, program, batch, op, attrs, inputs)
     }
 
     fn transformer_state_init(
@@ -321,7 +361,7 @@ impl ReferenceGraphBackend {
         hidden: &TensorF32,
     ) -> Result<TensorF32> {
         let (tokens, hidden_size) = hidden.matrix("transformer_state_init hidden")?;
-        let Some(first_layer) = program.runtime_plan.layers.first() else {
+        let Some(first_layer) = program.semantic_plan.layers.first() else {
             return Ok(hidden.clone());
         };
         let layer_objects = objects.layer_objects(first_layer.index)?;
@@ -351,6 +391,7 @@ impl ReferenceGraphBackend {
         &mut self,
         program: &GraphProgram,
         objects: &BackendObjectStore,
+        states: &mut [ReferenceGraphSequenceState],
         batch: &ExecutionBatch,
         layer: usize,
         state: &TensorF32,
@@ -384,29 +425,37 @@ impl ReferenceGraphBackend {
         }
         let mut out = Vec::with_capacity(state.data.len());
         for row in 0..tokens {
-            let batch_row = batch.rows().get(row).ok_or_else(|| {
-                Error::Graph(format!("transformer_layer missing batch row {row}"))
+            let state_index = state_index_for_packed_row(batch, row, states.len())?;
+            let sequence_state = states.get_mut(state_index).ok_or_else(|| {
+                Error::Graph(format!(
+                    "transformer_layer state slot {state_index} is unavailable"
+                ))
             })?;
-            let key = ReferenceLayerStateKey {
-                layer,
-                session_id: batch_row.session_id.0,
-            };
-            if let std::collections::btree_map::Entry::Vacant(entry) = self.layer_states.entry(key)
+            if let std::collections::btree_map::Entry::Vacant(entry) =
+                sequence_state.layer_states.entry(layer)
             {
                 let layer_objects = objects.layer_objects(layer)?;
                 let policy = graph_layer_binding_options(layer_plan).expert_policy;
-                let new_state = new_layer_execution_state_from_graph_objects(
-                    &layer_objects,
-                    binding.as_ref(),
-                    policy,
-                )?;
-                entry.insert(new_state);
+                entry.insert(LayerExecutionState::new(binding.attention_spec.head_dim));
+                if !self.layer_expert_runtimes.contains_key(&layer) {
+                    let runtime =
+                        new_layer_expert_runtime_from_graph_objects(&layer_objects, policy)?;
+                    self.layer_expert_runtimes.insert(layer, runtime);
+                }
             }
-            let state_for_layer = self.layer_states.get_mut(&key).expect("inserted above");
+            let state_for_layer = sequence_state
+                .layer_states
+                .get_mut(&layer)
+                .expect("inserted above");
+            let expert_runtime = self
+                .layer_expert_runtimes
+                .get_mut(&layer)
+                .ok_or_else(|| Error::Graph(format!("missing expert runtime for layer {layer}")))?;
             let start = row * hc_dim;
             let step = executor.execute_decode_step(
                 binding.as_ref(),
                 state_for_layer,
+                expert_runtime,
                 &state.data[start..start + hc_dim],
                 token_ids.data[row],
                 &[],
@@ -461,19 +510,19 @@ impl ReferenceGraphBackend {
                 hc_mult,
                 hidden_size,
                 sinkhorn_iters: program
-                    .runtime_plan
+                    .semantic_plan
                     .layers
                     .first()
                     .map(|layer| layer.hyper_connection_sinkhorn_iters)
                     .unwrap_or(4),
                 eps: program
-                    .runtime_plan
+                    .semantic_plan
                     .layers
                     .first()
                     .map(|layer| layer.hyper_connection_epsilon)
                     .unwrap_or(1e-6),
                 norm_eps: program
-                    .runtime_plan
+                    .semantic_plan
                     .layers
                     .first()
                     .map(|layer| layer.norm_epsilon)
@@ -496,7 +545,7 @@ impl ReferenceGraphBackend {
                 &hidden,
                 output_norm,
                 program
-                    .runtime_plan
+                    .semantic_plan
                     .layers
                     .first()
                     .map(|layer| layer.norm_epsilon)
@@ -652,15 +701,9 @@ impl TensorU32 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct ReferenceKvKey {
-    layer: usize,
-    session_id: u64,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 struct ReferenceKvEntry {
-    position: usize,
+    position: u32,
     key: Vec<f32>,
     value: Vec<f32>,
 }
@@ -670,12 +713,6 @@ struct ReferenceKvState {
     key_width: usize,
     value_width: usize,
     entries: Vec<ReferenceKvEntry>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct ReferenceLayerStateKey {
-    layer: usize,
-    session_id: u64,
 }
 
 impl ReferenceKvState {
@@ -691,7 +728,7 @@ impl ReferenceKvState {
         self.entries.len()
     }
 
-    fn upsert(&mut self, position: usize, key: &[f32], value: &[f32]) -> Result<()> {
+    fn upsert(&mut self, position: u32, key: &[f32], value: &[f32]) -> Result<()> {
         if key.len() != self.key_width || value.len() != self.value_width {
             return Err(Error::Graph(format!(
                 "reference KV width mismatch: expected key={} value={}, got key={} value={}",
@@ -729,7 +766,7 @@ enum AttentionKvRef {
 }
 
 fn execute_node_dense(
-    kv_states: &mut BTreeMap<ReferenceKvKey, ReferenceKvState>,
+    states: &mut [ReferenceGraphSequenceState],
     program: &GraphProgram,
     batch: &ExecutionBatch,
     op: &crate::graph::OpKey,
@@ -823,7 +860,7 @@ fn execute_node_dense(
                 .f32("causal_attention v")?,
             batch,
             layer_plan,
-            kv_states,
+            states,
         )?)]);
     }
     if is_op(op, domain::TRANSFORMER, "swiglu_ffn") {
@@ -879,24 +916,14 @@ fn input_value_from_batch(name: Option<&str>, batch: &ExecutionBatch) -> Result<
     match name {
         Some("token_ids") => Ok(RuntimeValue::U32(TensorU32::new(
             vec![batch.len()],
-            batch.token_ids().collect(),
+            batch.token_ids().to_vec(),
             "token_ids",
         )?)),
-        Some("positions") => {
-            let positions = batch
-                .positions()
-                .map(|position| {
-                    u32::try_from(position).map_err(|_| {
-                        Error::Graph(format!("position {position} exceeds u32 graph input range"))
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(RuntimeValue::U32(TensorU32::new(
-                vec![batch.len()],
-                positions,
-                "positions",
-            )?))
-        }
+        Some("positions") => Ok(RuntimeValue::U32(TensorU32::new(
+            vec![batch.len()],
+            batch.positions().to_vec(),
+            "positions",
+        )?)),
         Some(other) => Err(Error::Graph(format!(
             "reference graph backend does not know input '{other}'"
         ))),
@@ -1023,8 +1050,8 @@ fn causal_attention(
     k: &TensorF32,
     v: &TensorF32,
     batch: &ExecutionBatch,
-    layer: &TransformerLayerPlan,
-    kv_states: &mut BTreeMap<ReferenceKvKey, ReferenceKvState>,
+    layer: &TransformerLayerSemantic,
+    states: &mut [ReferenceGraphSequenceState],
 ) -> Result<TensorF32> {
     let (tokens, q_width) = q.matrix("causal_attention q")?;
     let (k_tokens, k_width) = k.matrix("causal_attention k")?;
@@ -1056,26 +1083,29 @@ fn causal_attention(
         )));
     }
 
+    let row_state_indices = (0..tokens)
+        .map(|row| state_index_for_packed_row(batch, row, states.len()))
+        .collect::<Result<Vec<_>>>()?;
+    let positions = batch.positions();
     let scale = (head_dim as f32).powf(-0.5);
     let mut output = vec![0.0f32; tokens * q_width];
-    let rows = batch.rows();
     for query_row in 0..tokens {
-        let query = rows[query_row];
-        let state_key = ReferenceKvKey {
-            layer: layer.index,
-            session_id: query.session_id.0,
-        };
+        let state_index = row_state_indices[query_row];
+        let query_position = positions[query_row];
         for head in 0..num_heads {
             let kv_head = head / (num_heads / kv_heads);
             let q_base = query_row * q_width + head * head_dim;
             let mut max_score = f32::NEG_INFINITY;
             let mut scores = Vec::<(AttentionKvRef, f32)>::new();
 
-            if let Some(state) = kv_states.get(&state_key) {
+            if let Some(state) = states[state_index].kv_states.get(&layer.index) {
                 for (entry_index, entry) in state.entries.iter().enumerate() {
-                    if entry.position > query.position
-                        || batch_has_position(rows, query.session_id.0, entry.position)
-                    {
+                    let position_is_in_current_query = row_state_indices.iter().zip(positions).any(
+                        |(candidate_state, position)| {
+                            *candidate_state == state_index && *position == entry.position
+                        },
+                    );
+                    if entry.position > query_position || position_is_in_current_query {
                         continue;
                     }
                     let k_base = kv_head * head_dim;
@@ -1089,8 +1119,7 @@ fn causal_attention(
             }
 
             for key_row in 0..tokens {
-                if rows[key_row].session_id != query.session_id
-                    || rows[key_row].position > query.position
+                if row_state_indices[key_row] != state_index || positions[key_row] > query_position
                 {
                     continue;
                 }
@@ -1122,9 +1151,15 @@ fn causal_attention(
                 let weight = (score - max_score).exp() / denom;
                 match kv_ref {
                     AttentionKvRef::Persisted(entry_index) => {
-                        let state = kv_states.get(&state_key).ok_or_else(|| {
-                            Error::Graph("reference KV state disappeared during attention".into())
-                        })?;
+                        let state =
+                            states[state_index]
+                                .kv_states
+                                .get(&layer.index)
+                                .ok_or_else(|| {
+                                    Error::Graph(
+                                        "reference KV state disappeared during attention".into(),
+                                    )
+                                })?;
                         let entry = &state.entries[entry_index];
                         let v_base = kv_head * head_dim;
                         for dim in 0..head_dim {
@@ -1143,19 +1178,16 @@ fn causal_attention(
     }
 
     for row in 0..tokens {
-        let row_info = rows[row];
-        let state_key = ReferenceKvKey {
-            layer: layer.index,
-            session_id: row_info.session_id.0,
-        };
-        let state = kv_states
-            .entry(state_key)
+        let state_index = row_state_indices[row];
+        let state = states[state_index]
+            .kv_states
+            .entry(layer.index)
             .or_insert_with(|| ReferenceKvState::new(k_width, v_width));
         if state.key_width != k_width || state.value_width != v_width {
             return Err(Error::Graph(format!(
-                "reference KV state width changed for layer {} session {}: existing key={} value={}, new key={k_width} value={v_width}",
+                "reference KV state width changed for layer {} state slot {}: existing key={} value={}, new key={k_width} value={v_width}",
                 layer.index,
-                row_info.session_id.0,
+                state_index,
                 state.key_width,
                 state.value_width
             )));
@@ -1163,7 +1195,7 @@ fn causal_attention(
         let k_base = row * k_width;
         let v_base = row * v_width;
         state.upsert(
-            row_info.position,
+            positions[row],
             &k.data[k_base..k_base + k_width],
             &v.data[v_base..v_base + v_width],
         )?;
@@ -1227,8 +1259,10 @@ fn logits_select(logits: &TensorF32, batch: &ExecutionBatch) -> Result<TensorF32
         )));
     }
     let selected = batch
-        .logits_rows()
-        .map(|(index, _)| index)
+        .logits()
+        .iter()
+        .enumerate()
+        .filter_map(|(row, request)| (!matches!(request, LogitsRequest::None)).then_some(row))
         .collect::<Vec<_>>();
     let mut output = Vec::with_capacity(selected.len() * vocab);
     for row in selected.iter().copied() {
@@ -1400,16 +1434,16 @@ fn attr_usize(attrs: &AttributeMap, key: &str) -> Result<usize> {
     }
 }
 
-fn layer_plan(program: &GraphProgram, layer: usize) -> Result<&TransformerLayerPlan> {
+fn layer_plan(program: &GraphProgram, layer: usize) -> Result<&TransformerLayerSemantic> {
     program
-        .runtime_plan
+        .semantic_plan
         .layers
         .iter()
         .find(|candidate| candidate.index == layer)
-        .ok_or_else(|| Error::Graph(format!("runtime plan has no layer {layer}")))
+        .ok_or_else(|| Error::Graph(format!("semantic plan has no layer {layer}")))
 }
 
-fn graph_layer_binding_options(layer: &TransformerLayerPlan) -> GraphLayerBindingOptions {
+fn graph_layer_binding_options(layer: &TransformerLayerSemantic) -> GraphLayerBindingOptions {
     let top_k = layer.feed_forward.num_experts_per_tok.unwrap_or(1).max(1);
     GraphLayerBindingOptions {
         hc_eps: layer.hyper_connection_epsilon,
@@ -1453,13 +1487,38 @@ fn required_attention_dim(value: Option<usize>, name: &str, layer: usize) -> Res
     value.ok_or_else(|| Error::Graph(format!("layer {layer} missing attention {name}")))
 }
 
-fn batch_has_position(
-    rows: &[crate::graph::runtime::ExecutionRow],
-    session_id: u64,
-    position: usize,
-) -> bool {
-    rows.iter()
-        .any(|row| row.session_id.0 == session_id && row.position == position)
+fn sequence_for_packed_row(batch: &ExecutionBatch, row: usize) -> Result<&ExecutionSequence> {
+    let packed_row = u32::try_from(row).map_err(|_| {
+        Error::Graph(format!(
+            "packed row {row} cannot be represented by an execution query range"
+        ))
+    })?;
+    batch
+        .sequences()
+        .iter()
+        .find(|sequence| sequence.query.contains(&packed_row))
+        .ok_or_else(|| Error::Graph(format!("packed row {row} is not covered by a sequence")))
+}
+
+fn state_index_for_packed_row(
+    batch: &ExecutionBatch,
+    row: usize,
+    state_count: usize,
+) -> Result<usize> {
+    let sequence = sequence_for_packed_row(batch, row)?;
+    let state_index = sequence.state_slot.try_as_usize().map_err(|_| {
+        Error::Graph(format!(
+            "state slot {} for packed row {row} cannot be represented as usize",
+            sequence.state_slot.get()
+        ))
+    })?;
+    if state_index >= state_count {
+        return Err(Error::Graph(format!(
+            "state slot {} for packed row {row} is out of range for {state_count} states",
+            sequence.state_slot.get()
+        )));
+    }
+    Ok(state_index)
 }
 
 fn dot(lhs: &[f32], rhs: &[f32]) -> f32 {
@@ -1493,26 +1552,27 @@ mod tests {
         ArtifactObjectGroup, BackendObject, BackendObjectStore, ExpertRegistryObject,
     };
     use crate::graph::dialects::transformer_ops;
+    use crate::graph::external_bindings::{ArtifactGroupKind, ExternalBindingPlan};
     use crate::graph::program::{GraphProgram, GraphProgramProfile};
-    use crate::graph::runtime::{
-        ArtifactGroupKind, ExecutionBatch, ExecutionSegment, ExternalBindingPlan, LogitsSelection,
+    use ferrule_common::execution::{
+        ExecutionBatch, ExecutionSequence, ForwardMode, ForwardPhase, LogitsRequest, StateSlot,
     };
-    use crate::scheduling::session::SessionId;
     use ferrule_model::artifact::tensor::{ArtifactDType, ArtifactTensorSlice};
     use ferrule_model::moe::streaming::{
         ExpertId, ExpertLoadSource, ExpertMatrixKind, ExpertTensorComponent, ExpertTensorKey,
         ExpertTensorPayload, ExpertTensorSlice,
     };
-    use ferrule_model::transformer_plan::{
-        AttentionStepPlan, ExpertResidencyMode, FeedForwardStepPlan, RuntimeEpilogue,
-        RuntimePrologue, TransformerLayerPlan, TransformerRuntimePlan,
+    use ferrule_model::semantic_plan::{
+        AttentionSemantic, ExpertResidency, FeedForwardSemantic, SemanticEpilogue,
+        SemanticPrologue, TransformerLayerSemantic, TransformerSemanticPlan,
     };
 
     #[test]
     fn reference_backend_executes_tiny_embedding_head_graph() -> Result<()> {
         let (program, objects, batch, dir) = tiny_embedding_head_fixture()?;
         let mut backend = ReferenceGraphBackend::new(1024);
-        let outputs = backend.execute_program(&program, &objects, &batch)?;
+        let mut states = [ReferenceGraphSequenceState::new()];
+        let outputs = backend.execute_program(&program, &objects, &mut states, &batch)?;
         assert_tiny_embedding_head_outputs(&outputs)?;
 
         let _ = std::fs::remove_dir_all(dir);
@@ -1523,7 +1583,8 @@ mod tests {
     fn reference_graph_executor_executes_tiny_embedding_head_graph() -> Result<()> {
         let (program, objects, batch, dir) = tiny_embedding_head_fixture()?;
         let mut executor = ReferenceGraphExecutor::new(program, objects, 1024);
-        let outputs = executor.execute(&batch)?;
+        let mut states = [ReferenceGraphSequenceState::new()];
+        let outputs = executor.execute(&mut states, &batch)?;
         assert_tiny_embedding_head_outputs(&outputs)?;
 
         let _ = std::fs::remove_dir_all(dir);
@@ -1534,13 +1595,14 @@ mod tests {
     fn reference_backend_executes_tiny_semantic_transformer_layer_graph() -> Result<()> {
         let (program, objects, batch, dir) = tiny_semantic_layer_fixture()?;
         let mut backend = ReferenceGraphBackend::new(64 * 1024);
-        let outputs = backend.execute_program(&program, &objects, &batch)?;
+        let mut states = [ReferenceGraphSequenceState::new()];
+        let outputs = backend.execute_program(&program, &objects, &mut states, &batch)?;
         assert_eq!(outputs.len(), 1);
         let logits = bytes_to_f32(outputs[0].bytes())?;
         assert_eq!(logits.len(), 2);
         assert!(logits.iter().all(|value| value.is_finite()));
         assert_eq!(backend.layer_binding_cache.len(), 1);
-        assert_eq!(backend.layer_states.len(), 1);
+        assert_eq!(states[0].layer_states.len(), 1);
 
         let _ = std::fs::remove_dir_all(dir);
         Ok(())
@@ -1626,17 +1688,16 @@ mod tests {
         let program = GraphProgram::new(
             graph,
             ExternalBindingPlan::new(),
-            tiny_runtime_plan(),
+            tiny_dense_semantic_plan(),
             GraphProgramProfile::default(),
         )?;
-        let batch = ExecutionBatch::from_tokens(
-            ExecutionSegment::Prefill,
-            SessionId(1),
+        let batch = single_sequence_batch(
             0,
-            &[0, 2],
-            None,
-            LogitsSelection::Last,
-        )?;
+            ForwardPhase::Prefill,
+            vec![0, 2],
+            vec![0, 1],
+            vec![LogitsRequest::None, LogitsRequest::Full],
+        );
         Ok((program, objects, batch, dir))
     }
 
@@ -1905,11 +1966,48 @@ mod tests {
         let program = GraphProgram::new(
             graph,
             ExternalBindingPlan::new(),
-            tiny_semantic_runtime_plan(),
+            tiny_routed_semantic_plan(),
             GraphProgramProfile::default(),
         )?;
-        let batch = ExecutionBatch::decode_one(SessionId(7), 0, 0, None)?;
+        let batch = single_sequence_batch(
+            0,
+            ForwardPhase::Decode,
+            vec![0],
+            vec![0],
+            vec![LogitsRequest::Full],
+        );
         Ok((program, objects, batch, dir))
+    }
+
+    fn single_sequence_batch(
+        state_slot: u32,
+        phase: ForwardPhase,
+        token_ids: Vec<u32>,
+        positions: Vec<u32>,
+        logits: Vec<LogitsRequest>,
+    ) -> ExecutionBatch {
+        let row_count = u32::try_from(token_ids.len()).unwrap();
+        let context_len = *positions.first().unwrap();
+        let mode = match phase {
+            ForwardPhase::Prefill => ForwardMode::Prefill,
+            ForwardPhase::Decode => ForwardMode::Decode,
+        };
+        ExecutionBatch::new(
+            mode,
+            token_ids,
+            positions,
+            vec![None; row_count as usize],
+            logits,
+            vec![ExecutionSequence::new(
+                StateSlot::new(state_slot),
+                phase,
+                0..row_count,
+                context_len,
+                context_len.checked_add(row_count).unwrap(),
+                0..0,
+            )],
+            vec![],
+        )
     }
 
     fn assert_tiny_embedding_head_outputs(outputs: &[TensorData]) -> Result<()> {
@@ -1919,37 +2017,99 @@ mod tests {
     }
 
     #[test]
-    fn causal_attention_persists_kv_across_decode_calls() -> Result<()> {
-        let layer = tiny_layer_plan();
-        let mut kv_states = BTreeMap::new();
-        let first = ExecutionBatch::decode_one(SessionId(9), 0, 1, None)?;
+    fn causal_attention_maps_ragged_rows_to_isolated_state_slots() -> Result<()> {
+        let batch = ExecutionBatch::new(
+            ForwardMode::Prefill,
+            vec![1, 2, 3],
+            vec![0, 1, 0],
+            vec![None; 3],
+            vec![LogitsRequest::None; 3],
+            vec![
+                ExecutionSequence::new(StateSlot::new(1), ForwardPhase::Prefill, 0..2, 0, 2, 0..0),
+                ExecutionSequence::new(StateSlot::new(0), ForwardPhase::Prefill, 2..3, 0, 1, 0..0),
+            ],
+            vec![],
+        );
+        let backend = ReferenceGraphBackend::new(1);
+        let mut states = [
+            ReferenceGraphSequenceState::new(),
+            ReferenceGraphSequenceState::new(),
+        ];
+        batch.validate(states.len(), &backend.capabilities())?;
+
+        let output = causal_attention(
+            &TensorF32::new(vec![3, 1], vec![0.0; 3], "q")?,
+            &TensorF32::new(vec![3, 1], vec![1.0; 3], "k")?,
+            &TensorF32::new(vec![3, 1], vec![10.0, 30.0, 100.0], "v")?,
+            &batch,
+            &tiny_layer_semantic(),
+            &mut states,
+        )?;
+
+        assert_eq!(output.data, vec![10.0, 20.0, 100.0]);
+        assert_eq!(states[0].kv_state_rows(0), 1);
+        assert_eq!(states[1].kv_state_rows(0), 2);
+        assert_eq!(states[0].kv_states[&0].entries[0].value, vec![100.0]);
+        assert_eq!(
+            states[1]
+                .kv_states
+                .get(&0)
+                .unwrap()
+                .entries
+                .iter()
+                .map(|entry| entry.value[0])
+                .collect::<Vec<_>>(),
+            vec![10.0, 30.0]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn causal_attention_reuses_one_explicit_state_across_decode_calls() -> Result<()> {
+        let layer = tiny_layer_semantic();
+        let backend = ReferenceGraphBackend::new(1);
+        let mut states = [ReferenceGraphSequenceState::new()];
+        let first = single_sequence_batch(
+            0,
+            ForwardPhase::Decode,
+            vec![1],
+            vec![0],
+            vec![LogitsRequest::None],
+        );
+        first.validate(states.len(), &backend.capabilities())?;
         let first_out = causal_attention(
             &TensorF32::new(vec![1, 1], vec![0.0], "q0")?,
             &TensorF32::new(vec![1, 1], vec![1.0], "k0")?,
             &TensorF32::new(vec![1, 1], vec![10.0], "v0")?,
             &first,
             &layer,
-            &mut kv_states,
+            &mut states,
         )?;
         assert_eq!(first_out.data, vec![10.0]);
-        assert_eq!(kv_states.len(), 1);
-        assert_eq!(kv_states.values().next().unwrap().len(), 1);
+        assert_eq!(states[0].kv_state_rows(0), 1);
 
-        let second = ExecutionBatch::decode_one(SessionId(9), 1, 2, None)?;
+        let second = single_sequence_batch(
+            0,
+            ForwardPhase::Decode,
+            vec![2],
+            vec![1],
+            vec![LogitsRequest::None],
+        );
+        second.validate(states.len(), &backend.capabilities())?;
         let second_out = causal_attention(
             &TensorF32::new(vec![1, 1], vec![0.0], "q1")?,
             &TensorF32::new(vec![1, 1], vec![1.0], "k1")?,
             &TensorF32::new(vec![1, 1], vec![20.0], "v1")?,
             &second,
             &layer,
-            &mut kv_states,
+            &mut states,
         )?;
         assert!((second_out.data[0] - 15.0).abs() < 1e-6);
-        assert_eq!(kv_states.values().next().unwrap().len(), 2);
+        assert_eq!(states[0].kv_state_rows(0), 2);
         Ok(())
     }
 
-    fn tiny_semantic_runtime_plan() -> TransformerRuntimePlan {
+    fn tiny_routed_semantic_plan() -> TransformerSemanticPlan {
         let spec = TransformerSpec {
             family: ModelFamily::DeepSeekV4,
             architecture: Some("tiny-semantic".into()),
@@ -1972,7 +2132,7 @@ mod tests {
             quantization: Vec::new(),
             notes: Vec::new(),
         };
-        TransformerRuntimePlan {
+        TransformerSemanticPlan {
             family: spec.family.clone(),
             architecture: spec.architecture.clone(),
             hidden_size: spec.hidden_size,
@@ -1980,13 +2140,13 @@ mod tests {
             num_heads: spec.num_heads,
             num_kv_heads: spec.num_kv_heads,
             head_dim: spec.head_dim,
-            prologue: RuntimePrologue {
+            prologue: SemanticPrologue {
                 token_embedding: TensorRole::TokenEmbedding,
             },
-            layers: vec![TransformerLayerPlan {
+            layers: vec![TransformerLayerSemantic {
                 index: 0,
                 pre_norm_roles: Vec::new(),
-                attention: AttentionStepPlan {
+                attention: AttentionSemantic {
                     kind: AttentionKind::MultiLatentAttention,
                     kv_shape: KvCacheShape::LatentOrCompressed,
                     num_heads: Some(1),
@@ -2009,7 +2169,7 @@ mod tests {
                     needs_sparse_indices: true,
                     needs_attention_sink: true,
                 },
-                feed_forward: FeedForwardStepPlan {
+                feed_forward: FeedForwardSemantic {
                     kind: FeedForwardKind::RoutedAndSharedExperts,
                     router: RouterKind::HashAssistedTopK,
                     num_experts: Some(1),
@@ -2018,7 +2178,7 @@ mod tests {
                     optional_roles: Vec::new(),
                     swiglu_limit: None,
                     route_scale: None,
-                    expert_residency: ExpertResidencyMode::Streamable,
+                    expert_residency: ExpertResidency::Streamable,
                     has_shared_experts: true,
                 },
                 auxiliary_roles: Vec::new(),
@@ -2026,7 +2186,7 @@ mod tests {
                 hyper_connection_epsilon: 1e-6,
                 hyper_connection_sinkhorn_iters: 4,
             }],
-            epilogue: RuntimeEpilogue {
+            epilogue: SemanticEpilogue {
                 output_norm: Some(TensorRole::OutputNorm),
                 output_head: Some(TensorRole::OutputHead),
             },
@@ -2035,7 +2195,7 @@ mod tests {
         }
     }
 
-    fn tiny_runtime_plan() -> TransformerRuntimePlan {
+    fn tiny_dense_semantic_plan() -> TransformerSemanticPlan {
         let spec = TransformerSpec {
             family: ModelFamily::Qwen3,
             architecture: Some("tiny".into()),
@@ -2053,7 +2213,7 @@ mod tests {
             quantization: Vec::new(),
             notes: Vec::new(),
         };
-        TransformerRuntimePlan {
+        TransformerSemanticPlan {
             family: spec.family.clone(),
             architecture: spec.architecture.clone(),
             hidden_size: spec.hidden_size,
@@ -2061,11 +2221,11 @@ mod tests {
             num_heads: spec.num_heads,
             num_kv_heads: spec.num_kv_heads,
             head_dim: spec.head_dim,
-            prologue: RuntimePrologue {
+            prologue: SemanticPrologue {
                 token_embedding: TensorRole::TokenEmbedding,
             },
             layers: Vec::new(),
-            epilogue: RuntimeEpilogue {
+            epilogue: SemanticEpilogue {
                 output_norm: None,
                 output_head: Some(TensorRole::OutputHead),
             },
@@ -2074,11 +2234,11 @@ mod tests {
         }
     }
 
-    fn tiny_layer_plan() -> TransformerLayerPlan {
-        TransformerLayerPlan {
+    fn tiny_layer_semantic() -> TransformerLayerSemantic {
+        TransformerLayerSemantic {
             index: 0,
             pre_norm_roles: Vec::new(),
-            attention: AttentionStepPlan {
+            attention: AttentionSemantic {
                 kind: AttentionKind::DenseMha,
                 kv_shape: KvCacheShape::FullKeysValues,
                 num_heads: Some(1),
@@ -2101,7 +2261,7 @@ mod tests {
                 needs_sparse_indices: false,
                 needs_attention_sink: false,
             },
-            feed_forward: FeedForwardStepPlan {
+            feed_forward: FeedForwardSemantic {
                 kind: FeedForwardKind::DenseMlp,
                 router: RouterKind::None,
                 num_experts: None,
@@ -2110,7 +2270,7 @@ mod tests {
                 optional_roles: Vec::new(),
                 swiglu_limit: None,
                 route_scale: None,
-                expert_residency: ExpertResidencyMode::AllResident,
+                expert_residency: ExpertResidency::AllResident,
                 has_shared_experts: false,
             },
             auxiliary_roles: Vec::new(),

@@ -8,14 +8,14 @@
 use crate::graph::ComputeGraph;
 use ferrule_common::Result;
 
-use crate::graph::runtime::ExternalBindingPlan;
-use ferrule_model::transformer_plan::TransformerRuntimePlan;
+use crate::graph::external_bindings::ExternalBindingPlan;
+use ferrule_model::semantic_plan::TransformerSemanticPlan;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphProgram {
     pub graph: ComputeGraph,
     pub bindings: ExternalBindingPlan,
-    pub runtime_plan: TransformerRuntimePlan,
+    pub semantic_plan: TransformerSemanticPlan,
     pub profile: GraphProgramProfile,
 }
 
@@ -23,14 +23,14 @@ impl GraphProgram {
     pub fn new(
         graph: ComputeGraph,
         bindings: ExternalBindingPlan,
-        runtime_plan: TransformerRuntimePlan,
+        semantic_plan: TransformerSemanticPlan,
         profile: GraphProgramProfile,
     ) -> Result<Self> {
         graph.validate()?;
         Ok(Self {
             graph,
             bindings,
-            runtime_plan,
+            semantic_plan,
             profile,
         })
     }

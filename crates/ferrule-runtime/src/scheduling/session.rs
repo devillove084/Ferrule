@@ -298,6 +298,16 @@ impl SequenceState {
         self.mark_finished(SequenceFinishReason::Cancelled);
     }
 
+    /// Mark the sequence unusable after backend execution may have partially
+    /// committed state. Error state is terminal until the owning backend session
+    /// is reset or released; it is never rescheduled in place.
+    pub fn mark_error(&mut self) {
+        self.status = SequenceStatus::Error;
+        self.next_decode_token = None;
+        self.next_decode_logit = None;
+        self.finish_reason = None;
+    }
+
     /// Reset the entire session.
     pub fn reset(&mut self) {
         self.request_id = None;
@@ -371,6 +381,12 @@ mod tests {
         seq.mark_finished(SequenceFinishReason::MaxTokens);
         assert_eq!(seq.status, SequenceStatus::Finished);
         assert_eq!(seq.finish_reason, Some(SequenceFinishReason::MaxTokens));
+
+        seq.stage_decode_token(6).unwrap();
+        seq.mark_error();
+        assert_eq!(seq.status, SequenceStatus::Error);
+        assert_eq!(seq.finish_reason, None);
+        assert_eq!(seq.next_decode_token, None);
 
         seq.append_prompt(&[7, 8]);
         assert_eq!(seq.status, SequenceStatus::Running);

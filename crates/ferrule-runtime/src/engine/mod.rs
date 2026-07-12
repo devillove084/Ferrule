@@ -7,16 +7,16 @@
 //! capabilities.
 
 mod driver;
-mod executor;
 mod lazy;
+mod topk_compatibility;
 mod worker;
 
 pub use driver::{
     ResidentActionKind, ResidentDriverStep, ResidentTokenEvent, ResidentTopKDriver,
     ResidentTopKDriverConfig, ResidentTopKDriverStats,
 };
-pub use executor::{ResidentActionExecutor, ResidentActionExecutorConfig};
-pub use lazy::{LazyEngineLoadStats, LazyEngineWorker};
+pub use lazy::LazyEngineWorker;
+pub use topk_compatibility::{TopKCompatibilityExecutor, TopKCompatibilityExecutorConfig};
 pub use worker::{EngineWorker, EngineWorkerStats, TopKDecodeState, TopKDecodeStep};
 
 #[cfg(test)]
@@ -132,9 +132,15 @@ mod tests {
             stop: Vec::new(),
         };
 
-        let turn = worker
-            .generate_turn(&[1, 2], &cfg, PrefillMode::Interactive, 1, |_| Ok(()))
+        let mut decode = worker
+            .append_prompt(&[1, 2], &cfg, PrefillMode::Interactive, 1)
             .unwrap();
+        let turn = loop {
+            match worker.decode_next(&mut decode).unwrap() {
+                TopKDecodeStep::Token(_) => {}
+                TopKDecodeStep::Finished(turn) => break turn,
+            }
+        };
         assert_eq!(turn.tokens, vec![b'a' as u32, b'b' as u32]);
         assert_eq!(turn.finish_reason, TopKFinishReason::MaxTokens);
         assert_eq!(

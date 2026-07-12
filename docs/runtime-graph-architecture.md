@@ -2,19 +2,35 @@
 
 ## Status
 
-This document is the canonical design note for Ferrule's graph-facing runtime architecture. It merges the previous compute-graph and runtime-abstraction notes into one plan.
+This document is canonical for Ferrule's **device-independent graph IR**, graph
+programs, dialects, validation, and external binding contracts. It is not the
+canonical execution-batch, sequence-state, arena, or CUDA graph design; those are
+specified in
+[`execution-engine-architecture.md`](execution-engine-architecture.md).
 
-The key decision is: **graph IR is a `ferrule-runtime::graph` module, not a separate crate**. Ferrule currently keeps a small 5-crate workspace and uses modules/traits to draw boundaries.
+The key decision remains: **graph IR is a `ferrule-runtime::graph` module, not a
+separate crate**. Ferrule currently keeps a small workspace and uses modules/traits
+to draw boundaries.
 
-- `ferrule-runtime::graph` owns the device-independent graph IR, graph programs, graph-facing execution batches, and external binding contracts.
-- `ferrule-runtime` also owns sessions, scheduling, storage/residency vocabulary, artifact binding, and semantic external binding.
+- `ferrule-runtime::graph` owns device-independent graph IR, `GraphProgram`,
+  dialect/shape semantics, and external resource binding contracts.
+- E1 deleted the graph-specific execution envelope. The only public execution ABI
+  is now `ferrule-common::execution`; graph IR does not define or re-export a second
+  `ExecutionBatch` or `ExecutionOutput`.
+- `ferrule-runtime` owns sessions, scheduling, storage/residency vocabulary,
+  artifact binding, semantic external binding, and lowering from scheduled work to
+  the neutral execution ABI. Crate-private `ScheduledBatch` retains runtime
+  request/session/KV correlation.
+- Reference graph execution receives caller-owned
+  `&mut [ReferenceGraphSequenceState]` explicitly; no hidden default sequence state
+  or legacy graph execution entrypoint remains.
 - Benchmark/report schemas and smoke harnesses live with the CLI/runtime modules that use them; there is no standalone benchmark crate in the current workspace.
 - `ferrule-cuda` remains the CUDA backend, kernel, artifact-operator, and CUDA driver graph-capture crate.
 - `ferrule-cuda::graph` refers to CUDA driver graph capture/replay, not Ferrule's runtime graph IR.
 
 A future rename from `ferrule-cuda` to something like `ferrule-backend-cuda` may be reasonable, but the CUDA backend should not become the graph IR owner.
 
-A first implementation slice now exists: dense graph translation, generic semantic Transformer graph translation, graph validation, `BackendObjectStore`, `ReferenceGraphBackend`, and DSV4 local materialization through semantic artifact groups, stage norm groups, expert registries, and generic config-derived layer policies. The next design pressure is expanding coarse semantic `transformer_layer` nodes into fine-grained operator graph nodes without introducing model-family-specific runtime graph files.
+A first implementation slice now exists: dense graph translation, generic semantic Transformer graph translation, graph validation, `BackendObjectStore`, and `ReferenceGraphExecutor` with explicit sequence state, plus DSV4 local materialization through semantic artifact groups, stage norm groups, expert registries, and generic config-derived layer policies. The next design pressure is integrating graph preparation with E2 resources/arenas and later expanding coarse semantic `transformer_layer` nodes into fine-grained operator graph nodes without introducing model-family-specific runtime graph files.
 
 ## Goals
 
@@ -22,9 +38,13 @@ Ferrule should move from model-specific runners toward a reusable runtime archit
 
 1. Model families describe structure and semantic roles.
 2. Graph translation builds a device-independent program.
-3. Runtime state, weights, KV cache, artifact tensors/groups, expert registries, and resident experts are bound through external handles.
-4. Backends execute whole graphs, not public per-op trait methods.
-5. CUDA, CPU/reference, and future autograd paths share the same graph-facing contracts.
+3. Immutable artifacts, semantic tensor groups, and expert registries are resolved
+   through `ExternalBindingPlan` and `BackendObjectStore`.
+4. Mutable sequence/KV state is caller-owned and passed explicitly; external
+   resource bindings must not become a hidden sequence-state container.
+5. Executors consume whole graph programs rather than exposing public per-op traits.
+6. CUDA, CPU/reference, and future autograd paths share graph semantics while using
+   the sole neutral execution ABI for invocation and explicit state ownership.
 
 This is intended to make Ferrule easier to extend across model families and future training/backprop work without duplicating runners per model family.
 
@@ -33,7 +53,8 @@ This is intended to make Ferrule easier to extend across model families and futu
 - Do not add a public `FerruleOps` trait with methods such as `linear()`, `rms_norm()`, or `attention()`.
 - Do not encode every concrete op as a core `GraphNode` enum variant.
 - Do not put CUDA buffers, mmap slices, WeightPack objects, or KV pages directly inside graph nodes.
-- Do not remove the mature DeepSeekV4 path before graph parity exists.
+- Keep the mature DeepSeekV4 eager path as the correctness anchor for future E7
+  graph lowering.
 - Do not remove the OLMoE CUDA fixture until MoE graph parity is proven.
 - Do not rush Qwen3 execution before graph, batch, and binding boundaries are stable.
 
@@ -52,10 +73,11 @@ This is intended to make Ferrule easier to extend across model families and futu
 |  KV policies: contiguous/paged/prefix/radix                                      |
 |  storage/residency vocabulary + expert streaming/residency                       |
 |  graph-facing contracts:                                                        |
-|    - ExecutionBatch / ExecutionOutput                                            |
 |    - ExternalBindingPlan                                                         |
-|    - TransformerRuntimePlan                                                      |
-|    - GraphProgram / GraphRunner                                                  |
+|    - TransformerSemanticPlan                                                      |
+|    - GraphProgram / ReferenceGraphExecutor                                       |
+|  execution lowering targets the neutral ABI defined outside graph IR             |
+|  mutable reference state is supplied explicitly by the caller                    |
 |  Runtime owns algorithms over capabilities; it does not own concrete models.     |
 +-------------------------------+-------------------------------+------------------+
                                 |                               |
@@ -176,45 +198,49 @@ GradientRegistry    op -> backward graph/tape recipe
 
 The important rule remains: backend public APIs execute graphs, not individual concrete ops.
 
-## Backend boundary
+## Current execution boundary
 
-Backends receive a whole graph plus external bindings and runtime inputs.
+The old generic graph backend trait and external-value execution envelope have been
+removed. The concrete reference boundary owns its `GraphProgram` and
+`BackendObjectStore`, while invocation receives the sole neutral batch and explicit
+caller-owned mutable state:
 
 ```rust
-pub trait GraphBackend {
-    fn execute(
+impl ReferenceGraphExecutor {
+    pub fn execute(
         &mut self,
-        graph: &ComputeGraph,
-        external: &ExternalHandles,
-        inputs: &[TensorData],
+        states: &mut [ReferenceGraphSequenceState],
+        batch: &ferrule_common::execution::ExecutionBatch,
     ) -> Result<Vec<TensorData>>;
 }
 ```
 
 ```text
-+------------------+       +----------------------+       +----------------------+
-|  ComputeGraph    |       |   ExternalHandles    |       |      TensorData      |
-|  opaque nodes    |       |  weights / KV / etc  |       |  runtime inputs      |
-+---------+--------+       +----------+-----------+       +----------+-----------+
-          |                           |                              |
-          +---------------------------+------------------------------+
-                                      |
-                                      v
-                         +--------------------------+
-                         |      GraphBackend        |
-                         | execute(graph, ...)      |
-                         +------------+-------------+
-                                      |
-                +---------------------+----------------------+
-                |                     |                      |
-                v                     v                      v
-       +----------------+     +----------------+      +----------------+
-       | CPU reference  |     | CUDA backend   |      | Autograd       |
-       | interpreter    |     | lower + fuse   |      | tape/backward  |
-       +----------------+     +----------------+      +----------------+
++-------------------------+       +----------------------------------+
+| GraphProgram            |       | BackendObjectStore               |
+| opaque nodes + metadata |       | resolved immutable resources     |
++------------+------------+       +----------------+-----------------+
+             |                                     |
+             +------------------+------------------+
+                                |
++-------------------------------v------------------------------------+
+| ReferenceGraphExecutor                                             |
+| execute(&mut [ReferenceGraphSequenceState], &ExecutionBatch)       |
++-------------------------------+------------------------------------+
+                                |
+                                v
+                     low-level Vec<TensorData>
 ```
 
-The CUDA backend can internally match graph patterns, fuse nodes, plan memory, upload weights, and capture CUDA driver graphs. None of those decisions need to leak into the `GraphBackend` trait.
+`ExternalBindingPlan` describes resources; it does not carry mutable sequence state,
+runtime request IDs, or scheduler KV handles. `Vec<TensorData>` is a low-level graph
+result, not a validated `ModelBatchExecutor::ExecutionOutput`.
+
+The production CUDA target is not a resurrection of a second graph execution API.
+Backend preparation may match graph patterns, upload weights, plan arenas, fuse
+nodes, and create CUDA graph execs, but invocation still flows through
+`PreparedModelPlan + ModelBatchExecutor`, explicit sequence state, and the neutral
+`ExecutionBatch` specified by the execution-engine document.
 
 ## Graph templates
 
@@ -260,39 +286,38 @@ Dense decoder block template
 
 Dense decoder adapters can reuse one dense block template. MoE adapters can reuse a routed-FFN fragment. DeepSeekV4 can later add MLA/HC/hash-routing fragments once dialect support is mature.
 
-## Runtime contract 1: `ExecutionBatch` / `ExecutionOutput`
+## Execution ABI integration — implemented in E1
 
-`ExecutionBatch` is Ferrule's graph-facing execution envelope. It groups token, position, session, KV, and logits-selection metadata into one runtime input contract. `ExecutionOutput` is the paired result envelope: each output row carries the session, position, KV handle, and optional full/top-k logits.
+Graph IR no longer owns an execution envelope. The only public invocation and output
+vocabulary is `ferrule-common::execution`, shared by model executors and the
+reference graph bridge:
 
 ```text
-+-----------------------------+
-|       ExecutionBatch        |
-|-----------------------------|
-| segment: Prefill/Decode/Mix |
-| rows: Vec<ExecutionRow>     |
-+-------------+---------------+
-              |
-              v
-+-----------------------------+
-|        ExecutionRow         |
-|-----------------------------|
-| token_id: u32               |
-| position: usize             |
-| session_id: SessionId       |
-| kv_handle: Option<KvHandle> |
-| require_logits: bool        |
-+-----------------------------+
+ResidentScheduler
+  → SchedulerAction
+  → crate-private ScheduledBatch
+       ├─ ExecutionBatch: packed tokens/positions/write slots/logits intent
+       └─ runtime-only request/session/KV correlation
+  → TopKCompatibilityExecutor today
+  → native ModelBatchExecutor after E2/E3/E4
 ```
 
-Advantages:
+The public batch uses ragged `ExecutionSequence` spans plus opaque `StateSlot`,
+`KvWriteSlot`, and `KvBlockId` values. It contains no `SessionId`, `RequestId`, or
+runtime `KvHandle`; output correlation uses `input_row` and the private scheduled
+sequence map.
 
-- Makes token ids, positions, sessions, KV handles, and logits selection explicit.
-- Allows schedulers to form multi-row decode, chunked prefill, or mixed prefill/decode batches.
-- Avoids producing logits for rows that do not need them.
-- Gives graph runners a stable input contract without replacing legacy `ModelRunner` immediately.
-- Opens the path to continuous batching and paged KV scheduling.
+Reference graph execution consumes the same `ExecutionBatch` but receives
+`&mut [ReferenceGraphSequenceState]` separately. This prevents graph execution from
+silently persisting slot zero or conflating semantic external resources with mutable
+sequence/KV state.
 
-Legacy runners can keep using `prefill(tokens)` and `decode_token(token)`. Graph-backed runners can opt into `ExecutionBatch` / `ExecutionOutput` when ready. `SchedulerAction` is the current bridge from resident sequence state to concrete prefill/decode batches, `ResidentActionExecutor` is the capability-based adapter that executes those actions against a single resident `TopKModelRunner`, and `ResidentTopKDriver` closes the loop with token events, EOS/stop/max-token finish policy, and KV release without depending on any concrete model family.
+The retained serving-shaped path terminates in
+`TopKCompatibilityExecutor<R: TopKModelRunner>`. It truthfully supports only one
+implicit runner sequence and is not a native multi-session `ModelBatchExecutor`.
+E2 prepares reusable resources and arenas, E3 introduces model-native explicit
+sequence state, and E4 allows scheduler-formed ragged/multi-session work to reach
+one native device pipeline.
 
 ## Runtime contract 2: `ExternalBindingPlan`
 
@@ -333,7 +358,7 @@ Advantages:
 
 ## Model-to-graph translation pipeline
 
-The existing `TransformerRuntimePlan` is the right semantic bridge: it already turns model-family contracts into runtime-level attention, FFN/MoE, KV, and attachment policy without exposing raw tensor names.
+The existing `TransformerSemanticPlan` is the right semantic bridge: it already turns model-family contracts into runtime-level attention, FFN/MoE, KV, and attachment policy without exposing raw tensor names.
 
 ```text
 +--------------------+
@@ -347,7 +372,7 @@ The existing `TransformerRuntimePlan` is the right semantic bridge: it already t
           |
           v
 +------------------------+
-| TransformerRuntimePlan |
+| TransformerSemanticPlan |
 +---------+--------------+
           |
           v
@@ -373,14 +398,19 @@ The existing `TransformerRuntimePlan` is the right semantic bridge: it already t
 +------------------------+
 ```
 
-Recommended first targets:
+Implementation state and next targets:
 
-1. Dense decoder graph generation, without rushing execution.
-2. CPU/reference graph executor for correctness.
-3. CUDA graph backend adapter using `CudaArtifactOperatorContext` internally.
-4. Qwen3 dense execution once graph/batch/binding contracts are validated.
-5. MoE graph parity using OLMoE/Mixtral/Qwen-MoE style fragments.
-6. DeepSeekV4 migration only after MLA/HC/hash-routing dialect coverage is strong.
+1. **Implemented:** dense and generic semantic graph construction plus shape
+   validation.
+2. **Implemented:** CPU/reference graph execution with explicit per-sequence state.
+3. **Implemented baseline:** materialized `BackendObjectStore` and coarse DSV4
+   semantic layer binding.
+4. **After E2/E3 ownership:** CUDA prepared lowering through the same neutral batch,
+   sequence-state, and arena contracts used by eager execution.
+5. **Then:** fine-grained dense/MoE/MLA/HC/router dialect coverage and parity without
+   model-family-specific runtime graph files.
+6. **After native parity:** reusable CUDA graph buckets and fusion; graph capture is
+   not a separate execution path.
 
 ## Backend lowering model
 
@@ -417,6 +447,10 @@ This keeps `CudaArtifactOperatorContext` valuable as the existing generic CUDA a
 ```text
 Current reusable pieces
 
+ferrule-common
+  execution.rs                    sole public ExecutionBatch/ExecutionOutput ABI,
+                                  capability validation, plan/executor traits
+
 ferrule-model
   spec.rs                         ModelFamily, TransformerSpec, TensorRole
   support/plan.rs                 ModelSupportContract / EnginePlan
@@ -424,15 +458,16 @@ ferrule-model
   families/deepseek_v4.rs         DeepSeekV4 semantic classification
 
 ferrule-runtime/src/graph
-  runtime.rs                      ExecutionBatch, ExecutionOutput, ExternalBindingPlan
+  external_bindings.rs            semantic external resource contracts only
   layer_binding.rs                materialized externals -> layer object bundles
   builder.rs / translate.rs       semantic model descriptors -> graph programs
   template.rs                     reusable graph topology recipes
   shape_registry.rs               graph shape validation support
 
 ferrule-runtime/src/scheduling
+  actions.rs                      SchedulerAction and action planning vocabulary
+  batch.rs                        crate-private ScheduledBatch correlation/lowering
   session.rs                      GenerateRequest, SequenceState, finish reasons
-  scheduler.rs                    SchedulerAction, PrefillChunkAction, DecodeAction
   resident.rs                     ResidentScheduler over SequenceKvCache
 
 ferrule-runtime/src/cache
@@ -441,13 +476,14 @@ ferrule-runtime/src/cache
   prefix_cache.rs / radix_cache.rs prefix/radix cache direction
 
 ferrule-runtime/src/engine
-  worker.rs                       EngineWorker phased append/decode API
-  executor.rs                     SchedulerAction -> ExecutionOutput adapter over TopKModelRunner
+  worker.rs                       explicit EngineWorker append/decode phases
+  topk_compatibility.rs           single-sequence compatibility executor
   driver.rs                       request -> token event -> finish/free-KV loop
   lazy.rs                         artifact-only background load + foreground runner construction
 
 ferrule-runtime
   backend_object_store.rs         materialized HF/semantic externals
+  reference_graph_backend.rs      explicit-state ReferenceGraphExecutor
   layer_binding.rs                executable layer state binding
   expert_residency.rs             expert residency backend trait + adapters
 
@@ -462,21 +498,18 @@ ferrule-cuda
 
 The immediate goal is not simply to add another model name. The goal is to build the runtime capabilities that make model support scalable inside Ferrule.
 
-```text
-+-------------------------------+----------------------------------------------+
-| Capability                    | Ferrule abstraction                           |
-+-------------------------------+----------------------------------------------+
-| batched graph execution       | ExecutionBatch                                |
-| reusable graph construction   | GraphTemplate -> ComputeGraph                 |
-| backend buffer separation     | ExternalKey + ExternalBindingPlan             |
-| paged KV direction            | KvHandle + PagedSequenceKvCache + KvState     |
-| continuous batching           | ResidentScheduler + ResidentTopKDriver + ExecutionBatch |
-| artifact/WeightPack loading     | ExternalBindingPlan + backend object store    |
-| CUDA fusion/capture           | backend lowering + memory plan + CUDA capture |
-| model-family bring-up         | TransformerRuntimePlan + graph translator     |
-| future training/backprop      | graph IR + GradientRegistry / autograd pass   |
-+-------------------------------+----------------------------------------------+
-```
+| Capability | Current/target Ferrule abstraction |
+|---|---|
+| Public execution ABI | sole `ferrule-common::execution::ExecutionBatch` and `ExecutionOutput` |
+| Current compatibility execution | `ResidentScheduler -> ScheduledBatch -> TopKCompatibilityExecutor` |
+| Native continuous batching target | E3/E4 explicit sequence state and native `ModelBatchExecutor` |
+| Reusable graph construction | `GraphTemplate -> ComputeGraph -> GraphProgram` |
+| External resource separation | `ExternalKey + ExternalBindingPlan + BackendObjectStore` |
+| Paged KV direction | runtime reservation plus one physical multi-plane binding lifecycle |
+| Artifact/WeightPack loading | external binding plan plus backend object store |
+| CUDA fusion/capture | prepared lowering plus persistent arena plus reusable CUDA graph buckets |
+| Model-family bring-up | `TransformerSemanticPlan` plus graph translator |
+| Future training/backprop | graph IR plus `GradientRegistry`/autograd pass, without a second invocation ABI |
 
 ## Backprop and training direction
 
@@ -495,59 +528,64 @@ GradientRegistry resolves op gradient recipes
 Backward graph or tape executor
         |
         v
-GraphBackend::execute(...)
+backend-specific lowering/execution with explicit state
 ```
 
 This avoids building a separate training abstraction that duplicates inference logic. The forward graph remains the source of truth, while gradient semantics live in dialect registries.
 
-## Migration plan
+## Graph-IR migration plan
+
+The phases below describe graph-IR construction/materialization. They do not replace
+the E0–E8 execution-engine roadmap. Backend graph lowering consumes an already
+prepared execution plan and explicit sequence/arena bindings; it must not become a
+second execution ownership system.
 
 ```text
-Phase 0: cleanup and skeletons
-  - Remove legacy OLMoE CPU forward/KV path
-  - Keep OLMoE CUDA fixture
+Phase 0: execution-boundary cleanup — complete
   - Keep graph IR inside ferrule-runtime::graph
-  - Add graph_runtime.rs with ExecutionBatch and ExternalBindingPlan
+  - Use the sole ferrule-common::execution ABI
+  - Keep external resource binding separate from mutable sequence state
+  - Delete duplicate graph execution entrypoints and implicit default state
 
-Phase 1: graph construction
+Phase 1: graph construction — implemented
   - Build dense decoder templates
-  - Generate ComputeGraph without executing it
+  - Generate ComputeGraph and GraphProgram
   - Produce ExternalBindingPlan from semantic roles
-  - Add shape validation registry
+  - Validate shapes through the registry
 
-Phase 2: materialized external bridge
+Phase 2: materialized external bridge — implemented baseline
   - Materialize graph externals into BackendObjectStore
   - Aggregate layer-scoped ArtifactGroup / ExpertRegistry / KvState objects
   - Build GraphLayerObjects / executable layer bundles without model-family graph APIs
 
-Phase 3: coarse semantic layer execution
+Phase 3: coarse reference layer execution — implemented baseline
   - Lower coarse transformer_layer nodes into existing runtime components
   - Reuse semantic artifact binding, stage norms, HC, attention, router, MoE, expert streaming, and KV helpers
   - Carry generic attrs/policies for norm eps, HC eps/sinkhorn iters, RoPE/YaRN, compression/indexer metadata, grouped output metadata, SwiGLU limit, route scale, and hash-router layer count
-  - Prove tiny/synthetic layer execution, then local DSV4 layer execution when present
+  - Keep explicit ReferenceGraphSequenceState and the neutral ExecutionBatch boundary
 
-Phase 4: fine-grained semantic op split
-  - Split transformer_layer after the coarse bridge executes
+Phase 4: fine-grained semantic op split — future graph work
+  - Split transformer_layer only after execution ownership is stable
   - Add generic MLA/HC/router/MoE/cache ops and shape inference
   - Keep op names semantic, not model-family-specific
 
-Phase 5: CUDA graph backend adapter
-  - Lower graph nodes internally to CudaArtifactOperatorContext
-  - Add scratch allocation and memory planning
-  - Add pattern fusion
-  - Add optional CUDA driver graph capture
+Phase 5: CUDA prepared lowering — after E2/E3 ownership
+  - Lower graph recipes internally to CudaArtifactOperatorContext
+  - Reuse PersistentArena memory planning and eager *_into stages
+  - Add pattern fusion only after native state/batching parity
+  - Add reusable CUDA driver graph buckets in E7, not a separate graph path
 
-Phase 6: graph-backed RuntimeRunner
-  - Add RuntimeRunner::Graph(...)
-  - Keep OLMoE and DeepSeekV4 legacy paths until graph-backed parity exists
+Phase 6: graph-backed native ModelBatchExecutor — after parity
+  - Consume explicit sequence state and the sole neutral batch ABI
+  - Keep OLMoE and DeepSeekV4 compatibility paths until native parity exists
 
 Phase 7: serving, speculation, and training/autograd
-  - Bind paged KV block tables into graph/backend KvState execution
-  - Add multi-session backend execution beyond the single-runner TopK adapter
+  - Bind physical paged KV block tables into explicit sequence state
+  - Replace the single-sequence TopK compatibility path with native multi-session execution
   - Add DSpark-style speculation through generic Speculation bindings
   - Add GradientRegistry
   - Generate backward graph or tape
-  - Reuse backend execute boundary
+  - Reuse the neutral model execution boundary
 ```
 
 ## Open questions

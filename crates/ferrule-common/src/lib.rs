@@ -1,5 +1,6 @@
 //! Ferrule Common — shared types, errors, and observability infrastructure.
 
+pub mod execution;
 pub mod observability;
 
 use thiserror::Error;
@@ -21,6 +22,9 @@ pub enum Error {
 
     #[error("Model: {0}")]
     Model(String),
+
+    #[error("Execution: {0}")]
+    Execution(String),
 
     #[error("Tokenization: {0}")]
     Tokenization(String),
