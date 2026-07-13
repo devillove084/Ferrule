@@ -4,6 +4,7 @@ members = [
   "crates/ferrule-model",
   "crates/ferrule-cuda",
   "crates/ferrule-runtime",
+  "crates/ferrule-server",
   "crates/ferrule-cli",
 ]
 resolver = "2"

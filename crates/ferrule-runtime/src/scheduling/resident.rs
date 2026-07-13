@@ -16,7 +16,7 @@ use ferrule_common::{Error, Result};
 use crate::cache::{KvHandle, SequenceSlotPool};
 
 use super::actions::{DecodeAction, PrefillChunkAction, SchedulerAction, plan_prefill_chunk};
-use super::session::{GenerateRequest, SequenceFinishReason, SequenceState, SessionId};
+use super::session::{GenerateRequest, RequestId, SequenceFinishReason, SequenceState, SessionId};
 
 #[derive(Debug, Clone)]
 struct WaitingRequest {
@@ -64,6 +64,23 @@ impl Default for ResidentSchedulerConfig {
             allow_mixed_batches: true,
         }
     }
+}
+
+/// Outcome of cancelling a resident generation request by request ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelRequestResult {
+    /// The request was removed before admission and never owned runtime resources.
+    Waiting {
+        request_id: RequestId,
+        session_id: SessionId,
+    },
+    /// The request was active; its scheduler slot was released.
+    Active {
+        request_id: RequestId,
+        session_id: SessionId,
+    },
+    /// No waiting or active request had this ID.
+    NotFound { request_id: RequestId },
 }
 
 impl ResidentSchedulerConfig {
@@ -299,6 +316,53 @@ impl ResidentScheduler {
         }
         self.active.insert(session_id, suspended.sequence);
         Ok(())
+    }
+
+    /// Cancel a waiting or active request by its service-level request ID.
+    ///
+    /// Waiting requests are converted directly to terminal cancellation records.
+    /// Active requests additionally release their scheduler-owned sequence slot.
+    pub fn cancel_request<C>(
+        &mut self,
+        request_id: RequestId,
+        slot_pool: &mut C,
+    ) -> Result<CancelRequestResult>
+    where
+        C: SequenceSlotPool,
+    {
+        if let Some(session_id) = self.active.iter().find_map(|(session_id, sequence)| {
+            (sequence.request_id == Some(request_id)).then_some(*session_id)
+        }) {
+            self.cancel_sequence(session_id, slot_pool)?;
+            return Ok(CancelRequestResult::Active {
+                request_id,
+                session_id,
+            });
+        }
+
+        if let Some(index) = self
+            .waiting
+            .iter()
+            .position(|waiting| waiting.request.id == request_id)
+        {
+            let waiting = self
+                .waiting
+                .remove(index)
+                .expect("waiting request index was just found");
+            let session_id = self.resolve_session_id(waiting.request.session_id);
+            let mut sequence = SequenceState::from_request(&waiting.request, session_id);
+            if let Some(position_start) = waiting.position_start {
+                sequence.position = position_start;
+            }
+            sequence.mark_cancelled();
+            self.cancelled.push(sequence);
+            return Ok(CancelRequestResult::Waiting {
+                request_id,
+                session_id,
+            });
+        }
+
+        Ok(CancelRequestResult::NotFound { request_id })
     }
 
     pub fn drain_finished(&mut self) -> Vec<SequenceState> {
@@ -781,6 +845,7 @@ mod tests {
             sampling: SamplingConfig::greedy(),
             max_new_tokens: 16,
             stop: Vec::new(),
+            ignore_eos: false,
         }
     }
 
@@ -955,6 +1020,55 @@ mod tests {
         );
         assert_eq!(cancelled[0].kv_handle, None);
         assert!(scheduler.is_idle());
+    }
+
+    #[test]
+    fn cancel_request_distinguishes_waiting_active_and_unknown() {
+        let mut scheduler = ResidentScheduler::default();
+        let mut kv = MultiSessionKvCache::new(1, 1, 4, 1);
+        scheduler.submit(request(1, vec![1]));
+        scheduler.submit(request(2, vec![2]));
+        assert_eq!(scheduler.admit_waiting(&mut kv).unwrap(), 1);
+
+        assert_eq!(
+            scheduler.cancel_request(RequestId(2), &mut kv).unwrap(),
+            CancelRequestResult::Waiting {
+                request_id: RequestId(2),
+                session_id: SessionId(2),
+            }
+        );
+        assert_eq!(scheduler.waiting_len(), 0);
+        assert_eq!(scheduler.active_len(), 1);
+        assert_eq!(kv.active_count(), 1);
+
+        assert_eq!(
+            scheduler.cancel_request(RequestId(1), &mut kv).unwrap(),
+            CancelRequestResult::Active {
+                request_id: RequestId(1),
+                session_id: SessionId(1),
+            }
+        );
+        assert_eq!(scheduler.active_len(), 0);
+        assert_eq!(kv.active_count(), 0);
+        assert_eq!(
+            scheduler.cancel_request(RequestId(99), &mut kv).unwrap(),
+            CancelRequestResult::NotFound {
+                request_id: RequestId(99),
+            }
+        );
+
+        let cancelled = scheduler.drain_cancelled();
+        assert_eq!(cancelled.len(), 2);
+        assert_eq!(cancelled[0].request_id, Some(RequestId(2)));
+        assert_eq!(cancelled[1].request_id, Some(RequestId(1)));
+        assert!(cancelled.iter().all(|sequence| {
+            sequence.status == super::super::session::SequenceStatus::Cancelled
+                && sequence.finish_reason == Some(SequenceFinishReason::Cancelled)
+        }));
+
+        scheduler.submit(request(3, vec![3]));
+        assert_eq!(scheduler.admit_waiting(&mut kv).unwrap(), 1);
+        assert_eq!(scheduler.active_len(), 1);
     }
 
     #[test]

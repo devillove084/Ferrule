@@ -381,6 +381,7 @@ fn run_deepseek_v4_greedy_chat_loop_lazy(
             sampling: SamplingConfig::greedy(),
             max_new_tokens: generation.max_new_tokens,
             stop: generation.stop.clone(),
+            ignore_eos: !generation.stop_at_eos,
         });
         let turn_start = Instant::now();
         let mut first_token_time = None;

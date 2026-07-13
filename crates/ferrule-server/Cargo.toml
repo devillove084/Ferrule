@@ -1,0 +1,28 @@
+[package]
+name = "ferrule-server"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "Ferrule OpenAI-compatible asynchronous serving frontend"
+repository = "https://github.com/ferrule/ferrule"
+readme = "../../README.md"
+keywords = ["llm", "inference", "openai", "server", "rust"]
+categories = ["science", "machine-learning", "web-programming::http-server"]
+
+[dependencies]
+ferrule-common = { path = "../ferrule-common" }
+ferrule-model = { path = "../ferrule-model" }
+ferrule-runtime = { path = "../ferrule-runtime" }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+futures-core = "0.3"
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
+
+[lints]
+workspace = true

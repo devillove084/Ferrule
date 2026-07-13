@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
@@ -26,6 +28,8 @@ pub(crate) enum Command {
         #[arg(long = "chat-template")]
         chat_template: Option<String>,
     },
+    /// Serve an OpenAI-compatible asynchronous HTTP API.
+    Serve(ServeArgs),
     /// Benchmark multi-turn interactive chat latency.
     #[command(name = "bench-interactive")]
     BenchInteractive {
@@ -188,6 +192,66 @@ pub(crate) enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Args, Clone)]
+pub(crate) struct ServeArgs {
+    /// Local Hugging Face model directory.
+    pub(crate) model: String,
+    /// Public model ID returned by /v1/models and accepted by requests.
+    #[arg(long = "served-model-name", default_value = "deepseek-v4")]
+    pub(crate) served_model_name: String,
+    /// Listening address.
+    #[arg(long, default_value = "127.0.0.1")]
+    pub(crate) host: IpAddr,
+    /// Listening TCP port.
+    #[arg(long, default_value_t = 8000)]
+    pub(crate) port: u16,
+    /// Operator backend: cuda or cpu.
+    #[arg(long, default_value = "cuda")]
+    pub(crate) backend: String,
+    /// Override the model-family default chat template.
+    #[arg(long = "chat-template")]
+    pub(crate) chat_template: Option<String>,
+    /// Maximum context tokens retained per active request.
+    #[arg(long = "ctx-size", default_value_t = 4096)]
+    pub(crate) ctx_size: usize,
+    /// Maximum simultaneously resident requests.
+    #[arg(long = "max-active-sequences", default_value_t = 64)]
+    pub(crate) max_active_sequences: usize,
+    /// Maximum prompt tokens processed by one prefill chunk.
+    #[arg(long = "prefill-chunk-size", default_value_t = 4096)]
+    pub(crate) prefill_chunk_size: usize,
+    /// Maximum packed prefill plus decode tokens in one scheduler action.
+    #[arg(long = "max-batch-tokens", default_value_t = 4096)]
+    pub(crate) max_batch_tokens: usize,
+    /// Bounded requests waiting for model-worker admission.
+    #[arg(long = "request-queue-capacity", default_value_t = 256)]
+    pub(crate) request_queue_capacity: usize,
+    /// Bounded token events buffered independently per request.
+    #[arg(long = "event-queue-capacity", default_value_t = 32)]
+    pub(crate) event_queue_capacity: usize,
+    /// Maximum time in seconds to wait for tokenizer/runtime admission.
+    #[arg(long = "admission-timeout-secs", default_value_t = 30)]
+    pub(crate) admission_timeout_secs: u64,
+    /// Number of DSV4 base layers to execute.
+    #[arg(long, default_value_t = 43)]
+    pub(crate) max_layers: usize,
+    /// lm_head chunk size in rows for full-vocabulary top-1 scans.
+    #[arg(long, default_value_t = 4096)]
+    pub(crate) output_head_chunk_rows: usize,
+    /// Maximum single top-level/layer artifact tensor read size.
+    #[arg(long = "max-tensor-mb", default_value_t = 128)]
+    pub(crate) max_tensor_mb: u64,
+    /// Maximum single expert artifact read size.
+    #[arg(long = "expert-max-slice-mb", default_value_t = 64)]
+    pub(crate) expert_reader_max_slice_mb: u64,
+    /// Number of routed experts per layer to predictively prefetch.
+    #[arg(long, default_value_t = 32)]
+    pub(crate) moe_prefetch_experts: usize,
+    /// Bound resident routed experts per layer (0 = managed default).
+    #[arg(long, default_value_t = 48)]
+    pub(crate) moe_hotset_experts: usize,
 }
 
 #[derive(Args, Clone)]

@@ -126,9 +126,13 @@ batches; E5 owns authoritative physical paged multi-plane CUDA KV with COW,
 preemption/restore, and exact-prefix sharing; E6 owns device route/group resolution
 and runtime-controlled expert slots, generations, leases, and publication. The CUDA
 side now owns only physical source/staging/upload/table resources for residency.
-Compressor control and stable CUDA graph buckets remain later work. The earlier
-five-token `17.47–17.75s` prefill and `0.80–0.824 tok/s` decode snapshot predates this
-kernel cut and must not be presented as current headline throughput.
+Compressor control and stable CUDA graph buckets remain later work. The model-neutral
+Axum/Hyper/Tokio serving substrate is now active: bounded async handlers feed one
+model-owner thread, OpenAI chat/text completion streams carry usage and `[DONE]`, and
+disconnect cancellation releases request state at a model-step boundary. Official
+vLLM/SGLang benchmark results are not yet recorded. The earlier five-token
+`17.47–17.75s` prefill and `0.80–0.824 tok/s` decode snapshot predates this kernel cut
+and must not be presented as current headline throughput.
 
 ---
 
@@ -838,9 +842,12 @@ For the implemented resident/publication paths:
 ### Completion validation
 
 - `ferrule-common`: 36 tests passed.
-- `ferrule-model`: 175 tests passed.
-- `ferrule-runtime`: 253 tests passed.
-- `just test-cuda-required` passed.
+- `ferrule-model`: 179 unit tests plus integration coverage passed.
+- `ferrule-runtime`: 292 tests passed with one expensive local test ignored.
+- `ferrule-server`: 16 protocol/worker tests passed, including official-client payload
+  shapes and disconnect cancellation without worker poisoning.
+- `ferrule-cli`: 14 tests passed.
+- `just test-cuda-required` passed after the serving changes.
 - CUDA `expert_slot_resolve`: 5 tests passed.
 - Real DSV4 CUDA gates passed for packed batch-2/batch-4 exactness, ragged/mixed
   exactness, prefix-fork COW exactness, repeated sequence residency reuse, and the
@@ -914,7 +921,9 @@ Only profiler-justified work:
 - grouped FP4 packing/dispatch tuning;
 - output head + device sampling;
 - bucket autotuning;
-- serving API, streaming, cancellation, metrics, and structured masks;
+- [x] model-neutral OpenAI chat/text API, SSE streaming, bounded admission/fanout,
+  per-request EOS policy, and disconnect cancellation;
+- [ ] production metrics/profiling endpoints, device sampling, and structured masks;
 - DSpark proposal/verify/rollback after E5/E6 state safety.
 
 ### Correctness exit gate
@@ -944,11 +953,11 @@ quality settings.
 
 ## 7. Immediate implementation slices
 
-E0 and E1 are complete. Slice A established the neutral ABI and compatibility
-boundary without changing DSV4 mathematics or CUDA kernels. Work now enters E2 at
-Slice B; prepared resources and persistent arenas remain active implementation work,
-not completed capabilities. Later sequence-state, KV-transaction, and continuous
-benchmark gates remain with their owning phases.
+E0–E6 and implementation Slices A–D are complete. They remain below as the historical
+execution order and validation record. The active sequence is now: validate the new
+OpenAI HTTP/SSE substrate with official vLLM/SGLang clients, implement E7 stable CUDA
+graph buckets, then complete E8 device sampling, profiler-driven fusion, metrics, and
+competitive reporting.
 
 ### Slice A — E1 neutral ABI and compatibility adapter
 

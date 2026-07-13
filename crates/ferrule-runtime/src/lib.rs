@@ -111,8 +111,8 @@ pub use sampling::{JsonConstraint, MaxLengthConstraint, SamplerMask, TokenConstr
 pub use sampling::{Logprobs, Sampler, SamplingConfig};
 
 pub use scheduling::{
-    DecodeAction, LogitsSelection, PrefillChunkAction, ResidentScheduler, ResidentSchedulerConfig,
-    SchedulerAction, plan_prefill_chunk,
+    CancelRequestResult, DecodeAction, LogitsSelection, PrefillChunkAction, ResidentScheduler,
+    ResidentSchedulerConfig, SchedulerAction, plan_prefill_chunk,
 };
 pub use scheduling::{
     GenerateRequest, RequestId, SequenceFinishReason, SequenceState, SequenceStatus, SessionId,

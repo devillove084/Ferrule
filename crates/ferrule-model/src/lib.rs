@@ -153,7 +153,7 @@ pub use hyper_connection::{
 pub use ffn::SwiGluFfnPayload;
 
 // ── Re-exports: chat ──────────────────────────────────────────────────────
-pub use chat::{ChatTemplate, detect_chat_template};
+pub use chat::{ChatFormatError, ChatMessage, ChatRole, ChatTemplate, detect_chat_template};
 
 // ── Re-exports: precision ─────────────────────────────────────────────────
 pub use precision::{PrecisionPolicy, QuantPreset, TensorDtypeOverride};

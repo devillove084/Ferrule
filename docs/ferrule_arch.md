@@ -49,11 +49,17 @@ Canonical execution documents:
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        ferrule-cli                                  │
-│  args · display · chat · bench-interactive · cuda · inspect/probes   │
-│  Owns UX only: no handwritten generation loop, no unsafe kernels.    │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-                               ▼
+│  args · chat · serve composition root · benchmarks · diagnostics     │
+└───────────────┬──────────────────────────────────────┬──────────────┘
+                │                                      │
+                ▼                                      ▼
+┌──────────────────────────────┐      ┌───────────────────────────────┐
+│        ferrule-server        │      │       direct diagnostics       │
+│ Axum/Hyper/Tokio · OpenAI/SSE│      │ terminal/JSON over runtime     │
+│ bounded channels · worker    │      └───────────────┬───────────────┘
+└───────────────┬──────────────┘                      │
+                └──────────────────┬───────────────────┘
+                                   ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                     ferrule-runtime                                 │
 │  generation/session/sampling/scheduler/cache                        │
@@ -85,7 +91,8 @@ Canonical execution documents:
 | `ferrule-model` | model semantics, artifact binding, prepared model/lowering policy, CPU reference, and concrete model implementations such as `models::deepseek_v4` |
 | `ferrule-runtime` | generation/session/sampling/scheduling, logical sequence/KV lifecycle, runtime graph IR, storage/residency and executable-cache policy; depends on capabilities, not concrete models |
 | `ferrule-cuda` | CUDA allocations/pools, streams/events, primitives/kernels, physical device resources, counters, and CUDA graph execs |
-| `ferrule-cli` | argument parsing, command dispatch, terminal/JSON output, model-specific diagnostics |
+| `ferrule-server` | model-neutral Axum/Hyper/Tokio OpenAI API, SSE serialization, bounded admission/token channels, dedicated model-worker ownership, and disconnect cancellation |
+| `ferrule-cli` | argument parsing, command dispatch, model-family composition roots, terminal/JSON output, and diagnostics |
 
 ---
 
@@ -572,26 +579,28 @@ CUDA graphs, fusion, device sampling, and competitive serving validation. See
 
 ## Serving
 
-Serving is a design target, not an active CLI command in the current 5-crate
-workspace. The intended OpenAI-compatible surface is still:
+Serving is active through the model-neutral `ferrule-server` crate and the DSV4
+`ferrule serve` composition root. The implemented OpenAI-compatible surface is:
 
 - `GET /health`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
-- SSE streaming (`stream: true`) with token text + final usage stats
+- `POST /v1/completions`
+- streaming and non-streaming responses, final usage, and SSE `[DONE]`
 
-Production serving needs, in dependency order:
+Axum/Hyper/Tokio handlers submit through a bounded channel to one dedicated model
+thread. That thread constructs and exclusively owns the tokenizer, CUDA runner,
+`ResidentTopKDriver`, scheduler, and paged KV state. Per-request bounded token
+channels prevent a slow client from blocking every sequence. Closing an SSE response
+sets an atomic cancellation flag; the owner thread cancels at the next model-step
+boundary and releases runtime/model/KV state without returning a callback error or
+poisoning unrelated requests.
 
-1. the completed E1–E3 neutral ABI, prepared resources/arenas, and explicit backend
-   sequence state behind the compatibility driver;
-2. the completed E4 native multi-session/ragged execution, where runtime correlation
-   binds every row to a real backend sequence state;
-3. the completed E5 physical multi-plane paged KV with COW, exact-prefix sharing,
-   rollback, and preempt/restore;
-4. the completed E6 device router/grouping and runtime residency coordinator with
-   stable expert indirection;
-5. E7 reusable graph buckets over the same eager `*_into` stages;
-6. cancellation/rollback, metrics, structured-output masks, and an HTTP/SSE surface.
+The API currently accepts only truthful greedy generation (`temperature = 0`,
+`n = 1`, top-k 1) and rejects unsupported sampling/logprob/tool fields. E7 graph
+buckets, E8 device sampling/fusion, automatic radix-prefix lookup, metrics endpoints,
+and official vLLM/SGLang benchmark publication remain. See
+[`serving.md`](serving.md) for the contract and commands.
 
 ---
 
@@ -643,7 +652,7 @@ leak into scheduler, sampler, CLI, or the neutral execution ABI.
 | KV | authoritative physical paged multi-plane lifecycle with reservation/COW/prefix/preemption | radix lookup policy and later low-bit KV formats |
 | MoE residency | runtime cross-request coordinator, exact stable bindings/leases/stats, and event-guarded CUDA physical resources | E7 graph binding plus later distributed placement |
 | CUDA graph | no current DSV4 graph mode; device-resident eager decode only | E7 long-lived piecewise buckets over the eager device pipeline |
-| Serving | control-plane scheduler/driver proof; no active server command | native multi-session executor, physical KV, streaming/cancel/metrics |
+| Serving | active OpenAI chat/completion HTTP/SSE, bounded async admission/fanout, dedicated model owner, per-request EOS, and disconnect cancellation | official benchmark validation, metrics, device sampling, auth/deployment hardening |
 | Quantization | Q4/Q8/FP4/FP8, mixed precision, artifact-preserving DSV4 | calibrated quality gates and additional formats only after execution ownership stabilizes |
 
 ### Differentiation

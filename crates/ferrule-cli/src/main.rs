@@ -14,6 +14,7 @@ use commands::inspect::{
     cmd_deepseek_v4_generate, cmd_deepseek_v4_prefill_parity, cmd_deepseek_v4_probe,
     cmd_expert_stream_smoke, cmd_inspect_weightpack,
 };
+use commands::serve::cmd_serve;
 
 fn main() -> anyhow::Result<()> {
     ferrule_common::observability::init_tracing();
@@ -21,6 +22,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Info { model } => cmd_info(&model),
         Command::Cuda => cmd_cuda(),
+        Command::Serve(args) => cmd_serve(args),
         Command::Chat {
             model,
             max_tokens,

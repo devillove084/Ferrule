@@ -17,6 +17,7 @@ path = "src/main.rs"
 ferrule-common = { path = "../ferrule-common" }
 ferrule-model = { path = "../ferrule-model" }
 ferrule-runtime = { path = "../ferrule-runtime" }
+ferrule-server = { path = "../ferrule-server" }
 ferrule-cuda = { path = "../ferrule-cuda", optional = true }
 memmap2 = "0.9"
 clap = { version = "4", features = ["derive"] }
@@ -26,6 +27,7 @@ serde_json = "1"
 rustyline = "15"
 console = "0.15"
 tracing = "0.1"
+tokio = { version = "1", features = ["net", "rt-multi-thread", "signal"] }
 
 [features]
 default = []

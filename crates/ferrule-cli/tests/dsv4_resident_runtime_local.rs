@@ -76,6 +76,7 @@ fn deepseek_v4_runs_latest_resident_runtime_driver_local() -> Result<()> {
         sampling: SamplingConfig::greedy(),
         max_new_tokens: 1,
         stop: Vec::new(),
+        ignore_eos: false,
     });
 
     let mut emitted = Vec::new();
@@ -228,6 +229,7 @@ fn deepseek_v4_native_packed_decode_batch2_and_batch4_are_exact_local() -> Resul
                 sampling: SamplingConfig::greedy(),
                 max_new_tokens: 2,
                 stop: Vec::new(),
+                ignore_eos: false,
             });
         }
         let mut events = Vec::new();
@@ -385,6 +387,7 @@ fn deepseek_v4_native_ragged_prefill_and_mixed_are_exact_local() -> Result<()> {
             sampling: SamplingConfig::greedy(),
             max_new_tokens: 2,
             stop: Vec::new(),
+            ignore_eos: false,
         });
     }
     let mut events = Vec::new();
@@ -482,6 +485,7 @@ fn deepseek_v4_exact_prefix_fork_cow_matches_full_serial_local() -> Result<()> {
         sampling: SamplingConfig::greedy(),
         max_new_tokens: 2,
         stop: Vec::new(),
+        ignore_eos: false,
     });
     driver.step(&mut |_| Ok(()))?;
     let pages_before_fork = driver.page_manager().unwrap().allocated_pages();
@@ -494,6 +498,7 @@ fn deepseek_v4_exact_prefix_fork_cow_matches_full_serial_local() -> Result<()> {
             sampling: SamplingConfig::greedy(),
             max_new_tokens: 2,
             stop: Vec::new(),
+            ignore_eos: false,
         },
         prefix.len(),
     )?;

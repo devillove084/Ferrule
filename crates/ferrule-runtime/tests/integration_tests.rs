@@ -112,6 +112,7 @@ fn scheduler_request(
         sampling: SamplingConfig::greedy(),
         max_new_tokens: 4,
         stop: Vec::new(),
+        ignore_eos: false,
     }
 }
 

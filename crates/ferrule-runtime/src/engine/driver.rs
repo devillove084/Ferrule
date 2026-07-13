@@ -10,8 +10,9 @@ use crate::cache::{KvPageManager, PreemptedKvState, SequenceSlotPool};
 use crate::generation::matched_stop;
 use crate::scheduling::resident::{SuspendedSequenceSchedule, greedy_candidate};
 use crate::scheduling::{
-    DecodeAction, GenerateRequest, ResidentScheduler, ResidentSchedulerConfig, ScheduledBatch,
-    SchedulerAction, SequenceFinishReason, SequenceState, SessionId,
+    CancelRequestResult, DecodeAction, GenerateRequest, RequestId, ResidentScheduler,
+    ResidentSchedulerConfig, ScheduledBatch, SchedulerAction, SequenceFinishReason, SequenceState,
+    SessionId,
 };
 
 use super::NativeMultiSessionExecutor;
@@ -435,6 +436,24 @@ where
         self.scheduler.submit_at_position(request, position_start);
     }
 
+    /// Cancel a waiting or active request without executing another model step.
+    ///
+    /// Active cancellation releases the scheduler slot, model sequence state,
+    /// authoritative paged KV metadata, and physical KV pages. Cleanup failures
+    /// are returned but do not poison the executor.
+    pub fn cancel_request(&mut self, request_id: RequestId) -> Result<CancelRequestResult> {
+        let result = self
+            .scheduler
+            .cancel_request(request_id, &mut self.slot_pool)?;
+        if let CancelRequestResult::Active { session_id, .. } = result {
+            if let Some(position) = self.retained_sessions.get_mut(&session_id) {
+                *position = 0;
+            }
+            self.try_release_sequence_state(session_id)?;
+        }
+        Ok(result)
+    }
+
     /// Fork an active session from exactly its currently committed paged prefix.
     ///
     /// `target_request.prompt_tokens` is the suffix for the target branch; the
@@ -566,6 +585,10 @@ where
         self.scheduler.drain_finished()
     }
 
+    pub fn drain_cancelled(&mut self) -> Vec<SequenceState> {
+        self.scheduler.drain_cancelled()
+    }
+
     pub fn drain_failed(&mut self) -> Vec<SequenceState> {
         self.scheduler.drain_failed()
     }
@@ -619,30 +642,40 @@ where
 
     /// Release the sequence state for a finished or cancelled session.
     fn release_sequence_state(&mut self, session_id: SessionId) {
-        if let (Some(manager), Some(slot)) =
-            (&mut self.page_manager, self.page_slots.remove(&session_id))
-        {
-            match manager.free_sequence_pages(slot) {
-                Ok(pages) => {
-                    if let Err(error) = self.executor.release_kv_pages(&pages) {
-                        tracing::warn!(
-                            "failed to release physical KV pages for session {session_id:?}: {error}"
-                        );
+        if let Err(error) = self.try_release_sequence_state(session_id) {
+            tracing::warn!("failed to release state for session {session_id:?}: {error}");
+        }
+    }
+
+    /// Attempt every resource release and report cleanup errors without changing
+    /// executor poison state. This is used directly by explicit cancellation.
+    fn try_release_sequence_state(&mut self, session_id: SessionId) -> Result<()> {
+        let mut errors = Vec::new();
+        if let Some(slot) = self.page_slots.remove(&session_id) {
+            match self.page_manager.as_mut() {
+                Some(manager) => match manager.free_sequence_pages(slot) {
+                    Ok(pages) => {
+                        if let Err(error) = self.executor.release_kv_pages(&pages) {
+                            errors.push(format!("physical KV release failed: {error}"));
+                        }
                     }
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        "failed to release KV pages for session {session_id:?}: {error}"
-                    );
-                }
+                    Err(error) => errors.push(format!("paged KV release failed: {error}")),
+                },
+                None => errors.push("authoritative page manager is missing".into()),
             }
         }
         if let Some(state) = self.sequence_states.remove(&session_id) {
             if let Err(error) = self.executor.release_sequence_state(state) {
-                tracing::warn!(
-                    "failed to release sequence state for session {session_id:?}: {error}"
-                );
+                errors.push(format!("model sequence-state release failed: {error}"));
             }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::Internal(format!(
+                "failed to release cancelled session {session_id:?}: {}",
+                errors.join("; ")
+            )))
         }
     }
 
@@ -1175,6 +1208,7 @@ where
             };
 
             if self.config.stop_at_eos
+                && !sequence.ignore_eos
                 && self.executor.runner().eos_token_id() == Some(candidate.token_id)
             {
                 if self.config.append_eos_to_session {
@@ -1316,6 +1350,8 @@ mod tests {
         prefills: Vec<Vec<u32>>,
         fail_next_mutation: bool,
         mutation_calls: usize,
+        released_sequence_states: usize,
+        released_kv_pages: Vec<ferrule_common::execution::KvPageId>,
     }
 
     impl MockTopKRunner {
@@ -1328,6 +1364,8 @@ mod tests {
                 prefills: Vec::new(),
                 fail_next_mutation: false,
                 mutation_calls: 0,
+                released_sequence_states: 0,
+                released_kv_pages: Vec::new(),
             }
         }
 
@@ -1540,6 +1578,15 @@ mod tests {
         }
 
         fn release_sequence_state(&mut self, _state: Self::SequenceState) -> Result<()> {
+            self.released_sequence_states += 1;
+            Ok(())
+        }
+
+        fn release_kv_pages(
+            &mut self,
+            pages: &[ferrule_common::execution::KvPageId],
+        ) -> Result<()> {
+            self.released_kv_pages.extend_from_slice(pages);
             Ok(())
         }
 
@@ -1580,6 +1627,7 @@ mod tests {
             sampling: SamplingConfig::greedy(),
             max_new_tokens,
             stop,
+            ignore_eos: false,
         }
     }
 
@@ -1734,6 +1782,54 @@ mod tests {
     }
 
     #[test]
+    fn mixed_requests_isolate_ignore_eos_policy() {
+        let eos = 2;
+        let mut driver = ResidentTopKDriver::with_configs(
+            MockTopKRunner::new(vec![top(eos)]).with_eos(eos),
+            PagedSequenceKvCache::new(1, 1, 4, 2),
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 4,
+                max_active_sequences: 2,
+                max_decode_batch: 2,
+                max_batch_tokens: 8,
+                allow_mixed_batches: true,
+            },
+            NonZeroU32::new(1).unwrap(),
+            ResidentTopKDriverConfig::default(),
+        );
+        let stop_at_eos = request(40, &[1], 1, Vec::new());
+        let mut ignore_eos = request(41, &[3], 1, Vec::new());
+        ignore_eos.ignore_eos = true;
+        driver.submit(stop_at_eos);
+        driver.submit(ignore_eos);
+
+        let mut events = Vec::new();
+        driver
+            .run_until_blocked(|event| {
+                events.push((event.request_id, event.token));
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(events, vec![(Some(RequestId(41)), eos)]);
+        let finished = driver.drain_finished();
+        let stopped = finished
+            .iter()
+            .find(|sequence| sequence.request_id == Some(RequestId(40)))
+            .unwrap();
+        let ignored = finished
+            .iter()
+            .find(|sequence| sequence.request_id == Some(RequestId(41)))
+            .unwrap();
+        assert_eq!(stopped.finish_reason, Some(SequenceFinishReason::Eos));
+        assert!(!stopped.ignore_eos);
+        assert_eq!(stopped.tokens, vec![1]);
+        assert_eq!(ignored.finish_reason, Some(SequenceFinishReason::MaxTokens));
+        assert!(ignored.ignore_eos);
+        assert_eq!(ignored.tokens, vec![3, eos]);
+    }
+
+    #[test]
     fn final_decode_skips_next_logits() {
         let mut driver = driver_with_outputs(vec![top(b'a' as u32)]);
         driver.submit(request(4, &[1], 1, Vec::new()));
@@ -1879,6 +1975,84 @@ mod tests {
         assert_eq!(driver.scheduler().waiting_len(), 1);
         assert_eq!(driver.scheduler().active_len(), 0);
         assert_eq!(driver.slot_pool().active_count(), 0);
+    }
+
+    #[test]
+    fn driver_cancel_request_reports_waiting_and_unknown() {
+        let mut driver = driver_with_outputs(Vec::new());
+        driver.submit(request(18, &[1], 1, Vec::new()));
+
+        assert_eq!(
+            driver.cancel_request(RequestId(18)).unwrap(),
+            CancelRequestResult::Waiting {
+                request_id: RequestId(18),
+                session_id: SessionId(1),
+            }
+        );
+        assert_eq!(
+            driver.cancel_request(RequestId(99)).unwrap(),
+            CancelRequestResult::NotFound {
+                request_id: RequestId(99),
+            }
+        );
+        assert!(!driver.executor().is_poisoned());
+        let cancelled = driver.drain_cancelled();
+        assert_eq!(cancelled.len(), 1);
+        assert_eq!(cancelled[0].request_id, Some(RequestId(18)));
+        assert_eq!(cancelled[0].status, SequenceStatus::Cancelled);
+    }
+
+    #[test]
+    fn driver_active_cancel_releases_all_resources_and_allows_followup() {
+        let manager = KvPageManager::new(Box::new(DriverTestKvSchema), 16);
+        let mut driver = driver_with_outputs(vec![top(b'a' as u32), top(b'b' as u32)])
+            .with_page_manager(manager);
+        driver.submit(request(19, &[1, 2, 3], 2, Vec::new()));
+        driver.step(&mut |_| Ok(())).unwrap();
+
+        assert_eq!(driver.scheduler().active_len(), 1);
+        assert_eq!(driver.slot_pool().active_count(), 1);
+        assert_eq!(driver.page_manager().unwrap().active_sequences(), 1);
+        assert!(driver.page_manager().unwrap().allocated_pages() > 0);
+        assert!(driver.sequence_states.contains_key(&SessionId(1)));
+
+        assert_eq!(
+            driver.cancel_request(RequestId(19)).unwrap(),
+            CancelRequestResult::Active {
+                request_id: RequestId(19),
+                session_id: SessionId(1),
+            }
+        );
+        assert_eq!(driver.scheduler().active_len(), 0);
+        assert_eq!(driver.slot_pool().active_count(), 0);
+        assert_eq!(driver.page_manager().unwrap().active_sequences(), 0);
+        assert_eq!(driver.page_manager().unwrap().allocated_pages(), 0);
+        assert!(!driver.sequence_states.contains_key(&SessionId(1)));
+        assert!(!driver.page_slots.contains_key(&SessionId(1)));
+        assert_eq!(driver.executor().runner().released_sequence_states, 1);
+        assert_eq!(driver.executor().runner().released_kv_pages.len(), 1);
+        assert!(!driver.executor().is_poisoned());
+
+        let cancelled = driver.drain_cancelled();
+        assert_eq!(cancelled.len(), 1);
+        assert_eq!(cancelled[0].request_id, Some(RequestId(19)));
+        assert_eq!(cancelled[0].status, SequenceStatus::Cancelled);
+
+        driver.submit(request(20, &[9], 1, Vec::new()));
+        let mut events = Vec::new();
+        driver
+            .run_until_blocked(|event| {
+                events.push(event.token);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(events, vec![b'a' as u32]);
+        let finished = driver.drain_finished();
+        assert_eq!(finished.len(), 1);
+        assert_eq!(finished[0].request_id, Some(RequestId(20)));
+        assert_eq!(driver.slot_pool().active_count(), 0);
+        assert_eq!(driver.page_manager().unwrap().active_sequences(), 0);
+        assert!(!driver.executor().is_poisoned());
     }
 
     #[test]

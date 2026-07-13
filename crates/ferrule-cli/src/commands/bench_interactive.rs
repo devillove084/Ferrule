@@ -800,6 +800,7 @@ fn driver_request(
         sampling: SamplingConfig::greedy(),
         max_new_tokens,
         stop: stop.to_vec(),
+        ignore_eos: false,
     }
 }
 

@@ -7,6 +7,7 @@
 #   just chat MODEL → interactive chat (MODEL required)
 #   just bench-interactive MODEL → multi-turn chat latency benchmark
 #   just dsv4-runtime-driver-bench → DSV4 benchmark through ResidentTopKDriver
+#   just dsv4-serve → OpenAI-compatible DSV4 HTTP/SSE server
 #   just dsv4-prefill-chunk-sweep → DSV4 runtime-driver prefill chunk sweep CSV/JSONL
 #   just test       → all workspace tests
 #   just test-graph → runtime graph IR tests
@@ -90,7 +91,7 @@ oxide-test *args='':
 
 # ── Test ───────────────────────────────────────────────────────────────
 
-test: test-graph test-runtime test-model test-cuda test-cli
+test: test-graph test-runtime test-model test-server test-cuda test-cli
 
 test-graph:
     cargo test -p ferrule-runtime graph
@@ -100,6 +101,10 @@ test-runtime:
 
 test-model:
     cargo test -p ferrule-model
+
+test-server:
+    cargo test -p ferrule-server
+
 
 test-cuda *args='':
     @if [ "{{ _use-cuda }}" != "1" ]; then \
@@ -131,10 +136,10 @@ fmt-fix:
     cargo fmt
 
 clippy:
-    cargo clippy -p ferrule-common -p ferrule-model -p ferrule-runtime -p ferrule-cli -- -D warnings
+    cargo clippy -p ferrule-common -p ferrule-model -p ferrule-runtime -p ferrule-server -p ferrule-cli -- -D warnings
 
 clippy-cuda:
-    cargo clippy -p ferrule-common -p ferrule-model -p ferrule-runtime -p ferrule-cli --features cuda -- -D warnings
+    cargo clippy -p ferrule-common -p ferrule-model -p ferrule-runtime -p ferrule-server -p ferrule-cli --features cuda -- -D warnings
 
 clippy-all: clippy clippy-cuda
     @echo "=== Clippy passed ==="
@@ -178,6 +183,10 @@ chat model quant='q4' *args='':
 
 bench-interactive model *args='':
     just run-cuda bench-interactive {{ model }} {{ args }}
+
+dsv4-serve model='models/DeepSeek-V4-Flash-DSpark' port='8000' *args='':
+    just run-cuda serve {{ model }} --host 127.0.0.1 --port {{ port }} --served-model-name deepseek-v4 {{ args }}
+
 
 dsv4-runtime-driver-bench prompt1='Hello' prompt2='Explain Ferrule in one sentence.' tokens='1' warmup='1' chunk='4096' layers='43' *args='':
     @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi

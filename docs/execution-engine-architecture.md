@@ -60,7 +60,11 @@ The following decisions are fixed for the next implementation phases.
 The production path is:
 
 ```text
-ResidentScheduler
+Axum/Hyper/Tokio OpenAI handler
+  → bounded request channel
+  → dedicated model-owner thread
+  → ResidentTopKDriver
+  → ResidentScheduler
   → token-budgeted SchedulerAction::Execute
   → runtime-private ScheduledBatch correlation
   → ferrule-common::execution::ExecutionBatch
@@ -71,8 +75,12 @@ ResidentScheduler
   → DSV4 CUDA physical transfers/tables and ferrule-cuda kernels
 ```
 
-E1–E6 have separated logical lifecycle from physical resources. The major remaining
-execution-shape work is E7 stable graph buckets and E8 profiler-driven fusion/sampling.
+E1–E6 have separated logical lifecycle from physical resources. The asynchronous
+HTTP/SSE layer now preserves that ownership: handlers never lock or execute the model,
+and disconnects become request cancellation between synchronous model steps. The major
+remaining execution-shape work is E7 stable graph buckets and E8 profiler-driven
+fusion/device sampling; serving metrics and official comparative results are also
+pending.
 
 ### 2.1 Native batching and prefill are implemented
 

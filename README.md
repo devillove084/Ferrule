@@ -46,21 +46,28 @@ Verified on `models/DeepSeek-V4-Flash-DSpark` with `sm_121a`:
 - full 43-layer greedy chat/generation, FP4 Tensor Core MoE, GPU compressor
   numerics, and deterministic route-ranked reduction are active.
 
-E1–E5 are complete. Ferrule now has a dependency-neutral `ExecutionBatch`, prepared
+E1–E6 are complete. Ferrule now has a dependency-neutral `ExecutionBatch`, prepared
 plans and persistent arenas, explicit per-sequence state, token-budgeted native
-multi-session execution, and authoritative runtime/CUDA page transactions. Exact
-prefixes share physical pages with partial-tail COW; rollback and preempt/restore
-replace model-local CUDA checkpoint copies.
+multi-session execution, authoritative runtime/CUDA page transactions, device
+routing, and runtime-owned expert residency. Exact prefixes share physical pages with
+partial-tail COW; rollback and preempt/restore replace model-local CUDA checkpoint
+copies.
 
-The architecture is **not** yet vLLM/SGLang-class serving:
+An OpenAI-compatible server is active through `ferrule serve`: Axum/Hyper/Tokio own
+HTTP and SSE, while one dedicated model thread owns the synchronous resident driver.
+Bounded request/token channels provide admission control and backpressure; disconnects
+cancel at a model-step boundary without poisoning other requests. Chat and text
+completion endpoints currently expose truthful greedy (`temperature = 0`, `n = 1`)
+semantics.
 
-- router and expert residency remain host controlled;
+The architecture is **not** yet vLLM/SGLang performance parity:
+
 - DSV4 uses device-resident eager execution but has no stable graph buckets yet;
-- device sampling, fusion, radix lookup policy, and an active server command remain
-  future work.
+- device sampling, fusion, automatic radix-prefix lookup, and production metrics remain;
+- official vLLM/SGLang serving benchmark results have not yet been recorded.
 
-Next are E6 device routing/runtime residency, E7 stable graph buckets, and E8 fusion,
-device sampling, and competitive validation. See the
+Next are E7 stable graph buckets and E8 fusion, device sampling, and competitive
+validation. See the
 [execution engine design](docs/execution-engine-architecture.md) and
 [roadmap](docs/ROADMAP.md).
 
@@ -93,9 +100,9 @@ model structure, runtime state, and hardware placement.
 </p>
 
 Near term: llama.cpp-level local usability with a more explicit runtime
-architecture — fast cached startup, sampling controls, templates, quality
-checks, benchmarks, future local serving, and source-preserving bring-up for
-mainstream model families.
+architecture — fast cached startup, sampling controls, templates, quality checks,
+OpenAI-compatible local serving, official benchmarks, and source-preserving bring-up
+for mainstream model families.
 
 Long term: a runtime substrate for edge-cloud LLM systems:
 
@@ -158,7 +165,18 @@ Inside chat:
 just dsv4-cuda-generate Hello 2 4096 --chat
 ```
 
-6. **OLMoE regression fixture (if present):**
+6. **Start the OpenAI-compatible DSV4 server:**
+
+```bash
+just dsv4-serve
+
+curl http://127.0.0.1:8000/v1/models
+curl -N http://127.0.0.1:8000/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{"model":"deepseek-v4","messages":[{"role":"user","content":"Hello"}],"max_completion_tokens":8,"temperature":0,"stream":true,"stream_options":{"include_usage":true}}'
+```
+
+7. **OLMoE regression fixture (if present):**
 
 ```bash
 just chat models/OLMoE-Instruct q4 -n 256
@@ -184,7 +202,7 @@ just chat models/OLMoE-Instruct q4 -n 256
 | Runtime graph | `ferrule-runtime::graph` opaque IR, `GraphProgram`, `BackendObjectStore`, and `ReferenceGraphExecutor::execute` with caller-owned `ReferenceGraphSequenceState` |
 | Sampling | temperature, top-k, top-p, min-p, repeat penalty, seed, stop strings, logprobs |
 | Chat templates | OLMoE, ChatML, Llama3, Qwen, DeepSeek-V4, Plain |
-| Serving | design target; no active CLI server command in the current 5-crate workspace |
+| Serving | `ferrule-server` + `ferrule serve`: Axum/Hyper/Tokio, dedicated model-owner thread, bounded queues, disconnect cancellation, `/health`, `/v1/models`, `/v1/chat/completions`, and `/v1/completions`; greedy only for now |
 | Structured decoding | token mask API, program-like generation API |
 | Speculation | DSpark/MTP metadata represented as generic speculation attachment policy |
 | Training/RL | design target, not implemented |
@@ -208,6 +226,7 @@ just check              # Quick check
 
 ```bash
 just dsv4-chat tokens=128                        # Interactive chat
+just dsv4-serve                                  # OpenAI-compatible HTTP/SSE server
 just dsv4-runtime-driver-bench                   # bench-interactive via ResidentTopKDriver
 # positional override: prompt1 prompt2 tokens warmup chunk layers
 just dsv4-runtime-driver-bench "Hello" "Explain Ferrule in one sentence." 1 0 2 43
@@ -244,19 +263,17 @@ just lint           # fmt + clippy
 
 ## Active development focus
 
-1. **Implement E4 native ragged multi-session execution** — consume the completed
-   prepared-plan, per-sequence state, and exact-bucket arena ownership without
-   reintroducing a default-sequence swap path.
-2. **Make batching physical in E5** — bind ragged execution to physical multi-plane
-   paged KV before claiming continuous batching, prefix reuse, or preemption.
-3. **Move routing and residency policy into E6** — distinguish fixed prepared
-   resources from dynamic expert-generation changes and coordinate them across
-   active sessions.
-4. **Build stable E7 graph buckets** — lower the unified allocation-free eager
-   stages into reusable graphs; do not restore the deleted token-specific one-shot
-   graph path.
-5. **Fuse and benchmark in E8** — add device sampling, fusion, and competitive GB10
-   comparisons only after E4–E7 stabilize the serving execution shape.
+1. **Run official serving smoke tests** — validate Ferrule against `vllm bench serve`
+   and SGLang `benchmark.serving` using identical prompts, tokenizer, greedy settings,
+   and concurrency.
+2. **Build stable E7 graph buckets** — lower the unified allocation-free eager stages
+   into reusable graphs without restoring the deleted token-specific one-shot path.
+3. **Complete E8 device sampling and fusion** — move non-greedy sampling off the host
+   path and optimize only profiler-proven stages.
+4. **Connect automatic radix-prefix lookup and production metrics** — E5 already owns
+   exact fork/COW primitives; independent API requests still need lookup/admission.
+5. **Publish controlled comparisons** — report TTFT, TPOT, ITL, throughput, memory,
+   page utilization, and quality under fixed vLLM/SGLang-compatible workloads.
 
 ---
 
@@ -265,7 +282,8 @@ just lint           # fmt + clippy
 | Document | Content |
 |---|---|
 | [Architecture](docs/ferrule_arch.md) | Repository crates, model boundaries, current runtime, serving direction, and alignment targets |
-| [Execution Engine](docs/execution-engine-architecture.md) | E1–E5 implemented ownership: neutral ABI, prepared plans, sequence state, arenas, native batching, and physical paged KV; E6–E8 targets follow |
+| [Execution Engine](docs/execution-engine-architecture.md) | E1–E6 implemented ownership: neutral ABI, prepared plans, sequence state, arenas, native batching, physical paged KV, and runtime expert residency; E7–E8 targets follow |
+| [Serving](docs/serving.md) | Axum/Hyper/Tokio selection, dedicated model-worker ownership, OpenAI/SSE contract, cancellation, commands, and official benchmark targets |
 | [Roadmap](docs/ROADMAP.md) | Canonical E0–E8 dependency plan with phase-owned correctness/performance gates and non-goals |
 | [Storage & Residency](docs/storage-residency-architecture.md) | Current/target expert residency ownership, slots, leases, transfers, policy, metrics, and E6 migration |
 | [Runtime Graph](docs/runtime-graph-architecture.md) | Device-independent graph IR, `GraphNode`, dialects, `GraphProgram`, external bindings, and explicit reference execution state |

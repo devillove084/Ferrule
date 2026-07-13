@@ -15,7 +15,7 @@ pub use actions::{
     plan_prefill_chunk,
 };
 pub(crate) use batch::ScheduledBatch;
-pub use resident::{ResidentScheduler, ResidentSchedulerConfig};
+pub use resident::{CancelRequestResult, ResidentScheduler, ResidentSchedulerConfig};
 pub use session::{
     GenerateRequest, RequestId, SequenceFinishReason, SequenceState, SequenceStatus, SessionId,
 };

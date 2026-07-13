@@ -664,13 +664,13 @@ impl ExecutionOutput {
         let mut seen = vec![false; batch.len()];
 
         for (output_index, row) in self.logits.iter().enumerate() {
-            if let Some(previous) = previous_input_row {
-                if row.input_row <= previous {
-                    return Err(execution_error(format!(
-                        "output logits row {output_index} input_row {} is not strictly greater than {previous}",
-                        row.input_row
-                    )));
-                }
+            if let Some(previous) = previous_input_row
+                && row.input_row <= previous
+            {
+                return Err(execution_error(format!(
+                    "output logits row {output_index} input_row {} is not strictly greater than {previous}",
+                    row.input_row
+                )));
             }
             previous_input_row = Some(row.input_row);
 
@@ -955,7 +955,7 @@ pub struct KvPlaneDescriptor {
 ///
 /// This trait is model-agnostic. Concrete models (DSV4, Qwen3, etc.) implement
 /// it to describe their specific KV planes.
-pub trait KvLayoutSchema: std::fmt::Debug {
+pub trait KvLayoutSchema: std::fmt::Debug + Send + Sync {
     /// All KV planes this model requires.
     fn planes(&self) -> &[KvPlaneDescriptor];
 
@@ -968,7 +968,7 @@ pub trait KvLayoutSchema: std::fmt::Debug {
     /// Number of pages needed for a sequence of `token_count` tokens.
     fn pages_for_tokens(&self, token_count: usize) -> usize {
         let page_size = self.page_size();
-        (token_count + page_size - 1) / page_size
+        token_count.div_ceil(page_size)
     }
 }
 

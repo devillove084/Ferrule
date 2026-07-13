@@ -71,6 +71,8 @@ pub struct GenerateRequest {
     pub sampling: crate::sampling::sampler::SamplingConfig,
     pub max_new_tokens: usize,
     pub stop: Vec<String>,
+    /// Continue generation when the model selects its EOS token for this request.
+    pub ignore_eos: bool,
 }
 
 /// The state of a single generation session.
@@ -97,6 +99,8 @@ pub struct SequenceState {
     pub max_new_tokens: usize,
     /// Stop strings attached to the current request turn.
     pub stop: Vec<String>,
+    /// Whether EOS should be treated as a normal decode candidate for this request turn.
+    pub ignore_eos: bool,
     /// Prompt token count for the current turn.
     pub prompt_len: usize,
     /// Number of current-turn prompt tokens already executed in prefill.
@@ -125,6 +129,7 @@ impl SequenceState {
             sampling: crate::sampling::sampler::SamplingConfig::default(),
             max_new_tokens: 0,
             stop: Vec::new(),
+            ignore_eos: false,
             prompt_len: 0,
             prompt_cursor: 0,
             next_decode_token: None,
@@ -146,6 +151,7 @@ impl SequenceState {
         self.sampling = request.sampling.clone();
         self.max_new_tokens = request.max_new_tokens;
         self.stop = request.stop.clone();
+        self.ignore_eos = request.ignore_eos;
     }
 
     pub fn bind_kv(&mut self, handle: KvHandle) {
@@ -316,6 +322,7 @@ impl SequenceState {
             sampling: request.sampling.clone(),
             max_new_tokens: request.max_new_tokens,
             stop: request.stop.clone(),
+            ignore_eos: request.ignore_eos,
             prompt_len: request.prompt_tokens.len(),
             prompt_cursor: 0,
             next_decode_token: None,
@@ -368,6 +375,7 @@ impl SequenceState {
         self.sampling = crate::sampling::sampler::SamplingConfig::default();
         self.max_new_tokens = 0;
         self.stop.clear();
+        self.ignore_eos = false;
         self.total_generated = 0;
     }
 }
@@ -476,11 +484,13 @@ mod tests {
             sampling: crate::sampling::sampler::SamplingConfig::greedy(),
             max_new_tokens: 32,
             stop: vec!["</s>".into()],
+            ignore_eos: false,
         };
         assert_eq!(req.id, RequestId(100));
         assert_eq!(req.session_id, Some(SessionId(1)));
         assert_eq!(req.max_new_tokens, 32);
         assert_eq!(req.stop, vec!["</s>"]);
+        assert!(!req.ignore_eos);
 
         let state = SequenceState::from_request(&req, SessionId(99));
         assert_eq!(state.request_id, Some(RequestId(100)));
@@ -488,6 +498,7 @@ mod tests {
         assert_eq!(state.current_prompt_tokens(), &[10, 20]);
         assert_eq!(state.max_new_tokens, 32);
         assert_eq!(state.stop, vec!["</s>"]);
+        assert!(!state.ignore_eos);
         assert_eq!(state.sampling.temperature, 0.0);
     }
 

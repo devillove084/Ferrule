@@ -118,6 +118,7 @@ pub fn cmd_deepseek_v4_generate(
             sampling: SamplingConfig::greedy(),
             max_new_tokens: warmup_tokens,
             stop: Vec::new(),
+            ignore_eos: !stop_at_eos,
         });
         let warmup_start = Instant::now();
         warmup_driver.run_until_blocked(|_| Ok(()))?;
@@ -150,6 +151,7 @@ pub fn cmd_deepseek_v4_generate(
             sampling: SamplingConfig::greedy(),
             max_new_tokens,
             stop: Vec::new(),
+            ignore_eos: !stop_at_eos,
         });
 
         loop {
