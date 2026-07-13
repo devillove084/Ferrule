@@ -149,7 +149,6 @@ pub struct CudaOpCounters {
     pub moe_scalar_calls: u64,
     pub moe_reduce_calls: u64,
     pub moe_total_us: u64,
-    pub moe_pointer_upload_us: u64,
     pub moe_input_prepare_us: u64,
     pub moe_gate_up_us: u64,
     pub moe_swiglu_us: u64,
@@ -192,7 +191,6 @@ pub(crate) struct CudaOpCounterCells {
     moe_scalar_calls: Cell<u64>,
     moe_reduce_calls: Cell<u64>,
     moe_total_us: Cell<u64>,
-    moe_pointer_upload_us: Cell<u64>,
     moe_input_prepare_us: Cell<u64>,
     moe_gate_up_us: Cell<u64>,
     moe_swiglu_us: Cell<u64>,
@@ -225,7 +223,6 @@ impl CudaOpCounterCells {
             moe_scalar_calls: self.moe_scalar_calls.get(),
             moe_reduce_calls: self.moe_reduce_calls.get(),
             moe_total_us: self.moe_total_us.get(),
-            moe_pointer_upload_us: self.moe_pointer_upload_us.get(),
             moe_input_prepare_us: self.moe_input_prepare_us.get(),
             moe_gate_up_us: self.moe_gate_up_us.get(),
             moe_swiglu_us: self.moe_swiglu_us.get(),
@@ -257,7 +254,6 @@ impl CudaOpCounterCells {
         self.moe_scalar_calls.set(0);
         self.moe_reduce_calls.set(0);
         self.moe_total_us.set(0);
-        self.moe_pointer_upload_us.set(0);
         self.moe_input_prepare_us.set(0);
         self.moe_gate_up_us.set(0);
         self.moe_swiglu_us.set(0);
@@ -340,11 +336,6 @@ impl CudaOpCounterCells {
     pub(crate) fn add_moe_total_us(&self, us: u64) {
         self.moe_total_us
             .set(self.moe_total_us.get().saturating_add(us));
-    }
-
-    pub(crate) fn add_moe_pointer_upload_us(&self, us: u64) {
-        self.moe_pointer_upload_us
-            .set(self.moe_pointer_upload_us.get().saturating_add(us));
     }
 
     pub(crate) fn add_moe_input_prepare_us(&self, us: u64) {

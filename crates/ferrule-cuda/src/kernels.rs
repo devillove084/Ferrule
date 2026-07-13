@@ -6,7 +6,9 @@
 //! inline-PTX JIT issues on newer GPUs.
 
 use cuda_device::{
-    DisjointSlice, SharedArray, cuda_module, kernel, ptx_asm, thread,
+    DisjointSlice, SharedArray,
+    atomic::{AtomicOrdering, DeviceAtomicI32},
+    cuda_module, kernel, ptx_asm, thread,
     wmma::{
         mma_m16n8k16_f32_bf16, mma_m16n8k32_f32_e4m3_e4m3,
         mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0,
@@ -4389,14 +4391,14 @@ pub mod kernels {
     ///
     /// Input logits are `[tokens, experts]`. For each token this computes
     /// `score = sqrt(softplus(logit))`, selects top-k by `score + bias`, then
-    /// writes selected expert ids and normalized route weights as `[tokens, k]`
-    /// f32 buffers. Host-side residency only needs ids/weights; diagnostic route
-    /// scores stay CPU-reference-only for now.
+    /// writes selected expert ids as i32 and normalized route weights as f32,
+    /// both shaped `[tokens, k]`. Host-side residency only needs ids/weights;
+    /// diagnostic route scores stay CPU-reference-only for now.
     #[kernel]
     pub fn dsv4_router_topk_sqrt_softplus_rows(
         logits: &[f32],
         bias: &[f32],
-        mut indices: DisjointSlice<f32>,
+        mut indices: DisjointSlice<i32>,
         mut weights: DisjointSlice<f32>,
         tokens: u32,
         experts: u32,
@@ -4466,8 +4468,161 @@ pub mod kernels {
                 0.0
             };
             unsafe {
-                *idx_ptr.add(out_offset + slot) = top_idx[slot] as f32;
+                *idx_ptr.add(out_offset + slot) = top_idx[slot];
                 *w_ptr.add(out_offset + slot) = weight;
+            }
+        }
+    }
+
+    /// DeepSeek-V4 hash router over device-resident token ids and hash rows.
+    ///
+    /// Hash selection deliberately ignores router bias. The selected experts'
+    /// original `sqrt(softplus(logit))` scores are normalized and scaled.
+    #[kernel]
+    pub fn dsv4_router_hash_sqrt_softplus_rows(
+        logits: &[f32],
+        token_ids: &[i32],
+        hash_table: &[i32],
+        mut indices: DisjointSlice<i32>,
+        mut weights: DisjointSlice<f32>,
+        tokens: u32,
+        experts: u32,
+        hash_rows: u32,
+        hash_cols: u32,
+        k: u32,
+        route_scale: f32,
+    ) {
+        let row = thread::index_1d().get();
+        if row >= tokens as usize {
+            return;
+        }
+        let experts = experts as usize;
+        let hash_rows = hash_rows as usize;
+        let hash_cols = hash_cols as usize;
+        let k = k as usize;
+        if k == 0 || k > 64 || k > hash_cols {
+            return;
+        }
+        let token_id = token_ids[row];
+        if token_id < 0 || token_id as usize >= hash_rows {
+            return;
+        }
+        let logits_offset = row * experts;
+        let hash_offset = token_id as usize * hash_cols;
+        let out_offset = row * k;
+        let mut selected_score = [0.0f32; 64];
+        let mut sum = 0.0f32;
+
+        for slot in 0..k {
+            let expert = hash_table[hash_offset + slot];
+            if expert < 0 || expert as usize >= experts {
+                return;
+            }
+            let logit = logits[logits_offset + expert as usize];
+            let softplus = stable_softplus_f32(logit);
+            let score = if softplus > 0.0 {
+                fast_sqrt(softplus)
+            } else {
+                0.0
+            };
+            selected_score[slot] = score;
+            sum += score;
+            unsafe {
+                *indices.as_mut_ptr().add(out_offset + slot) = expert;
+            }
+        }
+
+        for slot in 0..k {
+            let weight = if sum > 0.0 && sum.is_finite() {
+                selected_score[slot] / sum * route_scale
+            } else {
+                0.0
+            };
+            unsafe {
+                *weights.as_mut_ptr().add(out_offset + slot) = weight;
+            }
+        }
+    }
+
+    #[kernel]
+    pub fn initialize_expert_slot_resolve(
+        mut miss_ids: DisjointSlice<i32>,
+        mut miss_count: DisjointSlice<i32>,
+        mut miss_overflow: DisjointSlice<i32>,
+        miss_capacity: u32,
+    ) {
+        let index = thread::index_1d().get() as usize;
+        unsafe {
+            if index < miss_capacity as usize {
+                *miss_ids.as_mut_ptr().add(index) = -1;
+            }
+            if index == 0 {
+                *miss_count.as_mut_ptr() = 0;
+                *miss_overflow.as_mut_ptr() = 0;
+            }
+        }
+    }
+
+    /// Resolve every device-produced route independently through the
+    /// generation-stamped stable slot table. Miss compaction is atomic; no
+    /// thread serially traverses the route array.
+    #[kernel]
+    pub fn resolve_expert_slots(
+        expert_ids: &[i32],
+        expert_to_slot: &[i32],
+        expert_generation: &[i32],
+        slot_generation: &[i32],
+        mut route_slots: DisjointSlice<i32>,
+        mut route_generations: DisjointSlice<i32>,
+        mut miss_markers: DisjointSlice<i32>,
+        mut miss_ids: DisjointSlice<i32>,
+        mut miss_count: DisjointSlice<i32>,
+        mut miss_overflow: DisjointSlice<i32>,
+        route_count: u32,
+        expert_capacity: u32,
+        slot_capacity: u32,
+        miss_capacity: u32,
+    ) {
+        let route = thread::index_1d().get() as usize;
+        let route_count = (route_count as usize).min(expert_ids.len());
+        if route >= route_count {
+            return;
+        }
+        let expert_capacity = (expert_capacity as usize)
+            .min(expert_to_slot.len())
+            .min(expert_generation.len());
+        let slot_capacity = (slot_capacity as usize).min(slot_generation.len());
+        let expert = expert_ids[route];
+        let mut slot = -1i32;
+        let mut generation = 0i32;
+        if expert >= 0 && (expert as usize) < expert_capacity {
+            let expert_index = expert as usize;
+            let mapped_slot = expert_to_slot[expert_index];
+            let expert_gen = expert_generation[expert_index];
+            if mapped_slot >= 0
+                && (mapped_slot as usize) < slot_capacity
+                && expert_gen > 0
+                && slot_generation[mapped_slot as usize] == expert_gen
+            {
+                slot = mapped_slot;
+                generation = expert_gen;
+            }
+        }
+        unsafe {
+            *route_slots.as_mut_ptr().add(route) = slot;
+            *route_generations.as_mut_ptr().add(route) = generation;
+            *miss_markers.as_mut_ptr().add(route) = if slot < 0 { 1 } else { 0 };
+        }
+        if slot < 0 {
+            let miss_counter = unsafe { DeviceAtomicI32::from_ptr(miss_count.as_mut_ptr()) };
+            let miss = miss_counter.fetch_add(1, AtomicOrdering::Relaxed);
+            if miss >= 0 && (miss as u32) < miss_capacity {
+                unsafe {
+                    *miss_ids.as_mut_ptr().add(miss as usize) = expert;
+                }
+            } else {
+                let overflow = unsafe { DeviceAtomicI32::from_ptr(miss_overflow.as_mut_ptr()) };
+                overflow.fetch_or(1, AtomicOrdering::Relaxed);
             }
         }
     }
@@ -6087,6 +6242,317 @@ pub mod kernels {
     // blockIdx.y = expert index. Expert weight pointers are passed as device
     // address arrays (`&[u64]`) and dereferenced inside the kernel.
 
+    /// Gather compact decode dispatch metadata from a generation-stamped stable
+    /// expert slot table. The route-sized launch is parallel; invalid bindings
+    /// atomically mark `dispatch_error` and are made harmless to later kernels.
+    #[kernel]
+    pub fn gather_stable_moe_dispatch(
+        table_gate_ptrs: &[u64],
+        table_gate_scale_ptrs: &[u64],
+        table_up_ptrs: &[u64],
+        table_up_scale_ptrs: &[u64],
+        table_down_ptrs: &[u64],
+        table_down_scale_ptrs: &[u64],
+        slot_generations: &[i32],
+        resolved_slots: &[i32],
+        resolved_generations: &[i32],
+        router_weights: &[f32],
+        mut gate_ptrs: DisjointSlice<u64>,
+        mut gate_scale_ptrs: DisjointSlice<u64>,
+        mut up_ptrs: DisjointSlice<u64>,
+        mut up_scale_ptrs: DisjointSlice<u64>,
+        mut down_ptrs: DisjointSlice<u64>,
+        mut down_scale_ptrs: DisjointSlice<u64>,
+        mut route_weights: DisjointSlice<f32>,
+        mut route_slots: DisjointSlice<i32>,
+        mut dispatch_error: DisjointSlice<i32>,
+        route_count: u32,
+        slot_capacity: u32,
+    ) {
+        if thread::blockIdx_x() != 0 {
+            return;
+        }
+        let rank = thread::threadIdx_x() as usize;
+        if rank == 0 {
+            unsafe {
+                *dispatch_error.as_mut_ptr() = 0;
+            }
+        }
+        thread::sync_threads();
+        let route_count = (route_count as usize)
+            .min(resolved_slots.len())
+            .min(resolved_generations.len())
+            .min(router_weights.len());
+        if rank >= route_count {
+            return;
+        }
+        let slot_capacity = (slot_capacity as usize)
+            .min(slot_generations.len())
+            .min(table_gate_ptrs.len())
+            .min(table_gate_scale_ptrs.len())
+            .min(table_up_ptrs.len())
+            .min(table_up_scale_ptrs.len())
+            .min(table_down_ptrs.len())
+            .min(table_down_scale_ptrs.len());
+        let slot = resolved_slots[rank];
+        let generation = resolved_generations[rank];
+        let slot_index = if slot >= 0 {
+            slot as usize
+        } else {
+            slot_capacity
+        };
+        let current = slot_index < slot_capacity
+            && generation > 0
+            && slot_generations[slot_index] == generation;
+        let gate = if current {
+            table_gate_ptrs[slot_index]
+        } else {
+            0
+        };
+        let gate_scale = if current {
+            table_gate_scale_ptrs[slot_index]
+        } else {
+            0
+        };
+        let up = if current {
+            table_up_ptrs[slot_index]
+        } else {
+            0
+        };
+        let up_scale = if current {
+            table_up_scale_ptrs[slot_index]
+        } else {
+            0
+        };
+        let down = if current {
+            table_down_ptrs[slot_index]
+        } else {
+            0
+        };
+        let down_scale = if current {
+            table_down_scale_ptrs[slot_index]
+        } else {
+            0
+        };
+        let valid = current
+            && gate != 0
+            && gate_scale != 0
+            && up != 0
+            && up_scale != 0
+            && down != 0
+            && down_scale != 0;
+        if !valid {
+            let error = unsafe { DeviceAtomicI32::from_ptr(dispatch_error.as_mut_ptr()) };
+            error.fetch_or(1, AtomicOrdering::Relaxed);
+        }
+        unsafe {
+            *gate_ptrs.as_mut_ptr().add(rank) = gate;
+            *gate_scale_ptrs.as_mut_ptr().add(rank) = gate_scale;
+            *up_ptrs.as_mut_ptr().add(rank) = up;
+            *up_scale_ptrs.as_mut_ptr().add(rank) = up_scale;
+            *down_ptrs.as_mut_ptr().add(rank) = down;
+            *down_scale_ptrs.as_mut_ptr().add(rank) = down_scale;
+            *route_weights.as_mut_ptr().add(rank) = if valid { router_weights[rank] } else { 0.0 };
+            *route_slots.as_mut_ptr().add(rank) = if valid { rank as i32 } else { -1 };
+        }
+    }
+
+    #[kernel]
+    pub fn initialize_moe_segment_invocation(
+        mut route_output: DisjointSlice<f32>,
+        mut route_written: DisjointSlice<i32>,
+        mut route_error: DisjointSlice<i32>,
+        output_elements: u32,
+        num_routes: u32,
+    ) {
+        let index = thread::index_1d().get() as usize;
+        unsafe {
+            if index < output_elements as usize {
+                *route_output.as_mut_ptr().add(index) = 0.0;
+            }
+            if index < num_routes as usize {
+                *route_written.as_mut_ptr().add(index) = 0;
+            }
+            if index == 0 {
+                *route_error.as_mut_ptr() = 0;
+            }
+        }
+    }
+
+    #[kernel]
+    pub fn initialize_moe_segment_grouping(
+        mut slot_counts: DisjointSlice<i32>,
+        mut slot_offsets: DisjointSlice<i32>,
+        mut slot_cursors: DisjointSlice<i32>,
+        mut segment_slots: DisjointSlice<i32>,
+        mut segment_generations: DisjointSlice<i32>,
+        mut segment_tokens: DisjointSlice<i32>,
+        mut segment_routes: DisjointSlice<i32>,
+        mut segment_weights: DisjointSlice<f32>,
+        slot_capacity: u32,
+        max_segments: u32,
+    ) {
+        let index = thread::index_1d().get() as usize;
+        let slot_capacity = slot_capacity as usize;
+        let max_segments = max_segments as usize;
+        let metadata_capacity = max_segments * 8;
+        unsafe {
+            if index < slot_capacity {
+                *slot_counts.as_mut_ptr().add(index) = 0;
+            }
+            if index < slot_capacity {
+                *slot_offsets.as_mut_ptr().add(index) = 0;
+            }
+            if index < slot_capacity {
+                *slot_cursors.as_mut_ptr().add(index) = 0;
+            }
+            if index < max_segments {
+                *segment_slots.as_mut_ptr().add(index) = -1;
+            }
+            if index < max_segments {
+                *segment_generations.as_mut_ptr().add(index) = 0;
+            }
+            if index < metadata_capacity {
+                *segment_tokens.as_mut_ptr().add(index) = -1;
+            }
+            if index < metadata_capacity {
+                *segment_routes.as_mut_ptr().add(index) = -1;
+            }
+            if index < metadata_capacity {
+                *segment_weights.as_mut_ptr().add(index) = 0.0;
+            }
+        }
+    }
+
+    #[kernel]
+    pub fn count_moe_routes_by_slot(
+        route_slots: &[i32],
+        route_generations: &[i32],
+        slot_generations: &[i32],
+        mut slot_counts: DisjointSlice<i32>,
+        route_count: u32,
+        slot_capacity: u32,
+    ) {
+        let route = thread::index_1d().get() as usize;
+        if route >= route_count as usize
+            || route >= route_slots.len()
+            || route >= route_generations.len()
+        {
+            return;
+        }
+        let slot = route_slots[route];
+        let generation = route_generations[route];
+        if slot >= 0
+            && (slot as u32) < slot_capacity
+            && (slot as usize) < slot_generations.len()
+            && generation > 0
+            && slot_generations[slot as usize] == generation
+        {
+            let count =
+                unsafe { DeviceAtomicI32::from_ptr(slot_counts.as_mut_ptr().add(slot as usize)) };
+            count.fetch_add(1, AtomicOrdering::Relaxed);
+        }
+    }
+
+    /// Scan only the bounded stable-slot table. Route arrays are never traversed
+    /// by this control kernel.
+    #[kernel]
+    pub fn scan_moe_slot_segments(
+        slot_counts: &[i32],
+        slot_generations: &[i32],
+        mut slot_offsets: DisjointSlice<i32>,
+        mut segment_slots: DisjointSlice<i32>,
+        mut segment_generations: DisjointSlice<i32>,
+        mut dispatch_error: DisjointSlice<i32>,
+        slot_capacity: u32,
+        max_segments: u32,
+    ) {
+        if thread::index_1d().get() != 0 {
+            return;
+        }
+        let slots = (slot_capacity as usize)
+            .min(512)
+            .min(slot_counts.len())
+            .min(slot_generations.len());
+        let max_segments = max_segments as usize;
+        let mut segment_base = 0usize;
+        for slot in 0..slots {
+            unsafe {
+                *slot_offsets.as_mut_ptr().add(slot) = segment_base as i32;
+            }
+            let count = slot_counts[slot].max(0) as usize;
+            let segments = (count + 7) / 8;
+            let end = segment_base.saturating_add(segments);
+            if end > max_segments {
+                unsafe {
+                    *dispatch_error.as_mut_ptr() = 1;
+                }
+                return;
+            }
+            for segment in segment_base..end {
+                unsafe {
+                    *segment_slots.as_mut_ptr().add(segment) = slot as i32;
+                    *segment_generations.as_mut_ptr().add(segment) = slot_generations[slot];
+                }
+            }
+            segment_base = end;
+        }
+    }
+
+    #[kernel]
+    pub fn scatter_moe_routes_to_segments(
+        route_slots: &[i32],
+        route_generations: &[i32],
+        router_weights: &[f32],
+        slot_generations: &[i32],
+        slot_offsets: &[i32],
+        mut slot_cursors: DisjointSlice<i32>,
+        mut segment_tokens: DisjointSlice<i32>,
+        mut segment_routes: DisjointSlice<i32>,
+        mut segment_weights: DisjointSlice<f32>,
+        mut dispatch_error: DisjointSlice<i32>,
+        route_count: u32,
+        routes_per_token: u32,
+        slot_capacity: u32,
+        max_segments: u32,
+    ) {
+        let route = thread::index_1d().get() as usize;
+        if route >= route_count as usize
+            || route >= route_slots.len()
+            || route >= route_generations.len()
+            || route >= router_weights.len()
+            || routes_per_token == 0
+        {
+            return;
+        }
+        let slot = route_slots[route];
+        let generation = route_generations[route];
+        if slot < 0
+            || (slot as u32) >= slot_capacity
+            || (slot as usize) >= slot_generations.len()
+            || generation <= 0
+            || slot_generations[slot as usize] != generation
+        {
+            return;
+        }
+        let cursor =
+            unsafe { DeviceAtomicI32::from_ptr(slot_cursors.as_mut_ptr().add(slot as usize)) };
+        let position = cursor.fetch_add(1, AtomicOrdering::Relaxed);
+        let segment = slot_offsets[slot as usize] + position / 8;
+        let column = position % 8;
+        if position < 0 || segment < 0 || segment as u32 >= max_segments {
+            let error = unsafe { DeviceAtomicI32::from_ptr(dispatch_error.as_mut_ptr()) };
+            error.fetch_or(1, AtomicOrdering::Relaxed);
+            return;
+        }
+        let metadata = segment as usize * 8 + column as usize;
+        unsafe {
+            *segment_tokens.as_mut_ptr().add(metadata) = (route as u32 / routes_per_token) as i32;
+            *segment_routes.as_mut_ptr().add(metadata) = route as i32;
+            *segment_weights.as_mut_ptr().add(metadata) = router_weights[route];
+        }
+    }
+
     /// Batched gate+up FP4 GEMV for all selected experts.
     ///
     /// Grid: `(ceil(intermediate_size / 256), num_experts)`.
@@ -6122,6 +6588,18 @@ pub mod kernels {
         let gate_scale_ptr = gate_scale_ptrs[expert] as *const u8;
         let up_ptr = up_ptrs[expert] as *const u8;
         let up_scale_ptr = up_scale_ptrs[expert] as *const u8;
+        if gate_ptr.is_null()
+            || gate_scale_ptr.is_null()
+            || up_ptr.is_null()
+            || up_scale_ptr.is_null()
+        {
+            let out_off = expert * n as usize + row;
+            unsafe {
+                *y_gate.as_mut_ptr().add(out_off) = 0.0;
+                *y_up.as_mut_ptr().add(out_off) = 0.0;
+            }
+            return;
+        }
 
         let mut d_gate = 0.0f32;
         let mut d_up = 0.0f32;
@@ -6206,6 +6684,13 @@ pub mod kernels {
         let gate_scale_ptr = gate_scale_ptrs[expert] as *const u8;
         let up_ptr = up_ptrs[expert] as *const u8;
         let up_scale_ptr = up_scale_ptrs[expert] as *const u8;
+        if gate_ptr.is_null()
+            || gate_scale_ptr.is_null()
+            || up_ptr.is_null()
+            || up_scale_ptr.is_null()
+        {
+            return;
+        }
         let mut acc_gate = [0.0f32; 4];
         let mut acc_up = [0.0f32; 4];
 
@@ -6535,6 +7020,13 @@ pub mod kernels {
 
         let down_ptr = down_ptrs[expert] as *const u8;
         let down_scale_ptr = down_scale_ptrs[expert] as *const u8;
+        if down_ptr.is_null() || down_scale_ptr.is_null() {
+            let out_off = expert * hidden_size as usize + row;
+            unsafe {
+                *expert_output.as_mut_ptr().add(out_off) = 0.0;
+            }
+            return;
+        }
 
         let mut dot = 0.0f32;
         let row_packed = row * packed_cols;
@@ -6602,6 +7094,9 @@ pub mod kernels {
         let scale_cols = inter / 32;
         let down_ptr = down_ptrs[expert] as *const u8;
         let down_scale_ptr = down_scale_ptrs[expert] as *const u8;
+        if down_ptr.is_null() || down_scale_ptr.is_null() {
+            return;
+        }
         let mut acc = [0.0f32; 4];
 
         let mut kt = 0usize;
@@ -6747,6 +7242,20 @@ pub mod kernels {
         let gate_scale_ptr = gate_scale_ptrs[expert] as *const u8;
         let up_ptr = up_ptrs[expert] as *const u8;
         let up_scale_ptr = up_scale_ptrs[expert] as *const u8;
+        if gate_ptr.is_null()
+            || gate_scale_ptr.is_null()
+            || up_ptr.is_null()
+            || up_scale_ptr.is_null()
+        {
+            if tid == 0 {
+                let out_off = expert * n as usize + row;
+                unsafe {
+                    *y_gate.as_mut_ptr().add(out_off) = 0.0;
+                    *y_up.as_mut_ptr().add(out_off) = 0.0;
+                }
+            }
+            return;
+        }
 
         let row_packed = row * packed_cols;
         let row_scales = row * scale_cols;
@@ -6833,6 +7342,15 @@ pub mod kernels {
 
         let down_ptr = down_ptrs[expert] as *const u8;
         let down_scale_ptr = down_scale_ptrs[expert] as *const u8;
+        if down_ptr.is_null() || down_scale_ptr.is_null() {
+            if tid == 0 {
+                let out_off = expert * hidden_size as usize + row;
+                unsafe {
+                    *expert_output.as_mut_ptr().add(out_off) = 0.0;
+                }
+            }
+            return;
+        }
 
         let row_packed = row * packed_cols;
         let row_scales = row * scale_cols;
@@ -6945,14 +7463,19 @@ pub mod kernels {
         gate_scale_ptrs: &[u64],
         up_ptrs: &[u64],
         up_scale_ptrs: &[u64],
+        down_ptrs: &[u64],
+        down_scale_ptrs: &[u64],
+        slot_generations: &[i32],
         segment_expert_slots: &[i32],
+        segment_generations: &[i32],
         segment_token_indices: &[i32],
+        mut route_error: DisjointSlice<i32>,
         mut y_gate: DisjointSlice<f32>,
         mut y_up: DisjointSlice<f32>,
         n: u32,
         k: u32,
         num_tokens: u32,
-        num_experts: u32,
+        slot_capacity: u32,
         num_segments: u32,
     ) {
         static mut SMEM_A: SharedArray<u8, 512, 32> = SharedArray::UNINIT;
@@ -6964,22 +7487,59 @@ pub mod kernels {
         let n = n as usize;
         let k = k as usize;
         let num_tokens = num_tokens as usize;
-        let num_experts = num_experts as usize;
+        let slot_capacity = slot_capacity as usize;
         let num_segments = num_segments as usize;
         if tid >= 32
             || segment >= num_segments
             || num_tokens == 0
-            || num_experts == 0
+            || slot_capacity == 0
             || k == 0
             || !k.is_multiple_of(64)
         {
             return;
         }
         let expert_slot = segment_expert_slots[segment];
-        if expert_slot < 0 || expert_slot as usize >= num_experts {
+        if expert_slot == -1 {
             return;
         }
-        let expert = expert_slot as usize;
+        let expert = if expert_slot >= 0 {
+            expert_slot as usize
+        } else {
+            slot_capacity
+        };
+        let valid_binding = expert < slot_capacity
+            && expert < slot_generations.len()
+            && expert < gate_ptrs.len()
+            && expert < gate_scale_ptrs.len()
+            && expert < up_ptrs.len()
+            && expert < up_scale_ptrs.len()
+            && expert < down_ptrs.len()
+            && expert < down_scale_ptrs.len()
+            && segment < segment_generations.len()
+            && segment_generations[segment] > 0
+            && slot_generations[expert] == segment_generations[segment]
+            && gate_ptrs[expert] != 0
+            && gate_scale_ptrs[expert] != 0
+            && up_ptrs[expert] != 0
+            && up_scale_ptrs[expert] != 0
+            && down_ptrs[expert] != 0
+            && down_scale_ptrs[expert] != 0;
+        let mut valid_tokens = segment * 8 + 7 < segment_token_indices.len();
+        if valid_tokens {
+            let mut column = 0usize;
+            while column < 8 {
+                let token = segment_token_indices[segment * 8 + column];
+                if token < -1 || (token != -1 && token as usize >= num_tokens) {
+                    valid_tokens = false;
+                }
+                column += 1;
+            }
+        }
+        if !valid_binding || !valid_tokens {
+            let error = unsafe { DeviceAtomicI32::from_ptr(route_error.as_mut_ptr()) };
+            error.fetch_or(1, AtomicOrdering::Relaxed);
+            return;
+        }
 
         let packed_cols = k / 2;
         let scale_cols = k / 32;
@@ -7161,14 +7721,22 @@ pub mod kernels {
     pub unsafe fn moe_gemm_down_fp4_mxf4_segmented(
         y_hidden_packed: &[u8],
         y_hidden_scales: &[u8],
+        gate_ptrs: &[u64],
+        gate_scale_ptrs: &[u64],
+        up_ptrs: &[u64],
+        up_scale_ptrs: &[u64],
         down_ptrs: &[u64],
         down_scale_ptrs: &[u64],
+        slot_generations: &[i32],
         segment_expert_slots: &[i32],
+        segment_generations: &[i32],
         segment_route_indices: &[i32],
+        mut route_written: DisjointSlice<i32>,
+        mut route_error: DisjointSlice<i32>,
         mut route_output: DisjointSlice<f32>,
         intermediate_size: u32,
         hidden_size: u32,
-        num_experts: u32,
+        slot_capacity: u32,
         num_segments: u32,
         num_routes: u32,
     ) {
@@ -7180,12 +7748,12 @@ pub mod kernels {
         let row_base = thread::blockIdx_x() as usize * 16;
         let inter = intermediate_size as usize;
         let hidden = hidden_size as usize;
-        let num_experts = num_experts as usize;
+        let slot_capacity = slot_capacity as usize;
         let num_segments = num_segments as usize;
         let num_routes = num_routes as usize;
         if tid >= 32
             || segment >= num_segments
-            || num_experts == 0
+            || slot_capacity == 0
             || num_routes == 0
             || inter == 0
             || !inter.is_multiple_of(64)
@@ -7193,10 +7761,47 @@ pub mod kernels {
             return;
         }
         let expert_slot = segment_expert_slots[segment];
-        if expert_slot < 0 || expert_slot as usize >= num_experts {
+        if expert_slot == -1 {
             return;
         }
-        let expert = expert_slot as usize;
+        let expert = if expert_slot >= 0 {
+            expert_slot as usize
+        } else {
+            slot_capacity
+        };
+        let valid_binding = expert < slot_capacity
+            && expert < slot_generations.len()
+            && expert < gate_ptrs.len()
+            && expert < gate_scale_ptrs.len()
+            && expert < up_ptrs.len()
+            && expert < up_scale_ptrs.len()
+            && expert < down_ptrs.len()
+            && expert < down_scale_ptrs.len()
+            && segment < segment_generations.len()
+            && segment_generations[segment] > 0
+            && slot_generations[expert] == segment_generations[segment]
+            && gate_ptrs[expert] != 0
+            && gate_scale_ptrs[expert] != 0
+            && up_ptrs[expert] != 0
+            && up_scale_ptrs[expert] != 0
+            && down_ptrs[expert] != 0
+            && down_scale_ptrs[expert] != 0;
+        let mut valid_routes = segment * 8 + 7 < segment_route_indices.len();
+        if valid_routes {
+            let mut column = 0usize;
+            while column < 8 {
+                let route = segment_route_indices[segment * 8 + column];
+                if route < -1 || (route != -1 && route as usize >= num_routes) {
+                    valid_routes = false;
+                }
+                column += 1;
+            }
+        }
+        if !valid_binding || !valid_routes {
+            let error = unsafe { DeviceAtomicI32::from_ptr(route_error.as_mut_ptr()) };
+            error.fetch_or(1, AtomicOrdering::Relaxed);
+            return;
+        }
 
         let packed_cols = inter / 2;
         let scale_cols = inter / 32;
@@ -7292,13 +7897,22 @@ pub mod kernels {
             let row = row_base + group + if j >= 2 { 8 } else { 0 };
             let col = thread_in_group * 2 + (j & 1);
             let route = segment_route_indices[segment * 8 + col];
-            if row < hidden && route >= 0 && (route as usize) < num_routes {
+            if row < hidden && route >= 0 {
                 let output_off = route as usize * hidden + row;
                 unsafe {
                     *output_ptr.add(output_off) = acc[j];
                 }
             }
             j += 1;
+        }
+        if row_base == 0 && tid < 8 {
+            let route = segment_route_indices[segment * 8 + tid];
+            if route >= 0 {
+                let completed = unsafe {
+                    DeviceAtomicI32::from_ptr(route_written.as_mut_ptr().add(route as usize))
+                };
+                completed.fetch_or(1, AtomicOrdering::Relaxed);
+            }
         }
     }
 
@@ -7325,6 +7939,58 @@ pub mod kernels {
         let output_ptr = output.as_mut_ptr();
         let mut acc = unsafe { *output_ptr.add(index) };
         let mut rank = 0usize;
+        while rank < routes_per_token {
+            let route = token * routes_per_token + rank;
+            acc += route_output[route * hidden + row];
+            rank += 1;
+        }
+        unsafe {
+            *output_ptr.add(index) = acc;
+        }
+    }
+
+    /// Ranked reducer for cumulative segmented execution. Completion is checked
+    /// before any route output is read. Failure writes one deterministic quiet NaN.
+    #[kernel]
+    pub fn moe_reduce_segment_route_outputs_ranked(
+        route_output: &[f32],
+        route_written: &[i32],
+        route_error: &[i32],
+        mut output: DisjointSlice<f32>,
+        tokens: u32,
+        routes_per_token: u32,
+        hidden_size: u32,
+    ) {
+        let index = thread::index_1d().get();
+        let total = tokens as u64 * hidden_size as u64;
+        if (index as u64) >= total || tokens == 0 || routes_per_token == 0 || hidden_size == 0 {
+            return;
+        }
+
+        let hidden = hidden_size as usize;
+        let routes_per_token = routes_per_token as usize;
+        let token = index / hidden;
+        let row = index - token * hidden;
+        let mut complete = route_error.first().copied().unwrap_or(1) == 0;
+        let mut rank = 0usize;
+        while rank < routes_per_token {
+            let route = token * routes_per_token + rank;
+            if route_written.get(route).copied().unwrap_or(0) == 0 {
+                complete = false;
+            }
+            rank += 1;
+        }
+
+        let output_ptr = output.as_mut_ptr();
+        if !complete {
+            unsafe {
+                *output_ptr.add(index) = f32::from_bits(0x7fc0_0000);
+            }
+            return;
+        }
+
+        let mut acc = unsafe { *output_ptr.add(index) };
+        rank = 0;
         while rank < routes_per_token {
             let route = token * routes_per_token + rank;
             acc += route_output[route * hidden + row];

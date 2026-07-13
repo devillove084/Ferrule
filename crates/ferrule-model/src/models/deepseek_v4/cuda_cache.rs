@@ -2,7 +2,7 @@
 
 #![cfg(feature = "cuda")]
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use ferrule_common::execution::{KvCowReplacement, KvLayoutSchema, KvPageId};
@@ -44,6 +44,7 @@ use super::prepared::{DeepSeekV4ExecutionPolicy, DeepSeekV4KvLayoutSchema};
 use super::sequence::DeepSeekV4PagedKvBinding;
 
 const DSV4_ROPE_TABLE_MIN_CAPACITY: usize = 4096;
+const DSV4_EXPERT_TABLE_CAPACITY: usize = 512;
 
 struct CudaRopeTable {
     rope_dim: usize,
@@ -171,14 +172,13 @@ pub(crate) struct DeepSeekV4CudaOperatorCache {
     pub(crate) ops: ferrule_cuda::context::CudaArtifactOperatorContext,
     managed_experts: bool,
     expert_upload_inflight: usize,
-    device_router_topk: bool,
-    moe_segment_batch: usize,
     kv_page_pool: Option<ferrule_cuda::CudaKvPagePool>,
     pending_kv_reservations: Vec<ferrule_cuda::KvPoolReservation>,
     active_paged_kv: Option<ActivePagedKvBinding>,
     cached_paged_kv: HashMap<(usize, usize, usize, usize), ActivePagedKvBinding>,
     linears: HashMap<String, ferrule_cuda::context::CudaArtifactLinearHandle>,
     experts: HashMap<ExpertId, CudaFp4ExpertHandles>,
+    expert_slot_tables: HashMap<usize, ferrule_cuda::context::CudaExpertSlotTable>,
     recycled_experts: Vec<CudaFp4ExpertHandles>,
     uploading_experts: HashMap<ExpertId, CudaExpertUploadTicket>,
     moe_access_events: Vec<ExpertBatchAccessEvent>,
@@ -198,6 +198,11 @@ pub(crate) struct DeepSeekV4CudaOperatorCache {
     pub(crate) sink_buffers: HashMap<String, ferrule_cuda::context::CudaF32Buffer>,
     /// Cached router bias buffers, keyed by layer tag — uploaded once per layer.
     router_bias_buffers: HashMap<String, ferrule_cuda::context::CudaF32Buffer>,
+    /// Validated hash tables are converted from host usize and uploaded once per layer.
+    router_hash_tables: HashMap<usize, CudaRouterHashTableCache>,
+    /// Token ids are persistent by packed batch shape. The host mirror prevents
+    /// repeated H2D copies as every routed layer sees the same batch/step ids.
+    router_token_ids: HashMap<usize, ferrule_cuda::context::CudaDsv4RouterTokenIds>,
     /// Cached dequantized f32 weights for grouped output_a, uploaded once.
     grouped_wo_a_weights: HashMap<String, ferrule_cuda::context::CudaF32Buffer>,
 
@@ -291,6 +296,87 @@ struct ActivePagedKvBinding {
 }
 
 #[cfg(feature = "cuda")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CudaRouterHashTableIdentity {
+    host: Vec<usize>,
+    hash_rows: usize,
+    hash_cols: usize,
+    experts: usize,
+    top_k: usize,
+}
+
+#[cfg(feature = "cuda")]
+impl CudaRouterHashTableIdentity {
+    fn new(
+        layer: usize,
+        table: &[usize],
+        hash_rows: usize,
+        hash_cols: usize,
+        experts: usize,
+        top_k: usize,
+    ) -> Result<Self> {
+        validate_router_hash_table_shape(layer, table, hash_rows, hash_cols)?;
+        Ok(Self {
+            host: table.to_vec(),
+            hash_rows,
+            hash_cols,
+            experts,
+            top_k,
+        })
+    }
+
+    fn validate_request(
+        &self,
+        layer: usize,
+        table: &[usize],
+        hash_rows: usize,
+        hash_cols: usize,
+        experts: usize,
+        top_k: usize,
+    ) -> Result<()> {
+        validate_router_hash_table_shape(layer, table, hash_rows, hash_cols)?;
+        if self.host != table
+            || self.hash_rows != hash_rows
+            || self.hash_cols != hash_cols
+            || self.experts != experts
+            || self.top_k != top_k
+        {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 layer {layer} router hash table changed after device upload"
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn validate_router_hash_table_shape(
+    layer: usize,
+    table: &[usize],
+    hash_rows: usize,
+    hash_cols: usize,
+) -> Result<()> {
+    let expected = hash_rows.checked_mul(hash_cols).ok_or_else(|| {
+        Error::Model(format!(
+            "DeepSeek-V4 layer {layer} router hash table shape overflows usize: rows={hash_rows} cols={hash_cols}"
+        ))
+    })?;
+    if table.len() != expected {
+        return Err(Error::Model(format!(
+            "DeepSeek-V4 layer {layer} router hash table shape mismatch: rows={hash_rows} cols={hash_cols} require {expected} entries, got {}",
+            table.len()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+struct CudaRouterHashTableCache {
+    identity: CudaRouterHashTableIdentity,
+    device: ferrule_cuda::context::CudaDsv4RouterHashTable,
+}
+
+#[cfg(feature = "cuda")]
 #[derive(Default)]
 struct DeepSeekV4DecodeArena {
     hidden: Option<ferrule_cuda::context::CudaF32Buffer>,
@@ -301,6 +387,9 @@ struct DeepSeekV4DecodeArena {
     /// Reusable routed MoE scratch/pointer buffers keyed by exact execution shape.
     moe_workspaces:
         HashMap<(usize, usize, usize, usize), ferrule_cuda::context::CudaMoeBatchedWorkspace>,
+    /// Per-layer stable-slot route resolution scratch. Keeping this persistent is
+    /// required for allocation-free steady decode.
+    moe_resolve_workspaces: HashMap<usize, ferrule_cuda::context::CudaExpertRouteResolveWorkspace>,
 }
 
 #[cfg(feature = "cuda")]
@@ -539,6 +628,27 @@ fn validate_output_head_rows_request(
     Ok((vocab_rows, hidden_cols))
 }
 
+fn fixed_eight_segment_capacity(route_count: usize, resident_slots: usize) -> Result<usize> {
+    let populated_slots = route_count.min(resident_slots);
+    let padding = populated_slots.checked_mul(7).ok_or_else(|| {
+        Error::Internal(format!(
+            "CUDA segmented MoE fixed-eight capacity overflow: routes={route_count} resident_slots={resident_slots}"
+        ))
+    })?;
+    let padded_routes = route_count.checked_add(padding).ok_or_else(|| {
+        Error::Internal(format!(
+            "CUDA segmented MoE fixed-eight capacity overflow: routes={route_count} resident_slots={resident_slots}"
+        ))
+    })?;
+    let segment_capacity = (padded_routes / 8).max(1);
+    if segment_capacity > u16::MAX as usize {
+        return Err(Error::Internal(format!(
+            "CUDA segmented MoE fixed-eight segment capacity {segment_capacity} exceeds the u16 limit 65535: routes={route_count} resident_slots={resident_slots}"
+        )));
+    }
+    Ok(segment_capacity)
+}
+
 fn merge_output_head_chunk(
     top_by_row: &mut [Vec<TokenLogit>],
     indices: &[f32],
@@ -586,14 +696,13 @@ impl DeepSeekV4CudaOperatorCache {
             ops: ferrule_cuda::context::CudaArtifactOperatorContext::new()?,
             managed_experts: policy.managed_experts(),
             expert_upload_inflight: policy.expert_upload_inflight(),
-            device_router_topk: policy.device_router_topk(),
-            moe_segment_batch: policy.moe_segment_batch(),
             kv_page_pool: None,
             pending_kv_reservations: Vec::new(),
             active_paged_kv: None,
             cached_paged_kv: HashMap::new(),
             linears: HashMap::new(),
             experts: HashMap::new(),
+            expert_slot_tables: HashMap::new(),
             recycled_experts: Vec::new(),
             uploading_experts: HashMap::new(),
             moe_access_events: Vec::new(),
@@ -609,6 +718,8 @@ impl DeepSeekV4CudaOperatorCache {
             hc_head_weights: None,
             sink_buffers: HashMap::new(),
             router_bias_buffers: HashMap::new(),
+            router_hash_tables: HashMap::new(),
+            router_token_ids: HashMap::new(),
             grouped_wo_a_weights: HashMap::new(),
             rope_tables: HashMap::new(),
             topk_buffers: HashMap::new(),
@@ -1070,6 +1181,9 @@ impl DeepSeekV4CudaOperatorCache {
         for (_, ticket) in self.uploading_experts.drain() {
             ticket.synchronize()?;
         }
+        for table in self.expert_slot_tables.values_mut() {
+            self.ops.clear_expert_slot_table(table)?;
+        }
         self.experts.clear();
         self.recycled_experts.clear();
         Ok(())
@@ -1088,6 +1202,8 @@ impl DeepSeekV4CudaOperatorCache {
         self.hc_head_weights = None;
         self.sink_buffers.clear();
         self.router_bias_buffers.clear();
+        self.router_hash_tables.clear();
+        self.router_token_ids.clear();
         self.grouped_wo_a_weights.clear();
         self.rope_tables.clear();
         Ok(())
@@ -1148,6 +1264,38 @@ impl DeepSeekV4CudaOperatorCache {
         Ok(ready)
     }
 
+    fn install_cuda_expert(
+        &mut self,
+        expert: ExpertId,
+        handles: CudaFp4ExpertHandles,
+    ) -> Result<()> {
+        if self.experts.contains_key(&expert) {
+            return Ok(());
+        }
+        if expert.expert >= DSV4_EXPERT_TABLE_CAPACITY {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 CUDA expert {} exceeds stable table capacity {}",
+                expert.expert, DSV4_EXPERT_TABLE_CAPACITY
+            )));
+        }
+        let pointers = self
+            .ops
+            .expert_slot_pointers(&handles.gate, &handles.up, &handles.down)?;
+        if let Some(table) = self.expert_slot_tables.get_mut(&expert.layer) {
+            self.ops
+                .install_expert_slot(table, expert.expert, pointers)?;
+        } else {
+            let mut table = self
+                .ops
+                .expert_slot_table(DSV4_EXPERT_TABLE_CAPACITY, DSV4_EXPERT_TABLE_CAPACITY)?;
+            self.ops
+                .install_expert_slot(&mut table, expert.expert, pointers)?;
+            self.expert_slot_tables.insert(expert.layer, table);
+        }
+        self.experts.insert(expert, handles);
+        Ok(())
+    }
+
     fn install_uploaded_expert(
         &mut self,
         expert: ExpertId,
@@ -1160,7 +1308,7 @@ impl DeepSeekV4CudaOperatorCache {
                 expert.layer, expert.expert
             )));
         }
-        self.experts.insert(expert, ticket.into_handles());
+        self.install_cuda_expert(expert, ticket.into_handles())?;
         self.expert_loads = self.expert_loads.saturating_add(1);
         self.expert_load_bytes = self.expert_load_bytes.saturating_add(bytes);
         Ok(bytes)
@@ -1201,18 +1349,35 @@ impl DeepSeekV4CudaOperatorCache {
         self.install_uploaded_expert(expert, ticket)
     }
 
-    fn apply_cuda_expert_evictions(&mut self, evictions: &[ExpertEvictRequest]) -> usize {
-        if evictions.is_empty() {
-            return 0;
-        }
+    fn apply_cuda_expert_evictions(&mut self, evictions: &[ExpertEvictRequest]) -> Result<usize> {
         let mut removed = 0usize;
         for eviction in evictions {
-            if let Some(handles) = self.experts.remove(&eviction.expert) {
-                self.recycled_experts.push(handles);
-                removed = removed.saturating_add(1);
+            if !self.experts.contains_key(&eviction.expert) {
+                continue;
             }
+            let table = self
+                .expert_slot_tables
+                .get_mut(&eviction.expert.layer)
+                .ok_or_else(|| {
+                    Error::Internal(format!(
+                        "CUDA expert slot table missing during eviction: layer {} expert {}",
+                        eviction.expert.layer, eviction.expert.expert
+                    ))
+                })?;
+            if !self.ops.evict_expert_slot(table, eviction.expert.expert)? {
+                return Err(Error::Internal(format!(
+                    "CUDA resident expert missing from slot table during eviction: layer {} expert {}",
+                    eviction.expert.layer, eviction.expert.expert
+                )));
+            }
+            let handles = self
+                .experts
+                .remove(&eviction.expert)
+                .expect("resident checked above");
+            self.recycled_experts.push(handles);
+            removed = removed.saturating_add(1);
         }
-        removed
+        Ok(removed)
     }
 
     fn pinned_bundle_for_upload(
@@ -1364,7 +1529,7 @@ impl DeepSeekV4CudaOperatorCache {
                 expert.layer, expert.expert
             )));
         }
-        self.experts.insert(expert, handles);
+        self.install_cuda_expert(expert, handles)?;
         self.expert_loads = self.expert_loads.saturating_add(1);
         self.expert_load_bytes = self.expert_load_bytes.saturating_add(bytes);
         Ok(bytes)
@@ -1553,8 +1718,8 @@ impl DeepSeekV4CudaOperatorCache {
         self.expert_evictions = self
             .expert_evictions
             .saturating_add(streaming.evictions.len() as u64);
+        self.apply_cuda_expert_evictions(&streaming.evictions)?;
         handles.apply_evictions(&streaming.evictions);
-        self.apply_cuda_expert_evictions(&streaming.evictions);
         let outcome = self.queue_prefetch_loads_only(&streaming.loads, reader)?;
         planner.commit_step_loaded(&streaming, outcome.ready.iter().copied())?;
 
@@ -1586,8 +1751,8 @@ impl DeepSeekV4CudaOperatorCache {
         self.expert_evictions = self
             .expert_evictions
             .saturating_add(streaming.evictions.len() as u64);
+        self.apply_cuda_expert_evictions(&streaming.evictions)?;
         handles.apply_evictions(&streaming.evictions);
-        self.apply_cuda_expert_evictions(&streaming.evictions);
 
         let mut warmed = 0usize;
         if !streaming.loads.is_empty() {
@@ -1638,7 +1803,7 @@ impl DeepSeekV4CudaOperatorCache {
                         expert_id.layer, expert_id.expert
                     )));
                 }
-                self.experts.insert(*expert_id, expert);
+                self.install_cuda_expert(*expert_id, expert)?;
                 handles.insert_resident_handle(ResidentExpertHandle::new(
                     *expert_id,
                     ExpertStorageTier::Gpu,
@@ -1676,7 +1841,6 @@ impl DeepSeekV4CudaOperatorCache {
             moe_scalar_calls: cuda.moe_scalar_calls,
             moe_reduce_calls: cuda.moe_reduce_calls,
             moe_total_us: cuda.moe_total_us,
-            moe_pointer_upload_us: cuda.moe_pointer_upload_us,
             moe_input_prepare_us: cuda.moe_input_prepare_us,
             moe_gate_up_us: cuda.moe_gate_up_us,
             moe_swiglu_us: cuda.moe_swiglu_us,
@@ -2035,47 +2199,147 @@ impl DeepSeekV4CudaOperatorCache {
         Ok(Some(key))
     }
 
+    fn ensure_router_hash_table(
+        &mut self,
+        layer: usize,
+        router: &RouterArtifactPayload,
+        experts: usize,
+        top_k: usize,
+    ) -> Result<()> {
+        let table = router.hash_table.as_deref().ok_or_else(|| {
+            Error::Model(format!(
+                "DeepSeek-V4 layer {layer} hash router is missing its hash table"
+            ))
+        })?;
+        if let Some(cached) = self.router_hash_tables.get(&layer) {
+            return cached.identity.validate_request(
+                layer,
+                table,
+                router.hash_rows,
+                router.hash_cols,
+                experts,
+                top_k,
+            );
+        }
+        let identity = CudaRouterHashTableIdentity::new(
+            layer,
+            table,
+            router.hash_rows,
+            router.hash_cols,
+            experts,
+            top_k,
+        )?;
+        let device = self.ops.upload_dsv4_router_hash_table(
+            table,
+            router.hash_rows,
+            router.hash_cols,
+            experts,
+            top_k,
+        )?;
+        self.router_hash_tables
+            .insert(layer, CudaRouterHashTableCache { identity, device });
+        Ok(())
+    }
+
+    fn ensure_router_token_ids(&mut self, token_ids: &[u32], hash_rows: usize) -> Result<()> {
+        match self.router_token_ids.get_mut(&token_ids.len()) {
+            Some(cached) => {
+                self.ops
+                    .update_dsv4_router_token_ids(token_ids, hash_rows, cached)?;
+            }
+            None => {
+                let device = self.ops.dsv4_router_token_ids(token_ids, hash_rows)?;
+                self.router_token_ids.insert(token_ids.len(), device);
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn dsv4_router_topk_routes_from_device_logits(
         &mut self,
         layer: usize,
         logits: &ferrule_cuda::context::CudaF32Buffer,
-        tokens: usize,
+        token_ids: &[u32],
         router: &RouterArtifactPayload,
         router_policy: &ExpertRouterPolicy,
-        indices_dev: &mut ferrule_cuda::context::CudaF32Buffer,
+        indices_dev: &mut ferrule_cuda::context::CudaI32Buffer,
         weights_dev: &mut ferrule_cuda::context::CudaF32Buffer,
-    ) -> Result<Option<Vec<Vec<ExpertRoute>>>> {
-        if !self.device_router_topk {
-            return Ok(None);
-        }
-        if router_policy.selection != RouterSelectionPolicy::ScoreTopK
-            || router_policy.score_function != RouterScoreFunction::SqrtSoftplus
+    ) -> Result<Vec<Vec<ExpertRoute>>> {
+        if router_policy.score_function != RouterScoreFunction::SqrtSoftplus
             || !router_policy.normalize_non_softmax_weights
         {
-            return Ok(None);
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 CUDA router does not support policy {:?}",
+                router_policy
+            )));
         }
+        let tokens = token_ids.len();
         let experts = router.weight.format.out_features();
         let top_k = router_policy.top_k;
-        if top_k == 0 || top_k > 64 || experts > 512 {
-            return Ok(None);
+        if tokens == 0 || top_k == 0 || top_k > 64 || top_k > experts || experts > 512 {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 CUDA router unsupported shape: tokens={tokens} experts={experts} top_k={top_k}"
+            )));
         }
-        let bias_key =
-            self.ensure_router_bias_buffer_key(layer, router.bias.as_deref(), experts)?;
-        let bias = bias_key
-            .as_ref()
-            .and_then(|key| self.router_bias_buffers.get(key));
-        let (indices, weights) = self
-            .ops
-            .dsv4_router_topk_sqrt_softplus_rows_from_device_into(
-                logits,
-                bias,
-                tokens,
-                experts,
-                top_k,
-                router_policy.route_scale,
-                indices_dev,
-                weights_dev,
-            )?;
+        if !router_policy.route_scale.is_finite() {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 CUDA router route_scale must be finite, got {}",
+                router_policy.route_scale
+            )));
+        }
+
+        match router_policy.selection {
+            RouterSelectionPolicy::ScoreTopK => {
+                let bias_key =
+                    self.ensure_router_bias_buffer_key(layer, router.bias.as_deref(), experts)?;
+                let bias = bias_key
+                    .as_ref()
+                    .and_then(|key| self.router_bias_buffers.get(key));
+                self.ops
+                    .dsv4_router_topk_sqrt_softplus_rows_from_device_into(
+                        logits,
+                        bias,
+                        tokens,
+                        experts,
+                        top_k,
+                        router_policy.route_scale,
+                        indices_dev,
+                        weights_dev,
+                    )?;
+            }
+            RouterSelectionPolicy::Hash => {
+                self.ensure_router_hash_table(layer, router, experts, top_k)?;
+                self.ensure_router_token_ids(token_ids, router.hash_rows)?;
+                let hash_table = &self
+                    .router_hash_tables
+                    .get(&layer)
+                    .expect("hash table inserted above")
+                    .device;
+                let token_ids_dev = self
+                    .router_token_ids
+                    .get(&tokens)
+                    .expect("token ids inserted above");
+                self.ops
+                    .dsv4_router_hash_sqrt_softplus_rows_from_device_into(
+                        logits,
+                        token_ids_dev,
+                        hash_table,
+                        tokens,
+                        experts,
+                        top_k,
+                        router_policy.route_scale,
+                        indices_dev,
+                        weights_dev,
+                    )?;
+            }
+        }
+
+        // The host residency planner still consumes compact routes for miss
+        // materialization and telemetry. Compute continues from these same
+        // device ids/weights through stable slot resolution and grouping.
+        let indices = self.ops.download_i32_buffer(indices_dev)?;
+        let weights = self.ops.download_f32_buffer(weights_dev)?;
         let mut routes_by_token = Vec::with_capacity(tokens);
         for token in 0..tokens {
             let mut routes = Vec::with_capacity(top_k);
@@ -2090,7 +2354,7 @@ impl DeepSeekV4CudaOperatorCache {
             }
             routes_by_token.push(routes);
         }
-        Ok(Some(routes_by_token))
+        Ok(routes_by_token)
     }
 
     pub(crate) fn output_head_topk_chunks(
@@ -2424,7 +2688,7 @@ impl DeepSeekV4CudaOperatorCache {
         handles: &mut CpuExpertHandleStore,
         shared_expert: &SwiGluFfnPayload,
         router_logits_dev: &mut ferrule_cuda::context::CudaF32Buffer,
-        router_indices_dev: &mut ferrule_cuda::context::CudaF32Buffer,
+        router_indices_dev: &mut ferrule_cuda::context::CudaI32Buffer,
         router_weights_dev: &mut ferrule_cuda::context::CudaF32Buffer,
         linear_workspace: &mut ferrule_cuda::context::CudaArtifactLinearWorkspace,
         shared_workspace: &mut ferrule_cuda::context::CudaSwiGLUWorkspace,
@@ -2469,31 +2733,15 @@ impl DeepSeekV4CudaOperatorCache {
             router_logits_dev,
             linear_workspace,
         )?;
-        let routes_by_token = if let Some(routes) = self
-            .dsv4_router_topk_routes_from_device_logits(
-                layer,
-                router_logits_dev,
-                tokens,
-                router,
-                router_policy,
-                router_indices_dev,
-                router_weights_dev,
-            )? {
-            routes
-        } else {
-            let router_logits = self.ops.download_f32_buffer(router_logits_dev)?;
-            let logits_width = router.weight.format.out_features();
-            let mut routes_by_token = Vec::<Vec<ExpertRoute>>::with_capacity(tokens);
-            for (token_idx, &token_id) in token_ids.iter().enumerate() {
-                let logits =
-                    &router_logits[token_idx * logits_width..(token_idx + 1) * logits_width];
-                let hash_experts = router.hash_experts_for_token(token_id)?;
-                let routes =
-                    router_policy.route(logits, router.bias.as_deref(), hash_experts.as_deref())?;
-                routes_by_token.push(routes);
-            }
-            routes_by_token
-        };
+        let routes_by_token = self.dsv4_router_topk_routes_from_device_logits(
+            layer,
+            router_logits_dev,
+            token_ids,
+            router,
+            router_policy,
+            router_indices_dev,
+            router_weights_dev,
+        )?;
         for routes in &routes_by_token {
             self.expert_selected = self.expert_selected.saturating_add(routes.len() as u64);
         }
@@ -2525,7 +2773,8 @@ impl DeepSeekV4CudaOperatorCache {
             layer,
             input_dev,
             &routes_by_token,
-            row_to_sequence,
+            router_indices_dev,
+            router_weights_dev,
             predicted_experts,
             planner,
             reader,
@@ -2552,7 +2801,8 @@ impl DeepSeekV4CudaOperatorCache {
         layer: usize,
         input_dev: &ferrule_cuda::context::CudaF32Buffer,
         routes_by_token: &[Vec<ExpertRoute>],
-        row_to_sequence: Option<&[usize]>,
+        router_indices: &ferrule_cuda::context::CudaI32Buffer,
+        router_weights: &ferrule_cuda::context::CudaF32Buffer,
         predicted_experts: &[usize],
         planner: &mut ExpertStreamingPlanner,
         reader: &ExpertStreamingReader,
@@ -2591,7 +2841,7 @@ impl DeepSeekV4CudaOperatorCache {
             )));
         }
 
-        let mut routes_by_expert = BTreeMap::<usize, Vec<(usize, i32, i32, f32)>>::new();
+        let mut unique_experts = BTreeSet::new();
         for (token, routes) in routes_by_token.iter().enumerate() {
             if routes.len() != routes_per_token {
                 return Err(Error::Internal(format!(
@@ -2599,22 +2849,9 @@ impl DeepSeekV4CudaOperatorCache {
                     routes.len()
                 )));
             }
-            for (rank, route) in routes.iter().enumerate() {
-                let route_index = token
-                    .checked_mul(routes_per_token)
-                    .and_then(|base| base.checked_add(rank))
-                    .ok_or_else(|| {
-                        Error::Internal("CUDA segmented MoE route index overflow".into())
-                    })?;
-                routes_by_expert.entry(route.expert).or_default().push((
-                    row_to_sequence.map_or(0, |sequences| sequences[token]),
-                    token as i32,
-                    route_index as i32,
-                    route.weight,
-                ));
-            }
+            unique_experts.extend(routes.iter().map(|route| route.expert));
         }
-        let unique_experts = routes_by_expert.keys().copied().collect::<Vec<_>>();
+        let unique_experts = unique_experts.into_iter().collect::<Vec<_>>();
         if unique_experts.is_empty() {
             return Err(Error::Internal(
                 "CUDA segmented MoE selected no experts".into(),
@@ -2631,10 +2868,9 @@ impl DeepSeekV4CudaOperatorCache {
             )));
         }
 
-        let resident_slots = planner.policy().gpu_slots_per_layer.clamp(1, 64);
-        let segment_capacity = self.moe_segment_batch;
+        let resident_slots = planner.policy().gpu_slots_per_layer.clamp(1, 512);
+        let segment_capacity = fixed_eight_segment_capacity(route_count, resident_slots)?;
         let compute_start = Instant::now();
-        let mut route_seen = vec![false; route_count];
         let mut input_prepared = false;
         let mut expected_intermediate = None;
         let mut streaming_steps = Vec::new();
@@ -2654,8 +2890,8 @@ impl DeepSeekV4CudaOperatorCache {
                 .saturating_add(streaming.evictions.len() as u64);
 
             let stage_start = Instant::now();
+            self.apply_cuda_expert_evictions(&streaming.evictions)?;
             handles.apply_evictions(&streaming.evictions);
-            self.apply_cuda_expert_evictions(&streaming.evictions);
             self.moe_cache_lookup_us = self
                 .moe_cache_lookup_us
                 .saturating_add(duration_us(stage_start.elapsed()));
@@ -2699,7 +2935,7 @@ impl DeepSeekV4CudaOperatorCache {
                 .as_ref()
                 .map(|workspace| {
                     !workspace.matches(
-                        resident_slots,
+                        DSV4_EXPERT_TABLE_CAPACITY,
                         segment_capacity,
                         tokens,
                         hidden_size,
@@ -2710,7 +2946,7 @@ impl DeepSeekV4CudaOperatorCache {
                 .unwrap_or(true);
             if workspace_needs_init {
                 *segment_workspace = Some(self.ops.moe_segment_workspace(
-                    resident_slots,
+                    DSV4_EXPERT_TABLE_CAPACITY,
                     segment_capacity,
                     tokens,
                     hidden_size,
@@ -2729,113 +2965,34 @@ impl DeepSeekV4CudaOperatorCache {
                     hidden_size,
                     workspace,
                 )?;
+                self.ops
+                    .begin_moe_segment_invocation(routes_per_token, workspace, route_output)?;
                 input_prepared = true;
             }
 
-            let mut segment_expert_slots = Vec::new();
-            let mut segment_token_indices = Vec::new();
-            let mut segment_route_indices = Vec::new();
-            let mut segment_route_weights = Vec::new();
-            for (slot, expert) in selected.iter().copied().enumerate() {
-                let records = routes_by_expert.get(&expert).ok_or_else(|| {
-                    Error::Internal(format!(
-                        "CUDA segmented MoE missing route records for expert {expert}"
-                    ))
-                })?;
-                let mut sequence_start = 0;
-                while sequence_start < records.len() {
-                    let sequence = records[sequence_start].0;
-                    let mut sequence_end = sequence_start + 1;
-                    while sequence_end < records.len() && records[sequence_end].0 == sequence {
-                        sequence_end += 1;
-                    }
-                    for records in records[sequence_start..sequence_end].chunks(8) {
-                        segment_expert_slots.push(slot as i32);
-                        for column in 0..8 {
-                            if let Some(&(_, token, route, weight)) = records.get(column) {
-                                let route_index = route as usize;
-                                if std::mem::replace(&mut route_seen[route_index], true) {
-                                    return Err(Error::Internal(format!(
-                                        "CUDA segmented MoE duplicate route index {route_index}"
-                                    )));
-                                }
-                                segment_token_indices.push(token);
-                                segment_route_indices.push(route);
-                                segment_route_weights.push(weight);
-                            } else {
-                                segment_token_indices.push(-1);
-                                segment_route_indices.push(-1);
-                                segment_route_weights.push(0.0);
-                            }
-                        }
-                    }
-                    sequence_start = sequence_end;
-                }
-            }
-
-            {
-                let gate_handles = selected
-                    .iter()
-                    .map(|&expert| {
-                        self.experts
-                            .get(&ExpertId::new(layer, expert))
-                            .map(|handles| &handles.gate)
-                            .ok_or_else(|| {
-                                Error::Model(format!(
-                                    "CUDA segmented MoE gate missing for layer {layer} expert {expert}"
-                                ))
-                            })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let up_handles = selected
-                    .iter()
-                    .map(|&expert| {
-                        self.experts
-                            .get(&ExpertId::new(layer, expert))
-                            .map(|handles| &handles.up)
-                            .ok_or_else(|| {
-                                Error::Model(format!(
-                                    "CUDA segmented MoE up missing for layer {layer} expert {expert}"
-                                ))
-                            })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let down_handles = selected
-                    .iter()
-                    .map(|&expert| {
-                        self.experts
-                            .get(&ExpertId::new(layer, expert))
-                            .map(|handles| &handles.down)
-                            .ok_or_else(|| {
-                                Error::Model(format!(
-                                    "CUDA segmented MoE down missing for layer {layer} expert {expert}"
-                                ))
-                            })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let workspace = segment_workspace
-                    .as_mut()
-                    .expect("segmented MoE workspace initialized above");
-                for segment_start in (0..segment_expert_slots.len()).step_by(segment_capacity) {
-                    let segment_end =
-                        (segment_start + segment_capacity).min(segment_expert_slots.len());
-                    let metadata_start = segment_start * 8;
-                    let metadata_end = segment_end * 8;
-                    self.ops.moe_expert_segment_batch_from_prepared(
-                        &gate_handles,
-                        &up_handles,
-                        &down_handles,
-                        &segment_expert_slots[segment_start..segment_end],
-                        &segment_token_indices[metadata_start..metadata_end],
-                        &segment_route_indices[metadata_start..metadata_end],
-                        &segment_route_weights[metadata_start..metadata_end],
-                        routes_per_token,
-                        swiglu_limit,
-                        workspace,
-                        route_output,
-                    )?;
-                }
-            }
+            let table = self.expert_slot_tables.get(&layer).ok_or_else(|| {
+                Error::Internal(format!(
+                    "CUDA stable expert slot table missing for routed layer {layer}"
+                ))
+            })?;
+            let workspace = segment_workspace
+                .as_mut()
+                .expect("segmented MoE workspace initialized above");
+            self.ops.prepare_moe_segment_grouping_stable(
+                table,
+                router_indices,
+                router_weights,
+                route_count,
+                routes_per_token,
+                workspace,
+            )?;
+            self.ops.moe_expert_segments_stable_from_prepared(
+                table,
+                routes_per_token,
+                swiglu_limit,
+                workspace,
+                route_output,
+            )?;
 
             let stage_start = Instant::now();
             planner.commit_step_loaded(&streaming, loaded_experts.iter().copied())?;
@@ -2845,17 +3002,15 @@ impl DeepSeekV4CudaOperatorCache {
             streaming_steps.push(streaming);
         }
 
-        if route_seen.iter().any(|seen| !seen) {
-            let missing = route_seen.iter().filter(|seen| !**seen).count();
-            return Err(Error::Internal(format!(
-                "CUDA segmented MoE failed to materialize {missing} of {route_count} routes"
-            )));
-        }
-        self.ops.reduce_moe_route_outputs_ranked(
+        let workspace = segment_workspace
+            .as_mut()
+            .expect("segmented MoE workspace initialized above");
+        self.ops.reduce_moe_segment_route_outputs_ranked(
             route_output,
             tokens,
             routes_per_token,
             hidden_size,
+            workspace,
             output_dev,
         )?;
         self.moe_compute_submit_us = self
@@ -2874,28 +3029,22 @@ impl DeepSeekV4CudaOperatorCache {
         router_policy: &ExpertRouterPolicy,
         router_input: &mut ferrule_cuda::context::CudaF32Buffer,
         logits_dev: &mut ferrule_cuda::context::CudaF32Buffer,
-        indices_dev: &mut ferrule_cuda::context::CudaF32Buffer,
+        indices_dev: &mut ferrule_cuda::context::CudaI32Buffer,
         weights_dev: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<CudaMoeRoutes> {
         let stage_start = Instant::now();
         self.ops.copy_f32_into_slot(input, router_input, 0)?;
         self.linear_matvec_from_device_into(&router.weight, router_input, logits_dev)?;
-        let routes = if let Some(mut routes_by_token) = self
-            .dsv4_router_topk_routes_from_device_logits(
-                layer,
-                logits_dev,
-                1,
-                router,
-                router_policy,
-                indices_dev,
-                weights_dev,
-            )? {
-            routes_by_token.pop().unwrap_or_default()
-        } else {
-            let logits = self.ops.download_f32_buffer(logits_dev)?;
-            let hash_experts = router.hash_experts_for_token(token_id)?;
-            router_policy.route(&logits, router.bias.as_deref(), hash_experts.as_deref())?
-        };
+        let mut routes_by_token = self.dsv4_router_topk_routes_from_device_logits(
+            layer,
+            logits_dev,
+            std::slice::from_ref(&token_id),
+            router,
+            router_policy,
+            indices_dev,
+            weights_dev,
+        )?;
+        let routes = routes_by_token.pop().unwrap_or_default();
         self.moe_router_us = self
             .moe_router_us
             .saturating_add(duration_us(stage_start.elapsed()));
@@ -2934,8 +3083,8 @@ impl DeepSeekV4CudaOperatorCache {
             .saturating_add(streaming.evictions.len() as u64);
 
         let stage_start = Instant::now();
+        self.apply_cuda_expert_evictions(&streaming.evictions)?;
         handles.apply_evictions(&streaming.evictions);
-        self.apply_cuda_expert_evictions(&streaming.evictions);
         self.moe_cache_lookup_us = self
             .moe_cache_lookup_us
             .saturating_add(duration_us(stage_start.elapsed()));
@@ -2963,7 +3112,7 @@ impl DeepSeekV4CudaOperatorCache {
         shared_expert: &SwiGluFfnPayload,
         router_input: &mut ferrule_cuda::context::CudaF32Buffer,
         router_logits: &mut ferrule_cuda::context::CudaF32Buffer,
-        router_indices: &mut ferrule_cuda::context::CudaF32Buffer,
+        router_indices: &mut ferrule_cuda::context::CudaI32Buffer,
         router_weights: &mut ferrule_cuda::context::CudaF32Buffer,
         shared_workspace: &mut ferrule_cuda::context::CudaSwiGLUWorkspace,
         accumulator: &mut ferrule_cuda::context::CudaF32Buffer,
@@ -3015,33 +3164,6 @@ impl DeepSeekV4CudaOperatorCache {
         if !routes.is_empty() {
             let stage_start = Instant::now();
             let num_experts = routes.len();
-            // Gather all expert handles and route weights.
-            let mut gate_handles: Vec<&ferrule_cuda::context::CudaArtifactLinearHandle> =
-                Vec::with_capacity(num_experts);
-            let mut up_handles: Vec<&ferrule_cuda::context::CudaArtifactLinearHandle> =
-                Vec::with_capacity(num_experts);
-            let mut down_handles: Vec<&ferrule_cuda::context::CudaArtifactLinearHandle> =
-                Vec::with_capacity(num_experts);
-            let mut route_weights_arr = [0.0f32; 6];
-            for (i, route) in routes.iter().enumerate() {
-                let expert_id = ExpertId::new(layer, route.expert);
-                let expert = self.experts.get(&expert_id).ok_or_else(|| {
-                    Error::Model(format!(
-                        "CUDA expert handle missing for layer {} expert {}",
-                        expert_id.layer, expert_id.expert
-                    ))
-                })?;
-                gate_handles.push(&expert.gate);
-                up_handles.push(&expert.up);
-                down_handles.push(&expert.down);
-                if i < 6 {
-                    route_weights_arr[i] = route.weight;
-                }
-            }
-
-            // Get shapes from first expert. The workspace MoE path prepares the
-            // activation internally (direct FP4 packing for TC, FP8-in-f32 for
-            // scalar fallback), so there is no per-call prepared input buffer.
             let first_expert_id = ExpertId::new(layer, routes[0].expert);
             let first_expert = self.experts.get(&first_expert_id).ok_or_else(|| {
                 Error::Model(format!(
@@ -3049,41 +3171,8 @@ impl DeepSeekV4CudaOperatorCache {
                     first_expert_id.layer, first_expert_id.expert
                 ))
             })?;
-
             let intermediate_size = first_expert.gate.shape().out_features();
             let hidden_size = first_expert.down.shape().out_features();
-
-            // Pad handle arrays to fixed [6] for the batched kernel.
-            let mut gate_arr: [&ferrule_cuda::context::CudaArtifactLinearHandle; 6] = [
-                gate_handles[0],
-                gate_handles[0],
-                gate_handles[0],
-                gate_handles[0],
-                gate_handles[0],
-                gate_handles[0],
-            ];
-            let mut up_arr: [&ferrule_cuda::context::CudaArtifactLinearHandle; 6] = [
-                up_handles[0],
-                up_handles[0],
-                up_handles[0],
-                up_handles[0],
-                up_handles[0],
-                up_handles[0],
-            ];
-            let mut down_arr: [&ferrule_cuda::context::CudaArtifactLinearHandle; 6] = [
-                down_handles[0],
-                down_handles[0],
-                down_handles[0],
-                down_handles[0],
-                down_handles[0],
-                down_handles[0],
-            ];
-            for i in 0..num_experts.min(6) {
-                gate_arr[i] = gate_handles[i];
-                up_arr[i] = up_handles[i];
-                down_arr[i] = down_handles[i];
-            }
-
             let workspace_key = (6, input.len(), intermediate_size, hidden_size);
             if !self
                 .decode_arena
@@ -3100,7 +3189,27 @@ impl DeepSeekV4CudaOperatorCache {
                     .moe_workspaces
                     .insert(workspace_key, workspace);
             }
+            if !self
+                .decode_arena
+                .moe_resolve_workspaces
+                .contains_key(&layer)
+            {
+                let resolve = self.ops.expert_route_resolve_workspace(6, 6)?;
+                self.decode_arena
+                    .moe_resolve_workspaces
+                    .insert(layer, resolve);
+            }
+            let table = self.expert_slot_tables.get(&layer).ok_or_else(|| {
+                Error::Internal(format!(
+                    "CUDA stable expert slot table missing for routed layer {layer}"
+                ))
+            })?;
             let ops = &self.ops;
+            let resolve = self
+                .decode_arena
+                .moe_resolve_workspaces
+                .get_mut(&layer)
+                .expect("MoE resolve workspace initialized above");
             let workspace = self
                 .decode_arena
                 .moe_workspaces
@@ -3110,14 +3219,22 @@ impl DeepSeekV4CudaOperatorCache {
                 .moe_workspace_us
                 .saturating_add(duration_us(stage_start.elapsed()));
             let stage_start = Instant::now();
-            ops.moe_experts_batched_add_into_from_device(
-                &gate_arr,
-                &up_arr,
-                &down_arr,
-                &route_weights_arr,
+            ops.prepare_moe_experts_batched_workspace_stable(
+                table,
+                &selected[..num_experts],
+                router_indices,
+                router_weights,
+                num_experts,
+                input.len(),
+                intermediate_size,
+                hidden_size,
+                resolve,
+                workspace,
+            )?;
+            ops.moe_experts_batched_add_into_from_device_prepared(
                 input,
                 swiglu_limit,
-                num_experts.min(6),
+                num_experts,
                 intermediate_size,
                 hidden_size,
                 workspace,
@@ -4577,6 +4694,49 @@ mod tests {
 
     use super::super::helpers::apply_rotary_tail_scaled;
     use super::*;
+
+    #[test]
+    fn router_hash_table_identity_rejects_same_values_with_different_shape() {
+        let table = vec![0, 1, 2, 3, 4, 5];
+        let identity = CudaRouterHashTableIdentity::new(7, &table, 2, 3, 8, 2).unwrap();
+
+        identity.validate_request(7, &table, 2, 3, 8, 2).unwrap();
+        let error = identity
+            .validate_request(7, &table, 3, 2, 8, 2)
+            .expect_err("same flattened table with a different shape must be rejected");
+        assert!(error.to_string().contains("changed after device upload"));
+    }
+
+    #[test]
+    fn router_hash_table_identity_validates_flattened_shape() {
+        let error = CudaRouterHashTableIdentity::new(2, &[0, 1, 2], 2, 2, 4, 1)
+            .expect_err("malformed flattened shape must be rejected");
+        assert!(error.to_string().contains("shape mismatch"));
+
+        let error = validate_router_hash_table_shape(2, &[], usize::MAX, 2)
+            .expect_err("overflowing shape must be rejected");
+        assert!(error.to_string().contains("shape overflows usize"));
+    }
+
+    #[test]
+    fn fixed_eight_segment_capacity_uses_resident_window_upper_bound() {
+        assert_eq!(fixed_eight_segment_capacity(0, 0).unwrap(), 1);
+        assert_eq!(fixed_eight_segment_capacity(8, 1).unwrap(), 1);
+        assert_eq!(fixed_eight_segment_capacity(9, 1).unwrap(), 2);
+        assert_eq!(fixed_eight_segment_capacity(9, 9).unwrap(), 9);
+        assert_eq!(fixed_eight_segment_capacity(100, 4).unwrap(), 16);
+    }
+
+    #[test]
+    fn fixed_eight_segment_capacity_rejects_overflow_and_u16_excess() {
+        let error = fixed_eight_segment_capacity(usize::MAX, usize::MAX)
+            .expect_err("arithmetic overflow must be rejected");
+        assert!(error.to_string().contains("capacity overflow"));
+
+        let error = fixed_eight_segment_capacity(8 * 65_536, 1)
+            .expect_err("capacity above u16 must be rejected");
+        assert!(error.to_string().contains("u16 limit 65535"));
+    }
 
     #[test]
     fn output_head_rows_shape_validation_is_explicit() {

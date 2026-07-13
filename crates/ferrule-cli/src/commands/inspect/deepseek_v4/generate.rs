@@ -282,7 +282,6 @@ pub fn cmd_deepseek_v4_generate(
             moe_scalar_calls,
             moe_reduce_calls,
             moe_total_us,
-            moe_pointer_upload_us,
             moe_input_prepare_us,
             moe_gate_up_us,
             moe_swiglu_us,
@@ -299,9 +298,6 @@ pub fn cmd_deepseek_v4_generate(
                     .moe_reduce_calls
                     .saturating_sub(base.moe_reduce_calls),
                 op_counters.moe_total_us.saturating_sub(base.moe_total_us),
-                op_counters
-                    .moe_pointer_upload_us
-                    .saturating_sub(base.moe_pointer_upload_us),
                 op_counters
                     .moe_input_prepare_us
                     .saturating_sub(base.moe_input_prepare_us),
@@ -320,7 +316,6 @@ pub fn cmd_deepseek_v4_generate(
                 op_counters.moe_scalar_calls,
                 op_counters.moe_reduce_calls,
                 op_counters.moe_total_us,
-                op_counters.moe_pointer_upload_us,
                 op_counters.moe_input_prepare_us,
                 op_counters.moe_gate_up_us,
                 op_counters.moe_swiglu_us,
@@ -337,7 +332,6 @@ pub fn cmd_deepseek_v4_generate(
         counters.timing.moe_scalar_calls = moe_scalar_calls;
         counters.timing.moe_reduce_calls = moe_reduce_calls;
         counters.timing.moe_total_us = moe_total_us;
-        counters.timing.moe_pointer_upload_us = moe_pointer_upload_us;
         counters.timing.moe_input_prepare_us = moe_input_prepare_us;
         counters.timing.moe_gate_up_us = moe_gate_up_us;
         counters.timing.moe_swiglu_us = moe_swiglu_us;

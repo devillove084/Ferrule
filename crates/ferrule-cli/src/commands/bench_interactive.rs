@@ -932,9 +932,6 @@ fn dsv4_operator_counters_delta(
             .moe_reduce_calls
             .saturating_sub(before.moe_reduce_calls),
         moe_total_us: after.moe_total_us.saturating_sub(before.moe_total_us),
-        moe_pointer_upload_us: after
-            .moe_pointer_upload_us
-            .saturating_sub(before.moe_pointer_upload_us),
         moe_input_prepare_us: after
             .moe_input_prepare_us
             .saturating_sub(before.moe_input_prepare_us),
@@ -1773,7 +1770,6 @@ fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> ser
             );
         };
         seconds_field("moe_total_s", stats.moe_total_us);
-        seconds_field("moe_pointer_upload_s", stats.moe_pointer_upload_us);
         seconds_field("moe_input_prepare_s", stats.moe_input_prepare_us);
         seconds_field("moe_gate_up_s", stats.moe_gate_up_us);
         seconds_field("moe_swiglu_s", stats.moe_swiglu_us);

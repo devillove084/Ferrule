@@ -112,8 +112,6 @@ pub struct DeepSeekV4ExecutionPolicy {
     fused_indexer_topk_decode: bool,
     pinned_expert_cache_capacity: usize,
     expert_upload_inflight: usize,
-    device_router_topk: bool,
-    moe_segment_batch: usize,
     profile_sync: bool,
     parity_checkpoint_selection: Option<(usize, String)>,
 }
@@ -132,8 +130,6 @@ impl Default for DeepSeekV4ExecutionPolicy {
             fused_indexer_topk_decode: false,
             pinned_expert_cache_capacity: 64,
             expert_upload_inflight: 32,
-            device_router_topk: false,
-            moe_segment_batch: 256,
             profile_sync: false,
             parity_checkpoint_selection: None,
         }
@@ -179,14 +175,6 @@ impl DeepSeekV4ExecutionPolicy {
 
     pub const fn expert_upload_inflight(&self) -> usize {
         self.expert_upload_inflight
-    }
-
-    pub const fn device_router_topk(&self) -> bool {
-        self.device_router_topk
-    }
-
-    pub const fn moe_segment_batch(&self) -> usize {
-        self.moe_segment_batch
     }
 
     pub const fn profile_sync(&self) -> bool {
@@ -264,21 +252,7 @@ impl DeepSeekV4ExecutionPolicy {
             lookup("FERRULE_DSV4_EXPERT_UPLOAD_INFLIGHT")?,
             32,
         )?;
-        let device_router_topk = parse_env_bool(
-            "FERRULE_DSV4_DEVICE_ROUTER_TOPK",
-            lookup("FERRULE_DSV4_DEVICE_ROUTER_TOPK")?,
-            false,
-        )?;
-        let moe_segment_batch = parse_env_usize(
-            "FERRULE_CUDA_MOE_SEGMENT_BATCH",
-            lookup("FERRULE_CUDA_MOE_SEGMENT_BATCH")?,
-            256,
-        )?;
-        if moe_segment_batch == 0 {
-            return Err(Error::Model(
-                "DeepSeek-V4 execution policy FERRULE_CUDA_MOE_SEGMENT_BATCH must be > 0".into(),
-            ));
-        }
+
         let profile_sync = parse_env_bool(
             "FERRULE_DSV4_PROFILE_SYNC",
             lookup("FERRULE_DSV4_PROFILE_SYNC")?,
@@ -301,8 +275,6 @@ impl DeepSeekV4ExecutionPolicy {
             fused_indexer_topk_decode,
             pinned_expert_cache_capacity,
             expert_upload_inflight,
-            device_router_topk,
-            moe_segment_batch: moe_segment_batch.min(65_535),
             profile_sync,
             parity_checkpoint_selection,
         })
@@ -646,8 +618,6 @@ mod tests {
             ("FERRULE_DSV4_FUSED_INDEXER_TOPK_PREFILL", "true"),
             ("FERRULE_DSV4_PINNED_EXPERT_CACHE_CAPACITY", "12"),
             ("FERRULE_DSV4_EXPERT_UPLOAD_INFLIGHT", "7"),
-            ("FERRULE_DSV4_DEVICE_ROUTER_TOPK", "on"),
-            ("FERRULE_CUDA_MOE_SEGMENT_BATCH", "70000"),
             ("FERRULE_DSV4_PROFILE_SYNC", "1"),
             ("FERRULE_DSV4_PARITY_CHECKPOINT_LAYER", "4"),
             ("FERRULE_DSV4_PARITY_CHECKPOINT_STAGE", "attention"),
@@ -667,8 +637,6 @@ mod tests {
         assert!(!policy.fused_indexer_decode_topk());
         assert_eq!(policy.pinned_expert_cache_capacity(), 12);
         assert_eq!(policy.expert_upload_inflight(), 7);
-        assert!(policy.device_router_topk());
-        assert_eq!(policy.moe_segment_batch(), 65_535);
         assert!(policy.profile_sync());
         assert_eq!(
             policy.parity_checkpoint_selection(),

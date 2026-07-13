@@ -144,13 +144,20 @@ fn expert_major_segments_gather_scatter_and_reduce() {
         .upload_artifact_linear(down_shape, &down_two_weight, &down_scale)
         .expect("upload expert-1 down");
 
-    let gate_handles = [&gate, &gate];
-    let up_handles = [&up, &up];
-    let down_handles = [&down_one, &down_two];
+    let mut table = context.expert_slot_table(2, 1).expect("slot table");
+    let expert_zero = context
+        .expert_slot_pointers(&gate, &up, &down_one)
+        .expect("expert 0 pointers");
+    let expert_one = context
+        .expert_slot_pointers(&gate, &up, &down_two)
+        .expect("expert 1 pointers");
+    context
+        .install_expert_slot(&mut table, 0, expert_zero)
+        .expect("install expert 0");
     let mut workspace = context
-        .moe_segment_workspace(2, 2, TOKENS, INPUT_SIZE, INTERMEDIATE_SIZE, HIDDEN_SIZE)
+        .moe_segment_workspace(1, 1, TOKENS, INPUT_SIZE, INTERMEDIATE_SIZE, HIDDEN_SIZE)
         .expect("segment workspace");
-    assert!(workspace.matches(2, 2, TOKENS, INPUT_SIZE, INTERMEDIATE_SIZE, HIDDEN_SIZE));
+    assert!(workspace.matches(1, 1, TOKENS, INPUT_SIZE, INTERMEDIATE_SIZE, HIDDEN_SIZE));
 
     let input = context
         .upload_f32_buffer(&vec![1.0f32; TOKENS * INPUT_SIZE])
@@ -161,35 +168,63 @@ fn expert_major_segments_gather_scatter_and_reduce() {
     let mut route_output = context
         .allocate_moe_route_output(TOKENS, ROUTES_PER_TOKEN, HIDDEN_SIZE)
         .expect("allocate route output");
-
-    let segment_expert_slots = [0, 1];
-    let mut segment_token_indices = [-1i32; 16];
-    let mut segment_route_indices = [-1i32; 16];
-    let mut segment_route_weights = [0.0f32; 16];
-    // Expert 0 uses deliberately non-contiguous token order and writes routes
-    // 4, 0, and 3. Expert 1 fills the complementary routes 1, 2, and 5.
-    segment_token_indices[..3].copy_from_slice(&[2, 0, 1]);
-    segment_route_indices[..3].copy_from_slice(&[4, 0, 3]);
-    segment_route_weights[..3].fill(ROUTE_WEIGHT);
-    segment_token_indices[8..11].copy_from_slice(&[0, 1, 2]);
-    segment_route_indices[8..11].copy_from_slice(&[1, 2, 5]);
-    segment_route_weights[8..11].fill(ROUTE_WEIGHT);
-
     context
-        .moe_expert_segment_batch_from_prepared(
-            &gate_handles,
-            &up_handles,
-            &down_handles,
-            &segment_expert_slots,
-            &segment_token_indices,
-            &segment_route_indices,
-            &segment_route_weights,
+        .begin_moe_segment_invocation(ROUTES_PER_TOKEN, &mut workspace, &mut route_output)
+        .expect("begin cumulative segment invocation");
+
+    // Token-major/rank-major routes map expert 0 to route indices 0, 3, 4 and
+    // expert 1 to the complementary indices 1, 2, 5.
+    let expert_ids = context
+        .upload_i32_buffer(&[0, 1, 1, 0, 0, 1])
+        .expect("upload route experts");
+    let route_weights = context
+        .upload_f32_buffer(&[ROUTE_WEIGHT; TOKENS * ROUTES_PER_TOKEN])
+        .expect("upload route weights");
+    context
+        .prepare_moe_segment_grouping_stable(
+            &table,
+            &expert_ids,
+            &route_weights,
+            TOKENS * ROUTES_PER_TOKEN,
+            ROUTES_PER_TOKEN,
+            &mut workspace,
+        )
+        .expect("group expert-0 resident window");
+    context
+        .moe_expert_segments_stable_from_prepared(
+            &table,
             ROUTES_PER_TOKEN,
             0.0,
             &mut workspace,
             &mut route_output,
         )
-        .expect("execute expert-major segments");
+        .expect("execute expert-0 resident window");
+
+    context
+        .evict_expert_slot(&mut table, 0)
+        .expect("evict expert 0 between windows");
+    context
+        .install_expert_slot(&mut table, 1, expert_one)
+        .expect("install expert 1 window");
+    context
+        .prepare_moe_segment_grouping_stable(
+            &table,
+            &expert_ids,
+            &route_weights,
+            TOKENS * ROUTES_PER_TOKEN,
+            ROUTES_PER_TOKEN,
+            &mut workspace,
+        )
+        .expect("group expert-1 resident window");
+    context
+        .moe_expert_segments_stable_from_prepared(
+            &table,
+            ROUTES_PER_TOKEN,
+            0.0,
+            &mut workspace,
+            &mut route_output,
+        )
+        .expect("execute expert-1 resident window");
     context.sync_stream().expect("synchronize segments");
 
     // Quantized input remains exactly 1. Gate/up each produce 64, sigmoid(64)=1,
@@ -221,17 +256,65 @@ fn expert_major_segments_gather_scatter_and_reduce() {
         .upload_f32_buffer(&prefix)
         .expect("upload shared-expert prefix");
     context
-        .reduce_moe_route_outputs_ranked(
+        .reduce_moe_segment_route_outputs_ranked(
             &route_output,
             TOKENS,
             ROUTES_PER_TOKEN,
             HIDDEN_SIZE,
+            &mut workspace,
             &mut output,
         )
-        .expect("reduce segment routes");
+        .expect("reduce complete cumulative segment routes");
     context.sync_stream().expect("synchronize reducer");
     let actual = context
         .download_f32_buffer(&output)
         .expect("download reduced output");
     assert_close_slice(&actual, &expected, 1e-3, "segment route reduction");
+
+    // A generation change after grouping invalidates all six pointers for the
+    // resident segment. Execution must accumulate an error, mark no routes
+    // complete, and final reduction must not read the zeroed route output.
+    context
+        .begin_moe_segment_invocation(ROUTES_PER_TOKEN, &mut workspace, &mut route_output)
+        .expect("begin failing segment invocation");
+    context
+        .prepare_moe_segment_grouping_stable(
+            &table,
+            &expert_ids,
+            &route_weights,
+            TOKENS * ROUTES_PER_TOKEN,
+            ROUTES_PER_TOKEN,
+            &mut workspace,
+        )
+        .expect("group resident expert before generation change");
+    context
+        .evict_expert_slot(&mut table, 1)
+        .expect("invalidate grouped generation");
+    context
+        .moe_expert_segments_stable_from_prepared(
+            &table,
+            ROUTES_PER_TOKEN,
+            0.0,
+            &mut workspace,
+            &mut route_output,
+        )
+        .expect("launch invalidated segment safely");
+    let mut failure_output = context
+        .zero_f32_buffer(TOKENS * HIDDEN_SIZE)
+        .expect("failure output");
+    context
+        .reduce_moe_segment_route_outputs_ranked(
+            &route_output,
+            TOKENS,
+            ROUTES_PER_TOKEN,
+            HIDDEN_SIZE,
+            &mut workspace,
+            &mut failure_output,
+        )
+        .expect("reduce invalidated segment invocation");
+    context.sync_stream().expect("synchronize failure reducer");
+    let failure = context
+        .download_f32_buffer(&failure_output)
+        .expect("download failure marker");
+    assert!(failure.iter().all(|value| value.is_nan()));
 }

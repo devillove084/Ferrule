@@ -568,11 +568,10 @@ fn deepseek_v4_cuda_continuation_crosses_4096_local() -> Result<()> {
         counters.expert_selected,
     );
     eprintln!(
-        "DSV4 long-context MoE counters: calls={} tc_calls={} total_us={} pointer_upload_us={} input_prepare_us={} gate_up_us={} swiglu_us={} down_us={} router_us={} routing_us={} plan_us={} cache_lookup_us={} expert_read_us={} expert_upload_us={} shared_us={} workspace_us={} compute_submit_us={} commit_us={} planner_syncs={}",
+        "DSV4 long-context MoE counters: calls={} tc_calls={} total_us={} input_prepare_us={} gate_up_us={} swiglu_us={} down_us={} router_us={} routing_us={} plan_us={} cache_lookup_us={} expert_read_us={} expert_upload_us={} shared_us={} workspace_us={} compute_submit_us={} commit_us={} planner_syncs={}",
         counters.moe_calls,
         counters.moe_tc_calls,
         counters.moe_total_us,
-        counters.moe_pointer_upload_us,
         counters.moe_input_prepare_us,
         counters.moe_gate_up_us,
         counters.moe_swiglu_us,

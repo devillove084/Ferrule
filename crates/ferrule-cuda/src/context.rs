@@ -601,6 +601,13 @@ impl CudaArtifactLinearHandle {
     pub fn shape(&self) -> CudaArtifactLinearShape {
         self.shape
     }
+
+    fn expert_slot_pointers(&self) -> Result<(u64, u64)> {
+        let scale = self.scale.as_ref().ok_or_else(|| {
+            Error::Internal("CUDA expert slot linear is missing its scale buffer".into())
+        })?;
+        Ok((self.weight.cu_deviceptr(), scale.cu_deviceptr()))
+    }
 }
 
 /// Opaque f32 device buffer used by generic artifact operators.
@@ -738,6 +745,7 @@ pub struct CudaMoeBatchedWorkspace {
     down_scale_ptrs: DeviceBuffer<u64>,
     route_weights: DeviceBuffer<f32>,
     route_slots: DeviceBuffer<i32>,
+    dispatch_error: DeviceBuffer<i32>,
     x_f32: CudaF32Buffer,
     y_gate: CudaF32Buffer,
     y_up: CudaF32Buffer,
@@ -756,21 +764,22 @@ pub struct CudaMoeBatchedWorkspace {
 /// Reusable workspace for expert-major, fixed-eight-column route segments.
 ///
 /// Layer input is quantized once into the full-token `x_packed`/`x_scales`
-/// buffers. Each execution batch only refreshes resident expert pointers and
-/// segment metadata; gate/up and hidden scratch are segment-major. Down
-/// projections write directly to a separate route-major output buffer, so this
-/// workspace deliberately has no f32 expert-output scratch.
+/// buffers. Stable-slot counts, offsets, and fixed-eight segment metadata are
+/// produced entirely on device. Down projections write directly to a separate
+/// route-major output buffer, so this workspace deliberately has no f32
+/// expert-output scratch or per-batch pointer arrays.
 pub struct CudaMoeSegmentWorkspace {
-    gate_ptrs: DeviceBuffer<u64>,
-    gate_scale_ptrs: DeviceBuffer<u64>,
-    up_ptrs: DeviceBuffer<u64>,
-    up_scale_ptrs: DeviceBuffer<u64>,
-    down_ptrs: DeviceBuffer<u64>,
-    down_scale_ptrs: DeviceBuffer<u64>,
+    slot_counts: DeviceBuffer<i32>,
+    slot_segment_offsets: DeviceBuffer<i32>,
+    slot_cursors: DeviceBuffer<i32>,
     segment_expert_slots: DeviceBuffer<i32>,
+    segment_generations: DeviceBuffer<i32>,
     segment_token_indices: DeviceBuffer<i32>,
     segment_route_indices: DeviceBuffer<i32>,
     segment_route_weights: DeviceBuffer<f32>,
+    route_written: DeviceBuffer<i32>,
+    route_error: DeviceBuffer<i32>,
+    resolve: CudaExpertRouteResolveWorkspace,
     x_packed: DeviceBuffer<u8>,
     x_scales: DeviceBuffer<u8>,
     y_gate: CudaF32Buffer,
@@ -784,6 +793,7 @@ pub struct CudaMoeSegmentWorkspace {
     intermediate_size: usize,
     hidden_size: usize,
     input_prepared: bool,
+    invocation_routes: Option<usize>,
 }
 
 impl CudaFp4ExpertWorkspace {
@@ -876,6 +886,373 @@ impl CudaI32Buffer {
     }
 }
 
+/// Validated, device-resident token-id hash table for the DSV4 router.
+///
+/// Construction validates the authoritative host `usize` payload before its
+/// one-time conversion and upload to device `i32` storage.
+pub struct CudaDsv4RouterHashTable {
+    buffer: DeviceBuffer<i32>,
+    rows: usize,
+    cols: usize,
+}
+
+/// Persistent DSV4 router token ids with an authoritative host mirror.
+pub struct CudaDsv4RouterTokenIds {
+    host: Vec<u32>,
+    device: CudaI32Buffer,
+    staging: PinnedHostBuffer<i32>,
+    copy_event: CudaEvent,
+}
+
+impl Drop for CudaDsv4RouterTokenIds {
+    fn drop(&mut self) {
+        let _ = self.copy_event.synchronize();
+    }
+}
+
+impl CudaDsv4RouterHashTable {
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    pub fn cols(&self) -> usize {
+        self.cols
+    }
+}
+
+pub fn validate_dsv4_router_token_ids(token_ids: &[u32], hash_rows: usize) -> Result<Vec<i32>> {
+    if token_ids.is_empty() || hash_rows == 0 {
+        return Err(Error::Internal(format!(
+            "CUDA DSV4 hash router requires non-empty token ids and hash rows, got tokens={} rows={hash_rows}",
+            token_ids.len()
+        )));
+    }
+    token_ids
+        .iter()
+        .enumerate()
+        .map(|(row, &token_id)| {
+            let token_id = usize::try_from(token_id).map_err(|_| {
+                Error::Internal(format!(
+                    "CUDA DSV4 hash router token id at batch row {row} does not fit usize"
+                ))
+            })?;
+            if token_id >= hash_rows {
+                return Err(Error::Internal(format!(
+                    "CUDA DSV4 hash router token id {token_id} at batch row {row} exceeds hash rows {hash_rows}"
+                )));
+            }
+            i32::try_from(token_id).map_err(|_| {
+                Error::Internal(format!(
+                    "CUDA DSV4 hash router token id {token_id} at batch row {row} does not fit i32"
+                ))
+            })
+        })
+        .collect()
+}
+
+pub fn validate_dsv4_router_hash_table(
+    table: &[usize],
+    rows: usize,
+    cols: usize,
+    experts: usize,
+    top_k: usize,
+) -> Result<Vec<i32>> {
+    let expected = rows
+        .checked_mul(cols)
+        .ok_or_else(|| Error::Internal("CUDA DSV4 hash router table shape overflow".into()))?;
+    if rows == 0 || cols == 0 || table.len() != expected {
+        return Err(Error::Internal(format!(
+            "CUDA DSV4 hash router table shape mismatch: values={} rows={rows} cols={cols}",
+            table.len()
+        )));
+    }
+    if top_k == 0 || top_k > cols || top_k > experts || top_k > 64 {
+        return Err(Error::Internal(format!(
+            "CUDA DSV4 hash router requires top_k in 1..={}, got {top_k}",
+            cols.min(experts).min(64)
+        )));
+    }
+    for row in 0..rows {
+        let selected = &table[row * cols..row * cols + top_k];
+        for (slot, &expert) in selected.iter().enumerate() {
+            if expert >= experts {
+                return Err(Error::Internal(format!(
+                    "CUDA DSV4 hash router expert id {expert} at table row {row} slot {slot} exceeds expert count {experts}"
+                )));
+            }
+            if selected[..slot].contains(&expert) {
+                return Err(Error::Internal(format!(
+                    "CUDA DSV4 hash router duplicate expert id {expert} at table row {row} within top_k {top_k}"
+                )));
+            }
+        }
+    }
+    table
+        .iter()
+        .enumerate()
+        .map(|(index, &expert)| {
+            i32::try_from(expert).map_err(|_| {
+                Error::Internal(format!(
+                    "CUDA DSV4 hash router table value {expert} at flat index {index} does not fit i32"
+                ))
+            })
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CudaExpertSlotPointers {
+    pub gate_weight: u64,
+    pub gate_scale: u64,
+    pub up_weight: u64,
+    pub up_scale: u64,
+    pub down_weight: u64,
+    pub down_scale: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CudaExpertSlotBinding {
+    pub slot: i32,
+    pub generation: i32,
+}
+
+/// Host mirror for one layer's stable expert slot table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CudaExpertSlotTableHost {
+    gate_weight: Vec<u64>,
+    gate_scale: Vec<u64>,
+    up_weight: Vec<u64>,
+    up_scale: Vec<u64>,
+    down_weight: Vec<u64>,
+    down_scale: Vec<u64>,
+    expert_to_slot: Vec<i32>,
+    expert_generation: Vec<i32>,
+    slot_generation: Vec<i32>,
+}
+
+impl CudaExpertSlotTableHost {
+    pub fn new(expert_capacity: usize, slot_capacity: usize) -> Result<Self> {
+        if expert_capacity == 0 || slot_capacity == 0 {
+            return Err(Error::Internal(format!(
+                "CUDA expert slot table requires positive capacities: experts={expert_capacity} slots={slot_capacity}"
+            )));
+        }
+        Ok(Self {
+            gate_weight: vec![0; slot_capacity],
+            gate_scale: vec![0; slot_capacity],
+            up_weight: vec![0; slot_capacity],
+            up_scale: vec![0; slot_capacity],
+            down_weight: vec![0; slot_capacity],
+            down_scale: vec![0; slot_capacity],
+            expert_to_slot: vec![-1; expert_capacity],
+            expert_generation: vec![0; expert_capacity],
+            slot_generation: vec![0; slot_capacity],
+        })
+    }
+
+    pub fn expert_capacity(&self) -> usize {
+        self.expert_to_slot.len()
+    }
+
+    pub fn slot_capacity(&self) -> usize {
+        self.slot_generation.len()
+    }
+
+    pub fn binding(&self, expert: usize) -> Option<CudaExpertSlotBinding> {
+        let slot = *self.expert_to_slot.get(expert)?;
+        if slot < 0 {
+            return None;
+        }
+        let generation = *self.expert_generation.get(expert)?;
+        let slot_generation = *self.slot_generation.get(slot as usize)?;
+        (generation > 0 && generation == slot_generation)
+            .then_some(CudaExpertSlotBinding { slot, generation })
+    }
+
+    pub fn is_current(&self, binding: CudaExpertSlotBinding) -> bool {
+        binding.slot >= 0
+            && self
+                .slot_generation
+                .get(binding.slot as usize)
+                .is_some_and(|generation| *generation == binding.generation)
+    }
+
+    pub fn install(
+        &mut self,
+        expert: usize,
+        pointers: CudaExpertSlotPointers,
+    ) -> Result<CudaExpertSlotBinding> {
+        if let Some(binding) = self.binding(expert) {
+            return Ok(binding);
+        }
+        if expert >= self.expert_capacity() {
+            return Err(Error::Internal(format!(
+                "CUDA expert id {expert} exceeds slot table capacity {}",
+                self.expert_capacity()
+            )));
+        }
+        let mut used = vec![false; self.slot_capacity()];
+        for slot in &self.expert_to_slot {
+            if *slot >= 0 && (*slot as usize) < used.len() {
+                used[*slot as usize] = true;
+            }
+        }
+        let has_free_slot = used.iter().any(|used| !used);
+        let slot = used
+            .iter()
+            .enumerate()
+            .find_map(|(slot, used)| {
+                (!*used && self.slot_generation[slot] < i32::MAX - 1).then_some(slot)
+            })
+            .ok_or_else(|| {
+                if has_free_slot {
+                    Error::Internal("CUDA expert slot generation exhausted".into())
+                } else {
+                    Error::Internal("CUDA expert slot table is full".into())
+                }
+            })?;
+        let generation = self.slot_generation[slot]
+            .checked_add(1)
+            .filter(|generation| *generation > 0 && *generation < i32::MAX)
+            .ok_or_else(|| Error::Internal("CUDA expert slot generation exhausted".into()))?;
+        self.slot_generation[slot] = generation;
+        self.expert_to_slot[expert] = slot as i32;
+        self.expert_generation[expert] = generation;
+        self.gate_weight[slot] = pointers.gate_weight;
+        self.gate_scale[slot] = pointers.gate_scale;
+        self.up_weight[slot] = pointers.up_weight;
+        self.up_scale[slot] = pointers.up_scale;
+        self.down_weight[slot] = pointers.down_weight;
+        self.down_scale[slot] = pointers.down_scale;
+        Ok(CudaExpertSlotBinding {
+            slot: slot as i32,
+            generation,
+        })
+    }
+
+    pub fn evict(&mut self, expert: usize) -> Result<bool> {
+        let Some(binding) = self.binding(expert) else {
+            return Ok(false);
+        };
+        let slot = binding.slot as usize;
+        self.expert_to_slot[expert] = -1;
+        self.expert_generation[expert] = 0;
+        self.gate_weight[slot] = 0;
+        self.gate_scale[slot] = 0;
+        self.up_weight[slot] = 0;
+        self.up_scale[slot] = 0;
+        self.down_weight[slot] = 0;
+        self.down_scale[slot] = 0;
+        self.slot_generation[slot] = self.slot_generation[slot]
+            .checked_add(1)
+            .filter(|generation| *generation > 0)
+            .ok_or_else(|| Error::Internal("CUDA expert slot generation exhausted".into()))?;
+        Ok(true)
+    }
+
+    fn clear(&mut self) -> Result<bool> {
+        let mut changed = false;
+        for expert in 0..self.expert_capacity() {
+            changed |= self.evict(expert)?;
+        }
+        Ok(changed)
+    }
+}
+
+#[cfg(test)]
+mod expert_slot_generation_tests {
+    use super::{CudaExpertSlotPointers, CudaExpertSlotTableHost};
+
+    const POINTERS: CudaExpertSlotPointers = CudaExpertSlotPointers {
+        gate_weight: 1,
+        gate_scale: 2,
+        up_weight: 3,
+        up_scale: 4,
+        down_weight: 5,
+        down_scale: 6,
+    };
+
+    #[test]
+    fn terminal_generation_is_free_but_exhausted() {
+        let mut table = CudaExpertSlotTableHost::new(2, 1).expect("slot table");
+        table.slot_generation[0] = i32::MAX - 2;
+
+        let resident = table.install(0, POINTERS).expect("max-1 resident");
+        assert_eq!(resident.generation, i32::MAX - 1);
+        assert!(table.evict(0).expect("evict max-1 resident"));
+        assert_eq!(table.slot_generation[0], i32::MAX);
+        assert_eq!(table.binding(0), None);
+
+        let error = table
+            .install(1, POINTERS)
+            .expect_err("terminal generation must not be published");
+        assert!(error.to_string().contains("generation exhausted"));
+        assert_eq!(table.binding(1), None);
+    }
+}
+
+/// Stable device arrays plus their authoritative host mirror for one MoE layer.
+pub struct CudaExpertSlotTable {
+    gate_weight: DeviceBuffer<u64>,
+    gate_scale: DeviceBuffer<u64>,
+    up_weight: DeviceBuffer<u64>,
+    up_scale: DeviceBuffer<u64>,
+    down_weight: DeviceBuffer<u64>,
+    down_scale: DeviceBuffer<u64>,
+    expert_to_slot: DeviceBuffer<i32>,
+    expert_generation: DeviceBuffer<i32>,
+    slot_generation: DeviceBuffer<i32>,
+    host: CudaExpertSlotTableHost,
+    poisoned: bool,
+}
+
+impl CudaExpertSlotTable {
+    pub fn host(&self) -> &CudaExpertSlotTableHost {
+        &self.host
+    }
+
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned
+    }
+
+    fn ensure_healthy(&self) -> Result<()> {
+        if self.poisoned {
+            return Err(Error::Internal(
+                "CUDA expert slot table is poisoned after a failed update and rollback".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub struct CudaExpertRouteResolveWorkspace {
+    route_slots: CudaI32Buffer,
+    route_generations: CudaI32Buffer,
+    miss_markers: CudaI32Buffer,
+    miss_ids: CudaI32Buffer,
+    miss_count: CudaI32Buffer,
+    miss_overflow: CudaI32Buffer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CudaExpertRouteResolveResult {
+    pub route_slots: Vec<i32>,
+    pub route_generations: Vec<i32>,
+    pub miss_markers: Vec<i32>,
+    pub miss_ids: Vec<i32>,
+    pub miss_overflow: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CudaMoeSegmentGroupingResult {
+    pub segment_expert_slots: Vec<i32>,
+    pub segment_generations: Vec<i32>,
+    pub segment_token_indices: Vec<i32>,
+    pub segment_route_indices: Vec<i32>,
+    pub segment_route_weights: Vec<f32>,
+    pub dispatch_error: bool,
+}
+
 /// Reusable host-side context for generic artifact-format CUDA operators.
 ///
 /// This follows cuda-oxide's preferred examples: create one `CudaContext`, load
@@ -920,6 +1297,309 @@ impl CudaArtifactOperatorContext {
 
     pub fn counters(&self) -> CudaOpCounters {
         self.counters.snapshot()
+    }
+
+    pub fn expert_slot_pointers(
+        &self,
+        gate: &CudaArtifactLinearHandle,
+        up: &CudaArtifactLinearHandle,
+        down: &CudaArtifactLinearHandle,
+    ) -> Result<CudaExpertSlotPointers> {
+        let (gate_weight, gate_scale) = gate.expert_slot_pointers()?;
+        let (up_weight, up_scale) = up.expert_slot_pointers()?;
+        let (down_weight, down_scale) = down.expert_slot_pointers()?;
+        Ok(CudaExpertSlotPointers {
+            gate_weight,
+            gate_scale,
+            up_weight,
+            up_scale,
+            down_weight,
+            down_scale,
+        })
+    }
+
+    pub fn expert_slot_table(
+        &self,
+        expert_capacity: usize,
+        slot_capacity: usize,
+    ) -> Result<CudaExpertSlotTable> {
+        let host = CudaExpertSlotTableHost::new(expert_capacity, slot_capacity)?;
+        Ok(CudaExpertSlotTable {
+            gate_weight: self.upload_device_slice(&host.gate_weight)?,
+            gate_scale: self.upload_device_slice(&host.gate_scale)?,
+            up_weight: self.upload_device_slice(&host.up_weight)?,
+            up_scale: self.upload_device_slice(&host.up_scale)?,
+            down_weight: self.upload_device_slice(&host.down_weight)?,
+            down_scale: self.upload_device_slice(&host.down_scale)?,
+            expert_to_slot: self.upload_device_slice(&host.expert_to_slot)?,
+            expert_generation: self.upload_device_slice(&host.expert_generation)?,
+            slot_generation: self.upload_device_slice(&host.slot_generation)?,
+            host,
+            poisoned: false,
+        })
+    }
+
+    fn upload_device_slice<T: DeviceCopy>(&self, values: &[T]) -> Result<DeviceBuffer<T>> {
+        let buffer = self.record_device_allocation(
+            values.len(),
+            DeviceBuffer::from_host(&self.stream, values),
+        )?;
+        self.counters.add_host_to_device(slice_bytes(values));
+        Ok(buffer)
+    }
+
+    fn download_device_slice<T: DeviceCopy>(
+        &self,
+        buffer: &DeviceBuffer<T>,
+        len: usize,
+    ) -> Result<Vec<T>> {
+        self.check_capture_safe("device-to-host download")?;
+        let values = cu(buffer.to_host_vec(&self.stream))?;
+        self.counters.add_device_to_host(element_bytes::<T>(len));
+        Ok(values)
+    }
+
+    fn write_expert_slot_table_host(
+        &self,
+        table: &mut CudaExpertSlotTable,
+        host: &CudaExpertSlotTableHost,
+    ) -> Result<()> {
+        self.check_capture_safe("expert slot table publication")?;
+
+        fn enqueue<T: DeviceCopy>(
+            stream: &CudaStream,
+            src: &[T],
+            dst: &DeviceBuffer<T>,
+        ) -> Result<()> {
+            let bytes = slice_bytes(src) as usize;
+            let result = unsafe {
+                cuda_bindings::cuMemcpyHtoDAsync_v2(
+                    dst.cu_deviceptr(),
+                    src.as_ptr().cast(),
+                    bytes,
+                    stream.cu_stream(),
+                )
+            };
+            if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+                return Err(Error::Internal(format!(
+                    "cuMemcpyHtoDAsync expert slot publication failed: error {result}"
+                )));
+            }
+            Ok(())
+        }
+
+        enqueue(&self.stream, &host.gate_weight, &table.gate_weight)?;
+        enqueue(&self.stream, &host.gate_scale, &table.gate_scale)?;
+        enqueue(&self.stream, &host.up_weight, &table.up_weight)?;
+        enqueue(&self.stream, &host.up_scale, &table.up_scale)?;
+        enqueue(&self.stream, &host.down_weight, &table.down_weight)?;
+        enqueue(&self.stream, &host.down_scale, &table.down_scale)?;
+        enqueue(&self.stream, &host.expert_to_slot, &table.expert_to_slot)?;
+        enqueue(
+            &self.stream,
+            &host.expert_generation,
+            &table.expert_generation,
+        )?;
+        enqueue(&self.stream, &host.slot_generation, &table.slot_generation)?;
+
+        for bytes in [
+            slice_bytes(&host.gate_weight),
+            slice_bytes(&host.gate_scale),
+            slice_bytes(&host.up_weight),
+            slice_bytes(&host.up_scale),
+            slice_bytes(&host.down_weight),
+            slice_bytes(&host.down_scale),
+            slice_bytes(&host.expert_to_slot),
+            slice_bytes(&host.expert_generation),
+            slice_bytes(&host.slot_generation),
+        ] {
+            self.counters.add_host_to_device(bytes);
+        }
+        self.record_stream_wide_sync(self.stream.synchronize())
+    }
+
+    fn publish_expert_slot_table_host(
+        &self,
+        table: &mut CudaExpertSlotTable,
+        next: CudaExpertSlotTableHost,
+    ) -> Result<()> {
+        table.ensure_healthy()?;
+        let previous = table.host.clone();
+        if let Err(error) = self.write_expert_slot_table_host(table, &next) {
+            if let Err(rollback) = self.write_expert_slot_table_host(table, &previous) {
+                table.poisoned = true;
+                return Err(Error::Internal(format!(
+                    "CUDA expert slot table update failed ({error}); rollback also failed ({rollback}); table poisoned"
+                )));
+            }
+            return Err(error);
+        }
+        table.host = next;
+        Ok(())
+    }
+
+    pub fn install_expert_slot(
+        &self,
+        table: &mut CudaExpertSlotTable,
+        expert: usize,
+        pointers: CudaExpertSlotPointers,
+    ) -> Result<CudaExpertSlotBinding> {
+        table.ensure_healthy()?;
+        if let Some(binding) = table.host.binding(expert) {
+            return Ok(binding);
+        }
+        if pointers.gate_weight == 0
+            || pointers.gate_scale == 0
+            || pointers.up_weight == 0
+            || pointers.up_scale == 0
+            || pointers.down_weight == 0
+            || pointers.down_scale == 0
+        {
+            return Err(Error::Internal(
+                "CUDA expert slot table cannot install null weight/scale pointers".into(),
+            ));
+        }
+        let mut next = table.host.clone();
+        let binding = next.install(expert, pointers)?;
+        self.publish_expert_slot_table_host(table, next)?;
+        Ok(binding)
+    }
+
+    pub fn evict_expert_slot(
+        &self,
+        table: &mut CudaExpertSlotTable,
+        expert: usize,
+    ) -> Result<bool> {
+        table.ensure_healthy()?;
+        let mut next = table.host.clone();
+        if !next.evict(expert)? {
+            return Ok(false);
+        }
+        self.publish_expert_slot_table_host(table, next)?;
+        Ok(true)
+    }
+
+    pub fn clear_expert_slot_table(&self, table: &mut CudaExpertSlotTable) -> Result<bool> {
+        table.ensure_healthy()?;
+        let mut next = table.host.clone();
+        if !next.clear()? {
+            return Ok(false);
+        }
+        self.publish_expert_slot_table_host(table, next)?;
+        Ok(true)
+    }
+
+    pub fn expert_route_resolve_workspace(
+        &self,
+        route_capacity: usize,
+        miss_capacity: usize,
+    ) -> Result<CudaExpertRouteResolveWorkspace> {
+        if route_capacity == 0 || miss_capacity == 0 {
+            return Err(Error::Internal(format!(
+                "CUDA expert route resolve requires positive capacities: routes={route_capacity} misses={miss_capacity}"
+            )));
+        }
+        Ok(CudaExpertRouteResolveWorkspace {
+            route_slots: self.zero_i32_buffer(route_capacity)?,
+            route_generations: self.zero_i32_buffer(route_capacity)?,
+            miss_markers: self.zero_i32_buffer(route_capacity)?,
+            miss_ids: self.zero_i32_buffer(miss_capacity)?,
+            miss_count: self.zero_i32_buffer(1)?,
+            miss_overflow: self.zero_i32_buffer(1)?,
+        })
+    }
+
+    pub fn resolve_expert_routes(
+        &self,
+        table: &CudaExpertSlotTable,
+        expert_ids: &CudaI32Buffer,
+        route_count: usize,
+        workspace: &mut CudaExpertRouteResolveWorkspace,
+    ) -> Result<()> {
+        table.ensure_healthy()?;
+        if route_count > expert_ids.len
+            || route_count > workspace.route_slots.len
+            || route_count > workspace.route_generations.len
+            || route_count > workspace.miss_markers.len
+        {
+            return Err(Error::Internal(format!(
+                "CUDA expert route resolve exceeds capacity: routes={route_count} ids={} slots={} generations={} markers={}",
+                expert_ids.len,
+                workspace.route_slots.len,
+                workspace.route_generations.len,
+                workspace.miss_markers.len
+            )));
+        }
+        let route_count = u32::try_from(route_count)
+            .map_err(|_| Error::Internal("CUDA expert route count exceeds u32".into()))?;
+        let expert_capacity = u32::try_from(table.host.expert_capacity())
+            .map_err(|_| Error::Internal("CUDA expert table capacity exceeds u32".into()))?;
+        let slot_capacity = u32::try_from(table.host.slot_capacity())
+            .map_err(|_| Error::Internal("CUDA expert slot capacity exceeds u32".into()))?;
+        let miss_capacity = u32::try_from(workspace.miss_ids.len)
+            .map_err(|_| Error::Internal("CUDA expert miss capacity exceeds u32".into()))?;
+        self.launched(unsafe {
+            self.module.initialize_expert_slot_resolve(
+                &self.stream,
+                LaunchConfig::for_num_elems(miss_capacity.max(1)),
+                &mut workspace.miss_ids.buffer,
+                &mut workspace.miss_count.buffer,
+                &mut workspace.miss_overflow.buffer,
+                miss_capacity,
+            )
+        })?;
+        self.launched(unsafe {
+            self.module.resolve_expert_slots(
+                &self.stream,
+                LaunchConfig::for_num_elems(route_count.max(1)),
+                &expert_ids.buffer,
+                &table.expert_to_slot,
+                &table.expert_generation,
+                &table.slot_generation,
+                &mut workspace.route_slots.buffer,
+                &mut workspace.route_generations.buffer,
+                &mut workspace.miss_markers.buffer,
+                &mut workspace.miss_ids.buffer,
+                &mut workspace.miss_count.buffer,
+                &mut workspace.miss_overflow.buffer,
+                route_count,
+                expert_capacity,
+                slot_capacity,
+                miss_capacity,
+            )
+        })
+    }
+
+    /// Diagnostic/test oracle that downloads device-side route resolution.
+    /// Production dispatch must consume the device-resident workspace directly
+    /// and must not call this method.
+    pub fn download_expert_route_resolve(
+        &self,
+        workspace: &CudaExpertRouteResolveWorkspace,
+        route_count: usize,
+    ) -> Result<CudaExpertRouteResolveResult> {
+        if route_count > workspace.route_slots.len {
+            return Err(Error::Internal(
+                "CUDA expert route resolve download exceeds route capacity".into(),
+            ));
+        }
+        let miss_count = self.download_i32_buffer(&workspace.miss_count)?[0].max(0) as usize;
+        let miss_overflow = self.download_i32_buffer(&workspace.miss_overflow)?[0] != 0;
+        let mut route_slots = self.download_i32_buffer(&workspace.route_slots)?;
+        let mut route_generations = self.download_i32_buffer(&workspace.route_generations)?;
+        let mut miss_markers = self.download_i32_buffer(&workspace.miss_markers)?;
+        let mut miss_ids = self.download_i32_buffer(&workspace.miss_ids)?;
+        route_slots.truncate(route_count);
+        route_generations.truncate(route_count);
+        miss_markers.truncate(route_count);
+        miss_ids.truncate(miss_count.min(miss_ids.len()));
+        Ok(CudaExpertRouteResolveResult {
+            route_slots,
+            route_generations,
+            miss_markers,
+            miss_ids,
+            miss_overflow,
+        })
     }
 
     /// Whether this artifact can use the GB10 FP8 Tensor Core path. Callers
@@ -1421,6 +2101,7 @@ impl CudaArtifactOperatorContext {
 
     /// Overwrite an existing i32 device buffer without allocating.
     pub fn overwrite_i32_buffer(&self, src: &[i32], dst: &mut CudaI32Buffer) -> Result<()> {
+        self.check_capture_safe("host-to-device i32 overwrite")?;
         if src.len() != dst.len {
             return Err(Error::Internal(format!(
                 "CUDA i32 overwrite length mismatch: src={} dst={}",
@@ -1428,8 +2109,26 @@ impl CudaArtifactOperatorContext {
                 dst.len
             )));
         }
-        self.counters.add_host_to_device(slice_bytes(src));
-        cu(dst.buffer.copy_from_host(&self.stream, src))
+        if src.is_empty() {
+            return Ok(());
+        }
+        let bytes = slice_bytes(src) as usize;
+        let result = unsafe {
+            cuda_bindings::cuMemcpyHtoDAsync_v2(
+                dst.buffer.cu_deviceptr(),
+                src.as_ptr().cast(),
+                bytes,
+                self.stream.cu_stream(),
+            )
+        };
+        if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+            return Err(Error::Internal(format!(
+                "cuMemcpyHtoDAsync i32 overwrite failed: error {result}"
+            )));
+        }
+        self.record_stream_wide_sync(self.stream.synchronize())?;
+        self.counters.add_host_to_device(bytes as u64);
+        Ok(())
     }
 
     /// Overwrite the valid prefix of a capacity-sized i32 workspace.
@@ -1464,17 +2163,7 @@ impl CudaArtifactOperatorContext {
         Ok(())
     }
 
-    fn copy_u64_into_device_buffer(&self, src: &[u64], dst: &mut DeviceBuffer<u64>) -> Result<()> {
-        self.counters.add_host_to_device(slice_bytes(src));
-        cu(dst.copy_from_host(&self.stream, src))
-    }
-
     fn copy_f32_into_device_buffer(&self, src: &[f32], dst: &mut DeviceBuffer<f32>) -> Result<()> {
-        self.counters.add_host_to_device(slice_bytes(src));
-        cu(dst.copy_from_host(&self.stream, src))
-    }
-
-    fn copy_i32_into_device_buffer(&self, src: &[i32], dst: &mut DeviceBuffer<i32>) -> Result<()> {
         self.counters.add_host_to_device(slice_bytes(src));
         cu(dst.copy_from_host(&self.stream, src))
     }
@@ -2550,6 +3239,98 @@ impl CudaArtifactOperatorContext {
         self.artifact_linear_topk_from_device(handle, &xd, top_k)
     }
 
+    pub fn dsv4_router_token_ids(
+        &self,
+        token_ids: &[u32],
+        hash_rows: usize,
+    ) -> Result<CudaDsv4RouterTokenIds> {
+        let validated = validate_dsv4_router_token_ids(token_ids, hash_rows)?;
+        let staging = cu(PinnedHostBuffer::from_slice(&self._ctx, &validated))?;
+        let buffer = self.record_device_allocation(validated.len(), unsafe {
+            DeviceBuffer::from_pinned_host(&self.stream, &staging)
+        })?;
+        self.counters.add_host_to_device(slice_bytes(&validated));
+        let copy_event = match self.stream.record_event(None) {
+            Ok(event) => event,
+            Err(error) => {
+                self.record_stream_wide_sync(self.stream.synchronize())?;
+                return Err(Error::Internal(format!(
+                    "CUDA router token-id copy event failed: {error:?}"
+                )));
+            }
+        };
+        Ok(CudaDsv4RouterTokenIds {
+            host: token_ids.to_vec(),
+            device: CudaI32Buffer {
+                buffer,
+                len: validated.len(),
+            },
+            staging,
+            copy_event,
+        })
+    }
+
+    pub fn update_dsv4_router_token_ids(
+        &self,
+        token_ids: &[u32],
+        hash_rows: usize,
+        cached: &mut CudaDsv4RouterTokenIds,
+    ) -> Result<()> {
+        if cached.host.len() != token_ids.len() {
+            return Err(Error::Internal(format!(
+                "CUDA DSV4 hash router token buffer shape mismatch: cached={} requested={}",
+                cached.host.len(),
+                token_ids.len()
+            )));
+        }
+        if cached.host == token_ids {
+            // Different hash layers may have different row counts, so retain the
+            // cheap host row validation even when no device overwrite is needed.
+            validate_dsv4_router_token_ids(token_ids, hash_rows)?;
+            return Ok(());
+        }
+        let validated = validate_dsv4_router_token_ids(token_ids, hash_rows)?;
+        cu(cached.copy_event.synchronize())?;
+        cached.staging.as_mut_slice().copy_from_slice(&validated);
+        unsafe {
+            cu(cached
+                .device
+                .buffer
+                .copy_from_pinned_host_async(&self.stream, &cached.staging))?;
+        }
+        self.counters.add_host_to_device(slice_bytes(&validated));
+        match self.stream.record_event(None) {
+            Ok(event) => cached.copy_event = event,
+            Err(error) => {
+                self.record_stream_wide_sync(self.stream.synchronize())?;
+                cached.host.clear();
+                cached.host.extend_from_slice(token_ids);
+                return Err(Error::Internal(format!(
+                    "CUDA router token-id copy event failed after the copy completed: {error:?}"
+                )));
+            }
+        }
+        cached.host.clear();
+        cached.host.extend_from_slice(token_ids);
+        Ok(())
+    }
+
+    pub fn upload_dsv4_router_hash_table(
+        &self,
+        table: &[usize],
+        rows: usize,
+        cols: usize,
+        experts: usize,
+        top_k: usize,
+    ) -> Result<CudaDsv4RouterHashTable> {
+        let table = validate_dsv4_router_hash_table(table, rows, cols, experts, top_k)?;
+        Ok(CudaDsv4RouterHashTable {
+            buffer: self.upload_i32(&table)?,
+            rows,
+            cols,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn dsv4_router_topk_sqrt_softplus_rows_from_device_into(
         &self,
@@ -2559,9 +3340,9 @@ impl CudaArtifactOperatorContext {
         experts: usize,
         top_k: usize,
         route_scale: f32,
-        indices: &mut CudaF32Buffer,
+        indices: &mut CudaI32Buffer,
         weights: &mut CudaF32Buffer,
-    ) -> Result<(Vec<f32>, Vec<f32>)> {
+    ) -> Result<()> {
         if tokens == 0 || experts == 0 || top_k == 0 {
             return Err(Error::Internal(format!(
                 "CUDA DSV4 router topk requires non-empty shape: tokens={tokens} experts={experts} top_k={top_k}"
@@ -2618,11 +3399,87 @@ impl CudaArtifactOperatorContext {
                 bias_enabled,
                 route_scale,
             )
-        })?;
-        Ok((
-            self.download_f32(&indices.buffer, out_len)?,
-            self.download_f32(&weights.buffer, out_len)?,
-        ))
+        })
+        .map(|_| ())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn dsv4_router_hash_sqrt_softplus_rows_from_device_into(
+        &self,
+        logits: &CudaF32Buffer,
+        token_ids: &CudaDsv4RouterTokenIds,
+        hash_table: &CudaDsv4RouterHashTable,
+        tokens: usize,
+        experts: usize,
+        top_k: usize,
+        route_scale: f32,
+        indices: &mut CudaI32Buffer,
+        weights: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        if tokens == 0 || experts == 0 || top_k == 0 {
+            return Err(Error::Internal(format!(
+                "CUDA DSV4 hash router requires non-empty shape: tokens={tokens} experts={experts} top_k={top_k}"
+            )));
+        }
+        if top_k > 64 || top_k > experts || top_k > hash_table.cols {
+            return Err(Error::Internal(format!(
+                "CUDA DSV4 hash router top_k {top_k} exceeds experts={experts}, hash_cols={}, or kernel limit 64",
+                hash_table.cols
+            )));
+        }
+        if !route_scale.is_finite() {
+            return Err(Error::Internal(format!(
+                "CUDA DSV4 hash router route_scale must be finite, got {route_scale}"
+            )));
+        }
+        let logits_len = tokens
+            .checked_mul(experts)
+            .ok_or_else(|| Error::Internal("CUDA DSV4 hash router logits shape overflow".into()))?;
+        let output_len = tokens
+            .checked_mul(top_k)
+            .ok_or_else(|| Error::Internal("CUDA DSV4 hash router output shape overflow".into()))?;
+        if logits.len != logits_len || token_ids.device.len != tokens {
+            return Err(Error::Internal(format!(
+                "CUDA DSV4 hash router input mismatch: logits={} expected={logits_len}, token_ids={} expected={tokens}",
+                logits.len, token_ids.device.len
+            )));
+        }
+        if indices.len != output_len || weights.len != output_len {
+            return Err(Error::Internal(format!(
+                "CUDA DSV4 hash router output mismatch: expected {output_len}, indices={}, weights={}",
+                indices.len, weights.len
+            )));
+        }
+        self.launched(unsafe {
+            self.module.dsv4_router_hash_sqrt_softplus_rows(
+                &self.stream,
+                LaunchConfig::for_num_elems(checked_u32(
+                    tokens,
+                    "dsv4_router_hash_sqrt_softplus_rows",
+                    "tokens",
+                )?),
+                &logits.buffer,
+                &token_ids.device.buffer,
+                &hash_table.buffer,
+                &mut indices.buffer,
+                &mut weights.buffer,
+                checked_u32(tokens, "dsv4_router_hash_sqrt_softplus_rows", "tokens")?,
+                checked_u32(experts, "dsv4_router_hash_sqrt_softplus_rows", "experts")?,
+                checked_u32(
+                    hash_table.rows,
+                    "dsv4_router_hash_sqrt_softplus_rows",
+                    "hash_rows",
+                )?,
+                checked_u32(
+                    hash_table.cols,
+                    "dsv4_router_hash_sqrt_softplus_rows",
+                    "hash_cols",
+                )?,
+                checked_u32(top_k, "dsv4_router_hash_sqrt_softplus_rows", "top_k")?,
+                route_scale,
+            )
+        })
+        .map(|_| ())
     }
 
     pub fn topk_vocab_rows_from_device_into(
@@ -4240,6 +5097,7 @@ impl CudaArtifactOperatorContext {
             down_scale_ptrs: self.zeroed_device_buffer::<u64>(max_experts)?,
             route_weights: self.zeroed_device_buffer::<f32>(max_experts)?,
             route_slots: self.zeroed_device_buffer::<i32>(max_experts)?,
+            dispatch_error: self.zeroed_device_buffer::<i32>(1)?,
             x_f32: CudaF32Buffer {
                 buffer: self.uninitialized_device_buffer::<f32>(input_size)?,
                 len: input_size,
@@ -4283,9 +5141,9 @@ impl CudaArtifactOperatorContext {
         intermediate_size: usize,
         hidden_size: usize,
     ) -> Result<CudaMoeSegmentWorkspace> {
-        if max_experts == 0 || max_experts > 64 {
+        if max_experts == 0 || max_experts > 512 {
             return Err(Error::Internal(format!(
-                "CUDA MoE segment workspace expects 1..=64 resident experts, got {max_experts}"
+                "CUDA MoE segment workspace expects 1..=512 stable slots, got {max_experts}"
             )));
         }
         if max_segments == 0 || max_segments > 65_535 {
@@ -4329,16 +5187,17 @@ impl CudaArtifactOperatorContext {
         })?;
 
         Ok(CudaMoeSegmentWorkspace {
-            gate_ptrs: self.zeroed_device_buffer::<u64>(max_experts)?,
-            gate_scale_ptrs: self.zeroed_device_buffer::<u64>(max_experts)?,
-            up_ptrs: self.zeroed_device_buffer::<u64>(max_experts)?,
-            up_scale_ptrs: self.zeroed_device_buffer::<u64>(max_experts)?,
-            down_ptrs: self.zeroed_device_buffer::<u64>(max_experts)?,
-            down_scale_ptrs: self.zeroed_device_buffer::<u64>(max_experts)?,
+            slot_counts: self.zeroed_device_buffer::<i32>(max_experts)?,
+            slot_segment_offsets: self.zeroed_device_buffer::<i32>(max_experts)?,
+            slot_cursors: self.zeroed_device_buffer::<i32>(max_experts)?,
             segment_expert_slots: self.zeroed_device_buffer::<i32>(max_segments)?,
+            segment_generations: self.zeroed_device_buffer::<i32>(max_segments)?,
             segment_token_indices: self.zeroed_device_buffer::<i32>(segment_cols)?,
             segment_route_indices: self.zeroed_device_buffer::<i32>(segment_cols)?,
             segment_route_weights: self.zeroed_device_buffer::<f32>(segment_cols)?,
+            route_written: self.zeroed_device_buffer::<i32>(segment_cols)?,
+            route_error: self.zeroed_device_buffer::<i32>(1)?,
+            resolve: self.expert_route_resolve_workspace(segment_cols, segment_cols)?,
             x_packed: self.uninitialized_device_buffer::<u8>(total_input / 2)?,
             x_scales: self.uninitialized_device_buffer::<u8>(total_input / 32)?,
             y_gate: CudaF32Buffer {
@@ -4358,6 +5217,7 @@ impl CudaArtifactOperatorContext {
             intermediate_size,
             hidden_size,
             input_prepared: false,
+            invocation_routes: None,
         })
     }
 
@@ -4452,332 +5312,323 @@ impl CudaArtifactOperatorContext {
         })
     }
 
-    /// Execute one batch of expert-major route segments from a prepared layer input.
-    ///
-    /// `segment_expert_slots` has one resident-handle slot per segment. The token,
-    /// route, and weight arrays are `[num_segments, 8]`; padding columns must use
-    /// `token=-1, route=-1`. A real route is `token * routes_per_token + rank` and
-    /// must occur at most once in this batch. Down projections write directly to
-    /// `route_output[route, hidden]` without atomics.
-    #[allow(clippy::too_many_arguments)]
-    pub fn moe_expert_segment_batch_from_prepared(
+    /// Begin one segmented MoE invocation. Completion/error state and the full
+    /// route-major output are initialized exactly once and then accumulated
+    /// across any number of resident grouping windows.
+    pub fn begin_moe_segment_invocation(
         &self,
-        gate_handles: &[&CudaArtifactLinearHandle],
-        up_handles: &[&CudaArtifactLinearHandle],
-        down_handles: &[&CudaArtifactLinearHandle],
-        segment_expert_slots: &[i32],
-        segment_token_indices: &[i32],
-        segment_route_indices: &[i32],
-        segment_route_weights: &[f32],
+        routes_per_token: usize,
+        workspace: &mut CudaMoeSegmentWorkspace,
+        route_output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        if routes_per_token == 0 {
+            return Err(Error::Internal(
+                "CUDA segmented MoE invocation requires positive routes_per_token".into(),
+            ));
+        }
+        let routes = workspace
+            .tokens
+            .checked_mul(routes_per_token)
+            .ok_or_else(|| Error::Internal("CUDA segmented MoE route count overflow".into()))?;
+        let output_elements = routes
+            .checked_mul(workspace.hidden_size)
+            .ok_or_else(|| Error::Internal("CUDA segmented MoE output size overflow".into()))?;
+        if routes > workspace.route_written.len() || route_output.len != output_elements {
+            return Err(Error::Internal(format!(
+                "CUDA segmented MoE invocation capacity mismatch: routes={routes} completion_capacity={} output={} expected={output_elements}",
+                workspace.route_written.len(),
+                route_output.len
+            )));
+        }
+        let elements = routes.max(output_elements).max(1);
+        self.launched(unsafe {
+            self.module.initialize_moe_segment_invocation(
+                &self.stream,
+                LaunchConfig::for_num_elems(checked_u32(
+                    elements,
+                    "segmented MoE invocation",
+                    "initialization elements",
+                )?),
+                &mut route_output.buffer,
+                &mut workspace.route_written,
+                &mut workspace.route_error,
+                checked_u32(
+                    output_elements,
+                    "segmented MoE invocation",
+                    "output elements",
+                )?,
+                checked_u32(routes, "segmented MoE invocation", "routes")?,
+            )
+        })?;
+        workspace.invocation_routes = Some(routes);
+        Ok(())
+    }
+
+    /// Resolve resident routes and build the fixed-eight segment layout without
+    /// host metadata or pointer uploads. Invalid/missing routes are omitted;
+    /// callers may materialize them and invoke this again for the next resident
+    /// window. Grouping failures are accumulated until final reduction.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_moe_segment_grouping_stable(
+        &self,
+        table: &CudaExpertSlotTable,
+        expert_ids: &CudaI32Buffer,
+        router_weights: &CudaF32Buffer,
+        route_count: usize,
+        routes_per_token: usize,
+        workspace: &mut CudaMoeSegmentWorkspace,
+    ) -> Result<()> {
+        table.ensure_healthy()?;
+        if route_count == 0
+            || routes_per_token == 0
+            || route_count > expert_ids.len
+            || route_count > router_weights.len
+            || !route_count.is_multiple_of(routes_per_token)
+        {
+            return Err(Error::Internal(format!(
+                "CUDA stable segment grouping shape mismatch: routes={route_count} routes_per_token={routes_per_token} ids={} weights={}",
+                expert_ids.len, router_weights.len
+            )));
+        }
+        let slot_capacity = table.host.slot_capacity();
+        if slot_capacity == 0 || slot_capacity > 512 || slot_capacity > workspace.max_experts {
+            return Err(Error::Internal(format!(
+                "CUDA stable segment slot capacity mismatch: table={slot_capacity} workspace={} limit=512",
+                workspace.max_experts
+            )));
+        }
+        let metadata_capacity = workspace
+            .max_segments
+            .checked_mul(8)
+            .ok_or_else(|| Error::Internal("CUDA segment metadata capacity overflow".into()))?;
+        let init_elements = metadata_capacity
+            .max(workspace.max_segments)
+            .max(slot_capacity);
+        self.launched(unsafe {
+            self.module.initialize_moe_segment_grouping(
+                &self.stream,
+                LaunchConfig::for_num_elems(checked_u32(
+                    init_elements,
+                    "stable segment grouping",
+                    "initialization elements",
+                )?),
+                &mut workspace.slot_counts,
+                &mut workspace.slot_segment_offsets,
+                &mut workspace.slot_cursors,
+                &mut workspace.segment_expert_slots,
+                &mut workspace.segment_generations,
+                &mut workspace.segment_token_indices,
+                &mut workspace.segment_route_indices,
+                &mut workspace.segment_route_weights,
+                checked_u32(
+                    slot_capacity,
+                    "stable segment grouping",
+                    "stable slot capacity",
+                )?,
+                checked_u32(
+                    workspace.max_segments,
+                    "stable segment grouping",
+                    "segment capacity",
+                )?,
+            )
+        })?;
+        self.resolve_expert_routes(table, expert_ids, route_count, &mut workspace.resolve)?;
+        let route_count_u32 = checked_u32(route_count, "stable segment grouping", "routes")?;
+        let slot_capacity_u32 = checked_u32(
+            slot_capacity,
+            "stable segment grouping",
+            "stable slot capacity",
+        )?;
+        let max_segments_u32 = checked_u32(
+            workspace.max_segments,
+            "stable segment grouping",
+            "segment capacity",
+        )?;
+        self.launched(unsafe {
+            self.module.count_moe_routes_by_slot(
+                &self.stream,
+                LaunchConfig::for_num_elems(route_count_u32),
+                &workspace.resolve.route_slots.buffer,
+                &workspace.resolve.route_generations.buffer,
+                &table.slot_generation,
+                &mut workspace.slot_counts,
+                route_count_u32,
+                slot_capacity_u32,
+            )
+        })?;
+        self.launched(unsafe {
+            self.module.scan_moe_slot_segments(
+                &self.stream,
+                LaunchConfig::for_num_elems(1),
+                &workspace.slot_counts,
+                &table.slot_generation,
+                &mut workspace.slot_segment_offsets,
+                &mut workspace.segment_expert_slots,
+                &mut workspace.segment_generations,
+                &mut workspace.route_error,
+                slot_capacity_u32,
+                max_segments_u32,
+            )
+        })?;
+        self.launched(unsafe {
+            self.module.scatter_moe_routes_to_segments(
+                &self.stream,
+                LaunchConfig::for_num_elems(route_count_u32),
+                &workspace.resolve.route_slots.buffer,
+                &workspace.resolve.route_generations.buffer,
+                &router_weights.buffer,
+                &table.slot_generation,
+                &workspace.slot_segment_offsets,
+                &mut workspace.slot_cursors,
+                &mut workspace.segment_token_indices,
+                &mut workspace.segment_route_indices,
+                &mut workspace.segment_route_weights,
+                &mut workspace.route_error,
+                route_count_u32,
+                checked_u32(
+                    routes_per_token,
+                    "stable segment grouping",
+                    "routes per token",
+                )?,
+                slot_capacity_u32,
+                max_segments_u32,
+            )
+        })
+    }
+
+    /// Diagnostic/test oracle that downloads device-side segment grouping.
+    /// Production dispatch must consume the device-resident workspace directly
+    /// and must not call this method.
+    pub fn download_moe_segment_grouping(
+        &self,
+        workspace: &CudaMoeSegmentWorkspace,
+    ) -> Result<CudaMoeSegmentGroupingResult> {
+        Ok(CudaMoeSegmentGroupingResult {
+            segment_expert_slots: self
+                .download_device_slice(&workspace.segment_expert_slots, workspace.max_segments)?,
+            segment_generations: self
+                .download_device_slice(&workspace.segment_generations, workspace.max_segments)?,
+            segment_token_indices: self.download_device_slice(
+                &workspace.segment_token_indices,
+                workspace.max_segments * 8,
+            )?,
+            segment_route_indices: self.download_device_slice(
+                &workspace.segment_route_indices,
+                workspace.max_segments * 8,
+            )?,
+            segment_route_weights: self.download_device_slice(
+                &workspace.segment_route_weights,
+                workspace.max_segments * 8,
+            )?,
+            dispatch_error: self.download_device_slice(&workspace.route_error, 1)?[0] != 0,
+        })
+    }
+
+    /// Execute every workspace segment. The launch extent is always the warmed
+    /// workspace capacity; unused segments carry slot `-1` and return before any
+    /// stable-table pointer is dereferenced.
+    #[allow(clippy::too_many_arguments)]
+    pub fn moe_expert_segments_stable_from_prepared(
+        &self,
+        table: &CudaExpertSlotTable,
         routes_per_token: usize,
         swiglu_limit: f32,
         workspace: &mut CudaMoeSegmentWorkspace,
         route_output: &mut CudaF32Buffer,
     ) -> Result<()> {
-        if !workspace.input_prepared {
+        table.ensure_healthy()?;
+        if !workspace.input_prepared || routes_per_token == 0 || !swiglu_limit.is_finite() {
             return Err(Error::Internal(
-                "CUDA MoE segment input has not been prepared".into(),
-            ));
-        }
-        if !swiglu_limit.is_finite() {
-            return Err(Error::Internal(format!(
-                "CUDA MoE segment SwiGLU limit must be finite, got {swiglu_limit}"
-            )));
-        }
-
-        let resident_experts = gate_handles.len();
-        if resident_experts == 0 || resident_experts > workspace.max_experts {
-            return Err(Error::Internal(format!(
-                "CUDA MoE segment resident expert count must be in 1..={}, got {resident_experts}",
-                workspace.max_experts
-            )));
-        }
-        if up_handles.len() != resident_experts || down_handles.len() != resident_experts {
-            return Err(Error::Internal(format!(
-                "CUDA MoE segment handle count mismatch: gate={resident_experts} up={} down={}",
-                up_handles.len(),
-                down_handles.len()
-            )));
-        }
-
-        for expert in 0..resident_experts {
-            match gate_handles[expert].shape {
-                CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
-                    out_features,
-                    in_features,
-                } if out_features == workspace.intermediate_size
-                    && in_features == workspace.input_size => {}
-                shape => {
-                    return Err(Error::Internal(format!(
-                        "CUDA MoE segment gate[{expert}] shape mismatch: got {shape:?}, expected FP4 [{},{}]",
-                        workspace.intermediate_size, workspace.input_size
-                    )));
-                }
-            }
-            match up_handles[expert].shape {
-                CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
-                    out_features,
-                    in_features,
-                } if out_features == workspace.intermediate_size
-                    && in_features == workspace.input_size => {}
-                shape => {
-                    return Err(Error::Internal(format!(
-                        "CUDA MoE segment up[{expert}] shape mismatch: got {shape:?}, expected FP4 [{},{}]",
-                        workspace.intermediate_size, workspace.input_size
-                    )));
-                }
-            }
-            match down_handles[expert].shape {
-                CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
-                    out_features,
-                    in_features,
-                } if out_features == workspace.hidden_size
-                    && in_features == workspace.intermediate_size => {}
-                shape => {
-                    return Err(Error::Internal(format!(
-                        "CUDA MoE segment down[{expert}] shape mismatch: got {shape:?}, expected FP4 [{},{}]",
-                        workspace.hidden_size, workspace.intermediate_size
-                    )));
-                }
-            }
-            if gate_handles[expert].scale.is_none()
-                || up_handles[expert].scale.is_none()
-                || down_handles[expert].scale.is_none()
-            {
-                return Err(Error::Internal(format!(
-                    "CUDA MoE segment expert[{expert}] is missing an E8M0 scale buffer"
-                )));
-            }
-        }
-
-        let num_segments = segment_expert_slots.len();
-        if num_segments == 0 || num_segments > workspace.max_segments {
-            return Err(Error::Internal(format!(
-                "CUDA MoE segment count must be in 1..={}, got {num_segments}",
-                workspace.max_segments
-            )));
-        }
-        let active_cols = num_segments
-            .checked_mul(8)
-            .ok_or_else(|| Error::Internal("CUDA MoE segment metadata length overflow".into()))?;
-        if segment_token_indices.len() != active_cols
-            || segment_route_indices.len() != active_cols
-            || segment_route_weights.len() != active_cols
-        {
-            return Err(Error::Internal(format!(
-                "CUDA MoE segment metadata length mismatch: segments={num_segments} expected_cols={active_cols} tokens={} routes={} weights={}",
-                segment_token_indices.len(),
-                segment_route_indices.len(),
-                segment_route_weights.len()
-            )));
-        }
-        if let Some((segment, slot)) = segment_expert_slots
-            .iter()
-            .copied()
-            .enumerate()
-            .find(|(_, slot)| *slot < 0 || *slot as usize >= resident_experts)
-        {
-            return Err(Error::Internal(format!(
-                "CUDA MoE segment expert slot out of range at segment {segment}: slot={slot}, resident_experts={resident_experts}"
-            )));
-        }
-        if routes_per_token == 0 {
-            return Err(Error::Internal(
-                "CUDA MoE segment routes_per_token must be non-zero".into(),
+                "CUDA stable MoE segment execution is not prepared or has invalid parameters"
+                    .into(),
             ));
         }
         let route_count = workspace
             .tokens
             .checked_mul(routes_per_token)
-            .ok_or_else(|| Error::Internal("CUDA MoE segment route count overflow".into()))?;
-        if route_count > i32::MAX as usize {
-            return Err(Error::Internal(format!(
-                "CUDA MoE segment route count exceeds i32 metadata ABI: {route_count}"
-            )));
-        }
-        let expected_route_output = route_count
+            .ok_or_else(|| Error::Internal("CUDA stable segment route count overflow".into()))?;
+        let expected_output = route_count
             .checked_mul(workspace.hidden_size)
-            .ok_or_else(|| Error::Internal("CUDA MoE segment route output size overflow".into()))?;
-        if route_output.len != expected_route_output {
+            .ok_or_else(|| Error::Internal("CUDA stable segment output size overflow".into()))?;
+        if workspace.invocation_routes != Some(route_count) {
             return Err(Error::Internal(format!(
-                "CUDA MoE segment route output length mismatch: output={} expected={}x{}={expected_route_output}",
-                route_output.len, route_count, workspace.hidden_size
+                "CUDA stable segment execution requires an active invocation for {route_count} routes, got {:?}",
+                workspace.invocation_routes
             )));
         }
-
-        let mut seen_routes = vec![false; route_count];
-        for column in 0..active_cols {
-            let token = segment_token_indices[column];
-            let route = segment_route_indices[column];
-            let weight = segment_route_weights[column];
-            if !weight.is_finite() {
-                return Err(Error::Internal(format!(
-                    "CUDA MoE segment route weight is not finite at column {column}: {weight}"
-                )));
-            }
-            if token == -1 || route == -1 {
-                if token != -1 || route != -1 {
-                    return Err(Error::Internal(format!(
-                        "CUDA MoE segment padding mismatch at column {column}: token={token} route={route}; both must be -1"
-                    )));
-                }
-                continue;
-            }
-            if token < 0 || token as usize >= workspace.tokens {
-                return Err(Error::Internal(format!(
-                    "CUDA MoE segment token index out of range at column {column}: token={token}, tokens={}",
-                    workspace.tokens
-                )));
-            }
-            if route < 0 || route as usize >= route_count {
-                return Err(Error::Internal(format!(
-                    "CUDA MoE segment route index out of range at column {column}: route={route}, routes={route_count}"
-                )));
-            }
-            let route = route as usize;
-            if route / routes_per_token != token as usize {
-                return Err(Error::Internal(format!(
-                    "CUDA MoE segment route/token mismatch at column {column}: token={token}, route={route}, routes_per_token={routes_per_token}"
-                )));
-            }
-            if std::mem::replace(&mut seen_routes[route], true) {
-                return Err(Error::Internal(format!(
-                    "CUDA MoE segment route index is duplicated in this batch: route={route}"
-                )));
-            }
+        if route_output.len != expected_output {
+            return Err(Error::Internal(format!(
+                "CUDA stable segment route output mismatch: output={} expected={expected_output}",
+                route_output.len
+            )));
         }
-
-        let mut gate_ptrs = vec![0u64; workspace.max_experts];
-        let mut gate_scale_ptrs = vec![0u64; workspace.max_experts];
-        let mut up_ptrs = vec![0u64; workspace.max_experts];
-        let mut up_scale_ptrs = vec![0u64; workspace.max_experts];
-        let mut down_ptrs = vec![0u64; workspace.max_experts];
-        let mut down_scale_ptrs = vec![0u64; workspace.max_experts];
-        for expert in 0..resident_experts {
-            gate_ptrs[expert] = gate_handles[expert].weight.cu_deviceptr();
-            gate_scale_ptrs[expert] = gate_handles[expert]
-                .scale
-                .as_ref()
-                .expect("validated gate scale")
-                .cu_deviceptr();
-            up_ptrs[expert] = up_handles[expert].weight.cu_deviceptr();
-            up_scale_ptrs[expert] = up_handles[expert]
-                .scale
-                .as_ref()
-                .expect("validated up scale")
-                .cu_deviceptr();
-            down_ptrs[expert] = down_handles[expert].weight.cu_deviceptr();
-            down_scale_ptrs[expert] = down_handles[expert]
-                .scale
-                .as_ref()
-                .expect("validated down scale")
-                .cu_deviceptr();
+        let slot_capacity = table.host.slot_capacity();
+        if slot_capacity > workspace.max_experts {
+            return Err(Error::Internal(format!(
+                "CUDA stable segment table exceeds workspace: slots={slot_capacity} workspace={}",
+                workspace.max_experts
+            )));
         }
-
-        let metadata_capacity = workspace
-            .max_segments
-            .checked_mul(8)
-            .ok_or_else(|| Error::Internal("CUDA MoE segment metadata capacity overflow".into()))?;
-        let mut padded_expert_slots = vec![-1i32; workspace.max_segments];
-        let mut padded_token_indices = vec![-1i32; metadata_capacity];
-        let mut padded_route_indices = vec![-1i32; metadata_capacity];
-        let mut padded_route_weights = vec![0.0f32; metadata_capacity];
-        padded_expert_slots[..num_segments].copy_from_slice(segment_expert_slots);
-        padded_token_indices[..active_cols].copy_from_slice(segment_token_indices);
-        padded_route_indices[..active_cols].copy_from_slice(segment_route_indices);
-        for column in 0..active_cols {
-            if segment_token_indices[column] >= 0 {
-                padded_route_weights[column] = segment_route_weights[column];
-            }
-        }
-
-        let timing_enabled = self.moe_timing_enabled();
-        let total_start = timing_enabled.then(Instant::now);
-        let phase_start = timing_enabled.then(Instant::now);
-        self.copy_u64_into_device_buffer(&gate_ptrs, &mut workspace.gate_ptrs)?;
-        self.copy_u64_into_device_buffer(&gate_scale_ptrs, &mut workspace.gate_scale_ptrs)?;
-        self.copy_u64_into_device_buffer(&up_ptrs, &mut workspace.up_ptrs)?;
-        self.copy_u64_into_device_buffer(&up_scale_ptrs, &mut workspace.up_scale_ptrs)?;
-        self.copy_u64_into_device_buffer(&down_ptrs, &mut workspace.down_ptrs)?;
-        self.copy_u64_into_device_buffer(&down_scale_ptrs, &mut workspace.down_scale_ptrs)?;
-        self.copy_i32_into_device_buffer(
-            &padded_expert_slots,
-            &mut workspace.segment_expert_slots,
-        )?;
-        self.copy_i32_into_device_buffer(
-            &padded_token_indices,
-            &mut workspace.segment_token_indices,
-        )?;
-        self.copy_i32_into_device_buffer(
-            &padded_route_indices,
-            &mut workspace.segment_route_indices,
-        )?;
-        self.copy_f32_into_device_buffer(
-            &padded_route_weights,
-            &mut workspace.segment_route_weights,
-        )?;
-        if let Some(start) = phase_start {
-            self.sync_stream()?;
-            self.counters
-                .add_moe_pointer_upload_us(duration_us(start.elapsed()));
-        }
-
         let intermediate_size = checked_u32(
             workspace.intermediate_size,
-            "MoE segment batch",
-            "intermediate_size",
+            "stable segment execution",
+            "intermediate size",
         )?;
-        let input_size = checked_u32(workspace.input_size, "MoE segment batch", "input_size")?;
-        let hidden_size = checked_u32(workspace.hidden_size, "MoE segment batch", "hidden_size")?;
-        let tokens = checked_u32(workspace.tokens, "MoE segment batch", "tokens")?;
-        let resident_experts =
-            checked_u32(resident_experts, "MoE segment batch", "resident_experts")?;
-        let num_segments = checked_u32(num_segments, "MoE segment batch", "num_segments")?;
-        let route_count = checked_u32(route_count, "MoE segment batch", "route_count")?;
+        let input_size = checked_u32(
+            workspace.input_size,
+            "stable segment execution",
+            "input size",
+        )?;
+        let hidden_size = checked_u32(
+            workspace.hidden_size,
+            "stable segment execution",
+            "hidden size",
+        )?;
+        let tokens = checked_u32(workspace.tokens, "stable segment execution", "tokens")?;
+        let slots = checked_u32(slot_capacity, "stable segment execution", "stable slots")?;
+        let segments = checked_u32(
+            workspace.max_segments,
+            "stable segment execution",
+            "segment capacity",
+        )?;
+        let routes = checked_u32(route_count, "stable segment execution", "routes")?;
 
         self.counters.add_moe_call(CudaMoeExecutionPath::TensorCore);
-        let phase_start = timing_enabled.then(Instant::now);
         self.launched(unsafe {
             self.module.moe_gemm_dual_fp4_mxf4_segmented(
                 &self.stream,
                 LaunchConfig {
-                    grid_dim: (
-                        workspace.intermediate_size.div_ceil(16) as u32,
-                        num_segments,
-                        1,
-                    ),
+                    grid_dim: (workspace.intermediate_size.div_ceil(16) as u32, segments, 1),
                     block_dim: (32, 1, 1),
                     shared_mem_bytes: 0,
                 },
                 &workspace.x_packed,
                 &workspace.x_scales,
-                &workspace.gate_ptrs,
-                &workspace.gate_scale_ptrs,
-                &workspace.up_ptrs,
-                &workspace.up_scale_ptrs,
+                &table.gate_weight,
+                &table.gate_scale,
+                &table.up_weight,
+                &table.up_scale,
+                &table.down_weight,
+                &table.down_scale,
+                &table.slot_generation,
                 &workspace.segment_expert_slots,
+                &workspace.segment_generations,
                 &workspace.segment_token_indices,
+                &mut workspace.route_error,
                 &mut workspace.y_gate.buffer,
                 &mut workspace.y_up.buffer,
                 intermediate_size,
                 input_size,
                 tokens,
-                resident_experts,
-                num_segments,
+                slots,
+                segments,
             )
         })?;
-        if let Some(start) = phase_start {
-            self.sync_stream()?;
-            self.counters
-                .add_moe_gate_up_us(duration_us(start.elapsed()));
-        }
-
-        let phase_start = timing_enabled.then(Instant::now);
         self.launched(unsafe {
             self.module.moe_swiglu_fp4_packed_batched(
                 &self.stream,
                 LaunchConfig {
-                    grid_dim: ((workspace.intermediate_size / 32) as u32, num_segments, 8),
+                    grid_dim: ((workspace.intermediate_size / 32) as u32, segments, 8),
                     block_dim: (32, 1, 1),
                     shared_mem_bytes: 0,
                 },
@@ -4788,47 +5639,40 @@ impl CudaArtifactOperatorContext {
                 &mut workspace.y_hidden_scales,
                 intermediate_size,
                 8,
-                num_segments,
+                segments,
                 swiglu_limit,
             )
         })?;
-        if let Some(start) = phase_start {
-            self.sync_stream()?;
-            self.counters
-                .add_moe_swiglu_us(duration_us(start.elapsed()));
-        }
-
-        let phase_start = timing_enabled.then(Instant::now);
         self.launched(unsafe {
             self.module.moe_gemm_down_fp4_mxf4_segmented(
                 &self.stream,
                 LaunchConfig {
-                    grid_dim: (workspace.hidden_size.div_ceil(16) as u32, num_segments, 1),
+                    grid_dim: (workspace.hidden_size.div_ceil(16) as u32, segments, 1),
                     block_dim: (32, 1, 1),
                     shared_mem_bytes: 0,
                 },
                 &workspace.y_hidden_packed,
                 &workspace.y_hidden_scales,
-                &workspace.down_ptrs,
-                &workspace.down_scale_ptrs,
+                &table.gate_weight,
+                &table.gate_scale,
+                &table.up_weight,
+                &table.up_scale,
+                &table.down_weight,
+                &table.down_scale,
+                &table.slot_generation,
                 &workspace.segment_expert_slots,
+                &workspace.segment_generations,
                 &workspace.segment_route_indices,
+                &mut workspace.route_written,
+                &mut workspace.route_error,
                 &mut route_output.buffer,
                 intermediate_size,
                 hidden_size,
-                resident_experts,
-                num_segments,
-                route_count,
+                slots,
+                segments,
+                routes,
             )
-        })?;
-        if let Some(start) = phase_start {
-            self.sync_stream()?;
-            self.counters.add_moe_down_us(duration_us(start.elapsed()));
-        }
-        if let Some(start) = total_start {
-            self.counters.add_moe_total_us(duration_us(start.elapsed()));
-        }
-        Ok(())
+        })
     }
 
     /// Add route-major expert outputs into an existing token-major accumulator.
@@ -4874,6 +5718,70 @@ impl CudaArtifactOperatorContext {
                 checked_u32(hidden_size, "MoE route reducer", "hidden_size")?,
             )
         })
+    }
+
+    /// Finalize a segmented invocation. Missing routes or any cumulative
+    /// grouping/execution error produce a canonical NaN in every output element;
+    /// incomplete route output is never read.
+    pub fn reduce_moe_segment_route_outputs_ranked(
+        &self,
+        route_output: &CudaF32Buffer,
+        tokens: usize,
+        routes_per_token: usize,
+        hidden_size: usize,
+        workspace: &mut CudaMoeSegmentWorkspace,
+        output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        if tokens != workspace.tokens || hidden_size != workspace.hidden_size {
+            return Err(Error::Internal(format!(
+                "CUDA segmented MoE reducer/workspace mismatch: workspace=[tokens={},hidden={}] call=[tokens={tokens},hidden={hidden_size}]",
+                workspace.tokens, workspace.hidden_size
+            )));
+        }
+        let routes = tokens
+            .checked_mul(routes_per_token)
+            .ok_or_else(|| Error::Internal("CUDA segmented MoE reducer route overflow".into()))?;
+        let expected_routes = routes
+            .checked_mul(hidden_size)
+            .ok_or_else(|| Error::Internal("CUDA segmented MoE reducer input overflow".into()))?;
+        let expected_output = tokens
+            .checked_mul(hidden_size)
+            .ok_or_else(|| Error::Internal("CUDA segmented MoE reducer output overflow".into()))?;
+        if routes_per_token == 0
+            || workspace.invocation_routes != Some(routes)
+            || route_output.len != expected_routes
+            || output.len != expected_output
+        {
+            return Err(Error::Internal(format!(
+                "CUDA segmented MoE reducer state/shape mismatch: active={:?} routes={routes} route_output={} expected={expected_routes} output={} expected={expected_output}",
+                workspace.invocation_routes, route_output.len, output.len
+            )));
+        }
+
+        let elements = checked_u32(
+            expected_output,
+            "segmented MoE route reducer",
+            "output elements",
+        )?;
+        self.launched(unsafe {
+            self.module.moe_reduce_segment_route_outputs_ranked(
+                &self.stream,
+                LaunchConfig::for_num_elems(elements),
+                &route_output.buffer,
+                &workspace.route_written,
+                &workspace.route_error,
+                &mut output.buffer,
+                checked_u32(tokens, "segmented MoE route reducer", "tokens")?,
+                checked_u32(
+                    routes_per_token,
+                    "segmented MoE route reducer",
+                    "routes_per_token",
+                )?,
+                checked_u32(hidden_size, "segmented MoE route reducer", "hidden_size")?,
+            )
+        })?;
+        workspace.invocation_routes = None;
+        Ok(())
     }
 
     pub fn fp4_swiglu_ffn_from_device(
@@ -5045,122 +5953,95 @@ impl CudaArtifactOperatorContext {
         Ok(())
     }
 
-    /// Batched routed MoE into an existing accumulator using reusable scratch.
-    ///
-    /// This is the decode hot-path variant. It avoids per-call CUDA allocation
-    /// and writes selected expert pointers, weights, and deterministic reduction
-    /// slots into persistent tiny device arrays.
+    /// Populate a warmed batched MoE workspace entirely on device from stable
+    /// expert slots and device-produced router metadata.
     #[allow(clippy::too_many_arguments)]
-    pub fn prepare_moe_experts_batched_workspace(
+    pub fn prepare_moe_experts_batched_workspace_stable(
         &self,
-        gate_handles: &[&CudaArtifactLinearHandle; 6],
-        up_handles: &[&CudaArtifactLinearHandle; 6],
-        down_handles: &[&CudaArtifactLinearHandle; 6],
-        route_weights: &[f32; 6],
+        table: &CudaExpertSlotTable,
+        selected_experts: &[usize],
+        expert_ids: &CudaI32Buffer,
+        router_weights: &CudaF32Buffer,
+        route_count: usize,
         input_len: usize,
-        num_experts: usize,
         intermediate_size: usize,
         hidden_size: usize,
+        resolve: &mut CudaExpertRouteResolveWorkspace,
         workspace: &mut CudaMoeBatchedWorkspace,
     ) -> Result<()> {
-        if num_experts == 0 || num_experts > 6 {
+        table.ensure_healthy()?;
+        if route_count == 0 || route_count > 6 || selected_experts.len() != route_count {
             return Err(Error::Internal(format!(
-                "MoE batched expects 1..=6 experts, got {num_experts}"
+                "stable CUDA MoE dispatch expects 1..=6 matching routes: routes={route_count} selected={}",
+                selected_experts.len()
             )));
         }
-        if !workspace.matches(num_experts, input_len, intermediate_size, hidden_size) {
+        if route_count > expert_ids.len || route_count > router_weights.len {
             return Err(Error::Internal(format!(
-                "CUDA MoE workspace mismatch: workspace=[max_experts={},input={},intermediate={},hidden={}] call=[experts={},input={},intermediate={},hidden={}]",
+                "stable CUDA MoE router metadata too short: routes={route_count} ids={} weights={}",
+                expert_ids.len, router_weights.len
+            )));
+        }
+        if !workspace.matches(route_count, input_len, intermediate_size, hidden_size) {
+            return Err(Error::Internal(format!(
+                "stable CUDA MoE workspace mismatch: workspace=[max_experts={},input={},intermediate={},hidden={}] call=[experts={},input={},intermediate={},hidden={}]",
                 workspace.max_experts,
                 workspace.input_size,
                 workspace.intermediate_size,
                 workspace.hidden_size,
-                num_experts,
+                route_count,
                 input_len,
                 intermediate_size,
                 hidden_size
             )));
         }
 
-        let first_gate = gate_handles[0];
-        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
-            out_features: gate_out,
-            in_features: gate_in,
-        } = first_gate.shape
-        else {
-            return Err(Error::Internal("CUDA packed expert gate is not FP4".into()));
-        };
-        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
-            out_features: up_out,
-            in_features: up_in,
-        } = up_handles[0].shape
-        else {
-            return Err(Error::Internal("CUDA packed expert up is not FP4".into()));
-        };
-        let CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
-            out_features: down_out,
-            in_features: down_in,
-        } = down_handles[0].shape
-        else {
-            return Err(Error::Internal("CUDA packed expert down is not FP4".into()));
-        };
-        if input_len != gate_in
-            || up_in != gate_in
-            || up_out != gate_out
-            || down_in != gate_out
-            || down_out != hidden_size
-            || gate_out != intermediate_size
-        {
-            return Err(Error::Internal(format!(
-                "CUDA packed expert shape mismatch: input={} gate=[{gate_out},{gate_in}] up=[{up_out},{up_in}] down=[{down_out},{down_in}] expected intermediate={intermediate_size} hidden={hidden_size}",
-                input_len
-            )));
+        // This mirror check makes stale bindings an actionable host error without
+        // adding a D2H read to steady decode. The device kernel repeats the check
+        // so an impossible ordering violation still cannot dereference stale/null
+        // expert storage.
+        for &expert in selected_experts {
+            let binding = table.host.binding(expert).ok_or_else(|| {
+                Error::Internal(format!(
+                    "stable CUDA MoE dispatch selected unbound expert {expert}"
+                ))
+            })?;
+            if !table.host.is_current(binding) {
+                return Err(Error::Internal(format!(
+                    "stable CUDA MoE dispatch selected stale expert {expert}: slot={} generation={}",
+                    binding.slot, binding.generation
+                )));
+            }
         }
 
-        let timing_enabled = self.moe_timing_enabled();
-        let mut gate_ptrs = [0u64; 6];
-        let mut gate_scale_ptrs = [0u64; 6];
-        let mut up_ptrs = [0u64; 6];
-        let mut up_scale_ptrs = [0u64; 6];
-        let mut down_ptrs = [0u64; 6];
-        let mut down_scale_ptrs = [0u64; 6];
-        let mut route_slots = vec![-1i32; workspace.max_experts];
-        for i in 0..num_experts {
-            route_slots[i] = i as i32;
-            gate_ptrs[i] = gate_handles[i].weight.cu_deviceptr();
-            gate_scale_ptrs[i] = gate_handles[i]
-                .scale
-                .as_ref()
-                .ok_or_else(|| Error::Internal("CUDA packed expert gate missing scale".into()))?
-                .cu_deviceptr();
-            up_ptrs[i] = up_handles[i].weight.cu_deviceptr();
-            up_scale_ptrs[i] = up_handles[i]
-                .scale
-                .as_ref()
-                .ok_or_else(|| Error::Internal("CUDA packed expert up missing scale".into()))?
-                .cu_deviceptr();
-            down_ptrs[i] = down_handles[i].weight.cu_deviceptr();
-            down_scale_ptrs[i] = down_handles[i]
-                .scale
-                .as_ref()
-                .ok_or_else(|| Error::Internal("CUDA packed expert down missing scale".into()))?
-                .cu_deviceptr();
-        }
-        let phase_start = timing_enabled.then(Instant::now);
-        self.copy_u64_into_device_buffer(&gate_ptrs, &mut workspace.gate_ptrs)?;
-        self.copy_u64_into_device_buffer(&gate_scale_ptrs, &mut workspace.gate_scale_ptrs)?;
-        self.copy_u64_into_device_buffer(&up_ptrs, &mut workspace.up_ptrs)?;
-        self.copy_u64_into_device_buffer(&up_scale_ptrs, &mut workspace.up_scale_ptrs)?;
-        self.copy_u64_into_device_buffer(&down_ptrs, &mut workspace.down_ptrs)?;
-        self.copy_u64_into_device_buffer(&down_scale_ptrs, &mut workspace.down_scale_ptrs)?;
-        self.copy_f32_into_device_buffer(route_weights, &mut workspace.route_weights)?;
-        self.copy_i32_into_device_buffer(&route_slots, &mut workspace.route_slots)?;
-        if let Some(start) = phase_start {
-            self.sync_stream()?;
-            self.counters
-                .add_moe_pointer_upload_us(duration_us(start.elapsed()));
-        }
-        Ok(())
+        self.resolve_expert_routes(table, expert_ids, route_count, resolve)?;
+        self.launched(unsafe {
+            self.module.gather_stable_moe_dispatch(
+                &self.stream,
+                LaunchConfig::for_num_elems(route_count as u32),
+                &table.gate_weight,
+                &table.gate_scale,
+                &table.up_weight,
+                &table.up_scale,
+                &table.down_weight,
+                &table.down_scale,
+                &table.slot_generation,
+                &resolve.route_slots.buffer,
+                &resolve.route_generations.buffer,
+                &router_weights.buffer,
+                &mut workspace.gate_ptrs,
+                &mut workspace.gate_scale_ptrs,
+                &mut workspace.up_ptrs,
+                &mut workspace.up_scale_ptrs,
+                &mut workspace.down_ptrs,
+                &mut workspace.down_scale_ptrs,
+                &mut workspace.route_weights,
+                &mut workspace.route_slots,
+                &mut workspace.dispatch_error,
+                route_count as u32,
+                table.host.slot_capacity() as u32,
+            )
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -5503,43 +6384,6 @@ impl CudaArtifactOperatorContext {
         }
 
         Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn moe_experts_batched_add_into_from_device(
-        &self,
-        gate_handles: &[&CudaArtifactLinearHandle; 6],
-        up_handles: &[&CudaArtifactLinearHandle; 6],
-        down_handles: &[&CudaArtifactLinearHandle; 6],
-        route_weights: &[f32; 6],
-        input: &CudaF32Buffer,
-        swiglu_limit: f32,
-        num_experts: usize,
-        intermediate_size: usize,
-        hidden_size: usize,
-        workspace: &mut CudaMoeBatchedWorkspace,
-        output: &mut CudaF32Buffer,
-    ) -> Result<()> {
-        self.prepare_moe_experts_batched_workspace(
-            gate_handles,
-            up_handles,
-            down_handles,
-            route_weights,
-            input.len,
-            num_experts,
-            intermediate_size,
-            hidden_size,
-            workspace,
-        )?;
-        self.moe_experts_batched_add_into_from_device_prepared(
-            input,
-            swiglu_limit,
-            num_experts,
-            intermediate_size,
-            hidden_size,
-            workspace,
-            output,
-        )
     }
 
     pub fn rms_norm(&self, input: &[f32], weight: &[f32], eps: f32) -> Result<Vec<f32>> {
@@ -7163,6 +8007,44 @@ pub fn cuda_sparse_attention_sink_f32(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_slot_pointers(seed: u64) -> CudaExpertSlotPointers {
+        CudaExpertSlotPointers {
+            gate_weight: seed + 1,
+            gate_scale: seed + 2,
+            up_weight: seed + 3,
+            up_scale: seed + 4,
+            down_weight: seed + 5,
+            down_scale: seed + 6,
+        }
+    }
+
+    #[test]
+    fn expert_slot_host_reuses_slot_with_new_generation() {
+        let mut table = CudaExpertSlotTableHost::new(4, 1).unwrap();
+        let first = table.install(0, test_slot_pointers(10)).unwrap();
+        assert_eq!(table.binding(0), Some(first));
+        assert!(table.is_current(first));
+
+        assert!(table.evict(0).unwrap());
+        assert_eq!(table.binding(0), None);
+        assert!(!table.is_current(first));
+        let second = table.install(1, test_slot_pointers(20)).unwrap();
+        assert_eq!(second.slot, first.slot);
+        assert_ne!(second.generation, first.generation);
+        assert!(!table.is_current(first));
+        assert!(table.is_current(second));
+    }
+
+    #[test]
+    fn expert_slot_host_resolves_resident_and_rejects_miss() {
+        let mut table = CudaExpertSlotTableHost::new(4, 2).unwrap();
+        let resident = table.install(2, test_slot_pointers(30)).unwrap();
+        assert_eq!(table.binding(2), Some(resident));
+        assert_eq!(table.binding(1), None);
+        assert_eq!(table.binding(4), None);
+        assert!(!table.evict(1).unwrap());
+    }
 
     #[test]
     fn dsv4_paged_decode_rows_shape_accepts_fixed_stride_outputs() {

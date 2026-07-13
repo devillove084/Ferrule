@@ -1190,7 +1190,7 @@ pub(crate) struct DeepSeekV4LayerArena {
     attention_transition: Option<DeepSeekV4AttentionRowsTransitionArena>,
     router_input: ferrule_cuda::context::CudaF32Buffer,
     router_logits: ferrule_cuda::context::CudaF32Buffer,
-    router_indices: ferrule_cuda::context::CudaF32Buffer,
+    router_indices: ferrule_cuda::context::CudaI32Buffer,
     router_weights: ferrule_cuda::context::CudaF32Buffer,
     moe_output: ferrule_cuda::context::CudaF32Buffer,
     shared_workspace: ferrule_cuda::context::CudaSwiGLUWorkspace,
@@ -1332,7 +1332,7 @@ impl DeepSeekV4LayerArena {
             router_indices: operators
                 .cuda_mut()?
                 .ops
-                .zero_f32_buffer(rows * layer.router_policy.top_k)?,
+                .zero_i32_buffer(rows * layer.router_policy.top_k)?,
             router_weights: operators
                 .cuda_mut()?
                 .ops

@@ -156,7 +156,6 @@ pub struct RuntimeTimingCounters {
     /// Env-gated GPU-synchronized MoE timings. These stay zero unless
     /// `FERRULE_CUDA_MOE_TIMING=1` is set for the run.
     pub moe_total_us: u64,
-    pub moe_pointer_upload_us: u64,
     pub moe_input_prepare_us: u64,
     pub moe_gate_up_us: u64,
     pub moe_swiglu_us: u64,

@@ -1,6 +1,8 @@
 //! Numerical and long-context boundary regressions for DSV4 device top-k kernels.
 
-use ferrule_cuda::context::CudaArtifactOperatorContext;
+use ferrule_cuda::context::{
+    CudaArtifactOperatorContext, validate_dsv4_router_hash_table, validate_dsv4_router_token_ids,
+};
 use std::sync::{Mutex, MutexGuard};
 
 static CUDA_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -206,4 +208,272 @@ fn paged_decode_rows_matches_stable_cpu_reference() {
             .expect("download plane selectors"),
         expected.1
     );
+}
+
+fn router_topk_reference(
+    logits: &[f32],
+    bias: &[f32],
+    tokens: usize,
+    experts: usize,
+    top_k: usize,
+    route_scale: f32,
+) -> (Vec<i32>, Vec<f32>) {
+    let mut indices = Vec::with_capacity(tokens * top_k);
+    let mut weights = Vec::with_capacity(tokens * top_k);
+    for row in logits.chunks_exact(experts).take(tokens) {
+        let scores = row
+            .iter()
+            .map(|&logit| {
+                let softplus = if logit > 20.0 {
+                    logit
+                } else if logit < -20.0 {
+                    logit.exp()
+                } else {
+                    logit.exp().ln_1p()
+                };
+                softplus.sqrt()
+            })
+            .collect::<Vec<_>>();
+        let mut ranked = (0..experts).collect::<Vec<_>>();
+        ranked.sort_by(|&left, &right| {
+            (scores[right] + bias[right])
+                .total_cmp(&(scores[left] + bias[left]))
+                .then_with(|| left.cmp(&right))
+        });
+        let selected = &ranked[..top_k];
+        let sum = selected.iter().map(|&expert| scores[expert]).sum::<f32>();
+        for &expert in selected {
+            indices.push(expert as i32);
+            weights.push(scores[expert] / sum * route_scale);
+        }
+    }
+    (indices, weights)
+}
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn router_topk_writes_i32_ids_without_hidden_download_and_matches_cpu_routes() {
+    const TOKENS: usize = 2;
+    const EXPERTS: usize = 6;
+    const TOP_K: usize = 3;
+    const ROUTE_SCALE: f32 = 1.25;
+
+    let logits = [
+        -2.0, 0.5, 3.0, -0.25, 1.5, -4.0, // row 0
+        2.0, -1.0, 0.0, 4.0, -3.0, 1.0, // row 1
+    ];
+    let bias = [0.0, 0.25, -0.5, 0.0, 0.75, -0.25];
+    let expected = router_topk_reference(&logits, &bias, TOKENS, EXPERTS, TOP_K, ROUTE_SCALE);
+
+    let _guard = cuda_test_guard();
+    let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
+    let logits = context
+        .upload_f32_buffer(&logits)
+        .expect("upload router logits");
+    let bias = context
+        .upload_f32_buffer(&bias)
+        .expect("upload router bias");
+    let mut indices = context
+        .zero_i32_buffer(TOKENS * TOP_K)
+        .expect("allocate i32 router IDs");
+    let mut weights = context
+        .zero_f32_buffer(TOKENS * TOP_K)
+        .expect("allocate router weights");
+
+    context.reset_counters();
+    context.enable_capture_safe();
+    context
+        .dsv4_router_topk_sqrt_softplus_rows_from_device_into(
+            &logits,
+            Some(&bias),
+            TOKENS,
+            EXPERTS,
+            TOP_K,
+            ROUTE_SCALE,
+            &mut indices,
+            &mut weights,
+        )
+        .expect("launch DSV4 router top-k");
+    context.disable_capture_safe();
+    let launch_counters = context.counters();
+    assert_eq!(launch_counters.device_to_host_copies, 0);
+    assert_eq!(launch_counters.device_to_host_bytes, 0);
+    assert_eq!(launch_counters.stream_wide_syncs, 0);
+
+    let actual_indices = context
+        .download_i32_buffer(&indices)
+        .expect("download i32 router IDs");
+    let actual_weights = context
+        .download_f32_buffer(&weights)
+        .expect("download router weights");
+    assert_eq!(actual_indices, expected.0);
+    for (actual, expected) in actual_weights.iter().zip(&expected.1) {
+        assert!(
+            (actual - expected).abs() <= 1.0e-4,
+            "router weight mismatch: actual={actual} expected={expected}"
+        );
+    }
+}
+
+#[test]
+fn hash_router_host_validation_covers_token_rows_topk_duplicates_and_bounds() {
+    assert_eq!(
+        validate_dsv4_router_token_ids(&[2, 0], 3).expect("valid token rows"),
+        vec![2, 0]
+    );
+    assert!(
+        validate_dsv4_router_token_ids(&[3], 3)
+            .unwrap_err()
+            .to_string()
+            .contains("batch row 0")
+    );
+
+    let valid = [0usize, 1, 2, 2, 0, 1];
+    assert_eq!(
+        validate_dsv4_router_hash_table(&valid, 2, 3, 3, 2).expect("valid hash table"),
+        vec![0, 1, 2, 2, 0, 1]
+    );
+    assert!(
+        validate_dsv4_router_hash_table(&valid, 2, 3, 3, 4)
+            .unwrap_err()
+            .to_string()
+            .contains("top_k")
+    );
+    assert!(
+        validate_dsv4_router_hash_table(&[1, 1, 0], 1, 3, 3, 2)
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate expert id 1")
+    );
+    assert!(
+        validate_dsv4_router_hash_table(&[3, 1, 0], 1, 3, 3, 2)
+            .unwrap_err()
+            .to_string()
+            .contains("exceeds expert count 3")
+    );
+}
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn hash_router_uses_token_rows_matches_weights_and_wrapper_has_no_copies_or_sync() {
+    const TOKENS: usize = 3;
+    const EXPERTS: usize = 4;
+    const TOP_K: usize = 2;
+    const HASH_ROWS: usize = 5;
+    const HASH_COLS: usize = 3;
+    const ROUTE_SCALE: f32 = 1.5;
+
+    let logits: [f32; TOKENS * EXPERTS] = [
+        -2.0, 0.5, 3.0, -0.25, // token 0 uses hash row 3
+        2.0, -1.0, 0.0, 4.0, // token 1 uses hash row 0
+        1.0, 2.0, -3.0, 0.25, // token 2 also uses hash row 3
+    ];
+    let token_id_values = [3u32, 0, 3];
+    let hash_table = [
+        3usize, 1, 2, // row 0
+        0, 2, 1, // row 1
+        1, 3, 0, // row 2
+        2, 0, 3, // row 3
+        0, 1, 2, // row 4
+    ];
+    let expected_indices = [2i32, 0, 3, 1, 2, 0];
+    let mut expected_weights = Vec::with_capacity(TOKENS * TOP_K);
+    for (row, selected) in logits
+        .chunks_exact(EXPERTS)
+        .zip(expected_indices.chunks_exact(TOP_K))
+    {
+        let scores = selected
+            .iter()
+            .map(|&expert| {
+                let logit = row[expert as usize];
+                let softplus = if logit > 20.0 {
+                    logit
+                } else if logit < -20.0 {
+                    logit.exp()
+                } else {
+                    logit.exp().ln_1p()
+                };
+                softplus.sqrt()
+            })
+            .collect::<Vec<_>>();
+        let sum = scores.iter().sum::<f32>();
+        expected_weights.extend(scores.into_iter().map(|score| score / sum * ROUTE_SCALE));
+    }
+
+    let _guard = cuda_test_guard();
+    let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
+    let logits = context
+        .upload_f32_buffer(&logits)
+        .expect("upload router logits");
+    let mut token_ids = context
+        .dsv4_router_token_ids(&token_id_values, HASH_ROWS)
+        .expect("upload router token ids");
+    let hash_table = context
+        .upload_dsv4_router_hash_table(&hash_table, HASH_ROWS, HASH_COLS, EXPERTS, TOP_K)
+        .expect("upload router hash table");
+    let mut indices = context
+        .zero_i32_buffer(TOKENS * TOP_K)
+        .expect("allocate router IDs");
+    let mut weights = context
+        .zero_f32_buffer(TOKENS * TOP_K)
+        .expect("allocate router weights");
+
+    context.reset_counters();
+    context
+        .update_dsv4_router_token_ids(&token_id_values, HASH_ROWS, &mut token_ids)
+        .expect("reuse unchanged router token ids");
+    context.enable_capture_safe();
+    context
+        .dsv4_router_hash_sqrt_softplus_rows_from_device_into(
+            &logits,
+            &token_ids,
+            &hash_table,
+            TOKENS,
+            EXPERTS,
+            TOP_K,
+            ROUTE_SCALE,
+            &mut indices,
+            &mut weights,
+        )
+        .expect("launch DSV4 hash router");
+    context.disable_capture_safe();
+    let launch_counters = context.counters();
+    assert_eq!(launch_counters.host_to_device_copies, 0);
+    assert_eq!(launch_counters.host_to_device_bytes, 0);
+    assert_eq!(launch_counters.device_to_host_copies, 0);
+    assert_eq!(launch_counters.device_to_host_bytes, 0);
+    assert_eq!(launch_counters.stream_wide_syncs, 0);
+    assert_eq!(launch_counters.device_allocation_attempts, 0);
+    assert_eq!(launch_counters.device_allocations, 0);
+
+    assert_eq!(
+        context
+            .download_i32_buffer(&indices)
+            .expect("download hash router IDs"),
+        expected_indices
+    );
+    let actual_weights = context
+        .download_f32_buffer(&weights)
+        .expect("download hash router weights");
+    for (actual, expected) in actual_weights.iter().zip(&expected_weights) {
+        assert!(
+            (actual - expected).abs() <= 1.0e-4,
+            "hash router weight mismatch: actual={actual} expected={expected}"
+        );
+    }
+
+    context.reset_counters();
+    context
+        .update_dsv4_router_token_ids(&[3, 0, 4], HASH_ROWS, &mut token_ids)
+        .expect("overwrite changed router token ids");
+    let overwrite_counters = context.counters();
+    assert_eq!(overwrite_counters.host_to_device_copies, 1);
+    assert_eq!(
+        overwrite_counters.host_to_device_bytes,
+        (TOKENS * std::mem::size_of::<i32>()) as u64
+    );
+    assert_eq!(overwrite_counters.device_to_host_copies, 0);
+    assert_eq!(overwrite_counters.stream_wide_syncs, 0);
+    assert_eq!(overwrite_counters.device_allocation_attempts, 0);
+    assert_eq!(overwrite_counters.device_allocations, 0);
 }

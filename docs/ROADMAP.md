@@ -770,7 +770,7 @@ E3 sequence ownership and E4 batch bindings.
 
 ## E6 — Device router and runtime residency coordinator
 
-**Status: planned.**
+**Status: in progress.**
 
 ### Depends on
 
@@ -786,9 +786,22 @@ E4 native batching; required before E7 stable graphs.
   rejection, and deterministic slot reuse.
 - [ ] Connect coordinator ownership to the runner/backend residency hooks and delete
   per-sequence planner/backend double bookkeeping.
-- [ ] Keep score/hash route IDs, weights, expert-to-slot resolution, and packed
-  expert grouping device-side; update stable pointer tables only when residency
-  changes.
+- [x] Keep DSV4 score/hash route IDs and weights device-side with `i32` expert IDs;
+  hash tables are shape-validated/uploaded once and persistent pinned token IDs are
+  updated once per changed batch, not once per layer. Full router-logit D2H is deleted
+  for supported DSV4 policies.
+- [x] Add per-layer CUDA stable pointer tables with expert-to-slot and slot-generation
+  validation. Install/evict updates tables only when residency changes; terminal
+  generations are rejected, failed update+rollback poisons the table, and stale routes,
+  transfer failures, and slot reuse are covered by CPU/CUDA gates.
+- [x] Move decode dispatch and packed fixed-eight expert grouping to the device.
+  Warm stable dispatch performs zero pointer/route-weight H2D, zero D2H, zero sync,
+  and zero allocation; packed grouping uses parallel count/scan/scatter, tracks complete
+  route coverage across residency windows, and preserves token-major route-rank reduction
+  across mixed sequences.
+- [x] Delete the old host pointer/weight dispatch, host `BTreeMap` segment grouping,
+  segment metadata upload path, obsolete pointer-upload telemetry, and superseded
+  device-router/segment-batch compatibility switches.
 
 ### Deliverables
 

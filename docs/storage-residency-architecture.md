@@ -380,10 +380,18 @@ Performance reports must distinguish:
 
 ### R3 — Device routing and stable slots
 
-- [ ] Device top-k/weights/grouping.
-- [x] Stable slot/generation table and lease-protected eviction semantics.
-- [ ] Remove host route/pointer uploads from steady path.
-- [ ] Connect backend event dependencies to expert leases.
+- [x] Device score/hash routing, normalized weights, stable-slot resolution, and
+  packed fixed-eight grouping with cumulative route-completion validation across
+  residency windows.
+- [x] Stable CUDA pointer/slot/generation tables plus the runtime coordinator's
+  lease-protected eviction semantics. Terminal generations are rejected and an
+  unrecoverable publication rollback poisons the device table.
+- [x] Remove full-logit D2H and host pointer/route-weight/segment uploads from the
+  steady compute path. Hash token IDs use persistent pinned async staging; compact
+  selected IDs/weights remain an explicit residency control boundary until R2 owns
+  miss planning.
+- [ ] Connect backend event dependencies and CUDA slot publication to runtime expert
+  leases.
 
 ### R4 — Native batch and graph integration
 
