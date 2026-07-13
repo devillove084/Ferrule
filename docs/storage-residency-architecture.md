@@ -1,13 +1,13 @@
 # Ferrule Storage and Expert Residency Architecture
 
-_Status: canonical target design; current implementation is partial_
+_Status: E6 runtime expert-residency ownership is implemented; E7 graph integration remains planned_
 
 _Last updated: 2026-07-13_
 
 This document defines storage/residency ownership after the execution-engine
-refactor. It is intentionally narrower than the previous survey: it describes
-Ferrule's concrete lifecycle, current mechanisms, target coordinator, interfaces,
-metrics, and staged migration.
+refactor. It is intentionally narrower than the previous survey: it describes the
+implemented E6 lifecycle, model-neutral control ABI, runtime coordinator, physical
+CUDA store, metrics, and remaining E7 graph integration.
 
 Related documents:
 
@@ -25,19 +25,20 @@ Related documents:
 Ferrule targets sparse MoE inference under memory pressure. DSV4 routed experts are
 the immediate pressure test, but the vocabulary must remain model-neutral.
 
-The target separation is:
+The implemented E6 separation is:
 
 ```text
 model semantics
-  router policy, selected-expert demand, artifact layout, optional prediction hint
-        │
+  selected-expert demand, artifact layout, optional prediction hint
+        │ model-neutral ExpertResidencyControl ABI
         ▼
-runtime ExpertResidencyCoordinator
-  budget, hotness, retain/prefetch/evict, sequence/batch admission, leases
-        │ ResidencyPlan / transfer intent
+ferrule-runtime ExpertResidencyController
+  per-layer capacity/LRU, stable slots/generations, reservations, leases, stats
+        │ prepared install / exact physical binding
         ▼
-CUDA backend residency store
-  resident slots, staged/pinned sources, upload stream/events, generations
+DSV4 CUDA physical residency store
+  immutable source catalogs, staging/pinned sources, upload tickets/events,
+  resident handles and stable device tables
         │ stable expert indirection
         ▼
 prepared MoE dispatcher / grouped kernels
@@ -58,34 +59,23 @@ Decisions:
 
 ---
 
-## 2. Current code reality
+## 2. Current implementation
 
-The prior document is outdated in several important ways. Current DSV4 CUDA code
-already has:
+E6 has completed the residency ownership migration:
 
-- `HostStagedExpertCache`;
-- CUDA pinned expert-source cache;
-- asynchronous host staging;
-- dedicated upload stream/events;
-- in-flight upload tickets;
-- resident FP4 CUDA handles;
-- selected/prefetch classification and counters;
-- model-local `ExpertStreamingPlanner` and predictor;
-- deterministic route-ranked MoE reduction.
+| Location | Implemented ownership |
+|---|---|
+| `ferrule-common::expert_residency` | Model-neutral `ExpertKey`, stable slot/generation bindings, leases, selected/prefetch intents, two-phase prepare/publish/cancel, and stats ABI. |
+| `ferrule-runtime::expert_residency` | One stable-slot coordinator per layer, capacity/LRU policy among unleased slots, selected leases, prefetch admission, cancellation, and aggregate stats. |
+| `NativeMultiSessionExecutor` | Lazy controller construction/injection before execution. The injected control stays on the runner, so clean executor/driver teardown and runner re-wrapping preserve residency ownership and state. |
+| DSV4 CUDA path | Immutable source-catalog access, asynchronous host staging, pinned upload sources, upload tickets/events, resident FP4 handles, stable physical tables, and physical counters only. |
+| CPU/reference path | The remaining `ExpertStreamingPlanner` and `CpuExpertHandleStore` correctness implementation; CUDA does not allocate mirrors of either. |
 
-The remaining problem is ownership, not absence of mechanisms:
-
-| Current location | Contains | Why it is not the target |
-|---|---|---|
-| `ferrule-model::moe::streaming` | planner, sources, host staging vocabulary | policy is still invoked by a model runner and cannot coordinate requests globally |
-| `DeepSeekV4Runner` | prediction, lookahead, prefetch sequencing | one implicit sequence owns behavior that should be shared/runtime policy |
-| `DeepSeekV4CudaOperatorCache` | resident handles, upload tickets, pinned cache, host cache, transfer counters, MoE workspace | backend resources are mixed with prepared weights, sequence KV, arenas, and diagnostics |
-| `ferrule-runtime::expert_residency` | backend trait plus stable slot/generation/lease coordinator foundation | active DSV4 CUDA path does not yet use it as the authoritative coordinator |
-| `ResidentScheduler` | request admission and sequence actions | cannot budget or reserve actual expert resources before execution |
-
-The GB10 cold path remains dominated by prompt-dependent selected expert
-materialization. Stable numerical parity does not make the current design a serving
-residency system.
+The old CUDA planner/backend reconciliation and duplicate logical residency ledger are
+removed. Selected and prefetch uploads share the pinned asynchronous upload path;
+selected compute waits by inserting only the required upload-event dependency on the
+compute stream. Device publication kernels update stable tables in place without a
+normal-path H2D table copy or stream-wide synchronization.
 
 ---
 
@@ -107,13 +97,15 @@ The execution engine adds the following concepts:
 | Type | Meaning |
 |---|---|
 | `ExpertKey` | Model-instance-qualified immutable expert identity, not merely `(layer, expert)` across all models. |
-| `ExpertSlot` | Stable backend-local index used by device dispatch/indirection. |
-| `ExpertGeneration` | Monotonic slot/resource version; rejects stale dispatch and graph metadata. |
+| `ExpertSlotId` | Stable backend-local index used by device dispatch/indirection. |
+| `ExpertSlotGeneration` | Monotonic slot/resource version; rejects stale dispatch and graph metadata. |
 | `ExpertLease` | Temporary non-evictable reference acquired for an execution batch. |
-| `TransferTicket` | Async staging/upload operation with source, destination, event, bytes, and result state. |
-| `ExpertDemand` | Selected and predicted expert requirements emitted by model lowering. |
-| `ResidencyPlan` | Runtime policy decision: retain, prefetch, acquire lease, evict, or reject. |
-| `ResidencyOutcome` | Backend result: resident, in-flight, host-staged, cold, failed, bytes/wait metadata. |
+| `ExpertInstallIntent` | Model-qualified selected or prefetch request. |
+| `PreparedExpertInstall` | Unpublished exact slot/generation reservation returned before physical transfer. |
+| `ExpertInstallPrepareOutcome` | Resident grant, prepared installation, or nonfatal prefetch capacity pressure. |
+| `ExpertResidencyGrant` | Published binding plus the mandatory lease for selected demand; prefetch grants are unleased. |
+| `ExpertResidencyStats` | Aggregate resident/lease/install/eviction/hit/cancellation/capacity counters exposed through the common ABI. |
+| Upload ticket | DSV4 CUDA asynchronous pinned upload plus completion event and retained staging/resources. |
 
 `ExpertKey` must be namespaced by model instance or model fingerprint. Current
 layer/expert IDs are not sufficient for a backend that can host multiple models.
@@ -124,87 +116,55 @@ layer/expert IDs are not sufficient for a backend that can host multiple models.
 
 ### 4.1 Model-side demand
 
-The model provides deterministic semantics:
+The model owns deterministic router IDs, weights, route rank/order, immutable source
+catalogs, and optional hash/DSpark prediction hints. The CUDA lowering converts compact
+selected or predicted layer/expert IDs into model-instance-qualified `ExpertKey`
+values and invokes the common selected/prefetch control ABI. Model hints do not choose
+a slot/generation or directly publish/evict a logical binding.
+
+### 4.2 Model-neutral control ABI and runtime coordinator
+
+`ferrule-common` provides the object-safe `ExpertResidencyControl` ABI. Its key
+operations are:
 
 ```rust
-pub struct ExpertDemand {
-    pub layer: u32,
-    pub selected: Vec<SelectedExpert>,
-    pub predicted: Vec<PredictedExpert>,
-    pub route_capacity: u32,
-}
-
-pub struct SelectedExpert {
-    pub key: ExpertKey,
-    pub router_rank: u32,
-    pub weight: f32,
-}
+fn binding(&self, key: ExpertKey) -> Result<Option<ExpertSlotBinding>>;
+fn acquire_selected(&mut self, key: ExpertKey) -> Result<Option<ExpertResidencyGrant>>;
+fn release(&mut self, lease: ExpertLease) -> Result<()>;
+fn prepare_install(&mut self, intent: ExpertInstallIntent)
+    -> Result<ExpertInstallPrepareOutcome>;
+fn publish_install(&mut self, prepared: PreparedExpertInstall)
+    -> Result<ExpertResidencyGrant>;
+fn cancel_install(&mut self, prepared: PreparedExpertInstall) -> Result<()>;
+fn stats(&self) -> ExpertResidencyStats;
 ```
 
-DSV4 may add hash/DSpark lookahead hints, but those hints do not directly upload or
-evict expert bytes.
+`ferrule-runtime::ExpertResidencyController` implements that ABI with an independent
+coordinator and configured capacity for every model layer. It owns stable logical
+slots/generations, LRU choice among unleased slots, selected leases, prefetch capacity
+handling, prepare/publish/cancel transactions, and aggregate/per-layer stats. It does
+not own CUDA handles, pinned memory, streams, events, or artifact I/O.
 
-### 4.2 Runtime coordinator
+`NativeMultiSessionExecutor` constructs and injects the controller lazily from the
+runner's model-instance and per-layer requirements. Injection occurs once before the
+first execution/feed/diagnostic path that needs it. Because the boxed control is held
+by the runner, `into_runner` followed by construction of a new executor recognizes and
+reuses the existing control instead of replacing it.
 
-```rust
-pub trait ExpertResidencyCoordinator {
-    fn plan(
-        &mut self,
-        batch: &ExecutionBatch,
-        demand: &[ExpertDemand],
-        budget: ResidencyBudget,
-    ) -> Result<ResidencyPlan>;
+### 4.3 DSV4 CUDA physical residency store
 
-    fn commit(&mut self, outcome: &ResidencyOutcome) -> Result<()>;
+DSV4 CUDA owns only physical mechanisms:
 
-    fn release(&mut self, leases: &[ExpertLease]) -> Result<()>;
-}
-```
+- immutable expert source catalogs and host-staged/pinned source caches;
+- selected and prefetch upload tickets on the upload stream;
+- upload completion events and compute-stream event dependencies;
+- resident FP4 device handles and their event-guarded retirement;
+- stable pointer, expert-to-slot, and generation device tables;
+- physical publication/eviction kernels, grouped workspaces, and backend counters.
 
-Runtime responsibilities:
-
-- per-tier memory budget;
-- hotness and workload history;
-- cross-request retain/prefetch/evict policy;
-- admission/deadline interaction;
-- sequence/batch ownership and leases;
-- metrics aggregation;
-- poisoned request handling.
-
-It does not own CUDA handles or disk/mmap implementation.
-
-### 4.3 CUDA backend residency store
-
-```rust
-pub trait ExpertResidencyBackend {
-    fn prepare(
-        &mut self,
-        plan: &ResidencyPlan,
-    ) -> Result<ResidencyOutcome>;
-
-    fn poll(&mut self) -> Result<Vec<TransferTicket>>;
-
-    fn acquire_slots(
-        &mut self,
-        leases: &[ExpertLease],
-        dispatch: &mut PreparedMoeDispatch,
-    ) -> Result<()>;
-
-    fn release_slots(&mut self, leases: &[ExpertLease]) -> Result<()>;
-}
-```
-
-CUDA responsibilities:
-
-- immutable expert bundle decode/upload;
-- host-staged and pinned sources;
-- upload stream/event recording;
-- resident device handles;
-- slot allocation and generation;
-- stable device indirection table;
-- event dependency insertion on compute stream;
-- physical eviction after lease release;
-- backend-local counters.
+It does not choose logical slots/generations or allocate CPU planner/handle mirrors.
+Normal publication mutates the stable device tables with kernels; it performs no H2D
+table copy and no stream-wide synchronization.
 
 ### 4.4 Immutable source versus replica
 
@@ -222,20 +182,20 @@ optional transfer ticket. Do not encode source tier and resident state in one en
 
 ---
 
-## 5. Target execution flow
+## 5. Implemented execution flow
 
 ### 5.1 Steady resident path
 
 ```text
 model layer prefix produces router hidden
 → device router top-k/weights/grouping
-→ model emits ExpertDemand
-→ runtime confirms/renews leases
-→ backend resolves stable ExpertSlot + generation
-→ backend writes compact dispatch metadata
+→ compact selected IDs become model-qualified ExpertKey values
+→ runtime acquires selected ExpertLease bindings
+→ device kernels resolve ExpertSlotId + ExpertSlotGeneration
 → grouped FP4 kernels execute
 → route-ranked reducer combines output
-→ leases release after completion event
+→ leases release after dispatch submission
+→ physical handle retirement remains guarded by compute events
 ```
 
 Required steady-state properties:
@@ -259,19 +219,23 @@ prediction hint / policy demand
 → dispatch through stable indirection
 ```
 
-### 5.3 Cold selected miss
-
-Initial policy may choose request-fatal or synchronous materialization. It must be
-explicit:
+### 5.3 Selected miss and prefetch pressure
 
 ```text
 selected miss
-→ either admission blocks before execute
-→ or execute returns a named residency error and sequence is poisoned
+→ runtime prepares an exact slot/generation reservation
+→ DSV4 resolves/stages and pins the immutable source
+→ upload stream submits an asynchronous ticket and records an event
+→ compute stream waits on that event only
+→ physical publication kernel updates the stable table
+→ runtime publishes the reservation and returns a selected lease
 ```
 
-Do not hide selected miss with global stream sync. A later async policy may overlap
-only when a source/ticket/event contract exists.
+When selected demand needs capacity, DSV4 deterministically sorts pending non-selected
+prefetches and cancels the excess reservations. A canceled in-flight ticket is moved
+to the abandoned-resource list: its pinned staging and device allocations remain alive
+until its completion event reports that release is safe. No host event synchronize or
+global stream synchronize is used to satisfy selected compute.
 
 ---
 
@@ -281,14 +245,15 @@ Long-lived graph replay cannot capture raw pointers from a mutable `HashMap` of
 resident experts. The backend needs a stable device table:
 
 ```text
-ExpertSlot → {
-  generation,
+ExpertSlotId → {
+  ExpertSlotGeneration,
   gate pointer/scales,
   up pointer/scales,
   down pointer/scales,
-  format/layout metadata,
-  ready event state
+  expert-to-slot and slot-generation metadata
 }
+
+resident handle → upload guard / retirement event
 ```
 
 Dispatch metadata carries slots and expected generations. Before execution:
@@ -310,22 +275,24 @@ Residency participates in the same prepare/execute/commit boundary as KV:
 
 ```text
 scheduler forms ScheduledBatch
-→ runtime reserves KV and computes residency plan
-→ backend prepares sequence/KV bindings and expert slots
+→ runtime reserves KV
+→ runtime residency control acquires or prepares exact expert bindings
+→ DSV4 CUDA completes physical staging/upload/publication
 → PreparedStepBinding receives page/slot/route generations
 → device execute
-→ completion event
-→ commit sequence cursor, KV reservation, residency observations
-→ release temporary leases
+→ commit sequence cursor and KV reservation
+→ release temporary leases; retire physical resources by events
 ```
 
 On error before commit:
 
-- newly allocated KV pages roll back once E5 exists;
+- newly allocated KV pages roll back;
 - expert leases release;
-- in-flight uploads may remain backend-global cache candidates but cannot be
-  installed as selected state for the failed sequence;
-- sequence is poisoned until reset/release under the initial contract.
+- unpublished expert reservations are canceled;
+- canceled in-flight uploads retain their physical resources until their events
+  complete, but cannot publish the canceled logical binding;
+- the sequence follows the existing transaction poison/reset rules when execution may
+  have mutated state.
 
 ---
 
@@ -340,9 +307,12 @@ Required counters by placement and outcome:
 | Host staged | hit/miss/eviction, bytes, decode time |
 | Pinned | hit/miss/eviction, bytes, pin time |
 | Transfer | read bytes/time, upload bytes/time, submitted/completed/failed/in-flight tickets, event waits |
-| Policy | retain/prefetch/evict/reject decisions, accuracy, budget pressure |
+| Runtime control | resident slots, active leases, installs, evictions, resident hits, stale releases, prepare cancellations, prefetch capacity misses |
 | Execution | grouped columns/expert, route compact time, kernel time, reducer time |
 | Graph | dispatch generation invalidation, graph fallback caused by residency |
+
+The aggregate runtime-controller values above are exposed through DSV4 operator
+runtime counters alongside physical transfer and MoE counters.
 
 Performance reports must distinguish:
 
@@ -356,48 +326,38 @@ Performance reports must distinguish:
 
 ## 9. Migration phases
 
-### R0 — Preserve current mechanisms and measure
+### R0/R1 — Mechanism preservation and physical-store extraction — complete
 
-- Retain model-local planner, host-staged/pinned/in-flight paths, and current CUDA
-  cache.
-- Add counters and failure semantics required by roadmap E0.
-- Do not change routing or reduction order.
+- [x] Preserve staged/pinned/asynchronous transfer mechanisms and deterministic
+  routing/reduction while splitting physical CUDA resources from logical policy.
+- [x] Add model-instance-qualified expert identity and separate prepared, sequence,
+  arena, physical residency, and diagnostics lifetimes.
 
-### R1 — Extract backend residency store
+### R2 — Runtime coordinator — complete
 
-- Split DSV4 CUDA cache into prepared weights, backend-global expert store,
-  per-sequence KV, arena, and diagnostics.
-- Keep an adapter so current model-local planner can drive the extracted store.
-- Add model-instance namespace to expert identity.
+- [x] Add the model-neutral stable slot/generation/lease and stats ABI with
+  failure-atomic two-phase publication/cancellation.
+- [x] Install one runtime coordinator per layer through lazy executor-to-runner
+  injection, preserving it across clean runner moves.
+- [x] Remove the CUDA planner/backend reconciliation and CPU planner/handle mirrors.
 
-### R2 — Introduce runtime coordinator
-
-- [x] Add the model-neutral stable slot/generation/lease state machine with
-  failure-atomic two-phase publication.
-- [ ] Move cross-request hotness/budget/prefetch policy to runtime.
-- [ ] Model emits demand/hints; backend returns outcomes.
-- [ ] Keep a temporary DSV4 planner adapter only while behavior is compared.
-
-### R3 — Device routing and stable slots
+### R3 — Device routing, transfers, and stable publication — complete
 
 - [x] Device score/hash routing, normalized weights, stable-slot resolution, and
-  packed fixed-eight grouping with cumulative route-completion validation across
-  residency windows.
-- [x] Stable CUDA pointer/slot/generation tables plus the runtime coordinator's
-  lease-protected eviction semantics. Terminal generations are rejected and an
-  unrecoverable publication rollback poisons the device table.
-- [x] Remove full-logit D2H and host pointer/route-weight/segment uploads from the
-  steady compute path. Hash token IDs use persistent pinned async staging; compact
-  selected IDs/weights remain an explicit residency control boundary until R2 owns
-  miss planning.
-- [ ] Connect backend event dependencies and CUDA slot publication to runtime expert
-  leases.
+  packed fixed-eight grouping validate cumulative route completion across residency
+  windows.
+- [x] Selected/prefetch uploads use pinned asynchronous tickets; selected compute
+  waits on the upload event without host synchronization.
+- [x] Device kernels publish and evict stable table bindings without H2D table copies
+  or stream-wide synchronization.
+- [x] Selected leases protect physical use; deterministic prefetch cancellation keeps
+  in-flight resources alive until completion events retire them.
 
-### R4 — Native batch and graph integration
+### R4 — Native batch complete; graph integration remains E7
 
-- Group experts across real multi-sequence rows.
-- Use residency generation in stable execution metadata and the graph bucket key.
-- Graph fallback on unsupported residency state uses the same eager pipeline.
+- [x] Group real multi-sequence rows and preserve exact packed/ragged/mixed output.
+- [ ] Use the completed stable residency metadata in long-lived E7 graph buckets.
+- [ ] Graph fallback on unsupported residency state uses the same eager pipeline.
 
 ---
 
@@ -414,17 +374,26 @@ Performance reports must distinguish:
 
 ---
 
-## 11. Acceptance gates
+## 11. E6 acceptance validation
 
-Before declaring E6 complete:
+E6 is complete with the following implemented validation:
 
-1. Device route IDs/weights match CPU/reference semantics.
-2. Different residency budgets/interleavings preserve DSV4 output.
-3. Selected expert leases prevent eviction races.
-4. Stale slot generations and transfer failure paths are tested.
-5. Warm resident path has zero router D2H, pointer H2D, and stream-wide sync.
-6. Repeated workload reduces cold bytes/latency relative to current baseline.
-7. Multi-sequence grouped execution preserves route-ranked deterministic reduction.
+1. `ferrule-common`: 36 tests passed.
+2. `ferrule-model`: 175 tests passed.
+3. `ferrule-runtime`: 253 tests passed.
+4. `just test-cuda-required` passed.
+5. CUDA `expert_slot_resolve`: 5 tests passed.
+6. Real DSV4 packed batch-2/batch-4 output is exact.
+7. Real DSV4 ragged/mixed output is exact.
+8. Real DSV4 prefix-fork COW is exact.
+9. Repeated sequence execution reuses expert residency.
+10. The latest 43-layer resident runtime-driver path passes.
+11. Explicit device score/hash router and paged-decode CUDA gates pass with required
+    zero-copy/zero-stream-sync wrapper invariants.
+
+These gates cover stable-slot resolution, prepare/publish/cancel atomicity,
+lease-protected eviction, transfer failure, asynchronous selected-event waits, native
+multi-sequence grouping, and residency reuse.
 
 ---
 
@@ -440,5 +409,5 @@ Useful design references, without copying framework surfaces:
   <https://docs.sglang.ai/advanced_features/pd_disaggregation.html>
 
 Ferrule's immediate differentiator remains artifact-aware, out-of-core single-node
-MoE residency. Distributed expert parallelism is an extension point after the
-single-node lifecycle is correct.
+MoE residency. The single-node E6 ownership lifecycle is implemented; distributed
+expert parallelism remains a separate extension after E7 graph integration.

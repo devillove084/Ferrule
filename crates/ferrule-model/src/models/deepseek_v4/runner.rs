@@ -4,6 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(any(feature = "cuda", test))]
 use std::ops::Range;
 use std::path::Path;
+#[cfg(feature = "cuda")]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::execution::ModelExecutionBackend;
@@ -24,6 +26,7 @@ use ferrule_common::execution::{ExecutionBatch, ForwardMode, ForwardPhase};
 use ferrule_common::execution::{
     ExecutionOutput, LogitsOutput, LogitsRequest, LogitsRow, TokenLogit as ExecutionTokenLogit,
 };
+use ferrule_common::expert_residency::{ExpertResidencyControl, ExpertResidencyRequirements};
 use ferrule_common::{Error, Result};
 
 use super::artifact::DeepSeekV4ArtifactModel;
@@ -38,7 +41,9 @@ use super::operators::{
     DeepSeekV4OperatorRuntimeCounters,
 };
 pub use super::prepared::DeepSeekV4PrepareOptions;
-use super::prepared::{DeepSeekV4ExecutionPolicy, DeepSeekV4PreparedModelPlan, prepare};
+use super::prepared::{
+    DeepSeekV4ExecutionPolicy, DeepSeekV4PreparedLayerExperts, DeepSeekV4PreparedModelPlan, prepare,
+};
 use super::sequence::DeepSeekV4SequenceExecutionState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,11 +94,19 @@ pub struct DeepSeekV4PrefillRuntimeStats {
     pub append_segment_tokens: u64,
 }
 
+#[cfg(feature = "cuda")]
+static NEXT_DSV4_MODEL_INSTANCE: AtomicU64 = AtomicU64::new(1);
+
 pub struct DeepSeekV4Runner {
     plan: DeepSeekV4PreparedModelPlan,
     operators: DeepSeekV4OperatorContext,
-    /// Backend-global expert residency shared by all serially executed sequences.
-    expert_runtimes: Vec<DeepSeekV4LayerExpertRuntime>,
+    /// CPU/reference planner and handle stores. CUDA consumes immutable prepared
+    /// catalogs while runtime owns logical slots, generations, leases, and policy.
+    cpu_expert_runtimes: Option<Box<[DeepSeekV4LayerExpertRuntime]>>,
+    #[cfg(feature = "cuda")]
+    model_instance: u64,
+    #[cfg(feature = "cuda")]
+    expert_residency: Option<Box<dyn ExpertResidencyControl>>,
     #[cfg(feature = "cuda")]
     layer_arena_pool: PersistentArenaPool<ExecutionShapeKey, DeepSeekV4LayerArenaVariants>,
     /// E3: per-sequence state. The runner wraps one default sequence.
@@ -124,6 +137,46 @@ enum CudaDecodeOutput {
     Feed,
     Hidden(Vec<f32>),
     TopK(Vec<TokenLogit>),
+}
+
+fn build_cpu_expert_runtimes(
+    backend: ModelExecutionBackend,
+    layers: &[DeepSeekV4PreparedLayerExperts],
+) -> Option<Box<[DeepSeekV4LayerExpertRuntime]>> {
+    (backend == ModelExecutionBackend::Cpu).then(|| {
+        layers
+            .iter()
+            .map(|layer| {
+                DeepSeekV4LayerExpertRuntime::from_catalog(
+                    std::sync::Arc::clone(layer.source_catalog()),
+                    layer.streaming_policy().clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
+    })
+}
+
+fn require_cpu_expert_runtimes_mut(
+    runtimes: &mut Option<Box<[DeepSeekV4LayerExpertRuntime]>>,
+) -> Result<&mut [DeepSeekV4LayerExpertRuntime]> {
+    runtimes.as_deref_mut().ok_or_else(|| {
+        Error::Internal(
+            "DeepSeek-V4 CPU execution requires per-layer expert runtimes, but none were allocated"
+                .into(),
+        )
+    })
+}
+
+fn require_cpu_expert_runtime_mut(
+    runtimes: &mut Option<Box<[DeepSeekV4LayerExpertRuntime]>>,
+    layer: usize,
+) -> Result<&mut DeepSeekV4LayerExpertRuntime> {
+    require_cpu_expert_runtimes_mut(runtimes)?
+        .get_mut(layer)
+        .ok_or_else(|| {
+            Error::Internal(format!("DeepSeek-V4 CPU expert runtime {layer} is missing"))
+        })
 }
 
 /// Model-local lowering of model-neutral packed execution metadata.
@@ -285,17 +338,13 @@ impl DeepSeekV4Runner {
         let model = plan.resources().model();
         let mut operators = DeepSeekV4OperatorContext::new(operator_backend, policy)?;
         let mut layer_states = Vec::with_capacity(options.max_layers);
-        let mut expert_runtimes = Vec::with_capacity(options.max_layers);
         for layer_idx in 0..options.max_layers {
             let state_start = Instant::now();
             layer_states.push(model.new_layer_sequence_state(layer_idx)?);
-            expert_runtimes.push(model.new_quality_first_layer_expert_runtime_with_residency(
-                layer_idx,
-                options.moe_prefetch_experts,
-                options.moe_hotset_experts,
-            )?);
             operators.record_layer_state_init(layer_idx, duration_us(state_start.elapsed()));
         }
+        let cpu_expert_runtimes =
+            build_cpu_expert_runtimes(operator_backend, plan.resources().layer_experts());
 
         let sequence =
             DeepSeekV4SequenceExecutionState::new(layer_states, model.config.num_routed_experts);
@@ -304,7 +353,11 @@ impl DeepSeekV4Runner {
         Ok(Self {
             plan,
             operators,
-            expert_runtimes,
+            cpu_expert_runtimes,
+            #[cfg(feature = "cuda")]
+            model_instance: NEXT_DSV4_MODEL_INSTANCE.fetch_add(1, Ordering::Relaxed),
+            #[cfg(feature = "cuda")]
+            expert_residency: None,
             #[cfg(feature = "cuda")]
             layer_arena_pool: PersistentArenaPool::new(),
             sequence,
@@ -368,6 +421,10 @@ impl DeepSeekV4Runner {
 
     pub fn operator_runtime_counters(&self) -> DeepSeekV4OperatorRuntimeCounters {
         let mut counters = self.operators.runtime_counters();
+        #[cfg(feature = "cuda")]
+        if let Some(residency) = self.expert_residency.as_ref() {
+            counters.expert_residency_stats = residency.stats();
+        }
         counters.expert_predictor_stats = self.sequence.predictor.stats();
         counters
     }
@@ -519,9 +576,14 @@ impl DeepSeekV4Runner {
             return Ok(());
         }
         self.sequence.release_capacity();
-        self.expert_runtimes.clear();
+        self.cpu_expert_runtimes = None;
         #[cfg(feature = "cuda")]
-        self.layer_arena_pool.clear();
+        {
+            self.layer_arena_pool.clear();
+            self.operators
+                .shutdown(self.expert_residency.as_deref_mut())?;
+        }
+        #[cfg(not(feature = "cuda"))]
         self.operators.shutdown()?;
         self.shutdown = true;
         Ok(())
@@ -669,18 +731,32 @@ impl DeepSeekV4Runner {
         }
 
         if predicted.len() < count {
-            let expert_runtime = self.expert_runtimes.get(layer).ok_or_else(|| {
-                Error::Internal(format!(
-                    "DeepSeek-V4 layer expert runtime {layer} is missing"
-                ))
-            })?;
-            push_candidate_experts(
-                &mut predicted,
-                &mut excluded,
+            let candidates = if let Some(expert_runtime) = self
+                .cpu_expert_runtimes
+                .as_deref()
+                .and_then(|runtimes| runtimes.get(layer))
+            {
                 expert_runtime.expert_planner.hot_experts(
                     layer,
                     self.plan.resources().model().config.num_routed_experts,
-                ),
+                )
+            } else {
+                self.plan
+                    .resources()
+                    .layer_expert_source_catalog(layer)
+                    .ok_or_else(|| {
+                        Error::Internal(format!(
+                            "DeepSeek-V4 prepared expert catalog {layer} is missing"
+                        ))
+                    })?
+                    .iter()
+                    .map(|(expert, _)| expert.expert)
+                    .collect()
+            };
+            push_candidate_experts(
+                &mut predicted,
+                &mut excluded,
+                candidates,
                 count,
                 self.plan.resources().model().config.num_routed_experts,
             );
@@ -734,24 +810,41 @@ impl DeepSeekV4Runner {
         layer: usize,
         predicted_experts: &[usize],
     ) -> Result<()> {
+        #[cfg(not(feature = "cuda"))]
+        let _ = layer;
         if predicted_experts.is_empty()
             || self.plan.resources().prepare_options().moe_prefetch_experts == 0
             || !self.lookahead_prefetch_enabled()
         {
             return Ok(());
         }
-        let expert_runtime = self.expert_runtimes.get_mut(layer).ok_or_else(|| {
-            Error::Internal(format!(
-                "DeepSeek-V4 layer expert runtime {layer} is missing"
-            ))
-        })?;
-        self.operators.prefetch_predicted_experts(
-            layer,
-            predicted_experts,
-            &mut expert_runtime.expert_planner,
-            &self.expert_reader,
-            &mut expert_runtime.expert_handles,
-        )?;
+        #[cfg(feature = "cuda")]
+        {
+            if self.operators.backend() != ModelExecutionBackend::Cuda {
+                return Ok(());
+            }
+            let prepared = self
+                .plan
+                .resources()
+                .layer_experts()
+                .get(layer)
+                .ok_or_else(|| {
+                    Error::Internal(format!("prepared expert layer {layer} is missing"))
+                })?;
+            let source_catalog = std::sync::Arc::clone(prepared.source_catalog());
+            let prefetch_capacity = prepared.prefetch_capacity();
+            let residency = self.expert_residency.as_deref_mut().ok_or_else(|| {
+                Error::Execution("runtime expert residency controller is not installed".into())
+            })?;
+            self.operators.prefetch_predicted_experts(
+                layer,
+                predicted_experts,
+                residency,
+                source_catalog.as_ref(),
+                prefetch_capacity,
+                &self.expert_reader,
+            )?;
+        }
         Ok(())
     }
 
@@ -826,24 +919,26 @@ impl DeepSeekV4Runner {
             return Ok(0);
         }
         let mut warmed = 0usize;
-        for layer_idx in 0..self.plan.resources().prepare_options().max_layers {
-            let predicted = if count >= self.plan.resources().model().config.num_routed_experts {
-                (0..self.plan.resources().model().config.num_routed_experts).collect::<Vec<_>>()
-            } else {
-                self.expert_runtimes[layer_idx]
-                    .expert_planner
-                    .hot_experts(layer_idx, count)
-            };
+        let residency = self.expert_residency.as_deref_mut().ok_or_else(|| {
+            Error::Execution("runtime expert residency controller is not installed".into())
+        })?;
+        for (layer_idx, prepared) in self.plan.resources().layer_experts().iter().enumerate() {
+            let predicted = prepared
+                .source_catalog()
+                .iter()
+                .map(|(expert, _)| expert.expert)
+                .take(count)
+                .collect::<Vec<_>>();
             if predicted.is_empty() {
                 continue;
             }
-            let expert_runtime = &mut self.expert_runtimes[layer_idx];
             warmed = warmed.saturating_add(self.operators.prewarm_experts(
                 layer_idx,
                 &predicted,
-                &mut expert_runtime.expert_planner,
+                residency,
+                prepared.source_catalog().as_ref(),
+                prepared.prefetch_capacity().max(count),
                 &self.expert_reader,
-                &mut expert_runtime.expert_handles,
             )?);
         }
         Ok(warmed)
@@ -858,7 +953,10 @@ impl DeepSeekV4Runner {
         for layer_idx in 0..self.plan.resources().prepare_options().max_layers {
             let layer = &self.plan.resources().layers()[layer_idx];
             let state = &self.sequence.layers[layer_idx];
-            let expert_runtime = &self.expert_runtimes[layer_idx];
+            let cpu_expert_runtime = self
+                .cpu_expert_runtimes
+                .as_deref()
+                .and_then(|runtimes| runtimes.get(layer_idx));
             let index_head_dim = layer.attention.config.index_head_dim;
             let (resident_experts, resident_expert_bytes) = {
                 #[cfg(feature = "cuda")]
@@ -866,18 +964,26 @@ impl DeepSeekV4Runner {
                     if let Some(cache) = self.operators.cuda.as_ref() {
                         cache.resident_expert_stats_for_layer(layer_idx)
                     } else {
-                        (
-                            expert_runtime.expert_handles.len(),
-                            expert_runtime.expert_handles.total_bytes(),
-                        )
+                        cpu_expert_runtime
+                            .map(|runtime| {
+                                (
+                                    runtime.expert_handles.len(),
+                                    runtime.expert_handles.total_bytes(),
+                                )
+                            })
+                            .unwrap_or((0, 0))
                     }
                 }
                 #[cfg(not(feature = "cuda"))]
                 {
-                    (
-                        expert_runtime.expert_handles.len(),
-                        expert_runtime.expert_handles.total_bytes(),
-                    )
+                    cpu_expert_runtime
+                        .map(|runtime| {
+                            (
+                                runtime.expert_handles.len(),
+                                runtime.expert_handles.total_bytes(),
+                            )
+                        })
+                        .unwrap_or((0, 0))
                 }
             };
             stats.push(DeepSeekV4LayerRuntimeStats {
@@ -935,7 +1041,8 @@ impl DeepSeekV4Runner {
             self.prepare_predicted_experts_for_layer(layer_idx, &predicted_experts)?;
             let layer = &self.plan.resources().layers()[layer_idx];
             let state = &mut self.sequence.layers[layer_idx];
-            let expert_runtime = &mut self.expert_runtimes[layer_idx];
+            let expert_runtime =
+                require_cpu_expert_runtime_mut(&mut self.cpu_expert_runtimes, layer_idx)?;
             let step = layer.decode_step_with_operators(
                 state,
                 expert_runtime,
@@ -1195,6 +1302,10 @@ impl DeepSeekV4Runner {
             hidden_size,
         )?;
 
+        let residency = self.expert_residency.as_deref_mut().ok_or_else(|| {
+            Error::Execution("runtime expert residency controller is not installed".into())
+        })?;
+        let layer_experts = self.plan.resources().layer_experts();
         let execution = (|| -> Result<Vec<Vec<TokenLogit>>> {
             self.operators
                 .cuda_mut()?
@@ -1241,7 +1352,9 @@ impl DeepSeekV4Runner {
                     &metadata.sequence_major_rows,
                     &sequence_prefill,
                     &paged_bindings,
-                    &mut self.expert_runtimes[layer_idx],
+                    residency,
+                    layer_experts[layer_idx].source_catalog().as_ref(),
+                    layer_experts[layer_idx].prefetch_capacity(),
                     arena,
                     &mut decode_buffers.hc_input,
                     batch.token_ids(),
@@ -1460,7 +1573,10 @@ impl DeepSeekV4Runner {
             let layers = self.plan.resources().layers();
             let position = self.sequence.core.position();
             let states = &mut self.sequence.layers;
-            let expert_runtimes = &mut self.expert_runtimes;
+            let residency = self.expert_residency.as_deref_mut().ok_or_else(|| {
+                Error::Execution("runtime expert residency controller is not installed".into())
+            })?;
+            let layer_experts = self.plan.resources().layer_experts();
             let expert_reader = &self.expert_reader;
             let operators = &mut self.operators;
             (|| {
@@ -1476,7 +1592,9 @@ impl DeepSeekV4Runner {
                         .expect("pooled layer arena variants match prepared layers");
                     let step = layers[layer_idx].decode_step_device_hc_device(
                         &mut states[layer_idx],
-                        &mut expert_runtimes[layer_idx],
+                        residency,
+                        layer_experts[layer_idx].source_catalog().as_ref(),
+                        layer_experts[layer_idx].prefetch_capacity(),
                         arena,
                         &mut decode_buffers.hc_input,
                         token_id,
@@ -1769,7 +1887,8 @@ impl DeepSeekV4Runner {
             self.prepare_predicted_experts_for_layer(layer_idx, &predicted_experts)?;
             let layer = &self.plan.resources().layers()[layer_idx];
             let state = &mut self.sequence.layers[layer_idx];
-            let expert_runtime = &mut self.expert_runtimes[layer_idx];
+            let expert_runtime =
+                require_cpu_expert_runtime_mut(&mut self.cpu_expert_runtimes, layer_idx)?;
             hc_state = layer.prefill_start_with_operators(
                 state,
                 expert_runtime,
@@ -1861,6 +1980,10 @@ impl DeepSeekV4Runner {
             tokens * hidden_size,
             hidden_size,
         )?;
+        let residency = self.expert_residency.as_deref_mut().ok_or_else(|| {
+            Error::Execution("runtime expert residency controller is not installed".into())
+        })?;
+        let layer_experts = self.plan.resources().layer_experts();
         let execution = (|| {
             self.operators
                 .cuda_mut()?
@@ -1874,7 +1997,9 @@ impl DeepSeekV4Runner {
                     .expect("pooled layer arena variants match prepared layers");
                 layer.prefill_start_cuda_device_chain_into(
                     &mut self.sequence.layers[layer_idx],
-                    &mut self.expert_runtimes[layer_idx],
+                    residency,
+                    layer_experts[layer_idx].source_catalog().as_ref(),
+                    layer_experts[layer_idx].prefetch_capacity(),
                     arena,
                     &mut buffers.hc_input,
                     token_ids,
@@ -2088,7 +2213,8 @@ impl DeepSeekV4Runner {
             self.prepare_predicted_experts_for_layer(layer_idx, &predicted_experts)?;
             let layer = &self.plan.resources().layers()[layer_idx];
             let state = &mut self.sequence.layers[layer_idx];
-            let expert_runtime = &mut self.expert_runtimes[layer_idx];
+            let expert_runtime =
+                require_cpu_expert_runtime_mut(&mut self.cpu_expert_runtimes, layer_idx)?;
             hc_state = layer.prefill_start_with_operators(
                 state,
                 expert_runtime,
@@ -2160,7 +2286,8 @@ impl DeepSeekV4Runner {
             self.prepare_predicted_experts_for_layer(layer_idx, &predicted_experts)?;
             let layer = &self.plan.resources().layers()[layer_idx];
             let state = &mut self.sequence.layers[layer_idx];
-            let expert_runtime = &mut self.expert_runtimes[layer_idx];
+            let expert_runtime =
+                require_cpu_expert_runtime_mut(&mut self.cpu_expert_runtimes, layer_idx)?;
             let step = layer.decode_step_with_operators(
                 state,
                 expert_runtime,
@@ -2228,17 +2355,22 @@ impl DeepSeekV4Runner {
 
         let mut trace = Vec::with_capacity(max_layers);
         let mut layer_moe_steps = Vec::with_capacity(max_layers);
+        let residency = self.expert_residency.as_deref_mut().ok_or_else(|| {
+            Error::Execution("runtime expert residency controller is not installed".into())
+        })?;
+        let layer_experts = self.plan.resources().layer_experts();
         for layer_idx in 0..max_layers {
             let layer = &self.plan.resources().layers()[layer_idx];
             let state = &mut self.sequence.layers[layer_idx];
-            let expert_runtime = &mut self.expert_runtimes[layer_idx];
             let arena = arena_lease
                 .get_mut()
                 .get_for_layer_mut(layer_idx)
                 .expect("pooled layer arena variants match prepared layers");
             let step = layer.decode_step_device_hc_device(
                 state,
-                expert_runtime,
+                residency,
+                layer_experts[layer_idx].source_catalog().as_ref(),
+                layer_experts[layer_idx].prefetch_capacity(),
                 arena,
                 &mut hc_state_dev,
                 token_id,
@@ -2301,6 +2433,45 @@ fn push_candidate_experts(
 
 fn duration_us(duration: Duration) -> u64 {
     duration.as_micros().min(u128::from(u64::MAX)) as u64
+}
+
+#[cfg(test)]
+mod expert_runtime_tests {
+    use std::sync::Arc;
+
+    use crate::moe::streaming::{
+        ExpertId, ExpertLoadSource, ExpertSourceCatalog, ExpertStreamingPolicy,
+    };
+
+    use super::*;
+
+    fn prepared_layer() -> DeepSeekV4PreparedLayerExperts {
+        DeepSeekV4PreparedLayerExperts::new(
+            Arc::new(ExpertSourceCatalog::from_sources([(
+                ExpertId::new(0, 0),
+                ExpertLoadSource::LocalShard {
+                    path: "expert.safetensors".into(),
+                    offset: 0,
+                    bytes: 16,
+                },
+            )])),
+            ExpertStreamingPolicy::quality_first(1),
+        )
+    }
+
+    #[test]
+    fn runner_allocates_layer_expert_runtime_only_for_cpu() {
+        let layers = [prepared_layer()];
+        let cpu = build_cpu_expert_runtimes(ModelExecutionBackend::Cpu, &layers);
+        let cuda = build_cpu_expert_runtimes(ModelExecutionBackend::Cuda, &layers);
+
+        assert_eq!(cpu.as_deref().map(<[_]>::len), Some(1));
+        assert!(cuda.is_none());
+        assert!(Arc::ptr_eq(
+            cpu.as_ref().unwrap()[0].expert_planner.source_catalog(),
+            layers[0].source_catalog(),
+        ));
+    }
 }
 
 impl ModelRunner for DeepSeekV4Runner {
@@ -2398,6 +2569,66 @@ impl TopKModelRunner for DeepSeekV4Runner {
 
 impl MultiSessionRunner for DeepSeekV4Runner {
     type SequenceState = DeepSeekV4SequenceExecutionState;
+
+    fn expert_residency_requirements(&self) -> Option<ExpertResidencyRequirements> {
+        #[cfg(feature = "cuda")]
+        if self.operators.backend() == ModelExecutionBackend::Cuda {
+            return Some(ExpertResidencyRequirements::new(
+                self.model_instance,
+                self.plan
+                    .resources()
+                    .layer_experts()
+                    .iter()
+                    .map(DeepSeekV4PreparedLayerExperts::resident_capacity)
+                    .collect(),
+            ));
+        }
+        None
+    }
+
+    fn expert_residency_control_installed(&self) -> bool {
+        #[cfg(feature = "cuda")]
+        {
+            return self.expert_residency.is_some();
+        }
+        #[cfg(not(feature = "cuda"))]
+        false
+    }
+
+    fn install_expert_residency_control(
+        &mut self,
+        control: Box<dyn ExpertResidencyControl>,
+    ) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        {
+            let expected = self.expert_residency_requirements().ok_or_else(|| {
+                Error::Execution(
+                    "DeepSeek-V4 CPU runner does not accept an expert residency controller".into(),
+                )
+            })?;
+            if control.requirements() != expected {
+                return Err(Error::Execution(format!(
+                    "DeepSeek-V4 expert residency requirements mismatch: expected {:?}, got {:?}",
+                    expected,
+                    control.requirements()
+                )));
+            }
+            if self.expert_residency.is_some() {
+                return Err(Error::Execution(
+                    "DeepSeek-V4 expert residency controller is already installed".into(),
+                ));
+            }
+            self.expert_residency = Some(control);
+            return Ok(());
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            let _ = control;
+            Err(Error::Execution(
+                "DeepSeek-V4 was built without CUDA expert residency support".into(),
+            ))
+        }
+    }
 
     fn configure_kv_page_capacity(&mut self, max_pages: usize) -> Result<()> {
         #[cfg(feature = "cuda")]

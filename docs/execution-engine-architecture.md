@@ -1,8 +1,8 @@
 # Ferrule Execution Engine Architecture
 
-_Status: E1–E5 complete; E6–E8 planned_
+_Status: E1–E6 complete; E7–E8 planned_
 
-_Last updated: 2026-07-12_
+_Last updated: 2026-07-13_
 
 This document is the canonical design for Ferrule's model execution ownership and
 hot-path architecture. It covers:
@@ -55,9 +55,9 @@ The following decisions are fixed for the next implementation phases.
 
 ---
 
-## 2. Why the current abstraction limits performance
+## 2. Implemented execution baseline and remaining limits
 
-The current full path is approximately:
+The production path is:
 
 ```text
 ResidentScheduler
@@ -65,93 +65,71 @@ ResidentScheduler
   → runtime-private ScheduledBatch correlation
   → ferrule-common::execution::ExecutionBatch
   → NativeMultiSessionExecutor<MultiSessionRunner>
-  → DeepSeekV4Runner
-  → per-layer host control
-  → DeepSeekV4OperatorContext
-  → DeepSeekV4CudaOperatorCache
-  → ferrule-cuda primitives
+  → DSV4 whole-batch packed/ragged/mixed pipeline
+  → authoritative physical paged multi-plane KV
+  → runtime expert residency control
+  → DSV4 CUDA physical transfers/tables and ferrule-cuda kernels
 ```
 
-The names imply layering, but state ownership crosses those boundaries.
+E1–E6 have separated logical lifecycle from physical resources. The major remaining
+execution-shape work is E7 stable graph buckets and E8 profiler-driven fusion/sampling.
 
-### 2.1 The neutral ABI supports batching, but DSV4 dispatch is still serial
+### 2.1 Native batching and prefill are implemented
 
-The scheduler and `NativeMultiSessionExecutor` accept multi-session ragged prefill,
-decode, and mixed `ExecutionBatch` inputs. `MultiSessionRunner` also has a whole-batch
-override so a model backend can consume packed rows and physical KV bindings directly.
+`NativeMultiSessionExecutor` accepts multi-session packed decode, ragged prefill, and
+mixed `ExecutionBatch` inputs. DSV4's whole-batch override executes real packed rows
+through HC, attention, MoE, and output-head stages. Batch-2/batch-4 and ragged/mixed
+real CUDA gates are exact against serial execution.
 
-The generic correctness path still swaps one explicit sequence state at a time and
-invokes `TopKModelRunner` primitives. DSV4 has not yet replaced that fallback with one
-packed HC/attention/MoE pipeline across real sequence rows. Consequently E4's
-batch-2/4 throughput and launch-reduction gates remain open even though scheduling,
-row correlation, and sequence isolation are implemented.
+Production prefill is the paged packed/ragged rows pipeline. The token-loop path is
+retained only as a parity/trace diagnostic oracle; it is not a production prefill
+fallback.
 
-### 2.2 Physical data pages exist, but recurrent metadata migration is incomplete
+### 2.2 Physical paged multi-plane KV is authoritative
 
-Runtime `KvPageManager` is the authoritative logical allocator/refcount/block-table
-owner. The CUDA backend now has a model-neutral preallocated multi-plane physical
-pool with provisional reserve/commit/rollback, COW, reuse, preempt/restore, compact
-page metadata, and direct paged attention/indexer kernels. Runtime reservations and
-zero-refcount release deltas flow through the generic runner transaction boundary.
+Runtime `KvPageManager` is the logical allocation/refcount/block-table owner. CUDA
+owns preallocated multi-plane physical pools and page tables. Window, compressed,
+indexer, and recurrent metadata paths participate in prepare/execute/commit or
+rollback, with exact-prefix sharing, partial-tail COW, preempt/restore, and reuse.
+The obsolete contiguous CUDA KV and model checkpoint/restore paths are deleted.
 
-DSV4's window, main-compressed, and indexer data planes have paged write/read lowering.
-However, compressor/indexer recurrent state is fixed per sequence rather than
-per-token page data and still has host transfers. Contiguous DSV4 buffers therefore
-remain as the unconfigured fallback, and DSV4 truthfully reports
-`KvBindingMode::None` until every prefill/append mode and recurrent metadata path is
-physical-page authoritative.
+### 2.3 Sequence, prepared, arena, and residency lifetimes are separate
 
-### 2.3 DSV4 runner owns unrelated lifetimes
+The runner wraps a default sequence for compatibility, while explicit sequence states
+are supplied by the native executor. Prepared resources and arenas are shared.
+Runtime-owned expert residency control is backend-global and independent of sequence
+reset/release. DSV4 CUDA does not construct CPU planner or handle-store mirrors; those
+exist only for the CPU/reference implementation.
 
-`DeepSeekV4Runner` currently combines:
+### 2.4 Runtime owns logical expert residency
 
-- model-global artifact and options;
-- lazily bound immutable layers;
-- one sequence's per-layer state and position;
-- backend/operator cache;
-- expert reader/executor/predictor;
-- CUDA graph lifecycle;
-- profiling and parity diagnostics.
+The model-neutral ABI is in `ferrule-common`: `ExpertKey`, stable slot/generation
+bindings, leases, prepare/publish/cancel transactions, requirements, and stats.
+`ferrule-runtime` owns one coordinator per layer. `NativeMultiSessionExecutor` lazily
+injects the controller before execution, and because the control remains attached to
+the runner, clean runner moves and executor reconstruction preserve the same
+residency state.
 
-This makes one runner equivalent to one physical sequence and prevents model
-resources from naturally serving multiple sequence states.
+### 2.5 DSV4 CUDA owns only physical residency mechanisms
 
-### 2.4 Layer state mixes semantics, residency, and scratch
+The DSV4 CUDA side consumes immutable source catalogs and owns host staging, pinned
+sources, asynchronous upload tickets/events, resident handles, physical stable tables,
+and grouped workspaces. Selected and prefetch uploads are pinned and asynchronous;
+selected compute inserts a wait for the upload event on the compute stream without a
+host synchronize or stream-wide synchronize.
 
-`DeepSeekV4LayerState` currently contains:
+Publication/eviction kernels update stable pointer, expert-to-slot, and generation
+tables in place, with no normal-path H2D table copy or stream-wide synchronization.
+Selected demand deterministically cancels excess prefetch reservations while retaining
+already in-flight resources until their events complete. The old CUDA planner/backend
+reconciliation path is removed, and runtime-controller stats are exposed through DSV4
+operator counters.
 
-- `DeepSeekV4AttentionCache` — per-sequence semantic state;
-- `ExpertStreamingPlanner` — policy/residency state;
-- `CpuExpertHandleStore` — backend/resource state;
-- `DeepSeekV4LayerGraphArena` — per-batch scratch.
+### 2.6 Remaining limits
 
-Its `reset_sequence_with_expert_residency()` consequently resets multiple
-lifetimes at once. Its `Clone` omits graph arena and does not copy authoritative
-CUDA KV, so it is not a complete sequence checkpoint.
-
-### 2.5 Operator/cache abstractions are service locators
-
-`DeepSeekV4OperatorContext` owns backend selection, CUDA cache, profiles, parity
-selection/data, MoE events, and graph counters. `DeepSeekV4CudaOperatorCache` owns
-prepared weights, sequence KV, expert residency, arenas, events, and diagnostics.
-
-Many hot calls perform:
-
-- `format!` resource key construction;
-- `HashMap` lookup;
-- lazy `ensure_*` checks;
-- backend dispatch;
-- environment-derived branch selection;
-- returning-buffer allocation.
-
-This is not a prepared execution boundary.
-
-### 2.6 Prefill is device-resident only inside one layer
-
-A layer can execute HC/attention/MoE/HC on CUDA, but the outer prefill loop receives
-`Vec<f32>` HC rows back from each layer and uploads them again for the next layer.
-Appended prefill segments can also fall back to invoking decode one token at a
-time.
+Stable, patchable CUDA graph buckets remain E7 work. Compressor control and further
+fusion/sampling optimization remain measurable follow-on work rather than reasons to
+reintroduce token-loop production execution or duplicate residency ownership.
 
 ### 2.7 Retired token-specific graph execution
 
@@ -165,7 +143,7 @@ buckets remain an E7 deliverable after physical KV and device routing/residency.
 
 ---
 
-## 3. Target ownership
+## 3. Implemented ownership
 
 ```mermaid
 flowchart TD
@@ -177,16 +155,16 @@ flowchart TD
     Executor --> Arena[PersistentArena Lease]
     Executor --> Backend[CUDA / Reference Backend]
     Backend --> KV[Physical KV Pools]
-    Backend --> Experts[Expert Slots and Transfers]
+    Backend --> Experts[Physical Expert Tables and Transfers]
     Backend --> Graphs[Executable / CUDA Graph Cache]
 ```
 
 | Owner | Owns | Does not own |
 |---|---|---|
 | `ferrule-model` | validated model config, typed artifact binding, model semantics, CPU/component reference, model-specific KV schema and lowering policy | request queues, session IDs, scheduler policy, CUDA graph lifecycle |
-| `ferrule-runtime` | request/session/sampling, admission, batch planning, sequence-handle mapping, logical KV reservations, preemption, cross-request residency and executable-cache policy | DSV4 tensor names, compressor math, CUDA buffers |
+| `ferrule-runtime` | request/session/sampling, admission, batch planning, sequence-handle mapping, logical KV reservations/preemption, per-layer expert slot/generation/lease/prefetch policy, and executable-cache policy | DSV4 tensor names, compressor math, CUDA buffers or expert handles |
 | prepared executor | immutable prepared plan, explicit sequence-state references, arena leases, batch validation/lowering, eager/graph choice | service-level request semantics, artifact discovery in execute |
-| `ferrule-cuda` | allocations/pools, streams/events, typed device resources, physical KV pages, expert handles/indirection, kernels, graph exec | fairness, request IDs, model-family policy |
+| `ferrule-cuda` / DSV4 CUDA physical store | allocations/pools, streams/events, physical KV pages, immutable expert source/staging/upload resources, resident handles, stable device tables, kernels, graph exec | fairness, request IDs, logical residency policy, CPU planner/handle mirrors |
 | diagnostics | counters, profiles, parity captures, traces | authoritative sequence/resource state |
 
 ---
@@ -259,8 +237,8 @@ no authoritative token history or committed KV.
 ## 5. Execution ABI v2 — implemented
 
 E1 is implemented. This section describes the current neutral ABI and its
-compatibility boundaries. It does not imply that the E2 concrete DSV4 prepared plan
-or persistent arena already exists.
+compatibility boundaries. E2–E6 build the prepared, sequence, batch, physical-KV, and
+expert-residency lifecycles on this ABI.
 
 ### 5.1 Placement
 
@@ -427,8 +405,8 @@ Runtime maps `input_row` back to request/session/KV state through private
 
 ### 5.5 Prepared executor traits
 
-The lifecycle traits are implemented even though concrete E2 prepared resources are
-still being built:
+The lifecycle traits are implemented and back the completed prepared-resource and
+native execution paths:
 
 ```rust
 pub struct SequenceStateInit {
@@ -606,7 +584,7 @@ neutral lowering contract exists; do not create a dependency cycle to move files
 
 ## 7. Per-sequence DSV4 state
 
-### 7.1 Target structures
+### 7.1 Implemented structures
 
 ```rust
 pub struct DeepSeekV4SequenceExecutionState {
@@ -636,25 +614,25 @@ pub struct DeepSeekV4CudaLayerSequenceState {
 
 Buffer and capacity metadata belong in one typed state object, not parallel maps.
 
-### 7.2 What must be checkpointed
+### 7.2 Sequence state versus shared resources
 
-A sequence checkpoint includes:
+A sequence state includes:
 
 - committed position and generation;
-- full host/reference attention state;
-- window validity and contents where authoritative;
-- compressed and indexer values;
-- main/indexer compressor `kv_state` and `score_state`;
+- host/reference attention state when running diagnostics;
 - sequence-specific predictor state;
-- physical CUDA window/combined/indexer buffers and logical lengths/capacities.
+- authoritative runtime page bindings;
+- device-resident recurrent compressor/indexer metadata.
 
-Initial CUDA checkpoint/restore uses D2D bit-copy and does not recompute tokens.
+Runtime page reservations, physical preempt/restore, and exact-prefix page sharing/COW
+are the only serving rollback/fork mechanisms. The obsolete model-local CUDA D2D
+checkpoint/restore/fork path is deleted.
 
-A checkpoint does not include:
+A sequence state does not include:
 
 - prepared weights/model;
-- backend-global expert residency;
-- host/pinned expert caches;
+- runtime-owned expert residency control;
+- backend-global physical expert handles and host/pinned caches;
 - arena scratch;
 - CUDA graph exec;
 - diagnostics.
@@ -665,9 +643,7 @@ A checkpoint does not include:
 pub fn create_sequence(...);
 sequence.reset_for_reuse();
 sequence.release_capacity();
-pub fn checkpoint_sequence(...);
-pub fn restore_sequence(...);
-pub fn fork_sequence(...);
+pub fn fork_sequence_from_exact_prefix(...);
 pub fn release_sequence(...);
 pub fn release_arena(...);
 pub fn shutdown_backend(...);
@@ -681,18 +657,13 @@ Required order for reset/release:
 4. release or retain physical KV capacity according to the selected lifecycle operation;
 5. release expert/resource leases;
 6. return arena scratch to pool;
-7. preserve prepared weights and backend-global expert cache;
+7. preserve prepared weights, runtime expert residency control, and backend physical
+   expert resources;
 8. reset diagnostics only through an explicit diagnostics API.
 
 ### 7.4 Error and commit semantics
 
-Before physical KV reservations exist:
-
-```text
-execute error → state.poisoned = true → runtime must reset or release
-```
-
-After E5:
+The implemented E5/E6 transaction is:
 
 ```text
 validate
@@ -848,31 +819,32 @@ execute_prefill_layer_into(
 Eager calls these directly. A future E7 CUDA graph implementation must call the
 same methods after all bindings and resources are prepared.
 
-### 9.2 Transitional prefix/dispatch/suffix split
+### 9.2 Implemented routing/residency control boundary
 
-Today router/residency preparation depends on this layer's FFN-normalized hidden and
-contains host work. Until E6, the safe shared pipeline is:
+Routing and grouping remain device-side. The only host control boundary is compact
+selected/predicted demand used to acquire or prepare runtime-owned stable bindings:
 
 ```text
 execute_layer_prefix_into
   attention HC/norm/attention/post
   FFN HC/norm
         ↓
-prepare_moe_dispatch
-  router result materialization
-  residency classification/transfers/events
-  stable route/expert binding
+device router + route compact
+        ↓
+runtime acquire/prepare stable slots and selected leases
+        ↓
+DSV4 CUDA stage/upload, compute-stream event wait, device table publication
+        ↓
+device stable-slot resolve + grouped experts + route-ranked reduction
         ↓
 execute_layer_suffix_into
-  shared FFN add
-  routed experts add
-  route-ranked reduction
   FFN HC-post
 ```
 
-Graph capture uses a `PreparedMoeDispatch` created outside capture. Eager prepares it
-between prefix and suffix. Once routing/grouping is device-resident, the split can
-collapse into one uninterrupted device execution.
+A resident path performs no router-logit D2H, pointer/route-weight H2D, or stream-wide
+synchronization. A selected miss uses a pinned asynchronous upload ticket and queues a
+compute-stream wait on its upload event. E7 may capture stable device segments around
+this host policy boundary; it must not capture file I/O or transfers.
 
 ### 9.3 Attention decomposition
 
@@ -984,70 +956,91 @@ block lifecycles.
 - single- and dual-plane sparse attention resolve logical rows through physical slots;
 - combined ring indices are converted to absolute logical rows and plane selectors on device;
 - DSV4 indexer top-k has direct paged-plane variants;
-- real CUDA parity tests cover page boundaries, non-zero layers, COW isolation,
-  dual-plane ring conversion, and indexer lookup;
-- recurrent compressor/indexer metadata still needs a device-resident per-sequence
-  arena before DSV4 can publish `KvBindingMode::Paged` and delete contiguous fallbacks.
+- recurrent compressor/indexer metadata is device-resident per sequence;
+- DSV4 truthfully publishes `KvBindingMode::Paged` when its bounded pool is configured;
+- obsolete contiguous CUDA KV and model-local D2D checkpoint/fork paths are deleted.
 
-### 10.4 Required tests
+### 10.4 Completed tests
 
-- page boundary and ring wrap;
-- compressed/indexer capacity boundary;
-- position >4096;
-- stale generation;
-- fork/COW after shared prefix;
+- page boundary, ring wrap, compressed/indexer capacity, and position >4096;
+- stale generation and reserve/rollback failure isolation;
+- exact-prefix fork with partial-tail COW;
 - preempt/restore parity;
-- cancel/failure leak and refcount tests.
+- cancellation/refcount/reuse coverage;
+- real packed batch-2/batch-4, ragged/mixed, and prefix-fork COW exactness.
 
 ---
 
-## 11. Device router and expert residency
+## 11. Device router and expert residency — implemented in E6
 
-### 11.1 Target split
+### 11.1 Implemented ownership split
 
 Model:
 
 - router score/selection semantics;
 - selected expert IDs/weights contract;
 - optional hash/DSpark prediction hints;
-- expert artifact layout.
+- immutable expert artifact/source catalogs.
 
-Runtime coordinator:
+`ferrule-common` ABI:
 
-- cross-request budget and hotness;
-- retain/prefetch/evict decisions;
-- deadline and admission interaction;
-- transfer intent and generation policy.
+- model-qualified `ExpertKey`;
+- stable `ExpertSlotId`/`ExpertSlotGeneration` bindings;
+- selected leases and selected/prefetch install intent;
+- failure-atomic prepare/publish/cancel;
+- requirements and aggregate/per-layer stats.
 
-CUDA backend:
+Runtime:
 
-- resident expert handles;
-- pinned/staged source buffers;
-- upload stream/events;
-- stable expert slot/indirection table;
-- grouped execution workspaces.
+- `ExpertResidencyController` with one coordinator per layer;
+- capacity/LRU decisions among unleased slots;
+- selected leases, prefetch admission/cancellation, and generation policy;
+- lazy `NativeMultiSessionExecutor` injection preserved across clean runner moves.
 
-### 11.2 Device path
+DSV4 CUDA physical store:
+
+- immutable source-catalog access, staged/pinned buffers, upload tickets/events;
+- resident expert handles, stable physical tables, and grouped workspaces;
+- no CPU `ExpertStreamingPlanner` or `CpuExpertHandleStore` mirror.
+
+### 11.2 Implemented device and transfer path
 
 ```text
 router logits
-→ device top-k and weights
-→ device token/expert compact
-→ validate/lease expert slots
-→ grouped FP4 gate/up/SwiGLU/down
+→ device top-k/weights and token/expert compact
+→ runtime acquire or prepare exact slot/generation
+→ pinned asynchronous upload when missing
+→ compute stream waits on the upload event only
+→ device publication kernel updates the stable table
+→ device stable-slot resolve and grouped FP4 gate/up/SwiGLU/down
 → route-ranked deterministic combine
+→ selected leases release after submission
 ```
 
-Steady path requirements:
+Selected demand deterministically cancels excess non-selected prefetch reservations.
+Canceled in-flight tickets keep their staging/device resources until completion events
+allow safe retirement. The steady/publication paths have no full router-logit D2H,
+per-layer pointer/route-weight H2D, H2D stable-table publication, host event
+synchronization, or stream-wide synchronization.
 
-- no full router logits D2H;
-- no per-layer pointer array H2D;
-- no route weight H2D;
-- no stream-wide synchronization;
-- selected expert lease prevents concurrent eviction;
-- slot generation rejects stale graph/dispatch metadata.
+DSV4 operator counters expose `ExpertResidencyStats` from the runtime controller plus
+physical upload, selected-hit/wait, prefetch, and eviction counters. The old CUDA
+planner/backend reconciliation and host pointer/segment dispatch paths are removed.
 
-### 11.3 Relationship to distributed EP
+### 11.3 Completion validation
+
+- `ferrule-common`: 36 tests passed.
+- `ferrule-model`: 175 tests passed.
+- `ferrule-runtime`: 253 tests passed.
+- `just test-cuda-required` passed.
+- CUDA `expert_slot_resolve`: 5 tests passed.
+- Real DSV4 packed batch-2/batch-4, ragged/mixed, and prefix-fork COW gates are exact.
+- Repeated sequence execution demonstrates residency reuse, and the latest 43-layer
+  resident runtime-driver gate passes.
+- Explicit device score/hash router and paged-decode CUDA gates pass with their
+  zero-copy/zero-stream-sync wrapper invariants.
+
+### 11.4 Relationship to distributed EP
 
 Ferrule's immediate problem is out-of-core single-node residency. Distributed
 expert parallelism solves a different problem. A future EP backend can reuse the
@@ -1187,7 +1180,7 @@ count.
 Split by lifetime:
 
 - prepared fixed resources;
-- backend-global expert residency/transfer;
+- backend-global physical expert sources/staging/uploads/handles/tables (logical policy remains in runtime);
 - per-sequence KV state;
 - per-bucket arenas;
 - diagnostics.
@@ -1258,7 +1251,8 @@ styles exist.
 ### 14.3 Do not delete
 
 - CPU/component reference;
-- token-loop prefill;
+- token-loop prefill as a parity/trace diagnostic oracle only, never as production
+  prefill;
 - compressed/non-compressed semantic policies;
 - layer/attention parity checkpoints;
 - deterministic ranked reducer;
@@ -1279,7 +1273,9 @@ styles exist.
 - prepared resource lookup/miss/upload;
 - execution batch sizes, sequences, query tokens, phase mix;
 - KV reserve/commit/rollback/page alloc/free/COW;
-- expert slot lease/hit/miss/transfer/wait/evict;
+- expert controller resident/lease/install/evict/hit/stale-release/cancel/
+  prefetch-capacity stats, exposed in DSV4 counters;
+- physical expert transfer/wait/retirement counters;
 - graph bucket lookup/hit/capture/recapture/fallback/replay.
 
 ### 15.2 E7 capture-safe assertion mode
@@ -1331,7 +1327,10 @@ This document maps directly to [`ROADMAP.md`](ROADMAP.md):
 8. [x] E5: authoritative runtime reservations connected to physical multi-plane CUDA
    pages, including rollback, COW, preempt/restore, and exact-prefix sharing; obsolete
    contiguous CUDA KV and model checkpoint paths are deleted.
-9. E6: move routing/grouping device-side and residency policy to runtime.
+9. [x] E6: move routing/grouping device-side; publish the model-neutral common ABI;
+   inject the per-layer runtime residency controller; reduce DSV4 CUDA ownership to
+   immutable source/staging/upload/physical-table resources; and remove old CUDA
+   planner/backend reconciliation.
 10. E7: cache stable piecewise graph buckets.
 11. E8: fuse and compare only after the execution shape is stable.
 

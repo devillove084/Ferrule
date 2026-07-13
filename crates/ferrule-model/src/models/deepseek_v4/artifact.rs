@@ -1,6 +1,7 @@
 //! DeepSeek-V4 artifact model: HF weight loading and tensor binding.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::artifact::binding::{
     bind_attention_from_hf, bind_hyper_connection_from_hf, bind_hyper_connection_head_from_hf,
@@ -12,14 +13,11 @@ use crate::execution::ModelExecutionBackend;
 use crate::hyper_connection::HyperConnectionHeadWeights;
 
 use crate::moe::routing::ExpertRouterPolicy;
-use crate::moe::streaming::{ExpertStreamingPlanner, ExpertStreamingPolicy};
+use crate::moe::streaming::{ExpertSourceCatalog, ExpertStreamingPolicy};
 use crate::runner::{ModelInfo, TokenLogit};
 use crate::semantic::HyperConnectionStage;
 use crate::tokenizer::TokenizerHandle;
-use crate::{
-    HfRoutedExpertTensorInfo, HfSafetensorsInventory, ModelDescriptor, ModelFamily, TensorRole,
-    WeightSource,
-};
+use crate::{HfSafetensorsInventory, ModelDescriptor, ModelFamily, TensorRole, WeightSource};
 use ferrule_common::{Error, Result};
 
 use super::attention::{DeepSeekV4Attention, DeepSeekV4CompressedAttentionPayload};
@@ -43,7 +41,7 @@ pub struct DeepSeekV4ArtifactModel {
     pub output_head: ArtifactMatrixSlice,
     pub hc_head: HyperConnectionHeadWeights,
     inventory: HfSafetensorsInventory,
-    routed_expert_tensors_by_layer: Vec<Vec<HfRoutedExpertTensorInfo>>,
+    routed_expert_catalogs_by_layer: Vec<Arc<ExpertSourceCatalog>>,
     max_tensor_bytes: u64,
 }
 
@@ -71,6 +69,13 @@ impl DeepSeekV4ArtifactModel {
                 routed_expert_tensors_by_layer[layer].push(tensor);
             }
         }
+        let routed_expert_catalogs_by_layer = routed_expert_tensors_by_layer
+            .into_iter()
+            .map(|tensors| {
+                ExpertSourceCatalog::from_hf_routed_expert_tensor_sets(&descriptor.path, tensors)
+                    .map(Arc::new)
+            })
+            .collect::<Result<Vec<_>>>()?;
         let reader = ArtifactTensorReader::new(max_tensor_bytes);
         let tokenizer = TokenizerHandle::load(model_dir)?;
         let embedding = ArtifactMatrixSlice::from_slice(
@@ -102,7 +107,7 @@ impl DeepSeekV4ArtifactModel {
             output_head,
             hc_head,
             inventory,
-            routed_expert_tensors_by_layer,
+            routed_expert_catalogs_by_layer,
             max_tensor_bytes,
         })
     }
@@ -458,36 +463,39 @@ impl DeepSeekV4ArtifactModel {
         Ok(DeepSeekV4LayerState::new(attention_config))
     }
 
+    pub fn expert_source_catalog(&self, layer: usize) -> Result<&Arc<ExpertSourceCatalog>> {
+        self.routed_expert_catalogs_by_layer
+            .get(layer)
+            .ok_or_else(|| Error::Model(format!("DeepSeek-V4 layer {layer} out of range")))
+    }
+
     pub fn new_layer_expert_runtime(
         &self,
         layer: usize,
         policy: ExpertStreamingPolicy,
     ) -> Result<DeepSeekV4LayerExpertRuntime> {
-        let routed = self
-            .routed_expert_tensors_by_layer
-            .get(layer)
-            .ok_or_else(|| Error::Model(format!("DeepSeek-V4 layer {layer} out of range")))?;
-        let mut expert_planner = ExpertStreamingPlanner::new(policy);
-        let registered = expert_planner
-            .register_hf_routed_expert_tensor_sets(&self.descriptor.path, routed.iter().cloned())?;
-        if registered != self.config.num_routed_experts {
+        let catalog = self.expert_source_catalog(layer)?;
+        if catalog.count() != self.config.num_routed_experts {
             return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} registered {registered} routed experts, expected {}",
+                "DeepSeek-V4 layer {layer} catalog has {} routed experts, expected {}",
+                catalog.count(),
                 self.config.num_routed_experts
             )));
         }
-        Ok(DeepSeekV4LayerExpertRuntime::new(expert_planner))
+        Ok(DeepSeekV4LayerExpertRuntime::from_catalog(
+            Arc::clone(catalog),
+            policy,
+        ))
     }
 
-    pub fn new_quality_first_layer_expert_runtime_with_residency(
+    pub fn resolved_expert_streaming_policy(
         &self,
-        layer: usize,
         moe_prefetch_experts: usize,
         moe_hotset_experts: usize,
-    ) -> Result<DeepSeekV4LayerExpertRuntime> {
+    ) -> ExpertStreamingPolicy {
         let moe_hotset_experts = moe_hotset_experts.min(self.config.num_routed_experts);
         let moe_prefetch_experts = moe_prefetch_experts.min(self.config.num_routed_experts);
-        let policy = if moe_hotset_experts > 0 {
+        let mut policy = if moe_hotset_experts > 0 {
             let gpu_slots_per_layer = moe_hotset_experts
                 .max(self.config.num_experts_per_tok)
                 .min(self.config.num_routed_experts);
@@ -513,6 +521,26 @@ impl DeepSeekV4ArtifactModel {
                 moe_prefetch_experts,
             )
         };
-        self.new_layer_expert_runtime(layer, policy)
+        policy.gpu_slots_per_layer = policy
+            .gpu_slots_per_layer
+            .min(self.config.num_routed_experts);
+        policy.prefetch_per_layer = policy.prefetch_per_layer.min(
+            policy
+                .gpu_slots_per_layer
+                .saturating_sub(self.config.num_experts_per_tok),
+        );
+        policy
+    }
+
+    pub fn new_quality_first_layer_expert_runtime_with_residency(
+        &self,
+        layer: usize,
+        moe_prefetch_experts: usize,
+        moe_hotset_experts: usize,
+    ) -> Result<DeepSeekV4LayerExpertRuntime> {
+        self.new_layer_expert_runtime(
+            layer,
+            self.resolved_expert_streaming_policy(moe_prefetch_experts, moe_hotset_experts),
+        )
     }
 }

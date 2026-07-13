@@ -67,8 +67,11 @@ pub use engine::{
     ResidentTopKDriverStats,
 };
 pub use expert_residency::{
-    ExpertLease, ExpertResidencyCoordinator, ExpertResidencyCoordinatorStats, ExpertSlotBinding,
-    ExpertSlotGeneration, ExpertSlotId, PreparedExpertInstall,
+    ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertInstallReason, ExpertKey, ExpertLease,
+    ExpertResidencyControl, ExpertResidencyController, ExpertResidencyCoordinator,
+    ExpertResidencyCoordinatorStats, ExpertResidencyGrant, ExpertResidencyRequirements,
+    ExpertResidencyStats, ExpertSlotBinding, ExpertSlotGeneration, ExpertSlotId,
+    PreparedExpertInstall,
 };
 pub use generation::{GenerationConfig, GenerationResult, InferenceEngine, TokenEvent};
 pub use graph::builder::{

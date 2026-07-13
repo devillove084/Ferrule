@@ -53,9 +53,10 @@ fn stable_slot_table_resolves_residents_misses_and_reuse_generation() {
         .install_expert_slot(&mut table, 2, pointers)
         .expect("install expert 2");
     let publication = context.counters();
-    assert_eq!(publication.host_to_device_copies, 9);
-    assert_eq!(publication.host_to_device_bytes, 84);
-    assert_eq!(publication.stream_wide_syncs, 1);
+    assert_eq!(publication.kernel_launches, 1);
+    assert_eq!(publication.host_to_device_copies, 0);
+    assert_eq!(publication.host_to_device_bytes, 0);
+    assert_eq!(publication.stream_wide_syncs, 0);
     assert!(!table.is_poisoned());
     let ids = context
         .upload_i32_buffer(&[2, 1, -1, 4])
@@ -106,7 +107,141 @@ fn stable_slot_table_resolves_residents_misses_and_reuse_generation() {
 }
 
 #[test]
-fn failed_update_and_rollback_poison_every_stable_entry_point() {
+fn exact_slot_publication_rejects_stale_and_mismatches_atomically() {
+    let _guard = cuda_test_guard();
+    if !has_cuda() {
+        eprintln!("skipping: no CUDA device");
+        return;
+    }
+
+    let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
+    let pointers = CudaExpertSlotPointers {
+        gate_weight: 1,
+        gate_scale: 2,
+        up_weight: 3,
+        up_scale: 4,
+        down_weight: 5,
+        down_scale: 6,
+    };
+    let mut table = context.expert_slot_table(3, 2).expect("slot table");
+    let first = context
+        .install_expert_slot_at(&mut table, 0, 1, 1, pointers)
+        .expect("exact first install");
+    assert_eq!(first.slot, 1);
+    assert_eq!(first.generation, 1);
+    assert!(table.host().is_current(first));
+
+    let installed = table.host().clone();
+    assert!(
+        context
+            .install_expert_slot_at(&mut table, 1, 1, 2, pointers)
+            .is_err()
+    );
+    assert_eq!(
+        table.host(),
+        &installed,
+        "occupied slot mismatch mutated table"
+    );
+    assert!(
+        context
+            .install_expert_slot_at(&mut table, 0, 0, 1, pointers)
+            .is_err()
+    );
+    assert_eq!(
+        table.host(),
+        &installed,
+        "expert binding mismatch mutated table"
+    );
+    assert!(
+        context
+            .install_expert_slot_at(
+                &mut table,
+                0,
+                1,
+                1,
+                CudaExpertSlotPointers {
+                    gate_weight: 7,
+                    ..pointers
+                },
+            )
+            .is_err()
+    );
+    assert_eq!(table.host(), &installed, "pointer mismatch mutated table");
+    assert!(
+        context
+            .evict_expert_slot_binding(&mut table, 0, 0, 1)
+            .is_err()
+    );
+    assert_eq!(
+        table.host(),
+        &installed,
+        "stale slot eviction mutated table"
+    );
+    assert!(
+        context
+            .evict_expert_slot_binding(&mut table, 0, 1, 2)
+            .is_err()
+    );
+    assert_eq!(
+        table.host(),
+        &installed,
+        "stale generation eviction mutated table"
+    );
+
+    let ids = context
+        .upload_i32_buffer(&[0, 1])
+        .expect("upload exact route ids");
+    let mut workspace = context
+        .expert_route_resolve_workspace(2, 2)
+        .expect("resolve workspace");
+    context
+        .resolve_expert_routes(&table, &ids, 2, &mut workspace)
+        .expect("resolve after rejected updates");
+    let resolved = context
+        .download_expert_route_resolve(&workspace, 2)
+        .expect("download exact resolve result");
+    assert_eq!(resolved.route_slots, vec![1, -1]);
+    assert_eq!(resolved.route_generations, vec![1, 0]);
+
+    context
+        .evict_expert_slot_binding(&mut table, 0, 1, 1)
+        .expect("exact eviction");
+    assert!(!table.host().is_current(first));
+    let evicted = table.host().clone();
+    assert!(
+        context
+            .evict_expert_slot_binding(&mut table, 0, 1, 1)
+            .is_err()
+    );
+    assert_eq!(table.host(), &evicted, "stale eviction mutated free slot");
+    assert!(
+        context
+            .install_expert_slot_at(&mut table, 1, 1, 3, pointers)
+            .is_err()
+    );
+    assert_eq!(
+        table.host(),
+        &evicted,
+        "generation mismatch mutated free slot"
+    );
+
+    let second = context
+        .install_expert_slot_at(&mut table, 1, 1, 2, pointers)
+        .expect("exact reused install");
+    assert_eq!(second.slot, first.slot);
+    assert_eq!(second.generation, first.generation + 1);
+    context
+        .resolve_expert_routes(&table, &ids, 2, &mut workspace)
+        .expect("resolve reused exact slot");
+    let resolved = context
+        .download_expert_route_resolve(&workspace, 2)
+        .expect("download reused exact resolve result");
+    assert_eq!(resolved.route_slots, vec![-1, 1]);
+    assert_eq!(resolved.route_generations, vec![0, 2]);
+}
+
+#[test]
+fn capture_safe_rejection_is_atomic_and_keeps_stable_table_usable() {
     let _guard = cuda_test_guard();
     if !has_cuda() {
         eprintln!("skipping: no CUDA device");
@@ -124,81 +259,33 @@ fn failed_update_and_rollback_poison_every_stable_entry_point() {
     };
     let mut table = context.expert_slot_table(1, 1).expect("slot table");
     context.enable_capture_safe();
+    let before = table.host().clone();
     let error = context
-        .install_expert_slot(&mut table, 0, pointers)
-        .expect_err("publication and rollback must fail in capture-safe mode");
+        .install_expert_slot_at(&mut table, 0, 0, 1, pointers)
+        .expect_err("publication must be rejected in capture-safe mode");
     context.disable_capture_safe();
-    assert!(error.to_string().contains("table poisoned"));
-    assert!(table.is_poisoned());
+    assert!(error.to_string().contains("capture-safe"));
+    assert_eq!(table.host(), &before);
+    assert!(!table.is_poisoned());
 
-    assert!(
-        context
-            .install_expert_slot(&mut table, 0, pointers)
-            .is_err()
-    );
-    assert!(context.evict_expert_slot(&mut table, 0).is_err());
-    assert!(context.clear_expert_slot_table(&mut table).is_err());
+    let binding = context
+        .install_expert_slot_at(&mut table, 0, 0, 1, pointers)
+        .expect("table remains usable after atomic rejection");
+    assert_eq!(binding.slot, 0);
+    assert_eq!(binding.generation, 1);
 
     let expert_ids = context.upload_i32_buffer(&[0]).expect("expert ids");
-    let router_weights = context.upload_f32_buffer(&[1.0]).expect("router weights");
     let mut resolve = context
         .expert_route_resolve_workspace(1, 1)
         .expect("resolve workspace");
-    assert!(
-        context
-            .resolve_expert_routes(&table, &expert_ids, 1, &mut resolve)
-            .is_err()
-    );
-
-    let mut batched = context
-        .moe_batched_workspace(1, 32, 32, 32)
-        .expect("batched workspace");
-    assert!(
-        context
-            .prepare_moe_experts_batched_workspace_stable(
-                &table,
-                &[0],
-                &expert_ids,
-                &router_weights,
-                1,
-                32,
-                32,
-                32,
-                &mut resolve,
-                &mut batched,
-            )
-            .is_err()
-    );
-
-    let mut segments = context
-        .moe_segment_workspace(1, 1, 1, 64, 64, 16)
-        .expect("segment workspace");
-    assert!(
-        context
-            .prepare_moe_segment_grouping_stable(
-                &table,
-                &expert_ids,
-                &router_weights,
-                1,
-                1,
-                &mut segments,
-            )
-            .is_err()
-    );
-    let mut route_output = context
-        .allocate_moe_route_output(1, 1, 16)
-        .expect("route output");
-    assert!(
-        context
-            .moe_expert_segments_stable_from_prepared(
-                &table,
-                1,
-                0.0,
-                &mut segments,
-                &mut route_output,
-            )
-            .is_err()
-    );
+    context
+        .resolve_expert_routes(&table, &expert_ids, 1, &mut resolve)
+        .expect("usable table resolves installed expert");
+    let resolved = context
+        .download_expert_route_resolve(&resolve, 1)
+        .expect("download resolved binding");
+    assert_eq!(resolved.route_slots, vec![0]);
+    assert_eq!(resolved.route_generations, vec![1]);
 }
 
 #[test]

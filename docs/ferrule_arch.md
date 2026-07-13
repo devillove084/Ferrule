@@ -58,7 +58,7 @@ Canonical execution documents:
 │                     ferrule-runtime                                 │
 │  generation/session/sampling/scheduler/cache                        │
 │  graph IR + private ScheduledBatch correlation/lowering             │
-│  storage/residency vocabulary + expert streaming/residency traits    │
+│  storage vocabulary + expert residency coordinator/policy            │
 │  Owns algorithms over capability traits; owns no concrete model.     │
 └───────────────┬───────────────────────────────────┬─────────────────┘
                 │                                   │
@@ -75,13 +75,13 @@ Canonical execution documents:
                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                     ferrule-common                                  │
-│  shared error/result, quant vocabulary, sole neutral execution ABI   │
+│  shared error/result, sole execution + expert-residency neutral ABIs  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 | Crate | Role |
 |---|---|
-| `ferrule-common` | shared errors, `QuantType`, lightweight vocabulary, and the sole public dependency-neutral execution ABI |
+| `ferrule-common` | shared errors, `QuantType`, the sole dependency-neutral execution ABI, and the model-neutral expert slot/generation/lease control ABI |
 | `ferrule-model` | model semantics, artifact binding, prepared model/lowering policy, CPU reference, and concrete model implementations such as `models::deepseek_v4` |
 | `ferrule-runtime` | generation/session/sampling/scheduling, logical sequence/KV lifecycle, runtime graph IR, storage/residency and executable-cache policy; depends on capabilities, not concrete models |
 | `ferrule-cuda` | CUDA allocations/pools, streams/events, primitives/kernels, physical device resources, counters, and CUDA graph execs |
@@ -100,9 +100,9 @@ Artifact-preserving model payloads
         ↓
 ferrule-model concrete runner implements capability traits
         ↓
-ferrule-runtime generation/session/scheduler algorithms over those traits
+ferrule-runtime scheduler/KV lifecycle + per-layer expert residency controller
         ↓
-CUDA operator cache + model session state + expert residency planner
+model runner sequence state + CUDA physical pages/expert handles/stable tables
         ↓
 chat / one-shot generation / diagnostics
 ```
@@ -114,12 +114,13 @@ Two execution paths coexist:
    correctness fixture for router semantics and legacy CUDA kernels.
 
 2. **DSV4 interactive streaming path**: `ferrule-model::models::deepseek_v4`
-   owns `DeepSeekV4Runner`, session position, and per-layer model state.
-   `DeepSeekV4CudaOperatorCache` owns CUDA operator state, uploaded linears,
-   norm/rope caches, device KV buffers, expert handles, MoE workspaces, and
-   counters. Runtime generation only sees the runner capability traits.
-   `ExpertStreamingPlanner` decides selected, prefetched, loaded, and evicted
-   `(layer, expert)` bundles.
+   owns model semantics, immutable expert source catalogs, the compatibility default
+   sequence, and concrete lowering. `KvPageManager` owns logical page allocation,
+   refcounts, block tables, COW, and preemption; the CUDA backend owns physical page
+   planes plus expert staging/upload tickets, handles, and stable tables. The
+   runtime-injected per-layer `ExpertResidencyController` owns logical expert slots,
+   generations, leases, LRU/admission, and cross-request stats. CPU/reference DSV4
+   alone retains `ExpertStreamingPlanner` and `CpuExpertHandleStore`.
 
 Current DSV4 execution is a **single-process resident runner**, not yet a production
 serving engine. Two UX paths exist:
@@ -139,8 +140,9 @@ serving engine. Two UX paths exist:
   model-neutral schema to preallocated CUDA multi-plane page pools. Reserve, execute,
   commit/rollback, COW, preempt/restore, and exact-prefix sharing use one lifecycle.
 - Packed decode, ragged prefill, and mixed prefill/decode share one rows pipeline.
-  Compressor/router/residency still retain host control points and are addressed by
-  E6; stable graph buckets remain E7 work.
+  Score/hash routing, compact grouping, stable-slot resolution, and residency
+  publication are device-side; runtime owns residency policy. Stable graph buckets
+  remain E7 work.
 
 ---
 
@@ -240,15 +242,17 @@ Runtime handle store exposes executable objects to model code
   `StorageObjectId`, `ObjectLocator`, `Placement`, `ObjectReplica`,
   `ReplicaHandleId`, `StorageCatalog`, `TransferEngine`, and policy scoring
   types.
-- `ExpertStreamingPlanner` is the active DSV4 strategy layer. It tracks per-layer
-  expert state, recency, frequency, selected experts, predicted experts, loads,
-  evictions, and committed residency.
+- `ferrule-common::ExpertResidencyControl` defines model-qualified expert identity,
+  stable slot/generation bindings, selected leases, and prepare/publish/cancel.
+  `ferrule-runtime::ExpertResidencyController` is the active CUDA residency policy:
+  one coordinator per layer owns capacity, deterministic LRU, reservations, leases,
+  and stats. `ExpertStreamingPlanner` remains only in CPU/reference execution.
 - `HostStagedExpertCache` caches decoded expert bundles in host RAM and uses mmap
   shard reads underneath.
-- CUDA DSV4 expert execution uses managed-memory FP4 expert buffers on GB10 by
-  default. This avoids explicit H2D uploads for expert weights, but resident
-  handles still represent `(layer, expert)` bundles and can exceed small-GPU
-  budgets if left unbounded.
+- CUDA DSV4 selected and prefetch misses use pinned asynchronous uploads and
+  compute-stream event dependencies. Stable-table publication/eviction uses device
+  kernels with no normal-path table H2D copy or stream-wide synchronization; runtime
+  capacity prevents unbounded physical residency.
 - Routing-aware hot prefetch is implemented: `--moe-prefetch-experts N` uses the
   per-layer observed hotset instead of naive low expert IDs.
 - Bounded hotset residency is available via `--moe-hotset-experts N`; it is a
@@ -558,10 +562,10 @@ with `KvPageManager` and backend physical-page transactions. Chat retains reside
 sessions across turns; token-loop execution exists only inside the page-managed
 differential diagnostic harness.
 
-E1–E5 now provide the execution ABI, prepared resources/arenas, explicit sequence
-state, native packed multi-session execution, and authoritative physical paged KV.
-E6–E8 still own device routing/residency, stable CUDA graphs, fusion, device sampling,
-and competitive serving validation. See
+E1–E6 now provide the execution ABI, prepared resources/arenas, explicit sequence
+state, native packed multi-session execution, authoritative physical paged KV,
+device routing/grouping, and runtime-owned expert residency. E7–E8 still own stable
+CUDA graphs, fusion, device sampling, and competitive serving validation. See
 [`execution-engine-architecture.md`](execution-engine-architecture.md).
 
 ---
@@ -580,16 +584,14 @@ Production serving needs, in dependency order:
 
 1. the completed E1–E3 neutral ABI, prepared resources/arenas, and explicit backend
    sequence state behind the compatibility driver;
-2. E4 native multi-session/ragged execution, where runtime correlation binds every
-   row to a real backend sequence state rather than an implicit runner;
-3. E5 physical multi-plane paged KV, then prefix/radix reuse and preemption;
-4. E6 device router/grouping and a runtime residency coordinator with stable expert
-   indirection;
+2. the completed E4 native multi-session/ragged execution, where runtime correlation
+   binds every row to a real backend sequence state;
+3. the completed E5 physical multi-plane paged KV with COW, exact-prefix sharing,
+   rollback, and preempt/restore;
+4. the completed E6 device router/grouping and runtime residency coordinator with
+   stable expert indirection;
 5. E7 reusable graph buckets over the same eager `*_into` stages;
 6. cancellation/rollback, metrics, structured-output masks, and an HTTP/SSE surface.
-
-`PagedSequenceKvCache` is only the current logical block-table manager; it is not
-sufficient to claim physical paged attention or continuous batching.
 
 ---
 
@@ -623,7 +625,7 @@ leak into scheduler, sampler, CLI, or the neutral execution ABI.
 | `QuantPolicy` | Q4/Q8 WeightPack; DSV4 FP4/FP8 artifact path | calibration/quality gates; new formats only after hot-path ownership stabilizes |
 | `KvPolicy` | legacy contiguous KV plus scheduler-facing paged metadata | physical CUDA paged multi-plane KV, prefix/COW/preemption |
 | `SchedulerPolicy` | resident action scheduling over request/session metadata | native ragged prefill, multi-row decode, fairness and preemption |
-| `ResidencyPolicy` | DSV4 model-local planner and staged/pinned/managed mechanisms | runtime-owned budget coordinator, leases, generations, stable backend slots |
+| `ResidencyPolicy` | runtime-owned per-layer coordinator, leases, generations, stats; DSV4 owns staged/pinned physical mechanisms | integrate stable bindings with E7 graph buckets and later distributed placement |
 | `SpeculationPolicy` | DSpark/MTP attachment metadata | isolated proposal/verify/rollback after sequence and KV rollback are safe |
 
 ---
@@ -635,11 +637,11 @@ leak into scheduler, sampler, CLI, or the neutral execution ABI.
 | Capability | Ferrule today | Target |
 |---|---|---|
 | Correctness | real DSV4 43L batched/token-loop is bit-exact; continuation `[30594,1175]` | preserve oracle through every ownership and kernel migration; add long-context, graph, failure, and multi-sequence gates |
-| Execution ABI | sole packed/ragged `ExecutionBatch`, private `ScheduledBatch`, and native `MultiSessionRunner`/`NativeMultiSessionExecutor` | preserve the neutral ABI through E6–E8 |
-| Prompt prefill | native paged ragged/mixed CUDA rows pipeline; token loop is diagnostic-only | remove remaining host-controlled compressor/router/residency points |
-| Decode | native packed multi-row paged decode with exact batch-2/4 serial parity | device routing/residency, stable graph buckets, device sampling |
+| Execution ABI | sole packed/ragged `ExecutionBatch`, private `ScheduledBatch`, and native `MultiSessionRunner`/`NativeMultiSessionExecutor` | preserve the neutral ABI through E7–E8 |
+| Prompt prefill | native paged ragged/mixed CUDA rows pipeline; token loop is diagnostic-only; device router/residency is complete | stable graph buckets and further fusion |
+| Decode | native packed multi-row paged decode with exact batch-2/4 serial parity and device routing/residency | stable graph buckets and device sampling |
 | KV | authoritative physical paged multi-plane lifecycle with reservation/COW/prefix/preemption | radix lookup policy and later low-bit KV formats |
-| MoE residency | model-local planner plus CUDA resident/staged/pinned/upload caches | runtime cross-request coordinator and stable backend expert indirection |
+| MoE residency | runtime cross-request coordinator, exact stable bindings/leases/stats, and event-guarded CUDA physical resources | E7 graph binding plus later distributed placement |
 | CUDA graph | no current DSV4 graph mode; device-resident eager decode only | E7 long-lived piecewise buckets over the eager device pipeline |
 | Serving | control-plane scheduler/driver proof; no active server command | native multi-session executor, physical KV, streaming/cancel/metrics |
 | Quantization | Q4/Q8/FP4/FP8, mixed precision, artifact-preserving DSV4 | calibrated quality gates and additional formats only after execution ownership stabilizes |

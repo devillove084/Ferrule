@@ -4544,6 +4544,84 @@ pub mod kernels {
         }
     }
 
+    /// Publish one exact stable expert binding. Residency policy and generation
+    /// validation remain host/runtime-owned; this kernel only applies the
+    /// already-validated mapping in compute-stream order.
+    #[kernel]
+    pub fn install_expert_slot_binding(
+        mut gate_weight: DisjointSlice<u64>,
+        mut gate_scale: DisjointSlice<u64>,
+        mut up_weight: DisjointSlice<u64>,
+        mut up_scale: DisjointSlice<u64>,
+        mut down_weight: DisjointSlice<u64>,
+        mut down_scale: DisjointSlice<u64>,
+        mut expert_to_slot: DisjointSlice<i32>,
+        mut expert_generation: DisjointSlice<i32>,
+        mut slot_generation: DisjointSlice<i32>,
+        expert: u32,
+        slot: u32,
+        generation: i32,
+        gate_weight_ptr: u64,
+        gate_scale_ptr: u64,
+        up_weight_ptr: u64,
+        up_scale_ptr: u64,
+        down_weight_ptr: u64,
+        down_scale_ptr: u64,
+    ) {
+        if thread::index_1d().get() != 0 {
+            return;
+        }
+        let expert = expert as usize;
+        let slot = slot as usize;
+        unsafe {
+            *gate_weight.as_mut_ptr().add(slot) = gate_weight_ptr;
+            *gate_scale.as_mut_ptr().add(slot) = gate_scale_ptr;
+            *up_weight.as_mut_ptr().add(slot) = up_weight_ptr;
+            *up_scale.as_mut_ptr().add(slot) = up_scale_ptr;
+            *down_weight.as_mut_ptr().add(slot) = down_weight_ptr;
+            *down_scale.as_mut_ptr().add(slot) = down_scale_ptr;
+            *slot_generation.as_mut_ptr().add(slot) = generation;
+            *expert_to_slot.as_mut_ptr().add(expert) = slot as i32;
+            *expert_generation.as_mut_ptr().add(expert) = generation;
+        }
+    }
+
+    /// Remove one exact stable expert binding in compute-stream order. The slot
+    /// generation is advanced by the host-validated state transition so stale
+    /// routes cannot observe a replacement as the previous payload.
+    #[kernel]
+    pub fn evict_expert_slot_binding(
+        mut gate_weight: DisjointSlice<u64>,
+        mut gate_scale: DisjointSlice<u64>,
+        mut up_weight: DisjointSlice<u64>,
+        mut up_scale: DisjointSlice<u64>,
+        mut down_weight: DisjointSlice<u64>,
+        mut down_scale: DisjointSlice<u64>,
+        mut expert_to_slot: DisjointSlice<i32>,
+        mut expert_generation: DisjointSlice<i32>,
+        mut slot_generation: DisjointSlice<i32>,
+        expert: u32,
+        slot: u32,
+        next_generation: i32,
+    ) {
+        if thread::index_1d().get() != 0 {
+            return;
+        }
+        let expert = expert as usize;
+        let slot = slot as usize;
+        unsafe {
+            *expert_to_slot.as_mut_ptr().add(expert) = -1;
+            *expert_generation.as_mut_ptr().add(expert) = 0;
+            *gate_weight.as_mut_ptr().add(slot) = 0;
+            *gate_scale.as_mut_ptr().add(slot) = 0;
+            *up_weight.as_mut_ptr().add(slot) = 0;
+            *up_scale.as_mut_ptr().add(slot) = 0;
+            *down_weight.as_mut_ptr().add(slot) = 0;
+            *down_scale.as_mut_ptr().add(slot) = 0;
+            *slot_generation.as_mut_ptr().add(slot) = next_generation;
+        }
+    }
+
     #[kernel]
     pub fn initialize_expert_slot_resolve(
         mut miss_ids: DisjointSlice<i32>,

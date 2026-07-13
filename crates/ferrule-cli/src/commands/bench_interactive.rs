@@ -1020,12 +1020,7 @@ fn dsv4_operator_counters_delta(
         expert_lookahead_prefetch_us: after
             .expert_lookahead_prefetch_us
             .saturating_sub(before.expert_lookahead_prefetch_us),
-        expert_planner_residency_syncs: after
-            .expert_planner_residency_syncs
-            .saturating_sub(before.expert_planner_residency_syncs),
-        expert_planner_residency_synced: after
-            .expert_planner_residency_synced
-            .saturating_sub(before.expert_planner_residency_synced),
+
         moe_cache_lookup_us: after
             .moe_cache_lookup_us
             .saturating_sub(before.moe_cache_lookup_us),
@@ -1128,6 +1123,34 @@ fn dsv4_operator_counters_delta(
         arena_misses: after.arena_misses.saturating_sub(before.arena_misses),
         arena_grows: after.arena_grows.saturating_sub(before.arena_grows),
         arena_reuses: after.arena_reuses.saturating_sub(before.arena_reuses),
+        expert_residency_stats: ferrule_common::ExpertResidencyStats {
+            resident: after.expert_residency_stats.resident,
+            active_leases: after.expert_residency_stats.active_leases,
+            installs: after
+                .expert_residency_stats
+                .installs
+                .saturating_sub(before.expert_residency_stats.installs),
+            evictions: after
+                .expert_residency_stats
+                .evictions
+                .saturating_sub(before.expert_residency_stats.evictions),
+            resident_hits: after
+                .expert_residency_stats
+                .resident_hits
+                .saturating_sub(before.expert_residency_stats.resident_hits),
+            stale_releases: after
+                .expert_residency_stats
+                .stale_releases
+                .saturating_sub(before.expert_residency_stats.stale_releases),
+            prepare_cancellations: after
+                .expert_residency_stats
+                .prepare_cancellations
+                .saturating_sub(before.expert_residency_stats.prepare_cancellations),
+            prefetch_capacity_misses: after
+                .expert_residency_stats
+                .prefetch_capacity_misses
+                .saturating_sub(before.expert_residency_stats.prefetch_capacity_misses),
+        },
         expert_predictor_stats: expert_prediction_stats_delta(
             before.expert_predictor_stats,
             after.expert_predictor_stats,
@@ -1650,14 +1673,7 @@ fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> ser
             "expert_lookahead_prefetch_enqueued",
             stats.expert_lookahead_prefetch_enqueued,
         );
-        u64_field(
-            "expert_planner_residency_syncs",
-            stats.expert_planner_residency_syncs,
-        );
-        u64_field(
-            "expert_planner_residency_synced",
-            stats.expert_planner_residency_synced,
-        );
+
         u64_field("output_head_calls", stats.output_head_calls);
         u64_field("output_head_chunks", stats.output_head_chunks);
         u64_field("output_head_rows", stats.output_head_rows);
@@ -1717,6 +1733,30 @@ fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> ser
         u64_field("arena_grows", stats.arena_grows);
         u64_field("arena_reuses", stats.arena_reuses);
         u64_field(
+            "expert_residency_installs",
+            stats.expert_residency_stats.installs,
+        );
+        u64_field(
+            "expert_residency_evictions",
+            stats.expert_residency_stats.evictions,
+        );
+        u64_field(
+            "expert_residency_resident_hits",
+            stats.expert_residency_stats.resident_hits,
+        );
+        u64_field(
+            "expert_residency_stale_releases",
+            stats.expert_residency_stats.stale_releases,
+        );
+        u64_field(
+            "expert_residency_prepare_cancellations",
+            stats.expert_residency_stats.prepare_cancellations,
+        );
+        u64_field(
+            "expert_residency_prefetch_capacity_misses",
+            stats.expert_residency_stats.prefetch_capacity_misses,
+        );
+        u64_field(
             "expert_predictor_predict_calls",
             stats.expert_predictor_stats.predict_calls,
         );
@@ -1741,6 +1781,14 @@ fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> ser
             stats.expert_predictor_stats.transition_observations,
         );
     }
+    out.insert(
+        "expert_residency_resident".into(),
+        serde_json::Value::from(stats.expert_residency_stats.resident),
+    );
+    out.insert(
+        "expert_residency_active_leases".into(),
+        serde_json::Value::from(stats.expert_residency_stats.active_leases),
+    );
     out.insert(
         "expert_host_cache_entries".into(),
         serde_json::Value::from(stats.expert_host_cache_entries),

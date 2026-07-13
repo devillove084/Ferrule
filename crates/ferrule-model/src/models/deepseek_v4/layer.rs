@@ -10,9 +10,14 @@ use crate::moe::routed::RoutedMoeStepOutput;
 use crate::moe::routing::ExpertRouterPolicy;
 #[cfg(any(feature = "cuda", test))]
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
-use crate::moe::streaming::{ExpertStreamingPlanner, ExpertStreamingReader};
+use crate::moe::streaming::{
+    ExpertSourceCatalog, ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader,
+};
+#[cfg(feature = "cuda")]
+use ferrule_common::ExpertResidencyControl;
 #[cfg(feature = "cuda")]
 use ferrule_common::execution::ForwardMode;
 use ferrule_common::{Error, Result};
@@ -377,7 +382,9 @@ impl DeepSeekV4Layer {
     pub(crate) fn decode_step_device_hc_device(
         &self,
         state: &mut DeepSeekV4LayerState,
-        expert_runtime: &mut DeepSeekV4LayerExpertRuntime,
+        residency: &mut dyn ExpertResidencyControl,
+        source_catalog: &ExpertSourceCatalog,
+        prefetch_capacity: usize,
         arena: &mut DeepSeekV4LayerArena,
         hc_state_dev: &mut ferrule_cuda::context::CudaF32Buffer,
         token_id: u32,
@@ -524,9 +531,10 @@ impl DeepSeekV4Layer {
             operators.prefetch_predicted_experts(
                 self.layer,
                 predicted_experts,
-                &mut expert_runtime.expert_planner,
+                residency,
+                source_catalog,
+                prefetch_capacity,
                 expert_reader,
-                &mut expert_runtime.expert_handles,
             )?;
         }
         let stage_start = Instant::now();
@@ -537,9 +545,10 @@ impl DeepSeekV4Layer {
             &self.router,
             predicted_experts,
             &self.router_policy,
-            &mut expert_runtime.expert_planner,
+            residency,
+            source_catalog,
+            prefetch_capacity,
             expert_reader,
-            &mut expert_runtime.expert_handles,
             &self.shared_ffn,
             &mut arena.router_input,
             &mut arena.router_logits,
@@ -602,7 +611,9 @@ impl DeepSeekV4Layer {
         sequence_major_rows: &[usize],
         sequence_prefill: &[bool],
         paged_bindings: &[DeepSeekV4PagedKvBinding],
-        expert_runtime: &mut DeepSeekV4LayerExpertRuntime,
+        residency: &mut dyn ExpertResidencyControl,
+        source_catalog: &ExpertSourceCatalog,
+        prefetch_capacity: usize,
         arena: &mut DeepSeekV4LayerArena,
         hc_state_dev: &mut ferrule_cuda::context::CudaF32Buffer,
         token_ids: &[u32],
@@ -725,9 +736,10 @@ impl DeepSeekV4Layer {
             operators.prefetch_predicted_experts(
                 self.layer,
                 predicted_experts,
-                &mut expert_runtime.expert_planner,
+                residency,
+                source_catalog,
+                prefetch_capacity,
                 expert_reader,
-                &mut expert_runtime.expert_handles,
             )?;
         }
         operators.routed_moe_prefill_batch_from_device_into(
@@ -738,9 +750,10 @@ impl DeepSeekV4Layer {
             &self.router,
             predicted_experts,
             &self.router_policy,
-            &mut expert_runtime.expert_planner,
+            residency,
+            source_catalog,
+            prefetch_capacity,
             expert_reader,
-            &mut expert_runtime.expert_handles,
             &self.shared_ffn,
             &mut arena.router_logits,
             &mut arena.router_indices,
@@ -781,7 +794,9 @@ impl DeepSeekV4Layer {
     pub(crate) fn prefill_start_cuda_device_chain_into(
         &self,
         state: &mut DeepSeekV4LayerState,
-        expert_runtime: &mut DeepSeekV4LayerExpertRuntime,
+        residency: &mut dyn ExpertResidencyControl,
+        source_catalog: &ExpertSourceCatalog,
+        prefetch_capacity: usize,
         arena: &mut DeepSeekV4LayerArena,
         hc_state_dev: &mut ferrule_cuda::context::CudaF32Buffer,
         token_ids: &[u32],
@@ -927,9 +942,10 @@ impl DeepSeekV4Layer {
             operators.prefetch_predicted_experts(
                 self.layer,
                 predicted_experts,
-                &mut expert_runtime.expert_planner,
+                residency,
+                source_catalog,
+                prefetch_capacity,
                 expert_reader,
-                &mut expert_runtime.expert_handles,
             )?;
         }
 
@@ -942,9 +958,10 @@ impl DeepSeekV4Layer {
             &self.router,
             predicted_experts,
             &self.router_policy,
-            &mut expert_runtime.expert_planner,
+            residency,
+            source_catalog,
+            prefetch_capacity,
             expert_reader,
-            &mut expert_runtime.expert_handles,
             &self.shared_ffn,
             &mut arena.router_logits,
             &mut arena.router_indices,
@@ -1387,6 +1404,43 @@ impl DeepSeekV4LayerExpertRuntime {
             expert_planner,
             expert_handles: CpuExpertHandleStore::default(),
         }
+    }
+
+    pub(crate) fn from_catalog(
+        source_catalog: Arc<ExpertSourceCatalog>,
+        policy: ExpertStreamingPolicy,
+    ) -> Self {
+        Self::new(ExpertStreamingPlanner::from_catalog(policy, source_catalog))
+    }
+}
+
+#[cfg(test)]
+mod expert_runtime_tests {
+    use crate::moe::streaming::{ExpertId, ExpertLoadSource};
+
+    use super::*;
+
+    #[test]
+    fn cpu_expert_runtime_is_constructed_from_shared_catalog() {
+        let catalog = Arc::new(ExpertSourceCatalog::from_sources([(
+            ExpertId::new(4, 9),
+            ExpertLoadSource::LocalShard {
+                path: "experts.safetensors".into(),
+                offset: 128,
+                bytes: 64,
+            },
+        )]));
+        let runtime = DeepSeekV4LayerExpertRuntime::from_catalog(
+            Arc::clone(&catalog),
+            ExpertStreamingPolicy::quality_first(1),
+        );
+
+        assert!(Arc::ptr_eq(
+            runtime.expert_planner.source_catalog(),
+            &catalog
+        ));
+        assert_eq!(runtime.expert_planner.source_catalog().count(), 1);
+        assert!(runtime.expert_handles.is_empty());
     }
 }
 

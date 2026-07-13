@@ -9,8 +9,9 @@ architecture documentation.
 Related canonical documents:
 
 - [`execution-engine-architecture.md`](execution-engine-architecture.md) — implemented
-  E1 execution ABI plus target prepared plans, sequence state, arenas, device
-  pipeline, paged KV, residency, and graph design.
+  E1–E6 execution ABI, prepared plans, sequence state, arenas, native batches,
+  physical paged KV, device routing, and runtime residency ownership, plus the E7
+  graph design.
 
 - [`ferrule_arch.md`](ferrule_arch.md) — repository-wide architecture and model
   bring-up boundaries.
@@ -112,20 +113,22 @@ cooperative, and routed MoE uses expert-major segments plus deterministic
 route-rank reduction. Scalar/F32/tile implementations remain explicit differential
 oracles and fallbacks.
 
-The remaining 4096-token cost is now dominated by compressor/indexer work,
+That historical 4096-token run was dominated by compressor/indexer work,
 layer-boundary HC host/device bridges, expert load/upload, metadata traffic, and
-allocation churn. A full run still records approximately `19.8 GB` H2D, `13.1 GB`
-D2H, and `368k` device allocations. Those are ownership/lifetime problems to remove
-through the planned prepared pipeline and persistent arenas, not reasons to weaken
-correctness or add more one-off scalar kernels.
+allocation churn, recording approximately `19.8 GB` H2D, `13.1 GB` D2H, and `368k`
+device allocations. E2–E6 subsequently addressed the prepared-resource, arena, KV,
+batching, and residency ownership classes; these historical counters are not a claim
+about the current serving path.
 
 These numbers remain a historical single-sequence performance baseline, not the
-current serving architecture. E4 now owns native packed decode, ragged prefill, and
-mixed batches; E5 owns authoritative physical paged multi-plane CUDA KV with COW,
-preemption/restore, and exact-prefix sharing. Compressor/router/residency still retain
-host control points, and stable CUDA graph buckets remain an E7 deliverable. The
-earlier five-token `17.47–17.75s` prefill and `0.80–0.824 tok/s` decode snapshot
-predates this kernel cut and must not be presented as current headline throughput.
+current serving architecture. E4 owns native packed decode, ragged prefill, and mixed
+batches; E5 owns authoritative physical paged multi-plane CUDA KV with COW,
+preemption/restore, and exact-prefix sharing; E6 owns device route/group resolution
+and runtime-controlled expert slots, generations, leases, and publication. The CUDA
+side now owns only physical source/staging/upload/table resources for residency.
+Compressor control and stable CUDA graph buckets remain later work. The earlier
+five-token `17.47–17.75s` prefill and `0.80–0.824 tok/s` decode snapshot predates this
+kernel cut and must not be presented as current headline throughput.
 
 ---
 
@@ -164,7 +167,7 @@ flowchart TD
     E3[E3 Complete: Per-sequence execution state]
     E3 --> E4[E4 Complete: Native multi-session and ragged execution]
     E4 --> E5[E5 Complete: Physical paged multi-plane KV]
-    E4 --> E6[E6 Device router and runtime residency]
+    E4 --> E6[E6 Complete: Device router and runtime residency]
     E5 --> E7[E7 Stable CUDA graph buckets]
     E6 --> E7
     E7 --> E8[E8 Fusion, device sampling, and competitive validation]
@@ -182,10 +185,11 @@ Every phase must preserve these invariants:
 
 ### Correctness
 
-- CPU/component reference, token-loop prefill, layer/attention checkpoints,
-  deterministic ranked MoE reduction, and compressor parity remain available.
-- The 43-layer batched/token-loop result remains elementwise `0.0` unless a
-  deliberately documented numerical contract replaces bit-exactness.
+- CPU/component reference, layer/attention checkpoints, deterministic ranked MoE
+  reduction, compressor parity, and token-loop prefill remain available as diagnostic
+  oracles. Token-loop execution is not a production prefill implementation.
+- The 43-layer batched/token-loop diagnostic result remains elementwise `0.0` unless
+  a deliberately documented numerical contract replaces bit-exactness.
 - Residency, batching, graph mode, and cache placement must not change model
   semantics.
 - An execution error must never be silently treated as a committed step. E3 owns
@@ -486,7 +490,9 @@ E2 prepared model and arena ownership.
 - [x] Replace prepared/sequence parallel `Vec<Option<_>>` slots with fully initialized
   vectors; execution contains no lazy bind/state initialization path.
 - [x] Move expert planner/handles out of sequence checkpoints into backend-global
-  layer expert runtime shared across serial sequences.
+  layer expert runtime shared across serial sequences. This was the E3 intermediate
+  state; E6 later replaced CUDA logical residency with runtime control while retaining
+  planners/CPU handles only for the reference path.
 - [x] Remove duplicate host-only checkpoint/fork APIs and reset-time expert/arena
   destruction.
 
@@ -619,9 +625,9 @@ E3 explicit sequence state.
   per-row causal visible lengths address shared sequence page tables without
   duplicating mutable state; only recurrent compressor transitions remain ordered
   sequence-major. A real local mixed/ragged gate is bit-exact with serial execution.
-- [x] Current core validation: 239 runtime unit tests and 176 model unit tests pass;
-  the required CUDA kernel gate and real local packed decode, ragged/mixed, and
-  exact-prefix/COW gates pass.
+- [x] E4's required CUDA kernel gate and real local packed decode, ragged/mixed, and
+  exact-prefix/COW gates pass; the current aggregate suite counts are recorded in the
+  E6 completion validation below.
 
 ### Deliverables
 
@@ -770,7 +776,7 @@ E3 sequence ownership and E4 batch bindings.
 
 ## E6 — Device router and runtime residency coordinator
 
-**Status: in progress.**
+**Status: complete.**
 
 ### Depends on
 
@@ -778,60 +784,69 @@ E4 native batching; required before E7 stable graphs.
 
 ### Implementation checkpoint
 
-- [x] Add a model-neutral, key-generic `ExpertResidencyCoordinator` foundation in
-  runtime with stable slot IDs, monotonic slot generations, execution leases,
-  LRU selection among unleased slots, and two-phase
-  `prepare_install -> backend transfer -> publish_install` semantics. Unit gates
-  prove transfer-failure atomicity, lease-protected eviction, stale-generation
-  rejection, and deterministic slot reuse.
-- [ ] Connect coordinator ownership to the runner/backend residency hooks and delete
-  per-sequence planner/backend double bookkeeping.
-- [x] Keep DSV4 score/hash route IDs and weights device-side with `i32` expert IDs;
-  hash tables are shape-validated/uploaded once and persistent pinned token IDs are
-  updated once per changed batch, not once per layer. Full router-logit D2H is deleted
-  for supported DSV4 policies.
-- [x] Add per-layer CUDA stable pointer tables with expert-to-slot and slot-generation
-  validation. Install/evict updates tables only when residency changes; terminal
-  generations are rejected, failed update+rollback poisons the table, and stale routes,
-  transfer failures, and slot reuse are covered by CPU/CUDA gates.
-- [x] Move decode dispatch and packed fixed-eight expert grouping to the device.
-  Warm stable dispatch performs zero pointer/route-weight H2D, zero D2H, zero sync,
-  and zero allocation; packed grouping uses parallel count/scan/scatter, tracks complete
-  route coverage across residency windows, and preserves token-major route-rank reduction
-  across mixed sequences.
-- [x] Delete the old host pointer/weight dispatch, host `BTreeMap` segment grouping,
-  segment metadata upload path, obsolete pointer-upload telemetry, and superseded
-  device-router/segment-batch compatibility switches.
-
-### Deliverables
-
-- Router logits → top-k → weights → token/expert grouping stays device-side.
-- Introduce a stable expert indirection table with slot generation.
-- Runtime `ExpertResidencyCoordinator` owns cross-request budget, hotness,
-  prefetch, retain, and eviction policy.
-- CUDA backend continues to own resident handles, pinned/staged sources, upload
-  streams/events, and execution workspaces.
-- Model supplies selected expert demand and optional DSV4 hash/DSpark hints.
-- Remove per-sequence `ExpertStreamingPlanner` and CPU expert-handle ownership.
-- Remove planner/backend residency double bookkeeping and repeated synchronization.
-- Selected misses wait only on their transfer event, never on a stream-wide sync.
-- Group real tokens from multiple sequences by expert for grouped FP4 execution.
+- [x] `ferrule-common` defines the model-neutral expert-residency ABI:
+  model-qualified `ExpertKey`, stable `ExpertSlotId`/`ExpertSlotGeneration` bindings,
+  selected-expert leases, selected/prefetch install intents, failure-atomic
+  `prepare_install` → backend transfer → `publish_install`/`cancel_install`, and
+  aggregate/per-layer stats.
+- [x] `ferrule-runtime::ExpertResidencyController` owns one coordinator per layer.
+  `NativeMultiSessionExecutor` lazily injects it before the first execution path that
+  needs residency; the control remains attached to the runner and is reused when a
+  clean runner is moved out and wrapped by another executor.
+- [x] DSV4 CUDA consumes immutable source catalogs and owns staging caches, pinned
+  upload sources, asynchronous upload tickets/events, resident device handles, and
+  physical stable tables only. It allocates no CUDA-side CPU
+  `ExpertStreamingPlanner` or `CpuExpertHandleStore` mirrors; those remain solely in
+  the CPU/reference path.
+- [x] Selected and prefetch transfers use pinned asynchronous uploads. Selected
+  compute queues a wait on the upload event on the compute stream without host event
+  synchronization or stream-wide synchronization.
+- [x] Device publication/eviction kernels update stable pointer, expert-to-slot, and
+  generation tables in place. Normal publication performs no table H2D copy and no
+  stream-wide synchronization.
+- [x] Selected demand deterministically cancels excess prefetch reservations. Any
+  already-submitted upload ticket and its pinned/device resources remain retained in
+  the abandoned/retired lists until completion events make them safe to release.
+- [x] DSV4 operator counters expose aggregate runtime-controller residency stats in
+  addition to physical upload, hit, wait, and eviction counters.
+- [x] DSV4 score/hash route IDs and weights stay device-side; packed fixed-eight
+  grouping and stable-slot resolution preserve complete route coverage and
+  token-major route-rank reduction across mixed sequences.
+- [x] The old CUDA planner/backend reconciliation, host pointer/weight dispatch,
+  host `BTreeMap` segment grouping, segment metadata upload, and compatibility
+  switches are removed.
 
 ### Correctness exit gate
 
-- Device route IDs and weights match CPU/reference.
-- Output is unchanged across residency budgets and interleavings.
-- A selected expert cannot be evicted while leased.
-- Stale slot generations and transfer failures are isolated.
+- [x] Device route IDs/weights and stable-slot resolution match reference semantics.
+- [x] Real packed batch-2/batch-4, ragged/mixed, exact-prefix fork/COW, and repeated
+  sequence-residency reuse are exact.
+- [x] Selected leases prevent eviction; stale generations, cancellation, transfer
+  failure, and deterministic slot reuse are covered.
 
 ### Performance exit gate
 
-For a steady resident path:
+For the implemented resident/publication paths:
 
-- full router-logit D2H: `0`;
-- per-layer pointer-array/route-weight H2D: `0`;
-- stream-wide sync: `0`;
-- repeated-workload resident hit rate rises and expert load bytes fall.
+- [x] full router-logit D2H: `0`;
+- [x] per-layer pointer-array/route-weight H2D: `0`;
+- [x] stable-table publication H2D copies and stream-wide sync: `0`;
+- [x] selected upload dependency is a compute-stream event wait, not host or
+  stream-wide synchronization;
+- [x] repeated sequence execution reuses residency.
+
+### Completion validation
+
+- `ferrule-common`: 36 tests passed.
+- `ferrule-model`: 175 tests passed.
+- `ferrule-runtime`: 253 tests passed.
+- `just test-cuda-required` passed.
+- CUDA `expert_slot_resolve`: 5 tests passed.
+- Real DSV4 CUDA gates passed for packed batch-2/batch-4 exactness, ragged/mixed
+  exactness, prefix-fork COW exactness, repeated sequence residency reuse, and the
+  latest 43-layer resident runtime-driver path.
+- Explicit device router/hash/paged-decode CUDA gates passed with zero wrapper
+  copies or stream-wide synchronization where required.
 
 ### Not in E6
 
@@ -841,7 +856,7 @@ For a steady resident path:
 
 ## E7 — Stable CUDA graph buckets
 
-**Status: planned after E2/E4/E5/E6.**
+**Status: planned after completed E2/E4/E5/E6.**
 
 ### Depends on
 

@@ -2,6 +2,7 @@
 
 use std::env as process_environment;
 use std::num::NonZeroU32;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ferrule_common::execution::{
@@ -10,6 +11,7 @@ use ferrule_common::execution::{
 use ferrule_common::{Error, Result};
 
 use crate::execution::PreparedModel;
+use crate::moe::streaming::{ExpertSourceCatalog, ExpertStreamingPolicy};
 
 use super::artifact::DeepSeekV4ArtifactModel;
 use super::layer::DeepSeekV4Layer;
@@ -281,10 +283,49 @@ impl DeepSeekV4ExecutionPolicy {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct DeepSeekV4PreparedLayerExperts {
+    source_catalog: Arc<ExpertSourceCatalog>,
+    streaming_policy: ExpertStreamingPolicy,
+    resident_capacity: usize,
+    prefetch_capacity: usize,
+}
+
+impl DeepSeekV4PreparedLayerExperts {
+    pub(crate) fn new(
+        source_catalog: Arc<ExpertSourceCatalog>,
+        streaming_policy: ExpertStreamingPolicy,
+    ) -> Self {
+        Self {
+            resident_capacity: streaming_policy.gpu_slots_per_layer,
+            prefetch_capacity: streaming_policy.prefetch_per_layer,
+            source_catalog,
+            streaming_policy,
+        }
+    }
+
+    pub fn source_catalog(&self) -> &Arc<ExpertSourceCatalog> {
+        &self.source_catalog
+    }
+
+    pub const fn streaming_policy(&self) -> &ExpertStreamingPolicy {
+        &self.streaming_policy
+    }
+
+    pub const fn resident_capacity(&self) -> usize {
+        self.resident_capacity
+    }
+
+    pub const fn prefetch_capacity(&self) -> usize {
+        self.prefetch_capacity
+    }
+}
+
 pub struct DeepSeekV4PreparedResources {
     model: DeepSeekV4ArtifactModel,
     options: DeepSeekV4PrepareOptions,
     layers: Box<[DeepSeekV4Layer]>,
+    layer_experts: Box<[DeepSeekV4PreparedLayerExperts]>,
     kv_layout: DeepSeekV4KvLayoutSchema,
     policy: DeepSeekV4ExecutionPolicy,
 }
@@ -300,6 +341,28 @@ impl DeepSeekV4PreparedResources {
 
     pub fn layers(&self) -> &[DeepSeekV4Layer] {
         &self.layers
+    }
+
+    pub fn layer_experts(&self) -> &[DeepSeekV4PreparedLayerExperts] {
+        &self.layer_experts
+    }
+
+    pub fn layer_expert_source_catalog(&self, layer: usize) -> Option<&Arc<ExpertSourceCatalog>> {
+        self.layer_experts
+            .get(layer)
+            .map(DeepSeekV4PreparedLayerExperts::source_catalog)
+    }
+
+    pub fn layer_resident_expert_capacity(&self, layer: usize) -> Option<usize> {
+        self.layer_experts
+            .get(layer)
+            .map(DeepSeekV4PreparedLayerExperts::resident_capacity)
+    }
+
+    pub fn layer_prefetch_expert_capacity(&self, layer: usize) -> Option<usize> {
+        self.layer_experts
+            .get(layer)
+            .map(DeepSeekV4PreparedLayerExperts::prefetch_capacity)
     }
 
     pub const fn kv_layout(&self) -> &DeepSeekV4KvLayoutSchema {
@@ -331,8 +394,31 @@ pub fn prepare(
                 options.max_layers
             ))
         })?;
+    let mut layer_experts = Vec::new();
+    layer_experts
+        .try_reserve_exact(options.max_layers)
+        .map_err(|error| {
+            Error::Model(format!(
+                "DeepSeek-V4 prepared expert catalog allocation failed for {} layers: {error}",
+                options.max_layers
+            ))
+        })?;
+    let expert_streaming_policy = model
+        .resolved_expert_streaming_policy(options.moe_prefetch_experts, options.moe_hotset_experts);
     for layer in 0..options.max_layers {
+        let source_catalog = Arc::clone(model.expert_source_catalog(layer)?);
+        if source_catalog.count() != model.config.num_routed_experts {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 layer {layer} catalog has {} routed experts, expected {}",
+                source_catalog.count(),
+                model.config.num_routed_experts
+            )));
+        }
         layers.push(model.bind_layer(layer)?);
+        layer_experts.push(DeepSeekV4PreparedLayerExperts::new(
+            source_catalog,
+            expert_streaming_policy.clone(),
+        ));
     }
 
     let max_compress_ratio = model
@@ -400,6 +486,7 @@ pub fn prepare(
         model,
         options,
         layers: layers.into_boxed_slice(),
+        layer_experts: layer_experts.into_boxed_slice(),
         kv_layout,
         policy,
     };
@@ -533,6 +620,31 @@ mod tests {
     use ferrule_common::execution::{KvBindingMode, LogitsRowPolicy};
 
     use super::*;
+
+    #[test]
+    fn prepared_layer_experts_retain_catalog_identity_and_resolved_capacities() {
+        let catalog = Arc::new(ExpertSourceCatalog::from_sources([(
+            crate::moe::streaming::ExpertId::new(2, 7),
+            crate::moe::streaming::ExpertLoadSource::LocalShard {
+                path: "experts.safetensors".into(),
+                offset: 64,
+                bytes: 32,
+            },
+        )]));
+        let policy = ExpertStreamingPolicy {
+            gpu_slots_per_layer: 6,
+            prefetch_per_layer: 2,
+            preserve_artifact_quantization: true,
+            allow_cpu_staging: false,
+            allow_remote_sources: false,
+        };
+        let prepared = DeepSeekV4PreparedLayerExperts::new(Arc::clone(&catalog), policy.clone());
+
+        assert!(Arc::ptr_eq(prepared.source_catalog(), &catalog));
+        assert_eq!(prepared.streaming_policy(), &policy);
+        assert_eq!(prepared.resident_capacity(), 6);
+        assert_eq!(prepared.prefetch_capacity(), 2);
+    }
 
     #[test]
     fn dsv4_capabilities_truthfully_describe_serial_runner() {

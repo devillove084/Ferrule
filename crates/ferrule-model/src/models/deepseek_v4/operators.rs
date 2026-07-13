@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use ferrule_common::{Error, Result};
+#[cfg(feature = "cuda")]
+use ferrule_common::ExpertResidencyControl;
+use ferrule_common::{Error, ExpertResidencyStats, Result};
 
 use crate::artifact::binding::RouterArtifactPayload;
 use crate::artifact::linear::ArtifactLinearPayload;
@@ -23,6 +25,8 @@ use crate::moe::routed::{
     RoutedMoeStepOutput, execute_routed_moe_with_artifact_router_reference_with_handles,
 };
 use crate::moe::routing::ExpertRouterPolicy;
+#[cfg(feature = "cuda")]
+use crate::moe::streaming::ExpertSourceCatalog;
 use crate::moe::streaming::{ExpertStreamingPlanner, ExpertStreamingReader};
 use crate::runner::TokenLogit;
 
@@ -183,8 +187,6 @@ pub struct DeepSeekV4OperatorRuntimeCounters {
     pub expert_lookahead_prefetch_experts: u64,
     pub expert_lookahead_prefetch_enqueued: u64,
     pub expert_lookahead_prefetch_us: u64,
-    pub expert_planner_residency_syncs: u64,
-    pub expert_planner_residency_synced: u64,
     pub moe_cache_lookup_us: u64,
     pub moe_expert_read_us: u64,
     pub moe_expert_upload_us: u64,
@@ -229,6 +231,7 @@ pub struct DeepSeekV4OperatorRuntimeCounters {
     pub arena_misses: u64,
     pub arena_grows: u64,
     pub arena_reuses: u64,
+    pub expert_residency_stats: ExpertResidencyStats,
     pub expert_predictor_stats: ExpertPredictionStats,
 }
 
@@ -857,9 +860,10 @@ impl DeepSeekV4OperatorContext {
         router: &RouterArtifactPayload,
         predicted_experts: &[usize],
         router_policy: &ExpertRouterPolicy,
-        planner: &mut ExpertStreamingPlanner,
+        residency: &mut dyn ExpertResidencyControl,
+        source_catalog: &ExpertSourceCatalog,
+        prefetch_capacity: usize,
         reader: &ExpertStreamingReader,
-        handles: &mut CpuExpertHandleStore,
         shared_expert: &SwiGluFfnPayload,
         router_logits: &mut ferrule_cuda::context::CudaF32Buffer,
         router_indices: &mut ferrule_cuda::context::CudaI32Buffer,
@@ -883,9 +887,10 @@ impl DeepSeekV4OperatorContext {
             router,
             predicted_experts,
             router_policy,
-            planner,
+            residency,
+            source_catalog,
+            prefetch_capacity,
             reader,
-            handles,
             shared_expert,
             router_logits,
             router_indices,
@@ -908,9 +913,10 @@ impl DeepSeekV4OperatorContext {
         &mut self,
         layer: usize,
         predicted_experts: &[usize],
-        planner: &mut ExpertStreamingPlanner,
+        residency: &mut dyn ExpertResidencyControl,
+        source_catalog: &ExpertSourceCatalog,
+        prefetch_capacity: usize,
         reader: &ExpertStreamingReader,
-        handles: &mut CpuExpertHandleStore,
     ) -> Result<usize> {
         if self.backend != ModelExecutionBackend::Cuda {
             return Ok(0);
@@ -918,22 +924,11 @@ impl DeepSeekV4OperatorContext {
         self.cuda_mut()?.prefetch_predicted_experts(
             layer,
             predicted_experts,
-            planner,
+            residency,
+            source_catalog,
+            prefetch_capacity,
             reader,
-            handles,
         )
-    }
-
-    #[cfg(not(feature = "cuda"))]
-    pub(crate) fn prefetch_predicted_experts(
-        &mut self,
-        _layer: usize,
-        _predicted_experts: &[usize],
-        _planner: &mut ExpertStreamingPlanner,
-        _reader: &ExpertStreamingReader,
-        _handles: &mut CpuExpertHandleStore,
-    ) -> Result<usize> {
-        Ok(0)
     }
 
     #[cfg(feature = "cuda")]
@@ -941,21 +936,31 @@ impl DeepSeekV4OperatorContext {
         &mut self,
         layer: usize,
         experts: &[usize],
-        planner: &mut ExpertStreamingPlanner,
+        residency: &mut dyn ExpertResidencyControl,
+        source_catalog: &ExpertSourceCatalog,
+        prefetch_capacity: usize,
         reader: &ExpertStreamingReader,
-        handles: &mut CpuExpertHandleStore,
     ) -> Result<usize> {
         if self.backend != ModelExecutionBackend::Cuda {
             return Ok(0);
         }
-        self.cuda_mut()?
-            .prewarm_experts(layer, experts, planner, reader, handles)
+        self.cuda_mut()?.prefetch_predicted_experts(
+            layer,
+            experts,
+            residency,
+            source_catalog,
+            prefetch_capacity,
+            reader,
+        )
     }
 
-    pub(crate) fn shutdown(&mut self) -> Result<()> {
+    pub(crate) fn shutdown(
+        &mut self,
+        #[cfg(feature = "cuda")] residency: Option<&mut (dyn ExpertResidencyControl + '_)>,
+    ) -> Result<()> {
         #[cfg(feature = "cuda")]
         if self.backend == ModelExecutionBackend::Cuda {
-            self.cuda_mut()?.shutdown()?;
+            self.cuda_mut()?.shutdown(residency)?;
         }
         Ok(())
     }

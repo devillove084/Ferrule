@@ -109,6 +109,55 @@ fn deepseek_v4_runs_latest_resident_runtime_driver_local() -> Result<()> {
 
 #[test]
 #[ignore = "requires cargo-oxide, CUDA, and a local DeepSeek-V4-Flash-DSpark artifact"]
+fn deepseek_v4_repeated_sequence_reuses_runtime_expert_residency_local() -> Result<()> {
+    let model_dir = local_dsv4_model_dir();
+    if !model_dir.is_dir() {
+        return Ok(());
+    }
+    let options = DeepSeekV4PrepareOptions {
+        max_layers: 1,
+        output_head_chunk_rows: 4096,
+        moe_prefetch_experts: 0,
+        moe_hotset_experts: 0,
+        ..DeepSeekV4PrepareOptions::default()
+    };
+    let model = DeepSeekV4ArtifactModel::load_hf_with_limit(&model_dir, 128 * 1024 * 1024)?;
+    let runner =
+        DeepSeekV4Runner::new_with_operator_backend(model, options, ModelExecutionBackend::Cuda)?;
+    let prompt = runner.encode(&ChatTemplate::DeepSeekV4.format_turn("Hello", true))?;
+    let prompt = &prompt[..prompt.len().min(5)];
+    let schema = runner.kv_layout_schema().clone();
+    let mut harness = PageManagedDiagnosticHarness::new(runner, Box::new(schema), 4096, 2)?;
+
+    let first = harness.create_sequence(0)?;
+    harness.execute_sequence_step(first, ForwardPhase::Prefill, prompt, |runner| {
+        runner.prefill_topk(prompt, 1, PrefillMode::Batched)
+    })?;
+    let after_first = harness.runner().operator_runtime_counters();
+    assert!(after_first.expert_residency_stats.resident > 0);
+    assert!(after_first.expert_load_bytes > 0);
+    assert_eq!(after_first.expert_residency_stats.active_leases, 0);
+
+    let second = harness.create_sequence(1)?;
+    harness.execute_sequence_step(second, ForwardPhase::Prefill, prompt, |runner| {
+        runner.prefill_topk(prompt, 1, PrefillMode::Batched)
+    })?;
+    let after_second = harness.runner().operator_runtime_counters();
+    assert!(
+        after_second.expert_residency_stats.resident_hits
+            > after_first.expert_residency_stats.resident_hits
+    );
+    assert_eq!(
+        after_second.expert_load_bytes,
+        after_first.expert_load_bytes
+    );
+    assert_eq!(after_second.expert_loads, after_first.expert_loads);
+    assert_eq!(after_second.expert_residency_stats.active_leases, 0);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires cargo-oxide, CUDA, and a local DeepSeek-V4-Flash-DSpark artifact"]
 fn deepseek_v4_native_packed_decode_batch2_and_batch4_are_exact_local() -> Result<()> {
     let model_dir = local_dsv4_model_dir();
     if !model_dir.is_dir() {
@@ -568,7 +617,7 @@ fn deepseek_v4_cuda_continuation_crosses_4096_local() -> Result<()> {
         counters.expert_selected,
     );
     eprintln!(
-        "DSV4 long-context MoE counters: calls={} tc_calls={} total_us={} input_prepare_us={} gate_up_us={} swiglu_us={} down_us={} router_us={} routing_us={} plan_us={} cache_lookup_us={} expert_read_us={} expert_upload_us={} shared_us={} workspace_us={} compute_submit_us={} commit_us={} planner_syncs={}",
+        "DSV4 long-context MoE counters: calls={} tc_calls={} total_us={} input_prepare_us={} gate_up_us={} swiglu_us={} down_us={} router_us={} routing_us={} plan_us={} cache_lookup_us={} expert_read_us={} expert_upload_us={} shared_us={} workspace_us={} compute_submit_us={} commit_us={}",
         counters.moe_calls,
         counters.moe_tc_calls,
         counters.moe_total_us,
@@ -586,7 +635,6 @@ fn deepseek_v4_cuda_continuation_crosses_4096_local() -> Result<()> {
         counters.moe_workspace_us,
         counters.moe_compute_submit_us,
         counters.moe_commit_us,
-        counters.expert_planner_residency_syncs,
     );
     eprintln!(
         "DSV4 long-context layer profiles: {:?}",

@@ -6,7 +6,10 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use ferrule_common::execution::{KvCowReplacement, KvLayoutSchema, KvPageId};
-use ferrule_common::{Error, Result};
+use ferrule_common::{
+    Error, ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertKey, ExpertLease,
+    ExpertResidencyControl, ExpertResidencyGrant, ExpertSlotBinding, PreparedExpertInstall, Result,
+};
 
 use crate::TensorRole;
 use crate::artifact::binding::RouterArtifactPayload;
@@ -20,9 +23,7 @@ use crate::ffn::SwiGluFfnPayload;
 use crate::hyper_connection::{
     HyperConnectionConfig, HyperConnectionHeadWeights, HyperConnectionWeights,
 };
-use crate::moe::handle::{
-    CpuExpertHandleStore, ExpertHandleStore, ExpertResidentFormat, ResidentExpertHandle,
-};
+
 use crate::moe::prediction::{ExpertAccessPhase, ExpertBatchAccessEvent};
 use crate::moe::routed::RoutedMoeStepOutput;
 use crate::moe::routing::{
@@ -30,10 +31,9 @@ use crate::moe::routing::{
 };
 use crate::moe::streaming::{
     AsyncHostStagedExpertLoader, ExpertComputeBundle, ExpertEvictRequest, ExpertId,
-    ExpertLinearFormat, ExpertLinearPayload, ExpertLoadRequest, ExpertMatrixKind,
-    ExpertResidencyPlan, ExpertResidencySelectedLoad, ExpertStorageTier, ExpertStreamingPlanner,
-    ExpertStreamingReader, ExpertStreamingStep, HostStagedExpertCache, classify_expert_residency,
-    read_experts_concurrent,
+    ExpertLinearFormat, ExpertLinearPayload, ExpertLoadReason, ExpertLoadRequest, ExpertMatrixKind,
+    ExpertSourceCatalog, ExpertStorageTier, ExpertStreamingReader, ExpertStreamingStep,
+    HostStagedExpertCache, read_experts_concurrent,
 };
 use crate::runner::TokenLogit;
 
@@ -179,8 +179,10 @@ pub(crate) struct DeepSeekV4CudaOperatorCache {
     linears: HashMap<String, ferrule_cuda::context::CudaArtifactLinearHandle>,
     experts: HashMap<ExpertId, CudaFp4ExpertHandles>,
     expert_slot_tables: HashMap<usize, ferrule_cuda::context::CudaExpertSlotTable>,
-    recycled_experts: Vec<CudaFp4ExpertHandles>,
-    uploading_experts: HashMap<ExpertId, CudaExpertUploadTicket>,
+    retired_experts: Vec<CudaRetiredExpert>,
+    abandoned_uploads: Vec<CudaExpertUploadTicket>,
+    uploading_experts: HashMap<ExpertId, CudaPendingExpertInstall>,
+    poisoned_expert_layers: BTreeSet<usize>,
     moe_access_events: Vec<ExpertBatchAccessEvent>,
     decode_arena: DeepSeekV4DecodeArena,
     host_staged_cache: HostStagedExpertCache,
@@ -260,8 +262,6 @@ pub(crate) struct DeepSeekV4CudaOperatorCache {
     expert_lookahead_prefetch_experts: u64,
     expert_lookahead_prefetch_enqueued: u64,
     expert_lookahead_prefetch_us: u64,
-    expert_planner_residency_syncs: u64,
-    expert_planner_residency_synced: u64,
     moe_cache_lookup_us: u64,
     moe_expert_read_us: u64,
     moe_expert_upload_us: u64,
@@ -406,15 +406,29 @@ struct CudaFp4ExpertHandles {
     up: ferrule_cuda::context::CudaArtifactLinearHandle,
     down: ferrule_cuda::context::CudaArtifactLinearHandle,
     bytes: u64,
+    upload_guard: Option<CudaExpertUploadGuard>,
+}
+
+#[cfg(feature = "cuda")]
+struct CudaExpertUploadGuard {
+    _staging: CudaPinnedExpertBundle,
+    event: ferrule_cuda::context::CudaUploadEvent,
+}
+
+#[cfg(feature = "cuda")]
+struct CudaRetiredExpert {
+    _handles: CudaFp4ExpertHandles,
+    event: ferrule_cuda::context::CudaComputeEvent,
 }
 
 #[cfg(feature = "cuda")]
 struct CudaExpertUploadTicket {
-    gate: ferrule_cuda::context::CudaArtifactLinearAsyncUpload,
-    up: ferrule_cuda::context::CudaArtifactLinearAsyncUpload,
-    down: ferrule_cuda::context::CudaArtifactLinearAsyncUpload,
+    gate: Option<ferrule_cuda::context::CudaArtifactLinearAsyncUpload>,
+    up: Option<ferrule_cuda::context::CudaArtifactLinearAsyncUpload>,
+    down: Option<ferrule_cuda::context::CudaArtifactLinearAsyncUpload>,
     bytes: u64,
-    event: ferrule_cuda::context::CudaUploadEvent,
+    staging: Option<CudaPinnedExpertBundle>,
+    event: Option<ferrule_cuda::context::CudaUploadEvent>,
 }
 
 #[cfg(feature = "cuda")]
@@ -455,36 +469,89 @@ struct CudaMoeRoutes {
 #[cfg(feature = "cuda")]
 struct CudaMoeMaterialization {
     streaming: ExpertStreamingStep,
-    loaded_experts: BTreeSet<ExpertId>,
+    leases: Vec<ExpertLease>,
 }
 
 #[cfg(feature = "cuda")]
-#[derive(Default)]
-struct PrefetchQueueOutcome {
-    enqueued: usize,
-    ready: BTreeSet<ExpertId>,
+struct CudaPendingExpertInstall {
+    prepared: PreparedExpertInstall,
+    load_source: crate::moe::streaming::ExpertLoadSource,
+    ticket: Option<CudaExpertUploadTicket>,
 }
 
 #[cfg(feature = "cuda")]
 impl CudaExpertUploadTicket {
+    fn event(&self) -> &ferrule_cuda::context::CudaUploadEvent {
+        self.event
+            .as_ref()
+            .expect("live upload ticket has an event")
+    }
+
     fn is_complete(&self) -> Result<bool> {
-        self.event.is_complete()
+        self.event().is_complete()
     }
 
     fn synchronize(&self) -> Result<()> {
-        self.event.synchronize()
+        self.event().synchronize()
     }
 
     fn bytes(&self) -> u64 {
         self.bytes
     }
 
-    fn into_handles(self) -> CudaFp4ExpertHandles {
+    fn into_handles(mut self) -> CudaFp4ExpertHandles {
+        let gate = self
+            .gate
+            .take()
+            .expect("live upload ticket has gate upload");
+        let up = self.up.take().expect("live upload ticket has up upload");
+        let down = self
+            .down
+            .take()
+            .expect("live upload ticket has down upload");
+        let staging = self
+            .staging
+            .take()
+            .expect("live upload ticket has staging resources");
+        let event = self.event.take().expect("live upload ticket has an event");
         CudaFp4ExpertHandles {
-            gate: self.gate.into_handle(),
-            up: self.up.into_handle(),
-            down: self.down.into_handle(),
+            gate: gate.into_handle(),
+            up: up.into_handle(),
+            down: down.into_handle(),
             bytes: self.bytes,
+            upload_guard: Some(CudaExpertUploadGuard {
+                _staging: staging,
+                event,
+            }),
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl Drop for CudaExpertUploadTicket {
+    fn drop(&mut self) {
+        if let Some(event) = self.event.as_ref()
+            && !matches!(event.is_complete(), Ok(true))
+        {
+            let _ = event.synchronize();
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl Drop for CudaExpertUploadGuard {
+    fn drop(&mut self) {
+        if !matches!(self.event.is_complete(), Ok(true)) {
+            let _ = self.event.synchronize();
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl Drop for CudaRetiredExpert {
+    fn drop(&mut self) {
+        if !matches!(self.event.is_complete(), Ok(true)) {
+            let _ = self.event.synchronize();
         }
     }
 }
@@ -703,8 +770,10 @@ impl DeepSeekV4CudaOperatorCache {
             linears: HashMap::new(),
             experts: HashMap::new(),
             expert_slot_tables: HashMap::new(),
-            recycled_experts: Vec::new(),
+            retired_experts: Vec::new(),
+            abandoned_uploads: Vec::new(),
             uploading_experts: HashMap::new(),
+            poisoned_expert_layers: BTreeSet::new(),
             moe_access_events: Vec::new(),
             decode_arena: DeepSeekV4DecodeArena::default(),
             host_staged_cache: HostStagedExpertCache::new(256),
@@ -768,8 +837,6 @@ impl DeepSeekV4CudaOperatorCache {
             expert_lookahead_prefetch_experts: 0,
             expert_lookahead_prefetch_enqueued: 0,
             expert_lookahead_prefetch_us: 0,
-            expert_planner_residency_syncs: 0,
-            expert_planner_residency_synced: 0,
             moe_cache_lookup_us: 0,
             moe_expert_read_us: 0,
             moe_expert_upload_us: 0,
@@ -1177,20 +1244,42 @@ impl DeepSeekV4CudaOperatorCache {
         (entries, bytes)
     }
 
-    pub(crate) fn clear_expert_residency(&mut self) -> Result<()> {
-        for (_, ticket) in self.uploading_experts.drain() {
-            ticket.synchronize()?;
+    pub(crate) fn clear_expert_residency(
+        &mut self,
+        mut residency: Option<&mut (dyn ExpertResidencyControl + '_)>,
+    ) -> Result<()> {
+        for (_, mut pending) in self.uploading_experts.drain() {
+            if let Some(ticket) = pending.ticket.take() {
+                ticket.synchronize()?;
+            }
+            let control = residency.as_deref_mut().ok_or_else(|| {
+                Error::Internal(
+                    "cannot clear pending CUDA expert installs without residency control".into(),
+                )
+            })?;
+            control.cancel_install(pending.prepared)?;
         }
         for table in self.expert_slot_tables.values_mut() {
             self.ops.clear_expert_slot_table(table)?;
         }
+        for retired in &self.retired_experts {
+            retired.event.synchronize()?;
+        }
+        for upload in &self.abandoned_uploads {
+            upload.synchronize()?;
+        }
         self.experts.clear();
-        self.recycled_experts.clear();
+        self.retired_experts.clear();
+        self.abandoned_uploads.clear();
+        self.poisoned_expert_layers.clear();
         Ok(())
     }
 
-    pub(crate) fn shutdown(&mut self) -> Result<()> {
-        self.clear_expert_residency()?;
+    pub(crate) fn shutdown(
+        &mut self,
+        residency: Option<&mut (dyn ExpertResidencyControl + '_)>,
+    ) -> Result<()> {
+        self.clear_expert_residency(residency)?;
         self.ops.sync_upload_stream()?;
         self.ops.sync_stream()?;
         self.decode_arena = DeepSeekV4DecodeArena::default();
@@ -1209,30 +1298,101 @@ impl DeepSeekV4CudaOperatorCache {
         Ok(())
     }
 
-    fn sync_planner_residency_for_layer(
-        &mut self,
-        layer: usize,
-        planner: &mut ExpertStreamingPlanner,
-    ) -> Result<usize> {
-        self.expert_planner_residency_syncs = self.expert_planner_residency_syncs.saturating_add(1);
-        let synced = planner.sync_gpu_residents(layer, self.resident_experts_for_layer(layer))?;
-        self.expert_planner_residency_synced = self
-            .expert_planner_residency_synced
-            .saturating_add(synced as u64);
-        Ok(synced)
+    fn expert_key(model_instance: u64, expert: ExpertId) -> Result<ExpertKey> {
+        Ok(ExpertKey::new(
+            model_instance,
+            u32::try_from(expert.layer)
+                .map_err(|_| Error::Model(format!("expert layer {} exceeds u32", expert.layer)))?,
+            u32::try_from(expert.expert)
+                .map_err(|_| Error::Model(format!("expert index {} exceeds u32", expert.expert)))?,
+        ))
     }
 
-    fn install_resident_handle(
-        handles: &mut CpuExpertHandleStore,
-        expert: ExpertId,
-        bytes: u64,
-    ) -> Result<()> {
-        handles.insert_resident_handle(ResidentExpertHandle::new(
-            expert,
-            ExpertStorageTier::Gpu,
-            ExpertResidentFormat::Opaque("cuda-fp4-artifact".into()),
-            bytes,
+    fn expert_id(key: ExpertKey) -> Result<ExpertId> {
+        Ok(ExpertId::new(
+            usize::try_from(key.layer)
+                .map_err(|_| Error::Model("expert layer exceeds usize".into()))?,
+            usize::try_from(key.expert)
+                .map_err(|_| Error::Model("expert index exceeds usize".into()))?,
         ))
+    }
+
+    fn ensure_expert_layer_healthy(&self, layer: usize) -> Result<()> {
+        if self.poisoned_expert_layers.contains(&layer) {
+            return Err(Error::Internal(format!(
+                "DeepSeek-V4 CUDA expert table for layer {layer} is poisoned after a physical/controller residency divergence"
+            )));
+        }
+        Ok(())
+    }
+
+    fn ensure_expert_slot_table(
+        &mut self,
+        layer: usize,
+        expert_capacity: usize,
+        slot_capacity: usize,
+    ) -> Result<()> {
+        self.ensure_expert_layer_healthy(layer)?;
+        if slot_capacity == 0 {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 CUDA expert residency capacity is zero for layer {layer}"
+            )));
+        }
+        if let Some(table) = self.expert_slot_tables.get(&layer) {
+            if table.host().expert_capacity() != expert_capacity
+                || table.host().slot_capacity() != slot_capacity
+            {
+                return Err(Error::Internal(format!(
+                    "DeepSeek-V4 CUDA expert table capacity changed for layer {layer}: experts={} slots={}, requested experts={expert_capacity} slots={slot_capacity}",
+                    table.host().expert_capacity(),
+                    table.host().slot_capacity(),
+                )));
+            }
+            return Ok(());
+        }
+        self.expert_slot_tables.insert(
+            layer,
+            self.ops.expert_slot_table(expert_capacity, slot_capacity)?,
+        );
+        Ok(())
+    }
+
+    fn poison_expert_layer(&mut self, layer: usize, cause: impl std::fmt::Display) -> Error {
+        self.poisoned_expert_layers.insert(layer);
+        let clear_error = self
+            .expert_slot_tables
+            .get_mut(&layer)
+            .and_then(|table| self.ops.clear_expert_slot_table(table).err());
+        let resident = self
+            .experts
+            .keys()
+            .copied()
+            .filter(|expert| expert.layer == layer)
+            .collect::<Vec<_>>();
+        for expert in resident {
+            self.experts.remove(&expert);
+        }
+        match clear_error {
+            Some(clear_error) => Error::Internal(format!(
+                "DeepSeek-V4 CUDA expert residency diverged for layer {layer}: {cause}; physical table clear also failed: {clear_error}; layer poisoned"
+            )),
+            None => Error::Internal(format!(
+                "DeepSeek-V4 CUDA expert residency diverged for layer {layer}: {cause}; physical table cleared and layer poisoned"
+            )),
+        }
+    }
+
+    fn cancel_prepared_after_failure(
+        residency: &mut dyn ExpertResidencyControl,
+        prepared: PreparedExpertInstall,
+        failure: Error,
+    ) -> Error {
+        match residency.cancel_install(prepared) {
+            Ok(()) => failure,
+            Err(cancel_error) => Error::Internal(format!(
+                "expert backend operation failed ({failure}); canceling prepared install also failed ({cancel_error})"
+            )),
+        }
     }
 
     fn drain_async_host_staging(&mut self) -> usize {
@@ -1240,144 +1400,88 @@ impl DeepSeekV4CudaOperatorCache {
             .drain_into(&mut self.host_staged_cache)
     }
 
-    fn max_upload_prefetch_in_flight(&self) -> usize {
-        self.expert_upload_inflight
-    }
-
-    fn poll_completed_uploads(&mut self) -> Result<BTreeSet<ExpertId>> {
-        let mut completed = Vec::new();
-        for (expert, ticket) in &self.uploading_experts {
-            if ticket.is_complete()? {
-                completed.push(*expert);
+    fn retire_completed_expert_resources(&mut self) -> Result<()> {
+        for handles in self.experts.values_mut() {
+            let completed = handles
+                .upload_guard
+                .as_ref()
+                .map(|guard| guard.event.is_complete())
+                .transpose()?
+                .unwrap_or(false);
+            if completed {
+                handles.upload_guard = None;
             }
         }
-
-        let mut ready = BTreeSet::new();
-        for expert in completed {
-            if let Some(ticket) = self.uploading_experts.remove(&expert) {
-                self.install_uploaded_expert(expert, ticket)?;
-                self.expert_upload_prefetch_completed =
-                    self.expert_upload_prefetch_completed.saturating_add(1);
-                ready.insert(expert);
+        for retired in &mut self.retired_experts {
+            let completed = retired
+                ._handles
+                .upload_guard
+                .as_ref()
+                .map(|guard| guard.event.is_complete())
+                .transpose()?
+                .unwrap_or(false);
+            if completed {
+                retired._handles.upload_guard = None;
             }
         }
-        Ok(ready)
-    }
-
-    fn install_cuda_expert(
-        &mut self,
-        expert: ExpertId,
-        handles: CudaFp4ExpertHandles,
-    ) -> Result<()> {
-        if self.experts.contains_key(&expert) {
-            return Ok(());
+        let mut index = 0;
+        while index < self.retired_experts.len() {
+            if self.retired_experts[index].event.is_complete()? {
+                self.retired_experts.swap_remove(index);
+            } else {
+                index += 1;
+            }
         }
-        if expert.expert >= DSV4_EXPERT_TABLE_CAPACITY {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 CUDA expert {} exceeds stable table capacity {}",
-                expert.expert, DSV4_EXPERT_TABLE_CAPACITY
-            )));
+        let mut index = 0;
+        while index < self.abandoned_uploads.len() {
+            if self.abandoned_uploads[index].is_complete()? {
+                self.abandoned_uploads.swap_remove(index);
+            } else {
+                index += 1;
+            }
         }
-        let pointers = self
-            .ops
-            .expert_slot_pointers(&handles.gate, &handles.up, &handles.down)?;
-        if let Some(table) = self.expert_slot_tables.get_mut(&expert.layer) {
-            self.ops
-                .install_expert_slot(table, expert.expert, pointers)?;
-        } else {
-            let mut table = self
-                .ops
-                .expert_slot_table(DSV4_EXPERT_TABLE_CAPACITY, DSV4_EXPERT_TABLE_CAPACITY)?;
-            self.ops
-                .install_expert_slot(&mut table, expert.expert, pointers)?;
-            self.expert_slot_tables.insert(expert.layer, table);
-        }
-        self.experts.insert(expert, handles);
         Ok(())
     }
 
-    fn install_uploaded_expert(
+    fn limit_prefetch_reservations_for_selected(
         &mut self,
-        expert: ExpertId,
-        ticket: CudaExpertUploadTicket,
-    ) -> Result<u64> {
-        let bytes = ticket.bytes();
-        if self.ops.failpoints().check_expert_upload() {
-            return Err(Error::Internal(format!(
-                "deterministic failpoint: expert upload install layer {} expert {}",
-                expert.layer, expert.expert
-            )));
-        }
-        self.install_cuda_expert(expert, ticket.into_handles())?;
-        self.expert_loads = self.expert_loads.saturating_add(1);
-        self.expert_load_bytes = self.expert_load_bytes.saturating_add(bytes);
-        Ok(bytes)
-    }
-
-    fn wait_upload_ticket(&mut self, expert: ExpertId) -> Result<CudaExpertUploadTicket> {
-        let wait_start = Instant::now();
-        let complete = self
+        layer: usize,
+        selected: &[ExpertId],
+        resident_capacity: usize,
+        residency: &mut dyn ExpertResidencyControl,
+    ) -> Result<()> {
+        let selected = selected.iter().copied().collect::<BTreeSet<_>>();
+        let keep = resident_capacity.saturating_sub(selected.len());
+        let mut pending = self
             .uploading_experts
-            .get(&expert)
-            .ok_or_else(|| {
-                Error::Internal(format!(
-                    "selected CUDA expert upload ticket missing: layer {} expert {}",
-                    expert.layer, expert.expert
-                ))
-            })?
-            .is_complete()?;
-        if !complete {
-            self.expert_selected_upload_waits = self.expert_selected_upload_waits.saturating_add(1);
-            self.uploading_experts
-                .get(&expert)
-                .expect("checked above")
-                .synchronize()?;
+            .keys()
+            .copied()
+            .filter(|expert| expert.layer == layer && !selected.contains(expert))
+            .collect::<Vec<_>>();
+        pending.sort_unstable();
+        while pending.len() > keep {
+            let expert = pending.pop().expect("pending prefetch count checked");
+            let mut install = self
+                .uploading_experts
+                .remove(&expert)
+                .expect("pending prefetch key came from map");
+            residency.cancel_install(install.prepared)?;
+            if let Some(ticket) = install.ticket.take() {
+                self.abandoned_uploads.push(ticket);
+            }
         }
-        self.expert_selected_upload_wait_us = self
-            .expert_selected_upload_wait_us
-            .saturating_add(duration_us(wait_start.elapsed()));
-        Ok(self
-            .uploading_experts
-            .remove(&expert)
-            .expect("checked above"))
+        Ok(())
     }
 
-    fn wait_selected_upload(&mut self, expert: ExpertId) -> Result<u64> {
-        let ticket = self.wait_upload_ticket(expert)?;
-        self.expert_upload_prefetch_completed =
-            self.expert_upload_prefetch_completed.saturating_add(1);
-        self.install_uploaded_expert(expert, ticket)
+    fn upload_prefetches_in_flight(&self) -> usize {
+        self.uploading_experts
+            .values()
+            .filter(|pending| pending.ticket.is_some())
+            .count()
     }
 
-    fn apply_cuda_expert_evictions(&mut self, evictions: &[ExpertEvictRequest]) -> Result<usize> {
-        let mut removed = 0usize;
-        for eviction in evictions {
-            if !self.experts.contains_key(&eviction.expert) {
-                continue;
-            }
-            let table = self
-                .expert_slot_tables
-                .get_mut(&eviction.expert.layer)
-                .ok_or_else(|| {
-                    Error::Internal(format!(
-                        "CUDA expert slot table missing during eviction: layer {} expert {}",
-                        eviction.expert.layer, eviction.expert.expert
-                    ))
-                })?;
-            if !self.ops.evict_expert_slot(table, eviction.expert.expert)? {
-                return Err(Error::Internal(format!(
-                    "CUDA resident expert missing from slot table during eviction: layer {} expert {}",
-                    eviction.expert.layer, eviction.expert.expert
-                )));
-            }
-            let handles = self
-                .experts
-                .remove(&eviction.expert)
-                .expect("resident checked above");
-            self.recycled_experts.push(handles);
-            removed = removed.saturating_add(1);
-        }
-        Ok(removed)
+    fn max_upload_prefetch_in_flight(&self) -> usize {
+        self.expert_upload_inflight
     }
 
     fn pinned_bundle_for_upload(
@@ -1392,429 +1496,709 @@ impl DeepSeekV4CudaOperatorCache {
         Ok(pinned)
     }
 
-    fn submit_prefetch_upload_from_bundle(
+    fn prefetch_upload_ticket(
         &mut self,
-        expert: ExpertId,
         bundle: &ExpertComputeBundle,
-    ) -> Result<bool> {
-        if self.experts.contains_key(&expert) || self.uploading_experts.contains_key(&expert) {
-            return Ok(false);
-        }
-        if self.uploading_experts.len() >= self.max_upload_prefetch_in_flight() {
-            return Ok(false);
-        }
+    ) -> Result<CudaExpertUploadTicket> {
         let pinned = self.pinned_bundle_for_upload(bundle)?;
         let ticket = self.upload_pinned_expert_bundle_async(&pinned)?;
         self.expert_async_upload_bytes = self
             .expert_async_upload_bytes
             .saturating_add(ticket.bytes());
-        self.uploading_experts.insert(expert, ticket);
         self.expert_upload_prefetch_submitted =
             self.expert_upload_prefetch_submitted.saturating_add(1);
-        Ok(true)
+        Ok(ticket)
     }
 
-    fn wait_for_selected_host_staging(
+    fn physical_binding_matches(&self, layer: usize, binding: ExpertSlotBinding) -> Result<bool> {
+        let expert = Self::expert_id(binding.key)?;
+        if expert.layer != layer || !self.experts.contains_key(&expert) {
+            return Ok(false);
+        }
+        let Some(table) = self.expert_slot_tables.get(&layer) else {
+            return Ok(false);
+        };
+        let Some(physical) = table.host().binding(expert.expert) else {
+            return Ok(false);
+        };
+        Ok(
+            physical.slot == i32::try_from(binding.slot.get()).unwrap_or(-1)
+                && physical.generation == i32::try_from(binding.generation.get()).unwrap_or(-1),
+        )
+    }
+
+    fn install_prepared_handles(
         &mut self,
-        selected: &ExpertResidencySelectedLoad,
-    ) -> Result<Option<ExpertComputeBundle>> {
-        self.expert_selected_host_staging_waits =
-            self.expert_selected_host_staging_waits.saturating_add(1);
-        let wait_start = Instant::now();
-        let staged = self
-            .async_host_stager
-            .wait_for_into(selected.expert, &mut self.host_staged_cache)?;
-        self.expert_selected_host_staging_wait_us = self
-            .expert_selected_host_staging_wait_us
-            .saturating_add(duration_us(wait_start.elapsed()));
-        if staged {
-            if let Some(bundle) = self.host_staged_cache.get(selected.expert) {
-                self.expert_selected_host_staging_hits =
-                    self.expert_selected_host_staging_hits.saturating_add(1);
-                return Ok(Some(bundle));
-            }
-        }
-        Ok(None)
-    }
+        residency: &mut dyn ExpertResidencyControl,
+        prepared: PreparedExpertInstall,
+        handles: CudaFp4ExpertHandles,
+        expert_capacity: usize,
+    ) -> Result<ExpertResidencyGrant> {
+        let binding = prepared.binding();
+        let expert = Self::expert_id(binding.key)?;
+        let requirements = residency.requirements();
+        let slot_capacity = requirements
+            .layer_capacity(binding.key.layer)
+            .ok_or_else(|| {
+                Error::Internal(format!(
+                    "expert residency controller has no capacity for layer {}",
+                    binding.key.layer
+                ))
+            })?;
+        self.ensure_expert_slot_table(expert.layer, expert_capacity, slot_capacity)?;
 
-    fn record_prefetch_residency_plan(&mut self, plan: &ExpertResidencyPlan) {
-        self.moe_prefetch_loads = self
-            .moe_prefetch_loads
-            .saturating_add(plan.prefetch_load_count() as u64);
-        self.moe_prefetch_skipped_cached_or_inflight = self
-            .moe_prefetch_skipped_cached_or_inflight
-            .saturating_add(plan.prefetch_skipped_cached_or_inflight_count() as u64);
-        self.moe_prefetch_resident = self
-            .moe_prefetch_resident
-            .saturating_add(plan.prefetch_resident.len() as u64);
-        self.moe_prefetch_materializing = self
-            .moe_prefetch_materializing
-            .saturating_add(plan.prefetch_materializing.len() as u64);
-        self.moe_prefetch_host_staged = self
-            .moe_prefetch_host_staged
-            .saturating_add(plan.prefetch_host_staged.len() as u64);
-        self.moe_prefetch_in_flight = self
-            .moe_prefetch_in_flight
-            .saturating_add(plan.prefetch_in_flight.len() as u64);
-        self.moe_prefetch_cold = self
-            .moe_prefetch_cold
-            .saturating_add(plan.prefetch_cold.len() as u64);
-    }
-
-    fn queue_prefetch_loads_only(
-        &mut self,
-        loads: &[ExpertLoadRequest],
-        reader: &ExpertStreamingReader,
-    ) -> Result<PrefetchQueueOutcome> {
-        let mut outcome = PrefetchQueueOutcome::default();
-        self.drain_async_host_staging();
-        outcome.ready.extend(self.poll_completed_uploads()?);
-        if loads.is_empty() {
-            return Ok(outcome);
+        if self.ops.failpoints().check_expert_upload() {
+            let failure = Error::Internal(format!(
+                "deterministic failpoint: expert upload install layer {} expert {}",
+                expert.layer, expert.expert
+            ));
+            return Err(Self::cancel_prepared_after_failure(
+                residency, prepared, failure,
+            ));
         }
 
-        let plan = classify_expert_residency(
-            loads,
-            |expert| self.experts.contains_key(&expert),
-            |expert| self.uploading_experts.contains_key(&expert),
-            |expert| self.host_staged_cache.contains(expert),
-            |expert| self.async_host_stager.is_in_flight(expert),
-        );
-        self.record_prefetch_residency_plan(&plan);
-        outcome.ready.extend(plan.prefetch_resident.iter().copied());
-
-        for expert_id in &plan.prefetch_host_staged {
-            let Some(bundle) = self.host_staged_cache.get(*expert_id) else {
-                self.moe_prefetch_skipped_cached_or_inflight = self
-                    .moe_prefetch_skipped_cached_or_inflight
-                    .saturating_add(1);
-                continue;
-            };
-            if self.submit_prefetch_upload_from_bundle(*expert_id, &bundle)? {
-                self.moe_prefetch_enqueued = self.moe_prefetch_enqueued.saturating_add(1);
-                outcome.enqueued = outcome.enqueued.saturating_add(1);
-            } else {
-                self.moe_prefetch_skipped_cached_or_inflight = self
-                    .moe_prefetch_skipped_cached_or_inflight
-                    .saturating_add(1);
-            }
-        }
-
-        for prefetch in &plan.prefetch_cold {
-            if self
-                .async_host_stager
-                .enqueue(prefetch.expert, prefetch.load_source.clone(), reader)
+        let pointers = self
+            .ops
+            .expert_slot_pointers(&handles.gate, &handles.up, &handles.down)?;
+        let mut physical_changed = false;
+        if let Some(evicted_key) = prepared.evicted_key() {
+            let evicted = Self::expert_id(evicted_key)?;
+            let old_binding = residency.binding(evicted_key)?.ok_or_else(|| {
+                Error::Internal(format!(
+                    "controller prepared eviction of missing resident expert {:?}",
+                    evicted_key
+                ))
+            })?;
+            if old_binding.slot != binding.slot
+                || old_binding.generation.get().checked_add(1) != Some(binding.generation.get())
+                || !self.physical_binding_matches(expert.layer, old_binding)?
             {
-                self.moe_prefetch_enqueued = self.moe_prefetch_enqueued.saturating_add(1);
-                outcome.enqueued = outcome.enqueued.saturating_add(1);
-            } else {
-                self.moe_prefetch_skipped_cached_or_inflight = self
-                    .moe_prefetch_skipped_cached_or_inflight
-                    .saturating_add(1);
+                let failure = Error::Internal(format!(
+                    "prepared CUDA eviction does not match physical/controller binding for layer {} expert {}",
+                    evicted.layer, evicted.expert
+                ));
+                let failure = Self::cancel_prepared_after_failure(residency, prepared, failure);
+                return Err(self.poison_expert_layer(expert.layer, failure));
             }
+            let table = self
+                .expert_slot_tables
+                .get_mut(&expert.layer)
+                .expect("expert table ensured above");
+            if let Err(error) = self.ops.evict_expert_slot_binding(
+                table,
+                evicted.expert,
+                old_binding.slot.get(),
+                old_binding.generation.get(),
+            ) {
+                let failure = Self::cancel_prepared_after_failure(residency, prepared, error);
+                return Err(self.poison_expert_layer(expert.layer, failure));
+            }
+            physical_changed = true;
+            let retirement_event = match self.ops.record_compute_event() {
+                Ok(event) => event,
+                Err(error) => {
+                    let failure = Self::cancel_prepared_after_failure(residency, prepared, error);
+                    return Err(self.poison_expert_layer(expert.layer, failure));
+                }
+            };
+            let old_handles = self.experts.remove(&evicted).ok_or_else(|| {
+                self.poison_expert_layer(
+                    expert.layer,
+                    format!(
+                        "physical eviction removed layer {} expert {} but its CUDA handles were missing",
+                        evicted.layer, evicted.expert
+                    ),
+                )
+            })?;
+            self.retired_experts.push(CudaRetiredExpert {
+                _handles: old_handles,
+                event: retirement_event,
+            });
+            self.expert_evictions = self.expert_evictions.saturating_add(1);
         }
-        Ok(outcome)
+
+        let table = self
+            .expert_slot_tables
+            .get_mut(&expert.layer)
+            .expect("expert table ensured above");
+        if let Err(error) = self.ops.install_expert_slot_at(
+            table,
+            expert.expert,
+            binding.slot.get(),
+            binding.generation.get(),
+            pointers,
+        ) {
+            let failure = Self::cancel_prepared_after_failure(residency, prepared, error);
+            if physical_changed || table.is_poisoned() {
+                return Err(self.poison_expert_layer(expert.layer, failure));
+            }
+            return Err(failure);
+        }
+        self.experts.insert(expert, handles);
+        let grant = match residency.publish_install(prepared) {
+            Ok(grant) if grant.binding() == binding => grant,
+            Ok(grant) => {
+                return Err(self.poison_expert_layer(
+                    expert.layer,
+                    format!(
+                        "controller published binding {:?}, expected {:?}",
+                        grant.binding(),
+                        binding
+                    ),
+                ));
+            }
+            Err(error) => {
+                let _ = residency.cancel_install(prepared);
+                return Err(self.poison_expert_layer(expert.layer, error));
+            }
+        };
+        self.expert_loads = self.expert_loads.saturating_add(1);
+        self.expert_load_bytes = self
+            .expert_load_bytes
+            .saturating_add(self.experts[&expert].bytes);
+        Ok(grant)
     }
 
-    fn materialize_selected_bundle_sync(
+    fn load_selected_bundle(
         &mut self,
         expert: ExpertId,
-        bundle: &ExpertComputeBundle,
-    ) -> Result<u64> {
-        let handles = self.upload_expert_bundle(bundle)?;
-        let bytes = handles.bytes;
-        if self.ops.failpoints().check_expert_upload() {
-            return Err(Error::Internal(format!(
-                "deterministic failpoint: expert sync upload layer {} expert {}",
-                expert.layer, expert.expert
-            )));
-        }
-        self.install_cuda_expert(expert, handles)?;
-        self.expert_loads = self.expert_loads.saturating_add(1);
-        self.expert_load_bytes = self.expert_load_bytes.saturating_add(bytes);
-        Ok(bytes)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn materialize_selected_and_queue_prefetch(
-        &mut self,
-        layer: usize,
-        loads: &[ExpertLoadRequest],
+        load_source: &crate::moe::streaming::ExpertLoadSource,
         reader: &ExpertStreamingReader,
-        handles: &mut CpuExpertHandleStore,
-    ) -> Result<BTreeSet<ExpertId>> {
-        let mut loaded = BTreeSet::<ExpertId>::new();
-        if loads.is_empty() {
-            return Ok(loaded);
-        }
-
-        let stage_start = Instant::now();
-        self.drain_async_host_staging();
-        loaded.extend(self.poll_completed_uploads()?);
-        let plan = classify_expert_residency(
-            loads,
-            |expert| self.experts.contains_key(&expert),
-            |expert| self.uploading_experts.contains_key(&expert),
-            |expert| self.host_staged_cache.contains(expert),
-            |expert| self.async_host_stager.is_in_flight(expert),
-        );
-
-        self.expert_selected_load_requests = self.expert_selected_load_requests.saturating_add(
-            (plan.selected_resident.len()
-                + plan.selected_materializing.len()
-                + plan.selected_host_staged.len()
-                + plan.selected_in_flight.len()
-                + plan.selected_cold.len()) as u64,
-        );
-        self.expert_selected_resident_hits = self
-            .expert_selected_resident_hits
-            .saturating_add(plan.selected_resident_count() as u64);
-        self.expert_selected_upload_hits = self
-            .expert_selected_upload_hits
-            .saturating_add(plan.selected_materializing.len() as u64);
-        self.expert_selected_host_staged_hits = self
-            .expert_selected_host_staged_hits
-            .saturating_add(plan.selected_host_staged.len() as u64);
-        self.expert_selected_cold_misses = self
-            .expert_selected_cold_misses
-            .saturating_add(plan.selected_cold.len() as u64);
-        self.record_prefetch_residency_plan(&plan);
-        loaded.extend(plan.prefetch_resident.iter().copied());
-
-        for expert_id in &plan.selected_resident {
-            let bytes = self
-                .experts
-                .get(expert_id)
-                .map(|expert| expert.bytes)
-                .ok_or_else(|| {
-                    Error::Internal(format!(
-                        "residency plan marked missing CUDA expert resident: layer {} expert {}",
-                        expert_id.layer, expert_id.expert
-                    ))
-                })?;
-            Self::install_resident_handle(handles, *expert_id, bytes)?;
-            loaded.insert(*expert_id);
-        }
-
-        for expert_id in &plan.selected_materializing {
-            let bytes = self.wait_selected_upload(*expert_id)?;
-            Self::install_resident_handle(handles, *expert_id, bytes)?;
-            loaded.insert(*expert_id);
-        }
-
-        let mut selected_bundles = Vec::<(ExpertId, Option<ExpertComputeBundle>)>::new();
-        let mut selected_miss_loads = Vec::new();
-        for selected in plan.selected_waiting_for_host_staging() {
-            if let Some(bundle) = self.wait_for_selected_host_staging(selected)? {
-                selected_bundles.push((selected.expert, Some(bundle)));
-            } else {
-                selected_bundles.push((selected.expert, None));
-                selected_miss_loads.push((selected.expert, selected.load_source.clone()));
-            }
-        }
-        for selected in plan.selected_to_materialize() {
-            if selected.host_staged {
-                let bundle = self.host_staged_cache.get(selected.expert).ok_or_else(|| {
-                    Error::Internal(format!(
-                        "residency plan marked missing host-staged expert: layer {} expert {}",
-                        selected.expert.layer, selected.expert.expert
-                    ))
-                })?;
-                selected_bundles.push((selected.expert, Some(bundle)));
-            } else {
-                selected_bundles.push((selected.expert, None));
-                selected_miss_loads.push((selected.expert, selected.load_source.clone()));
-            }
-        }
-
-        for expert_id in &plan.prefetch_host_staged {
-            let Some(bundle) = self.host_staged_cache.get(*expert_id) else {
-                self.moe_prefetch_skipped_cached_or_inflight = self
-                    .moe_prefetch_skipped_cached_or_inflight
-                    .saturating_add(1);
-                continue;
-            };
-            if self.submit_prefetch_upload_from_bundle(*expert_id, &bundle)? {
-                self.moe_prefetch_enqueued = self.moe_prefetch_enqueued.saturating_add(1);
-            } else {
-                self.moe_prefetch_skipped_cached_or_inflight = self
-                    .moe_prefetch_skipped_cached_or_inflight
-                    .saturating_add(1);
-            }
-        }
-
-        for prefetch in &plan.prefetch_cold {
-            if self
+    ) -> Result<ExpertComputeBundle> {
+        if self.async_host_stager.is_in_flight(expert) {
+            self.expert_selected_host_staging_waits =
+                self.expert_selected_host_staging_waits.saturating_add(1);
+            let wait_start = Instant::now();
+            let staged = self
                 .async_host_stager
-                .enqueue(prefetch.expert, prefetch.load_source.clone(), reader)
-            {
-                self.moe_prefetch_enqueued = self.moe_prefetch_enqueued.saturating_add(1);
-            } else {
-                self.moe_prefetch_skipped_cached_or_inflight = self
-                    .moe_prefetch_skipped_cached_or_inflight
-                    .saturating_add(1);
+                .wait_for_into(expert, &mut self.host_staged_cache)?;
+            self.expert_selected_host_staging_wait_us = self
+                .expert_selected_host_staging_wait_us
+                .saturating_add(duration_us(wait_start.elapsed()));
+            if staged {
+                self.expert_selected_host_staging_hits =
+                    self.expert_selected_host_staging_hits.saturating_add(1);
             }
         }
-
-        self.moe_cache_lookup_us = self
-            .moe_cache_lookup_us
-            .saturating_add(duration_us(stage_start.elapsed()));
-
+        if let Some(bundle) = self.host_staged_cache.get(expert) {
+            self.expert_selected_host_staged_hits =
+                self.expert_selected_host_staged_hits.saturating_add(1);
+            return Ok(bundle);
+        }
+        self.expert_selected_cold_misses = self.expert_selected_cold_misses.saturating_add(1);
         let stage_start = Instant::now();
-        let read_payloads = if selected_miss_loads.is_empty() {
-            Vec::new()
-        } else {
-            read_experts_concurrent(reader, &selected_miss_loads)?
-        };
+        let payload = read_experts_concurrent(reader, &[(expert, load_source.clone())])?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                Error::Internal(format!(
+                    "expert read returned no payload for layer {} expert {}",
+                    expert.layer, expert.expert
+                ))
+            })?;
         self.moe_expert_read_us = self
             .moe_expert_read_us
             .saturating_add(duration_us(stage_start.elapsed()));
+        let bundle = ExpertComputeBundle::from_artifact_payload(payload)?;
+        self.host_staged_cache.insert(bundle.clone());
+        Ok(bundle)
+    }
 
-        let stage_start = Instant::now();
-        let mut payload_iter = read_payloads.into_iter();
-        for (expert_id, cached) in selected_bundles {
-            let bundle = if let Some(bundle) = cached {
-                bundle
-            } else {
-                let payload = payload_iter.next().ok_or_else(|| {
-                    Error::Internal(format!(
-                        "concurrent expert read returned fewer payloads than expected for layer {layer}"
-                    ))
-                })?;
-                let bundle = ExpertComputeBundle::from_artifact_payload(payload)?;
-                self.host_staged_cache.insert(bundle.clone());
-                bundle
+    fn finish_pending_selected(
+        &mut self,
+        expert: ExpertId,
+        mut pending: CudaPendingExpertInstall,
+        residency: &mut dyn ExpertResidencyControl,
+        expert_capacity: usize,
+        reader: &ExpertStreamingReader,
+    ) -> Result<ExpertResidencyGrant> {
+        let handles = if let Some(ticket) = pending.ticket.take() {
+            let handles = match self.queue_selected_upload_wait(ticket) {
+                Ok(handles) => handles,
+                Err(error) => {
+                    return Err(Self::cancel_prepared_after_failure(
+                        residency,
+                        pending.prepared,
+                        error,
+                    ));
+                }
             };
-            let bytes = self.materialize_selected_bundle_sync(expert_id, &bundle)?;
-            Self::install_resident_handle(handles, expert_id, bytes)?;
-            loaded.insert(expert_id);
+            self.expert_upload_prefetch_completed =
+                self.expert_upload_prefetch_completed.saturating_add(1);
+            handles
+        } else {
+            let bundle = match self.load_selected_bundle(expert, &pending.load_source, reader) {
+                Ok(bundle) => bundle,
+                Err(error) => {
+                    return Err(Self::cancel_prepared_after_failure(
+                        residency,
+                        pending.prepared,
+                        error,
+                    ));
+                }
+            };
+            let ticket = match self.selected_upload_ticket(&bundle) {
+                Ok(ticket) => ticket,
+                Err(error) => {
+                    return Err(Self::cancel_prepared_after_failure(
+                        residency,
+                        pending.prepared,
+                        error,
+                    ));
+                }
+            };
+            match self.queue_selected_upload_wait(ticket) {
+                Ok(handles) => handles,
+                Err(error) => {
+                    return Err(Self::cancel_prepared_after_failure(
+                        residency,
+                        pending.prepared,
+                        error,
+                    ));
+                }
+            }
+        };
+        self.install_prepared_handles(residency, pending.prepared, handles, expert_capacity)
+    }
+
+    fn progress_prefetch_installs(
+        &mut self,
+        residency: &mut dyn ExpertResidencyControl,
+        expert_capacity: usize,
+        reader: &ExpertStreamingReader,
+    ) -> Result<usize> {
+        self.drain_async_host_staging();
+        let waiting = self
+            .uploading_experts
+            .iter()
+            .filter_map(|(expert, pending)| pending.ticket.is_none().then_some(*expert))
+            .collect::<Vec<_>>();
+        for expert in waiting {
+            if self.upload_prefetches_in_flight() >= self.max_upload_prefetch_in_flight() {
+                break;
+            }
+            if let Some(bundle) = self.host_staged_cache.get(expert) {
+                let ticket = match self.prefetch_upload_ticket(&bundle) {
+                    Ok(ticket) => ticket,
+                    Err(error) => {
+                        let pending = self
+                            .uploading_experts
+                            .remove(&expert)
+                            .expect("pending prefetch exists");
+                        return Err(Self::cancel_prepared_after_failure(
+                            residency,
+                            pending.prepared,
+                            error,
+                        ));
+                    }
+                };
+                self.uploading_experts
+                    .get_mut(&expert)
+                    .expect("pending prefetch exists")
+                    .ticket = Some(ticket);
+            } else if !self.async_host_stager.is_in_flight(expert) {
+                let source = self
+                    .uploading_experts
+                    .get(&expert)
+                    .expect("pending prefetch exists")
+                    .load_source
+                    .clone();
+                let _ = self.async_host_stager.enqueue(expert, source, reader);
+            }
         }
-        self.moe_expert_upload_us = self
-            .moe_expert_upload_us
-            .saturating_add(duration_us(stage_start.elapsed()));
-        Ok(loaded)
+
+        let mut completed = Vec::new();
+        for (expert, pending) in &self.uploading_experts {
+            if let Some(ticket) = &pending.ticket {
+                match ticket.is_complete() {
+                    Ok(true) => completed.push(*expert),
+                    Ok(false) => {}
+                    Err(error) => {
+                        let expert = *expert;
+                        let pending = self
+                            .uploading_experts
+                            .remove(&expert)
+                            .expect("pending prefetch exists");
+                        return Err(Self::cancel_prepared_after_failure(
+                            residency,
+                            pending.prepared,
+                            error,
+                        ));
+                    }
+                }
+            }
+        }
+
+        let mut published = 0usize;
+        for expert in completed {
+            let mut pending = self
+                .uploading_experts
+                .remove(&expert)
+                .expect("completed prefetch exists");
+            let ticket = pending.ticket.take().expect("completed ticket exists");
+            let grant = self.install_prepared_handles(
+                residency,
+                pending.prepared,
+                ticket.into_handles(),
+                expert_capacity,
+            )?;
+            if grant.reason() != ferrule_common::ExpertInstallReason::Prefetch
+                || grant.lease().is_some()
+            {
+                return Err(self.poison_expert_layer(
+                    expert.layer,
+                    "completed asynchronous prefetch published with non-prefetch intent or a lease",
+                ));
+            }
+            self.expert_upload_prefetch_completed =
+                self.expert_upload_prefetch_completed.saturating_add(1);
+            published = published.saturating_add(1);
+        }
+        Ok(published)
+    }
+
+    fn release_expert_leases(
+        residency: &mut dyn ExpertResidencyControl,
+        leases: Vec<ExpertLease>,
+    ) -> Result<()> {
+        let mut first_error = None;
+        for lease in leases {
+            if let Err(error) = residency.release(lease) {
+                first_error.get_or_insert(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn selected_streaming_step(
+        layer: usize,
+        selected: Vec<ExpertId>,
+        prefetched: Vec<ExpertId>,
+        loads: Vec<ExpertLoadRequest>,
+        evictions: Vec<ExpertEvictRequest>,
+    ) -> ExpertStreamingStep {
+        ExpertStreamingStep {
+            layer,
+            selected,
+            prefetched,
+            loads,
+            evictions,
+        }
+    }
+
+    fn materialize_selected_experts(
+        &mut self,
+        layer: usize,
+        selected: &[usize],
+        predicted_experts: &[usize],
+        residency: &mut dyn ExpertResidencyControl,
+        source_catalog: &ExpertSourceCatalog,
+        prefetch_capacity: usize,
+        reader: &ExpertStreamingReader,
+    ) -> Result<CudaMoeMaterialization> {
+        self.ensure_expert_layer_healthy(layer)?;
+        self.retire_completed_expert_resources()?;
+        let requirements = residency.requirements();
+        let model_instance = requirements.model_instance;
+        self.progress_prefetch_installs(residency, source_catalog.count(), reader)?;
+
+        let mut selected_ids = selected
+            .iter()
+            .copied()
+            .map(|expert| ExpertId::new(layer, expert))
+            .collect::<Vec<_>>();
+        selected_ids.sort_unstable();
+        selected_ids.dedup();
+        let resident_capacity = requirements
+            .layer_capacity(
+                u32::try_from(layer)
+                    .map_err(|_| Error::Model(format!("expert layer {layer} exceeds u32")))?,
+            )
+            .ok_or_else(|| {
+                Error::Internal(format!(
+                    "expert residency controller has no capacity for layer {layer}"
+                ))
+            })?;
+        self.limit_prefetch_reservations_for_selected(
+            layer,
+            &selected_ids,
+            resident_capacity,
+            residency,
+        )?;
+        let mut leases = Vec::with_capacity(selected_ids.len());
+        let mut misses = Vec::new();
+        let mut loads = Vec::new();
+        let mut evictions = Vec::new();
+
+        for expert in &selected_ids {
+            let key = Self::expert_key(model_instance, *expert)?;
+            match residency.acquire_selected(key)? {
+                Some(grant) => {
+                    let lease = grant.lease().ok_or_else(|| {
+                        Error::Internal("selected resident grant did not carry a lease".into())
+                    })?;
+                    if !self.physical_binding_matches(layer, grant.binding())? {
+                        let _ = residency.release(lease);
+                        return Err(self.poison_expert_layer(
+                            layer,
+                            format!(
+                                "controller selected binding {:?} is not physically installed",
+                                grant.binding()
+                            ),
+                        ));
+                    }
+                    self.expert_selected_resident_hits =
+                        self.expert_selected_resident_hits.saturating_add(1);
+                    leases.push(lease);
+                }
+                None => misses.push(*expert),
+            }
+        }
+
+        let materialize_result = (|| -> Result<()> {
+            for expert in misses {
+                let key = Self::expert_key(model_instance, expert)?;
+                let grant = if let Some(pending) = self.uploading_experts.remove(&expert) {
+                    self.expert_selected_upload_hits =
+                        self.expert_selected_upload_hits.saturating_add(1);
+                    let grant = self.finish_pending_selected(
+                        expert,
+                        pending,
+                        residency,
+                        source_catalog.count(),
+                        reader,
+                    )?;
+                    let lease = residency
+                        .acquire_selected(key)?
+                        .and_then(ExpertResidencyGrant::lease)
+                        .ok_or_else(|| {
+                            Error::Internal(format!(
+                                "prefetched selected expert {:?} was not acquirable after publication",
+                                key
+                            ))
+                        })?;
+                    leases.push(lease);
+                    grant
+                } else {
+                    match residency.prepare_install(ExpertInstallIntent::selected(key))? {
+                        ExpertInstallPrepareOutcome::Resident(grant) => {
+                            let lease = grant.lease().ok_or_else(|| {
+                                Error::Internal(
+                                    "selected prepare returned resident grant without lease".into(),
+                                )
+                            })?;
+                            if !self.physical_binding_matches(layer, grant.binding())? {
+                                let _ = residency.release(lease);
+                                return Err(self.poison_expert_layer(
+                                    layer,
+                                    "selected prepare returned a physically missing binding",
+                                ));
+                            }
+                            leases.push(lease);
+                            grant
+                        }
+                        ExpertInstallPrepareOutcome::Prepared(prepared) => {
+                            let source = source_catalog.source(expert).ok_or_else(|| {
+                                Error::Model(format!(
+                                    "expert source catalog missing layer {} expert {}",
+                                    expert.layer, expert.expert
+                                ))
+                            })?;
+                            let bundle = match self.load_selected_bundle(expert, source, reader) {
+                                Ok(bundle) => bundle,
+                                Err(error) => {
+                                    return Err(Self::cancel_prepared_after_failure(
+                                        residency, prepared, error,
+                                    ));
+                                }
+                            };
+                            let ticket = match self.selected_upload_ticket(&bundle) {
+                                Ok(ticket) => ticket,
+                                Err(error) => {
+                                    return Err(Self::cancel_prepared_after_failure(
+                                        residency, prepared, error,
+                                    ));
+                                }
+                            };
+                            let handles = match self.queue_selected_upload_wait(ticket) {
+                                Ok(handles) => handles,
+                                Err(error) => {
+                                    return Err(Self::cancel_prepared_after_failure(
+                                        residency, prepared, error,
+                                    ));
+                                }
+                            };
+                            if let Some(evicted) = prepared.evicted_key() {
+                                let evicted = Self::expert_id(evicted)?;
+                                evictions.push(ExpertEvictRequest {
+                                    expert: evicted,
+                                    target: ExpertStorageTier::LocalStorage,
+                                });
+                            }
+                            let grant = self.install_prepared_handles(
+                                residency,
+                                prepared,
+                                handles,
+                                source_catalog.count(),
+                            )?;
+                            let lease = grant.lease().ok_or_else(|| {
+                                Error::Internal(
+                                    "selected publication did not return an execution lease".into(),
+                                )
+                            })?;
+                            leases.push(lease);
+                            loads.push(ExpertLoadRequest {
+                                expert,
+                                load_source: source.clone(),
+                                reason: ExpertLoadReason::Selected,
+                            });
+                            grant
+                        }
+                        ExpertInstallPrepareOutcome::CapacityAllLeased => {
+                            return Err(Error::Internal(
+                                "selected expert install unexpectedly reported CapacityAllLeased"
+                                    .into(),
+                            ));
+                        }
+                    }
+                };
+                if !self.physical_binding_matches(layer, grant.binding())? {
+                    return Err(self.poison_expert_layer(
+                        layer,
+                        "newly published selected binding is not physically installed",
+                    ));
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = materialize_result {
+            let release = Self::release_expert_leases(residency, leases);
+            return Err(match release {
+                Ok(()) => error,
+                Err(release_error) => Error::Internal(format!(
+                    "selected expert materialization failed ({error}); releasing acquired leases also failed ({release_error})"
+                )),
+            });
+        }
+
+        self.expert_selected_load_requests = self
+            .expert_selected_load_requests
+            .saturating_add(loads.len() as u64);
+        let prefetched = predicted_experts
+            .iter()
+            .copied()
+            .take(prefetch_capacity)
+            .map(|expert| ExpertId::new(layer, expert))
+            .collect::<Vec<_>>();
+        Ok(CudaMoeMaterialization {
+            streaming: Self::selected_streaming_step(
+                layer,
+                selected_ids,
+                prefetched,
+                loads,
+                evictions,
+            ),
+            leases,
+        })
     }
 
     pub(crate) fn prefetch_predicted_experts(
         &mut self,
         layer: usize,
         predicted_experts: &[usize],
-        planner: &mut ExpertStreamingPlanner,
+        residency: &mut dyn ExpertResidencyControl,
+        source_catalog: &ExpertSourceCatalog,
+        prefetch_capacity: usize,
         reader: &ExpertStreamingReader,
-        handles: &mut CpuExpertHandleStore,
     ) -> Result<usize> {
-        if predicted_experts.is_empty() {
+        if predicted_experts.is_empty() || prefetch_capacity == 0 {
             return Ok(0);
         }
+        self.ensure_expert_layer_healthy(layer)?;
         let prefetch_start = Instant::now();
         self.expert_lookahead_prefetch_calls =
             self.expert_lookahead_prefetch_calls.saturating_add(1);
         self.expert_lookahead_prefetch_experts = self
             .expert_lookahead_prefetch_experts
             .saturating_add(predicted_experts.len() as u64);
+        self.progress_prefetch_installs(residency, source_catalog.count(), reader)?;
 
-        self.sync_planner_residency_for_layer(layer, planner)?;
-        let streaming = planner.plan_layer_step(layer, &[], predicted_experts)?;
-        self.expert_evictions = self
-            .expert_evictions
-            .saturating_add(streaming.evictions.len() as u64);
-        self.apply_cuda_expert_evictions(&streaming.evictions)?;
-        handles.apply_evictions(&streaming.evictions);
-        let outcome = self.queue_prefetch_loads_only(&streaming.loads, reader)?;
-        planner.commit_step_loaded(&streaming, outcome.ready.iter().copied())?;
-
+        let model_instance = residency.requirements().model_instance;
+        let mut candidates = predicted_experts.to_vec();
+        candidates.sort_unstable();
+        candidates.dedup();
+        candidates.truncate(prefetch_capacity);
+        let mut enqueued = 0usize;
+        for expert_index in candidates {
+            let expert = ExpertId::new(layer, expert_index);
+            if self.uploading_experts.contains_key(&expert) {
+                self.moe_prefetch_skipped_cached_or_inflight = self
+                    .moe_prefetch_skipped_cached_or_inflight
+                    .saturating_add(1);
+                continue;
+            }
+            let key = Self::expert_key(model_instance, expert)?;
+            let prepared = match residency.prepare_install(ExpertInstallIntent::prefetch(key))? {
+                ExpertInstallPrepareOutcome::Resident(_) => {
+                    self.moe_prefetch_resident = self.moe_prefetch_resident.saturating_add(1);
+                    continue;
+                }
+                ExpertInstallPrepareOutcome::CapacityAllLeased => {
+                    self.moe_prefetch_skipped_cached_or_inflight = self
+                        .moe_prefetch_skipped_cached_or_inflight
+                        .saturating_add(1);
+                    continue;
+                }
+                ExpertInstallPrepareOutcome::Prepared(prepared) => prepared,
+            };
+            let source = match source_catalog.source(expert) {
+                Some(source) => source.clone(),
+                None => {
+                    let error = Error::Model(format!(
+                        "expert source catalog missing layer {layer} expert {expert_index}"
+                    ));
+                    return Err(Self::cancel_prepared_after_failure(
+                        residency, prepared, error,
+                    ));
+                }
+            };
+            let mut pending = CudaPendingExpertInstall {
+                prepared,
+                load_source: source.clone(),
+                ticket: None,
+            };
+            if self.upload_prefetches_in_flight() < self.max_upload_prefetch_in_flight() {
+                if let Some(bundle) = self.host_staged_cache.get(expert) {
+                    pending.ticket = Some(match self.prefetch_upload_ticket(&bundle) {
+                        Ok(ticket) => ticket,
+                        Err(error) => {
+                            return Err(Self::cancel_prepared_after_failure(
+                                residency, prepared, error,
+                            ));
+                        }
+                    });
+                }
+            }
+            if pending.ticket.is_none() {
+                // Host staging is bounded and best-effort. A full queue leaves the
+                // prepared install pending; `progress_prefetch_installs` retries it
+                // after completed workers are drained.
+                let _ = self
+                    .async_host_stager
+                    .enqueue(expert, source.clone(), reader);
+            }
+            self.uploading_experts.insert(expert, pending);
+            self.moe_prefetch_loads = self.moe_prefetch_loads.saturating_add(1);
+            self.moe_prefetch_enqueued = self.moe_prefetch_enqueued.saturating_add(1);
+            enqueued = enqueued.saturating_add(1);
+        }
         self.expert_lookahead_prefetch_enqueued = self
             .expert_lookahead_prefetch_enqueued
-            .saturating_add(outcome.enqueued as u64);
+            .saturating_add(enqueued as u64);
         self.expert_lookahead_prefetch_us = self
             .expert_lookahead_prefetch_us
             .saturating_add(duration_us(prefetch_start.elapsed()));
-        Ok(outcome.enqueued)
-    }
-
-    pub(crate) fn prewarm_experts(
-        &mut self,
-        layer: usize,
-        experts: &[usize],
-        planner: &mut ExpertStreamingPlanner,
-        reader: &ExpertStreamingReader,
-        handles: &mut CpuExpertHandleStore,
-    ) -> Result<usize> {
-        if experts.is_empty() {
-            return Ok(0);
-        }
-        let mut selected = experts.to_vec();
-        selected.sort_unstable();
-        selected.dedup();
-        self.sync_planner_residency_for_layer(layer, planner)?;
-        let streaming = planner.plan_layer_step(layer, &selected, &[])?;
-        self.expert_evictions = self
-            .expert_evictions
-            .saturating_add(streaming.evictions.len() as u64);
-        self.apply_cuda_expert_evictions(&streaming.evictions)?;
-        handles.apply_evictions(&streaming.evictions);
-
-        let mut warmed = 0usize;
-        if !streaming.loads.is_empty() {
-            let mut cached_bundles = Vec::with_capacity(streaming.loads.len());
-            let mut miss_loads = Vec::new();
-            for load in &streaming.loads {
-                if let Some(expert) = self.experts.get(&load.expert) {
-                    handles.insert_resident_handle(ResidentExpertHandle::new(
-                        load.expert,
-                        ExpertStorageTier::Gpu,
-                        ExpertResidentFormat::Opaque("cuda-fp4-artifact".into()),
-                        expert.bytes,
-                    ))?;
-                    continue;
-                }
-                if let Some(bundle) = self.host_staged_cache.get(load.expert) {
-                    cached_bundles.push((load.expert, Some(bundle)));
-                } else {
-                    cached_bundles.push((load.expert, None));
-                    miss_loads.push((load.expert, load.load_source.clone()));
-                }
-            }
-
-            let read_payloads = if miss_loads.is_empty() {
-                Vec::new()
-            } else {
-                read_experts_concurrent(reader, &miss_loads)?
-            };
-            let mut payload_iter = read_payloads.into_iter();
-            for (expert_id, cached) in &cached_bundles {
-                let bundle = if let Some(bundle) = cached {
-                    bundle.clone()
-                } else {
-                    let payload = payload_iter.next().ok_or_else(|| {
-                        Error::Internal(format!(
-                            "expert prewarm read returned fewer payloads than expected for layer {layer}"
-                        ))
-                    })?;
-                    let bundle = ExpertComputeBundle::from_artifact_payload(payload)?;
-                    self.host_staged_cache.insert(bundle.clone());
-                    bundle
-                };
-                let expert = self.upload_expert_bundle(&bundle)?;
-                let bytes = expert.bytes;
-                if self.ops.failpoints().check_resource_install() {
-                    return Err(Error::Internal(format!(
-                        "deterministic failpoint: expert prewarm install layer {} expert {}",
-                        expert_id.layer, expert_id.expert
-                    )));
-                }
-                self.install_cuda_expert(*expert_id, expert)?;
-                handles.insert_resident_handle(ResidentExpertHandle::new(
-                    *expert_id,
-                    ExpertStorageTier::Gpu,
-                    ExpertResidentFormat::Opaque("cuda-fp4-artifact".into()),
-                    bytes,
-                ))?;
-                warmed = warmed.saturating_add(1);
-            }
-        }
-        planner.commit_step(&streaming)?;
-        Ok(warmed)
+        Ok(enqueued)
     }
 
     pub(crate) fn runtime_counters(&self) -> DeepSeekV4OperatorRuntimeCounters {
@@ -1886,8 +2270,6 @@ impl DeepSeekV4CudaOperatorCache {
             expert_lookahead_prefetch_experts: self.expert_lookahead_prefetch_experts,
             expert_lookahead_prefetch_enqueued: self.expert_lookahead_prefetch_enqueued,
             expert_lookahead_prefetch_us: self.expert_lookahead_prefetch_us,
-            expert_planner_residency_syncs: self.expert_planner_residency_syncs,
-            expert_planner_residency_synced: self.expert_planner_residency_synced,
             moe_cache_lookup_us: self.moe_cache_lookup_us,
             moe_expert_read_us: self.moe_expert_read_us,
             moe_expert_upload_us: self.moe_expert_upload_us,
@@ -1921,6 +2303,7 @@ impl DeepSeekV4CudaOperatorCache {
             arena_misses: cuda.arena_misses,
             arena_grows: cuda.arena_grows,
             arena_reuses: cuda.arena_reuses,
+            expert_residency_stats: Default::default(),
             expert_predictor_stats: Default::default(),
         }
     }
@@ -2683,9 +3066,10 @@ impl DeepSeekV4CudaOperatorCache {
         router: &RouterArtifactPayload,
         predicted_experts: &[usize],
         router_policy: &ExpertRouterPolicy,
-        planner: &mut ExpertStreamingPlanner,
+        residency: &mut dyn ExpertResidencyControl,
+        source_catalog: &ExpertSourceCatalog,
+        prefetch_capacity: usize,
         reader: &ExpertStreamingReader,
-        handles: &mut CpuExpertHandleStore,
         shared_expert: &SwiGluFfnPayload,
         router_logits_dev: &mut ferrule_cuda::context::CudaF32Buffer,
         router_indices_dev: &mut ferrule_cuda::context::CudaI32Buffer,
@@ -2776,9 +3160,10 @@ impl DeepSeekV4CudaOperatorCache {
             router_indices_dev,
             router_weights_dev,
             predicted_experts,
-            planner,
+            residency,
+            source_catalog,
+            prefetch_capacity,
             reader,
-            handles,
             shared_expert.swiglu_limit,
             segment_workspace,
             route_output_dev,
@@ -2804,9 +3189,10 @@ impl DeepSeekV4CudaOperatorCache {
         router_indices: &ferrule_cuda::context::CudaI32Buffer,
         router_weights: &ferrule_cuda::context::CudaF32Buffer,
         predicted_experts: &[usize],
-        planner: &mut ExpertStreamingPlanner,
+        residency: &mut dyn ExpertResidencyControl,
+        source_catalog: &ExpertSourceCatalog,
+        prefetch_capacity: usize,
         reader: &ExpertStreamingReader,
-        handles: &mut CpuExpertHandleStore,
         swiglu_limit: f32,
         segment_workspace: &mut Option<ferrule_cuda::context::CudaMoeSegmentWorkspace>,
         route_output: &mut ferrule_cuda::context::CudaF32Buffer,
@@ -2868,7 +3254,18 @@ impl DeepSeekV4CudaOperatorCache {
             )));
         }
 
-        let resident_slots = planner.policy().gpu_slots_per_layer.clamp(1, 512);
+        let resident_slots = residency
+            .requirements()
+            .layer_capacity(
+                u32::try_from(layer)
+                    .map_err(|_| Error::Model(format!("expert layer {layer} exceeds u32")))?,
+            )
+            .ok_or_else(|| {
+                Error::Internal(format!(
+                    "expert residency controller has no capacity for layer {layer}"
+                ))
+            })?
+            .clamp(1, DSV4_EXPERT_TABLE_CAPACITY);
         let segment_capacity = fixed_eight_segment_capacity(route_count, resident_slots)?;
         let compute_start = Instant::now();
         let mut input_prepared = false;
@@ -2879,126 +3276,138 @@ impl DeepSeekV4CudaOperatorCache {
             self.moe_predicted_experts = self
                 .moe_predicted_experts
                 .saturating_add(predicted_experts.len() as u64);
-            self.sync_planner_residency_for_layer(layer, planner)?;
             let stage_start = Instant::now();
-            let streaming = planner.plan_layer_step(layer, selected, predicted_experts)?;
+            let CudaMoeMaterialization { streaming, leases } = self.materialize_selected_experts(
+                layer,
+                selected,
+                predicted_experts,
+                residency,
+                source_catalog,
+                prefetch_capacity,
+                reader,
+            )?;
             self.moe_plan_us = self
                 .moe_plan_us
                 .saturating_add(duration_us(stage_start.elapsed()));
-            self.expert_evictions = self
-                .expert_evictions
-                .saturating_add(streaming.evictions.len() as u64);
 
-            let stage_start = Instant::now();
-            self.apply_cuda_expert_evictions(&streaming.evictions)?;
-            handles.apply_evictions(&streaming.evictions);
-            self.moe_cache_lookup_us = self
-                .moe_cache_lookup_us
-                .saturating_add(duration_us(stage_start.elapsed()));
-            let loaded_experts = self.materialize_selected_and_queue_prefetch(
-                layer,
-                &streaming.loads,
-                reader,
-                handles,
-            )?;
-
-            let first_expert = selected
-                .first()
-                .copied()
-                .ok_or_else(|| Error::Internal("CUDA segmented MoE empty window".into()))?;
-            let first_handles = self
-                .experts
-                .get(&ExpertId::new(layer, first_expert))
-                .ok_or_else(|| {
-                    Error::Model(format!(
-                        "CUDA segmented MoE missing layer {layer} expert {first_expert}"
-                    ))
-                })?;
-            let intermediate_size = first_handles.gate.shape().out_features();
-            if first_handles.down.shape().out_features() != hidden_size {
-                return Err(Error::Model(format!(
-                    "CUDA segmented MoE hidden mismatch: expert={} input={hidden_size}",
-                    first_handles.down.shape().out_features()
-                )));
-            }
-            if let Some(expected) = expected_intermediate {
-                if intermediate_size != expected {
+            let chunk_result = (|| -> Result<()> {
+                let first_expert = selected
+                    .first()
+                    .copied()
+                    .ok_or_else(|| Error::Internal("CUDA segmented MoE empty window".into()))?;
+                let first_handles = self
+                    .experts
+                    .get(&ExpertId::new(layer, first_expert))
+                    .ok_or_else(|| {
+                        Error::Model(format!(
+                            "CUDA segmented MoE missing layer {layer} expert {first_expert}"
+                        ))
+                    })?;
+                let intermediate_size = first_handles.gate.shape().out_features();
+                if first_handles.down.shape().out_features() != hidden_size {
                     return Err(Error::Model(format!(
-                        "CUDA segmented MoE intermediate mismatch: got {intermediate_size} expected {expected}"
+                        "CUDA segmented MoE hidden mismatch: expert={} input={hidden_size}",
+                        first_handles.down.shape().out_features()
                     )));
                 }
-            } else {
-                expected_intermediate = Some(intermediate_size);
-            }
+                if let Some(expected) = expected_intermediate {
+                    if intermediate_size != expected {
+                        return Err(Error::Model(format!(
+                            "CUDA segmented MoE intermediate mismatch: got {intermediate_size} expected {expected}"
+                        )));
+                    }
+                } else {
+                    expected_intermediate = Some(intermediate_size);
+                }
 
-            let workspace_needs_init = segment_workspace
-                .as_ref()
-                .map(|workspace| {
-                    !workspace.matches(
+                let workspace_needs_init = segment_workspace
+                    .as_ref()
+                    .map(|workspace| {
+                        !workspace.matches(
+                            DSV4_EXPERT_TABLE_CAPACITY,
+                            segment_capacity,
+                            tokens,
+                            hidden_size,
+                            intermediate_size,
+                            hidden_size,
+                        )
+                    })
+                    .unwrap_or(true);
+                if workspace_needs_init {
+                    *segment_workspace = Some(self.ops.moe_segment_workspace(
                         DSV4_EXPERT_TABLE_CAPACITY,
                         segment_capacity,
                         tokens,
                         hidden_size,
                         intermediate_size,
                         hidden_size,
-                    )
-                })
-                .unwrap_or(true);
-            if workspace_needs_init {
-                *segment_workspace = Some(self.ops.moe_segment_workspace(
-                    DSV4_EXPERT_TABLE_CAPACITY,
-                    segment_capacity,
-                    tokens,
-                    hidden_size,
-                    intermediate_size,
-                    hidden_size,
-                )?);
-                input_prepared = false;
-            }
-            if !input_prepared {
+                    )?);
+                    input_prepared = false;
+                }
+                if !input_prepared {
+                    let workspace = segment_workspace
+                        .as_mut()
+                        .expect("segmented MoE workspace initialized above");
+                    self.ops.prepare_moe_segment_input_from_device(
+                        input_dev,
+                        tokens,
+                        hidden_size,
+                        workspace,
+                    )?;
+                    self.ops.begin_moe_segment_invocation(
+                        routes_per_token,
+                        workspace,
+                        route_output,
+                    )?;
+                    input_prepared = true;
+                }
+
+                let table = self.expert_slot_tables.get(&layer).ok_or_else(|| {
+                    Error::Internal(format!(
+                        "CUDA stable expert slot table missing for routed layer {layer}"
+                    ))
+                })?;
                 let workspace = segment_workspace
                     .as_mut()
                     .expect("segmented MoE workspace initialized above");
-                self.ops.prepare_moe_segment_input_from_device(
-                    input_dev,
-                    tokens,
-                    hidden_size,
+                self.ops.prepare_moe_segment_grouping_stable(
+                    table,
+                    router_indices,
+                    router_weights,
+                    route_count,
+                    routes_per_token,
                     workspace,
                 )?;
-                self.ops
-                    .begin_moe_segment_invocation(routes_per_token, workspace, route_output)?;
-                input_prepared = true;
+                self.ops.moe_expert_segments_stable_from_prepared(
+                    table,
+                    routes_per_token,
+                    swiglu_limit,
+                    workspace,
+                    route_output,
+                )?;
+                Ok(())
+            })();
+            let release_result = Self::release_expert_leases(residency, leases);
+            match (chunk_result, release_result) {
+                (Err(error), Ok(())) => return Err(error),
+                (Ok(()), Err(error)) => return Err(error),
+                (Err(error), Err(release_error)) => {
+                    return Err(Error::Internal(format!(
+                        "CUDA segmented MoE dispatch failed ({error}); releasing expert leases also failed ({release_error})"
+                    )));
+                }
+                (Ok(()), Ok(())) => {}
             }
-
-            let table = self.expert_slot_tables.get(&layer).ok_or_else(|| {
-                Error::Internal(format!(
-                    "CUDA stable expert slot table missing for routed layer {layer}"
-                ))
-            })?;
-            let workspace = segment_workspace
-                .as_mut()
-                .expect("segmented MoE workspace initialized above");
-            self.ops.prepare_moe_segment_grouping_stable(
-                table,
-                router_indices,
-                router_weights,
-                route_count,
-                routes_per_token,
-                workspace,
-            )?;
-            self.ops.moe_expert_segments_stable_from_prepared(
-                table,
-                routes_per_token,
-                swiglu_limit,
-                workspace,
-                route_output,
-            )?;
-
-            let stage_start = Instant::now();
-            planner.commit_step_loaded(&streaming, loaded_experts.iter().copied())?;
-            self.moe_commit_us = self
-                .moe_commit_us
-                .saturating_add(duration_us(stage_start.elapsed()));
+            if !predicted_experts.is_empty() {
+                self.prefetch_predicted_experts(
+                    layer,
+                    predicted_experts,
+                    residency,
+                    source_catalog,
+                    prefetch_capacity,
+                    reader,
+                )?;
+            }
             streaming_steps.push(streaming);
         }
 
@@ -3058,46 +3467,6 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn plan_and_materialize_decode_moe(
-        &mut self,
-        layer: usize,
-        selected: &[usize],
-        route_count: usize,
-        predicted_experts: &[usize],
-        planner: &mut ExpertStreamingPlanner,
-        reader: &ExpertStreamingReader,
-        handles: &mut CpuExpertHandleStore,
-    ) -> Result<CudaMoeMaterialization> {
-        self.moe_predicted_experts = self
-            .moe_predicted_experts
-            .saturating_add(predicted_experts.len() as u64);
-        self.sync_planner_residency_for_layer(layer, planner)?;
-        let stage_start = Instant::now();
-        let streaming = planner.plan_layer_step(layer, selected, predicted_experts)?;
-        self.moe_plan_us = self
-            .moe_plan_us
-            .saturating_add(duration_us(stage_start.elapsed()));
-        self.expert_selected = self.expert_selected.saturating_add(route_count as u64);
-        self.expert_evictions = self
-            .expert_evictions
-            .saturating_add(streaming.evictions.len() as u64);
-
-        let stage_start = Instant::now();
-        self.apply_cuda_expert_evictions(&streaming.evictions)?;
-        handles.apply_evictions(&streaming.evictions);
-        self.moe_cache_lookup_us = self
-            .moe_cache_lookup_us
-            .saturating_add(duration_us(stage_start.elapsed()));
-
-        let loaded_experts =
-            self.materialize_selected_and_queue_prefetch(layer, &streaming.loads, reader, handles)?;
-        Ok(CudaMoeMaterialization {
-            streaming,
-            loaded_experts,
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn routed_moe_step_device_output_into(
         &mut self,
         layer: usize,
@@ -3106,9 +3475,10 @@ impl DeepSeekV4CudaOperatorCache {
         router: &RouterArtifactPayload,
         predicted_experts: &[usize],
         router_policy: &ExpertRouterPolicy,
-        planner: &mut ExpertStreamingPlanner,
+        residency: &mut dyn ExpertResidencyControl,
+        source_catalog: &ExpertSourceCatalog,
+        prefetch_capacity: usize,
         reader: &ExpertStreamingReader,
-        handles: &mut CpuExpertHandleStore,
         shared_expert: &SwiGluFfnPayload,
         router_input: &mut ferrule_cuda::context::CudaF32Buffer,
         router_logits: &mut ferrule_cuda::context::CudaF32Buffer,
@@ -3128,177 +3498,169 @@ impl DeepSeekV4CudaOperatorCache {
             router_indices,
             router_weights,
         )?;
-        let CudaMoeMaterialization {
-            streaming,
-            loaded_experts,
-        } = self.plan_and_materialize_decode_moe(
+        self.moe_predicted_experts = self
+            .moe_predicted_experts
+            .saturating_add(predicted_experts.len() as u64);
+        self.expert_selected = self.expert_selected.saturating_add(routes.len() as u64);
+        let CudaMoeMaterialization { streaming, leases } = self.materialize_selected_experts(
             layer,
             &selected,
-            routes.len(),
             predicted_experts,
-            planner,
+            residency,
+            source_catalog,
+            prefetch_capacity,
             reader,
-            handles,
         )?;
 
-        let stage_start = Instant::now();
-        let swiglu_limit = shared_expert.swiglu_limit;
-        let gate_key = self.ensure_linear_uploaded(&shared_expert.gate)?;
-        let up_key = self.ensure_linear_uploaded(&shared_expert.up)?;
-        let down_key = self.ensure_linear_uploaded(&shared_expert.down)?;
-        self.ops.artifact_swiglu_ffn_from_device_into(
-            self.linears.get(&gate_key).expect("inserted above"),
-            self.linears.get(&up_key).expect("inserted above"),
-            self.linears.get(&down_key).expect("inserted above"),
-            input,
-            1.0,
-            swiglu_limit,
-            shared_workspace,
-        )?;
-        self.ops
-            .copy_f32_into_slot(shared_workspace.output(), accumulator, 0)?;
-        self.moe_shared_us = self
-            .moe_shared_us
-            .saturating_add(duration_us(stage_start.elapsed()));
-
-        if !routes.is_empty() {
+        let execution_result = (|| -> Result<RoutedMoeStepOutput> {
             let stage_start = Instant::now();
-            let num_experts = routes.len();
-            let first_expert_id = ExpertId::new(layer, routes[0].expert);
-            let first_expert = self.experts.get(&first_expert_id).ok_or_else(|| {
-                Error::Model(format!(
-                    "CUDA expert handle missing for layer {} expert {}",
-                    first_expert_id.layer, first_expert_id.expert
-                ))
-            })?;
-            let intermediate_size = first_expert.gate.shape().out_features();
-            let hidden_size = first_expert.down.shape().out_features();
-            let workspace_key = (6, input.len(), intermediate_size, hidden_size);
-            if !self
-                .decode_arena
-                .moe_workspaces
-                .contains_key(&workspace_key)
-            {
-                let workspace = self.ops.moe_batched_workspace(
-                    6,
+            let swiglu_limit = shared_expert.swiglu_limit;
+            let gate_key = self.ensure_linear_uploaded(&shared_expert.gate)?;
+            let up_key = self.ensure_linear_uploaded(&shared_expert.up)?;
+            let down_key = self.ensure_linear_uploaded(&shared_expert.down)?;
+            self.ops.artifact_swiglu_ffn_from_device_into(
+                self.linears.get(&gate_key).expect("inserted above"),
+                self.linears.get(&up_key).expect("inserted above"),
+                self.linears.get(&down_key).expect("inserted above"),
+                input,
+                1.0,
+                swiglu_limit,
+                shared_workspace,
+            )?;
+            self.ops
+                .copy_f32_into_slot(shared_workspace.output(), accumulator, 0)?;
+            self.moe_shared_us = self
+                .moe_shared_us
+                .saturating_add(duration_us(stage_start.elapsed()));
+
+            if !routes.is_empty() {
+                let stage_start = Instant::now();
+                let num_experts = routes.len();
+                let first_expert_id = ExpertId::new(layer, routes[0].expert);
+                let first_expert = self.experts.get(&first_expert_id).ok_or_else(|| {
+                    Error::Model(format!(
+                        "CUDA expert handle missing for layer {} expert {}",
+                        first_expert_id.layer, first_expert_id.expert
+                    ))
+                })?;
+                let intermediate_size = first_expert.gate.shape().out_features();
+                let hidden_size = first_expert.down.shape().out_features();
+                let workspace_key = (6, input.len(), intermediate_size, hidden_size);
+                if !self
+                    .decode_arena
+                    .moe_workspaces
+                    .contains_key(&workspace_key)
+                {
+                    let workspace = self.ops.moe_batched_workspace(
+                        6,
+                        input.len(),
+                        intermediate_size,
+                        hidden_size,
+                    )?;
+                    self.decode_arena
+                        .moe_workspaces
+                        .insert(workspace_key, workspace);
+                }
+                if !self
+                    .decode_arena
+                    .moe_resolve_workspaces
+                    .contains_key(&layer)
+                {
+                    let resolve = self.ops.expert_route_resolve_workspace(6, 6)?;
+                    self.decode_arena
+                        .moe_resolve_workspaces
+                        .insert(layer, resolve);
+                }
+                let table = self.expert_slot_tables.get(&layer).ok_or_else(|| {
+                    Error::Internal(format!(
+                        "CUDA stable expert slot table missing for routed layer {layer}"
+                    ))
+                })?;
+                let ops = &self.ops;
+                let resolve = self
+                    .decode_arena
+                    .moe_resolve_workspaces
+                    .get_mut(&layer)
+                    .expect("MoE resolve workspace initialized above");
+                let workspace = self
+                    .decode_arena
+                    .moe_workspaces
+                    .get_mut(&workspace_key)
+                    .expect("MoE workspace initialized above");
+                self.moe_workspace_us = self
+                    .moe_workspace_us
+                    .saturating_add(duration_us(stage_start.elapsed()));
+                let stage_start = Instant::now();
+                ops.prepare_moe_experts_batched_workspace_stable(
+                    table,
+                    &selected[..num_experts],
+                    router_indices,
+                    router_weights,
+                    num_experts,
                     input.len(),
                     intermediate_size,
                     hidden_size,
+                    resolve,
+                    workspace,
                 )?;
-                self.decode_arena
-                    .moe_workspaces
-                    .insert(workspace_key, workspace);
+                ops.moe_experts_batched_add_into_from_device_prepared(
+                    input,
+                    swiglu_limit,
+                    num_experts,
+                    intermediate_size,
+                    hidden_size,
+                    workspace,
+                    accumulator,
+                )?;
+                self.moe_compute_submit_us = self
+                    .moe_compute_submit_us
+                    .saturating_add(duration_us(stage_start.elapsed()));
             }
-            if !self
-                .decode_arena
-                .moe_resolve_workspaces
-                .contains_key(&layer)
-            {
-                let resolve = self.ops.expert_route_resolve_workspace(6, 6)?;
-                self.decode_arena
-                    .moe_resolve_workspaces
-                    .insert(layer, resolve);
-            }
-            let table = self.expert_slot_tables.get(&layer).ok_or_else(|| {
-                Error::Internal(format!(
-                    "CUDA stable expert slot table missing for routed layer {layer}"
-                ))
-            })?;
-            let ops = &self.ops;
-            let resolve = self
-                .decode_arena
-                .moe_resolve_workspaces
-                .get_mut(&layer)
-                .expect("MoE resolve workspace initialized above");
-            let workspace = self
-                .decode_arena
-                .moe_workspaces
-                .get_mut(&workspace_key)
-                .expect("MoE workspace initialized above");
-            self.moe_workspace_us = self
-                .moe_workspace_us
-                .saturating_add(duration_us(stage_start.elapsed()));
-            let stage_start = Instant::now();
-            ops.prepare_moe_experts_batched_workspace_stable(
-                table,
-                &selected[..num_experts],
-                router_indices,
-                router_weights,
-                num_experts,
-                input.len(),
-                intermediate_size,
-                hidden_size,
-                resolve,
-                workspace,
-            )?;
-            ops.moe_experts_batched_add_into_from_device_prepared(
-                input,
-                swiglu_limit,
-                num_experts,
-                intermediate_size,
-                hidden_size,
-                workspace,
-                accumulator,
-            )?;
-            self.moe_compute_submit_us = self
-                .moe_compute_submit_us
-                .saturating_add(duration_us(stage_start.elapsed()));
+
+            Ok(RoutedMoeStepOutput {
+                routes,
+                streaming,
+                routed_output: Vec::new(),
+                shared_output: None,
+                output: Vec::new(),
+            })
+        })();
+        let release_result = Self::release_expert_leases(residency, leases);
+        match (execution_result, release_result) {
+            (Ok(output), Ok(())) => Ok(output),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(_), Err(release_error)) => Err(release_error),
+            (Err(error), Err(release_error)) => Err(Error::Internal(format!(
+                "CUDA decode MoE failed ({error}); releasing expert leases also failed ({release_error})"
+            ))),
         }
-
-        let stage_start = Instant::now();
-        planner.commit_step_loaded(&streaming, loaded_experts.iter().copied())?;
-        self.moe_commit_us = self
-            .moe_commit_us
-            .saturating_add(duration_us(stage_start.elapsed()));
-
-        Ok(RoutedMoeStepOutput {
-            routes,
-            streaming,
-            routed_output: Vec::new(),
-            shared_output: None,
-            output: Vec::new(),
-        })
     }
 
-    fn upload_expert_bundle(
+    fn selected_upload_ticket(
         &mut self,
         bundle: &ExpertComputeBundle,
-    ) -> Result<CudaFp4ExpertHandles> {
-        if let Some(mut handles) = self.recycled_experts.pop() {
-            self.overwrite_expert_linear(&mut handles.gate, &bundle.gate)?;
-            self.overwrite_expert_linear(&mut handles.up, &bundle.up)?;
-            self.overwrite_expert_linear(&mut handles.down, &bundle.down)?;
-            handles.bytes = bundle.total_bytes();
-            return Ok(handles);
-        }
-        Ok(CudaFp4ExpertHandles {
-            gate: self.upload_expert_linear(&bundle.gate)?,
-            up: self.upload_expert_linear(&bundle.up)?,
-            down: self.upload_expert_linear(&bundle.down)?,
-            bytes: bundle.total_bytes(),
-        })
+    ) -> Result<CudaExpertUploadTicket> {
+        let pinned = self.pinned_bundle_for_upload(bundle)?;
+        let ticket = self.upload_pinned_expert_bundle_async(&pinned)?;
+        self.expert_async_upload_bytes = self
+            .expert_async_upload_bytes
+            .saturating_add(ticket.bytes());
+        Ok(ticket)
     }
 
-    fn overwrite_expert_linear(
-        &self,
-        handle: &mut ferrule_cuda::context::CudaArtifactLinearHandle,
-        linear: &ExpertLinearPayload,
-    ) -> Result<()> {
-        let ExpertLinearFormat::Fp4E2M1PackedWithE8M0Scale { block_size: 32, .. } = linear.format
-        else {
-            return Err(Error::Model(format!(
-                "CUDA routed expert {:?} requires artifact FP4 block_size=32, got {:?}",
-                linear.matrix, linear.format
-            )));
-        };
-        let scale = linear.scale.as_ref().ok_or_else(|| {
-            Error::Model(format!(
-                "CUDA routed expert {:?} is missing E8M0 scale payload",
-                linear.matrix
-            ))
-        })?;
-        self.ops
-            .overwrite_artifact_linear(handle, &linear.weight.bytes, &scale.bytes)
+    fn queue_selected_upload_wait(
+        &mut self,
+        ticket: CudaExpertUploadTicket,
+    ) -> Result<CudaFp4ExpertHandles> {
+        let wait_start = Instant::now();
+        if !ticket.is_complete()? {
+            self.expert_selected_upload_waits = self.expert_selected_upload_waits.saturating_add(1);
+        }
+        self.ops.wait_upload_event(ticket.event())?;
+        self.expert_selected_upload_wait_us = self
+            .expert_selected_upload_wait_us
+            .saturating_add(duration_us(wait_start.elapsed()));
+        Ok(ticket.into_handles())
     }
 
     fn upload_pinned_expert_bundle_async(
@@ -3306,15 +3668,34 @@ impl DeepSeekV4CudaOperatorCache {
         bundle: &CudaPinnedExpertBundle,
     ) -> Result<CudaExpertUploadTicket> {
         let gate = self.upload_pinned_expert_linear_async(&bundle.gate)?;
-        let up = self.upload_pinned_expert_linear_async(&bundle.up)?;
-        let down = self.upload_pinned_expert_linear_async(&bundle.down)?;
-        let event = self.ops.record_upload_event()?;
+        let up = match self.upload_pinned_expert_linear_async(&bundle.up) {
+            Ok(up) => up,
+            Err(error) => {
+                let _ = self.ops.sync_upload_stream();
+                return Err(error);
+            }
+        };
+        let down = match self.upload_pinned_expert_linear_async(&bundle.down) {
+            Ok(down) => down,
+            Err(error) => {
+                let _ = self.ops.sync_upload_stream();
+                return Err(error);
+            }
+        };
+        let event = match self.ops.record_upload_event() {
+            Ok(event) => event,
+            Err(error) => {
+                let _ = self.ops.sync_upload_stream();
+                return Err(error);
+            }
+        };
         Ok(CudaExpertUploadTicket {
-            gate,
-            up,
-            down,
+            gate: Some(gate),
+            up: Some(up),
+            down: Some(down),
             bytes: bundle.bytes,
-            event,
+            staging: Some(bundle.clone()),
+            event: Some(event),
         })
     }
 
@@ -3338,36 +3719,6 @@ impl DeepSeekV4CudaOperatorCache {
             linear.scale.clone(),
             out_features,
             in_features,
-        )
-    }
-
-    pub(crate) fn upload_expert_linear(
-        &self,
-        linear: &ExpertLinearPayload,
-    ) -> Result<ferrule_cuda::context::CudaArtifactLinearHandle> {
-        let ExpertLinearFormat::Fp4E2M1PackedWithE8M0Scale {
-            out_features,
-            in_features,
-            block_size: 32,
-        } = linear.format.clone()
-        else {
-            return Err(Error::Model(format!(
-                "CUDA routed expert {:?} requires artifact FP4 block_size=32, got {:?}",
-                linear.matrix, linear.format
-            )));
-        };
-        let scale = linear.scale.as_ref().ok_or_else(|| {
-            Error::Model(format!(
-                "CUDA routed expert {:?} is missing E8M0 scale payload",
-                linear.matrix
-            ))
-        })?;
-        self.ops.upload_fp4_e2m1_e8m0_linear(
-            &linear.weight.bytes,
-            &scale.bytes,
-            out_features,
-            in_features,
-            self.managed_experts,
         )
     }
 

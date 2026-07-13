@@ -18,6 +18,8 @@ use ferrule_common::execution::{
 use ferrule_common::{Error, Result};
 use ferrule_model::{MultiSessionRunner, PrefillMode, TokenLogit};
 
+use crate::expert_residency::ExpertResidencyController;
+
 /// Native multi-session executor wrapping any [`MultiSessionRunner`].
 ///
 /// The executor owns the runner and its default sequence. Additional sequences
@@ -33,6 +35,7 @@ pub struct NativeMultiSessionExecutor<R: MultiSessionRunner> {
     capabilities: ExecutionCapabilities,
     poison: Option<PoisonState>,
     batch_prepared: bool,
+    expert_residency_initialized: bool,
 }
 
 #[derive(Debug)]
@@ -50,6 +53,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
             capabilities,
             poison: None,
             batch_prepared: false,
+            expert_residency_initialized: false,
         }
     }
 
@@ -171,7 +175,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         state: &mut R::SequenceState,
         token_id: u32,
     ) -> Result<()> {
-        self.ensure_ready()?;
+        self.ensure_execution_ready()?;
         self.runner
             .with_sequence_state(state, |runner| runner.feed_token(token_id))
     }
@@ -258,7 +262,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         kv_reservations: &[KvReservation],
         execute: impl FnOnce(&mut R, &mut [R::SequenceState]) -> Result<T>,
     ) -> Result<T> {
-        self.ensure_ready()?;
+        self.ensure_execution_ready()?;
         if self.batch_prepared {
             return Err(Error::Execution(
                 "native executor has an uncommitted backend batch".into(),
@@ -308,7 +312,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         batch: &ExecutionBatch,
         kv_reservations: &[KvReservation],
     ) -> Result<ExecutionOutput> {
-        self.ensure_ready()?;
+        self.ensure_execution_ready()?;
         if self.batch_prepared {
             return Err(Error::Execution(
                 "native executor has an uncommitted backend batch".into(),
@@ -470,6 +474,35 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         )))
     }
 
+    fn ensure_execution_ready(&mut self) -> Result<()> {
+        self.ensure_ready()?;
+        if self.expert_residency_initialized || self.runner.expert_residency_control_installed() {
+            self.expert_residency_initialized = true;
+            return Ok(());
+        }
+
+        let Some(requirements) = self.runner.expert_residency_requirements() else {
+            self.expert_residency_initialized = true;
+            return Ok(());
+        };
+
+        let result =
+            ExpertResidencyController::with_requirements(requirements).and_then(|control| {
+                self.runner
+                    .install_expert_residency_control(Box::new(control))
+            });
+        match result {
+            Ok(()) => {
+                self.expert_residency_initialized = true;
+                Ok(())
+            }
+            Err(error) => {
+                self.record_poison("expert_residency_initialization", &error);
+                Err(error)
+            }
+        }
+    }
+
     fn record_poison(&mut self, operation: &'static str, error: &Error) {
         self.poison = Some(PoisonState {
             operation,
@@ -597,13 +630,14 @@ mod tests {
     use ferrule_common::execution::{
         ExecutionBatch, ExecutionCapabilities, ExecutionSequence, ForwardMode, LogitsRequest,
     };
+    use ferrule_common::{ExpertResidencyControl, ExpertResidencyRequirements};
     use ferrule_model::{
         ModelInfo, ModelRunner, MultiSessionRunner, PrefillMode, TokenLogit, TopKModelRunner,
     };
 
     /// A mock runner that supports multi-session execution by tracking per-sequence
     /// position and KV state in a simple way.
-    #[derive(Debug, Default)]
+    #[derive(Default)]
     struct MockMultiSessionRunner {
         position: usize,
         sequences_created: usize,
@@ -612,6 +646,11 @@ mod tests {
         prepares: usize,
         commits: usize,
         rollbacks: usize,
+        expert_residency_requirements: Option<ExpertResidencyRequirements>,
+        expert_residency_install_attempts: usize,
+        expert_residency_control: Option<Box<dyn ExpertResidencyControl>>,
+        fail_expert_residency_install: bool,
+        decode_topk_calls: usize,
     }
 
     impl ModelRunner for MockMultiSessionRunner {
@@ -660,6 +699,13 @@ mod tests {
             self.position
         }
         fn feed_token(&mut self, _token_id: u32) -> Result<()> {
+            if self.expert_residency_requirements.is_some()
+                && self.expert_residency_control.is_none()
+            {
+                return Err(Error::Execution(
+                    "mock execution started before expert residency installation".into(),
+                ));
+            }
             self.position += 1;
             Ok(())
         }
@@ -679,7 +725,15 @@ mod tests {
             }])
         }
         fn decode_topk(&mut self, _token_id: u32, _top_k: usize) -> Result<Vec<TokenLogit>> {
+            if self.expert_residency_requirements.is_some()
+                && self.expert_residency_control.is_none()
+            {
+                return Err(Error::Execution(
+                    "mock execution started before expert residency installation".into(),
+                ));
+            }
             self.position += 1;
+            self.decode_topk_calls += 1;
             Ok(vec![TokenLogit {
                 token_id: 2,
                 logit: 3.0,
@@ -696,6 +750,28 @@ mod tests {
 
     impl MultiSessionRunner for MockMultiSessionRunner {
         type SequenceState = MockSequenceState;
+
+        fn expert_residency_requirements(&self) -> Option<ExpertResidencyRequirements> {
+            self.expert_residency_requirements.clone()
+        }
+
+        fn expert_residency_control_installed(&self) -> bool {
+            self.expert_residency_control.is_some()
+        }
+
+        fn install_expert_residency_control(
+            &mut self,
+            control: Box<dyn ExpertResidencyControl>,
+        ) -> Result<()> {
+            self.expert_residency_install_attempts += 1;
+            if self.fail_expert_residency_install {
+                return Err(Error::Execution(
+                    "mock expert residency install failed".into(),
+                ));
+            }
+            self.expert_residency_control = Some(control);
+            Ok(())
+        }
 
         fn prepare_multi_session_batch(
             &mut self,
@@ -842,6 +918,166 @@ mod tests {
         );
 
         (states, batch)
+    }
+
+    #[test]
+    fn expert_residency_controller_is_shared_across_batches_and_survives_reset() {
+        let requirements = ExpertResidencyRequirements::new(73, vec![2, 3]);
+        let runner = MockMultiSessionRunner {
+            expert_residency_requirements: Some(requirements.clone()),
+            ..MockMultiSessionRunner::default()
+        };
+        let mut executor = NativeMultiSessionExecutor::new(runner);
+
+        assert_eq!(executor.runner().expert_residency_install_attempts, 0);
+        assert!(executor.runner().expert_residency_control.is_none());
+        executor.create_sequence_state().unwrap();
+        assert_eq!(executor.runner().expert_residency_install_attempts, 0);
+
+        let (mut first_states, first_batch) = make_decode_batch(1);
+        executor
+            .execute_batch(&mut first_states, &first_batch)
+            .unwrap();
+        assert_eq!(executor.runner().expert_residency_install_attempts, 1);
+        assert_eq!(
+            executor
+                .runner()
+                .expert_residency_control
+                .as_deref()
+                .unwrap()
+                .requirements(),
+            requirements
+        );
+        let first_control = executor
+            .runner()
+            .expert_residency_control
+            .as_deref()
+            .unwrap() as *const dyn ExpertResidencyControl as *const ();
+
+        executor.reset().unwrap();
+        let (mut second_states, second_batch) = make_decode_batch(1);
+        executor
+            .execute_batch(&mut second_states, &second_batch)
+            .unwrap();
+        let second_control = executor
+            .runner()
+            .expert_residency_control
+            .as_deref()
+            .unwrap() as *const dyn ExpertResidencyControl
+            as *const ();
+        assert_eq!(executor.runner().expert_residency_install_attempts, 1);
+        assert_eq!(first_control, second_control);
+
+        let runner = executor.into_runner().unwrap();
+        assert_eq!(
+            runner
+                .expert_residency_control
+                .as_deref()
+                .unwrap()
+                .requirements(),
+            requirements
+        );
+        let mut rebuilt = NativeMultiSessionExecutor::new(runner);
+        let (mut third_states, third_batch) = make_decode_batch(1);
+        rebuilt
+            .execute_batch(&mut third_states, &third_batch)
+            .unwrap();
+        assert_eq!(rebuilt.runner().expert_residency_install_attempts, 1);
+        let third_control = rebuilt
+            .runner()
+            .expert_residency_control
+            .as_deref()
+            .unwrap() as *const dyn ExpertResidencyControl as *const ();
+        assert_eq!(first_control, third_control);
+    }
+
+    #[test]
+    fn expert_residency_install_failure_poisons_reports_and_can_be_reset() {
+        let runner = MockMultiSessionRunner {
+            expert_residency_requirements: Some(ExpertResidencyRequirements::new(91, vec![1])),
+            fail_expert_residency_install: true,
+            ..MockMultiSessionRunner::default()
+        };
+        let mut executor = NativeMultiSessionExecutor::new(runner);
+        let (mut states, batch) = make_decode_batch(1);
+
+        let error = executor.execute_batch(&mut states, &batch).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("mock expert residency install failed")
+        );
+        assert!(executor.is_poisoned());
+        assert_eq!(
+            executor.poison_operation(),
+            Some("expert_residency_initialization")
+        );
+        assert!(
+            executor
+                .poison_cause()
+                .unwrap()
+                .contains("mock expert residency install failed")
+        );
+        assert_eq!(executor.runner().expert_residency_install_attempts, 1);
+        assert_eq!(executor.runner().decode_topk_calls, 0);
+
+        let poisoned = executor.execute_batch(&mut states, &batch).unwrap_err();
+        assert!(poisoned.to_string().contains("native executor is poisoned"));
+        assert_eq!(executor.runner().expert_residency_install_attempts, 1);
+
+        executor.runner_mut().fail_expert_residency_install = false;
+        executor.reset().unwrap();
+        assert!(!executor.is_poisoned());
+        executor.execute_batch(&mut states, &batch).unwrap();
+        assert_eq!(executor.runner().expert_residency_install_attempts, 2);
+        assert_eq!(executor.runner().decode_topk_calls, 1);
+    }
+
+    #[test]
+    fn expert_residency_is_installed_before_feed_and_diagnostic_paths() {
+        let requirements = ExpertResidencyRequirements::new(102, vec![1]);
+        let runner = MockMultiSessionRunner {
+            expert_residency_requirements: Some(requirements.clone()),
+            ..MockMultiSessionRunner::default()
+        };
+        let mut executor = NativeMultiSessionExecutor::new(runner);
+        let mut state = MockSequenceState {
+            position: 0,
+            fed_tokens: Vec::new(),
+        };
+
+        executor.feed_sequence_token(&mut state, 4).unwrap();
+        assert_eq!(state.position, 1);
+        assert_eq!(executor.runner().expert_residency_install_attempts, 1);
+
+        let (mut states, batch) = make_decode_batch(1);
+        executor
+            .execute_diagnostic_batch_with_kv(&mut states, &batch, &[], |runner, _states| {
+                assert_eq!(
+                    runner
+                        .expert_residency_control
+                        .as_deref()
+                        .unwrap()
+                        .requirements(),
+                    requirements
+                );
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(executor.runner().expert_residency_install_attempts, 1);
+    }
+
+    #[test]
+    fn runner_without_expert_residency_requirements_never_receives_control() {
+        let mut executor = NativeMultiSessionExecutor::new(MockMultiSessionRunner::default());
+        let (mut states, batch) = make_decode_batch(1);
+
+        executor.execute_batch(&mut states, &batch).unwrap();
+        executor.execute_batch(&mut states, &batch).unwrap();
+
+        assert!(executor.expert_residency_initialized);
+        assert_eq!(executor.runner().expert_residency_install_attempts, 0);
+        assert!(executor.runner().expert_residency_control.is_none());
     }
 
     #[test]

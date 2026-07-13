@@ -151,6 +151,92 @@ impl ExpertLoadSource {
     }
 }
 
+/// Immutable mapping from expert identity to model-neutral source metadata.
+///
+/// Catalogs are intended to be built once during artifact discovery and shared by
+/// prepared plans and backend runtimes. The generic source type keeps the catalog
+/// reusable for source representations beyond [`ExpertLoadSource`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpertSourceCatalog<S = ExpertLoadSource> {
+    sources: BTreeMap<ExpertId, S>,
+}
+
+impl<S> ExpertSourceCatalog<S> {
+    pub fn from_sources(sources: impl IntoIterator<Item = (ExpertId, S)>) -> Self {
+        Self {
+            sources: sources.into_iter().collect(),
+        }
+    }
+
+    pub fn source(&self, expert: ExpertId) -> Option<&S> {
+        self.sources.get(&expert)
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&ExpertId, &S)> {
+        self.sources.iter()
+    }
+
+    pub fn count(&self) -> usize {
+        self.sources.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.sources.is_empty()
+    }
+}
+
+impl<S> Default for ExpertSourceCatalog<S> {
+    fn default() -> Self {
+        Self {
+            sources: BTreeMap::new(),
+        }
+    }
+}
+
+impl ExpertSourceCatalog<ExpertLoadSource> {
+    pub fn from_hf_routed_expert_tensor_sets(
+        model_dir: &Path,
+        tensors: impl IntoIterator<Item = HfRoutedExpertTensorInfo>,
+    ) -> Result<Self> {
+        let mut grouped = BTreeMap::<ExpertId, Vec<ExpertTensorSlice>>::new();
+        for tensor in tensors {
+            let expert = expert_id_from_ref(&tensor.descriptor);
+            grouped.entry(expert).or_default().push(ExpertTensorSlice {
+                key: ExpertTensorKey {
+                    expert,
+                    matrix: matrix_from_model(tensor.descriptor.matrix),
+                },
+                component: component_from_model(tensor.descriptor.part),
+                path: model_dir.join(&tensor.shard),
+                offset: tensor.file_offset,
+                bytes: tensor.byte_size,
+                dtype: tensor.dtype,
+                shape: tensor.shape,
+            });
+        }
+
+        let mut sources = BTreeMap::new();
+        for (expert, mut tensors) in grouped {
+            tensors.sort_by(|a, b| {
+                a.key
+                    .matrix
+                    .cmp(&b.key.matrix)
+                    .then_with(|| a.component.cmp(&b.component))
+                    .then_with(|| a.path.cmp(&b.path))
+                    .then_with(|| a.offset.cmp(&b.offset))
+            });
+            if tensors.is_empty() {
+                return Err(Error::Model(format!(
+                    "empty expert tensor set for layer {} expert {}",
+                    expert.layer, expert.expert
+                )));
+            }
+            sources.insert(expert, ExpertLoadSource::LocalTensorSet { tensors });
+        }
+        Ok(Self { sources })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExpertLoadReason {
     Selected,
@@ -256,7 +342,6 @@ impl ExpertStreamingStep {
 
 #[derive(Debug, Clone)]
 struct ExpertState {
-    load_source: ExpertLoadSource,
     location: ExpertStorageTier,
     last_used_step: u64,
     selected_count: u64,
@@ -265,15 +350,37 @@ struct ExpertState {
 #[derive(Debug, Clone)]
 pub struct ExpertStreamingPlanner {
     policy: ExpertStreamingPolicy,
+    source_catalog: Arc<ExpertSourceCatalog>,
     experts: BTreeMap<ExpertId, ExpertState>,
     step: u64,
 }
 
 impl ExpertStreamingPlanner {
     pub fn new(policy: ExpertStreamingPolicy) -> Self {
+        Self::from_catalog(policy, Arc::new(ExpertSourceCatalog::default()))
+    }
+
+    pub fn from_catalog(
+        policy: ExpertStreamingPolicy,
+        source_catalog: Arc<ExpertSourceCatalog>,
+    ) -> Self {
+        let experts = source_catalog
+            .iter()
+            .map(|(expert, source)| {
+                (
+                    *expert,
+                    ExpertState {
+                        location: source.tier(),
+                        last_used_step: 0,
+                        selected_count: 0,
+                    },
+                )
+            })
+            .collect();
         Self {
             policy,
-            experts: BTreeMap::new(),
+            source_catalog,
+            experts,
             step: 0,
         }
     }
@@ -282,12 +389,26 @@ impl ExpertStreamingPlanner {
         &self.policy
     }
 
+    pub fn source_catalog(&self) -> &Arc<ExpertSourceCatalog> {
+        &self.source_catalog
+    }
+
+    /// Compatibility registration for incremental callers.
+    ///
+    /// The currently shared catalog is never mutated. Instead, registration
+    /// replaces this planner's catalog with a new immutable snapshot.
     pub fn register_load_source(&mut self, expert: ExpertId, load_source: ExpertLoadSource) {
         let location = load_source.tier();
+        let mut sources = self
+            .source_catalog
+            .iter()
+            .map(|(expert, source)| (*expert, source.clone()))
+            .collect::<BTreeMap<_, _>>();
+        sources.insert(expert, load_source);
+        self.source_catalog = Arc::new(ExpertSourceCatalog { sources });
         self.experts.insert(
             expert,
             ExpertState {
-                load_source,
                 location,
                 last_used_step: 0,
                 selected_count: 0,
@@ -300,41 +421,25 @@ impl ExpertStreamingPlanner {
         model_dir: &Path,
         tensors: impl IntoIterator<Item = HfRoutedExpertTensorInfo>,
     ) -> Result<usize> {
-        let mut grouped = BTreeMap::<ExpertId, Vec<ExpertTensorSlice>>::new();
-        for tensor in tensors {
-            let expert = expert_id_from_ref(&tensor.descriptor);
-            grouped.entry(expert).or_default().push(ExpertTensorSlice {
-                key: ExpertTensorKey {
-                    expert,
-                    matrix: matrix_from_model(tensor.descriptor.matrix),
+        let catalog = ExpertSourceCatalog::from_hf_routed_expert_tensor_sets(model_dir, tensors)?;
+        let count = catalog.count();
+        let mut sources = self
+            .source_catalog
+            .iter()
+            .map(|(expert, source)| (*expert, source.clone()))
+            .collect::<BTreeMap<_, _>>();
+        for (expert, source) in catalog.iter() {
+            sources.insert(*expert, source.clone());
+            self.experts.insert(
+                *expert,
+                ExpertState {
+                    location: source.tier(),
+                    last_used_step: 0,
+                    selected_count: 0,
                 },
-                component: component_from_model(tensor.descriptor.part),
-                path: model_dir.join(&tensor.shard),
-                offset: tensor.file_offset,
-                bytes: tensor.byte_size,
-                dtype: tensor.dtype,
-                shape: tensor.shape,
-            });
+            );
         }
-
-        let count = grouped.len();
-        for (expert, mut tensors) in grouped {
-            tensors.sort_by(|a, b| {
-                a.key
-                    .matrix
-                    .cmp(&b.key.matrix)
-                    .then_with(|| a.component.cmp(&b.component))
-                    .then_with(|| a.path.cmp(&b.path))
-                    .then_with(|| a.offset.cmp(&b.offset))
-            });
-            if tensors.is_empty() {
-                return Err(Error::Model(format!(
-                    "empty expert tensor set for layer {} expert {}",
-                    expert.layer, expert.expert
-                )));
-            }
-            self.register_load_source(expert, ExpertLoadSource::LocalTensorSet { tensors });
-        }
+        self.source_catalog = Arc::new(ExpertSourceCatalog { sources });
         Ok(count)
     }
 
@@ -360,73 +465,6 @@ impl ExpertStreamingPlanner {
                 (expert.layer == layer && state.location.is_gpu_ready()).then_some(*expert)
             })
             .collect()
-    }
-
-    /// Reconcile the planner's residency view with a backend-owned GPU cache.
-    ///
-    /// CUDA keeps uploaded expert handles outside the per-sequence handle store so
-    /// they can survive request/session resets. After such a reset, the planner may
-    /// be stale in either direction:
-    ///
-    /// - it may have demoted experts that the backend still has resident;
-    /// - it may still mark experts GPU-resident after backend eviction.
-    ///
-    /// This method makes the planner's GPU view match the backend snapshot for the
-    /// given layer while preserving load sources and routing hotness. It returns the
-    /// number of experts promoted to GPU by the snapshot.
-    pub fn sync_gpu_residents(
-        &mut self,
-        layer: usize,
-        experts: impl IntoIterator<Item = usize>,
-    ) -> Result<usize> {
-        let expert_indices = experts.into_iter().collect::<Vec<_>>();
-        let backend_gpu = unique_ids(layer, &expert_indices)
-            .into_iter()
-            .filter(|expert| self.experts.contains_key(expert))
-            .collect::<BTreeSet<_>>();
-
-        for (expert, state) in self.experts.iter_mut() {
-            if expert.layer != layer
-                || !state.location.is_gpu_ready()
-                || backend_gpu.contains(expert)
-            {
-                continue;
-            }
-            let source_tier = state.load_source.tier();
-            state.location = if source_tier == ExpertStorageTier::Gpu {
-                ExpertStorageTier::LocalStorage
-            } else {
-                source_tier
-            };
-        }
-
-        let mut synced = 0usize;
-        for expert in backend_gpu {
-            if self.location(expert) != Some(ExpertStorageTier::Gpu) {
-                self.mark_resident(expert, ExpertStorageTier::Gpu)?;
-                synced = synced.saturating_add(1);
-            }
-        }
-        Ok(synced)
-    }
-
-    /// Clear sequence-scoped residency while preserving routing hotness.
-    ///
-    /// Session reset drops KV/cache handles, but warmup should still inform the
-    /// next request's predicted hotset. Demoting resident locations forces the
-    /// next step to emit load requests again; CUDA backends can satisfy those
-    /// requests from their process-global resident expert cache instead of disk.
-    pub fn clear_residency(&mut self) {
-        for state in self.experts.values_mut() {
-            if state.location.is_gpu_ready() {
-                let source_tier = state.load_source.tier();
-                state.location = if source_tier == ExpertStorageTier::Gpu {
-                    ExpertStorageTier::LocalStorage
-                } else {
-                    source_tier
-                };
-            }
-        }
     }
 
     fn resident_experts_by_hotness(&self, layer: usize) -> Vec<ExpertId> {
@@ -605,15 +643,12 @@ impl ExpertStreamingPlanner {
     }
 
     fn load_source_for(&self, expert: ExpertId) -> Result<&ExpertLoadSource> {
-        self.experts
-            .get(&expert)
-            .map(|state| &state.load_source)
-            .ok_or_else(|| {
-                Error::Model(format!(
-                    "expert streaming load source missing for layer {} expert {}",
-                    expert.layer, expert.expert
-                ))
-            })
+        self.source_catalog.source(expert).ok_or_else(|| {
+            Error::Model(format!(
+                "expert streaming load source missing for layer {} expert {}",
+                expert.layer, expert.expert
+            ))
+        })
     }
 
     fn load_source_tier_or_local(&self, expert: ExpertId) -> Result<ExpertStorageTier> {
@@ -1706,7 +1741,7 @@ mod tests {
     }
 
     #[test]
-    fn registers_hf_tensor_sets_and_reads_exact_slices() {
+    fn hf_catalog_preserves_identity_count_lookup_and_exact_slices() {
         let dir = unique_temp_dir("ferrule-expert-streaming-test");
         std::fs::create_dir_all(&dir).unwrap();
         let shard = "model-00001-of-00001.safetensors";
@@ -1742,13 +1777,25 @@ mod tests {
                 4,
             ),
         ];
-        let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy::quality_first(1));
-        assert_eq!(
-            planner
-                .register_hf_routed_expert_tensor_sets(&dir, tensors)
-                .unwrap(),
-            1
+        let catalog = Arc::new(
+            ExpertSourceCatalog::from_hf_routed_expert_tensor_sets(&dir, tensors).unwrap(),
         );
+        assert_eq!(catalog.count(), 1);
+        assert_eq!(
+            catalog
+                .iter()
+                .map(|(expert, _)| *expert)
+                .collect::<Vec<_>>(),
+            vec![ExpertId::new(0, 3)]
+        );
+        let source = catalog.source(ExpertId::new(0, 3)).unwrap();
+        assert_eq!(source.bytes(), 10);
+
+        let mut planner = ExpertStreamingPlanner::from_catalog(
+            ExpertStreamingPolicy::quality_first(1),
+            Arc::clone(&catalog),
+        );
+        assert!(Arc::ptr_eq(planner.source_catalog(), &catalog));
 
         let step = planner.plan_layer_step(0, &[3], &[]).unwrap();
         assert_eq!(step.loads.len(), 1);
@@ -2081,170 +2128,6 @@ mod tests {
 
         assert_eq!(planner.hot_experts(0, 3), vec![1, 2]);
         assert!(planner.hot_experts(1, 3).is_empty());
-    }
-
-    #[test]
-    fn clear_residency_preserves_hotset_but_emits_loads_again() {
-        let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
-            gpu_slots_per_layer: 3,
-            prefetch_per_layer: 1,
-            preserve_artifact_quantization: true,
-            allow_cpu_staging: false,
-            allow_remote_sources: false,
-        });
-        for expert in 0..4 {
-            planner.register_load_source(
-                ExpertId::new(0, expert),
-                ExpertLoadSource::LocalShard {
-                    path: PathBuf::from("model.safetensors"),
-                    offset: 0,
-                    bytes: 10,
-                },
-            );
-        }
-
-        let first = planner.plan_layer_step(0, &[2, 1], &[]).unwrap();
-        planner.commit_step(&first).unwrap();
-        let second = planner.plan_layer_step(0, &[2], &[]).unwrap();
-        planner.commit_step(&second).unwrap();
-        assert_eq!(planner.hot_experts(0, 2), vec![2, 1]);
-        assert_eq!(planner.resident_experts(0).len(), 2);
-
-        planner.clear_residency();
-
-        assert!(planner.resident_experts(0).is_empty());
-        assert_eq!(planner.hot_experts(0, 2), vec![2, 1]);
-        let after_reset = planner
-            .plan_layer_step(0, &[3], &planner.hot_experts(0, 1))
-            .unwrap();
-        assert_eq!(after_reset.selected, vec![ExpertId::new(0, 3)]);
-        assert_eq!(after_reset.prefetched, vec![ExpertId::new(0, 2)]);
-        assert_eq!(after_reset.loads.len(), 2);
-        assert!(
-            after_reset
-                .loads
-                .iter()
-                .all(|load| load.load_source.tier() == ExpertStorageTier::LocalStorage)
-        );
-    }
-
-    #[test]
-    fn sync_gpu_residents_restores_backend_cache_view_for_eviction() {
-        let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
-            gpu_slots_per_layer: 2,
-            prefetch_per_layer: 0,
-            preserve_artifact_quantization: true,
-            allow_cpu_staging: false,
-            allow_remote_sources: false,
-        });
-        for expert in 0..4 {
-            planner.register_load_source(
-                ExpertId::new(0, expert),
-                ExpertLoadSource::LocalShard {
-                    path: PathBuf::from("model.safetensors"),
-                    offset: 0,
-                    bytes: 10,
-                },
-            );
-        }
-
-        let first = planner.plan_layer_step(0, &[0, 1], &[]).unwrap();
-        planner.commit_step(&first).unwrap();
-        planner.clear_residency();
-        assert!(planner.resident_experts(0).is_empty());
-
-        let synced = planner.sync_gpu_residents(0, [0, 1]).unwrap();
-        assert_eq!(synced, 2);
-        assert_eq!(planner.resident_experts(0).len(), 2);
-
-        let next = planner.plan_layer_step(0, &[2], &[]).unwrap();
-        assert_eq!(next.loads.len(), 1);
-        assert_eq!(next.evictions.len(), 1);
-        assert!(matches!(
-            next.evictions[0].expert,
-            ExpertId {
-                layer: 0,
-                expert: 0
-            } | ExpertId {
-                layer: 0,
-                expert: 1
-            }
-        ));
-    }
-
-    #[test]
-    fn sync_gpu_residents_demotes_planner_entries_missing_from_backend() {
-        let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
-            gpu_slots_per_layer: 3,
-            prefetch_per_layer: 0,
-            preserve_artifact_quantization: true,
-            allow_cpu_staging: false,
-            allow_remote_sources: false,
-        });
-        for expert in 0..3 {
-            planner.register_load_source(
-                ExpertId::new(0, expert),
-                ExpertLoadSource::LocalShard {
-                    path: PathBuf::from("model.safetensors"),
-                    offset: 0,
-                    bytes: 10,
-                },
-            );
-        }
-
-        let first = planner.plan_layer_step(0, &[0, 1], &[]).unwrap();
-        planner.commit_step(&first).unwrap();
-        assert_eq!(planner.resident_experts(0).len(), 2);
-
-        let promoted = planner.sync_gpu_residents(0, [1]).unwrap();
-        assert_eq!(promoted, 0);
-        assert_ne!(
-            planner.location(ExpertId::new(0, 0)),
-            Some(ExpertStorageTier::Gpu)
-        );
-        assert_eq!(
-            planner.location(ExpertId::new(0, 1)),
-            Some(ExpertStorageTier::Gpu)
-        );
-
-        let next = planner.plan_layer_step(0, &[0], &[]).unwrap();
-        assert_eq!(next.loads.len(), 1);
-        assert_eq!(next.loads[0].expert, ExpertId::new(0, 0));
-    }
-
-    #[test]
-    fn sync_gpu_residents_ignores_backend_entries_unknown_to_planner() {
-        let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
-            gpu_slots_per_layer: 2,
-            prefetch_per_layer: 0,
-            preserve_artifact_quantization: true,
-            allow_cpu_staging: false,
-            allow_remote_sources: false,
-        });
-        planner.register_load_source(
-            ExpertId::new(0, 1),
-            ExpertLoadSource::LocalShard {
-                path: PathBuf::from("model.safetensors"),
-                offset: 0,
-                bytes: 10,
-            },
-        );
-
-        let synced = planner.sync_gpu_residents(0, [1, 45]).unwrap();
-        assert_eq!(synced, 1);
-        assert_eq!(planner.resident_experts(0), vec![ExpertId::new(0, 1)]);
-
-        let step = ExpertStreamingStep {
-            layer: 0,
-            selected: Vec::new(),
-            prefetched: Vec::new(),
-            loads: Vec::new(),
-            evictions: Vec::new(),
-        };
-        planner
-            .commit_step_loaded(&step, [ExpertId::new(0, 1), ExpertId::new(0, 45)])
-            .unwrap();
-        assert_eq!(planner.resident_experts(0), vec![ExpertId::new(0, 1)]);
     }
 
     #[test]

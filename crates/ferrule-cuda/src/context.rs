@@ -519,6 +519,22 @@ impl CudaUploadEvent {
     }
 }
 
+/// Completion marker for compute-stream work that may still reference a
+/// retired device allocation.
+pub struct CudaComputeEvent {
+    event: CudaEvent,
+}
+
+impl CudaComputeEvent {
+    pub fn is_complete(&self) -> Result<bool> {
+        cu(self.event.query())
+    }
+
+    pub fn synchronize(&self) -> Result<()> {
+        cu(self.event.synchronize())
+    }
+}
+
 /// Page-locked host memory buffer that is directly accessible from the GPU
 /// via `cuMemHostGetDevicePointer`. On GB10 (unified memory), this avoids
 /// the page-fault overhead of `cuMemAllocManaged` — the GPU reads directly
@@ -1010,6 +1026,17 @@ pub struct CudaExpertSlotPointers {
     pub down_scale: u64,
 }
 
+impl CudaExpertSlotPointers {
+    fn is_complete(self) -> bool {
+        self.gate_weight != 0
+            && self.gate_scale != 0
+            && self.up_weight != 0
+            && self.up_scale != 0
+            && self.down_weight != 0
+            && self.down_scale != 0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CudaExpertSlotBinding {
     pub slot: i32,
@@ -1075,6 +1102,157 @@ impl CudaExpertSlotTableHost {
                 .slot_generation
                 .get(binding.slot as usize)
                 .is_some_and(|generation| *generation == binding.generation)
+    }
+
+    fn exact_coordinates(
+        &self,
+        expert: usize,
+        slot: u32,
+        generation: u32,
+    ) -> Result<(usize, i32, i32)> {
+        if expert >= self.expert_capacity() {
+            return Err(Error::Internal(format!(
+                "CUDA expert id {expert} exceeds slot table capacity {}",
+                self.expert_capacity()
+            )));
+        }
+        let slot_index = slot as usize;
+        if slot_index >= self.slot_capacity() {
+            return Err(Error::Internal(format!(
+                "CUDA expert slot {slot} exceeds slot table capacity {}",
+                self.slot_capacity()
+            )));
+        }
+        let slot = i32::try_from(slot).map_err(|_| {
+            Error::Internal(format!(
+                "CUDA expert slot {slot} does not fit the i32 device ABI"
+            ))
+        })?;
+        let generation = i32::try_from(generation)
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| {
+                Error::Internal(format!(
+                    "CUDA expert slot generation must be positive and fit i32, got {generation}"
+                ))
+            })?;
+        Ok((slot_index, slot, generation))
+    }
+
+    fn pointers_at(&self, slot: usize) -> CudaExpertSlotPointers {
+        CudaExpertSlotPointers {
+            gate_weight: self.gate_weight[slot],
+            gate_scale: self.gate_scale[slot],
+            up_weight: self.up_weight[slot],
+            up_scale: self.up_scale[slot],
+            down_weight: self.down_weight[slot],
+            down_scale: self.down_scale[slot],
+        }
+    }
+
+    fn install_at(
+        &mut self,
+        expert: usize,
+        slot: u32,
+        generation: u32,
+        pointers: CudaExpertSlotPointers,
+    ) -> Result<CudaExpertSlotBinding> {
+        let (slot_index, slot, generation) = self.exact_coordinates(expert, slot, generation)?;
+        if !pointers.is_complete() {
+            return Err(Error::Internal(
+                "CUDA expert slot table requires a complete non-null weight/scale pointer tuple"
+                    .into(),
+            ));
+        }
+
+        if self.expert_to_slot[expert] >= 0 {
+            let current = self.binding(expert).ok_or_else(|| {
+                Error::Internal(format!(
+                    "CUDA expert {expert} has an inconsistent existing slot binding"
+                ))
+            })?;
+            if current.slot == slot && current.generation == generation {
+                if self.pointers_at(slot_index) != pointers {
+                    return Err(Error::Internal(format!(
+                        "CUDA expert {expert} slot {slot} generation {generation} is already installed with a different pointer tuple"
+                    )));
+                }
+                return Ok(current);
+            }
+            return Err(Error::Internal(format!(
+                "CUDA expert {expert} is already bound to slot {} generation {}, not slot {slot} generation {generation}",
+                current.slot, current.generation
+            )));
+        }
+
+        if let Some(conflicting_expert) = self
+            .expert_to_slot
+            .iter()
+            .position(|bound_slot| *bound_slot == slot)
+        {
+            return Err(Error::Internal(format!(
+                "CUDA expert slot {slot} is already bound to expert {conflicting_expert}"
+            )));
+        }
+
+        let expected_generation = match self.slot_generation[slot_index] {
+            0 => 1,
+            i32::MAX => {
+                return Err(Error::Internal(
+                    "CUDA expert slot generation exhausted".into(),
+                ));
+            }
+            generation => generation,
+        };
+        if generation != expected_generation {
+            return Err(Error::Internal(format!(
+                "CUDA expert slot {slot} expected generation {expected_generation}, got {generation}"
+            )));
+        }
+
+        self.slot_generation[slot_index] = generation;
+        self.expert_to_slot[expert] = slot;
+        self.expert_generation[expert] = generation;
+        self.gate_weight[slot_index] = pointers.gate_weight;
+        self.gate_scale[slot_index] = pointers.gate_scale;
+        self.up_weight[slot_index] = pointers.up_weight;
+        self.up_scale[slot_index] = pointers.up_scale;
+        self.down_weight[slot_index] = pointers.down_weight;
+        self.down_scale[slot_index] = pointers.down_scale;
+        Ok(CudaExpertSlotBinding { slot, generation })
+    }
+
+    fn evict_binding(&mut self, expert: usize, slot: u32, generation: u32) -> Result<()> {
+        let (slot_index, slot, generation) = self.exact_coordinates(expert, slot, generation)?;
+        let current = self.binding(expert).ok_or_else(|| {
+            Error::Internal(format!(
+                "CUDA expert slot eviction rejected stale binding: expert {expert} slot {slot} generation {generation}"
+            ))
+        })?;
+        if current.slot != slot || current.generation != generation {
+            return Err(Error::Internal(format!(
+                "CUDA expert slot eviction rejected stale binding: expert {expert} is at slot {} generation {}, not slot {slot} generation {generation}",
+                current.slot, current.generation
+            )));
+        }
+
+        let next_generation = generation
+            .checked_add(1)
+            .filter(|value| *value > 0)
+            .ok_or_else(|| Error::Internal("CUDA expert slot generation exhausted".into()))?;
+        self.expert_to_slot[expert] = -1;
+        self.expert_generation[expert] = 0;
+        self.gate_weight[slot_index] = 0;
+        self.gate_scale[slot_index] = 0;
+        self.up_weight[slot_index] = 0;
+        self.up_scale[slot_index] = 0;
+        self.down_weight[slot_index] = 0;
+        self.down_scale[slot_index] = 0;
+        // Advancing invalidates stale slot/generation handles. The controller's
+        // prepared replacement already carries this next generation, so exact
+        // installation consumes it without incrementing it a second time.
+        self.slot_generation[slot_index] = next_generation;
+        Ok(())
     }
 
     pub fn install(
@@ -1161,7 +1339,7 @@ impl CudaExpertSlotTableHost {
 
 #[cfg(test)]
 mod expert_slot_generation_tests {
-    use super::{CudaExpertSlotPointers, CudaExpertSlotTableHost};
+    use super::{CudaExpertSlotBinding, CudaExpertSlotPointers, CudaExpertSlotTableHost};
 
     const POINTERS: CudaExpertSlotPointers = CudaExpertSlotPointers {
         gate_weight: 1,
@@ -1171,6 +1349,125 @@ mod expert_slot_generation_tests {
         down_weight: 5,
         down_scale: 6,
     };
+
+    #[test]
+    fn exact_install_evict_and_reuse_follow_external_generations() {
+        let mut table = CudaExpertSlotTableHost::new(3, 2).expect("slot table");
+
+        let first = table
+            .install_at(2, 1, 1, POINTERS)
+            .expect("exact first install");
+        assert_eq!(
+            first,
+            CudaExpertSlotBinding {
+                slot: 1,
+                generation: 1,
+            }
+        );
+        assert_eq!(table.binding(2), Some(first));
+        assert_eq!(table.pointers_at(1), POINTERS);
+
+        table
+            .evict_binding(2, 1, 1)
+            .expect("exact binding eviction");
+        assert_eq!(table.binding(2), None);
+        assert!(!table.is_current(first));
+        assert_eq!(table.slot_generation[1], 2);
+        assert_eq!(
+            table.pointers_at(1),
+            CudaExpertSlotPointers {
+                gate_weight: 0,
+                gate_scale: 0,
+                up_weight: 0,
+                up_scale: 0,
+                down_weight: 0,
+                down_scale: 0,
+            }
+        );
+
+        let second = table
+            .install_at(1, 1, 2, POINTERS)
+            .expect("exact reused install");
+        assert_eq!(
+            second,
+            CudaExpertSlotBinding {
+                slot: 1,
+                generation: 2,
+            }
+        );
+        assert_eq!(table.binding(1), Some(second));
+    }
+
+    #[test]
+    fn exact_binding_mismatches_are_failure_atomic() {
+        let mut table = CudaExpertSlotTableHost::new(3, 2).expect("slot table");
+        table
+            .install_at(0, 0, 1, POINTERS)
+            .expect("exact first install");
+        let installed = table.clone();
+
+        assert!(table.install_at(1, 0, 2, POINTERS).is_err());
+        assert_eq!(table, installed, "occupied slot mismatch mutated table");
+        assert!(table.install_at(0, 1, 1, POINTERS).is_err());
+        assert_eq!(table, installed, "expert binding mismatch mutated table");
+        assert!(table.evict_binding(0, 0, 2).is_err());
+        assert_eq!(table, installed, "stale generation eviction mutated table");
+        assert!(table.evict_binding(0, 1, 1).is_err());
+        assert_eq!(table, installed, "stale slot eviction mutated table");
+        assert!(table.evict_binding(1, 0, 1).is_err());
+        assert_eq!(table, installed, "stale expert eviction mutated table");
+
+        table
+            .evict_binding(0, 0, 1)
+            .expect("exact binding eviction");
+        let evicted = table.clone();
+        assert!(table.install_at(1, 0, 3, POINTERS).is_err());
+        assert_eq!(table, evicted, "generation mismatch mutated free slot");
+    }
+
+    #[test]
+    fn exact_install_validates_coordinates_generation_and_full_pointer_tuple() {
+        let mut table = CudaExpertSlotTableHost::new(2, 1).expect("slot table");
+        let empty = table.clone();
+
+        assert!(table.install_at(2, 0, 1, POINTERS).is_err());
+        assert!(table.install_at(0, 1, 1, POINTERS).is_err());
+        assert!(table.install_at(0, 0, 0, POINTERS).is_err());
+        assert!(
+            table
+                .install_at(0, 0, i32::MAX as u32 + 1, POINTERS)
+                .is_err()
+        );
+        for missing in [
+            CudaExpertSlotPointers {
+                gate_weight: 0,
+                ..POINTERS
+            },
+            CudaExpertSlotPointers {
+                gate_scale: 0,
+                ..POINTERS
+            },
+            CudaExpertSlotPointers {
+                up_weight: 0,
+                ..POINTERS
+            },
+            CudaExpertSlotPointers {
+                up_scale: 0,
+                ..POINTERS
+            },
+            CudaExpertSlotPointers {
+                down_weight: 0,
+                ..POINTERS
+            },
+            CudaExpertSlotPointers {
+                down_scale: 0,
+                ..POINTERS
+            },
+        ] {
+            assert!(table.install_at(0, 0, 1, missing).is_err());
+        }
+        assert_eq!(table, empty);
+    }
 
     #[test]
     fn terminal_generation_is_free_but_exhausted() {
@@ -1438,6 +1735,89 @@ impl CudaArtifactOperatorContext {
         Ok(())
     }
 
+    pub fn install_expert_slot_at(
+        &self,
+        table: &mut CudaExpertSlotTable,
+        expert: usize,
+        slot: u32,
+        generation: u32,
+        pointers: CudaExpertSlotPointers,
+    ) -> Result<CudaExpertSlotBinding> {
+        table.ensure_healthy()?;
+        let mut next = table.host.clone();
+        let binding = next.install_at(expert, slot, generation, pointers)?;
+        if next == table.host {
+            return Ok(binding);
+        }
+        let expert = u32::try_from(expert)
+            .map_err(|_| Error::Internal("CUDA expert index exceeds u32".into()))?;
+        let generation = i32::try_from(generation)
+            .map_err(|_| Error::Internal("CUDA expert generation exceeds i32".into()))?;
+        self.check_capture_safe("expert slot binding publication")?;
+        self.launched(unsafe {
+            self.module.install_expert_slot_binding(
+                &self.stream,
+                LaunchConfig::for_num_elems(1),
+                &mut table.gate_weight,
+                &mut table.gate_scale,
+                &mut table.up_weight,
+                &mut table.up_scale,
+                &mut table.down_weight,
+                &mut table.down_scale,
+                &mut table.expert_to_slot,
+                &mut table.expert_generation,
+                &mut table.slot_generation,
+                expert,
+                slot,
+                generation,
+                pointers.gate_weight,
+                pointers.gate_scale,
+                pointers.up_weight,
+                pointers.up_scale,
+                pointers.down_weight,
+                pointers.down_scale,
+            )
+        })?;
+        table.host = next;
+        Ok(binding)
+    }
+
+    pub fn evict_expert_slot_binding(
+        &self,
+        table: &mut CudaExpertSlotTable,
+        expert: usize,
+        slot: u32,
+        generation: u32,
+    ) -> Result<()> {
+        table.ensure_healthy()?;
+        let mut next = table.host.clone();
+        next.evict_binding(expert, slot, generation)?;
+        let expert = u32::try_from(expert)
+            .map_err(|_| Error::Internal("CUDA expert index exceeds u32".into()))?;
+        let next_generation = next.slot_generation[slot as usize];
+        self.check_capture_safe("expert slot binding eviction")?;
+        self.launched(unsafe {
+            self.module.evict_expert_slot_binding(
+                &self.stream,
+                LaunchConfig::for_num_elems(1),
+                &mut table.gate_weight,
+                &mut table.gate_scale,
+                &mut table.up_weight,
+                &mut table.up_scale,
+                &mut table.down_weight,
+                &mut table.down_scale,
+                &mut table.expert_to_slot,
+                &mut table.expert_generation,
+                &mut table.slot_generation,
+                expert,
+                slot,
+                next_generation,
+            )
+        })?;
+        table.host = next;
+        Ok(())
+    }
+
     pub fn install_expert_slot(
         &self,
         table: &mut CudaExpertSlotTable,
@@ -1448,20 +1828,36 @@ impl CudaArtifactOperatorContext {
         if let Some(binding) = table.host.binding(expert) {
             return Ok(binding);
         }
-        if pointers.gate_weight == 0
-            || pointers.gate_scale == 0
-            || pointers.up_weight == 0
-            || pointers.up_scale == 0
-            || pointers.down_weight == 0
-            || pointers.down_scale == 0
-        {
-            return Err(Error::Internal(
-                "CUDA expert slot table cannot install null weight/scale pointers".into(),
-            ));
-        }
         let mut next = table.host.clone();
         let binding = next.install(expert, pointers)?;
-        self.publish_expert_slot_table_host(table, next)?;
+        let expert = u32::try_from(expert)
+            .map_err(|_| Error::Internal("CUDA expert index exceeds u32".into()))?;
+        self.check_capture_safe("expert slot binding publication")?;
+        self.launched(unsafe {
+            self.module.install_expert_slot_binding(
+                &self.stream,
+                LaunchConfig::for_num_elems(1),
+                &mut table.gate_weight,
+                &mut table.gate_scale,
+                &mut table.up_weight,
+                &mut table.up_scale,
+                &mut table.down_weight,
+                &mut table.down_scale,
+                &mut table.expert_to_slot,
+                &mut table.expert_generation,
+                &mut table.slot_generation,
+                expert,
+                binding.slot as u32,
+                binding.generation,
+                pointers.gate_weight,
+                pointers.gate_scale,
+                pointers.up_weight,
+                pointers.up_scale,
+                pointers.down_weight,
+                pointers.down_scale,
+            )
+        })?;
+        table.host = next;
         Ok(binding)
     }
 
@@ -1471,11 +1867,15 @@ impl CudaArtifactOperatorContext {
         expert: usize,
     ) -> Result<bool> {
         table.ensure_healthy()?;
-        let mut next = table.host.clone();
-        if !next.evict(expert)? {
+        let Some(binding) = table.host.binding(expert) else {
             return Ok(false);
-        }
-        self.publish_expert_slot_table_host(table, next)?;
+        };
+        self.evict_expert_slot_binding(
+            table,
+            expert,
+            binding.slot as u32,
+            binding.generation as u32,
+        )?;
         Ok(true)
     }
 
@@ -1670,6 +2070,12 @@ impl CudaArtifactOperatorContext {
     pub fn record_upload_event(&self) -> Result<CudaUploadEvent> {
         Ok(CudaUploadEvent {
             event: cu(self.upload_stream.record_event(None))?,
+        })
+    }
+
+    pub fn record_compute_event(&self) -> Result<CudaComputeEvent> {
+        Ok(CudaComputeEvent {
+            event: cu(self.stream.record_event(None))?,
         })
     }
 

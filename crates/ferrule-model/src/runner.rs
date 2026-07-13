@@ -127,6 +127,39 @@ pub trait MultiSessionRunner: TopKModelRunner {
     /// Per-sequence execution state (position, KV, predictor, etc.).
     type SequenceState;
 
+    /// Describe model-owned expert residency capacity, when this runner uses MoE
+    /// expert residency managed by the runtime.
+    fn expert_residency_requirements(
+        &self,
+    ) -> Option<ferrule_common::expert_residency::ExpertResidencyRequirements> {
+        None
+    }
+
+    /// Whether runtime-owned expert residency control is already attached.
+    ///
+    /// This remains true when a runner is moved between executor instances, so
+    /// rebuilding an executor cannot replace live residency state.
+    fn expert_residency_control_installed(&self) -> bool {
+        false
+    }
+
+    /// Transfer runtime-owned expert residency control into the runner.
+    ///
+    /// Runners that report requirements must override this hook. Dense runners
+    /// retain the no-op default and never receive a controller from the runtime.
+    fn install_expert_residency_control(
+        &mut self,
+        _control: Box<dyn ferrule_common::expert_residency::ExpertResidencyControl>,
+    ) -> Result<()> {
+        if self.expert_residency_requirements().is_some() {
+            return Err(ferrule_common::Error::Execution(
+                "runner reports expert residency requirements but does not support installing expert residency control"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Execute a closure against an explicit sequence state instead of the
     /// runner's default session. The state is swapped in for the duration of
     /// the closure and swapped back afterwards, even on panic.

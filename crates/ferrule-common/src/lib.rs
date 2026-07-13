@@ -1,7 +1,15 @@
 //! Ferrule Common — shared types, errors, and observability infrastructure.
 
 pub mod execution;
+pub mod expert_residency;
 pub mod observability;
+
+pub use expert_residency::{
+    ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertInstallReason, ExpertKey, ExpertLease,
+    ExpertResidencyControl, ExpertResidencyCoordinator, ExpertResidencyCoordinatorStats,
+    ExpertResidencyGrant, ExpertResidencyRequirements, ExpertResidencyStats, ExpertSlotBinding,
+    ExpertSlotGeneration, ExpertSlotId, PreparedExpertInstall,
+};
 
 use thiserror::Error;
 
