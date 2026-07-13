@@ -66,6 +66,10 @@ pub use engine::{
     ResidentDriverStep, ResidentTokenEvent, ResidentTopKDriver, ResidentTopKDriverConfig,
     ResidentTopKDriverStats,
 };
+pub use expert_residency::{
+    ExpertLease, ExpertResidencyCoordinator, ExpertResidencyCoordinatorStats, ExpertSlotBinding,
+    ExpertSlotGeneration, ExpertSlotId, PreparedExpertInstall,
+};
 pub use generation::{GenerationConfig, GenerationResult, InferenceEngine, TokenEvent};
 pub use graph::builder::{
     GraphProgramBuildOptions, build_graph_program_from_descriptor,

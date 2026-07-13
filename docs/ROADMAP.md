@@ -776,6 +776,20 @@ E3 sequence ownership and E4 batch bindings.
 
 E4 native batching; required before E7 stable graphs.
 
+### Implementation checkpoint
+
+- [x] Add a model-neutral, key-generic `ExpertResidencyCoordinator` foundation in
+  runtime with stable slot IDs, monotonic slot generations, execution leases,
+  LRU selection among unleased slots, and two-phase
+  `prepare_install -> backend transfer -> publish_install` semantics. Unit gates
+  prove transfer-failure atomicity, lease-protected eviction, stale-generation
+  rejection, and deterministic slot reuse.
+- [ ] Connect coordinator ownership to the runner/backend residency hooks and delete
+  per-sequence planner/backend double bookkeeping.
+- [ ] Keep score/hash route IDs, weights, expert-to-slot resolution, and packed
+  expert grouping device-side; update stable pointer tables only when residency
+  changes.
+
 ### Deliverables
 
 - Router logits → top-k → weights → token/expert grouping stays device-side.

@@ -17,7 +17,11 @@
 use crate::storage::{
     DeviceMemoryKind, LocalPlacement, ModelRevision, ObjectLocator, Placement, StorageObjectId,
 };
-use ferrule_common::Result;
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::hash::Hash;
+
+use ferrule_common::{Error, Result};
 
 use ferrule_model::moe::streaming::{
     ExpertId, ExpertLoadSource, ExpertMatrixKind as RuntimeExpertMatrixKind, ExpertStorageTier,
@@ -149,6 +153,286 @@ impl From<RuntimeExpertTensorComponent> for crate::storage::id::ExpertTensorComp
             RuntimeExpertTensorComponent::Scale => Self::Scale,
             RuntimeExpertTensorComponent::Other(s) => Self::Other(s),
         }
+    }
+}
+
+// ── Stable expert slots and leases ────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ExpertSlotId(u32);
+
+impl ExpertSlotId {
+    pub fn get(self) -> u32 {
+        self.0
+    }
+
+    fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ExpertSlotGeneration(u32);
+
+impl ExpertSlotGeneration {
+    pub fn get(self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpertSlotBinding<K> {
+    pub key: K,
+    pub slot: ExpertSlotId,
+    pub generation: ExpertSlotGeneration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpertLease<K> {
+    binding: ExpertSlotBinding<K>,
+}
+
+impl<K: Copy> ExpertLease<K> {
+    pub fn binding(self) -> ExpertSlotBinding<K> {
+        self.binding
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreparedExpertInstall<K> {
+    key: K,
+    slot: ExpertSlotId,
+    previous_key: Option<K>,
+    previous_generation: ExpertSlotGeneration,
+    next_generation: ExpertSlotGeneration,
+}
+
+impl<K: Copy> PreparedExpertInstall<K> {
+    pub fn binding(self) -> ExpertSlotBinding<K> {
+        ExpertSlotBinding {
+            key: self.key,
+            slot: self.slot,
+            generation: self.next_generation,
+        }
+    }
+
+    pub fn evicted_key(self) -> Option<K> {
+        self.previous_key
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExpertResidencyCoordinatorStats {
+    pub resident: usize,
+    pub active_leases: usize,
+    pub installs: u64,
+    pub evictions: u64,
+    pub resident_hits: u64,
+    pub stale_releases: u64,
+}
+
+#[derive(Debug)]
+struct ExpertSlot<K> {
+    key: Option<K>,
+    generation: ExpertSlotGeneration,
+    leases: u32,
+    last_used: u64,
+}
+
+/// Model-neutral ownership of stable expert slots, generations, and execution
+/// leases. Backend payload installation happens between `prepare_install` and
+/// `publish_install`, so transfer failure leaves the published mapping unchanged.
+#[derive(Debug)]
+pub struct ExpertResidencyCoordinator<K> {
+    slots: Vec<ExpertSlot<K>>,
+    by_key: HashMap<K, ExpertSlotId>,
+    clock: u64,
+    stats: ExpertResidencyCoordinatorStats,
+}
+
+impl<K> ExpertResidencyCoordinator<K>
+where
+    K: Copy + Debug + Eq + Hash,
+{
+    pub fn new(capacity: usize) -> Result<Self> {
+        if capacity == 0 {
+            return Err(Error::Execution(
+                "expert residency coordinator capacity must be greater than zero".into(),
+            ));
+        }
+        if capacity > u32::MAX as usize {
+            return Err(Error::Execution(
+                "expert residency coordinator capacity exceeds u32".into(),
+            ));
+        }
+        Ok(Self {
+            slots: (0..capacity)
+                .map(|_| ExpertSlot {
+                    key: None,
+                    generation: ExpertSlotGeneration(0),
+                    leases: 0,
+                    last_used: 0,
+                })
+                .collect(),
+            by_key: HashMap::with_capacity(capacity),
+            clock: 0,
+            stats: ExpertResidencyCoordinatorStats::default(),
+        })
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.slots.len()
+    }
+
+    pub fn binding(&self, key: K) -> Option<ExpertSlotBinding<K>> {
+        let slot = *self.by_key.get(&key)?;
+        let entry = &self.slots[slot.index()];
+        (entry.key == Some(key)).then_some(ExpertSlotBinding {
+            key,
+            slot,
+            generation: entry.generation,
+        })
+    }
+
+    pub fn acquire(&mut self, key: K) -> Result<Option<ExpertLease<K>>> {
+        let Some(slot) = self.by_key.get(&key).copied() else {
+            return Ok(None);
+        };
+        self.clock = self.clock.saturating_add(1);
+        let entry = &mut self.slots[slot.index()];
+        if entry.key != Some(key) {
+            return Err(Error::Internal(
+                "expert residency key map and slot table diverged".into(),
+            ));
+        }
+        entry.leases = entry
+            .leases
+            .checked_add(1)
+            .ok_or_else(|| Error::Execution("expert lease count overflow".into()))?;
+        entry.last_used = self.clock;
+        self.stats.active_leases += 1;
+        self.stats.resident_hits = self.stats.resident_hits.saturating_add(1);
+        Ok(Some(ExpertLease {
+            binding: ExpertSlotBinding {
+                key,
+                slot,
+                generation: entry.generation,
+            },
+        }))
+    }
+
+    pub fn release(&mut self, lease: ExpertLease<K>) -> Result<()> {
+        let binding = lease.binding;
+        let Some(entry) = self.slots.get_mut(binding.slot.index()) else {
+            self.stats.stale_releases = self.stats.stale_releases.saturating_add(1);
+            return Err(Error::Execution(
+                "expert lease references a missing slot".into(),
+            ));
+        };
+        if entry.key != Some(binding.key) || entry.generation != binding.generation {
+            self.stats.stale_releases = self.stats.stale_releases.saturating_add(1);
+            return Err(Error::Execution(
+                "expert lease has a stale slot generation".into(),
+            ));
+        }
+        entry.leases = entry
+            .leases
+            .checked_sub(1)
+            .ok_or_else(|| Error::Internal("expert lease count underflow".into()))?;
+        self.stats.active_leases -= 1;
+        Ok(())
+    }
+
+    pub fn prepare_install(&self, key: K) -> Result<PreparedExpertInstall<K>> {
+        if self.by_key.contains_key(&key) {
+            return Err(Error::Execution(format!(
+                "expert {key:?} is already resident"
+            )));
+        }
+        let candidate = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.leases == 0)
+            .min_by_key(|(_, entry)| (entry.key.is_some(), entry.last_used))
+            .ok_or_else(|| Error::Execution("all expert residency slots are leased".into()))?;
+        let (index, entry) = candidate;
+        let next = entry
+            .generation
+            .0
+            .checked_add(1)
+            .filter(|generation| *generation != 0)
+            .ok_or_else(|| Error::Execution("expert slot generation exhausted".into()))?;
+        Ok(PreparedExpertInstall {
+            key,
+            slot: ExpertSlotId(index as u32),
+            previous_key: entry.key,
+            previous_generation: entry.generation,
+            next_generation: ExpertSlotGeneration(next),
+        })
+    }
+
+    pub fn publish_install(
+        &mut self,
+        prepared: PreparedExpertInstall<K>,
+    ) -> Result<ExpertSlotBinding<K>> {
+        if self.by_key.contains_key(&prepared.key) {
+            return Err(Error::Execution(format!(
+                "expert {:?} became resident before install publication",
+                prepared.key
+            )));
+        }
+        let entry = self
+            .slots
+            .get_mut(prepared.slot.index())
+            .ok_or_else(|| Error::Internal("prepared expert slot is missing".into()))?;
+        if entry.key != prepared.previous_key
+            || entry.generation != prepared.previous_generation
+            || entry.leases != 0
+        {
+            return Err(Error::Execution(
+                "prepared expert install became stale before publication".into(),
+            ));
+        }
+        if let Some(previous) = entry.key {
+            self.by_key.remove(&previous);
+            self.stats.evictions = self.stats.evictions.saturating_add(1);
+        }
+        self.clock = self.clock.saturating_add(1);
+        entry.key = Some(prepared.key);
+        entry.generation = prepared.next_generation;
+        entry.last_used = self.clock;
+        self.by_key.insert(prepared.key, prepared.slot);
+        self.stats.installs = self.stats.installs.saturating_add(1);
+        self.stats.resident = self.by_key.len();
+        Ok(prepared.binding())
+    }
+
+    pub fn evict(&mut self, key: K) -> Result<Option<ExpertSlotBinding<K>>> {
+        let Some(slot) = self.by_key.get(&key).copied() else {
+            return Ok(None);
+        };
+        let entry = &mut self.slots[slot.index()];
+        if entry.leases != 0 {
+            return Err(Error::Execution(format!(
+                "expert {key:?} cannot be evicted while leased"
+            )));
+        }
+        let binding = ExpertSlotBinding {
+            key,
+            slot,
+            generation: entry.generation,
+        };
+        entry.key = None;
+        entry.last_used = 0;
+        self.by_key.remove(&key);
+        self.stats.evictions = self.stats.evictions.saturating_add(1);
+        self.stats.resident = self.by_key.len();
+        Ok(Some(binding))
+    }
+
+    pub fn stats(&self) -> ExpertResidencyCoordinatorStats {
+        self.stats
     }
 }
 
@@ -296,6 +580,82 @@ mod tests {
         ExpertLoadSource::LocalTensorSet {
             tensors: vec![make_slice(expert, bytes)],
         }
+    }
+
+    fn install(
+        coordinator: &mut ExpertResidencyCoordinator<u32>,
+        key: u32,
+    ) -> ExpertSlotBinding<u32> {
+        let prepared = coordinator.prepare_install(key).unwrap();
+        coordinator.publish_install(prepared).unwrap()
+    }
+
+    #[test]
+    fn coordinator_install_is_failure_atomic_until_publish() {
+        let mut coordinator = ExpertResidencyCoordinator::new(1).unwrap();
+        let first = install(&mut coordinator, 7);
+        let prepared = coordinator.prepare_install(9).unwrap();
+
+        assert_eq!(prepared.evicted_key(), Some(7));
+        assert_eq!(coordinator.binding(7), Some(first));
+        assert_eq!(coordinator.binding(9), None);
+        assert_eq!(coordinator.stats().resident, 1);
+        assert_eq!(coordinator.stats().evictions, 0);
+    }
+
+    #[test]
+    fn coordinator_lease_blocks_eviction_and_slot_reuse_increments_generation() {
+        let mut coordinator = ExpertResidencyCoordinator::new(1).unwrap();
+        let first = install(&mut coordinator, 7);
+        let lease = coordinator.acquire(7).unwrap().unwrap();
+        let stale_lease = lease;
+
+        let error = coordinator.prepare_install(9).unwrap_err();
+        assert!(error.to_string().contains("leased"));
+        let error = coordinator.evict(7).unwrap_err();
+        assert!(error.to_string().contains("while leased"));
+
+        coordinator.release(lease).unwrap();
+        let second = install(&mut coordinator, 9);
+        assert_eq!(second.slot, first.slot);
+        assert!(second.generation.get() > first.generation.get());
+        assert_eq!(coordinator.binding(7), None);
+        assert_eq!(coordinator.binding(9), Some(second));
+
+        let error = coordinator.release(stale_lease).unwrap_err();
+        assert!(error.to_string().contains("stale slot generation"));
+        assert_eq!(coordinator.stats().active_leases, 0);
+        assert_eq!(coordinator.stats().stale_releases, 1);
+    }
+
+    #[test]
+    fn coordinator_rejects_stale_prepared_publication() {
+        let mut coordinator = ExpertResidencyCoordinator::new(1).unwrap();
+        install(&mut coordinator, 7);
+        let prepared = coordinator.prepare_install(9).unwrap();
+        let lease = coordinator.acquire(7).unwrap().unwrap();
+
+        let error = coordinator.publish_install(prepared).unwrap_err();
+        assert!(error.to_string().contains("became stale"));
+        assert!(coordinator.binding(7).is_some());
+        assert!(coordinator.binding(9).is_none());
+        coordinator.release(lease).unwrap();
+    }
+
+    #[test]
+    fn coordinator_evicts_least_recently_used_unleased_slot() {
+        let mut coordinator = ExpertResidencyCoordinator::new(2).unwrap();
+        let first = install(&mut coordinator, 1);
+        let second = install(&mut coordinator, 2);
+        let lease = coordinator.acquire(1).unwrap().unwrap();
+        coordinator.release(lease).unwrap();
+
+        let third = install(&mut coordinator, 3);
+        assert_eq!(third.slot, second.slot);
+        assert_ne!(third.slot, first.slot);
+        assert!(coordinator.binding(1).is_some());
+        assert!(coordinator.binding(2).is_none());
+        assert!(coordinator.binding(3).is_some());
     }
 
     // ── Adapter tests ──

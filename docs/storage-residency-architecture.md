@@ -80,7 +80,7 @@ The remaining problem is ownership, not absence of mechanisms:
 | `ferrule-model::moe::streaming` | planner, sources, host staging vocabulary | policy is still invoked by a model runner and cannot coordinate requests globally |
 | `DeepSeekV4Runner` | prediction, lookahead, prefetch sequencing | one implicit sequence owns behavior that should be shared/runtime policy |
 | `DeepSeekV4CudaOperatorCache` | resident handles, upload tickets, pinned cache, host cache, transfer counters, MoE workspace | backend resources are mixed with prepared weights, sequence KV, arenas, and diagnostics |
-| `ferrule-runtime::expert_residency` | generic trait/vocabulary | active DSV4 CUDA path does not yet use it as the authoritative coordinator |
+| `ferrule-runtime::expert_residency` | backend trait plus stable slot/generation/lease coordinator foundation | active DSV4 CUDA path does not yet use it as the authoritative coordinator |
 | `ResidentScheduler` | request admission and sequence actions | cannot budget or reserve actual expert resources before execution |
 
 The GB10 cold path remains dominated by prompt-dependent selected expert
@@ -372,21 +372,23 @@ Performance reports must distinguish:
 
 ### R2 — Introduce runtime coordinator
 
-- Move cross-request hotness/budget/prefetch policy to runtime.
-- Model emits demand/hints; backend returns outcomes.
-- Keep compatibility adapter for DSV4 planner while behavior is compared.
+- [x] Add the model-neutral stable slot/generation/lease state machine with
+  failure-atomic two-phase publication.
+- [ ] Move cross-request hotness/budget/prefetch policy to runtime.
+- [ ] Model emits demand/hints; backend returns outcomes.
+- [ ] Keep a temporary DSV4 planner adapter only while behavior is compared.
 
 ### R3 — Device routing and stable slots
 
-- Device top-k/weights/grouping.
-- Stable slot/generation table.
-- Remove host route/pointer uploads from steady path.
-- Add expert leases and event dependencies.
+- [ ] Device top-k/weights/grouping.
+- [x] Stable slot/generation table and lease-protected eviction semantics.
+- [ ] Remove host route/pointer uploads from steady path.
+- [ ] Connect backend event dependencies to expert leases.
 
 ### R4 — Native batch and graph integration
 
 - Group experts across real multi-sequence rows.
-- Use residency generation in `PreparedStepBinding` and graph bucket key.
+- Use residency generation in stable execution metadata and the graph bucket key.
 - Graph fallback on unsupported residency state uses the same eager pipeline.
 
 ---
