@@ -56,7 +56,6 @@ pub struct ResidentTokenEvent {
     pub token: u32,
     pub logit: Option<f32>,
     pub text: String,
-    pub generated_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -813,17 +812,30 @@ where
                 // dense slice ordered by state slot index. The executor uses
                 // state_slot to index into this slice.
                 let mut states_flat: Vec<R::SequenceState> = Vec::with_capacity(state_count);
+                let mut missing_session = None;
                 for scheduled_seq in &batch.sequences {
-                    let state = self
-                        .sequence_states
-                        .remove(&scheduled_seq.session_id)
-                        .ok_or_else(|| {
-                            Error::Internal(format!(
-                                "sequence state disappeared for session {:?}",
-                                scheduled_seq.session_id
-                            ))
-                        })?;
-                    states_flat.push(state);
+                    match self.sequence_states.remove(&scheduled_seq.session_id) {
+                        Some(state) => states_flat.push(state),
+                        None => {
+                            missing_session = Some(scheduled_seq.session_id);
+                            break;
+                        }
+                    }
+                }
+                if let Some(session_id) = missing_session {
+                    for (scheduled_seq, state) in batch.sequences.iter().zip(states_flat) {
+                        self.sequence_states.insert(scheduled_seq.session_id, state);
+                    }
+                    self.rollback_page_reservations(std::mem::take(&mut page_reservations));
+                    let error = Error::Internal(format!(
+                        "sequence state disappeared for session {session_id:?}"
+                    ));
+                    return Err(self.abort_action(
+                        &action,
+                        error,
+                        false,
+                        "sequence state collection",
+                    ));
                 }
 
                 let exec_result = self.executor.execute_batch_with_kv(
@@ -832,12 +844,10 @@ where
                     &page_reservations,
                 );
 
-                // Write back states regardless of success or failure.
-                for scheduled_seq in &batch.sequences {
-                    if !states_flat.is_empty() {
-                        self.sequence_states
-                            .insert(scheduled_seq.session_id, states_flat.remove(0));
-                    }
+                // Move every state back in linear time, including after execution failure.
+                debug_assert_eq!(batch.sequences.len(), states_flat.len());
+                for (scheduled_seq, state) in batch.sequences.iter().zip(states_flat) {
+                    self.sequence_states.insert(scheduled_seq.session_id, state);
                 }
 
                 match exec_result {
@@ -1067,7 +1077,6 @@ where
                 token: action.token_id,
                 logit: action.logit,
                 text,
-                generated_text: sequence.generated_text.clone(),
             };
             self.stats.emitted_tokens += 1;
             on_token(&event)?;
@@ -1659,6 +1668,24 @@ mod tests {
         driver_from_runner(MockTopKRunner::new(outputs))
     }
 
+    fn batched_driver_from_runner(
+        runner: MockTopKRunner,
+    ) -> ResidentTopKDriver<MockTopKRunner, PagedSequenceKvCache> {
+        ResidentTopKDriver::with_configs(
+            runner,
+            PagedSequenceKvCache::new(1, 1, 8, 2),
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 8,
+                max_active_sequences: 2,
+                max_decode_batch: 2,
+                max_batch_tokens: 16,
+                allow_mixed_batches: true,
+            },
+            NonZeroU32::new(1).unwrap(),
+            ResidentTopKDriverConfig::default(),
+        )
+    }
+
     #[test]
     fn driver_runs_request_to_max_tokens_and_frees_kv() {
         let mut driver = driver_with_outputs(vec![top(b'a' as u32), top(b'b' as u32)]);
@@ -1675,8 +1702,13 @@ mod tests {
             events.iter().map(|event| event.token).collect::<Vec<_>>(),
             vec![b'a' as u32, b'b' as u32]
         );
-        assert_eq!(events[0].text, "a");
-        assert_eq!(events[1].generated_text, "ab");
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
         assert_eq!(stats.prefill_chunks, 1);
         assert_eq!(stats.prefill_tokens, 2);
         assert_eq!(stats.decode_steps, 2);
@@ -1916,6 +1948,33 @@ mod tests {
         assert!(format!("{error}").contains("native executor is poisoned"));
         // The second request was never admitted because the executor is poisoned.
         assert_eq!(driver.scheduler().waiting_len(), 1);
+    }
+
+    #[test]
+    fn batch_execution_writes_back_every_sequence_state_on_success() {
+        let mut driver = batched_driver_from_runner(MockTopKRunner::new(vec![top(b'a' as u32)]));
+        driver.submit(request(50, &[1], 2, Vec::new()));
+        driver.submit(request(51, &[2], 2, Vec::new()));
+
+        let step = driver.step(&mut |_| Ok(())).unwrap();
+        assert!(matches!(step, ResidentDriverStep::Executed { rows: 2, .. }));
+        assert_eq!(driver.sequence_states.len(), 2);
+        assert_eq!(driver.sequence_states[&SessionId(1)].position, 1);
+        assert_eq!(driver.sequence_states[&SessionId(2)].position, 1);
+    }
+
+    #[test]
+    fn batch_execution_writes_back_every_sequence_state_on_failure() {
+        let runner = MockTopKRunner::new(vec![top(b'a' as u32)]).failing_next_mutation();
+        let mut driver = batched_driver_from_runner(runner);
+        driver.submit(request(52, &[1], 2, Vec::new()));
+        driver.submit(request(53, &[2], 2, Vec::new()));
+
+        let error = driver.step(&mut |_| Ok(())).unwrap_err();
+        assert!(format!("{error}").contains("simulated failure"));
+        assert_eq!(driver.scheduler().failed_len(), 2);
+        assert!(driver.sequence_states.is_empty());
+        assert_eq!(driver.executor().runner().released_sequence_states, 2);
     }
 
     #[cfg(target_pointer_width = "64")]

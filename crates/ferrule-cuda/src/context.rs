@@ -89,8 +89,33 @@ fn duration_us(duration: Duration) -> u64 {
 
 pub const ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE: usize = 128;
 
-fn env_feature_enabled(name: &str) -> bool {
-    std::env::var(name)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CudaDispatchConfig {
+    fp8_mma: bool,
+    grouped_wo_a_mma: bool,
+    moe_timing: bool,
+    moe_reduce: bool,
+    moe_tensor_core: bool,
+}
+
+impl CudaDispatchConfig {
+    fn from_env() -> Self {
+        Self::resolve(|name| std::env::var(name).ok())
+    }
+
+    fn resolve(mut env: impl FnMut(&str) -> Option<String>) -> Self {
+        Self {
+            fp8_mma: env_feature_enabled(env("FERRULE_CUDA_FP8_MMA").as_deref()),
+            grouped_wo_a_mma: env_feature_enabled(env("FERRULE_CUDA_GROUPED_WO_A_MMA").as_deref()),
+            moe_timing: env_moe_feature_enabled(env("FERRULE_CUDA_MOE_TIMING").as_deref(), false),
+            moe_reduce: env_moe_feature_enabled(env("FERRULE_CUDA_MOE_REDUCE").as_deref(), false),
+            moe_tensor_core: env_moe_feature_enabled(env("FERRULE_CUDA_MOE_TC").as_deref(), true),
+        }
+    }
+}
+
+fn env_feature_enabled(value: Option<&str>) -> bool {
+    value
         .map(|value| {
             !matches!(
                 value.trim().to_ascii_lowercase().as_str(),
@@ -100,12 +125,10 @@ fn env_feature_enabled(name: &str) -> bool {
         .unwrap_or(true)
 }
 
-fn fp8_mma_enabled() -> bool {
-    env_feature_enabled("FERRULE_CUDA_FP8_MMA")
-}
-
-fn grouped_wo_a_mma_enabled() -> bool {
-    env_feature_enabled("FERRULE_CUDA_GROUPED_WO_A_MMA")
+fn env_moe_feature_enabled(value: Option<&str>, default: bool) -> bool {
+    value
+        .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
+        .unwrap_or(default)
 }
 
 fn quantized_shape_uses_fp8_activation(shape: CudaArtifactLinearShape) -> bool {
@@ -1563,6 +1586,7 @@ pub struct CudaArtifactOperatorContext {
     upload_stream: Arc<CudaStream>,
     counters: CudaOpCounterCells,
     failpoints: CudaFailpoints,
+    dispatch_config: CudaDispatchConfig,
     /// When true, any device allocation, D2H copy, or stream-wide sync inside
     /// a capture region returns an error immediately. This is the E2
     /// capture-safe assertion mode.
@@ -1571,6 +1595,7 @@ pub struct CudaArtifactOperatorContext {
 
 impl CudaArtifactOperatorContext {
     pub fn new() -> Result<Self> {
+        let dispatch_config = CudaDispatchConfig::from_env();
         let ctx = cu(CudaContext::new(0))?;
         cu(ctx.bind_to_thread())?;
         let module = cu(crate::kernels::kernels::load(&ctx))?;
@@ -1588,6 +1613,7 @@ impl CudaArtifactOperatorContext {
             upload_stream,
             counters: CudaOpCounterCells::default(),
             failpoints: CudaFailpoints::default(),
+            dispatch_config,
             capture_safe: Cell::new(false),
         })
     }
@@ -2006,7 +2032,7 @@ impl CudaArtifactOperatorContext {
     /// that previously quantized activation buffers themselves use this to
     /// avoid applying the activation quantization contract twice.
     pub fn artifact_linear_uses_fp8_mma(&self, handle: &CudaArtifactLinearHandle) -> bool {
-        fp8_mma_enabled()
+        self.dispatch_config.fp8_mma
             && matches!(
                 handle.shape,
                 CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
@@ -2077,12 +2103,6 @@ impl CudaArtifactOperatorContext {
         Ok(CudaComputeEvent {
             event: cu(self.stream.record_event(None))?,
         })
-    }
-
-    fn moe_timing_enabled(&self) -> bool {
-        std::env::var("FERRULE_CUDA_MOE_TIMING")
-            .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
-            .unwrap_or(false)
     }
 
     pub fn reset_counters(&self) {
@@ -3384,7 +3404,7 @@ impl CudaArtifactOperatorContext {
         group_in: usize,
         o_lora_rank: usize,
     ) -> bool {
-        grouped_wo_a_mma_enabled()
+        self.dispatch_config.grouped_wo_a_mma
             && output_latent_dim.is_multiple_of(16)
             && group_in.is_multiple_of(128)
             && o_lora_rank.is_multiple_of(16)
@@ -5663,7 +5683,7 @@ impl CudaArtifactOperatorContext {
             "quantization blocks",
         )?;
         let row_width = checked_u32(input_size, "MoE segment input", "input_size")?;
-        let timing_enabled = self.moe_timing_enabled();
+        let timing_enabled = self.dispatch_config.moe_timing;
         let phase_start = timing_enabled.then(Instant::now);
         self.launched(unsafe {
             self.module.fp4_e2m1_e8m0_quantize_f32_packed(
@@ -6486,22 +6506,17 @@ impl CudaArtifactOperatorContext {
             )));
         }
 
-        let timing_enabled = self.moe_timing_enabled();
+        let timing_enabled = self.dispatch_config.moe_timing;
         let total_start = timing_enabled.then(Instant::now);
 
         let block = 256u32;
         let reduce_block = 128u32;
-        let use_reduce = std::env::var("FERRULE_CUDA_MOE_REDUCE")
-            .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
-            .unwrap_or(false);
+        let use_reduce = self.dispatch_config.moe_reduce;
         // FP4 mxf4 Tensor Core path is the default hot path. It is still under-utilized
         // at batch_cols=1, but avoids the scalar FP4 decode loop and remains env-gated
         // for A/B: set FERRULE_CUDA_MOE_TC=0 to force the scalar fallback.
-        let use_tensor_core = !use_reduce
-            && input.len.is_multiple_of(64)
-            && std::env::var("FERRULE_CUDA_MOE_TC")
-                .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
-                .unwrap_or(true);
+        let use_tensor_core =
+            !use_reduce && input.len.is_multiple_of(64) && self.dispatch_config.moe_tensor_core;
         let grid_inter = (
             (intermediate_size as u32 + block - 1) / block,
             num_experts as u32,
@@ -8413,6 +8428,63 @@ pub fn cuda_sparse_attention_sink_f32(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dispatch_config(overrides: &[(&str, &str)]) -> CudaDispatchConfig {
+        CudaDispatchConfig::resolve(|name| {
+            overrides
+                .iter()
+                .find_map(|(key, value)| (*key == name).then(|| (*value).to_owned()))
+        })
+    }
+
+    #[test]
+    fn cuda_dispatch_config_defaults_match_existing_behavior() {
+        assert_eq!(
+            dispatch_config(&[]),
+            CudaDispatchConfig {
+                fp8_mma: true,
+                grouped_wo_a_mma: true,
+                moe_timing: false,
+                moe_reduce: false,
+                moe_tensor_core: true,
+            }
+        );
+    }
+
+    #[test]
+    fn cuda_dispatch_config_honors_environment_overrides() {
+        assert_eq!(
+            dispatch_config(&[
+                ("FERRULE_CUDA_FP8_MMA", " off "),
+                ("FERRULE_CUDA_GROUPED_WO_A_MMA", "NO"),
+                ("FERRULE_CUDA_MOE_TIMING", "1"),
+                ("FERRULE_CUDA_MOE_REDUCE", "yes"),
+                ("FERRULE_CUDA_MOE_TC", "FALSE"),
+            ]),
+            CudaDispatchConfig {
+                fp8_mma: false,
+                grouped_wo_a_mma: false,
+                moe_timing: true,
+                moe_reduce: true,
+                moe_tensor_core: false,
+            }
+        );
+    }
+
+    #[test]
+    fn cuda_dispatch_config_preserves_moe_whitespace_semantics() {
+        let config = dispatch_config(&[
+            ("FERRULE_CUDA_FP8_MMA", " false "),
+            ("FERRULE_CUDA_MOE_TIMING", " false "),
+            ("FERRULE_CUDA_MOE_REDUCE", " 0 "),
+            ("FERRULE_CUDA_MOE_TC", " false "),
+        ]);
+
+        assert!(!config.fp8_mma);
+        assert!(config.moe_timing);
+        assert!(config.moe_reduce);
+        assert!(config.moe_tensor_core);
+    }
 
     fn test_slot_pointers(seed: u64) -> CudaExpertSlotPointers {
         CudaExpertSlotPointers {

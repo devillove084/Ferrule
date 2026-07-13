@@ -14,7 +14,10 @@ Related documents:
 - [`execution-engine-architecture.md`](execution-engine-architecture.md) —
   prepared executor, sequence state, physical KV, device router, and E6
   integration.
-- [`ROADMAP.md`](ROADMAP.md) — E0–E8 dependencies and gates.
+- [`ROADMAP.md`](ROADMAP.md) — E0–E9 dependencies and gates.
+- [`expert-memory-architecture.md`](expert-memory-architecture.md) — local
+  whole-expert pageable/pinned budgets, owner-thread LRU, GB10 constraints, and
+  telemetry rules.
 - [`status/2026-07-11-gb10-dsv4.md`](status/2026-07-11-gb10-dsv4.md) — current
   DSV4 measurements and known hot-path costs.
 

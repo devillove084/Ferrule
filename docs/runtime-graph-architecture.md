@@ -535,7 +535,7 @@ This avoids building a separate training abstraction that duplicates inference l
 ## Graph-IR migration plan
 
 The phases below describe graph-IR construction/materialization. They do not replace
-the E0–E8 execution-engine roadmap. Backend graph lowering consumes an already
+the E0–E9 execution-engine roadmap. Backend graph lowering consumes an already
 prepared execution plan and explicit sequence/arena bindings; it must not become a
 second execution ownership system.
 

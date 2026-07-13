@@ -58,7 +58,9 @@ HTTP and SSE, while one dedicated model thread owns the synchronous resident dri
 Bounded request/token channels provide admission control and backpressure; disconnects
 cancel at a model-step boundary without poisoning other requests. Chat and text
 completion endpoints currently expose truthful greedy (`temperature = 0`, `n = 1`)
-semantics.
+semantics. Expert pageable/pinned retention is configured with entry and byte budgets,
+uses one O(1) owner-thread LRU/accounting primitive, and shares host bundles through
+`Arc` rather than cloning expert tensors on cache hits.
 
 The architecture is **not** yet vLLM/SGLang performance parity:
 
@@ -66,8 +68,8 @@ The architecture is **not** yet vLLM/SGLang performance parity:
 - device sampling, fusion, automatic radix-prefix lookup, and production metrics remain;
 - official vLLM/SGLang serving benchmark results have not yet been recorded.
 
-Next are E7 stable graph buckets and E8 fusion, device sampling, and competitive
-validation. See the
+Next are official eager serving baselines, E7 stable graph buckets, E8 fusion/device
+sampling, and E9 cache-aware single-node serving maturity. See the
 [execution engine design](docs/execution-engine-architecture.md) and
 [roadmap](docs/ROADMAP.md).
 
@@ -79,8 +81,8 @@ validation. See the
 |---|---|
 | **Policy-composed model descriptions** | Model families map source tensors into semantic attention, FFN/MoE, KV, residency, quantization, and speculation policies. DSV4 now separates fully prepared layers, backend expert runtime, explicit sequence state, and reusable eager arenas. |
 | **Neutral execution ABI** | One public `ExecutionBatch` expresses packed/ragged rows, phases, state slots, KV bindings, and strict logits intent; runtime correlation stays private and native multi-session execution consumes it directly. |
-| **MoE-first execution** | Router logits, hash/top-k selection, selected experts, shared experts, and DSV4 expert-streaming mechanisms are explicit objects rather than opaque kernel details. Cross-request residency coordination is still planned. |
-| **Storage/residency vocabulary** | `StorageObjectId`, `ObjectLocator`, `Placement`, `ObjectReplica` provide typed storage vocabulary. DSV4 currently uses a model-local planner; runtime-owned budget/eviction coordination is an E6 target. |
+| **MoE-first execution** | Router logits, hash/top-k selection, selected experts, shared experts, and DSV4 expert-streaming mechanisms are explicit objects rather than opaque kernel details. Runtime owns cross-request stable-slot/generation/lease residency. |
+| **Storage/residency and memory vocabulary** | `StorageObjectId`, `ObjectLocator`, `Placement`, and `ObjectReplica` describe storage; generic `MemoryPoolLimits`, `MemoryPoolStats`, and `OwnerMemoryLru` enforce local whole-expert host/pinned retention without model-specific policy leakage. |
 | **cuda-oxide kernels** | Custom CUDA kernels integrated with the Rust runtime: quantized GEMV, packed FP4 expert execution, sparse attention, artifact-preserving operators. |
 | **Safetensors source binding** | Inspect and bind Hugging Face safetensors by semantic role, with bounded reads instead of loading a 100 GB+ checkpoint into RAM. |
 | **WeightPack execution artifact** | Layer weights quantized once and reloaded from a Ferrule-owned package. GGUF remains a compatibility/PK path. |
@@ -192,8 +194,8 @@ just chat models/OLMoE-Instruct q4 -n 256
 | Real large-model milestone | DeepSeek V4 Flash + DSpark full 43-layer CUDA greedy chat plus `bench-interactive` through `ResidentTopKDriver` |
 | Execution ABI | E1–E4 complete: public `ExecutionBatch`, prepared-executor traits, runtime-private `ScheduledBatch`, strict validation, and native packed multi-session execution |
 | DSV4 execution boundary | The model owns HC/MLA/compressor/router/MoE math; runtime remains model-neutral and owns scheduling plus logical page lifecycle through generic traits |
-| Expert streaming | `ExpertStreamingPlanner` + `ExpertStreamingReader` + `ExpertResidencyBackend` trait |
-| Storage/residency | `ferrule-runtime::storage` module: vocabulary types + `StorageCatalog` + `TransferEngine` traits |
+| Expert streaming | immutable source catalogs + `ExpertStreamingReader`; CPU/reference retains `ExpertStreamingPlanner`, while CUDA uses runtime-owned stable-slot residency and async physical uploads |
+| Storage/residency | `ferrule-runtime::storage` vocabulary plus runtime expert residency; `ferrule-common::memory` supplies model-neutral entry/byte budgets, stats, topology vocabulary, and owner-thread LRU |
 | Attention | OLMoE GQA executable; DSV4 MLA sparse attention correctness-first CUDA path |
 | Hyper-connections | DSV4 HC source binding + reference `hc_pre`/`hc_post`/`hc_head` |
 | KV cache | E5 complete: `KvPageManager` plus bounded CUDA multi-plane pools, paged attention/indexer kernels, rollback, COW, preempt/restore, and exact-prefix sharing; host caches are reference infrastructure |
@@ -282,10 +284,11 @@ just lint           # fmt + clippy
 | Document | Content |
 |---|---|
 | [Architecture](docs/ferrule_arch.md) | Repository crates, model boundaries, current runtime, serving direction, and alignment targets |
-| [Execution Engine](docs/execution-engine-architecture.md) | E1–E6 implemented ownership: neutral ABI, prepared plans, sequence state, arenas, native batching, physical paged KV, and runtime expert residency; E7–E8 targets follow |
-| [Serving](docs/serving.md) | Axum/Hyper/Tokio selection, dedicated model-worker ownership, OpenAI/SSE contract, cancellation, commands, and official benchmark targets |
-| [Roadmap](docs/ROADMAP.md) | Canonical E0–E8 dependency plan with phase-owned correctness/performance gates and non-goals |
-| [Storage & Residency](docs/storage-residency-architecture.md) | Current/target expert residency ownership, slots, leases, transfers, policy, metrics, and E6 migration |
+| [Execution Engine](docs/execution-engine-architecture.md) | E1–E6 implemented ownership: neutral ABI, prepared plans, sequence state, arenas, native batching, physical paged KV, and runtime expert residency; E7–E9 targets follow |
+| [Serving](docs/serving.md) | Axum/Hyper/Tokio selection, dedicated model-worker ownership, OpenAI/SSE contract, cancellation, commands, cache budgets, and official benchmark targets |
+| [Roadmap](docs/ROADMAP.md) | Canonical E0–E9 dependency plan with phase-owned correctness/performance gates and non-goals |
+| [Storage & Residency](docs/storage-residency-architecture.md) | Storage identity/placement plus implemented expert slots, leases, transfers, policy, and metrics |
+| [Expert Memory & Telemetry](docs/expert-memory-architecture.md) | Model-neutral owner-thread memory pools, host/pinned expert budgets, GB10 constraints, and benchmark-safe telemetry |
 | [Runtime Graph](docs/runtime-graph-architecture.md) | Device-independent graph IR, `GraphNode`, dialects, `GraphProgram`, external bindings, and explicit reference execution state |
 
 ---

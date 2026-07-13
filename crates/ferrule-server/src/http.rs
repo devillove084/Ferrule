@@ -665,7 +665,6 @@ mod tests {
                 token: 42,
                 logit: Some(1.0),
                 text: "ok".into(),
-                generated_text: "ok".into(),
             });
             let mut state = SequenceState::from_request(&request, session_id);
             state.generated = 1;

@@ -20,6 +20,9 @@ Related canonical documents:
   graph capture.
 - [`storage-residency-architecture.md`](storage-residency-architecture.md) —
   storage tiers, replicas, transfers, and residency policy.
+- [`expert-memory-architecture.md`](expert-memory-architecture.md) — model-neutral
+  owner-thread memory pools, expert host/pinned budgets, GB10 constraints, and
+  benchmark-safe telemetry.
 
 ---
 
@@ -126,7 +129,9 @@ batches; E5 owns authoritative physical paged multi-plane CUDA KV with COW,
 preemption/restore, and exact-prefix sharing; E6 owns device route/group resolution
 and runtime-controlled expert slots, generations, leases, and publication. The CUDA
 side now owns only physical source/staging/upload/table resources for residency.
-Compressor control and stable CUDA graph buckets remain later work. The model-neutral
+Whole-expert pageable/pinned retention now uses model-neutral entry+byte budgets,
+shared bundle allocations, O(1) owner-thread LRU/accounting, and explicit peak/rejection
+statistics. Compressor control and stable CUDA graph buckets remain later work. The model-neutral
 Axum/Hyper/Tokio serving substrate is now active: bounded async handlers feed one
 model-owner thread, OpenAI chat/text completion streams carry usage and `[DONE]`, and
 disconnect cancellation releases request state at a model-step boundary. Official
@@ -175,6 +180,7 @@ flowchart TD
     E5 --> E7[E7 Stable CUDA graph buckets]
     E6 --> E7
     E7 --> E8[E8 Fusion, device sampling, and competitive validation]
+    E8 --> E9[E9 Single-node serving maturity]
 ```
 
 Serving is unlocked after E4 plus the first E5 physical-KV slice. Prefix reuse and
@@ -214,8 +220,9 @@ Every phase must preserve these invariants:
 
 ### Hot path
 
-- No artifact discovery, environment parsing, string key construction, or weight
-  upload in an execute call.
+- No artifact discovery, environment parsing, string key construction, or fixed-weight
+  upload in an execute call. CUDA dispatch and DSV4 telemetry controls are frozen at
+  construction/preparation time.
 - No stream-wide synchronization as a semantic dependency.
 - No host-dependent intermediate D2H after E4; diagnostics are opt-in and measured
   separately.
@@ -224,7 +231,7 @@ Every phase must preserve these invariants:
 
 ### Continuous benchmark gate
 
-Every E1–E8 performance exit gate includes reproducible cold/warm measurements for
+Every E1–E9 performance exit gate includes reproducible cold/warm measurements for
 its affected scenarios. Report TTFT and ITL p50/p95, prefill/decode throughput, and
 relevant allocation/copy/sync/cache counters at phase entry and exit. Headline runs
 must keep profiling synchronizations disabled. This is a continuing regression gate
@@ -270,7 +277,7 @@ gates belong to the phase whose invariant they protect; they do not reopen E0.
 - E3 owns generalized `SequenceExecutionState` step commit, poison, reset, and
   compressor/indexer transition semantics beyond the E1 single-runner adapter.
 - E5 owns physical KV reserve → execute → commit/rollback semantics.
-- Every E1–E8 phase owns the global cold/warm p50/p95 benchmark gate for the paths
+- Every E1–E9 phase owns the global cold/warm p50/p95 benchmark gate for the paths
   it changes. This reporting is continuous regression evidence, not an E0 blocker.
 - Arena hit/miss/grow and reusable executable-cache counters become populated E2/E7
   gates when those resources exist; E0 does not fabricate zero-value ownership.
@@ -813,6 +820,14 @@ E4 native batching; required before E7 stable graphs.
   the abandoned/retired lists until completion events make them safe to release.
 - [x] DSV4 operator counters expose aggregate runtime-controller residency stats in
   addition to physical upload, hit, wait, and eviction counters.
+- [x] Whole-expert pageable and pinned retention use shared model-neutral
+  `MemoryPoolLimits`/`MemoryPoolStats` and one synchronization-free O(1) owner-thread
+  LRU. Host-cache hits return `Arc<ExpertComputeBundle>` without tensor deep copies;
+  both pools enforce entry and byte budgets and reject oversized entries without
+  disturbing same-key residents.
+- [x] Serving freezes host/pinned cache entry+MiB limits into `ExpertMemoryPolicy` and
+  passes them to the actual CUDA cache construction path. The obsolete
+  `FERRULE_DSV4_PINNED_EXPERT_CACHE_CAPACITY` policy branch is deleted.
 - [x] DSV4 score/hash route IDs and weights stay device-side; packed fixed-eight
   grouping and stable-slot resolution preserve complete route coverage and
   token-major route-rank reduction across mixed sequences.
@@ -841,12 +856,14 @@ For the implemented resident/publication paths:
 
 ### Completion validation
 
-- `ferrule-common`: 36 tests passed.
-- `ferrule-model`: 179 unit tests plus integration coverage passed.
-- `ferrule-runtime`: 292 tests passed with one expensive local test ignored.
-- `ferrule-server`: 16 protocol/worker tests passed, including official-client payload
+- `ferrule-common`: 41 tests passed, including byte-budget, hit-promotion, disabled,
+  and oversized-replacement owner-LRU cases.
+- `ferrule-model`: 188 unit tests plus local descriptor integration coverage passed.
+- `ferrule-runtime`: 259 unit tests, 12 integration tests, 8 storage tests, and local
+  artifact coverage passed with one expensive CPU reference test ignored.
+- `ferrule-server`: 17 protocol/worker tests passed, including official-client payload
   shapes and disconnect cancellation without worker poisoning.
-- `ferrule-cli`: 14 tests passed.
+- `ferrule-cli`: 16 tests passed, including checked cache-budget conversion.
 - `just test-cuda-required` passed after the serving changes.
 - CUDA `expert_slot_resolve`: 5 tests passed.
 - Real DSV4 CUDA gates passed for packed batch-2/batch-4 exactness, ragged/mixed
@@ -951,13 +968,55 @@ quality settings.
 
 ---
 
+## E9 — Single-node serving maturity and cache-aware operation
+
+**Status: planned after the first official E6/E7/E8 serving baselines.**
+
+### Depends on
+
+Truthful OpenAI serving, authoritative E5 KV pages, E6 residency, and measured E7/E8
+execution behavior.
+
+### Deliverables
+
+- automatic radix-prefix lookup, admission, eviction, and hit-quality policy over the
+  authoritative E5 page/COW lifecycle;
+- periodic owner-thread metrics snapshots for scheduler, KV, expert memory, transfers,
+  cancellation, backpressure, TTFT, and ITL without per-token logging;
+- bounded sampled CUDA-event profiling with no model-thread synchronization or
+  unbounded telemetry queue;
+- soak, OOM, cancellation, slow-client, overload, and graceful-drain validation;
+- reproducible vLLM/SGLang benchmark regression suites and archived hardware/config
+  manifests;
+- cache/scheduler autotuning constrained by explicit memory budgets.
+
+### Correctness and performance exit gate
+
+- prefix hits and misses are exact against uncached execution, including partial-tail
+  COW, cancellation, and stale-generation rejection;
+- metrics/logging off and counters-only modes do not alter token/logit output;
+- bounded telemetry cannot block the model owner; overflow drops samples and increments
+  a counter;
+- long-running serving stays within configured KV/expert memory budgets without leaked
+  requests, pages, leases, upload tickets, or cache entries;
+- official concurrency sweeps report stable TTFT/ITL/throughput and memory high-water
+  marks.
+
+### Not in E9
+
+- distributed serving, tensor/expert parallelism, NCCL/DeepEP, RDMA, and remote cache.
+
+---
+
 ## 7. Immediate implementation slices
 
 E0–E6 and implementation Slices A–D are complete. They remain below as the historical
-execution order and validation record. The active sequence is now: validate the new
-OpenAI HTTP/SSE substrate with official vLLM/SGLang clients, implement E7 stable CUDA
-graph buckets, then complete E8 device sampling, profiler-driven fusion, metrics, and
-competitive reporting.
+execution order and validation record. Benchmark-hygiene P0 is also complete: profiling
+is off by default, CUDA dispatch controls are frozen, per-token generated-text cloning
+and O(batch²) state removal are gone, and expert host/pinned retention is byte-budgeted.
+The active sequence is now: record official E6 eager baselines, implement E7 stable
+CUDA graph buckets, complete E8 device sampling and profiler-driven fusion, then close
+E9 cache-aware single-node serving maturity.
 
 ### Slice A — E1 neutral ABI and compatibility adapter
 

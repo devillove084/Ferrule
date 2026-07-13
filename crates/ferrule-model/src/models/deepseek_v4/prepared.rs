@@ -11,7 +11,7 @@ use ferrule_common::execution::{
 use ferrule_common::{Error, Result};
 
 use crate::execution::PreparedModel;
-use crate::moe::streaming::{ExpertSourceCatalog, ExpertStreamingPolicy};
+use crate::moe::streaming::{ExpertMemoryPolicy, ExpertSourceCatalog, ExpertStreamingPolicy};
 
 use super::artifact::DeepSeekV4ArtifactModel;
 use super::layer::DeepSeekV4Layer;
@@ -24,6 +24,8 @@ pub struct DeepSeekV4PrepareOptions {
     pub output_head_chunk_rows: usize,
     pub expert_reader_max_tensor_bytes: u64,
     pub moe_prefetch_experts: usize,
+    /// Retention limits for pageable and pinned whole-expert host caches.
+    pub expert_memory_policy: ExpertMemoryPolicy,
     /// Optional bounded per-layer resident hotset. `0` keeps the managed-memory
     /// default (no planner eviction); non-zero clamps residency to at least
     /// `num_experts_per_tok` and retains hottest routed experts first.
@@ -37,6 +39,7 @@ impl Default for DeepSeekV4PrepareOptions {
             output_head_chunk_rows: 1024,
             expert_reader_max_tensor_bytes: 64 * 1024 * 1024,
             moe_prefetch_experts: 0,
+            expert_memory_policy: ExpertMemoryPolicy::default(),
             moe_hotset_experts: 0,
         }
     }
@@ -112,8 +115,8 @@ pub struct DeepSeekV4ExecutionPolicy {
     fused_indexer_topk: bool,
     fused_indexer_topk_prefill: bool,
     fused_indexer_topk_decode: bool,
-    pinned_expert_cache_capacity: usize,
     expert_upload_inflight: usize,
+    profile: bool,
     profile_sync: bool,
     parity_checkpoint_selection: Option<(usize, String)>,
 }
@@ -130,8 +133,8 @@ impl Default for DeepSeekV4ExecutionPolicy {
             fused_indexer_topk: true,
             fused_indexer_topk_prefill: false,
             fused_indexer_topk_decode: false,
-            pinned_expert_cache_capacity: 64,
             expert_upload_inflight: 32,
+            profile: false,
             profile_sync: false,
             parity_checkpoint_selection: None,
         }
@@ -171,12 +174,12 @@ impl DeepSeekV4ExecutionPolicy {
         self.fused_indexer_topk && self.fused_indexer_topk_decode
     }
 
-    pub const fn pinned_expert_cache_capacity(&self) -> usize {
-        self.pinned_expert_cache_capacity
-    }
-
     pub const fn expert_upload_inflight(&self) -> usize {
         self.expert_upload_inflight
+    }
+
+    pub const fn profile_enabled(&self) -> bool {
+        self.profile
     }
 
     pub const fn profile_sync(&self) -> bool {
@@ -244,11 +247,7 @@ impl DeepSeekV4ExecutionPolicy {
             lookup("FERRULE_DSV4_FUSED_INDEXER_TOPK_DECODE")?,
             false,
         )?;
-        let pinned_expert_cache_capacity = parse_env_usize(
-            "FERRULE_DSV4_PINNED_EXPERT_CACHE_CAPACITY",
-            lookup("FERRULE_DSV4_PINNED_EXPERT_CACHE_CAPACITY")?,
-            64,
-        )?;
+
         let expert_upload_inflight = parse_env_usize(
             "FERRULE_DSV4_EXPERT_UPLOAD_INFLIGHT",
             lookup("FERRULE_DSV4_EXPERT_UPLOAD_INFLIGHT")?,
@@ -260,6 +259,15 @@ impl DeepSeekV4ExecutionPolicy {
             lookup("FERRULE_DSV4_PROFILE_SYNC")?,
             false,
         )?;
+        // Existing diagnostic modes preserve their semantics by implying
+        // profiling even when PROFILE is absent or explicitly off.
+        let profile = profile_sync
+            || prefill_progress
+            || parse_env_bool(
+                "FERRULE_DSV4_PROFILE",
+                lookup("FERRULE_DSV4_PROFILE")?,
+                false,
+            )?;
         let parity_checkpoint_selection = parse_parity_checkpoint_selection(
             lookup("FERRULE_DSV4_PARITY_CHECKPOINT_LAYER")?,
             lookup("FERRULE_DSV4_PARITY_CHECKPOINT_STAGE")?,
@@ -275,8 +283,8 @@ impl DeepSeekV4ExecutionPolicy {
             fused_indexer_topk,
             fused_indexer_topk_prefill,
             fused_indexer_topk_decode,
-            pinned_expert_cache_capacity,
             expert_upload_inflight,
+            profile,
             profile_sync,
             parity_checkpoint_selection,
         })
@@ -620,6 +628,8 @@ mod tests {
     use ferrule_common::execution::{KvBindingMode, LogitsRowPolicy};
 
     use super::*;
+    use crate::execution::ModelExecutionBackend;
+    use crate::models::deepseek_v4::operators::DeepSeekV4OperatorContext;
 
     #[test]
     fn prepared_layer_experts_retain_catalog_identity_and_resolved_capacities() {
@@ -728,8 +738,8 @@ mod tests {
             ("FERRULE_DSV4_HASH_PREFETCH_WINDOW", "true"),
             ("FERRULE_MANAGED_EXPERTS", "false"),
             ("FERRULE_DSV4_FUSED_INDEXER_TOPK_PREFILL", "true"),
-            ("FERRULE_DSV4_PINNED_EXPERT_CACHE_CAPACITY", "12"),
             ("FERRULE_DSV4_EXPERT_UPLOAD_INFLIGHT", "7"),
+            ("FERRULE_DSV4_PROFILE", "0"),
             ("FERRULE_DSV4_PROFILE_SYNC", "1"),
             ("FERRULE_DSV4_PARITY_CHECKPOINT_LAYER", "4"),
             ("FERRULE_DSV4_PARITY_CHECKPOINT_STAGE", "attention"),
@@ -747,13 +757,69 @@ mod tests {
         assert!(!policy.managed_experts());
         assert!(policy.fused_indexer_prefill_topk());
         assert!(!policy.fused_indexer_decode_topk());
-        assert_eq!(policy.pinned_expert_cache_capacity(), 12);
         assert_eq!(policy.expert_upload_inflight(), 7);
+        assert!(policy.profile_enabled());
         assert!(policy.profile_sync());
         assert_eq!(
             policy.parity_checkpoint_selection(),
             Some((4, "attention".to_owned()))
         );
+    }
+
+    #[test]
+    fn execution_policy_defaults_to_profile_off() {
+        let policy = DeepSeekV4ExecutionPolicy::resolve_with(|_| Ok(None)).unwrap();
+        assert!(!policy.profile_enabled());
+        assert!(!policy.profile_sync());
+
+        let memory = DeepSeekV4PrepareOptions::default().expert_memory_policy;
+        assert_eq!(memory.host_staged.max_entries, 256);
+        assert_eq!(memory.host_staged.max_bytes, u64::MAX);
+        assert_eq!(memory.pinned_host.max_entries, 64);
+        assert_eq!(memory.pinned_host.max_bytes, u64::MAX);
+    }
+
+    #[test]
+    fn execution_policy_enables_profile_without_sync() {
+        let policy = DeepSeekV4ExecutionPolicy::resolve_with(|name| {
+            Ok((name == "FERRULE_DSV4_PROFILE").then(|| "true".to_string()))
+        })
+        .unwrap();
+        assert!(policy.profile_enabled());
+        assert!(!policy.profile_sync());
+    }
+
+    #[test]
+    fn profile_gate_keeps_stats_empty_off_and_records_on() {
+        let mut off = DeepSeekV4OperatorContext::new(
+            ModelExecutionBackend::Cpu,
+            &DeepSeekV4ExecutionPolicy::default(),
+            ExpertMemoryPolicy::default(),
+        )
+        .unwrap();
+        assert!(off.profile_start().is_none());
+        off.record_layer_prefill(3, 7, 11);
+        off.record_attention_call(3, 7);
+        assert!(off.layer_profile_stats().is_empty());
+        assert!(off.attention_profile_stats().is_empty());
+
+        let policy = DeepSeekV4ExecutionPolicy {
+            profile: true,
+            ..DeepSeekV4ExecutionPolicy::default()
+        };
+        let mut on = DeepSeekV4OperatorContext::new(
+            ModelExecutionBackend::Cpu,
+            &policy,
+            ExpertMemoryPolicy::default(),
+        )
+        .unwrap();
+        let start = on.profile_start();
+        assert!(start.is_some());
+        let elapsed_us = on.finish_profile_stage(start).unwrap().unwrap();
+        on.record_layer_prefill(3, 7, elapsed_us);
+        on.record_attention_call(3, 7);
+        assert_eq!(on.layer_profile_stats()[0].prefill_calls, 1);
+        assert_eq!(on.attention_profile_stats()[0].calls, 1);
     }
 
     #[test]

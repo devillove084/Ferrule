@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 #[cfg(feature = "cuda")]
 use crate::bench::{GoldenTurn, InteractiveTrace, compare_interactive_trace};
 #[cfg(feature = "cuda")]
+use ferrule_common::MemoryPoolStats;
+#[cfg(feature = "cuda")]
 use ferrule_model::{
     ChatTemplate, ModelExecutionBackend, ModelRunner,
     models::deepseek_v4::{
@@ -777,8 +779,8 @@ fn run_with_resident_driver(
         counters_now.expert_loads,
         counters_now.expert_load_bytes,
         counters_now.expert_evictions,
-        counters_now.expert_host_cache_entries,
-        counters_now.expert_host_cache_bytes,
+        counters_now.expert_host_cache.entries_used,
+        counters_now.expert_host_cache.bytes_used,
         layer_stats.iter().map(|s| s.resident_experts).sum(),
         layer_stats.iter().map(|s| s.resident_expert_bytes).sum(),
     );
@@ -878,6 +880,21 @@ fn resident_driver_stats_delta(
         finished_sequences: after
             .finished_sequences
             .saturating_sub(before.finished_sequences),
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn memory_pool_stats_delta(before: MemoryPoolStats, after: MemoryPoolStats) -> MemoryPoolStats {
+    MemoryPoolStats {
+        limits: after.limits,
+        entries_used: after.entries_used,
+        bytes_used: after.bytes_used,
+        peak_bytes_used: after.peak_bytes_used,
+        hits: after.hits.saturating_sub(before.hits),
+        misses: after.misses.saturating_sub(before.misses),
+        admissions: after.admissions.saturating_sub(before.admissions),
+        evictions: after.evictions.saturating_sub(before.evictions),
+        rejections: after.rejections.saturating_sub(before.rejections),
     }
 }
 
@@ -1083,28 +1100,14 @@ fn dsv4_operator_counters_delta(
         expert_evictions: after
             .expert_evictions
             .saturating_sub(before.expert_evictions),
-        expert_host_cache_hits: after
-            .expert_host_cache_hits
-            .saturating_sub(before.expert_host_cache_hits),
-        expert_host_cache_misses: after
-            .expert_host_cache_misses
-            .saturating_sub(before.expert_host_cache_misses),
-        expert_host_cache_evictions: after
-            .expert_host_cache_evictions
-            .saturating_sub(before.expert_host_cache_evictions),
-        expert_host_cache_entries: after.expert_host_cache_entries,
-        expert_host_cache_bytes: after.expert_host_cache_bytes,
-        expert_pinned_cache_hits: after
-            .expert_pinned_cache_hits
-            .saturating_sub(before.expert_pinned_cache_hits),
-        expert_pinned_cache_misses: after
-            .expert_pinned_cache_misses
-            .saturating_sub(before.expert_pinned_cache_misses),
-        expert_pinned_cache_evictions: after
-            .expert_pinned_cache_evictions
-            .saturating_sub(before.expert_pinned_cache_evictions),
-        expert_pinned_cache_entries: after.expert_pinned_cache_entries,
-        expert_pinned_cache_bytes: after.expert_pinned_cache_bytes,
+        expert_host_cache: memory_pool_stats_delta(
+            before.expert_host_cache,
+            after.expert_host_cache,
+        ),
+        expert_pinned_cache: memory_pool_stats_delta(
+            before.expert_pinned_cache,
+            after.expert_pinned_cache,
+        ),
         expert_cuda_resident_entries: after.expert_cuda_resident_entries,
         expert_cuda_resident_bytes: after.expert_cuda_resident_bytes,
         expert_async_prefetch_submitted: after
@@ -1692,23 +1695,45 @@ fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> ser
         u64_field("expert_loads", stats.expert_loads);
         u64_field("expert_load_bytes", stats.expert_load_bytes);
         u64_field("expert_evictions", stats.expert_evictions);
-        u64_field("expert_host_cache_hits", stats.expert_host_cache_hits);
-        u64_field("expert_host_cache_misses", stats.expert_host_cache_misses);
+        u64_field("expert_host_cache_hits", stats.expert_host_cache.hits);
+        u64_field("expert_host_cache_misses", stats.expert_host_cache.misses);
         u64_field(
             "expert_host_cache_evictions",
-            stats.expert_host_cache_evictions,
+            stats.expert_host_cache.evictions,
         );
-        u64_field("expert_host_cache_bytes", stats.expert_host_cache_bytes);
-        u64_field("expert_pinned_cache_hits", stats.expert_pinned_cache_hits);
+        u64_field(
+            "expert_host_cache_rejections",
+            stats.expert_host_cache.rejections,
+        );
+        u64_field(
+            "expert_host_cache_bytes",
+            stats.expert_host_cache.bytes_used,
+        );
+        u64_field(
+            "expert_host_cache_lifetime_peak_bytes",
+            stats.expert_host_cache.peak_bytes_used,
+        );
+        u64_field("expert_pinned_cache_hits", stats.expert_pinned_cache.hits);
         u64_field(
             "expert_pinned_cache_misses",
-            stats.expert_pinned_cache_misses,
+            stats.expert_pinned_cache.misses,
         );
         u64_field(
             "expert_pinned_cache_evictions",
-            stats.expert_pinned_cache_evictions,
+            stats.expert_pinned_cache.evictions,
         );
-        u64_field("expert_pinned_cache_bytes", stats.expert_pinned_cache_bytes);
+        u64_field(
+            "expert_pinned_cache_rejections",
+            stats.expert_pinned_cache.rejections,
+        );
+        u64_field(
+            "expert_pinned_cache_bytes",
+            stats.expert_pinned_cache.bytes_used,
+        );
+        u64_field(
+            "expert_pinned_cache_lifetime_peak_bytes",
+            stats.expert_pinned_cache.peak_bytes_used,
+        );
         u64_field(
             "expert_cuda_resident_bytes",
             stats.expert_cuda_resident_bytes,
@@ -1792,11 +1817,11 @@ fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> ser
     );
     out.insert(
         "expert_host_cache_entries".into(),
-        serde_json::Value::from(stats.expert_host_cache_entries),
+        serde_json::Value::from(stats.expert_host_cache.entries_used),
     );
     out.insert(
         "expert_pinned_cache_entries".into(),
-        serde_json::Value::from(stats.expert_pinned_cache_entries),
+        serde_json::Value::from(stats.expert_pinned_cache.entries_used),
     );
     out.insert(
         "expert_cuda_resident_entries".into(),

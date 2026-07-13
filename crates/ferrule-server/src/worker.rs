@@ -354,6 +354,7 @@ where
     E: ModelEngine,
 {
     let mut active = HashMap::<RequestId, ActiveRequest>::new();
+    let mut cancellation_scratch = Vec::<RequestId>::new();
     let mut fatal_error: Option<String> = None;
 
     loop {
@@ -383,7 +384,7 @@ where
             }
         }
 
-        cancel_disconnected(&mut engine, &mut active);
+        cancel_disconnected(&mut engine, &mut active, &mut cancellation_scratch);
         drain_terminal(&mut engine, &mut active);
         if active.is_empty() || fatal_error.is_some() {
             continue;
@@ -419,7 +420,7 @@ where
                 fail_all(&mut engine, &mut active, error);
             }
         }
-        cancel_disconnected(&mut engine, &mut active);
+        cancel_disconnected(&mut engine, &mut active, &mut cancellation_scratch);
         drain_terminal(&mut engine, &mut active);
     }
 }
@@ -483,20 +484,21 @@ where
     }
 }
 
-fn cancel_disconnected<E>(engine: &mut E, active: &mut HashMap<RequestId, ActiveRequest>)
-where
+fn cancel_disconnected<E>(
+    engine: &mut E,
+    active: &mut HashMap<RequestId, ActiveRequest>,
+    scratch: &mut Vec<RequestId>,
+) where
     E: ModelEngine,
 {
-    let cancelled = active
-        .iter()
-        .filter_map(|(request_id, request)| {
-            request
-                .cancellation
-                .load(Ordering::Acquire)
-                .then_some(*request_id)
-        })
-        .collect::<Vec<_>>();
-    for request_id in cancelled {
+    scratch.clear();
+    scratch.extend(active.iter().filter_map(|(request_id, request)| {
+        request
+            .cancellation
+            .load(Ordering::Acquire)
+            .then_some(*request_id)
+    }));
+    for request_id in scratch.iter().copied() {
         if let Err(error) = engine.cancel_request(request_id)
             && let Some(request) = active.remove(&request_id)
         {
@@ -616,7 +618,6 @@ mod tests {
                 token: 1,
                 logit: Some(1.0),
                 text: "x".into(),
-                generated_text: "x".repeat(self.token_index + 1),
             });
             self.token_index += 1;
             Ok(ResidentDriverStep::Executed {
@@ -653,6 +654,67 @@ mod tests {
         fn drain_failed(&mut self) -> Vec<SequenceState> {
             Vec::new()
         }
+    }
+
+    fn test_request(id: u64) -> GenerateRequest {
+        GenerateRequest {
+            id: RequestId(id),
+            session_id: Some(SessionId(id)),
+            prompt_tokens: vec![1],
+            sampling: SamplingConfig::greedy(),
+            max_new_tokens: 8,
+            stop: Vec::new(),
+            ignore_eos: false,
+        }
+    }
+
+    #[test]
+    fn disconnected_cancellation_reuses_scratch_without_stale_requests() {
+        let cancellation_count = Arc::new(AtomicUsize::new(0));
+        let mut engine = DisconnectEngine {
+            request: Some(test_request(1)),
+            token_index: 0,
+            cancellation_count: Arc::clone(&cancellation_count),
+            cancelled: Vec::new(),
+        };
+        let mut active = HashMap::new();
+        let (events, _events_receiver) = mpsc::channel(1);
+        active.insert(
+            RequestId(1),
+            ActiveRequest {
+                events,
+                cancellation: Arc::new(AtomicBool::new(true)),
+            },
+        );
+        let mut scratch = Vec::with_capacity(1);
+        let scratch_pointer = scratch.as_ptr();
+
+        cancel_disconnected(&mut engine, &mut active, &mut scratch);
+
+        assert_eq!(scratch, vec![RequestId(1)]);
+        assert_eq!(scratch.as_ptr(), scratch_pointer);
+        assert_eq!(cancellation_count.load(Ordering::Acquire), 1);
+        drain_terminal(&mut engine, &mut active);
+        assert!(active.is_empty());
+
+        engine.submit(test_request(2));
+        let (events, _events_receiver) = mpsc::channel(1);
+        active.insert(
+            RequestId(2),
+            ActiveRequest {
+                events,
+                cancellation: Arc::new(AtomicBool::new(false)),
+            },
+        );
+        cancel_disconnected(&mut engine, &mut active, &mut scratch);
+
+        assert!(scratch.is_empty());
+        assert_eq!(scratch.as_ptr(), scratch_pointer);
+        assert_eq!(cancellation_count.load(Ordering::Acquire), 1);
+        assert_eq!(
+            engine.request.as_ref().map(|request| request.id),
+            Some(RequestId(2))
+        );
     }
 
     #[tokio::test]

@@ -2,6 +2,7 @@
 
 pub mod execution;
 pub mod expert_residency;
+pub mod memory;
 pub mod observability;
 
 pub use expert_residency::{
@@ -9,6 +10,9 @@ pub use expert_residency::{
     ExpertResidencyControl, ExpertResidencyCoordinator, ExpertResidencyCoordinatorStats,
     ExpertResidencyGrant, ExpertResidencyRequirements, ExpertResidencyStats, ExpertSlotBinding,
     ExpertSlotGeneration, ExpertSlotId, PreparedExpertInstall,
+};
+pub use memory::{
+    MemoryPoolKind, MemoryPoolLimits, MemoryPoolStats, MemoryTopology, OwnerMemoryLru,
 };
 
 use thiserror::Error;

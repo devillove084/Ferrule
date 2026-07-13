@@ -2,13 +2,15 @@
 
 #![cfg(feature = "cuda")]
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ferrule_common::execution::{KvCowReplacement, KvLayoutSchema, KvPageId};
 use ferrule_common::{
     Error, ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertKey, ExpertLease,
-    ExpertResidencyControl, ExpertResidencyGrant, ExpertSlotBinding, PreparedExpertInstall, Result,
+    ExpertResidencyControl, ExpertResidencyGrant, ExpertSlotBinding, MemoryPoolLimits,
+    MemoryPoolStats, OwnerMemoryLru, PreparedExpertInstall, Result,
 };
 
 use crate::TensorRole;
@@ -32,8 +34,8 @@ use crate::moe::routing::{
 use crate::moe::streaming::{
     AsyncHostStagedExpertLoader, ExpertComputeBundle, ExpertEvictRequest, ExpertId,
     ExpertLinearFormat, ExpertLinearPayload, ExpertLoadReason, ExpertLoadRequest, ExpertMatrixKind,
-    ExpertSourceCatalog, ExpertStorageTier, ExpertStreamingReader, ExpertStreamingStep,
-    HostStagedExpertCache, read_experts_concurrent,
+    ExpertMemoryPolicy, ExpertSourceCatalog, ExpertStorageTier, ExpertStreamingReader,
+    ExpertStreamingStep, HostStagedExpertCache, read_experts_concurrent,
 };
 use crate::runner::TokenLogit;
 
@@ -170,6 +172,7 @@ impl std::fmt::Debug for DeepSeekV4CudaSequenceKvState {
 #[cfg(feature = "cuda")]
 pub(crate) struct DeepSeekV4CudaOperatorCache {
     pub(crate) ops: ferrule_cuda::context::CudaArtifactOperatorContext,
+    profile: bool,
     managed_experts: bool,
     expert_upload_inflight: usize,
     kv_page_pool: Option<ferrule_cuda::CudaKvPagePool>,
@@ -186,6 +189,7 @@ pub(crate) struct DeepSeekV4CudaOperatorCache {
     moe_access_events: Vec<ExpertBatchAccessEvent>,
     decode_arena: DeepSeekV4DecodeArena,
     host_staged_cache: HostStagedExpertCache,
+    unretained_host_experts: HashMap<ExpertId, Arc<ExpertComputeBundle>>,
     pinned_host_expert_cache: CudaPinnedExpertCache,
     async_host_stager: AsyncHostStagedExpertLoader,
     norm_weights: HashMap<String, ferrule_cuda::context::CudaF32Buffer>,
@@ -452,12 +456,7 @@ struct CudaPinnedExpertBundle {
 
 #[cfg(feature = "cuda")]
 struct CudaPinnedExpertCache {
-    entries: HashMap<ExpertId, CudaPinnedExpertBundle>,
-    order: VecDeque<ExpertId>,
-    capacity: usize,
-    hits: u64,
-    misses: u64,
-    evictions: u64,
+    cache: OwnerMemoryLru<ExpertId, CudaPinnedExpertBundle>,
 }
 
 #[cfg(feature = "cuda")]
@@ -595,69 +594,41 @@ impl CudaPinnedExpertBundle {
 
 #[cfg(feature = "cuda")]
 impl CudaPinnedExpertCache {
-    fn new(capacity: usize) -> Self {
+    fn new(limits: MemoryPoolLimits) -> Self {
         Self {
-            entries: HashMap::new(),
-            order: VecDeque::new(),
-            capacity,
-            hits: 0,
-            misses: 0,
-            evictions: 0,
+            cache: OwnerMemoryLru::new(limits),
         }
     }
 
     fn get(&mut self, expert: ExpertId) -> Option<CudaPinnedExpertBundle> {
-        if self.entries.contains_key(&expert) {
-            self.hits = self.hits.saturating_add(1);
-            self.order.retain(|id| *id != expert);
-            self.order.push_back(expert);
-            self.entries.get(&expert).cloned()
-        } else {
-            self.misses = self.misses.saturating_add(1);
-            None
-        }
+        self.cache.get_cloned(expert)
     }
 
-    fn insert(&mut self, bundle: CudaPinnedExpertBundle) {
-        if self.capacity == 0 {
-            return;
-        }
+    fn insert(&mut self, bundle: CudaPinnedExpertBundle) -> bool {
         let expert = bundle.expert;
-        if self.entries.contains_key(&expert) {
-            self.order.retain(|id| *id != expert);
-        } else if self.entries.len() >= self.capacity {
-            if let Some(evicted) = self.order.pop_front() {
-                self.entries.remove(&evicted);
-                self.evictions = self.evictions.saturating_add(1);
-            }
-        }
-        self.entries.insert(expert, bundle);
-        self.order.push_back(expert);
+        let bytes = bundle.bytes;
+        self.cache.insert(expert, bundle, bytes)
     }
 
-    fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    fn total_bytes(&self) -> u64 {
-        self.entries.values().map(|bundle| bundle.bytes).sum()
-    }
-
-    fn hits(&self) -> u64 {
-        self.hits
-    }
-
-    fn misses(&self) -> u64 {
-        self.misses
-    }
-
-    fn evictions(&self) -> u64 {
-        self.evictions
+    fn stats(&self) -> MemoryPoolStats {
+        self.cache.stats()
     }
 }
 
 fn duration_us(d: Duration) -> u64 {
     d.as_micros().min(u128::from(u64::MAX)) as u64
+}
+
+#[inline]
+fn profile_start(enabled: bool) -> Option<Instant> {
+    enabled.then(Instant::now)
+}
+
+#[inline]
+fn record_profile_duration(stat: &mut u64, start: Option<Instant>) {
+    if let Some(start) = start {
+        *stat = stat.saturating_add(duration_us(start.elapsed()));
+    }
 }
 
 fn validate_output_head_rows_request(
@@ -758,9 +729,13 @@ fn merge_output_head_chunk(
 
 #[cfg(feature = "cuda")]
 impl DeepSeekV4CudaOperatorCache {
-    pub(crate) fn new(policy: &DeepSeekV4ExecutionPolicy) -> Result<Self> {
+    pub(crate) fn new(
+        policy: &DeepSeekV4ExecutionPolicy,
+        expert_memory_policy: ExpertMemoryPolicy,
+    ) -> Result<Self> {
         Ok(Self {
             ops: ferrule_cuda::context::CudaArtifactOperatorContext::new()?,
+            profile: policy.profile_enabled(),
             managed_experts: policy.managed_experts(),
             expert_upload_inflight: policy.expert_upload_inflight(),
             kv_page_pool: None,
@@ -776,10 +751,9 @@ impl DeepSeekV4CudaOperatorCache {
             poisoned_expert_layers: BTreeSet::new(),
             moe_access_events: Vec::new(),
             decode_arena: DeepSeekV4DecodeArena::default(),
-            host_staged_cache: HostStagedExpertCache::new(256),
-            pinned_host_expert_cache: CudaPinnedExpertCache::new(
-                policy.pinned_expert_cache_capacity(),
-            ),
+            host_staged_cache: HostStagedExpertCache::with_limits(expert_memory_policy.host_staged),
+            unretained_host_experts: HashMap::new(),
+            pinned_host_expert_cache: CudaPinnedExpertCache::new(expert_memory_policy.pinned_host),
             async_host_stager: AsyncHostStagedExpertLoader::default(),
             norm_weights: HashMap::new(),
             compressor_ape_buffers: HashMap::new(),
@@ -1396,8 +1370,14 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     fn drain_async_host_staging(&mut self) -> usize {
-        self.async_host_stager
-            .drain_into(&mut self.host_staged_cache)
+        let completed = self.async_host_stager.drain_into(
+            &mut self.host_staged_cache,
+            &mut self.unretained_host_experts,
+        );
+        let uploading_experts = &self.uploading_experts;
+        self.unretained_host_experts
+            .retain(|expert, _| uploading_experts.contains_key(expert));
+        completed
     }
 
     fn retire_completed_expert_resources(&mut self) -> Result<()> {
@@ -1465,6 +1445,7 @@ impl DeepSeekV4CudaOperatorCache {
                 .uploading_experts
                 .remove(&expert)
                 .expect("pending prefetch key came from map");
+            self.unretained_host_experts.remove(&expert);
             residency.cancel_install(install.prepared)?;
             if let Some(ticket) = install.ticket.take() {
                 self.abandoned_uploads.push(ticket);
@@ -1664,20 +1645,26 @@ impl DeepSeekV4CudaOperatorCache {
         expert: ExpertId,
         load_source: &crate::moe::streaming::ExpertLoadSource,
         reader: &ExpertStreamingReader,
-    ) -> Result<ExpertComputeBundle> {
+    ) -> Result<Arc<ExpertComputeBundle>> {
+        if let Some(bundle) = self.unretained_host_experts.remove(&expert) {
+            self.expert_selected_host_staging_hits =
+                self.expert_selected_host_staging_hits.saturating_add(1);
+            return Ok(bundle);
+        }
         if self.async_host_stager.is_in_flight(expert) {
             self.expert_selected_host_staging_waits =
                 self.expert_selected_host_staging_waits.saturating_add(1);
-            let wait_start = Instant::now();
-            let staged = self
-                .async_host_stager
-                .wait_for_into(expert, &mut self.host_staged_cache)?;
-            self.expert_selected_host_staging_wait_us = self
-                .expert_selected_host_staging_wait_us
-                .saturating_add(duration_us(wait_start.elapsed()));
-            if staged {
+            let wait_start = profile_start(self.profile);
+            let staged = self.async_host_stager.wait_for_into(
+                expert,
+                &mut self.host_staged_cache,
+                &mut self.unretained_host_experts,
+            )?;
+            record_profile_duration(&mut self.expert_selected_host_staging_wait_us, wait_start);
+            if let Some(bundle) = staged {
                 self.expert_selected_host_staging_hits =
                     self.expert_selected_host_staging_hits.saturating_add(1);
+                return Ok(bundle);
             }
         }
         if let Some(bundle) = self.host_staged_cache.get(expert) {
@@ -1686,7 +1673,7 @@ impl DeepSeekV4CudaOperatorCache {
             return Ok(bundle);
         }
         self.expert_selected_cold_misses = self.expert_selected_cold_misses.saturating_add(1);
-        let stage_start = Instant::now();
+        let stage_start = profile_start(self.profile);
         let payload = read_experts_concurrent(reader, &[(expert, load_source.clone())])?
             .into_iter()
             .next()
@@ -1696,11 +1683,9 @@ impl DeepSeekV4CudaOperatorCache {
                     expert.layer, expert.expert
                 ))
             })?;
-        self.moe_expert_read_us = self
-            .moe_expert_read_us
-            .saturating_add(duration_us(stage_start.elapsed()));
-        let bundle = ExpertComputeBundle::from_artifact_payload(payload)?;
-        self.host_staged_cache.insert(bundle.clone());
+        record_profile_duration(&mut self.moe_expert_read_us, stage_start);
+        let bundle = Arc::new(ExpertComputeBundle::from_artifact_payload(payload)?);
+        self.host_staged_cache.insert_shared(Arc::clone(&bundle));
         Ok(bundle)
     }
 
@@ -1777,7 +1762,11 @@ impl DeepSeekV4CudaOperatorCache {
             if self.upload_prefetches_in_flight() >= self.max_upload_prefetch_in_flight() {
                 break;
             }
-            if let Some(bundle) = self.host_staged_cache.get(expert) {
+            let bundle = self
+                .unretained_host_experts
+                .remove(&expert)
+                .or_else(|| self.host_staged_cache.get(expert));
+            if let Some(bundle) = bundle {
                 let ticket = match self.prefetch_upload_ticket(&bundle) {
                     Ok(ticket) => ticket,
                     Err(error) => {
@@ -2115,7 +2104,7 @@ impl DeepSeekV4CudaOperatorCache {
             return Ok(0);
         }
         self.ensure_expert_layer_healthy(layer)?;
-        let prefetch_start = Instant::now();
+        let prefetch_start = profile_start(self.profile);
         self.expert_lookahead_prefetch_calls =
             self.expert_lookahead_prefetch_calls.saturating_add(1);
         self.expert_lookahead_prefetch_experts = self
@@ -2168,7 +2157,11 @@ impl DeepSeekV4CudaOperatorCache {
                 ticket: None,
             };
             if self.upload_prefetches_in_flight() < self.max_upload_prefetch_in_flight() {
-                if let Some(bundle) = self.host_staged_cache.get(expert) {
+                let bundle = self
+                    .unretained_host_experts
+                    .remove(&expert)
+                    .or_else(|| self.host_staged_cache.get(expert));
+                if let Some(bundle) = bundle {
                     pending.ticket = Some(match self.prefetch_upload_ticket(&bundle) {
                         Ok(ticket) => ticket,
                         Err(error) => {
@@ -2195,15 +2188,15 @@ impl DeepSeekV4CudaOperatorCache {
         self.expert_lookahead_prefetch_enqueued = self
             .expert_lookahead_prefetch_enqueued
             .saturating_add(enqueued as u64);
-        self.expert_lookahead_prefetch_us = self
-            .expert_lookahead_prefetch_us
-            .saturating_add(duration_us(prefetch_start.elapsed()));
+        record_profile_duration(&mut self.expert_lookahead_prefetch_us, prefetch_start);
         Ok(enqueued)
     }
 
     pub(crate) fn runtime_counters(&self) -> DeepSeekV4OperatorRuntimeCounters {
         let cuda = self.ops.counters();
         let async_prefetch = self.async_host_stager.stats();
+        let host_cache = self.host_staged_cache.stats();
+        let pinned_cache = self.pinned_host_expert_cache.stats();
         let (expert_cuda_resident_entries, expert_cuda_resident_bytes) =
             self.resident_expert_totals();
         DeepSeekV4OperatorRuntimeCounters {
@@ -2282,16 +2275,8 @@ impl DeepSeekV4CudaOperatorCache {
             expert_loads: self.expert_loads,
             expert_load_bytes: self.expert_load_bytes,
             expert_evictions: self.expert_evictions,
-            expert_host_cache_hits: self.host_staged_cache.hits(),
-            expert_host_cache_misses: self.host_staged_cache.misses(),
-            expert_host_cache_evictions: self.host_staged_cache.evictions(),
-            expert_host_cache_entries: self.host_staged_cache.len(),
-            expert_host_cache_bytes: self.host_staged_cache.total_bytes(),
-            expert_pinned_cache_hits: self.pinned_host_expert_cache.hits(),
-            expert_pinned_cache_misses: self.pinned_host_expert_cache.misses(),
-            expert_pinned_cache_evictions: self.pinned_host_expert_cache.evictions(),
-            expert_pinned_cache_entries: self.pinned_host_expert_cache.len(),
-            expert_pinned_cache_bytes: self.pinned_host_expert_cache.total_bytes(),
+            expert_host_cache: host_cache,
+            expert_pinned_cache: pinned_cache,
             expert_cuda_resident_entries,
             expert_cuda_resident_bytes,
             expert_async_prefetch_submitted: async_prefetch.submitted,
@@ -2779,7 +2764,7 @@ impl DeepSeekV4CudaOperatorCache {
             return Ok((0..batch_rows).map(|_| Vec::new()).collect());
         }
 
-        let upload_start = Instant::now();
+        let upload_start = profile_start(self.profile);
         if self
             .decode_arena
             .hidden
@@ -2798,9 +2783,7 @@ impl DeepSeekV4CudaOperatorCache {
             return Err(error);
         }
         self.output_head_hidden_uploads = self.output_head_hidden_uploads.saturating_add(1);
-        self.output_head_hidden_upload_us = self
-            .output_head_hidden_upload_us
-            .saturating_add(duration_us(upload_start.elapsed()));
+        record_profile_duration(&mut self.output_head_hidden_upload_us, upload_start);
         let result = self.output_head_topk_chunks_rows_with_device(
             slice,
             &hidden_device,
@@ -2864,27 +2847,23 @@ impl DeepSeekV4CudaOperatorCache {
             let key = artifact_linear_row_cache_key(slice, start, rows)?;
             if !self.linears.contains_key(&key) {
                 self.output_head_cache_misses = self.output_head_cache_misses.saturating_add(1);
-                let read_start = Instant::now();
+                let read_start = profile_start(self.profile);
                 let payload = reader.read_2d_rows(slice, start, rows)?;
                 let linear = ArtifactLinearPayload::from_weight_and_scale(
                     TensorRole::OutputHead,
                     payload,
                     None,
                 )?;
-                self.output_head_read_us = self
-                    .output_head_read_us
-                    .saturating_add(duration_us(read_start.elapsed()));
+                record_profile_duration(&mut self.output_head_read_us, read_start);
                 let actual_key = artifact_linear_cache_key(&linear);
                 if actual_key != key {
                     return Err(Error::Model(format!(
                         "DeepSeek-V4 output-head cache-key mismatch: predicted {key}, materialized {actual_key}"
                     )));
                 }
-                let upload_start = Instant::now();
+                let upload_start = profile_start(self.profile);
                 let handle = self.upload_linear(&linear)?;
-                self.output_head_upload_us = self
-                    .output_head_upload_us
-                    .saturating_add(duration_us(upload_start.elapsed()));
+                record_profile_duration(&mut self.output_head_upload_us, upload_start);
                 self.linears.insert(key.clone(), handle);
             } else {
                 self.output_head_cache_hits = self.output_head_cache_hits.saturating_add(1);
@@ -2934,7 +2913,7 @@ impl DeepSeekV4CudaOperatorCache {
                 .output_head_linear_workspaces
                 .get_mut(&hidden.len())
                 .expect("output-head linear workspace initialized above");
-            let topk_start = Instant::now();
+            let topk_start = profile_start(self.profile);
             self.ops
                 .artifact_linear_rows_from_device_into_with_scratch(
                     handle,
@@ -2946,10 +2925,8 @@ impl DeepSeekV4CudaOperatorCache {
             let (chunk_indices, chunk_values) = self.ops.topk_vocab_rows_from_device_into(
                 logits, batch_rows, rows, chunk_k, indices, values,
             )?;
-            self.output_head_topk_us = self
-                .output_head_topk_us
-                .saturating_add(duration_us(topk_start.elapsed()));
-            let merge_start = Instant::now();
+            record_profile_duration(&mut self.output_head_topk_us, topk_start);
+            let merge_start = profile_start(self.profile);
             merge_output_head_chunk(
                 &mut top,
                 &chunk_indices,
@@ -2958,9 +2935,7 @@ impl DeepSeekV4CudaOperatorCache {
                 start,
                 top_k,
             )?;
-            self.output_head_merge_us = self
-                .output_head_merge_us
-                .saturating_add(duration_us(merge_start.elapsed()));
+            record_profile_duration(&mut self.output_head_merge_us, merge_start);
             start += rows;
         }
         Ok(top)
@@ -3109,7 +3084,7 @@ impl DeepSeekV4CudaOperatorCache {
             )));
         }
 
-        let stage_start = Instant::now();
+        let stage_start = profile_start(self.profile);
         self.linear_rows_from_device_into(
             &router.weight,
             input_dev,
@@ -3129,11 +3104,9 @@ impl DeepSeekV4CudaOperatorCache {
         for routes in &routes_by_token {
             self.expert_selected = self.expert_selected.saturating_add(routes.len() as u64);
         }
-        self.moe_router_us = self
-            .moe_router_us
-            .saturating_add(duration_us(stage_start.elapsed()));
+        record_profile_duration(&mut self.moe_router_us, stage_start);
 
-        let stage_start = Instant::now();
+        let stage_start = profile_start(self.profile);
         let gate_key = self.ensure_linear_uploaded(&shared_expert.gate)?;
         let up_key = self.ensure_linear_uploaded(&shared_expert.up)?;
         let down_key = self.ensure_linear_uploaded(&shared_expert.down)?;
@@ -3149,9 +3122,7 @@ impl DeepSeekV4CudaOperatorCache {
         )?;
         self.ops
             .copy_f32_into_slot(shared_workspace.output(), output_dev, 0)?;
-        self.moe_shared_us = self
-            .moe_shared_us
-            .saturating_add(duration_us(stage_start.elapsed()));
+        record_profile_duration(&mut self.moe_shared_us, stage_start);
 
         let streaming_steps = self.routed_moe_prefill_segments_from_device(
             layer,
@@ -3267,7 +3238,7 @@ impl DeepSeekV4CudaOperatorCache {
             })?
             .clamp(1, DSV4_EXPERT_TABLE_CAPACITY);
         let segment_capacity = fixed_eight_segment_capacity(route_count, resident_slots)?;
-        let compute_start = Instant::now();
+        let compute_start = profile_start(self.profile);
         let mut input_prepared = false;
         let mut expected_intermediate = None;
         let mut streaming_steps = Vec::new();
@@ -3276,7 +3247,7 @@ impl DeepSeekV4CudaOperatorCache {
             self.moe_predicted_experts = self
                 .moe_predicted_experts
                 .saturating_add(predicted_experts.len() as u64);
-            let stage_start = Instant::now();
+            let stage_start = profile_start(self.profile);
             let CudaMoeMaterialization { streaming, leases } = self.materialize_selected_experts(
                 layer,
                 selected,
@@ -3286,9 +3257,7 @@ impl DeepSeekV4CudaOperatorCache {
                 prefetch_capacity,
                 reader,
             )?;
-            self.moe_plan_us = self
-                .moe_plan_us
-                .saturating_add(duration_us(stage_start.elapsed()));
+            record_profile_duration(&mut self.moe_plan_us, stage_start);
 
             let chunk_result = (|| -> Result<()> {
                 let first_expert = selected
@@ -3422,9 +3391,7 @@ impl DeepSeekV4CudaOperatorCache {
             workspace,
             output_dev,
         )?;
-        self.moe_compute_submit_us = self
-            .moe_compute_submit_us
-            .saturating_add(duration_us(compute_start.elapsed()));
+        record_profile_duration(&mut self.moe_compute_submit_us, compute_start);
         Ok(streaming_steps)
     }
 
@@ -3441,7 +3408,7 @@ impl DeepSeekV4CudaOperatorCache {
         indices_dev: &mut ferrule_cuda::context::CudaI32Buffer,
         weights_dev: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<CudaMoeRoutes> {
-        let stage_start = Instant::now();
+        let stage_start = profile_start(self.profile);
         self.ops.copy_f32_into_slot(input, router_input, 0)?;
         self.linear_matvec_from_device_into(&router.weight, router_input, logits_dev)?;
         let mut routes_by_token = self.dsv4_router_topk_routes_from_device_logits(
@@ -3454,15 +3421,11 @@ impl DeepSeekV4CudaOperatorCache {
             weights_dev,
         )?;
         let routes = routes_by_token.pop().unwrap_or_default();
-        self.moe_router_us = self
-            .moe_router_us
-            .saturating_add(duration_us(stage_start.elapsed()));
+        record_profile_duration(&mut self.moe_router_us, stage_start);
 
-        let stage_start = Instant::now();
+        let stage_start = profile_start(self.profile);
         let selected = routes.iter().map(|route| route.expert).collect::<Vec<_>>();
-        self.moe_routing_us = self
-            .moe_routing_us
-            .saturating_add(duration_us(stage_start.elapsed()));
+        record_profile_duration(&mut self.moe_routing_us, stage_start);
         Ok(CudaMoeRoutes { routes, selected })
     }
 
@@ -3513,7 +3476,7 @@ impl DeepSeekV4CudaOperatorCache {
         )?;
 
         let execution_result = (|| -> Result<RoutedMoeStepOutput> {
-            let stage_start = Instant::now();
+            let stage_start = profile_start(self.profile);
             let swiglu_limit = shared_expert.swiglu_limit;
             let gate_key = self.ensure_linear_uploaded(&shared_expert.gate)?;
             let up_key = self.ensure_linear_uploaded(&shared_expert.up)?;
@@ -3529,12 +3492,10 @@ impl DeepSeekV4CudaOperatorCache {
             )?;
             self.ops
                 .copy_f32_into_slot(shared_workspace.output(), accumulator, 0)?;
-            self.moe_shared_us = self
-                .moe_shared_us
-                .saturating_add(duration_us(stage_start.elapsed()));
+            record_profile_duration(&mut self.moe_shared_us, stage_start);
 
             if !routes.is_empty() {
-                let stage_start = Instant::now();
+                let stage_start = profile_start(self.profile);
                 let num_experts = routes.len();
                 let first_expert_id = ExpertId::new(layer, routes[0].expert);
                 let first_expert = self.experts.get(&first_expert_id).ok_or_else(|| {
@@ -3587,10 +3548,8 @@ impl DeepSeekV4CudaOperatorCache {
                     .moe_workspaces
                     .get_mut(&workspace_key)
                     .expect("MoE workspace initialized above");
-                self.moe_workspace_us = self
-                    .moe_workspace_us
-                    .saturating_add(duration_us(stage_start.elapsed()));
-                let stage_start = Instant::now();
+                record_profile_duration(&mut self.moe_workspace_us, stage_start);
+                let stage_start = profile_start(self.profile);
                 ops.prepare_moe_experts_batched_workspace_stable(
                     table,
                     &selected[..num_experts],
@@ -3612,9 +3571,7 @@ impl DeepSeekV4CudaOperatorCache {
                     workspace,
                     accumulator,
                 )?;
-                self.moe_compute_submit_us = self
-                    .moe_compute_submit_us
-                    .saturating_add(duration_us(stage_start.elapsed()));
+                record_profile_duration(&mut self.moe_compute_submit_us, stage_start);
             }
 
             Ok(RoutedMoeStepOutput {
@@ -3652,14 +3609,12 @@ impl DeepSeekV4CudaOperatorCache {
         &mut self,
         ticket: CudaExpertUploadTicket,
     ) -> Result<CudaFp4ExpertHandles> {
-        let wait_start = Instant::now();
+        let wait_start = profile_start(self.profile);
         if !ticket.is_complete()? {
             self.expert_selected_upload_waits = self.expert_selected_upload_waits.saturating_add(1);
         }
         self.ops.wait_upload_event(ticket.event())?;
-        self.expert_selected_upload_wait_us = self
-            .expert_selected_upload_wait_us
-            .saturating_add(duration_us(wait_start.elapsed()));
+        record_profile_duration(&mut self.expert_selected_upload_wait_us, wait_start);
         Ok(ticket.into_handles())
     }
 
@@ -5141,8 +5096,10 @@ mod tests {
     #[test]
     #[ignore = "requires cargo-oxide and CUDA"]
     fn packed_paged_scatter_rows_handles_mixed_compressor_and_page_boundaries() -> Result<()> {
-        let mut operators =
-            DeepSeekV4CudaOperatorCache::new(&DeepSeekV4ExecutionPolicy::default())?;
+        let mut operators = DeepSeekV4CudaOperatorCache::new(
+            &DeepSeekV4ExecutionPolicy::default(),
+            ExpertMemoryPolicy::default(),
+        )?;
         let planes = [
             ferrule_common::execution::KvPlaneDescriptor {
                 name: "window".into(),
@@ -5228,8 +5185,10 @@ mod tests {
     #[test]
     #[ignore = "requires cargo-oxide and CUDA"]
     fn rope_table_grows_across_4096_boundary() -> Result<()> {
-        let mut operators =
-            DeepSeekV4CudaOperatorCache::new(&DeepSeekV4ExecutionPolicy::default())?;
+        let mut operators = DeepSeekV4CudaOperatorCache::new(
+            &DeepSeekV4ExecutionPolicy::default(),
+            ExpertMemoryPolicy::default(),
+        )?;
         let name = "rope_boundary_test";
         let rope_dim = 4;
         let head_dim = 6;

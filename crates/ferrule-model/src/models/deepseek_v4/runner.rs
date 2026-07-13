@@ -336,12 +336,15 @@ impl DeepSeekV4Runner {
         let options = *plan.resources().prepare_options();
         let policy = plan.resources().policy();
         let model = plan.resources().model();
-        let mut operators = DeepSeekV4OperatorContext::new(operator_backend, policy)?;
+        let mut operators =
+            DeepSeekV4OperatorContext::new(operator_backend, policy, options.expert_memory_policy)?;
         let mut layer_states = Vec::with_capacity(options.max_layers);
         for layer_idx in 0..options.max_layers {
-            let state_start = Instant::now();
+            let state_start = operators.profile_start();
             layer_states.push(model.new_layer_sequence_state(layer_idx)?);
-            operators.record_layer_state_init(layer_idx, duration_us(state_start.elapsed()));
+            if let Some(state_start) = state_start {
+                operators.record_layer_state_init(layer_idx, duration_us(state_start.elapsed()));
+            }
         }
         let cpu_expert_runtimes =
             build_cpu_expert_runtimes(operator_backend, plan.resources().layer_experts());
@@ -447,6 +450,17 @@ impl DeepSeekV4Runner {
 
     pub fn output_profile_stats(&self) -> DeepSeekV4OutputProfileStats {
         self.output_profile
+    }
+
+    fn record_output_profile_stage(
+        &mut self,
+        start: Option<Instant>,
+        update: impl FnOnce(&mut DeepSeekV4OutputProfileStats, u64),
+    ) -> Result<()> {
+        if let Some(elapsed_us) = self.operators.finish_profile_stage(start)? {
+            update(&mut self.output_profile, elapsed_us);
+        }
+        Ok(())
     }
 
     pub fn position(&self) -> usize {
@@ -1093,7 +1107,7 @@ impl DeepSeekV4Runner {
             )));
         }
 
-        let hc_head_start = Instant::now();
+        let hc_head_start = self.operators.profile_start();
         let hidden = {
             #[cfg(feature = "cuda")]
             if self.operators.backend() == ModelExecutionBackend::Cuda {
@@ -1146,15 +1160,13 @@ impl DeepSeekV4Runner {
                 )?
             }
         };
-        self.output_profile.final_hc_head_calls =
-            self.output_profile.final_hc_head_calls.saturating_add(1);
-        self.output_profile.final_hc_head_us = self
-            .output_profile
-            .final_hc_head_us
-            .saturating_add(self.operators.finish_profile_stage(hc_head_start)?);
+        self.record_output_profile_stage(hc_head_start, |profile, elapsed_us| {
+            profile.final_hc_head_calls = profile.final_hc_head_calls.saturating_add(1);
+            profile.final_hc_head_us = profile.final_hc_head_us.saturating_add(elapsed_us);
+        })?;
 
         let start = (tokens - 1) * self.plan.resources().model().config.hidden_size;
-        let norm_start = Instant::now();
+        let norm_start = self.operators.profile_start();
         let normed = self.operators.rms_norm(
             &hidden[start..start + self.plan.resources().model().config.hidden_size],
             &self.plan.resources().model().output_norm,
@@ -1164,12 +1176,10 @@ impl DeepSeekV4Runner {
         #[cfg(feature = "cuda")]
         self.operators
             .capture_parity_checkpoint_host(0, "final_norm", &normed);
-        self.output_profile.final_norm_calls =
-            self.output_profile.final_norm_calls.saturating_add(1);
-        self.output_profile.final_norm_us = self
-            .output_profile
-            .final_norm_us
-            .saturating_add(self.operators.finish_profile_stage(norm_start)?);
+        self.record_output_profile_stage(norm_start, |profile, elapsed_us| {
+            profile.final_norm_calls = profile.final_norm_calls.saturating_add(1);
+            profile.final_norm_us = profile.final_norm_us.saturating_add(elapsed_us);
+        })?;
         Ok(normed)
     }
 
@@ -1287,12 +1297,7 @@ impl DeepSeekV4Runner {
             let layers = self.plan.resources().layers();
             let operators = &mut self.operators;
             self.layer_arena_pool.acquire(arena_key, || {
-                DeepSeekV4LayerArenaVariants::try_build_for_packed_mode(
-                    layers,
-                    metadata.mode,
-                    rows,
-                    operators,
-                )
+                DeepSeekV4LayerArenaVariants::try_build_for_packed_mode(layers, rows, operators)
             })?
         };
 
@@ -1625,7 +1630,7 @@ impl DeepSeekV4Runner {
                 return Ok(CudaDecodeOutput::Feed);
             }
 
-            let final_hc_start = Instant::now();
+            let final_hc_start = self.operators.profile_start();
             self.operators.cuda_mut()?.hc_head_from_device_into(
                 &decode_buffers.hc_input,
                 1,
@@ -1633,14 +1638,12 @@ impl DeepSeekV4Runner {
                 &self.plan.resources().model().hc_head,
                 &mut decode_buffers.final_hidden,
             )?;
-            self.output_profile.final_hc_head_calls =
-                self.output_profile.final_hc_head_calls.saturating_add(1);
-            self.output_profile.final_hc_head_us = self
-                .output_profile
-                .final_hc_head_us
-                .saturating_add(self.operators.finish_profile_stage(final_hc_start)?);
+            self.record_output_profile_stage(final_hc_start, |profile, elapsed_us| {
+                profile.final_hc_head_calls = profile.final_hc_head_calls.saturating_add(1);
+                profile.final_hc_head_us = profile.final_hc_head_us.saturating_add(elapsed_us);
+            })?;
 
-            let final_norm_start = Instant::now();
+            let final_norm_start = self.operators.profile_start();
             self.operators.cuda_mut()?.rms_norm_device_cached_into(
                 "output_norm",
                 &decode_buffers.final_hidden,
@@ -1648,12 +1651,10 @@ impl DeepSeekV4Runner {
                 self.plan.resources().model().config.norm_eps,
                 &mut decode_buffers.final_norm,
             )?;
-            self.output_profile.final_norm_calls =
-                self.output_profile.final_norm_calls.saturating_add(1);
-            self.output_profile.final_norm_us = self
-                .output_profile
-                .final_norm_us
-                .saturating_add(self.operators.finish_profile_stage(final_norm_start)?);
+            self.record_output_profile_stage(final_norm_start, |profile, elapsed_us| {
+                profile.final_norm_calls = profile.final_norm_calls.saturating_add(1);
+                profile.final_norm_us = profile.final_norm_us.saturating_add(elapsed_us);
+            })?;
 
             match completion {
                 CudaDecodeCompletion::Feed => unreachable!("handled before finalization"),
@@ -1664,7 +1665,7 @@ impl DeepSeekV4Runner {
                     .download_f32_buffer(&decode_buffers.final_norm)
                     .map(CudaDecodeOutput::Hidden),
                 CudaDecodeCompletion::TopK(top_k) => {
-                    let topk_start = Instant::now();
+                    let topk_start = self.operators.profile_start();
                     let logits = self
                         .plan
                         .resources()
@@ -1678,12 +1679,11 @@ impl DeepSeekV4Runner {
                                 .output_head_chunk_rows,
                             &mut self.operators,
                         )?;
-                    self.output_profile.lm_head_topk_calls =
-                        self.output_profile.lm_head_topk_calls.saturating_add(1);
-                    self.output_profile.lm_head_topk_us = self
-                        .output_profile
-                        .lm_head_topk_us
-                        .saturating_add(self.operators.finish_profile_stage(topk_start)?);
+                    self.record_output_profile_stage(topk_start, |profile, elapsed_us| {
+                        profile.lm_head_topk_calls = profile.lm_head_topk_calls.saturating_add(1);
+                        profile.lm_head_topk_us =
+                            profile.lm_head_topk_us.saturating_add(elapsed_us);
+                    })?;
                     Ok(CudaDecodeOutput::TopK(logits))
                 }
             }
@@ -1737,7 +1737,7 @@ impl DeepSeekV4Runner {
         }
 
         let hidden = self.decode_token_hidden(token_id)?;
-        let topk_start = Instant::now();
+        let topk_start = self.operators.profile_start();
         let logits = self
             .plan
             .resources()
@@ -1751,12 +1751,10 @@ impl DeepSeekV4Runner {
                     .output_head_chunk_rows,
                 &mut self.operators,
             )?;
-        self.output_profile.lm_head_topk_calls =
-            self.output_profile.lm_head_topk_calls.saturating_add(1);
-        self.output_profile.lm_head_topk_us = self
-            .output_profile
-            .lm_head_topk_us
-            .saturating_add(self.operators.finish_profile_stage(topk_start)?);
+        self.record_output_profile_stage(topk_start, |profile, elapsed_us| {
+            profile.lm_head_topk_calls = profile.lm_head_topk_calls.saturating_add(1);
+            profile.lm_head_topk_us = profile.lm_head_topk_us.saturating_add(elapsed_us);
+        })?;
         Ok(logits)
     }
 
@@ -1879,7 +1877,9 @@ impl DeepSeekV4Runner {
             .initial_hc_state_for_tokens(token_ids)?;
         let report_progress = self.plan.resources().policy().prefill_progress();
         for layer_idx in 0..self.plan.resources().prepare_options().max_layers {
-            let layer_start = report_progress.then(Instant::now);
+            let layer_start = report_progress
+                .then(|| self.operators.profile_start())
+                .flatten();
             let predicted_experts = self.predicted_experts_for_layer(
                 layer_idx,
                 ExpertPredictionInput::Prefill { token_ids },
@@ -2127,7 +2127,7 @@ impl DeepSeekV4Runner {
             .saturating_add(token_ids.len() as u64);
 
         let hidden = self.prefill_tokens_hidden_batched(token_ids)?;
-        let topk_start = Instant::now();
+        let topk_start = self.operators.profile_start();
         let logits = self
             .plan
             .resources()
@@ -2141,12 +2141,10 @@ impl DeepSeekV4Runner {
                     .output_head_chunk_rows,
                 &mut self.operators,
             )?;
-        self.output_profile.lm_head_topk_calls =
-            self.output_profile.lm_head_topk_calls.saturating_add(1);
-        self.output_profile.lm_head_topk_us = self
-            .output_profile
-            .lm_head_topk_us
-            .saturating_add(self.operators.finish_profile_stage(topk_start)?);
+        self.record_output_profile_stage(topk_start, |profile, elapsed_us| {
+            profile.lm_head_topk_calls = profile.lm_head_topk_calls.saturating_add(1);
+            profile.lm_head_topk_us = profile.lm_head_topk_us.saturating_add(elapsed_us);
+        })?;
         Ok(logits)
     }
 

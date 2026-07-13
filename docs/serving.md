@@ -99,7 +99,11 @@ cargo oxide build --features cuda --arch sm_121a -- --release -p ferrule-cli
   --port 8000 \
   --ctx-size 4096 \
   --max-active-sequences 64 \
-  --max-batch-tokens 4096
+  --max-batch-tokens 4096 \
+  --expert-host-cache-entries 256 \
+  --expert-host-cache-mb 4096 \
+  --expert-pinned-cache-entries 64 \
+  --expert-pinned-cache-mb 1024
 ```
 
 Important tuning controls:
@@ -109,6 +113,16 @@ Important tuning controls:
 - `--prefill-chunk-size`: maximum prompt chunk per sequence.
 - `--request-queue-capacity`: HTTP-to-model admission bound.
 - `--event-queue-capacity`: independent SSE backpressure bound per request.
+- `--expert-host-cache-entries` / `--expert-host-cache-mb`: pageable whole-expert
+  retention. Zero entries disables retention; zero MiB means entry-limited only.
+- `--expert-pinned-cache-entries` / `--expert-pinned-cache-mb`: pinned whole-expert
+  retention with the same disable/unbounded-byte semantics.
+
+Cache MiB conversion is checked and frozen before the model worker starts. The policy
+is passed through preparation to the actual CUDA caches; there is no separate DSV4
+environment capacity override. Both caches enforce simultaneous entry/byte limits with
+O(1) owner-thread LRU/accounting and expose current/peak/rejection statistics. See
+[`expert-memory-architecture.md`](expert-memory-architecture.md).
 
 ## Compatibility smoke
 
@@ -184,15 +198,31 @@ python -m sglang.benchmark.serving \
 ```
 
 For direct engine comparisons, use the same client, prompt file, tokenizer, seed,
-input/output lengths, request-arrival process, warmup, and concurrency for every
-server. SGLang recommends at least `num_prompts >= 5 * max_concurrency` for steady
-state.
+input/output lengths, request-arrival process, warmup, concurrency, and expert-cache
+entry/byte limits for every server. SGLang recommends at least
+`num_prompts >= 5 * max_concurrency` for steady state.
+
+Headline runs must keep synchronized diagnostics disabled:
+
+```bash
+FERRULE_DSV4_PROFILE=false \
+FERRULE_DSV4_PROFILE_SYNC=false \
+FERRULE_CUDA_MOE_TIMING=false \
+just dsv4-serve -- \
+  --expert-host-cache-mb 4096 \
+  --expert-pinned-cache-mb 1024
+```
+
+With profiling off, DSV4 does not sample host clocks or populate per-layer timing maps
+in the execution path. CUDA dispatch environment controls are parsed once at context
+construction. Cache/correctness counters are owner-thread integer updates; model steps
+do not format request JSON or per-token logs.
 
 ## Remaining work
 
 - Run and archive official vLLM/SGLang smoke and concurrency sweeps.
-- Add server metrics and profiling endpoints; client-side latency metrics do not depend
-  on them.
+- Add periodic server metrics snapshots and bounded sampled CUDA-event profiling;
+  client-side latency metrics do not depend on them.
 - Implement device sampling before accepting non-greedy API settings.
 - Connect automatic radix-prefix lookup/admission for independent API requests.
 - Add E7 graph buckets and E8 profiler-driven fusion.

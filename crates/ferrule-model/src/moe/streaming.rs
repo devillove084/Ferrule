@@ -6,14 +6,14 @@
 //! Quality-first adapters can preserve artifact FP4/FP8 payloads and stream experts
 //! instead of immediately re-quantizing them to fit.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 
 use crate::HfRoutedExpertTensorInfo;
 use crate::semantic::{RoutedExpertMatrix, RoutedExpertTensorPart, RoutedExpertTensorRef};
-use ferrule_common::{Error, Result};
+use ferrule_common::{Error, MemoryPoolLimits, MemoryPoolStats, OwnerMemoryLru, Result};
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1186,21 +1186,40 @@ fn component_from_model(value: RoutedExpertTensorPart) -> ExpertTensorComponent 
 
 // ── HostStagedExpertCache ──────────────────────────────────────────────────
 
-/// A simple LRU cache of expert compute bundles staged in host RAM.
+/// Model-family-neutral retention policy for streamed expert payloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpertMemoryPolicy {
+    pub host_staged: MemoryPoolLimits,
+    pub pinned_host: MemoryPoolLimits,
+}
+
+impl ExpertMemoryPolicy {
+    pub const fn new(host_staged: MemoryPoolLimits, pinned_host: MemoryPoolLimits) -> Self {
+        Self {
+            host_staged,
+            pinned_host,
+        }
+    }
+}
+
+impl Default for ExpertMemoryPolicy {
+    fn default() -> Self {
+        Self::new(
+            MemoryPoolLimits::entries_only(256),
+            MemoryPoolLimits::entries_only(64),
+        )
+    }
+}
+
+/// Owner-thread LRU cache of complete expert compute bundles staged in host RAM.
 ///
-/// This avoids repeated disk reads for experts that are selected across
-/// consecutive decode tokens but evicted from GPU memory between uses.
-///
-/// This directly targets the synthetic-fixture bottleneck of 243 disk reads
-/// across 5 forward passes (ROADMAP P4).
+/// Bundles are shared through [`Arc`], so cache hits do not copy tensor payloads.
+/// The cache has no internal synchronization: one owner thread performs all
+/// mutations. Resident bytes and both ends of the LRU list are maintained
+/// incrementally, making accounting, hits, and eviction O(1) on average.
 #[derive(Debug)]
 pub struct HostStagedExpertCache {
-    entries: HashMap<ExpertId, ExpertComputeBundle>,
-    order: VecDeque<ExpertId>,
-    capacity: usize,
-    hits: u64,
-    misses: u64,
-    evictions: u64,
+    cache: OwnerMemoryLru<ExpertId, Arc<ExpertComputeBundle>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1434,10 +1453,14 @@ impl AsyncHostStagedExpertLoader {
         true
     }
 
-    pub fn drain_into(&mut self, cache: &mut HostStagedExpertCache) -> usize {
+    pub fn drain_into(
+        &mut self,
+        cache: &mut HostStagedExpertCache,
+        unretained: &mut HashMap<ExpertId, Arc<ExpertComputeBundle>>,
+    ) -> usize {
         let mut completed_now = 0usize;
         while let Ok(result) = self.rx.try_recv() {
-            if self.handle_result(result, cache) {
+            if self.handle_result(result, cache, unretained) {
                 completed_now += 1;
             }
         }
@@ -1445,45 +1468,56 @@ impl AsyncHostStagedExpertLoader {
     }
 
     /// Wait for a specific in-flight host-staging read and move all completed
-    /// bundles observed while waiting into the host cache. Returns `true` when
-    /// the requested expert was successfully staged; `false` lets the caller
-    /// fall back to a synchronous read.
+    /// bundles observed while waiting into the host cache or the caller-owned
+    /// one-shot handoff. A successful read is returned even when long-term cache
+    /// admission rejects it.
     pub fn wait_for_into(
         &mut self,
         expert: ExpertId,
         cache: &mut HostStagedExpertCache,
-    ) -> Result<bool> {
+        unretained: &mut HashMap<ExpertId, Arc<ExpertComputeBundle>>,
+    ) -> Result<Option<Arc<ExpertComputeBundle>>> {
+        if let Some(bundle) = unretained.remove(&expert) {
+            return Ok(Some(bundle));
+        }
         if !self.in_flight.contains(&expert) {
-            return Ok(false);
+            return Ok(None);
         }
         while self.in_flight.contains(&expert) {
             match self.rx.recv() {
                 Ok(result) => {
                     let completed_expert = result.expert();
-                    let loaded = self.handle_result(result, cache);
+                    let loaded = self.handle_result(result, cache, unretained);
                     if completed_expert == expert {
-                        return Ok(loaded);
+                        if !loaded {
+                            return Ok(None);
+                        }
+                        return Ok(unretained.remove(&expert).or_else(|| cache.get(expert)));
                     }
                 }
                 Err(_) => {
                     self.in_flight.remove(&expert);
                     self.failed = self.failed.saturating_add(1);
-                    return Ok(false);
+                    return Ok(None);
                 }
             }
         }
-        Ok(cache.contains(expert))
+        Ok(unretained.remove(&expert).or_else(|| cache.get(expert)))
     }
 
     fn handle_result(
         &mut self,
         result: AsyncHostStagedExpertResult,
         cache: &mut HostStagedExpertCache,
+        unretained: &mut HashMap<ExpertId, Arc<ExpertComputeBundle>>,
     ) -> bool {
         match result {
             AsyncHostStagedExpertResult::Loaded(bundle) => {
                 self.in_flight.remove(&bundle.expert);
-                cache.insert(bundle);
+                let bundle = Arc::new(bundle);
+                if !cache.insert_shared(Arc::clone(&bundle)) {
+                    unretained.insert(bundle.expert, bundle);
+                }
                 self.completed = self.completed.saturating_add(1);
                 true
             }
@@ -1509,43 +1543,34 @@ impl Default for AsyncHostStagedExpertLoader {
 }
 
 impl HostStagedExpertCache {
-    /// Create a cache holding at most `capacity` expert bundles in host RAM.
-    pub fn new(capacity: usize) -> Self {
+    /// Create an entry-limited cache, preserving the original constructor API.
+    /// Use [`Self::with_limits`] to enforce a host-memory byte budget as well.
+    pub fn new(max_entries: usize) -> Self {
+        Self::with_limits(MemoryPoolLimits::entries_only(max_entries))
+    }
+
+    /// Create a cache that enforces entry and byte limits simultaneously.
+    pub fn with_limits(limits: MemoryPoolLimits) -> Self {
         Self {
-            entries: HashMap::new(),
-            order: VecDeque::new(),
-            capacity,
-            hits: 0,
-            misses: 0,
-            evictions: 0,
+            cache: OwnerMemoryLru::new(limits),
         }
     }
 
-    /// Look up a staged bundle, returning a clone if present.
+    /// Look up a staged bundle and mark it most recently used.
     ///
-    /// Cloning is intentional: the caller (CUDA upload path) needs an owned
-    /// bundle to upload, while the cache retains its copy for future hits.
-    /// Bundles are small (a few MB each for FP4 experts).
-    pub fn get(&mut self, expert: ExpertId) -> Option<ExpertComputeBundle> {
-        if self.entries.contains_key(&expert) {
-            self.hits += 1;
-            // Move to back (most-recently-used).
-            self.order.retain(|id| *id != expert);
-            self.order.push_back(expert);
-            self.entries.get(&expert).cloned()
-        } else {
-            self.misses += 1;
-            None
-        }
+    /// The returned [`Arc`] shares the exact allocation held by the cache; no
+    /// expert tensor payload is copied.
+    pub fn get(&mut self, expert: ExpertId) -> Option<Arc<ExpertComputeBundle>> {
+        self.cache.get_cloned(expert)
     }
 
     pub fn contains(&self, expert: ExpertId) -> bool {
-        self.entries.contains_key(&expert)
+        self.cache.contains(expert)
     }
 
     pub fn expert_ids_for_layer(&self, layer: usize) -> Vec<usize> {
         let mut experts = self
-            .entries
+            .cache
             .keys()
             .filter(|expert| expert.layer == layer)
             .map(|expert| expert.expert)
@@ -1554,80 +1579,68 @@ impl HostStagedExpertCache {
         experts
     }
 
-    /// Insert a bundle, evicting the least-recently-used entry if at capacity.
-    pub fn insert(&mut self, bundle: ExpertComputeBundle) {
-        if self.capacity == 0 {
-            return;
-        }
-        let expert = bundle.expert;
-        if self.entries.contains_key(&expert) {
-            self.order.retain(|id| *id != expert);
-        } else if self.entries.len() >= self.capacity && self.capacity > 0 {
-            if let Some(evicted) = self.order.pop_front() {
-                self.entries.remove(&evicted);
-                self.evictions += 1;
-            }
-        }
-        self.entries.insert(expert, bundle);
-        self.order.push_back(expert);
+    /// Insert an owned bundle. Returns `true` when it was admitted.
+    pub fn insert(&mut self, bundle: ExpertComputeBundle) -> bool {
+        self.insert_shared(Arc::new(bundle))
     }
 
-    /// Load an expert bundle from disk via the reader, caching the result.
+    /// Insert an already shared bundle. Returns `true` when it was admitted.
     ///
-    /// On cache hit, skips the disk read entirely. On miss, reads from disk
-    /// and inserts into the cache before returning.
-    pub fn get_or_load(
-        &mut self,
-        expert: ExpertId,
-        source: &ExpertLoadSource,
-        reader: &ExpertStreamingReader,
-    ) -> Result<ExpertComputeBundle> {
-        if let Some(bundle) = self.get(expert) {
-            return Ok(bundle);
-        }
-        let payload = reader.read_load_source(expert, source)?;
-        let bundle = ExpertComputeBundle::from_artifact_payload(payload)?;
-        self.insert(bundle.clone());
-        Ok(bundle)
+    /// A bundle larger than `max_bytes` (or any bundle when `max_entries` is
+    /// zero) is rejected without evicting or replacing existing entries.
+    pub fn insert_shared(&mut self, bundle: Arc<ExpertComputeBundle>) -> bool {
+        let expert = bundle.expert;
+        let bytes = bundle.total_bytes();
+        self.cache.insert(expert, bundle, bytes)
     }
 
     /// Number of currently staged bundles.
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.cache.len()
     }
 
     /// Whether the cache is empty.
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.cache.is_empty()
+    }
+
+    pub fn limits(&self) -> MemoryPoolLimits {
+        self.cache.limits()
+    }
+
+    pub fn stats(&self) -> MemoryPoolStats {
+        self.cache.stats()
     }
 
     /// Cache hit count (experts served from host memory).
     pub fn hits(&self) -> u64 {
-        self.hits
+        self.cache.stats().hits
     }
 
     /// Cache miss count (experts that required a disk read).
     pub fn misses(&self) -> u64 {
-        self.misses
+        self.cache.stats().misses
     }
 
-    /// Number of host-side evictions (LRU replacements).
+    /// Number of entries removed to satisfy cache limits.
     pub fn evictions(&self) -> u64 {
-        self.evictions
+        self.cache.stats().evictions
     }
 
-    /// Total bytes of all staged bundles.
+    /// Number of entries rejected by cache limits.
+    pub fn rejections(&self) -> u64 {
+        self.cache.stats().rejections
+    }
+
+    /// Total payload bytes of all staged bundles, maintained in O(1).
     pub fn total_bytes(&self) -> u64 {
-        self.entries.values().map(|b| b.total_bytes()).sum()
+        self.cache.stats().bytes_used
     }
 }
 
 impl Default for HostStagedExpertCache {
     fn default() -> Self {
-        // Default capacity: 256 expert bundles. At ~13 MB per FP4 expert
-        // (gate+up+down for DeepSeek-V4 Flash), this is ~3.4 GB host RAM.
-        // Larger cache reduces disk re-reads across decode tokens with
-        // different expert routing.
+        // Compatibility default: 256 entries and no additional byte cap.
         Self::new(256)
     }
 }
@@ -1644,6 +1657,107 @@ mod tests {
         assert_eq!(policy.prefetch_per_layer, 6);
         assert!(!policy.allow_cpu_staging);
         assert!(!policy.allow_remote_sources);
+    }
+
+    #[test]
+    fn host_cache_get_shares_bundle_allocation() {
+        let mut cache = HostStagedExpertCache::with_limits(MemoryPoolLimits::new(2, 64));
+        assert!(cache.insert(synthetic_bundle(0, 0, 12)));
+
+        let first = cache.get(ExpertId::new(0, 0)).unwrap();
+        let second = cache.get(ExpertId::new(0, 0)).unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(first.total_bytes(), 12);
+        assert_eq!(cache.hits(), 2);
+    }
+
+    #[test]
+    fn host_cache_evicts_lru_until_byte_budget_is_satisfied() {
+        let mut cache = HostStagedExpertCache::with_limits(MemoryPoolLimits::new(8, 12));
+        assert!(cache.insert(synthetic_bundle(0, 0, 6)));
+        assert!(cache.insert(synthetic_bundle(0, 1, 6)));
+        assert!(cache.insert(synthetic_bundle(0, 2, 6)));
+
+        assert!(!cache.contains(ExpertId::new(0, 0)));
+        assert!(cache.contains(ExpertId::new(0, 1)));
+        assert!(cache.contains(ExpertId::new(0, 2)));
+        assert_eq!(cache.total_bytes(), 12);
+        assert_eq!(
+            cache.stats(),
+            MemoryPoolStats {
+                limits: MemoryPoolLimits::new(8, 12),
+                entries_used: 2,
+                bytes_used: 12,
+                peak_bytes_used: 12,
+                admissions: 3,
+                evictions: 1,
+                ..MemoryPoolStats::default()
+            }
+        );
+    }
+
+    #[test]
+    fn host_cache_replacement_updates_bytes_without_counting_an_eviction() {
+        let mut cache = HostStagedExpertCache::with_limits(MemoryPoolLimits::new(2, 20));
+        assert!(cache.insert(synthetic_bundle(0, 0, 6)));
+        assert!(cache.insert(synthetic_bundle(0, 1, 8)));
+        assert!(cache.insert(synthetic_bundle(0, 0, 12)));
+
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.total_bytes(), 20);
+        assert_eq!(cache.evictions(), 0);
+        assert_eq!(cache.stats().peak_bytes_used, 20);
+        assert_eq!(cache.get(ExpertId::new(0, 0)).unwrap().total_bytes(), 12);
+        assert!(cache.contains(ExpertId::new(0, 1)));
+    }
+
+    #[test]
+    fn host_cache_rejects_oversize_entry_without_disturbing_residents() {
+        let mut cache = HostStagedExpertCache::with_limits(MemoryPoolLimits::new(2, 10));
+        assert!(cache.insert(synthetic_bundle(0, 0, 8)));
+        let resident = cache.get(ExpertId::new(0, 0)).unwrap();
+
+        assert!(!cache.insert(synthetic_bundle(0, 0, 11)));
+
+        let after_rejection = cache.get(ExpertId::new(0, 0)).unwrap();
+        assert!(Arc::ptr_eq(&resident, &after_rejection));
+        assert_eq!(cache.total_bytes(), 8);
+        assert_eq!(cache.evictions(), 0);
+        assert_eq!(cache.rejections(), 1);
+    }
+
+    #[test]
+    fn host_cache_hit_promotes_entry_in_lru_order() {
+        let mut cache = HostStagedExpertCache::with_limits(MemoryPoolLimits::new(2, 64));
+        assert!(cache.insert(synthetic_bundle(0, 0, 4)));
+        assert!(cache.insert(synthetic_bundle(0, 1, 4)));
+        assert!(cache.get(ExpertId::new(0, 0)).is_some());
+        assert!(cache.insert(synthetic_bundle(0, 2, 4)));
+
+        assert!(cache.contains(ExpertId::new(0, 0)));
+        assert!(!cache.contains(ExpertId::new(0, 1)));
+        assert!(cache.contains(ExpertId::new(0, 2)));
+        assert_eq!(cache.evictions(), 1);
+    }
+
+    #[test]
+    fn rejected_async_cache_admission_preserves_one_shot_bundle_handoff() {
+        let expert = ExpertId::new(0, 7);
+        let mut loader = AsyncHostStagedExpertLoader::new(1);
+        let mut cache = HostStagedExpertCache::with_limits(MemoryPoolLimits::disabled());
+        let mut unretained = HashMap::new();
+
+        assert!(loader.handle_result(
+            AsyncHostStagedExpertResult::Loaded(synthetic_bundle(0, 7, 12)),
+            &mut cache,
+            &mut unretained,
+        ));
+
+        assert!(cache.is_empty());
+        assert_eq!(cache.rejections(), 1);
+        assert_eq!(unretained.remove(&expert).unwrap().total_bytes(), 12);
+        assert_eq!(loader.stats().completed, 1);
     }
 
     #[test]
@@ -2258,6 +2372,33 @@ mod tests {
             err.to_string()
                 .contains("selected experts must be available")
         );
+    }
+
+    fn synthetic_bundle(layer: usize, expert: usize, bytes: usize) -> ExpertComputeBundle {
+        let expert = ExpertId::new(layer, expert);
+        let linear = |matrix, bytes| ExpertLinearPayload {
+            matrix,
+            weight: ExpertTensorPayload {
+                slice: ExpertTensorSlice {
+                    key: ExpertTensorKey { expert, matrix },
+                    component: ExpertTensorComponent::Weight,
+                    path: PathBuf::from("synthetic.safetensors"),
+                    offset: 0,
+                    bytes: bytes as u64,
+                    dtype: "opaque".into(),
+                    shape: vec![bytes],
+                },
+                bytes: vec![1; bytes],
+            },
+            scale: None,
+            format: ExpertLinearFormat::Opaque,
+        };
+        ExpertComputeBundle {
+            expert,
+            gate: linear(ExpertMatrixKind::Gate, bytes),
+            up: linear(ExpertMatrixKind::Up, 0),
+            down: linear(ExpertMatrixKind::Down, 0),
+        }
     }
 
     fn fp4_payload(

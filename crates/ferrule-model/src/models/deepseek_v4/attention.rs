@@ -599,7 +599,7 @@ impl DeepSeekV4Attention {
             )));
         }
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let q_latents = operators.linear_rows(&self.payload.query_a, hidden, tokens)?;
         record_attention_stage(
             operators,
@@ -607,7 +607,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::Qa,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let q_norm_name = format!("q_norm_L{}", self.layer);
         let q_latents = operators.rms_norm_rows(
             &q_latents,
@@ -622,7 +622,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::QNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let mut queries = operators.linear_rows(&self.payload.query_b, &q_latents, tokens)?;
         record_attention_stage(
             operators,
@@ -630,7 +630,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::Qb,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.rms_norm_heads_in_place(
             &mut queries,
             tokens * cfg.num_heads,
@@ -644,7 +644,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::QHeadNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         for token in 0..tokens {
             let position = start_pos + token;
             let row_start = token * cfg.q_full_dim();
@@ -665,7 +665,7 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let kv_rows = operators.linear_rows(&self.payload.key_value, hidden, tokens)?;
         record_attention_stage(
             operators,
@@ -673,7 +673,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvProj,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let kv_norm_name = format!("kv_norm_L{}", self.layer);
         let mut values = operators.rms_norm_rows(
             &kv_rows,
@@ -688,7 +688,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         for token in 0..tokens {
             let position = start_pos + token;
             let row_start = token * cfg.head_dim;
@@ -710,7 +710,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvRopeQuant,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         for token in 0..tokens {
             let position = start_pos + token;
             let row_start = token * cfg.head_dim;
@@ -725,7 +725,7 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let topk_cols = tokens.min(cfg.window_size);
         let topk = window_topk_indices_prefill(cfg.window_size, tokens);
         record_attention_stage(
@@ -734,7 +734,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::TopkBuild,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let context = operators.sparse_attention(
             &queries,
             &values,
@@ -781,7 +781,7 @@ impl DeepSeekV4Attention {
         })?;
         let rope = cfg.rope_params();
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let q_latents = operators.linear_rows(&self.payload.query_a, hidden, tokens)?;
         record_attention_stage(
             operators,
@@ -789,7 +789,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::Qa,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let q_norm_name = format!("q_norm_L{}", self.layer);
         let q_latents = operators.rms_norm_rows(
             &q_latents,
@@ -804,7 +804,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::QNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let mut queries = operators.linear_rows(&self.payload.query_b, &q_latents, tokens)?;
         record_attention_stage(
             operators,
@@ -812,7 +812,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::Qb,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.rms_norm_heads_in_place(
             &mut queries,
             tokens * cfg.num_heads,
@@ -826,7 +826,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::QHeadNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         for token in 0..tokens {
             let position = start_pos + token;
             let row_start = token * cfg.q_full_dim();
@@ -847,7 +847,7 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let kv_rows = operators.linear_rows(&self.payload.key_value, hidden, tokens)?;
         record_attention_stage(
             operators,
@@ -855,7 +855,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvProj,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let kv_norm_name = format!("kv_norm_L{}", self.layer);
         let mut window_values = operators.rms_norm_rows(
             &kv_rows,
@@ -870,7 +870,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         for token in 0..tokens {
             let position = start_pos + token;
             let row_start = token * cfg.head_dim;
@@ -892,7 +892,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvRopeQuant,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         for token in 0..tokens {
             let position = start_pos + token;
             let row_start = token * cfg.head_dim;
@@ -909,7 +909,7 @@ impl DeepSeekV4Attention {
         )?;
 
         if let Some(indexer) = compressed.indexer.as_ref() {
-            let stage_start = Instant::now();
+            let stage_start = operators.profile_start();
             let indexer_values = {
                 let state = cache.indexer_compressor.as_mut().ok_or_else(|| {
                     Error::Model(format!(
@@ -942,7 +942,7 @@ impl DeepSeekV4Attention {
             cache.indexer_compressed.extend_from_slice(&indexer_values);
         }
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let main_compressed = {
             let state = cache.main_compressor.as_mut().ok_or_else(|| {
                 Error::Model(format!(
@@ -974,7 +974,7 @@ impl DeepSeekV4Attention {
         }
         cache.compressed.extend_from_slice(&main_compressed);
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let window_cols = tokens.min(cfg.window_size);
         let mut topk = window_topk_indices_prefill(cfg.window_size, tokens);
         let mut topk_cols = window_cols;
@@ -1013,7 +1013,7 @@ impl DeepSeekV4Attention {
         let mut values = Vec::with_capacity((tokens + main_compressed_len) * cfg.head_dim);
         values.extend_from_slice(&window_values);
         values.extend_from_slice(&main_compressed);
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let context = operators.sparse_attention(
             &queries,
             &values,
@@ -1053,7 +1053,7 @@ impl DeepSeekV4Attention {
             let position = start_pos + token;
             let row_start = token * cfg.q_full_dim();
             let row = &mut context[row_start..row_start + cfg.q_full_dim()];
-            let stage_start = Instant::now();
+            let stage_start = operators.profile_start();
             apply_rotary_tail_scaled(
                 row,
                 cfg.num_heads,
@@ -1069,7 +1069,7 @@ impl DeepSeekV4Attention {
                 DeepSeekV4AttentionProfileStage::ContextRope,
                 stage_start,
             )?;
-            let stage_start = Instant::now();
+            let stage_start = operators.profile_start();
             let latent =
                 operators.grouped_output_a(&self.payload.output_a, row, cfg, self.layer)?;
             record_attention_stage(
@@ -1078,7 +1078,7 @@ impl DeepSeekV4Attention {
                 DeepSeekV4AttentionProfileStage::OutputA,
                 stage_start,
             )?;
-            let stage_start = Instant::now();
+            let stage_start = operators.profile_start();
             let projected = operators.linear_matvec(&self.payload.output_b, &latent)?;
             record_attention_stage(
                 operators,
@@ -1184,7 +1184,7 @@ impl DeepSeekV4Attention {
         }
         let layer_tag = format!("attn_L{}", self.layer);
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_rows_from_device_into(
             &self.payload.query_a,
             hidden_dev,
@@ -1198,7 +1198,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::Qa,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let q_norm_name = format!("q_norm_{layer_tag}");
         operators.cuda_mut()?.rms_norm_rows_device_cached_into(
             &q_norm_name,
@@ -1214,7 +1214,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::QNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_rows_from_device_into(
             &self.payload.query_b,
             &arena.q_norm,
@@ -1228,7 +1228,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::Qb,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.rms_norm_heads_from_device_into(
             &arena.query_raw,
             tokens * cfg.num_heads,
@@ -1242,7 +1242,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::QHeadNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let rope_name = format!("rope_{layer_tag}");
         let rope_positions = required_rope_positions(start_pos, 1, tokens)?;
         operators.cuda_mut()?.ensure_rope_tables_with_params(
@@ -1268,7 +1268,7 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_rows_from_device_into(
             &self.payload.key_value,
             hidden_dev,
@@ -1282,7 +1282,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvProj,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let kv_norm_name = format!("kv_norm_{layer_tag}");
         operators.cuda_mut()?.rms_norm_rows_device_cached_into(
             &kv_norm_name,
@@ -1298,7 +1298,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.rope_tail_rows_from_device(
             &rope_name,
             &mut arena.kv,
@@ -1323,7 +1323,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvRopeQuant,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let zero_kv = vec![0.0f32; cfg.head_dim];
         for token in 0..tokens {
             cache.window.append(start_pos + token, &zero_kv)?;
@@ -1343,7 +1343,7 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let topk_cols = tokens.min(cfg.window_size);
         let topk = window_topk_indices_prefill(cfg.window_size, tokens);
         operators
@@ -1355,7 +1355,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::TopkBuild,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators
             .cuda_mut()?
             .sparse_attention_with_device_query_values_topk_into(
@@ -1409,7 +1409,7 @@ impl DeepSeekV4Attention {
         let rope = cfg.rope_params();
         let layer_tag = format!("attn_L{}", self.layer);
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_rows_from_device_into(
             &self.payload.query_a,
             hidden_dev,
@@ -1429,7 +1429,7 @@ impl DeepSeekV4Attention {
             &arena.q_latent,
             cfg.q_lora_rank,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let q_norm_name = format!("q_norm_{layer_tag}");
         operators.cuda_mut()?.rms_norm_rows_device_cached_into(
             &q_norm_name,
@@ -1451,7 +1451,7 @@ impl DeepSeekV4Attention {
             &arena.q_norm,
             cfg.q_lora_rank,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_rows_from_device_into(
             &self.payload.query_b,
             &arena.q_norm,
@@ -1465,7 +1465,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::Qb,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.rms_norm_heads_from_device_into(
             &arena.query_raw,
             tokens * cfg.num_heads,
@@ -1479,7 +1479,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::QHeadNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let rope_name = format!("rope_{layer_tag}");
         let rope_positions = required_rope_positions(start_pos, 1, tokens)?;
         operators.cuda_mut()?.ensure_rope_tables_with_params(
@@ -1511,7 +1511,7 @@ impl DeepSeekV4Attention {
             cfg.q_full_dim(),
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_rows_from_device_into(
             &self.payload.key_value,
             hidden_dev,
@@ -1525,7 +1525,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvProj,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let kv_norm_name = format!("kv_norm_{layer_tag}");
         operators.cuda_mut()?.rms_norm_rows_device_cached_into(
             &kv_norm_name,
@@ -1541,7 +1541,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.rope_tail_rows_from_device(
             &rope_name,
             &mut arena.kv,
@@ -1567,7 +1567,7 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
         operators.capture_parity_checkpoint_rows(self.layer, "attn_kv", &arena.kv, cfg.head_dim)?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let zero_kv = vec![0.0f32; cfg.head_dim];
         for token in 0..tokens {
             cache.window.append(start_pos + token, &zero_kv)?;
@@ -1581,7 +1581,7 @@ impl DeepSeekV4Attention {
 
         if let Some(indexer) = compressed.indexer.as_ref() {
             let indexer_compressed_start = cache.indexer_compressed_len(cfg.index_head_dim);
-            let stage_start = Instant::now();
+            let stage_start = operators.profile_start();
             let indexer_groups = {
                 let (compressor_state, window) = (&mut cache.indexer_compressor, &mut cache.window);
                 let state = compressor_state.as_mut().ok_or_else(|| {
@@ -1642,7 +1642,7 @@ impl DeepSeekV4Attention {
             )?;
         }
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let compressed_start = cache.compressed_len();
         let main_groups = {
             let (compressor_state, window) = (&mut cache.main_compressor, &mut cache.window);
@@ -1683,7 +1683,7 @@ impl DeepSeekV4Attention {
             .compressed
             .resize(cache.compressed.len() + main_groups * cfg.head_dim, 0.0);
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.paged_write_rows(
             0,
             self.layer,
@@ -1719,7 +1719,7 @@ impl DeepSeekV4Attention {
             .normalized
             .len()
             / cfg.head_dim;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let window_cols = tokens.min(cfg.window_size);
         let compressed_offset = tokens;
         let topk_cols = if let Some(indexer) = compressed.indexer.as_ref() {
@@ -1866,7 +1866,7 @@ impl DeepSeekV4Attention {
                 cfg.head_dim,
                 &mut arena.compact_values,
             )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators
             .cuda_mut()?
             .sparse_attention_with_device_query_values_topk_into(
@@ -1912,7 +1912,7 @@ impl DeepSeekV4Attention {
                 arena.context.len()
             )));
         }
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let rope_name = format!("rope_attn_L{}", self.layer);
         let rope_positions = required_rope_positions(start_pos, 1, tokens)?;
         operators.cuda_mut()?.ensure_rope_tables_with_params(
@@ -1944,7 +1944,7 @@ impl DeepSeekV4Attention {
             cfg.q_full_dim(),
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators
             .cuda_mut()?
             .grouped_output_a_rows_from_device_into(
@@ -1968,7 +1968,7 @@ impl DeepSeekV4Attention {
             self.payload.output_b.format.in_features(),
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_rows_from_device_into(
             &self.payload.output_b,
             &arena.latent,
@@ -2259,7 +2259,7 @@ impl DeepSeekV4Attention {
             required_positions,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_rows_from_device_into(
             &self.payload.query_a,
             hidden_dev,
@@ -2280,7 +2280,7 @@ impl DeepSeekV4Attention {
             cfg.q_lora_rank,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.rms_norm_rows_device_cached_into(
             &format!("q_norm_{layer_tag}"),
             &arena.q_latent,
@@ -2312,7 +2312,7 @@ impl DeepSeekV4Attention {
                 .copy_f32_into_slot(&arena.q_norm, &mut arena.q_indexer, 0)?;
         }
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_rows_from_device_into(
             &self.payload.query_b,
             &arena.q_norm,
@@ -2326,7 +2326,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::Qb,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.rms_norm_heads_from_device_into(
             &arena.query_raw,
             rows * cfg.num_heads,
@@ -2340,7 +2340,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::QHeadNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.rope_tail_rows_indexed_from_device(
             &rope_name,
             &mut arena.query,
@@ -2364,7 +2364,7 @@ impl DeepSeekV4Attention {
             cfg.q_full_dim(),
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_rows_from_device_into(
             &self.payload.key_value,
             hidden_dev,
@@ -2378,7 +2378,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvProj,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.rms_norm_rows_device_cached_into(
             &format!("kv_norm_{layer_tag}"),
             &arena.kv_raw,
@@ -2393,7 +2393,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.rope_tail_rows_indexed_from_device(
             &rope_name,
             &mut arena.kv,
@@ -2431,7 +2431,7 @@ impl DeepSeekV4Attention {
         let cfg = self.config;
         let rows = arena.positions.len();
         let rope_name = format!("rope_attn_L{}", self.layer);
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.rope_tail_rows_indexed_from_device(
             &rope_name,
             &mut arena.context,
@@ -2454,7 +2454,7 @@ impl DeepSeekV4Attention {
             &arena.context,
             cfg.q_full_dim(),
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators
             .cuda_mut()?
             .grouped_output_a_rows_from_device_into(
@@ -2477,7 +2477,7 @@ impl DeepSeekV4Attention {
             &arena.latent,
             self.payload.output_b.format.in_features(),
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_rows_from_device_into(
             &self.payload.output_b,
             &arena.latent,
@@ -2571,7 +2571,7 @@ impl DeepSeekV4Attention {
                 .map(|position| position.saturating_add(1).min(cfg.window_size))
                 .max()
                 .ok_or_else(|| Error::Model("packed attention positions are empty".into()))?;
-            let stage_start = Instant::now();
+            let stage_start = operators.profile_start();
             operators
                 .cuda_mut()?
                 .paged_window_sparse_attention_rows_into(
@@ -3013,7 +3013,7 @@ impl DeepSeekV4Attention {
     ) -> Result<()> {
         let rope_positions = required_rope_positions(position, 1, 1)?;
         // Append to device combined KV cache (no D2H/H2D round-trip).
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.paged_write_rows(
             0,
             self.layer,
@@ -3033,7 +3033,7 @@ impl DeepSeekV4Attention {
         )?;
 
         if let Some(indexer) = compressed.indexer.as_ref() {
-            let stage_start = Instant::now();
+            let stage_start = operators.profile_start();
             let new_indexer_kv = {
                 let (compressor_state, window) = (&mut cache.indexer_compressor, &mut cache.window);
                 let state = compressor_state.as_mut().ok_or_else(|| {
@@ -3090,7 +3090,7 @@ impl DeepSeekV4Attention {
             }
         }
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let new_main_kv = {
             let (compressor_state, window) = (&mut cache.main_compressor, &mut cache.window);
             let state = compressor_state.as_mut().ok_or_else(|| {
@@ -3136,7 +3136,7 @@ impl DeepSeekV4Attention {
         // Combined KV cache window append already done above (device path).
         // Only compressed KV append remains here.
         if new_main_kv {
-            let stage_start = Instant::now();
+            let stage_start = operators.profile_start();
             let compressed_index = cache.compressed_len().saturating_sub(1);
             operators.cuda_mut()?.paged_write_rows(
                 1,
@@ -3158,7 +3158,7 @@ impl DeepSeekV4Attention {
             )?;
         }
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let window_len = cache.window.len;
         let topk_len = if let Some(indexer) = compressed.indexer.as_ref() {
             let compressed_len = cache.indexer_compressed_len(cfg.index_head_dim);
@@ -3277,7 +3277,7 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators
             .cuda_mut()?
             .sparse_attention_with_paged_kv_topk_into(
@@ -3442,7 +3442,7 @@ impl DeepSeekV4Attention {
             .copy_f32_into_slot(hidden_dev, &mut arena.hidden_b, 0)?;
 
         // Query: query_a → rms_norm → query_b → head_norm (all on device)
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_matvec_from_device_into(
             &self.payload.query_a,
             &mut arena.hidden_a,
@@ -3455,7 +3455,7 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
         let q_norm_name = format!("q_norm_{layer_tag}");
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.rms_norm_device_cached_into(
             &q_norm_name,
             &arena.q_latent,
@@ -3469,7 +3469,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::QNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_matvec_from_device_into(
             &self.payload.query_b,
             &mut arena.q_norm,
@@ -3481,7 +3481,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::Qb,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.rms_norm_heads_from_device_into(
             &arena.query_raw,
             cfg.num_heads,
@@ -3495,7 +3495,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::QHeadNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.rope_tail_from_device(
             &rope_name,
             &mut arena.query,
@@ -3513,7 +3513,7 @@ impl DeepSeekV4Attention {
         )?;
 
         // KV: key_value → rms_norm → rotary (all on device), then append to device KV cache.
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_matvec_from_device_into(
             &self.payload.key_value,
             &mut arena.hidden_b,
@@ -3526,7 +3526,7 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
         let kv_norm_name = format!("kv_norm_{layer_tag}");
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.rms_norm_device_cached_into(
             &kv_norm_name,
             &arena.kv_raw,
@@ -3540,7 +3540,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.rope_tail_from_device(
             &rope_name,
             &mut arena.kv,
@@ -3565,7 +3565,7 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
         // Append to device KV cache.
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.paged_write_rows(
             0,
             self.layer,
@@ -3593,7 +3593,7 @@ impl DeepSeekV4Attention {
             topk: cfg.window_size,
             softmax_scale: (cfg.head_dim as f32).powf(-0.5),
         };
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators
             .cuda_mut()?
             .sparse_attention_topk_from_device_into(
@@ -3613,7 +3613,7 @@ impl DeepSeekV4Attention {
         )?;
 
         // Inverse rotary on context (device).
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.rope_tail_from_device(
             &rope_name,
             &mut arena.context,
@@ -3631,7 +3631,7 @@ impl DeepSeekV4Attention {
         )?;
 
         // Grouped output_a on device.
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators
             .cuda_mut()?
             .grouped_output_a_rows_from_device_into(
@@ -3650,7 +3650,7 @@ impl DeepSeekV4Attention {
         )?;
 
         // Output_b on device into caller-owned storage.
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_matvec_from_device_into(
             &self.payload.output_b,
             &mut arena.latent,
@@ -3670,13 +3670,16 @@ fn record_attention_stage(
     operators: &mut DeepSeekV4OperatorContext,
     layer: usize,
     stage: DeepSeekV4AttentionProfileStage,
-    start: Instant,
+    start: Option<Instant>,
 ) -> Result<()> {
-    let elapsed_us = operators.finish_profile_stage(start).map_err(|error| {
+    let Some(elapsed_us) = operators.finish_profile_stage(start).map_err(|error| {
         Error::Internal(format!(
             "DeepSeek-V4 layer {layer} attention stage {stage:?} failed while synchronizing: {error}"
         ))
-    })?;
+    })?
+    else {
+        return Ok(());
+    };
     operators.record_attention_stage(layer, stage, elapsed_us);
     Ok(())
 }

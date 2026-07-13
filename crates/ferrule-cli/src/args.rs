@@ -252,6 +252,18 @@ pub(crate) struct ServeArgs {
     /// Bound resident routed experts per layer (0 = managed default).
     #[arg(long, default_value_t = 48)]
     pub(crate) moe_hotset_experts: usize,
+    /// Maximum whole experts retained in pageable host memory (0 disables retention).
+    #[arg(long = "expert-host-cache-entries", default_value_t = 256)]
+    pub(crate) expert_host_cache_entries: usize,
+    /// Pageable host expert-cache budget in MiB (0 = entry-limited only).
+    #[arg(long = "expert-host-cache-mb", default_value_t = 0)]
+    pub(crate) expert_host_cache_mb: u64,
+    /// Maximum whole experts retained in pinned host memory (0 disables retention).
+    #[arg(long = "expert-pinned-cache-entries", default_value_t = 64)]
+    pub(crate) expert_pinned_cache_entries: usize,
+    /// Pinned host expert-cache budget in MiB (0 = entry-limited only).
+    #[arg(long = "expert-pinned-cache-mb", default_value_t = 0)]
+    pub(crate) expert_pinned_cache_mb: u64,
 }
 
 #[derive(Args, Clone)]

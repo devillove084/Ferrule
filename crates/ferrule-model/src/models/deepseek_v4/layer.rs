@@ -393,12 +393,12 @@ impl DeepSeekV4Layer {
         expert_reader: &ExpertStreamingReader,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<DeepSeekV4LayerDeviceStepOutput> {
-        let decode_start = Instant::now();
+        let decode_start = operators.profile_start();
         let norm_eps = self.hc_config.norm_eps;
         let layer_tag = format!("L{}", self.layer);
 
         // ── Prefix: attention HC-pre + norm + attention + HC-post + FFN HC-pre + FFN norm ──
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let attn_hc_name = format!("hc_attn_{layer_tag}");
         operators.cuda_mut()?.hc_pre_from_device_into(
             &attn_hc_name,
@@ -424,7 +424,7 @@ impl DeepSeekV4Layer {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let attn_norm_name = format!("attn_norm_{layer_tag}");
         operators.cuda_mut()?.rms_norm_device_cached_into(
             &attn_norm_name,
@@ -446,7 +446,7 @@ impl DeepSeekV4Layer {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         self.attention.decode_step_from_device_into(
             &mut state.kv,
             &arena.attn_norm,
@@ -461,7 +461,7 @@ impl DeepSeekV4Layer {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.hc_post_from_device_into(
             &arena.attention.output,
             hc_state_dev,
@@ -484,7 +484,7 @@ impl DeepSeekV4Layer {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let ffn_hc_name = format!("hc_ffn_{layer_tag}");
         operators.cuda_mut()?.hc_pre_from_device_into(
             &ffn_hc_name,
@@ -504,7 +504,7 @@ impl DeepSeekV4Layer {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let ffn_norm_name = format!("ffn_norm_{layer_tag}");
         operators.cuda_mut()?.rms_norm_device_cached_into(
             &ffn_norm_name,
@@ -537,7 +537,7 @@ impl DeepSeekV4Layer {
                 expert_reader,
             )?;
         }
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let moe = operators.cuda_mut()?.routed_moe_step_device_output_into(
             self.layer,
             &arena.ffn_norm,
@@ -571,7 +571,7 @@ impl DeepSeekV4Layer {
         )?;
 
         // ── Suffix: FFN HC-post ──
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.hc_post_from_device_into(
             &arena.moe_output,
             &arena.after_attn,
@@ -593,8 +593,9 @@ impl DeepSeekV4Layer {
             DeepSeekV4LayerProfileStage::FfnHcPost,
             stage_start,
         )?;
-        let decode_us = operators.finish_profile_stage(decode_start)?;
-        operators.record_layer_decode(self.layer, decode_us);
+        if let Some(decode_us) = operators.finish_profile_stage(decode_start)? {
+            operators.record_layer_decode(self.layer, decode_us);
+        }
         std::mem::swap(hc_state_dev, &mut arena.layer_output);
         Ok(DeepSeekV4LayerDeviceStepOutput { moe })
     }
@@ -806,10 +807,10 @@ impl DeepSeekV4Layer {
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<()> {
         let tokens = token_ids.len();
-        let prefill_start = Instant::now();
+        let prefill_start = operators.profile_start();
         let layer_tag = format!("L{}", self.layer);
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let attn_hc_name = format!("hc_attn_{layer_tag}");
         operators.cuda_mut()?.hc_pre_from_device_into(
             &attn_hc_name,
@@ -835,7 +836,7 @@ impl DeepSeekV4Layer {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let attn_norm_name = format!("attn_norm_{layer_tag}");
         operators.cuda_mut()?.rms_norm_rows_device_cached_into(
             &attn_norm_name,
@@ -858,7 +859,7 @@ impl DeepSeekV4Layer {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         self.attention.prefill_start_from_device_into(
             &mut state.kv,
             &arena.attn_norm,
@@ -873,7 +874,7 @@ impl DeepSeekV4Layer {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.hc_post_from_device_into(
             &arena.attention.output,
             hc_state_dev,
@@ -896,7 +897,7 @@ impl DeepSeekV4Layer {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let ffn_hc_name = format!("hc_ffn_{layer_tag}");
         operators.cuda_mut()?.hc_pre_from_device_into(
             &ffn_hc_name,
@@ -916,7 +917,7 @@ impl DeepSeekV4Layer {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let ffn_norm_name = format!("ffn_norm_{layer_tag}");
         operators.cuda_mut()?.rms_norm_rows_device_cached_into(
             &ffn_norm_name,
@@ -949,7 +950,7 @@ impl DeepSeekV4Layer {
             )?;
         }
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.routed_moe_prefill_batch_from_device_into(
             self.layer,
             &arena.ffn_norm,
@@ -985,7 +986,7 @@ impl DeepSeekV4Layer {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         operators.cuda_mut()?.hc_post_from_device_into(
             &arena.moe_output,
             &arena.after_attn,
@@ -1008,8 +1009,9 @@ impl DeepSeekV4Layer {
             stage_start,
         )?;
 
-        let prefill_us = operators.finish_profile_stage(prefill_start)?;
-        operators.record_layer_prefill(self.layer, tokens, prefill_us);
+        if let Some(prefill_us) = operators.finish_profile_stage(prefill_start)? {
+            operators.record_layer_prefill(self.layer, tokens, prefill_us);
+        }
         std::mem::swap(hc_state_dev, &mut arena.layer_output);
         Ok(())
     }
@@ -1042,8 +1044,8 @@ impl DeepSeekV4Layer {
             )));
         }
 
-        let prefill_start = Instant::now();
-        let stage_start = Instant::now();
+        let prefill_start = operators.profile_start();
+        let stage_start = operators.profile_start();
         let attention_pre =
             operators.hc_pre(hc_state, tokens, self.hc_config, &self.hc_attention)?;
 
@@ -1053,7 +1055,7 @@ impl DeepSeekV4Layer {
             DeepSeekV4LayerProfileStage::AttnHcPre,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let attn_norm_name = format!("attn_norm_L{}", self.layer);
         let attention_input = rms_norm_rows_with_operators(
             operators,
@@ -1070,7 +1072,7 @@ impl DeepSeekV4Layer {
             DeepSeekV4LayerProfileStage::AttnNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let attention_hidden = if start_pos == 0 {
             self.attention.prefill_start_with_operators(
                 &mut state.kv,
@@ -1092,7 +1094,7 @@ impl DeepSeekV4Layer {
             DeepSeekV4LayerProfileStage::Attention,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let after_attention = operators.hc_post(
             &attention_hidden,
             hc_state,
@@ -1107,7 +1109,7 @@ impl DeepSeekV4Layer {
             stage_start,
         )?;
 
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let ffn_pre = operators.hc_pre(
             &after_attention,
             tokens,
@@ -1120,7 +1122,7 @@ impl DeepSeekV4Layer {
             DeepSeekV4LayerProfileStage::FfnHcPre,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let ffn_norm_name = format!("ffn_norm_L{}", self.layer);
         let ffn_input = rms_norm_rows_with_operators(
             operators,
@@ -1137,7 +1139,7 @@ impl DeepSeekV4Layer {
             DeepSeekV4LayerProfileStage::FfnNorm,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let feed_forward_hidden = operators.routed_moe_prefill_batch(
             self.layer,
             &ffn_input,
@@ -1158,7 +1160,7 @@ impl DeepSeekV4Layer {
             DeepSeekV4LayerProfileStage::Moe,
             stage_start,
         )?;
-        let stage_start = Instant::now();
+        let stage_start = operators.profile_start();
         let out = operators.hc_post(
             &feed_forward_hidden,
             &after_attention,
@@ -1172,8 +1174,9 @@ impl DeepSeekV4Layer {
             DeepSeekV4LayerProfileStage::FfnHcPost,
             stage_start,
         )?;
-        let prefill_us = operators.finish_profile_stage(prefill_start)?;
-        operators.record_layer_prefill(self.layer, tokens, prefill_us);
+        if let Some(prefill_us) = operators.finish_profile_stage(prefill_start)? {
+            operators.record_layer_prefill(self.layer, tokens, prefill_us);
+        }
         Ok(out)
     }
 }
@@ -1241,27 +1244,19 @@ impl DeepSeekV4LayerArenaVariants {
         rows: usize,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<Self> {
-        Self::try_build_with_row_transitions(
-            layers,
-            mode,
-            rows,
-            mode == ForwardMode::Decode,
-            operators,
-        )
+        Self::try_build_with_row_transitions(layers, rows, mode == ForwardMode::Decode, operators)
     }
 
     pub(crate) fn try_build_for_packed_mode(
         layers: &[DeepSeekV4Layer],
-        mode: ForwardMode,
         rows: usize,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<Self> {
-        Self::try_build_with_row_transitions(layers, mode, rows, true, operators)
+        Self::try_build_with_row_transitions(layers, rows, true, operators)
     }
 
     fn try_build_with_row_transitions(
         layers: &[DeepSeekV4Layer],
-        mode: ForwardMode,
         rows: usize,
         independent_rows: bool,
         operators: &mut DeepSeekV4OperatorContext,
@@ -1276,11 +1271,7 @@ impl DeepSeekV4LayerArenaVariants {
                 operators,
             )?);
         }
-        eprintln!(
-            "[ferrule] DSV4 arena bucket mode={mode:?} rows={rows}: {} layers -> {} unique scratch arenas",
-            layers.len(),
-            arenas.len()
-        );
+
         Ok(Self {
             arenas,
             layer_to_variant: layer_to_variant.into_boxed_slice(),
@@ -1461,9 +1452,10 @@ fn record_stage(
     operators: &mut DeepSeekV4OperatorContext,
     layer: usize,
     stage: DeepSeekV4LayerProfileStage,
-    start: Instant,
+    start: Option<Instant>,
 ) -> Result<()> {
-    let elapsed_us = operators.finish_profile_stage(start)?;
-    operators.record_layer_stage(layer, stage, elapsed_us);
+    if let Some(elapsed_us) = operators.finish_profile_stage(start)? {
+        operators.record_layer_stage(layer, stage, elapsed_us);
+    }
     Ok(())
 }

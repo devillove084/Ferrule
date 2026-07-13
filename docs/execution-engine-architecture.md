@@ -1,6 +1,6 @@
 # Ferrule Execution Engine Architecture
 
-_Status: E1–E6 complete; E7–E8 planned_
+_Status: E1–E6 complete; E7–E9 planned_
 
 _Last updated: 2026-07-13_
 
@@ -23,6 +23,9 @@ It does **not** replace:
   device-independent semantic graph IR;
 - [`storage-residency-architecture.md`](storage-residency-architecture.md), which
   defines object identity, placement, replicas, transfers, and policy;
+- [`expert-memory-architecture.md`](expert-memory-architecture.md), which defines
+  owner-thread memory pools, expert host/pinned budgets, GB10 constraints, and
+  benchmark-safe telemetry;
 - [`ROADMAP.md`](ROADMAP.md), which defines implementation order and gates.
 
 ---
@@ -133,13 +136,44 @@ already in-flight resources until their events complete. The old CUDA planner/ba
 reconciliation path is removed, and runtime-controller stats are exposed through DSV4
 operator counters.
 
-### 2.6 Remaining limits
+### 2.6 Expert host/pinned memory is explicitly budgeted
+
+`ferrule-common::memory` provides model-neutral topology/pool vocabulary and the
+synchronization-free `OwnerMemoryLru`. DSV4 composes `ExpertMemoryPolicy` from separate
+pageable and pinned `MemoryPoolLimits`; serving freezes entry and byte limits before
+constructing the model worker and passes them to the actual CUDA caches.
+
+Host cache values are `Arc<ExpertComputeBundle>`, so a hit shares tensor payloads with
+the upload operation rather than cloning six tensors. Pageable and pinned caches use
+O(1)-average hit promotion, byte accounting, and individual eviction. Oversized values
+are rejected before an existing same-key resident is removed. Runtime snapshots expose
+current/peak bytes, limits, hits/misses, admissions, evictions, and rejections through
+`MemoryPoolStats`.
+
+This is local retention accounting, not a claim that expert weights are physically
+paged. On GB10, pageable, pinned, device, KV, arena, and file-cache allocations compete
+for the same coherent LPDDR capacity. Mapped-pinned and managed backing remain A/B
+candidates, not unmeasured defaults.
+
+### 2.7 Benchmark-safe diagnostics
+
+DSV4 profiling is frozen at preparation time and defaults off. With profiling disabled,
+layer/attention hot paths do not call `Instant::now`, synchronize CUDA for timing, or
+populate timing maps. CUDA dispatch environment switches are parsed once when the CUDA
+operator context is built. Cache/correctness counters remain owner-thread integer
+updates; request/token event paths do not clone cumulative generated text.
+
+Synchronized profiling remains diagnostic-only. Production metrics and sampled CUDA
+events belong to E9 and must publish bounded snapshots without model-thread formatting,
+blocking, or per-token logs.
+
+### 2.8 Remaining limits
 
 Stable, patchable CUDA graph buckets remain E7 work. Compressor control and further
 fusion/sampling optimization remain measurable follow-on work rather than reasons to
 reintroduce token-loop production execution or duplicate residency ownership.
 
-### 2.7 Retired token-specific graph execution
+### 2.9 Retired token-specific graph execution
 
 The DSV4 token/position/route-specific one-shot graph path has been deleted. It
 performed an eager warmup on cloned state, ran separate graph-only attention/MoE
@@ -173,7 +207,7 @@ flowchart TD
 | `ferrule-runtime` | request/session/sampling, admission, batch planning, sequence-handle mapping, logical KV reservations/preemption, per-layer expert slot/generation/lease/prefetch policy, and executable-cache policy | DSV4 tensor names, compressor math, CUDA buffers or expert handles |
 | prepared executor | immutable prepared plan, explicit sequence-state references, arena leases, batch validation/lowering, eager/graph choice | service-level request semantics, artifact discovery in execute |
 | `ferrule-cuda` / DSV4 CUDA physical store | allocations/pools, streams/events, physical KV pages, immutable expert source/staging/upload resources, resident handles, stable device tables, kernels, graph exec | fairness, request IDs, logical residency policy, CPU planner/handle mirrors |
-| diagnostics | counters, profiles, parity captures, traces | authoritative sequence/resource state |
+| diagnostics | owner-thread counters/snapshots, opt-in profiles, parity captures, traces | authoritative sequence/resource state or synchronous model-thread log formatting |
 
 ---
 

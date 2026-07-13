@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(feature = "cuda")]
 use ferrule_common::ExpertResidencyControl;
-use ferrule_common::{Error, ExpertResidencyStats, Result};
+use ferrule_common::{Error, ExpertResidencyStats, MemoryPoolStats, Result};
 
 use crate::artifact::binding::RouterArtifactPayload;
 use crate::artifact::linear::ArtifactLinearPayload;
@@ -27,7 +27,7 @@ use crate::moe::routed::{
 use crate::moe::routing::ExpertRouterPolicy;
 #[cfg(feature = "cuda")]
 use crate::moe::streaming::ExpertSourceCatalog;
-use crate::moe::streaming::{ExpertStreamingPlanner, ExpertStreamingReader};
+use crate::moe::streaming::{ExpertMemoryPolicy, ExpertStreamingPlanner, ExpertStreamingReader};
 use crate::runner::TokenLogit;
 
 use super::config::DeepSeekV4AttentionConfig;
@@ -210,16 +210,8 @@ pub struct DeepSeekV4OperatorRuntimeCounters {
     pub expert_loads: u64,
     pub expert_load_bytes: u64,
     pub expert_evictions: u64,
-    pub expert_host_cache_hits: u64,
-    pub expert_host_cache_misses: u64,
-    pub expert_host_cache_evictions: u64,
-    pub expert_host_cache_entries: usize,
-    pub expert_host_cache_bytes: u64,
-    pub expert_pinned_cache_hits: u64,
-    pub expert_pinned_cache_misses: u64,
-    pub expert_pinned_cache_evictions: u64,
-    pub expert_pinned_cache_entries: usize,
-    pub expert_pinned_cache_bytes: u64,
+    pub expert_host_cache: MemoryPoolStats,
+    pub expert_pinned_cache: MemoryPoolStats,
     pub expert_cuda_resident_entries: usize,
     pub expert_cuda_resident_bytes: u64,
     pub expert_async_prefetch_submitted: u64,
@@ -243,6 +235,9 @@ pub struct DeepSeekV4OperatorContext {
     pub(crate) backend: ModelExecutionBackend,
     layer_profiles: BTreeMap<usize, DeepSeekV4LayerProfileStats>,
     attention_profiles: BTreeMap<usize, DeepSeekV4AttentionProfileStats>,
+    /// Frozen at preparation time. When false, hot paths do not sample the
+    /// clock and profile maps remain empty.
+    profile: bool,
     /// When enabled, profile stage timings synchronize the CUDA stream before
     /// sampling elapsed wall time. This is expensive but gives attribution that
     /// includes queued GPU work instead of only host enqueue time.
@@ -260,11 +255,18 @@ pub struct DeepSeekV4OperatorContext {
 }
 
 impl DeepSeekV4OperatorContext {
-    pub fn new(backend: ModelExecutionBackend, policy: &DeepSeekV4ExecutionPolicy) -> Result<Self> {
+    pub fn new(
+        backend: ModelExecutionBackend,
+        policy: &DeepSeekV4ExecutionPolicy,
+        expert_memory_policy: ExpertMemoryPolicy,
+    ) -> Result<Self> {
+        #[cfg(not(feature = "cuda"))]
+        let _ = expert_memory_policy;
         Ok(Self {
             backend,
             layer_profiles: BTreeMap::new(),
             attention_profiles: BTreeMap::new(),
+            profile: policy.profile_enabled(),
             profile_sync: policy.profile_sync(),
             #[cfg(feature = "cuda")]
             fused_indexer_prefill_topk: policy.fused_indexer_prefill_topk(),
@@ -277,7 +279,10 @@ impl DeepSeekV4OperatorContext {
             #[cfg(feature = "cuda")]
             cuda: match backend {
                 ModelExecutionBackend::Cpu => None,
-                ModelExecutionBackend::Cuda => Some(DeepSeekV4CudaOperatorCache::new(policy)?),
+                ModelExecutionBackend::Cuda => Some(DeepSeekV4CudaOperatorCache::new(
+                    policy,
+                    expert_memory_policy,
+                )?),
             },
         })
     }
@@ -286,6 +291,7 @@ impl DeepSeekV4OperatorContext {
         Self::new(
             ModelExecutionBackend::Cpu,
             &DeepSeekV4ExecutionPolicy::default(),
+            ExpertMemoryPolicy::default(),
         )
     }
 
@@ -395,8 +401,12 @@ impl DeepSeekV4OperatorContext {
         self.attention_profiles.values().copied().collect()
     }
 
+    pub const fn profile_enabled(&self) -> bool {
+        self.profile
+    }
+
     pub fn profile_sync_enabled(&self) -> bool {
-        self.profile_sync
+        self.profile && self.profile_sync
     }
 
     #[cfg(feature = "cuda")]
@@ -428,20 +438,31 @@ impl DeepSeekV4OperatorContext {
         }
     }
 
-    pub(crate) fn finish_profile_stage(&mut self, start: Instant) -> Result<u64> {
+    #[inline]
+    pub(crate) fn profile_start(&self) -> Option<Instant> {
+        self.profile.then(Instant::now)
+    }
+
+    pub(crate) fn finish_profile_stage(&mut self, start: Option<Instant>) -> Result<Option<u64>> {
+        let Some(start) = start else {
+            return Ok(None);
+        };
         self.sync_profile_stream()?;
-        Ok(duration_us(start.elapsed()))
+        Ok(Some(duration_us(start.elapsed())))
     }
 
     pub(crate) fn sync_profile_stream(&mut self) -> Result<()> {
         #[cfg(feature = "cuda")]
-        if self.profile_sync && self.backend == ModelExecutionBackend::Cuda {
+        if self.profile && self.profile_sync && self.backend == ModelExecutionBackend::Cuda {
             self.cuda_mut()?.ops.sync_stream()?;
         }
         Ok(())
     }
 
     pub(crate) fn record_layer_state_init(&mut self, layer: usize, elapsed_us: u64) {
+        if !self.profile {
+            return;
+        }
         let stats = self.layer_profile_entry(layer);
         stats.state_init_calls = stats.state_init_calls.saturating_add(1);
         stats.state_init_us = stats.state_init_us.saturating_add(elapsed_us);
@@ -449,12 +470,18 @@ impl DeepSeekV4OperatorContext {
 
     #[cfg(feature = "cuda")]
     pub(crate) fn record_layer_decode(&mut self, layer: usize, elapsed_us: u64) {
+        if !self.profile {
+            return;
+        }
         let stats = self.layer_profile_entry(layer);
         stats.decode_calls = stats.decode_calls.saturating_add(1);
         stats.decode_total_us = stats.decode_total_us.saturating_add(elapsed_us);
     }
 
     pub(crate) fn record_layer_prefill(&mut self, layer: usize, tokens: usize, elapsed_us: u64) {
+        if !self.profile {
+            return;
+        }
         let stats = self.layer_profile_entry(layer);
         stats.prefill_calls = stats.prefill_calls.saturating_add(1);
         stats.prefill_tokens = stats.prefill_tokens.saturating_add(tokens as u64);
@@ -467,6 +494,9 @@ impl DeepSeekV4OperatorContext {
         stage: DeepSeekV4LayerProfileStage,
         elapsed_us: u64,
     ) {
+        if !self.profile {
+            return;
+        }
         let stats = self.layer_profile_entry(layer);
         match stage {
             DeepSeekV4LayerProfileStage::AttnHcPre => {
@@ -497,6 +527,9 @@ impl DeepSeekV4OperatorContext {
     }
 
     pub(crate) fn record_attention_call(&mut self, layer: usize, tokens: usize) {
+        if !self.profile {
+            return;
+        }
         let stats = self.attention_profile_entry(layer);
         stats.calls = stats.calls.saturating_add(1);
         stats.tokens = stats.tokens.saturating_add(tokens as u64);
@@ -508,6 +541,9 @@ impl DeepSeekV4OperatorContext {
         stage: DeepSeekV4AttentionProfileStage,
         elapsed_us: u64,
     ) {
+        if !self.profile {
+            return;
+        }
         let stats = self.attention_profile_entry(layer);
         match stage {
             DeepSeekV4AttentionProfileStage::Qa => {

@@ -352,27 +352,30 @@ pub fn cmd_deepseek_v4_generate(
             match &decode_counters_baseline {
                 Some(base) => (
                     op_counters
-                        .expert_host_cache_hits
-                        .saturating_sub(base.expert_host_cache_hits),
+                        .expert_host_cache
+                        .hits
+                        .saturating_sub(base.expert_host_cache.hits),
                     op_counters
-                        .expert_host_cache_misses
-                        .saturating_sub(base.expert_host_cache_misses),
+                        .expert_host_cache
+                        .misses
+                        .saturating_sub(base.expert_host_cache.misses),
                     op_counters
-                        .expert_host_cache_evictions
-                        .saturating_sub(base.expert_host_cache_evictions),
+                        .expert_host_cache
+                        .evictions
+                        .saturating_sub(base.expert_host_cache.evictions),
                 ),
                 None => (
-                    op_counters.expert_host_cache_hits,
-                    op_counters.expert_host_cache_misses,
-                    op_counters.expert_host_cache_evictions,
+                    op_counters.expert_host_cache.hits,
+                    op_counters.expert_host_cache.misses,
+                    op_counters.expert_host_cache.evictions,
                 ),
             };
         counters.set_expert_host_cache(
             host_cache_hits,
             host_cache_misses,
             host_cache_evictions,
-            op_counters.expert_host_cache_entries,
-            op_counters.expert_host_cache_bytes,
+            op_counters.expert_host_cache.entries_used,
+            op_counters.expert_host_cache.bytes_used,
         );
         counters.set_expert_residency(resident_experts, resident_bytes);
         let summary =

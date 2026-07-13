@@ -2,8 +2,9 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use ferrule_common::MemoryPoolLimits;
 use ferrule_model::{
-    ChatTemplate, ModelDescriptor, ModelExecutionBackend, ModelFamily,
+    ChatTemplate, ExpertMemoryPolicy, ModelDescriptor, ModelExecutionBackend, ModelFamily,
     models::deepseek_v4::{DeepSeekV4PrepareOptions, DeepSeekV4Runner},
 };
 use ferrule_runtime::{ResidentSchedulerConfig, ResidentTopKDriverConfig};
@@ -35,11 +36,22 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
     }
 
     let model_path = PathBuf::from(&args.model);
+    let expert_memory_policy = ExpertMemoryPolicy::new(
+        MemoryPoolLimits::new(
+            args.expert_host_cache_entries,
+            cache_byte_limit(args.expert_host_cache_mb, "expert-host-cache-mb")?,
+        ),
+        MemoryPoolLimits::new(
+            args.expert_pinned_cache_entries,
+            cache_byte_limit(args.expert_pinned_cache_mb, "expert-pinned-cache-mb")?,
+        ),
+    );
     let prepare_options = DeepSeekV4PrepareOptions {
         max_layers: args.max_layers,
         output_head_chunk_rows: args.output_head_chunk_rows,
         expert_reader_max_tensor_bytes: args.expert_reader_max_slice_mb.saturating_mul(1024 * 1024),
         moe_prefetch_experts: args.moe_prefetch_experts,
+        expert_memory_policy,
         moe_hotset_experts: args.moe_hotset_experts,
     };
     let max_tensor_bytes = args.max_tensor_mb.saturating_mul(1024 * 1024);
@@ -114,6 +126,15 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
     })
 }
 
+fn cache_byte_limit(mebibytes: u64, option: &str) -> anyhow::Result<u64> {
+    if mebibytes == 0 {
+        return Ok(u64::MAX);
+    }
+    mebibytes
+        .checked_mul(1024 * 1024)
+        .ok_or_else(|| anyhow::anyhow!("{option} exceeds the supported byte range"))
+}
+
 fn validate_args(args: &ServeArgs) -> anyhow::Result<()> {
     if args.served_model_name.trim().is_empty() {
         anyhow::bail!("served model name must not be empty");
@@ -140,4 +161,20 @@ fn validate_args(args: &ServeArgs) -> anyhow::Result<()> {
         anyhow::bail!("admission-timeout-secs must be greater than zero");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cache_byte_limit;
+
+    #[test]
+    fn zero_cache_mebibytes_means_entry_limited_only() {
+        assert_eq!(cache_byte_limit(0, "cache").unwrap(), u64::MAX);
+    }
+
+    #[test]
+    fn cache_mebibytes_conversion_is_checked() {
+        assert_eq!(cache_byte_limit(2, "cache").unwrap(), 2 * 1024 * 1024);
+        assert!(cache_byte_limit(u64::MAX, "cache").is_err());
+    }
 }

@@ -42,9 +42,9 @@ pub use routing::{ExpertRoute, ExpertRouterPolicy, RouterScoreFunction, RouterSe
 pub use streaming::{
     AsyncHostStagedExpertLoader, AsyncHostStagedExpertStats, ExpertArtifactPayload,
     ExpertComputeBundle, ExpertEvictRequest, ExpertId, ExpertLinearFormat, ExpertLinearPayload,
-    ExpertLoadReason, ExpertLoadRequest, ExpertLoadSource, ExpertMatrixKind, ExpertStorageTier,
-    ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader, ExpertStreamingStep,
-    ExpertTensorComponent, ExpertTensorKey, ExpertTensorPayload, ExpertTensorSlice,
-    HostStagedExpertCache, read_experts_concurrent,
+    ExpertLoadReason, ExpertLoadRequest, ExpertLoadSource, ExpertMatrixKind, ExpertMemoryPolicy,
+    ExpertStorageTier, ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader,
+    ExpertStreamingStep, ExpertTensorComponent, ExpertTensorKey, ExpertTensorPayload,
+    ExpertTensorSlice, HostStagedExpertCache, read_experts_concurrent,
 };
 pub use telemetry::ExpertTelemetry;
