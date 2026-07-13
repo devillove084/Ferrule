@@ -940,6 +940,9 @@ Only profiler-justified work:
 - bucket autotuning;
 - [x] model-neutral OpenAI chat/text API, SSE streaming, bounded admission/fanout,
   per-request EOS policy, and disconnect cancellation;
+- [x] reproducible vLLM 0.25 serving harness script with fixed greedy/random-token
+  workloads, concurrency sweeps, detailed per-request JSON, percentile metrics, and
+  Git/vLLM/GPU run metadata; official Ferrule result runs remain to be recorded;
 - [ ] production metrics/profiling endpoints, device sampling, and structured masks;
 - DSpark proposal/verify/rollback after E5/E6 state safety.
 

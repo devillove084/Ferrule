@@ -229,6 +229,9 @@ just check              # Quick check
 ```bash
 just dsv4-chat tokens=128                        # Interactive chat
 just dsv4-serve                                  # OpenAI-compatible HTTP/SSE server
+just dsv4-vllm-bench smoke                       # vLLM API compatibility smoke
+just dsv4-vllm-bench baseline                    # Saved official single-concurrency result
+just dsv4-vllm-bench sweep                       # Saved concurrency 1/2/4 results
 just dsv4-runtime-driver-bench                   # bench-interactive via ResidentTopKDriver
 # positional override: prompt1 prompt2 tokens warmup chunk layers
 just dsv4-runtime-driver-bench "Hello" "Explain Ferrule in one sentence." 1 0 2 43

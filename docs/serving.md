@@ -160,23 +160,42 @@ curl -N http://127.0.0.1:8000/v1/completions \
 
 ## Official benchmark targets
 
-Primary neutral harness:
+Primary neutral harness is `scripts/bench_vllm_serve.sh`, verified against the
+installed vLLM 0.25.0 CLI. Start Ferrule in one terminal, then run the benchmark in
+another:
 
 ```bash
-vllm bench serve \
-  --backend openai-chat \
-  --base-url http://127.0.0.1:8000 \
-  --endpoint /v1/chat/completions \
-  --model deepseek-v4 \
-  --tokenizer models/DeepSeek-V4-Flash-DSpark \
-  --dataset-name custom \
-  --dataset-path prompts.jsonl \
-  --custom-output-len 8 \
-  --num-prompts 10 \
-  --max-concurrency 2 \
-  --temperature 0 \
-  --save-result \
-  --save-detailed
+# Fast API/streaming compatibility check: 2 requests, 16 input / 2 output tokens.
+just dsv4-vllm-bench smoke
+
+# Stable single-concurrency baseline: 20 requests, 32 input / 8 output tokens.
+just dsv4-vllm-bench baseline
+
+# Same workload at concurrency 1, 2, and 4.
+just dsv4-vllm-bench sweep
+```
+
+The script uses vLLM's `openai-chat` backend and exact-length random dataset, sends
+`temperature=0` plus `ignore_eos`, reports TTFT/TPOT/ITL/E2EL p50/p90/p95/p99, and
+saves detailed per-request JSON. The vLLM initial single-prompt compatibility request
+is not included in the reported metrics; its default readiness timeout is 600 seconds
+to accommodate a cold 43-layer DSV4 path. Each run directory also contains the Ferrule
+commit, vLLM version, server model response, GPU snapshot, and console logs under
+`target/bench/vllm-serve/<UTC timestamp>/`.
+
+Override workload or server settings with environment variables:
+
+```bash
+BASE_URL=http://127.0.0.1:8000 \
+INPUT_LEN=128 OUTPUT_LEN=32 NUM_PROMPTS=40 \
+CONCURRENCIES=1,2,4,8 REQUEST_RATE=inf \
+./scripts/bench_vllm_serve.sh sweep
+```
+
+Arguments after the profile are forwarded to `vllm bench serve`, for example:
+
+```bash
+./scripts/bench_vllm_serve.sh baseline --metric-percentiles 50,95,99
 ```
 
 SGLang cross-check:

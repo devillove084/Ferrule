@@ -8,6 +8,7 @@
 #   just bench-interactive MODEL → multi-turn chat latency benchmark
 #   just dsv4-runtime-driver-bench → DSV4 benchmark through ResidentTopKDriver
 #   just dsv4-serve → OpenAI-compatible DSV4 HTTP/SSE server
+#   just dsv4-vllm-bench → vLLM official serving benchmark against a running server
 #   just dsv4-prefill-chunk-sweep → DSV4 runtime-driver prefill chunk sweep CSV/JSONL
 #   just test       → all workspace tests
 #   just test-graph → runtime graph IR tests
@@ -186,6 +187,9 @@ bench-interactive model *args='':
 
 dsv4-serve model='models/DeepSeek-V4-Flash-DSpark' port='8000' *args='':
     just run-cuda serve {{ model }} --host 127.0.0.1 --port {{ port }} --served-model-name deepseek-v4 {{ args }}
+
+dsv4-vllm-bench mode='smoke' *args='':
+    ./scripts/bench_vllm_serve.sh {{ mode }} {{ args }}
 
 
 dsv4-runtime-driver-bench prompt1='Hello' prompt2='Explain Ferrule in one sentence.' tokens='1' warmup='1' chunk='4096' layers='43' *args='':
