@@ -126,42 +126,15 @@ For one exact target pass, define:
 
 Per-resource lower bounds are:
 
-$$
-\begin{aligned}
-T_{\mathrm{gpu}}   &= \frac{F_{\mathrm{gpu}}}{\eta_{\mathrm{gpu}} P_{\mathrm{gpu}}}, \\
-T_{\mathrm{cpu}}   &= \frac{F_{\mathrm{cpu}}}{\eta_{\mathrm{cpu}} P_{\mathrm{cpu}}}, \\
-T_{\mathrm{um}}    &= \frac{B_{\mathrm{um}}}{\eta_{\mathrm{um}} W_{\mathrm{um}}}, \\
-T_{\mathrm{nvme}}  &= \frac{B_{\mathrm{nvme}}}{\eta_{\mathrm{nvme}} W_{\mathrm{nvme}}}, \\
-T_{\mathrm{intra}} &= \frac{B_{\mathrm{intra}}}{\eta_{\mathrm{intra}} W_{\mathrm{intra}}}
-                      + C_{\mathrm{intra}} L_{\mathrm{intra}}, \\
-T_{\mathrm{inter}} &= \frac{B_{\mathrm{inter}}}{\eta_{\mathrm{inter}} W_{\mathrm{inter}}}
-                      + C_{\mathrm{inter}} L_{\mathrm{inter}}.
-\end{aligned}
-$$
+$$\begin{aligned} T_{\mathrm{gpu}}   &= \frac{F_{\mathrm{gpu}}}{\eta_{\mathrm{gpu}} P_{\mathrm{gpu}}}, \\\\ T_{\mathrm{cpu}}   &= \frac{F_{\mathrm{cpu}}}{\eta_{\mathrm{cpu}} P_{\mathrm{cpu}}}, \\\\ T_{\mathrm{um}}    &= \frac{B_{\mathrm{um}}}{\eta_{\mathrm{um}} W_{\mathrm{um}}}, \\\\ T_{\mathrm{nvme}}  &= \frac{B_{\mathrm{nvme}}}{\eta_{\mathrm{nvme}} W_{\mathrm{nvme}}}, \\\\ T_{\mathrm{intra}} &= \frac{B_{\mathrm{intra}}}{\eta_{\mathrm{intra}} W_{\mathrm{intra}}} + C_{\mathrm{intra}} L_{\mathrm{intra}}, \\\\ T_{\mathrm{inter}} &= \frac{B_{\mathrm{inter}}}{\eta_{\mathrm{inter}} W_{\mathrm{inter}}} + C_{\mathrm{inter}} L_{\mathrm{inter}}. \end{aligned}$$
 
 With perfect overlap, the optimistic roofline is the slowest resource:
 
-$$
-T_{\mathrm{ideal}} = \max\!\left(
-T_{\mathrm{gpu}},
-T_{\mathrm{cpu}},
-T_{\mathrm{um}},
-T_{\mathrm{nvme}},
-T_{\mathrm{intra}},
-T_{\mathrm{inter}},
-T_{\mathrm{serial}}
-\right),
-\qquad
-R_{\mathrm{target}} \le \frac{1}{T_{\mathrm{ideal}}}.
-$$
+$$T_{\mathrm{ideal}} = \max\left( T_{\mathrm{gpu}}, T_{\mathrm{cpu}}, T_{\mathrm{um}}, T_{\mathrm{nvme}}, T_{\mathrm{intra}}, T_{\mathrm{inter}}, T_{\mathrm{serial}} \right), \qquad R_{\mathrm{target}} \le \frac{1}{T_{\mathrm{ideal}}}.$$
 
 With no overlap, the corresponding latency model is:
 
-$$
-T_{\mathrm{no\text{-}overlap}}
-= T_{\mathrm{gpu}} + T_{\mathrm{cpu}} + T_{\mathrm{um}} + T_{\mathrm{nvme}}
-+ T_{\mathrm{intra}} + T_{\mathrm{inter}} + T_{\mathrm{serial}}.
-$$
+$$T_{\mathrm{no\text{-}overlap}} = T_{\mathrm{gpu}} + T_{\mathrm{cpu}} + T_{\mathrm{um}} + T_{\mathrm{nvme}} + T_{\mathrm{intra}} + T_{\mathrm{inter}} + T_{\mathrm{serial}}.$$
 
 Real execution is always slower than the optimistic roof because dependencies, kernel
 launches, queueing, cache misses, and resource contention reduce $\eta_r$ and limit
@@ -172,34 +145,11 @@ overlap.
 CPU, GPU, CUDA copies, pinned staging, and NVMe DMA all share the same LPDDR system.
 They must not be modeled as independent $273\ \mathrm{GB/s}$ domains:
 
-$$
-\begin{aligned}
-B_{\mathrm{um}} ={}& B_{\mathrm{dense}}
-+ B_{\mathrm{active\text{-}expert}}
-+ B_{\mathrm{KV}}
-+ B_{\mathrm{head}} \\
-&+ B_{\mathrm{nvme\text{-}destination}}
-+ B_{\mathrm{staging\leftrightarrow frame}}
-+ B_{\mathrm{temporary}}.
-\end{aligned}
-$$
+$$\begin{aligned} B_{\mathrm{um}} ={}& B_{\mathrm{dense}} + B_{\mathrm{active\text{-}expert}} + B_{\mathrm{KV}} + B_{\mathrm{head}} \\\\ &+ B_{\mathrm{nvme\text{-}destination}} + B_{\mathrm{staging\leftrightarrow frame}} + B_{\mathrm{temporary}}. \end{aligned}$$
 
 The GPU and CPU ceilings are:
 
-$$
-\begin{aligned}
-R_{\mathrm{gpu}}
-&\le \min\!\left(
-\frac{\eta_{\mathrm{gpu}} \cdot 1\ \mathrm{PFLOP/s}}{F_{\mathrm{gpu}}},
-\frac{\eta_{\mathrm{um}} \cdot 273\ \mathrm{GB/s}}{B_{\mathrm{gpu}}}
-\right), \\
-R_{\mathrm{cpu}}
-&\le \min\!\left(
-\frac{\eta_{\mathrm{cpu}} P_{\mathrm{cpu}}}{F_{\mathrm{cpu}}},
-\frac{\eta_{\mathrm{um}} \cdot 273\ \mathrm{GB/s}}{B_{\mathrm{cpu}}}
-\right).
-\end{aligned}
-$$
+$$\begin{aligned} R_{\mathrm{gpu}} &\le \min\left( \frac{\eta_{\mathrm{gpu}} \cdot 1\ \mathrm{PFLOP/s}}{F_{\mathrm{gpu}}}, \frac{\eta_{\mathrm{um}} \cdot 273\ \mathrm{GB/s}}{B_{\mathrm{gpu}}} \right), \\\\ R_{\mathrm{cpu}} &\le \min\left( \frac{\eta_{\mathrm{cpu}} P_{\mathrm{cpu}}}{F_{\mathrm{cpu}}}, \frac{\eta_{\mathrm{um}} \cdot 273\ \mathrm{GB/s}}{B_{\mathrm{cpu}}} \right). \end{aligned}$$
 
 The advertised FP4 peak is a very loose bound for batch-1 matrix-vector work. NVIDIA
 does not publish a directly comparable sustained MoE rate for the 20-core CPU, so
@@ -208,27 +158,16 @@ cannot both claim the full $273\ \mathrm{GB/s}$ simultaneously because they shar
 lossless GB10 path uses the CPU primarily for control and I/O rather than expert math.
 A Fiddler-style CPU expert path is useful only when:
 
-$$
-T_{\mathrm{cpu\text{-}expert}}
-< T_{\mathrm{stage/copy}} + T_{\mathrm{gpu\text{-}expert}}.
-$$
+$$T_{\mathrm{cpu\text{-}expert}} < T_{\mathrm{stage/copy}} + T_{\mathrm{gpu\text{-}expert}}.$$
 
 The model's all-cold routed-expert payload is known directly from its shape:
 
-$$
-B_{\mathrm{routed,cold}}
-= 43 \cdot 6 \cdot 12.75\ \mathrm{MiB}
-= 3.21\ \mathrm{GiB/target\ pass}.
-$$
+$$B_{\mathrm{routed,cold}} = 43 \cdot 6 \cdot 12.75\ \mathrm{MiB} = 3.21\ \mathrm{GiB/target\ pass}.$$
 
 At the observed $10.53\ \mathrm{GiB/s}$ storage ceiling, even perfect all-cold
 streaming gives:
 
-$$
-R_{\mathrm{nvme,cold}}
-\le \frac{10.53\ \mathrm{GiB/s}}{3.21\ \mathrm{GiB/pass}}
-\approx 3.28\ \mathrm{target\ passes/s}.
-$$
+$$R_{\mathrm{nvme,cold}} \le \frac{10.53\ \mathrm{GiB/s}}{3.21\ \mathrm{GiB/pass}} \approx 3.28\ \mathrm{target\ passes/s}.$$
 
 That is a storage/model roofline, not an end-to-end Ferrule result. Caching and
 prediction reduce $B_{\mathrm{nvme}}$; wrong prefetch increases it.
@@ -236,91 +175,87 @@ prediction reduce $B_{\mathrm{nvme}}$; wrong prefetch increases it.
 For a fully staged/resident working set, NVMe can leave the steady critical path, but
 LPDDR cannot. Converting the vendor bandwidth to binary units gives:
 
-$$
-273\ \mathrm{GB/s}
-\approx 254.25\ \mathrm{GiB/s}.
-$$
+$$273\ \mathrm{GB/s} \approx 254.25\ \mathrm{GiB/s}.$$
 
 For an illustrative exact pass moving $B_{\mathrm{um}} \in [20,22]\ \mathrm{GiB}$,
 the ideal memory-only ceiling is:
 
-$$
-R_{\mathrm{um}}
-\le \frac{254.25\ \mathrm{GiB/s}}{B_{\mathrm{um}}}
-\in [11.6,12.7]\ \mathrm{target\ passes/s}.
-$$
+$$R_{\mathrm{um}} \le \frac{254.25\ \mathrm{GiB/s}}{B_{\mathrm{um}}} \in [11.6,12.7]\ \mathrm{target\ passes/s}.$$
 
 The exact $B_{\mathrm{um}}$ must come from the S0 target-pass roofline in
 [`docs/ROADMAP.md`](docs/ROADMAP.md); 20–22 GiB is an intentionally optimistic
 capacity example, not a measured Ferrule token rate. It illustrates why 15–17 full
 43-layer passes/s is not the correct single-Spark target.
 
-For DSpark, let $A$ be the average committed tokens per exact target verification
-cycle. The accepted-token roof is:
+For DSpark, distinguish the number of target rows verified in one cycle, $V$, from
+the average number of tokens actually committed, $A$, where $A \le V$. The accepted-token
+rate is:
 
-$$
-R_{\mathrm{accepted}} \le \frac{A}{T_{\mathrm{cycle}}},
-$$
+$$R_{\mathrm{accepted}} = \frac{A}{T_{\mathrm{cycle}}(V)}.$$
 
-where
+The verification width is not free. Its resource lower bound must use width-dependent
+work and traffic:
 
-$$
-T_{\mathrm{cycle}}
-= T_{\mathrm{draft}}
-+ T_{\mathrm{verify}}
-+ T_{\mathrm{commit/rollback}}
-- T_{\mathrm{safe\ overlap}}.
-$$
+$$T_{\mathrm{verify}}(V) \ge \max\left( \frac{F_{\mathrm{gpu}}(V)}{\eta_{\mathrm{gpu}}P_{\mathrm{gpu}}}, \frac{B_{\mathrm{um}}(V)}{\eta_{\mathrm{um}}W_{\mathrm{um}}}, \frac{B_{\mathrm{nvme}}(V)}{\eta_{\mathrm{nvme}}W_{\mathrm{nvme}}}, T_{\mathrm{verify,serial}}(V) \right).$$
 
-For example, $A=4$ accepted tokens from a $T_{\mathrm{cycle}}=250\ \mathrm{ms}$
-complete cycle imply
+A complete single-sequence cycle is then:
 
-$$
-R_{\mathrm{accepted}} \le \frac{4}{0.25\ \mathrm{s}} = 16\ \mathrm{tokens/s}.
-$$
+$$T_{\mathrm{cycle}}(V) = T_{\mathrm{draft}}(V) + T_{\mathrm{verify}}(V) + T_{\mathrm{commit/rollback}}(V) - T_{\mathrm{safe\ overlap}}(V).$$
 
-This is the architectural meaning of Ferrule's 15–17 tok/s goal; the numbers are a
-target operating point, not a current result.
+For example, $A=4$ committed tokens from a complete
+$T_{\mathrm{cycle}}(V)=250\ \mathrm{ms}$ cycle imply:
 
-Combining the storage and resident-memory roofs gives the following intentionally
-optimistic single-Spark envelope:
+$$R_{\mathrm{accepted}} = \frac{4}{0.25\ \mathrm{s}} = 16\ \mathrm{tokens/s}.$$
 
-| Average accepted tokens $A$ | All-cold NVMe roof | Resident LPDDR roof |
-|---:|---:|---:|
-| $1$ | $3.28$ accepted tok/s | $11.6$–$12.7$ accepted tok/s |
-| $2$ | $6.56$ accepted tok/s | $23.2$–$25.4$ accepted tok/s |
-| $4$ | $13.12$ accepted tok/s | $46.4$–$50.8$ accepted tok/s |
+This is the architectural meaning of Ferrule's 15–17 tok/s goal; it is a target
+operating point, not a current result. It is incorrect in general to multiply the
+single-row target-pass roof by $A$, because $F_{\mathrm{gpu}}(V)$,
+$B_{\mathrm{um}}(V)$, and $B_{\mathrm{nvme}}(V)$ all depend on verification width
+and route overlap.
 
-The table uses:
+For routed experts, let $E_{\ell,v}$ be the exact selected-expert set for verified row
+$v$ at layer $\ell$, and let $S_e=12.75\ \mathrm{MiB}$ be one expert payload. The
+all-cold routed bytes for a width-$V$ verification are:
 
-$$
-R_{\mathrm{accepted,ideal}}(A)
-\approx A \cdot R_{\mathrm{target,ideal}}.
-$$
+$$B_{\mathrm{routed,cold}}(V) = S_e \sum_{\ell=1}^{43} \left|\bigcup_{v=1}^{V} E_{\ell,v}\right|.$$
 
-It assumes multi-token verification does not increase active expert bytes, draft and
-rollback are free or hidden, acceptance is exactly $A$, and resource efficiencies are
-already represented by the selected roof. Real throughput is lower.
+Because every row selects six distinct experts per layer:
 
-For a desired accepted throughput $R^*_{\mathrm{accepted}}$, the per-cycle storage
-budget is:
+$$3.21\ \mathrm{GiB} \le B_{\mathrm{routed,cold}}(V) \le 3.21V\ \mathrm{GiB},$$
 
-$$
-B^*_{\mathrm{nvme,cycle}}
-\le \frac{A W_{\mathrm{nvme}}}{R^*_{\mathrm{accepted}}}.
-$$
+until the per-layer union reaches all 256 experts. The lower bound requires every
+verified row to select the same experts; the upper bound corresponds to disjoint
+selected sets. Under an independent uniform-routing approximation, the expected union
+per layer is:
 
-At $A=4$, $R^*_{\mathrm{accepted}}=16\ \mathrm{tok/s}$, and
-$W_{\mathrm{nvme}}=10.53\ \mathrm{GiB/s}$:
+$$\mathbb{E}[U(V)] = 256\left[1-\left(1-\frac{6}{256}\right)^V\right].$$
 
-$$
-B^*_{\mathrm{nvme,cycle}}
-\le \frac{4 \cdot 10.53}{16}
-\approx 2.63\ \mathrm{GiB/cycle}.
-$$
+At $V=4$, this approximation gives about $23.17$ unique experts per layer and:
 
-Thus 15–17 tok/s is physically plausible only in the cached/speculative regime, not
-when every verification cycle reloads the full $3.21\ \mathrm{GiB}$ routed set.
+$$\mathbb{E}\left[B_{\mathrm{routed,cold}}(4)\right] \approx 43 \cdot 23.17 \cdot 12.75\ \mathrm{MiB} \approx 12.40\ \mathrm{GiB/cycle}.$$
+
+If all of those bytes came from the measured $10.53\ \mathrm{GiB/s}$ NVMe path and
+$A=4$, the storage-only accepted-token ceiling would be only:
+
+$$R_{\mathrm{accepted,nvme}}(4) \le \frac{4 \cdot 10.53}{12.40} \approx 3.40\ \mathrm{tokens/s}.$$
+
+Actual DeepSeek routing is neither uniform nor independent; measured route traces must
+supply the real union. The formula shows why wider verification produces useful weight
+reuse only when routes overlap or the required experts are already resident.
+
+For a desired accepted throughput $R^{\star}(\mathrm{accepted})$, the measured NVMe
+path imposes this per-cycle read budget:
+
+$$B^{\star}(\mathrm{NVMe/cycle}) \le \frac{A W(\mathrm{NVMe,observed})}{R^{\star}(\mathrm{accepted})}.$$
+
+At $A=4$, $R^{\star}(\mathrm{accepted})=16\ \mathrm{tok/s}$, and
+$W(\mathrm{NVMe,observed})=10.53\ \mathrm{GiB/s}$:
+
+$$B^{\star}(\mathrm{NVMe/cycle}) \le \frac{4 \cdot 10.53}{16} \approx 2.63\ \mathrm{GiB/cycle}.$$
+
+Thus 15–17 tok/s is physically plausible only in a cache-heavy speculative regime.
+Even the perfect-route-reuse all-cold minimum of $3.21\ \mathrm{GiB/cycle}$ exceeds
+the $2.63\ \mathrm{GiB/cycle}$ storage budget for 16 tok/s.
 
 #### One host with multiple GPUs
 
@@ -328,35 +263,13 @@ A DGX Spark contains one GB10; this subsection describes Ferrule's extension to 
 separate multi-GPU host rather than multiple internal GPUs in one Spark. For $G$ GPUs
 in one host, the ideal node roofline becomes:
 
-$$
-T_{\mathrm{node}} = \max\!\left(
-\frac{F_{\mathrm{gpu}}}{G\eta_{\mathrm{gpu}}P_{\mathrm{gpu}}},
-\frac{B_{\mathrm{device}}}{G\eta_{\mathrm{mem}}W_{\mathrm{device}}},
-\frac{B_{\mathrm{host}}}{\eta_{\mathrm{host}}W_{\mathrm{host}}},
-\frac{B_{\mathrm{nvme}}}{\eta_{\mathrm{storage}}W_{\mathrm{storage,agg}}},
-\frac{B_{\mathrm{intra}}}{\eta_{\mathrm{intra}}W_{\mathrm{intra}}}
-+ C_{\mathrm{intra}}L_{\mathrm{intra}},
-T_{\mathrm{serial}}
-\right),
-\qquad
-R_{\mathrm{node}} \le \frac{1}{T_{\mathrm{node}}}.
-$$
+$$T_{\mathrm{node}} = \max\left( \frac{F_{\mathrm{gpu}}}{G\eta_{\mathrm{gpu}}P_{\mathrm{gpu}}}, \frac{B_{\mathrm{device}}}{G\eta_{\mathrm{mem}}W_{\mathrm{device}}}, \frac{B_{\mathrm{host}}}{\eta_{\mathrm{host}}W_{\mathrm{host}}}, \frac{B_{\mathrm{nvme}}}{\eta_{\mathrm{storage}}W_{\mathrm{storage,agg}}}, \frac{B_{\mathrm{intra}}}{\eta_{\mathrm{intra}}W_{\mathrm{intra}}} + C_{\mathrm{intra}}L_{\mathrm{intra}}, T_{\mathrm{serial}} \right), \qquad R_{\mathrm{node}} \le \frac{1}{T_{\mathrm{node}}}.$$
 
 Capacity and bandwidth scale differently:
 
-$$
-M_{\mathrm{resident}}
-\le \sum_{g=1}^{G} M_g + M_{\mathrm{host,budget}},
-$$
+$$M_{\mathrm{resident}} \le \sum_{g=1}^{G} M_g + M_{\mathrm{host,budget}},$$
 
-$$
-W_{\mathrm{storage,agg}}
-\le \sum_{d \in \mathrm{independent\ paths}} W_d,
-\qquad
-P_{\mathrm{node}}
-\le \sum_{g=1}^{G} P_g
-\quad \text{only for partitionable work}.
-$$
+$$W_{\mathrm{storage,agg}} \le \sum_{d \in \mathrm{independent\ paths}} W_d, \qquad P_{\mathrm{node}} \le \sum_{g=1}^{G} P_g \quad \text{only for partitionable work}.$$
 
 If aggregate GPU memory holds the checkpoint plus KV/arenas, steady expert NVMe traffic
 can approach zero. If the model still streams from one drive, adding GPUs does not
@@ -366,49 +279,24 @@ choose TP/EP/PP from measured communication and memory costs rather than GPU cou
 
 The ideal linear speedup and parallel efficiency are:
 
-$$
-S(G) = \frac{R_G}{R_1} \le G,
-\qquad
-E(G) = \frac{S(G)}{G} \le 1.
-$$
+$$S(G) = \frac{R_G}{R_1} \le G, \qquad E(G) = \frac{S(G)}{G} \le 1.$$
 
 #### Multiple nodes with multiple GPUs
 
 For $N$ nodes with $G$ GPUs each:
 
-$$
-T_{\mathrm{cluster}} = \max\!\left(
-\frac{F_{\mathrm{gpu}}}{NG\eta_{\mathrm{gpu}}P_{\mathrm{gpu}}},
-\frac{B_{\mathrm{device}}}{NG\eta_{\mathrm{mem}}W_{\mathrm{device}}},
-\frac{B_{\mathrm{storage}}}{\eta_{\mathrm{storage}}W_{\mathrm{storage,cluster}}},
-\frac{B_{\mathrm{intra}}}{\eta_{\mathrm{intra}}W_{\mathrm{intra}}}
-+ C_{\mathrm{intra}}L_{\mathrm{intra}},
-\frac{B_{\mathrm{inter}}}{\eta_{\mathrm{inter}}W_{\mathrm{network}}}
-+ C_{\mathrm{inter}}L_{\mathrm{network}},
-T_{\mathrm{serial}}
-\right),
-\qquad
-R_{\mathrm{cluster}} \le \frac{1}{T_{\mathrm{cluster}}}.
-$$
+$$T_{\mathrm{cluster}} = \max\left( \frac{F_{\mathrm{gpu}}}{NG\eta_{\mathrm{gpu}}P_{\mathrm{gpu}}}, \frac{B_{\mathrm{device}}}{NG\eta_{\mathrm{mem}}W_{\mathrm{device}}}, \frac{B_{\mathrm{storage}}}{\eta_{\mathrm{storage}}W_{\mathrm{storage,cluster}}}, \frac{B_{\mathrm{intra}}}{\eta_{\mathrm{intra}}W_{\mathrm{intra}}} + C_{\mathrm{intra}}L_{\mathrm{intra}}, \frac{B_{\mathrm{inter}}}{\eta_{\mathrm{inter}}W_{\mathrm{network}}} + C_{\mathrm{inter}}L_{\mathrm{network}}, T_{\mathrm{serial}} \right), \qquad R_{\mathrm{cluster}} \le \frac{1}{T_{\mathrm{cluster}}}.$$
 
 For expert-parallel decode, a useful first-order activation-traffic estimate is:
 
-$$
-B_{\mathrm{EP}}
-\approx 2p_{\mathrm{remote}}Lkbh s,
-$$
+$$B_{\mathrm{EP}} \approx 2p_{\mathrm{remote}}Lkbh s,$$
 
 where $L$ is the layer count, $k$ is top-k, $b$ is the batch row count, $h$ is hidden
 size, and $s$ is bytes per activation element. The factor two covers dispatch and
 returned expert outputs. With $L=43$, $k=6$, $b=1$, $h=4096$, $s=2$ bytes, and
 $p_{\mathrm{remote}}=1$:
 
-$$
-B_{\mathrm{EP}}
-\approx 2 \cdot 1 \cdot 43 \cdot 6 \cdot 1 \cdot 4096 \cdot 2
-= 4{,}227{,}072\ \mathrm{bytes}
-\approx 4.03\ \mathrm{MiB/target\ pass}.
-$$
+$$B_{\mathrm{EP}} \approx 2 \cdot 1 \cdot 43 \cdot 6 \cdot 1 \cdot 4096 \cdot 2 = 4{,}227{,}072\ \mathrm{bytes} \approx 4.03\ \mathrm{MiB/target\ pass}.$$
 
 This excludes router metadata and collective overhead. The byte count
 is manageable on a fast fabric, but up to 43 latency-sensitive routing rounds can
@@ -418,32 +306,18 @@ collective latency at many sublayers.
 For a Spark cluster, a $200\ \mathrm{Gb/s}$ network path has the vendor-level
 unidirectional bandwidth ceiling:
 
-$$
-W_{\mathrm{network}}
-\le \frac{200\ \mathrm{Gb/s}}{8}
-= 25\ \mathrm{GB/s}
-\approx 23.3\ \mathrm{GiB/s}.
-$$
+$$W_{\mathrm{network}} \le \frac{200\ \mathrm{Gb/s}}{8} = 25\ \mathrm{GB/s} \approx 23.3\ \mathrm{GiB/s}.$$
 
 Sending the $3.21\ \mathrm{GiB}$ all-cold routed weight set over that path every pass
 would cap the weight-transfer roof at:
 
-$$
-R_{\mathrm{remote\text{-}weight}}
-\le \frac{23.3\ \mathrm{GiB/s}}{3.21\ \mathrm{GiB/pass}}
-\approx 7.3\ \mathrm{target\ passes/s}.
-$$
+$$R_{\mathrm{remote\text{-}weight}} \le \frac{23.3\ \mathrm{GiB/s}}{3.21\ \mathrm{GiB/pass}} \approx 7.3\ \mathrm{target\ passes/s}.$$
 
 Expert-parallel placement should therefore keep weights local to their owner and
 exchange the MiB-scale activations instead. With independent local NVMe devices and
 balanced sharding, the ideal storage ceiling is bounded by:
 
-$$
-W_{\mathrm{storage,cluster}}
-\le \sum_{n=1}^{N} W_{\mathrm{nvme},n}
-\approx N W_{\mathrm{nvme}}
-\quad \text{only for independent, balanced paths}.
-$$
+$$W_{\mathrm{storage,cluster}} \le \sum_{n=1}^{N} W_{\mathrm{nvme},n} \approx N W_{\mathrm{nvme}} \quad \text{only for independent, balanced paths}.$$
 
 One shared storage path does not scale with node count.
 
