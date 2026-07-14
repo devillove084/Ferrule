@@ -177,17 +177,28 @@ Implemented:
 - direct tensor-subrange upload into ordinary device frames;
 - slab leases retained by upload guards until completion;
 - async prefetch and selected fallback;
-- selected reserve equal to half the physical expert capacity of the slab pool;
+- an initial selected reserve equal to half the physical expert capacity of the slab pool;
 - full I/O counters in runtime JSON.
 
-The corrected 43-layer path has repeatedly reported:
+The half-capacity reserve is not a sufficient production admission rule. A complete
+`bench-interactive` run with `prefetch=32`, top-6 routing, and 16 slabs reproduced:
 
 ```text
-slab_exhaustions = 0
-fallback         = 0
-admission_skips  = 0
+slab_exhaustions = 310
+fallback         = 310
 failed_extents   = 0
 ```
+
+The same run with 24 slabs reported zero exhaustion/fallback because half of 12
+expert-sized physical credits happens to cover batch-1 top-6. That is a diagnostic
+configuration, not the final policy. Production admission must reserve actual extent
+credits for selected demand and account for queued reads atomically. For batch width
+`b`, the conservative selected union is `min(num_experts, top_k * b)`; the scheduler
+must use measured/predicted union and actual coalesced extent count rather than hardcode
+`6` or reserve a fixed fraction.
+
+Previously reported zero-exhaustion runs remain valid for their tested route/load
+shape, but no longer constitute the S1 production-matrix exit gate.
 
 Parity evidence includes:
 
@@ -283,6 +294,80 @@ Therefore:
 - 15–17 accepted tokens/s remains possible only by combining a much faster target
   pass with multiple accepted tokens per verification pass;
 - DSpark is likely a required performance phase, not optional polish.
+
+### 2.10 S0 profile checkpoint and first measured fix
+
+A fixed-prompt, 43-layer, greedy run used the production io_uring path with QD2,
+16 MiB registered slabs, hotset 48, 16 warmup tokens, and eight measured decode tokens.
+All headline runs disabled synchronized profiling.
+
+#### Prefetch/slab admission A/B
+
+| Mode | Decode tok/s | Mean decode | Slab exhaustion/fallback | Measured decode expert bytes |
+|---|---:|---:|---:|---:|
+| `prefetch=32`, 16 slabs | 0.840 | 1.191 s | 310 / 310 | 8.61 GB |
+| `prefetch=0`, 16 slabs | 1.071 | 0.933 s | 0 / 0 | 8.02 GB |
+| `prefetch=32`, 24 slabs | 1.094 | 0.914 s | 0 / 0 | 9.05 GB |
+
+After removing fallback, current prefetch improved throughput only about 2.1% over no
+prefetch while moving about 12.8% more expert bytes. The present predictor/scheduler
+therefore does not yet create enough useful overlap to justify its traffic. More
+prefetch is not the next optimization.
+
+#### Component profile
+
+A synchronization-heavy diagnostic profile, used only for attribution, measured two
+43-layer decode steps:
+
+| Component | Per-step time |
+|---|---:|
+| Attention/MLA | 0.53–0.55 s |
+| MoE layer envelope | 0.42–0.44 s |
+| Selected expert read inside MoE | 0.11–0.12 s |
+| Router handoff | about 0.073 s |
+| Routed FP4 compute submission/completion | about 0.225 s |
+| Output head when requested | about 0.039 s |
+| Kernel launches | about 2.6k–2.8k/token |
+
+Nsight Systems isolated one exact decode from its `43 × 48 B` compact-router D2H
+signature. Before the first S0 fix it showed approximately:
+
+```text
+GPU span             844.6 ms
+GPU kernel busy      652.7 ms
+small device allocs  82/token
+small sync frees     82/token
+```
+
+The 82 allocations were two combined-ring paged-attention scratch buffers repeatedly
+resized as adjacent layers alternated between 128/129/130 top-k elements. The old
+buffer was synchronously freed on every shape change. Caching the logical/selector
+pair by exact element count changed the fixed-prompt benchmark to:
+
+```text
+device allocs/token    80–82 -> 0
+mean decode            933.3 ms -> 879.9 ms
+throughput             1.071 tok/s -> 1.137 tok/s
+GPU span               844.6 ms -> 808.0 ms
+GPU kernel busy        652.7 ms -> 659.7 ms
+```
+
+This is a 6.1% end-to-end improvement with unchanged kernel count, expert bytes, and
+D2H count. It proves that the persistent-arena invariant must include exact-shape
+attention scratch, not only the outer layer arena.
+
+The post-fix exact pass still spends roughly 660 ms in GPU kernels and roughly 148 ms
+in gaps/dependencies. Perfectly hiding the current 0.11–0.12 s expert read cannot by
+itself approach the final target. The required architecture is therefore:
+
+1. allocation-free steady execution and device all-hit/miss-only routing;
+2. faster/fused FP8, BF16/HC, and FP4 target kernels plus graph buckets;
+3. deadline I/O scheduling that uses the resulting compute window;
+4. exact DSpark verification to convert each faster target cycle into multiple accepted
+   tokens.
+
+Raw local artifacts are under `target/bench/s0-profile/` and are intentionally not
+committed.
 
 ## 3. Canonical architecture decisions
 
@@ -424,8 +509,9 @@ route traces.
 
 ### Purpose
 
-Determine where the remaining `0.84–1.09 s` exact target step is spent before another
-large implementation change.
+Determine where the remaining approximately `0.88 s` warm exact target step is spent
+before another large implementation change. The first Nsight/component checkpoint and
+allocation-free paged-top-k scratch fix are recorded in Section 2.10.
 
 ### Deliverables
 
@@ -438,7 +524,9 @@ large implementation change.
    - routed FP4 MoE gate/up, activation, down, and reduction;
    - expert wait and upload dependency;
    - final norm and output head.
-4. Launch count and launch-gap report.
+4. Launch count and launch-gap report. Initial exact-pass result: about 2.4k–2.8k
+   kernels, 660 ms kernel busy, and 148 ms post-fix GPU span gap; per-kernel attribution
+   is recorded in Section 2.10.
 5. Separate reports for:
    - cold storage;
    - warm real residency;
@@ -469,15 +557,18 @@ hardening remains.
 
 - O_DIRECT fixed-file io_uring backend;
 - registered aligned CUDA-pinned slabs;
-- QD2 and bounded physical admission;
+- QD2 and an initial bounded physical admission rule;
 - two-extent expert reconstruction;
 - direct slab-to-device subrange upload;
-- selected reserve and safe slab lifetime;
+- safe slab lifetime through upload completion;
 - mmap fallback;
-- exact parity and zero exhaustion/fallback validation.
+- exact parity across mmap and io_uring paths.
 
 ### Remaining deliverables
 
+- replace the static half-capacity reserve with atomic extent/slab credits;
+- reserve selected demand from batch width, top-k, and route-union estimates;
+- let selected demand preempt or take over lower-priority prefetched credits;
 - histogram-quality read latency p50/p95;
 - current/peak read and upload queue depth by deadline class;
 - explicit selected-reserve utilization;
@@ -532,7 +623,35 @@ hardening remains.
 
 **Depends on:** S0; the final graph path depends on S2.
 
-### Priority 1: routed FP4 MoE
+### Priority 1: FP8/BF16 attention and HC linears
+
+The first exact-pass Nsight slice measured approximately:
+
+```text
+FP8 GEMM                         229 ms
+BF16 GEMV                        153 ms
+HC-pre                           103 ms
+grouped output_a                  32 ms
+FP8 activation quantization       29 ms
+FP8 GEMV                          24 ms
+```
+
+These kernels dominate the roughly 660 ms GPU-busy time. Work:
+
+- profile the exact FP8/BF16 shapes and arithmetic intensity for rows 1/2/4;
+- replace batch-1 general GEMM paths with shape-specialized persistent GEMV/GEMM where
+  memory traffic or launch setup dominates;
+- fuse activation quantization with its consumer when parity and register pressure permit;
+- fuse HC-pre/norm or persist intermediate layout where the profile proves a saved read/write;
+- evaluate FlashInfer/FlashAttention/DeepGEMM design techniques against DSV4 HC/MLA shapes,
+  not as drop-in APIs;
+- retain eager reference-equivalent fallbacks.
+
+### Priority 2: routed FP4 MoE
+
+The measured gate/up plus down FP4 kernels account for roughly 62 ms of the isolated
+batch-1 pass; the wider MoE envelope also includes route barriers, reads, and waits.
+Work:
 
 - profile rows 1/2/4 and selected-expert distributions;
 - fuse or persist route resolve/grouping where profitable;
@@ -541,7 +660,16 @@ hardening remains.
 - implement grouped down FP4 and weighted reduction;
 - retain scalar/eager correctness fallback.
 
-### Priority 2: output head
+### Priority 3: stable graph buckets and device control
+
+- complete S2 all-hit/miss-only routing before final graph capture;
+- stable decode graph buckets for rows 1/2/4;
+- graph-safe KV and stable expert bindings;
+- eliminate the remaining exact-shape allocations before capture;
+- no D2H or whole-stream sync inside an all-hit captured bucket;
+- eager fallback for misses, unsupported shapes, and diagnostics.
+
+### Priority 4: output head
 
 Completed:
 
@@ -555,13 +683,8 @@ Remaining:
 - profile/fuse chunk top-k and global merge;
 - reduce the cost of the 1,010 MiB BF16 scan without changing logits semantics.
 
-### Priority 3: attention/HC and graph replay
-
-- fuse only profiler-proven material stages;
-- stable decode graph buckets for rows 1/2/4;
-- graph-safe KV and stable expert bindings;
-- no allocation, D2H, or whole-stream sync inside capture;
-- eager fallback for unsupported shapes and diagnostics.
+The synchronized component profile measured about 39 ms when the output head was
+requested, so it is important but not ahead of the attention/HC target body.
 
 ### Exit gate
 
@@ -584,6 +707,13 @@ Remaining:
 - far-horizon `StageToRegisteredPinned` and near-horizon `PromoteToDevice` actions;
 - deadline queue ordered by selected status, target layer, confidence, completion estimate,
   and shard locality;
+- one credit ledger for NVMe SQEs, registered extents/slabs, upload frames, stable slots,
+  and coherent-memory traffic;
+- atomic admission that charges queued as well as physically acquired slab credits;
+- selected takeover/preemption without a pageable fallback when low-priority prefetch owns
+  the required credits;
+- reserve estimates based on `min(num_experts, top_k * batch_rows)` and then tightened by
+  measured/predicted route union; no hardcoded batch-1 top-k constant;
 - on-time, late, wasted, evict-before-use, and wrong-prefetch byte counters;
 - memory-pressure controller across device frames, slabs, KV, and arenas.
 
@@ -697,7 +827,8 @@ C4 1.15 tok/s
 
 ### Slice A — Resident/no-I/O exact roofline
 
-**Status:** next.
+**Status:** active. Exact-pass Nsight isolation and allocation-free paged-top-k scratch
+are complete; deterministic route capture and resident replay remain.
 
 Files likely involved:
 
@@ -711,7 +842,8 @@ Work:
 - capture a deterministic exact route trace;
 - preinstall that trace's selected working set;
 - report component CUDA-event time without changing output;
-- establish resident and output-head-excluded lower bounds.
+- establish resident and output-head-excluded lower bounds;
+- keep steady decode at zero device allocations across every observed top-k shape.
 
 ### Slice B — Device all-hit/miss-only route resolution
 
@@ -873,6 +1005,8 @@ Report:
 - unique experts per layer/batch;
 - D2H/H2D calls and bytes;
 - kernel launches and graph replays;
+- synchronous and asynchronous device alloc/free calls by size;
+- GPU kernel-busy time, GPU span, and unexplained gap;
 - device/slab/pageable/KV/arena peak bytes;
 - failed requests and fatal worker states.
 

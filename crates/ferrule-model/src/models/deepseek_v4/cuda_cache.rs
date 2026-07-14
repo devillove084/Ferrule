@@ -232,8 +232,17 @@ pub(crate) struct DeepSeekV4CudaOperatorCache {
     /// Packed prefill and decode use different row counts and must not evict each
     /// other's warm buffer.
     topk_buffers: HashMap<usize, ferrule_cuda::context::CudaI32Buffer>,
-    paged_topk_logical: Option<ferrule_cuda::context::CudaI32Buffer>,
-    paged_topk_selectors: Option<ferrule_cuda::context::CudaI32Buffer>,
+    /// Exact-shape logical/selector scratch for combined-ring paged attention.
+    /// DSV4 compression boundaries make adjacent layers alternate between a few
+    /// top-k widths; caching by element count avoids synchronizing `cuMemFree`
+    /// twice per layer when those widths differ.
+    paged_topk_buffers: HashMap<
+        usize,
+        (
+            ferrule_cuda::context::CudaI32Buffer,
+            ferrule_cuda::context::CudaI32Buffer,
+        ),
+    >,
     output_head_logits: HashMap<(usize, usize), ferrule_cuda::context::CudaF32Buffer>,
     output_head_linear_workspaces:
         HashMap<usize, ferrule_cuda::context::CudaArtifactLinearWorkspace>,
@@ -1161,8 +1170,7 @@ impl DeepSeekV4CudaOperatorCache {
             grouped_wo_a_weights: HashMap::new(),
             rope_tables: HashMap::new(),
             topk_buffers: HashMap::new(),
-            paged_topk_logical: None,
-            paged_topk_selectors: None,
+            paged_topk_buffers: HashMap::new(),
             output_head_logits: HashMap::new(),
             output_head_linear_workspaces: HashMap::new(),
             output_head_indices: HashMap::new(),
@@ -1660,6 +1668,7 @@ impl DeepSeekV4CudaOperatorCache {
         self.ops.sync_stream()?;
         self.decode_arena = DeepSeekV4DecodeArena::default();
         self.topk_buffers.clear();
+        self.paged_topk_buffers.clear();
         self.linears.clear();
         self.norm_weights.clear();
         self.compressor_ape_buffers.clear();
@@ -4786,27 +4795,31 @@ impl DeepSeekV4CudaOperatorCache {
             let elements = tokens
                 .checked_mul(spec.topk)
                 .ok_or_else(|| Error::Model("paged combined top-k size overflow".into()))?;
-            if self
-                .paged_topk_logical
-                .as_ref()
-                .is_none_or(|buffer| buffer.len() != elements)
-            {
-                self.paged_topk_logical = Some(self.ops.zero_i32_buffer(elements)?);
-                self.paged_topk_selectors = Some(self.ops.zero_i32_buffer(elements)?);
+            if !self.paged_topk_buffers.contains_key(&elements) {
+                let logical = self.ops.zero_i32_buffer(elements)?;
+                let selectors = self.ops.zero_i32_buffer(elements)?;
+                self.paged_topk_buffers
+                    .insert(elements, (logical, selectors));
             }
-            self.ops.convert_combined_ring_topk_indices_into(
-                topk,
-                ferrule_cuda::CombinedRingWindowLens::PositionDerived,
-                ferrule_cuda::CombinedRingTopkLayout {
-                    rows: tokens,
-                    topk: spec.topk,
-                    start_position: position,
-                    position_stride: 1,
-                    window_size,
-                },
-                self.paged_topk_logical.as_mut().expect("ensured above"),
-                self.paged_topk_selectors.as_mut().expect("ensured above"),
-            )?;
+            {
+                let (logical, selectors) = self
+                    .paged_topk_buffers
+                    .get_mut(&elements)
+                    .expect("paged top-k buffers inserted above");
+                self.ops.convert_combined_ring_topk_indices_into(
+                    topk,
+                    ferrule_cuda::CombinedRingWindowLens::PositionDerived,
+                    ferrule_cuda::CombinedRingTopkLayout {
+                        rows: tokens,
+                        topk: spec.topk,
+                        start_position: position,
+                        position_stride: 1,
+                        window_size,
+                    },
+                    logical,
+                    selectors,
+                )?;
+            }
             let sink_name = format!("sink_L{layer}");
             self.ensure_sink_buffer(&sink_name, sink)?;
             let active = self.active_paged_kv.as_ref().expect("validated above");
@@ -4836,6 +4849,10 @@ impl DeepSeekV4CudaOperatorCache {
                 },
                 second_elements_per_token: second_descriptor.elements_per_token,
             };
+            let (logical, selectors) = self
+                .paged_topk_buffers
+                .get(&elements)
+                .expect("paged top-k buffers inserted above");
             return self
                 .ops
                 .dual_plane_paged_sparse_attention_sink_from_device_into(
@@ -4845,8 +4862,8 @@ impl DeepSeekV4CudaOperatorCache {
                     &active.block_slots_device,
                     &active.block_offsets_device,
                     &active.kv_len_device,
-                    self.paged_topk_logical.as_ref().expect("ensured above"),
-                    self.paged_topk_selectors.as_ref().expect("ensured above"),
+                    logical,
+                    selectors,
                     self.sink_buffers.get(&sink_name).expect("inserted above"),
                     layout,
                     output,
