@@ -97,18 +97,25 @@ cargo oxide build --features cuda --arch sm_121a -- --release -p ferrule-cli
   --served-model-name deepseek-v4 \
   --host 127.0.0.1 \
   --port 8000 \
-  --ctx-size 4096 \
-  --max-active-sequences 64 \
-  --max-batch-tokens 4096 \
-  --expert-host-cache-entries 256 \
-  --expert-host-cache-mb 4096 \
-  --expert-pinned-cache-entries 64 \
-  --expert-pinned-cache-mb 1024
+  --ctx-size 1024 \
+  --max-active-sequences 4 \
+  --prefill-chunk-size 512 \
+  --max-batch-tokens 512 \
+  --kv-cache-mb 1024 \
+  --moe-prefetch-experts 0 \
+  --moe-hotset-experts 12 \
+  --expert-host-cache-entries 64 \
+  --expert-host-cache-mb 1024 \
+  --expert-pinned-cache-entries 16 \
+  --expert-pinned-cache-mb 256
 ```
 
 Important tuning controls:
 
-- `--max-active-sequences`: resident scheduler and KV capacity.
+- `--max-active-sequences`: resident scheduler slots. The conservative GB10 default is
+  4, not the old unsafe value of 64.
+- `--kv-cache-mb`: hard byte budget for preallocated CUDA KV data planes. The default
+  is 1024 MiB; it caps the page count implied by context size and active sequences.
 - `--max-batch-tokens`: total prefill plus decode tokens in one action.
 - `--prefill-chunk-size`: maximum prompt chunk per sequence.
 - `--request-queue-capacity`: HTTP-to-model admission bound.
@@ -117,6 +124,13 @@ Important tuning controls:
   retention. Zero entries disables retention; zero MiB means entry-limited only.
 - `--expert-pinned-cache-entries` / `--expert-pinned-cache-mb`: pinned whole-expert
   retention with the same disable/unbounded-byte semantics.
+
+On the 43-layer DSV4 artifact, one physical f32 KV page is 3.023 MiB. The old
+`64 × 4096` full-capacity configuration implied 16,384 pages, or 48.375 GiB, before
+model weights, resident experts, host/pinned caches, and upload transients. On GB10
+coherent memory that can trigger an OS `SIGKILL` (exit 137) when the pages are first
+touched. Ferrule now converts `--kv-cache-mb` to a hard page limit and prints both the
+requested full-capacity page count and the bounded allocation before serving.
 
 Cache MiB conversion is checked and frozen before the model worker starts. The policy
 is passed through preparation to the actual CUDA caches; there is no separate DSV4
@@ -181,7 +195,10 @@ saves detailed per-request JSON. The vLLM initial single-prompt compatibility re
 is not included in the reported metrics; its default readiness timeout is 600 seconds
 to accommodate a cold 43-layer DSV4 path. Each run directory also contains the Ferrule
 commit, vLLM version, server model response, GPU snapshot, and console logs under
-`target/bench/vllm-serve/<UTC timestamp>/`.
+`target/bench/vllm-serve/<UTC timestamp>/`. The client process defaults to
+`CUDA_VISIBLE_DEVICES=""`; HTTP benchmarking must not create a competing GB10 CUDA
+context. Set `BENCH_CUDA_VISIBLE_DEVICES` only when intentionally testing a client-side
+GPU feature.
 
 Override workload or server settings with environment variables:
 

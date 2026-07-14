@@ -6,6 +6,7 @@
 use std::ops::Range;
 
 use ferrule_common::{Error, Result};
+use ferrule_model::IncrementalDecodeState;
 
 use crate::cache::KvHandle;
 
@@ -111,6 +112,8 @@ pub struct SequenceState {
     pub next_decode_logit: Option<f32>,
     /// Decoded text generated in the current request turn.
     pub generated_text: String,
+    /// Bounded tokenizer state for correct per-token text deltas.
+    pub incremental_decode: IncrementalDecodeState,
     /// Total accumulated generated tokens.
     pub total_generated: usize,
 }
@@ -135,6 +138,7 @@ impl SequenceState {
             next_decode_token: None,
             next_decode_logit: None,
             generated_text: String::new(),
+            incremental_decode: IncrementalDecodeState::default(),
             total_generated: 0,
         }
     }
@@ -267,6 +271,7 @@ impl SequenceState {
         self.next_decode_token = None;
         self.next_decode_logit = None;
         self.generated_text.clear();
+        self.incremental_decode.reset();
         self.generated = 0;
         self.status = SequenceStatus::Running;
         self.finish_reason = None;
@@ -283,6 +288,7 @@ impl SequenceState {
         self.next_decode_token = None;
         self.next_decode_logit = None;
         self.generated_text.clear();
+        self.incremental_decode.reset();
         self.generated = 0;
         self.status = SequenceStatus::Running;
         self.finish_reason = None;
@@ -328,6 +334,7 @@ impl SequenceState {
             next_decode_token: None,
             next_decode_logit: None,
             generated_text: String::new(),
+            incremental_decode: IncrementalDecodeState::default(),
             total_generated: self.total_generated,
         })
     }
@@ -370,6 +377,7 @@ impl SequenceState {
         self.next_decode_token = None;
         self.next_decode_logit = None;
         self.generated_text.clear();
+        self.incremental_decode.reset();
         self.status = SequenceStatus::Pending;
         self.finish_reason = None;
         self.sampling = crate::sampling::sampler::SamplingConfig::default();

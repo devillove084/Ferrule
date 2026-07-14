@@ -84,6 +84,25 @@ impl DeepSeekV4KvLayoutSchema {
         self.page_size
     }
 
+    /// Bytes per physical CUDA page for the three f32 token-scaled data planes.
+    pub fn cuda_f32_data_page_bytes(&self) -> Result<u64> {
+        let data_planes = self.planes.get(..3).ok_or_else(|| {
+            Error::Model("DeepSeek-V4 KV schema is missing CUDA data planes".into())
+        })?;
+        let elements_per_page = data_planes.iter().try_fold(0usize, |total, plane| {
+            self.page_size
+                .checked_mul(plane.elements_per_token)
+                .and_then(|elements| elements.checked_mul(plane.layer_count))
+                .and_then(|elements| total.checked_add(elements))
+                .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA KV page size overflow".into()))
+        })?;
+        let bytes = elements_per_page
+            .checked_mul(std::mem::size_of::<f32>())
+            .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA KV page byte size overflow".into()))?;
+        u64::try_from(bytes)
+            .map_err(|_| Error::Model("DeepSeek-V4 CUDA KV page bytes exceed u64".into()))
+    }
+
     pub fn compress_ratios(&self) -> &[usize] {
         &self.compress_ratios
     }
@@ -715,6 +734,7 @@ mod tests {
         };
         assert_eq!(schema.planes().len(), 5);
         assert_eq!(schema.page_size(), 16);
+        assert_eq!(schema.cuda_f32_data_page_bytes().unwrap(), 20_480);
         assert_eq!(schema.pages_for_tokens(4097), 257);
         assert_eq!(schema.planes()[2].name, "indexer_kv");
     }

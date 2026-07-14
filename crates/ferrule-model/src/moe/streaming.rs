@@ -156,24 +156,53 @@ impl ExpertLoadSource {
 /// Catalogs are intended to be built once during artifact discovery and shared by
 /// prepared plans and backend runtimes. The generic source type keeps the catalog
 /// reusable for source representations beyond [`ExpertLoadSource`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpertSourceDenseLayout {
+    pub first_layer: usize,
+    pub layer_count: usize,
+    pub experts_per_layer: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpertSourceCatalog<S = ExpertLoadSource> {
-    sources: BTreeMap<ExpertId, S>,
+    sources: Vec<(ExpertId, S)>,
+    dense_layout: Option<ExpertSourceDenseLayout>,
 }
 
 impl<S> ExpertSourceCatalog<S> {
     pub fn from_sources(sources: impl IntoIterator<Item = (ExpertId, S)>) -> Self {
+        let sources = sources
+            .into_iter()
+            .collect::<BTreeMap<_, _>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let dense_layout = detect_dense_source_layout(&sources);
         Self {
-            sources: sources.into_iter().collect(),
+            sources,
+            dense_layout,
         }
     }
 
     pub fn source(&self, expert: ExpertId) -> Option<&S> {
-        self.sources.get(&expert)
+        if let Some(dense) = self.dense_layout {
+            let layer = expert.layer.checked_sub(dense.first_layer)?;
+            if layer >= dense.layer_count || expert.expert >= dense.experts_per_layer {
+                return None;
+            }
+            let index = layer
+                .checked_mul(dense.experts_per_layer)?
+                .checked_add(expert.expert)?;
+            let (stored, source) = self.sources.get(index)?;
+            return (*stored == expert).then_some(source);
+        }
+        self.sources
+            .binary_search_by_key(&expert, |(stored, _)| *stored)
+            .ok()
+            .and_then(|index| self.sources.get(index).map(|(_, source)| source))
     }
 
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (&ExpertId, &S)> {
-        self.sources.iter()
+        self.sources.iter().map(|(expert, source)| (expert, source))
     }
 
     pub fn count(&self) -> usize {
@@ -183,14 +212,49 @@ impl<S> ExpertSourceCatalog<S> {
     pub fn is_empty(&self) -> bool {
         self.sources.is_empty()
     }
+
+    pub const fn dense_layout(&self) -> Option<ExpertSourceDenseLayout> {
+        self.dense_layout
+    }
 }
 
 impl<S> Default for ExpertSourceCatalog<S> {
     fn default() -> Self {
         Self {
-            sources: BTreeMap::new(),
+            sources: Vec::new(),
+            dense_layout: None,
         }
     }
+}
+
+fn detect_dense_source_layout<S>(sources: &[(ExpertId, S)]) -> Option<ExpertSourceDenseLayout> {
+    let first = sources.first()?.0;
+    let last = sources.last()?.0;
+    if first.expert != 0 {
+        return None;
+    }
+    let layer_count = last.layer.checked_sub(first.layer)?.checked_add(1)?;
+    let experts_per_layer = sources
+        .iter()
+        .take_while(|(expert, _)| expert.layer == first.layer)
+        .count();
+    if experts_per_layer == 0 || layer_count.checked_mul(experts_per_layer)? != sources.len() {
+        return None;
+    }
+    for (index, (expert, _)) in sources.iter().enumerate() {
+        let expected = ExpertId::new(
+            first.layer + index / experts_per_layer,
+            index % experts_per_layer,
+        );
+        if *expert != expected {
+            return None;
+        }
+    }
+    Some(ExpertSourceDenseLayout {
+        first_layer: first.layer,
+        layer_count,
+        experts_per_layer,
+    })
 }
 
 impl ExpertSourceCatalog<ExpertLoadSource> {
@@ -233,7 +297,7 @@ impl ExpertSourceCatalog<ExpertLoadSource> {
             }
             sources.insert(expert, ExpertLoadSource::LocalTensorSet { tensors });
         }
-        Ok(Self { sources })
+        Ok(Self::from_sources(sources))
     }
 }
 
@@ -405,7 +469,7 @@ impl ExpertStreamingPlanner {
             .map(|(expert, source)| (*expert, source.clone()))
             .collect::<BTreeMap<_, _>>();
         sources.insert(expert, load_source);
-        self.source_catalog = Arc::new(ExpertSourceCatalog { sources });
+        self.source_catalog = Arc::new(ExpertSourceCatalog::from_sources(sources));
         self.experts.insert(
             expert,
             ExpertState {
@@ -439,7 +503,7 @@ impl ExpertStreamingPlanner {
                 },
             );
         }
-        self.source_catalog = Arc::new(ExpertSourceCatalog { sources });
+        self.source_catalog = Arc::new(ExpertSourceCatalog::from_sources(sources));
         Ok(count)
     }
 
@@ -799,12 +863,45 @@ fn get_or_open_mmap(path: &Path) -> Result<Arc<memmap2::Mmap>> {
     Ok(mmap)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExpertIoStats {
+    pub submitted_extents: u64,
+    pub completed_extents: u64,
+    pub failed_extents: u64,
+    pub requested_bytes: u64,
+    pub aligned_bytes: u64,
+    pub coalesced_slices: u64,
+    pub fixed_file_registrations: u64,
+    pub fallback_count: u64,
+    pub slab_exhaustions: u64,
+    pub peak_queue_depth: usize,
+    pub read_us: u64,
+}
+
+#[cfg(all(target_os = "linux", feature = "cuda"))]
+pub(crate) struct PinnedExpertArtifactPayload {
+    pub(crate) expert: ExpertId,
+    pub(crate) tensors: Vec<super::io_uring_reader::PinnedExpertTensorPayload>,
+}
+
+#[derive(Clone)]
 pub struct ExpertStreamingReader {
     max_slice_bytes: u64,
-    /// When true, reads use mmap'd file regions instead of pread.
+    /// When true, fallback reads use mmap'd file regions instead of pread.
     /// The mmap cache is shared across all reader instances (static).
     use_mmap: bool,
+    #[cfg(target_os = "linux")]
+    io_uring: Option<Arc<super::io_uring_reader::IoUringExpertReader>>,
+}
+
+impl std::fmt::Debug for ExpertStreamingReader {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExpertStreamingReader")
+            .field("max_slice_bytes", &self.max_slice_bytes)
+            .field("backend", &self.backend_name())
+            .finish()
+    }
 }
 
 impl ExpertStreamingReader {
@@ -812,11 +909,171 @@ impl ExpertStreamingReader {
         Self {
             max_slice_bytes,
             use_mmap: true,
+            #[cfg(target_os = "linux")]
+            io_uring: None,
         }
+    }
+
+    pub fn from_env(max_slice_bytes: u64) -> Result<Self> {
+        let backend = std::env::var("FERRULE_EXPERT_IO_BACKEND")
+            .unwrap_or_else(|_| "mmap".to_string())
+            .to_ascii_lowercase();
+        match backend.as_str() {
+            "mmap" => Ok(Self::new(max_slice_bytes)),
+            "pread" | "positioned" => {
+                let mut reader = Self::new(max_slice_bytes);
+                reader.use_mmap = false;
+                Ok(reader)
+            }
+            "io_uring" | "uring" => {
+                let queue_depth = parse_expert_io_usize("FERRULE_EXPERT_IO_QUEUE_DEPTH", 2)?;
+                let buffer_mib = parse_expert_io_usize("FERRULE_EXPERT_IO_BUFFER_MIB", 16)?;
+                let buffer_bytes = buffer_mib.checked_mul(1024 * 1024).ok_or_else(|| {
+                    Error::Model("FERRULE_EXPERT_IO_BUFFER_MIB overflows usize".into())
+                })?;
+                Self::with_io_uring(max_slice_bytes, queue_depth, buffer_bytes)
+            }
+            other => Err(Error::Model(format!(
+                "unsupported FERRULE_EXPERT_IO_BACKEND '{other}'; expected mmap, pread, or io_uring"
+            ))),
+        }
+    }
+
+    #[cfg(all(target_os = "linux", feature = "cuda"))]
+    pub(crate) fn from_env_with_cuda_pinned(
+        max_slice_bytes: u64,
+        allocator: ferrule_cuda::context::CudaPinnedHostAllocator,
+    ) -> Result<Self> {
+        let backend = std::env::var("FERRULE_EXPERT_IO_BACKEND")
+            .unwrap_or_else(|_| "mmap".to_string())
+            .to_ascii_lowercase();
+        if !matches!(backend.as_str(), "io_uring" | "uring") {
+            return Self::from_env(max_slice_bytes);
+        }
+        let queue_depth = parse_expert_io_usize("FERRULE_EXPERT_IO_QUEUE_DEPTH", 2)?;
+        let buffer_mib = parse_expert_io_usize("FERRULE_EXPERT_IO_BUFFER_MIB", 16)?;
+        let slab_count = parse_expert_io_usize("FERRULE_EXPERT_IO_SLABS", 16)?;
+        let buffer_bytes = buffer_mib
+            .checked_mul(1024 * 1024)
+            .ok_or_else(|| Error::Model("FERRULE_EXPERT_IO_BUFFER_MIB overflows usize".into()))?;
+        Ok(Self {
+            max_slice_bytes,
+            use_mmap: false,
+            io_uring: Some(Arc::new(
+                super::io_uring_reader::IoUringExpertReader::new_cuda_pinned(
+                    queue_depth,
+                    buffer_bytes,
+                    slab_count,
+                    &allocator,
+                )?,
+            )),
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn with_io_uring(
+        max_slice_bytes: u64,
+        queue_depth: usize,
+        buffer_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            max_slice_bytes,
+            use_mmap: false,
+            io_uring: Some(Arc::new(super::io_uring_reader::IoUringExpertReader::new(
+                queue_depth,
+                buffer_bytes,
+            )?)),
+        })
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn with_io_uring(
+        _max_slice_bytes: u64,
+        _queue_depth: usize,
+        _buffer_bytes: usize,
+    ) -> Result<Self> {
+        Err(Error::Model(
+            "io_uring expert streaming is supported only on Linux".into(),
+        ))
+    }
+
+    pub fn backend_name(&self) -> &'static str {
+        #[cfg(target_os = "linux")]
+        if self.io_uring.is_some() {
+            return "io_uring";
+        }
+        if self.use_mmap { "mmap" } else { "pread" }
     }
 
     pub fn max_slice_bytes(&self) -> u64 {
         self.max_slice_bytes
+    }
+
+    pub fn io_stats(&self) -> ExpertIoStats {
+        #[cfg(target_os = "linux")]
+        if let Some(reader) = self.io_uring.as_ref() {
+            let stats = reader.stats();
+            return ExpertIoStats {
+                submitted_extents: stats.submitted_extents,
+                completed_extents: stats.completed_extents,
+                failed_extents: stats.failed_extents,
+                requested_bytes: stats.requested_bytes,
+                aligned_bytes: stats.aligned_bytes,
+                coalesced_slices: stats.coalesced_slices,
+                fixed_file_registrations: stats.fixed_file_registrations,
+                fallback_count: stats.fallback_count,
+                slab_exhaustions: stats.slab_exhaustions,
+                peak_queue_depth: stats.peak_queue_depth,
+                read_us: stats.read_us,
+            };
+        }
+        ExpertIoStats::default()
+    }
+
+    #[cfg(all(target_os = "linux", feature = "cuda"))]
+    pub(crate) fn direct_expert_capacity(&self) -> Option<usize> {
+        self.io_uring
+            .as_ref()
+            .and_then(|reader| reader.direct_expert_capacity())
+    }
+
+    #[cfg(all(target_os = "linux", feature = "cuda"))]
+    pub(crate) fn available_direct_experts(&self) -> Option<usize> {
+        self.io_uring
+            .as_ref()
+            .and_then(|reader| reader.available_direct_experts())
+    }
+
+    #[cfg(all(target_os = "linux", feature = "cuda"))]
+    pub(crate) fn read_load_source_pinned(
+        &self,
+        expert: ExpertId,
+        load_source: &ExpertLoadSource,
+    ) -> Result<Option<PinnedExpertArtifactPayload>> {
+        let Some(reader) = self.io_uring.as_ref() else {
+            return Ok(None);
+        };
+        let slices = Self::slices_for_load_source(expert, load_source)?;
+        for slice in &slices {
+            if slice.bytes > self.max_slice_bytes {
+                return Err(Error::Model(format!(
+                    "expert tensor slice exceeds bounded read size: {} > {} bytes",
+                    slice.bytes, self.max_slice_bytes
+                )));
+            }
+        }
+        match reader.read_slices_pinned(&slices) {
+            Ok(tensors) => Ok(Some(PinnedExpertArtifactPayload { expert, tensors })),
+            Err(error) => {
+                reader.record_fallback();
+                tracing::debug!(
+                    error = %error,
+                    slices = slices.len(),
+                    "CUDA-pinned expert io_uring read unavailable; falling back to pageable staging"
+                );
+                Ok(None)
+            }
+        }
     }
 
     pub fn read_load_source(
@@ -824,37 +1081,8 @@ impl ExpertStreamingReader {
         expert: ExpertId,
         load_source: &ExpertLoadSource,
     ) -> Result<ExpertArtifactPayload> {
-        let tensors = match load_source {
-            ExpertLoadSource::LocalTensorSet { tensors } => tensors
-                .iter()
-                .map(Self::read_local_slice_positioned)
-                .collect::<Result<Vec<_>>>()?,
-            ExpertLoadSource::LocalShard {
-                path,
-                offset,
-                bytes,
-            } => {
-                let slice = ExpertTensorSlice {
-                    key: ExpertTensorKey {
-                        expert,
-                        matrix: ExpertMatrixKind::Gate,
-                    },
-                    component: ExpertTensorComponent::Other("whole_expert_chunk".into()),
-                    path: path.clone(),
-                    offset: *offset,
-                    bytes: *bytes,
-                    dtype: "opaque".into(),
-                    shape: Vec::new(),
-                };
-                vec![Self::read_local_slice_positioned(&slice)?]
-            }
-            other => {
-                return Err(Error::Model(format!(
-                    "expert streaming reader does not support artifact tier {:?} yet",
-                    other.tier()
-                )));
-            }
-        };
+        let slices = Self::slices_for_load_source(expert, load_source)?;
+        let tensors = self.read_slices_with_backend(&slices, false)?;
         Ok(ExpertArtifactPayload { expert, tensors })
     }
 
@@ -896,9 +1124,6 @@ impl ExpertStreamingReader {
     ///
     /// When mmap is enabled, reads from the mmap'd file region instead.
     /// The OS page cache provides automatic caching across reads.
-    fn read_local_slice_positioned(slice: &ExpertTensorSlice) -> Result<ExpertTensorPayload> {
-        Self::read_local_slice_positioned_with_mmap(slice, true)
-    }
 
     fn read_local_slice_positioned_with_mmap(
         slice: &ExpertTensorSlice,
@@ -965,34 +1190,46 @@ impl ExpertStreamingReader {
         expert: ExpertId,
         load_source: &ExpertLoadSource,
     ) -> Result<ExpertArtifactPayload> {
-        let slices: Vec<ExpertTensorSlice> = match load_source {
-            ExpertLoadSource::LocalTensorSet { tensors } => tensors.clone(),
+        let slices = Self::slices_for_load_source(expert, load_source)?;
+        let tensors = self.read_slices_with_backend(&slices, true)?;
+        Ok(ExpertArtifactPayload { expert, tensors })
+    }
+
+    fn slices_for_load_source(
+        expert: ExpertId,
+        load_source: &ExpertLoadSource,
+    ) -> Result<Vec<ExpertTensorSlice>> {
+        match load_source {
+            ExpertLoadSource::LocalTensorSet { tensors } => Ok(tensors.clone()),
             ExpertLoadSource::LocalShard {
                 path,
                 offset,
                 bytes,
-            } => {
-                vec![ExpertTensorSlice {
-                    key: ExpertTensorKey {
-                        expert,
-                        matrix: ExpertMatrixKind::Gate,
-                    },
-                    component: ExpertTensorComponent::Other("whole_expert_chunk".into()),
-                    path: path.clone(),
-                    offset: *offset,
-                    bytes: *bytes,
-                    dtype: "opaque".into(),
-                    shape: Vec::new(),
-                }]
-            }
-            other => {
-                return Err(Error::Model(format!(
-                    "expert streaming reader does not support artifact tier {:?} yet",
-                    other.tier()
-                )));
-            }
-        };
-        for slice in &slices {
+            } => Ok(vec![ExpertTensorSlice {
+                key: ExpertTensorKey {
+                    expert,
+                    matrix: ExpertMatrixKind::Gate,
+                },
+                component: ExpertTensorComponent::Other("whole_expert_chunk".into()),
+                path: path.clone(),
+                offset: *offset,
+                bytes: *bytes,
+                dtype: "opaque".into(),
+                shape: Vec::new(),
+            }]),
+            other => Err(Error::Model(format!(
+                "expert streaming reader does not support artifact tier {:?} yet",
+                other.tier()
+            ))),
+        }
+    }
+
+    fn read_slices_with_backend(
+        &self,
+        slices: &[ExpertTensorSlice],
+        parallel_fallback: bool,
+    ) -> Result<Vec<ExpertTensorPayload>> {
+        for slice in slices {
             if slice.bytes > self.max_slice_bytes {
                 return Err(Error::Model(format!(
                     "expert tensor slice exceeds bounded read size: {} > {} bytes",
@@ -1001,24 +1238,48 @@ impl ExpertStreamingReader {
             }
         }
 
-        // Fast path: single slice, no need for tokio overhead.
-        if slices.len() <= 1 {
-            let tensors = slices
-                .iter()
-                .map(|s| Self::read_local_slice_positioned_with_mmap(s, self.use_mmap))
-                .collect::<Result<Vec<_>>>()?;
-            return Ok(ExpertArtifactPayload { expert, tensors });
+        #[cfg(target_os = "linux")]
+        if let Some(reader) = self.io_uring.as_ref() {
+            match reader.read_slices(slices) {
+                Ok(payloads) => return Ok(payloads),
+                Err(error) => {
+                    reader.record_fallback();
+                    tracing::debug!(
+                        error = %error,
+                        slices = slices.len(),
+                        "expert io_uring read failed; falling back to positioned reads"
+                    );
+                }
+            }
         }
 
-        // Parallel path: use rayon for concurrent slice reads.
+        if !parallel_fallback || slices.len() <= 1 {
+            return slices
+                .iter()
+                .map(|slice| Self::read_local_slice_positioned_with_mmap(slice, self.use_mmap))
+                .collect();
+        }
+
         let use_mmap = self.use_mmap;
-        let results: Vec<Result<ExpertTensorPayload>> = slices
+        let results = slices
             .par_iter()
-            .map(|s| Self::read_local_slice_positioned_with_mmap(s, use_mmap))
-            .collect();
-        let tensors = results.into_iter().collect::<Result<Vec<_>>>()?;
-        Ok(ExpertArtifactPayload { expert, tensors })
+            .map(|slice| Self::read_local_slice_positioned_with_mmap(slice, use_mmap))
+            .collect::<Vec<_>>();
+        results.into_iter().collect()
     }
+}
+
+fn parse_expert_io_usize(name: &str, default: usize) -> Result<usize> {
+    let Some(value) = std::env::var(name).ok() else {
+        return Ok(default);
+    };
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|error| Error::Model(format!("invalid {name}='{value}': {error}")))?;
+    if parsed == 0 {
+        return Err(Error::Model(format!("{name} must be greater than zero")));
+    }
+    Ok(parsed)
 }
 
 /// Read multiple experts concurrently. Each expert's slices are read in
@@ -1042,8 +1303,8 @@ pub fn read_experts_concurrent(
     let results: Vec<Result<ExpertArtifactPayload>> = loads
         .par_iter()
         .map(|(expert, source)| {
-            let r = ExpertStreamingReader::new(reader.max_slice_bytes);
-            r.read_load_source_concurrent(*expert, source)
+            let reader = reader.clone();
+            reader.read_load_source_concurrent(*expert, source)
         })
         .collect();
     results.into_iter().collect()
@@ -1107,31 +1368,41 @@ fn infer_linear_format(
     weight: &ExpertTensorPayload,
     scale: Option<&ExpertTensorPayload>,
 ) -> Result<ExpertLinearFormat> {
-    let Some(scale) = scale else {
+    infer_expert_linear_format(
+        &weight.slice,
+        weight.bytes.len(),
+        scale.map(|scale| (&scale.slice, scale.bytes.len())),
+    )
+}
+
+pub(crate) fn infer_expert_linear_format(
+    weight: &ExpertTensorSlice,
+    weight_len: usize,
+    scale: Option<(&ExpertTensorSlice, usize)>,
+) -> Result<ExpertLinearFormat> {
+    let Some((scale, scale_len)) = scale else {
         return Ok(ExpertLinearFormat::Opaque);
     };
-    if weight.slice.dtype == "I8" && scale.slice.dtype == "F8_E8M0" {
-        if weight.slice.shape.len() != 2 || scale.slice.shape.len() != 2 {
+    if weight.dtype == "I8" && scale.dtype == "F8_E8M0" {
+        if weight.shape.len() != 2 || scale.shape.len() != 2 {
             return Err(Error::Model(format!(
                 "FP4 expert tensor expects 2D weight/scale shapes, got {:?} and {:?}",
-                weight.slice.shape, scale.slice.shape
+                weight.shape, scale.shape
             )));
         }
-        let out = weight.slice.shape[0];
-        let packed_in = weight.slice.shape[1];
+        let out = weight.shape[0];
+        let packed_in = weight.shape[1];
         let logical_in = packed_in
             .checked_mul(2)
             .ok_or_else(|| Error::Model("FP4 expert packed input dimension overflow".into()))?;
         let expected_scale_cols = logical_in / 32;
-        if scale.slice.shape[0] != out || scale.slice.shape[1] != expected_scale_cols {
+        if scale.shape[0] != out || scale.shape[1] != expected_scale_cols {
             return Err(Error::Model(format!(
                 "FP4 expert scale shape mismatch: weight {:?} implies scale [{out}, {expected_scale_cols}], got {:?}",
-                weight.slice.shape, scale.slice.shape
+                weight.shape, scale.shape
             )));
         }
-        if weight.bytes.len() as u64 != weight.slice.bytes
-            || scale.bytes.len() as u64 != scale.slice.bytes
-        {
+        if weight_len as u64 != weight.bytes || scale_len as u64 != scale.bytes {
             return Err(Error::Model(
                 "expert payload byte length does not match tensor slice metadata".into(),
             ));

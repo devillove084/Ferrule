@@ -466,6 +466,95 @@ pub mod kernels {
         }
     }
 
+    #[kernel]
+    pub fn fill_i32_sequence(mut output: DisjointSlice<i32>, start: i32, len: u32) {
+        let index = thread::index_1d().get();
+        if index >= len as usize {
+            return;
+        }
+        if let Some(value) = output.get_mut(thread::index_1d()) {
+            *value = start.saturating_add(index as i32);
+        }
+    }
+
+    #[kernel]
+    pub fn pack_i32_f32_pairs(
+        indices: &[i32],
+        weights: &[f32],
+        mut output: DisjointSlice<i32>,
+        pair_count: u32,
+    ) {
+        let output_index = thread::index_1d().get();
+        if output_index >= pair_count as usize * 2 {
+            return;
+        }
+        let pair = output_index / 2;
+        let value = if output_index % 2 == 0 {
+            indices[pair]
+        } else {
+            weights[pair].to_bits() as i32
+        };
+        if let Some(output) = output.get_mut(thread::index_1d()) {
+            *output = value;
+        }
+    }
+
+    #[kernel]
+    pub fn fill_dsv4_paged_window_topk(
+        mut output: DisjointSlice<i32>,
+        start: u32,
+        valid_len: u32,
+        output_len: u32,
+    ) {
+        let index = thread::index_1d().get();
+        if index >= output_len as usize {
+            return;
+        }
+        let value = if index < valid_len as usize {
+            start.saturating_add(index as u32) as i32
+        } else {
+            -1
+        };
+        if let Some(output) = output.get_mut(thread::index_1d()) {
+            *output = value;
+        }
+    }
+
+    #[kernel]
+    pub fn fill_dsv4_decode_attention_topk(
+        mut output: DisjointSlice<i32>,
+        position: u32,
+        window_size: u32,
+        window_len: u32,
+        compressed_len: u32,
+        output_len: u32,
+    ) {
+        let index = thread::index_1d().get();
+        if index >= output_len as usize || window_size == 0 {
+            return;
+        }
+        let window_size_usize = window_size as usize;
+        let value = if index < window_size_usize {
+            if index >= window_len as usize {
+                -1
+            } else if window_len < window_size {
+                index as i32
+            } else {
+                ((position as usize % window_size_usize + 1 + index) % window_size_usize) as i32
+            }
+        } else {
+            let compressed_index = index - window_size_usize;
+            if compressed_index < compressed_len as usize {
+                index as i32
+            } else {
+                -1
+            }
+        };
+        if let Some(output) = output.get_mut(thread::index_1d()) {
+            *output = value;
+        }
+    }
+
     // ── GEMV f32/BF16 (unrolled 4x) ───────────────────────────────────
 
     #[kernel]
@@ -5833,6 +5922,84 @@ pub mod kernels {
                     *val_ptr.add(output_offset + j) = best_val[j];
                 }
             }
+        }
+    }
+
+    /// Merge one chunk's row-wise top-k into persistent global row-wise top-k.
+    /// Token IDs remain encoded as exact f32 integers because the vocabulary is
+    /// well below the 24-bit exact-integer range of f32.
+    #[kernel]
+    pub fn merge_topk_rows_in_place(
+        chunk_idx: &[f32],
+        chunk_val: &[f32],
+        mut global_idx: DisjointSlice<f32>,
+        mut global_val: DisjointSlice<f32>,
+        rows: u32,
+        global_k: u32,
+        chunk_k: u32,
+        token_offset: u32,
+        has_existing: u32,
+    ) {
+        let row = thread::blockIdx_x() as usize;
+        let tid = thread::threadIdx_x() as usize;
+        let rows = rows as usize;
+        let global_k = global_k as usize;
+        let chunk_k = chunk_k as usize;
+        if row >= rows || tid != 0 {
+            return;
+        }
+
+        let mut best_val = [f32::NEG_INFINITY; 40];
+        let mut best_idx = [u32::MAX; 40];
+        let global_offset = row * global_k;
+        let global_idx_ptr = global_idx.as_mut_ptr();
+        let global_val_ptr = global_val.as_mut_ptr();
+        if has_existing != 0 {
+            let mut slot = 0usize;
+            while slot < global_k {
+                unsafe {
+                    best_idx[slot] = *global_idx_ptr.add(global_offset + slot) as u32;
+                    best_val[slot] = *global_val_ptr.add(global_offset + slot);
+                }
+                slot += 1;
+            }
+        }
+
+        let chunk_offset = row * chunk_k;
+        let mut candidate = 0usize;
+        while candidate < chunk_k {
+            let value = chunk_val[chunk_offset + candidate];
+            let token = chunk_idx[chunk_offset + candidate] as u32 + token_offset;
+            let mut position = global_k;
+            while position > 0 {
+                let previous = position - 1;
+                let better = value > best_val[previous]
+                    || (value == best_val[previous] && token < best_idx[previous]);
+                if !better {
+                    break;
+                }
+                position -= 1;
+            }
+            if position < global_k {
+                let mut shift = global_k - 1;
+                while shift > position {
+                    best_val[shift] = best_val[shift - 1];
+                    best_idx[shift] = best_idx[shift - 1];
+                    shift -= 1;
+                }
+                best_val[position] = value;
+                best_idx[position] = token;
+            }
+            candidate += 1;
+        }
+
+        let mut slot = 0usize;
+        while slot < global_k {
+            unsafe {
+                *global_idx_ptr.add(global_offset + slot) = best_idx[slot] as f32;
+                *global_val_ptr.add(global_offset + slot) = best_val[slot];
+            }
+            slot += 1;
         }
     }
 

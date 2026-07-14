@@ -29,6 +29,25 @@ pub(crate) fn build_resident_topk_driver<R>(
 where
     R: MultiSessionRunner,
 {
+    build_resident_topk_driver_with_page_limit(
+        runner,
+        schema,
+        scheduler_config,
+        driver_config,
+        None,
+    )
+}
+
+pub(crate) fn build_resident_topk_driver_with_page_limit<R>(
+    runner: R,
+    schema: Box<dyn KvLayoutSchema>,
+    scheduler_config: ResidentSchedulerConfig,
+    driver_config: ResidentTopKDriverConfig,
+    max_page_limit: Option<usize>,
+) -> anyhow::Result<ResidentTopKDriver<R, FixedSequenceSlotPool>>
+where
+    R: MultiSessionRunner,
+{
     if driver_config.ctx_size == 0 {
         anyhow::bail!("resident driver ctx_size must be greater than zero");
     }
@@ -41,11 +60,16 @@ where
     }
 
     let max_active_sequences = scheduler_config.max_active_sequences.max(1);
-    let max_pages = schema
+    let full_capacity_pages = schema
         .pages_for_tokens(driver_config.ctx_size)
         .checked_mul(max_active_sequences)
         .filter(|pages| *pages > 0)
         .ok_or_else(|| anyhow::anyhow!("resident driver KV page capacity overflow"))?;
+    let max_pages = match max_page_limit {
+        Some(0) => anyhow::bail!("resident driver KV page limit must be greater than zero"),
+        Some(limit) => full_capacity_pages.min(limit),
+        None => full_capacity_pages,
+    };
 
     ResidentTopKDriver::with_configs(
         runner,

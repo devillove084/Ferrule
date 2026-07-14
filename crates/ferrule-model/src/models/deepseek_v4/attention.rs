@@ -2216,11 +2216,13 @@ impl DeepSeekV4Attention {
             ))
         })?;
         let rope = cfg.rope_params();
-        let positions_i32 = decode_metadata_i32(&[position], "position")?;
-        operators
-            .cuda_mut()?
-            .ops
-            .overwrite_i32_prefix(&positions_i32, &mut arena.positions)?;
+        let position_i32 = i32::try_from(position)
+            .map_err(|_| Error::Model("DeepSeek-V4 decode position exceeds i32 ABI".into()))?;
+        operators.cuda_mut()?.ops.fill_i32_sequence_prefix(
+            &mut arena.positions,
+            position_i32,
+            1,
+        )?;
         self.project_decode_rows_from_device_into(hidden_dev, position, operators, arena)?;
         self.decode_step_compressed_projected_continuation(
             cache, hidden_dev, position, operators, cfg, compressed, rope, arena,
@@ -3164,11 +3166,16 @@ impl DeepSeekV4Attention {
             let compressed_len = cache.indexer_compressed_len(cfg.index_head_dim);
             let indexer_cols = cfg.index_topk.min(compressed_len);
             if indexer_cols == 0 {
-                let topk = cache.window.topk_indices(position, cfg.window_size);
                 operators
                     .cuda_mut()?
-                    .write_topk_indices(&topk, &mut arena.topk)?;
-                cfg.window_size
+                    .ops
+                    .fill_dsv4_decode_attention_topk_into(
+                        &mut arena.topk,
+                        position,
+                        cfg.window_size,
+                        window_len,
+                        0,
+                    )?
             } else {
                 operators.cuda_mut()?.linear_matvec_from_device_into(
                     &indexer.wq_b,
@@ -3263,12 +3270,16 @@ impl DeepSeekV4Attention {
             }
         } else {
             let compressed_len = cache.compressed_len();
-            let mut topk = cache.window.topk_indices(position, cfg.window_size);
-            topk.extend((0..compressed_len).map(|index| (cfg.window_size + index) as isize));
             operators
                 .cuda_mut()?
-                .write_topk_indices(&topk, &mut arena.topk)?;
-            cfg.window_size + compressed_len
+                .ops
+                .fill_dsv4_decode_attention_topk_into(
+                    &mut arena.topk,
+                    position,
+                    cfg.window_size,
+                    window_len,
+                    compressed_len,
+                )?
         };
         record_attention_stage(
             operators,

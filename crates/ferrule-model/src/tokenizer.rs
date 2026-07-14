@@ -3,6 +3,49 @@
 use ferrule_common::{Error, Result};
 use std::path::Path;
 
+/// Per-sequence state for bounded incremental token decoding.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IncrementalDecodeState {
+    ids: Vec<u32>,
+    prefix: String,
+    prefix_index: usize,
+}
+
+impl IncrementalDecodeState {
+    pub fn reset(&mut self) {
+        self.ids.clear();
+        self.prefix.clear();
+        self.prefix_index = 0;
+    }
+
+    /// Decode one token while retaining only the bounded context needed by the
+    /// tokenizer decoder. `None` means more token bytes are required before a
+    /// valid text delta can be emitted.
+    pub fn step(
+        &mut self,
+        id: u32,
+        decode: impl Fn(&[u32]) -> Result<String>,
+    ) -> Result<Option<String>> {
+        self.ids.push(id);
+        let decoded = decode(&self.ids)?;
+        if decoded.len() <= self.prefix.len() || decoded.ends_with('�') {
+            return Ok(None);
+        }
+        if !decoded.starts_with(&self.prefix) {
+            return Err(Error::Tokenization(
+                "incremental decode produced a non-prefix continuation".into(),
+            ));
+        }
+
+        let delta = decoded[self.prefix.len()..].to_owned();
+        let new_prefix_index = self.ids.len().saturating_sub(self.prefix_index);
+        self.ids = self.ids.drain(self.prefix_index..).collect();
+        self.prefix = decode(&self.ids)?;
+        self.prefix_index = new_prefix_index;
+        Ok(Some(delta))
+    }
+}
+
 /// Lightweight tokenizer handle — decoupled from model weights.
 pub struct TokenizerHandle {
     inner: tokenizers::Tokenizer,
@@ -83,6 +126,25 @@ mod tests {
             eos_token_id: Some(2),
         };
         assert_eq!(handle.eos_token_id(), Some(2));
+    }
+
+    #[test]
+    fn incremental_decode_waits_for_valid_text_and_emits_only_the_delta() {
+        let mut state = IncrementalDecodeState::default();
+        let decode = |ids: &[u32]| match ids {
+            [1] => Ok("�".to_owned()),
+            [1, 2] => Ok("é".to_owned()),
+            [1, 2, 3] => Ok("é!".to_owned()),
+            [2, 3] => Ok("é!".to_owned()),
+            [3] => Ok("!".to_owned()),
+            _ => Ok(String::new()),
+        };
+
+        assert_eq!(state.step(1, decode).unwrap(), None);
+        assert_eq!(state.step(2, decode).unwrap(), Some("é".to_owned()));
+        assert_eq!(state.step(3, decode).unwrap(), Some("!".to_owned()));
+        state.reset();
+        assert_eq!(state, IncrementalDecodeState::default());
     }
 
     #[test]

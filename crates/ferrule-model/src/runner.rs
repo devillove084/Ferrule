@@ -2,7 +2,7 @@ use ferrule_common::execution::{
     ExecutionBatch, ExecutionCapabilities, ExecutionOutput, KvReservation,
 };
 
-use crate::{EnginePlan, ModelDescriptor};
+use crate::{EnginePlan, IncrementalDecodeState, ModelDescriptor};
 use ferrule_common::Result;
 pub use ferrule_common::execution::TokenLogit;
 
@@ -57,6 +57,13 @@ pub trait ModelRunner {
     fn model_info(&self) -> ModelInfo;
     fn encode(&self, text: &str) -> Result<Vec<u32>>;
     fn decode(&self, tokens: &[u32]) -> Result<String>;
+    fn decode_incremental(
+        &self,
+        token: u32,
+        state: &mut IncrementalDecodeState,
+    ) -> Result<Option<String>> {
+        state.step(token, |tokens| self.decode(tokens))
+    }
     fn prefill(&mut self, tokens: &[u32]) -> Result<Vec<f32>>;
     fn decode_token(&mut self, token: u32) -> Result<Vec<f32>>;
     fn reset_session(&mut self) -> Result<()>;

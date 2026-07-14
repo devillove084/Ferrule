@@ -187,6 +187,7 @@ pub struct ExpertPredictionStats {
     pub observed_experts: u64,
     pub cold_miss_observations: u64,
     pub transition_observations: u64,
+    pub transition_predictions: u64,
 }
 
 pub trait ExpertHotsetPredictor {
@@ -401,6 +402,7 @@ impl ExpertHotsetPredictor for ScoreBasedExpertPredictor {
         host_staged.sort_unstable();
 
         let mut candidates = Vec::new();
+        let mut transition_candidates = BTreeSet::new();
         for expert in 0..num_experts {
             let idx = self.index(ctx.layer, expert).expect("bounded above");
             let session = self.config.session_weight * self.session_scores[idx];
@@ -417,6 +419,9 @@ impl ExpertHotsetPredictor for ScoreBasedExpertPredictor {
             if action == ExpertCacheAction::KeepResident {
                 continue;
             }
+            if transition > 0.0 {
+                transition_candidates.insert(expert);
+            }
             candidates.push(ExpertPrediction {
                 expert: ExpertId::new(ctx.layer, expert),
                 score,
@@ -432,6 +437,12 @@ impl ExpertHotsetPredictor for ScoreBasedExpertPredictor {
                 .then_with(|| left.expert.expert.cmp(&right.expert.expert))
         });
         candidates.truncate(ctx.budget);
+        self.stats.transition_predictions = self.stats.transition_predictions.saturating_add(
+            candidates
+                .iter()
+                .filter(|prediction| transition_candidates.contains(&prediction.expert.expert))
+                .count() as u64,
+        );
         self.stats.predicted_experts = self
             .stats
             .predicted_experts
@@ -649,6 +660,7 @@ mod tests {
         ));
         assert_eq!(predicted[0].expert, ExpertId::new(1, 5));
         assert!(predictor.stats().transition_observations > 0);
+        assert_eq!(predictor.stats().transition_predictions, 1);
     }
 
     #[test]

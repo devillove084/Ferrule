@@ -1058,7 +1058,7 @@ where
         F: FnMut(&ResidentTokenEvent) -> Result<()>,
     {
         for action in actions {
-            let text = self.executor.runner().decode(&[action.token_id])?;
+            let runner = self.executor.runner();
             let sequence = self
                 .scheduler
                 .active_sequence_mut(action.session_id)
@@ -1068,6 +1068,9 @@ where
                         action.session_id
                     ))
                 })?;
+            let text = runner
+                .decode_incremental(action.token_id, &mut sequence.incremental_decode)?
+                .unwrap_or_default();
             sequence.append_generated_text(&text);
             let index = sequence.generated.saturating_sub(1);
             let event = ResidentTokenEvent {

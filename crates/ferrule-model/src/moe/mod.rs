@@ -16,6 +16,8 @@
 
 pub mod executor;
 pub mod handle;
+#[cfg(target_os = "linux")]
+pub(crate) mod io_uring_reader;
 pub mod prediction;
 pub mod routed;
 pub mod routing;

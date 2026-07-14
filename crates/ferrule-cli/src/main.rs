@@ -14,6 +14,7 @@ use commands::inspect::{
     cmd_deepseek_v4_generate, cmd_deepseek_v4_prefill_parity, cmd_deepseek_v4_probe,
     cmd_expert_stream_smoke, cmd_inspect_weightpack,
 };
+
 use commands::serve::cmd_serve;
 
 fn main() -> anyhow::Result<()> {
@@ -44,6 +45,9 @@ fn main() -> anyhow::Result<()> {
             warmup_tokens,
             max_layers,
             prefill_chunk_size,
+            output_head_chunk_rows,
+            moe_prefetch_experts,
+            moe_hotset_experts,
             golden,
             json,
         } => cmd_bench_interactive(
@@ -54,9 +58,13 @@ fn main() -> anyhow::Result<()> {
             warmup_tokens,
             max_layers,
             prefill_chunk_size,
+            output_head_chunk_rows,
+            moe_prefetch_experts,
+            moe_hotset_experts,
             golden.as_deref(),
             json,
         ),
+
         Command::InspectWeightPack { path } => cmd_inspect_weightpack(&path),
         Command::ExpertStreamSmoke {
             model,
@@ -64,6 +72,7 @@ fn main() -> anyhow::Result<()> {
             expert,
             max_slice_mb,
         } => cmd_expert_stream_smoke(&model, layer, expert, max_slice_mb),
+
         Command::DeepSeekV4Generate {
             model,
             prompt,

@@ -180,6 +180,24 @@ pub struct DeepSeekV4OperatorRuntimeCounters {
     pub expert_upload_prefetch_submitted: u64,
     pub expert_upload_prefetch_completed: u64,
     pub expert_upload_prefetch_in_flight: usize,
+    pub expert_prefetch_outstanding: usize,
+    pub expert_prefetch_slot_reservations: usize,
+    pub expert_prefetch_host_queued: usize,
+    pub expert_abandoned_uploads: usize,
+    pub expert_frame_reuses: u64,
+    pub expert_frame_waits: u64,
+    pub expert_free_frames: usize,
+    pub expert_io_submitted_extents: u64,
+    pub expert_io_completed_extents: u64,
+    pub expert_io_failed_extents: u64,
+    pub expert_io_requested_bytes: u64,
+    pub expert_io_aligned_bytes: u64,
+    pub expert_io_coalesced_slices: u64,
+    pub expert_io_fixed_file_registrations: u64,
+    pub expert_io_fallback_count: u64,
+    pub expert_io_slab_exhaustions: u64,
+    pub expert_io_peak_queue_depth: usize,
+    pub expert_io_read_us: u64,
     pub expert_selected_upload_waits: u64,
     pub expert_selected_upload_wait_us: u64,
     pub expert_async_upload_bytes: u64,
@@ -942,6 +960,25 @@ impl DeepSeekV4OperatorContext {
                 .extend(cuda.drain_moe_access_events());
         }
         Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn configure_expert_frame_pool(
+        &mut self,
+        expert_capacity: usize,
+        layer_slot_capacities: &[usize],
+        hidden_size: usize,
+        intermediate_size: usize,
+    ) -> Result<()> {
+        if self.backend != ModelExecutionBackend::Cuda {
+            return Ok(());
+        }
+        self.cuda_mut()?.configure_expert_frame_pool(
+            expert_capacity,
+            layer_slot_capacities,
+            hidden_size,
+            intermediate_size,
+        )
     }
 
     #[cfg(feature = "cuda")]

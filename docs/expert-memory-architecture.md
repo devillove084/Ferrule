@@ -77,10 +77,10 @@ retained-payload accounting rather than process RSS.
 `ferrule serve` freezes these options before the model worker starts:
 
 ```text
---expert-host-cache-entries <COUNT>    default 256; 0 disables retention
---expert-host-cache-mb <MIB>           default 0; 0 means entry-limited only
---expert-pinned-cache-entries <COUNT>  default 64; 0 disables retention
---expert-pinned-cache-mb <MIB>         default 0; 0 means entry-limited only
+--expert-host-cache-entries <COUNT>    default 64; 0 disables retention
+--expert-host-cache-mb <MIB>           default 1024; 0 means entry-limited only
+--expert-pinned-cache-entries <COUNT>  default 16; 0 disables retention
+--expert-pinned-cache-mb <MIB>         default 256; 0 means entry-limited only
 ```
 
 MiB conversion is checked; overflow is rejected. The resulting
@@ -91,16 +91,17 @@ There is no second DSV4 environment-variable capacity source.
 Example bounded GB10 starting point (a tuning input, not a universal optimum):
 
 ```bash
-just dsv4-serve -- \
-  --expert-host-cache-entries 256 \
-  --expert-host-cache-mb 4096 \
-  --expert-pinned-cache-entries 64 \
-  --expert-pinned-cache-mb 1024
+./target/release/ferrule serve models/DeepSeek-V4-Flash-DSpark \
+  --expert-host-cache-entries 64 \
+  --expert-host-cache-mb 1024 \
+  --expert-pinned-cache-entries 16 \
+  --expert-pinned-cache-mb 256
 ```
 
 The correct values depend on model expert size, active KV capacity, fixed-weight
-residency, OS page cache, and concurrency. Benchmark sweeps must report the selected
-limits and current/peak/rejection statistics.
+residency, OS page cache, and concurrency. KV has an independent enforced serving
+budget (`--kv-cache-mb`, default 1024 MiB); expert-cache budgets do not borrow from it.
+Benchmark sweeps must report the selected limits and current/peak/rejection statistics.
 
 ## 5. GB10 / coherent unified memory
 

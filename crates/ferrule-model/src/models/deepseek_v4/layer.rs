@@ -527,16 +527,8 @@ impl DeepSeekV4Layer {
         )?;
 
         // ── Dispatch: eager MoE with host-side routing ──
-        if !predicted_experts.is_empty() {
-            operators.prefetch_predicted_experts(
-                self.layer,
-                predicted_experts,
-                residency,
-                source_catalog,
-                prefetch_capacity,
-                expert_reader,
-            )?;
-        }
+        // CUDA decode lookahead is scheduled once by the runner. Predictions remain
+        // attached to the MoE step for materialization metadata and telemetry.
         let stage_start = operators.profile_start();
         let moe = operators.cuda_mut()?.routed_moe_step_device_output_into(
             self.layer,

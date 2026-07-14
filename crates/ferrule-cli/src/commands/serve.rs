@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ferrule_common::MemoryPoolLimits;
+use ferrule_common::execution::KvLayoutSchema;
 use ferrule_model::{
     ChatTemplate, ExpertMemoryPolicy, ModelDescriptor, ModelExecutionBackend, ModelFamily,
     models::deepseek_v4::{DeepSeekV4PrepareOptions, DeepSeekV4Runner},
@@ -14,7 +15,7 @@ use ferrule_server::{
 
 use crate::args::ServeArgs;
 
-use super::resident::build_resident_topk_driver;
+use super::resident::build_resident_topk_driver_with_page_limit;
 
 pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
     validate_args(&args)?;
@@ -55,6 +56,7 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
         moe_hotset_experts: args.moe_hotset_experts,
     };
     let max_tensor_bytes = args.max_tensor_mb.saturating_mul(1024 * 1024);
+    let kv_cache_bytes = required_mebibytes_to_bytes(args.kv_cache_mb, "kv-cache-mb")?;
     let scheduler_config = ResidentSchedulerConfig {
         prefill_chunk_size: args.prefill_chunk_size,
         max_active_sequences: args.max_active_sequences,
@@ -92,8 +94,33 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
             )
             .map_err(|error| error.to_string())?;
             let schema = runner.kv_layout_schema().clone();
-            build_resident_topk_driver(runner, Box::new(schema), scheduler_config, driver_config)
-                .map_err(|error| error.to_string())
+            let page_bytes = schema
+                .cuda_f32_data_page_bytes()
+                .map_err(|error| error.to_string())?;
+            let page_limit = page_limit_for_budget(kv_cache_bytes, page_bytes)
+                .map_err(|error| error.to_string())?;
+            let full_capacity_pages = schema
+                .pages_for_tokens(driver_config.ctx_size)
+                .checked_mul(scheduler_config.max_active_sequences)
+                .ok_or_else(|| "serving KV page capacity overflow".to_owned())?;
+            let configured_pages = full_capacity_pages.min(page_limit);
+            let configured_bytes = u64::try_from(configured_pages)
+                .ok()
+                .and_then(|pages| pages.checked_mul(page_bytes))
+                .ok_or_else(|| "serving KV byte estimate overflow".to_owned())?;
+            eprintln!(
+                "configuring CUDA KV pool: pages={configured_pages}/{full_capacity_pages}, page_bytes={page_bytes}, physical_budget={} MiB, allocated={} MiB",
+                kv_cache_bytes / (1024 * 1024),
+                configured_bytes / (1024 * 1024),
+            );
+            build_resident_topk_driver_with_page_limit(
+                runner,
+                Box::new(schema),
+                scheduler_config,
+                driver_config,
+                Some(page_limit),
+            )
+            .map_err(|error| error.to_string())
         },
         worker_config,
     )
@@ -135,6 +162,28 @@ fn cache_byte_limit(mebibytes: u64, option: &str) -> anyhow::Result<u64> {
         .ok_or_else(|| anyhow::anyhow!("{option} exceeds the supported byte range"))
 }
 
+fn required_mebibytes_to_bytes(mebibytes: u64, option: &str) -> anyhow::Result<u64> {
+    if mebibytes == 0 {
+        anyhow::bail!("{option} must be greater than zero");
+    }
+    mebibytes
+        .checked_mul(1024 * 1024)
+        .ok_or_else(|| anyhow::anyhow!("{option} exceeds the supported byte range"))
+}
+
+fn page_limit_for_budget(budget_bytes: u64, page_bytes: u64) -> anyhow::Result<usize> {
+    if page_bytes == 0 {
+        anyhow::bail!("physical KV page size must be greater than zero");
+    }
+    let pages = budget_bytes / page_bytes;
+    if pages == 0 {
+        anyhow::bail!(
+            "kv-cache-mb budget ({budget_bytes} bytes) is smaller than one physical KV page ({page_bytes} bytes)"
+        );
+    }
+    usize::try_from(pages).map_err(|_| anyhow::anyhow!("KV page budget exceeds usize"))
+}
+
 fn validate_args(args: &ServeArgs) -> anyhow::Result<()> {
     if args.served_model_name.trim().is_empty() {
         anyhow::bail!("served model name must not be empty");
@@ -151,6 +200,9 @@ fn validate_args(args: &ServeArgs) -> anyhow::Result<()> {
     if args.max_batch_tokens == 0 {
         anyhow::bail!("max-batch-tokens must be greater than zero");
     }
+    if args.kv_cache_mb == 0 {
+        anyhow::bail!("kv-cache-mb must be greater than zero");
+    }
     if args.request_queue_capacity == 0 {
         anyhow::bail!("request-queue-capacity must be greater than zero");
     }
@@ -165,7 +217,7 @@ fn validate_args(args: &ServeArgs) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::cache_byte_limit;
+    use super::{cache_byte_limit, page_limit_for_budget, required_mebibytes_to_bytes};
 
     #[test]
     fn zero_cache_mebibytes_means_entry_limited_only() {
@@ -176,5 +228,13 @@ mod tests {
     fn cache_mebibytes_conversion_is_checked() {
         assert_eq!(cache_byte_limit(2, "cache").unwrap(), 2 * 1024 * 1024);
         assert!(cache_byte_limit(u64::MAX, "cache").is_err());
+        assert!(required_mebibytes_to_bytes(0, "kv-cache-mb").is_err());
+    }
+
+    #[test]
+    fn kv_page_limit_is_a_hard_byte_budget() {
+        assert_eq!(page_limit_for_budget(10_000, 3_000).unwrap(), 3);
+        assert!(page_limit_for_budget(2_999, 3_000).is_err());
+        assert!(page_limit_for_budget(10_000, 0).is_err());
     }
 }

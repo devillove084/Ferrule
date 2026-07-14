@@ -87,6 +87,9 @@ struct InteractiveBenchReport {
     max_new_tokens: usize,
     max_layers: usize,
     prefill_chunk_size: usize,
+    output_head_chunk_rows: usize,
+    moe_prefetch_experts: usize,
+    moe_hotset_experts: usize,
     runtime_path: String,
     dsv4_profile_sync: bool,
     /// Wall time from load start to runner ready.
@@ -159,6 +162,9 @@ pub fn cmd_bench_interactive(
     warmup_tokens: usize,
     max_layers: usize,
     prefill_chunk_size: usize,
+    output_head_chunk_rows: usize,
+    moe_prefetch_experts: usize,
+    moe_hotset_experts: usize,
     golden_trace_path: Option<&str>,
     json: bool,
 ) -> anyhow::Result<()> {
@@ -182,15 +188,21 @@ pub fn cmd_bench_interactive(
 
     let options = DeepSeekV4PrepareOptions {
         max_layers,
-        output_head_chunk_rows: 4096,
-        moe_prefetch_experts: 32,
-        moe_hotset_experts: 48,
+        output_head_chunk_rows,
+        moe_prefetch_experts,
+        moe_hotset_experts,
         ..DeepSeekV4PrepareOptions::default()
     };
 
     // ── Phase 1: load ────────────────────────────────────────────────────
+    let output_head_chunk_bytes = u64::try_from(output_head_chunk_rows)
+        .ok()
+        .and_then(|rows| rows.checked_mul(4096))
+        .and_then(|elements| elements.checked_mul(2))
+        .ok_or_else(|| anyhow::anyhow!("output-head chunk byte size overflow"))?;
+    let max_tensor_bytes = output_head_chunk_bytes.max(128 * 1024 * 1024);
     let load_start = Instant::now();
-    let model = DeepSeekV4ArtifactModel::load_hf_with_limit(model_path, 128 * 1024 * 1024)?;
+    let model = DeepSeekV4ArtifactModel::load_hf_with_limit(model_path, max_tensor_bytes)?;
     let runner =
         DeepSeekV4Runner::new_with_operator_backend(model, options, ModelExecutionBackend::Cuda)?;
     let artifact_load_us = duration_us(load_start.elapsed());
@@ -201,6 +213,9 @@ pub fn cmd_bench_interactive(
         max_new_tokens,
         max_layers,
         prefill_chunk_size,
+        output_head_chunk_rows,
+        moe_prefetch_experts,
+        moe_hotset_experts,
         runtime_path: "resident_topk_driver".into(),
         dsv4_profile_sync: runner.execution_policy().profile_sync(),
         artifact_load_us,
@@ -263,6 +278,9 @@ pub fn cmd_bench_interactive(
             "host_cache_bytes": report.host_cache_bytes,
             "turns": report.turns.iter().map(interactive_turn_json).collect::<Vec<_>>(),
         });
+        out["output_head_chunk_rows"] = serde_json::json!(report.output_head_chunk_rows);
+        out["moe_prefetch_experts"] = serde_json::json!(report.moe_prefetch_experts);
+        out["moe_hotset_experts"] = serde_json::json!(report.moe_hotset_experts);
 
         // ── Golden trace comparison ─────────────────────────────────────
         if let Some(golden_path) = golden_trace_path {
@@ -1017,6 +1035,48 @@ fn dsv4_operator_counters_delta(
             .expert_upload_prefetch_completed
             .saturating_sub(before.expert_upload_prefetch_completed),
         expert_upload_prefetch_in_flight: after.expert_upload_prefetch_in_flight,
+        expert_prefetch_outstanding: after.expert_prefetch_outstanding,
+        expert_prefetch_slot_reservations: after.expert_prefetch_slot_reservations,
+        expert_prefetch_host_queued: after.expert_prefetch_host_queued,
+        expert_abandoned_uploads: after.expert_abandoned_uploads,
+        expert_frame_reuses: after
+            .expert_frame_reuses
+            .saturating_sub(before.expert_frame_reuses),
+        expert_frame_waits: after
+            .expert_frame_waits
+            .saturating_sub(before.expert_frame_waits),
+        expert_free_frames: after.expert_free_frames,
+        expert_io_submitted_extents: after
+            .expert_io_submitted_extents
+            .saturating_sub(before.expert_io_submitted_extents),
+        expert_io_completed_extents: after
+            .expert_io_completed_extents
+            .saturating_sub(before.expert_io_completed_extents),
+        expert_io_failed_extents: after
+            .expert_io_failed_extents
+            .saturating_sub(before.expert_io_failed_extents),
+        expert_io_requested_bytes: after
+            .expert_io_requested_bytes
+            .saturating_sub(before.expert_io_requested_bytes),
+        expert_io_aligned_bytes: after
+            .expert_io_aligned_bytes
+            .saturating_sub(before.expert_io_aligned_bytes),
+        expert_io_coalesced_slices: after
+            .expert_io_coalesced_slices
+            .saturating_sub(before.expert_io_coalesced_slices),
+        expert_io_fixed_file_registrations: after
+            .expert_io_fixed_file_registrations
+            .saturating_sub(before.expert_io_fixed_file_registrations),
+        expert_io_fallback_count: after
+            .expert_io_fallback_count
+            .saturating_sub(before.expert_io_fallback_count),
+        expert_io_slab_exhaustions: after
+            .expert_io_slab_exhaustions
+            .saturating_sub(before.expert_io_slab_exhaustions),
+        expert_io_peak_queue_depth: after.expert_io_peak_queue_depth,
+        expert_io_read_us: after
+            .expert_io_read_us
+            .saturating_sub(before.expert_io_read_us),
         expert_selected_upload_waits: after
             .expert_selected_upload_waits
             .saturating_sub(before.expert_selected_upload_waits),
@@ -1182,6 +1242,9 @@ fn expert_prediction_stats_delta(
         transition_observations: after
             .transition_observations
             .saturating_sub(before.transition_observations),
+        transition_predictions: after
+            .transition_predictions
+            .saturating_sub(before.transition_predictions),
     }
 }
 
@@ -1659,6 +1722,33 @@ fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> ser
             "expert_upload_prefetch_completed",
             stats.expert_upload_prefetch_completed,
         );
+        u64_field("expert_frame_reuses", stats.expert_frame_reuses);
+        u64_field("expert_frame_waits", stats.expert_frame_waits);
+        u64_field(
+            "expert_io_submitted_extents",
+            stats.expert_io_submitted_extents,
+        );
+        u64_field(
+            "expert_io_completed_extents",
+            stats.expert_io_completed_extents,
+        );
+        u64_field("expert_io_failed_extents", stats.expert_io_failed_extents);
+        u64_field("expert_io_requested_bytes", stats.expert_io_requested_bytes);
+        u64_field("expert_io_aligned_bytes", stats.expert_io_aligned_bytes);
+        u64_field(
+            "expert_io_coalesced_slices",
+            stats.expert_io_coalesced_slices,
+        );
+        u64_field(
+            "expert_io_fixed_file_registrations",
+            stats.expert_io_fixed_file_registrations,
+        );
+        u64_field("expert_io_fallback_count", stats.expert_io_fallback_count);
+        u64_field(
+            "expert_io_slab_exhaustions",
+            stats.expert_io_slab_exhaustions,
+        );
+        u64_field("expert_io_read_us", stats.expert_io_read_us);
 
         u64_field(
             "expert_selected_upload_waits",
@@ -1806,6 +1896,10 @@ fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> ser
             "expert_predictor_transition_observations",
             stats.expert_predictor_stats.transition_observations,
         );
+        u64_field(
+            "expert_predictor_transition_predictions",
+            stats.expert_predictor_stats.transition_predictions,
+        );
     }
     out.insert(
         "expert_residency_resident".into(),
@@ -1834,6 +1928,30 @@ fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> ser
     out.insert(
         "expert_upload_prefetch_in_flight".into(),
         serde_json::Value::from(stats.expert_upload_prefetch_in_flight),
+    );
+    out.insert(
+        "expert_prefetch_outstanding".into(),
+        serde_json::Value::from(stats.expert_prefetch_outstanding),
+    );
+    out.insert(
+        "expert_prefetch_slot_reservations".into(),
+        serde_json::Value::from(stats.expert_prefetch_slot_reservations),
+    );
+    out.insert(
+        "expert_prefetch_host_queued".into(),
+        serde_json::Value::from(stats.expert_prefetch_host_queued),
+    );
+    out.insert(
+        "expert_abandoned_uploads".into(),
+        serde_json::Value::from(stats.expert_abandoned_uploads),
+    );
+    out.insert(
+        "expert_free_frames".into(),
+        serde_json::Value::from(stats.expert_free_frames),
+    );
+    out.insert(
+        "expert_io_peak_queue_depth".into(),
+        serde_json::Value::from(stats.expert_io_peak_queue_depth),
     );
 
     {
@@ -1911,6 +2029,9 @@ pub fn cmd_bench_interactive(
     _warmup_tokens: usize,
     _max_layers: usize,
     _prefill_chunk_size: usize,
+    _output_head_chunk_rows: usize,
+    _moe_prefetch_experts: usize,
+    _moe_hotset_experts: usize,
     _golden_trace_path: Option<&str>,
     _json: bool,
 ) -> anyhow::Result<()> {

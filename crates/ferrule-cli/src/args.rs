@@ -53,6 +53,15 @@ pub(crate) enum Command {
         /// Runtime scheduler prefill chunk size.
         #[arg(long = "prefill-chunk-size", default_value_t = 4096)]
         prefill_chunk_size: usize,
+        /// lm_head chunk size in rows for full-vocabulary top-1 scans.
+        #[arg(long = "output-head-chunk-rows", default_value_t = 4096)]
+        output_head_chunk_rows: usize,
+        /// Number of routed experts per layer to prefetch during the benchmark.
+        #[arg(long = "moe-prefetch-experts", default_value_t = 0)]
+        moe_prefetch_experts: usize,
+        /// Bound resident routed experts per layer (0 = managed default).
+        #[arg(long = "moe-hotset-experts", default_value_t = 48)]
+        moe_hotset_experts: usize,
         /// Path to a golden interactive trace JSON for correctness comparison.
         #[arg(long = "golden")]
         golden: Option<String>,
@@ -60,6 +69,7 @@ pub(crate) enum Command {
         #[arg(long)]
         json: bool,
     },
+
     /// Inspect a WeightPack file header.
     #[command(name = "inspect-weightpack")]
     InspectWeightPack { path: String },
@@ -74,6 +84,7 @@ pub(crate) enum Command {
         #[arg(long = "max-slice-mb", default_value_t = 64)]
         max_slice_mb: u64,
     },
+
     /// Generate greedily from real local DeepSeek-V4 HF shards.
     #[command(name = "deepseek-v4-generate")]
     DeepSeekV4Generate {
@@ -214,17 +225,20 @@ pub(crate) struct ServeArgs {
     #[arg(long = "chat-template")]
     pub(crate) chat_template: Option<String>,
     /// Maximum context tokens retained per active request.
-    #[arg(long = "ctx-size", default_value_t = 4096)]
+    #[arg(long = "ctx-size", default_value_t = 1024)]
     pub(crate) ctx_size: usize,
     /// Maximum simultaneously resident requests.
-    #[arg(long = "max-active-sequences", default_value_t = 64)]
+    #[arg(long = "max-active-sequences", default_value_t = 4)]
     pub(crate) max_active_sequences: usize,
     /// Maximum prompt tokens processed by one prefill chunk.
-    #[arg(long = "prefill-chunk-size", default_value_t = 4096)]
+    #[arg(long = "prefill-chunk-size", default_value_t = 512)]
     pub(crate) prefill_chunk_size: usize,
     /// Maximum packed prefill plus decode tokens in one scheduler action.
-    #[arg(long = "max-batch-tokens", default_value_t = 4096)]
+    #[arg(long = "max-batch-tokens", default_value_t = 512)]
     pub(crate) max_batch_tokens: usize,
+    /// Hard budget for the preallocated physical CUDA KV data planes in MiB.
+    #[arg(long = "kv-cache-mb", default_value_t = 1024)]
+    pub(crate) kv_cache_mb: u64,
     /// Bounded requests waiting for model-worker admission.
     #[arg(long = "request-queue-capacity", default_value_t = 256)]
     pub(crate) request_queue_capacity: usize,
@@ -247,22 +261,22 @@ pub(crate) struct ServeArgs {
     #[arg(long = "expert-max-slice-mb", default_value_t = 64)]
     pub(crate) expert_reader_max_slice_mb: u64,
     /// Number of routed experts per layer to predictively prefetch.
-    #[arg(long, default_value_t = 32)]
+    #[arg(long, default_value_t = 0)]
     pub(crate) moe_prefetch_experts: usize,
     /// Bound resident routed experts per layer (0 = managed default).
-    #[arg(long, default_value_t = 48)]
+    #[arg(long, default_value_t = 12)]
     pub(crate) moe_hotset_experts: usize,
     /// Maximum whole experts retained in pageable host memory (0 disables retention).
-    #[arg(long = "expert-host-cache-entries", default_value_t = 256)]
+    #[arg(long = "expert-host-cache-entries", default_value_t = 64)]
     pub(crate) expert_host_cache_entries: usize,
     /// Pageable host expert-cache budget in MiB (0 = entry-limited only).
-    #[arg(long = "expert-host-cache-mb", default_value_t = 0)]
+    #[arg(long = "expert-host-cache-mb", default_value_t = 1024)]
     pub(crate) expert_host_cache_mb: u64,
     /// Maximum whole experts retained in pinned host memory (0 disables retention).
-    #[arg(long = "expert-pinned-cache-entries", default_value_t = 64)]
+    #[arg(long = "expert-pinned-cache-entries", default_value_t = 16)]
     pub(crate) expert_pinned_cache_entries: usize,
     /// Pinned host expert-cache budget in MiB (0 = entry-limited only).
-    #[arg(long = "expert-pinned-cache-mb", default_value_t = 0)]
+    #[arg(long = "expert-pinned-cache-mb", default_value_t = 256)]
     pub(crate) expert_pinned_cache_mb: u64,
 }
 

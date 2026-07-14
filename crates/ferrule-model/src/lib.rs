@@ -159,4 +159,4 @@ pub use chat::{ChatFormatError, ChatMessage, ChatRole, ChatTemplate, detect_chat
 pub use precision::{PrecisionPolicy, QuantPreset, TensorDtypeOverride};
 
 // ── Re-exports: tokenizer ─────────────────────────────────────────────────
-pub use tokenizer::TokenizerHandle;
+pub use tokenizer::{IncrementalDecodeState, TokenizerHandle};

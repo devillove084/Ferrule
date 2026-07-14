@@ -82,6 +82,7 @@ REQUEST_RATE="${REQUEST_RATE:-inf}"
 SEED="${SEED:-0}"
 READY_TIMEOUT_SECS="${READY_TIMEOUT_SECS:-600}"
 METRIC_PERCENTILES="${METRIC_PERCENTILES:-50,90,95,99}"
+BENCH_CUDA_VISIBLE_DEVICES="${BENCH_CUDA_VISIBLE_DEVICES:-}"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 RESULT_ROOT="${RESULT_ROOT:-target/bench/vllm-serve/$TIMESTAMP}"
 
@@ -145,6 +146,7 @@ concurrencies=$CONCURRENCIES
 request_rate=$REQUEST_RATE
 seed=$SEED
 metric_percentiles=$METRIC_PERCENTILES
+bench_cuda_visible_devices=$BENCH_CUDA_VISIBLE_DEVICES
 vllm_version=$VLLM_VERSION
 ferrule_commit=$GIT_COMMIT
 ferrule_dirty_files=$GIT_DIRTY
@@ -159,6 +161,7 @@ printf '%s\n' "Ferrule vLLM serving benchmark" \
     "  prompts:       $NUM_PROMPTS per run" \
     "  concurrency:   $CONCURRENCIES" \
     "  request rate:  $REQUEST_RATE" \
+    "  client CUDA:   ${BENCH_CUDA_VISIBLE_DEVICES:-hidden}" \
     "  results:       $RESULT_ROOT"
 
 IFS=',' read -r -a CONCURRENCY_VALUES <<<"$CONCURRENCIES"
@@ -217,7 +220,7 @@ for concurrency in "${CONCURRENCY_VALUES[@]}"; do
     printf 'command:'
     printf ' %q' "${command[@]}"
     printf '\n'
-    "${command[@]}" 2>&1 | tee "$log_filename"
+    CUDA_VISIBLE_DEVICES="$BENCH_CUDA_VISIBLE_DEVICES" "${command[@]}" 2>&1 | tee "$log_filename"
 done
 
 ln -sfn "$RESULT_ROOT" "$(dirname "$RESULT_ROOT")/latest"

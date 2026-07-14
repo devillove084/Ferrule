@@ -380,7 +380,12 @@ impl CudaArtifactLinearShape {
         }
     }
 
-    fn validate(self, weight_len: usize, scale_len: usize) -> Result<()> {
+    /// Exact byte lengths required by this artifact shape's weight and scale storage.
+    ///
+    /// This is the authoritative storage-size calculation used by both uploads and
+    /// empty frame allocation, so preallocated handles cannot drift from the
+    /// existing artifact validation contract.
+    pub fn storage_lengths(self) -> Result<(usize, usize)> {
         match self {
             Self::F32 {
                 out_features,
@@ -391,17 +396,13 @@ impl CudaArtifactLinearShape {
                         "invalid CUDA F32 artifact linear shape: out={out_features} in={in_features}"
                     )));
                 }
-                let expected_weight = out_features
+                let weight = out_features
                     .checked_mul(in_features)
                     .and_then(|elements| elements.checked_mul(4))
                     .ok_or_else(|| {
                         Error::Internal("CUDA F32 artifact weight size overflow".into())
                     })?;
-                if weight_len != expected_weight || scale_len != 0 {
-                    return Err(Error::Internal(format!(
-                        "CUDA F32 artifact linear length mismatch: weight={weight_len} scale={scale_len}, expected weight={expected_weight} scale=0"
-                    )));
-                }
+                Ok((weight, 0))
             }
             Self::Bf16Bytes {
                 out_features,
@@ -412,19 +413,14 @@ impl CudaArtifactLinearShape {
                         "invalid CUDA BF16 artifact linear shape: out={out_features} in={in_features}"
                     )));
                 }
-                let expected_weight = out_features
+                let weight = out_features
                     .checked_mul(in_features)
                     .and_then(|elements| elements.checked_mul(2))
                     .ok_or_else(|| {
                         Error::Internal("CUDA BF16 artifact weight size overflow".into())
                     })?;
-                if weight_len != expected_weight || scale_len != 0 {
-                    return Err(Error::Internal(format!(
-                        "CUDA BF16 artifact linear length mismatch: weight={weight_len} scale={scale_len}, expected weight={expected_weight} scale=0"
-                    )));
-                }
+                Ok((weight, 0))
             }
-
             Self::Fp8E4M3WithE8M0Scale {
                 out_features,
                 in_features,
@@ -436,20 +432,16 @@ impl CudaArtifactLinearShape {
                         "invalid CUDA FP8 artifact linear shape: out={out_features} in={in_features} block_m={block_m} block_k={block_k}"
                     )));
                 }
-                let expected_weight = out_features.checked_mul(in_features).ok_or_else(|| {
+                let weight = out_features.checked_mul(in_features).ok_or_else(|| {
                     Error::Internal("CUDA FP8 artifact weight size overflow".into())
                 })?;
-                let expected_scale = out_features
+                let scale = out_features
                     .div_ceil(block_m)
                     .checked_mul(in_features.div_ceil(block_k))
                     .ok_or_else(|| {
                         Error::Internal("CUDA FP8 artifact scale size overflow".into())
                     })?;
-                if weight_len != expected_weight || scale_len != expected_scale {
-                    return Err(Error::Internal(format!(
-                        "CUDA FP8 artifact linear length mismatch: weight={weight_len} scale={scale_len}, expected weight={expected_weight} scale={expected_scale}"
-                    )));
-                }
+                Ok((weight, scale))
             }
             Self::Fp4E2M1PackedWithE8M0Scale {
                 out_features,
@@ -464,22 +456,31 @@ impl CudaArtifactLinearShape {
                         "invalid CUDA FP4 artifact linear shape: out={out_features} in={in_features}"
                     )));
                 }
-                let expected_weight =
-                    out_features.checked_mul(in_features / 2).ok_or_else(|| {
-                        Error::Internal("CUDA FP4 artifact weight size overflow".into())
-                    })?;
-                let expected_scale =
-                    out_features.checked_mul(in_features / 32).ok_or_else(|| {
-                        Error::Internal("CUDA FP4 artifact scale size overflow".into())
-                    })?;
-                if weight_len != expected_weight || scale_len != expected_scale {
-                    return Err(Error::Internal(format!(
-                        "CUDA FP4 artifact linear length mismatch: weight={weight_len} scale={scale_len}, expected weight={expected_weight} scale={expected_scale}"
-                    )));
-                }
+                let weight = out_features.checked_mul(in_features / 2).ok_or_else(|| {
+                    Error::Internal("CUDA FP4 artifact weight size overflow".into())
+                })?;
+                let scale = out_features.checked_mul(in_features / 32).ok_or_else(|| {
+                    Error::Internal("CUDA FP4 artifact scale size overflow".into())
+                })?;
+                Ok((weight, scale))
             }
         }
-        Ok(())
+    }
+
+    fn validate(self, weight_len: usize, scale_len: usize) -> Result<()> {
+        let (expected_weight, expected_scale) = self.storage_lengths()?;
+        if weight_len == expected_weight && scale_len == expected_scale {
+            return Ok(());
+        }
+        let format = match self {
+            Self::F32 { .. } => "F32",
+            Self::Bf16Bytes { .. } => "BF16",
+            Self::Fp8E4M3WithE8M0Scale { .. } => "FP8",
+            Self::Fp4E2M1PackedWithE8M0Scale { .. } => "FP4",
+        };
+        Err(Error::Internal(format!(
+            "CUDA {format} artifact linear length mismatch: weight={weight_len} scale={scale_len}, expected weight={expected_weight} scale={expected_scale}"
+        )))
     }
 }
 
@@ -497,15 +498,99 @@ pub struct CudaArtifactLinearHandle {
 #[derive(Clone)]
 pub struct CudaPinnedU8HostBuffer {
     buffer: Arc<PinnedHostBuffer<u8>>,
+    offset: usize,
+    len: usize,
 }
 
 impl CudaPinnedU8HostBuffer {
     pub fn len(&self) -> usize {
-        self.buffer.len()
+        self.len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.buffer.is_empty()
+        self.len == 0
+    }
+
+    pub fn as_ptr(&self) -> *const u8 {
+        // SAFETY: construction and `slice` validate that offset + len remains
+        // within the Arc-owned pinned allocation.
+        unsafe { self.buffer.as_ptr().add(self.offset) }
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        // SAFETY: the range is bounded by the Arc-owned allocation and shared
+        // access cannot mutate it.
+        unsafe { std::slice::from_raw_parts(self.as_ptr(), self.len) }
+    }
+
+    pub fn slice(&self, offset: usize, len: usize) -> Result<Self> {
+        let end = offset
+            .checked_add(len)
+            .ok_or_else(|| Error::Internal("CUDA pinned host slice range overflow".into()))?;
+        if end > self.len {
+            return Err(Error::Internal(format!(
+                "CUDA pinned host slice out of bounds: {offset}+{len}>{}",
+                self.len
+            )));
+        }
+        Ok(Self {
+            buffer: Arc::clone(&self.buffer),
+            offset: self.offset + offset,
+            len,
+        })
+    }
+
+    pub fn is_uniquely_owned(&self) -> bool {
+        Arc::strong_count(&self.buffer) == 1
+    }
+
+    /// Return the mutable pointer for an exclusively owned pinned range.
+    ///
+    /// # Safety
+    /// The caller must not clone this buffer or access the allocation until
+    /// the external writer using the returned pointer has completed.
+    pub unsafe fn as_mut_ptr_unique(&mut self) -> Result<*mut u8> {
+        let base = Arc::get_mut(&mut self.buffer)
+            .ok_or_else(|| Error::Internal("CUDA pinned host buffer is still shared".into()))?;
+        // SAFETY: `self.offset + self.len` was validated at construction and
+        // Arc uniqueness gives the caller exclusive access to the allocation.
+        Ok(unsafe { base.as_mut_ptr().add(self.offset) })
+    }
+}
+
+/// Cloneable allocator for CUDA page-locked host I/O slabs.
+#[derive(Clone)]
+pub struct CudaPinnedHostAllocator {
+    ctx: Arc<CudaContext>,
+}
+
+impl CudaPinnedHostAllocator {
+    pub fn allocate_u8_aligned(
+        &self,
+        len: usize,
+        alignment: usize,
+    ) -> Result<CudaPinnedU8HostBuffer> {
+        if alignment == 0 || !alignment.is_power_of_two() {
+            return Err(Error::Internal(format!(
+                "CUDA pinned host alignment must be a power of two, got {alignment}"
+            )));
+        }
+        let allocation_len = len
+            .checked_add(alignment - 1)
+            .ok_or_else(|| Error::Internal("CUDA pinned host allocation overflow".into()))?;
+        let buffer = Arc::new(cu(PinnedHostBuffer::zeroed(&self.ctx, allocation_len))?);
+        let address = buffer.as_ptr() as usize;
+        let aligned_address = address
+            .checked_add(alignment - 1)
+            .map(|value| value & !(alignment - 1))
+            .ok_or_else(|| Error::Internal("CUDA pinned host alignment overflow".into()))?;
+        let offset = aligned_address - address;
+        debug_assert!(offset + len <= allocation_len);
+        Ok(CudaPinnedU8HostBuffer {
+            buffer,
+            offset,
+            len,
+        })
     }
 }
 
@@ -515,6 +600,47 @@ pub struct CudaArtifactLinearAsyncUpload {
     handle: CudaArtifactLinearHandle,
     _weight: CudaPinnedU8HostBuffer,
     _scale: Option<CudaPinnedU8HostBuffer>,
+}
+
+/// Allocation-free, stream-ordered overwrite of an existing artifact handle.
+///
+/// The ticket owns the pinned sources and the upload-stream completion event.
+/// Dropping an incomplete ticket waits for that event before releasing the
+/// sources, preserving CUDA's asynchronous H2D source-lifetime requirement.
+pub struct CudaArtifactLinearAsyncOverwrite {
+    weight: Option<CudaPinnedU8HostBuffer>,
+    scale: Option<CudaPinnedU8HostBuffer>,
+    event: CudaUploadEvent,
+}
+
+impl CudaArtifactLinearAsyncOverwrite {
+    pub fn event(&self) -> &CudaUploadEvent {
+        &self.event
+    }
+
+    pub fn is_complete(&self) -> Result<bool> {
+        self.event.is_complete()
+    }
+
+    pub fn synchronize(&self) -> Result<()> {
+        self.event.synchronize()
+    }
+}
+
+impl Drop for CudaArtifactLinearAsyncOverwrite {
+    fn drop(&mut self) {
+        if !matches!(self.event.is_complete(), Ok(true)) && self.event.synchronize().is_err() {
+            // A failed event synchronization cannot prove that CUDA has stopped
+            // reading the pinned sources. Leak the Arc-backed guards rather than
+            // freeing host memory while DMA may still be in flight.
+            if let Some(weight) = self.weight.take() {
+                std::mem::forget(weight);
+            }
+            if let Some(scale) = self.scale.take() {
+                std::mem::forget(scale);
+            }
+        }
+    }
 }
 
 impl CudaArtifactLinearAsyncUpload {
@@ -639,6 +765,20 @@ unsafe impl Sync for HostPinnedBuffer {}
 impl CudaArtifactLinearHandle {
     pub fn shape(&self) -> CudaArtifactLinearShape {
         self.shape
+    }
+
+    fn validate_storage(&self) -> Result<()> {
+        let (expected_weight, expected_scale) = self.shape.storage_lengths()?;
+        let actual_scale = self.scale.as_ref().map(DeviceBuffer::len).unwrap_or(0);
+        if self.weight.len() != expected_weight || actual_scale != expected_scale {
+            return Err(Error::Internal(format!(
+                "CUDA artifact linear handle storage mismatch: shape={:?} weight={} scale={}, expected weight={expected_weight} scale={expected_scale}",
+                self.shape,
+                self.weight.len(),
+                actual_scale
+            )));
+        }
+        Ok(())
     }
 
     fn expert_slot_pointers(&self) -> Result<(u64, u64)> {
@@ -933,6 +1073,38 @@ pub struct CudaDsv4RouterHashTable {
     buffer: DeviceBuffer<i32>,
     rows: usize,
     cols: usize,
+}
+
+/// Persistent pinned host mirror for small, frequently updated i32 control tables.
+pub struct CudaI32HostMirror {
+    host: Vec<i32>,
+    device: CudaI32Buffer,
+    staging: PinnedHostBuffer<i32>,
+    copy_event: CudaEvent,
+}
+
+impl CudaI32HostMirror {
+    pub fn len(&self) -> usize {
+        self.device.len()
+    }
+
+    pub fn device(&self) -> &CudaI32Buffer {
+        &self.device
+    }
+}
+
+impl std::ops::Deref for CudaI32HostMirror {
+    type Target = CudaI32Buffer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.device
+    }
+}
+
+impl Drop for CudaI32HostMirror {
+    fn drop(&mut self) {
+        let _ = self.copy_event.synchronize();
+    }
 }
 
 /// Persistent DSV4 router token ids with an authoritative host mirror.
@@ -2093,6 +2265,15 @@ impl CudaArtifactOperatorContext {
         cu(self.stream.wait(&event.event))
     }
 
+    /// Order future upload-stream work after compute that may still reference a
+    /// retired physical frame.
+    ///
+    /// The caller must keep `event` alive until a later upload event covering
+    /// the dependent overwrite has completed.
+    pub fn wait_compute_event_on_upload_stream(&self, event: &CudaComputeEvent) -> Result<()> {
+        cu(self.upload_stream.wait(&event.event))
+    }
+
     pub fn record_upload_event(&self) -> Result<CudaUploadEvent> {
         Ok(CudaUploadEvent {
             event: cu(self.upload_stream.record_event(None))?,
@@ -2180,6 +2361,31 @@ impl CudaArtifactOperatorContext {
         })
     }
 
+    fn uninitialized_upload_device_buffer<T: DeviceCopy>(
+        &self,
+        len: usize,
+    ) -> Result<DeviceBuffer<T>> {
+        self.check_capture_safe("device allocation")?;
+        if self.failpoints.check_allocation() {
+            return Err(Error::Internal(
+                "deterministic failpoint: device allocation".into(),
+            ));
+        }
+
+        self.counters.begin_device_allocation();
+        match cu(unsafe { DeviceBuffer::<T>::uninitialized_async(&self.upload_stream, len) }) {
+            Ok(buffer) => {
+                self.counters
+                    .complete_device_allocation(element_bytes::<T>(len));
+                Ok(buffer)
+            }
+            Err(error) => {
+                self.counters.fail_device_allocation();
+                Err(error)
+            }
+        }
+    }
+
     fn zeroed_device_buffer<T: DeviceCopy>(&self, len: usize) -> Result<DeviceBuffer<T>> {
         self.record_device_allocation(len, DeviceBuffer::<T>::zeroed(&self.stream, len))
     }
@@ -2254,9 +2460,17 @@ impl CudaArtifactOperatorContext {
         Ok(buffer)
     }
 
+    pub fn pinned_host_allocator(&self) -> CudaPinnedHostAllocator {
+        CudaPinnedHostAllocator {
+            ctx: Arc::clone(&self._ctx),
+        }
+    }
+
     pub fn pin_u8_host_buffer(&self, values: &[u8]) -> Result<CudaPinnedU8HostBuffer> {
         Ok(CudaPinnedU8HostBuffer {
             buffer: Arc::new(cu(PinnedHostBuffer::from_slice(&self._ctx, values))?),
+            offset: 0,
+            len: values.len(),
         })
     }
 
@@ -2518,11 +2732,230 @@ impl CudaArtifactOperatorContext {
         })
     }
 
+    pub fn i32_host_mirror(&self, values: &[i32]) -> Result<CudaI32HostMirror> {
+        if values.is_empty() {
+            return Err(Error::Internal(
+                "CUDA i32 host mirror requires a non-empty buffer".into(),
+            ));
+        }
+        let staging = cu(PinnedHostBuffer::from_slice(&self._ctx, values))?;
+        let buffer = self.record_device_allocation(values.len(), unsafe {
+            DeviceBuffer::from_pinned_host(&self.stream, &staging)
+        })?;
+        self.counters.add_host_to_device(slice_bytes(values));
+        let copy_event = match self.stream.record_event(None) {
+            Ok(event) => event,
+            Err(error) => {
+                self.record_stream_wide_sync(self.stream.synchronize())?;
+                return Err(Error::Internal(format!(
+                    "CUDA i32 host mirror event failed: {error:?}"
+                )));
+            }
+        };
+        Ok(CudaI32HostMirror {
+            host: values.to_vec(),
+            device: CudaI32Buffer {
+                buffer,
+                len: values.len(),
+            },
+            staging,
+            copy_event,
+        })
+    }
+
+    pub fn update_i32_host_mirror(
+        &self,
+        values: &[i32],
+        mirror: &mut CudaI32HostMirror,
+    ) -> Result<()> {
+        if values.len() != mirror.len() {
+            return Err(Error::Internal(format!(
+                "CUDA i32 host mirror shape mismatch: cached={} requested={}",
+                mirror.len(),
+                values.len()
+            )));
+        }
+        if values == mirror.host {
+            return Ok(());
+        }
+        cu(mirror.copy_event.synchronize())?;
+        mirror.staging.as_mut_slice().copy_from_slice(values);
+        unsafe {
+            cu(mirror
+                .device
+                .buffer
+                .copy_from_pinned_host_async(&self.stream, &mirror.staging))?;
+        }
+        self.counters.add_host_to_device(slice_bytes(values));
+        match self.stream.record_event(None) {
+            Ok(event) => mirror.copy_event = event,
+            Err(error) => {
+                self.record_stream_wide_sync(self.stream.synchronize())?;
+                mirror.host.clear();
+                mirror.host.extend_from_slice(values);
+                return Err(Error::Internal(format!(
+                    "CUDA i32 host mirror update event failed after copy: {error:?}"
+                )));
+            }
+        }
+        mirror.host.clear();
+        mirror.host.extend_from_slice(values);
+        Ok(())
+    }
+
     pub fn zero_i32_buffer(&self, len: usize) -> Result<CudaI32Buffer> {
         Ok(CudaI32Buffer {
             buffer: self.zeroed_device_buffer::<i32>(len)?,
             len,
         })
+    }
+
+    pub fn pack_i32_f32_pairs_into(
+        &self,
+        indices: &CudaI32Buffer,
+        weights: &CudaF32Buffer,
+        output: &mut CudaI32Buffer,
+        pair_count: usize,
+    ) -> Result<()> {
+        if pair_count > indices.len || pair_count > weights.len {
+            return Err(Error::Internal(format!(
+                "CUDA pair pack input too small: pairs={pair_count} indices={} weights={}",
+                indices.len, weights.len
+            )));
+        }
+        let output_len = pair_count
+            .checked_mul(2)
+            .ok_or_else(|| Error::Internal("CUDA pair pack output size overflow".into()))?;
+        if output.len != output_len {
+            return Err(Error::Internal(format!(
+                "CUDA pair pack output mismatch: expected {output_len}, got {}",
+                output.len
+            )));
+        }
+        if pair_count == 0 {
+            return Ok(());
+        }
+        let output_len = checked_u32(output_len, "pack i32/f32 pairs", "output_len")?;
+        self.launched(unsafe {
+            self.module.pack_i32_f32_pairs(
+                &self.stream,
+                LaunchConfig::for_num_elems(output_len),
+                &indices.buffer,
+                &weights.buffer,
+                &mut output.buffer,
+                checked_u32(pair_count, "pack i32/f32 pairs", "pair_count")?,
+            )
+        })
+        .map(|_| ())
+    }
+
+    pub fn fill_i32_sequence_prefix(
+        &self,
+        dst: &mut CudaI32Buffer,
+        start: i32,
+        len: usize,
+    ) -> Result<()> {
+        if len > dst.len {
+            return Err(Error::Internal(format!(
+                "CUDA i32 sequence exceeds destination: len={len} capacity={}",
+                dst.len
+            )));
+        }
+        if len == 0 {
+            return Ok(());
+        }
+        let len = checked_u32(len, "fill_i32_sequence", "len")?;
+        self.launched(unsafe {
+            self.module.fill_i32_sequence(
+                &self.stream,
+                LaunchConfig::for_num_elems(len),
+                &mut dst.buffer,
+                start,
+                len,
+            )
+        })
+        .map(|_| ())
+    }
+
+    pub fn fill_dsv4_paged_window_topk_into(
+        &self,
+        dst: &mut CudaI32Buffer,
+        position: usize,
+        window_size: usize,
+    ) -> Result<()> {
+        if window_size == 0 || window_size > dst.len {
+            return Err(Error::Internal(format!(
+                "CUDA paged window top-k invalid size: window={window_size} capacity={}",
+                dst.len
+            )));
+        }
+        let kv_len = position
+            .checked_add(1)
+            .ok_or_else(|| Error::Internal("CUDA paged window KV length overflow".into()))?;
+        let valid_len = kv_len.min(window_size);
+        let start = kv_len.saturating_sub(window_size);
+        let end = start
+            .checked_add(valid_len)
+            .ok_or_else(|| Error::Internal("CUDA paged window index overflow".into()))?;
+        if end > i32::MAX as usize {
+            return Err(Error::Internal(
+                "CUDA paged window index exceeds i32 ABI".into(),
+            ));
+        }
+        let output_len = checked_u32(window_size, "fill paged window top-k", "output_len")?;
+        self.launched(unsafe {
+            self.module.fill_dsv4_paged_window_topk(
+                &self.stream,
+                LaunchConfig::for_num_elems(output_len),
+                &mut dst.buffer,
+                checked_u32(start, "fill paged window top-k", "start")?,
+                checked_u32(valid_len, "fill paged window top-k", "valid_len")?,
+                output_len,
+            )
+        })
+        .map(|_| ())
+    }
+
+    pub fn fill_dsv4_decode_attention_topk_into(
+        &self,
+        dst: &mut CudaI32Buffer,
+        position: usize,
+        window_size: usize,
+        window_len: usize,
+        compressed_len: usize,
+    ) -> Result<usize> {
+        if window_size == 0 || window_len > window_size {
+            return Err(Error::Internal(format!(
+                "CUDA decode attention top-k invalid window: size={window_size} len={window_len}"
+            )));
+        }
+        let output_len = window_size
+            .checked_add(compressed_len)
+            .ok_or_else(|| Error::Internal("CUDA decode attention top-k size overflow".into()))?;
+        if output_len > dst.len {
+            return Err(Error::Internal(format!(
+                "CUDA decode attention top-k exceeds destination: required={output_len} capacity={}",
+                dst.len
+            )));
+        }
+        let output_len_u32 = checked_u32(output_len, "fill decode attention top-k", "output_len")?;
+        self.launched(unsafe {
+            self.module.fill_dsv4_decode_attention_topk(
+                &self.stream,
+                LaunchConfig::for_num_elems(output_len_u32),
+                &mut dst.buffer,
+                checked_u32(position, "fill decode attention top-k", "position")?,
+                checked_u32(window_size, "fill decode attention top-k", "window_size")?,
+                checked_u32(window_len, "fill decode attention top-k", "window_len")?,
+                checked_u32(
+                    compressed_len,
+                    "fill decode attention top-k",
+                    "compressed_len",
+                )?,
+                output_len_u32,
+            )
+        })?;
+        Ok(output_len)
     }
 
     /// Overwrite an existing i32 device buffer without allocating.
@@ -2900,6 +3333,126 @@ impl CudaArtifactOperatorContext {
                 x.len as u32,
             )
         })
+    }
+
+    /// Preallocate an artifact handle in ordinary device storage without
+    /// initializing its contents.
+    ///
+    /// Allocation is enqueued on the upload stream so subsequent pinned
+    /// overwrites on that stream are naturally ordered after frame creation.
+    pub fn allocate_artifact_linear_device(
+        &self,
+        shape: CudaArtifactLinearShape,
+    ) -> Result<CudaArtifactLinearHandle> {
+        let (weight_len, scale_len) = shape.storage_lengths()?;
+        let weight = self.uninitialized_upload_device_buffer::<u8>(weight_len)?;
+        let scale = if scale_len == 0 {
+            None
+        } else {
+            Some(self.uninitialized_upload_device_buffer::<u8>(scale_len)?)
+        };
+        Ok(CudaArtifactLinearHandle {
+            shape,
+            weight,
+            scale,
+        })
+    }
+
+    /// Overwrite a preallocated artifact handle from pinned host storage.
+    ///
+    /// This method performs no device allocation. The returned ticket owns the
+    /// pinned sources and an event recorded after both copies on the upload
+    /// stream; it must remain alive until that event completes.
+    pub fn overwrite_artifact_linear_from_pinned_async(
+        &self,
+        handle: &mut CudaArtifactLinearHandle,
+        expected_shape: CudaArtifactLinearShape,
+        weight: CudaPinnedU8HostBuffer,
+        scale: Option<CudaPinnedU8HostBuffer>,
+    ) -> Result<CudaArtifactLinearAsyncOverwrite> {
+        self.check_capture_safe("artifact linear pinned overwrite")?;
+        if handle.shape != expected_shape {
+            return Err(Error::Internal(format!(
+                "CUDA artifact linear overwrite shape mismatch: handle={:?} requested={expected_shape:?}",
+                handle.shape
+            )));
+        }
+        handle.validate_storage()?;
+        let scale_len = scale.as_ref().map(CudaPinnedU8HostBuffer::len).unwrap_or(0);
+        expected_shape.validate(weight.len(), scale_len)?;
+        let upload_bytes = (weight.len() as u64).saturating_add(scale_len as u64);
+        self.counters.add_artifact_upload(upload_bytes);
+
+        debug_assert!(Arc::ptr_eq(weight.buffer.context(), &self._ctx));
+        if let Some(scale) = scale.as_ref() {
+            debug_assert!(Arc::ptr_eq(scale.buffer.context(), &self._ctx));
+        }
+        let enqueue_result = (|| -> Result<CudaUploadEvent> {
+            let result = unsafe {
+                cuda_bindings::cuMemcpyHtoDAsync_v2(
+                    handle.weight.cu_deviceptr(),
+                    weight.as_ptr().cast(),
+                    weight.len(),
+                    self.upload_stream.cu_stream(),
+                )
+            };
+            if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+                return Err(Error::Internal(format!(
+                    "CUDA pinned artifact weight range upload failed: error {result}"
+                )));
+            }
+            self.counters.add_host_to_device(weight.len() as u64);
+
+            match (handle.scale.as_mut(), scale.as_ref()) {
+                (Some(dst), Some(src)) => {
+                    let result = unsafe {
+                        cuda_bindings::cuMemcpyHtoDAsync_v2(
+                            dst.cu_deviceptr(),
+                            src.as_ptr().cast(),
+                            src.len(),
+                            self.upload_stream.cu_stream(),
+                        )
+                    };
+                    if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+                        return Err(Error::Internal(format!(
+                            "CUDA pinned artifact scale range upload failed: error {result}"
+                        )));
+                    }
+                    self.counters.add_host_to_device(src.len() as u64);
+                }
+                (None, None) => {}
+                (None, Some(src)) if src.is_empty() => {}
+                _ => {
+                    return Err(Error::Internal(
+                        "CUDA artifact linear overwrite scale storage mismatch".into(),
+                    ));
+                }
+            }
+            self.record_upload_event()
+        })();
+
+        match enqueue_result {
+            Ok(event) => Ok(CudaArtifactLinearAsyncOverwrite {
+                weight: Some(weight),
+                scale,
+                event,
+            }),
+            Err(error) => match self.sync_upload_stream() {
+                Ok(()) => Err(error),
+                Err(sync_error) => {
+                    // Without a successful synchronization CUDA may still be
+                    // reading these sources. Leak their Arc guards rather than
+                    // releasing pinned memory prematurely.
+                    std::mem::forget(weight);
+                    if let Some(scale) = scale {
+                        std::mem::forget(scale);
+                    }
+                    Err(Error::Internal(format!(
+                        "artifact linear pinned overwrite failed ({error}); synchronizing the upload stream also failed ({sync_error})"
+                    )))
+                }
+            },
+        }
     }
 
     pub fn upload_artifact_linear(
@@ -3908,7 +4461,7 @@ impl CudaArtifactOperatorContext {
         .map(|_| ())
     }
 
-    pub fn topk_vocab_rows_from_device_into(
+    pub fn topk_vocab_rows_from_device_buffers_into(
         &self,
         logits: &CudaF32Buffer,
         rows: usize,
@@ -3916,7 +4469,7 @@ impl CudaArtifactOperatorContext {
         top_k: usize,
         indices: &mut CudaF32Buffer,
         values: &mut CudaF32Buffer,
-    ) -> Result<(Vec<f32>, Vec<f32>)> {
+    ) -> Result<()> {
         if rows == 0 || vocab == 0 || top_k == 0 || top_k > vocab || top_k > 40 {
             return Err(Error::Internal(format!(
                 "CUDA vocab rows top-k requires rows>0 and k in 1..={}, got rows={rows} vocab={vocab} k={top_k}",
@@ -3950,7 +4503,78 @@ impl CudaArtifactOperatorContext {
                 checked_u32(vocab, "topk_vocab_rows", "vocab")?,
                 checked_u32(top_k, "topk_vocab_rows", "top_k")?,
             )
-        })?;
+        })
+        .map(|_| ())
+    }
+
+    pub fn merge_topk_rows_in_place(
+        &self,
+        chunk_indices: &CudaF32Buffer,
+        chunk_values: &CudaF32Buffer,
+        global_indices: &mut CudaF32Buffer,
+        global_values: &mut CudaF32Buffer,
+        rows: usize,
+        global_k: usize,
+        chunk_k: usize,
+        token_offset: usize,
+        has_existing: bool,
+    ) -> Result<()> {
+        if rows == 0 || global_k == 0 || global_k > 40 || chunk_k == 0 || chunk_k > global_k {
+            return Err(Error::Internal(format!(
+                "CUDA row top-k merge invalid shape: rows={rows} global_k={global_k} chunk_k={chunk_k}"
+            )));
+        }
+        let chunk_len = rows
+            .checked_mul(chunk_k)
+            .ok_or_else(|| Error::Internal("CUDA chunk top-k merge size overflow".into()))?;
+        let global_len = rows
+            .checked_mul(global_k)
+            .ok_or_else(|| Error::Internal("CUDA global top-k merge size overflow".into()))?;
+        if chunk_indices.len < chunk_len
+            || chunk_values.len < chunk_len
+            || global_indices.len < global_len
+            || global_values.len < global_len
+        {
+            return Err(Error::Internal(format!(
+                "CUDA row top-k merge workspace mismatch: chunk_indices={} chunk_values={} global_indices={} global_values={} required_chunk={chunk_len} required_global={global_len}",
+                chunk_indices.len, chunk_values.len, global_indices.len, global_values.len
+            )));
+        }
+        self.launched(unsafe {
+            self.module.merge_topk_rows_in_place(
+                &self.stream,
+                LaunchConfig {
+                    grid_dim: (checked_u32(rows, "merge_topk_rows", "rows")?, 1, 1),
+                    block_dim: (32, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                &chunk_indices.buffer,
+                &chunk_values.buffer,
+                &mut global_indices.buffer,
+                &mut global_values.buffer,
+                checked_u32(rows, "merge_topk_rows", "rows")?,
+                checked_u32(global_k, "merge_topk_rows", "global_k")?,
+                checked_u32(chunk_k, "merge_topk_rows", "chunk_k")?,
+                checked_u32(token_offset, "merge_topk_rows", "token_offset")?,
+                u32::from(has_existing),
+            )
+        })
+        .map(|_| ())
+    }
+
+    pub fn topk_vocab_rows_from_device_into(
+        &self,
+        logits: &CudaF32Buffer,
+        rows: usize,
+        vocab: usize,
+        top_k: usize,
+        indices: &mut CudaF32Buffer,
+        values: &mut CudaF32Buffer,
+    ) -> Result<(Vec<f32>, Vec<f32>)> {
+        self.topk_vocab_rows_from_device_buffers_into(logits, rows, vocab, top_k, indices, values)?;
+        let output_len = rows
+            .checked_mul(top_k)
+            .ok_or_else(|| Error::Internal("CUDA vocab rows top-k output size overflow".into()))?;
         Ok((
             self.download_f32(&indices.buffer, output_len)?,
             self.download_f32(&values.buffer, output_len)?,
