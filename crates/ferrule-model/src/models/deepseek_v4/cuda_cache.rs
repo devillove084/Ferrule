@@ -22,9 +22,7 @@ use crate::artifact::linear::{artifact_linear_cache_key, artifact_linear_row_cac
 use crate::artifact::tensor::{ArtifactTensorReader, ArtifactTensorSlice};
 use crate::attention_backend::SparseAttentionSpec;
 use crate::ffn::SwiGluFfnPayload;
-use crate::hyper_connection::{
-    HyperConnectionConfig, HyperConnectionHeadWeights, HyperConnectionWeights,
-};
+use crate::hyper_connection::{HyperConnectionConfig, HyperConnectionWeights};
 
 use crate::moe::prediction::{ExpertAccessPhase, ExpertBatchAccessEvent};
 use crate::moe::routed::RoutedMoeStepOutput;
@@ -41,14 +39,24 @@ use crate::moe::streaming::{
 use crate::moe::streaming::{PinnedExpertArtifactPayload, infer_expert_linear_format};
 use crate::runner::TokenLogit;
 
+use super::artifact::DeepSeekV4ArtifactModel;
+use super::attention::DeepSeekV4CompressorPayload;
 use super::config::{DeepSeekV4AttentionConfig, DeepSeekV4RopeParams};
-use super::helpers::{check_linear, rank_logits_desc, yarn_frequency};
+use super::helpers::{rank_logits_desc, yarn_frequency};
+use super::layer::DeepSeekV4Layer;
 use super::operators::DeepSeekV4OperatorRuntimeCounters;
 use super::prepared::{DeepSeekV4ExecutionPolicy, DeepSeekV4KvLayoutSchema};
 use super::sequence::DeepSeekV4PagedKvBinding;
 
 const DSV4_ROPE_TABLE_MIN_CAPACITY: usize = 4096;
 const DSV4_EXPERT_TABLE_CAPACITY: usize = 512;
+
+fn env_flag(name: &str) -> bool {
+    matches!(
+        std::env::var(name).as_deref(),
+        Ok("1") | Ok("true") | Ok("yes") | Ok("on")
+    )
+}
 
 struct CudaRopeTable {
     rope_dim: usize,
@@ -176,12 +184,13 @@ pub(crate) struct DeepSeekV4CudaOperatorCache {
     pub(crate) ops: ferrule_cuda::context::CudaArtifactOperatorContext,
     profile: bool,
     managed_experts: bool,
+    device_route_fast_path: bool,
     expert_upload_inflight: usize,
     kv_page_pool: Option<ferrule_cuda::CudaKvPagePool>,
     pending_kv_reservations: Vec<ferrule_cuda::KvPoolReservation>,
     active_paged_kv: Option<ActivePagedKvBinding>,
     cached_paged_kv: HashMap<(usize, usize, usize, usize), ActivePagedKvBinding>,
-    linears: HashMap<String, ferrule_cuda::context::CudaArtifactLinearHandle>,
+    output_head_linears: HashMap<String, ferrule_cuda::context::CudaArtifactLinearHandle>,
     experts: HashMap<ExpertId, CudaFp4ExpertHandles>,
     expert_slot_tables: HashMap<usize, ferrule_cuda::context::CudaExpertSlotTable>,
     free_expert_frames: Vec<CudaFp4ExpertHandles>,
@@ -201,29 +210,14 @@ pub(crate) struct DeepSeekV4CudaOperatorCache {
     direct_pinned_experts: HashMap<ExpertId, CudaPinnedExpertBundle>,
     pinned_host_expert_cache: CudaPinnedExpertCache,
     async_host_stager: CudaAsyncHostStagedExpertLoader,
-    norm_weights: HashMap<String, ferrule_cuda::context::CudaF32Buffer>,
-    compressor_ape_buffers: HashMap<String, ferrule_cuda::context::CudaF32Buffer>,
-    /// Cached HC weights: function, scale, base — uploaded once per layer.
-    hc_weights: HashMap<String, HcDeviceWeights>,
-    /// Cached HC head weights: function, scale, base — uploaded once for the
-    /// terminal HC head projection.
-    hc_head_weights: Option<HcDeviceWeights>,
-    /// Cached attention sink buffers, keyed by layer tag — uploaded once per
-    /// layer and reused across decode steps.
-    pub(crate) sink_buffers: HashMap<String, ferrule_cuda::context::CudaF32Buffer>,
-    /// Cached router bias buffers, keyed by layer tag — uploaded once per layer.
-    router_bias_buffers: HashMap<String, ferrule_cuda::context::CudaF32Buffer>,
-    /// Validated hash tables are converted from host usize and uploaded once per layer.
-    router_hash_tables: HashMap<usize, CudaRouterHashTableCache>,
+    /// Immutable, context-bound model resources compiled before the runner is published.
+    execution_image: Option<DeepSeekV4CudaExecutionImage>,
     /// Token ids are persistent by packed batch shape. The host mirror prevents
     /// repeated H2D copies as every routed layer sees the same batch/step ids.
     router_token_ids: HashMap<usize, ferrule_cuda::context::CudaDsv4RouterTokenIds>,
     /// Interleaved expert-id/weight-bit buffers used to return one compact route
     /// payload per layer instead of two host-blocking D2H transfers.
     router_compact_buffers: HashMap<usize, ferrule_cuda::context::CudaI32Buffer>,
-    /// Cached dequantized f32 weights for grouped output_a, uploaded once.
-    grouped_wo_a_weights: HashMap<String, ferrule_cuda::context::CudaF32Buffer>,
-
     /// Typed precomputed RoPE tables keyed by their stable layer/resource name.
     /// Each entry records its parameters and growable position capacity so a
     /// same-name shape/configuration mismatch cannot be silently reused.
@@ -304,8 +298,111 @@ pub(crate) struct DeepSeekV4CudaOperatorCache {
 }
 
 #[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeepSeekV4CudaHcStage {
+    Attention,
+    FeedForward,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeepSeekV4CudaLayerNorm {
+    Attention,
+    FeedForward,
+    Query,
+    KeyValue,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeepSeekV4CudaCompressor {
+    Main,
+    Indexer,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeepSeekV4CudaLinear {
+    QueryA,
+    QueryB,
+    KeyValue,
+    OutputB,
+    MainCompressorKv,
+    MainCompressorGate,
+    IndexerCompressorKv,
+    IndexerCompressorGate,
+    IndexerQuery,
+    IndexerWeights,
+    Router,
+}
+
+#[cfg(feature = "cuda")]
 struct HcDeviceWeights {
-    function: ferrule_cuda::context::CudaF32Buffer,
+    /// Logical `[rows, K]` HC function repacked as `[K, rows]` on device.
+    function_col_major: ferrule_cuda::context::CudaF32Buffer,
+    scale: ferrule_cuda::context::CudaF32Buffer,
+    base: ferrule_cuda::context::CudaF32Buffer,
+}
+
+#[cfg(feature = "cuda")]
+struct DeepSeekV4CudaPreparedLinear {
+    handle: ferrule_cuda::context::CudaArtifactLinearHandle,
+    activation_quantization: Option<ArtifactActivationQuantization>,
+}
+
+#[cfg(feature = "cuda")]
+struct DeepSeekV4CudaPreparedCompressor {
+    ape: ferrule_cuda::context::CudaF32Buffer,
+    norm: ferrule_cuda::context::CudaF32Buffer,
+    kv: DeepSeekV4CudaPreparedLinear,
+    gate: DeepSeekV4CudaPreparedLinear,
+}
+
+#[cfg(feature = "cuda")]
+struct DeepSeekV4CudaPreparedLayer {
+    query_a: DeepSeekV4CudaPreparedLinear,
+    query_b: DeepSeekV4CudaPreparedLinear,
+    key_value: DeepSeekV4CudaPreparedLinear,
+    output_a: DeepSeekV4CudaPreparedLinear,
+    output_b: DeepSeekV4CudaPreparedLinear,
+    grouped_output_a_f32: Option<ferrule_cuda::context::CudaF32Buffer>,
+    indexer_query: Option<DeepSeekV4CudaPreparedLinear>,
+    indexer_weights: Option<DeepSeekV4CudaPreparedLinear>,
+    router: DeepSeekV4CudaPreparedLinear,
+    shared_gate: DeepSeekV4CudaPreparedLinear,
+    shared_up: DeepSeekV4CudaPreparedLinear,
+    shared_down: DeepSeekV4CudaPreparedLinear,
+    attention_norm: ferrule_cuda::context::CudaF32Buffer,
+    feed_forward_norm: ferrule_cuda::context::CudaF32Buffer,
+    query_norm: ferrule_cuda::context::CudaF32Buffer,
+    key_value_norm: ferrule_cuda::context::CudaF32Buffer,
+    attention_hc: HcDeviceWeights,
+    feed_forward_hc: HcDeviceWeights,
+    attention_sink: ferrule_cuda::context::CudaF32Buffer,
+    main_compressor: Option<DeepSeekV4CudaPreparedCompressor>,
+    indexer_compressor: Option<DeepSeekV4CudaPreparedCompressor>,
+    router_bias: Option<ferrule_cuda::context::CudaF32Buffer>,
+    router_hash_table: Option<ferrule_cuda::context::CudaDsv4RouterHashTable>,
+}
+
+/// Context-bound immutable resources for one prepared model generation.
+///
+/// Runtime caches and routed-expert frames remain outside this image. Stable,
+/// typed layer slots are intentionally used here so future fused projection
+/// groups and CUDA graphs do not depend on string identities or hash lookups.
+#[cfg(feature = "cuda")]
+struct DeepSeekV4CudaExecutionImage {
+    generation: u64,
+    hc_config: HyperConnectionConfig,
+    hc_head: HcHeadDeviceWeights,
+    output_norm: ferrule_cuda::context::CudaF32Buffer,
+    layers: Box<[DeepSeekV4CudaPreparedLayer]>,
+}
+
+#[cfg(feature = "cuda")]
+struct HcHeadDeviceWeights {
+    /// HC head has only four rows; its original row-major streams are faster.
+    function_row_major: ferrule_cuda::context::CudaF32Buffer,
     scale: ferrule_cuda::context::CudaF32Buffer,
     base: ferrule_cuda::context::CudaF32Buffer,
 }
@@ -322,7 +419,7 @@ struct ActivePagedKvBinding {
     sequence_count: usize,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CudaRouterHashTableIdentity {
     host: Vec<usize>,
@@ -332,7 +429,7 @@ struct CudaRouterHashTableIdentity {
     top_k: usize,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(test)]
 impl CudaRouterHashTableIdentity {
     fn new(
         layer: usize,
@@ -398,12 +495,6 @@ fn validate_router_hash_table_shape(
 }
 
 #[cfg(feature = "cuda")]
-struct CudaRouterHashTableCache {
-    identity: CudaRouterHashTableIdentity,
-    device: ferrule_cuda::context::CudaDsv4RouterHashTable,
-}
-
-#[cfg(feature = "cuda")]
 #[derive(Default)]
 struct DeepSeekV4DecodeArena {
     hidden: Option<ferrule_cuda::context::CudaF32Buffer>,
@@ -414,9 +505,17 @@ struct DeepSeekV4DecodeArena {
     /// Reusable routed MoE scratch/pointer buffers keyed by exact execution shape.
     moe_workspaces:
         HashMap<(usize, usize, usize, usize), ferrule_cuda::context::CudaMoeBatchedWorkspace>,
+    /// Separate miss-completion outputs preserve resident route values until one
+    /// final rank-ordered reduction merges both exact subsets.
+    moe_miss_workspaces:
+        HashMap<(usize, usize, usize, usize), ferrule_cuda::context::CudaMoeBatchedWorkspace>,
     /// Per-layer stable-slot route resolution scratch. Keeping this persistent is
     /// required for allocation-free steady decode.
     moe_resolve_workspaces: HashMap<usize, ferrule_cuda::context::CudaExpertRouteResolveWorkspace>,
+    /// A second resolver preserves the original miss mask while newly loaded
+    /// routes are resolved for the exact miss-only completion pass.
+    moe_miss_resolve_workspaces:
+        HashMap<usize, ferrule_cuda::context::CudaExpertRouteResolveWorkspace>,
 }
 
 #[cfg(feature = "cuda")]
@@ -1133,12 +1232,13 @@ impl DeepSeekV4CudaOperatorCache {
             ops: ferrule_cuda::context::CudaArtifactOperatorContext::new()?,
             profile: policy.profile_enabled(),
             managed_experts: policy.managed_experts(),
+            device_route_fast_path: env_flag("FERRULE_DSV4_DEVICE_ROUTE_FAST_PATH"),
             expert_upload_inflight: policy.expert_upload_inflight(),
             kv_page_pool: None,
             pending_kv_reservations: Vec::new(),
             active_paged_kv: None,
             cached_paged_kv: HashMap::new(),
-            linears: HashMap::new(),
+            output_head_linears: HashMap::new(),
             experts: HashMap::new(),
             expert_slot_tables: HashMap::new(),
             free_expert_frames: Vec::new(),
@@ -1158,16 +1258,9 @@ impl DeepSeekV4CudaOperatorCache {
             direct_pinned_experts: HashMap::new(),
             pinned_host_expert_cache: CudaPinnedExpertCache::new(expert_memory_policy.pinned_host),
             async_host_stager: CudaAsyncHostStagedExpertLoader::default(),
-            norm_weights: HashMap::new(),
-            compressor_ape_buffers: HashMap::new(),
-            hc_weights: HashMap::new(),
-            hc_head_weights: None,
-            sink_buffers: HashMap::new(),
-            router_bias_buffers: HashMap::new(),
-            router_hash_tables: HashMap::new(),
+            execution_image: None,
             router_token_ids: HashMap::new(),
             router_compact_buffers: HashMap::new(),
-            grouped_wo_a_weights: HashMap::new(),
             rope_tables: HashMap::new(),
             topk_buffers: HashMap::new(),
             paged_topk_buffers: HashMap::new(),
@@ -1669,17 +1762,10 @@ impl DeepSeekV4CudaOperatorCache {
         self.decode_arena = DeepSeekV4DecodeArena::default();
         self.topk_buffers.clear();
         self.paged_topk_buffers.clear();
-        self.linears.clear();
-        self.norm_weights.clear();
-        self.compressor_ape_buffers.clear();
-        self.hc_weights.clear();
-        self.hc_head_weights = None;
-        self.sink_buffers.clear();
-        self.router_bias_buffers.clear();
-        self.router_hash_tables.clear();
+        self.output_head_linears.clear();
+        self.execution_image = None;
         self.router_token_ids.clear();
         self.router_compact_buffers.clear();
-        self.grouped_wo_a_weights.clear();
         self.rope_tables.clear();
         Ok(())
     }
@@ -3001,40 +3087,372 @@ impl DeepSeekV4CudaOperatorCache {
         }
     }
 
+    fn readonly_prepared_linear(
+        &self,
+        layer: usize,
+        linear: DeepSeekV4CudaLinear,
+        input_len: usize,
+    ) -> Result<&DeepSeekV4CudaPreparedLinear> {
+        let prepared = self.prepared_linear(layer, linear)?;
+        let in_features = prepared.handle.shape().in_features();
+        if input_len != in_features {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 layer {layer} CUDA readonly {linear:?} input length mismatch: expected {in_features}, got {input_len}"
+            )));
+        }
+        if prepared.activation_quantization.is_some() {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 layer {layer} CUDA readonly {linear:?} cannot skip activation quantization"
+            )));
+        }
+        if !matches!(
+            prepared.handle.shape(),
+            ferrule_cuda::context::CudaArtifactLinearShape::F32 { .. }
+                | ferrule_cuda::context::CudaArtifactLinearShape::Bf16Bytes { .. }
+        ) {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 layer {layer} CUDA readonly {linear:?} requires F32/BF16 weights, got {:?}",
+                prepared.handle.shape()
+            )));
+        }
+        Ok(prepared)
+    }
+
+    pub(crate) fn linear_pair_matvec_readonly_from_device_into(
+        &self,
+        layer: usize,
+        first: DeepSeekV4CudaLinear,
+        second: DeepSeekV4CudaLinear,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        first_output: &mut ferrule_cuda::context::CudaF32Buffer,
+        second_output: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        let first = self.readonly_prepared_linear(layer, first, input.len())?;
+        let second = self.readonly_prepared_linear(layer, second, input.len())?;
+        self.ops.artifact_linear_pair_matvec_into(
+            &first.handle,
+            &second.handle,
+            input,
+            first_output,
+            second_output,
+        )
+    }
+
     pub(crate) fn linear_matvec_from_device_into(
-        &mut self,
-        linear: &ArtifactLinearPayload,
+        &self,
+        layer: usize,
+        linear: DeepSeekV4CudaLinear,
         input: &mut ferrule_cuda::context::CudaF32Buffer,
         output: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
-        if input.len() != linear.format.in_features() {
+        let prepared = self.prepared_linear(layer, linear)?;
+        let in_features = prepared.handle.shape().in_features();
+        if input.len() != in_features {
             return Err(Error::Model(format!(
-                "artifact linear {:?} device input length mismatch: expected {}, got {}",
-                linear.role,
-                linear.format.in_features(),
+                "DeepSeek-V4 layer {layer} CUDA {linear:?} input length mismatch: expected {in_features}, got {}",
                 input.len()
             )));
         }
-        let key = self.ensure_linear_uploaded(linear)?;
-        let use_fp8_mma = {
-            let handle = self.linears.get(&key).expect("inserted above");
-            self.ops.artifact_linear_uses_fp8_mma(handle)
-        };
-        if !use_fp8_mma {
-            if let Some(activation) = linear.execution.activation_quantization {
+        if !self.ops.artifact_linear_uses_fp8_mma(&prepared.handle) {
+            if let Some(activation) = prepared.activation_quantization {
                 match activation {
                     ArtifactActivationQuantization::Fp8E4M3WithE8M0Scale { block_size } => {
                         self.ops.fp8_activation_quantize_buffer_in_place(
                             input,
-                            linear.format.in_features(),
+                            in_features,
                             block_size,
                         )?;
                     }
                 }
             }
         }
-        let handle = self.linears.get(&key).expect("inserted above");
-        self.ops.artifact_linear_matvec_into(handle, input, output)
+        self.ops
+            .artifact_linear_matvec_into(&prepared.handle, input, output)
+    }
+
+    fn upload_hc_device_weights(
+        &self,
+        weights: &HyperConnectionWeights,
+        config: HyperConnectionConfig,
+    ) -> Result<HcDeviceWeights> {
+        weights.validate(config)?;
+        let function_col_major = ferrule_cuda::context::transpose_hc_function_for_device(
+            &weights.function,
+            config.mix_hc(),
+        )?;
+        Ok(HcDeviceWeights {
+            function_col_major: self.ops.upload_f32_buffer(&function_col_major)?,
+            scale: self.ops.upload_f32_buffer(&weights.scale)?,
+            base: self.ops.upload_f32_buffer(&weights.base)?,
+        })
+    }
+
+    fn upload_prepared_linear(
+        &self,
+        linear: &ArtifactLinearPayload,
+    ) -> Result<DeepSeekV4CudaPreparedLinear> {
+        Ok(DeepSeekV4CudaPreparedLinear {
+            handle: self.upload_linear(linear)?,
+            activation_quantization: linear.execution.activation_quantization,
+        })
+    }
+
+    fn upload_compressor_resources(
+        &self,
+        payload: &DeepSeekV4CompressorPayload,
+    ) -> Result<DeepSeekV4CudaPreparedCompressor> {
+        Ok(DeepSeekV4CudaPreparedCompressor {
+            ape: self.ops.upload_f32_buffer(&payload.ape)?,
+            norm: self.upload_norm_weight(&payload.norm)?,
+            kv: self.upload_prepared_linear(&payload.wkv)?,
+            gate: self.upload_prepared_linear(&payload.wgate)?,
+        })
+    }
+
+    /// Compile immutable model CUDA resources before any model execution.
+    ///
+    /// The image is built transactionally in a temporary owner and published
+    /// only after every upload succeeds. Dynamic expert, KV, workspace, and
+    /// output-head chunk resources deliberately remain runtime-owned.
+    pub(crate) fn compile_execution_image(
+        &mut self,
+        generation: u64,
+        model: &DeepSeekV4ArtifactModel,
+        layers: &[DeepSeekV4Layer],
+    ) -> Result<()> {
+        if let Some(image) = self.execution_image.as_ref() {
+            if image.generation == generation && image.layers.len() == layers.len() {
+                return Ok(());
+            }
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 CUDA execution image is already compiled for generation {} with {} layers",
+                image.generation,
+                image.layers.len()
+            )));
+        }
+
+        let hc_config = model.config.hc_config();
+        model.hc_head.validate(hc_config)?;
+        let hc_head = HcHeadDeviceWeights {
+            function_row_major: self.ops.upload_f32_buffer(&model.hc_head.function)?,
+            scale: self.ops.upload_f32_buffer(&model.hc_head.scale)?,
+            base: self.ops.upload_f32_buffer(&model.hc_head.base)?,
+        };
+        let output_norm = self.upload_norm_weight(&model.output_norm)?;
+
+        let mut prepared = Vec::new();
+        prepared.try_reserve_exact(layers.len()).map_err(|error| {
+            Error::Model(format!(
+                "DeepSeek-V4 CUDA execution image allocation failed for {} layers: {error}",
+                layers.len()
+            ))
+        })?;
+        for (layer_index, layer) in layers.iter().enumerate() {
+            if layer.layer != layer_index {
+                return Err(Error::Model(format!(
+                    "DeepSeek-V4 CUDA execution image layer identity mismatch: slot={layer_index} layer={}",
+                    layer.layer
+                )));
+            }
+            let query_a = self.upload_prepared_linear(&layer.attention.payload.query_a)?;
+            let query_b = self.upload_prepared_linear(&layer.attention.payload.query_b)?;
+            let key_value = self.upload_prepared_linear(&layer.attention.payload.key_value)?;
+            let output_a = self.upload_prepared_linear(&layer.attention.payload.output_a)?;
+            let output_b = self.upload_prepared_linear(&layer.attention.payload.output_b)?;
+            let cfg = layer.attention.config;
+            let grouped_output_a_f32 = if self.ops.grouped_output_a_bf16_mma_supported(
+                &output_a.handle,
+                cfg.output_latent_dim(),
+                cfg.output_group_input_dim(),
+                cfg.o_lora_rank,
+            ) {
+                None
+            } else {
+                let weights = layer.attention.payload.output_a.reference_weights_f32()?;
+                Some(self.ops.upload_f32_buffer(&weights)?)
+            };
+            let main_compressor = layer
+                .attention
+                .compressed
+                .as_ref()
+                .map(|compressed| self.upload_compressor_resources(&compressed.compressor))
+                .transpose()?;
+            let indexer_compressor = layer
+                .attention
+                .compressed
+                .as_ref()
+                .and_then(|compressed| compressed.indexer.as_ref())
+                .map(|indexer| self.upload_compressor_resources(&indexer.compressor))
+                .transpose()?;
+            let indexer_query = layer
+                .attention
+                .compressed
+                .as_ref()
+                .and_then(|compressed| compressed.indexer.as_ref())
+                .map(|indexer| self.upload_prepared_linear(&indexer.wq_b))
+                .transpose()?;
+            let indexer_weights = layer
+                .attention
+                .compressed
+                .as_ref()
+                .and_then(|compressed| compressed.indexer.as_ref())
+                .map(|indexer| self.upload_prepared_linear(&indexer.weights_proj))
+                .transpose()?;
+            let router = self.upload_prepared_linear(&layer.router.weight)?;
+            let shared_gate = self.upload_prepared_linear(&layer.shared_ffn.gate)?;
+            let shared_up = self.upload_prepared_linear(&layer.shared_ffn.up)?;
+            let shared_down = self.upload_prepared_linear(&layer.shared_ffn.down)?;
+            let experts = layer.router.weight.format.out_features();
+            let router_bias = layer
+                .router
+                .bias
+                .as_deref()
+                .map(|bias| {
+                    if bias.len() != experts {
+                        return Err(Error::Model(format!(
+                            "DeepSeek-V4 layer {layer_index} router bias length mismatch: got {} expected {experts}",
+                            bias.len()
+                        )));
+                    }
+                    self.ops.upload_f32_buffer(bias)
+                })
+                .transpose()?;
+            let router_hash_table = match layer.router_policy.selection {
+                RouterSelectionPolicy::ScoreTopK => None,
+                RouterSelectionPolicy::Hash => {
+                    let table = layer.router.hash_table.as_deref().ok_or_else(|| {
+                        Error::Model(format!(
+                            "DeepSeek-V4 layer {layer_index} hash router is missing its hash table"
+                        ))
+                    })?;
+                    validate_router_hash_table_shape(
+                        layer_index,
+                        table,
+                        layer.router.hash_rows,
+                        layer.router.hash_cols,
+                    )?;
+                    Some(self.ops.upload_dsv4_router_hash_table(
+                        table,
+                        layer.router.hash_rows,
+                        layer.router.hash_cols,
+                        experts,
+                        layer.router_policy.top_k,
+                    )?)
+                }
+            };
+            prepared.push(DeepSeekV4CudaPreparedLayer {
+                query_a,
+                query_b,
+                key_value,
+                output_a,
+                output_b,
+                grouped_output_a_f32,
+                indexer_query,
+                indexer_weights,
+                router,
+                shared_gate,
+                shared_up,
+                shared_down,
+                attention_norm: self.upload_norm_weight(&layer.attn_norm)?,
+                feed_forward_norm: self.upload_norm_weight(&layer.ffn_norm)?,
+                query_norm: self.upload_norm_weight(&layer.attention.payload.query_norm)?,
+                key_value_norm: self.upload_norm_weight(&layer.attention.payload.key_value_norm)?,
+                attention_hc: self
+                    .upload_hc_device_weights(&layer.hc_attention, layer.hc_config)?,
+                feed_forward_hc: self
+                    .upload_hc_device_weights(&layer.hc_feed_forward, layer.hc_config)?,
+                attention_sink: self
+                    .ops
+                    .upload_f32_buffer(&layer.attention.payload.attention_sink)?,
+                main_compressor,
+                indexer_compressor,
+                router_bias,
+                router_hash_table,
+            });
+        }
+        self.execution_image = Some(DeepSeekV4CudaExecutionImage {
+            generation,
+            hc_config,
+            hc_head,
+            output_norm,
+            layers: prepared.into_boxed_slice(),
+        });
+        Ok(())
+    }
+
+    fn prepared_image(&self) -> Result<&DeepSeekV4CudaExecutionImage> {
+        self.execution_image.as_ref().ok_or_else(|| {
+            Error::Internal(
+                "DeepSeek-V4 CUDA execution image was not compiled before execution".into(),
+            )
+        })
+    }
+
+    fn prepared_layer(&self, layer: usize) -> Result<&DeepSeekV4CudaPreparedLayer> {
+        self.prepared_image()?.layers.get(layer).ok_or_else(|| {
+            Error::Model(format!(
+                "DeepSeek-V4 CUDA execution image layer {layer} is out of range"
+            ))
+        })
+    }
+
+    fn prepared_attention_sink(
+        &self,
+        layer: usize,
+    ) -> Result<&ferrule_cuda::context::CudaF32Buffer> {
+        Ok(&self.prepared_layer(layer)?.attention_sink)
+    }
+
+    fn prepared_compressor(
+        &self,
+        layer: usize,
+        compressor: DeepSeekV4CudaCompressor,
+    ) -> Result<&DeepSeekV4CudaPreparedCompressor> {
+        let prepared = self.prepared_layer(layer)?;
+        let resources = match compressor {
+            DeepSeekV4CudaCompressor::Main => prepared.main_compressor.as_ref(),
+            DeepSeekV4CudaCompressor::Indexer => prepared.indexer_compressor.as_ref(),
+        };
+        resources.ok_or_else(|| {
+            Error::Model(format!(
+                "DeepSeek-V4 layer {layer} CUDA {compressor:?} compressor resources are unavailable"
+            ))
+        })
+    }
+
+    fn prepared_linear(
+        &self,
+        layer: usize,
+        linear: DeepSeekV4CudaLinear,
+    ) -> Result<&DeepSeekV4CudaPreparedLinear> {
+        let prepared = self.prepared_layer(layer)?;
+        let handle = match linear {
+            DeepSeekV4CudaLinear::QueryA => Some(&prepared.query_a),
+            DeepSeekV4CudaLinear::QueryB => Some(&prepared.query_b),
+            DeepSeekV4CudaLinear::KeyValue => Some(&prepared.key_value),
+            DeepSeekV4CudaLinear::OutputB => Some(&prepared.output_b),
+            DeepSeekV4CudaLinear::MainCompressorKv => {
+                prepared.main_compressor.as_ref().map(|value| &value.kv)
+            }
+            DeepSeekV4CudaLinear::MainCompressorGate => {
+                prepared.main_compressor.as_ref().map(|value| &value.gate)
+            }
+            DeepSeekV4CudaLinear::IndexerCompressorKv => {
+                prepared.indexer_compressor.as_ref().map(|value| &value.kv)
+            }
+            DeepSeekV4CudaLinear::IndexerCompressorGate => prepared
+                .indexer_compressor
+                .as_ref()
+                .map(|value| &value.gate),
+            DeepSeekV4CudaLinear::IndexerQuery => prepared.indexer_query.as_ref(),
+            DeepSeekV4CudaLinear::IndexerWeights => prepared.indexer_weights.as_ref(),
+            DeepSeekV4CudaLinear::Router => Some(&prepared.router),
+        };
+        handle.ok_or_else(|| {
+            Error::Model(format!(
+                "DeepSeek-V4 layer {layer} CUDA {linear:?} linear is unavailable"
+            ))
+        })
     }
 
     /// Upload a norm weight once for reuse with `rms_norm_from_device`.
@@ -3045,81 +3463,89 @@ impl DeepSeekV4CudaOperatorCache {
         self.ops.upload_norm_weight(weight)
     }
 
-    /// Get or upload a named norm weight, cached on device.
-    /// Returns a key that can be used to look up the weight in `norm_weights`.
-    pub(crate) fn ensure_norm_uploaded(&mut self, name: &str, weight: &[f32]) -> Result<()> {
-        if !self.norm_weights.contains_key(name) {
-            let buf = self.upload_norm_weight(weight)?;
-            self.norm_weights.insert(name.to_string(), buf);
-        }
-        Ok(())
-    }
-
-    pub(crate) fn rms_norm_device_cached_into(
-        &mut self,
-        name: &str,
+    pub(crate) fn rms_norm_layer_device_into(
+        &self,
+        layer: usize,
+        norm: DeepSeekV4CudaLayerNorm,
         input: &ferrule_cuda::context::CudaF32Buffer,
-        weight: &[f32],
         eps: f32,
         output: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
-        self.ensure_norm_uploaded(name, weight)?;
-        let weight_buf = self.norm_weights.get(name).expect("inserted above");
-        self.ops
-            .rms_norm_from_device_into(input, weight_buf, eps, output)
-    }
-
-    pub(crate) fn rms_norm_rows_device_cached_into(
-        &mut self,
-        name: &str,
-        input: &ferrule_cuda::context::CudaF32Buffer,
-        rows: usize,
-        weight: &[f32],
-        eps: f32,
-        output: &mut ferrule_cuda::context::CudaF32Buffer,
-    ) -> Result<()> {
-        if rows == 0 || input.len() != rows * weight.len() || output.len() != input.len() {
+        let prepared = self.prepared_layer(layer)?;
+        let weight = match norm {
+            DeepSeekV4CudaLayerNorm::Attention => &prepared.attention_norm,
+            DeepSeekV4CudaLayerNorm::FeedForward => &prepared.feed_forward_norm,
+            DeepSeekV4CudaLayerNorm::Query => &prepared.query_norm,
+            DeepSeekV4CudaLayerNorm::KeyValue => &prepared.key_value_norm,
+        };
+        if input.len() != weight.len() || output.len() != input.len() {
             return Err(Error::Model(format!(
-                "DeepSeek-V4 CUDA RMS device rows length mismatch: rows={rows} input={} output={} weight={}",
+                "DeepSeek-V4 layer {layer} CUDA RMS length mismatch: input={} output={} weight={}",
                 input.len(),
                 output.len(),
                 weight.len()
             )));
         }
-        self.ensure_norm_uploaded(name, weight)?;
-        let weight_buf = self.norm_weights.get(name).expect("inserted above");
         self.ops
-            .rms_norm_rows_from_device_into(input, rows, weight_buf, eps, output)
+            .rms_norm_from_device_into(input, weight, eps, output)
     }
 
-    /// Ensure HC weights (function, scale, base) are uploaded once and cached.
-    pub(crate) fn ensure_hc_weights_uploaded(
-        &mut self,
-        name: &str,
-        weights: &HyperConnectionWeights,
+    pub(crate) fn rms_norm_layer_rows_device_into(
+        &self,
+        layer: usize,
+        norm: DeepSeekV4CudaLayerNorm,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        rows: usize,
+        eps: f32,
+        output: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
-        if !self.hc_weights.contains_key(name) {
-            let function = self.ops.upload_f32_buffer(&weights.function)?;
-            let scale = self.ops.upload_f32_buffer(&weights.scale)?;
-            let base = self.ops.upload_f32_buffer(&weights.base)?;
-            self.hc_weights.insert(
-                name.to_string(),
-                HcDeviceWeights {
-                    function,
-                    scale,
-                    base,
-                },
-            );
+        let prepared = self.prepared_layer(layer)?;
+        let weight = match norm {
+            DeepSeekV4CudaLayerNorm::Attention => &prepared.attention_norm,
+            DeepSeekV4CudaLayerNorm::FeedForward => &prepared.feed_forward_norm,
+            DeepSeekV4CudaLayerNorm::Query => &prepared.query_norm,
+            DeepSeekV4CudaLayerNorm::KeyValue => &prepared.key_value_norm,
+        };
+        if rows == 0 || input.len() != rows * weight.len() || output.len() != input.len() {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 layer {layer} CUDA RMS rows length mismatch: rows={rows} input={} output={} weight={}",
+                input.len(),
+                output.len(),
+                weight.len()
+            )));
         }
-        Ok(())
+        self.ops
+            .rms_norm_rows_from_device_into(input, rows, weight, eps, output)
+    }
+
+    pub(crate) fn rms_norm_compressor_rows_device_into(
+        &self,
+        layer: usize,
+        compressor: DeepSeekV4CudaCompressor,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        rows: usize,
+        eps: f32,
+        output: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        let weight = &self.prepared_compressor(layer, compressor)?.norm;
+        if rows == 0 || input.len() != rows * weight.len() || output.len() != input.len() {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 layer {layer} CUDA {compressor:?} compressor RMS rows length mismatch: rows={rows} input={} output={} weight={}",
+                input.len(),
+                output.len(),
+                weight.len()
+            )));
+        }
+        self.ops
+            .rms_norm_rows_from_device_into(input, rows, weight, eps, output)
     }
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn hc_pre_from_device_into(
-        &mut self,
-        name: &str,
+        &self,
+        layer: usize,
+        stage: DeepSeekV4CudaHcStage,
         state: &ferrule_cuda::context::CudaF32Buffer,
-        weights: &HyperConnectionWeights,
         tokens: usize,
         config: HyperConnectionConfig,
         hidden: &mut ferrule_cuda::context::CudaF32Buffer,
@@ -3127,11 +3553,14 @@ impl DeepSeekV4CudaOperatorCache {
         post: &mut ferrule_cuda::context::CudaF32Buffer,
         comb: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
-        self.ensure_hc_weights_uploaded(name, weights)?;
-        let hw = self.hc_weights.get(name).expect("inserted above");
+        let prepared = self.prepared_layer(layer)?;
+        let hw = match stage {
+            DeepSeekV4CudaHcStage::Attention => &prepared.attention_hc,
+            DeepSeekV4CudaHcStage::FeedForward => &prepared.feed_forward_hc,
+        };
         self.ops.hc_pre_from_device_into(
             state,
-            &hw.function,
+            &hw.function_col_major,
             &hw.scale,
             &hw.base,
             tokens,
@@ -3170,151 +3599,80 @@ impl DeepSeekV4CudaOperatorCache {
         )
     }
 
-    /// Ensure HC head weights (function, scale, base) are uploaded once and cached.
-    pub(crate) fn ensure_hc_head_weights_uploaded(
-        &mut self,
-        weights: &HyperConnectionHeadWeights,
-    ) -> Result<()> {
-        if self.hc_head_weights.is_none() {
-            let function = self.ops.upload_f32_buffer(&weights.function)?;
-            let scale = self.ops.upload_f32_buffer(&weights.scale)?;
-            let base = self.ops.upload_f32_buffer(&weights.base)?;
-            self.hc_head_weights = Some(HcDeviceWeights {
-                function,
-                scale,
-                base,
-            });
-        }
-        Ok(())
-    }
-
-    /// Device-resident hc_head: state on device, weights cached, output stays
-    /// on device. This is the terminal HC projection applied after all layers.
+    /// Device-resident terminal HC projection using the immutable execution image.
     pub(crate) fn hc_head_from_device(
-        &mut self,
+        &self,
         state: &ferrule_cuda::context::CudaF32Buffer,
         tokens: usize,
-        config: HyperConnectionConfig,
-        weights: &HyperConnectionHeadWeights,
     ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
-        self.ensure_hc_head_weights_uploaded(weights)?;
-        let hw = self.hc_head_weights.as_ref().expect("inserted above");
+        let image = self.prepared_image()?;
         self.ops.hc_head_from_device(
             state,
-            &hw.function,
-            &hw.scale,
-            &hw.base,
+            &image.hc_head.function_row_major,
+            &image.hc_head.scale,
+            &image.hc_head.base,
             tokens,
-            config.hc_mult,
-            config.hidden_size,
-            config.eps,
-            config.norm_eps,
+            image.hc_config.hc_mult,
+            image.hc_config.hidden_size,
+            image.hc_config.eps,
+            image.hc_config.norm_eps,
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn hc_head_from_device_into(
-        &mut self,
+        &self,
         state: &ferrule_cuda::context::CudaF32Buffer,
         tokens: usize,
-        config: HyperConnectionConfig,
-        weights: &HyperConnectionHeadWeights,
         output: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
-        self.ensure_hc_head_weights_uploaded(weights)?;
-        let hw = self.hc_head_weights.as_ref().expect("inserted above");
+        let image = self.prepared_image()?;
         self.ops.hc_head_from_device_into(
             state,
-            &hw.function,
-            &hw.scale,
-            &hw.base,
+            &image.hc_head.function_row_major,
+            &image.hc_head.scale,
+            &image.hc_head.base,
             tokens,
-            config.hc_mult,
-            config.hidden_size,
-            config.eps,
-            config.norm_eps,
+            image.hc_config.hc_mult,
+            image.hc_config.hidden_size,
+            image.hc_config.eps,
+            image.hc_config.norm_eps,
             output,
         )
     }
 
-    /// Ensure the attention sink buffer for a named layer is uploaded once and
-    /// cached on device. The sink is a small `[num_heads]` f32 buffer that
-    /// never changes across decode steps.
-    pub(crate) fn ensure_sink_buffer(
-        &mut self,
-        name: &str,
-        sink: &[f32],
-    ) -> Result<&ferrule_cuda::context::CudaF32Buffer> {
-        if !self.sink_buffers.contains_key(name) {
-            let buf = self.ops.upload_f32_buffer(sink)?;
-            self.sink_buffers.insert(name.to_string(), buf);
-        }
-        Ok(self.sink_buffers.get(name).expect("inserted above"))
-    }
-
-    fn ensure_router_bias_buffer_key(
-        &mut self,
-        layer: usize,
-        bias: Option<&[f32]>,
-        experts: usize,
-    ) -> Result<Option<String>> {
-        let Some(bias) = bias else {
-            return Ok(None);
-        };
-        if bias.len() != experts {
+    pub(crate) fn rms_norm_output_device_into(
+        &self,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        eps: f32,
+        output: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        let image = self.prepared_image()?;
+        let weight = &image.output_norm;
+        if input.len() != weight.len() || output.len() != input.len() {
             return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} router bias length mismatch: got {} expected {experts}",
-                bias.len()
+                "DeepSeek-V4 CUDA output RMS length mismatch: input={} output={} weight={}",
+                input.len(),
+                output.len(),
+                weight.len()
             )));
         }
-        let key = format!("router_bias_L{layer}");
-        if !self.router_bias_buffers.contains_key(&key) {
-            let buffer = self.ops.upload_f32_buffer(bias)?;
-            self.router_bias_buffers.insert(key.clone(), buffer);
-        }
-        Ok(Some(key))
+        self.ops
+            .rms_norm_from_device_into(input, weight, eps, output)
     }
 
-    fn ensure_router_hash_table(
-        &mut self,
-        layer: usize,
-        router: &RouterArtifactPayload,
-        experts: usize,
-        top_k: usize,
+    /// Multi-row output RMS norm.  `input` must contain `rows * hidden_size`
+    /// elements; `output` is written in-place with the same layout.
+    pub(crate) fn rms_norm_output_rows_device_into(
+        &self,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        rows: usize,
+        eps: f32,
+        output: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
-        let table = router.hash_table.as_deref().ok_or_else(|| {
-            Error::Model(format!(
-                "DeepSeek-V4 layer {layer} hash router is missing its hash table"
-            ))
-        })?;
-        if let Some(cached) = self.router_hash_tables.get(&layer) {
-            return cached.identity.validate_request(
-                layer,
-                table,
-                router.hash_rows,
-                router.hash_cols,
-                experts,
-                top_k,
-            );
-        }
-        let identity = CudaRouterHashTableIdentity::new(
-            layer,
-            table,
-            router.hash_rows,
-            router.hash_cols,
-            experts,
-            top_k,
-        )?;
-        let device = self.ops.upload_dsv4_router_hash_table(
-            table,
-            router.hash_rows,
-            router.hash_cols,
-            experts,
-            top_k,
-        )?;
-        self.router_hash_tables
-            .insert(layer, CudaRouterHashTableCache { identity, device });
-        Ok(())
+        let image = self.prepared_image()?;
+        let weight = &image.output_norm;
+        self.ops
+            .rms_norm_rows_from_device_into(input, rows, weight, eps, output)
     }
 
     fn ensure_router_token_ids(&mut self, token_ids: &[u32], hash_rows: usize) -> Result<()> {
@@ -3341,6 +3699,7 @@ impl DeepSeekV4CudaOperatorCache {
         router_policy: &ExpertRouterPolicy,
         indices_dev: &mut ferrule_cuda::context::CudaI32Buffer,
         weights_dev: &mut ferrule_cuda::context::CudaF32Buffer,
+        download_routes: bool,
     ) -> Result<Vec<Vec<ExpertRoute>>> {
         if router_policy.score_function != RouterScoreFunction::SqrtSoftplus
             || !router_policy.normalize_non_softmax_weights
@@ -3367,11 +3726,7 @@ impl DeepSeekV4CudaOperatorCache {
 
         match router_policy.selection {
             RouterSelectionPolicy::ScoreTopK => {
-                let bias_key =
-                    self.ensure_router_bias_buffer_key(layer, router.bias.as_deref(), experts)?;
-                let bias = bias_key
-                    .as_ref()
-                    .and_then(|key| self.router_bias_buffers.get(key));
+                let bias = self.prepared_layer(layer)?.router_bias.as_ref();
                 self.ops
                     .dsv4_router_topk_sqrt_softplus_rows_from_device_into(
                         logits,
@@ -3385,13 +3740,16 @@ impl DeepSeekV4CudaOperatorCache {
                     )?;
             }
             RouterSelectionPolicy::Hash => {
-                self.ensure_router_hash_table(layer, router, experts, top_k)?;
                 self.ensure_router_token_ids(token_ids, router.hash_rows)?;
-                let hash_table = &self
-                    .router_hash_tables
-                    .get(&layer)
-                    .expect("hash table inserted above")
-                    .device;
+                let hash_table = self
+                    .prepared_layer(layer)?
+                    .router_hash_table
+                    .as_ref()
+                    .ok_or_else(|| {
+                        Error::Internal(format!(
+                            "DeepSeek-V4 layer {layer} prepared hash router table is missing"
+                        ))
+                    })?;
                 let token_ids_dev = self
                     .router_token_ids
                     .get(&tokens)
@@ -3409,6 +3767,10 @@ impl DeepSeekV4CudaOperatorCache {
                         weights_dev,
                     )?;
             }
+        }
+
+        if !download_routes {
+            return Ok(Vec::new());
         }
 
         // The host residency planner still consumes compact routes for miss
@@ -3581,7 +3943,7 @@ impl DeepSeekV4CudaOperatorCache {
             self.output_head_chunks = self.output_head_chunks.saturating_add(1);
             self.output_head_rows = self.output_head_rows.saturating_add(rows as u64);
             let key = artifact_linear_row_cache_key(slice, start, rows)?;
-            if !self.linears.contains_key(&key) {
+            if !self.output_head_linears.contains_key(&key) {
                 self.output_head_cache_misses = self.output_head_cache_misses.saturating_add(1);
                 let read_start = profile_start(self.profile);
                 let payload = reader.read_2d_rows(slice, start, rows)?;
@@ -3600,7 +3962,7 @@ impl DeepSeekV4CudaOperatorCache {
                 let upload_start = profile_start(self.profile);
                 let handle = self.upload_linear(&linear)?;
                 record_profile_duration(&mut self.output_head_upload_us, upload_start);
-                self.linears.insert(key.clone(), handle);
+                self.output_head_linears.insert(key.clone(), handle);
             } else {
                 self.output_head_cache_hits = self.output_head_cache_hits.saturating_add(1);
             }
@@ -3632,7 +3994,10 @@ impl DeepSeekV4CudaOperatorCache {
                 self.output_head_linear_workspaces
                     .insert(hidden.len(), workspace);
             }
-            let handle = self.linears.get(&key).expect("inserted above");
+            let handle = self
+                .output_head_linears
+                .get(&key)
+                .expect("output-head chunk inserted above");
             let logits = self
                 .output_head_logits
                 .get_mut(&logits_key)
@@ -3696,18 +4061,6 @@ impl DeepSeekV4CudaOperatorCache {
             .collect::<Vec<_>>();
         merge_output_head_chunk(&mut top, &indices, &values, top_k, 0, top_k)?;
         Ok(top)
-    }
-
-    pub(crate) fn ensure_linear_uploaded(
-        &mut self,
-        linear: &ArtifactLinearPayload,
-    ) -> Result<String> {
-        let key = artifact_linear_cache_key(linear);
-        if !self.linears.contains_key(&key) {
-            let handle = self.upload_linear(linear)?;
-            self.linears.insert(key.clone(), handle);
-        }
-        Ok(key)
     }
 
     pub(crate) fn upload_linear(
@@ -3843,7 +4196,8 @@ impl DeepSeekV4CudaOperatorCache {
 
         let stage_start = profile_start(self.profile);
         self.linear_rows_from_device_into(
-            &router.weight,
+            layer,
+            DeepSeekV4CudaLinear::Router,
             input_dev,
             tokens,
             router_logits_dev,
@@ -3857,6 +4211,7 @@ impl DeepSeekV4CudaOperatorCache {
             router_policy,
             router_indices_dev,
             router_weights_dev,
+            true,
         )?;
         for routes in &routes_by_token {
             self.expert_selected = self.expert_selected.saturating_add(routes.len() as u64);
@@ -3864,13 +4219,11 @@ impl DeepSeekV4CudaOperatorCache {
         record_profile_duration(&mut self.moe_router_us, stage_start);
 
         let stage_start = profile_start(self.profile);
-        let gate_key = self.ensure_linear_uploaded(&shared_expert.gate)?;
-        let up_key = self.ensure_linear_uploaded(&shared_expert.up)?;
-        let down_key = self.ensure_linear_uploaded(&shared_expert.down)?;
+        let prepared = self.prepared_layer(layer)?;
         self.ops.artifact_swiglu_ffn_rows_from_device_into(
-            self.linears.get(&gate_key).expect("inserted above"),
-            self.linears.get(&up_key).expect("inserted above"),
-            self.linears.get(&down_key).expect("inserted above"),
+            &prepared.shared_gate.handle,
+            &prepared.shared_up.handle,
+            &prepared.shared_down.handle,
             input_dev,
             tokens,
             1.0,
@@ -4167,7 +4520,12 @@ impl DeepSeekV4CudaOperatorCache {
     ) -> Result<CudaMoeRoutes> {
         let stage_start = profile_start(self.profile);
         self.ops.copy_f32_into_slot(input, router_input, 0)?;
-        self.linear_matvec_from_device_into(&router.weight, router_input, logits_dev)?;
+        self.linear_matvec_from_device_into(
+            layer,
+            DeepSeekV4CudaLinear::Router,
+            router_input,
+            logits_dev,
+        )?;
         let mut routes_by_token = self.dsv4_router_topk_routes_from_device_logits(
             layer,
             logits_dev,
@@ -4176,6 +4534,7 @@ impl DeepSeekV4CudaOperatorCache {
             router_policy,
             indices_dev,
             weights_dev,
+            true,
         )?;
         let routes = routes_by_token.pop().unwrap_or_default();
         record_profile_duration(&mut self.moe_router_us, stage_start);
@@ -4184,6 +4543,440 @@ impl DeepSeekV4CudaOperatorCache {
         let selected = routes.iter().map(|route| route.expert).collect::<Vec<_>>();
         record_profile_duration(&mut self.moe_routing_us, stage_start);
         Ok(CudaMoeRoutes { routes, selected })
+    }
+
+    fn submit_shared_expert_from_device_into(
+        &mut self,
+        layer: usize,
+        shared_expert: &SwiGluFfnPayload,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        shared_workspace: &mut ferrule_cuda::context::CudaSwiGLUWorkspace,
+        accumulator: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        let stage_start = profile_start(self.profile);
+        let swiglu_limit = shared_expert.swiglu_limit;
+        let prepared = self.prepared_layer(layer)?;
+        self.ops.artifact_swiglu_ffn_from_device_into(
+            &prepared.shared_gate.handle,
+            &prepared.shared_up.handle,
+            &prepared.shared_down.handle,
+            input,
+            1.0,
+            swiglu_limit,
+            shared_workspace,
+        )?;
+        self.ops
+            .copy_f32_into_slot(shared_workspace.output(), accumulator, 0)?;
+        record_profile_duration(&mut self.moe_shared_us, stage_start);
+        Ok(())
+    }
+
+    /// Experimental resident-first decode. Device resolution launches exact
+    /// resident routes before the host observes the bounded miss queue. Misses
+    /// are then materialized and added in a second, mask-filtered pass.
+    #[allow(clippy::too_many_arguments)]
+    fn try_routed_moe_step_device_resident_first(
+        &mut self,
+        layer: usize,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        token_id: u32,
+        router: &RouterArtifactPayload,
+        router_policy: &ExpertRouterPolicy,
+        residency: &mut dyn ExpertResidencyControl,
+        source_catalog: &ExpertSourceCatalog,
+        reader: &ExpertStreamingReader,
+        shared_expert: &SwiGluFfnPayload,
+        router_input: &mut ferrule_cuda::context::CudaF32Buffer,
+        router_logits: &mut ferrule_cuda::context::CudaF32Buffer,
+        router_indices: &mut ferrule_cuda::context::CudaI32Buffer,
+        router_weights: &mut ferrule_cuda::context::CudaF32Buffer,
+        shared_workspace: &mut ferrule_cuda::context::CudaSwiGLUWorkspace,
+        accumulator: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<Option<RoutedMoeStepOutput>> {
+        let route_count = router_policy.top_k;
+        if route_count == 0 || route_count > 6 || !self.expert_slot_tables.contains_key(&layer) {
+            return Ok(None);
+        }
+        let Some((intermediate_size, hidden_size)) = self
+            .experts
+            .iter()
+            .find(|(expert, _)| expert.layer == layer)
+            .map(|(_, handles)| {
+                (
+                    handles.gate.shape().out_features(),
+                    handles.down.shape().out_features(),
+                )
+            })
+        else {
+            // With no resident frame there cannot be useful hit work to launch.
+            return Ok(None);
+        };
+        let workspace_key = (6, input.len(), intermediate_size, hidden_size);
+        if !self
+            .decode_arena
+            .moe_workspaces
+            .contains_key(&workspace_key)
+        {
+            let workspace =
+                self.ops
+                    .moe_batched_workspace(6, input.len(), intermediate_size, hidden_size)?;
+            self.decode_arena
+                .moe_workspaces
+                .insert(workspace_key, workspace);
+        }
+        if !self
+            .decode_arena
+            .moe_miss_workspaces
+            .contains_key(&workspace_key)
+        {
+            let workspace =
+                self.ops
+                    .moe_batched_workspace(6, input.len(), intermediate_size, hidden_size)?;
+            self.decode_arena
+                .moe_miss_workspaces
+                .insert(workspace_key, workspace);
+        }
+        if !self
+            .decode_arena
+            .moe_resolve_workspaces
+            .contains_key(&layer)
+        {
+            let resolve = self
+                .ops
+                .expert_route_resolve_workspace(route_count, route_count)?;
+            self.decode_arena
+                .moe_resolve_workspaces
+                .insert(layer, resolve);
+        }
+        if !self
+            .decode_arena
+            .moe_miss_resolve_workspaces
+            .contains_key(&layer)
+        {
+            let resolve = self
+                .ops
+                .expert_route_resolve_workspace(route_count, route_count)?;
+            self.decode_arena
+                .moe_miss_resolve_workspaces
+                .insert(layer, resolve);
+        }
+
+        let stage_start = profile_start(self.profile);
+        self.ops.copy_f32_into_slot(input, router_input, 0)?;
+        self.linear_matvec_from_device_into(
+            layer,
+            DeepSeekV4CudaLinear::Router,
+            router_input,
+            router_logits,
+        )?;
+        self.dsv4_router_topk_routes_from_device_logits(
+            layer,
+            router_logits,
+            std::slice::from_ref(&token_id),
+            router,
+            router_policy,
+            router_indices,
+            router_weights,
+            false,
+        )?;
+        record_profile_duration(&mut self.moe_router_us, stage_start);
+        self.expert_selected = self.expert_selected.saturating_add(route_count as u64);
+
+        self.submit_shared_expert_from_device_into(
+            layer,
+            shared_expert,
+            input,
+            shared_workspace,
+            accumulator,
+        )?;
+
+        let stage_start = profile_start(self.profile);
+        let miss_control_ready;
+        {
+            let table = self.expert_slot_tables.get(&layer).ok_or_else(|| {
+                Error::Internal(format!(
+                    "CUDA stable expert slot table missing for routed layer {layer}"
+                ))
+            })?;
+            let resolve = self
+                .decode_arena
+                .moe_resolve_workspaces
+                .get_mut(&layer)
+                .expect("resident-first resolver initialized above");
+            self.ops
+                .resolve_expert_routes(table, router_indices, route_count, resolve)?;
+            miss_control_ready = self.ops.record_compute_event()?;
+            let workspace = self
+                .decode_arena
+                .moe_workspaces
+                .get_mut(&workspace_key)
+                .expect("resident-first MoE workspace initialized above");
+            self.ops
+                .prepare_moe_experts_batched_workspace_resolved_filtered(
+                    table,
+                    router_weights,
+                    route_count,
+                    input.len(),
+                    intermediate_size,
+                    hidden_size,
+                    resolve,
+                    resolve,
+                    0,
+                    workspace,
+                )?;
+            self.ops.moe_experts_batched_add_into_from_device_prepared(
+                input,
+                shared_expert.swiglu_limit,
+                route_count,
+                intermediate_size,
+                hidden_size,
+                None,
+                workspace,
+                accumulator,
+                false,
+            )?;
+        }
+        record_profile_duration(&mut self.moe_compute_submit_us, stage_start);
+
+        // This single compact D2H is intentionally queued after resident compute
+        // on the same stream: all-hit layers expose no router-to-expert host gap.
+        let misses = {
+            let resolve = self
+                .decode_arena
+                .moe_resolve_workspaces
+                .get_mut(&layer)
+                .expect("resident-first resolver initialized above");
+            self.ops
+                .download_expert_route_misses_after(resolve, &miss_control_ready)?
+        };
+        if misses.overflow {
+            return Err(Error::Internal(format!(
+                "CUDA routed layer {layer} miss queue overflowed capacity {route_count}"
+            )));
+        }
+        let mut selected_misses = misses
+            .miss_ids
+            .into_iter()
+            .map(|expert| {
+                usize::try_from(expert).map_err(|_| {
+                    Error::Internal(format!(
+                        "CUDA routed layer {layer} returned invalid miss expert {expert}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        selected_misses.sort_unstable();
+        selected_misses.dedup();
+        let selected_routes = misses
+            .route_ids
+            .into_iter()
+            .take(route_count)
+            .map(|expert| {
+                usize::try_from(expert).map_err(|_| {
+                    Error::Internal(format!(
+                        "CUDA routed layer {layer} returned invalid route expert {expert}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if selected_routes.len() != route_count {
+            return Err(Error::Internal(format!(
+                "CUDA routed layer {layer} returned {} route ids for {route_count} routes",
+                selected_routes.len()
+            )));
+        }
+        let miss_set = selected_misses.iter().copied().collect::<BTreeSet<_>>();
+        let model_instance = residency.requirements().model_instance;
+        let mut resident_leases = Vec::with_capacity(route_count - selected_misses.len());
+        let acquire_result = (|| -> Result<()> {
+            for expert in selected_routes
+                .iter()
+                .copied()
+                .filter(|expert| !miss_set.contains(expert))
+            {
+                let key = Self::expert_key(model_instance, ExpertId::new(layer, expert))?;
+                let grant = residency.acquire_selected(key)?.ok_or_else(|| {
+                    Error::Internal(format!(
+                        "device-resolved resident expert {layer}:{expert} was absent from the host coordinator"
+                    ))
+                })?;
+                let lease = grant.lease().ok_or_else(|| {
+                    Error::Internal("device-resolved resident grant did not carry a lease".into())
+                })?;
+                if !self.physical_binding_matches(layer, grant.binding())? {
+                    let _ = residency.release(lease);
+                    return Err(self.poison_expert_layer(
+                        layer,
+                        format!(
+                            "device-resolved binding {:?} is not physically installed",
+                            grant.binding()
+                        ),
+                    ));
+                }
+                resident_leases.push(lease);
+                self.expert_selected_resident_hits =
+                    self.expert_selected_resident_hits.saturating_add(1);
+            }
+            Ok(())
+        })();
+        if let Err(error) = acquire_result {
+            return match Self::release_expert_leases(residency, resident_leases) {
+                Ok(()) => Err(error),
+                Err(release_error) => Err(Error::Internal(format!(
+                    "CUDA resident route acquisition failed ({error}); releasing acquired leases also failed ({release_error})"
+                ))),
+            };
+        }
+        let selected_ids = selected_routes
+            .iter()
+            .copied()
+            .map(|expert| ExpertId::new(layer, expert))
+            .collect::<Vec<_>>();
+
+        if selected_misses.is_empty() {
+            let execution_result = (|| -> Result<()> {
+                let workspace = self
+                    .decode_arena
+                    .moe_workspaces
+                    .get(&workspace_key)
+                    .expect("resident-first MoE workspace initialized above");
+                self.ops.reduce_moe_experts_batched_output_into(
+                    workspace,
+                    route_count,
+                    hidden_size,
+                    accumulator,
+                )
+            })();
+            let release_result = Self::release_expert_leases(residency, resident_leases);
+            return match (execution_result, release_result) {
+                (Ok(()), Ok(())) => Ok(Some(RoutedMoeStepOutput {
+                    routes: Vec::new(),
+                    streaming: Self::selected_streaming_step(
+                        layer,
+                        selected_ids,
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                    ),
+                    routed_output: Vec::new(),
+                    shared_output: None,
+                    output: Vec::new(),
+                })),
+                (Err(error), Ok(())) => Err(error),
+                (Ok(()), Err(release_error)) => Err(release_error),
+                (Err(error), Err(release_error)) => Err(Error::Internal(format!(
+                    "CUDA resident route reduction failed ({error}); releasing leases also failed ({release_error})"
+                ))),
+            };
+        }
+
+        let materialization = self.materialize_selected_experts(
+            layer,
+            &selected_misses,
+            &[],
+            residency,
+            source_catalog,
+            0,
+            reader,
+        );
+        let CudaMoeMaterialization {
+            mut streaming,
+            leases: miss_leases,
+        } = match materialization {
+            Ok(materialization) => materialization,
+            Err(error) => {
+                return match Self::release_expert_leases(residency, resident_leases) {
+                    Ok(()) => Err(error),
+                    Err(release_error) => Err(Error::Internal(format!(
+                        "CUDA miss materialization failed ({error}); releasing resident leases also failed ({release_error})"
+                    ))),
+                };
+            }
+        };
+        streaming.selected = selected_ids;
+        resident_leases.extend(miss_leases);
+        let leases = resident_leases;
+        let execution_result = (|| -> Result<()> {
+            let table = self.expert_slot_tables.get(&layer).ok_or_else(|| {
+                Error::Internal(format!(
+                    "CUDA stable expert slot table missing after layer {layer} miss publication"
+                ))
+            })?;
+            let active_markers = self
+                .decode_arena
+                .moe_resolve_workspaces
+                .get(&layer)
+                .expect("resident-first resolver initialized above");
+            let resolved = self
+                .decode_arena
+                .moe_miss_resolve_workspaces
+                .get_mut(&layer)
+                .expect("miss resolver initialized above");
+            self.ops
+                .resolve_expert_routes(table, router_indices, route_count, resolved)?;
+            let resident_workspace = self
+                .decode_arena
+                .moe_workspaces
+                .get(&workspace_key)
+                .expect("resident-first MoE workspace initialized above");
+            let workspace = self
+                .decode_arena
+                .moe_miss_workspaces
+                .get_mut(&workspace_key)
+                .expect("miss-completion MoE workspace initialized above");
+            self.ops
+                .prepare_moe_experts_batched_workspace_resolved_filtered(
+                    table,
+                    router_weights,
+                    route_count,
+                    input.len(),
+                    intermediate_size,
+                    hidden_size,
+                    resolved,
+                    active_markers,
+                    1,
+                    workspace,
+                )?;
+            self.ops.moe_experts_batched_add_into_from_device_prepared(
+                input,
+                shared_expert.swiglu_limit,
+                route_count,
+                intermediate_size,
+                hidden_size,
+                Some(resident_workspace),
+                workspace,
+                accumulator,
+                false,
+            )?;
+            let materialized_workspace = self
+                .decode_arena
+                .moe_miss_workspaces
+                .get(&workspace_key)
+                .expect("miss-completion MoE workspace initialized above");
+            self.ops.reduce_moe_experts_batched_split_output_into(
+                resident_workspace,
+                materialized_workspace,
+                active_markers,
+                route_count,
+                hidden_size,
+                accumulator,
+            )
+        })();
+        let release_result = Self::release_expert_leases(residency, leases);
+        match (execution_result, release_result) {
+            (Ok(()), Ok(())) => Ok(Some(RoutedMoeStepOutput {
+                routes: Vec::new(),
+                streaming,
+                routed_output: Vec::new(),
+                shared_output: None,
+                output: Vec::new(),
+            })),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(()), Err(release_error)) => Err(release_error),
+            (Err(error), Err(release_error)) => Err(Error::Internal(format!(
+                "CUDA resident-first MoE failed ({error}); releasing miss leases also failed ({release_error})"
+            ))),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4207,6 +5000,30 @@ impl DeepSeekV4CudaOperatorCache {
         shared_workspace: &mut ferrule_cuda::context::CudaSwiGLUWorkspace,
         accumulator: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<RoutedMoeStepOutput> {
+        if self.device_route_fast_path
+            && prefetch_capacity == 0
+            && predicted_experts.is_empty()
+            && let Some(output) = self.try_routed_moe_step_device_resident_first(
+                layer,
+                input,
+                token_id,
+                router,
+                router_policy,
+                residency,
+                source_catalog,
+                reader,
+                shared_expert,
+                router_input,
+                router_logits,
+                router_indices,
+                router_weights,
+                shared_workspace,
+                accumulator,
+            )?
+        {
+            return Ok(output);
+        }
+
         let CudaMoeRoutes { routes, selected } = self.route_decode_moe_from_device_into(
             layer,
             input,
@@ -4233,23 +5050,13 @@ impl DeepSeekV4CudaOperatorCache {
         )?;
 
         let execution_result = (|| -> Result<RoutedMoeStepOutput> {
-            let stage_start = profile_start(self.profile);
-            let swiglu_limit = shared_expert.swiglu_limit;
-            let gate_key = self.ensure_linear_uploaded(&shared_expert.gate)?;
-            let up_key = self.ensure_linear_uploaded(&shared_expert.up)?;
-            let down_key = self.ensure_linear_uploaded(&shared_expert.down)?;
-            self.ops.artifact_swiglu_ffn_from_device_into(
-                self.linears.get(&gate_key).expect("inserted above"),
-                self.linears.get(&up_key).expect("inserted above"),
-                self.linears.get(&down_key).expect("inserted above"),
+            self.submit_shared_expert_from_device_into(
+                layer,
+                shared_expert,
                 input,
-                1.0,
-                swiglu_limit,
                 shared_workspace,
+                accumulator,
             )?;
-            self.ops
-                .copy_f32_into_slot(shared_workspace.output(), accumulator, 0)?;
-            record_profile_duration(&mut self.moe_shared_us, stage_start);
 
             if !routes.is_empty() {
                 let stage_start = profile_start(self.profile);
@@ -4321,12 +5128,14 @@ impl DeepSeekV4CudaOperatorCache {
                 )?;
                 ops.moe_experts_batched_add_into_from_device_prepared(
                     input,
-                    swiglu_limit,
+                    shared_expert.swiglu_limit,
                     num_experts,
                     intermediate_size,
                     hidden_size,
+                    None,
                     workspace,
                     accumulator,
+                    true,
                 )?;
                 record_profile_duration(&mut self.moe_compute_submit_us, stage_start);
             }
@@ -4572,7 +5381,6 @@ impl DeepSeekV4CudaOperatorCache {
         query: &ferrule_cuda::context::CudaF32Buffer,
         values: &ferrule_cuda::context::CudaF32Buffer,
         topk: &ferrule_cuda::context::CudaI32Buffer,
-        sink: &[f32],
         tokens: usize,
         kv_len: usize,
         spec: SparseAttentionSpec,
@@ -4595,14 +5403,12 @@ impl DeepSeekV4CudaOperatorCache {
             topk: spec.topk,
             softmax_scale: spec.softmax_scale,
         };
-        let sink_name = format!("sink_L{layer}");
-        self.ensure_sink_buffer(&sink_name, sink)?;
-        let sink_buf = self.sink_buffers.get(&sink_name).expect("inserted above");
+        let sink = self.prepared_attention_sink(layer)?;
         self.ops.sparse_attention_sink_from_device_into(
             query,
             values,
             topk.as_device_buffer(),
-            sink_buf,
+            sink,
             shape,
             output,
         )
@@ -4614,7 +5420,6 @@ impl DeepSeekV4CudaOperatorCache {
         query: &ferrule_cuda::context::CudaF32Buffer,
         positions: &[usize],
         row_kv_lens: &ferrule_cuda::context::CudaI32Buffer,
-        sink: &[f32],
         rows: usize,
         layer: usize,
         spec: SparseAttentionSpec,
@@ -4649,8 +5454,6 @@ impl DeepSeekV4CudaOperatorCache {
             &logical,
             self.topk_buffers.get_mut(&elements).expect("ensured above"),
         )?;
-        let sink_name = format!("sink_L{layer}");
-        self.ensure_sink_buffer(&sink_name, sink)?;
         let active = self.active_paged_kv.as_ref().ok_or_else(|| {
             Error::Model("packed window attention requires an active paged binding".into())
         })?;
@@ -4689,7 +5492,7 @@ impl DeepSeekV4CudaOperatorCache {
                 &active.row_sequence_ids_device,
                 row_kv_lens,
                 self.topk_buffers.get(&elements).expect("filled above"),
-                self.sink_buffers.get(&sink_name).expect("inserted above"),
+                self.prepared_attention_sink(layer)?,
                 layout,
                 output,
             )
@@ -4702,14 +5505,11 @@ impl DeepSeekV4CudaOperatorCache {
         topk: &ferrule_cuda::context::CudaI32Buffer,
         selectors: &ferrule_cuda::context::CudaI32Buffer,
         row_kv_lens: &ferrule_cuda::context::CudaI32Buffer,
-        sink: &[f32],
         rows: usize,
         layer: usize,
         spec: SparseAttentionSpec,
         output: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
-        let sink_name = format!("sink_L{layer}");
-        self.ensure_sink_buffer(&sink_name, sink)?;
         let active = self.active_paged_kv.as_ref().ok_or_else(|| {
             Error::Model("packed sparse attention requires an active paged binding".into())
         })?;
@@ -4758,7 +5558,7 @@ impl DeepSeekV4CudaOperatorCache {
                 row_kv_lens,
                 topk,
                 selectors,
-                self.sink_buffers.get(&sink_name).expect("inserted above"),
+                self.prepared_attention_sink(layer)?,
                 layout,
                 output,
             )
@@ -4772,7 +5572,6 @@ impl DeepSeekV4CudaOperatorCache {
         position: usize,
         window_size: usize,
         topk: &ferrule_cuda::context::CudaI32Buffer,
-        sink: &[f32],
         tokens: usize,
         spec: SparseAttentionSpec,
         output: &mut ferrule_cuda::context::CudaF32Buffer,
@@ -4820,8 +5619,6 @@ impl DeepSeekV4CudaOperatorCache {
                     selectors,
                 )?;
             }
-            let sink_name = format!("sink_L{layer}");
-            self.ensure_sink_buffer(&sink_name, sink)?;
             let active = self.active_paged_kv.as_ref().expect("validated above");
             let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
                 Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
@@ -4864,7 +5661,7 @@ impl DeepSeekV4CudaOperatorCache {
                     &active.kv_len_device,
                     logical,
                     selectors,
-                    self.sink_buffers.get(&sink_name).expect("inserted above"),
+                    self.prepared_attention_sink(layer)?,
                     layout,
                     output,
                 );
@@ -4873,21 +5670,22 @@ impl DeepSeekV4CudaOperatorCache {
 
     /// Batched device-resident grouped output_a into caller-owned output.
     pub(crate) fn grouped_output_a_rows_from_device_into(
-        &mut self,
-        output_a: &ArtifactLinearPayload,
+        &self,
         context: &ferrule_cuda::context::CudaF32Buffer,
         rows: usize,
         cfg: DeepSeekV4AttentionConfig,
         layer: usize,
         output: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
-        check_linear(
-            layer,
-            "wo_a",
-            output_a,
-            cfg.output_latent_dim(),
-            cfg.output_group_input_dim(),
-        )?;
+        let prepared = self.prepared_layer(layer)?;
+        let handle = &prepared.output_a.handle;
+        if handle.shape().out_features() != cfg.output_latent_dim()
+            || handle.shape().in_features() != cfg.output_group_input_dim()
+        {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 layer {layer} prepared grouped output_a shape mismatch"
+            )));
+        }
         if rows == 0 || context.len() != rows * cfg.q_full_dim() {
             return Err(Error::Model(format!(
                 "DeepSeek-V4 layer {layer} CUDA grouped wo_a device rows context length mismatch: rows={} expected {}, got {}",
@@ -4904,11 +5702,6 @@ impl DeepSeekV4CudaOperatorCache {
             )));
         }
         let group_in = cfg.output_group_input_dim();
-        let linear_key = self.ensure_linear_uploaded(output_a)?;
-        let handle = self
-            .linears
-            .get(&linear_key)
-            .expect("grouped WO-A inserted above");
         if self.ops.grouped_output_a_bf16_mma_supported(
             handle,
             cfg.output_latent_dim(),
@@ -4926,13 +5719,11 @@ impl DeepSeekV4CudaOperatorCache {
             );
         }
 
-        let key = format!("{}::grouped_wo_a_f32", output_a.weight.slice.name);
-        if !self.grouped_wo_a_weights.contains_key(&key) {
-            let weights = output_a.reference_weights_f32()?;
-            let buf = self.ops.upload_f32_buffer(&weights)?;
-            self.grouped_wo_a_weights.insert(key.clone(), buf);
-        }
-        let weight_buf = self.grouped_wo_a_weights.get(&key).expect("inserted above");
+        let weight_buf = prepared.grouped_output_a_f32.as_ref().ok_or_else(|| {
+            Error::Internal(format!(
+                "DeepSeek-V4 layer {layer} grouped output_a fallback was not prepared"
+            ))
+        })?;
         self.ops.grouped_matvec_f32_rows_from_device_into(
             context,
             rows,
@@ -4944,49 +5735,88 @@ impl DeepSeekV4CudaOperatorCache {
         )
     }
 
+    pub(crate) fn prepare_linear_pair_fp8<'a>(
+        &self,
+        layer: usize,
+        first: DeepSeekV4CudaLinear,
+        second: DeepSeekV4CudaLinear,
+        input: &ferrule_cuda::context::CudaF32Buffer,
+        rows: usize,
+        storage: &'a mut ferrule_cuda::context::CudaFp8ActivationPack,
+    ) -> Result<Option<ferrule_cuda::context::CudaPreparedFp8Activation<'a>>> {
+        let first = self.prepared_linear(layer, first)?;
+        let second = self.prepared_linear(layer, second)?;
+        if !self.ops.artifact_linear_uses_fp8_mma(&first.handle)
+            || !self.ops.artifact_linear_uses_fp8_mma(&second.handle)
+            || first.handle.shape().in_features() != second.handle.shape().in_features()
+        {
+            return Ok(None);
+        }
+        self.ops
+            .prepare_fp8_activation_from_device(
+                input,
+                rows,
+                first.handle.shape().in_features(),
+                storage,
+            )
+            .map(Some)
+    }
+
+    pub(crate) fn linear_rows_from_prepared_fp8_into(
+        &self,
+        layer: usize,
+        linear: DeepSeekV4CudaLinear,
+        activation: &ferrule_cuda::context::CudaPreparedFp8Activation<'_>,
+        output: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        let prepared = self.prepared_linear(layer, linear)?;
+        self.ops
+            .artifact_linear_rows_from_prepared_fp8_into(&prepared.handle, activation, output)
+    }
+
     pub(crate) fn linear_rows_from_device_into(
-        &mut self,
-        linear: &ArtifactLinearPayload,
+        &self,
+        layer: usize,
+        linear: DeepSeekV4CudaLinear,
         input: &ferrule_cuda::context::CudaF32Buffer,
         rows: usize,
         output: &mut ferrule_cuda::context::CudaF32Buffer,
         workspace: &mut ferrule_cuda::context::CudaArtifactLinearWorkspace,
     ) -> Result<()> {
-        if rows == 0 || input.len() != rows * linear.format.in_features() {
+        let prepared = self.prepared_linear(layer, linear)?;
+        let in_features = prepared.handle.shape().in_features();
+        if rows == 0 || input.len() != rows * in_features {
             return Err(Error::Model(format!(
-                "artifact linear {:?} device rows input length mismatch: rows={} expected {}, got {}",
-                linear.role,
-                rows,
-                rows * linear.format.in_features(),
+                "DeepSeek-V4 layer {layer} CUDA {linear:?} rows input length mismatch: rows={rows} expected {}, got {}",
+                rows * in_features,
                 input.len()
             )));
         }
-        let key = self.ensure_linear_uploaded(linear)?;
-        let handle = self.linears.get(&key).expect("inserted above");
         self.ops.artifact_linear_rows_from_device_into_with_scratch(
-            handle, input, rows, output, workspace,
+            &prepared.handle,
+            input,
+            rows,
+            output,
+            workspace,
         )
     }
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn compressor_recurrent_seed_prefill(
-        &mut self,
+        &self,
+        layer: usize,
+        compressor: DeepSeekV4CudaCompressor,
         state: &mut Option<ferrule_cuda::CudaCompressorRecurrentState>,
         needs_reset: &mut bool,
-        name: &str,
         kv_rows: &ferrule_cuda::context::CudaF32Buffer,
         score_rows: &ferrule_cuda::context::CudaF32Buffer,
-        ape: &[f32],
         tokens: usize,
         ratio: usize,
         head_dim: usize,
         out_dim: usize,
         overlap: bool,
     ) -> Result<usize> {
-        if !self.compressor_ape_buffers.contains_key(name) {
-            self.compressor_ape_buffers
-                .insert(name.to_string(), self.ops.upload_f32_buffer(ape)?);
-        }
+        let ape = &self.prepared_compressor(layer, compressor)?.ape;
         if state.is_none() {
             *state = Some(
                 self.ops
@@ -5007,23 +5837,19 @@ impl DeepSeekV4CudaOperatorCache {
             self.ops.reset_compressor_recurrent_state(state)?;
             *needs_reset = false;
         }
-        let ape = self
-            .compressor_ape_buffers
-            .get(name)
-            .expect("inserted above");
         self.ops
             .compressor_recurrent_seed_prefill(state, kv_rows, score_rows, ape, tokens)
     }
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn compressor_recurrent_append_into(
-        &mut self,
+        &self,
+        layer: usize,
+        compressor: DeepSeekV4CudaCompressor,
         state: &mut Option<ferrule_cuda::CudaCompressorRecurrentState>,
         needs_reset: &mut bool,
-        name: &str,
         projected_kv: &ferrule_cuda::context::CudaF32Buffer,
         projected_score: &ferrule_cuda::context::CudaF32Buffer,
-        ape: &[f32],
         position: usize,
         ratio: usize,
         head_dim: usize,
@@ -5031,10 +5857,7 @@ impl DeepSeekV4CudaOperatorCache {
         overlap: bool,
         compressed: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<bool> {
-        if !self.compressor_ape_buffers.contains_key(name) {
-            self.compressor_ape_buffers
-                .insert(name.to_string(), self.ops.upload_f32_buffer(ape)?);
-        }
+        let ape = &self.prepared_compressor(layer, compressor)?.ape;
         if state.is_none() {
             *state = Some(
                 self.ops
@@ -5046,10 +5869,6 @@ impl DeepSeekV4CudaOperatorCache {
             self.ops.reset_compressor_recurrent_state(state)?;
             *needs_reset = false;
         }
-        let ape = self
-            .compressor_ape_buffers
-            .get(name)
-            .expect("inserted above");
         let boundary = self.ops.compressor_recurrent_append_projected(
             state,
             projected_kv,
@@ -5066,11 +5885,11 @@ impl DeepSeekV4CudaOperatorCache {
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn compressor_prefill_softmax_from_device_into(
-        &mut self,
-        name: &str,
+        &self,
+        layer: usize,
+        compressor: DeepSeekV4CudaCompressor,
         kv_rows: &ferrule_cuda::context::CudaF32Buffer,
         score_rows: &ferrule_cuda::context::CudaF32Buffer,
-        ape: &[f32],
         groups: usize,
         ratio: usize,
         head_dim: usize,
@@ -5078,14 +5897,7 @@ impl DeepSeekV4CudaOperatorCache {
         overlap: bool,
         output: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
-        if !self.compressor_ape_buffers.contains_key(name) {
-            let buffer = self.ops.upload_f32_buffer(ape)?;
-            self.compressor_ape_buffers.insert(name.to_string(), buffer);
-        }
-        let ape = self
-            .compressor_ape_buffers
-            .get(name)
-            .expect("compressor APE inserted above");
+        let ape = &self.prepared_compressor(layer, compressor)?.ape;
         self.ops.compressor_prefill_softmax_from_device_into(
             kv_rows, score_rows, ape, groups, ratio, head_dim, out_dim, overlap, output,
         )
@@ -5831,7 +6643,6 @@ impl DeepSeekV4CudaOperatorCache {
         layer: usize,
         position: usize,
         window_size: usize,
-        sink: &[f32],
         shape: ferrule_cuda::transformer::sparse_attention::CudaSparseAttentionShape,
         output: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
@@ -5844,8 +6655,6 @@ impl DeepSeekV4CudaOperatorCache {
             })?;
         {
             self.fill_paged_window_topk(position, window_size)?;
-            let sink_name = format!("sink_L{layer}");
-            self.ensure_sink_buffer(&sink_name, sink)?;
             let active = self.active_paged_kv.as_ref().expect("validated above");
             let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
                 Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
@@ -5876,7 +6685,7 @@ impl DeepSeekV4CudaOperatorCache {
                 &active.block_offsets_device,
                 &active.kv_len_device,
                 self.topk_buffers.get(&window_size).expect("filled above"),
-                self.sink_buffers.get(&sink_name).expect("inserted above"),
+                self.prepared_attention_sink(layer)?,
                 layout,
                 output,
             );
@@ -6026,10 +6835,10 @@ mod tests {
         let kv_lens = vec![2, 3];
         operators.active_paged_kv = Some(ActivePagedKvBinding {
             physical_block_slots: block_slots.clone(),
-            block_slots_device: operators.ops.upload_i32_buffer(&block_slots)?,
-            block_offsets_device: operators.ops.upload_i32_buffer(&block_offsets)?,
-            kv_len_device: operators.ops.upload_i32_buffer(&kv_lens)?,
-            row_sequence_ids_device: operators.ops.upload_i32_buffer(&[0, 1])?,
+            block_slots_device: operators.ops.i32_host_mirror(&block_slots)?,
+            block_offsets_device: operators.ops.i32_host_mirror(&block_offsets)?,
+            kv_len_device: operators.ops.i32_host_mirror(&kv_lens)?,
+            row_sequence_ids_device: operators.ops.i32_host_mirror(&[0, 1])?,
             page_tokens: 2,
             layer_count: 1,
             sequence_count: 2,

@@ -50,6 +50,9 @@ fn main() -> anyhow::Result<()> {
             moe_hotset_experts,
             golden,
             json,
+            resident_replay,
+            verify_width_sweep,
+            verify_iterations,
         } => cmd_bench_interactive(
             &model,
             &prompts,
@@ -63,6 +66,9 @@ fn main() -> anyhow::Result<()> {
             moe_hotset_experts,
             golden.as_deref(),
             json,
+            resident_replay,
+            verify_width_sweep,
+            verify_iterations,
         ),
 
         Command::InspectWeightPack { path } => cmd_inspect_weightpack(&path),

@@ -109,8 +109,14 @@ struct SubmitCommand {
     accepted: oneshot::Sender<Result<(), String>>,
 }
 
+struct TokenizeCommand {
+    prompt: String,
+    response: oneshot::Sender<Result<Vec<u32>, String>>,
+}
+
 enum WorkerCommand {
     Submit(SubmitCommand),
+    Tokenize(TokenizeCommand),
     Shutdown,
 }
 
@@ -210,6 +216,41 @@ impl ModelWorkerHandle {
                     "timed out waiting for model admission",
                 ))
             }
+        }
+    }
+
+    /// Tokenize a prompt on the model worker thread.
+    ///
+    /// Returns the allocated request id alongside the token ids so the caller
+    /// can build a unique response identifier consistent with [`submit`].
+    pub(crate) async fn tokenize(&self, prompt: String) -> Result<(u64, Vec<u32>), SubmitError> {
+        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        let (response, receiver) = oneshot::channel();
+        let command = WorkerCommand::Tokenize(TokenizeCommand { prompt, response });
+
+        match self.commands.try_send(command) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                return Err(SubmitError::new(
+                    SubmitErrorKind::Overloaded,
+                    "model request queue is full",
+                ));
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                return Err(SubmitError::new(
+                    SubmitErrorKind::Unavailable,
+                    "model worker is unavailable",
+                ));
+            }
+        }
+
+        match receiver.await {
+            Ok(Ok(tokens)) => Ok((request_id, tokens)),
+            Ok(Err(message)) => Err(SubmitError::new(SubmitErrorKind::Rejected, message)),
+            Err(_) => Err(SubmitError::new(
+                SubmitErrorKind::Unavailable,
+                "model worker stopped during tokenization",
+            )),
         }
     }
 }
@@ -436,6 +477,11 @@ where
 {
     match command {
         WorkerCommand::Shutdown => true,
+        WorkerCommand::Tokenize(command) => {
+            let result = engine.encode(&command.prompt);
+            let _ = command.response.send(result);
+            false
+        }
         WorkerCommand::Submit(command) => {
             if let Some(error) = fatal_error {
                 let _ = command

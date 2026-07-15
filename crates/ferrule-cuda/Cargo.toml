@@ -1,6 +1,7 @@
 [package]
 name = "ferrule-cuda"
 edition.workspace = true
+build = "build.rs"
 version.workspace = true
 license.workspace = true
 description = "Ferrule — Rust-native LLM inference runtime"
@@ -11,6 +12,7 @@ categories = ["science", "machine-learning"]
 
 [features]
 default = []
+cutlass-sm121a = []
 
 [dependencies]
 ferrule-common = { path = "../ferrule-common" }
@@ -22,6 +24,9 @@ cuda-core = { git = "https://github.com/devillove084/cuda-oxide.git", branch = "
 cuda-device = { git = "https://github.com/devillove084/cuda-oxide.git", branch = "fp-and-graph-support" }
 cuda-host = { git = "https://github.com/devillove084/cuda-oxide.git", branch = "fp-and-graph-support" }
 cuda-bindings = { git = "https://github.com/devillove084/cuda-oxide.git", branch = "fp-and-graph-support" }
+
+[build-dependencies]
+cc = "1.2"
 
 [lints]
 workspace = true

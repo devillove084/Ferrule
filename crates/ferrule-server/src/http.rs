@@ -22,8 +22,8 @@ use crate::config::ModelRegistration;
 use crate::openai::{
     AssistantMessage, ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse,
     ChunkChoice, ChunkDelta, CompletionChunk, CompletionRequest, CompletionResponse, ErrorEnvelope,
-    ErrorObject, ModelList, ModelObject, ResponseChoice, TextCompletionChoice,
-    openai_finish_reason,
+    ErrorObject, ModelList, ModelObject, ResponseChoice, TextCompletionChoice, TokenizeData,
+    TokenizeRequest, TokenizeResponse, openai_finish_reason,
 };
 use crate::worker::{
     EventSubscription, ModelWorkerHandle, SubmitError, SubmitErrorKind, WorkerEvent, WorkerRequest,
@@ -50,6 +50,8 @@ pub fn router(state: ServerState) -> Router {
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/completions", post(completions))
+        .route("/v1/tokenize", post(tokenize))
+        .route("/tokenize", post(tokenize))
         .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
         .with_state(state)
 }
@@ -150,6 +152,40 @@ async fn chat_completions(
         )
         .await
     }
+}
+
+async fn tokenize(
+    State(state): State<ServerState>,
+    payload: Result<Json<TokenizeRequest>, JsonRejection>,
+) -> Response {
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => return json_rejection(rejection),
+    };
+    let prompt = match request.validate(&state.registration.id) {
+        Ok(prompt) => prompt,
+        Err(message) => {
+            return api_error(StatusCode::BAD_REQUEST, &message, "invalid_request_error");
+        }
+    };
+    let (request_id, tokens) = match state.worker.tokenize(prompt).await {
+        Ok(result) => result,
+        Err(error) => return submit_error(error),
+    };
+    let id = format!("tok-ferrule-{request_id}");
+    let count = tokens.len();
+    Json(TokenizeResponse {
+        id: &id,
+        object: "list",
+        created: unix_timestamp(),
+        model: &state.registration.id,
+        data: vec![TokenizeData {
+            object: "tokens",
+            tokens,
+            count,
+        }],
+    })
+    .into_response()
 }
 
 async fn chat_non_streaming_response(
@@ -910,6 +946,66 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        worker.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn tokenize_returns_tokens_for_v1_and_root_path() {
+        for uri in ["/v1/tokenize", "/tokenize"] {
+            let (state, worker) = test_state();
+            let response = router(state)
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(axum::body::Body::from(
+                            serde_json::json!({
+                                "model": "test-model",
+                                "prompt": "hello"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert!(value["id"].as_str().unwrap().starts_with("tok-ferrule-"));
+            assert_eq!(value["object"], "list");
+            assert_eq!(value["model"], "test-model");
+            assert_eq!(value["data"][0]["object"], "tokens");
+            let tokens = value["data"][0]["tokens"].as_array().unwrap();
+            assert_eq!(tokens.len(), 5);
+            assert_eq!(tokens[0], b'h' as u64);
+            assert_eq!(value["data"][0]["count"], 5);
+            assert!(value["created"].as_u64().is_some());
+            worker.shutdown().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn tokenize_rejects_invalid_json_with_openai_error_envelope() {
+        let (state, worker) = test_state();
+        let response = router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/tokenize")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from("{"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["type"], "invalid_request_error");
+        assert!(value["error"]["message"].is_string());
         worker.shutdown().await.unwrap();
     }
 }

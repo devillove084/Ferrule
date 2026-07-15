@@ -30,6 +30,7 @@ use super::helpers::{
     unique_top_level_slice,
 };
 use super::layer::{DeepSeekV4Layer, DeepSeekV4LayerExpertRuntime, DeepSeekV4LayerState};
+use super::mtp::{DeepSeekV4MtpModel, load_mtp_layer, load_mtp_prediction_heads};
 use super::operators::DeepSeekV4OperatorContext;
 
 pub struct DeepSeekV4ArtifactModel {
@@ -204,12 +205,9 @@ impl DeepSeekV4ArtifactModel {
             #[cfg(feature = "cuda")]
             if operators.backend() == ModelExecutionBackend::Cuda {
                 let state_buf = operators.cuda_mut()?.ops.upload_f32_buffer(hc_state)?;
-                let hidden_buf = operators.cuda_mut()?.hc_head_from_device(
-                    &state_buf,
-                    tokens,
-                    self.config.hc_config(),
-                    &self.hc_head,
-                )?;
+                let hidden_buf = operators
+                    .cuda_mut()?
+                    .hc_head_from_device(&state_buf, tokens)?;
                 operators.cuda_mut()?.ops.download_f32_buffer(&hidden_buf)?
             } else {
                 operators.hc_head(hc_state, tokens, self.config.hc_config(), &self.hc_head)?
@@ -372,6 +370,47 @@ impl DeepSeekV4ArtifactModel {
         )
     }
 
+    /// Batched output-head top-k for multiple hidden rows on device.
+    ///
+    /// `hidden` must contain `batch_rows * output_head.cols` contiguous f32
+    /// values.  Returns one `Vec<TokenLogit>` per batch row.
+    #[cfg(feature = "cuda")]
+    pub(crate) fn topk_logits_rows_for_hidden_device_with_operators(
+        &self,
+        hidden: &ferrule_cuda::context::CudaF32Buffer,
+        batch_rows: usize,
+        top_k: usize,
+        chunk_rows: usize,
+        operators: &mut DeepSeekV4OperatorContext,
+    ) -> Result<Vec<Vec<TokenLogit>>> {
+        if top_k == 0 {
+            return Ok((0..batch_rows).map(|_| Vec::new()).collect());
+        }
+        if chunk_rows == 0 {
+            return Err(Error::Model(
+                "DeepSeek-V4 output head chunk_rows must be > 0".into(),
+            ));
+        }
+        if hidden.len() != batch_rows * self.output_head.cols {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 output head device batch input mismatch: expected {batch_rows}x{}, got {}",
+                self.output_head.cols,
+                hidden.len()
+            )));
+        }
+        let reader = ArtifactTensorReader::new(self.max_tensor_bytes);
+        operators
+            .cuda_mut()?
+            .output_head_topk_chunks_rows_with_device(
+                &self.output_head.slice,
+                hidden,
+                batch_rows,
+                top_k,
+                chunk_rows,
+                &reader,
+            )
+    }
+
     pub fn bind_layer(&self, layer: usize) -> Result<DeepSeekV4Layer> {
         let reader = ArtifactTensorReader::new(self.max_tensor_bytes);
         let attention_tensors = self.inventory.attention_tensors();
@@ -456,6 +495,73 @@ impl DeepSeekV4ArtifactModel {
             shared_ffn,
             router_policy,
         })
+    }
+
+    /// Loads the MTP (Multi-Token Prediction) model for DSpark speculative decoding.
+    ///
+    /// Returns `Ok(None)` when the checkpoint contains no MTP tensors.
+    pub fn load_mtp(&self) -> Result<Option<DeepSeekV4MtpModel>> {
+        let mtp_tensors = self.inventory.mtp_layer_tensors();
+        if mtp_tensors.is_empty() {
+            return Ok(None);
+        }
+        let reader = ArtifactTensorReader::new(self.max_tensor_bytes);
+        let hc_config = self.config.hc_config();
+        let max_mtp_index = *mtp_tensors.keys().max().expect("MTP tensors are non-empty");
+        let expected_stages = self.config.num_mtp_layers;
+        if mtp_tensors.len() != expected_stages || max_mtp_index + 1 != expected_stages {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 DSpark checkpoint has MTP stages {:?}, expected contiguous 0..{}",
+                mtp_tensors.keys().collect::<Vec<_>>(),
+                expected_stages
+            )));
+        }
+        let mut layers = Vec::with_capacity(mtp_tensors.len());
+        let mut prediction_heads = None;
+        for (&mtp_index, layer_tensors) in &mtp_tensors {
+            let attention_config = self.config.attention_config_for_mtp_layer(mtp_index)?;
+            let layer = load_mtp_layer(
+                &self.descriptor.path,
+                mtp_index,
+                self.config.num_layers + mtp_index,
+                layer_tensors,
+                &reader,
+                attention_config,
+                hc_config,
+                self.config.swiglu_limit,
+                self.config.num_experts_per_tok,
+                self.config.route_scale,
+            )?;
+            if mtp_index == max_mtp_index {
+                // Collect HC head tensors from the last layer's tensor list.
+                let hc_tensors: Vec<crate::artifact::inventory::HfHyperConnectionTensorInfo> =
+                    layer_tensors
+                        .iter()
+                        .filter_map(super::mtp::parse_mtp_hyper_connection_tensor)
+                        .collect();
+                prediction_heads = Some(load_mtp_prediction_heads(
+                    &self.descriptor.path,
+                    mtp_index,
+                    layer_tensors,
+                    &reader,
+                    &hc_tensors,
+                    hc_config,
+                )?);
+            }
+            if layer.expert_source_catalog.count() != self.config.num_routed_experts {
+                return Err(Error::Model(format!(
+                    "DeepSeek-V4 MTP stage {mtp_index} catalog has {} routed experts, expected {}",
+                    layer.expert_source_catalog.count(),
+                    self.config.num_routed_experts
+                )));
+            }
+            layers.push(layer);
+        }
+        Ok(Some(DeepSeekV4MtpModel {
+            layers,
+            prediction_heads,
+            config: self.config.dspark_config(),
+        }))
     }
 
     pub fn new_layer_sequence_state(&self, layer: usize) -> Result<DeepSeekV4LayerState> {

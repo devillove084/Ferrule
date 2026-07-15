@@ -15,9 +15,11 @@
 pub mod benchmark;
 pub mod context;
 pub mod counters;
+pub mod cutlass;
 pub mod graph;
 pub mod kernels;
 pub mod kv_page_pool;
+pub mod provider;
 pub mod transformer;
 
 /// Re-export `CudaContext` for the same reason.
@@ -38,6 +40,11 @@ pub use context::{
 pub use counters::CudaOpCounters;
 pub use kv_page_pool::{
     CudaKvPagePool, KvHostSnapshot, KvPagePoolStats, KvPoolReservation, PagedPlaneLayout,
+};
+pub use provider::{
+    KernelId, KernelPhase, KernelProviderId, LaunchDescriptor, LayerKernelPlan, LayerKernelPlanSet,
+    ModelKernelPlan, ProviderManifest, ProviderRegistry, RowBucket, WeightBinding, WeightLayout,
+    compile_default_plan,
 };
 pub use transformer::combined_ring::CombinedRingTopkLayout;
 pub use transformer::compressor_recurrent::CompressorRecurrentShape;

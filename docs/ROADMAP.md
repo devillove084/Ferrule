@@ -1,130 +1,246 @@
-# Ferrule single-node SOTA roadmap
+# Ferrule single-DGX Spark SOTA release roadmap
 
-> Canonical execution plan for DeepSeek-V4-Flash-DSpark on one NVIDIA DGX Spark.
+> Canonical engineering and release plan for exact DeepSeek-V4-Flash-DSpark inference on
+> one NVIDIA DGX Spark / GB10.
 >
-> Updated: 2026-07-14. This revision incorporates the production io_uring work,
-> control-plane reductions, warm-residency measurements, concurrency 1/2/4 serving
-> results, the local paper set under `papers/`, and the corrected conclusion that
-> DSpark is likely required for the 15–17 accepted-token/s target.
+> Updated: 2026-07-15.
+>
+> This document is organized around one release equation, three feasibility kill gates,
+> and a reproducible SOTA claim. Historical measurements are retained only when they change
+> a design decision.
 
-## 1. North star
+## 0. Executive decision
 
-Ferrule's target is the fastest **lossless** DeepSeek-V4-Flash-DSpark runtime on one
-DGX Spark / GB10 while preserving the checkpoint's real router, experts, attention,
-KV semantics, and generated tokens.
+Ferrule has a credible SOTA opportunity, but the opportunity is conditional and not yet
+proven.
 
-The headline target is:
+The strongest parts of the current system are:
 
-```text
-15–17 accepted output tokens/s on one DGX Spark
-```
+- exact 43-layer CUDA target execution on the real 48-shard checkpoint;
+- Rust-owned sequence, KV, expert-frame, upload-event, and rollback state;
+- context-bound typed CUDA execution image;
+- physical paged multi-plane KV;
+- stable expert slot/generation/lease semantics;
+- production `O_DIRECT + io_uring` reads into registered CUDA-pinned slabs;
+- resident/no-I/O replay with token and logit-bit parity;
+- honest hardware, storage, serving, and Nsight evidence.
 
-This is an end-state **DSpark accepted-token throughput** target. It is not a claim
-that a complete 43-layer target-model pass can or should execute once per emitted
-token at 15–17 passes/s.
+The blockers are not missing generic features. They are specific to the 16 accepted-token/s
+critical path:
 
-The distinction is mandatory:
+1. native CUDA packed execution does not yet support the essential DSpark shape
+   `1 sequence × V candidate rows`;
+2. packed output-head evaluation is row-serial;
+3. the execution image describes resources, but not per-shape executable kernel plans;
+4. dominant FP8/BF16/HC/FP4 work still runs as an operator-by-operator eager pipeline;
+5. complete DSpark proposal, verification, commit, and rollback are not implemented;
+6. current serving throughput has regressed and does not scale proportionally with raw
+   concurrency;
+7. current release artifacts are local development evidence, not yet a frozen public SOTA
+   dossier.
 
-```text
-base-step throughput       complete exact target-model verification passes/s
-accepted-token throughput  committed output tokens/s after proposal and verification
+The program remains **GO** only while all three feasibility gates in Section 1.4 remain
+physically achievable. Failure of any gate requires changing the operating point, target,
+or hardware claim rather than continuing local kernel tuning.
 
-accepted tok/s = accepted tokens per target pass / target-pass seconds
-```
+---
 
-A plausible end-state operating point is approximately four accepted tokens per
-250 ms target verification pass. The actual optimum must be measured; it is not a
-hard-coded architectural constant.
+## 1. Release contract
 
-Single-node SOTA is not one number. A claim requires all of the following under a
-published, reproducible workload:
+### 1.1 North star
 
-1. competitive warm single-stream ITL at concurrency 1;
-2. competitive cold and warm TTFT reported separately;
-3. highest useful output-token throughput at concurrency 1/2/4;
-4. exact target-model output with no expert approximation or skipped verification;
-5. bounded operation inside 128 GB coherent memory without swap/page-cache collapse;
-6. complete commands, environment, counters, and raw artifacts;
-7. DSpark acceptance and rollback statistics when speculation is enabled.
-
-Prediction and speculation are allowed only when semantically invisible:
-
-```text
-prediction miss -> extra I/O, fallback, or wait
-speculation miss -> exact target rejection and rollback
-never            -> changed router choice, substituted expert, or changed token
-```
-
-## 2. Current verified state
-
-### 2.1 Correctness and execution foundation
-
-The former E0–E6 foundation is complete:
-
-- dependency-neutral execution ABI;
-- prepared model plans and persistent arenas;
-- explicit per-sequence state;
-- native multi-session/ragged execution;
-- physical paged multi-plane KV with rollback, COW, and prefix sharing;
-- device router output;
-- runtime-owned expert slots, generations, reservations, and leases.
-
-The 43-layer CUDA path has repeatedly preserved deterministic greedy output. Stable
-expert publication still uses the existing slot/generation/lease ABI and ordinary
-device expert frames.
-
-### 2.2 Completed prefetch and residency corrections
-
-The CUDA path now has:
-
-- one prefetch admission owner per token/layer;
-- no unscored source-catalog fallback;
-- current-token `L -> L+1` transition observation;
-- a per-layer outstanding hard cap;
-- host staging separated from stable-slot reservation;
-- selected takeover from queued, staged, or uploading work;
-- slab-aware admission with capacity reserved for selected demand;
-- completed upload-guard reclamation before selected fallback;
-- near-layer ordering rather than HashMap iteration order;
-- safe cancellation of a prefetch reservation that would evict another expert
-  selected by the same packed batch.
-
-The last item fixed a real concurrency failure:
+Ferrule releases the single-DGX Spark SOTA milestone only when one DGX Spark sustains:
 
 ```text
-prepared expert install became stale before publication
+>= 16 accepted output tokens/s
 ```
 
-The failure occurred when prefetched expert A had reserved the slot occupied by B,
-while the same exact packed routes selected both A and B. Ferrule now cancels only
-the conflicting slot reservation, preserves staged/uploaded data, and lets selected
-takeover reserve a non-conflicting slot. Concurrency 1/2/4 serving subsequently
-completed without HTTP 500 failures.
+under a frozen warm workload with:
 
-### 2.3 Hardware constraints
+- the exact DeepSeek-V4-Flash-DSpark checkpoint;
+- exact target verification;
+- the real router and experts;
+- no expert skipping, substitution, or approximation;
+- zero headline request failures;
+- bounded execution inside the 128 GB coherent-memory system;
+- published raw artifacts and a reproducible environment manifest.
+
+This is an accepted-token target, not a claim of 16 complete 43-layer target passes/s.
+
+### 1.2 Release equation
+
+For verification width `V`, mean committed tokens `A(V)`, and complete cycle latency
+`T_cycle(V)`:
 
 ```text
-GPU                  NVIDIA GB10, sm_121a, coherent/integrated memory
-Physical memory      approximately 127.6 GB shared by CPU, GPU, page cache, and staging
-Checkpoint           48 safetensors shards, approximately 156 GiB
-Routed experts       approximately 137.1 GiB before dense weights/KV/arenas
-Storage              Samsung 3.7 TB NVMe, ext4
-Kernel               Linux 6.11, io_uring enabled
+accepted tok/s = A(V) / T_cycle(V)
 ```
 
-The complete checkpoint cannot remain resident. Coherent memory removes a discrete
-PCIe-VRAM ownership boundary, but it does not make copies, cache movement, stream
-ordering, page faults, or LPDDR bandwidth free.
+The complete cycle includes:
 
-### 2.4 Verified storage and memory design
+```text
+T_cycle(V)
+  = draft
+  + exact target verification
+  + commit or rollback
+  + non-overlapped expert I/O
+  + scheduler/control latency
+  - only overlap proven safe by measurement
+```
 
-Direct GDS is not the production default on the tested GB10:
+The release gate is:
+
+```text
+A(V) / T_cycle(V) >= 16
+```
+
+Kernel microbenchmarks, launch reductions, target-body passes/s, and optimistic
+`A / T_body(1)` multiplication are intermediate evidence only.
+
+### 1.3 Provisional operating budget
+
+The current planning point is `A≈4`:
+
+```text
+exact target verification, V chosen by acceptance data  <= 200 ms
+draft + commit/rollback + uncovered I/O/control          <=  50 ms
+complete cycle                                           <= 250 ms
+mean committed tokens                                    >= 4
+accepted throughput                                      >= 16 tok/s
+```
+
+This is a planning constraint, not a measured result. Components may borrow budget only if
+the measured complete cycle still passes the release equation.
+
+`V=4, A=4` implies nearly 100% mean acceptance. Therefore `V=2/4/8` must be measured rather
+than assuming `V=4` is optimal.
+
+### 1.4 Feasibility kill gates
+
+#### Gate F1 — Resident packed verification
+
+Implement and measure exact all-resident verification for:
+
+```text
+1 sequence × V rows, V in {2,4,8}
+```
+
+including the required target logits/output-head work and excluding draft/I/O.
+
+Decision:
+
+- `V=4 > 250 ms`: the `V=4, A=4` operating point is rejected;
+- `V=4 > 200 ms`: the provisional 50 ms non-verification budget is rejected;
+- if every measured `V / T_verify(V) <= 16`, the one-Spark headline is rejected unless a
+  different exact verification algorithm changes the bound.
+
+#### Gate F2 — Real acceptance
+
+Run the complete correctness-first DSpark transaction and measure:
+
+- accepted-prefix histogram;
+- `A(V)` for `V=2/4/8`;
+- draft, verify, commit, and rollback latency;
+- complete `T_cycle(V)`;
+- accepted tokens reported internally and returned externally.
+
+Decision:
+
+```text
+A(V) < 16 × T_cycle(V) for every viable V
+```
+
+rejects the 16 tok/s target on the current design.
+
+#### Gate F3 — I/O and capacity
+
+At 16 accepted tok/s, the measured NVMe ceiling gives a long-run budget of:
+
+```text
+10.53 GiB/s / 16 = 0.658 GiB per accepted token
+```
+
+At `A=4`:
+
+```text
+<= 2.63 GiB per complete cycle
+```
+
+Use real proposal/rollback route traces and the actual memory budget to compare current
+policy with a Belady oracle. If the oracle still exceeds `0.658 GiB/accepted token`, no
+prefetch or scheduler policy can meet the target.
+
+### 1.5 SOTA claim gate
+
+Reaching 16 tok/s is an internal release target, not automatically a SOTA claim.
+
+A public SOTA claim additionally requires:
+
+```text
+Ferrule beats the strongest eligible runtime
+under the same frozen checkpoint, tokenizer, prompts, sampling, hardware, and metric
+```
+
+with a difference larger than measurement noise and without unacceptable latency, memory,
+or failure-rate regressions.
+
+If no competing runtime supports the exact contract, the claim must be phrased as a first
+published exact result under that contract, not as an unqualified SOTA claim.
+
+---
+
+## 2. Current verified evidence
+
+### 2.1 Test platform
+
+```text
+System                NVIDIA DGX Spark
+GPU                    NVIDIA GB10, sm_121a
+CPU                    20-core Arm
+Coherent memory        approximately 127.6 GB available, 128 GB nominal
+Shared LPDDR bandwidth vendor peak 273 GB/s
+CUDA / driver          CUDA 13.0 / 580.82.09
+Kernel                 Linux 6.11, aarch64
+Storage                Samsung 3.7 TB NVMe, ext4
+Checkpoint             DeepSeek-V4-Flash-DSpark
+Checkpoint layout      48 safetensors shards, approximately 156 GiB
+Routed experts         approximately 137.1 GiB
+```
+
+The checkpoint exceeds physical memory before dense weights, KV, arenas, pinned slabs, page
+cache, and the OS. Ferrule is solving a deadline-streaming problem, not a conventional
+full-residency deployment.
+
+### 2.2 Correctness and execution foundation
+
+Verified implementation foundation:
+
+- exact 43-layer CUDA target path;
+- packed/ragged execution ABI and explicit sequence state;
+- physical paged multi-plane KV;
+- KV rollback, COW, and prefix-sharing primitives;
+- compressed attention and indexer state;
+- FP8/BF16 attention projections;
+- routed FP4 MoE with exact router ordering;
+- stable expert frame/slot/generation/lease state;
+- transactional expert publication through upload events;
+- device output-head top-k merge;
+- persistent outer arenas and exact-shape attention scratch;
+- context-bound typed CUDA execution image;
+- producer-owned FP8 activation packs;
+- HC device prelayout preserving original per-row accumulation order;
+- BF16 compressor dual projection over a shared caller-owned input.
+
+CPU execution remains a correctness oracle, not a performance target.
+
+### 2.3 Storage evidence
+
+Direct GDS is not the production path on the tested GB10:
 
 ```text
 GB10 model support       unsupported by gdscheck
 NVMe P2PDMA              unsupported
-cuFile compatibility     installed
-registered device path   failed through nvidia_fs/nvfs
+registered device path   failed through nvidia-fs/nvfs
 ```
 
 Read-only 1 GiB / 16 MiB-request measurements:
@@ -139,16 +255,16 @@ Read-only 1 GiB / 16 MiB-request measurements:
 | io_uring registered buffers, QD8 | 10.70 GiB/s | 10.51 ms |
 
 QD2 is the production starting point. Higher QD adds deadline latency without useful
-bandwidth on this device.
+bandwidth.
 
-A real 12.75 MiB FP4 expert A/B was output-identical but showed:
+A real 12.75 MiB FP4 expert A/B was output-identical:
 
 | Backing | First use | Warm expert execution |
 |---|---:|---:|
 | ordinary device frame | 1,581.2 us | **518.2 us** |
 | mapped pinned | **1,395.8 us** | 1,155.9 us |
 
-Therefore the production hierarchy is:
+Production hierarchy:
 
 ```text
 NVMe
@@ -160,104 +276,73 @@ NVMe
  -> FP4 Tensor Core execution
 ```
 
-Mapped pinned memory is a staging tier, not the hot compute backing.
+Mapped pinned memory is staging, not hot compute backing.
 
-### 2.5 Production io_uring checkpoint
+### 2.4 Resident target-pass checkpoint
 
-Implemented:
+Current real-checkpoint resident replay:
 
-- `io-uring 0.7.13`;
-- `O_DIRECT`;
-- sparse fixed-file registration;
-- 4 KiB-aligned registered buffers;
-- QD2;
-- configurable 16 MiB / 16-slab default;
-- six expert tensor slices coalesced into two extents;
-- CUDA page-locked registered slabs;
-- direct tensor-subrange upload into ordinary device frames;
-- slab leases retained by upload guards until completion;
-- async prefetch and selected fallback;
-- an initial selected reserve equal to half the physical expert capacity of the slab pool;
-- full I/O counters in runtime JSON.
+| Pass | Wall time | Target passes/s | Kernel launches | Selected expert bytes | Top-1 |
+|---|---:|---:|---:|---:|---|
+| capture with head | 850.042 ms | 1.176 | 2,314 | 1,069,547,520 | `19923`, `30.054031372070312` |
+| resident with head | 670.436 ms | 1.492 | 2,234 | 0 | `19923`, `30.054031372070312` |
+| resident body without head | 627.717 ms | 1.593 | 2,136 | 0 | n/a |
 
-The half-capacity reserve is not a sufficient production admission rule. A complete
-`bench-interactive` run with `prefetch=32`, top-6 routing, and 16 slabs reproduced:
+Capture and resident-with-head retained token equality and logit-bit equality. Both resident
+passes had zero selected cold misses, zero selected expert-load bytes, and zero steady device
+allocations.
 
-```text
-slab_exhaustions = 310
-fallback         = 310
-failed_extents   = 0
-```
+Relative to the earlier 705.811 ms resident body, the current 627.717 ms is 11.1% faster.
+This is an aggregate execution-image/pack/direct-input/fusion checkpoint and must not be
+attributed to one kernel.
 
-The same run with 24 slabs reported zero exhaustion/fallback because half of 12
-expert-sized physical credits happens to cover batch-1 top-6. That is a diagnostic
-configuration, not the final policy. Production admission must reserve actual extent
-credits for selected demand and account for queued reads atomically. For batch width
-`b`, the conservative selected union is `min(num_experts, top_k * b)`; the scheduler
-must use measured/predicted union and actual coalesced extent count rather than hardcode
-`6` or reserve a fixed fraction.
+Current warm non-speculative output throughput is 1.28672 tok/s, 12.44x below the 16 tok/s
+headline. Complete DSpark accepted throughput is not yet measurable.
 
-Previously reported zero-exhaustion runs remain valid for their tested route/load
-shape, but no longer constitute the S1 production-matrix exit gate.
+### 2.5 Nsight checkpoint
 
-Parity evidence includes:
+A full Nsight Systems resident replay retained parity. The aggregate GPU kernel-time
+breakdown across capture and resident replay was:
 
-- one-layer mmap/io_uring row-0 logit: `-2.800501`;
-- two-layer prefetch token: `83484` through both readers;
-- 43-layer token: `19923` through both readers;
-- 43-layer continuation after control-plane changes: `[19923, 3]`.
+| Kernel group | GPU kernel time |
+|---|---:|
+| FP8 MMA GEMM | 34.3% |
+| BF16 GEMM | 15.3% |
+| HC-pre | 12.5% |
+| routed FP4 dual projection | 7.1% |
+| grouped output-A | 4.8% |
+| BF16 compressor pair | 3.9% |
+| routed FP4 down | 3.4% |
+| FP8 activation pack | 3.4% |
+| remaining BF16 GEMV | 3.3% |
 
-### 2.6 Control-plane checkpoint
+The top nine groups account for 88.0% of aggregate kernel time. Sparse attention itself was
+below 0.1% in this trace.
 
-Completed reductions:
+Consequences:
 
-```text
-router D2H calls/token            86 -> 43
-output-head D2H calls/token       64 -> 2
-steady stream-wide syncs/token     5 -> 0
-```
+- a literal FlashAttention kernel transplant does not address the measured bottleneck;
+- FP8/BF16/HC account for approximately 72.7% and are first priority;
+- routed FP4 is second priority at approximately 10.5% for dual/down kernels;
+- CUDA Graph alone cannot remove dominant kernel work;
+- isolated M=1 GEMV wins cannot reach the release budget.
 
-Current non-final generated-token control traffic is approximately:
+Amdahl estimate: accelerating the top 88% by 4x leaves about 213 ms of M=1-equivalent body
+time. Reaching 200 ms with an unchanged remainder requires approximately 4.4x acceleration
+of the top 88%. Multi-row weight reuse may improve this bound, but must be measured.
+
+Artifacts:
 
 ```text
-43 router compact D2H calls
- 2 final output-head D2H calls
-45 total D2H calls
+target/bench/s3-kernel-slice/resident-replay-full.nsys-rep
+target/bench/s3-kernel-slice/resident-replay-full.sqlite
+target/bench/s3-kernel-slice/resident-replay-full-kernels.csv
+target/bench/s3-kernel-slice/resident-replay-full-cuda-api.csv
 ```
 
-The final request step still has one safe sequence-release synchronization when no
-subsequent output-head read guarantees completion. It is not a steady-token barrier
-and must be replaced by deferred/event-owned reclamation rather than deleted blindly.
+### 2.6 Serving evidence
 
-Output-head chunk-local top-k results are now merged on device. Generated tokens remain
-`[19923, 3]`. This removed host round trips but produced little wall-time improvement,
-proving that the 1,010 MiB head scan and target compute dominate over the tiny result
-copies.
-
-### 2.7 Warm residency evidence
-
-A 32-token warmup followed by four measured tokens produced:
-
-| Measured token | Decode step | Resident hits | Upload hits | Cold misses | Expert load bytes |
-|---:|---:|---:|---:|---:|---:|
-| 1 | 1.090 s | 219 | 7 | 39 | 521,404,416 |
-| 2 | 0.900 s | 221 | 12 | 35 | 494,665,728 |
-| 3 | 0.937 s | 200 | 14 | 57 | 775,421,952 |
-| 4 | 0.841 s | 209 | 17 | 49 | 655,097,856 |
-
-The average measured expert payload was approximately `0.61 GB/token`, down from the
-cold diagnostic's `1.07 GB/token`. Decode nevertheless remained around `0.84–1.09 s`.
-
-This changes the optimization priority:
-
-- I/O remains a hard physical constraint;
-- warm residency is already moving payload toward the viable bandwidth range;
-- the remaining wall time cannot be attributed to NVMe alone;
-- the next required measurement is a resident/no-I/O exact target roofline.
-
-### 2.8 Serving evidence
-
-`vllm bench serve`, random data, input 8, output 8, four requests:
+Historical diagnostic, random input 8/output 8, four requests:
 
 | Concurrency | Output throughput | Relative to C1 | p50 TPOT | Mean TTFT |
 |---:|---:|---:|---:|---:|
@@ -265,820 +350,1104 @@ This changes the optimization priority:
 | 2 | 1.04 tok/s | 1.33x | 1,308 ms | 5.95 s |
 | 4 | 1.15 tok/s | 1.47x | 1,652 ms | 15.72 s |
 
-Artifacts are under:
+Current-branch diagnostic, official `vllm bench serve`, fixed input 8/output 8, eight
+requests, request rate `inf`, seed zero, greedy, ignore EOS:
+
+| Concurrency | Output throughput | Relative to C1 | Mean TPOT | Mean E2EL |
+|---:|---:|---:|---:|---:|
+| 1 | 0.277 tok/s | 1.00x | 3,863 ms | 28.86 s |
+| 2 | 0.352 tok/s | 1.27x | 6,463 ms | 45.24 s |
+
+The current sweep was stopped before C4 completed. No reproducible C8 JSON exists.
+`/tokenize` was unavailable, making zero-valued C2 TTFT/ITL invalid; duration, throughput,
+TPOT, and E2EL remain usable.
+
+Conclusions:
+
+- raw FIFO concurrency does not yield proportional throughput;
+- C2 adds 27% throughput while worsening mean TPOT by 67%;
+- the current C1 result is a release-blocking anomaly relative to the historical artifact;
+- old and current runs are not a paired regression A/B because request counts and branch
+  state differ;
+- current C1/C2/C4/C8 must be rerun under one frozen contract before release.
+
+Artifacts:
 
 ```text
 target/bench/vllm-serve/agent-run/sweep-output8/
+target/bench/vllm-serve/20260715-s3-c1-c8/
 ```
 
-Simple FIFO batching is therefore insufficient. Larger batches improve aggregate
-throughput, but random requests enlarge the unique expert set and increase latency.
-Ferrule requires expert-aware batch formation and an incremental expert-byte cost
-model, not a policy that always maximizes row count.
+### 2.7 Static checkpoint ingest
 
-### 2.9 Current physical conclusion
-
-At 15 tok/s, the current warm average expert traffic alone would demand roughly:
+The expert reader already uses direct registered slabs. Static execution-image construction
+still follows a per-tensor path:
 
 ```text
-0.61 GB/token * 15 token/s = 9.15 GB/s
+metadata inventory
+ -> per tensor open/seek/read_exact
+ -> pageable Vec<u8>
+ -> retained host payload
+ -> serial upload during execution-image compilation
 ```
 
-That is already close to the measured storage ceiling before dense weights, KV,
-output head, unified-memory contention, and compute. The exact 43-layer target path is
-currently about 13–15x slower than a 66.7 ms/token target.
+The `fastsafetensors` paper and implementation validate metadata-first range planning,
+aggregated transfer, and delayed tensor construction as useful design principles. Their
+reported 4.8–7.5x loading wins are upstream Python/multi-NVMe/GPU results, not Ferrule GB10
+measurements.
 
-Therefore:
+Ferrule should port the range-planning and aggregated-copy design onto its existing
+registered io_uring slab engine. It should not import a Python/DLPack owner, whole-shard GPU
+buffer, second pinned pool, mmap-plus-pin GB10 path, or unsupported GDS path.
 
-- 15–17 complete target passes/s is not a credible near-term target;
-- 15–17 accepted tokens/s remains possible only by combining a much faster target
-  pass with multiple accepted tokens per verification pass;
-- DSpark is likely a required performance phase, not optional polish.
+Static ingest primarily affects cold TTFT, publication latency, memory headroom, and the
+ability to produce backend-native layouts without duplicate weights. It does not explain
+the 627.717 ms resident body and must proceed in parallel with, not replace, the target
+kernel critical path.
 
-### 2.10 S0 profile checkpoint and first measured fix
+---
 
-A fixed-prompt, 43-layer, greedy run used the production io_uring path with QD2,
-16 MiB registered slabs, hotset 48, 16 warmup tokens, and eight measured decode tokens.
-All headline runs disabled synchronized profiling.
+## 3. Canonical target architecture
 
-#### Prefetch/slab admission A/B
+### 3.1 Rust remains the unique runtime owner
 
-| Mode | Decode tok/s | Mean decode | Slab exhaustion/fallback | Measured decode expert bytes |
-|---|---:|---:|---:|---:|
-| `prefetch=32`, 16 slabs | 0.840 | 1.191 s | 310 / 310 | 8.61 GB |
-| `prefetch=0`, 16 slabs | 1.071 | 0.933 s | 0 / 0 | 8.02 GB |
-| `prefetch=32`, 24 slabs | 1.094 | 0.914 s | 0 / 0 | 9.05 GB |
+Rust owns:
 
-After removing fallback, current prefetch improved throughput only about 2.1% over no
-prefetch while moving about 12.8% more expert bytes. The present predictor/scheduler
-therefore does not yet create enough useful overlap to justify its traffic. More
-prefetch is not the next optimization.
+- CUDA context, streams, events, and graphs;
+- device allocations and arenas;
+- paged KV and transactional sequence state;
+- expert frames, slots, generations, and leases;
+- static execution image;
+- cancellation, failure recovery, and rollback;
+- storage slab leases and upload tickets;
+- scheduler, admission, and DSpark commit state.
 
-#### Component profile
+External kernel systems may generate device code but must not introduce a second allocator,
+stream owner, tensor owner, KV owner, or expert residency state machine.
 
-A synchronization-heavy diagnostic profile, used only for attribution, measured two
-43-layer decode steps:
+### 3.2 Execution image becomes an executable plan
 
-| Component | Per-step time |
-|---|---:|
-| Attention/MLA | 0.53–0.55 s |
-| MoE layer envelope | 0.42–0.44 s |
-| Selected expert read inside MoE | 0.11–0.12 s |
-| Router handoff | about 0.073 s |
-| Routed FP4 compute submission/completion | about 0.225 s |
-| Output head when requested | about 0.039 s |
-| Kernel launches | about 2.6k–2.8k/token |
-
-Nsight Systems isolated one exact decode from its `43 × 48 B` compact-router D2H
-signature. Before the first S0 fix it showed approximately:
+Target structure:
 
 ```text
-GPU span             844.6 ms
-GPU kernel busy      652.7 ms
-small device allocs  82/token
-small sync frees     82/token
+DeepSeekV4CudaExecutionImage
+  ├── LayerResourceImage
+  │     ├── static typed weights/layouts
+  │     ├── norms/HC/router/sinks
+  │     └── stable dynamic indirections
+  └── LayerKernelPlan[rows=1/2/4/8]
+        ├── selected KernelProvider and kernel IDs
+        ├── backend-native weight layouts
+        ├── tile/persistent schedule
+        ├── fusion and epilogue descriptors
+        ├── workspace offset plan
+        ├── graph bucket bindings
+        └── measured/autotuned configuration
 ```
 
-The 82 allocations were two combined-ring paged-attention scratch buffers repeatedly
-resized as adjacent layers alternated between 128/129/130 top-k elements. The old
-buffer was synchronously freed on every shape change. Caching the logical/selector
-pair by exact element count changed the fixed-prompt benchmark to:
+Kernel selection occurs during prepare/compile, not through string lookup or hot-path dynamic
+policy.
+
+### 3.3 Kernel provider boundary
+
+Ferrule CUDA supports multiple leaf providers:
 
 ```text
-device allocs/token    80–82 -> 0
-mean decode            933.3 ms -> 879.9 ms
-throughput             1.071 tok/s -> 1.137 tok/s
-GPU span               844.6 ms -> 808.0 ms
-GPU kernel busy        652.7 ms -> 659.7 ms
+KernelProvider
+  ├── CudaOxideProvider       custom control/glue and correctness fallback
+  ├── EmbeddedCubinProvider   fixed-shape production kernels
+  └── CUTLASS/CuTe-generated cubins where they win
 ```
 
-This is a 6.1% end-to-end improvement with unchanged kernel count, expert bytes, and
-D2H count. It proves that the persistent-arena invariant must include exact-shape
-attention scratch, not only the outer layer arena.
+Rules:
 
-The post-fix exact pass still spends roughly 660 ms in GPU kernels and roughly 148 ms
-in gaps/dependencies. Perfectly hiding the current 0.11–0.12 s expert read cannot by
-itself approach the final target. The required architecture is therefore:
+- Rust loads cubins through the CUDA Driver API;
+- provider descriptors are versioned POD data;
+- no C++ object crosses the hot FFI boundary;
+- no provider owns allocation or streams;
+- provider-native weight transforms are performed once during ingest into the final unique
+  device layout;
+- cuda-oxide remains valid for routing, metadata, recurrent compressor logic, paged control,
+  custom HC glue, and eager correctness paths.
 
-1. allocation-free steady execution and device all-hit/miss-only routing;
-2. faster/fused FP8, BF16/HC, and FP4 target kernels plus graph buckets;
-3. deadline I/O scheduling that uses the resulting compute window;
-4. exact DSpark verification to convert each faster target cycle into multiple accepted
-   tokens.
+Restricting all dominant GEMM kernels to handwritten cuda-oxide is not a release invariant.
+Performance evidence decides the provider.
 
-Raw local artifacts are under `target/bench/s0-profile/` and are intentionally not
-committed.
-
-## 3. Canonical architecture decisions
-
-### 3.1 Expert state machine
+### 3.4 Shape strategy
 
 ```text
-Predicted
-  -> ReadQueued                 no stable slot
-  -> Reading                    no stable slot
-  -> RegisteredPinnedReady      no stable slot
-  -> PromotionQueued
-  -> SlotReserved               immediately before upload
-  -> DeviceUploading
-  -> Published
-  -> Retired after last compute event
+rows=1      persistent small-M kernels and multi-N consumers; no padded batch-16 work
+rows=2/4    Tensor Core verification kernels
+rows=8      enabled only when acceptance/serving evidence justifies it
+larger M    conventional tiled/grouped GEMM
+all rows    producer-owned packs, native layouts, stable descriptors, graph buckets
 ```
 
-Selected demand may promote priority or replace a conflicting reservation. It never
-changes the expert selected by the true router.
+Raw concurrency never decides the row bucket by itself. Admission includes incremental
+unique expert bytes, residency, deadline risk, and latency debt.
 
-### 3.2 Two prediction horizons
+### 3.5 Superkernel bundle A — HC producer
 
-Far horizon stages storage only:
+Semantic boundary:
 
-- route traces and request-level activation fingerprints;
-- exact hash layers;
-- measured transition/sequence probabilities;
-- bounded confidence and cutoff depth;
-- no stable slot reservation.
+```text
+HC-pre
+ -> layer RMSNorm
+ -> normalized activation
+ -> FP8 pack/scales when needed
+ -> preserve post/comb outputs
+```
 
-Near horizon promotes to device:
+Requirements:
 
-- current-token route trajectory;
-- selected demand and primarily `L+1` candidates;
-- deadline, score, outstanding bytes, upload frames, and slot pressure;
-- adaptive cutoff derived from measured read+promotion latency.
+- preserve exact HC model semantics;
+- keep the eager original-order implementation as oracle;
+- parallelize independent rows and pipeline loads;
+- remove avoidable hidden global write/read, separate norm launch, and duplicate pack;
+- permit deterministic optimized reductions only after the numerical gate in Section 3.11.
 
-Unscored fallback is forbidden in online decode.
+### 3.6 Superkernel bundle B — MLA projection
 
-### 3.3 Device resident fast path
+Semantic boundary:
 
-The desired steady layer path is:
+```text
+one activation producer
+ -> QueryA + KV true multi-N consumer
+ -> QueryA norm + QueryB
+ -> query head norm + RoPE
+ -> KV norm + RoPE + quantization
+ -> direct paged KV destination
+ -> compressor BF16 projection/recurrent append where applicable
+```
+
+Requirements:
+
+- rows=1 never routes through padded `m16n8` work;
+- rows=2/4/8 use dedicated Tensor Core schedules;
+- QueryA/KV share one producer pack and one backend plan;
+- KV epilogue writes the final paged destination where safe;
+- sparse attention remains an independent semantic kernel until profiling changes its
+  priority.
+
+Output-side MLA bundle:
+
+```text
+inverse RoPE load
+ -> grouped output-A
+ -> output-B producer/consumer plan
+```
+
+### 3.7 Superkernel bundle C — Shared FFN
+
+```text
+one activation producer
+ -> multi-N gate/up
+ -> fused SwiGLU + down-input pack
+ -> down
+ -> direct accumulator epilogue
+```
+
+Shared FFN and routed MoE may overlap only when stream dependencies and shared LPDDR
+contention show an end-to-end win.
+
+### 3.8 Superkernel bundle D — Stable-frame routed FP4 MoE
+
+```text
+stable slot/generation resolve
+ -> rows=1 rank-major or rows=2/4 expert-major dispatch
+ -> gate/up FP4
+ -> SwiGLU + hidden pack
+ -> down FP4
+ -> exact rank-ordered weighted reduction
+```
+
+Requirements:
+
+- kernels dereference stable slot tables, not graph-captured physical frame pointers;
+- miss masks prevent invalid pointer access;
+- rank order remains authoritative;
+- rows=1 does not execute fixed padded multi-column work;
+- the first production bundle may use several high-quality kernels rather than one unsafe
+  monolith.
+
+### 3.9 Native single-sequence verification
+
+The execution ABI must support:
+
+```text
+1 sequence × V candidate rows
+```
+
+separately from multi-session batching.
+
+Required device descriptor:
+
+- candidate positions and causal visibility;
+- row-to-sequence mapping with one sequence allowed;
+- per-row verification intent;
+- device-authoritative KV/compressor lengths;
+- branch/transaction identifier;
+- commit prefix length and rollback boundary;
+- stable output/logit destinations.
+
+Per-layer host `Vec`, `BTreeMap`, and `BTreeSet` construction is removed from graph-stable
+verification. Host metadata is committed transactionally after completion events.
+
+### 3.10 Batched verification head
+
+For `V=2/4/8`:
+
+```text
+batched HC head
+ -> batched output norm
+ -> batched vocabulary projection or drafted-token verification
+ -> device accepted-prefix computation
+ -> full top-k only for rows required by sampling semantics
+```
+
+The system must not perform a serial 1,010 MiB output-head scan independently for every
+candidate row when exact drafted-token verification can use a narrower device contract.
+Any narrowed contract must be proven equivalent to full target verification.
+
+### 3.11 Numerical contract
+
+Unbreakable semantic requirements:
+
+- source bytes, quantization, router policy, and expert identity are exact;
+- no expert substitution, skipping, or approximate target acceptance;
+- KV, recurrent state, commit, and rollback are exact;
+- optimized execution is deterministic;
+- generated tokens match the exact oracle on the release corpus.
+
+Bitwise eager execution remains the development oracle. Optimized Tensor Core and reduction
+kernels may use a different deterministic floating-point order only when they pass:
+
+- per-layer/logit numerical envelopes fixed before testing;
+- exact router IDs and selected experts;
+- long-output token parity;
+- near-tie router and vocabulary regression corpus;
+- resident, cold-miss, packed, graph, and rollback parity;
+- optional exact fallback when a proven margin/error bound indicates a near tie.
+
+An optimized path that changes a generated token without a valid fallback is rejected.
+Requiring every intermediate scalar to match the legacy kernel bitwise is not a universal
+release invariant because it would exclude standard Tensor Core schedules.
+
+### 3.12 Device all-hit and graph path
+
+Desired all-hit layer path:
 
 ```text
 router on device
- -> resolve exact IDs against stable slot table on device
- -> all-hit: execute routed MoE without host materialization
- -> miss: append compact miss records and wake host service
- -> publish uploaded miss
- -> resume exact execution
+ -> stable slot resolve on device
+ -> all-hit executes without route D2H or host lease construction
+ -> actual miss writes a compact control record
+ -> host promotes only the miss
+ -> exact continuation/restart protocol
 ```
 
-The host should not receive all route weights or perform residency work for an all-hit
-layer. Prediction remains advisory; stable slot generations remain authoritative.
+Before graph capture:
 
-### 3.4 Expert-aware batching
+- device batch descriptor is stable;
+- KV/expert/RoPE table bases are stable or indirectly addressed;
+- all-hit path has no D2H or whole-stream synchronization;
+- miss side effects and restart/rollback boundary are explicit;
+- graph buckets own fixed ping-pong workspaces;
+- host telemetry is delayed and cannot block resident computation.
 
-Batch admission optimizes incremental work, not raw row count:
+Capture order:
 
 ```text
-benefit = shared dense compute + shared resident experts + shared loaded experts
-cost    = incremental unique expert bytes + deadline risk + latency debt + memory pressure
+rows=1 resident graph
+rows=2 verification graph
+rows=4 verification graph
+rows=8 only if measured useful
 ```
 
-The scheduler may use predicted route fingerprints to group requests, but exact routing
-and output remain unchanged. A request must not starve because its expert overlap is low.
+Capturing 2,000 weak kernels is not completion of the kernel phase.
 
-### 3.5 Kernel strategy
+### 3.13 Expert-aware scheduler
 
-FlashAttention, FlashInfer, DeepGEMM, and related systems are design references, not
-drop-in replacements for the DSV4 path.
-
-The first fusion target is routed FP4 MoE:
+Admission objective:
 
 ```text
-stable route resolve
- -> token/expert grouping
- -> gate/up FP4
- -> SwiGLU
- -> down FP4
- -> route-weighted reduction
+benefit = shared dense work + resident expert overlap + loaded expert overlap
+cost    = incremental unique expert bytes + miss deadline + memory pressure + latency debt
 ```
 
-The implementation must support GB10 `sm_121a`, E2M1/UE8M0 weights, top-6 routing,
-stable frames, and rows 1/2/4 before optimizing larger serving buckets.
+Rules:
 
-### 3.6 DSpark/offloading co-design
+- rows=1 stays on a fast persistent path instead of waiting for an unprofitable batch;
+- rows=2/4/8 form only when predicted overlap and kernel gain exceed incremental bytes;
+- resident-ready rows are separated from miss-blocked rows;
+- miss I/O overlaps useful resident work;
+- slab/frame credits and deadline lateness constrain admission;
+- fairness prevents low-overlap requests from starvation;
+- request queue depth is not a performance objective.
 
-Drafting, verification, and expert I/O share one governor:
+### 3.14 Exact DSpark transaction
 
-- draft work predicts future target experts;
-- cutoff layers limit speculative prefetch depth;
-- accepted-token probability weights admission;
-- rejected candidates may waste staging but never alter target output;
-- verification batches target tokens and experts;
-- rollback restores KV, route-visible, and scheduler-visible state.
+```text
+draft proposal
+ -> target branch KV/state
+ -> packed exact verification
+ -> device accepted-prefix result
+ -> commit accepted prefix
+ -> rollback rejected suffix
+ -> update residency/acceptance telemetry
+```
 
-The governor optimizes bytes per accepted token, not only acceptance or prefetch recall.
+The governor optimizes accepted tokens per byte and per complete cycle, not acceptance rate
+or prefetch recall in isolation.
 
-## 4. Dependency graph
+Required rollback coverage:
+
+- all accepted;
+- rejection at the first, middle, and last proposal;
+- all rejected;
+- EOS;
+- cancellation and timeout;
+- KV growth/COW/prefix sharing;
+- compressor recurrent state;
+- slot generation reuse;
+- worker failure with in-flight I/O/upload.
+
+### 3.15 Single-owner safetensors ingest
+
+Canonical chain:
+
+```text
+HfSafetensorsInventory / immutable source manifest
+ -> typed ReadPlan(path, aligned extent, destination id/offset, transform)
+ -> shared io_uring O_DIRECT fixed-file + registered-slab extent engine
+ -> borrowed pinned slab views
+ -> upload-stream scatter into preallocated typed CUDA storage
+ -> event ticket retains slab lease
+ -> transactional execution-image publication
+```
+
+Rules:
+
+- static and expert reads share the low-level extent/slab engine but retain distinct policy;
+- static extents sort by file/offset, align to 4 KiB, and coalesce adjacent ranges;
+- QD2 read wave `N+1` overlaps upload wave `N` within slab credits;
+- backend-native transforms write the final unique layout;
+- raw static host payloads are released after image publication;
+- no whole-shard CUDA arena, second pinned pool, DLPack owner, or content-hash payload cache;
+- source identity, bounds, dtype, shape, and byte lengths are revalidated before publication;
+- CPU/reference materialization remains explicit and on demand.
+
+---
+
+## 4. Dependency and critical path
 
 ```mermaid
 flowchart TD
-    F[E0-E6 correctness foundation]
-    S0[S0 target-pass roofline and benchmark contract]
-    S1[S1 production io_uring staging]
-    S2[S2 device resident fast path]
-    S3[S3 fused target kernels and graphs]
-    S4[S4 trace and deadline residency]
-    S5[S5 expert-aware continuous batching]
-    S6[S6 real DSpark verification]
-    S7[S7 reproducible single-node SOTA]
+    B0[Benchmark integrity and serving regression]
+    ABI[Executable image and KernelProvider ABI]
+    V[Single-sequence V-row verification]
+    H[Batched verification head]
+    K[FP8 BF16 HC superkernels]
+    M[Routed FP4 and shared FFN bundles]
+    A[Device all-hit path]
+    G[Rows graph buckets]
+    D[Minimal exact DSpark transaction]
+    R[Route acceptance and cache oracle]
+    I[Static extent ingest]
+    S[Expert-aware serving scheduler]
+    REL[Release and SOTA dossier]
 
-    F --> S0
-    F --> S1
-    S0 --> S2
-    S1 --> S2
-    S0 --> S3
-    S2 --> S3
-    S0 --> S4
-    S1 --> S4
-    S2 --> S4
-    S3 --> S5
-    S4 --> S5
-    S3 --> S6
-    S4 --> S6
-    S5 --> S6
-    S6 --> S7
+    B0 --> ABI
+    ABI --> V
+    V --> H
+    H --> K
+    K --> M
+    A --> G
+    K --> G
+    V --> D
+    H --> D
+    D --> R
+    R --> K
+    R --> A
+    M --> G
+    G --> S
+    D --> S
+    I --> REL
+    B0 --> REL
+    S --> REL
 ```
 
-S3 and S4 may proceed in parallel after S0 provides trustworthy component timing and
-route traces.
+Critical release path:
 
-# 5. SOTA phases
+```text
+benchmark integrity
+ -> executable kernel plan
+ -> 1-sequence × V verification
+ -> batched verification head
+ -> dominant FP8/BF16/HC kernels
+ -> minimal DSpark and real acceptance
+ -> route/cache feasibility
+ -> FP4/all-hit/graphs as measured
+ -> complete cycle >=16 accepted tok/s
+```
 
-## S0 — Exact target-pass roofline and benchmark contract
+Parallel release lanes:
 
-**Status:** highest-priority active phase.
+- static ingest/cold TTFT/memory;
+- serving scheduler and `/tokenize` correctness;
+- parity corpus and artifact publication;
+- competitor eligibility and baseline runs.
+
+Static ingest is important but does not block resident kernel experiments. Full cross-request
+continuous batching is not a prerequisite for the first single-sequence DSpark acceptance
+measurement.
+
+---
+
+## 5. Phased implementation plan
+
+## Phase P0 — Benchmark integrity and current regression
 
 ### Purpose
 
-Determine where the remaining approximately `0.88 s` warm exact target step is spent
-before another large implementation change. The first Nsight/component checkpoint and
-allocation-free paged-top-k scratch fix are recorded in Section 2.10.
+Create a trustworthy measurement loop before further performance changes.
 
 ### Deliverables
 
-1. A deterministic 43-layer route trace for a fixed prompt/continuation.
-2. A resident/no-I/O replay where the exact selected working set is preinstalled.
-3. CUDA-event timings for:
-   - attention/MLA/HC;
-   - router and stable route resolution;
-   - shared expert;
-   - routed FP4 MoE gate/up, activation, down, and reduction;
-   - expert wait and upload dependency;
-   - final norm and output head.
-4. Launch count and launch-gap report. Initial exact-pass result: about 2.4k–2.8k
-   kernels, 660 ms kernel busy, and 148 ms post-fix GPU span gap; per-kernel attribution
-   is recorded in Section 2.10.
-5. Separate reports for:
-   - cold storage;
-   - warm real residency;
-   - resident/no-I/O roofline;
-   - output-head included and excluded.
-6. Single-stream output length 64–128 and serving concurrency 1/2/4 artifacts.
+- fix or implement `/tokenize` or an equivalent exact token-accounting endpoint;
+- hard-fail invalid TTFT/ITL instead of recording zero;
+- freeze model/tokenizer/template/prompt/client/server manifests;
+- rerun current C1/C2/C4/C8 under one contract;
+- reproduce or explain the current C1 serving anomaly;
+- add NVTX ranges for prefill, capture, resident head/body, layer bundles, MoE, and DSpark
+  cycle components;
+- preserve unprofiled and matching profiled artifacts.
 
 ### Exit gate
 
-- the exact target pass is partitioned into measured GPU compute, host wait, I/O wait,
-  output-head, and launch/control time;
-- component totals explain the observed wall time within an explicitly documented error;
-- all roofline modes produce the same exact tokens;
-- the next kernel or scheduler change is justified by measured percentage, not intuition.
+- zero failed requests;
+- valid token accounting and streaming timestamps;
+- paired current-branch serving matrix with repeated runs;
+- performance deltas attributable to one code/config change.
 
-### Non-goals
+## Phase P1 — Executable image and native V-row correctness
 
-- treating synchronization-heavy diagnostic timing as the headline result;
-- claiming SOTA from output length 1/2/8;
-- using a synthetic model or different quantization for the target roofline.
+### Purpose
 
-## S1 — Production io_uring registered staging
-
-**Status:** architecture implemented and real-checkpoint validated; operational metrics
-hardening remains.
-
-### Completed
-
-- O_DIRECT fixed-file io_uring backend;
-- registered aligned CUDA-pinned slabs;
-- QD2 and an initial bounded physical admission rule;
-- two-extent expert reconstruction;
-- direct slab-to-device subrange upload;
-- safe slab lifetime through upload completion;
-- mmap fallback;
-- exact parity across mmap and io_uring paths.
-
-### Remaining deliverables
-
-- replace the static half-capacity reserve with atomic extent/slab credits;
-- reserve selected demand from batch width, top-k, and route-union estimates;
-- let selected demand preempt or take over lower-priority prefetched credits;
-- histogram-quality read latency p50/p95;
-- current/peak read and upload queue depth by deadline class;
-- explicit selected-reserve utilization;
-- repeated long-output serving validation;
-- documented fallback behavior for unsupported filesystems.
-
-### Exit gate
-
-- byte identity for all six expert components;
-- no buffer reuse before CQE and upload completion;
-- no per-expert pageable `Vec -> pinned` copy in the io_uring CUDA path;
-- no fallback/exhaustion under the production benchmark matrix;
-- QD2 remains near the measured storage ceiling.
-
-### Non-goals
-
-- direct GDS as the default on unsupported GB10;
-- mapped-pinned hot expert execution;
-- increasing QD without a deadline benefit;
-- rewriting the maintained io-uring crate ABI.
-
-## S2 — Device-resident route and miss-only host path
-
-**Depends on:** S0 and S1.
+Establish the final runtime shape before optimizing more kernels.
 
 ### Deliverables
 
-1. Exact device route IDs/weights remain the compute source of truth.
-2. Stable slot/generation resolution runs on device.
-3. All-hit layers execute without host materialization.
-4. Device compacts only misses into a bounded control queue.
-5. Host handles miss promotion and publication without downloading resident routes.
-6. Route-ready scheduling can enqueue `L+1` work before current routed compute completes.
-7. Request completion uses event-owned deferred reclamation rather than a whole-stream sync.
+- `KernelProvider` and versioned POD launch descriptors;
+- `LayerKernelPlan[1/2/4/8]` compiled into the execution image;
+- existing cuda-oxide kernels registered as the initial provider;
+- native `1 sequence × V rows` execution for `V=2/4/8`;
+- device-stable verification descriptor;
+- correctness-first batched HC head/norm/output verification;
+- all-resident teacher-forced verification benchmark.
 
-### Correctness gate
+### Exit gate
 
-- all-hit and miss paths match current tokens and layer outputs;
-- a stale/canceled prefetch can never publish;
-- selected experts cannot be evicted by a conflicting reservation;
-- device miss queues are bounded and generation checked;
-- fallback to the current host path remains available during rollout.
+- exact eager parity for every row and sequence-state transition;
+- rollback returns KV/compressor/position state exactly;
+- `T_verify(2/4/8)` and route-union baseline reported;
+- no per-layer host container construction in the stable V-row path.
 
-### Performance gate
+## Phase P2 — FP8/BF16/HC target superkernels
 
-- all-hit layers perform no route D2H;
-- route D2H moves from fixed 43/token toward actual miss-layer traffic;
-- resident/no-I/O target latency improves materially;
-- miss handling does not increase selected late waits or wrong-prefetch bytes.
+### Purpose
 
-## S3 — Fused target kernels and stable graph buckets
+Attack the measured 72.7% dominant kernel family.
 
-**Depends on:** S0; the final graph path depends on S2.
+### Order
 
-### Priority 1: FP8/BF16 attention and HC linears
+1. rows=1 QueryA/KV true multi-N producer/consumer;
+2. rows=2/4 verification FP8 schedules;
+3. BF16 small-M Tensor Core kernels and compressor multi-N;
+4. HC-pre → norm → pack producer fusion;
+5. grouped output-A/output-B plan;
+6. rows=8 only after acceptance evidence.
 
-The first exact-pass Nsight slice measured approximately:
+### Deliverables
+
+- cuda-oxide and/or embedded CUTLASS/CuTe cubin implementations;
+- backend-native weight layouts produced during ingest;
+- targeted Nsight Compute reports for selected production kernels;
+- deterministic numerical and near-tie parity gates;
+- unprofiled resident `T_verify(2/4/8)` after every bundle.
+
+### Exit gate
+
+- intended operating point satisfies resident verification budget;
+- no token/router regression on the release parity corpus;
+- no duplicate full weight layout in coherent memory;
+- fallback remains available for unsupported shapes.
+
+### Kill gate
+
+After reasonable production kernels, failure of Gate F1 stops the current 16 tok/s plan.
+
+## Phase P3 — Minimal exact DSpark and feasibility proof
+
+### Purpose
+
+Measure real acceptance before completing secondary optimizations.
+
+### Deliverables
+
+- real proposal source and immutable identity/hash;
+- exact verify, accepted-prefix, commit, and rollback;
+- `V=2/4/8` sweep;
+- accepted-prefix histogram and `A(V)`;
+- complete cycle timer and component timers;
+- request-visible tokens reconciled with internal committed tokens;
+- route/union/rejected-prefetch traces.
+
+### Exit gate
+
+- all acceptance/rejection rollback cases pass;
+- Gate F2 passes for at least one operating point or remains within an explicit optimization
+  budget;
+- no acceptance result depends on approximate target execution.
+
+## Phase P4 — Route/cache oracle and acceptance-aware I/O
+
+### Purpose
+
+Prove the storage side of the release equation.
+
+### Deliverables
+
+- trace format with cycle, layer, row, rank, expert, hit class, and timing;
+- actual available-memory budget after dense weights/KV/arenas/slabs/OS;
+- LRU/LFU/frequency-recency/transition and Belady-oracle simulation;
+- bytes/cycle and bytes/accepted token;
+- far-horizon storage staging and near-horizon promotion actions;
+- deadline/cutoff admission weighted by acceptance probability;
+- selected-demand takeover and bounded slab/frame credits.
+
+### Exit gate
+
+- Gate F3 passes under the chosen operating point;
+- no wrong prefetch changes target output;
+- production policy approaches a documented fraction of the oracle;
+- no slab exhaustion/fallback in the release matrix.
+
+## Phase P5 — Routed FP4, shared FFN, and all-hit device control
+
+### Purpose
+
+Optimize the next measured kernel group and remove resident host barriers.
+
+### Deliverables
+
+- rows-aware stable-frame FP4 gate/up;
+- SwiGLU + hidden-pack fusion;
+- down and exact rank-ordered reduction;
+- shared FFN bundle with direct accumulator epilogue;
+- all-hit route execution without route D2H or host lease construction;
+- compact actual-miss control queue;
+- explicit miss continuation/restart boundary.
+
+### Exit gate
+
+- routed FP4 bundle wins end to end, not only in microbenchmarks;
+- all-hit layers wake no host service;
+- miss execution remains exact;
+- parity survives mixed resident/miss rank order.
+
+## Phase P6 — Stable graph buckets
+
+### Purpose
+
+Remove launch/control gaps after dominant kernel work has been reduced.
+
+### Deliverables
+
+- rows=1 resident graph;
+- rows=2/4 verification graphs;
+- rows=8 graph only when useful;
+- stable device descriptors and workspace bindings;
+- sequence reuse, KV growth, slot-generation reuse, and rollback coverage;
+- graph miss escape/restart protocol.
+
+### Exit gate
+
+- no D2H, whole-stream sync, or allocation in all-hit replay;
+- graph and eager outputs satisfy the numerical contract;
+- graph replay yields a measured complete-cycle win.
+
+## Phase P7 — Static safetensors extent engine
+
+### Purpose
+
+Reduce cold publication latency and memory amplification without creating a second owner.
+
+### Deliverables
+
+- immutable 48-shard source manifest;
+- generalized artifact extent engine over existing fixed files/registered slabs;
+- typed destination preallocation and async scatter upload;
+- bounded read/upload double buffering at QD2;
+- transactional image publication from source descriptors;
+- raw host payload release after publication;
+- backend-native layout transform support.
+
+### Exit gate
+
+- all static and expert source bytes validated;
+- direct 1 GiB/16 MiB QD2 microbench remains at least 10.0 GiB/s;
+- contiguous static `aligned/requested <= 1.02`;
+- pageable staging bytes zero on the new CUDA path;
+- no shard/checkpoint-sized staging or page-cache growth;
+- pinned peak bounded by the configured slab pool;
+- cold inventory/image publication/first-token A/B reported;
+- unchanged model parity.
+
+This phase proceeds in parallel with P2–P5 and must not displace the resident/DSpark critical
+path.
+
+## Phase P8 — Expert-aware serving and release
+
+### Purpose
+
+Turn the single-sequence cycle into a useful, reproducible service and determine whether the
+result is SOTA.
+
+### Deliverables
+
+- incremental-expert-byte admission;
+- resident-ready/miss-blocked separation;
+- dynamic rows=1/2/4/8 bucket selection;
+- fairness and latency-debt enforcement;
+- fresh and warm C1/C2/C4/C8 sweeps;
+- long-output parity and failure testing;
+- competitor eligibility matrix and same-contract runs;
+- public release artifact archive with hashes.
+
+### Release gate
+
+All must pass:
 
 ```text
-FP8 GEMM                         229 ms
-BF16 GEMV                        153 ms
-HC-pre                           103 ms
-grouped output_a                  32 ms
-FP8 activation quantization       29 ms
-FP8 GEMV                          24 ms
+exact target semantics and committed-token parity
+zero headline request failures
+lower 95% confidence bound of warm accepted throughput >= 16 tok/s
+memory bounded with no swap or page-cache collapse
+published environment and raw artifacts
+Ferrule beats the strongest eligible same-contract competitor for a SOTA claim
 ```
 
-These kernels dominate the roughly 660 ms GPU-busy time. Work:
-
-- profile the exact FP8/BF16 shapes and arithmetic intensity for rows 1/2/4;
-- replace batch-1 general GEMM paths with shape-specialized persistent GEMV/GEMM where
-  memory traffic or launch setup dominates;
-- fuse activation quantization with its consumer when parity and register pressure permit;
-- fuse HC-pre/norm or persist intermediate layout where the profile proves a saved read/write;
-- evaluate FlashInfer/FlashAttention/DeepGEMM design techniques against DSV4 HC/MLA shapes,
-  not as drop-in APIs;
-- retain eager reference-equivalent fallbacks.
-
-### Priority 2: routed FP4 MoE
-
-The measured gate/up plus down FP4 kernels account for roughly 62 ms of the isolated
-batch-1 pass; the wider MoE envelope also includes route barriers, reads, and waits.
-Work:
-
-- profile rows 1/2/4 and selected-expert distributions;
-- fuse or persist route resolve/grouping where profitable;
-- implement GB10-specialized grouped gate/up FP4;
-- fuse SwiGLU and hidden packing;
-- implement grouped down FP4 and weighted reduction;
-- retain scalar/eager correctness fallback.
-
-### Priority 3: stable graph buckets and device control
-
-- complete S2 all-hit/miss-only routing before final graph capture;
-- stable decode graph buckets for rows 1/2/4;
-- graph-safe KV and stable expert bindings;
-- eliminate the remaining exact-shape allocations before capture;
-- no D2H or whole-stream sync inside an all-hit captured bucket;
-- eager fallback for misses, unsupported shapes, and diagnostics.
-
-### Priority 4: output head
-
-Completed:
-
-- chunk-local top-k stays on device;
-- global top-k merge stays on device;
-- final output D2H is 2 calls instead of 64.
-
-Remaining:
-
-- compact final ID/value into one transfer or perform greedy selection on device;
-- profile/fuse chunk top-k and global merge;
-- reduce the cost of the 1,010 MiB BF16 scan without changing logits semantics.
-
-The synchronized component profile measured about 39 ms when the output head was
-requested, so it is important but not ahead of the attention/HC target body.
-
-### Exit gate
-
-- exact numerical/token parity;
-- routed MoE and total launch counts fall materially from the current approximately
-  2.5k launches/token;
-- graph replay survives sequence reuse, slot generations, KV growth, and rollback;
-- throughput gains hold with real expert misses, not only a synthetic resident case.
-
-## S4 — Trace-driven, deadline-aware residency
-
-**Depends on:** S0–S2 metrics.
-
-### Deliverables
-
-- route traces with token, layer, selected rank, hit class, reuse distance, and timing;
-- checkpoint-specific SRP/SCH-style locality measurements;
-- offline LRU/LFU/frequency-recency/transition and Belady-oracle simulation;
-- hotset sweep 6/8/12/16/24/32/48 per layer;
-- far-horizon `StageToRegisteredPinned` and near-horizon `PromoteToDevice` actions;
-- deadline queue ordered by selected status, target layer, confidence, completion estimate,
-  and shard locality;
-- one credit ledger for NVMe SQEs, registered extents/slabs, upload frames, stable slots,
-  and coherent-memory traffic;
-- atomic admission that charges queued as well as physically acquired slab credits;
-- selected takeover/preemption without a pageable fallback when low-priority prefetch owns
-  the required credits;
-- reserve estimates based on `min(num_experts, top_k * batch_rows)` and then tightened by
-  measured/predicted route union; no hardcoded batch-1 top-k constant;
-- on-time, late, wasted, evict-before-use, and wrong-prefetch byte counters;
-- memory-pressure controller across device frames, slabs, KV, and arenas.
-
-### Paper-derived constraint
-
-DeepSeek-family routing locality is not assumed to match the strongest MoE models.
-The local-routing paper places DeepSeek-V2-Lite around `37.9%` SRP for a 16-token
-segment. Ferrule must measure this checkpoint rather than assuming LRU or Markov will
-remove most misses.
-
-### Exit gate
-
-- production hotset is justified by hit-rate/latency/bytes curves;
-- warm expert traffic improves from the current approximately `0.61 GB/token` average;
-- wrong prefetch never blocks selected demand;
-- the production policy approaches its trace-derived oracle enough to justify complexity;
-- peak coherent-memory use retains a documented safety margin.
-
-## S5 — Expert-aware continuous batching
-
-**Depends on:** S3 and S4.
-
-### Deliverables
-
-1. Admission cost based on incremental unique expert bytes.
-2. Predicted route fingerprints for request grouping.
-3. Dynamic rows 1/2/4 selection instead of always filling the largest batch.
-4. Cross-sequence sharing of resident and newly loaded experts.
-5. Multi-token Tensor Core expert execution.
-6. Fairness, starvation bounds, and latency debt.
-7. Separate prefill/decode budgets and prefix-aware admission.
-8. Telemetry for:
-   - unique experts/layer/batch;
-   - expert bytes/emitted token;
-   - expert overlap across requests;
-   - batch rows and GPU occupancy;
-   - latency cost of grouping delay.
-
-### Baseline to beat
-
-For input 8/output 8:
-
-```text
-C1 0.78 tok/s
-C2 1.04 tok/s
-C4 1.15 tok/s
-```
-
-### Exit gate
-
-- aggregate throughput scales materially better than the current C4/C1 ratio of 1.47x;
-- bytes per emitted token do not increase faster than useful compute;
-- p95 request latency remains within a published service objective;
-- concurrency 1/2/4 passes cancellation, isolation, and residency-generation tests.
-
-## S6 — Real DSpark proposal, verification, and I/O governor
-
-**Depends on:** S3–S5 target-path maturity.
-
-### Deliverables
-
-- proposal state and draft execution;
-- multiple candidate tokens per proposal;
-- packed exact target verification;
-- accepted-prefix commit and rejected-suffix rollback;
-- KV, route, expert, output-head, and scheduler consistency across rollback;
-- proposal-derived future expert staging;
-- SP-MoE-style cutoff layer and deadline admission;
-- adaptive proposal length based on acceptance, target-pass time, expert bytes, and memory;
-- acceptance, candidates/verify, accepted tokens/pass, rejected-prefetch bytes, and rollback
-  counters.
-
-### Correctness gate
-
-- greedy output is identical to non-speculative target decode;
-- all rejection lengths and EOS/cancellation boundaries rollback exactly;
-- rejected proposals cannot leave published logical state;
-- predictor/draft failure cannot poison subsequent requests.
-
-### Performance gate
-
-- accepted tokens per exact 43-layer pass is consistently greater than one;
-- accepted-token throughput improves after proposal, verification, I/O, and rollback cost;
-- bytes per accepted token decreases;
-- the measured operating point supports or falsifies the 15–17 tok/s target honestly.
-
-## S7 — Reproducible single-node SOTA validation
-
-**Depends on:** S0–S6.
-
-### Deliverables
-
-- fixed single-stream and serving benchmark contracts;
-- cold and warm runs reported separately;
-- concurrency 1/2/4 with long enough outputs to amortize TTFT;
-- controlled comparison with every runnable single-node competitor;
-- raw server logs, environment, GPU state, JSON details, and exact commands;
-- lossless base and DSpark modes reported separately;
-- memory, power where available, and failure/retry statistics.
-
-### Exit gate
-
-- no comparison changes checkpoint, tokenizer, prompt distribution, sampling, context/output
-  length, or quality semantics;
-- all headline runs have zero failed requests;
-- accepted-token throughput and base target-pass throughput are both reported;
-- the SOTA claim links raw artifacts and reproduction commands;
-- 15–17 tok/s is claimed only if the measured accepted-token result reaches it.
+---
 
 ## 6. Immediate implementation slices
 
-### Slice A — Resident/no-I/O exact roofline
+### Slice A — KernelProvider and executable plan ABI
 
-**Status:** active. Exact-pass Nsight isolation and allocation-free paged-top-k scratch
-are complete; deterministic route capture and resident replay remain.
+Files:
 
-Files likely involved:
+- `crates/ferrule-cuda/src/context.rs`
+- `crates/ferrule-cuda/src/kernels.rs`
+- new internal provider/manifest modules under `crates/ferrule-cuda/src/`;
+- `crates/ferrule-model/src/models/deepseek_v4/cuda_cache.rs`.
+
+Work:
+
+- separate resource ownership from kernel implementation;
+- register current cuda-oxide kernels as provider zero;
+- define embedded cubin provider and versioned launch descriptors;
+- add per-shape kernel/layout/workspace plan to the execution image;
+- reserve ingest-time backend-native transforms;
+- avoid hot-path dynamic trait dispatch.
+
+### Slice B — One sequence × V rows
+
+Files:
 
 - `crates/ferrule-model/src/models/deepseek_v4/runner.rs`
-- `crates/ferrule-model/src/models/deepseek_v4/cuda_cache.rs`
-- `crates/ferrule-cuda/src/context.rs`
-- benchmark/runtime counter reporting.
-
-Work:
-
-- capture a deterministic exact route trace;
-- preinstall that trace's selected working set;
-- report component CUDA-event time without changing output;
-- establish resident and output-head-excluded lower bounds;
-- keep steady decode at zero device allocations across every observed top-k shape.
-
-### Slice B — Device all-hit/miss-only route resolution
-
-Files:
-
-- `crates/ferrule-cuda/src/kernels.rs`
-- `crates/ferrule-cuda/src/context.rs`
-- `crates/ferrule-model/src/models/deepseek_v4/cuda_cache.rs`
+- `crates/ferrule-model/src/models/deepseek_v4/attention.rs`
 - `crates/ferrule-model/src/models/deepseek_v4/layer.rs`
+- runtime KV transaction code.
 
 Work:
 
-- resolve stable slots on device;
-- build a bounded miss queue;
-- bypass host materialization on all-hit layers;
-- retain the exact fallback path.
+- remove the `sequences.len() >= 2` limitation for verification batches;
+- distinguish multi-session packed rows from single-sequence causal verification rows;
+- move lengths/masks/positions into a stable device descriptor;
+- remove per-layer host maps/sets/vectors from the stable path;
+- add teacher-forced V=2/4/8 correctness and timing tests.
 
-### Slice C — FP4 MoE rows 1/2/4 kernel plan
-
-Files:
-
-- `crates/ferrule-cuda/src/kernels.rs`
-- `crates/ferrule-cuda/src/context.rs`
-- `crates/ferrule-model/src/models/deepseek_v4/cuda_cache.rs`
+### Slice C — Batched verification head
 
 Work:
 
-- derive launch shapes from real route traces;
-- fuse only measured hot stages;
-- preserve stable-frame and upload-event safety;
-- compare eager/fused parity and GPU time.
+- batched HC head and norm;
+- batched vocabulary projection;
+- exact drafted-token verification on device;
+- accepted-prefix output;
+- avoid serial full-vocab scans when target semantics permit;
+- retain full top-k for required sampling rows.
 
-### Slice D — Trace simulator and production policy
-
-Files:
-
-- `crates/ferrule-model/src/moe/prediction.rs`
-- `crates/ferrule-model/src/moe/streaming.rs`
-- runtime counter/benchmark reporting;
-- a reusable trace-analysis script under `scripts/` if needed.
+### Slice D — FP8 MLA bundle
 
 Work:
 
-- export route/reuse traces;
-- compute checkpoint-specific locality and oracle curves;
-- select hotset, horizon, and replacement policy from evidence.
+- rows=1 persistent QueryA/KV multi-N;
+- rows=2/4 Tensor Core verification;
+- chain QueryA norm/QueryB and KV epilogues through one backend plan;
+- direct paged KV write when safe;
+- compare cuda-oxide and embedded cubin providers.
 
-### Slice E — Expert-aware scheduler admission
-
-Files:
-
-- runtime scheduler/driver;
-- model prediction summary boundary;
-- serving telemetry.
+### Slice E — BF16 and HC producer bundle
 
 Work:
 
-- estimate incremental unique expert bytes;
-- group compatible requests within a bounded delay;
-- select rows 1/2/4 dynamically;
-- enforce fairness and latency debt.
+- BF16 small-M Tensor Core schedule;
+- compressor multi-N projection;
+- HC-pre/norm/pack producer fusion;
+- preserve eager original-order oracle;
+- near-tie and long-output numerical gates.
 
-### Slice F — DSpark transactional prototype
+### Slice F — Minimal DSpark transaction
 
-Work begins only after S0 establishes target-pass cost and S3 provides a verification-capable
-packed target path.
+Work:
 
-## 7. Global invariants
+- proposal identity and width sweep;
+- branch KV/state;
+- exact target verification;
+- accepted-prefix computation;
+- commit/rollback;
+- acceptance and route-union traces;
+- complete-cycle timer.
 
-### Correctness
+### Slice G — Static extent ingest
 
-- the real router always determines exact expert IDs and weights;
-- no expert skipping, low-bit substitution, or approximate target MLP;
-- every stable pointer is generation and lifetime protected;
-- rollback restores KV, route-visible, expert-visible, and sampling-visible state;
-- benchmark modes never silently enable synchronization-heavy profiling;
-- prefetch cancellation is normal control flow and cannot poison a layer.
+Work:
 
-### Ownership
+- immutable source manifest;
+- aligned/coalesced `ReadPlan`;
+- shared registered-slab extent engine;
+- typed scatter upload and event-held leases;
+- transactional execution-image publication;
+- cold/warm publication and memory A/B.
 
-- runtime owns request scheduling, batch admission, KV pages, and logical residency;
-- model owns DSV4 math, source binding, and model-specific prediction signals;
-- CUDA owns streams, events, frames, stable tables, pinned registration, and graph buckets;
-- storage owns files, SQEs/CQEs, aligned extents, and slab reuse;
-- DSpark transactions own proposal/verification commit and rollback boundaries.
+---
 
-### Hot path
+## 7. Benchmark and correctness contract
 
-Steady decode must not perform:
+### 7.1 Immutable run manifest
 
-- per-token device allocation;
-- whole-stream synchronization;
-- all-layer fixed-K prefetch;
-- process-global mmap lookup per tensor;
-- pageable-to-pinned expert copies in the io_uring path;
-- output-head chunk-by-chunk host merge;
-- host route processing for an all-hit layer after S2;
-- FIFO batch growth without incremental expert-byte admission after S5.
+Every release candidate records:
 
-### Test discipline
+- Ferrule commit and dirty state;
+- release binary SHA256;
+- Rust, CUDA, cuda-oxide, compiler, and feature versions;
+- all performance environment variables;
+- model repository revision;
+- 48 shard names, exact sizes, and SHA256;
+- index/config/tokenizer/chat-template hashes;
+- prompt corpus hash;
+- benchmark client version/commit;
+- driver, kernel, firmware, filesystem, and mount options;
+- clocks, power mode, temperature, CPU governor, swap, and page-cache state;
+- run UUID and exact commands.
 
-- permanent tests cover correctness and lifetime regressions;
-- one-off performance harnesses are removed after results are recorded;
-- reusable benchmarks live under `scripts/` or `justfile`;
-- artifacts live under `target/`;
-- no benchmark modifies checkpoint files;
-- no performance win is accepted without token parity.
+### 7.2 Correctness matrix
 
-## 8. Benchmark contract
+Two oracle levels:
 
-### Single-stream base decode
+1. optimized/graph/DSpark path versus Ferrule eager exact path;
+2. Ferrule eager path versus independent canonical fixtures/runtime where available.
+
+Coverage:
+
+- multiple prompts and context lengths;
+- 64/128-token continuations;
+- prefill, decode, and mixed batches;
+- rows=1/2/4 and rows=8 when enabled;
+- resident, cold miss, upload takeover, and mixed hit/miss;
+- graph replay and slot-generation reuse;
+- KV growth, COW, and prefix sharing;
+- EOS, cancellation, timeout, and worker failure;
+- every DSpark rejection prefix length;
+- rollback of KV, compressor, route-visible, scheduler-visible, and residency-visible state.
+
+### 7.3 Resident verification benchmark
+
+Report for `V=1/2/4/8`:
+
+- target body and required output-head time;
+- rows/s and target cycles/s;
+- kernel launches/graphs;
+- GPU kernel busy/span/gap;
+- LPDDR/L2/TC metrics for dominant kernels;
+- expert union per layer/cycle;
+- zero-I/O resident proof;
+- peak memory and allocations;
+- parity result.
+
+### 7.4 DSpark benchmark
+
+Report:
+
+- proposal source/hash and `V`;
+- accepted-prefix histogram;
+- `A(V)` and acceptance rate;
+- draft/verify/commit/rollback/uncovered-I/O time;
+- complete `T_cycle(V)` percentiles;
+- accepted tok/s;
+- unique expert union;
+- requested/read/upload/rejected-prefetch bytes;
+- bytes/accepted token;
+- rollback and failure counts;
+- internal committed-token versus HTTP response accounting.
+
+### 7.5 Single-stream and serving
+
+Single-stream base target:
 
 ```text
 input length       32
-output length      64 or 128
+output length      64 and 128
 concurrency        1
 temperature        0
 ignore EOS         true
-warm measured      at least 64 tokens
-mode               exact non-speculative target
+fresh and warm     reported separately
 ```
 
-Report output-head-included and target-body timing separately.
-
-### Serving sweep
+Serving matrix:
 
 ```text
 input length       32
 output length      at least 32
-concurrency        1,2,4
-prompts            at least 5x concurrency
-request rate       published and identical
-sampling           greedy, ignore EOS for fixed length
+concurrency        1,2,4,8
+request rate       fixed and published
+sampling           greedy, ignore EOS
+server state       fresh and separately warm
 ```
 
-Short `8 -> 8` runs are diagnostic baselines only.
+Short `8 -> 8` runs are diagnostic only.
 
-### DSpark sweep
+Release latency requirements:
 
-Report:
+- `/tokenize` or exact equivalent must work;
+- invalid TTFT/ITL is a hard failure, not zero;
+- input/output token accounting must match server responses;
+- enough requests must support the claimed percentile or a valid confidence method;
+- each cell has repeated independent runs and zero failures.
 
-- proposal length;
-- acceptance rate;
-- accepted tokens/target pass;
-- target verification time;
-- rejected-prefetch bytes;
-- bytes/accepted token;
-- effective accepted-token throughput.
+### 7.6 Static ingest A/B
 
-### Required counters
+Compare current per-tensor and planned extent paths using the same source and final typed
+layout.
 
-- TTFT, ITL, TPOT, E2EL percentiles;
-- request/output-token throughput;
-- exact target passes/s;
-- accepted tokens/s;
-- selected/resident/upload/staged/cold expert classes;
-- requested/read/upload expert bytes per emitted and accepted token;
-- I/O/upload queue depth and deadline lateness;
-- unique experts per layer/batch;
-- D2H/H2D calls and bytes;
+Measure:
+
+- inventory complete;
+- plan complete;
+- first upload submitted;
+- execution image published;
+- first token ready;
+- requested/aligned/coalesced/read/upload/discarded bytes;
+- extent count/size and read latency p50/p95/p99;
+- read/upload overlap;
+- page-cache, pageable, pinned, CUDA, RSS, and swap peaks;
+- failure recovery and lease reclamation.
+
+A full 156 GiB scan has a storage-only lower bound near 14.8 s at 10.53 GiB/s and is a
+roofline diagnostic, not the production first-token objective.
+
+### 7.7 Profiling
+
+For every headline kernel phase:
+
+- preserve one unprofiled release run;
+- preserve a matching profiled run;
+- add NVTX/capture ranges;
+- store `.nsys-rep`, SQLite, summaries, commands, and profiler version;
+- run targeted Nsight Compute only on dominant production kernels;
+- profile actual V-row and complete DSpark cycles, not only M=1.
+
+### 7.8 Competitor contract
+
+Eligibility table records for each runtime:
+
+- exact checkpoint support;
+- exact tokenizer/quantization;
+- target-only and speculative capability;
+- version/commit and best legal public configuration;
+- runnable/not-runnable with reason;
+- throughput, latency, memory, and failures;
+- raw artifacts.
+
+Base-to-base and speculative-to-equivalent-speculation comparisons remain separate.
+
+---
+
+## 8. Required counters
+
+### Target and DSpark
+
+- target rows/cycle and target cycles/s;
+- proposals, accepted prefix, committed tokens, and rollbacks;
+- accepted tok/s and complete cycle latency;
+- draft/verify/commit/rollback component time;
+- bytes and time per accepted token.
+
+### GPU
+
 - kernel launches and graph replays;
-- synchronous and asynchronous device alloc/free calls by size;
-- GPU kernel-busy time, GPU span, and unexplained gap;
-- device/slab/pageable/KV/arena peak bytes;
-- failed requests and fatal worker states.
+- GPU kernel busy/span/gap;
+- TC utilization and achieved memory bandwidth for dominant kernels;
+- D2H/H2D/D2D calls and bytes;
+- sync and async allocations/frees by size;
+- stream synchronizations and event waits.
 
-## 9. Paper-derived guidance
+### Experts and I/O
 
-The local papers support the following decisions:
+- selected/resident/upload/staged/cold classes;
+- unique expert union per layer/cycle;
+- requested/aligned/read/upload/rejected-prefetch bytes;
+- read/upload QD and p50/p95/p99 latency;
+- deadline lateness, slab/frame credits, fallback, and exhaustion;
+- oracle/current-policy bytes per accepted token.
 
-- **BaM:** GPU-initiated storage can remove CPU control overhead, but GB10/GDS support and
-  the current workload do not justify replacing the working io_uring path first.
-- **MoE-Infinity / FlashMoE:** trace-aware frequency/recency replacement can greatly beat
-  naive offloading baselines; Ferrule should implement trace/oracle measurement before a
-  learned policy.
-- **Local Routing Consistency:** locality differs materially by model; DeepSeek must be
-  measured, not assumed.
-- **Klotski:** multi-batch overlap is useful only with expert-aware batch planning; this is
-  consistent with Ferrule's measured 1.47x throughput at 4x concurrency.
-- **SP-MoE / MoE-SpeQ:** speculative decoding and expert offloading require one cutoff,
-  deadline, and acceptance-aware governor.
-- **Pre-gated/Read-ME/RMoE:** model/router co-design can expose future routing earlier, but
-  replacing or retraining the checkpoint router is outside the lossless target milestone.
-- **HOBBIT/EdgeMoE:** mixed-precision substitution or expert skipping may improve edge
-  deployment but is not permitted in the exact target path.
+### Memory and serving
 
-## 10. Global non-goals
+- device/slab/pageable/KV/arena/page-cache/RSS/swap peaks;
+- TTFT, TPOT, ITL, E2EL distributions;
+- request/output/accepted-token throughput;
+- failures, cancellations, and fatal worker states;
+- inventory/image-publication/first-token timestamps.
 
-- B+ tree or a general database index for sequential tensor extents;
-- direct GDS claims on unsupported GB10 hardware;
-- managed-memory prefetch as the production expert path;
-- mapped-pinned hot expert execution;
-- full-model page-cache residency;
-- fixed-K all-layer prefetch without confidence/deadline admission;
-- router replacement, retraining, expert skipping, or quality substitution in the lossless path;
+---
+
+## 9. Artifact policy
+
+Development artifacts originate under `target/bench/`, but release evidence must be copied
+to a durable public archive such as a GitHub Release or object storage.
+
+Every artifact set includes:
+
+- raw benchmark JSON;
+- server/client logs;
+- environment/run manifest;
+- request/response token accounting;
+- acceptance and route summary;
+- memory/power logs;
+- Nsight report and summaries;
+- aggregation scripts;
+- SHA256 for every file.
+
+A local path is not a public artifact link.
+
+---
+
+## 10. Non-goals before the release gate
+
+- multi-GPU or multi-node execution;
+- training, RL, or router retraining;
+- model-family expansion;
+- expert skipping or approximate target verification;
 - CPU expert compute as the GB10 default;
-- SOTA claims obtained by changing output length, sampling, tokenizer, or checkpoint;
-- describing microbenchmark bandwidth as end-to-end token throughput.
+- managed-memory prefetch as the production path;
+- mapped-pinned hot expert execution;
+- retrying direct GDS on unsupported GB10 without new platform evidence;
+- QD4/QD8 bandwidth chasing without a deadline benefit;
+- general database/B+ tree indexing for sequential tensor extents;
+- full-checkpoint scan records presented as token throughput;
+- further sparse-attention optimization while it remains below 0.1%;
+- C8 optimization before the rows=1/2/4 and DSpark feasibility gates;
+- performance claims based on changed tokenizer, sampling, checkpoint, or output length.
 
-## 11. Validation commands
+---
 
-Fast correctness during implementation:
+## 11. Existing validation commands
+
+Fast implementation gates:
 
 ```bash
-cargo fmt --all
-cargo test -p ferrule-model
-cargo check -p ferrule-model --features cuda
-cargo check -p ferrule-cli --features cuda
+just fmt-fix
+just check-cuda
+just test-cuda-required
+just test-model
 git diff --check
 ```
 
-CUDA artifact validation when CUDA code changes:
+Real checkpoint parity and resident roofline:
 
 ```bash
-just test-cuda-required
+just dsv4-prefill-parity
+just dsv4-resident-roofline
+just dsv4-runtime-driver-bench "Hello" "Explain Ferrule in one sentence." 8 16 4096 43
 ```
 
-Read-only platform validation:
+Serving:
 
 ```bash
-just dsv4-storage-platform-check
-```
-
-Single-stream and serving performance gates:
-
-```bash
-just dsv4-runtime-driver-bench
 just dsv4-serve
 just dsv4-vllm-bench baseline
 just dsv4-vllm-bench sweep
 ```
 
-The benchmark agent is responsible for starting the server, waiting for `/health`,
-running the client, preserving artifacts, and stopping the server.
+Diagnostic short sweep:
 
-A phase is complete only when both its correctness and measured performance gates pass.
-Compiling, adding counters, reducing API calls, or winning a microbenchmark alone does
-not complete a phase.
+```bash
+INPUT_LEN=8 OUTPUT_LEN=8 NUM_PROMPTS=8 CONCURRENCIES=1,2,4,8 \
+  RESULT_ROOT=target/bench/vllm-serve/diagnostic-c1-c8 \
+  ./scripts/bench_vllm_serve.sh sweep
+```
+
+Required recipes to add during this roadmap:
+
+```text
+dsv4-verify-width-sweep       all-resident 1-sequence × V=2/4/8
+dsv4-dspark-cycle-sweep       complete proposal/verify/commit/rollback
+dsv4-route-cache-oracle       trace and Belady/current-policy comparison
+dsv4-static-ingest-ab         per-tensor versus extent/scatter path
+dsv4-release-manifest         immutable hashes/environment/commands
+dsv4-release-suite            parity + performance + serving + artifact package
+```
+
+A phase is complete only when its correctness and measured end-to-end exit gates pass.
+Compiling, adding counters, reducing API calls, or winning a microbenchmark does not complete
+a phase.
+
+---
+
+## 12. Final release checklist
+
+### Feasibility
+
+- [ ] Gate F1 resident V-row verification passes.
+- [ ] Gate F2 real acceptance passes.
+- [ ] Gate F3 I/O/capacity passes.
+
+### Exactness
+
+- [ ] Exact source/quantization/router/expert semantics.
+- [ ] Long-output committed-token parity.
+- [ ] Every rollback prefix and failure path validated.
+- [ ] Optimized numerical contract and near-tie corpus pass.
+
+### Performance
+
+- [ ] Lower 95% confidence bound of warm accepted throughput is at least 16 tok/s.
+- [ ] Complete cycle, not an internal substage, is timed.
+- [ ] Memory remains bounded with no swap/page-cache collapse.
+- [ ] Zero headline request failures.
+- [ ] C1/C2/C4/C8 and long-output serving matrix pass.
+
+### Reproducibility
+
+- [ ] Immutable run manifest and model hashes published.
+- [ ] Raw benchmark, logs, counters, and profiler artifacts published.
+- [ ] Exact commands and aggregation scripts published.
+- [ ] Current source commit and release binary hash published.
+
+### SOTA claim
+
+- [ ] Strongest eligible competitors identified.
+- [ ] Same-contract competitor runs preserved.
+- [ ] Ferrule exceeds the strongest eligible result beyond measurement noise.
+- [ ] Claim wording matches the actual comparison scope.

@@ -62,6 +62,137 @@ fn assert_close_slice(actual: &[f32], expected: &[f32], tolerance: f32, label: &
 }
 
 #[test]
+fn bf16_block_gemv_matches_legacy_for_real_dsv4_shapes() {
+    if !has_cuda() {
+        eprintln!("SKIP: no CUDA");
+        return;
+    }
+
+    let (_ctx, module, stream) = assert_cuda(load(), "load CUDA kernel module");
+    let k = 4096usize;
+    let x = (0..k)
+        .map(|col| ((col * 5 % 23) as i32 - 11) as f32 / 32.0)
+        .collect::<Vec<_>>();
+    let x_dev = assert_cuda(
+        DeviceBuffer::from_host(&stream, &x),
+        "upload BF16 GEMV input",
+    );
+
+    for n in [64usize, 256, 512, 1024] {
+        let mut weight = Vec::with_capacity(n * k * 2);
+        for row in 0..n {
+            for col in 0..k {
+                let value = ((row * 17 + col * 13) % 29) as i32 - 14;
+                let bf16 = ((value as f32 / 64.0).to_bits() >> 16) as u16;
+                weight.extend_from_slice(&bf16.to_le_bytes());
+            }
+        }
+        let weight_dev = assert_cuda(
+            DeviceBuffer::from_host(&stream, &weight),
+            &format!("upload BF16 GEMV {n}x{k} weight"),
+        );
+        let mut legacy_dev = assert_cuda(
+            DeviceBuffer::<f32>::zeroed(&stream, n),
+            "allocate legacy BF16 GEMV output",
+        );
+        let mut block_dev = assert_cuda(
+            DeviceBuffer::<f32>::zeroed(&stream, n),
+            "allocate block BF16 GEMV output",
+        );
+        let mut block_pair_first_dev = assert_cuda(
+            DeviceBuffer::<f32>::zeroed(&stream, n),
+            "allocate first block-pair BF16 GEMV output",
+        );
+        let mut block_pair_second_dev = assert_cuda(
+            DeviceBuffer::<f32>::zeroed(&stream, n),
+            "allocate second block-pair BF16 GEMV output",
+        );
+
+        assert_cuda(
+            unsafe {
+                module.gemv_bf16_bytes(
+                    &stream,
+                    LaunchConfig::for_num_elems(n as u32),
+                    &x_dev,
+                    &weight_dev,
+                    &mut legacy_dev,
+                    n as u32,
+                    k as u32,
+                )
+            },
+            &format!("legacy BF16 GEMV {n}x{k}"),
+        );
+        assert_cuda(
+            unsafe {
+                module.gemv_bf16_bytes_block(
+                    &stream,
+                    LaunchConfig {
+                        grid_dim: (n as u32, 1, 1),
+                        block_dim: (256, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    &x_dev,
+                    &weight_dev,
+                    &mut block_dev,
+                    n as u32,
+                    k as u32,
+                )
+            },
+            &format!("block BF16 GEMV {n}x{k}"),
+        );
+        assert_cuda(
+            unsafe {
+                module.gemv_bf16_bytes_block_pair(
+                    &stream,
+                    LaunchConfig {
+                        grid_dim: ((2 * n) as u32, 1, 1),
+                        block_dim: (256, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    &x_dev,
+                    &weight_dev,
+                    &weight_dev,
+                    &mut block_pair_first_dev,
+                    &mut block_pair_second_dev,
+                    n as u32,
+                    n as u32,
+                    k as u32,
+                )
+            },
+            &format!("block-pair BF16 GEMV {n}x{k}"),
+        );
+
+        let legacy = assert_cuda(legacy_dev.to_host_vec(&stream), "download legacy BF16 GEMV");
+        let block = assert_cuda(block_dev.to_host_vec(&stream), "download block BF16 GEMV");
+        let block_pair_first = assert_cuda(
+            block_pair_first_dev.to_host_vec(&stream),
+            "download first block-pair BF16 GEMV",
+        );
+        let block_pair_second = assert_cuda(
+            block_pair_second_dev.to_host_vec(&stream),
+            "download second block-pair BF16 GEMV",
+        );
+        assert_eq!(
+            block_pair_first, block,
+            "first block-pair output must preserve standalone block reduction for {n}x{k}"
+        );
+        assert_eq!(
+            block_pair_second, block,
+            "second block-pair output must preserve standalone block reduction for {n}x{k}"
+        );
+        for (row, (&expected, &actual)) in legacy.iter().zip(&block).enumerate() {
+            let tolerance = 5e-4f32.max(expected.abs() * 5e-4);
+            assert_close(
+                actual,
+                expected,
+                tolerance,
+                &format!("BF16 block GEMV {n}x{k} row {row}"),
+            );
+        }
+    }
+}
+
+#[test]
 fn artifact_format_kernels_produce_expected_tiny_outputs() {
     if !has_cuda() {
         eprintln!("SKIP: no CUDA");

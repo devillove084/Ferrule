@@ -7,6 +7,7 @@
 #   just chat MODEL → interactive chat (MODEL required)
 #   just bench-interactive MODEL → multi-turn chat latency benchmark
 #   just dsv4-runtime-driver-bench → DSV4 benchmark through ResidentTopKDriver
+#   just dsv4-resident-roofline → DSV4 exact resident/no-I/O target-pass roofline
 #   just dsv4-serve → OpenAI-compatible DSV4 HTTP/SSE server
 #   just dsv4-vllm-bench → vLLM official serving benchmark against a running server
 #   just dsv4-prefill-chunk-sweep → DSV4 runtime-driver prefill chunk sweep CSV/JSONL
@@ -197,6 +198,24 @@ dsv4-runtime-driver-bench prompt1='Hello' prompt2='Explain Ferrule in one senten
     @echo "→ DSV4 ResidentTopKDriver benchmark via cargo oxide (arch: {{ _cuda-arch }}, tokens: {{ tokens }}, warmup: {{ warmup }}, chunk: {{ chunk }}, layers: {{ layers }})"
     cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
     ./target/release/ferrule bench-interactive models/DeepSeek-V4-Flash-DSpark -p "{{ prompt1 }}" -p "{{ prompt2 }}" -n {{ tokens }} --warmup-tokens {{ warmup }} --prefill-chunk-size {{ chunk }} --max-layers {{ layers }} --json {{ args }}
+
+# Exact target-pass roofline: capture selected experts once, then replay the same
+# decode with independent KV states and require zero selected expert I/O.
+dsv4-resident-roofline model='models/DeepSeek-V4-Flash-DSpark' prompt='Hello' layers='43' hotset='48' chunk='4096' output='target/bench/s0-profile/resident-replay.json' *args='':
+    @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
+    @echo "→ DSV4 resident/no-I/O roofline (arch: {{ _cuda-arch }}, layers: {{ layers }}, hotset: {{ hotset }})"
+    cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
+    mkdir -p target/bench/s0-profile
+    FERRULE_EXPERT_IO_BACKEND=io_uring FERRULE_EXPERT_IO_QUEUE_DEPTH=2 FERRULE_EXPERT_IO_BUFFER_MIB=16 FERRULE_EXPERT_IO_SLABS=16 ./target/release/ferrule bench-interactive {{ model }} -p "{{ prompt }}" --max-layers {{ layers }} --output-head-chunk-rows {{ chunk }} --moe-prefetch-experts 0 --moe-hotset-experts {{ hotset }} --resident-replay --json {{ args }} | tee {{ output }}
+
+# Gate F1: reuse bench-interactive's resident harness for native
+# 1-sequence × V-row verification at V=2/4/8, including the output head.
+dsv4-verify-width-sweep model='models/DeepSeek-V4-Flash-DSpark' prompt='Explain Ferrule runtime architecture in one concise paragraph.' layers='43' hotset='48' chunk='4096' iterations='3' output='target/bench/gate-f1/verify-width-sweep.json' *args='':
+    @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
+    @echo "→ DSV4 Gate F1 resident verification width sweep (arch: {{ _cuda-arch }}, V=2/4/8, iterations: {{ iterations }})"
+    cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
+    mkdir -p target/bench/gate-f1
+    FERRULE_EXPERT_IO_BACKEND=io_uring FERRULE_EXPERT_IO_QUEUE_DEPTH=2 FERRULE_EXPERT_IO_BUFFER_MIB=16 FERRULE_EXPERT_IO_SLABS=16 ./target/release/ferrule bench-interactive {{ model }} -p "{{ prompt }}" --max-layers {{ layers }} --output-head-chunk-rows {{ chunk }} --moe-prefetch-experts 0 --moe-hotset-experts {{ hotset }} --verify-width-sweep --verify-iterations {{ iterations }} --json {{ args }} | tee {{ output }}
 
 # Sweep runtime-driver prefill chunk sizes and write CSV + JSONL under target/.
 dsv4-runtime-driver-chunk-sweep chunks='1,2,4,8,16,4096' tokens='1' warmup='0' layers='43' output='target/dsv4-runtime-driver-chunk-sweep' sync='0' *args='':

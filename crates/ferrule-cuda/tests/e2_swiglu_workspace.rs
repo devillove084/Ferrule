@@ -78,6 +78,235 @@ fn fp8_e4m3fn(byte: u8) -> f32 {
     sign * 2.0f32.powi(exponent as i32 - 7) * (1.0 + mantissa as f32 / 8.0)
 }
 
+fn bf16_bytes(values: impl IntoIterator<Item = f32>) -> Vec<u8> {
+    values
+        .into_iter()
+        .flat_map(|value| ((value.to_bits() >> 16) as u16).to_le_bytes())
+        .collect()
+}
+
+#[test]
+fn bf16_dual_projection_fuses_dispatch_and_removes_staging() {
+    if !has_cuda() {
+        eprintln!("skipping: no CUDA device");
+        return;
+    }
+    let _guard = cuda_test_guard();
+    let ctx = CudaArtifactOperatorContext::new().expect("CUDA context");
+    let in_features = 256usize;
+    let kv_features = 64usize;
+    let gate_features = 256usize;
+    let input_data = (0..in_features)
+        .map(|col| ((col % 31) as f32 - 15.0) / 32.0)
+        .collect::<Vec<_>>();
+    let kv_weight = bf16_bytes((0..kv_features * in_features).map(|index| {
+        let row = index / in_features;
+        let col = index % in_features;
+        (((row * 17 + col * 13) % 29) as f32 - 14.0) / 64.0
+    }));
+    let gate_weight = bf16_bytes((0..gate_features * in_features).map(|index| {
+        let row = index / in_features;
+        let col = index % in_features;
+        (((row * 11 + col * 7) % 37) as f32 - 18.0) / 64.0
+    }));
+    let kv = ctx
+        .upload_bf16_linear(&kv_weight, kv_features, in_features)
+        .expect("upload BF16 kv linear");
+    let gate = ctx
+        .upload_bf16_linear(&gate_weight, gate_features, in_features)
+        .expect("upload BF16 gate linear");
+    let input = ctx.upload_f32_buffer(&input_data).expect("upload input");
+    let mut staged_kv_input = ctx.zero_f32_buffer(in_features).expect("staged kv input");
+    let mut staged_gate_input = ctx.zero_f32_buffer(in_features).expect("staged gate input");
+    let mut staged_kv = ctx.zero_f32_buffer(kv_features).expect("staged kv output");
+    let mut staged_gate = ctx
+        .zero_f32_buffer(gate_features)
+        .expect("staged gate output");
+
+    ctx.reset_counters();
+    ctx.copy_f32_into_slot(&input, &mut staged_kv_input, 0)
+        .expect("stage kv input");
+    ctx.artifact_linear_matvec_into(&kv, &staged_kv_input, &mut staged_kv)
+        .expect("staged kv projection");
+    ctx.copy_f32_into_slot(&input, &mut staged_gate_input, 0)
+        .expect("stage gate input");
+    ctx.artifact_linear_matvec_into(&gate, &staged_gate_input, &mut staged_gate)
+        .expect("staged gate projection");
+    let staged_launches = ctx.counters().kernel_launches;
+
+    let mut direct_kv = ctx.zero_f32_buffer(kv_features).expect("direct kv output");
+    let mut direct_gate = ctx
+        .zero_f32_buffer(gate_features)
+        .expect("direct gate output");
+    ctx.reset_counters();
+    ctx.artifact_linear_pair_matvec_into(&kv, &gate, &input, &mut direct_kv, &mut direct_gate)
+        .expect("fused direct projections");
+    let direct_launches = ctx.counters().kernel_launches;
+
+    assert_eq!(
+        ctx.download_f32_buffer(&direct_kv)
+            .expect("download direct kv"),
+        ctx.download_f32_buffer(&staged_kv)
+            .expect("download staged kv")
+    );
+    assert_eq!(
+        ctx.download_f32_buffer(&direct_gate)
+            .expect("download direct gate"),
+        ctx.download_f32_buffer(&staged_gate)
+            .expect("download staged gate")
+    );
+    assert_eq!(
+        staged_launches,
+        direct_launches + 3,
+        "fused BF16 dual projection must remove two staging copies and one dispatch"
+    );
+}
+
+#[test]
+fn fp8_linear_pair_reuses_one_pack_for_small_m() {
+    if !has_cuda() {
+        eprintln!("skipping: no CUDA device");
+        return;
+    }
+    let _guard = cuda_test_guard();
+    let ctx = CudaArtifactOperatorContext::new().expect("CUDA context");
+    let in_features = 256usize;
+    let out_features = 256usize;
+    let first = make_fp8_linear(&ctx, out_features, in_features, 0.5);
+    let second = make_fp8_linear(&ctx, out_features, in_features, 0.7);
+    if !ctx.artifact_linear_uses_fp8_mma(&first) || !ctx.artifact_linear_uses_fp8_mma(&second) {
+        eprintln!("skipping: FP8 MMA dispatch disabled");
+        return;
+    }
+
+    for rows in [1usize, 2, 4] {
+        let input_data = (0..rows * in_features)
+            .map(|index| {
+                let row = index / in_features;
+                let col = index % in_features;
+                ((col % 37) as f32 - 18.0) * 0.007_812_5 * (row + 1) as f32
+            })
+            .collect::<Vec<_>>();
+        let input = ctx.upload_f32_buffer(&input_data).expect("upload input");
+        let mut sequential_first = ctx
+            .zero_f32_buffer(rows * out_features)
+            .expect("sequential first output");
+        let mut sequential_second = ctx
+            .zero_f32_buffer(rows * out_features)
+            .expect("sequential second output");
+        let mut sequential_scratch = ctx
+            .artifact_linear_workspace(rows, in_features)
+            .expect("sequential scratch");
+        ctx.reset_counters();
+        ctx.artifact_linear_rows_from_device_into_with_scratch(
+            &first,
+            &input,
+            rows,
+            &mut sequential_first,
+            &mut sequential_scratch,
+        )
+        .expect("sequential first projection");
+        ctx.artifact_linear_rows_from_device_into_with_scratch(
+            &second,
+            &input,
+            rows,
+            &mut sequential_second,
+            &mut sequential_scratch,
+        )
+        .expect("sequential second projection");
+        let sequential_launches = ctx.counters().kernel_launches;
+
+        let mut paired_first = ctx
+            .zero_f32_buffer(rows * out_features)
+            .expect("paired first output");
+        let mut paired_second = ctx
+            .zero_f32_buffer(rows * out_features)
+            .expect("paired second output");
+        let mut paired_scratch = ctx
+            .artifact_linear_workspace(rows, in_features)
+            .expect("paired scratch");
+        ctx.reset_counters();
+        ctx.artifact_linear_pair_rows_from_device_into_with_scratch(
+            &first,
+            &second,
+            &input,
+            rows,
+            &mut paired_first,
+            &mut paired_second,
+            &mut paired_scratch,
+        )
+        .expect("paired projections");
+        let paired_launches = ctx.counters().kernel_launches;
+
+        let mut stored_first = ctx
+            .zero_f32_buffer(rows * out_features)
+            .expect("stored first output");
+        let mut stored_second = ctx
+            .zero_f32_buffer(rows * out_features)
+            .expect("stored second output");
+        let mut storage = ctx
+            .fp8_activation_pack(rows, in_features)
+            .expect("producer pack storage");
+        ctx.reset_counters();
+        {
+            let activation = ctx
+                .prepare_fp8_activation_from_device(&input, rows, in_features, &mut storage)
+                .expect("prepare producer activation");
+            ctx.artifact_linear_rows_from_prepared_fp8_into(&first, &activation, &mut stored_first)
+                .expect("stored first projection");
+            ctx.artifact_linear_rows_from_prepared_fp8_into(
+                &second,
+                &activation,
+                &mut stored_second,
+            )
+            .expect("stored second projection");
+        }
+        let stored_launches = ctx.counters().kernel_launches;
+
+        let sequential_first = ctx
+            .download_f32_buffer(&sequential_first)
+            .expect("download sequential first");
+        let sequential_second = ctx
+            .download_f32_buffer(&sequential_second)
+            .expect("download sequential second");
+        let paired_first = ctx
+            .download_f32_buffer(&paired_first)
+            .expect("download paired first");
+        let paired_second = ctx
+            .download_f32_buffer(&paired_second)
+            .expect("download paired second");
+        let stored_first = ctx
+            .download_f32_buffer(&stored_first)
+            .expect("download stored first");
+        let stored_second = ctx
+            .download_f32_buffer(&stored_second)
+            .expect("download stored second");
+        assert_eq!(paired_first, sequential_first, "first output rows={rows}");
+        assert_eq!(
+            paired_second, sequential_second,
+            "second output rows={rows}"
+        );
+        assert_eq!(stored_first, sequential_first, "stored first rows={rows}");
+        assert_eq!(
+            stored_second, sequential_second,
+            "stored second rows={rows}"
+        );
+        assert_eq!(
+            paired_second, sequential_second,
+            "second output rows={rows}"
+        );
+        assert_eq!(
+            sequential_launches,
+            paired_launches + 1,
+            "paired rows={rows} must remove exactly one FP8 pack launch"
+        );
+        assert_eq!(
+            paired_launches, stored_launches,
+            "producer-owned pack rows={rows} must launch one pack and two consumers"
+        );
+    }
+}
+
 #[test]
 fn swiglu_workspace_into_matches_allocating_path() {
     if !has_cuda() {
@@ -112,7 +341,7 @@ fn swiglu_workspace_into_matches_allocating_path() {
         .expect("create workspace");
     ctx.artifact_swiglu_ffn_from_device_into(&gate, &up, &down, &input, 1.0, 0.0, &mut workspace)
         .expect("workspace SwiGLU");
-    let _workspace_counters = ctx.counters();
+    let workspace_counters = ctx.counters();
 
     // A warmed workspace call must be accepted by the capture-safe guard and
     // make no allocation attempt.
@@ -146,6 +375,12 @@ fn swiglu_workspace_into_matches_allocating_path() {
             "SwiGLU output mismatch at index {i}: allocating={a} workspace={w}"
         );
     }
+
+    assert_eq!(
+        allocating_counters.kernel_launches,
+        workspace_counters.kernel_launches + 1,
+        "workspace SwiGLU must reuse one gate/up activation pack"
+    );
 
     // The allocating path must have performed at least one allocation.
     assert!(

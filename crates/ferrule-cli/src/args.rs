@@ -68,6 +68,17 @@ pub(crate) enum Command {
         /// JSON output for machine consumption.
         #[arg(long)]
         json: bool,
+        /// Replay one identical decode across independent sequence states to measure
+        /// capture, resident-with-head, and resident-body-only target passes.
+        #[arg(long)]
+        resident_replay: bool,
+        /// Extend the resident replay harness with native 1-sequence × V-row
+        /// target verification for V=2/4/8 (Gate F1).
+        #[arg(long)]
+        verify_width_sweep: bool,
+        /// Number of measured all-resident samples per verification width.
+        #[arg(long, default_value_t = 3)]
+        verify_iterations: usize,
     },
 
     /// Inspect a WeightPack file header.

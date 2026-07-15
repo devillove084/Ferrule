@@ -318,6 +318,74 @@ impl KvPageManager {
         self.commit_batch_with_freed(vec![reservation]).map(|_| ())
     }
 
+    /// Commit only the first `committed_rows` tokens of a provisional reservation.
+    ///
+    /// Pages used exclusively by the rejected suffix are recycled and returned so
+    /// a backend that provisionally published the full batch can release the same
+    /// physical page IDs. Bytes beyond the committed cursor in a retained tail
+    /// page are intentionally ignored and overwritten by the next append.
+    pub fn commit_prefix_with_freed(
+        &mut self,
+        mut reservation: KvReservation,
+        committed_rows: usize,
+    ) -> Result<Vec<KvPageId>> {
+        let reserved_rows = reservation.positions.len();
+        if committed_rows > reserved_rows {
+            let _ = self.rollback(reservation);
+            return Err(Error::Execution(format!(
+                "page manager: committed prefix {committed_rows} exceeds reservation length {reserved_rows}"
+            )));
+        }
+        if committed_rows == reserved_rows {
+            return self.commit_batch_with_freed(vec![reservation]);
+        }
+        if committed_rows == 0 {
+            let mut freed = Vec::with_capacity(
+                reservation.newly_allocated.len()
+                    + usize::from(reservation.cow_replacement.is_some()),
+            );
+            if let Some(cow) = reservation.cow_replacement {
+                freed.push(cow.replacement);
+            }
+            freed.extend(reservation.newly_allocated.iter().copied());
+            self.rollback(reservation)?;
+            return Ok(freed);
+        }
+
+        let final_end = reservation
+            .positions
+            .start
+            .checked_add(committed_rows)
+            .ok_or_else(|| Error::Execution("page manager: prefix end overflow".into()))?;
+        let pages_before = self.schema.pages_for_tokens(reservation.positions.start);
+        let pages_after = self.schema.pages_for_tokens(final_end);
+        let kept_new_pages = pages_after.checked_sub(pages_before).ok_or_else(|| {
+            Error::Internal("page manager: prefix page count moved backwards".into())
+        })?;
+        let available_new_pages = reservation.newly_allocated.len();
+        if kept_new_pages > available_new_pages {
+            let _ = self.rollback(reservation);
+            return Err(Error::Internal(format!(
+                "page manager: prefix needs {kept_new_pages} new pages but reservation has {available_new_pages}"
+            )));
+        }
+        let rejected_pages = reservation.newly_allocated.split_off(kept_new_pages);
+        reservation.positions.end = final_end;
+
+        let commit = self.commit_batch_with_freed(vec![reservation]);
+        match commit {
+            Ok(mut freed) => {
+                self.free_pages.extend(rejected_pages.iter().copied());
+                freed.extend(rejected_pages);
+                Ok(freed)
+            }
+            Err(error) => {
+                self.free_pages.extend(rejected_pages);
+                Err(error)
+            }
+        }
+    }
+
     /// Atomically publish all reservations in a packed batch.
     ///
     /// Every reservation is validated before any block table or refcount changes.
@@ -768,6 +836,49 @@ mod tests {
         let table = mgr.block_table(slot(0)).unwrap();
         assert_eq!(table.committed_tokens(), 4);
         assert_eq!(table.num_pages(), 1);
+    }
+
+    #[test]
+    fn commit_prefix_recycles_rejected_suffix_pages() {
+        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
+        mgr.alloc_sequence(slot(0), 0).unwrap();
+
+        let reservation = mgr.reserve(slot(0), 0, 10).unwrap();
+        let rejected_page = reservation.newly_allocated[2];
+        let freed = mgr.commit_prefix_with_freed(reservation, 5).unwrap();
+
+        let table = mgr.block_table(slot(0)).unwrap();
+        assert_eq!(table.committed_tokens(), 5);
+        assert_eq!(table.num_pages(), 2);
+        assert_eq!(freed, vec![rejected_page]);
+        assert_eq!(mgr.allocated_pages(), 2);
+        assert_eq!(mgr.free_pages(), 1);
+    }
+
+    #[test]
+    fn zero_prefix_is_an_exact_reservation_rollback() {
+        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
+        mgr.alloc_sequence(slot(0), 0).unwrap();
+
+        let reservation = mgr.reserve(slot(0), 0, 9).unwrap();
+        let expected = reservation.newly_allocated.clone();
+        let freed = mgr.commit_prefix_with_freed(reservation, 0).unwrap();
+
+        assert_eq!(freed, expected);
+        assert_eq!(mgr.block_table(slot(0)).unwrap().committed_tokens(), 0);
+        assert_eq!(mgr.allocated_pages(), 0);
+        assert_eq!(mgr.free_pages(), 3);
+    }
+
+    #[test]
+    fn commit_prefix_rejects_lengths_beyond_the_reservation() {
+        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
+        mgr.alloc_sequence(slot(0), 0).unwrap();
+        let reservation = mgr.reserve(slot(0), 0, 2).unwrap();
+
+        assert!(mgr.commit_prefix_with_freed(reservation, 3).is_err());
+        assert_eq!(mgr.block_table(slot(0)).unwrap().committed_tokens(), 0);
+        assert_eq!(mgr.allocated_pages(), 0);
     }
 
     #[test]

@@ -68,7 +68,7 @@ fn stable_slot_table_resolves_residents_misses_and_reuse_generation() {
         .resolve_expert_routes(&table, &ids, 4, &mut workspace)
         .expect("resolve routes");
     let resolved = context
-        .download_expert_route_resolve(&workspace, 4)
+        .download_expert_route_resolve(&mut workspace, 4)
         .expect("download resolve result");
     assert_eq!(resolved.route_slots, vec![first.slot, -1, -1, -1]);
     assert_eq!(resolved.route_generations, vec![first.generation, 0, 0, 0]);
@@ -98,7 +98,7 @@ fn stable_slot_table_resolves_residents_misses_and_reuse_generation() {
         .resolve_expert_routes(&table, &ids, 2, &mut workspace)
         .expect("resolve reused slot");
     let resolved = context
-        .download_expert_route_resolve(&workspace, 2)
+        .download_expert_route_resolve(&mut workspace, 2)
         .expect("download reused resolve result");
     assert_eq!(resolved.route_slots, vec![-1, second.slot]);
     assert_eq!(resolved.route_generations, vec![0, second.generation]);
@@ -198,7 +198,7 @@ fn exact_slot_publication_rejects_stale_and_mismatches_atomically() {
         .resolve_expert_routes(&table, &ids, 2, &mut workspace)
         .expect("resolve after rejected updates");
     let resolved = context
-        .download_expert_route_resolve(&workspace, 2)
+        .download_expert_route_resolve(&mut workspace, 2)
         .expect("download exact resolve result");
     assert_eq!(resolved.route_slots, vec![1, -1]);
     assert_eq!(resolved.route_generations, vec![1, 0]);
@@ -234,7 +234,7 @@ fn exact_slot_publication_rejects_stale_and_mismatches_atomically() {
         .resolve_expert_routes(&table, &ids, 2, &mut workspace)
         .expect("resolve reused exact slot");
     let resolved = context
-        .download_expert_route_resolve(&workspace, 2)
+        .download_expert_route_resolve(&mut workspace, 2)
         .expect("download reused exact resolve result");
     assert_eq!(resolved.route_slots, vec![-1, 1]);
     assert_eq!(resolved.route_generations, vec![0, 2]);
@@ -282,7 +282,7 @@ fn capture_safe_rejection_is_atomic_and_keeps_stable_table_usable() {
         .resolve_expert_routes(&table, &expert_ids, 1, &mut resolve)
         .expect("usable table resolves installed expert");
     let resolved = context
-        .download_expert_route_resolve(&resolve, 1)
+        .download_expert_route_resolve(&mut resolve, 1)
         .expect("download resolved binding");
     assert_eq!(resolved.route_slots, vec![0]);
     assert_eq!(resolved.route_generations, vec![1]);
@@ -362,8 +362,10 @@ fn stable_dispatch_matches_cpu_reference_and_is_transfer_free_when_warm() {
             ROUTES,
             WIDTH,
             WIDTH,
+            None,
             &mut stable_workspace,
             &mut stable_output,
+            true,
         )
         .expect("stable prepared compute");
     let stable_values = context
@@ -399,8 +401,10 @@ fn stable_dispatch_matches_cpu_reference_and_is_transfer_free_when_warm() {
             ROUTES,
             WIDTH,
             WIDTH,
+            None,
             &mut stable_workspace,
             &mut stable_output,
+            true,
         )
         .expect("warm stable prepared compute");
     context.disable_capture_safe();

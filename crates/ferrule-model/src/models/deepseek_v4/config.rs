@@ -83,6 +83,18 @@ fn artifact_linear_format_has_quantized_weight(format: &ArtifactLinearFormat) ->
     )
 }
 
+/// DSpark speculative decoding configuration.
+///
+/// Bundles the MTP-related fields parsed from `config.json` so that the MTP
+/// model and runner can consume them as a single value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DSparkConfig {
+    pub block_size: usize,
+    pub noise_token_id: Option<u32>,
+    pub target_layer_ids: Vec<usize>,
+    pub markov_rank: Option<usize>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeepSeekV4Config {
     pub hidden_size: usize,
@@ -119,6 +131,7 @@ pub struct DeepSeekV4Config {
     pub dspark_noise_token_id: Option<u32>,
     pub dspark_target_layer_ids: Vec<usize>,
     pub dspark_markov_rank: Option<usize>,
+    pub num_mtp_layers: usize,
 }
 
 impl DeepSeekV4Config {
@@ -150,6 +163,13 @@ impl DeepSeekV4Config {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        // DeepSeek-V4-Flash-DSpark's HF config reports one next-token
+        // prediction block, while the converted executable checkpoint contains
+        // one MTP stage per target hidden layer. The target-layer list is the
+        // authoritative stage count for this DSpark architecture.
+        let num_mtp_layers = usize_key(&json, &["n_mtp_layers", "num_nextn_predict_layers"])
+            .unwrap_or(0)
+            .max(dspark_target_layer_ids.len());
 
         Ok(Self {
             hidden_size: usize_key(&json, &["hidden_size"]).unwrap_or(deepseek_v4::HIDDEN_SIZE),
@@ -209,7 +229,18 @@ impl DeepSeekV4Config {
                 .map(|value| value as u32),
             dspark_target_layer_ids,
             dspark_markov_rank: usize_key(&json, &["dspark_markov_rank"]),
+            num_mtp_layers,
         })
+    }
+
+    /// Returns the DSpark speculative decoding configuration bundled as a single value.
+    pub fn dspark_config(&self) -> DSparkConfig {
+        DSparkConfig {
+            block_size: self.dspark_block_size,
+            noise_token_id: self.dspark_noise_token_id,
+            target_layer_ids: self.dspark_target_layer_ids.clone(),
+            markov_rank: self.dspark_markov_rank,
+        }
     }
 
     pub fn hc_config(&self) -> HyperConnectionConfig {
@@ -220,6 +251,37 @@ impl DeepSeekV4Config {
             eps: self.hc_eps,
             norm_eps: self.norm_eps,
         }
+    }
+
+    /// Returns an attention configuration suitable for an MTP layer.
+    ///
+    /// MTP layers share the same MLA attention structure as main layers but do
+    /// not use compressed attention (compress_ratio = 0).
+    pub fn attention_config_for_mtp_layer(
+        &self,
+        _mtp_index: usize,
+    ) -> Result<DeepSeekV4AttentionConfig> {
+        Ok(DeepSeekV4AttentionConfig {
+            hidden_size: self.hidden_size,
+            num_heads: self.num_heads,
+            head_dim: self.head_dim,
+            q_lora_rank: self.q_lora_rank,
+            rope_head_dim: self.qk_rope_head_dim,
+            o_groups: self.o_groups,
+            o_lora_rank: self.o_lora_rank,
+            window_size: self.window_size,
+            compress_ratio: 0,
+            norm_eps: self.norm_eps,
+            rope_theta: self.rope_theta,
+            compress_rope_theta: self.compress_rope_theta,
+            original_seq_len: self.original_seq_len,
+            rope_factor: self.rope_factor,
+            beta_fast: self.beta_fast,
+            beta_slow: self.beta_slow,
+            index_n_heads: self.index_n_heads,
+            index_head_dim: self.index_head_dim,
+            index_topk: self.index_topk,
+        })
     }
 
     pub fn attention_config_for_layer(&self, layer: usize) -> Result<DeepSeekV4AttentionConfig> {

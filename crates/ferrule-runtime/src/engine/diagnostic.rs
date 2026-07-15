@@ -1,8 +1,8 @@
 //! Explicit page-managed execution for model-family diagnostics.
 
 use ferrule_common::execution::{
-    ExecutionBatch, ExecutionSequence, ForwardMode, ForwardPhase, KvBindingMode, KvLayoutSchema,
-    LogitsRequest, StateSlot,
+    ExecutionBatch, ExecutionOutput, ExecutionSequence, ForwardMode, ForwardPhase, KvBindingMode,
+    KvLayoutSchema, LogitsRequest, StateSlot,
 };
 use ferrule_common::{Error, Result};
 use ferrule_model::MultiSessionRunner;
@@ -84,6 +84,36 @@ impl<R: MultiSessionRunner> PageManagedDiagnosticHarness<R> {
         self.states.push(state);
         self.generations.push(generation);
         Ok(slot)
+    }
+
+    /// Reset one allocated slot to an empty sequence while retaining the slot.
+    ///
+    /// Logical pages and backend physical mappings are released before the
+    /// model-owned sequence state is reset. The incremented generation prevents
+    /// stale reservations from being published after reuse.
+    pub fn reset_sequence(&mut self, slot: StateSlot) -> Result<()> {
+        let index = slot.try_as_usize().map_err(|_| {
+            Error::Execution("page-managed diagnostic state slot exceeds usize".into())
+        })?;
+        let generation = self.generations.get(index).copied().ok_or_else(|| {
+            Error::Execution(format!(
+                "page-managed diagnostic state slot {} is not allocated",
+                slot.get()
+            ))
+        })?;
+        let freed_pages = self.page_manager.free_sequence_pages(slot)?;
+        self.executor.release_kv_pages(&freed_pages)?;
+        let state = self.states.get_mut(index).ok_or_else(|| {
+            Error::Internal(format!(
+                "diagnostic state slot {} has no model state",
+                slot.get()
+            ))
+        })?;
+        self.executor.reset_sequence_state(state)?;
+        let next_generation = generation.wrapping_add(1);
+        self.page_manager.alloc_sequence(slot, next_generation)?;
+        self.generations[index] = next_generation;
+        Ok(())
     }
 
     /// Execute one prefill chunk or decode token against an explicit sequence.
@@ -177,6 +207,131 @@ impl<R: MultiSessionRunner> PageManagedDiagnosticHarness<R> {
             &batch,
             std::slice::from_ref(&reservation),
             |runner, states| runner.with_sequence_state(&mut states[state_index], execute),
+        );
+        let output = match execution {
+            Ok(output) => output,
+            Err(error) => {
+                let _ = self.page_manager.rollback(reservation);
+                return Err(error);
+            }
+        };
+
+        if let Err(error) = self.page_manager.commit(reservation) {
+            let rollback = self.executor.rollback_prepared_batch();
+            return match rollback {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(Error::Internal(format!(
+                    "diagnostic KV commit failed ({error}); backend rollback also failed ({rollback_error})"
+                ))),
+            };
+        }
+        self.executor.commit_prepared_batch()?;
+        Ok(output)
+    }
+
+    /// Execute one native packed batch for a single sequence and return requested logits.
+    ///
+    /// Unlike [`execute_sequence_step`](Self::execute_sequence_step), this method
+    /// invokes the model-neutral `ExecutionBatch` path directly. It is used by
+    /// resident verification benchmarks and speculative target verification so
+    /// the measured path includes authoritative paged-KV prepare/commit.
+    pub fn execute_sequence_batch(
+        &mut self,
+        slot: StateSlot,
+        phase: ForwardPhase,
+        token_ids: &[u32],
+        logits: &[LogitsRequest],
+    ) -> Result<ExecutionOutput> {
+        if token_ids.is_empty() {
+            return Err(Error::Execution(
+                "page-managed diagnostic batch requires at least one token".into(),
+            ));
+        }
+        if token_ids.len() != logits.len() {
+            return Err(Error::Execution(format!(
+                "page-managed diagnostic batch has {} tokens but {} logits requests",
+                token_ids.len(),
+                logits.len()
+            )));
+        }
+        if phase == ForwardPhase::Decode && token_ids.len() != 1 {
+            return Err(Error::Execution(
+                "page-managed diagnostic decode batch requires exactly one token".into(),
+            ));
+        }
+
+        let state_index = slot.try_as_usize().map_err(|_| {
+            Error::Execution("page-managed diagnostic state slot exceeds usize".into())
+        })?;
+        let generation = *self.generations.get(state_index).ok_or_else(|| {
+            Error::Execution(format!(
+                "page-managed diagnostic state slot {} is not allocated",
+                slot.get()
+            ))
+        })?;
+        let reservation = self
+            .page_manager
+            .reserve(slot, generation, token_ids.len())?;
+        let bindings = match self.page_manager.reservation_bindings(&reservation) {
+            Ok(bindings) => bindings,
+            Err(error) => {
+                let _ = self.page_manager.rollback(reservation);
+                return Err(error);
+            }
+        };
+        let context_len = u32::try_from(reservation.positions.start)
+            .map_err(|_| Error::Execution("diagnostic context length exceeds u32".into()))?;
+        let sequence_len = u32::try_from(reservation.positions.end)
+            .map_err(|_| Error::Execution("diagnostic sequence length exceeds u32".into()))?;
+        let query_len = u32::try_from(token_ids.len())
+            .map_err(|_| Error::Execution("diagnostic query length exceeds u32".into()))?;
+        let uses_paged_kv = self.executor.capabilities().kv_binding_mode == KvBindingMode::Paged;
+        let block_count = if uses_paged_kv {
+            u32::try_from(bindings.block_ids.len())
+                .map_err(|_| Error::Execution("diagnostic block table exceeds u32".into()))?
+        } else {
+            0
+        };
+        let mode = match phase {
+            ForwardPhase::Prefill => ForwardMode::Prefill,
+            ForwardPhase::Decode => ForwardMode::Decode,
+        };
+        let batch = ExecutionBatch::new(
+            mode,
+            token_ids.to_vec(),
+            reservation
+                .positions
+                .clone()
+                .map(|position| {
+                    u32::try_from(position)
+                        .map_err(|_| Error::Execution("diagnostic position exceeds u32".into()))
+                })
+                .collect::<Result<Vec<_>>>()?,
+            if uses_paged_kv {
+                bindings.write_slots.iter().copied().map(Some).collect()
+            } else {
+                vec![None; token_ids.len()]
+            },
+            logits.to_vec(),
+            vec![ExecutionSequence::new(
+                slot,
+                phase,
+                0..query_len,
+                context_len,
+                sequence_len,
+                0..block_count,
+            )],
+            if uses_paged_kv {
+                bindings.block_ids
+            } else {
+                Vec::new()
+            },
+        );
+
+        let execution = self.executor.execute_batch_with_kv(
+            &mut self.states,
+            &batch,
+            std::slice::from_ref(&reservation),
         );
         let output = match execution {
             Ok(output) => output,

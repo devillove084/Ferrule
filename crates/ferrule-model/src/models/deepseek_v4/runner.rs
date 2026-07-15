@@ -268,10 +268,12 @@ impl PackedBatchMetadata {
 
     /// Native CUDA keeps row-owned projection/HC/MoE work packed while mutable
     /// recurrent state is advanced once per sequence in query order.
+    ///
+    /// Single-sequence multi-row batches (DSpark verification: 1 sequence × V
+    /// candidate rows) use the same packed path as multi-session batches.
     #[cfg(feature = "cuda")]
     pub(super) fn supports_native_cuda(&self) -> bool {
         self.row_to_sequence.len() >= 2
-            && self.sequences.len() >= 2
             && self.sequence_major_rows.len() == self.row_to_sequence.len()
             && self
                 .row_to_sequence
@@ -353,6 +355,11 @@ impl DeepSeekV4Runner {
                 &layer_slot_capacities,
                 model.config.hidden_size,
                 model.config.moe_intermediate_size,
+            )?;
+            operators.compile_cuda_execution_image(
+                plan.generation(),
+                model,
+                plan.resources().layers(),
             )?;
         }
         let mut layer_states = Vec::with_capacity(options.max_layers);
@@ -986,8 +993,6 @@ impl DeepSeekV4Runner {
                     self.operators.cuda_mut()?.hc_head_from_device_into(
                         &buffers.hc_input,
                         tokens,
-                        self.plan.resources().model().config.hc_config(),
-                        &self.plan.resources().model().hc_head,
                         &mut buffers.final_hidden,
                     )?;
                     self.operators.capture_parity_checkpoint_last_row(
@@ -1164,8 +1169,8 @@ impl DeepSeekV4Runner {
 
         let mut decode_buffers = self.operators.cuda_mut()?.take_decode_buffers(
             rows * hc_row_size,
-            hidden_size,
-            hidden_size,
+            rows * hidden_size,
+            rows * hidden_size,
         )?;
 
         let residency = self.expert_residency.as_deref_mut().ok_or_else(|| {
@@ -1233,70 +1238,38 @@ impl DeepSeekV4Runner {
             if max_top_k == 0 {
                 return Ok(vec![Vec::new(); rows]);
             }
+            // Batched output head: HC head + RMS norm + vocab projection
+            // over all rows in one pass, replacing the former row-serial loop.
+            self.operators.cuda_mut()?.hc_head_from_device_into(
+                &decode_buffers.hc_input,
+                rows,
+                &mut decode_buffers.final_hidden,
+            )?;
+            self.operators
+                .cuda_mut()?
+                .rms_norm_output_rows_device_into(
+                    &decode_buffers.final_hidden,
+                    rows,
+                    self.plan.resources().model().config.norm_eps,
+                    &mut decode_buffers.topk_row,
+                )?;
+            let all_row_logits = self
+                .plan
+                .resources()
+                .model()
+                .topk_logits_rows_for_hidden_device_with_operators(
+                    &decode_buffers.topk_row,
+                    rows,
+                    max_top_k,
+                    self.plan
+                        .resources()
+                        .prepare_options()
+                        .output_head_chunk_rows,
+                    &mut self.operators,
+                )?;
             let mut logits = vec![Vec::new(); rows];
             for &row in &requested_logit_rows {
-                if row != 0 {
-                    self.operators.cuda_mut()?.ops.copy_f32_within(
-                        &mut decode_buffers.hc_input,
-                        row * hc_row_size,
-                        0,
-                        hc_row_size,
-                    )?;
-                }
-                self.operators.cuda_mut()?.hc_head_from_device_into(
-                    &decode_buffers.hc_input,
-                    1,
-                    self.plan.resources().model().config.hc_config(),
-                    &self.plan.resources().model().hc_head,
-                    &mut decode_buffers.final_hidden,
-                )?;
-                self.operators.capture_parity_checkpoint_last_row(
-                    0,
-                    "final_hidden",
-                    &decode_buffers.final_hidden,
-                    hidden_size,
-                )?;
-                let sequence = metadata.row_to_sequence[row];
-                if sequence_prefill[sequence] {
-                    let final_hidden = self
-                        .operators
-                        .cuda_mut()?
-                        .ops
-                        .download_f32_buffer(&decode_buffers.final_hidden)?;
-                    let final_norm = self.operators.rms_norm(
-                        &final_hidden,
-                        &self.plan.resources().model().output_norm,
-                        self.plan.resources().model().config.norm_eps,
-                        "output_norm",
-                    )?;
-                    self.operators
-                        .capture_parity_checkpoint_host(0, "final_norm", &final_norm);
-                    self.operators
-                        .cuda_mut()?
-                        .ops
-                        .overwrite_f32_buffer(&final_norm, &mut decode_buffers.topk_row)?;
-                } else {
-                    self.operators.cuda_mut()?.rms_norm_device_cached_into(
-                        "output_norm",
-                        &decode_buffers.final_hidden,
-                        &self.plan.resources().model().output_norm,
-                        self.plan.resources().model().config.norm_eps,
-                        &mut decode_buffers.topk_row,
-                    )?;
-                }
-                logits[row] = self
-                    .plan
-                    .resources()
-                    .model()
-                    .topk_logits_for_hidden_device_with_operators(
-                        &decode_buffers.topk_row,
-                        max_top_k,
-                        self.plan
-                            .resources()
-                            .prepare_options()
-                            .output_head_chunk_rows,
-                        &mut self.operators,
-                    )?;
+                logits[row] = all_row_logits[row].clone();
             }
             Ok(logits)
         })();
@@ -1518,8 +1491,6 @@ impl DeepSeekV4Runner {
             self.operators.cuda_mut()?.hc_head_from_device_into(
                 &decode_buffers.hc_input,
                 1,
-                self.plan.resources().model().config.hc_config(),
-                &self.plan.resources().model().hc_head,
                 &mut decode_buffers.final_hidden,
             )?;
             self.record_output_profile_stage(final_hc_start, |profile, elapsed_us| {
@@ -1528,10 +1499,8 @@ impl DeepSeekV4Runner {
             })?;
 
             let final_norm_start = self.operators.profile_start();
-            self.operators.cuda_mut()?.rms_norm_device_cached_into(
-                "output_norm",
+            self.operators.cuda_mut()?.rms_norm_output_device_into(
                 &decode_buffers.final_hidden,
-                &self.plan.resources().model().output_norm,
                 self.plan.resources().model().config.norm_eps,
                 &mut decode_buffers.final_norm,
             )?;
@@ -2910,7 +2879,25 @@ impl MultiSessionRunner for DeepSeekV4Runner {
                     ferrule_common::execution::KvBindingMode::None
                 }
             },
-            logits_row_policy: ferrule_common::execution::LogitsRowPolicy::LastPerSequence,
+            logits_row_policy: {
+                #[cfg(feature = "cuda")]
+                {
+                    if self
+                        .operators
+                        .cuda
+                        .as_ref()
+                        .is_some_and(|cuda| cuda.has_kv_page_pool())
+                    {
+                        ferrule_common::execution::LogitsRowPolicy::Any
+                    } else {
+                        ferrule_common::execution::LogitsRowPolicy::LastPerSequence
+                    }
+                }
+                #[cfg(not(feature = "cuda"))]
+                {
+                    ferrule_common::execution::LogitsRowPolicy::LastPerSequence
+                }
+            },
         }
     }
 }

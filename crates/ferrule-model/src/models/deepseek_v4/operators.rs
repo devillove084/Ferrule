@@ -30,10 +30,14 @@ use crate::moe::streaming::ExpertSourceCatalog;
 use crate::moe::streaming::{ExpertMemoryPolicy, ExpertStreamingPlanner, ExpertStreamingReader};
 use crate::runner::TokenLogit;
 
+#[cfg(feature = "cuda")]
+use super::artifact::DeepSeekV4ArtifactModel;
 use super::config::DeepSeekV4AttentionConfig;
 #[cfg(feature = "cuda")]
 use super::cuda_cache::DeepSeekV4CudaOperatorCache;
 use super::helpers::{grouped_output_a, rank_logits_desc, rms_norm, rms_norm_heads_in_place};
+#[cfg(feature = "cuda")]
+use super::layer::DeepSeekV4Layer;
 use super::prepared::DeepSeekV4ExecutionPolicy;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -960,6 +964,20 @@ impl DeepSeekV4OperatorContext {
                 .extend(cuda.drain_moe_access_events());
         }
         Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn compile_cuda_execution_image(
+        &mut self,
+        generation: u64,
+        model: &DeepSeekV4ArtifactModel,
+        layers: &[DeepSeekV4Layer],
+    ) -> Result<()> {
+        if self.backend != ModelExecutionBackend::Cuda {
+            return Ok(());
+        }
+        self.cuda_mut()?
+            .compile_execution_image(generation, model, layers)
     }
 
     #[cfg(feature = "cuda")]

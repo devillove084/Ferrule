@@ -407,6 +407,55 @@ fn packed_metadata_batch(mode: ForwardMode, sequences: Vec<ExecutionSequence>) -
 }
 
 #[test]
+fn packed_metadata_supports_single_sequence_multi_row_verification() {
+    // DSpark verification: 1 sequence × V=4 candidate rows.
+    // This must use the same packed CUDA path as multi-session batches.
+    let batch = packed_metadata_batch(
+        ForwardMode::Prefill,
+        vec![ExecutionSequence::new(
+            StateSlot::new(0),
+            ForwardPhase::Prefill,
+            0..4,
+            10,
+            14,
+            0..0,
+        )],
+    );
+
+    let metadata = PackedBatchMetadata::lower(&batch, 1).unwrap();
+
+    assert_eq!(metadata.mode, ForwardMode::Prefill);
+    assert_eq!(metadata.sequences.len(), 1);
+    assert_eq!(metadata.row_to_sequence, vec![0, 0, 0, 0]);
+    assert_eq!(metadata.max_query_tokens, 4);
+    assert_eq!(metadata.sequences[0].query, 0..4);
+    #[cfg(feature = "cuda")]
+    assert!(metadata.supports_native_cuda());
+}
+
+#[test]
+fn packed_metadata_single_sequence_v2_v8_supports_native() {
+    for v in [2usize, 8] {
+        let batch = packed_metadata_batch(
+            ForwardMode::Prefill,
+            vec![ExecutionSequence::new(
+                StateSlot::new(0),
+                ForwardPhase::Prefill,
+                0..v as u32,
+                10,
+                10 + v as u32,
+                0..0,
+            )],
+        );
+        let metadata = PackedBatchMetadata::lower(&batch, 1).unwrap();
+        assert_eq!(metadata.row_to_sequence.len(), v);
+        assert_eq!(metadata.sequences.len(), 1);
+        #[cfg(feature = "cuda")]
+        assert!(metadata.supports_native_cuda());
+    }
+}
+
+#[test]
 fn release_capacity_preserves_initialized_layer_slots() {
     let cfg = official_tiny_cfg();
     let mut state = DeepSeekV4LayerState::new(cfg);

@@ -26,6 +26,8 @@ use super::attention::{DeepSeekV4Attention, DeepSeekV4AttentionCache};
 #[cfg(feature = "cuda")]
 use super::attention::{DeepSeekV4AttentionDecodeArena, DeepSeekV4AttentionRowsTransitionArena};
 use super::config::DeepSeekV4AttentionConfig;
+#[cfg(feature = "cuda")]
+use super::cuda_cache::{DeepSeekV4CudaHcStage, DeepSeekV4CudaLayerNorm};
 use super::helpers::rms_norm_rows_with_operators;
 use super::operators::{DeepSeekV4LayerProfileStage, DeepSeekV4OperatorContext};
 #[cfg(feature = "cuda")]
@@ -55,8 +57,6 @@ struct DeepSeekV4CompressorArenaShapeKey {
     ape_rows: usize,
     ape_cols: usize,
     norm_len: usize,
-    kv_input_width: usize,
-    score_input_width: usize,
     kv_width: usize,
     score_width: usize,
     compressed_width: usize,
@@ -133,10 +133,7 @@ struct DeepSeekV4LayerArenaShapeKey {
 
 #[cfg(any(feature = "cuda", test))]
 impl DeepSeekV4CompressorArenaShapeKey {
-    fn from_payload(
-        payload: &super::attention::DeepSeekV4CompressorPayload,
-        hidden_size: usize,
-    ) -> Self {
+    fn from_payload(payload: &super::attention::DeepSeekV4CompressorPayload) -> Self {
         Self {
             compress_ratio: payload.compress_ratio,
             head_dim: payload.head_dim,
@@ -145,8 +142,6 @@ impl DeepSeekV4CompressorArenaShapeKey {
             ape_rows: payload.ape_rows,
             ape_cols: payload.ape_cols,
             norm_len: payload.norm.len(),
-            kv_input_width: hidden_size,
-            score_input_width: hidden_size,
             kv_width: payload.wkv.format.out_features(),
             score_width: payload.wgate.format.out_features(),
             compressed_width: payload.head_dim,
@@ -167,13 +162,11 @@ impl DeepSeekV4LayerArenaShapeKey {
         let output_latent = cfg.output_latent_dim();
         let index_query = cfg.index_n_heads * cfg.index_head_dim;
         let compressed = layer.attention.compressed.as_ref();
-        let main_compressor = compressed.map(|payload| {
-            DeepSeekV4CompressorArenaShapeKey::from_payload(&payload.compressor, cfg.hidden_size)
-        });
+        let main_compressor = compressed
+            .map(|payload| DeepSeekV4CompressorArenaShapeKey::from_payload(&payload.compressor));
         let indexer = compressed.and_then(|payload| payload.indexer.as_ref());
-        let indexer_compressor = indexer.map(|payload| {
-            DeepSeekV4CompressorArenaShapeKey::from_payload(&payload.compressor, cfg.hidden_size)
-        });
+        let indexer_compressor = indexer
+            .map(|payload| DeepSeekV4CompressorArenaShapeKey::from_payload(&payload.compressor));
         let linear_workspace_width = cfg
             .hidden_size
             .max(cfg.q_lora_rank)
@@ -395,15 +388,13 @@ impl DeepSeekV4Layer {
     ) -> Result<DeepSeekV4LayerDeviceStepOutput> {
         let decode_start = operators.profile_start();
         let norm_eps = self.hc_config.norm_eps;
-        let layer_tag = format!("L{}", self.layer);
 
         // ── Prefix: attention HC-pre + norm + attention + HC-post + FFN HC-pre + FFN norm ──
         let stage_start = operators.profile_start();
-        let attn_hc_name = format!("hc_attn_{layer_tag}");
         operators.cuda_mut()?.hc_pre_from_device_into(
-            &attn_hc_name,
+            self.layer,
+            DeepSeekV4CudaHcStage::Attention,
             hc_state_dev,
-            &self.hc_attention,
             1,
             self.hc_config,
             &mut arena.attn_hidden,
@@ -425,11 +416,10 @@ impl DeepSeekV4Layer {
         )?;
 
         let stage_start = operators.profile_start();
-        let attn_norm_name = format!("attn_norm_{layer_tag}");
-        operators.cuda_mut()?.rms_norm_device_cached_into(
-            &attn_norm_name,
+        operators.cuda_mut()?.rms_norm_layer_device_into(
+            self.layer,
+            DeepSeekV4CudaLayerNorm::Attention,
             &arena.attn_hidden,
-            &self.attn_norm,
             norm_eps,
             &mut arena.attn_norm,
         )?;
@@ -485,11 +475,10 @@ impl DeepSeekV4Layer {
         )?;
 
         let stage_start = operators.profile_start();
-        let ffn_hc_name = format!("hc_ffn_{layer_tag}");
         operators.cuda_mut()?.hc_pre_from_device_into(
-            &ffn_hc_name,
+            self.layer,
+            DeepSeekV4CudaHcStage::FeedForward,
             &arena.after_attn,
-            &self.hc_feed_forward,
             1,
             self.hc_config,
             &mut arena.ffn_hidden,
@@ -505,11 +494,10 @@ impl DeepSeekV4Layer {
         )?;
 
         let stage_start = operators.profile_start();
-        let ffn_norm_name = format!("ffn_norm_{layer_tag}");
-        operators.cuda_mut()?.rms_norm_device_cached_into(
-            &ffn_norm_name,
+        operators.cuda_mut()?.rms_norm_layer_device_into(
+            self.layer,
+            DeepSeekV4CudaLayerNorm::FeedForward,
             &arena.ffn_hidden,
-            &self.ffn_norm,
             norm_eps,
             &mut arena.ffn_norm,
         )?;
@@ -630,11 +618,10 @@ impl DeepSeekV4Layer {
                 "DeepSeek-V4 packed row/sequence metadata is inconsistent".into(),
             ));
         }
-        let layer_tag = format!("L{}", self.layer);
         operators.cuda_mut()?.hc_pre_from_device_into(
-            &format!("hc_attn_{layer_tag}"),
+            self.layer,
+            DeepSeekV4CudaHcStage::Attention,
             hc_state_dev,
-            &self.hc_attention,
             rows,
             self.hc_config,
             &mut arena.attn_hidden,
@@ -648,11 +635,11 @@ impl DeepSeekV4Layer {
             &arena.attn_hidden,
             self.hc_config.hidden_size,
         )?;
-        operators.cuda_mut()?.rms_norm_rows_device_cached_into(
-            &format!("attn_norm_{layer_tag}"),
+        operators.cuda_mut()?.rms_norm_layer_rows_device_into(
+            self.layer,
+            DeepSeekV4CudaLayerNorm::Attention,
             &arena.attn_hidden,
             rows,
-            &self.attn_norm,
             self.hc_config.norm_eps,
             &mut arena.attn_norm,
         )?;
@@ -701,9 +688,9 @@ impl DeepSeekV4Layer {
             self.hc_config.hc_hidden_size(),
         )?;
         operators.cuda_mut()?.hc_pre_from_device_into(
-            &format!("hc_ffn_{layer_tag}"),
+            self.layer,
+            DeepSeekV4CudaHcStage::FeedForward,
             &arena.after_attn,
-            &self.hc_feed_forward,
             rows,
             self.hc_config,
             &mut arena.ffn_hidden,
@@ -711,11 +698,11 @@ impl DeepSeekV4Layer {
             &mut arena.ffn_post,
             &mut arena.ffn_comb,
         )?;
-        operators.cuda_mut()?.rms_norm_rows_device_cached_into(
-            &format!("ffn_norm_{layer_tag}"),
+        operators.cuda_mut()?.rms_norm_layer_rows_device_into(
+            self.layer,
+            DeepSeekV4CudaLayerNorm::FeedForward,
             &arena.ffn_hidden,
             rows,
-            &self.ffn_norm,
             self.hc_config.norm_eps,
             &mut arena.ffn_norm,
         )?;
@@ -800,14 +787,12 @@ impl DeepSeekV4Layer {
     ) -> Result<()> {
         let tokens = token_ids.len();
         let prefill_start = operators.profile_start();
-        let layer_tag = format!("L{}", self.layer);
 
         let stage_start = operators.profile_start();
-        let attn_hc_name = format!("hc_attn_{layer_tag}");
         operators.cuda_mut()?.hc_pre_from_device_into(
-            &attn_hc_name,
+            self.layer,
+            DeepSeekV4CudaHcStage::Attention,
             hc_state_dev,
-            &self.hc_attention,
             tokens,
             self.hc_config,
             &mut arena.attn_hidden,
@@ -829,12 +814,11 @@ impl DeepSeekV4Layer {
         )?;
 
         let stage_start = operators.profile_start();
-        let attn_norm_name = format!("attn_norm_{layer_tag}");
-        operators.cuda_mut()?.rms_norm_rows_device_cached_into(
-            &attn_norm_name,
+        operators.cuda_mut()?.rms_norm_layer_rows_device_into(
+            self.layer,
+            DeepSeekV4CudaLayerNorm::Attention,
             &arena.attn_hidden,
             tokens,
-            &self.attn_norm,
             self.hc_config.norm_eps,
             &mut arena.attn_norm,
         )?;
@@ -890,11 +874,10 @@ impl DeepSeekV4Layer {
         )?;
 
         let stage_start = operators.profile_start();
-        let ffn_hc_name = format!("hc_ffn_{layer_tag}");
         operators.cuda_mut()?.hc_pre_from_device_into(
-            &ffn_hc_name,
+            self.layer,
+            DeepSeekV4CudaHcStage::FeedForward,
             &arena.after_attn,
-            &self.hc_feed_forward,
             tokens,
             self.hc_config,
             &mut arena.ffn_hidden,
@@ -910,12 +893,11 @@ impl DeepSeekV4Layer {
         )?;
 
         let stage_start = operators.profile_start();
-        let ffn_norm_name = format!("ffn_norm_{layer_tag}");
-        operators.cuda_mut()?.rms_norm_rows_device_cached_into(
-            &ffn_norm_name,
+        operators.cuda_mut()?.rms_norm_layer_rows_device_into(
+            self.layer,
+            DeepSeekV4CudaLayerNorm::FeedForward,
             &arena.ffn_hidden,
             tokens,
-            &self.ffn_norm,
             self.hc_config.norm_eps,
             &mut arena.ffn_norm,
         )?;

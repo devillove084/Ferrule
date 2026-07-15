@@ -36,6 +36,29 @@ fn element_bytes<T>(len: usize) -> u64 {
     (len as u64).saturating_mul(std::mem::size_of::<T>() as u64)
 }
 
+/// Repack a logical row-major HC function matrix `[rows, cols]` as
+/// `[cols, rows]`. GPU HC kernels keep each row's `col=0..cols` accumulation
+/// order, while adjacent row threads read adjacent weights at every column.
+pub fn transpose_hc_function_for_device(function: &[f32], rows: usize) -> Result<Vec<f32>> {
+    if rows == 0 || !function.len().is_multiple_of(rows) {
+        return Err(Error::Internal(format!(
+            "invalid HC function layout: elements={} rows={rows}",
+            function.len()
+        )));
+    }
+    let cols = function.len() / rows;
+    if cols == 0 {
+        return Err(Error::Internal("HC function has zero columns".into()));
+    }
+    let mut transposed = vec![0.0f32; function.len()];
+    for row in 0..rows {
+        for col in 0..cols {
+            transposed[col * rows + row] = function[row * cols + col];
+        }
+    }
+    Ok(transposed)
+}
+
 fn f32_range_device_ptr(
     buffer: &CudaF32Buffer,
     offset: usize,
@@ -93,6 +116,7 @@ pub const ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE: usize = 128;
 struct CudaDispatchConfig {
     fp8_mma: bool,
     grouped_wo_a_mma: bool,
+    bf16_block_gemv: bool,
     moe_timing: bool,
     moe_reduce: bool,
     moe_tensor_core: bool,
@@ -107,6 +131,11 @@ impl CudaDispatchConfig {
         Self {
             fp8_mma: env_feature_enabled(env("FERRULE_CUDA_FP8_MMA").as_deref()),
             grouped_wo_a_mma: env_feature_enabled(env("FERRULE_CUDA_GROUPED_WO_A_MMA").as_deref()),
+            bf16_block_gemv: env_moe_feature_enabled(
+                env("FERRULE_CUDA_BF16_BLOCK_GEMV").as_deref(),
+                false,
+            ),
+
             moe_timing: env_moe_feature_enabled(env("FERRULE_CUDA_MOE_TIMING").as_deref(), false),
             moe_reduce: env_moe_feature_enabled(env("FERRULE_CUDA_MOE_REDUCE").as_deref(), false),
             moe_tensor_core: env_moe_feature_enabled(env("FERRULE_CUDA_MOE_TC").as_deref(), true),
@@ -878,6 +907,25 @@ pub struct CudaArtifactLinearWorkspace {
     x_scales: DeviceBuffer<u8>,
     value_capacity: usize,
     scale_capacity: usize,
+}
+
+/// Dedicated storage for a producer-owned FP8 activation pack.
+pub struct CudaFp8ActivationPack {
+    x_packed: DeviceBuffer<u8>,
+    x_scales: DeviceBuffer<u8>,
+    value_capacity: usize,
+    scale_capacity: usize,
+}
+
+/// A call-scoped immutable view of one freshly prepared activation.
+///
+/// The lifetime keeps the backing pack exclusively borrowed until all
+/// consumers finish, preventing another producer from overwriting it.
+pub struct CudaPreparedFp8Activation<'a> {
+    x_packed: &'a DeviceBuffer<u8>,
+    x_scales: &'a DeviceBuffer<u8>,
+    rows: usize,
+    row_width: usize,
 }
 
 impl CudaSwiGLUWorkspace {
@@ -1721,9 +1769,20 @@ pub struct CudaExpertRouteResolveWorkspace {
     route_slots: CudaI32Buffer,
     route_generations: CudaI32Buffer,
     miss_markers: CudaI32Buffer,
-    miss_ids: CudaI32Buffer,
-    miss_count: CudaI32Buffer,
-    miss_overflow: CudaI32Buffer,
+    /// `[count, overflow, miss_id...]`, kept contiguous so the host miss path
+    /// needs one bounded D2H transfer rather than three synchronization points.
+    miss_control: CudaI32Buffer,
+    miss_capacity: usize,
+    route_capacity: usize,
+    /// Persistent page-locked destination for control-stream D2H.
+    miss_staging: PinnedHostBuffer<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CudaExpertRouteMisses {
+    pub miss_ids: Vec<i32>,
+    pub route_ids: Vec<i32>,
+    pub overflow: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1756,6 +1815,7 @@ pub struct CudaArtifactOperatorContext {
     module: LoadedModule,
     stream: Arc<CudaStream>,
     upload_stream: Arc<CudaStream>,
+    control_stream: Arc<CudaStream>,
     counters: CudaOpCounterCells,
     failpoints: CudaFailpoints,
     dispatch_config: CudaDispatchConfig,
@@ -1778,11 +1838,15 @@ impl CudaArtifactOperatorContext {
         // publish readiness through events; the main compute stream only waits
         // when a selected expert is actually consumed.
         let upload_stream = cu(stream.fork())?;
+        // Small host-visible control transfers wait only for the exact producer
+        // event and can overlap with later compute already queued on `stream`.
+        let control_stream = cu(stream.fork())?;
         Ok(Self {
             _ctx: ctx,
             module,
             stream,
             upload_stream,
+            control_stream,
             counters: CudaOpCounterCells::default(),
             failpoints: CudaFailpoints::default(),
             dispatch_config,
@@ -2101,9 +2165,19 @@ impl CudaArtifactOperatorContext {
             route_slots: self.zero_i32_buffer(route_capacity)?,
             route_generations: self.zero_i32_buffer(route_capacity)?,
             miss_markers: self.zero_i32_buffer(route_capacity)?,
-            miss_ids: self.zero_i32_buffer(miss_capacity)?,
-            miss_count: self.zero_i32_buffer(1)?,
-            miss_overflow: self.zero_i32_buffer(1)?,
+            miss_control: self.zero_i32_buffer(
+                2usize
+                    .saturating_add(miss_capacity)
+                    .saturating_add(route_capacity),
+            )?,
+            miss_capacity,
+            route_capacity,
+            miss_staging: cu(PinnedHostBuffer::zeroed(
+                &self._ctx,
+                2usize
+                    .saturating_add(miss_capacity)
+                    .saturating_add(route_capacity),
+            ))?,
         })
     }
 
@@ -2119,6 +2193,7 @@ impl CudaArtifactOperatorContext {
             || route_count > workspace.route_slots.len
             || route_count > workspace.route_generations.len
             || route_count > workspace.miss_markers.len
+            || route_count > workspace.route_capacity
         {
             return Err(Error::Internal(format!(
                 "CUDA expert route resolve exceeds capacity: routes={route_count} ids={} slots={} generations={} markers={}",
@@ -2134,16 +2209,22 @@ impl CudaArtifactOperatorContext {
             .map_err(|_| Error::Internal("CUDA expert table capacity exceeds u32".into()))?;
         let slot_capacity = u32::try_from(table.host.slot_capacity())
             .map_err(|_| Error::Internal("CUDA expert slot capacity exceeds u32".into()))?;
-        let miss_capacity = u32::try_from(workspace.miss_ids.len)
+        let miss_capacity = u32::try_from(workspace.miss_capacity)
             .map_err(|_| Error::Internal("CUDA expert miss capacity exceeds u32".into()))?;
+        let route_capacity = u32::try_from(workspace.route_capacity)
+            .map_err(|_| Error::Internal("CUDA expert route capacity exceeds u32".into()))?;
         self.launched(unsafe {
             self.module.initialize_expert_slot_resolve(
                 &self.stream,
-                LaunchConfig::for_num_elems(miss_capacity.max(1)),
-                &mut workspace.miss_ids.buffer,
-                &mut workspace.miss_count.buffer,
-                &mut workspace.miss_overflow.buffer,
+                LaunchConfig::for_num_elems(
+                    miss_capacity
+                        .saturating_add(route_capacity)
+                        .saturating_add(2)
+                        .max(1),
+                ),
+                &mut workspace.miss_control.buffer,
                 miss_capacity,
+                route_capacity,
             )
         })?;
         self.launched(unsafe {
@@ -2157,9 +2238,7 @@ impl CudaArtifactOperatorContext {
                 &mut workspace.route_slots.buffer,
                 &mut workspace.route_generations.buffer,
                 &mut workspace.miss_markers.buffer,
-                &mut workspace.miss_ids.buffer,
-                &mut workspace.miss_count.buffer,
-                &mut workspace.miss_overflow.buffer,
+                &mut workspace.miss_control.buffer,
                 route_count,
                 expert_capacity,
                 slot_capacity,
@@ -2168,12 +2247,63 @@ impl CudaArtifactOperatorContext {
         })
     }
 
+    /// Download only the bounded miss control queue in one D2H transfer after
+    /// all compute work currently queued on the primary stream.
+    pub fn download_expert_route_misses(
+        &self,
+        workspace: &mut CudaExpertRouteResolveWorkspace,
+    ) -> Result<CudaExpertRouteMisses> {
+        let produced = self.record_compute_event()?;
+        self.download_expert_route_misses_after(workspace, &produced)
+    }
+
+    /// Start the compact control D2H after an explicit producer event. Later
+    /// primary-stream work can overlap while the host waits for this transfer.
+    pub fn download_expert_route_misses_after(
+        &self,
+        workspace: &mut CudaExpertRouteResolveWorkspace,
+        produced: &CudaComputeEvent,
+    ) -> Result<CudaExpertRouteMisses> {
+        self.check_capture_safe("expert miss control download")?;
+        cu(self.control_stream.wait(&produced.event))?;
+        let bytes = element_bytes::<i32>(workspace.miss_control.len) as usize;
+        let staging = workspace.miss_staging.as_mut_slice();
+        let result = unsafe {
+            cuda_bindings::cuMemcpyDtoHAsync_v2(
+                staging.as_mut_ptr().cast(),
+                workspace.miss_control.buffer.cu_deviceptr(),
+                bytes,
+                self.control_stream.cu_stream(),
+            )
+        };
+        if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+            return Err(Error::Internal(format!(
+                "CUDA expert miss control D2H failed: error {result}"
+            )));
+        }
+        let copied = cu(self.control_stream.record_event(None))?;
+        cu(copied.synchronize())?;
+        self.counters.add_device_to_host(bytes as u64);
+
+        let miss_count = staging[0].max(0) as usize;
+        let overflow = staging[1] != 0;
+        let miss_start = 2;
+        let miss_end = miss_start + workspace.miss_capacity;
+        let route_end = miss_end + workspace.route_capacity;
+        let take = miss_count.min(workspace.miss_capacity);
+        Ok(CudaExpertRouteMisses {
+            miss_ids: staging[miss_start..miss_start + take].to_vec(),
+            route_ids: staging[miss_end..route_end].to_vec(),
+            overflow: overflow || miss_count > workspace.miss_capacity,
+        })
+    }
+
     /// Diagnostic/test oracle that downloads device-side route resolution.
     /// Production dispatch must consume the device-resident workspace directly
     /// and must not call this method.
     pub fn download_expert_route_resolve(
         &self,
-        workspace: &CudaExpertRouteResolveWorkspace,
+        workspace: &mut CudaExpertRouteResolveWorkspace,
         route_count: usize,
     ) -> Result<CudaExpertRouteResolveResult> {
         if route_count > workspace.route_slots.len {
@@ -2181,22 +2311,19 @@ impl CudaArtifactOperatorContext {
                 "CUDA expert route resolve download exceeds route capacity".into(),
             ));
         }
-        let miss_count = self.download_i32_buffer(&workspace.miss_count)?[0].max(0) as usize;
-        let miss_overflow = self.download_i32_buffer(&workspace.miss_overflow)?[0] != 0;
+        let misses = self.download_expert_route_misses(workspace)?;
         let mut route_slots = self.download_i32_buffer(&workspace.route_slots)?;
         let mut route_generations = self.download_i32_buffer(&workspace.route_generations)?;
         let mut miss_markers = self.download_i32_buffer(&workspace.miss_markers)?;
-        let mut miss_ids = self.download_i32_buffer(&workspace.miss_ids)?;
         route_slots.truncate(route_count);
         route_generations.truncate(route_count);
         miss_markers.truncate(route_count);
-        miss_ids.truncate(miss_count.min(miss_ids.len()));
         Ok(CudaExpertRouteResolveResult {
             route_slots,
             route_generations,
             miss_markers,
-            miss_ids,
-            miss_overflow,
+            miss_ids: misses.miss_ids,
+            miss_overflow: misses.overflow,
         })
     }
 
@@ -3762,6 +3889,92 @@ impl CudaArtifactOperatorContext {
         }
     }
 
+    pub fn artifact_linear_pair_matvec_into(
+        &self,
+        first: &CudaArtifactLinearHandle,
+        second: &CudaArtifactLinearHandle,
+        input: &CudaF32Buffer,
+        first_output: &mut CudaF32Buffer,
+        second_output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        let first_in = first.shape.in_features();
+        let second_in = second.shape.in_features();
+        if first_in != second_in || input.len != first_in {
+            return Err(Error::Internal(format!(
+                "CUDA artifact linear pair input mismatch: first={first_in}, second={second_in}, input={}",
+                input.len
+            )));
+        }
+        let first_out = first.shape.out_features();
+        let second_out = second.shape.out_features();
+        if first_output.len != first_out || second_output.len != second_out {
+            return Err(Error::Internal(format!(
+                "CUDA artifact linear pair output mismatch: first expected={first_out} got={}, second expected={second_out} got={}",
+                first_output.len, second_output.len
+            )));
+        }
+        match (first.shape, second.shape) {
+            (
+                CudaArtifactLinearShape::Bf16Bytes { .. },
+                CudaArtifactLinearShape::Bf16Bytes { .. },
+            ) => {
+                let combined_out = first_out.checked_add(second_out).ok_or_else(|| {
+                    Error::Internal("CUDA BF16 linear pair output size overflow".into())
+                })?;
+                let combined_out = checked_u32(
+                    combined_out,
+                    "artifact_linear_pair_matvec_into",
+                    "combined_out",
+                )?;
+                let first_out =
+                    checked_u32(first_out, "artifact_linear_pair_matvec_into", "first_out")?;
+                let second_out =
+                    checked_u32(second_out, "artifact_linear_pair_matvec_into", "second_out")?;
+                let in_features =
+                    checked_u32(first_in, "artifact_linear_pair_matvec_into", "in_features")?;
+                if self.dispatch_config.bf16_block_gemv {
+                    self.launched(unsafe {
+                        self.module.gemv_bf16_bytes_block_pair(
+                            &self.stream,
+                            LaunchConfig {
+                                grid_dim: (combined_out, 1, 1),
+                                block_dim: (256, 1, 1),
+                                shared_mem_bytes: 0,
+                            },
+                            &input.buffer,
+                            &first.weight,
+                            &second.weight,
+                            &mut first_output.buffer,
+                            &mut second_output.buffer,
+                            first_out,
+                            second_out,
+                            in_features,
+                        )
+                    })
+                } else {
+                    self.launched(unsafe {
+                        self.module.gemv_bf16_bytes_pair(
+                            &self.stream,
+                            LaunchConfig::for_num_elems(combined_out),
+                            &input.buffer,
+                            &first.weight,
+                            &second.weight,
+                            &mut first_output.buffer,
+                            &mut second_output.buffer,
+                            first_out,
+                            second_out,
+                            in_features,
+                        )
+                    })
+                }
+            }
+            _ => {
+                self.artifact_linear_matvec_into(first, input, first_output)?;
+                self.artifact_linear_matvec_into(second, input, second_output)
+            }
+        }
+    }
+
     pub fn artifact_linear_rows_from_device(
         &self,
         handle: &CudaArtifactLinearHandle,
@@ -3812,14 +4025,20 @@ impl CudaArtifactOperatorContext {
                 &mut output.buffer,
             );
         }
-        let mut x = self.clone_f32_buffer(input)?;
-        if quantized_shape_uses_fp8_activation(handle.shape) {
-            self.fp8_activation_quantize_buffer_in_place(
-                &mut x,
-                in_features,
-                ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
-            )?;
+        if !quantized_shape_uses_fp8_activation(handle.shape) {
+            return self.artifact_linear_rows_device(
+                handle,
+                &input.buffer,
+                rows,
+                &mut output.buffer,
+            );
         }
+        let mut x = self.clone_f32_buffer(input)?;
+        self.fp8_activation_quantize_buffer_in_place(
+            &mut x,
+            in_features,
+            ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
+        )?;
         self.artifact_linear_rows_device(handle, &x.buffer, rows, &mut output.buffer)
     }
 
@@ -3867,16 +4086,184 @@ impl CudaArtifactOperatorContext {
             );
         }
 
-        self.copy_f32_into_slot(input, &mut scratch.cloned, 0)?;
-        if quantized_shape_uses_fp8_activation(handle.shape) {
-            self.fp8_activation_quantize_in_place(
-                &mut scratch.cloned.buffer,
-                input_len,
-                in_features,
-                ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
-            )?;
+        if !quantized_shape_uses_fp8_activation(handle.shape) {
+            return self.artifact_linear_rows_device(
+                handle,
+                &input.buffer,
+                rows,
+                &mut output.buffer,
+            );
         }
+        self.copy_f32_into_slot(input, &mut scratch.cloned, 0)?;
+        self.fp8_activation_quantize_in_place(
+            &mut scratch.cloned.buffer,
+            input_len,
+            in_features,
+            ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
+        )?;
         self.artifact_linear_rows_device(handle, &scratch.cloned.buffer, rows, &mut output.buffer)
+    }
+
+    pub fn prepare_fp8_activation_from_device<'a>(
+        &self,
+        input: &CudaF32Buffer,
+        rows: usize,
+        row_width: usize,
+        storage: &'a mut CudaFp8ActivationPack,
+    ) -> Result<CudaPreparedFp8Activation<'a>> {
+        let expected = rows.checked_mul(row_width).ok_or_else(|| {
+            Error::Internal("CUDA FP8 activation pack input size overflow".into())
+        })?;
+        if rows == 0 || row_width == 0 || input.len != expected {
+            return Err(Error::Internal(format!(
+                "CUDA FP8 activation pack input mismatch: rows={rows} row_width={row_width} input={}",
+                input.len
+            )));
+        }
+        self.pack_fp8_rows_from_f32_preallocated(
+            &input.buffer,
+            rows,
+            row_width,
+            &mut storage.x_packed,
+            storage.value_capacity,
+            &mut storage.x_scales,
+            storage.scale_capacity,
+        )?;
+        Ok(CudaPreparedFp8Activation {
+            x_packed: &storage.x_packed,
+            x_scales: &storage.x_scales,
+            rows,
+            row_width,
+        })
+    }
+
+    pub fn artifact_linear_rows_from_prepared_fp8_into(
+        &self,
+        handle: &CudaArtifactLinearHandle,
+        activation: &CudaPreparedFp8Activation<'_>,
+        output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        if !self.artifact_linear_uses_fp8_mma(handle) {
+            return Err(Error::Internal(
+                "CUDA prepared FP8 activation requires an FP8 MMA linear".into(),
+            ));
+        }
+        if handle.shape.in_features() != activation.row_width {
+            return Err(Error::Internal(format!(
+                "CUDA prepared FP8 activation width mismatch: activation={} linear={}",
+                activation.row_width,
+                handle.shape.in_features()
+            )));
+        }
+        let expected_output = activation
+            .rows
+            .checked_mul(handle.shape.out_features())
+            .ok_or_else(|| Error::Internal("CUDA prepared FP8 output size overflow".into()))?;
+        if output.len != expected_output {
+            return Err(Error::Internal(format!(
+                "CUDA prepared FP8 output mismatch: expected={expected_output} got={}",
+                output.len
+            )));
+        }
+        self.artifact_linear_rows_fp8_mma_from_packed_preallocated(
+            handle,
+            activation.x_packed,
+            activation.x_scales,
+            activation.rows,
+            &mut output.buffer,
+        )
+    }
+
+    /// Execute two artifact linears that consume the same row-major activation.
+    ///
+    /// When both consumers use the FP8 MMA path, the activation is packed once
+    /// and both GEMMs consume the same packed values and scales. The fallback
+    /// preserves the existing per-linear preparation semantics.
+    #[allow(clippy::too_many_arguments)]
+    pub fn artifact_linear_pair_rows_from_device_into_with_scratch(
+        &self,
+        first: &CudaArtifactLinearHandle,
+        second: &CudaArtifactLinearHandle,
+        input: &CudaF32Buffer,
+        rows: usize,
+        first_output: &mut CudaF32Buffer,
+        second_output: &mut CudaF32Buffer,
+        scratch: &mut CudaArtifactLinearWorkspace,
+    ) -> Result<()> {
+        let in_features = first.shape.in_features();
+        if second.shape.in_features() != in_features {
+            return Err(Error::Internal(format!(
+                "CUDA artifact linear pair input mismatch: first={} second={}",
+                in_features,
+                second.shape.in_features()
+            )));
+        }
+        let input_len = rows.checked_mul(in_features).ok_or_else(|| {
+            Error::Internal("CUDA artifact linear pair input size overflow".into())
+        })?;
+        if rows == 0 || input.len != input_len {
+            return Err(Error::Internal(format!(
+                "CUDA artifact linear pair rows input mismatch: rows={rows} in_features={in_features} input={}",
+                input.len
+            )));
+        }
+        let first_output_len = rows
+            .checked_mul(first.shape.out_features())
+            .ok_or_else(|| {
+                Error::Internal("CUDA artifact linear pair first output overflow".into())
+            })?;
+        let second_output_len = rows
+            .checked_mul(second.shape.out_features())
+            .ok_or_else(|| {
+                Error::Internal("CUDA artifact linear pair second output overflow".into())
+            })?;
+        if first_output.len != first_output_len || second_output.len != second_output_len {
+            return Err(Error::Internal(format!(
+                "CUDA artifact linear pair output mismatch: first={}/{} second={}/{}",
+                first_output.len, first_output_len, second_output.len, second_output_len
+            )));
+        }
+
+        if self.artifact_linear_uses_fp8_mma(first) && self.artifact_linear_uses_fp8_mma(second) {
+            self.pack_fp8_rows_from_f32_preallocated(
+                &input.buffer,
+                rows,
+                in_features,
+                &mut scratch.x_packed,
+                scratch.value_capacity,
+                &mut scratch.x_scales,
+                scratch.scale_capacity,
+            )?;
+            self.artifact_linear_rows_fp8_mma_from_packed_preallocated(
+                first,
+                &scratch.x_packed,
+                &scratch.x_scales,
+                rows,
+                &mut first_output.buffer,
+            )?;
+            return self.artifact_linear_rows_fp8_mma_from_packed_preallocated(
+                second,
+                &scratch.x_packed,
+                &scratch.x_scales,
+                rows,
+                &mut second_output.buffer,
+            );
+        }
+
+        self.artifact_linear_rows_from_device_into_with_scratch(
+            first,
+            input,
+            rows,
+            first_output,
+            scratch,
+        )?;
+        self.artifact_linear_rows_from_device_into_with_scratch(
+            second,
+            input,
+            rows,
+            second_output,
+            scratch,
+        )
     }
 
     pub fn artifact_swiglu_ffn_rows_from_device(
@@ -5903,6 +6290,32 @@ impl CudaArtifactOperatorContext {
         })
     }
 
+    pub fn fp8_activation_pack(
+        &self,
+        rows: usize,
+        row_width: usize,
+    ) -> Result<CudaFp8ActivationPack> {
+        if rows == 0 || row_width == 0 || !row_width.is_multiple_of(128) {
+            return Err(Error::Internal(format!(
+                "CUDA FP8 activation pack requires positive K128 dimensions: rows={rows} row_width={row_width}"
+            )));
+        }
+        let value_capacity = rows.checked_mul(row_width).ok_or_else(|| {
+            Error::Internal("CUDA FP8 activation pack value size overflow".into())
+        })?;
+        let scale_capacity = rows
+            .checked_mul(row_width / ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE)
+            .ok_or_else(|| {
+                Error::Internal("CUDA FP8 activation pack scale size overflow".into())
+            })?;
+        Ok(CudaFp8ActivationPack {
+            x_packed: self.uninitialized_device_buffer::<u8>(value_capacity)?,
+            x_scales: self.uninitialized_device_buffer::<u8>(scale_capacity)?,
+            value_capacity,
+            scale_capacity,
+        })
+    }
+
     /// Create a persistent shared SwiGLU workspace for an FFN whose input and
     /// output widths are equal. This is the E2 graph-safety primitive: the
     /// workspace owns all scratch buffers so `*_into` methods perform zero
@@ -6034,19 +6447,13 @@ impl CudaArtifactOperatorContext {
             )));
         }
 
-        // Gate projection into workspace.gated.
-        self.artifact_linear_rows_from_device_into_with_scratch(
+        // Gate/up share one producer-side FP8 pack when both handles use MMA.
+        self.artifact_linear_pair_rows_from_device_into_with_scratch(
             gate,
-            input,
-            rows,
-            &mut workspace.gated,
-            &mut workspace.linear_scratch,
-        )?;
-        // Up projection into workspace.upd.
-        self.artifact_linear_rows_from_device_into_with_scratch(
             up,
             input,
             rows,
+            &mut workspace.gated,
             &mut workspace.upd,
             &mut workspace.linear_scratch,
         )?;
@@ -7065,6 +7472,68 @@ impl CudaArtifactOperatorContext {
         }
 
         self.resolve_expert_routes(table, expert_ids, route_count, resolve)?;
+        self.prepare_moe_experts_batched_workspace_resolved_filtered(
+            table,
+            router_weights,
+            route_count,
+            input_len,
+            intermediate_size,
+            hidden_size,
+            resolve,
+            resolve,
+            0,
+            workspace,
+        )
+    }
+
+    /// Gather a subset of already-resolved routes into a warmed MoE workspace.
+    /// `active_markers[route] == active_value` selects the routes executed by the
+    /// next prepared dispatch; inactive or stale routes contribute exactly zero.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_moe_experts_batched_workspace_resolved_filtered(
+        &self,
+        table: &CudaExpertSlotTable,
+        router_weights: &CudaF32Buffer,
+        route_count: usize,
+        input_len: usize,
+        intermediate_size: usize,
+        hidden_size: usize,
+        resolved: &CudaExpertRouteResolveWorkspace,
+        active_markers: &CudaExpertRouteResolveWorkspace,
+        active_value: i32,
+        workspace: &mut CudaMoeBatchedWorkspace,
+    ) -> Result<()> {
+        table.ensure_healthy()?;
+        if route_count == 0 || route_count > 6 || route_count > router_weights.len {
+            return Err(Error::Internal(format!(
+                "resolved CUDA MoE dispatch has invalid route metadata: routes={route_count} weights={}",
+                router_weights.len
+            )));
+        }
+        if route_count > resolved.route_slots.len
+            || route_count > resolved.route_generations.len
+            || route_count > active_markers.miss_markers.len
+        {
+            return Err(Error::Internal(format!(
+                "resolved CUDA MoE dispatch exceeds scratch capacity: routes={route_count} slots={} generations={} markers={}",
+                resolved.route_slots.len,
+                resolved.route_generations.len,
+                active_markers.miss_markers.len
+            )));
+        }
+        if !workspace.matches(route_count, input_len, intermediate_size, hidden_size) {
+            return Err(Error::Internal(format!(
+                "resolved CUDA MoE workspace mismatch: workspace=[max_experts={},input={},intermediate={},hidden={}] call=[experts={},input={},intermediate={},hidden={}]",
+                workspace.max_experts,
+                workspace.input_size,
+                workspace.intermediate_size,
+                workspace.hidden_size,
+                route_count,
+                input_len,
+                intermediate_size,
+                hidden_size
+            )));
+        }
         self.launched(unsafe {
             self.module.gather_stable_moe_dispatch(
                 &self.stream,
@@ -7076,9 +7545,11 @@ impl CudaArtifactOperatorContext {
                 &table.down_weight,
                 &table.down_scale,
                 &table.slot_generation,
-                &resolve.route_slots.buffer,
-                &resolve.route_generations.buffer,
+                &resolved.route_slots.buffer,
+                &resolved.route_generations.buffer,
                 &router_weights.buffer,
+                &active_markers.miss_markers.buffer,
+                active_value,
                 &mut workspace.gate_ptrs,
                 &mut workspace.gate_scale_ptrs,
                 &mut workspace.up_ptrs,
@@ -7102,8 +7573,10 @@ impl CudaArtifactOperatorContext {
         num_experts: usize,
         intermediate_size: usize,
         hidden_size: usize,
+        input_workspace: Option<&CudaMoeBatchedWorkspace>,
         workspace: &mut CudaMoeBatchedWorkspace,
         output: &mut CudaF32Buffer,
+        reduce_into_output: bool,
     ) -> Result<()> {
         if num_experts == 0 || num_experts > 6 {
             return Err(Error::Internal(format!(
@@ -7123,6 +7596,21 @@ impl CudaArtifactOperatorContext {
                 workspace.input_size,
                 workspace.intermediate_size,
                 workspace.hidden_size,
+                num_experts,
+                input.len,
+                intermediate_size,
+                hidden_size
+            )));
+        }
+        if let Some(input_workspace) = input_workspace
+            && !input_workspace.matches(num_experts, input.len, intermediate_size, hidden_size)
+        {
+            return Err(Error::Internal(format!(
+                "CUDA MoE reusable input workspace mismatch: workspace=[max_experts={},input={},intermediate={},hidden={}] call=[experts={},input={},intermediate={},hidden={}]",
+                input_workspace.max_experts,
+                input_workspace.input_size,
+                input_workspace.intermediate_size,
+                input_workspace.hidden_size,
                 num_experts,
                 input.len,
                 intermediate_size,
@@ -7166,12 +7654,14 @@ impl CudaArtifactOperatorContext {
 
         if use_reduce {
             let phase_start = timing_enabled.then(Instant::now);
-            self.copy_f32_into_slot(input, &mut workspace.x_f32, 0)?;
-            self.fp8_activation_quantize_buffer_in_place(
-                &mut workspace.x_f32,
-                input.len,
-                ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
-            )?;
+            if input_workspace.is_none() {
+                self.copy_f32_into_slot(input, &mut workspace.x_f32, 0)?;
+                self.fp8_activation_quantize_buffer_in_place(
+                    &mut workspace.x_f32,
+                    input.len,
+                    ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
+                )?;
+            }
             if let Some(start) = phase_start {
                 self.sync_stream()?;
                 self.counters
@@ -7186,7 +7676,9 @@ impl CudaArtifactOperatorContext {
                         block_dim: (reduce_block, 1, 1),
                         shared_mem_bytes: 0,
                     },
-                    &workspace.x_f32.buffer,
+                    input_workspace
+                        .map(|source| &source.x_f32.buffer)
+                        .unwrap_or(&workspace.x_f32.buffer),
                     &workspace.gate_ptrs,
                     &workspace.gate_scale_ptrs,
                     &workspace.up_ptrs,
@@ -7207,19 +7699,21 @@ impl CudaArtifactOperatorContext {
             // Tensor Core path consumes FP4 activations directly. Avoid the old
             // FP8-in-f32 preparation buffer; the mxf4 MMA needs packed FP4 + E8M0.
             let phase_start = timing_enabled.then(Instant::now);
-            self.launched(unsafe {
-                self.module.fp4_e2m1_e8m0_quantize_f32_packed(
-                    &self.stream,
-                    LaunchConfig::for_num_elems((input.len / 32) as u32),
-                    &input.buffer,
-                    &mut workspace.x_packed,
-                    &mut workspace.x_scales,
-                    0,
-                    input.len as u32,
-                    input.len as u32,
-                    32,
-                )
-            })?;
+            if input_workspace.is_none() {
+                self.launched(unsafe {
+                    self.module.fp4_e2m1_e8m0_quantize_f32_packed(
+                        &self.stream,
+                        LaunchConfig::for_num_elems((input.len / 32) as u32),
+                        &input.buffer,
+                        &mut workspace.x_packed,
+                        &mut workspace.x_scales,
+                        0,
+                        input.len as u32,
+                        input.len as u32,
+                        32,
+                    )
+                })?;
+            }
             if let Some(start) = phase_start {
                 self.sync_stream()?;
                 self.counters
@@ -7234,8 +7728,12 @@ impl CudaArtifactOperatorContext {
                         block_dim: (32, 1, 1),
                         shared_mem_bytes: 0,
                     },
-                    &workspace.x_packed,
-                    &workspace.x_scales,
+                    input_workspace
+                        .map(|source| &source.x_packed)
+                        .unwrap_or(&workspace.x_packed),
+                    input_workspace
+                        .map(|source| &source.x_scales)
+                        .unwrap_or(&workspace.x_scales),
                     &workspace.gate_ptrs,
                     &workspace.gate_scale_ptrs,
                     &workspace.up_ptrs,
@@ -7255,12 +7753,14 @@ impl CudaArtifactOperatorContext {
             }
         } else {
             let phase_start = timing_enabled.then(Instant::now);
-            self.copy_f32_into_slot(input, &mut workspace.x_f32, 0)?;
-            self.fp8_activation_quantize_buffer_in_place(
-                &mut workspace.x_f32,
-                input.len,
-                ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
-            )?;
+            if input_workspace.is_none() {
+                self.copy_f32_into_slot(input, &mut workspace.x_f32, 0)?;
+                self.fp8_activation_quantize_buffer_in_place(
+                    &mut workspace.x_f32,
+                    input.len,
+                    ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
+                )?;
+            }
             if let Some(start) = phase_start {
                 self.sync_stream()?;
                 self.counters
@@ -7275,7 +7775,9 @@ impl CudaArtifactOperatorContext {
                         block_dim: (block, 1, 1),
                         shared_mem_bytes: 0,
                     },
-                    &workspace.x_f32.buffer,
+                    input_workspace
+                        .map(|source| &source.x_f32.buffer)
+                        .unwrap_or(&workspace.x_f32.buffer),
                     &workspace.gate_ptrs,
                     &workspace.gate_scale_ptrs,
                     &workspace.up_ptrs,
@@ -7405,6 +7907,33 @@ impl CudaArtifactOperatorContext {
                 )
             })?;
         }
+        if reduce_into_output {
+            self.reduce_moe_experts_batched_output_into(
+                workspace,
+                num_experts,
+                hidden_size,
+                output,
+            )?;
+        }
+        if let Some(start) = phase_start {
+            self.sync_stream()?;
+            self.counters.add_moe_down_us(duration_us(start.elapsed()));
+        }
+
+        if let Some(start) = total_start {
+            self.counters.add_moe_total_us(duration_us(start.elapsed()));
+        }
+
+        Ok(())
+    }
+
+    pub fn reduce_moe_experts_batched_output_into(
+        &self,
+        workspace: &CudaMoeBatchedWorkspace,
+        num_experts: usize,
+        hidden_size: usize,
+        output: &mut CudaF32Buffer,
+    ) -> Result<()> {
         self.launched(unsafe {
             self.module.moe_reduce_expert_outputs_ranked(
                 &self.stream,
@@ -7418,17 +7947,45 @@ impl CudaArtifactOperatorContext {
                 num_experts as u32,
                 num_experts as u32,
             )
-        })?;
-        if let Some(start) = phase_start {
-            self.sync_stream()?;
-            self.counters.add_moe_down_us(duration_us(start.elapsed()));
-        }
+        })
+    }
 
-        if let Some(start) = total_start {
-            self.counters.add_moe_total_us(duration_us(start.elapsed()));
+    pub fn reduce_moe_experts_batched_split_output_into(
+        &self,
+        resident: &CudaMoeBatchedWorkspace,
+        materialized: &CudaMoeBatchedWorkspace,
+        original: &CudaExpertRouteResolveWorkspace,
+        num_experts: usize,
+        hidden_size: usize,
+        output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        if num_experts == 0
+            || num_experts > resident.max_experts
+            || num_experts > materialized.max_experts
+            || num_experts > original.miss_markers.len
+        {
+            return Err(Error::Internal(format!(
+                "split CUDA MoE reduction exceeds capacity: routes={num_experts} resident={} materialized={} markers={}",
+                resident.max_experts, materialized.max_experts, original.miss_markers.len
+            )));
         }
-
-        Ok(())
+        self.launched(unsafe {
+            self.module.moe_reduce_split_expert_outputs_ranked(
+                &self.stream,
+                LaunchConfig::for_num_elems(hidden_size as u32),
+                &resident.expert_output.buffer,
+                &materialized.expert_output.buffer,
+                &resident.route_slots,
+                &materialized.route_slots,
+                &original.miss_markers.buffer,
+                &mut output.buffer,
+                0,
+                hidden_size as u32,
+                1,
+                num_experts as u32,
+                num_experts as u32,
+            )
+        })
     }
 
     pub fn rms_norm(&self, input: &[f32], weight: &[f32], eps: f32) -> Result<Vec<f32>> {
@@ -7619,10 +8176,12 @@ impl CudaArtifactOperatorContext {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// `function_col_major` is the logical `[mix_hc, hc_dim]` function matrix
+    /// repacked as `[hc_dim, mix_hc]` for coalesced reads across row threads.
     pub fn hc_pre_from_device_into(
         &self,
         state: &CudaF32Buffer,
-        function: &CudaF32Buffer,
+        function_col_major: &CudaF32Buffer,
         scale: &CudaF32Buffer,
         base: &CudaF32Buffer,
         tokens: usize,
@@ -7648,7 +8207,7 @@ impl CudaArtifactOperatorContext {
             || mix_hc > 128
             || hc_mult * hc_mult > 256
             || state.len != tokens * hc_dim
-            || function.len != mix_hc * hc_dim
+            || function_col_major.len != mix_hc * hc_dim
             || scale.len != 3
             || base.len != mix_hc
             || hidden.len != tokens * hidden_size
@@ -7659,7 +8218,7 @@ impl CudaArtifactOperatorContext {
             return Err(Error::Internal(format!(
                 "CUDA HC pre device shape mismatch: tokens={tokens} state={} function={} scale={} base={} hidden={} pre={} post={} comb={} hc={hc_mult} hidden_size={hidden_size} mix={mix_hc}",
                 state.len,
-                function.len,
+                function_col_major.len,
                 scale.len,
                 base.len,
                 hidden.len,
@@ -7677,7 +8236,7 @@ impl CudaArtifactOperatorContext {
                     shared_mem_bytes: 0,
                 },
                 &state.buffer,
-                &function.buffer,
+                &function_col_major.buffer,
                 &scale.buffer,
                 &base.buffer,
                 &mut hidden.buffer,
@@ -7733,8 +8292,9 @@ impl CudaArtifactOperatorContext {
                 base.len()
             )));
         }
+        let function_col_major = transpose_hc_function_for_device(function, mix_hc)?;
         let sd = self.upload_f32(state)?;
-        let fd = self.upload_f32(function)?;
+        let fd = self.upload_f32(&function_col_major)?;
         let scd = self.upload_f32(scale)?;
         let bd = self.upload_f32(base)?;
         let mut hidden = self.zeroed_device_buffer::<f32>(tokens * hidden_size)?;
@@ -8067,21 +8627,37 @@ impl CudaArtifactOperatorContext {
         x_scales: &mut DeviceBuffer<u8>,
         scale_capacity: usize,
     ) -> Result<()> {
-        let CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
-            out_features,
+        let in_features = handle.shape.in_features();
+        self.pack_fp8_rows_from_f32_preallocated(
+            input,
+            rows,
             in_features,
-            block_m: 128,
-            block_k: 128,
-        } = handle.shape
-        else {
-            return Err(Error::Internal(
-                "CUDA FP8 MMA rows called with unsupported artifact shape".into(),
-            ));
-        };
-        let weight_scales = handle
-            .scale
-            .as_ref()
-            .ok_or_else(|| Error::Internal("CUDA FP8 artifact linear missing scale".into()))?;
+            x_packed,
+            packed_capacity,
+            x_scales,
+            scale_capacity,
+        )?;
+        self.artifact_linear_rows_fp8_mma_from_packed_preallocated(
+            handle, x_packed, x_scales, rows, output,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pack_fp8_rows_from_f32_preallocated(
+        &self,
+        input: &DeviceBuffer<f32>,
+        rows: usize,
+        in_features: usize,
+        x_packed: &mut DeviceBuffer<u8>,
+        packed_capacity: usize,
+        x_scales: &mut DeviceBuffer<u8>,
+        scale_capacity: usize,
+    ) -> Result<()> {
+        if rows == 0 || in_features == 0 || !in_features.is_multiple_of(128) {
+            return Err(Error::Internal(format!(
+                "CUDA FP8 MMA pack requires positive K128 rows: rows={rows} in_features={in_features}"
+            )));
+        }
         let scale_cols = in_features / ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE;
         let input_len = rows
             .checked_mul(in_features)
@@ -8105,7 +8681,33 @@ impl CudaArtifactOperatorContext {
                 in_features as u32,
                 ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE as u32,
             )
-        })?;
+        })
+    }
+
+    fn artifact_linear_rows_fp8_mma_from_packed_preallocated(
+        &self,
+        handle: &CudaArtifactLinearHandle,
+        x_packed: &DeviceBuffer<u8>,
+        x_scales: &DeviceBuffer<u8>,
+        rows: usize,
+        output: &mut DeviceBuffer<f32>,
+    ) -> Result<()> {
+        let CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
+            out_features,
+            in_features,
+            block_m: 128,
+            block_k: 128,
+        } = handle.shape
+        else {
+            return Err(Error::Internal(
+                "CUDA FP8 MMA packed rows called with unsupported artifact shape".into(),
+            ));
+        };
+        let weight_scales = handle
+            .scale
+            .as_ref()
+            .ok_or_else(|| Error::Internal("CUDA FP8 artifact linear missing scale".into()))?;
+        let scale_cols = in_features / ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE;
         self.launched(unsafe {
             self.module.gemm_fp8_e4m3fn_e8m0_2d_mma(
                 &self.stream,
@@ -8281,17 +8883,37 @@ impl CudaArtifactOperatorContext {
             CudaArtifactLinearShape::Bf16Bytes {
                 out_features,
                 in_features,
-            } => self.launched(unsafe {
-                self.module.gemv_bf16_bytes(
-                    &self.stream,
-                    LaunchConfig::for_num_elems(out_features as u32),
-                    input,
-                    &handle.weight,
-                    output,
-                    out_features as u32,
-                    in_features as u32,
-                )
-            }),
+            } => {
+                if self.dispatch_config.bf16_block_gemv {
+                    self.launched(unsafe {
+                        self.module.gemv_bf16_bytes_block(
+                            &self.stream,
+                            LaunchConfig {
+                                grid_dim: (out_features as u32, 1, 1),
+                                block_dim: (256, 1, 1),
+                                shared_mem_bytes: 0,
+                            },
+                            input,
+                            &handle.weight,
+                            output,
+                            out_features as u32,
+                            in_features as u32,
+                        )
+                    })
+                } else {
+                    self.launched(unsafe {
+                        self.module.gemv_bf16_bytes(
+                            &self.stream,
+                            LaunchConfig::for_num_elems(out_features as u32),
+                            input,
+                            &handle.weight,
+                            output,
+                            out_features as u32,
+                            in_features as u32,
+                        )
+                    })
+                }
+            }
 
             CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
                 out_features,
@@ -9062,12 +9684,35 @@ mod tests {
     }
 
     #[test]
+    fn hc_device_layout_preserves_each_rows_accumulation_order() {
+        let rows = 3usize;
+        let cols = 7usize;
+        let function = [
+            0.5, -0.25, 1.0, 0.125, -2.0, 0.75, 0.0625, -1.0, 0.375, 0.5, -0.75, 1.25, 0.25,
+            -0.125, 2.0, -1.5, 0.25, 0.75, -0.5, 0.125, 1.0,
+        ];
+        let state = [0.25, -2.0, 1.5, 0.5, -0.75, 4.0, 0.125];
+        let transposed = transpose_hc_function_for_device(&function, rows).unwrap();
+
+        for row in 0..rows {
+            let mut row_major_dot = 0.0f32;
+            let mut device_layout_dot = 0.0f32;
+            for col in 0..cols {
+                row_major_dot += function[row * cols + col] * state[col];
+                device_layout_dot += transposed[col * rows + row] * state[col];
+            }
+            assert_eq!(row_major_dot.to_bits(), device_layout_dot.to_bits());
+        }
+    }
+
+    #[test]
     fn cuda_dispatch_config_defaults_match_existing_behavior() {
         assert_eq!(
             dispatch_config(&[]),
             CudaDispatchConfig {
                 fp8_mma: true,
                 grouped_wo_a_mma: true,
+                bf16_block_gemv: false,
                 moe_timing: false,
                 moe_reduce: false,
                 moe_tensor_core: true,
@@ -9081,6 +9726,7 @@ mod tests {
             dispatch_config(&[
                 ("FERRULE_CUDA_FP8_MMA", " off "),
                 ("FERRULE_CUDA_GROUPED_WO_A_MMA", "NO"),
+                ("FERRULE_CUDA_BF16_BLOCK_GEMV", "yes"),
                 ("FERRULE_CUDA_MOE_TIMING", "1"),
                 ("FERRULE_CUDA_MOE_REDUCE", "yes"),
                 ("FERRULE_CUDA_MOE_TC", "FALSE"),
@@ -9088,6 +9734,7 @@ mod tests {
             CudaDispatchConfig {
                 fp8_mma: false,
                 grouped_wo_a_mma: false,
+                bf16_block_gemv: true,
                 moe_timing: true,
                 moe_reduce: true,
                 moe_tensor_core: false,

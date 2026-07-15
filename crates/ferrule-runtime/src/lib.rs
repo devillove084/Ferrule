@@ -119,7 +119,6 @@ pub use scheduling::{
 };
 
 pub use speculation::{
-    DraftModel, SpeculationMetrics, SpeculativeDecodingPolicy, SpeculativeStepOutput, TargetModel,
-    run_speculative_step,
+    DSparkCycleResult, DSparkMetrics, DraftSource, VerificationWidth, run_dspark_verification,
 };
 pub use stats::GenerateStats;

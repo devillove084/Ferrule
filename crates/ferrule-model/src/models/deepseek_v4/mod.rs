@@ -12,8 +12,9 @@
 //! | `operators` | `DeepSeekV4OperatorContext` — CPU/CUDA operator dispatch |
 //! | `cuda_cache` | `DeepSeekV4CudaOperatorCache` — device-resident weight/KV cache |
 //! | `attention` | `DeepSeekV4Attention`, compressor, window KV, attention cache |
-//! | `layer` | `DeepSeekV4Layer` — one transformer block (HC + attention + MoE) |
-//! | `runner` | `DeepSeekV4Runner` — `ModelRunner` implementation |
+//! | `layer` | `DeepSeekV4Layer` - one transformer block (HC + attention + MoE) |
+//! | `mtp` | `DeepSeekV4MtpModel` - MTP layers for DSpark speculative decoding |
+//! | `runner` | `DeepSeekV4Runner` - `ModelRunner` implementation |
 //! | `helpers` | Free functions: RMSNorm, RoPE, YaRN, top-k, cache keys |
 
 pub mod artifact;
@@ -23,6 +24,7 @@ pub mod config;
 pub mod cuda_cache;
 pub mod helpers;
 pub mod layer;
+pub mod mtp;
 pub mod operators;
 pub mod prepared;
 pub mod runner;
@@ -38,9 +40,13 @@ pub use attention::{
     DeepSeekV4CompressorPayload, DeepSeekV4CompressorState, DeepSeekV4IndexerPayload,
     DeepSeekV4WindowKvCache,
 };
-pub use config::{DeepSeekV4AttentionConfig, DeepSeekV4Config, DeepSeekV4RopeParams};
+pub use config::{DSparkConfig, DeepSeekV4AttentionConfig, DeepSeekV4Config, DeepSeekV4RopeParams};
 pub use layer::{
     DeepSeekV4Layer, DeepSeekV4LayerExpertRuntime, DeepSeekV4LayerState, DeepSeekV4LayerStepOutput,
+};
+pub use mtp::{
+    DeepSeekV4MtpForwardOutput, DeepSeekV4MtpLayer, DeepSeekV4MtpModel,
+    DeepSeekV4MtpPredictionHeads,
 };
 pub use operators::{
     DeepSeekV4AttentionProfileStats, DeepSeekV4LayerProfileStats, DeepSeekV4OperatorContext,

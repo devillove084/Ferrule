@@ -478,6 +478,51 @@ pub(crate) struct ErrorObject<'a> {
     pub code: Option<&'a str>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TokenizeRequest {
+    #[serde(default)]
+    model: Option<String>,
+    pub prompt: String,
+    #[serde(default = "default_true")]
+    add_special_tokens: bool,
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+impl TokenizeRequest {
+    pub(crate) fn validate(self, expected_model: &str) -> Result<String, String> {
+        if let Some(model) = &self.model
+            && !model.is_empty()
+            && model != expected_model
+        {
+            return Err(format!("model '{model}' is not served by this server"));
+        }
+        if !self.add_special_tokens {
+            return Err("add_special_tokens=false is not supported".into());
+        }
+        Ok(self.prompt)
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct TokenizeResponse<'a> {
+    pub id: &'a str,
+    pub object: &'static str,
+    pub created: u64,
+    pub model: &'a str,
+    pub data: Vec<TokenizeData>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct TokenizeData {
+    pub object: &'static str,
+    pub tokens: Vec<u32>,
+    pub count: usize,
+}
+
 pub(crate) fn openai_finish_reason(reason: SequenceFinishReason) -> &'static str {
     match reason {
         SequenceFinishReason::MaxTokens | SequenceFinishReason::Context => "length",

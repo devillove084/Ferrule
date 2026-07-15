@@ -2,6 +2,7 @@
 
 pub mod execution;
 pub mod expert_residency;
+pub mod kernel_plan;
 pub mod memory;
 pub mod observability;
 

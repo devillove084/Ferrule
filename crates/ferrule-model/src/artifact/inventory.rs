@@ -393,6 +393,28 @@ impl HfSafetensorsInventory {
             })
             .collect()
     }
+
+    /// Collects MTP (Multi-Token Prediction) tensors grouped by MTP layer index.
+    ///
+    /// MTP tensors use the `mtp.{i}.` prefix instead of `layers.{i}.`. They are
+    /// not recognized by the family-specific parse functions, so this method
+    /// returns raw `HfSafetensorsTensorInfo` values for the MTP model loader to
+    /// interpret.
+    pub fn mtp_layer_tensors(&self) -> BTreeMap<usize, Vec<HfSafetensorsTensorInfo>> {
+        let mut grouped = BTreeMap::<usize, Vec<HfSafetensorsTensorInfo>>::new();
+        for tensor in &self.tensors {
+            let Some(rest) = tensor.name.strip_prefix("mtp.") else {
+                continue;
+            };
+            let Some(layer_str) = rest.split('.').next() else {
+                continue;
+            };
+            if let Ok(layer) = layer_str.parse::<usize>() {
+                grouped.entry(layer).or_default().push(tensor.clone());
+            }
+        }
+        grouped
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

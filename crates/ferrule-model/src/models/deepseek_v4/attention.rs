@@ -12,7 +12,10 @@ use ferrule_common::{Error, Result};
 
 use super::config::{DeepSeekV4AttentionConfig, DeepSeekV4RopeParams};
 #[cfg(feature = "cuda")]
-use super::cuda_cache::DeepSeekV4CudaSequenceKvState;
+use super::cuda_cache::{
+    DeepSeekV4CudaCompressor, DeepSeekV4CudaLayerNorm, DeepSeekV4CudaLinear,
+    DeepSeekV4CudaSequenceKvState,
+};
 use super::helpers::{
     apply_rotary_tail, apply_rotary_tail_scaled, bind_aux_linear, check_len, check_linear,
     compress_rows_softmax, compress_topk_indices_prefill, concat_topk_rows, decode_tensor_f32,
@@ -226,8 +229,6 @@ pub struct DeepSeekV4Attention {
 
 #[cfg(feature = "cuda")]
 struct DeepSeekV4CompressorDecodeArena {
-    kv_input: ferrule_cuda::context::CudaF32Buffer,
-    score_input: ferrule_cuda::context::CudaF32Buffer,
     kv: ferrule_cuda::context::CudaF32Buffer,
     score: ferrule_cuda::context::CudaF32Buffer,
     compressed: ferrule_cuda::context::CudaF32Buffer,
@@ -238,7 +239,6 @@ struct DeepSeekV4CompressorDecodeArena {
 impl DeepSeekV4CompressorDecodeArena {
     fn new(
         payload: &DeepSeekV4CompressorPayload,
-        hidden_size: usize,
         rows: usize,
         independent_sequences: bool,
         operators: &mut DeepSeekV4OperatorContext,
@@ -250,8 +250,6 @@ impl DeepSeekV4CompressorDecodeArena {
             rows / payload.compress_ratio
         };
         Ok(Self {
-            kv_input: ops.zero_f32_buffer(rows * hidden_size)?,
-            score_input: ops.zero_f32_buffer(rows * hidden_size)?,
             kv: ops.zero_f32_buffer(rows * payload.wkv.format.out_features())?,
             score: ops.zero_f32_buffer(rows * payload.wgate.format.out_features())?,
             compressed: ops.zero_f32_buffer(boundary_rows * payload.head_dim)?,
@@ -278,13 +276,7 @@ impl DeepSeekV4AttentionRowsTransitionArena {
             .compressed
             .as_ref()
             .map(|payload| {
-                DeepSeekV4CompressorDecodeArena::new(
-                    &payload.compressor,
-                    cfg.hidden_size,
-                    1,
-                    true,
-                    operators,
-                )
+                DeepSeekV4CompressorDecodeArena::new(&payload.compressor, 1, true, operators)
             })
             .transpose()?;
         let indexer_compressor = attention
@@ -292,13 +284,7 @@ impl DeepSeekV4AttentionRowsTransitionArena {
             .as_ref()
             .and_then(|payload| payload.indexer.as_ref())
             .map(|indexer| {
-                DeepSeekV4CompressorDecodeArena::new(
-                    &indexer.compressor,
-                    cfg.hidden_size,
-                    1,
-                    true,
-                    operators,
-                )
+                DeepSeekV4CompressorDecodeArena::new(&indexer.compressor, 1, true, operators)
             })
             .transpose()?;
         Ok(Self {
@@ -336,6 +322,7 @@ pub(crate) struct DeepSeekV4AttentionDecodeArena {
     latent: ferrule_cuda::context::CudaF32Buffer,
     pub(crate) output: ferrule_cuda::context::CudaF32Buffer,
     compact_values: ferrule_cuda::context::CudaF32Buffer,
+    hidden_fp8_pack: ferrule_cuda::context::CudaFp8ActivationPack,
     pub(crate) linear_workspace: ferrule_cuda::context::CudaArtifactLinearWorkspace,
     main_compressor: Option<DeepSeekV4CompressorDecodeArena>,
     indexer_compressor: Option<DeepSeekV4CompressorDecodeArena>,
@@ -356,7 +343,6 @@ impl DeepSeekV4AttentionDecodeArena {
             .map(|payload| {
                 DeepSeekV4CompressorDecodeArena::new(
                     &payload.compressor,
-                    cfg.hidden_size,
                     rows,
                     independent_sequences,
                     operators,
@@ -370,7 +356,6 @@ impl DeepSeekV4AttentionDecodeArena {
             .map(|indexer| {
                 DeepSeekV4CompressorDecodeArena::new(
                     &indexer.compressor,
-                    cfg.hidden_size,
                     rows,
                     independent_sequences,
                     operators,
@@ -418,6 +403,7 @@ impl DeepSeekV4AttentionDecodeArena {
             latent: ops.zero_f32_buffer(rows * cfg.output_latent_dim())?,
             output: ops.zero_f32_buffer(rows * cfg.hidden_size)?,
             compact_values: ops.zero_f32_buffer((rows + compressed_rows) * cfg.head_dim)?,
+            hidden_fp8_pack: ops.fp8_activation_pack(rows, cfg.hidden_size)?,
             linear_workspace: ops.artifact_linear_workspace(rows, max_linear_width)?,
             main_compressor,
             indexer_compressor,
@@ -1185,13 +1171,31 @@ impl DeepSeekV4Attention {
         let layer_tag = format!("attn_L{}", self.layer);
 
         let stage_start = operators.profile_start();
-        operators.cuda_mut()?.linear_rows_from_device_into(
-            &self.payload.query_a,
+        let hidden_fp8 = operators.cuda_mut()?.prepare_linear_pair_fp8(
+            self.layer,
+            DeepSeekV4CudaLinear::QueryA,
+            DeepSeekV4CudaLinear::KeyValue,
             hidden_dev,
             tokens,
-            &mut arena.q_latent,
-            &mut arena.linear_workspace,
+            &mut arena.hidden_fp8_pack,
         )?;
+        if let Some(activation) = hidden_fp8.as_ref() {
+            operators.cuda_mut()?.linear_rows_from_prepared_fp8_into(
+                self.layer,
+                DeepSeekV4CudaLinear::QueryA,
+                activation,
+                &mut arena.q_latent,
+            )?;
+        } else {
+            operators.cuda_mut()?.linear_rows_from_device_into(
+                self.layer,
+                DeepSeekV4CudaLinear::QueryA,
+                hidden_dev,
+                tokens,
+                &mut arena.q_latent,
+                &mut arena.linear_workspace,
+            )?;
+        }
         record_attention_stage(
             operators,
             self.layer,
@@ -1199,12 +1203,11 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
         let stage_start = operators.profile_start();
-        let q_norm_name = format!("q_norm_{layer_tag}");
-        operators.cuda_mut()?.rms_norm_rows_device_cached_into(
-            &q_norm_name,
+        operators.cuda_mut()?.rms_norm_layer_rows_device_into(
+            self.layer,
+            DeepSeekV4CudaLayerNorm::Query,
             &arena.q_latent,
             tokens,
-            &self.payload.query_norm,
             cfg.norm_eps,
             &mut arena.q_norm,
         )?;
@@ -1216,7 +1219,8 @@ impl DeepSeekV4Attention {
         )?;
         let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_rows_from_device_into(
-            &self.payload.query_b,
+            self.layer,
+            DeepSeekV4CudaLinear::QueryB,
             &arena.q_norm,
             tokens,
             &mut arena.query_raw,
@@ -1269,13 +1273,24 @@ impl DeepSeekV4Attention {
         )?;
 
         let stage_start = operators.profile_start();
-        operators.cuda_mut()?.linear_rows_from_device_into(
-            &self.payload.key_value,
-            hidden_dev,
-            tokens,
-            &mut arena.kv_raw,
-            &mut arena.linear_workspace,
-        )?;
+        if let Some(activation) = hidden_fp8.as_ref() {
+            operators.cuda_mut()?.linear_rows_from_prepared_fp8_into(
+                self.layer,
+                DeepSeekV4CudaLinear::KeyValue,
+                activation,
+                &mut arena.kv_raw,
+            )?;
+        } else {
+            operators.cuda_mut()?.linear_rows_from_device_into(
+                self.layer,
+                DeepSeekV4CudaLinear::KeyValue,
+                hidden_dev,
+                tokens,
+                &mut arena.kv_raw,
+                &mut arena.linear_workspace,
+            )?;
+        }
+        drop(hidden_fp8);
         record_attention_stage(
             operators,
             self.layer,
@@ -1283,12 +1298,11 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
         let stage_start = operators.profile_start();
-        let kv_norm_name = format!("kv_norm_{layer_tag}");
-        operators.cuda_mut()?.rms_norm_rows_device_cached_into(
-            &kv_norm_name,
+        operators.cuda_mut()?.rms_norm_layer_rows_device_into(
+            self.layer,
+            DeepSeekV4CudaLayerNorm::KeyValue,
             &arena.kv_raw,
             tokens,
-            &self.payload.key_value_norm,
             cfg.norm_eps,
             &mut arena.kv,
         )?;
@@ -1362,7 +1376,6 @@ impl DeepSeekV4Attention {
                 &arena.query,
                 &arena.kv,
                 &arena.topk,
-                &self.payload.attention_sink,
                 tokens,
                 tokens,
                 cfg.sparse_spec_with_topk(topk_cols),
@@ -1410,13 +1423,31 @@ impl DeepSeekV4Attention {
         let layer_tag = format!("attn_L{}", self.layer);
 
         let stage_start = operators.profile_start();
-        operators.cuda_mut()?.linear_rows_from_device_into(
-            &self.payload.query_a,
+        let hidden_fp8 = operators.cuda_mut()?.prepare_linear_pair_fp8(
+            self.layer,
+            DeepSeekV4CudaLinear::QueryA,
+            DeepSeekV4CudaLinear::KeyValue,
             hidden_dev,
             tokens,
-            &mut arena.q_latent,
-            &mut arena.linear_workspace,
+            &mut arena.hidden_fp8_pack,
         )?;
+        if let Some(activation) = hidden_fp8.as_ref() {
+            operators.cuda_mut()?.linear_rows_from_prepared_fp8_into(
+                self.layer,
+                DeepSeekV4CudaLinear::QueryA,
+                activation,
+                &mut arena.q_latent,
+            )?;
+        } else {
+            operators.cuda_mut()?.linear_rows_from_device_into(
+                self.layer,
+                DeepSeekV4CudaLinear::QueryA,
+                hidden_dev,
+                tokens,
+                &mut arena.q_latent,
+                &mut arena.linear_workspace,
+            )?;
+        }
         record_attention_stage(
             operators,
             self.layer,
@@ -1430,12 +1461,11 @@ impl DeepSeekV4Attention {
             cfg.q_lora_rank,
         )?;
         let stage_start = operators.profile_start();
-        let q_norm_name = format!("q_norm_{layer_tag}");
-        operators.cuda_mut()?.rms_norm_rows_device_cached_into(
-            &q_norm_name,
+        operators.cuda_mut()?.rms_norm_layer_rows_device_into(
+            self.layer,
+            DeepSeekV4CudaLayerNorm::Query,
             &arena.q_latent,
             tokens,
-            &self.payload.query_norm,
             cfg.norm_eps,
             &mut arena.q_norm,
         )?;
@@ -1453,7 +1483,8 @@ impl DeepSeekV4Attention {
         )?;
         let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_rows_from_device_into(
-            &self.payload.query_b,
+            self.layer,
+            DeepSeekV4CudaLinear::QueryB,
             &arena.q_norm,
             tokens,
             &mut arena.query_raw,
@@ -1512,13 +1543,24 @@ impl DeepSeekV4Attention {
         )?;
 
         let stage_start = operators.profile_start();
-        operators.cuda_mut()?.linear_rows_from_device_into(
-            &self.payload.key_value,
-            hidden_dev,
-            tokens,
-            &mut arena.kv_raw,
-            &mut arena.linear_workspace,
-        )?;
+        if let Some(activation) = hidden_fp8.as_ref() {
+            operators.cuda_mut()?.linear_rows_from_prepared_fp8_into(
+                self.layer,
+                DeepSeekV4CudaLinear::KeyValue,
+                activation,
+                &mut arena.kv_raw,
+            )?;
+        } else {
+            operators.cuda_mut()?.linear_rows_from_device_into(
+                self.layer,
+                DeepSeekV4CudaLinear::KeyValue,
+                hidden_dev,
+                tokens,
+                &mut arena.kv_raw,
+                &mut arena.linear_workspace,
+            )?;
+        }
+        drop(hidden_fp8);
         record_attention_stage(
             operators,
             self.layer,
@@ -1526,12 +1568,11 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
         let stage_start = operators.profile_start();
-        let kv_norm_name = format!("kv_norm_{layer_tag}");
-        operators.cuda_mut()?.rms_norm_rows_device_cached_into(
-            &kv_norm_name,
+        operators.cuda_mut()?.rms_norm_layer_rows_device_into(
+            self.layer,
+            DeepSeekV4CudaLayerNorm::KeyValue,
             &arena.kv_raw,
             tokens,
-            &self.payload.key_value_norm,
             cfg.norm_eps,
             &mut arena.kv,
         )?;
@@ -1599,11 +1640,12 @@ impl DeepSeekV4Attention {
                 let cuda = window.cuda_state_mut();
                 state.prefill_start_device_output_into(
                     &indexer.compressor,
+                    self.layer,
+                    DeepSeekV4CudaCompressor::Indexer,
                     hidden_dev,
                     cfg.rope_head_dim,
                     rope,
                     &format!("rope_indexer_compress_L{}", self.layer),
-                    &format!("indexer_compress_norm_L{}", self.layer),
                     compressor_arena,
                     &mut arena.linear_workspace,
                     &mut cuda.indexer_compressor_recurrent,
@@ -1661,11 +1703,12 @@ impl DeepSeekV4Attention {
             let cuda = window.cuda_state_mut();
             state.prefill_start_device_output_into(
                 &compressed.compressor,
+                self.layer,
+                DeepSeekV4CudaCompressor::Main,
                 hidden_dev,
                 cfg.rope_head_dim,
                 rope,
                 &format!("rope_main_compress_L{}", self.layer),
-                &format!("main_compress_norm_L{}", self.layer),
                 compressor_arena,
                 &mut arena.linear_workspace,
                 &mut cuda.main_compressor_recurrent,
@@ -1722,7 +1765,7 @@ impl DeepSeekV4Attention {
         let stage_start = operators.profile_start();
         let window_cols = tokens.min(cfg.window_size);
         let compressed_offset = tokens;
-        let topk_cols = if let Some(indexer) = compressed.indexer.as_ref() {
+        let topk_cols = if compressed.indexer.is_some() {
             let indexer_kv = &arena
                 .indexer_compressor
                 .as_ref()
@@ -1744,14 +1787,16 @@ impl DeepSeekV4Attention {
                     .write_topk_indices(&topk, &mut arena.topk)?;
             } else {
                 operators.cuda_mut()?.linear_rows_from_device_into(
-                    &indexer.wq_b,
+                    self.layer,
+                    DeepSeekV4CudaLinear::IndexerQuery,
                     &arena.q_norm,
                     tokens,
                     &mut arena.index_query,
                     &mut arena.linear_workspace,
                 )?;
                 operators.cuda_mut()?.linear_rows_from_device_into(
-                    &indexer.weights_proj,
+                    self.layer,
+                    DeepSeekV4CudaLinear::IndexerWeights,
                     hidden_dev,
                     tokens,
                     &mut arena.index_weights,
@@ -1873,7 +1918,6 @@ impl DeepSeekV4Attention {
                 &arena.query,
                 &arena.compact_values,
                 &arena.topk,
-                &self.payload.attention_sink,
                 tokens,
                 tokens + main_compressed_len,
                 cfg.sparse_spec_with_topk(topk_cols),
@@ -1948,7 +1992,6 @@ impl DeepSeekV4Attention {
         operators
             .cuda_mut()?
             .grouped_output_a_rows_from_device_into(
-                &self.payload.output_a,
                 &arena.context,
                 tokens,
                 cfg,
@@ -1970,7 +2013,8 @@ impl DeepSeekV4Attention {
 
         let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_rows_from_device_into(
-            &self.payload.output_b,
+            self.layer,
+            DeepSeekV4CudaLinear::OutputB,
             &arena.latent,
             tokens,
             &mut arena.output,
@@ -2262,13 +2306,31 @@ impl DeepSeekV4Attention {
         )?;
 
         let stage_start = operators.profile_start();
-        operators.cuda_mut()?.linear_rows_from_device_into(
-            &self.payload.query_a,
+        let hidden_fp8 = operators.cuda_mut()?.prepare_linear_pair_fp8(
+            self.layer,
+            DeepSeekV4CudaLinear::QueryA,
+            DeepSeekV4CudaLinear::KeyValue,
             hidden_dev,
             rows,
-            &mut arena.q_latent,
-            &mut arena.linear_workspace,
+            &mut arena.hidden_fp8_pack,
         )?;
+        if let Some(activation) = hidden_fp8.as_ref() {
+            operators.cuda_mut()?.linear_rows_from_prepared_fp8_into(
+                self.layer,
+                DeepSeekV4CudaLinear::QueryA,
+                activation,
+                &mut arena.q_latent,
+            )?;
+        } else {
+            operators.cuda_mut()?.linear_rows_from_device_into(
+                self.layer,
+                DeepSeekV4CudaLinear::QueryA,
+                hidden_dev,
+                rows,
+                &mut arena.q_latent,
+                &mut arena.linear_workspace,
+            )?;
+        }
         record_attention_stage(
             operators,
             self.layer,
@@ -2283,11 +2345,11 @@ impl DeepSeekV4Attention {
         )?;
 
         let stage_start = operators.profile_start();
-        operators.cuda_mut()?.rms_norm_rows_device_cached_into(
-            &format!("q_norm_{layer_tag}"),
+        operators.cuda_mut()?.rms_norm_layer_rows_device_into(
+            self.layer,
+            DeepSeekV4CudaLayerNorm::Query,
             &arena.q_latent,
             rows,
-            &self.payload.query_norm,
             cfg.norm_eps,
             &mut arena.q_norm,
         )?;
@@ -2316,7 +2378,8 @@ impl DeepSeekV4Attention {
 
         let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_rows_from_device_into(
-            &self.payload.query_b,
+            self.layer,
+            DeepSeekV4CudaLinear::QueryB,
             &arena.q_norm,
             rows,
             &mut arena.query_raw,
@@ -2367,13 +2430,24 @@ impl DeepSeekV4Attention {
         )?;
 
         let stage_start = operators.profile_start();
-        operators.cuda_mut()?.linear_rows_from_device_into(
-            &self.payload.key_value,
-            hidden_dev,
-            rows,
-            &mut arena.kv_raw,
-            &mut arena.linear_workspace,
-        )?;
+        if let Some(activation) = hidden_fp8.as_ref() {
+            operators.cuda_mut()?.linear_rows_from_prepared_fp8_into(
+                self.layer,
+                DeepSeekV4CudaLinear::KeyValue,
+                activation,
+                &mut arena.kv_raw,
+            )?;
+        } else {
+            operators.cuda_mut()?.linear_rows_from_device_into(
+                self.layer,
+                DeepSeekV4CudaLinear::KeyValue,
+                hidden_dev,
+                rows,
+                &mut arena.kv_raw,
+                &mut arena.linear_workspace,
+            )?;
+        }
+        drop(hidden_fp8);
         record_attention_stage(
             operators,
             self.layer,
@@ -2381,11 +2455,11 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
         let stage_start = operators.profile_start();
-        operators.cuda_mut()?.rms_norm_rows_device_cached_into(
-            &format!("kv_norm_{layer_tag}"),
+        operators.cuda_mut()?.rms_norm_layer_rows_device_into(
+            self.layer,
+            DeepSeekV4CudaLayerNorm::KeyValue,
             &arena.kv_raw,
             rows,
-            &self.payload.key_value_norm,
             cfg.norm_eps,
             &mut arena.kv,
         )?;
@@ -2460,7 +2534,6 @@ impl DeepSeekV4Attention {
         operators
             .cuda_mut()?
             .grouped_output_a_rows_from_device_into(
-                &self.payload.output_a,
                 &arena.context,
                 rows,
                 cfg,
@@ -2481,7 +2554,8 @@ impl DeepSeekV4Attention {
         )?;
         let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_rows_from_device_into(
-            &self.payload.output_b,
+            self.layer,
+            DeepSeekV4CudaLinear::OutputB,
             &arena.latent,
             rows,
             &mut arena.output,
@@ -2580,7 +2654,6 @@ impl DeepSeekV4Attention {
                     &arena.query,
                     positions,
                     &arena.visible_lens,
-                    &self.payload.attention_sink,
                     rows,
                     self.layer,
                     SparseAttentionSpec {
@@ -2626,20 +2699,22 @@ impl DeepSeekV4Attention {
         }
         self.project_decode_rows_from_device_into(hidden_dev, max_position, operators, arena)?;
         if sequence_prefill.iter().any(|prefill| *prefill) {
-            if let Some(indexer) = compressed.indexer.as_ref() {
+            if compressed.indexer.is_some() {
                 let projected = arena
                     .indexer_compressor
                     .as_mut()
                     .expect("indexer compressor arena exists");
                 operators.cuda_mut()?.linear_rows_from_device_into(
-                    &indexer.compressor.wkv,
+                    self.layer,
+                    DeepSeekV4CudaLinear::IndexerCompressorKv,
                     hidden_dev,
                     rows,
                     &mut projected.kv,
                     &mut arena.linear_workspace,
                 )?;
                 operators.cuda_mut()?.linear_rows_from_device_into(
-                    &indexer.compressor.wgate,
+                    self.layer,
+                    DeepSeekV4CudaLinear::IndexerCompressorGate,
                     hidden_dev,
                     rows,
                     &mut projected.score,
@@ -2651,14 +2726,16 @@ impl DeepSeekV4Attention {
                 .as_mut()
                 .expect("main compressor arena exists");
             operators.cuda_mut()?.linear_rows_from_device_into(
-                &compressed.compressor.wkv,
+                self.layer,
+                DeepSeekV4CudaLinear::MainCompressorKv,
                 hidden_dev,
                 rows,
                 &mut projected.kv,
                 &mut arena.linear_workspace,
             )?;
             operators.cuda_mut()?.linear_rows_from_device_into(
-                &compressed.compressor.wgate,
+                self.layer,
+                DeepSeekV4CudaLinear::MainCompressorGate,
                 hidden_dev,
                 rows,
                 &mut projected.score,
@@ -2718,6 +2795,8 @@ impl DeepSeekV4Attention {
                                 .expect("indexer compressor arena exists");
                             state.append_projected_step_from_device_into(
                                 &indexer.compressor,
+                                self.layer,
+                                DeepSeekV4CudaCompressor::Indexer,
                                 &projected.kv,
                                 &projected.score,
                                 row,
@@ -2725,7 +2804,6 @@ impl DeepSeekV4Attention {
                                 cfg.rope_head_dim,
                                 rope,
                                 &format!("rope_indexer_compress_L{}", self.layer),
-                                &format!("indexer_compress_norm_L{}", self.layer),
                                 &mut cuda.indexer_compressor_recurrent,
                                 &mut cuda.indexer_compressor_needs_reset,
                                 operators,
@@ -2734,12 +2812,13 @@ impl DeepSeekV4Attention {
                         } else {
                             state.append_step_from_device_into(
                                 &indexer.compressor,
+                                self.layer,
+                                DeepSeekV4CudaCompressor::Indexer,
                                 &transition.input,
                                 positions[row],
                                 cfg.rope_head_dim,
                                 rope,
                                 &format!("rope_indexer_compress_L{}", self.layer),
-                                &format!("indexer_compress_norm_L{}", self.layer),
                                 &mut cuda.indexer_compressor_recurrent,
                                 &mut cuda.indexer_compressor_needs_reset,
                                 operators,
@@ -2798,6 +2877,8 @@ impl DeepSeekV4Attention {
                             .expect("main compressor arena exists");
                         state.append_projected_step_from_device_into(
                             &compressed.compressor,
+                            self.layer,
+                            DeepSeekV4CudaCompressor::Main,
                             &projected.kv,
                             &projected.score,
                             row,
@@ -2805,7 +2886,6 @@ impl DeepSeekV4Attention {
                             cfg.rope_head_dim,
                             rope,
                             &format!("rope_main_compress_L{}", self.layer),
-                            &format!("main_compress_norm_L{}", self.layer),
                             &mut cuda.main_compressor_recurrent,
                             &mut cuda.main_compressor_needs_reset,
                             operators,
@@ -2814,12 +2894,13 @@ impl DeepSeekV4Attention {
                     } else {
                         state.append_step_from_device_into(
                             &compressed.compressor,
+                            self.layer,
+                            DeepSeekV4CudaCompressor::Main,
                             &transition.input,
                             positions[row],
                             cfg.rope_head_dim,
                             rope,
                             &format!("rope_main_compress_L{}", self.layer),
-                            &format!("main_compress_norm_L{}", self.layer),
                             &mut cuda.main_compressor_recurrent,
                             &mut cuda.main_compressor_needs_reset,
                             operators,
@@ -2893,9 +2974,10 @@ impl DeepSeekV4Attention {
                 )?;
             }
 
-            if let Some(indexer) = compressed.indexer.as_ref() {
+            if compressed.indexer.is_some() {
                 operators.cuda_mut()?.linear_rows_from_device_into(
-                    &indexer.wq_b,
+                    self.layer,
+                    DeepSeekV4CudaLinear::IndexerQuery,
                     &arena.q_indexer,
                     rows,
                     &mut arena.index_query,
@@ -2933,7 +3015,8 @@ impl DeepSeekV4Attention {
                         cfg.index_head_dim,
                     )?;
                 operators.cuda_mut()?.linear_rows_from_device_into(
-                    &indexer.weights_proj,
+                    self.layer,
+                    DeepSeekV4CudaLinear::IndexerWeights,
                     hidden_dev,
                     rows,
                     &mut arena.index_weights,
@@ -2973,7 +3056,6 @@ impl DeepSeekV4Attention {
                     &arena.topk,
                     &arena.topk_selectors,
                     &arena.visible_lens,
-                    &self.payload.attention_sink,
                     rows,
                     self.layer,
                     cfg.sparse_spec_with_topk(cfg.window_size + cfg.index_topk),
@@ -3053,12 +3135,13 @@ impl DeepSeekV4Attention {
                 let cuda = window.cuda_state_mut();
                 state.append_step_from_device_into(
                     &indexer.compressor,
+                    self.layer,
+                    DeepSeekV4CudaCompressor::Indexer,
                     hidden_dev,
                     position,
                     cfg.rope_head_dim,
                     rope,
                     &format!("rope_indexer_compress_L{}", self.layer),
-                    &format!("indexer_compress_norm_L{}", self.layer),
                     &mut cuda.indexer_compressor_recurrent,
                     &mut cuda.indexer_compressor_needs_reset,
                     operators,
@@ -3110,12 +3193,13 @@ impl DeepSeekV4Attention {
             let cuda = window.cuda_state_mut();
             state.append_step_from_device_into(
                 &compressed.compressor,
+                self.layer,
+                DeepSeekV4CudaCompressor::Main,
                 hidden_dev,
                 position,
                 cfg.rope_head_dim,
                 rope,
                 &format!("rope_main_compress_L{}", self.layer),
-                &format!("main_compress_norm_L{}", self.layer),
                 &mut cuda.main_compressor_recurrent,
                 &mut cuda.main_compressor_needs_reset,
                 operators,
@@ -3162,7 +3246,7 @@ impl DeepSeekV4Attention {
 
         let stage_start = operators.profile_start();
         let window_len = cache.window.len;
-        let topk_len = if let Some(indexer) = compressed.indexer.as_ref() {
+        let topk_len = if compressed.indexer.is_some() {
             let compressed_len = cache.indexer_compressed_len(cfg.index_head_dim);
             let indexer_cols = cfg.index_topk.min(compressed_len);
             if indexer_cols == 0 {
@@ -3178,7 +3262,8 @@ impl DeepSeekV4Attention {
                     )?
             } else {
                 operators.cuda_mut()?.linear_matvec_from_device_into(
-                    &indexer.wq_b,
+                    self.layer,
+                    DeepSeekV4CudaLinear::IndexerQuery,
                     &mut arena.q_indexer,
                     &mut arena.index_query,
                 )?;
@@ -3205,7 +3290,8 @@ impl DeepSeekV4Attention {
                     .ops
                     .copy_f32_into_slot(hidden_dev, &mut arena.hidden_a, 0)?;
                 operators.cuda_mut()?.linear_matvec_from_device_into(
-                    &indexer.weights_proj,
+                    self.layer,
+                    DeepSeekV4CudaLinear::IndexerWeights,
                     &mut arena.hidden_a,
                     &mut arena.index_weights,
                 )?;
@@ -3297,7 +3383,6 @@ impl DeepSeekV4Attention {
                 position,
                 cfg.window_size,
                 &arena.topk,
-                &self.payload.attention_sink,
                 1,
                 cfg.sparse_spec_with_topk(topk_len),
                 &mut arena.context,
@@ -3455,7 +3540,8 @@ impl DeepSeekV4Attention {
         // Query: query_a → rms_norm → query_b → head_norm (all on device)
         let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_matvec_from_device_into(
-            &self.payload.query_a,
+            self.layer,
+            DeepSeekV4CudaLinear::QueryA,
             &mut arena.hidden_a,
             &mut arena.q_latent,
         )?;
@@ -3465,12 +3551,11 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::Qa,
             stage_start,
         )?;
-        let q_norm_name = format!("q_norm_{layer_tag}");
         let stage_start = operators.profile_start();
-        operators.cuda_mut()?.rms_norm_device_cached_into(
-            &q_norm_name,
+        operators.cuda_mut()?.rms_norm_layer_device_into(
+            self.layer,
+            DeepSeekV4CudaLayerNorm::Query,
             &arena.q_latent,
-            &self.payload.query_norm,
             cfg.norm_eps,
             &mut arena.q_norm,
         )?;
@@ -3482,7 +3567,8 @@ impl DeepSeekV4Attention {
         )?;
         let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_matvec_from_device_into(
-            &self.payload.query_b,
+            self.layer,
+            DeepSeekV4CudaLinear::QueryB,
             &mut arena.q_norm,
             &mut arena.query_raw,
         )?;
@@ -3526,7 +3612,8 @@ impl DeepSeekV4Attention {
         // KV: key_value → rms_norm → rotary (all on device), then append to device KV cache.
         let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_matvec_from_device_into(
-            &self.payload.key_value,
+            self.layer,
+            DeepSeekV4CudaLinear::KeyValue,
             &mut arena.hidden_b,
             &mut arena.kv_raw,
         )?;
@@ -3536,12 +3623,11 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::KvProj,
             stage_start,
         )?;
-        let kv_norm_name = format!("kv_norm_{layer_tag}");
         let stage_start = operators.profile_start();
-        operators.cuda_mut()?.rms_norm_device_cached_into(
-            &kv_norm_name,
+        operators.cuda_mut()?.rms_norm_layer_device_into(
+            self.layer,
+            DeepSeekV4CudaLayerNorm::KeyValue,
             &arena.kv_raw,
-            &self.payload.key_value_norm,
             cfg.norm_eps,
             &mut arena.kv,
         )?;
@@ -3594,7 +3680,6 @@ impl DeepSeekV4Attention {
         )?;
 
         // Sparse attention on device.
-        let sink = &self.payload.attention_sink;
         let shape = ferrule_cuda::transformer::sparse_attention::CudaSparseAttentionShape {
             batch_size: 1,
             tokens_per_batch: 1,
@@ -3612,7 +3697,6 @@ impl DeepSeekV4Attention {
                 self.layer,
                 position,
                 cfg.window_size,
-                sink,
                 shape,
                 &mut arena.context,
             )?;
@@ -3646,7 +3730,6 @@ impl DeepSeekV4Attention {
         operators
             .cuda_mut()?
             .grouped_output_a_rows_from_device_into(
-                &self.payload.output_a,
                 &arena.context,
                 1,
                 cfg,
@@ -3663,7 +3746,8 @@ impl DeepSeekV4Attention {
         // Output_b on device into caller-owned storage.
         let stage_start = operators.profile_start();
         operators.cuda_mut()?.linear_matvec_from_device_into(
-            &self.payload.output_b,
+            self.layer,
+            DeepSeekV4CudaLinear::OutputB,
             &mut arena.latent,
             &mut arena.output,
         )?;
@@ -3953,11 +4037,12 @@ impl DeepSeekV4CompressorState {
     fn prefill_start_device_output_into(
         &mut self,
         payload: &DeepSeekV4CompressorPayload,
+        layer: usize,
+        compressor: DeepSeekV4CudaCompressor,
         hidden_dev: &ferrule_cuda::context::CudaF32Buffer,
         rope_dim: usize,
         rope: DeepSeekV4RopeParams,
         rope_name: &str,
-        norm_name: &str,
         arena: &mut DeepSeekV4CompressorDecodeArena,
         linear_workspace: &mut ferrule_cuda::context::CudaArtifactLinearWorkspace,
         recurrent_state: &mut Option<ferrule_cuda::CudaCompressorRecurrentState>,
@@ -3985,29 +4070,40 @@ impl DeepSeekV4CompressorState {
         }
 
         let tokens = hidden_dev.len() / payload.wkv.format.in_features();
+        let (kv_linear, gate_linear) = match compressor {
+            DeepSeekV4CudaCompressor::Main => (
+                DeepSeekV4CudaLinear::MainCompressorKv,
+                DeepSeekV4CudaLinear::MainCompressorGate,
+            ),
+            DeepSeekV4CudaCompressor::Indexer => (
+                DeepSeekV4CudaLinear::IndexerCompressorKv,
+                DeepSeekV4CudaLinear::IndexerCompressorGate,
+            ),
+        };
         operators.cuda_mut()?.linear_rows_from_device_into(
-            &payload.wkv,
+            layer,
+            kv_linear,
             hidden_dev,
             tokens,
             &mut arena.kv,
             linear_workspace,
         )?;
         operators.cuda_mut()?.linear_rows_from_device_into(
-            &payload.wgate,
+            layer,
+            gate_linear,
             hidden_dev,
             tokens,
             &mut arena.score,
             linear_workspace,
         )?;
 
-        let ape_name = format!("{norm_name}::recurrent_ape");
         let groups = operators.cuda_mut()?.compressor_recurrent_seed_prefill(
+            layer,
+            compressor,
             recurrent_state,
             recurrent_needs_reset,
-            &ape_name,
             &arena.kv,
             &arena.score,
-            &payload.ape,
             tokens,
             self.ratio,
             self.head_dim,
@@ -4018,14 +4114,13 @@ impl DeepSeekV4CompressorState {
             return Ok(0);
         }
 
-        let ape_name = format!("{norm_name}::ape");
         operators
             .cuda_mut()?
             .compressor_prefill_softmax_from_device_into(
-                &ape_name,
+                layer,
+                compressor,
                 &arena.kv,
                 &arena.score,
-                &payload.ape,
                 groups,
                 self.ratio,
                 self.head_dim,
@@ -4033,11 +4128,11 @@ impl DeepSeekV4CompressorState {
                 self.overlap,
                 &mut arena.compressed,
             )?;
-        operators.cuda_mut()?.rms_norm_rows_device_cached_into(
-            norm_name,
+        operators.cuda_mut()?.rms_norm_compressor_rows_device_into(
+            layer,
+            compressor,
             &arena.compressed,
             groups,
-            &payload.norm,
             1e-6,
             &mut arena.normalized,
         )?;
@@ -4223,43 +4318,46 @@ impl DeepSeekV4CompressorState {
     fn append_step_from_device_into(
         &mut self,
         payload: &DeepSeekV4CompressorPayload,
+        layer: usize,
+        compressor: DeepSeekV4CudaCompressor,
         hidden_dev: &ferrule_cuda::context::CudaF32Buffer,
         position: usize,
         rope_dim: usize,
         rope: DeepSeekV4RopeParams,
         rope_name: &str,
-        norm_name: &str,
         recurrent_state: &mut Option<ferrule_cuda::CudaCompressorRecurrentState>,
         recurrent_needs_reset: &mut bool,
         operators: &mut DeepSeekV4OperatorContext,
         scratch: &mut DeepSeekV4CompressorDecodeArena,
     ) -> Result<bool> {
         self.validate_append_payload(payload)?;
+        let (kv_linear, gate_linear) = match compressor {
+            DeepSeekV4CudaCompressor::Main => (
+                DeepSeekV4CudaLinear::MainCompressorKv,
+                DeepSeekV4CudaLinear::MainCompressorGate,
+            ),
+            DeepSeekV4CudaCompressor::Indexer => (
+                DeepSeekV4CudaLinear::IndexerCompressorKv,
+                DeepSeekV4CudaLinear::IndexerCompressorGate,
+            ),
+        };
         operators
             .cuda_mut()?
-            .ops
-            .copy_f32_into_slot(hidden_dev, &mut scratch.kv_input, 0)?;
-        operators.cuda_mut()?.linear_matvec_from_device_into(
-            &payload.wkv,
-            &mut scratch.kv_input,
-            &mut scratch.kv,
-        )?;
-        operators
-            .cuda_mut()?
-            .ops
-            .copy_f32_into_slot(hidden_dev, &mut scratch.score_input, 0)?;
-        operators.cuda_mut()?.linear_matvec_from_device_into(
-            &payload.wgate,
-            &mut scratch.score_input,
-            &mut scratch.score,
-        )?;
+            .linear_pair_matvec_readonly_from_device_into(
+                layer,
+                kv_linear,
+                gate_linear,
+                hidden_dev,
+                &mut scratch.kv,
+                &mut scratch.score,
+            )?;
         self.finish_projected_step_from_device_into(
-            payload,
+            layer,
+            compressor,
             position,
             rope_dim,
             rope,
             rope_name,
-            norm_name,
             recurrent_state,
             recurrent_needs_reset,
             operators,
@@ -4272,6 +4370,8 @@ impl DeepSeekV4CompressorState {
     fn append_projected_step_from_device_into(
         &mut self,
         payload: &DeepSeekV4CompressorPayload,
+        layer: usize,
+        compressor: DeepSeekV4CudaCompressor,
         projected_kv: &ferrule_cuda::context::CudaF32Buffer,
         projected_score: &ferrule_cuda::context::CudaF32Buffer,
         row: usize,
@@ -4279,7 +4379,6 @@ impl DeepSeekV4CompressorState {
         rope_dim: usize,
         rope: DeepSeekV4RopeParams,
         rope_name: &str,
-        norm_name: &str,
         recurrent_state: &mut Option<ferrule_cuda::CudaCompressorRecurrentState>,
         recurrent_needs_reset: &mut bool,
         operators: &mut DeepSeekV4OperatorContext,
@@ -4311,12 +4410,12 @@ impl DeepSeekV4CompressorState {
             self.out_dim,
         )?;
         self.finish_projected_step_from_device_into(
-            payload,
+            layer,
+            compressor,
             position,
             rope_dim,
             rope,
             rope_name,
-            norm_name,
             recurrent_state,
             recurrent_needs_reset,
             operators,
@@ -4328,25 +4427,24 @@ impl DeepSeekV4CompressorState {
     #[allow(clippy::too_many_arguments)]
     fn finish_projected_step_from_device_into(
         &mut self,
-        payload: &DeepSeekV4CompressorPayload,
+        layer: usize,
+        compressor: DeepSeekV4CudaCompressor,
         position: usize,
         rope_dim: usize,
         rope: DeepSeekV4RopeParams,
         rope_name: &str,
-        norm_name: &str,
         recurrent_state: &mut Option<ferrule_cuda::CudaCompressorRecurrentState>,
         recurrent_needs_reset: &mut bool,
         operators: &mut DeepSeekV4OperatorContext,
         scratch: &mut DeepSeekV4CompressorDecodeArena,
     ) -> Result<bool> {
-        let ape_name = format!("{norm_name}::recurrent_ape");
         let boundary = operators.cuda_mut()?.compressor_recurrent_append_into(
+            layer,
+            compressor,
             recurrent_state,
             recurrent_needs_reset,
-            &ape_name,
             &scratch.kv,
             &scratch.score,
-            &payload.ape,
             position,
             self.ratio,
             self.head_dim,
@@ -4357,11 +4455,11 @@ impl DeepSeekV4CompressorState {
         if !boundary {
             return Ok(false);
         }
-        operators.cuda_mut()?.rms_norm_rows_device_cached_into(
-            norm_name,
+        operators.cuda_mut()?.rms_norm_compressor_rows_device_into(
+            layer,
+            compressor,
             &scratch.compressed,
             1,
-            &payload.norm,
             1e-6,
             &mut scratch.normalized,
         )?;
@@ -4385,7 +4483,7 @@ impl DeepSeekV4CompressorState {
             effective_rope_dim as u32,
             false,
         )?;
-        if payload.rotate_for_indexer {
+        if compressor == DeepSeekV4CudaCompressor::Indexer {
             operators
                 .cuda_mut()?
                 .ops

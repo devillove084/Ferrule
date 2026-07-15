@@ -893,6 +893,173 @@ pub mod kernels {
         }
     }
 
+    /// Two independent legacy-order BF16 GEMVs over the same activation in one
+    /// launch. Each output thread preserves `gemv_bf16_bytes` accumulation order.
+    #[kernel]
+    pub fn gemv_bf16_bytes_pair(
+        x: &[f32],
+        first_w: &[u8],
+        second_w: &[u8],
+        mut first_y: DisjointSlice<f32>,
+        mut second_y: DisjointSlice<f32>,
+        first_n: u32,
+        second_n: u32,
+        k: u32,
+    ) {
+        let combined_row = thread::index_1d().get();
+        let first_n = first_n as usize;
+        let second_n = second_n as usize;
+        if combined_row >= first_n + second_n {
+            return;
+        }
+        let (w, row) = if combined_row < first_n {
+            (first_w, combined_row)
+        } else {
+            (second_w, combined_row - first_n)
+        };
+        let k = k as usize;
+        let base = row * k * 2;
+        let mut dot0 = 0.0f32;
+        let mut dot1 = 0.0f32;
+        let mut dot2 = 0.0f32;
+        let mut dot3 = 0.0f32;
+        let mut j = 0usize;
+        let k4 = k - k % 4;
+        while j < k4 {
+            let o0 = base + 2 * j;
+            let o1 = base + 2 * (j + 1);
+            let o2 = base + 2 * (j + 2);
+            let o3 = base + 2 * (j + 3);
+            dot0 += x[j] * bf16_pair_to_f32(w[o0], w[o0 + 1]);
+            dot1 += x[j + 1] * bf16_pair_to_f32(w[o1], w[o1 + 1]);
+            dot2 += x[j + 2] * bf16_pair_to_f32(w[o2], w[o2 + 1]);
+            dot3 += x[j + 3] * bf16_pair_to_f32(w[o3], w[o3 + 1]);
+            j += 4;
+        }
+        let mut dot = dot0 + dot1 + dot2 + dot3;
+        while j < k {
+            let off = base + 2 * j;
+            dot += x[j] * bf16_pair_to_f32(w[off], w[off + 1]);
+            j += 1;
+        }
+        unsafe {
+            if combined_row < first_n {
+                *first_y.as_mut_ptr().add(row) = dot;
+            } else {
+                *second_y.as_mut_ptr().add(row) = dot;
+            }
+        }
+    }
+
+    /// BF16 GEMV with one 256-thread CTA per output row. The legacy kernel
+    /// assigns one complete K reduction to a single thread; this variant
+    /// parallelizes that reduction while preserving f32 accumulation.
+    #[kernel]
+    pub fn gemv_bf16_bytes_block(x: &[f32], w: &[u8], mut y: DisjointSlice<f32>, n: u32, k: u32) {
+        static mut SUM: SharedArray<f32, 256> = SharedArray::UNINIT;
+
+        let row = thread::blockIdx_x() as usize;
+        let tid = thread::threadIdx_x() as usize;
+        let bdim = thread::blockDim_x() as usize;
+        if row >= n as usize || tid >= 256 {
+            return;
+        }
+        let k = k as usize;
+        let base = row * k * 2;
+        let mut dot = 0.0f32;
+        let mut j = tid;
+        while j < k {
+            let off = base + j * 2;
+            dot += x[j] * bf16_pair_to_f32(w[off], w[off + 1]);
+            j += bdim;
+        }
+        unsafe {
+            SUM[tid] = dot;
+        }
+        thread::sync_threads();
+
+        let mut stride = bdim / 2;
+        while stride > 0 {
+            if tid < stride {
+                unsafe {
+                    SUM[tid] += SUM[tid + stride];
+                }
+            }
+            thread::sync_threads();
+            stride /= 2;
+        }
+        if tid == 0 {
+            unsafe {
+                *y.as_mut_ptr().add(row) = SUM[0];
+            }
+        }
+    }
+
+    /// Two independent BF16 GEMVs over the same activation in one launch.
+    /// Each output row keeps the exact reduction schedule used by
+    /// `gemv_bf16_bytes_block`; the combined grid only removes the second
+    /// dispatch and lets both projections share the activation cache footprint.
+    #[kernel]
+    pub fn gemv_bf16_bytes_block_pair(
+        x: &[f32],
+        first_w: &[u8],
+        second_w: &[u8],
+        mut first_y: DisjointSlice<f32>,
+        mut second_y: DisjointSlice<f32>,
+        first_n: u32,
+        second_n: u32,
+        k: u32,
+    ) {
+        static mut SUM: SharedArray<f32, 256> = SharedArray::UNINIT;
+
+        let combined_row = thread::blockIdx_x() as usize;
+        let tid = thread::threadIdx_x() as usize;
+        let bdim = thread::blockDim_x() as usize;
+        let first_n = first_n as usize;
+        let second_n = second_n as usize;
+        if combined_row >= first_n + second_n || tid >= 256 {
+            return;
+        }
+        let (w, row) = if combined_row < first_n {
+            (first_w, combined_row)
+        } else {
+            (second_w, combined_row - first_n)
+        };
+        let k = k as usize;
+        let base = row * k * 2;
+        let mut dot = 0.0f32;
+        let mut j = tid;
+        while j < k {
+            let off = base + j * 2;
+            dot += x[j] * bf16_pair_to_f32(w[off], w[off + 1]);
+            j += bdim;
+        }
+        unsafe {
+            SUM[tid] = dot;
+        }
+        thread::sync_threads();
+
+        let mut stride = bdim / 2;
+        while stride > 0 {
+            if tid < stride {
+                unsafe {
+                    SUM[tid] += SUM[tid + stride];
+                }
+            }
+            thread::sync_threads();
+            stride /= 2;
+        }
+        if tid == 0 {
+            unsafe {
+                if combined_row < first_n {
+                    *first_y.as_mut_ptr().add(row) = SUM[0];
+                } else {
+                    *second_y.as_mut_ptr().add(row) = SUM[0];
+                }
+            }
+        }
+    }
+
     #[kernel]
     pub fn gemm_f32_bytes(
         x: &[f32],
@@ -4713,20 +4880,19 @@ pub mod kernels {
 
     #[kernel]
     pub fn initialize_expert_slot_resolve(
-        mut miss_ids: DisjointSlice<i32>,
-        mut miss_count: DisjointSlice<i32>,
-        mut miss_overflow: DisjointSlice<i32>,
+        mut miss_control: DisjointSlice<i32>,
         miss_capacity: u32,
+        route_capacity: u32,
     ) {
         let index = thread::index_1d().get() as usize;
+        let control_len = (miss_capacity as usize)
+            .saturating_add(route_capacity as usize)
+            .saturating_add(2);
+        if index >= control_len {
+            return;
+        }
         unsafe {
-            if index < miss_capacity as usize {
-                *miss_ids.as_mut_ptr().add(index) = -1;
-            }
-            if index == 0 {
-                *miss_count.as_mut_ptr() = 0;
-                *miss_overflow.as_mut_ptr() = 0;
-            }
+            *miss_control.as_mut_ptr().add(index) = if index < 2 { 0 } else { -1 };
         }
     }
 
@@ -4742,9 +4908,7 @@ pub mod kernels {
         mut route_slots: DisjointSlice<i32>,
         mut route_generations: DisjointSlice<i32>,
         mut miss_markers: DisjointSlice<i32>,
-        mut miss_ids: DisjointSlice<i32>,
-        mut miss_count: DisjointSlice<i32>,
-        mut miss_overflow: DisjointSlice<i32>,
+        mut miss_control: DisjointSlice<i32>,
         route_count: u32,
         expert_capacity: u32,
         slot_capacity: u32,
@@ -4779,16 +4943,20 @@ pub mod kernels {
             *route_slots.as_mut_ptr().add(route) = slot;
             *route_generations.as_mut_ptr().add(route) = generation;
             *miss_markers.as_mut_ptr().add(route) = if slot < 0 { 1 } else { 0 };
+            *miss_control
+                .as_mut_ptr()
+                .add(2 + miss_capacity as usize + route) = expert;
         }
         if slot < 0 {
-            let miss_counter = unsafe { DeviceAtomicI32::from_ptr(miss_count.as_mut_ptr()) };
+            let control = miss_control.as_mut_ptr();
+            let miss_counter = unsafe { DeviceAtomicI32::from_ptr(control) };
             let miss = miss_counter.fetch_add(1, AtomicOrdering::Relaxed);
             if miss >= 0 && (miss as u32) < miss_capacity {
                 unsafe {
-                    *miss_ids.as_mut_ptr().add(miss as usize) = expert;
+                    *control.add(2 + miss as usize) = expert;
                 }
             } else {
-                let overflow = unsafe { DeviceAtomicI32::from_ptr(miss_overflow.as_mut_ptr()) };
+                let overflow = unsafe { DeviceAtomicI32::from_ptr(control.add(1)) };
                 overflow.fetch_or(1, AtomicOrdering::Relaxed);
             }
         }
@@ -6502,6 +6670,8 @@ pub mod kernels {
         resolved_slots: &[i32],
         resolved_generations: &[i32],
         router_weights: &[f32],
+        active_markers: &[i32],
+        active_value: i32,
         mut gate_ptrs: DisjointSlice<u64>,
         mut gate_scale_ptrs: DisjointSlice<u64>,
         mut up_ptrs: DisjointSlice<u64>,
@@ -6546,6 +6716,7 @@ pub mod kernels {
         } else {
             slot_capacity
         };
+        let active = rank < active_markers.len() && active_markers[rank] == active_value;
         let current = slot_index < slot_capacity
             && generation > 0
             && slot_generations[slot_index] == generation;
@@ -6579,14 +6750,15 @@ pub mod kernels {
         } else {
             0
         };
-        let valid = current
+        let valid = active
+            && current
             && gate != 0
             && gate_scale != 0
             && up != 0
             && up_scale != 0
             && down != 0
             && down_scale != 0;
-        if !valid {
+        if active && !valid {
             let error = unsafe { DeviceAtomicI32::from_ptr(dispatch_error.as_mut_ptr()) };
             error.fetch_or(1, AtomicOrdering::Relaxed);
         }
@@ -6934,6 +7106,21 @@ pub mod kernels {
             || up_ptr.is_null()
             || up_scale_ptr.is_null()
         {
+            let group = tid / 4;
+            let thr = tid % 4;
+            let mut j = 0usize;
+            while j < 4 {
+                let row = row_base + group + if j >= 2 { 8 } else { 0 };
+                let col = thr * 2 + (j & 1);
+                if row < n && col < batch_cols {
+                    let out_off = expert * batch_cols * n + col * n + row;
+                    unsafe {
+                        *y_gate.as_mut_ptr().add(out_off) = 0.0;
+                        *y_up.as_mut_ptr().add(out_off) = 0.0;
+                    }
+                }
+                j += 1;
+            }
             return;
         }
         let mut acc_gate = [0.0f32; 4];
@@ -7340,6 +7527,20 @@ pub mod kernels {
         let down_ptr = down_ptrs[expert] as *const u8;
         let down_scale_ptr = down_scale_ptrs[expert] as *const u8;
         if down_ptr.is_null() || down_scale_ptr.is_null() {
+            let group = tid / 4;
+            let thr = tid % 4;
+            let mut j = 0usize;
+            while j < 4 {
+                let row = row_base + group + if j >= 2 { 8 } else { 0 };
+                let col = thr * 2 + (j & 1);
+                if row < hidden && col < batch_cols {
+                    let out_off = (expert * batch_cols + col) * hidden + row;
+                    unsafe {
+                        *expert_output.as_mut_ptr().add(out_off) = 0.0;
+                    }
+                }
+                j += 1;
+            }
             return;
         }
         let mut acc = [0.0f32; 4];
@@ -7682,11 +7883,71 @@ pub mod kernels {
         let mut rank = 0usize;
         while rank < routes_per_col {
             let slot = route_slots[col * routes_per_col + rank];
-            if slot < 0 || slot as usize >= num_experts {
-                return;
+            if slot >= 0 && (slot as usize) < num_experts {
+                let expert_off = (slot as usize * batch_cols + col) * hidden + row;
+                acc += expert_output[expert_off];
             }
-            let expert_off = (slot as usize * batch_cols + col) * hidden + row;
-            acc += expert_output[expert_off];
+            rank += 1;
+        }
+        unsafe {
+            *output_ptr.add(output_off) = acc;
+        }
+    }
+
+    /// Deterministically merge resident-hit and newly-materialized route outputs
+    /// in the original router rank order. Each route appears in exactly one input.
+    #[kernel]
+    pub fn moe_reduce_split_expert_outputs_ranked(
+        resident_output: &[f32],
+        materialized_output: &[f32],
+        resident_route_slots: &[i32],
+        materialized_route_slots: &[i32],
+        miss_markers: &[i32],
+        mut output: DisjointSlice<f32>,
+        output_offset: u32,
+        hidden_size: u32,
+        batch_cols: u32,
+        routes_per_col: u32,
+        num_experts: u32,
+    ) {
+        let index = thread::index_1d().get();
+        let total = hidden_size as u64 * batch_cols as u64;
+        if (index as u64) >= total
+            || hidden_size == 0
+            || batch_cols == 0
+            || routes_per_col == 0
+            || routes_per_col > num_experts
+        {
+            return;
+        }
+
+        let hidden = hidden_size as usize;
+        let routes_per_col = routes_per_col as usize;
+        let num_experts = num_experts as usize;
+        let col = index / hidden;
+        let row = index - col * hidden;
+        let output_off = output_offset as usize + col * hidden + row;
+        let output_ptr = output.as_mut_ptr();
+        let mut acc = unsafe { *output_ptr.add(output_off) };
+        let mut rank = 0usize;
+        while rank < routes_per_col {
+            let route = col * routes_per_col + rank;
+            let is_miss = route < miss_markers.len() && miss_markers[route] != 0;
+            let slots = if is_miss {
+                materialized_route_slots
+            } else {
+                resident_route_slots
+            };
+            let values = if is_miss {
+                materialized_output
+            } else {
+                resident_output
+            };
+            let slot = slots[route];
+            if slot >= 0 && (slot as usize) < num_experts {
+                let expert_off = (slot as usize * batch_cols as usize + col) * hidden + row;
+                acc += values[expert_off];
+            }
             rank += 1;
         }
         unsafe {
@@ -8251,7 +8512,7 @@ pub mod kernels {
     #[kernel]
     pub fn hc_pre_f32(
         state: &[f32],
-        function: &[f32],
+        function_col_major: &[f32],
         scale: &[f32],
         base: &[f32],
         mut hidden: DisjointSlice<f32>,
@@ -8270,6 +8531,11 @@ pub mod kernels {
         static mut MIX: SharedArray<f32, 128> = SharedArray::UNINIT;
         static mut PRE: SharedArray<f32, 16> = SharedArray::UNINIT;
         static mut COMB: SharedArray<f32, 256> = SharedArray::UNINIT;
+        // Decode uses hc=4/mix=24. The full CTA cooperatively stages 128
+        // transposed columns so global loads use all eight warps, while each
+        // row thread still consumes columns in the original arithmetic order.
+        static mut FUNCTION_TILE: SharedArray<f32, 3072> = SharedArray::UNINIT;
+        static mut STATE_TILE: SharedArray<f32, 128> = SharedArray::UNINIT;
         let token = thread::blockIdx_x() as usize;
         if token >= tokens as usize {
             return;
@@ -8315,11 +8581,49 @@ pub mod kernels {
         thread::sync_threads();
         let rms = unsafe { SUM[0] };
 
-        if tid < mix {
+        if mix <= 24 {
+            let mut dot = 0.0f32;
+            let mut tile_base = 0usize;
+            while tile_base < hc_dim {
+                let tile_cols = (hc_dim - tile_base).min(128);
+                let tile_elements = tile_cols * mix;
+                let mut index = tid;
+                while index < tile_elements {
+                    let col = index / mix;
+                    let row = index - col * mix;
+                    unsafe {
+                        FUNCTION_TILE[index] = function_col_major[(tile_base + col) * mix + row];
+                    }
+                    index += bdim;
+                }
+                let mut col = tid;
+                while col < tile_cols {
+                    unsafe {
+                        STATE_TILE[col] = state[state_base + tile_base + col];
+                    }
+                    col += bdim;
+                }
+                thread::sync_threads();
+
+                if tid < mix {
+                    let row = tid;
+                    for col in 0..tile_cols {
+                        dot += unsafe { FUNCTION_TILE[col * mix + row] * STATE_TILE[col] };
+                    }
+                }
+                thread::sync_threads();
+                tile_base += tile_cols;
+            }
+            if tid < mix {
+                unsafe {
+                    MIX[tid] = dot * rms;
+                }
+            }
+        } else if tid < mix {
             let mut dot = 0.0f32;
             let row = tid;
             for col in 0..hc_dim {
-                dot += function[row * hc_dim + col] * state[state_base + col];
+                dot += function_col_major[col * mix + row] * state[state_base + col];
             }
             unsafe {
                 MIX[row] = dot * rms;

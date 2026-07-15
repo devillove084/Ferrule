@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ferrule_common::execution::{
     ExecutionCapabilities, KvBindingMode, KvLayoutSchema, KvPlaneDescriptor, LogitsRowPolicy,
 };
+use ferrule_common::kernel_plan::{ModelKernelPlan, compile_default_plan};
 use ferrule_common::{Error, Result};
 
 use crate::execution::PreparedModel;
@@ -355,6 +356,10 @@ pub struct DeepSeekV4PreparedResources {
     layer_experts: Box<[DeepSeekV4PreparedLayerExperts]>,
     kv_layout: DeepSeekV4KvLayoutSchema,
     policy: DeepSeekV4ExecutionPolicy,
+    /// Per-layer kernel plans for rows=1/2/4/8 (Section 3.2 executable plan).
+    /// Starts empty; phases are filled in as superkernel bundles are
+    /// implemented.  An empty plan means "use the existing eager dispatch".
+    kernel_plan: ModelKernelPlan,
 }
 
 impl DeepSeekV4PreparedResources {
@@ -398,6 +403,11 @@ impl DeepSeekV4PreparedResources {
 
     pub const fn policy(&self) -> &DeepSeekV4ExecutionPolicy {
         &self.policy
+    }
+
+    /// Returns the per-layer kernel plan (executable plan, Section 3.2).
+    pub fn kernel_plan(&self) -> &ModelKernelPlan {
+        &self.kernel_plan
     }
 }
 
@@ -509,6 +519,7 @@ pub fn prepare(
             .collect::<Vec<_>>()
             .into_boxed_slice(),
     };
+    let kernel_plan = compile_default_plan(options.max_layers)?;
     let resources = DeepSeekV4PreparedResources {
         model,
         options,
@@ -516,6 +527,7 @@ pub fn prepare(
         layer_experts: layer_experts.into_boxed_slice(),
         kv_layout,
         policy,
+        kernel_plan,
     };
 
     publish_prepared(Ok((capabilities, resources)))

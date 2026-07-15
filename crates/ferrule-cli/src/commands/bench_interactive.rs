@@ -12,6 +12,8 @@
 #[cfg(feature = "cuda")]
 use std::collections::BTreeMap;
 #[cfg(feature = "cuda")]
+use std::num::NonZeroU32;
+#[cfg(feature = "cuda")]
 use std::path::Path;
 #[cfg(feature = "cuda")]
 use std::time::{Duration, Instant};
@@ -19,7 +21,10 @@ use std::time::{Duration, Instant};
 #[cfg(feature = "cuda")]
 use crate::bench::{GoldenTurn, InteractiveTrace, compare_interactive_trace};
 #[cfg(feature = "cuda")]
-use ferrule_common::MemoryPoolStats;
+use ferrule_common::{
+    MemoryPoolStats,
+    execution::{ExecutionOutput, ForwardPhase, LogitsOutput, LogitsRequest, StateSlot},
+};
 #[cfg(feature = "cuda")]
 use ferrule_model::{
     ChatTemplate, ModelExecutionBackend, ModelRunner,
@@ -32,13 +37,13 @@ use ferrule_model::{
 };
 #[cfg(feature = "cuda")]
 use ferrule_runtime::{
-    GenerateRequest, GenerationConfig, RequestId, ResidentActionKind, ResidentDriverStep,
-    ResidentSchedulerConfig, ResidentTopKDriverConfig, ResidentTopKDriverStats, SamplingConfig,
-    SessionId,
+    GenerateRequest, GenerationConfig, PageManagedDiagnosticHarness, RequestId, ResidentActionKind,
+    ResidentDriverStep, ResidentSchedulerConfig, ResidentTopKDriverConfig, ResidentTopKDriverStats,
+    SamplingConfig, SessionId,
 };
 
 #[cfg(feature = "cuda")]
-use super::resident::build_resident_topk_driver;
+use super::resident::{build_page_managed_diagnostic_harness, build_resident_topk_driver};
 
 /// A single turn measurement captured by the interactive benchmark.
 #[cfg(feature = "cuda")]
@@ -167,6 +172,9 @@ pub fn cmd_bench_interactive(
     moe_hotset_experts: usize,
     golden_trace_path: Option<&str>,
     json: bool,
+    resident_replay: bool,
+    verify_width_sweep: bool,
+    verify_iterations: usize,
 ) -> anyhow::Result<()> {
     let model_path = Path::new(model_dir);
     let max_layers = max_layers.max(1);
@@ -206,6 +214,36 @@ pub fn cmd_bench_interactive(
     let runner =
         DeepSeekV4Runner::new_with_operator_backend(model, options, ModelExecutionBackend::Cuda)?;
     let artifact_load_us = duration_us(load_start.elapsed());
+
+    if verify_width_sweep {
+        return run_resident_verify_width_sweep(
+            runner,
+            model_dir,
+            &chat_template,
+            prompts,
+            artifact_load_us,
+            max_layers,
+            output_head_chunk_rows,
+            moe_prefetch_experts,
+            moe_hotset_experts,
+            verify_iterations,
+            json,
+        );
+    }
+    if resident_replay {
+        return run_resident_replay(
+            runner,
+            model_dir,
+            &chat_template,
+            prompts,
+            artifact_load_us,
+            max_layers,
+            output_head_chunk_rows,
+            moe_prefetch_experts,
+            moe_hotset_experts,
+            json,
+        );
+    }
 
     let mut report = InteractiveBenchReport {
         model_dir: model_dir.to_string(),
@@ -2020,6 +2058,610 @@ fn dsv4_prefill_stats_json(stats: &DeepSeekV4PrefillRuntimeStats) -> serde_json:
     })
 }
 
+#[cfg(feature = "cuda")]
+struct ResidentReplayMeasurement {
+    label: &'static str,
+    elapsed_us: u64,
+    counters: DeepSeekV4OperatorRuntimeCounters,
+    layer_profile: Vec<DeepSeekV4LayerProfileStats>,
+    attention_profile: Vec<DeepSeekV4AttentionProfileStats>,
+    output_profile: DeepSeekV4OutputProfileStats,
+    top1: Option<(u32, f32)>,
+}
+
+#[cfg(feature = "cuda")]
+fn measure_resident_replay_topk(
+    diagnostic: &mut PageManagedDiagnosticHarness<DeepSeekV4Runner>,
+    slot: StateSlot,
+    token_id: u32,
+    label: &'static str,
+) -> anyhow::Result<ResidentReplayMeasurement> {
+    let counters_before = diagnostic.runner().operator_runtime_counters();
+    let layer_before = diagnostic.runner().layer_profile_stats();
+    let attention_before = diagnostic.runner().attention_profile_stats();
+    let output_before = diagnostic.runner().output_profile_stats();
+    let started = Instant::now();
+    let top = diagnostic.execute_sequence_step(
+        slot,
+        ForwardPhase::Decode,
+        std::slice::from_ref(&token_id),
+        |runner| runner.decode_token_topk(token_id, 1),
+    )?;
+    let elapsed_us = duration_us(started.elapsed());
+    let top1 = top
+        .first()
+        .map(|item| (item.token_id, item.logit))
+        .ok_or_else(|| anyhow::anyhow!("resident replay top-k pass produced no token"))?;
+    Ok(ResidentReplayMeasurement {
+        label,
+        elapsed_us,
+        counters: dsv4_operator_counters_delta(
+            counters_before,
+            diagnostic.runner().operator_runtime_counters(),
+        ),
+        layer_profile: dsv4_layer_profile_stats_delta(
+            &layer_before,
+            &diagnostic.runner().layer_profile_stats(),
+        ),
+        attention_profile: dsv4_attention_profile_stats_delta(
+            &attention_before,
+            &diagnostic.runner().attention_profile_stats(),
+        ),
+        output_profile: dsv4_output_profile_stats_delta(
+            output_before,
+            diagnostic.runner().output_profile_stats(),
+        ),
+        top1: Some(top1),
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn measure_resident_replay_body(
+    diagnostic: &mut PageManagedDiagnosticHarness<DeepSeekV4Runner>,
+    slot: StateSlot,
+    token_id: u32,
+) -> anyhow::Result<ResidentReplayMeasurement> {
+    let counters_before = diagnostic.runner().operator_runtime_counters();
+    let layer_before = diagnostic.runner().layer_profile_stats();
+    let attention_before = diagnostic.runner().attention_profile_stats();
+    let output_before = diagnostic.runner().output_profile_stats();
+    let started = Instant::now();
+    diagnostic.execute_sequence_step(
+        slot,
+        ForwardPhase::Decode,
+        std::slice::from_ref(&token_id),
+        |runner| runner.feed_token(token_id),
+    )?;
+    let elapsed_us = duration_us(started.elapsed());
+    Ok(ResidentReplayMeasurement {
+        label: "resident_body_without_output_head",
+        elapsed_us,
+        counters: dsv4_operator_counters_delta(
+            counters_before,
+            diagnostic.runner().operator_runtime_counters(),
+        ),
+        layer_profile: dsv4_layer_profile_stats_delta(
+            &layer_before,
+            &diagnostic.runner().layer_profile_stats(),
+        ),
+        attention_profile: dsv4_attention_profile_stats_delta(
+            &attention_before,
+            &diagnostic.runner().attention_profile_stats(),
+        ),
+        output_profile: dsv4_output_profile_stats_delta(
+            output_before,
+            diagnostic.runner().output_profile_stats(),
+        ),
+        top1: None,
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn resident_replay_measurement_json(measurement: &ResidentReplayMeasurement) -> serde_json::Value {
+    serde_json::json!({
+        "label": measurement.label,
+        "elapsed_s": measurement.elapsed_us as f64 / 1_000_000.0,
+        "target_passes_per_s": if measurement.elapsed_us == 0 {
+            0.0
+        } else {
+            1_000_000.0 / measurement.elapsed_us as f64
+        },
+        "top1_token_id": measurement.top1.map(|top1| top1.0),
+        "top1_logit": measurement.top1.map(|top1| top1.1),
+        "dsv4_operator_counters": dsv4_operator_counters_json(&measurement.counters),
+        "dsv4_layer_profile_summary": dsv4_layer_profile_summary_json(&measurement.layer_profile),
+        "dsv4_attention_profile_summary": dsv4_attention_profile_summary_json(&measurement.attention_profile),
+        "dsv4_output_profile": dsv4_output_profile_stats_json(&measurement.output_profile),
+    })
+}
+
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn run_resident_replay(
+    runner: DeepSeekV4Runner,
+    model_dir: &str,
+    chat_template: &ChatTemplate,
+    prompts: &[String],
+    artifact_load_us: u64,
+    max_layers: usize,
+    output_head_chunk_rows: usize,
+    moe_prefetch_experts: usize,
+    moe_hotset_experts: usize,
+    json: bool,
+) -> anyhow::Result<()> {
+    if prompts.len() != 1 {
+        anyhow::bail!(
+            "--resident-replay requires exactly one --prompt, got {}",
+            prompts.len()
+        );
+    }
+    if moe_prefetch_experts != 0 {
+        anyhow::bail!(
+            "--resident-replay requires --moe-prefetch-experts 0 so capture installs only exact selected experts"
+        );
+    }
+    let full_prompt = chat_template.format_turn(&prompts[0], true);
+    let token_ids = runner.encode(&full_prompt)?;
+    if token_ids.len() < 2 {
+        anyhow::bail!(
+            "--resident-replay requires a prompt encoding to at least two tokens, got {}",
+            token_ids.len()
+        );
+    }
+    let decode_token_id = *token_ids.last().expect("token length checked above");
+    let prefix = &token_ids[..token_ids.len() - 1];
+    let schema = runner.kv_layout_schema().clone();
+    let mut diagnostic =
+        build_page_managed_diagnostic_harness(runner, Box::new(schema), token_ids.len(), 3)?;
+    let capture_slot = diagnostic.create_sequence(0)?;
+    let resident_head_slot = diagnostic.create_sequence(0)?;
+    let resident_body_slot = diagnostic.create_sequence(0)?;
+
+    for slot in [capture_slot, resident_head_slot, resident_body_slot] {
+        diagnostic.execute_sequence_step(slot, ForwardPhase::Prefill, prefix, |runner| {
+            runner.prefill_tokens_topk_batched(prefix, 1).map(|_| ())
+        })?;
+    }
+
+    let capture = measure_resident_replay_topk(
+        &mut diagnostic,
+        capture_slot,
+        decode_token_id,
+        "capture_with_output_head",
+    )?;
+    let resident_head = measure_resident_replay_topk(
+        &mut diagnostic,
+        resident_head_slot,
+        decode_token_id,
+        "resident_with_output_head",
+    )?;
+    let resident_body =
+        measure_resident_replay_body(&mut diagnostic, resident_body_slot, decode_token_id)?;
+
+    let capture_top1 = capture.top1.expect("top-k capture records top-1");
+    let resident_top1 = resident_head.top1.expect("top-k replay records top-1");
+    let token_equal = capture_top1.0 == resident_top1.0;
+    let logit_bits_equal = capture_top1.1.to_bits() == resident_top1.1.to_bits();
+    let resident_no_io = resident_head.counters.expert_load_bytes == 0
+        && resident_head.counters.expert_selected_cold_misses == 0
+        && resident_body.counters.expert_load_bytes == 0
+        && resident_body.counters.expert_selected_cold_misses == 0;
+    if !token_equal || !logit_bits_equal {
+        anyhow::bail!(
+            "resident replay changed top-1: capture=({}, {:?}) resident=({}, {:?})",
+            capture_top1.0,
+            capture_top1.1,
+            resident_top1.0,
+            resident_top1.1
+        );
+    }
+    if !resident_no_io {
+        anyhow::bail!(
+            "resident replay still performed selected expert I/O: with_head bytes={} cold={} body bytes={} cold={}",
+            resident_head.counters.expert_load_bytes,
+            resident_head.counters.expert_selected_cold_misses,
+            resident_body.counters.expert_load_bytes,
+            resident_body.counters.expert_selected_cold_misses
+        );
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "mode": "resident_no_io_replay",
+                "model": model_dir,
+                "prompt": prompts[0],
+                "chat_template": chat_template.name(),
+                "prompt_token_ids": token_ids,
+                "prefix_tokens": prefix.len(),
+                "decode_token_id": decode_token_id,
+                "max_layers": max_layers,
+                "output_head_chunk_rows": output_head_chunk_rows,
+                "moe_prefetch_experts": moe_prefetch_experts,
+                "moe_hotset_experts": moe_hotset_experts,
+                "artifact_load_s": artifact_load_us as f64 / 1_000_000.0,
+                "parity": {
+                    "token_equal": token_equal,
+                    "logit_bits_equal": logit_bits_equal,
+                    "capture_top1_token_id": capture_top1.0,
+                    "resident_top1_token_id": resident_top1.0,
+                },
+                "resident_no_io": resident_no_io,
+                "capture": resident_replay_measurement_json(&capture),
+                "resident_with_head": resident_replay_measurement_json(&resident_head),
+                "resident_body_without_output_head": resident_replay_measurement_json(&resident_body),
+            }))?
+        );
+    } else {
+        println!("=== DSV4 Resident/No-I/O Replay ===");
+        println!("prompt:             {:?}", prompts[0]);
+        println!("prefix/decode:      {}/{}", prefix.len(), decode_token_id);
+        println!("top-1:              {}", capture_top1.0);
+        println!("resident_no_io:     {resident_no_io}");
+        for measurement in [&capture, &resident_head, &resident_body] {
+            println!(
+                "{:<28} {:>8.3} ms  loads={:<4} bytes={:<12} cold={}",
+                measurement.label,
+                measurement.elapsed_us as f64 / 1_000.0,
+                measurement.counters.expert_loads,
+                measurement.counters.expert_load_bytes,
+                measurement.counters.expert_selected_cold_misses,
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+struct ResidentVerifySample {
+    elapsed_us: u64,
+    counters: DeepSeekV4OperatorRuntimeCounters,
+    layer_profile: Vec<DeepSeekV4LayerProfileStats>,
+    attention_profile: Vec<DeepSeekV4AttentionProfileStats>,
+    output_profile: DeepSeekV4OutputProfileStats,
+    top1: Vec<(u32, f32)>,
+}
+
+#[cfg(feature = "cuda")]
+struct ResidentVerifyWidthMeasurement {
+    width: usize,
+    capture_top1: Vec<(u32, f32)>,
+    samples: Vec<ResidentVerifySample>,
+    parity: bool,
+    resident_no_io: bool,
+    allocation_free: bool,
+}
+
+#[cfg(feature = "cuda")]
+fn packed_output_top1(output: &ExecutionOutput, rows: usize) -> anyhow::Result<Vec<(u32, f32)>> {
+    let mut top1 = Vec::with_capacity(rows);
+    for input_row in 0..rows {
+        let row = output
+            .logits
+            .iter()
+            .find(|row| row.input_row as usize == input_row)
+            .ok_or_else(|| {
+                anyhow::anyhow!("packed verification output is missing row {input_row}")
+            })?;
+        let LogitsOutput::TopK(logits) = &row.logits else {
+            anyhow::bail!("packed verification output row {input_row} is not top-k");
+        };
+        let token = logits.first().ok_or_else(|| {
+            anyhow::anyhow!("packed verification output row {input_row} has no top-1 token")
+        })?;
+        top1.push((token.token_id, token.logit));
+    }
+    Ok(top1)
+}
+
+#[cfg(feature = "cuda")]
+fn same_top1_bits(left: &[(u32, f32)], right: &[(u32, f32)]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| left.0 == right.0 && left.1.to_bits() == right.1.to_bits())
+}
+
+#[cfg(feature = "cuda")]
+fn measure_resident_verify_rows(
+    diagnostic: &mut PageManagedDiagnosticHarness<DeepSeekV4Runner>,
+    slot: StateSlot,
+    token_ids: &[u32],
+) -> anyhow::Result<ResidentVerifySample> {
+    let top_one = NonZeroU32::new(1).expect("one is non-zero");
+    let logits = vec![LogitsRequest::TopK(top_one); token_ids.len()];
+    let counters_before = diagnostic.runner().operator_runtime_counters();
+    let layer_before = diagnostic.runner().layer_profile_stats();
+    let attention_before = diagnostic.runner().attention_profile_stats();
+    let output_before = diagnostic.runner().output_profile_stats();
+    let started = Instant::now();
+    let output =
+        diagnostic.execute_sequence_batch(slot, ForwardPhase::Prefill, token_ids, &logits)?;
+    Ok(ResidentVerifySample {
+        elapsed_us: duration_us(started.elapsed()),
+        counters: dsv4_operator_counters_delta(
+            counters_before,
+            diagnostic.runner().operator_runtime_counters(),
+        ),
+        layer_profile: dsv4_layer_profile_stats_delta(
+            &layer_before,
+            &diagnostic.runner().layer_profile_stats(),
+        ),
+        attention_profile: dsv4_attention_profile_stats_delta(
+            &attention_before,
+            &diagnostic.runner().attention_profile_stats(),
+        ),
+        output_profile: dsv4_output_profile_stats_delta(
+            output_before,
+            diagnostic.runner().output_profile_stats(),
+        ),
+        top1: packed_output_top1(&output, token_ids.len())?,
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn verify_percentile_us(measurement: &ResidentVerifyWidthMeasurement, percentile: usize) -> u64 {
+    let mut values = measurement
+        .samples
+        .iter()
+        .map(|sample| sample.elapsed_us)
+        .collect::<Vec<_>>();
+    values.sort_unstable();
+    let rank = values
+        .len()
+        .saturating_sub(1)
+        .saturating_mul(percentile.min(100))
+        .div_ceil(100);
+    values[rank.min(values.len().saturating_sub(1))]
+}
+
+#[cfg(feature = "cuda")]
+fn resident_verify_sample_json(sample: &ResidentVerifySample) -> serde_json::Value {
+    serde_json::json!({
+        "elapsed_s": sample.elapsed_us as f64 / 1_000_000.0,
+        "top1": sample.top1.iter().map(|(token_id, logit)| serde_json::json!({
+            "token_id": token_id,
+            "logit": logit,
+            "logit_bits": logit.to_bits(),
+        })).collect::<Vec<_>>(),
+        "dsv4_operator_counters": dsv4_operator_counters_json(&sample.counters),
+        "dsv4_layer_profile_summary": dsv4_layer_profile_summary_json(&sample.layer_profile),
+        "dsv4_attention_profile_summary": dsv4_attention_profile_summary_json(&sample.attention_profile),
+        "dsv4_output_profile": dsv4_output_profile_stats_json(&sample.output_profile),
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn resident_verify_width_json(measurement: &ResidentVerifyWidthMeasurement) -> serde_json::Value {
+    let p50_us = verify_percentile_us(measurement, 50);
+    let p95_us = verify_percentile_us(measurement, 95);
+    serde_json::json!({
+        "v": measurement.width,
+        "t_verify_p50_s": p50_us as f64 / 1_000_000.0,
+        "t_verify_p95_s": p95_us as f64 / 1_000_000.0,
+        "rows_per_s_p50": if p50_us == 0 { 0.0 } else {
+            measurement.width as f64 * 1_000_000.0 / p50_us as f64
+        },
+        "target_cycles_per_s_p50": if p50_us == 0 { 0.0 } else {
+            1_000_000.0 / p50_us as f64
+        },
+        "resident_no_io": measurement.resident_no_io,
+        "allocation_free": measurement.allocation_free,
+        "parity": measurement.parity,
+        "capture_top1": measurement.capture_top1.iter().map(|(token_id, logit)| serde_json::json!({
+            "token_id": token_id,
+            "logit": logit,
+            "logit_bits": logit.to_bits(),
+        })).collect::<Vec<_>>(),
+        "samples": measurement.samples.iter().map(resident_verify_sample_json).collect::<Vec<_>>(),
+    })
+}
+
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn run_resident_verify_width_sweep(
+    runner: DeepSeekV4Runner,
+    model_dir: &str,
+    chat_template: &ChatTemplate,
+    prompts: &[String],
+    artifact_load_us: u64,
+    max_layers: usize,
+    output_head_chunk_rows: usize,
+    moe_prefetch_experts: usize,
+    moe_hotset_experts: usize,
+    iterations: usize,
+    json: bool,
+) -> anyhow::Result<()> {
+    const WIDTHS: [usize; 3] = [2, 4, 8];
+    if prompts.len() != 1 {
+        anyhow::bail!(
+            "--verify-width-sweep requires exactly one --prompt, got {}",
+            prompts.len()
+        );
+    }
+    if iterations == 0 {
+        anyhow::bail!("--verify-iterations must be greater than zero");
+    }
+    if moe_prefetch_experts != 0 {
+        anyhow::bail!(
+            "--verify-width-sweep requires --moe-prefetch-experts 0 so measured I/O is exact"
+        );
+    }
+    if moe_hotset_experts < 48 {
+        anyhow::bail!(
+            "--verify-width-sweep requires --moe-hotset-experts >= 48 for the maximum V=8 route set"
+        );
+    }
+
+    let full_prompt = chat_template.format_turn(&prompts[0], true);
+    let token_ids = runner.encode(&full_prompt)?;
+    let max_width = *WIDTHS.last().expect("verification widths are non-empty");
+    if token_ids.len() <= max_width {
+        anyhow::bail!(
+            "--verify-width-sweep prompt encoded to {} tokens; need at least {}",
+            token_ids.len(),
+            max_width + 1
+        );
+    }
+    let prefix_len = token_ids.len() - max_width;
+    let prefix = &token_ids[..prefix_len];
+    let candidates = &token_ids[prefix_len..];
+    let schema = runner.kv_layout_schema().clone();
+    let mut diagnostic =
+        build_page_managed_diagnostic_harness(runner, Box::new(schema), token_ids.len(), 2)?;
+    let capture_slot = diagnostic.create_sequence(0)?;
+    let replay_slot = diagnostic.create_sequence(0)?;
+
+    let mut measurements = Vec::with_capacity(WIDTHS.len());
+    for (width_index, width) in WIDTHS.into_iter().enumerate() {
+        if width_index > 0 {
+            diagnostic.reset_sequence(capture_slot)?;
+            diagnostic.reset_sequence(replay_slot)?;
+        }
+        for slot in [capture_slot, replay_slot] {
+            diagnostic.execute_sequence_step(slot, ForwardPhase::Prefill, prefix, |runner| {
+                runner.prefill_tokens_no_logits_batched(prefix)
+            })?;
+        }
+
+        let candidate_rows = &candidates[..width];
+        let mut capture_top1: Option<Vec<(u32, f32)>> = None;
+        let mut samples = Vec::with_capacity(iterations);
+        let mut parity = true;
+        let mut resident_no_io = true;
+        let mut allocation_free = true;
+        for iteration in 0..iterations {
+            if iteration > 0 {
+                for slot in [capture_slot, replay_slot] {
+                    diagnostic.reset_sequence(slot)?;
+                    diagnostic.execute_sequence_step(
+                        slot,
+                        ForwardPhase::Prefill,
+                        prefix,
+                        |runner| runner.prefill_tokens_no_logits_batched(prefix),
+                    )?;
+                }
+            }
+            // Capture is deliberately outside T_verify. It installs exactly the
+            // route union used by the immediately following replay sample.
+            let capture =
+                measure_resident_verify_rows(&mut diagnostic, capture_slot, candidate_rows)?;
+            if let Some(baseline) = &capture_top1 {
+                parity &= same_top1_bits(baseline, &capture.top1);
+            } else {
+                capture_top1 = Some(capture.top1.clone());
+            }
+            let sample =
+                measure_resident_verify_rows(&mut diagnostic, replay_slot, candidate_rows)?;
+            parity &= same_top1_bits(
+                capture_top1
+                    .as_deref()
+                    .expect("capture baseline is initialized"),
+                &sample.top1,
+            );
+            resident_no_io &= sample.counters.expert_load_bytes == 0
+                && sample.counters.expert_selected_cold_misses == 0;
+            allocation_free &= sample.counters.device_allocations == 0;
+            samples.push(sample);
+        }
+        measurements.push(ResidentVerifyWidthMeasurement {
+            width,
+            capture_top1: capture_top1.expect("at least one verification iteration"),
+            samples,
+            parity,
+            resident_no_io,
+            allocation_free,
+        });
+    }
+
+    let v4 = measurements
+        .iter()
+        .find(|measurement| measurement.width == 4)
+        .ok_or_else(|| anyhow::anyhow!("V=4 verification measurement is missing"))?;
+    let v4_p50_us = verify_percentile_us(v4, 50);
+    let parity = measurements.iter().all(|measurement| measurement.parity);
+    let resident_no_io = measurements
+        .iter()
+        .all(|measurement| measurement.resident_no_io);
+    let allocation_free = measurements
+        .iter()
+        .all(|measurement| measurement.allocation_free);
+    let all_rates_at_most_16 = measurements.iter().all(|measurement| {
+        let p50_us = verify_percentile_us(measurement, 50);
+        p50_us == 0 || measurement.width as f64 * 1_000_000.0 / p50_us as f64 <= 16.0
+    });
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "mode": "resident_verify_width_sweep",
+                "model": model_dir,
+                "prompt": prompts[0],
+                "chat_template": chat_template.name(),
+                "prompt_token_ids": token_ids,
+                "prefix_tokens": prefix_len,
+                "verification_token_ids": candidates,
+                "iterations": iterations,
+                "max_layers": max_layers,
+                "output_head_chunk_rows": output_head_chunk_rows,
+                "moe_prefetch_experts": moe_prefetch_experts,
+                "moe_hotset_experts": moe_hotset_experts,
+                "artifact_load_s": artifact_load_us as f64 / 1_000_000.0,
+                "widths": measurements.iter().map(resident_verify_width_json).collect::<Vec<_>>(),
+                "gate_f1": {
+                    "parity": parity,
+                    "resident_no_io": resident_no_io,
+                    "allocation_free": allocation_free,
+                    "v4_over_250_ms": v4_p50_us > 250_000,
+                    "v4_over_200_ms": v4_p50_us > 200_000,
+                    "all_measured_rates_at_most_16_tok_s": all_rates_at_most_16,
+                    "headline_rate_viable": !all_rates_at_most_16,
+                },
+            }))?
+        );
+    } else {
+        println!("=== DSV4 Gate F1 Resident Verification Width Sweep ===");
+        println!("prefix tokens:      {prefix_len}");
+        println!("iterations:         {iterations}");
+        println!("resident no-I/O:    {resident_no_io}");
+        println!("allocation-free:    {allocation_free}");
+        println!("parity:             {parity}");
+        for measurement in &measurements {
+            let p50_us = verify_percentile_us(measurement, 50);
+            let p95_us = verify_percentile_us(measurement, 95);
+            let rows_per_s = if p50_us == 0 {
+                0.0
+            } else {
+                measurement.width as f64 * 1_000_000.0 / p50_us as f64
+            };
+            println!(
+                "V={:<2} p50={:>9.3} ms p95={:>9.3} ms rows/s={:>8.3} no_io={} alloc_free={} parity={}",
+                measurement.width,
+                p50_us as f64 / 1_000.0,
+                p95_us as f64 / 1_000.0,
+                rows_per_s,
+                measurement.resident_no_io,
+                measurement.allocation_free,
+                measurement.parity,
+            );
+        }
+        println!("V=4 > 250 ms:       {}", v4_p50_us > 250_000);
+        println!("V=4 > 200 ms:       {}", v4_p50_us > 200_000);
+        println!("headline viable:    {}", !all_rates_at_most_16);
+    }
+
+    if !parity {
+        anyhow::bail!("Gate F1 packed verification parity failed");
+    }
+    if !resident_no_io {
+        anyhow::bail!("Gate F1 measured verification performed selected-expert I/O");
+    }
+    Ok(())
+}
+
 #[cfg(not(feature = "cuda"))]
 pub fn cmd_bench_interactive(
     _model_dir: &str,
@@ -2034,6 +2676,9 @@ pub fn cmd_bench_interactive(
     _moe_hotset_experts: usize,
     _golden_trace_path: Option<&str>,
     _json: bool,
+    _resident_replay: bool,
+    _verify_width_sweep: bool,
+    _verify_iterations: usize,
 ) -> anyhow::Result<()> {
     anyhow::bail!("bench-interactive requires --features cuda")
 }
