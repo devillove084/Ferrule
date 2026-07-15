@@ -8,9 +8,10 @@ use ferrule_model::{
     ChatTemplate, ExpertMemoryPolicy, ModelDescriptor, ModelExecutionBackend, ModelFamily,
     models::deepseek_v4::{DeepSeekV4PrepareOptions, DeepSeekV4Runner},
 };
-use ferrule_runtime::{ResidentSchedulerConfig, ResidentTopKDriverConfig};
+use ferrule_runtime::{ExpertIoBudget, ResidentSchedulerConfig, ResidentTopKDriverConfig};
 use ferrule_server::{
-    ModelRegistration, ServerState, WorkerConfig, serve_with_shutdown, spawn_model_worker_with,
+    DeepSeekV4ResidentEngine, ModelRegistration, ServerState, WorkerConfig, serve_with_shutdown,
+    spawn_model_worker_with,
 };
 
 use crate::args::ServeArgs;
@@ -57,6 +58,13 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
     };
     let max_tensor_bytes = args.max_tensor_mb.saturating_mul(1024 * 1024);
     let kv_cache_bytes = required_mebibytes_to_bytes(args.kv_cache_mb, "kv-cache-mb")?;
+    let expert_io_budget = ExpertIoBudget {
+        max_incremental_expert_bytes: cache_byte_limit(
+            args.expert_io_batch_mb,
+            "expert-io-batch-mb",
+        )?,
+        ..ExpertIoBudget::unbounded()
+    };
     let scheduler_config = ResidentSchedulerConfig {
         prefill_chunk_size: args.prefill_chunk_size,
         max_active_sequences: args.max_active_sequences,
@@ -113,14 +121,15 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
                 kv_cache_bytes / (1024 * 1024),
                 configured_bytes / (1024 * 1024),
             );
-            build_resident_topk_driver_with_page_limit(
+            let driver = build_resident_topk_driver_with_page_limit(
                 runner,
                 Box::new(schema),
                 scheduler_config,
                 driver_config,
                 Some(page_limit),
             )
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+            Ok(DeepSeekV4ResidentEngine::new(driver, expert_io_budget))
         },
         worker_config,
     )

@@ -13,8 +13,8 @@ use ferrule_model::{
 use ferrule_runtime::cache::KvPageManager;
 use ferrule_runtime::{
     FixedSequenceSlotPool, GenerateRequest, PageManagedDiagnosticHarness, RequestId,
-    ResidentSchedulerConfig, ResidentTopKDriver, ResidentTopKDriverConfig, SamplingConfig,
-    SequenceFinishReason, SessionId,
+    ResidentSchedulerConfig, ResidentTopKDriver, ResidentTopKDriverConfig, SequenceFinishReason,
+    SessionId,
 };
 
 #[test]
@@ -73,7 +73,6 @@ fn deepseek_v4_runs_latest_resident_runtime_driver_local() -> Result<()> {
         id: RequestId(1),
         session_id: Some(SessionId(0)),
         prompt_tokens: prompt_tokens.clone(),
-        sampling: SamplingConfig::greedy(),
         max_new_tokens: 1,
         stop: Vec::new(),
         ignore_eos: false,
@@ -226,7 +225,6 @@ fn deepseek_v4_native_packed_decode_batch2_and_batch4_are_exact_local() -> Resul
                 id: RequestId(session_id.0),
                 session_id: Some(*session_id),
                 prompt_tokens: prompt.clone(),
-                sampling: SamplingConfig::greedy(),
                 max_new_tokens: 2,
                 stop: Vec::new(),
                 ignore_eos: false,
@@ -384,7 +382,6 @@ fn deepseek_v4_native_ragged_prefill_and_mixed_are_exact_local() -> Result<()> {
             id: RequestId((index + 1) as u64),
             session_id: Some(SessionId((index + 1) as u64)),
             prompt_tokens: prompt.clone(),
-            sampling: SamplingConfig::greedy(),
             max_new_tokens: 2,
             stop: Vec::new(),
             ignore_eos: false,
@@ -482,7 +479,6 @@ fn deepseek_v4_exact_prefix_fork_cow_matches_full_serial_local() -> Result<()> {
         id: RequestId(1),
         session_id: Some(source),
         prompt_tokens: prefix.clone(),
-        sampling: SamplingConfig::greedy(),
         max_new_tokens: 2,
         stop: Vec::new(),
         ignore_eos: false,
@@ -495,7 +491,6 @@ fn deepseek_v4_exact_prefix_fork_cow_matches_full_serial_local() -> Result<()> {
             id: RequestId(2),
             session_id: Some(SessionId(2)),
             prompt_tokens: suffix,
-            sampling: SamplingConfig::greedy(),
             max_new_tokens: 2,
             stop: Vec::new(),
             ignore_eos: false,

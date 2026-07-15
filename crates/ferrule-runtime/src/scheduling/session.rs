@@ -8,7 +8,7 @@ use std::ops::Range;
 use ferrule_common::{Error, Result};
 use ferrule_model::IncrementalDecodeState;
 
-use crate::cache::KvHandle;
+use super::KvHandle;
 
 /// Unique identifier for a generation request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -69,7 +69,6 @@ pub struct GenerateRequest {
     /// Optional session to continue (None = new session).
     pub session_id: Option<SessionId>,
     pub prompt_tokens: Vec<u32>,
-    pub sampling: crate::sampling::sampler::SamplingConfig,
     pub max_new_tokens: usize,
     pub stop: Vec<String>,
     /// Continue generation when the model selects its EOS token for this request.
@@ -94,8 +93,6 @@ pub struct SequenceState {
     pub status: SequenceStatus,
     /// Structured reason for the last terminal state, if any.
     pub finish_reason: Option<SequenceFinishReason>,
-    /// Sampling policy attached to the current request turn.
-    pub sampling: crate::sampling::sampler::SamplingConfig,
     /// Generation budget attached to the current request turn.
     pub max_new_tokens: usize,
     /// Stop strings attached to the current request turn.
@@ -129,7 +126,6 @@ impl SequenceState {
             generated: 0,
             status: SequenceStatus::Pending,
             finish_reason: None,
-            sampling: crate::sampling::sampler::SamplingConfig::default(),
             max_new_tokens: 0,
             stop: Vec::new(),
             ignore_eos: false,
@@ -152,7 +148,6 @@ impl SequenceState {
     }
 
     pub fn apply_request_config(&mut self, request: &GenerateRequest) {
-        self.sampling = request.sampling.clone();
         self.max_new_tokens = request.max_new_tokens;
         self.stop = request.stop.clone();
         self.ignore_eos = request.ignore_eos;
@@ -325,7 +320,6 @@ impl SequenceState {
             generated: 0,
             status: SequenceStatus::Running,
             finish_reason: None,
-            sampling: request.sampling.clone(),
             max_new_tokens: request.max_new_tokens,
             stop: request.stop.clone(),
             ignore_eos: request.ignore_eos,
@@ -380,7 +374,6 @@ impl SequenceState {
         self.incremental_decode.reset();
         self.status = SequenceStatus::Pending;
         self.finish_reason = None;
-        self.sampling = crate::sampling::sampler::SamplingConfig::default();
         self.max_new_tokens = 0;
         self.stop.clear();
         self.ignore_eos = false;
@@ -393,7 +386,6 @@ impl SequenceState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::KvHandle;
 
     #[test]
     fn request_id_equality() {
@@ -489,7 +481,6 @@ mod tests {
             id: RequestId(100),
             session_id: Some(SessionId(1)),
             prompt_tokens: vec![10, 20],
-            sampling: crate::sampling::sampler::SamplingConfig::greedy(),
             max_new_tokens: 32,
             stop: vec!["</s>".into()],
             ignore_eos: false,
@@ -507,7 +498,6 @@ mod tests {
         assert_eq!(state.max_new_tokens, 32);
         assert_eq!(state.stop, vec!["</s>"]);
         assert!(!state.ignore_eos);
-        assert_eq!(state.sampling.temperature, 0.0);
     }
 
     #[test]

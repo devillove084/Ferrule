@@ -6,10 +6,9 @@ _Last updated: 2026-07-13_
 
 ## 1. Scope
 
-This document defines the model-neutral memory boundary used by streamed MoE experts.
-It complements [`storage-residency-architecture.md`](storage-residency-architecture.md):
-storage policy decides what should be resident, while this document defines how local
-retention pools account for and enforce memory.
+This document defines the memory boundary used by streamed DSV4 MoE experts. The
+runtime expert-residency owner decides what remains resident; the pools described here
+account for and enforce host and pinned-memory retention.
 
 The current DSV4 physical flow is:
 

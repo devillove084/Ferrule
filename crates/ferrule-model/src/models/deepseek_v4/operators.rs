@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 
 #[cfg(feature = "cuda")]
 use ferrule_common::ExpertResidencyControl;
+#[cfg(feature = "cuda")]
+use ferrule_common::execution::ForwardPhase;
 use ferrule_common::{Error, ExpertResidencyStats, MemoryPoolStats, Result};
 
 use crate::artifact::binding::RouterArtifactPayload;
@@ -30,15 +32,15 @@ use crate::moe::streaming::ExpertSourceCatalog;
 use crate::moe::streaming::{ExpertMemoryPolicy, ExpertStreamingPlanner, ExpertStreamingReader};
 use crate::runner::TokenLogit;
 
-#[cfg(feature = "cuda")]
-use super::artifact::DeepSeekV4ArtifactModel;
 use super::config::DeepSeekV4AttentionConfig;
 #[cfg(feature = "cuda")]
 use super::cuda_cache::DeepSeekV4CudaOperatorCache;
 use super::helpers::{grouped_output_a, rank_logits_desc, rms_norm, rms_norm_heads_in_place};
-#[cfg(feature = "cuda")]
-use super::layer::DeepSeekV4Layer;
 use super::prepared::DeepSeekV4ExecutionPolicy;
+#[cfg(feature = "cuda")]
+use super::prepared::DeepSeekV4PreparedResources;
+#[cfg(feature = "cuda")]
+use super::sequence::DeepSeekV4SequenceMoeAccessEvent;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DeepSeekV4LayerProfileStats {
@@ -915,6 +917,7 @@ impl DeepSeekV4OperatorContext {
         input: &ferrule_cuda::context::CudaF32Buffer,
         token_ids: &[u32],
         row_to_sequence: Option<&[usize]>,
+        sequence_phases: Option<&[ForwardPhase]>,
         router: &RouterArtifactPayload,
         predicted_experts: &[usize],
         router_policy: &ExpertRouterPolicy,
@@ -931,7 +934,7 @@ impl DeepSeekV4OperatorContext {
         segment_workspace: &mut Option<ferrule_cuda::context::CudaMoeSegmentWorkspace>,
         route_output: &mut ferrule_cuda::context::CudaF32Buffer,
         output: &mut ferrule_cuda::context::CudaF32Buffer,
-    ) -> Result<()> {
+    ) -> Result<Vec<DeepSeekV4SequenceMoeAccessEvent>> {
         if self.backend != ModelExecutionBackend::Cuda {
             return Err(Error::Model(
                 "DeepSeek-V4 device-resident MoE prefill requires CUDA backend".into(),
@@ -942,6 +945,7 @@ impl DeepSeekV4OperatorContext {
             input,
             token_ids,
             row_to_sequence,
+            sequence_phases,
             router,
             predicted_experts,
             router_policy,
@@ -958,26 +962,20 @@ impl DeepSeekV4OperatorContext {
             segment_workspace,
             route_output,
             output,
-        )?;
-        if let Some(cuda) = self.cuda.as_mut() {
-            self.moe_access_events
-                .extend(cuda.drain_moe_access_events());
-        }
-        Ok(())
+        )
     }
 
     #[cfg(feature = "cuda")]
     pub(crate) fn compile_cuda_execution_image(
         &mut self,
         generation: u64,
-        model: &DeepSeekV4ArtifactModel,
-        layers: &[DeepSeekV4Layer],
+        resources: &DeepSeekV4PreparedResources,
     ) -> Result<()> {
         if self.backend != ModelExecutionBackend::Cuda {
             return Ok(());
         }
         self.cuda_mut()?
-            .compile_execution_image(generation, model, layers)
+            .compile_execution_image(generation, resources)
     }
 
     #[cfg(feature = "cuda")]

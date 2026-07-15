@@ -1,12 +1,12 @@
 <h1 align="center">Ferrule</h1>
 
 <p align="center">
-  <strong>Rust-native LLM runtime for sparse MoE, expert streaming, and hardware-aware execution.</strong>
+  <strong>Rust-native DeepSeek-V4 inference for one DGX Spark.</strong>
 </p>
 
 <p align="center">
-  Router decisions, selected experts, quantized weights, KV cache, expert residency,
-  and storage objects are explicit runtime concepts — not hidden behind opaque kernels.
+  Router decisions, expert I/O, quantized weights, KV transactions, and DSpark
+  verification are explicit runtime concepts — not hidden behind opaque kernels.
 </p>
 
 <p align="center">
@@ -14,7 +14,7 @@
   <img alt="CUDA" src="https://img.shields.io/badge/CUDA-cuda--oxide-22c55e?style=flat-square" />
   <img alt="MoE" src="https://img.shields.io/badge/MoE-router%20%2B%20top--k%20experts-8b5cf6?style=flat-square" />
   <img alt="WeightPack" src="https://img.shields.io/badge/WeightPack-execution%20artifact-2563eb?style=flat-square" />
-  <img alt="Storage" src="https://img.shields.io/badge/Storage-residency%20vocabulary-06b6d4?style=flat-square" />
+  <img alt="CUTLASS" src="https://img.shields.io/badge/GEMM-CUTLASS-06b6d4?style=flat-square" />
 </p>
 
 <p align="center">
@@ -22,10 +22,9 @@
   <a href="#current-milestone">Milestone</a> ·
   <a href="#core-features">Features</a> ·
   <a href="#dgx-spark-platform-evidence-and-sota-direction">GB10 evidence</a> ·
-  <a href="docs/ferrule_arch.md">Architecture</a> ·
-  <a href="docs/execution-engine-architecture.md">Execution Engine</a> ·
-  <a href="docs/ROADMAP.md">Roadmap</a> ·
-  <a href="docs/storage-residency-architecture.md">Storage</a>
+  <a href="docs/CUTLASS.md">CUTLASS</a> ·
+  <a href="docs/serving.md">Serving</a> ·
+  <a href="docs/ROADMAP.md">Roadmap</a>
 </p>
 
 ---
@@ -35,33 +34,33 @@
 Ferrule has a real, lossless 43-layer CUDA DeepSeek-V4 Flash target path on GB10.
 Native packed decode, ragged prefill, mixed batches, physical paged multi-plane KV,
 FP4 routed MoE, compressed attention state, and deterministic greedy generation are
-active. DSpark metadata is represented, but proposal/verification/rollback execution
-is not implemented yet.
+active. Exact DSpark packed verification, acceptance, rollback, and accepted-prefix
+replay are implemented; a production MTP proposal source is not connected yet.
 
 The completed execution foundation includes:
 
-- dependency-neutral `ExecutionBatch`, prepared plans, and persistent arenas;
+- one Rust-owned executable plan with prepare-time kernel-provider selection;
+- CUTLASS-first regular GEMM with architecture targets for SM86, SM90a, SM100a,
+  and SM121a;
 - explicit per-sequence state and native packed multi-session execution;
-- runtime-owned paged KV transactions, rollback, COW, and prefix sharing;
-- device routing and stable expert slot/generation/lease residency;
+- runtime-owned paged KV transactions, rollback, COW, and slot allocation;
+- request-centric continuous batching with expert-byte, pinned-memory, upload, and
+  deadline admission budgets;
 - production `O_DIRECT + io_uring` expert reads into registered CUDA-pinned slabs;
-- bounded slab admission, selected takeover, and ordinary device expert frames;
-- compact router handoff, device-global output-head top-k merge, and zero
-  whole-stream synchronization in steady decode;
-- OpenAI-compatible HTTP/SSE serving with bounded admission and cancellation;
-- reusable `vllm bench serve` compatibility and concurrency workflows.
+- device routing and stable expert slot/generation/lease residency;
+- OpenAI-compatible HTTP/SSE serving with bounded admission and cancellation.
 
 Recent correctness work also made packed concurrency safe when a prefetched expert's
 reserved victim is selected by the same batch: Ferrule cancels only the conflicting
 reservation, preserves completed staging/upload work, and re-reserves a safe slot.
 
-Ferrule is **not yet a single-node SOTA claim**. The remaining architecture work is:
+Ferrule is **not yet a single-node SOTA claim**. The remaining critical work is:
 
 1. establish an exact resident/no-I/O 43-layer target-pass roofline;
-2. add a device all-hit path so host work is proportional to actual expert misses;
-3. fuse the GB10 FP4 routed-MoE path and add stable graph buckets;
-4. schedule continuous batches by incremental unique-expert bytes, not row count alone;
-5. implement exact DSpark proposal, packed verification, commit, and rollback.
+2. migrate regular operators to CUTLASS and specialize the measured GB10 hot path;
+3. add a device all-hit path so host work is proportional to actual expert misses;
+4. capture stable CUDA graph buckets after launch shapes stop changing;
+5. connect the real MTP proposal source and validate end-to-end DSpark acceptance.
 
 The end target is **15–17 accepted output tokens/s**, not 15–17 complete target-model
 passes/s. See the [execution roadmap](docs/ROADMAP.md) for measured gates and phase
@@ -499,41 +498,31 @@ this README; the roadmap defines the benchmark gates and raw artifacts remain un
 
 | Feature | Why it matters |
 |---|---|
-| **Policy-composed model descriptions** | Model families map source tensors into semantic attention, FFN/MoE, KV, residency, quantization, and speculation policies. DSV4 now separates fully prepared layers, backend expert runtime, explicit sequence state, and reusable eager arenas. |
-| **Neutral execution ABI** | One public `ExecutionBatch` expresses packed/ragged rows, phases, state slots, KV bindings, and strict logits intent; runtime correlation stays private and native multi-session execution consumes it directly. |
-| **MoE-first execution** | Router logits, hash/top-k selection, selected experts, shared experts, and DSV4 expert-streaming mechanisms are explicit objects rather than opaque kernel details. Runtime owns cross-request stable-slot/generation/lease residency. |
-| **Storage/residency and memory vocabulary** | `StorageObjectId`, `ObjectLocator`, `Placement`, and `ObjectReplica` describe storage; generic `MemoryPoolLimits`, `MemoryPoolStats`, and `OwnerMemoryLru` enforce local whole-expert host/pinned retention without model-specific policy leakage. |
-| **cuda-oxide kernels** | Custom CUDA kernels integrated with the Rust runtime: quantized GEMV, packed FP4 expert execution, sparse attention, artifact-preserving operators. |
-| **Safetensors source binding** | Inspect and bind Hugging Face safetensors by semantic role, with bounded reads instead of loading a 100 GB+ checkpoint into RAM. |
-| **WeightPack execution artifact** | Layer weights quantized once and reloaded from a Ferrule-owned package. GGUF remains a compatibility/PK path. |
-| **Runtime graph IR** | Opaque graph with semantic ops, typed artifact bindings, shape registry, and backend object store. Model-family names stay out of graph nodes. |
-| **CPU/reference anchors** | CPU reference pieces validate CUDA kernels, source-format decoders, router behavior, and HC math — without a legacy full-model CPU runner. |
-| **Edge/hardware direction** | Expert placement, streaming, WeightPack layout, and scheduling adapt to VRAM, DRAM, NVMe, and future multi-GPU / multi-node cooperation. |
+| **Executable model plan** | Prepare-time binding selects immutable buffers, launch descriptors, and the kernel provider; the token hot path performs no architecture discovery. |
+| **CUTLASS provider boundary** | Regular GEMM is delegated to CUTLASS while cuda-oxide remains available for sparse attention, routing, KV, oracle, and fused control kernels. |
+| **Native packed execution** | `ExecutionBatch` represents continuous-batch `B × Q=1` decode and one-sequence `Q=V` DSpark verification without a CPU execution plan. |
+| **Expert-I/O scheduling** | Admission accounts for incremental expert bytes, inflight reads, pinned slabs, uploads, deadlines, and current residency instead of batching by row count alone. |
+| **Transactional KV and DSpark** | Physical multi-plane KV supports branch, rollback, and accepted-prefix replay for exact speculative verification. |
+| **Single-owner safetensors ingest** | DSV4 tensors and expert extents are bound with bounded reads rather than loading the checkpoint into RAM. |
+| **Narrow validation anchors** | CPU/reference code is retained only where it acts as a numerical oracle for CUDA correctness. |
 
 ---
 
 ## System vision
 
-Ferrule is designed around a simple idea: future LLM systems need to co-design
-model structure, runtime state, and hardware placement.
+Ferrule is intentionally a narrow DSV4/CUDA appliance. The runtime owns scheduling,
+KV transactions, expert residency, and exact speculative state; the prepared model owns
+DSV4 math and immutable execution buffers; the selected kernel provider owns launches.
 
-<p align="center">
-  <img src="docs/assets/ferrule-current-architecture.svg" alt="Ferrule architecture" width="100%" />
-</p>
+```text
+request-centric scheduler
+  -> executable DSV4 plan
+  -> CUTLASS regular math + cuda-oxide sparse/control kernels
+  -> transactional KV and expert residency
+```
 
-Near term: llama.cpp-level local usability with a more explicit runtime
-architecture — fast cached startup, sampling controls, templates, quality checks,
-OpenAI-compatible local serving, official benchmarks, and source-preserving bring-up
-for mainstream model families.
-
-Long term: a runtime substrate for edge-cloud LLM systems:
-
-- cloud builds model versions, WeightPack artifacts, calibration data, adapters
-- edge devices run private low-latency inference and collect rollout traces
-- router statistics guide expert placement, prefetch, and offload
-- KV/session state becomes movable and eventually distributed
-- speculation modules (DSpark/MTP) attach through a target/draft policy
-- DP/TP/EP/SP/CP/PP placement evolves under one state-aware runtime
+GB10 is the performance target. SM86 is a compile/correctness target, while H20/H200
+and B200 use the same provider boundary with architecture-specific CUTLASS kernels.
 
 ---
 
@@ -615,18 +604,17 @@ just chat models/OLMoE-Instruct q4 -n 256
 | Execution ABI | E1–E4 complete: public `ExecutionBatch`, prepared-executor traits, runtime-private `ScheduledBatch`, strict validation, and native packed multi-session execution |
 | DSV4 execution boundary | The model owns HC/MLA/compressor/router/MoE math; runtime remains model-neutral and owns scheduling plus logical page lifecycle through generic traits |
 | Expert streaming | Immutable source catalogs plus production `O_DIRECT + io_uring` fixed-file reads into registered CUDA-pinned slabs; CUDA promotes selected/on-time experts into ordinary device frames governed by stable slots, generations, leases, bounded admission, and selected takeover. |
-| Storage/residency | `ferrule-runtime::storage` vocabulary plus runtime expert residency; `ferrule-common::memory` supplies model-neutral entry/byte budgets, stats, topology vocabulary, and owner-thread LRU |
+| Expert residency | Runtime-owned stable slots, generations, leases, host/pinned budgets, upload admission, and dense residency snapshots feed the DSV4 expert-I/O advisor |
 | Attention | OLMoE GQA executable; DSV4 MLA sparse attention correctness-first CUDA path |
 | Hyper-connections | DSV4 HC source binding + reference `hc_pre`/`hc_post`/`hc_head` |
-| KV cache | E5 complete: `KvPageManager` plus bounded CUDA multi-plane pools, paged attention/indexer kernels, rollback, COW, preempt/restore, and exact-prefix sharing; host caches are reference infrastructure |
+| KV cache | `KvPageManager` plus bounded CUDA multi-plane pools, paged attention/indexer kernels, branch, rollback, COW, preempt/restore, and DSpark accepted-prefix replay |
 | Quantization | Q4_0/Q8_0, FP4 E2M1 + E8M0 scales, FP8 E4M3FN, mixed precision policy |
 | WeightPack | mmap'd reader, streaming writer, zero-copy slices, WeightPack-only load path |
-| Runtime graph | `ferrule-runtime::graph` opaque IR, `GraphProgram`, `BackendObjectStore`, and `ReferenceGraphExecutor::execute` with caller-owned `ReferenceGraphSequenceState` |
-| Sampling | temperature, top-k, top-p, min-p, repeat penalty, seed, stop strings, logprobs |
+| Kernel plan | Prepare-time `ModelKernelPlan` and POD launch descriptors select CUTLASS or cuda-oxide without architecture discovery in the token hot path |
+| Generation | Device/global top-k candidate selection, deterministic greedy commit, stop strings, EOS handling, and incremental token text; unsupported sampling is rejected at the API boundary |
 | Chat templates | OLMoE, ChatML, Llama3, Qwen, DeepSeek-V4, Plain |
 | Serving | `ferrule-server` + `ferrule serve`: Axum/Hyper/Tokio, dedicated model-owner thread, bounded queues, disconnect cancellation, `/health`, `/v1/models`, `/v1/chat/completions`, and `/v1/completions`; reusable `vllm bench serve` concurrency workflows; greedy only for now. |
-| Structured decoding | token mask API, program-like generation API |
-| Speculation | DSpark/MTP metadata is represented as a generic attachment policy; proposal, packed target verification, accepted-prefix commit, and rejected-suffix rollback remain the S6 milestone. |
+| Speculation | Exact one-sequence `Q=V` packed verification, acceptance, rollback, and accepted-prefix replay are implemented; production MTP proposal generation remains to be connected. |
 | Training/RL | design target, not implemented |
 
 ---
@@ -706,13 +694,10 @@ just lint           # fmt + clippy
 
 | Document | Content |
 |---|---|
-| [Architecture](docs/ferrule_arch.md) | Repository crates, model boundaries, current runtime, serving direction, and alignment targets |
-| [Execution Engine](docs/execution-engine-architecture.md) | Implemented ownership foundation: neutral ABI, prepared plans, sequence state, arenas, native batching, physical paged KV, and runtime expert residency. |
-| [Serving](docs/serving.md) | Axum/Hyper/Tokio selection, dedicated model-worker ownership, OpenAI/SSE contract, cancellation, commands, cache budgets, and official benchmark targets |
-| [Roadmap](docs/ROADMAP.md) | Canonical S0–S7 single-node SOTA plan: target roofline, device miss-only execution, fused kernels, trace-aware residency, expert-aware batching, and exact DSpark verification. |
-| [Storage & Residency](docs/storage-residency-architecture.md) | Storage identity/placement plus implemented expert slots, leases, transfers, policy, and metrics |
-| [Expert Memory & Telemetry](docs/expert-memory-architecture.md) | Model-neutral owner-thread memory pools, host/pinned expert budgets, GB10 constraints, and benchmark-safe telemetry |
-| [Runtime Graph](docs/runtime-graph-architecture.md) | Device-independent graph IR, `GraphNode`, dialects, `GraphProgram`, external bindings, and explicit reference execution state |
+| [CUTLASS](docs/CUTLASS.md) | Provider boundary, build targets, supported architectures, and regular-GEMM migration contract |
+| [Serving](docs/serving.md) | Axum/Hyper/Tokio model-worker ownership, OpenAI/SSE contract, cancellation, admission, and benchmark workflows |
+| [Roadmap](docs/ROADMAP.md) | Canonical P0–P8 single-DGX Spark SOTA plan, feasibility gates, exact DSpark transaction, expert-aware scheduling, and release contract |
+| [Expert Memory & Telemetry](docs/expert-memory-architecture.md) | Host/pinned expert budgets, stable device residency, GB10 constraints, and benchmark-safe telemetry |
 
 ---
 

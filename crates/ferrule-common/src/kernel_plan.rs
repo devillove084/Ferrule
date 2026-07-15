@@ -12,15 +12,13 @@
 //! or hot-path dynamic policy.  The hot path reads pre-resolved POD
 //! descriptors and dispatches directly.
 
-use crate::Result;
-
 // ── Row bucket ────────────────────────────────────────────────────────
 
 /// Verification row bucket.  Maps directly to the roadmap's shape strategy
 /// (Section 3.4): rows=1 is the persistent single-token path, rows=2/4 are
 /// Tensor Core verification schedules, and rows=8 is enabled only when
 /// acceptance/serving evidence justifies it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum RowBucket {
     /// Single-token decode.  Persistent small-M kernels; no padded batch-16 work.
@@ -116,6 +114,7 @@ pub enum KernelPhase {
 /// multiple implementations of the same phase (e.g., a fast path and a
 /// fallback).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(C)]
 pub struct KernelId {
     pub provider: KernelProviderId,
     pub phase: KernelPhase,
@@ -151,34 +150,40 @@ impl KernelId {
 ///
 /// Future versions may add persistent tile schedules, shared-memory sizes,
 /// and register allocation hints.  The `version` field allows safe evolution.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
 pub struct LaunchDescriptor {
-    /// ABI version of this descriptor.  Must match what the provider expects.
+    /// ABI version of this descriptor. Must match what the provider expects.
     pub version: u16,
+    /// Stable bit flags; unlike Rust `bool`, these have an explicit C ABI.
+    pub flags: u16,
     /// Which kernel to launch.
     pub kernel: KernelId,
-    /// Grid dimensions (x, y, z).
-    pub grid: (u32, u32, u32),
+    /// Grid dimensions (x, y, z). Zeroes are valid only for provider-managed
+    /// launches whose concrete geometry is resolved from the POD arguments.
+    pub grid: [u32; 3],
     /// Block dimensions (x, y, z).
-    pub block: (u32, u32, u32),
+    pub block: [u32; 3],
     /// Shared memory per block in bytes.
     pub shared_mem_bytes: u32,
-    /// Whether this kernel is safe inside CUDA graph capture (no D2H, no
-    /// allocation, no stream-wide sync).
-    pub capture_safe: bool,
+    /// Reserved for ABI-compatible extension and explicit 8-byte tail size.
+    pub reserved: u32,
 }
 
 impl LaunchDescriptor {
-    pub const ABI_VERSION: u16 = 1;
+    pub const ABI_VERSION: u16 = 2;
+    pub const FLAG_CAPTURE_SAFE: u16 = 1 << 0;
+    pub const FLAG_PROVIDER_MANAGED_LAUNCH: u16 = 1 << 1;
 
     pub const fn new(kernel: KernelId, grid: (u32, u32, u32), block: (u32, u32, u32)) -> Self {
         Self {
             version: Self::ABI_VERSION,
+            flags: 0,
             kernel,
-            grid,
-            block,
+            grid: [grid.0, grid.1, grid.2],
+            block: [block.0, block.1, block.2],
             shared_mem_bytes: 0,
-            capture_safe: false,
+            reserved: 0,
         }
     }
 
@@ -188,8 +193,21 @@ impl LaunchDescriptor {
     }
 
     pub const fn capture_safe(mut self) -> Self {
-        self.capture_safe = true;
+        self.flags |= Self::FLAG_CAPTURE_SAFE;
         self
+    }
+
+    pub const fn provider_managed(mut self) -> Self {
+        self.flags |= Self::FLAG_PROVIDER_MANAGED_LAUNCH;
+        self
+    }
+
+    pub const fn is_capture_safe(self) -> bool {
+        self.flags & Self::FLAG_CAPTURE_SAFE != 0
+    }
+
+    pub const fn is_provider_managed(self) -> bool {
+        self.flags & Self::FLAG_PROVIDER_MANAGED_LAUNCH != 0
     }
 }
 
@@ -217,7 +235,8 @@ pub enum WeightLayout {
 }
 
 /// Describes a weight tensor's device layout and workspace offset.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
 pub struct WeightBinding {
     /// Device-native layout of this weight tensor.
     pub layout: WeightLayout,
@@ -414,6 +433,18 @@ impl ProviderManifest {
             kernel_count: 0,
         }
     }
+
+    /// Manifest for a CUTLASS-generated cubin/native provider. The provider's
+    /// own POD ABI version is recorded independently from the execution-plan
+    /// launch descriptor version.
+    pub const fn cutlass_cubin(abi_version: u16, kernel_count: usize) -> Self {
+        Self {
+            id: KernelProviderId::CutlassCubin,
+            name: "cutlass-cubin",
+            abi_version,
+            kernel_count,
+        }
+    }
 }
 
 /// Registry of available kernel providers.
@@ -448,22 +479,6 @@ impl ProviderRegistry {
     pub fn manifests(&self) -> &[ProviderManifest] {
         &self.providers
     }
-}
-
-// ── Default plan compilation ──────────────────────────────────────────
-
-/// Compiles a default model kernel plan for the given layer count.
-///
-/// This creates a plan where every layer uses the cuda-oxide provider (the
-/// existing eager path) with no optimized schedules.  As superkernel bundles
-/// are implemented, individual phase descriptors are filled in or replaced.
-///
-/// The plan starts empty (no compiled phases) and phases are added as
-/// kernels are registered.  An empty plan means "use the existing eager
-/// dispatch path" - the runner checks `has_any_plan` before consulting the
-/// plan.
-pub fn compile_default_plan(layer_count: usize) -> Result<ModelKernelPlan> {
-    Ok(ModelKernelPlan::new(layer_count))
 }
 
 #[cfg(test)]
@@ -506,6 +521,16 @@ mod tests {
     }
 
     #[test]
+    fn launch_descriptor_has_stable_pod_layout() {
+        assert_eq!(std::mem::size_of::<KernelId>(), 4);
+        assert_eq!(std::mem::align_of::<KernelId>(), 1);
+        assert_eq!(std::mem::size_of::<LaunchDescriptor>(), 40);
+        assert_eq!(std::mem::align_of::<LaunchDescriptor>(), 4);
+        assert_eq!(std::mem::size_of::<WeightBinding>(), 24);
+        assert_eq!(std::mem::align_of::<WeightBinding>(), 8);
+    }
+
+    #[test]
     fn launch_descriptor_versioning() {
         let id = KernelId::new(
             KernelProviderId::CudaOxide,
@@ -514,10 +539,10 @@ mod tests {
         );
         let desc = LaunchDescriptor::new(id, (1, 1, 1), (256, 1, 1));
         assert_eq!(desc.version, LaunchDescriptor::ABI_VERSION);
-        assert!(!desc.capture_safe);
+        assert!(!desc.is_capture_safe());
 
         let desc_safe = desc.capture_safe().with_shared_mem(4096);
-        assert!(desc_safe.capture_safe);
+        assert!(desc_safe.is_capture_safe());
         assert_eq!(desc_safe.shared_mem_bytes, 4096);
     }
 
@@ -539,7 +564,7 @@ mod tests {
         // Replace existing phase
         let desc2 = LaunchDescriptor::new(id, (2, 1, 1), (128, 1, 1));
         plan.set_phase(desc2);
-        assert_eq!(plan.phase(KernelPhase::HcPre).unwrap().grid.0, 2);
+        assert_eq!(plan.phase(KernelPhase::HcPre).unwrap().grid[0], 2);
     }
 
     #[test]
@@ -563,7 +588,7 @@ mod tests {
 
     #[test]
     fn model_kernel_plan_layer_access() {
-        let mut plan = compile_default_plan(43).unwrap();
+        let mut plan = ModelKernelPlan::new(43);
         assert_eq!(plan.layers.len(), 43);
         assert!(plan.layer(0).is_some());
         assert!(plan.layer(43).is_none());
@@ -575,18 +600,20 @@ mod tests {
     }
 
     #[test]
-    fn compile_default_plan_allows_zero_layers() {
-        let plan = compile_default_plan(0).unwrap();
-        assert!(plan.layers.is_empty());
-    }
-
-    #[test]
     fn provider_registry_cuda_oxide() {
         let registry = ProviderRegistry::with_cuda_oxide();
         assert!(registry.is_available(KernelProviderId::CudaOxide));
         assert!(!registry.is_available(KernelProviderId::EmbeddedCubin));
         assert_eq!(registry.manifests().len(), 1);
         assert_eq!(registry.manifests()[0].name, "cuda-oxide");
+    }
+
+    #[test]
+    fn cutlass_manifest_keeps_provider_abi_and_catalog_size() {
+        let manifest = ProviderManifest::cutlass_cubin(3, 2);
+        assert_eq!(manifest.id, KernelProviderId::CutlassCubin);
+        assert_eq!(manifest.abi_version, 3);
+        assert_eq!(manifest.kernel_count, 2);
     }
 
     #[test]

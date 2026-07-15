@@ -64,9 +64,9 @@ pub struct ExpertPredictContext<'a> {
     pub phase: ExpertAccessPhase,
     pub budget: usize,
     pub num_experts: usize,
-    pub resident: &'a [usize],
-    pub materializing: &'a [usize],
-    pub host_staged: &'a [usize],
+    /// Dense expert state indexed by expert id. A short or empty slice treats
+    /// missing entries as cold.
+    pub residency: &'a [ExpertResidency],
 }
 
 impl<'a> ExpertPredictContext<'a> {
@@ -76,9 +76,7 @@ impl<'a> ExpertPredictContext<'a> {
             phase,
             budget,
             num_experts,
-            resident: &[],
-            materializing: &[],
-            host_staged: &[],
+            residency: &[],
         }
     }
 }
@@ -132,49 +130,109 @@ impl ExpertBatchAccessEvent {
         routes_by_token: &[Vec<ExpertRoute>],
         streaming_steps: &[ExpertStreamingStep],
     ) -> Self {
-        let selected_loads = streaming_steps
-            .iter()
-            .flat_map(|step| step.loads.iter())
-            .filter(|load| load.reason == ExpertLoadReason::Selected)
-            .map(|load| load.expert)
-            .collect::<BTreeSet<_>>();
+        Self::from_route_rows(
+            layer,
+            phase,
+            token_count,
+            routes_by_token.iter().map(Vec::as_slice),
+            streaming_steps,
+        )
+    }
 
+    #[cfg(any(feature = "cuda", test))]
+    pub(crate) fn from_packed_routes_by_sequence(
+        layer: usize,
+        sequence_phases: &[ExpertAccessPhase],
+        row_to_sequence: &[usize],
+        routes_by_token: &[Vec<ExpertRoute>],
+        streaming_steps: &[ExpertStreamingStep],
+    ) -> Vec<(usize, Self)> {
+        let selected_loads = Self::selected_loads(streaming_steps);
+        let mut token_counts = vec![0usize; sequence_phases.len()];
+        let mut aggregated = (0..sequence_phases.len())
+            .map(|_| BTreeMap::new())
+            .collect::<Vec<_>>();
+        for (&sequence, routes) in row_to_sequence.iter().zip(routes_by_token) {
+            token_counts[sequence] = token_counts[sequence].saturating_add(1);
+            Self::record_routes(&mut aggregated[sequence], layer, routes, &selected_loads);
+        }
+        aggregated
+            .into_iter()
+            .enumerate()
+            .filter(|(sequence, _)| token_counts[*sequence] > 0)
+            .map(|(sequence, experts)| {
+                (
+                    sequence,
+                    Self {
+                        layer,
+                        phase: sequence_phases[sequence],
+                        token_count: token_counts[sequence],
+                        experts: experts.into_values().collect(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn from_route_rows<'a>(
+        layer: usize,
+        phase: ExpertAccessPhase,
+        token_count: usize,
+        routes_by_token: impl IntoIterator<Item = &'a [ExpertRoute]>,
+        streaming_steps: &[ExpertStreamingStep],
+    ) -> Self {
+        let selected_loads = Self::selected_loads(streaming_steps);
         let mut aggregated = BTreeMap::<ExpertId, ExpertBatchExpertEvent>::new();
+        let mut route_rows = 0usize;
         for routes in routes_by_token {
-            let mut seen_in_token = BTreeSet::<ExpertId>::new();
-            for route in routes {
-                let expert = ExpertId::new(layer, route.expert);
-                let outcome = if selected_loads.contains(&expert) {
-                    // The generic streaming step only knows that the selected
-                    // expert was not planner-resident. CUDA materialization may
-                    // later classify this more precisely as materializing or
-                    // host-staged; for predictor scoring this is still the
-                    // expensive feedback signal we need to boost future demand.
-                    ExpertResidencyOutcome::ColdMiss
-                } else {
-                    ExpertResidencyOutcome::ResidentHit
-                };
-                let entry = aggregated.entry(expert).or_insert(ExpertBatchExpertEvent {
-                    expert,
-                    columns: 0,
-                    total_route_weight: 0.0,
-                    outcome,
-                });
-                if seen_in_token.insert(expert) {
-                    entry.columns = entry.columns.saturating_add(1);
-                }
-                entry.total_route_weight += route.weight;
-                if outcome == ExpertResidencyOutcome::ColdMiss {
-                    entry.outcome = ExpertResidencyOutcome::ColdMiss;
-                }
-            }
+            route_rows = route_rows.saturating_add(1);
+            Self::record_routes(&mut aggregated, layer, routes, &selected_loads);
         }
 
         Self {
             layer,
             phase,
-            token_count: token_count.max(routes_by_token.len()).max(1),
+            token_count: token_count.max(route_rows).max(1),
             experts: aggregated.into_values().collect(),
+        }
+    }
+
+    fn selected_loads(streaming_steps: &[ExpertStreamingStep]) -> BTreeSet<ExpertId> {
+        streaming_steps
+            .iter()
+            .flat_map(|step| step.loads.iter())
+            .filter(|load| load.reason == ExpertLoadReason::Selected)
+            .map(|load| load.expert)
+            .collect()
+    }
+
+    fn record_routes(
+        aggregated: &mut BTreeMap<ExpertId, ExpertBatchExpertEvent>,
+        layer: usize,
+        routes: &[ExpertRoute],
+        selected_loads: &BTreeSet<ExpertId>,
+    ) {
+        let mut seen_in_token = BTreeSet::<ExpertId>::new();
+        for route in routes {
+            let expert = ExpertId::new(layer, route.expert);
+            let outcome = if selected_loads.contains(&expert) {
+                ExpertResidencyOutcome::ColdMiss
+            } else {
+                ExpertResidencyOutcome::ResidentHit
+            };
+            let entry = aggregated.entry(expert).or_insert(ExpertBatchExpertEvent {
+                expert,
+                columns: 0,
+                total_route_weight: 0.0,
+                outcome,
+            });
+            if seen_in_token.insert(expert) {
+                entry.columns = entry.columns.saturating_add(1);
+            }
+            entry.total_route_weight += route.weight;
+            if outcome == ExpertResidencyOutcome::ColdMiss {
+                entry.outcome = ExpertResidencyOutcome::ColdMiss;
+            }
         }
     }
 }
@@ -339,20 +397,17 @@ impl ScoreBasedExpertPredictor {
             .sum()
     }
 
-    fn prediction_action(
-        resident: &[usize],
-        materializing: &[usize],
-        host_staged: &[usize],
-        expert: usize,
-    ) -> ExpertCacheAction {
-        if resident.binary_search(&expert).is_ok() {
-            ExpertCacheAction::KeepResident
-        } else if host_staged.binary_search(&expert).is_ok()
-            || materializing.binary_search(&expert).is_ok()
+    fn prediction_action(residency: &[ExpertResidency], expert: usize) -> ExpertCacheAction {
+        match residency
+            .get(expert)
+            .copied()
+            .unwrap_or(ExpertResidency::Cold)
         {
-            ExpertCacheAction::PrefetchToGpu
-        } else {
-            ExpertCacheAction::StageToHost
+            ExpertResidency::GpuReady => ExpertCacheAction::KeepResident,
+            ExpertResidency::HostStaged | ExpertResidency::Materializing => {
+                ExpertCacheAction::PrefetchToGpu
+            }
+            ExpertResidency::Cold => ExpertCacheAction::StageToHost,
         }
     }
 
@@ -385,24 +440,26 @@ impl ScoreBasedExpertPredictor {
             ExpertPredictionReason::Mixed
         }
     }
-}
 
-impl ExpertHotsetPredictor for ScoreBasedExpertPredictor {
-    fn predict(&mut self, ctx: ExpertPredictContext<'_>) -> Vec<ExpertPrediction> {
-        self.stats.predict_calls = self.stats.predict_calls.saturating_add(1);
+    /// Rank expert demand without mutating predictor state or statistics.
+    pub fn forecast(
+        &self,
+        ctx: ExpertPredictContext<'_>,
+        include_resident: bool,
+    ) -> Vec<ExpertPrediction> {
+        self.rank_predictions(ctx, include_resident).0
+    }
+
+    fn rank_predictions(
+        &self,
+        ctx: ExpertPredictContext<'_>,
+        include_resident: bool,
+    ) -> (Vec<ExpertPrediction>, usize) {
         if ctx.budget == 0 || ctx.layer >= self.num_layers || self.num_experts == 0 {
-            return Vec::new();
+            return (Vec::new(), 0);
         }
         let num_experts = ctx.num_experts.min(self.num_experts);
-        let mut resident = ctx.resident.to_vec();
-        resident.sort_unstable();
-        let mut materializing = ctx.materializing.to_vec();
-        materializing.sort_unstable();
-        let mut host_staged = ctx.host_staged.to_vec();
-        host_staged.sort_unstable();
-
         let mut candidates = Vec::new();
-        let mut transition_candidates = BTreeSet::new();
         for expert in 0..num_experts {
             let idx = self.index(ctx.layer, expert).expect("bounded above");
             let session = self.config.session_weight * self.session_scores[idx];
@@ -415,12 +472,9 @@ impl ExpertHotsetPredictor for ScoreBasedExpertPredictor {
             if score <= self.config.min_score || !score.is_finite() {
                 continue;
             }
-            let action = Self::prediction_action(&resident, &materializing, &host_staged, expert);
-            if action == ExpertCacheAction::KeepResident {
+            let action = Self::prediction_action(ctx.residency, expert);
+            if !include_resident && action == ExpertCacheAction::KeepResident {
                 continue;
-            }
-            if transition > 0.0 {
-                transition_candidates.insert(expert);
             }
             candidates.push(ExpertPrediction {
                 expert: ExpertId::new(ctx.layer, expert),
@@ -430,19 +484,35 @@ impl ExpertHotsetPredictor for ScoreBasedExpertPredictor {
                 action,
             });
         }
-        candidates.sort_by(|left, right| {
+        let compare = |left: &ExpertPrediction, right: &ExpertPrediction| {
             right
                 .score
                 .total_cmp(&left.score)
                 .then_with(|| left.expert.expert.cmp(&right.expert.expert))
-        });
-        candidates.truncate(ctx.budget);
-        self.stats.transition_predictions = self.stats.transition_predictions.saturating_add(
-            candidates
-                .iter()
-                .filter(|prediction| transition_candidates.contains(&prediction.expert.expert))
-                .count() as u64,
-        );
+        };
+        if candidates.len() > ctx.budget {
+            candidates.select_nth_unstable_by(ctx.budget, compare);
+            candidates.truncate(ctx.budget);
+        }
+        candidates.sort_by(compare);
+        let transition_predictions = candidates
+            .iter()
+            .filter(|prediction| {
+                self.transition_score_for(ctx.layer, prediction.expert.expert) > 0.0
+            })
+            .count();
+        (candidates, transition_predictions)
+    }
+}
+
+impl ExpertHotsetPredictor for ScoreBasedExpertPredictor {
+    fn predict(&mut self, ctx: ExpertPredictContext<'_>) -> Vec<ExpertPrediction> {
+        self.stats.predict_calls = self.stats.predict_calls.saturating_add(1);
+        let (candidates, transition_predictions) = self.rank_predictions(ctx, false);
+        self.stats.transition_predictions = self
+            .stats
+            .transition_predictions
+            .saturating_add(transition_predictions as u64);
         self.stats.predicted_experts = self
             .stats
             .predicted_experts
@@ -604,13 +674,51 @@ mod tests {
             phase: ExpertAccessPhase::Decode,
             budget: 2,
             num_experts: 8,
-            resident: &[3],
-            materializing: &[],
-            host_staged: &[],
+            residency: &[
+                ExpertResidency::Cold,
+                ExpertResidency::Cold,
+                ExpertResidency::Cold,
+                ExpertResidency::GpuReady,
+            ],
         });
         assert_eq!(predicted.len(), 1);
         assert_eq!(predicted[0].expert, ExpertId::new(0, 4));
         assert_eq!(predicted[0].action, ExpertCacheAction::StageToHost);
+    }
+
+    #[test]
+    fn forecast_is_read_only_and_can_include_resident_demand() {
+        let mut predictor = ScoreBasedExpertPredictor::new(1, 8);
+        predictor.observe_batch(ExpertBatchAccessEvent {
+            layer: 0,
+            phase: ExpertAccessPhase::Decode,
+            token_count: 1,
+            experts: vec![ExpertBatchExpertEvent {
+                expert: ExpertId::new(0, 3),
+                columns: 1,
+                total_route_weight: 2.0,
+                outcome: ExpertResidencyOutcome::ResidentHit,
+            }],
+        });
+        let before = predictor.stats();
+        let forecast = predictor.forecast(
+            ExpertPredictContext {
+                layer: 0,
+                phase: ExpertAccessPhase::Decode,
+                budget: 4,
+                num_experts: 8,
+                residency: &[
+                    ExpertResidency::Cold,
+                    ExpertResidency::Cold,
+                    ExpertResidency::Cold,
+                    ExpertResidency::GpuReady,
+                ],
+            },
+            true,
+        );
+        assert_eq!(forecast[0].expert, ExpertId::new(0, 3));
+        assert_eq!(forecast[0].action, ExpertCacheAction::KeepResident);
+        assert_eq!(predictor.stats(), before);
     }
 
     #[test]
@@ -732,6 +840,51 @@ mod tests {
         assert_eq!(by_expert[&3].columns, 2);
         assert_eq!(by_expert[&3].total_route_weight, 1.75);
         assert_eq!(by_expert[&3].outcome, ExpertResidencyOutcome::ResidentHit);
+    }
+
+    #[test]
+    fn access_event_can_select_noncontiguous_packed_rows() {
+        let routes = [
+            vec![ExpertRoute {
+                expert: 1,
+                weight: 0.25,
+                score: 1.0,
+                selection_score: 1.0,
+            }],
+            vec![ExpertRoute {
+                expert: 2,
+                weight: 0.5,
+                score: 1.0,
+                selection_score: 1.0,
+            }],
+            vec![ExpertRoute {
+                expert: 1,
+                weight: 0.75,
+                score: 1.0,
+                selection_score: 1.0,
+            }],
+        ];
+
+        let events = ExpertBatchAccessEvent::from_packed_routes_by_sequence(
+            3,
+            &[ExpertAccessPhase::Decode, ExpertAccessPhase::Prefill],
+            &[0, 1, 0],
+            &routes,
+            &[],
+        );
+
+        assert_eq!(events.len(), 2);
+        let event = &events[0].1;
+        assert_eq!(events[0].0, 0);
+        assert_eq!(event.phase, ExpertAccessPhase::Decode);
+        assert_eq!(event.token_count, 2);
+        assert_eq!(event.experts.len(), 1);
+        assert_eq!(event.experts[0].expert, ExpertId::new(3, 1));
+        assert_eq!(event.experts[0].columns, 2);
+        assert_eq!(event.experts[0].total_route_weight, 1.0);
+        assert_eq!(events[1].0, 1);
+        assert_eq!(events[1].1.phase, ExpertAccessPhase::Prefill);
+        assert_eq!(events[1].1.token_count, 1);
     }
 
     #[test]

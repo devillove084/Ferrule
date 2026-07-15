@@ -5,15 +5,37 @@
 //! libdevice/NVVM, matching the upstream examples and avoiding arch-specific
 //! inline-PTX JIT issues on newer GPUs.
 
-use cuda_device::{
-    DisjointSlice, SharedArray,
-    atomic::{AtomicOrdering, DeviceAtomicI32},
-    cuda_module, kernel, ptx_asm, thread,
-    wmma::{
-        mma_m16n8k16_f32_bf16, mma_m16n8k32_f32_e4m3_e4m3,
-        mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0,
-    },
-};
+#[cfg(ferrule_cuda_cuda_oxide_bf16_mma)]
+use cuda_device::wmma::mma_m16n8k16_f32_bf16;
+#[cfg(ferrule_cuda_blackwell_mma_sync_fp8)]
+use cuda_device::wmma::mma_m16n8k32_f32_e4m3_e4m3;
+#[cfg(ferrule_cuda_blackwell_mma_sync_mxfp4)]
+use cuda_device::wmma::mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0;
+use cuda_device::{DisjointSlice, SharedArray, cuda_module, kernel, ptx_asm, thread};
+
+// Keep the generated module's host API stable on portable targets. Provider
+// selection never launches these kernels unless the corresponding codegen
+// path is compiled; these helpers remove unavailable intrinsics from device IR.
+#[cfg(not(ferrule_cuda_blackwell_mma_sync_fp8))]
+unsafe fn mma_m16n8k32_f32_e4m3_e4m3(c: [f32; 4], _a: [u32; 4], _b: [u32; 2]) -> [f32; 4] {
+    c
+}
+
+#[cfg(not(ferrule_cuda_cuda_oxide_bf16_mma))]
+unsafe fn mma_m16n8k16_f32_bf16(c: [f32; 4], _a: [u32; 4], _b: [u32; 2]) -> [f32; 4] {
+    c
+}
+
+#[cfg(not(ferrule_cuda_blackwell_mma_sync_mxfp4))]
+unsafe fn mma_m16n8k64_mxf4_f32_e2m1_e2m1_b0_t0_b0_t0(
+    c: [f32; 4],
+    _a: [u32; 4],
+    _b: [u32; 2],
+    _scale_a: u32,
+    _scale_b: u32,
+) -> [f32; 4] {
+    c
+}
 
 const LN_2_F32: f32 = core::f32::consts::LN_2;
 pub(crate) const DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS: usize = 8192;
@@ -222,6 +244,38 @@ fn fast_sqrt(x: f32) -> f32 {
         );
     }
     result
+}
+
+/// Global i32 atomic add expressed as PTX so it remains legal in both the
+/// legacy pre-Blackwell NVVM dialect and the modern Blackwell path.
+fn atomic_fetch_add_i32(ptr: *mut i32, value: i32) -> i32 {
+    let old: u32;
+    unsafe {
+        ptx_asm!(
+            "atom.global.add.u32 %0, [%1], %2;",
+            out("=r") old,
+            in("l") ptr as u64,
+            in("r") value as u32,
+            clobber("memory"),
+        );
+    }
+    old as i32
+}
+
+/// Global i32 atomic OR with the same cross-architecture lowering contract as
+/// [`atomic_fetch_add_i32`].
+fn atomic_fetch_or_i32(ptr: *mut i32, value: i32) -> i32 {
+    let old: u32;
+    unsafe {
+        ptx_asm!(
+            "atom.global.or.b32 %0, [%1], %2;",
+            out("=r") old,
+            in("l") ptr as u64,
+            in("r") value as u32,
+            clobber("memory"),
+        );
+    }
+    old as i32
 }
 
 fn stable_softplus_f32(x: f32) -> f32 {
@@ -4949,15 +5003,13 @@ pub mod kernels {
         }
         if slot < 0 {
             let control = miss_control.as_mut_ptr();
-            let miss_counter = unsafe { DeviceAtomicI32::from_ptr(control) };
-            let miss = miss_counter.fetch_add(1, AtomicOrdering::Relaxed);
+            let miss = atomic_fetch_add_i32(control, 1);
             if miss >= 0 && (miss as u32) < miss_capacity {
                 unsafe {
                     *control.add(2 + miss as usize) = expert;
                 }
             } else {
-                let overflow = unsafe { DeviceAtomicI32::from_ptr(control.add(1)) };
-                overflow.fetch_or(1, AtomicOrdering::Relaxed);
+                atomic_fetch_or_i32(unsafe { control.add(1) }, 1);
             }
         }
     }
@@ -6759,8 +6811,7 @@ pub mod kernels {
             && down != 0
             && down_scale != 0;
         if active && !valid {
-            let error = unsafe { DeviceAtomicI32::from_ptr(dispatch_error.as_mut_ptr()) };
-            error.fetch_or(1, AtomicOrdering::Relaxed);
+            atomic_fetch_or_i32(dispatch_error.as_mut_ptr(), 1);
         }
         unsafe {
             *gate_ptrs.as_mut_ptr().add(rank) = gate;
@@ -6865,9 +6916,7 @@ pub mod kernels {
             && generation > 0
             && slot_generations[slot as usize] == generation
         {
-            let count =
-                unsafe { DeviceAtomicI32::from_ptr(slot_counts.as_mut_ptr().add(slot as usize)) };
-            count.fetch_add(1, AtomicOrdering::Relaxed);
+            atomic_fetch_add_i32(unsafe { slot_counts.as_mut_ptr().add(slot as usize) }, 1);
         }
     }
 
@@ -6952,14 +7001,12 @@ pub mod kernels {
         {
             return;
         }
-        let cursor =
-            unsafe { DeviceAtomicI32::from_ptr(slot_cursors.as_mut_ptr().add(slot as usize)) };
-        let position = cursor.fetch_add(1, AtomicOrdering::Relaxed);
+        let position =
+            atomic_fetch_add_i32(unsafe { slot_cursors.as_mut_ptr().add(slot as usize) }, 1);
         let segment = slot_offsets[slot as usize] + position / 8;
         let column = position % 8;
         if position < 0 || segment < 0 || segment as u32 >= max_segments {
-            let error = unsafe { DeviceAtomicI32::from_ptr(dispatch_error.as_mut_ptr()) };
-            error.fetch_or(1, AtomicOrdering::Relaxed);
+            atomic_fetch_or_i32(dispatch_error.as_mut_ptr(), 1);
             return;
         }
         let metadata = segment as usize * 8 + column as usize;
@@ -8042,8 +8089,7 @@ pub mod kernels {
             }
         }
         if !valid_binding || !valid_tokens {
-            let error = unsafe { DeviceAtomicI32::from_ptr(route_error.as_mut_ptr()) };
-            error.fetch_or(1, AtomicOrdering::Relaxed);
+            atomic_fetch_or_i32(route_error.as_mut_ptr(), 1);
             return;
         }
 
@@ -8304,8 +8350,7 @@ pub mod kernels {
             }
         }
         if !valid_binding || !valid_routes {
-            let error = unsafe { DeviceAtomicI32::from_ptr(route_error.as_mut_ptr()) };
-            error.fetch_or(1, AtomicOrdering::Relaxed);
+            atomic_fetch_or_i32(route_error.as_mut_ptr(), 1);
             return;
         }
 
@@ -8414,10 +8459,7 @@ pub mod kernels {
         if row_base == 0 && tid < 8 {
             let route = segment_route_indices[segment * 8 + tid];
             if route >= 0 {
-                let completed = unsafe {
-                    DeviceAtomicI32::from_ptr(route_written.as_mut_ptr().add(route as usize))
-                };
-                completed.fetch_or(1, AtomicOrdering::Relaxed);
+                atomic_fetch_or_i32(unsafe { route_written.as_mut_ptr().add(route as usize) }, 1);
             }
         }
     }

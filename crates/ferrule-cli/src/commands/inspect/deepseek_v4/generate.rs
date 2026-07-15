@@ -9,7 +9,7 @@ use ferrule_model::{
 };
 use ferrule_runtime::{
     GenerateRequest, RequestId, ResidentActionKind, ResidentDriverStep, ResidentSchedulerConfig,
-    ResidentTopKDriverConfig, SamplingConfig, SessionId,
+    ResidentTopKDriverConfig, SessionId,
 };
 
 use crate::commands::resident::build_resident_topk_driver;
@@ -115,7 +115,6 @@ pub fn cmd_deepseek_v4_generate(
             id: RequestId(0),
             session_id: Some(SessionId(u64::MAX)),
             prompt_tokens: prompt_tokens.clone(),
-            sampling: SamplingConfig::greedy(),
             max_new_tokens: warmup_tokens,
             stop: Vec::new(),
             ignore_eos: !stop_at_eos,
@@ -148,7 +147,6 @@ pub fn cmd_deepseek_v4_generate(
             id: RequestId(1),
             session_id: Some(SessionId(1)),
             prompt_tokens: prompt_tokens.clone(),
-            sampling: SamplingConfig::greedy(),
             max_new_tokens,
             stop: Vec::new(),
             ignore_eos: !stop_at_eos,
@@ -378,8 +376,7 @@ pub fn cmd_deepseek_v4_generate(
             op_counters.expert_host_cache.bytes_used,
         );
         counters.set_expert_residency(resident_experts, resident_bytes);
-        let summary =
-            RuntimeBenchSummary::new(None, None, counters, prompt_tokens.len(), generated.len());
+        let summary = RuntimeBenchSummary::new(counters, prompt_tokens.len(), generated.len());
         let out = serde_json::json!({
             "model": model_dir,
             "backend": runner.operator_backend().as_str(),

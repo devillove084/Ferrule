@@ -627,8 +627,11 @@ fn execution_error(message: impl Into<String>) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::KvPageManager;
+    use crate::speculation::{TargetFrontier, run_dspark_verification};
     use ferrule_common::execution::{
-        ExecutionBatch, ExecutionCapabilities, ExecutionSequence, ForwardMode, LogitsRequest,
+        ExecutionBatch, ExecutionCapabilities, ExecutionSequence, ForwardMode, KvLayoutSchema,
+        KvPlaneDescriptor, LogitsRequest,
     };
     use ferrule_common::{ExpertResidencyControl, ExpertResidencyRequirements};
     use ferrule_model::{
@@ -643,6 +646,8 @@ mod tests {
         sequences_created: usize,
         sequences_forked: usize,
         transactional: bool,
+        paged: bool,
+        packed_predictions: Vec<u32>,
         prepares: usize,
         commits: usize,
         rollbacks: usize,
@@ -785,6 +790,41 @@ mod tests {
             Ok(self.transactional)
         }
 
+        fn execute_multi_session_batch(
+            &mut self,
+            states: &mut [Self::SequenceState],
+            batch: &ExecutionBatch,
+        ) -> Result<Option<ExecutionOutput>> {
+            if self.packed_predictions.is_empty() {
+                return Ok(None);
+            }
+            if self.packed_predictions.len() < batch.len() {
+                return Err(Error::Execution(
+                    "mock packed predictions are incomplete".into(),
+                ));
+            }
+            let state = &mut states[0];
+            state.position += batch.len();
+            state.fed_tokens.extend_from_slice(batch.token_ids());
+            let logits = batch
+                .logits()
+                .iter()
+                .enumerate()
+                .filter_map(|(row, request)| {
+                    matches!(request, LogitsRequest::TopK(_)).then(|| {
+                        LogitsRow::new(
+                            row as u32,
+                            LogitsOutput::TopK(vec![ExecutionTokenLogit::new(
+                                self.packed_predictions[row],
+                                1.0,
+                            )]),
+                        )
+                    })
+                })
+                .collect();
+            Ok(Some(ExecutionOutput::new(logits)))
+        }
+
         fn commit_multi_session_batch(&mut self) -> Result<()> {
             self.commits += 1;
             Ok(())
@@ -860,8 +900,16 @@ mod tests {
                 supports_decode: true,
                 supports_mixed: true,
                 full_logits_width: None,
-                kv_binding_mode: ferrule_common::execution::KvBindingMode::None,
-                logits_row_policy: ferrule_common::execution::LogitsRowPolicy::LastPerSequence,
+                kv_binding_mode: if self.paged {
+                    ferrule_common::execution::KvBindingMode::Paged
+                } else {
+                    ferrule_common::execution::KvBindingMode::None
+                },
+                logits_row_policy: if self.paged {
+                    ferrule_common::execution::LogitsRowPolicy::Any
+                } else {
+                    ferrule_common::execution::LogitsRowPolicy::LastPerSequence
+                },
             }
         }
     }
@@ -877,6 +925,44 @@ mod tests {
 
     fn nz(n: u32) -> NonZeroU32 {
         NonZeroU32::new(n).unwrap()
+    }
+
+    #[derive(Debug)]
+    struct TestPagedSchema;
+
+    static TEST_KV_PLANE: KvPlaneDescriptor = KvPlaneDescriptor {
+        name: "mock",
+        elements_per_token: 1,
+        layer_count: 1,
+    };
+
+    impl KvLayoutSchema for TestPagedSchema {
+        fn planes(&self) -> &[KvPlaneDescriptor] {
+            std::slice::from_ref(&TEST_KV_PLANE)
+        }
+
+        fn page_size(&self) -> usize {
+            4
+        }
+
+        fn max_sequence_len(&self) -> usize {
+            1024
+        }
+    }
+
+    fn dspark_executor(predictions: &[u32]) -> NativeMultiSessionExecutor<MockMultiSessionRunner> {
+        NativeMultiSessionExecutor::new(MockMultiSessionRunner {
+            transactional: true,
+            paged: true,
+            packed_predictions: predictions.to_vec(),
+            ..MockMultiSessionRunner::default()
+        })
+    }
+
+    fn dspark_page_manager() -> KvPageManager {
+        let mut manager = KvPageManager::new(Box::new(TestPagedSchema), 16);
+        manager.alloc_sequence(StateSlot::new(0), 0).unwrap();
+        manager
     }
 
     fn make_decode_batch(num_sequences: usize) -> (Vec<MockSequenceState>, ExecutionBatch) {
@@ -918,6 +1004,124 @@ mod tests {
         );
 
         (states, batch)
+    }
+
+    #[test]
+    fn exact_dspark_full_accept_promotes_verification_branch() {
+        let mut executor = dspark_executor(&[11, 12, 42]);
+        let mut pages = dspark_page_manager();
+        let mut source = MockSequenceState {
+            position: 0,
+            fed_tokens: Vec::new(),
+        };
+        let result = run_dspark_verification(
+            &mut executor,
+            &mut pages,
+            &mut source,
+            StateSlot::new(0),
+            0,
+            &[10, 11, 12],
+            nz(1),
+            TargetFrontier {
+                position: 0,
+                top1: ExecutionTokenLogit::new(10, 1.0),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.accepted, vec![10, 11, 12]);
+        assert_eq!(result.target_next.unwrap().token_id, 42);
+        assert_eq!(source.position, 3);
+        assert_eq!(source.fed_tokens, vec![10, 11, 12]);
+        assert_eq!(
+            pages
+                .block_table(StateSlot::new(0))
+                .unwrap()
+                .committed_tokens(),
+            3
+        );
+        assert_eq!(executor.runner().prepares, 1);
+        assert_eq!(executor.runner().commits, 1);
+        assert_eq!(executor.runner().rollbacks, 0);
+    }
+
+    #[test]
+    fn exact_dspark_partial_accept_replays_only_committed_prefix() {
+        let mut executor = dspark_executor(&[11, 99, 42]);
+        let mut pages = dspark_page_manager();
+        let mut source = MockSequenceState {
+            position: 0,
+            fed_tokens: Vec::new(),
+        };
+        let result = run_dspark_verification(
+            &mut executor,
+            &mut pages,
+            &mut source,
+            StateSlot::new(0),
+            0,
+            &[10, 11, 12],
+            nz(1),
+            TargetFrontier {
+                position: 0,
+                top1: ExecutionTokenLogit::new(10, 1.0),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.accepted, vec![10, 11]);
+        assert_eq!(result.rejected, Some(12));
+        assert_eq!(result.target_correction, Some(99));
+        assert_eq!(source.position, 2);
+        assert_eq!(source.fed_tokens, vec![10, 11]);
+        assert_eq!(
+            pages
+                .block_table(StateSlot::new(0))
+                .unwrap()
+                .committed_tokens(),
+            2
+        );
+        assert_eq!(executor.runner().prepares, 2);
+        assert_eq!(executor.runner().commits, 1);
+        assert_eq!(executor.runner().rollbacks, 1);
+    }
+
+    #[test]
+    fn exact_dspark_zero_accept_preserves_source_and_rolls_back_pages() {
+        let mut executor = dspark_executor(&[11, 12, 42]);
+        let mut pages = dspark_page_manager();
+        let mut source = MockSequenceState {
+            position: 0,
+            fed_tokens: Vec::new(),
+        };
+        let result = run_dspark_verification(
+            &mut executor,
+            &mut pages,
+            &mut source,
+            StateSlot::new(0),
+            0,
+            &[10, 11, 12],
+            nz(1),
+            TargetFrontier {
+                position: 0,
+                top1: ExecutionTokenLogit::new(99, 1.0),
+            },
+        )
+        .unwrap();
+
+        assert!(result.accepted.is_empty());
+        assert_eq!(result.target_correction, Some(99));
+        assert_eq!(source.position, 0);
+        assert!(source.fed_tokens.is_empty());
+        assert_eq!(
+            pages
+                .block_table(StateSlot::new(0))
+                .unwrap()
+                .committed_tokens(),
+            0
+        );
+        assert_eq!(executor.runner().prepares, 1);
+        assert_eq!(executor.runner().commits, 0);
+        assert_eq!(executor.runner().rollbacks, 1);
     }
 
     #[test]

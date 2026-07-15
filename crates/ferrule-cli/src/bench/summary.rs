@@ -1,153 +1,14 @@
-//! Runtime/graph execution summaries and benchmark counters.
-//!
-//! These structs are deliberately backend- and model-family-neutral. A graph
-//! backend, legacy runner, or CLI command can fill whichever counters it knows,
-//! while JSON output remains stable for local benchmarking and regression
-//! tracking.
+//! Runtime execution summaries and benchmark counters.
 
-use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use ferrule_runtime::backend_object_store::{BackendObject, BackendObjectStore};
-use ferrule_runtime::graph::external_bindings::{ExternalBindingKind, ExternalResidency};
-use ferrule_runtime::graph::program::GraphProgram;
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GraphProgramSummary {
-    pub name: String,
-    pub layers: usize,
-    pub nodes: usize,
-    pub values: usize,
-    pub inputs: usize,
-    pub outputs: usize,
-    pub externals: usize,
-    pub artifact_tensor_bindings: usize,
-    pub artifact_group_bindings: usize,
-    pub expert_registry_bindings: usize,
-    pub kv_state_bindings: usize,
-    pub device_resident_bindings: usize,
-    pub streamable_bindings: usize,
-    pub backend_managed_bindings: usize,
-    pub ops: BTreeMap<String, usize>,
-    pub artifact_groups: BTreeMap<String, usize>,
-}
-
-impl GraphProgramSummary {
-    #[allow(dead_code)]
-    pub fn from_program(program: &GraphProgram) -> Self {
-        let mut summary = Self {
-            name: program.graph.name().unwrap_or("<unnamed>").to_string(),
-            layers: program.semantic_plan.layer_count(),
-            nodes: program.graph.nodes().len(),
-            values: program.graph.values().len(),
-            inputs: program.graph.inputs().len(),
-            outputs: program.graph.outputs().len(),
-            externals: program.bindings.len(),
-            ..Self::default()
-        };
-
-        for node in program.graph.nodes() {
-            *summary
-                .ops
-                .entry(format!("{}::{}", node.op().domain(), node.op().name()))
-                .or_default() += 1;
-        }
-
-        for binding in program.bindings.entries() {
-            match binding.kind {
-                ExternalBindingKind::Weight | ExternalBindingKind::ArtifactTensor => {
-                    summary.artifact_tensor_bindings += 1;
-                }
-                ExternalBindingKind::ArtifactGroup(group) => {
-                    summary.artifact_group_bindings += 1;
-                    *summary
-                        .artifact_groups
-                        .entry(group.as_str().to_string())
-                        .or_default() += 1;
-                }
-                ExternalBindingKind::ExpertRegistry => summary.expert_registry_bindings += 1,
-                ExternalBindingKind::KvState => summary.kv_state_bindings += 1,
-                ExternalBindingKind::ResidentExpert
-                | ExternalBindingKind::Adapter
-                | ExternalBindingKind::Speculation
-                | ExternalBindingKind::Other(_) => {}
-            }
-            match binding.residency {
-                ExternalResidency::Device => summary.device_resident_bindings += 1,
-                ExternalResidency::Streamable => summary.streamable_bindings += 1,
-                ExternalResidency::BackendManaged => summary.backend_managed_bindings += 1,
-                ExternalResidency::Host | ExternalResidency::Paged => {}
-            }
-        }
-
-        summary
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BackendObjectSummary {
-    pub objects: usize,
-    pub artifact_tensors: usize,
-    pub artifact_groups: usize,
-    pub artifact_group_tensors: usize,
-    pub expert_registries: usize,
-    pub registered_experts: usize,
-    pub kv_states: usize,
-    pub opaque_objects: usize,
-    pub artifact_bytes: u64,
-    pub expert_load_source_bytes: u64,
-}
-
-impl BackendObjectSummary {
-    #[allow(dead_code)]
-    pub fn from_store(store: &BackendObjectStore) -> Self {
-        let mut summary = Self {
-            objects: store.len(),
-            ..Self::default()
-        };
-        for object in store.objects().values() {
-            match object {
-                BackendObject::ArtifactTensor(slice) => {
-                    summary.artifact_tensors += 1;
-                    summary.artifact_bytes = summary.artifact_bytes.saturating_add(slice.bytes);
-                }
-                BackendObject::ArtifactGroup(group) => {
-                    summary.artifact_groups += 1;
-                    summary.artifact_group_tensors += group.tensors.len();
-                    summary.artifact_bytes = summary
-                        .artifact_bytes
-                        .saturating_add(group.tensors.iter().map(|tensor| tensor.bytes).sum());
-                }
-                BackendObject::ExpertRegistry(registry) => {
-                    summary.expert_registries += 1;
-                    summary.registered_experts += registry.experts.len();
-                    summary.expert_load_source_bytes =
-                        summary.expert_load_source_bytes.saturating_add(
-                            registry
-                                .experts
-                                .values()
-                                .map(|source| source.bytes())
-                                .sum::<u64>(),
-                        );
-                }
-                BackendObject::KvState(_) => summary.kv_states += 1,
-                BackendObject::Opaque { .. } => summary.opaque_objects += 1,
-            }
-        }
-        summary
-    }
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeTimingCounters {
     pub load_us: u64,
-    pub artifact_materialize_us: u64,
-    pub layer_bind_us: u64,
     pub prefill_us: u64,
     pub decode_us: u64,
-    pub graph_execute_us: u64,
     /// MoE calls observed in the CUDA operator path.
     pub moe_calls: u64,
     pub moe_tc_calls: u64,
@@ -214,38 +75,12 @@ impl RuntimeCounters {
         self.timing.load_us = self.timing.load_us.saturating_add(duration_us(elapsed));
     }
 
-    pub fn record_artifact_materialize(&mut self, elapsed: Duration, bytes: u64) {
-        self.timing.artifact_materialize_us = self
-            .timing
-            .artifact_materialize_us
-            .saturating_add(duration_us(elapsed));
-        self.transfers.host_to_device_bytes =
-            self.transfers.host_to_device_bytes.saturating_add(bytes);
-        self.transfers.artifact_uploads = self.transfers.artifact_uploads.saturating_add(1);
-        self.transfers.artifact_upload_bytes =
-            self.transfers.artifact_upload_bytes.saturating_add(bytes);
-    }
-
-    pub fn record_layer_bind(&mut self, elapsed: Duration) {
-        self.timing.layer_bind_us = self
-            .timing
-            .layer_bind_us
-            .saturating_add(duration_us(elapsed));
-    }
-
     pub fn record_prefill(&mut self, elapsed: Duration) {
         self.timing.prefill_us = self.timing.prefill_us.saturating_add(duration_us(elapsed));
     }
 
     pub fn record_decode(&mut self, elapsed: Duration) {
         self.timing.decode_us = self.timing.decode_us.saturating_add(duration_us(elapsed));
-    }
-
-    pub fn record_graph_execute(&mut self, elapsed: Duration) {
-        self.timing.graph_execute_us = self
-            .timing
-            .graph_execute_us
-            .saturating_add(duration_us(elapsed));
     }
 
     pub fn record_kernel_launches(&mut self, launches: u64) {
@@ -308,8 +143,6 @@ impl RuntimeCounters {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeBenchSummary {
-    pub graph: Option<GraphProgramSummary>,
-    pub objects: Option<BackendObjectSummary>,
     pub counters: RuntimeCounters,
     pub prompt_tokens: usize,
     pub generated_tokens: usize,
@@ -322,19 +155,11 @@ pub struct RuntimeBenchSummary {
 }
 
 impl RuntimeBenchSummary {
-    pub fn new(
-        graph: Option<GraphProgramSummary>,
-        objects: Option<BackendObjectSummary>,
-        counters: RuntimeCounters,
-        prompt_tokens: usize,
-        generated_tokens: usize,
-    ) -> Self {
+    pub fn new(counters: RuntimeCounters, prompt_tokens: usize, generated_tokens: usize) -> Self {
         let total_tokens = prompt_tokens.saturating_add(generated_tokens).max(1) as f64;
         let prefill_tok_per_s = rate(prompt_tokens, counters.timing.prefill_us);
         let decode_tok_per_s = rate(generated_tokens, counters.timing.decode_us);
         Self {
-            graph,
-            objects,
             kernel_launches_per_token: counters.kernels.launches as f64 / total_tokens,
             host_to_device_bytes_per_token: counters.transfers.host_to_device_bytes as f64
                 / total_tokens,
@@ -376,7 +201,7 @@ mod tests {
         counters.record_device_to_host(60);
         counters.record_expert_loads(3, 1024);
 
-        let summary = RuntimeBenchSummary::new(None, None, counters, 4, 6);
+        let summary = RuntimeBenchSummary::new(counters, 4, 6);
         assert_eq!(summary.prefill_tok_per_s, 2.0);
         assert_eq!(summary.decode_tok_per_s, 12.0);
         assert_eq!(summary.kernel_launches_per_token, 3.0);

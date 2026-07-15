@@ -3,7 +3,7 @@
 //! These actions carry resident sequence work into runtime-private execution
 //! lowering without owning queueing, admission, or KV lifecycle policy.
 
-use crate::cache::KvHandle;
+use super::KvHandle;
 use ferrule_common::{Error, Result};
 
 use super::session::{RequestId, SequenceFinishReason, SequenceState, SessionId};

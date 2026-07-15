@@ -34,6 +34,7 @@ use super::artifact::DeepSeekV4ArtifactModel;
 use super::config::deepseek_v4_linear_activation_quantization;
 #[cfg(feature = "cuda")]
 use super::cuda_cache::DeepSeekV4DecodeBuffers;
+use super::expert_io::{DeepSeekV4ExpertIoLayerSnapshot, DeepSeekV4ExpertIoSnapshot};
 #[cfg(feature = "cuda")]
 use super::layer::DeepSeekV4LayerArenaVariants;
 use super::layer::{DeepSeekV4LayerExpertRuntime, DeepSeekV4LayerState};
@@ -139,6 +140,15 @@ enum CudaDecodeOutput {
     Feed,
     Hidden(Vec<f32>),
     TopK(Vec<TokenLogit>),
+}
+
+fn cold_expert_residency(
+    expert_counts: &[usize],
+) -> Vec<Box<[crate::moe::prediction::ExpertResidency]>> {
+    expert_counts
+        .iter()
+        .map(|&count| vec![crate::moe::prediction::ExpertResidency::Cold; count].into_boxed_slice())
+        .collect()
 }
 
 fn build_cpu_expert_runtimes(
@@ -356,11 +366,7 @@ impl DeepSeekV4Runner {
                 model.config.hidden_size,
                 model.config.moe_intermediate_size,
             )?;
-            operators.compile_cuda_execution_image(
-                plan.generation(),
-                model,
-                plan.resources().layers(),
-            )?;
+            operators.compile_cuda_execution_image(plan.generation(), plan.resources())?;
         }
         let mut layer_states = Vec::with_capacity(options.max_layers);
         for layer_idx in 0..options.max_layers {
@@ -443,6 +449,42 @@ impl DeepSeekV4Runner {
 
     pub fn prepare_options(&self) -> &DeepSeekV4PrepareOptions {
         self.plan.resources().prepare_options()
+    }
+
+    pub fn expert_io_snapshot(&self) -> DeepSeekV4ExpertIoSnapshot {
+        let prepared_layers = self.plan.resources().layer_experts();
+        let expert_counts = prepared_layers
+            .iter()
+            .map(|layer| layer.source_bytes().len())
+            .collect::<Vec<_>>();
+        #[cfg(feature = "cuda")]
+        let mut residency = self
+            .operators
+            .cuda
+            .as_ref()
+            .map(|cache| cache.expert_io_residency_snapshot(&expert_counts))
+            .unwrap_or_else(|| cold_expert_residency(&expert_counts));
+        #[cfg(not(feature = "cuda"))]
+        let mut residency = cold_expert_residency(&expert_counts);
+        let layers = prepared_layers
+            .iter()
+            .zip(residency.drain(..))
+            .map(|(prepared, residency)| {
+                DeepSeekV4ExpertIoLayerSnapshot::with_source_order(
+                    std::sync::Arc::clone(prepared.source_bytes()),
+                    std::sync::Arc::clone(prepared.source_order()),
+                    residency,
+                )
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        DeepSeekV4ExpertIoSnapshot::new(
+            layers,
+            self.model()
+                .config
+                .num_experts_per_tok
+                .min(self.model().config.num_routed_experts),
+        )
     }
 
     pub fn execution_policy(&self) -> &DeepSeekV4ExecutionPolicy {
@@ -590,6 +632,7 @@ impl DeepSeekV4Runner {
             )));
         }
         state.begin_step()?;
+        self.discard_pending_moe_access_events();
         std::mem::swap(&mut self.sequence, state);
         #[cfg(feature = "cuda")]
         if self.operators.backend() == ModelExecutionBackend::Cuda {
@@ -603,6 +646,10 @@ impl DeepSeekV4Runner {
             }
         }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| execute(self)));
+        match &result {
+            Ok(Ok(_)) => self.observe_pending_moe_access_events(),
+            Ok(Err(_)) | Err(_) => self.discard_pending_moe_access_events(),
+        }
         #[cfg(feature = "cuda")]
         if self.operators.backend() == ModelExecutionBackend::Cuda {
             if let Ok(cuda) = self.operators.cuda_mut() {
@@ -663,17 +710,21 @@ impl DeepSeekV4Runner {
         if self.shutdown {
             return Err(Error::Model("DeepSeek-V4 runner is shut down".into()));
         }
+        self.discard_pending_moe_access_events();
         let binding = self.sequence.begin_step()?;
         match step(self) {
             Ok(output) => {
                 if let Err(error) = self.sequence.commit_step(binding, rows) {
                     self.sequence.poison_step(binding);
+                    self.discard_pending_moe_access_events();
                     return Err(error);
                 }
+                self.observe_pending_moe_access_events();
                 Ok(output)
             }
             Err(error) => {
                 self.sequence.poison_step(binding);
+                self.discard_pending_moe_access_events();
                 Err(error)
             }
         }
@@ -723,6 +774,10 @@ impl DeepSeekV4Runner {
         for event in self.operators.drain_moe_access_events() {
             self.sequence.predictor.observe_batch(event);
         }
+    }
+
+    fn discard_pending_moe_access_events(&mut self) {
+        self.operators.drain_moe_access_events();
     }
 
     fn lookahead_prefetch_enabled(&self) -> bool {
@@ -1128,10 +1183,10 @@ impl DeepSeekV4Runner {
                     .expect("validated above")
             })
             .collect::<Vec<_>>();
-        let sequence_prefill = metadata
+        let sequence_phases = metadata
             .sequences
             .iter()
-            .map(|sequence| sequence.phase == ForwardPhase::Prefill)
+            .map(|sequence| sequence.phase)
             .collect::<Vec<_>>();
         let positions = batch
             .positions()
@@ -1153,12 +1208,7 @@ impl DeepSeekV4Runner {
 
         self.operators.check_cuda_arena_acquire()?;
 
-        let arena_key = ExecutionShapeKey::new(
-            metadata.mode,
-            rows,
-            metadata.sequences.len(),
-            metadata.max_query_tokens,
-        );
+        let arena_key = ExecutionShapeKey::from_batch(batch)?;
         let mut arena_lease = {
             let layers = self.plan.resources().layers();
             let operators = &mut self.operators;
@@ -1177,6 +1227,7 @@ impl DeepSeekV4Runner {
             Error::Execution("runtime expert residency controller is not installed".into())
         })?;
         let layer_experts = self.plan.resources().layer_experts();
+        let mut moe_access_events = Vec::with_capacity(max_layers * metadata.sequences.len());
         let execution = (|| -> Result<Vec<Vec<TokenLogit>>> {
             self.operators
                 .cuda_mut()?
@@ -1217,23 +1268,25 @@ impl DeepSeekV4Runner {
                             })
                     })
                     .collect::<Result<Vec<_>>>()?;
-                self.plan.resources().layers()[layer_idx].packed_rows_device_hc_device(
-                    &mut layer_states,
-                    &metadata.row_to_sequence,
-                    &metadata.sequence_major_rows,
-                    &sequence_prefill,
-                    &paged_bindings,
-                    residency,
-                    layer_experts[layer_idx].source_catalog().as_ref(),
-                    layer_experts[layer_idx].prefetch_capacity(),
-                    arena,
-                    &mut decode_buffers.hc_input,
-                    batch.token_ids(),
-                    &positions,
-                    &[],
-                    &self.expert_reader,
-                    &mut self.operators,
-                )?;
+                let layer_events = self.plan.resources().layers()[layer_idx]
+                    .packed_rows_device_hc_device(
+                        &mut layer_states,
+                        &metadata.row_to_sequence,
+                        &metadata.sequence_major_rows,
+                        &sequence_phases,
+                        &paged_bindings,
+                        residency,
+                        layer_experts[layer_idx].source_catalog().as_ref(),
+                        layer_experts[layer_idx].prefetch_capacity(),
+                        arena,
+                        &mut decode_buffers.hc_input,
+                        batch.token_ids(),
+                        &positions,
+                        &[],
+                        &self.expert_reader,
+                        &mut self.operators,
+                    )?;
+                moe_access_events.extend(layer_events);
             }
             if max_top_k == 0 {
                 return Ok(vec![Vec::new(); rows]);
@@ -1310,7 +1363,22 @@ impl DeepSeekV4Runner {
             poison_packed_sequence_steps(states, metadata, &bindings);
             return Err(error);
         }
+        if moe_access_events
+            .iter()
+            .any(|event| event.sequence_index >= metadata.sequences.len())
+        {
+            poison_packed_sequence_steps(states, metadata, &bindings);
+            return Err(Error::Internal(
+                "DeepSeek-V4 packed MoE event references an unknown sequence".into(),
+            ));
+        }
         commit_packed_sequence_steps(states, metadata, bindings)?;
+        for attributed in moe_access_events {
+            let state_index = metadata.sequences[attributed.sequence_index].state_index;
+            states[state_index]
+                .predictor
+                .observe_batch(attributed.event);
+        }
         match metadata.mode {
             ForwardMode::Prefill => {
                 self.output_profile.packed_prefill_batches =
@@ -2283,25 +2351,28 @@ fn predict_experts_for_layer(
     let phase = input.phase();
 
     #[cfg(feature = "cuda")]
-    let (resident, materializing, host_staged) = operators
+    let residency = operators
         .cuda
         .as_ref()
         .map(|cache| {
-            (
-                cache.resident_experts_for_layer(layer),
-                cache.materializing_experts_for_layer(layer),
-                cache.host_staged_experts_for_layer(layer),
-            )
+            cache.expert_residency_for_layer(layer, resources.model().config.num_routed_experts)
         })
-        .unwrap_or_else(|| (Vec::new(), Vec::new(), Vec::new()));
+        .unwrap_or_default();
     #[cfg(not(feature = "cuda"))]
-    let (resident, materializing, host_staged) = (Vec::new(), Vec::new(), Vec::new());
+    let residency = Vec::new();
 
     let mut predicted = Vec::with_capacity(count);
-    let mut excluded = resident
+    let mut excluded = residency
         .iter()
-        .chain(materializing.iter())
-        .copied()
+        .enumerate()
+        .filter_map(|(expert, state)| {
+            matches!(
+                state,
+                crate::moe::prediction::ExpertResidency::GpuReady
+                    | crate::moe::prediction::ExpertResidency::Materializing
+            )
+            .then_some(expert)
+        })
         .collect::<BTreeSet<_>>();
 
     if operators.backend() == ModelExecutionBackend::Cuda
@@ -2351,9 +2422,7 @@ fn predict_experts_for_layer(
             phase,
             budget: count,
             num_experts: resources.model().config.num_routed_experts,
-            resident: &resident,
-            materializing: &materializing,
-            host_staged: &host_staged,
+            residency: &residency,
         }) {
             if predicted.len() >= count {
                 break;
@@ -2788,6 +2857,7 @@ impl MultiSessionRunner for DeepSeekV4Runner {
     ) -> Result<Option<ferrule_common::execution::ExecutionOutput>> {
         #[cfg(not(feature = "cuda"))]
         let _ = (states, batch);
+
         #[cfg(feature = "cuda")]
         if self.operators.backend() == ModelExecutionBackend::Cuda
             && self

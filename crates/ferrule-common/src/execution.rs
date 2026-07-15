@@ -96,6 +96,29 @@ pub enum ForwardMode {
     Mixed,
 }
 
+/// State-publication semantics for one execution call.
+///
+/// Ordinary prefill/decode publishes all successful rows. Speculative target
+/// verification executes against a branch and publishes only an accepted prefix
+/// through an explicit transaction; it must never be inferred from row count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ExecutionIntent {
+    Committed,
+    ProvisionalVerification,
+}
+
+/// Request and row dimensions used for executable-plan/resource selection.
+/// `sequence_count` and `total_rows` are intentionally separate: decode with
+/// four requests is not the same workload as one request verifying four rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ExecutionShape {
+    pub intent: ExecutionIntent,
+    pub sequence_count: usize,
+    pub total_rows: usize,
+    pub max_query_tokens: usize,
+    pub decode_rows: usize,
+}
+
 /// Logits requested for one packed input row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LogitsRequest {
@@ -143,6 +166,7 @@ impl ExecutionSequence {
 /// execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionBatch {
+    intent: ExecutionIntent,
     mode: ForwardMode,
     token_ids: Vec<u32>,
     positions: Vec<u32>,
@@ -164,6 +188,7 @@ impl ExecutionBatch {
         kv_block_ids: Vec<KvBlockId>,
     ) -> Self {
         Self {
+            intent: ExecutionIntent::Committed,
             mode,
             token_ids,
             positions,
@@ -174,8 +199,48 @@ impl ExecutionBatch {
         }
     }
 
+    /// Changes publication semantics without changing the packed payload.
+    /// Callers constructing speculative verification work must opt in explicitly.
+    pub fn with_intent(mut self, intent: ExecutionIntent) -> Self {
+        self.intent = intent;
+        self
+    }
+
+    pub const fn intent(&self) -> ExecutionIntent {
+        self.intent
+    }
+
     pub const fn mode(&self) -> ForwardMode {
         self.mode
+    }
+
+    pub fn shape(&self) -> Result<ExecutionShape> {
+        let mut max_query_tokens = 0usize;
+        let mut decode_rows = 0usize;
+        for sequence in &self.sequences {
+            let query_tokens = sequence
+                .query
+                .end
+                .checked_sub(sequence.query.start)
+                .ok_or_else(|| {
+                    execution_error("cannot derive shape from a reversed query range")
+                })?;
+            let query_tokens = usize::try_from(query_tokens)
+                .map_err(|_| execution_error("query length cannot be represented as usize"))?;
+            max_query_tokens = max_query_tokens.max(query_tokens);
+            if sequence.phase == ForwardPhase::Decode {
+                decode_rows = decode_rows.checked_add(query_tokens).ok_or_else(|| {
+                    execution_error("decode row count overflow while deriving execution shape")
+                })?;
+            }
+        }
+        Ok(ExecutionShape {
+            intent: self.intent,
+            sequence_count: self.sequences.len(),
+            total_rows: self.len(),
+            max_query_tokens,
+            decode_rows,
+        })
     }
 
     pub fn token_ids(&self) -> &[u32] {
@@ -382,6 +447,14 @@ impl ExecutionBatch {
             return Err(execution_error(format!(
                 "sequence queries cover {expected_query_start} packed rows, expected {row_count_u32}"
             )));
+        }
+
+        if self.intent == ExecutionIntent::ProvisionalVerification
+            && (self.mode != ForwardMode::Prefill || self.sequences.len() != 1)
+        {
+            return Err(execution_error(
+                "provisional verification currently requires exactly one prefill-phase sequence",
+            ));
         }
 
         match self.mode {
@@ -1137,7 +1210,44 @@ mod tests {
 
     #[test]
     fn validates_multi_sequence_decode() {
-        decode_batch().validate(2, &capabilities()).unwrap();
+        let batch = decode_batch();
+        batch.validate(2, &capabilities()).unwrap();
+        assert_eq!(batch.intent(), ExecutionIntent::Committed);
+        assert_eq!(
+            batch.shape().unwrap(),
+            ExecutionShape {
+                intent: ExecutionIntent::Committed,
+                sequence_count: 2,
+                total_rows: 2,
+                max_query_tokens: 1,
+                decode_rows: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn provisional_verification_is_explicit_and_shape_distinct_from_decode() {
+        let batch = ExecutionBatch::new(
+            ForwardMode::Prefill,
+            vec![10, 11, 12, 13],
+            vec![8, 9, 10, 11],
+            vec![None; 4],
+            vec![LogitsRequest::TopK(nz(1)); 4],
+            vec![sequence(0, ForwardPhase::Prefill, 0..4, 8, 12)],
+            vec![],
+        )
+        .with_intent(ExecutionIntent::ProvisionalVerification);
+        batch.validate(1, &capabilities()).unwrap();
+        assert_eq!(
+            batch.shape().unwrap(),
+            ExecutionShape {
+                intent: ExecutionIntent::ProvisionalVerification,
+                sequence_count: 1,
+                total_rows: 4,
+                max_query_tokens: 4,
+                decode_rows: 0,
+            }
+        );
     }
 
     #[test]

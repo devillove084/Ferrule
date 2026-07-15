@@ -4,8 +4,8 @@ mod args;
 mod bench;
 mod commands;
 
-pub(crate) use args::SamplingArgs;
 use args::{Cli, Command};
+pub(crate) use args::{GenerationConfig, SamplingArgs};
 use commands::bench_interactive::cmd_bench_interactive;
 use commands::chat::cmd_chat;
 use commands::cuda::cmd_cuda;

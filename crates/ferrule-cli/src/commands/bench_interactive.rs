@@ -19,6 +19,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "cuda")]
+use crate::GenerationConfig;
+#[cfg(feature = "cuda")]
 use crate::bench::{GoldenTurn, InteractiveTrace, compare_interactive_trace};
 #[cfg(feature = "cuda")]
 use ferrule_common::{
@@ -37,9 +39,9 @@ use ferrule_model::{
 };
 #[cfg(feature = "cuda")]
 use ferrule_runtime::{
-    GenerateRequest, GenerationConfig, PageManagedDiagnosticHarness, RequestId, ResidentActionKind,
+    GenerateRequest, PageManagedDiagnosticHarness, RequestId, ResidentActionKind,
     ResidentDriverStep, ResidentSchedulerConfig, ResidentTopKDriverConfig, ResidentTopKDriverStats,
-    SamplingConfig, SessionId,
+    SessionId,
 };
 
 #[cfg(feature = "cuda")]
@@ -188,7 +190,6 @@ pub fn cmd_bench_interactive(
     let gen_cfg = GenerationConfig {
         max_new_tokens,
         stop: Vec::new(),
-        logprobs_k: 0,
         ctx_size: 4096,
         append_eos_to_session: true,
         ..GenerationConfig::default()
@@ -855,7 +856,6 @@ fn driver_request(
         id: RequestId(id),
         session_id: Some(session_id),
         prompt_tokens,
-        sampling: SamplingConfig::greedy(),
         max_new_tokens,
         stop: stop.to_vec(),
         ignore_eos: false,

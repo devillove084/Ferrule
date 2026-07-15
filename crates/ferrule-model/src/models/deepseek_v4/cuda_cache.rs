@@ -6,7 +6,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use ferrule_common::execution::{KvCowReplacement, KvLayoutSchema, KvPageId};
+use ferrule_common::execution::{ForwardPhase, KvCowReplacement, KvLayoutSchema, KvPageId};
+use ferrule_common::kernel_plan::ModelKernelPlan;
+#[cfg(feature = "cutlass")]
+use ferrule_common::kernel_plan::{KernelPhase, KernelProviderId, RowBucket};
 use ferrule_common::{
     Error, ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertKey, ExpertLease,
     ExpertResidencyControl, ExpertResidencyGrant, ExpertSlotBinding, MemoryPoolLimits,
@@ -39,24 +42,18 @@ use crate::moe::streaming::{
 use crate::moe::streaming::{PinnedExpertArtifactPayload, infer_expert_linear_format};
 use crate::runner::TokenLogit;
 
-use super::artifact::DeepSeekV4ArtifactModel;
 use super::attention::DeepSeekV4CompressorPayload;
 use super::config::{DeepSeekV4AttentionConfig, DeepSeekV4RopeParams};
 use super::helpers::{rank_logits_desc, yarn_frequency};
-use super::layer::DeepSeekV4Layer;
+
 use super::operators::DeepSeekV4OperatorRuntimeCounters;
-use super::prepared::{DeepSeekV4ExecutionPolicy, DeepSeekV4KvLayoutSchema};
-use super::sequence::DeepSeekV4PagedKvBinding;
+use super::prepared::{
+    DeepSeekV4ExecutionPolicy, DeepSeekV4KvLayoutSchema, DeepSeekV4PreparedResources,
+};
+use super::sequence::{DeepSeekV4PagedKvBinding, DeepSeekV4SequenceMoeAccessEvent};
 
 const DSV4_ROPE_TABLE_MIN_CAPACITY: usize = 4096;
 const DSV4_EXPERT_TABLE_CAPACITY: usize = 512;
-
-fn env_flag(name: &str) -> bool {
-    matches!(
-        std::env::var(name).as_deref(),
-        Ok("1") | Ok("true") | Ok("yes") | Ok("on")
-    )
-}
 
 struct CudaRopeTable {
     rope_dim: usize,
@@ -397,6 +394,9 @@ struct DeepSeekV4CudaExecutionImage {
     hc_head: HcHeadDeviceWeights,
     output_norm: ferrule_cuda::context::CudaF32Buffer,
     layers: Box<[DeepSeekV4CudaPreparedLayer]>,
+    kernel_plan: ModelKernelPlan,
+    #[cfg(feature = "cutlass")]
+    cutlass_bf16_workspaces: BTreeMap<RowBucket, ferrule_cuda::cutlass::CutlassBf16Workspace>,
 }
 
 #[cfg(feature = "cuda")]
@@ -917,6 +917,10 @@ impl CudaAsyncHostStagedExpertLoader {
         self.in_flight.contains(&expert)
     }
 
+    fn in_flight_experts(&self) -> impl Iterator<Item = ExpertId> + '_ {
+        self.in_flight.iter().copied()
+    }
+
     fn enqueue(
         &mut self,
         expert: ExpertId,
@@ -1097,6 +1101,10 @@ impl CudaPinnedExpertCache {
         self.cache.insert(expert, bundle, bytes)
     }
 
+    fn expert_ids(&self) -> impl Iterator<Item = ExpertId> + '_ {
+        self.cache.keys()
+    }
+
     fn stats(&self) -> MemoryPoolStats {
         self.cache.stats()
     }
@@ -1232,7 +1240,7 @@ impl DeepSeekV4CudaOperatorCache {
             ops: ferrule_cuda::context::CudaArtifactOperatorContext::new()?,
             profile: policy.profile_enabled(),
             managed_experts: policy.managed_experts(),
-            device_route_fast_path: env_flag("FERRULE_DSV4_DEVICE_ROUTE_FAST_PATH"),
+            device_route_fast_path: policy.device_route_fast_path(),
             expert_upload_inflight: policy.expert_upload_inflight(),
             kv_page_pool: None,
             pending_kv_reservations: Vec::new(),
@@ -1668,30 +1676,70 @@ impl DeepSeekV4CudaOperatorCache {
         std::mem::take(&mut self.moe_access_events)
     }
 
-    pub(crate) fn resident_experts_for_layer(&self, layer: usize) -> Vec<usize> {
-        let mut experts = self
-            .experts
-            .keys()
-            .filter(|expert| expert.layer == layer)
-            .map(|expert| expert.expert)
-            .collect::<Vec<_>>();
-        experts.sort_unstable();
-        experts
+    fn for_each_expert_residency(
+        &self,
+        mut visit: impl FnMut(ExpertId, crate::moe::prediction::ExpertResidency),
+    ) {
+        use crate::moe::prediction::ExpertResidency;
+
+        for expert in self
+            .host_staged_cache
+            .expert_ids()
+            .chain(self.unretained_host_experts.keys().copied())
+            .chain(self.direct_pinned_experts.keys().copied())
+            .chain(self.pinned_host_expert_cache.expert_ids())
+        {
+            visit(expert, ExpertResidency::HostStaged);
+        }
+        for expert in self
+            .async_host_stager
+            .in_flight_experts()
+            .chain(self.uploading_experts.keys().copied())
+        {
+            visit(expert, ExpertResidency::Materializing);
+        }
+        for expert in self.experts.keys().copied() {
+            visit(expert, ExpertResidency::GpuReady);
+        }
     }
 
-    pub(crate) fn materializing_experts_for_layer(&self, layer: usize) -> Vec<usize> {
-        let mut experts = self
-            .uploading_experts
-            .keys()
-            .filter(|expert| expert.layer == layer)
-            .map(|expert| expert.expert)
-            .collect::<Vec<_>>();
-        experts.sort_unstable();
-        experts
+    pub(crate) fn expert_residency_for_layer(
+        &self,
+        layer: usize,
+        expert_count: usize,
+    ) -> Vec<crate::moe::prediction::ExpertResidency> {
+        use crate::moe::prediction::ExpertResidency;
+
+        let mut residency = vec![ExpertResidency::Cold; expert_count];
+        self.for_each_expert_residency(|expert, state| {
+            if expert.layer == layer {
+                if let Some(slot) = residency.get_mut(expert.expert) {
+                    *slot = state;
+                }
+            }
+        });
+        residency
     }
 
-    pub(crate) fn host_staged_experts_for_layer(&self, layer: usize) -> Vec<usize> {
-        self.host_staged_cache.expert_ids_for_layer(layer)
+    pub(crate) fn expert_io_residency_snapshot(
+        &self,
+        experts_per_layer: &[usize],
+    ) -> Vec<Box<[crate::moe::prediction::ExpertResidency]>> {
+        use crate::moe::prediction::ExpertResidency;
+
+        let mut layers = experts_per_layer
+            .iter()
+            .map(|&count| vec![ExpertResidency::Cold; count].into_boxed_slice())
+            .collect::<Vec<_>>();
+        self.for_each_expert_residency(|expert, state| {
+            if let Some(slot) = layers
+                .get_mut(expert.layer)
+                .and_then(|layer| layer.get_mut(expert.expert))
+            {
+                *slot = state;
+            }
+        });
+        layers
     }
 
     pub(crate) fn resident_expert_stats_for_layer(&self, layer: usize) -> (usize, u64) {
@@ -3212,16 +3260,30 @@ impl DeepSeekV4CudaOperatorCache {
     /// Compile immutable model CUDA resources before any model execution.
     ///
     /// The image is built transactionally in a temporary owner and published
-    /// only after every upload succeeds. Dynamic expert, KV, workspace, and
-    /// output-head chunk resources deliberately remain runtime-owned.
+    /// only after every upload succeeds. Dynamic expert, KV, and output-head
+    /// resources remain runtime-owned; provider workspaces are image-owned.
     pub(crate) fn compile_execution_image(
         &mut self,
         generation: u64,
-        model: &DeepSeekV4ArtifactModel,
-        layers: &[DeepSeekV4Layer],
+        resources: &DeepSeekV4PreparedResources,
     ) -> Result<()> {
+        let model = resources.model();
+        let layers = resources.layers();
+        let kernel_plan = resources.kernel_plan();
+        if kernel_plan.layers.len() != layers.len() {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 kernel plan has {} layers for {} prepared layers",
+                kernel_plan.layers.len(),
+                layers.len()
+            )));
+        }
         if let Some(image) = self.execution_image.as_ref() {
-            if image.generation == generation && image.layers.len() == layers.len() {
+            if image.generation == generation
+                && image.layers.len() == layers.len()
+                && image.kernel_plan.layers.len() == kernel_plan.layers.len()
+            {
+                #[cfg(feature = "cutlass")]
+                let _ = image.cutlass_bf16_workspaces.len();
                 return Ok(());
             }
             return Err(Error::Model(format!(
@@ -3370,12 +3432,36 @@ impl DeepSeekV4CudaOperatorCache {
                 router_hash_table,
             });
         }
+        #[cfg(feature = "cutlass")]
+        let cutlass_bf16_workspaces = {
+            let mut workspaces = BTreeMap::new();
+            for rows in RowBucket::ALL {
+                let selected = kernel_plan.layers.iter().any(|set| {
+                    set.plan(rows)
+                        .and_then(|plan| plan.phase(KernelPhase::CompressorProjection))
+                        .is_some_and(|descriptor| {
+                            descriptor.kernel.provider == KernelProviderId::CutlassCubin
+                        })
+                });
+                if selected {
+                    workspaces.insert(
+                        rows,
+                        self.ops
+                            .cutlass_bf16_workspace(rows.rows(), model.config.hidden_size)?,
+                    );
+                }
+            }
+            workspaces
+        };
         self.execution_image = Some(DeepSeekV4CudaExecutionImage {
             generation,
             hc_config,
             hc_head,
             output_norm,
             layers: prepared.into_boxed_slice(),
+            kernel_plan: kernel_plan.clone(),
+            #[cfg(feature = "cutlass")]
+            cutlass_bf16_workspaces,
         });
         Ok(())
     }
@@ -4148,6 +4234,7 @@ impl DeepSeekV4CudaOperatorCache {
         input_dev: &ferrule_cuda::context::CudaF32Buffer,
         token_ids: &[u32],
         row_to_sequence: Option<&[usize]>,
+        sequence_phases: Option<&[ForwardPhase]>,
         router: &RouterArtifactPayload,
         predicted_experts: &[usize],
         router_policy: &ExpertRouterPolicy,
@@ -4164,17 +4251,24 @@ impl DeepSeekV4CudaOperatorCache {
         segment_workspace: &mut Option<ferrule_cuda::context::CudaMoeSegmentWorkspace>,
         route_output_dev: &mut ferrule_cuda::context::CudaF32Buffer,
         output_dev: &mut ferrule_cuda::context::CudaF32Buffer,
-    ) -> Result<()> {
+    ) -> Result<Vec<DeepSeekV4SequenceMoeAccessEvent>> {
         let tokens = token_ids.len();
         if tokens == 0 {
             return Err(Error::Model(
                 "CUDA routed MoE prefill batch requires at least one token".into(),
             ));
         }
-        if row_to_sequence.is_some_and(|sequences| sequences.len() != tokens) {
-            return Err(Error::Model(
-                "CUDA routed MoE packed row/sequence metadata mismatch".into(),
-            ));
+        match (row_to_sequence, sequence_phases) {
+            (None, None) => {}
+            (Some(sequences), Some(phases))
+                if sequences.len() == tokens
+                    && !phases.is_empty()
+                    && sequences.iter().all(|sequence| *sequence < phases.len()) => {}
+            _ => {
+                return Err(Error::Model(
+                    "CUDA routed MoE packed row/sequence metadata mismatch".into(),
+                ));
+            }
         }
         let hidden_size = router.weight.format.in_features();
         if input_dev.len() != tokens * hidden_size {
@@ -4250,15 +4344,38 @@ impl DeepSeekV4CudaOperatorCache {
             route_output_dev,
             output_dev,
         )?;
-        self.moe_access_events
-            .push(ExpertBatchAccessEvent::from_routes_by_token(
-                layer,
-                ExpertAccessPhase::Prefill,
-                tokens,
-                &routes_by_token,
-                &streaming_steps,
-            ));
-        Ok(())
+        let Some(row_to_sequence) = row_to_sequence else {
+            self.moe_access_events
+                .push(ExpertBatchAccessEvent::from_routes_by_token(
+                    layer,
+                    ExpertAccessPhase::Prefill,
+                    tokens,
+                    &routes_by_token,
+                    &streaming_steps,
+                ));
+            return Ok(Vec::new());
+        };
+        let sequence_phases = sequence_phases
+            .expect("validated with packed row metadata")
+            .iter()
+            .map(|phase| match phase {
+                ForwardPhase::Prefill => ExpertAccessPhase::Prefill,
+                ForwardPhase::Decode => ExpertAccessPhase::Decode,
+            })
+            .collect::<Vec<_>>();
+        Ok(ExpertBatchAccessEvent::from_packed_routes_by_sequence(
+            layer,
+            &sequence_phases,
+            row_to_sequence,
+            &routes_by_token,
+            &streaming_steps,
+        )
+        .into_iter()
+        .map(|(sequence_index, event)| DeepSeekV4SequenceMoeAccessEvent {
+            sequence_index,
+            event,
+        })
+        .collect())
     }
 
     #[allow(clippy::too_many_arguments)]

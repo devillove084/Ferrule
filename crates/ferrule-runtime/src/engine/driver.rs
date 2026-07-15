@@ -3,19 +3,24 @@ use std::num::NonZeroU32;
 
 use ferrule_common::execution::{ExecutionOutput, KvBindingMode, KvReservation, StateSlot};
 use ferrule_common::{Error, Result};
-use ferrule_model::MultiSessionRunner;
+use ferrule_model::{ExpertIoModelRunner, MultiSessionRunner};
 use tracing;
 
-use crate::cache::{KvPageManager, PreemptedKvState, SequenceSlotPool};
-use crate::generation::matched_stop;
+use crate::cache::{KvPageManager, PreemptedKvState};
 use crate::scheduling::resident::{SuspendedSequenceSchedule, greedy_candidate};
 use crate::scheduling::{
-    CancelRequestResult, DecodeAction, GenerateRequest, RequestId, ResidentScheduler,
-    ResidentSchedulerConfig, ScheduledBatch, SchedulerAction, SequenceFinishReason, SequenceState,
-    SessionId,
+    CancelRequestResult, DecodeAction, ExpertIoAdvisor, ExpertIoBudget, GenerateRequest,
+    ModelExpertIoAdvisor, RequestId, ResidentScheduler, ResidentSchedulerConfig, ScheduledBatch,
+    SchedulerAction, SequenceFinishReason, SequenceSlotPool, SequenceState, SessionId,
+    ZeroExpertIoAdvisor,
 };
 
 use super::NativeMultiSessionExecutor;
+
+fn matched_stop(text: &str, stop: &[String]) -> bool {
+    stop.iter()
+        .any(|candidate| !candidate.is_empty() && text.ends_with(candidate))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResidentTopKDriverConfig {
@@ -758,27 +763,61 @@ where
     where
         F: FnMut(&ResidentTokenEvent) -> Result<()>,
     {
-        self.validate_configuration()?;
+        self.step_with_expert_io(
+            on_token,
+            &mut ZeroExpertIoAdvisor,
+            ExpertIoBudget::unbounded(),
+        )
+    }
 
-        // If the executor is poisoned, reject all further work.
+    pub fn step_with_expert_io<F, A>(
+        &mut self,
+        on_token: &mut F,
+        advisor: &mut A,
+        expert_budget: ExpertIoBudget,
+    ) -> Result<ResidentDriverStep>
+    where
+        F: FnMut(&ResidentTokenEvent) -> Result<()>,
+        A: ExpertIoAdvisor,
+    {
+        self.prepare_step()?;
+        let Some(action) = self.scheduler.next_action_with_expert_io(
+            &mut self.slot_pool,
+            advisor,
+            expert_budget,
+        )?
+        else {
+            return Ok(self.no_action_step());
+        };
+        self.execute_planned_action(action, on_token)
+    }
+
+    fn prepare_step(&mut self) -> Result<()> {
+        self.validate_configuration()?;
         if self.executor.is_poisoned() {
             return Err(Error::Execution(
                 "native executor is poisoned; reset before executing again".into(),
             ));
         }
+        self.admit_new_sequences()
+    }
 
-        // Admit waiting sequences before planning the next action. Each newly
-        // admitted sequence gets a forked sequence state from the runner.
-        self.admit_new_sequences()?;
+    fn no_action_step(&self) -> ResidentDriverStep {
+        if self.scheduler.is_idle() {
+            ResidentDriverStep::Idle
+        } else {
+            ResidentDriverStep::Blocked
+        }
+    }
 
-        let Some(mut action) = self.scheduler.next_action(&mut self.slot_pool)? else {
-            return Ok(if self.scheduler.is_idle() {
-                ResidentDriverStep::Idle
-            } else {
-                ResidentDriverStep::Blocked
-            });
-        };
-
+    fn execute_planned_action<F>(
+        &mut self,
+        mut action: SchedulerAction,
+        on_token: &mut F,
+    ) -> Result<ResidentDriverStep>
+    where
+        F: FnMut(&ResidentTokenEvent) -> Result<()>,
+    {
         let action_kind = action_kind(&action);
         let rows = action_rows(&action);
         let mut scheduled = match ScheduledBatch::from_action(&mut action, self.top_k) {
@@ -1104,7 +1143,7 @@ where
             };
             let reason = if sequence.generated >= sequence.max_new_tokens {
                 Some(SequenceFinishReason::MaxTokens)
-            } else if matched_stop(&sequence.generated_text, &sequence.stop).is_some() {
+            } else if matched_stop(&sequence.generated_text, &sequence.stop) {
                 Some(SequenceFinishReason::StopString)
             } else {
                 None
@@ -1268,6 +1307,34 @@ where
     }
 }
 
+impl<R, C> ResidentTopKDriver<R, C>
+where
+    R: ExpertIoModelRunner,
+    C: SequenceSlotPool,
+{
+    pub fn step_with_model_expert_io<F>(
+        &mut self,
+        on_token: &mut F,
+        expert_budget: ExpertIoBudget,
+    ) -> Result<ResidentDriverStep>
+    where
+        F: FnMut(&ResidentTokenEvent) -> Result<()>,
+    {
+        self.prepare_step()?;
+        let mut advisor = ModelExpertIoAdvisor::new(self.executor.runner(), &self.sequence_states);
+        let action = self.scheduler.next_action_with_expert_io(
+            &mut self.slot_pool,
+            &mut advisor,
+            expert_budget,
+        )?;
+        drop(advisor);
+        let Some(action) = action else {
+            return Ok(self.no_action_step());
+        };
+        self.execute_planned_action(action, on_token)
+    }
+}
+
 #[derive(Default)]
 struct ActionFinishOutcome {
     finished: usize,
@@ -1324,8 +1391,7 @@ mod tests {
         ModelInfo, ModelRunner, MultiSessionRunner, PrefillMode, TokenLogit, TopKModelRunner,
     };
 
-    use crate::cache::{FixedSequenceSlotPool, PagedSequenceKvCache};
-    use crate::sampling::SamplingConfig;
+    use crate::scheduling::FixedSequenceSlotPool;
     use crate::scheduling::{RequestId, SequenceStatus};
 
     use super::*;
@@ -1636,7 +1702,6 @@ mod tests {
             id: RequestId(id),
             session_id: None,
             prompt_tokens: prompt.to_vec(),
-            sampling: SamplingConfig::greedy(),
             max_new_tokens,
             stop,
             ignore_eos: false,
@@ -1645,10 +1710,10 @@ mod tests {
 
     fn driver_from_runner(
         runner: MockTopKRunner,
-    ) -> ResidentTopKDriver<MockTopKRunner, PagedSequenceKvCache> {
+    ) -> ResidentTopKDriver<MockTopKRunner, FixedSequenceSlotPool> {
         ResidentTopKDriver::with_configs(
             runner,
-            PagedSequenceKvCache::new(1, 1, 8, 1),
+            FixedSequenceSlotPool::new(1),
             ResidentSchedulerConfig {
                 prefill_chunk_size: 2,
                 max_active_sequences: 1,
@@ -1667,16 +1732,16 @@ mod tests {
 
     fn driver_with_outputs(
         outputs: Vec<Vec<TokenLogit>>,
-    ) -> ResidentTopKDriver<MockTopKRunner, PagedSequenceKvCache> {
+    ) -> ResidentTopKDriver<MockTopKRunner, FixedSequenceSlotPool> {
         driver_from_runner(MockTopKRunner::new(outputs))
     }
 
     fn batched_driver_from_runner(
         runner: MockTopKRunner,
-    ) -> ResidentTopKDriver<MockTopKRunner, PagedSequenceKvCache> {
+    ) -> ResidentTopKDriver<MockTopKRunner, FixedSequenceSlotPool> {
         ResidentTopKDriver::with_configs(
             runner,
-            PagedSequenceKvCache::new(1, 1, 8, 2),
+            FixedSequenceSlotPool::new(2),
             ResidentSchedulerConfig {
                 prefill_chunk_size: 8,
                 max_active_sequences: 2,
@@ -1791,7 +1856,7 @@ mod tests {
         let runner = MockTopKRunner::new(vec![top(2)]).with_eos(2);
         let mut driver = ResidentTopKDriver::with_configs(
             runner,
-            PagedSequenceKvCache::new(1, 1, 4, 1),
+            FixedSequenceSlotPool::new(1),
             ResidentSchedulerConfig::default(),
             NonZeroU32::new(1).unwrap(),
             ResidentTopKDriverConfig::default(),
@@ -1821,7 +1886,7 @@ mod tests {
         let eos = 2;
         let mut driver = ResidentTopKDriver::with_configs(
             MockTopKRunner::new(vec![top(eos)]).with_eos(eos),
-            PagedSequenceKvCache::new(1, 1, 4, 2),
+            FixedSequenceSlotPool::new(2),
             ResidentSchedulerConfig {
                 prefill_chunk_size: 4,
                 max_active_sequences: 2,
@@ -2020,7 +2085,7 @@ mod tests {
         // to trigger a validation failure before any work is consumed.
         let mut driver = ResidentTopKDriver::with_configs(
             MockTopKRunner::new(Vec::new()),
-            PagedSequenceKvCache::new(1, 1, 4, 2),
+            FixedSequenceSlotPool::new(2),
             ResidentSchedulerConfig {
                 prefill_chunk_size: 2,
                 max_active_sequences: 5,
@@ -2177,10 +2242,10 @@ mod tests {
         assert_eq!(driver.page_manager().unwrap().allocated_pages(), 0);
     }
 
-    fn fork_driver() -> ResidentTopKDriver<MockTopKRunner, PagedSequenceKvCache> {
+    fn fork_driver() -> ResidentTopKDriver<MockTopKRunner, FixedSequenceSlotPool> {
         ResidentTopKDriver::with_configs(
             MockTopKRunner::new(vec![top(b'a' as u32), top(b'b' as u32)]),
-            PagedSequenceKvCache::new(1, 1, 8, 2),
+            FixedSequenceSlotPool::new(2),
             ResidentSchedulerConfig {
                 prefill_chunk_size: 8,
                 max_active_sequences: 2,

@@ -13,6 +13,6 @@ mod worker;
 pub use config::{ModelRegistration, WorkerConfig};
 pub use http::{ServerState, router, serve_with_shutdown};
 pub use worker::{
-    ModelEngine, ModelWorker, ModelWorkerHandle, SubmitError, SubmitErrorKind, spawn_model_worker,
-    spawn_model_worker_with,
+    DeepSeekV4ResidentEngine, ModelEngine, ModelWorker, ModelWorkerHandle, SubmitError,
+    SubmitErrorKind, spawn_model_worker, spawn_model_worker_with,
 };

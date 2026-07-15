@@ -4,11 +4,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 
-use ferrule_model::MultiSessionRunner;
+use ferrule_model::{ModelRunner, MultiSessionRunner, models::deepseek_v4::DeepSeekV4Runner};
 use ferrule_runtime::{
-    CancelRequestResult, FixedSequenceSlotPool, GenerateRequest, RequestId, ResidentDriverStep,
-    ResidentTokenEvent, ResidentTopKDriver, SamplingConfig, SequenceFinishReason, SequenceSlotPool,
-    SequenceState, SessionId,
+    CancelRequestResult, ExpertIoBudget, FixedSequenceSlotPool, GenerateRequest, RequestId,
+    ResidentDriverStep, ResidentTokenEvent, ResidentTopKDriver, SequenceFinishReason,
+    SequenceSlotPool, SequenceState, SessionId,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -31,6 +31,77 @@ pub trait ModelEngine: Send + 'static {
     fn drain_finished(&mut self) -> Vec<SequenceState>;
     fn drain_cancelled(&mut self) -> Vec<SequenceState>;
     fn drain_failed(&mut self) -> Vec<SequenceState>;
+}
+
+pub struct DeepSeekV4ResidentEngine<C>
+where
+    C: SequenceSlotPool,
+{
+    driver: ResidentTopKDriver<DeepSeekV4Runner, C>,
+    expert_budget: ExpertIoBudget,
+}
+
+impl<C> DeepSeekV4ResidentEngine<C>
+where
+    C: SequenceSlotPool,
+{
+    pub fn new(
+        driver: ResidentTopKDriver<DeepSeekV4Runner, C>,
+        expert_budget: ExpertIoBudget,
+    ) -> Self {
+        Self {
+            driver,
+            expert_budget,
+        }
+    }
+}
+
+impl<C> ModelEngine for DeepSeekV4ResidentEngine<C>
+where
+    C: SequenceSlotPool + Send + 'static,
+{
+    fn encode(&self, prompt: &str) -> Result<Vec<u32>, String> {
+        self.driver
+            .executor()
+            .runner()
+            .encode(prompt)
+            .map_err(|error| error.to_string())
+    }
+
+    fn submit(&mut self, request: GenerateRequest) {
+        self.driver.submit(request);
+    }
+
+    fn step(
+        &mut self,
+        on_token: &mut dyn FnMut(&ResidentTokenEvent),
+    ) -> Result<ResidentDriverStep, String> {
+        let mut adapter = |event: &ResidentTokenEvent| {
+            on_token(event);
+            Ok(())
+        };
+        self.driver
+            .step_with_model_expert_io(&mut adapter, self.expert_budget)
+            .map_err(|error| error.to_string())
+    }
+
+    fn cancel_request(&mut self, request_id: RequestId) -> Result<CancelRequestResult, String> {
+        self.driver
+            .cancel_request(request_id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn drain_finished(&mut self) -> Vec<SequenceState> {
+        self.driver.drain_finished()
+    }
+
+    fn drain_cancelled(&mut self) -> Vec<SequenceState> {
+        self.driver.drain_cancelled()
+    }
+
+    fn drain_failed(&mut self) -> Vec<SequenceState> {
+        self.driver.drain_failed()
+    }
 }
 
 impl<R, C> ModelEngine for ResidentTopKDriver<R, C>
@@ -509,7 +580,6 @@ where
                 id: request_id,
                 session_id: Some(SessionId(request_id.0)),
                 prompt_tokens,
-                sampling: SamplingConfig::greedy(),
                 max_new_tokens: command.request.max_tokens,
                 stop: command.request.stop,
                 ignore_eos: command.request.ignore_eos,
@@ -707,7 +777,6 @@ mod tests {
             id: RequestId(id),
             session_id: Some(SessionId(id)),
             prompt_tokens: vec![1],
-            sampling: SamplingConfig::greedy(),
             max_new_tokens: 8,
             stop: Vec::new(),
             ignore_eos: false,

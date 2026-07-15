@@ -8,6 +8,8 @@ use crate::artifact::tensor::{ArtifactTensorReader, ArtifactTensorSlice};
 #[cfg(feature = "cuda")]
 use crate::attention_backend::SparseAttentionSpec;
 
+#[cfg(feature = "cuda")]
+use ferrule_common::execution::ForwardPhase;
 use ferrule_common::{Error, Result};
 
 use super::config::{DeepSeekV4AttentionConfig, DeepSeekV4RopeParams};
@@ -2584,7 +2586,7 @@ impl DeepSeekV4Attention {
         positions: &[usize],
         row_to_sequence: &[usize],
         sequence_major_rows: &[usize],
-        sequence_prefill: &[bool],
+        sequence_phases: &[ForwardPhase],
         paged_bindings: &[DeepSeekV4PagedKvBinding],
         operators: &mut DeepSeekV4OperatorContext,
         arena: &mut DeepSeekV4AttentionDecodeArena,
@@ -2595,7 +2597,7 @@ impl DeepSeekV4Attention {
             || row_to_sequence.len() != rows
             || sequence_major_rows.len() != rows
             || caches.len() != paged_bindings.len()
-            || sequence_prefill.len() != caches.len()
+            || sequence_phases.len() != caches.len()
             || row_to_sequence
                 .iter()
                 .any(|sequence| *sequence >= caches.len())
@@ -2698,7 +2700,7 @@ impl DeepSeekV4Attention {
             ops.overwrite_i32_prefix(&visible_lens, &mut arena.visible_lens)?;
         }
         self.project_decode_rows_from_device_into(hidden_dev, max_position, operators, arena)?;
-        if sequence_prefill.iter().any(|prefill| *prefill) {
+        if sequence_phases.contains(&ForwardPhase::Prefill) {
             if compressed.indexer.is_some() {
                 let projected = arena
                     .indexer_compressor
@@ -2788,7 +2790,7 @@ impl DeepSeekV4Attention {
                             ))
                         })?;
                         let cuda = window.cuda_state_mut();
-                        if sequence_prefill[sequence] {
+                        if sequence_phases[sequence] == ForwardPhase::Prefill {
                             let projected = arena
                                 .indexer_compressor
                                 .as_ref()
@@ -2870,7 +2872,7 @@ impl DeepSeekV4Attention {
                         ))
                     })?;
                     let cuda = window.cuda_state_mut();
-                    if sequence_prefill[sequence] {
+                    if sequence_phases[sequence] == ForwardPhase::Prefill {
                         let projected = arena
                             .main_compressor
                             .as_ref()

@@ -822,7 +822,7 @@ impl CudaArtifactLinearHandle {
 ///
 /// This is intentionally a CUDA/backend type, not a model-specific arena type.
 /// Model-family code can own and reuse these buffers without exposing CUDA driver
-/// handles through the runtime graph boundary.
+/// handles through the execution boundary.
 pub struct CudaF32Buffer {
     buffer: DeviceBuffer<f32>,
     len: usize,
@@ -2331,7 +2331,8 @@ impl CudaArtifactOperatorContext {
     /// that previously quantized activation buffers themselves use this to
     /// avoid applying the activation quantization contract twice.
     pub fn artifact_linear_uses_fp8_mma(&self, handle: &CudaArtifactLinearHandle) -> bool {
-        self.dispatch_config.fp8_mma
+        crate::architecture::COMPILED_BLACKWELL_MMA_SYNC_FP8
+            && self.dispatch_config.fp8_mma
             && matches!(
                 handle.shape,
                 CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
@@ -2341,6 +2342,109 @@ impl CudaArtifactOperatorContext {
                     block_k: 128,
                 } if out_features.is_multiple_of(16) && in_features.is_multiple_of(128)
             )
+    }
+
+    /// Allocate persistent activation-pack workspace for a CUTLASS BF16 row
+    /// bucket. The caller/execution image owns the allocation and reuses it.
+    #[cfg(feature = "cutlass")]
+    pub fn cutlass_bf16_workspace(
+        &self,
+        max_rows: usize,
+        in_features: usize,
+    ) -> Result<crate::cutlass::CutlassBf16Workspace> {
+        crate::cutlass::CutlassBf16Workspace::new(&self.stream, max_rows, in_features)
+    }
+
+    /// Whether the compiled CUTLASS catalog and shape contract support this
+    /// BF16 projection. Architecture-specific selection remains inside the
+    /// provider; model code sees only the semantic operation.
+    #[cfg(feature = "cutlass")]
+    pub fn artifact_linear_rows_bf16_cutlass_supported(
+        &self,
+        handle: &CudaArtifactLinearHandle,
+        rows: usize,
+    ) -> bool {
+        let Some(manifest) = crate::cutlass::provider_manifest() else {
+            return false;
+        };
+        manifest.supports(crate::cutlass::CutlassKernelId::Bf16MmaSync)
+            && rows > 0
+            && matches!(
+                handle.shape,
+                CudaArtifactLinearShape::Bf16Bytes {
+                    out_features,
+                    in_features,
+                } if out_features.is_multiple_of(4) && in_features.is_multiple_of(8)
+            )
+    }
+
+    /// Execute a BF16 projection through CUTLASS using caller-owned workspace.
+    /// No allocation, stream creation, synchronization, or ownership transfer
+    /// occurs inside the provider.
+    #[cfg(feature = "cutlass")]
+    pub fn artifact_linear_rows_bf16_cutlass_into(
+        &self,
+        handle: &CudaArtifactLinearHandle,
+        input: &CudaF32Buffer,
+        rows: usize,
+        output: &mut CudaF32Buffer,
+        workspace: &mut crate::cutlass::CutlassBf16Workspace,
+    ) -> Result<()> {
+        if !self.artifact_linear_rows_bf16_cutlass_supported(handle, rows) {
+            return Err(Error::Internal(format!(
+                "CUTLASS BF16 projection unsupported: shape={:?} rows={rows}",
+                handle.shape
+            )));
+        }
+        let CudaArtifactLinearShape::Bf16Bytes {
+            out_features,
+            in_features,
+        } = handle.shape
+        else {
+            unreachable!("shape was validated above")
+        };
+        let expected_input = rows
+            .checked_mul(in_features)
+            .ok_or_else(|| Error::Internal("CUTLASS BF16 input size overflow".into()))?;
+        let expected_output = rows
+            .checked_mul(out_features)
+            .ok_or_else(|| Error::Internal("CUTLASS BF16 output size overflow".into()))?;
+        if input.len != expected_input || output.len != expected_output {
+            return Err(Error::Internal(format!(
+                "CUTLASS BF16 projection buffer mismatch: input={}/{} output={}/{}",
+                input.len, expected_input, output.len, expected_output
+            )));
+        }
+        if !crate::cutlass::gemm_bf16_f32_can_implement(
+            &self.stream,
+            &input.buffer,
+            &handle.weight,
+            &mut output.buffer,
+            workspace,
+            rows,
+            out_features,
+            in_features,
+        )? {
+            return Err(Error::Internal(format!(
+                "compiled CUTLASS provider rejected BF16 shape rows={rows} n={out_features} k={in_features}"
+            )));
+        }
+        crate::cutlass::gemm_bf16_f32(
+            &self.stream,
+            &input.buffer,
+            &handle.weight,
+            &mut output.buffer,
+            workspace,
+            rows,
+            out_features,
+            in_features,
+            1.0,
+            0.0,
+        )?;
+        // One provider call launches the activation pack and GEMM kernels.
+        self.record_kernel_launch();
+        self.record_kernel_launch();
+        Ok(())
     }
 
     pub fn capture_decode_graph(
@@ -4344,7 +4448,8 @@ impl CudaArtifactOperatorContext {
         group_in: usize,
         o_lora_rank: usize,
     ) -> bool {
-        self.dispatch_config.grouped_wo_a_mma
+        crate::architecture::COMPILED_CUDA_OXIDE_BF16_MMA
+            && self.dispatch_config.grouped_wo_a_mma
             && output_latent_dim.is_multiple_of(16)
             && group_in.is_multiple_of(128)
             && o_lora_rank.is_multiple_of(16)
@@ -6993,6 +7098,12 @@ impl CudaArtifactOperatorContext {
         workspace: &mut CudaMoeSegmentWorkspace,
         route_output: &mut CudaF32Buffer,
     ) -> Result<()> {
+        if !crate::architecture::COMPILED_BLACKWELL_MMA_SYNC_MXFP4 {
+            return Err(Error::Internal(format!(
+                "stable MXFP4 MoE segments require an sm_120a+ CUDA module; compiled target is {}",
+                crate::architecture::COMPILED_TARGET
+            )));
+        }
         table.ensure_healthy()?;
         if !workspace.input_prepared || routes_per_token == 0 || !swiglu_limit.is_finite() {
             return Err(Error::Internal(
@@ -7627,8 +7738,10 @@ impl CudaArtifactOperatorContext {
         // FP4 mxf4 Tensor Core path is the default hot path. It is still under-utilized
         // at batch_cols=1, but avoids the scalar FP4 decode loop and remains env-gated
         // for A/B: set FERRULE_CUDA_MOE_TC=0 to force the scalar fallback.
-        let use_tensor_core =
-            !use_reduce && input.len.is_multiple_of(64) && self.dispatch_config.moe_tensor_core;
+        let use_tensor_core = crate::architecture::COMPILED_BLACKWELL_MMA_SYNC_MXFP4
+            && !use_reduce
+            && input.len.is_multiple_of(64)
+            && self.dispatch_config.moe_tensor_core;
         let grid_inter = (
             (intermediate_size as u32 + block - 1) / block,
             num_experts as u32,

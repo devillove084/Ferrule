@@ -19,7 +19,7 @@ use crate::moe::streaming::{
 #[cfg(feature = "cuda")]
 use ferrule_common::ExpertResidencyControl;
 #[cfg(feature = "cuda")]
-use ferrule_common::execution::ForwardMode;
+use ferrule_common::execution::{ForwardMode, ForwardPhase};
 use ferrule_common::{Error, Result};
 
 use super::attention::{DeepSeekV4Attention, DeepSeekV4AttentionCache};
@@ -31,7 +31,7 @@ use super::cuda_cache::{DeepSeekV4CudaHcStage, DeepSeekV4CudaLayerNorm};
 use super::helpers::rms_norm_rows_with_operators;
 use super::operators::{DeepSeekV4LayerProfileStage, DeepSeekV4OperatorContext};
 #[cfg(feature = "cuda")]
-use super::sequence::DeepSeekV4PagedKvBinding;
+use super::sequence::{DeepSeekV4PagedKvBinding, DeepSeekV4SequenceMoeAccessEvent};
 
 pub struct DeepSeekV4Layer {
     pub layer: usize,
@@ -590,7 +590,7 @@ impl DeepSeekV4Layer {
         states: &mut [&mut DeepSeekV4LayerState],
         row_to_sequence: &[usize],
         sequence_major_rows: &[usize],
-        sequence_prefill: &[bool],
+        sequence_phases: &[ForwardPhase],
         paged_bindings: &[DeepSeekV4PagedKvBinding],
         residency: &mut dyn ExpertResidencyControl,
         source_catalog: &ExpertSourceCatalog,
@@ -602,14 +602,14 @@ impl DeepSeekV4Layer {
         predicted_experts: &[usize],
         expert_reader: &ExpertStreamingReader,
         operators: &mut DeepSeekV4OperatorContext,
-    ) -> Result<()> {
+    ) -> Result<Vec<DeepSeekV4SequenceMoeAccessEvent>> {
         let rows = token_ids.len();
         if rows < 2
             || positions.len() != rows
             || row_to_sequence.len() != rows
             || sequence_major_rows.len() != rows
             || states.len() != paged_bindings.len()
-            || sequence_prefill.len() != states.len()
+            || sequence_phases.len() != states.len()
             || row_to_sequence
                 .iter()
                 .any(|sequence| *sequence >= states.len())
@@ -665,7 +665,7 @@ impl DeepSeekV4Layer {
             positions,
             row_to_sequence,
             sequence_major_rows,
-            sequence_prefill,
+            sequence_phases,
             paged_bindings,
             operators,
             &mut arena.attention,
@@ -722,11 +722,12 @@ impl DeepSeekV4Layer {
                 expert_reader,
             )?;
         }
-        operators.routed_moe_prefill_batch_from_device_into(
+        let moe_access_events = operators.routed_moe_prefill_batch_from_device_into(
             self.layer,
             &arena.ffn_norm,
             token_ids,
             Some(row_to_sequence),
+            Some(sequence_phases),
             &self.router,
             predicted_experts,
             &self.router_policy,
@@ -766,7 +767,7 @@ impl DeepSeekV4Layer {
             self.hc_config.hc_hidden_size(),
         )?;
         std::mem::swap(hc_state_dev, &mut arena.layer_output);
-        Ok(())
+        Ok(moe_access_events)
     }
 
     #[cfg(feature = "cuda")]
@@ -925,10 +926,11 @@ impl DeepSeekV4Layer {
         }
 
         let stage_start = operators.profile_start();
-        operators.routed_moe_prefill_batch_from_device_into(
+        let _ = operators.routed_moe_prefill_batch_from_device_into(
             self.layer,
             &arena.ffn_norm,
             token_ids,
+            None,
             None,
             &self.router,
             predicted_experts,

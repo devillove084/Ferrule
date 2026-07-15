@@ -1839,10 +1839,13 @@ impl HostStagedExpertCache {
         self.cache.contains(expert)
     }
 
+    pub fn expert_ids(&self) -> impl Iterator<Item = ExpertId> + '_ {
+        self.cache.keys()
+    }
+
     pub fn expert_ids_for_layer(&self, layer: usize) -> Vec<usize> {
         let mut experts = self
-            .cache
-            .keys()
+            .expert_ids()
             .filter(|expert| expert.layer == layer)
             .map(|expert| expert.expert)
             .collect::<Vec<_>>();

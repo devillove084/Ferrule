@@ -2,6 +2,27 @@ use std::net::IpAddr;
 
 use clap::{Args, Parser, Subcommand};
 
+#[derive(Debug, Clone)]
+pub(crate) struct GenerationConfig {
+    pub(crate) max_new_tokens: usize,
+    pub(crate) stop: Vec<String>,
+    pub(crate) stop_at_eos: bool,
+    pub(crate) append_eos_to_session: bool,
+    pub(crate) ctx_size: usize,
+}
+
+impl Default for GenerationConfig {
+    fn default() -> Self {
+        Self {
+            max_new_tokens: 16,
+            stop: Vec::new(),
+            stop_at_eos: true,
+            append_eos_to_session: true,
+            ctx_size: 4096,
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "ferrule", version = "0.2")]
 pub(crate) struct Cli {
@@ -277,6 +298,9 @@ pub(crate) struct ServeArgs {
     /// Bound resident routed experts per layer (0 = managed default).
     #[arg(long, default_value_t = 12)]
     pub(crate) moe_hotset_experts: usize,
+    /// Predicted incremental expert source bytes admitted per scheduler batch in MiB (0 = unbounded).
+    #[arg(long = "expert-io-batch-mb", default_value_t = 2693)]
+    pub(crate) expert_io_batch_mb: u64,
     /// Maximum whole experts retained in pageable host memory (0 disables retention).
     #[arg(long = "expert-host-cache-entries", default_value_t = 64)]
     pub(crate) expert_host_cache_entries: usize,
@@ -329,25 +353,16 @@ pub(crate) struct SamplingArgs {
 }
 
 impl SamplingArgs {
-    pub(crate) fn sampling_config(&self) -> ferrule_runtime::SamplingConfig {
-        ferrule_runtime::SamplingConfig {
-            temperature: self.temp,
-            top_k: self.top_k,
-            top_p: self.top_p,
-            min_p: self.min_p,
-            repeat_penalty: self.repeat_penalty,
-            repeat_last_n: self.repeat_last_n,
-            seed: self.seed,
-        }
+    pub(crate) fn supports_fast_greedy(&self) -> bool {
+        self.temp <= 0.0 && (self.repeat_penalty - 1.0).abs() < f32::EPSILON && self.logprobs == 0
     }
 
-    pub(crate) fn generation_config(&self, max_tokens: usize) -> ferrule_runtime::GenerationConfig {
-        ferrule_runtime::GenerationConfig {
+    pub(crate) fn generation_config(&self, max_tokens: usize) -> GenerationConfig {
+        GenerationConfig {
             max_new_tokens: max_tokens,
             stop: self.stop.clone(),
-            logprobs_k: self.logprobs,
             ctx_size: self.ctx_size,
-            ..ferrule_runtime::GenerationConfig::default()
+            ..GenerationConfig::default()
         }
     }
 

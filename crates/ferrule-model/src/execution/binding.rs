@@ -1,13 +1,17 @@
-use ferrule_common::execution::{ExecutionBatch, ForwardMode, ForwardPhase};
+use ferrule_common::execution::{
+    ExecutionBatch, ExecutionIntent, ExecutionShape, ForwardMode, ForwardPhase,
+};
 use ferrule_common::{Error, Result};
 
 /// Exact aggregate execution shape used to select persistent resources.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExecutionShapeKey {
+    intent: ExecutionIntent,
     mode: ForwardMode,
     batch_tokens: usize,
     sequence_count: usize,
     max_query_tokens: usize,
+    decode_rows: usize,
 }
 
 impl ExecutionShapeKey {
@@ -18,31 +22,37 @@ impl ExecutionShapeKey {
         max_query_tokens: usize,
     ) -> Self {
         Self {
+            intent: ExecutionIntent::Committed,
             mode,
             batch_tokens,
             sequence_count,
             max_query_tokens,
+            decode_rows: match mode {
+                ForwardMode::Decode => batch_tokens,
+                ForwardMode::Prefill | ForwardMode::Mixed => 0,
+            },
+        }
+    }
+
+    pub const fn from_shape(mode: ForwardMode, shape: ExecutionShape) -> Self {
+        Self {
+            intent: shape.intent,
+            mode,
+            batch_tokens: shape.total_rows,
+            sequence_count: shape.sequence_count,
+            max_query_tokens: shape.max_query_tokens,
+            decode_rows: shape.decode_rows,
         }
     }
 
     /// Derives the exact shape represented by a packed execution batch.
     pub fn from_batch(batch: &ExecutionBatch) -> Result<Self> {
         validate_basic_batch_shape(batch)?;
-        let max_query_tokens = batch
-            .sequences()
-            .iter()
-            .map(|sequence| sequence.query.end - sequence.query.start)
-            .max()
-            .unwrap_or(0);
-        let max_query_tokens = usize::try_from(max_query_tokens).map_err(|_| {
-            execution_error("maximum query length cannot be represented as a host size")
-        })?;
-        Ok(Self::new(
-            batch.mode(),
-            batch.len(),
-            batch.sequences().len(),
-            max_query_tokens,
-        ))
+        Ok(Self::from_shape(batch.mode(), batch.shape()?))
+    }
+
+    pub const fn intent(self) -> ExecutionIntent {
+        self.intent
     }
 
     pub const fn mode(self) -> ForwardMode {
@@ -59,6 +69,10 @@ impl ExecutionShapeKey {
 
     pub const fn max_query_tokens(self) -> usize {
         self.max_query_tokens
+    }
+
+    pub const fn decode_rows(self) -> usize {
+        self.decode_rows
     }
 }
 

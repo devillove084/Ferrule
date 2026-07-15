@@ -13,15 +13,29 @@ use std::collections::{BTreeMap, VecDeque};
 use ferrule_common::execution::{LogitsOutput, TokenLogit};
 use ferrule_common::{Error, Result};
 
-use crate::cache::{KvHandle, SequenceSlotPool};
-
 use super::actions::{DecodeAction, PrefillChunkAction, SchedulerAction, plan_prefill_chunk};
+use super::expert_io::{
+    ExpertIoAdvisor, ExpertIoBatchUsage, ExpertIoBudget, ExpertIoCandidate, ExpertIoDecisionTrace,
+    ExpertIoPhase, ExpertIoQueueClass, ZeroExpertIoAdvisor, classify_admitted,
+};
 use super::session::{GenerateRequest, RequestId, SequenceFinishReason, SequenceState, SessionId};
+use super::{KvHandle, SequenceSlotPool};
 
 #[derive(Debug, Clone)]
 struct WaitingRequest {
     request: GenerateRequest,
     position_start: Option<usize>,
+}
+
+struct BlockedExpertCandidate<T, A> {
+    action: T,
+    admission: A,
+    trace_index: usize,
+}
+
+enum ExpertIoCandidateDecision<A> {
+    Admitted,
+    Blocked { admission: A, trace_index: usize },
 }
 
 impl WaitingRequest {
@@ -131,6 +145,7 @@ pub struct ResidentScheduler {
     finished: Vec<SequenceState>,
     cancelled: Vec<SequenceState>,
     failed: Vec<SequenceState>,
+    expert_io_trace: Vec<ExpertIoDecisionTrace>,
     next_session_id: u64,
     total_submitted: u64,
 }
@@ -152,6 +167,7 @@ impl ResidentScheduler {
             finished: Vec::new(),
             cancelled: Vec::new(),
             failed: Vec::new(),
+            expert_io_trace: Vec::new(),
             next_session_id: 1,
             total_submitted: 0,
         }
@@ -207,6 +223,11 @@ impl ResidentScheduler {
 
     pub fn failed_len(&self) -> usize {
         self.failed.len()
+    }
+
+    /// Expert-I/O decisions made while constructing the most recent batch.
+    pub fn expert_io_trace(&self) -> &[ExpertIoDecisionTrace] {
+        &self.expert_io_trace
     }
 
     pub fn active_sequence(&self, session_id: SessionId) -> Option<&SequenceState> {
@@ -455,28 +476,108 @@ impl ResidentScheduler {
     where
         C: SequenceSlotPool,
     {
-        if self.config.allow_mixed_batches {
-            return self.next_native_action(slot_pool);
-        }
-        if let Some(action) = self.next_decode_action()? {
-            return Ok(Some(action));
-        }
-        self.next_prefill_action(slot_pool)
+        self.next_action_with_expert_io(
+            slot_pool,
+            &mut ZeroExpertIoAdvisor,
+            ExpertIoBudget::unbounded(),
+        )
     }
 
-    fn next_native_action<C>(&mut self, slot_pool: &mut C) -> Result<Option<SchedulerAction>>
+    /// Build the next request-centric batch under both token and expert-I/O
+    /// budgets. The advisor is model-neutral; a zero-cost advisor exactly
+    /// preserves the ordinary scheduler policy.
+    pub fn next_action_with_expert_io<C, A>(
+        &mut self,
+        slot_pool: &mut C,
+        advisor: &mut A,
+        expert_budget: ExpertIoBudget,
+    ) -> Result<Option<SchedulerAction>>
     where
         C: SequenceSlotPool,
+        A: ExpertIoAdvisor,
+    {
+        self.expert_io_trace.clear();
+        if !A::ENABLED {
+            return self.next_admitted_action(slot_pool, advisor, expert_budget);
+        }
+
+        advisor.begin_batch();
+        let decode_ready = self.decode_ready.clone();
+        let prefill_queue = self.prefill_queue.clone();
+        match self.next_admitted_action(slot_pool, advisor, expert_budget) {
+            Ok(action) => Ok(action),
+            Err(error) => {
+                self.decode_ready = decode_ready;
+                self.prefill_queue = prefill_queue;
+                Err(error)
+            }
+        }
+    }
+
+    fn admit_expert_io_candidate<A: ExpertIoAdvisor>(
+        &mut self,
+        advisor: &mut A,
+        budget: ExpertIoBudget,
+        usage: &mut ExpertIoBatchUsage,
+        candidate: ExpertIoCandidate<'_>,
+    ) -> Result<ExpertIoCandidateDecision<A::Admission>> {
+        if !A::ENABLED {
+            return Ok(ExpertIoCandidateDecision::Admitted);
+        }
+        let (estimate, admission) = advisor.estimate(candidate)?;
+        let rejection = usage.inspect(budget, estimate);
+        let admitted = rejection.is_none();
+        let trace_index = self.expert_io_trace.len();
+        self.expert_io_trace.push(ExpertIoDecisionTrace {
+            session_id: candidate.session_id,
+            phase: candidate.phase,
+            queue: if admitted {
+                classify_admitted(candidate.phase, estimate)
+            } else {
+                ExpertIoQueueClass::MissBlocked
+            },
+            admitted,
+            forced_progress: false,
+            estimate,
+            rejection,
+        });
+        if admitted {
+            usage.admit(estimate);
+            advisor.admit(admission);
+            Ok(ExpertIoCandidateDecision::Admitted)
+        } else {
+            Ok(ExpertIoCandidateDecision::Blocked {
+                admission,
+                trace_index,
+            })
+        }
+    }
+
+    fn next_admitted_action<C, A>(
+        &mut self,
+        slot_pool: &mut C,
+        advisor: &mut A,
+        expert_budget: ExpertIoBudget,
+    ) -> Result<Option<SchedulerAction>>
+    where
+        C: SequenceSlotPool,
+        A: ExpertIoAdvisor,
     {
         self.admit_waiting(slot_pool)?;
-        let budget = if self.config.max_batch_tokens == 0 {
+        let token_budget = if self.config.max_batch_tokens == 0 {
             usize::MAX
         } else {
             self.config.max_batch_tokens
         };
-        let mut remaining = budget;
+        let mut remaining = token_budget;
+        let mut expert_usage = ExpertIoBatchUsage::default();
         let mut decodes = Vec::new();
-        while remaining > 0 && decodes.len() < self.config.max_decode_batch {
+        let mut blocked_decode = None;
+        let decode_candidates = self.decode_ready.len();
+        for _ in 0..decode_candidates {
+            if remaining == 0 || decodes.len() >= self.config.max_decode_batch {
+                break;
+            }
             let Some(session_id) = self.decode_ready.pop_front() else {
                 break;
             };
@@ -486,35 +587,131 @@ impl ResidentScheduler {
             let Some(token_id) = sequence.next_decode_token else {
                 continue;
             };
-            decodes.push(DecodeAction::from_sequence(sequence, token_id));
+            let action = DecodeAction::from_sequence(sequence, token_id);
+            let decision = match self.admit_expert_io_candidate(
+                advisor,
+                expert_budget,
+                &mut expert_usage,
+                ExpertIoCandidate {
+                    session_id,
+                    phase: ExpertIoPhase::Decode,
+                    token_ids: std::slice::from_ref(&token_id),
+                },
+            ) {
+                Ok(decision) => decision,
+                Err(error) => {
+                    self.decode_ready.push_front(session_id);
+                    return Err(error);
+                }
+            };
+            if let ExpertIoCandidateDecision::Blocked {
+                admission,
+                trace_index,
+            } = decision
+            {
+                self.decode_ready.push_back(session_id);
+                if blocked_decode.is_none() {
+                    blocked_decode = Some(BlockedExpertCandidate {
+                        action,
+                        admission,
+                        trace_index,
+                    });
+                }
+                continue;
+            }
+            decodes.push(action);
             remaining -= 1;
         }
 
         let mut prefills = Vec::new();
-        let candidates = self.prefill_queue.len();
-        for _ in 0..candidates {
-            if remaining == 0 {
-                break;
-            }
-            let Some(session_id) = self.prefill_queue.pop_front() else {
-                break;
-            };
-            let Some(sequence) = self.active.get(&session_id) else {
-                continue;
-            };
-            if sequence.prompt_prefill_done() {
-                continue;
-            }
-            let chunk = self.config.prefill_chunk_size.min(remaining);
-            if let Some(action) = PrefillChunkAction::from_sequence(sequence, chunk)? {
+        let mut blocked_prefill = None;
+        if self.config.allow_mixed_batches || decodes.is_empty() {
+            let candidates = self.prefill_queue.len();
+            for _ in 0..candidates {
+                if remaining == 0 {
+                    break;
+                }
+                let Some(session_id) = self.prefill_queue.pop_front() else {
+                    break;
+                };
+                let Some(sequence) = self.active.get(&session_id) else {
+                    continue;
+                };
+                if sequence.prompt_prefill_done() {
+                    continue;
+                }
+                let chunk = self.config.prefill_chunk_size.min(remaining);
+                let Some(action) = PrefillChunkAction::from_sequence(sequence, chunk)? else {
+                    continue;
+                };
+                let decision = match self.admit_expert_io_candidate(
+                    advisor,
+                    expert_budget,
+                    &mut expert_usage,
+                    ExpertIoCandidate {
+                        session_id,
+                        phase: ExpertIoPhase::Prefill,
+                        token_ids: &action.tokens,
+                    },
+                ) {
+                    Ok(decision) => decision,
+                    Err(error) => {
+                        self.prefill_queue.push_front(session_id);
+                        return Err(error);
+                    }
+                };
+                self.prefill_queue.push_back(session_id);
+                if let ExpertIoCandidateDecision::Blocked {
+                    admission,
+                    trace_index,
+                } = decision
+                {
+                    if blocked_prefill.is_none() {
+                        blocked_prefill = Some(BlockedExpertCandidate {
+                            action,
+                            admission,
+                            trace_index,
+                        });
+                    }
+                    continue;
+                }
                 remaining -= action.tokens.len();
                 prefills.push(action);
-                self.prefill_queue.push_back(session_id);
+                if !self.config.allow_mixed_batches {
+                    break;
+                }
+            }
+        }
+
+        if prefills.is_empty()
+            && decodes.is_empty()
+            && A::ENABLED
+            && expert_budget.allow_singleton_overflow
+        {
+            if let Some(blocked) = blocked_decode {
+                self.remove_from_queue(blocked.action.session_id, QueueKind::Decode);
+                advisor.admit(blocked.admission);
+                let trace = &mut self.expert_io_trace[blocked.trace_index];
+                trace.admitted = true;
+                trace.forced_progress = true;
+                decodes.push(blocked.action);
+            } else if let Some(blocked) = blocked_prefill {
+                advisor.admit(blocked.admission);
+                let trace = &mut self.expert_io_trace[blocked.trace_index];
+                trace.admitted = true;
+                trace.forced_progress = true;
+                prefills.push(blocked.action);
             }
         }
 
         if prefills.is_empty() && decodes.is_empty() {
             Ok(None)
+        } else if !self.config.allow_mixed_batches {
+            if decodes.is_empty() {
+                Ok(prefills.pop().map(SchedulerAction::PrefillChunk))
+            } else {
+                Ok(Some(SchedulerAction::DecodeBatch(decodes)))
+            }
         } else {
             Ok(Some(SchedulerAction::Execute { prefills, decodes }))
         }
@@ -831,9 +1028,8 @@ mod tests {
     use ferrule_common::execution::LogitsOutput;
     use ferrule_model::TokenLogit;
 
-    use crate::cache::{KvHandle, MultiSessionKvCache, SequenceSlotPool};
-    use crate::sampling::SamplingConfig;
     use crate::scheduling::RequestId;
+    use crate::scheduling::{FixedSequenceSlotPool, KvHandle, SequenceSlotPool};
 
     use super::*;
 
@@ -842,7 +1038,6 @@ mod tests {
             id: RequestId(id),
             session_id: None,
             prompt_tokens: tokens,
-            sampling: SamplingConfig::greedy(),
             max_new_tokens: 16,
             stop: Vec::new(),
             ignore_eos: false,
@@ -850,6 +1045,99 @@ mod tests {
     }
 
     struct FailingFreeKvCache;
+
+    struct TokenCostAdvisor;
+
+    #[derive(Default)]
+    struct FailSecondAdvisor {
+        calls: usize,
+    }
+
+    #[derive(Default)]
+    struct UnionAdvisor {
+        admitted_tokens: Vec<u32>,
+        begin_calls: usize,
+    }
+
+    impl ExpertIoAdvisor for UnionAdvisor {
+        type Admission = u32;
+
+        fn begin_batch(&mut self) {
+            self.begin_calls += 1;
+            self.admitted_tokens.clear();
+        }
+
+        fn estimate(
+            &mut self,
+            candidate: ExpertIoCandidate<'_>,
+        ) -> Result<(super::super::expert_io::ExpertIoEstimate, Self::Admission)> {
+            let token = candidate.token_ids[0];
+            let incremental = if self.admitted_tokens.contains(&token) {
+                0
+            } else {
+                64
+            };
+            Ok((
+                super::super::expert_io::ExpertIoEstimate {
+                    incremental_unique_bytes: incremental,
+                    predicted_cold_bytes: incremental,
+                    ..Default::default()
+                },
+                token,
+            ))
+        }
+
+        fn admit(&mut self, token: Self::Admission) {
+            if !self.admitted_tokens.contains(&token) {
+                self.admitted_tokens.push(token);
+            }
+        }
+    }
+
+    impl ExpertIoAdvisor for FailSecondAdvisor {
+        type Admission = ();
+
+        fn begin_batch(&mut self) {
+            self.calls = 0;
+        }
+
+        fn estimate(
+            &mut self,
+            _candidate: ExpertIoCandidate<'_>,
+        ) -> Result<(super::super::expert_io::ExpertIoEstimate, Self::Admission)> {
+            self.calls += 1;
+            if self.calls == 2 {
+                Err(Error::Internal("simulated advisor failure".into()))
+            } else {
+                Ok((Default::default(), ()))
+            }
+        }
+
+        fn admit(&mut self, _admission: Self::Admission) {}
+    }
+
+    impl ExpertIoAdvisor for TokenCostAdvisor {
+        type Admission = ();
+
+        fn begin_batch(&mut self) {}
+
+        fn estimate(
+            &mut self,
+            candidate: ExpertIoCandidate<'_>,
+        ) -> Result<(super::super::expert_io::ExpertIoEstimate, Self::Admission)> {
+            let cold = candidate.token_ids.first().copied() == Some(10);
+            Ok((
+                super::super::expert_io::ExpertIoEstimate {
+                    incremental_unique_bytes: if cold { 128 } else { 0 },
+                    predicted_cold_bytes: if cold { 128 } else { 0 },
+                    ..Default::default()
+                },
+                (),
+            ))
+        }
+
+        fn admit(&mut self, _admission: Self::Admission) {}
+    }
 
     impl SequenceSlotPool for FailingFreeKvCache {
         fn alloc_slot(&mut self) -> Result<KvHandle> {
@@ -869,7 +1157,7 @@ mod tests {
             max_decode_batch: 2,
             ..Default::default()
         });
-        let mut kv = MultiSessionKvCache::new(1, 1, 8, 2);
+        let mut kv = FixedSequenceSlotPool::new(2);
         scheduler.submit(request(10, vec![1, 2, 3]));
 
         let SchedulerAction::PrefillChunk(first) = scheduler
@@ -883,7 +1171,7 @@ mod tests {
         assert_eq!(first.session_id, SessionId(1));
         assert_eq!(first.tokens, vec![1, 2]);
         assert_eq!(first.position_start, 0);
-        assert_eq!(first.kv_handle, Some(crate::cache::KvHandle(0)));
+        assert_eq!(first.kv_handle, Some(KvHandle(0)));
         scheduler.commit_prefill_action(&first).unwrap();
         assert_eq!(scheduler.active_sequence(SessionId(1)).unwrap().position, 2);
 
@@ -944,7 +1232,7 @@ mod tests {
             max_decode_batch: 2,
             ..Default::default()
         });
-        let mut kv = MultiSessionKvCache::new(1, 1, 8, 2);
+        let mut kv = FixedSequenceSlotPool::new(2);
         scheduler.submit(request(1, vec![1]));
         scheduler.submit(request(2, vec![2]));
         assert_eq!(scheduler.admit_waiting(&mut kv).unwrap(), 2);
@@ -978,7 +1266,7 @@ mod tests {
             max_batch_tokens: 3,
             allow_mixed_batches: true,
         });
-        let mut kv = MultiSessionKvCache::new(1, 1, 16, 2);
+        let mut kv = FixedSequenceSlotPool::new(2);
         scheduler.submit(request(1, vec![1]));
         scheduler.submit(request(2, vec![2, 3, 4, 5, 6]));
         scheduler.admit_waiting(&mut kv).unwrap();
@@ -999,12 +1287,187 @@ mod tests {
         assert_eq!(prefills.len(), 1);
         assert_eq!(prefills[0].tokens.len(), 2);
         assert_eq!(decodes.len() + prefills[0].tokens.len(), 3);
+        assert!(scheduler.expert_io_trace().is_empty());
+    }
+
+    #[test]
+    fn expert_io_budget_skips_blocked_decode_without_stalling_resident_work() {
+        let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
+            prefill_chunk_size: 4,
+            max_active_sequences: 2,
+            max_decode_batch: 2,
+            max_batch_tokens: 2,
+            allow_mixed_batches: true,
+        });
+        let mut kv = FixedSequenceSlotPool::new(2);
+        scheduler.submit(request(1, vec![1]));
+        scheduler.submit(request(2, vec![2]));
+        scheduler.admit_waiting(&mut kv).unwrap();
+        for _ in 0..2 {
+            let action = scheduler.next_prefill_action(&mut kv).unwrap().unwrap();
+            scheduler.commit_action(&action).unwrap();
+        }
+        scheduler.stage_decode_token(SessionId(1), 10).unwrap();
+        scheduler.stage_decode_token(SessionId(2), 20).unwrap();
+
+        let action = scheduler
+            .next_action_with_expert_io(
+                &mut kv,
+                &mut TokenCostAdvisor,
+                ExpertIoBudget {
+                    max_incremental_expert_bytes: 0,
+                    ..ExpertIoBudget::unbounded()
+                },
+            )
+            .unwrap()
+            .unwrap();
+        let SchedulerAction::Execute { decodes, prefills } = action else {
+            panic!("expected native execution action");
+        };
+        assert!(prefills.is_empty());
+        assert_eq!(decodes.len(), 1);
+        assert_eq!(decodes[0].token_id, 20);
+        assert_eq!(scheduler.expert_io_trace().len(), 2);
+        assert_eq!(
+            scheduler.expert_io_trace()[0].queue,
+            ExpertIoQueueClass::MissBlocked
+        );
+        assert_eq!(
+            scheduler.expert_io_trace()[1].queue,
+            ExpertIoQueueClass::ResidentReady
+        );
+        assert_eq!(scheduler.decode_ready_len(), 1);
+    }
+
+    #[test]
+    fn expert_io_advisor_error_restores_all_runnable_queues() {
+        let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
+            prefill_chunk_size: 4,
+            max_active_sequences: 2,
+            max_decode_batch: 2,
+            max_batch_tokens: 2,
+            allow_mixed_batches: true,
+        });
+        let mut kv = FixedSequenceSlotPool::new(2);
+        scheduler.submit(request(1, vec![1]));
+        scheduler.submit(request(2, vec![2]));
+        scheduler.admit_waiting(&mut kv).unwrap();
+        for _ in 0..2 {
+            let action = scheduler.next_prefill_action(&mut kv).unwrap().unwrap();
+            scheduler.commit_action(&action).unwrap();
+        }
+        scheduler.stage_decode_token(SessionId(1), 10).unwrap();
+        scheduler.stage_decode_token(SessionId(2), 20).unwrap();
+
+        let error = scheduler
+            .next_action_with_expert_io(
+                &mut kv,
+                &mut FailSecondAdvisor::default(),
+                ExpertIoBudget::unbounded(),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("simulated advisor failure"));
+        assert_eq!(scheduler.decode_ready_len(), 2);
+
+        let action = scheduler.next_action(&mut kv).unwrap().unwrap();
+        let SchedulerAction::Execute { decodes, .. } = action else {
+            panic!("expected restored decode batch");
+        };
+        assert_eq!(
+            decodes
+                .iter()
+                .map(|decode| decode.session_id)
+                .collect::<Vec<_>>(),
+            vec![SessionId(1), SessionId(2)]
+        );
+    }
+
+    #[test]
+    fn expert_io_advisor_commits_union_only_for_admitted_candidates() {
+        let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
+            prefill_chunk_size: 4,
+            max_active_sequences: 2,
+            max_decode_batch: 2,
+            max_batch_tokens: 2,
+            allow_mixed_batches: true,
+        });
+        let mut kv = FixedSequenceSlotPool::new(2);
+        scheduler.submit(request(1, vec![1]));
+        scheduler.submit(request(2, vec![2]));
+        scheduler.admit_waiting(&mut kv).unwrap();
+        for _ in 0..2 {
+            let action = scheduler.next_prefill_action(&mut kv).unwrap().unwrap();
+            scheduler.commit_action(&action).unwrap();
+        }
+        scheduler.stage_decode_token(SessionId(1), 10).unwrap();
+        scheduler.stage_decode_token(SessionId(2), 10).unwrap();
+
+        let mut advisor = UnionAdvisor::default();
+        let action = scheduler
+            .next_action_with_expert_io(
+                &mut kv,
+                &mut advisor,
+                ExpertIoBudget {
+                    max_incremental_expert_bytes: 64,
+                    allow_singleton_overflow: false,
+                    ..ExpertIoBudget::unbounded()
+                },
+            )
+            .unwrap()
+            .unwrap();
+        let SchedulerAction::Execute { decodes, .. } = action else {
+            panic!("expected native execution action");
+        };
+        assert_eq!(decodes.len(), 2);
+        assert_eq!(advisor.begin_calls, 1);
+        assert_eq!(advisor.admitted_tokens, vec![10]);
+        assert_eq!(
+            scheduler.expert_io_trace()[0]
+                .estimate
+                .incremental_unique_bytes,
+            64
+        );
+        assert_eq!(
+            scheduler.expert_io_trace()[1]
+                .estimate
+                .incremental_unique_bytes,
+            0
+        );
+    }
+
+    #[test]
+    fn expert_io_budget_forces_singleton_progress_when_all_work_is_blocked() {
+        let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
+            max_batch_tokens: 1,
+            ..Default::default()
+        });
+        let mut kv = FixedSequenceSlotPool::new(1);
+        scheduler.submit(request(1, vec![10]));
+
+        let action = scheduler
+            .next_action_with_expert_io(
+                &mut kv,
+                &mut TokenCostAdvisor,
+                ExpertIoBudget {
+                    max_incremental_expert_bytes: 0,
+                    ..ExpertIoBudget::unbounded()
+                },
+            )
+            .unwrap();
+        assert!(action.is_some());
+        assert_eq!(scheduler.expert_io_trace().len(), 1);
+        assert!(scheduler.expert_io_trace()[0].admitted);
+        assert!(scheduler.expert_io_trace()[0].forced_progress);
+        assert_eq!(
+            scheduler.expert_io_trace()[0].queue,
+            ExpertIoQueueClass::MissBlocked
+        );
     }
 
     #[test]
     fn resident_scheduler_cancel_frees_kv_and_drains_cancelled() {
         let mut scheduler = ResidentScheduler::default();
-        let mut kv = MultiSessionKvCache::new(1, 1, 4, 1);
+        let mut kv = FixedSequenceSlotPool::new(1);
         scheduler.submit(request(7, vec![1]));
         assert!(scheduler.next_prefill_action(&mut kv).unwrap().is_some());
         assert_eq!(kv.active_count(), 1);
@@ -1025,7 +1488,7 @@ mod tests {
     #[test]
     fn cancel_request_distinguishes_waiting_active_and_unknown() {
         let mut scheduler = ResidentScheduler::default();
-        let mut kv = MultiSessionKvCache::new(1, 1, 4, 1);
+        let mut kv = FixedSequenceSlotPool::new(1);
         scheduler.submit(request(1, vec![1]));
         scheduler.submit(request(2, vec![2]));
         assert_eq!(scheduler.admit_waiting(&mut kv).unwrap(), 1);
@@ -1074,7 +1537,7 @@ mod tests {
     #[test]
     fn greedy_decode_stages_full_logits_argmax() {
         let mut scheduler = ResidentScheduler::default();
-        let mut kv = MultiSessionKvCache::new(1, 1, 4, 1);
+        let mut kv = FixedSequenceSlotPool::new(1);
         scheduler.submit(request(1, vec![1]));
         let SchedulerAction::PrefillChunk(prefill) = scheduler
             .next_prefill_action(&mut kv)
@@ -1131,7 +1594,7 @@ mod tests {
             max_decode_batch: 2,
             ..Default::default()
         });
-        let mut kv = MultiSessionKvCache::new(1, 1, 4, 1);
+        let mut kv = FixedSequenceSlotPool::new(1);
         scheduler.submit(request(1, vec![1]));
         scheduler.submit(request(2, vec![2]));
         assert_eq!(scheduler.admit_waiting(&mut kv).unwrap(), 1);

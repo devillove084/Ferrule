@@ -7,6 +7,8 @@
 use ferrule_common::Result;
 
 use crate::execution::{SequenceStateCore, SequenceStepBinding};
+#[cfg(feature = "cuda")]
+use crate::moe::prediction::ExpertBatchAccessEvent;
 use crate::moe::prediction::ScoreBasedExpertPredictor;
 
 use super::layer::DeepSeekV4LayerState;
@@ -18,6 +20,13 @@ pub(crate) struct DeepSeekV4PagedKvBinding {
     pub(crate) sequence_len: usize,
     pub(crate) page_tokens: usize,
     pub(crate) layer_count: usize,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug)]
+pub(crate) struct DeepSeekV4SequenceMoeAccessEvent {
+    pub(crate) sequence_index: usize,
+    pub(crate) event: ExpertBatchAccessEvent,
 }
 
 /// Per-sequence execution state.
@@ -63,6 +72,10 @@ impl DeepSeekV4SequenceExecutionState {
 
     pub fn is_poisoned(&self) -> bool {
         self.core.is_poisoned()
+    }
+
+    pub fn expert_predictor(&self) -> &ScoreBasedExpertPredictor {
+        &self.predictor
     }
 
     /// Starts a mutation against the currently committed generation and cursor.

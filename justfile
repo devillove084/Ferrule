@@ -59,6 +59,18 @@ build-cuda arch='':
     @if [ "{{ _has-oxide }}" != "1" ]; then echo "error: cargo-oxide not found; run 'cargo install --path ...' or 'cargo oxide setup'"; exit 1; fi
     @arch="{{ arch }}"; test -n "$arch" || arch="{{ _cuda-arch }}"; echo "→ CUDA build via cargo oxide (arch: $arch)"; cargo oxide build --features cuda --arch "$arch" -- --release
 
+# Fetch the pinned header-only CUTLASS checkout into ignored build artifacts.
+cutlass-setup:
+    @if [ -f target/vendor/cutlass/include/cutlass/version.h ]; then echo "→ CUTLASS 4.6.1 headers already present"; else mkdir -p target/vendor; git clone --depth 1 --branch v4.6.1 https://github.com/NVIDIA/cutlass.git target/vendor/cutlass; fi
+
+# Build cuda-oxide control kernels plus CUTLASS leaf providers for this GPU.
+build-cutlass arch='': cutlass-setup
+    @if [ "{{ _has-oxide }}" != "1" ]; then echo "error: cargo-oxide not found"; exit 1; fi
+    @arch="{{ arch }}"; test -n "$arch" || arch="{{ _cuda-arch }}"; echo "→ CUDA + CUTLASS build (arch: $arch)"; cargo oxide build --features cuda,cutlass --arch "$arch" -- --release
+
+test-cutlass-provider: cutlass-setup
+    cargo test -p ferrule-cuda --features cutlass --test cutlass_provider
+
 build-dev:
     cargo build
 

@@ -290,7 +290,7 @@ fn packed_metadata_lowers_ragged_prefill_with_non_dense_state_slots() {
     assert_eq!(metadata.sequences[1].state_index, 1);
     assert_eq!(metadata.sequences[1].query, 3..5);
     #[cfg(feature = "cuda")]
-    assert!(!metadata.supports_native_cuda());
+    assert!(metadata.supports_native_cuda());
 }
 
 #[test]
@@ -404,6 +404,28 @@ fn packed_metadata_batch(mode: ForwardMode, sequences: Vec<ExecutionSequence>) -
         sequences,
         Vec::new(),
     )
+}
+
+#[test]
+fn packed_metadata_lowers_single_committed_row_for_serial_fallback() {
+    let batch = packed_metadata_batch(
+        ForwardMode::Decode,
+        vec![ExecutionSequence::new(
+            StateSlot::new(0),
+            ForwardPhase::Decode,
+            0..1,
+            10,
+            11,
+            0..0,
+        )],
+    );
+
+    let metadata = PackedBatchMetadata::lower(&batch, 1).unwrap();
+
+    assert_eq!(metadata.sequences.len(), 1);
+    assert_eq!(metadata.row_to_sequence, vec![0]);
+    #[cfg(feature = "cuda")]
+    assert!(!metadata.supports_native_cuda());
 }
 
 #[test]

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ferrule_common::execution::{
     ExecutionCapabilities, KvBindingMode, KvLayoutSchema, KvPlaneDescriptor, LogitsRowPolicy,
 };
-use ferrule_common::kernel_plan::{ModelKernelPlan, compile_default_plan};
+use ferrule_common::kernel_plan::ModelKernelPlan;
 use ferrule_common::{Error, Result};
 
 use crate::execution::PreparedModel;
@@ -132,6 +132,7 @@ pub struct DeepSeekV4ExecutionPolicy {
     hash_decode_prefetch_window: bool,
     prefill_hash_lookahead: bool,
     managed_experts: bool,
+    device_route_fast_path: bool,
     fused_indexer_topk: bool,
     fused_indexer_topk_prefill: bool,
     fused_indexer_topk_decode: bool,
@@ -150,6 +151,7 @@ impl Default for DeepSeekV4ExecutionPolicy {
             hash_decode_prefetch_window: false,
             prefill_hash_lookahead: false,
             managed_experts: true,
+            device_route_fast_path: false,
             fused_indexer_topk: true,
             fused_indexer_topk_prefill: false,
             fused_indexer_topk_decode: false,
@@ -184,6 +186,10 @@ impl DeepSeekV4ExecutionPolicy {
 
     pub const fn managed_experts(&self) -> bool {
         self.managed_experts
+    }
+
+    pub const fn device_route_fast_path(&self) -> bool {
+        self.device_route_fast_path
     }
 
     pub const fn fused_indexer_prefill_topk(&self) -> bool {
@@ -252,6 +258,11 @@ impl DeepSeekV4ExecutionPolicy {
             lookup("FERRULE_MANAGED_EXPERTS")?,
             true,
         )?;
+        let device_route_fast_path = parse_env_bool(
+            "FERRULE_DSV4_DEVICE_ROUTE_FAST_PATH",
+            lookup("FERRULE_DSV4_DEVICE_ROUTE_FAST_PATH")?,
+            false,
+        )?;
         let fused_indexer_topk = parse_env_bool(
             "FERRULE_DSV4_FUSED_INDEXER_TOPK",
             lookup("FERRULE_DSV4_FUSED_INDEXER_TOPK")?,
@@ -300,6 +311,7 @@ impl DeepSeekV4ExecutionPolicy {
             hash_decode_prefetch_window,
             prefill_hash_lookahead,
             managed_experts,
+            device_route_fast_path,
             fused_indexer_topk,
             fused_indexer_topk_prefill,
             fused_indexer_topk_decode,
@@ -314,6 +326,8 @@ impl DeepSeekV4ExecutionPolicy {
 #[derive(Debug, Clone)]
 pub struct DeepSeekV4PreparedLayerExperts {
     source_catalog: Arc<ExpertSourceCatalog>,
+    source_bytes: Arc<[u64]>,
+    source_order: Arc<[usize]>,
     streaming_policy: ExpertStreamingPolicy,
     resident_capacity: usize,
     prefetch_capacity: usize,
@@ -324,16 +338,35 @@ impl DeepSeekV4PreparedLayerExperts {
         source_catalog: Arc<ExpertSourceCatalog>,
         streaming_policy: ExpertStreamingPolicy,
     ) -> Self {
+        let mut source_bytes = vec![0; source_catalog.count()];
+        for (expert, source) in source_catalog.iter() {
+            if let Some(bytes) = source_bytes.get_mut(expert.expert) {
+                *bytes = source.bytes();
+            }
+        }
+        let mut source_order = (0..source_bytes.len()).collect::<Vec<_>>();
+        source_order.sort_unstable_by_key(|&expert| std::cmp::Reverse(source_bytes[expert]));
+        let source_bytes = source_bytes.into();
         Self {
             resident_capacity: streaming_policy.gpu_slots_per_layer,
             prefetch_capacity: streaming_policy.prefetch_per_layer,
             source_catalog,
+            source_bytes,
+            source_order: source_order.into(),
             streaming_policy,
         }
     }
 
     pub fn source_catalog(&self) -> &Arc<ExpertSourceCatalog> {
         &self.source_catalog
+    }
+
+    pub(crate) fn source_bytes(&self) -> &Arc<[u64]> {
+        &self.source_bytes
+    }
+
+    pub(crate) fn source_order(&self) -> &Arc<[usize]> {
+        &self.source_order
     }
 
     pub const fn streaming_policy(&self) -> &ExpertStreamingPolicy {
@@ -519,7 +552,13 @@ pub fn prepare(
             .collect::<Vec<_>>()
             .into_boxed_slice(),
     };
-    let kernel_plan = compile_default_plan(options.max_layers)?;
+    #[cfg(feature = "cuda")]
+    let kernel_plan = ferrule_cuda::provider::compile_cuda_model_plan(
+        options.max_layers,
+        model.config.hidden_size,
+    )?;
+    #[cfg(not(feature = "cuda"))]
+    let kernel_plan = ModelKernelPlan::new(options.max_layers);
     let resources = DeepSeekV4PreparedResources {
         model,
         options,

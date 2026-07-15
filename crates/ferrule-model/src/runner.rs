@@ -279,6 +279,33 @@ pub trait MultiSessionRunner: TopKModelRunner {
     fn multi_session_capabilities(&self) -> ExecutionCapabilities;
 }
 
+/// Optional model-owned expert-I/O oracle consumed by the generic runtime
+/// scheduler. Implementations keep route prediction and cache interpretation in
+/// the model crate while exposing only model-neutral cost estimates.
+pub trait ExpertIoModelRunner: MultiSessionRunner {
+    type ExpertIoBatchState;
+    type ExpertIoAdmission;
+
+    fn begin_expert_io_batch(&self) -> Self::ExpertIoBatchState;
+
+    fn estimate_expert_io(
+        &self,
+        batch: &mut Self::ExpertIoBatchState,
+        sequence: &Self::SequenceState,
+        phase: ferrule_common::expert_io::ExpertIoPhase,
+        token_ids: &[u32],
+    ) -> Result<(
+        ferrule_common::expert_io::ExpertIoEstimate,
+        Self::ExpertIoAdmission,
+    )>;
+
+    fn admit_expert_io(
+        &self,
+        batch: &mut Self::ExpertIoBatchState,
+        admission: Self::ExpertIoAdmission,
+    );
+}
+
 // ── Engine-plan helpers ──────────────────────────────────────────────────
 
 pub fn unsupported_runtime_message(plan: &EnginePlan) -> String {

@@ -674,6 +674,44 @@ impl KvPageManager {
         self.page_refcounts.get(&page).copied().unwrap_or(0)
     }
 
+    /// Derive a read-only prefix view for backend replay without publishing or
+    /// transferring ownership of the original reservation.
+    pub fn reservation_prefix_view(
+        &self,
+        reservation: &KvReservation,
+        prefix_rows: usize,
+    ) -> Result<KvReservation> {
+        if prefix_rows > reservation.positions.len() {
+            return Err(Error::Execution(format!(
+                "page manager: reservation prefix {prefix_rows} exceeds reserved rows {}",
+                reservation.positions.len()
+            )));
+        }
+        let prefix_end = reservation
+            .positions
+            .start
+            .checked_add(prefix_rows)
+            .ok_or_else(|| Error::Execution("page manager: prefix view end overflow".into()))?;
+        let pages_before = self.schema.pages_for_tokens(reservation.positions.start);
+        let pages_after = self.schema.pages_for_tokens(prefix_end);
+        let prefix_new_pages = pages_after.checked_sub(pages_before).ok_or_else(|| {
+            Error::Internal("page manager: prefix view page count moved backwards".into())
+        })?;
+        if prefix_new_pages > reservation.newly_allocated.len() {
+            return Err(Error::Internal(format!(
+                "page manager: prefix view needs {prefix_new_pages} new pages but reservation has {}",
+                reservation.newly_allocated.len()
+            )));
+        }
+        let mut view = reservation.clone();
+        view.positions.end = prefix_end;
+        view.newly_allocated.truncate(prefix_new_pages);
+        if prefix_rows == 0 {
+            view.cow_replacement = None;
+        }
+        Ok(view)
+    }
+
     /// Build provisional block/write bindings without publishing the reservation.
     pub fn reservation_bindings(
         &self,
@@ -836,6 +874,29 @@ mod tests {
         let table = mgr.block_table(slot(0)).unwrap();
         assert_eq!(table.committed_tokens(), 4);
         assert_eq!(table.num_pages(), 1);
+    }
+
+    #[test]
+    fn reservation_prefix_view_is_non_publishing_and_truncates_backend_bindings() {
+        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
+        mgr.alloc_sequence(slot(0), 0).unwrap();
+        let initial = mgr.reserve(slot(0), 0, 3).unwrap();
+        mgr.commit(initial).unwrap();
+
+        let reservation = mgr.reserve(slot(0), 0, 10).unwrap();
+        assert_eq!(reservation.newly_allocated.len(), 3);
+        let view = mgr.reservation_prefix_view(&reservation, 5).unwrap();
+        assert_eq!(view.positions, 3..8);
+        assert_eq!(view.newly_allocated.len(), 1);
+        let bindings = mgr.reservation_bindings(&view).unwrap();
+        assert_eq!(bindings.write_slots.len(), 5);
+        assert_eq!(bindings.block_ids.len(), 2);
+        assert_eq!(mgr.block_table(slot(0)).unwrap().committed_tokens(), 3);
+        assert_eq!(reservation.positions, 3..13);
+        assert_eq!(reservation.newly_allocated.len(), 3);
+
+        mgr.rollback(reservation).unwrap();
+        assert_eq!(mgr.block_table(slot(0)).unwrap().committed_tokens(), 3);
     }
 
     #[test]

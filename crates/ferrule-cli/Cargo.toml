@@ -32,6 +32,7 @@ tokio = { version = "1", features = ["net", "rt-multi-thread", "signal"] }
 [features]
 default = []
 cuda = ["ferrule-cuda", "ferrule-runtime/cuda", "ferrule-model/cuda"]
+cutlass = ["cuda", "ferrule-cuda/cutlass", "ferrule-runtime/cutlass", "ferrule-model/cutlass"]
 # Opt-in only: local ignored DSV4 runtime-driver tests require cargo-oxide,
 # CUDA hardware, and a large local `models/DeepSeek-V4-Flash-DSpark` artifact.
 local-dsv4-tests = ["cuda"]

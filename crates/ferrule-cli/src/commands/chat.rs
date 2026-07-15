@@ -1,13 +1,13 @@
-use crate::SamplingArgs;
+use crate::{GenerationConfig, SamplingArgs};
 use ferrule_model::{
     ChatTemplate, ModelDescriptor, ModelExecutionBackend, ModelFamily, ModelRunner,
     detect_chat_template,
     models::deepseek_v4::{DeepSeekV4ArtifactModel, DeepSeekV4PrepareOptions, DeepSeekV4Runner},
 };
 use ferrule_runtime::{
-    FixedSequenceSlotPool, GenerateRequest, GenerationConfig, RequestId, ResidentActionKind,
-    ResidentDriverStep, ResidentSchedulerConfig, ResidentTopKDriver, ResidentTopKDriverConfig,
-    SamplingConfig, SequenceFinishReason, SessionId,
+    FixedSequenceSlotPool, GenerateRequest, RequestId, ResidentActionKind, ResidentDriverStep,
+    ResidentSchedulerConfig, ResidentTopKDriver, ResidentTopKDriverConfig, SequenceFinishReason,
+    SessionId,
 };
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -124,9 +124,8 @@ fn run_deepseek_v4_chat(
     chat_template: ChatTemplate,
     sampling: &SamplingArgs,
 ) -> anyhow::Result<()> {
-    let sampling_config = sampling.sampling_config();
     let options = deepseek_v4_chat_options();
-    if can_use_deepseek_v4_fast_greedy(&sampling_config, generation) {
+    if sampling.supports_fast_greedy() {
         run_deepseek_v4_greedy_chat_loop_lazy(
             model_path.to_path_buf(),
             backend,
@@ -140,15 +139,6 @@ fn run_deepseek_v4_chat(
             "DeepSeek-V4 non-greedy/logprob chat is not yet supported; use --temp 0 --repeat-penalty 1 --logprobs 0 for the top-k fast path"
         );
     }
-}
-
-fn can_use_deepseek_v4_fast_greedy(
-    sampling: &SamplingConfig,
-    generation: &GenerationConfig,
-) -> bool {
-    sampling.temperature <= 0.0
-        && (sampling.repeat_penalty - 1.0).abs() < f32::EPSILON
-        && generation.logprobs_k == 0
 }
 
 type DeepSeekV4ChatDriver = ResidentTopKDriver<DeepSeekV4Runner, FixedSequenceSlotPool>;
@@ -378,7 +368,6 @@ fn run_deepseek_v4_greedy_chat_loop_lazy(
             id: RequestId(turns),
             session_id: Some(session_id),
             prompt_tokens: prompt_tokens.clone(),
-            sampling: SamplingConfig::greedy(),
             max_new_tokens: generation.max_new_tokens,
             stop: generation.stop.clone(),
             ignore_eos: !generation.stop_at_eos,

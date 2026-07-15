@@ -12,6 +12,7 @@
 //! Note: `graph` in this crate refers to CUDA driver graph capture/replay.
 //! Ferrule's device-independent compute graph IR lives in `ferrule-runtime::graph`.
 
+pub mod architecture;
 pub mod benchmark;
 pub mod context;
 pub mod counters;
@@ -29,6 +30,11 @@ pub use cuda_core::CudaContext;
 pub use cuda_core::stream::CudaStream;
 
 // Re-export common CUDA API surface for downstream crates.
+pub use architecture::{
+    COMPILED_BLACKWELL_MMA_SYNC_FP8, COMPILED_BLACKWELL_MMA_SYNC_MXFP4,
+    COMPILED_CUDA_OXIDE_BF16_MMA, COMPILED_TARGET, CudaArchitectureFamily, CudaKernelCapabilities,
+    CudaTarget, CudaTargetSuffix, compiled_capabilities,
+};
 pub use benchmark::{CudaSmokeBenchmark, run_gemv_rms_smoke_benchmark, run_smoke_benchmark};
 pub use context::CudaFailpoints;
 pub use context::CudaSwiGLUWorkspace;
@@ -42,9 +48,9 @@ pub use kv_page_pool::{
     CudaKvPagePool, KvHostSnapshot, KvPagePoolStats, KvPoolReservation, PagedPlaneLayout,
 };
 pub use provider::{
-    KernelId, KernelPhase, KernelProviderId, LaunchDescriptor, LayerKernelPlan, LayerKernelPlanSet,
-    ModelKernelPlan, ProviderManifest, ProviderRegistry, RowBucket, WeightBinding, WeightLayout,
-    compile_default_plan,
+    CudaProviderCatalog, KernelId, KernelPhase, KernelProviderId, LaunchDescriptor,
+    LayerKernelPlan, LayerKernelPlanSet, ModelKernelPlan, ProviderManifest, ProviderRegistry,
+    RowBucket, WeightBinding, WeightLayout, compile_cuda_model_plan,
 };
 pub use transformer::combined_ring::CombinedRingTopkLayout;
 pub use transformer::compressor_recurrent::CompressorRecurrentShape;

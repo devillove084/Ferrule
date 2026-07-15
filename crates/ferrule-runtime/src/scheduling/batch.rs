@@ -8,7 +8,9 @@ use ferrule_common::execution::{
 };
 use ferrule_common::{Error, Result};
 
-use crate::cache::{KvHandle, KvReservationBindings};
+use crate::cache::KvReservationBindings;
+
+use super::KvHandle;
 
 use super::actions::{LogitsSelection, SchedulerAction};
 use super::session::{RequestId, SessionId};
@@ -131,6 +133,7 @@ impl ScheduledBatch {
                 block_start..block_end,
             ));
         }
+        let intent = self.execution.intent();
         self.execution = ExecutionBatch::new(
             self.execution.mode(),
             self.execution.token_ids().to_vec(),
@@ -139,7 +142,8 @@ impl ScheduledBatch {
             self.execution.logits().to_vec(),
             sequences,
             block_ids,
-        );
+        )
+        .with_intent(intent);
         Ok(())
     }
 

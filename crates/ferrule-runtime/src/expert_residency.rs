@@ -1,22 +1,4 @@
-//! Expert residency backend trait and adapters.
-//!
-//! This module bridges the existing `ExpertStreamingPlanner` (strategy layer)
-//! with backend handle stores (execution layer). It provides:
-//!
-//! 1. `ExpertResidencyBackend` — a trait that unifies the duplicated
-//!    load/evict loop previously inlined in `routed_moe.rs` (CPU path) and
-//!    `deepseek_v4.rs` (CUDA path).
-//! 2. `apply_streaming_step` — one function that replaces both loops.
-//! 3. Adapters from existing expert types to runtime storage vocabulary types
-//!    (`ExpertId → StorageObjectId`, `ExpertStorageTier → Placement`,
-//!    `ExpertLoadSource → ObjectLocator`).
-//!
-//! Storage vocabulary lives in `crate::storage`; it is intentionally a runtime
-//! module rather than a separate workspace crate.
-
-use crate::storage::{
-    DeviceMemoryKind, LocalPlacement, ModelRevision, ObjectLocator, Placement, StorageObjectId,
-};
+//! Expert residency controller and backend materialization boundary.
 pub use ferrule_common::expert_residency::{
     ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertInstallReason, ExpertKey, ExpertLease,
     ExpertResidencyControl, ExpertResidencyCoordinator, ExpertResidencyCoordinatorStats,
@@ -26,137 +8,8 @@ pub use ferrule_common::expert_residency::{
 use ferrule_common::{Error, Result};
 
 use ferrule_model::moe::streaming::{
-    ExpertId, ExpertLoadSource, ExpertMatrixKind as RuntimeExpertMatrixKind, ExpertStorageTier,
-    ExpertStreamingReader, ExpertStreamingStep,
-    ExpertTensorComponent as RuntimeExpertTensorComponent,
+    ExpertId, ExpertLoadSource, ExpertStreamingReader, ExpertStreamingStep,
 };
-
-// ── Adapters: ExpertId → StorageObjectId ──────────────────────────────
-
-/// Convert an `ExpertId` to a `StorageObjectId::ExpertBundle`.
-///
-/// `model_revision` and `layout_version` must be supplied by the caller —
-/// they are not carried by `ExpertId` today. In Phase 3, the planner will
-/// hold a `ModelRevision` and pass it through; for now, adapters use a
-/// placeholder.
-pub fn expert_id_to_storage_object_id(
-    expert: ExpertId,
-    model_revision: ModelRevision,
-    layout_version: u32,
-) -> StorageObjectId {
-    StorageObjectId::ExpertBundle {
-        model_revision,
-        layer: expert.layer as u32,
-        expert: expert.expert as u32,
-        layout_version,
-    }
-}
-
-// ── Adapter: ExpertStorageTier → Placement ────────────────────────────
-
-/// Map a runtime storage tier to a storage-vocabulary `Placement`.
-///
-/// `Loading` maps to `Host` (staging) since it represents an in-flight
-/// transfer that will land in a local tier.
-pub fn expert_storage_tier_to_placement(tier: ExpertStorageTier) -> Placement {
-    match tier {
-        ExpertStorageTier::Gpu => Placement::Local(LocalPlacement::Device {
-            device_id: 0,
-            memory: DeviceMemoryKind::Vram,
-        }),
-        ExpertStorageTier::Cpu => Placement::Local(LocalPlacement::Host { pinned: false }),
-        ExpertStorageTier::HostMmap => Placement::Local(LocalPlacement::Host { pinned: false }),
-        ExpertStorageTier::LocalStorage => Placement::Local(LocalPlacement::Disk { volume: None }),
-        ExpertStorageTier::Remote => Placement::Remote(crate::storage::RemotePlacement {
-            endpoint: crate::storage::RemoteEndpoint {
-                scheme: crate::storage::RemoteScheme::Http,
-                host: String::new(),
-                port: None,
-            },
-            region: None,
-        }),
-        ExpertStorageTier::Loading => Placement::Local(LocalPlacement::Host { pinned: false }),
-    }
-}
-
-// ── Adapter: ExpertLoadSource → ObjectLocator ─────────────────────────
-
-/// Map a runtime load source to a storage-vocabulary `ObjectLocator`.
-///
-/// `GpuResident` and `CpuResident` return `None` — they represent
-/// already-resident objects, not fetchable locators.
-pub fn expert_load_source_to_locator(source: &ExpertLoadSource) -> Option<ObjectLocator> {
-    match source {
-        ExpertLoadSource::GpuResident | ExpertLoadSource::CpuResident => None,
-        ExpertLoadSource::HostMmap {
-            artifact,
-            offset,
-            bytes,
-        } => Some(ObjectLocator::LocalMmap {
-            path: artifact.clone(),
-            offset: *offset,
-            bytes: *bytes,
-        }),
-        ExpertLoadSource::LocalShard {
-            path,
-            offset,
-            bytes,
-        } => Some(ObjectLocator::LocalFile {
-            path: path.clone(),
-            offset: *offset,
-            bytes: *bytes,
-        }),
-        ExpertLoadSource::LocalTensorSet { tensors } => {
-            // A tensor set is a composite; use the first tensor's path
-            // as the primary locator. The catalog can register multiple
-            // locators per object in the future.
-            tensors.first().map(|t| ObjectLocator::LocalFile {
-                path: t.path.clone(),
-                offset: t.offset,
-                bytes: t.bytes,
-            })
-        }
-        ExpertLoadSource::WeightPackChunk {
-            path,
-            offset,
-            bytes,
-        } => Some(ObjectLocator::WeightPack {
-            path: path.clone(),
-            chunk: String::new(),
-            offset: *offset,
-            bytes: *bytes,
-        }),
-        ExpertLoadSource::Remote { uri, offset, bytes } => Some(ObjectLocator::RemoteObject {
-            uri: uri.clone(),
-            offset: *offset,
-            bytes: *bytes,
-        }),
-    }
-}
-
-// ── Adapter: ExpertMatrixKind ─────────────────────────────────────────
-
-impl From<RuntimeExpertMatrixKind> for crate::storage::id::ExpertMatrixKind {
-    fn from(kind: RuntimeExpertMatrixKind) -> Self {
-        match kind {
-            RuntimeExpertMatrixKind::Gate => Self::Gate,
-            RuntimeExpertMatrixKind::Up => Self::Up,
-            RuntimeExpertMatrixKind::Down => Self::Down,
-        }
-    }
-}
-
-// ── Adapter: ExpertTensorComponent ────────────────────────────────────
-
-impl From<RuntimeExpertTensorComponent> for crate::storage::id::ExpertTensorComponent {
-    fn from(comp: RuntimeExpertTensorComponent) -> Self {
-        match comp {
-            RuntimeExpertTensorComponent::Weight => Self::Weight,
-            RuntimeExpertTensorComponent::Scale => Self::Scale,
-            RuntimeExpertTensorComponent::Other(s) => Self::Other(s),
-        }
-    }
-}
 
 // ── Model-neutral per-layer residency controller ─────────────────────
 
@@ -411,8 +264,7 @@ pub trait ExpertResidencyBackend {
 
 /// Apply a streaming step to a backend: evict first, then load.
 ///
-/// This is the single implementation of the load/evict loop that was
-/// previously duplicated in `routed_moe.rs` and `deepseek_v4.rs`.
+/// This is the single runtime implementation of the backend load/evict loop.
 pub fn apply_streaming_step(
     backend: &mut impl ExpertResidencyBackend,
     step: &ExpertStreamingStep,
@@ -480,14 +332,11 @@ impl ExpertResidencyBackend for CpuExpertHandleStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::id::{
-        ExpertMatrixKind as StorageExpertMatrixKind,
-        ExpertTensorComponent as StorageExpertTensorComponent,
-    };
     use ferrule_model::moe::handle::CpuExpertHandleStore;
     use ferrule_model::moe::streaming::{
-        ExpertId, ExpertLoadSource, ExpertStreamingPlanner, ExpertStreamingPolicy,
-        ExpertTensorComponent, ExpertTensorKey, ExpertTensorSlice,
+        ExpertId, ExpertLoadSource, ExpertMatrixKind as RuntimeExpertMatrixKind, ExpertStorageTier,
+        ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertTensorComponent, ExpertTensorKey,
+        ExpertTensorSlice,
     };
     use std::path::PathBuf;
 
@@ -773,141 +622,6 @@ mod tests {
         assert!(controller.binding(layer1_second).unwrap().is_some());
         assert_eq!(controller.layer_stats(0).unwrap().resident, 1);
         assert_eq!(controller.layer_stats(1).unwrap().resident, 2);
-    }
-
-    // ── Adapter tests ──
-
-    #[test]
-    fn expert_id_maps_to_storage_object_id() {
-        let id = expert_id(3, 7);
-        let storage_id = expert_id_to_storage_object_id(id, ModelRevision(42), 2);
-        match storage_id {
-            StorageObjectId::ExpertBundle {
-                layer,
-                expert,
-                layout_version,
-                model_revision,
-            } => {
-                assert_eq!(layer, 3);
-                assert_eq!(expert, 7);
-                assert_eq!(layout_version, 2);
-                assert_eq!(model_revision, ModelRevision(42));
-            }
-            _ => panic!("expected ExpertBundle"),
-        }
-    }
-
-    #[test]
-    fn tier_to_placement_gpu() {
-        let p = expert_storage_tier_to_placement(ExpertStorageTier::Gpu);
-        assert!(p.is_device());
-    }
-
-    #[test]
-    fn tier_to_placement_cpu() {
-        let p = expert_storage_tier_to_placement(ExpertStorageTier::Cpu);
-        assert!(p.is_host());
-    }
-
-    #[test]
-    fn tier_to_placement_local_storage() {
-        let p = expert_storage_tier_to_placement(ExpertStorageTier::LocalStorage);
-        assert!(p.is_disk());
-    }
-
-    #[test]
-    fn tier_to_placement_remote() {
-        let p = expert_storage_tier_to_placement(ExpertStorageTier::Remote);
-        assert!(p.is_remote());
-    }
-
-    #[test]
-    fn load_source_to_locator_local_shard() {
-        let src = ExpertLoadSource::LocalShard {
-            path: PathBuf::from("/data/model.safetensors"),
-            offset: 1024,
-            bytes: 4096,
-        };
-        let loc = expert_load_source_to_locator(&src).unwrap();
-        match loc {
-            ObjectLocator::LocalFile {
-                path,
-                offset,
-                bytes,
-            } => {
-                assert_eq!(path, PathBuf::from("/data/model.safetensors"));
-                assert_eq!(offset, 1024);
-                assert_eq!(bytes, 4096);
-            }
-            _ => panic!("expected LocalFile"),
-        }
-    }
-
-    #[test]
-    fn load_source_to_locator_gpu_resident_is_none() {
-        let src = ExpertLoadSource::GpuResident;
-        assert!(expert_load_source_to_locator(&src).is_none());
-    }
-
-    #[test]
-    fn load_source_to_locator_weightpack() {
-        let src = ExpertLoadSource::WeightPackChunk {
-            path: PathBuf::from("/data/model.qcache"),
-            offset: 256,
-            bytes: 2048,
-        };
-        let loc = expert_load_source_to_locator(&src).unwrap();
-        assert!(matches!(loc, ObjectLocator::WeightPack { .. }));
-    }
-
-    #[test]
-    fn load_source_to_locator_remote() {
-        let src = ExpertLoadSource::Remote {
-            uri: "s3://bucket/expert.bin".into(),
-            offset: 0,
-            bytes: 4096,
-        };
-        let loc = expert_load_source_to_locator(&src).unwrap();
-        match loc {
-            ObjectLocator::RemoteObject { uri, .. } => {
-                assert_eq!(uri, "s3://bucket/expert.bin");
-            }
-            _ => panic!("expected RemoteObject"),
-        }
-    }
-
-    #[test]
-    fn matrix_kind_adapter() {
-        assert_eq!(
-            StorageExpertMatrixKind::from(RuntimeExpertMatrixKind::Gate),
-            StorageExpertMatrixKind::Gate
-        );
-        assert_eq!(
-            StorageExpertMatrixKind::from(RuntimeExpertMatrixKind::Up),
-            StorageExpertMatrixKind::Up
-        );
-        assert_eq!(
-            StorageExpertMatrixKind::from(RuntimeExpertMatrixKind::Down),
-            StorageExpertMatrixKind::Down
-        );
-    }
-
-    #[test]
-    fn tensor_component_adapter() {
-        assert_eq!(
-            StorageExpertTensorComponent::from(RuntimeExpertTensorComponent::Weight),
-            StorageExpertTensorComponent::Weight
-        );
-        assert_eq!(
-            StorageExpertTensorComponent::from(RuntimeExpertTensorComponent::Scale),
-            StorageExpertTensorComponent::Scale
-        );
-        assert_eq!(
-            StorageExpertTensorComponent::from(RuntimeExpertTensorComponent::Other(
-                "custom".into()
-            )),
-            StorageExpertTensorComponent::Other("custom".into())
-        );
     }
 
     // ── CpuExpertHandleStore backend tests ──

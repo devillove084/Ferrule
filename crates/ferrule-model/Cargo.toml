@@ -12,6 +12,7 @@ categories = ["science", "machine-learning"]
 [features]
 default = []
 cuda = ["dep:ferrule-cuda"]
+cutlass = ["cuda", "ferrule-cuda/cutlass"]
 
 [dependencies]
 ferrule-common = { path = "../ferrule-common" }
