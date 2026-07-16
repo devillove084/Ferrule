@@ -9,8 +9,14 @@ use ferrule_common::execution::{
     ExecutionCapabilities, KvBindingMode, KvLayoutSchema, KvPlaneDescriptor, LogitsRowPolicy,
 };
 use ferrule_common::kernel_plan::ModelKernelPlan;
+#[cfg(feature = "cuda")]
+use ferrule_common::kernel_plan::{
+    KernelOperation, LayerKernelRequirements, LinearBundleRequirement, WeightLayout,
+};
 use ferrule_common::{Error, Result};
 
+#[cfg(feature = "cuda")]
+use crate::artifact::linear::{ArtifactLinearFormat, ArtifactLinearPayload};
 use crate::execution::PreparedModel;
 use crate::moe::streaming::{ExpertMemoryPolicy, ExpertSourceCatalog, ExpertStreamingPolicy};
 
@@ -389,9 +395,8 @@ pub struct DeepSeekV4PreparedResources {
     layer_experts: Box<[DeepSeekV4PreparedLayerExperts]>,
     kv_layout: DeepSeekV4KvLayoutSchema,
     policy: DeepSeekV4ExecutionPolicy,
-    /// Per-layer kernel plans for rows=1/2/4/8 (Section 3.2 executable plan).
-    /// Starts empty; phases are filled in as superkernel bundles are
-    /// implemented.  An empty plan means "use the existing eager dispatch".
+    /// Required per-layer semantic superkernel plan. Missing operations are
+    /// prepare-time errors; row-count schedule selection is provider-owned.
     kernel_plan: ModelKernelPlan,
 }
 
@@ -553,10 +558,13 @@ pub fn prepare(
             .into_boxed_slice(),
     };
     #[cfg(feature = "cuda")]
-    let kernel_plan = ferrule_cuda::provider::compile_cuda_model_plan(
-        options.max_layers,
-        model.config.hidden_size,
-    )?;
+    let kernel_plan = {
+        let requirements = layers
+            .iter()
+            .map(deepseek_v4_layer_kernel_requirements)
+            .collect::<Result<Vec<_>>>()?;
+        ferrule_cuda::provider::compile_cuda_model_plan(&requirements)?
+    };
     #[cfg(not(feature = "cuda"))]
     let kernel_plan = ModelKernelPlan::new(options.max_layers);
     let resources = DeepSeekV4PreparedResources {
@@ -570,6 +578,225 @@ pub fn prepare(
     };
 
     publish_prepared(Ok((capabilities, resources)))
+}
+
+#[cfg(feature = "cuda")]
+fn deepseek_v4_layer_kernel_requirements(
+    layer: &DeepSeekV4Layer,
+) -> Result<LayerKernelRequirements> {
+    let mut requirements = LayerKernelRequirements::default();
+    if layer.hc_config.hc_mult != 4
+        || layer.hc_config.hidden_size != 4096
+        || layer.hc_config.mix_hc() != 24
+        || layer.attn_norm.len() != 4096
+        || layer.ffn_norm.len() != 4096
+    {
+        return Err(Error::Model(format!(
+            "SM121 HC producer requires hc=4 hidden=4096 mix=24 at layer {}, got hc={} hidden={} mix={} attn_norm={} ffn_norm={}",
+            layer.layer,
+            layer.hc_config.hc_mult,
+            layer.hc_config.hidden_size,
+            layer.hc_config.mix_hc(),
+            layer.attn_norm.len(),
+            layer.ffn_norm.len()
+        )));
+    }
+    validate_shared_ffn_requirement(layer)?;
+    validate_mla_output_requirement(layer)?;
+    requirements.require_operation(KernelOperation::AttentionHcPre);
+    requirements.require_operation(KernelOperation::FeedForwardHcPre);
+    requirements.require_operation(KernelOperation::SharedFfn);
+    requirements.require_operation(KernelOperation::RoutedFp4Moe);
+    requirements.require_operation(KernelOperation::MlaOutput);
+    requirements.add_linear_bundle(fp8_linear_bundle_requirement(
+        KernelOperation::MlaQueryAKv,
+        [
+            &layer.attention.payload.query_a,
+            &layer.attention.payload.key_value,
+        ],
+    )?);
+
+    let Some(compressed) = layer.attention.compressed.as_ref() else {
+        return Ok(requirements);
+    };
+
+    requirements.add_linear_bundle(bf16_linear_bundle_requirement(
+        KernelOperation::MainCompressorProjection,
+        [&compressed.compressor.wkv, &compressed.compressor.wgate],
+    )?);
+    if let Some(indexer) = compressed.indexer.as_ref() {
+        requirements.add_linear_bundle(bf16_linear_bundle_requirement(
+            KernelOperation::IndexerCompressorProjection,
+            [&indexer.compressor.wkv, &indexer.compressor.wgate],
+        )?);
+    }
+    Ok(requirements)
+}
+
+#[cfg(feature = "cuda")]
+fn validate_shared_ffn_requirement(layer: &DeepSeekV4Layer) -> Result<()> {
+    let formats = (
+        &layer.shared_ffn.gate.format,
+        &layer.shared_ffn.up.format,
+        &layer.shared_ffn.down.format,
+    );
+    let (
+        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+            out_features: gate_out,
+            in_features: gate_in,
+            block_m: 128,
+            block_k: 128,
+        },
+        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+            out_features: up_out,
+            in_features: up_in,
+            block_m: 128,
+            block_k: 128,
+        },
+        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+            out_features: down_out,
+            in_features: down_in,
+            block_m: 128,
+            block_k: 128,
+        },
+    ) = formats
+    else {
+        return Err(Error::Model(format!(
+            "SM121 shared FFN requires FP8 K128 weights at layer {}: gate={:?} up={:?} down={:?}",
+            layer.layer, formats.0, formats.1, formats.2
+        )));
+    };
+    if gate_in != up_in
+        || gate_out != up_out
+        || down_in != gate_out
+        || !gate_in.is_multiple_of(128)
+        || !gate_out.is_multiple_of(128)
+        || !down_out.is_multiple_of(16)
+        || !layer.shared_ffn.swiglu_limit.is_finite()
+    {
+        return Err(Error::Model(format!(
+            "SM121 shared FFN shape is unsupported at layer {}: gate=[{gate_out},{gate_in}] up=[{up_out},{up_in}] down=[{down_out},{down_in}] limit={}",
+            layer.layer, layer.shared_ffn.swiglu_limit
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn validate_mla_output_requirement(layer: &DeepSeekV4Layer) -> Result<()> {
+    let cfg = layer.attention.config;
+    let output_a = &layer.attention.payload.output_a.format;
+    let output_b = &layer.attention.payload.output_b.format;
+    let (
+        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+            out_features: output_a_out,
+            in_features: output_a_in,
+            block_m: 128,
+            block_k: 128,
+        },
+        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+            out_features: output_b_out,
+            in_features: output_b_in,
+            block_m: 128,
+            block_k: 128,
+        },
+    ) = (output_a, output_b)
+    else {
+        return Err(Error::Model(format!(
+            "SM121 MLA output requires FP8/E8M0 output-A and output-B at layer {}: output_a={output_a:?} output_b={output_b:?}",
+            layer.layer
+        )));
+    };
+    if *output_a_out != cfg.output_latent_dim()
+        || *output_a_in != cfg.output_group_input_dim()
+        || *output_b_in != cfg.output_latent_dim()
+        || *output_b_out != cfg.hidden_size
+        || !cfg.output_group_input_dim().is_multiple_of(128)
+        || !cfg.o_lora_rank.is_multiple_of(16)
+    {
+        return Err(Error::Model(format!(
+            "SM121 MLA output shape mismatch at layer {}: output_a=[{output_a_out},{output_a_in}] output_b=[{output_b_out},{output_b_in}] groups={} rank={} hidden={}",
+            layer.layer, cfg.o_groups, cfg.o_lora_rank, cfg.hidden_size
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn fp8_linear_bundle_requirement(
+    operation: KernelOperation,
+    linears: [&ArtifactLinearPayload; 2],
+) -> Result<LinearBundleRequirement> {
+    let [first, second] = linears;
+    let (
+        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+            out_features: first_out,
+            in_features: first_in,
+            block_m: first_block_m,
+            block_k: first_block_k,
+        },
+        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+            out_features: second_out,
+            in_features: second_in,
+            block_m: second_block_m,
+            block_k: second_block_k,
+        },
+    ) = (&first.format, &second.format)
+    else {
+        return Err(Error::Model(format!(
+            "DeepSeek-V4 {operation:?} requires two FP8 bindings"
+        )));
+    };
+    if first_in != second_in
+        || *first_block_m != 128
+        || *first_block_k != 128
+        || *second_block_m != 128
+        || *second_block_k != 128
+    {
+        return Err(Error::Model(format!(
+            "DeepSeek-V4 {operation:?} requires matching FP8 K128 layouts"
+        )));
+    }
+    Ok(LinearBundleRequirement::new(
+        operation,
+        *first_in,
+        [*first_out, *second_out],
+        WeightLayout::Fp8E4m3BlockScaled,
+    ))
+}
+
+#[cfg(feature = "cuda")]
+fn bf16_linear_bundle_requirement(
+    operation: KernelOperation,
+    linears: [&ArtifactLinearPayload; 2],
+) -> Result<LinearBundleRequirement> {
+    let [first, second] = linears;
+    let (
+        ArtifactLinearFormat::Bf16 {
+            out_features: first_out,
+            in_features: first_in,
+        },
+        ArtifactLinearFormat::Bf16 {
+            out_features: second_out,
+            in_features: second_in,
+        },
+    ) = (&first.format, &second.format)
+    else {
+        return Err(Error::Model(format!(
+            "DeepSeek-V4 {operation:?} requires two BF16 bindings"
+        )));
+    };
+    if first_in != second_in {
+        return Err(Error::Model(format!(
+            "DeepSeek-V4 {operation:?} input mismatch: first={first_in} second={second_in}"
+        )));
+    }
+    Ok(LinearBundleRequirement::new(
+        operation,
+        *first_in,
+        [*first_out, *second_out],
+        WeightLayout::Bf16RowMajor,
+    ))
 }
 
 fn validate_options(

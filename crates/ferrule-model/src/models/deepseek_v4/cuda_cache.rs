@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use ferrule_common::execution::{ForwardPhase, KvCowReplacement, KvLayoutSchema, KvPageId};
 use ferrule_common::kernel_plan::ModelKernelPlan;
 #[cfg(feature = "cutlass")]
-use ferrule_common::kernel_plan::{KernelPhase, KernelProviderId, RowBucket};
+use ferrule_common::kernel_plan::{KernelOperation, KernelProviderId, LaunchDescriptor};
 use ferrule_common::{
     Error, ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertKey, ExpertLease,
     ExpertResidencyControl, ExpertResidencyGrant, ExpertSlotBinding, MemoryPoolLimits,
@@ -304,8 +304,6 @@ pub(crate) enum DeepSeekV4CudaHcStage {
 #[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeepSeekV4CudaLayerNorm {
-    Attention,
-    FeedForward,
     Query,
     KeyValue,
 }
@@ -323,7 +321,6 @@ pub(crate) enum DeepSeekV4CudaLinear {
     QueryA,
     QueryB,
     KeyValue,
-    OutputB,
     MainCompressorKv,
     MainCompressorGate,
     IndexerCompressorKv,
@@ -331,6 +328,26 @@ pub(crate) enum DeepSeekV4CudaLinear {
     IndexerQuery,
     IndexerWeights,
     Router,
+}
+
+#[cfg(feature = "cuda")]
+impl DeepSeekV4CudaLinear {
+    const fn operation(self) -> KernelOperation {
+        match self {
+            Self::QueryA => KernelOperation::MlaQueryA,
+            Self::QueryB => KernelOperation::MlaQueryB,
+            Self::KeyValue => KernelOperation::MlaKeyValue,
+            Self::MainCompressorKv | Self::MainCompressorGate => {
+                KernelOperation::MainCompressorProjection
+            }
+            Self::IndexerCompressorKv | Self::IndexerCompressorGate => {
+                KernelOperation::IndexerCompressorProjection
+            }
+            Self::IndexerQuery => KernelOperation::IndexerQuery,
+            Self::IndexerWeights => KernelOperation::IndexerWeights,
+            Self::Router => KernelOperation::Router,
+        }
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -362,7 +379,6 @@ struct DeepSeekV4CudaPreparedLayer {
     key_value: DeepSeekV4CudaPreparedLinear,
     output_a: DeepSeekV4CudaPreparedLinear,
     output_b: DeepSeekV4CudaPreparedLinear,
-    grouped_output_a_f32: Option<ferrule_cuda::context::CudaF32Buffer>,
     indexer_query: Option<DeepSeekV4CudaPreparedLinear>,
     indexer_weights: Option<DeepSeekV4CudaPreparedLinear>,
     router: DeepSeekV4CudaPreparedLinear,
@@ -382,6 +398,32 @@ struct DeepSeekV4CudaPreparedLayer {
     router_hash_table: Option<ferrule_cuda::context::CudaDsv4RouterHashTable>,
 }
 
+#[cfg(feature = "cuda")]
+impl DeepSeekV4CudaPreparedLayer {
+    fn linear(&self, binding: DeepSeekV4CudaLinear) -> Option<&DeepSeekV4CudaPreparedLinear> {
+        match binding {
+            DeepSeekV4CudaLinear::QueryA => Some(&self.query_a),
+            DeepSeekV4CudaLinear::QueryB => Some(&self.query_b),
+            DeepSeekV4CudaLinear::KeyValue => Some(&self.key_value),
+            DeepSeekV4CudaLinear::MainCompressorKv => {
+                self.main_compressor.as_ref().map(|value| &value.kv)
+            }
+            DeepSeekV4CudaLinear::MainCompressorGate => {
+                self.main_compressor.as_ref().map(|value| &value.gate)
+            }
+            DeepSeekV4CudaLinear::IndexerCompressorKv => {
+                self.indexer_compressor.as_ref().map(|value| &value.kv)
+            }
+            DeepSeekV4CudaLinear::IndexerCompressorGate => {
+                self.indexer_compressor.as_ref().map(|value| &value.gate)
+            }
+            DeepSeekV4CudaLinear::IndexerQuery => self.indexer_query.as_ref(),
+            DeepSeekV4CudaLinear::IndexerWeights => self.indexer_weights.as_ref(),
+            DeepSeekV4CudaLinear::Router => Some(&self.router),
+        }
+    }
+}
+
 /// Context-bound immutable resources for one prepared model generation.
 ///
 /// Runtime caches and routed-expert frames remain outside this image. Stable,
@@ -395,8 +437,6 @@ struct DeepSeekV4CudaExecutionImage {
     output_norm: ferrule_cuda::context::CudaF32Buffer,
     layers: Box<[DeepSeekV4CudaPreparedLayer]>,
     kernel_plan: ModelKernelPlan,
-    #[cfg(feature = "cutlass")]
-    cutlass_bf16_workspaces: BTreeMap<RowBucket, ferrule_cuda::cutlass::CutlassBf16Workspace>,
 }
 
 #[cfg(feature = "cuda")]
@@ -3175,15 +3215,48 @@ impl DeepSeekV4CudaOperatorCache {
         first_output: &mut ferrule_cuda::context::CudaF32Buffer,
         second_output: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
-        let first = self.readonly_prepared_linear(layer, first, input.len())?;
-        let second = self.readonly_prepared_linear(layer, second, input.len())?;
-        self.ops.artifact_linear_pair_matvec_into(
-            &first.handle,
-            &second.handle,
-            input,
-            first_output,
-            second_output,
-        )
+        #[cfg(not(feature = "cutlass"))]
+        {
+            let _ = (layer, first, second, input, first_output, second_output);
+            return Err(Error::Model(
+                "GB10 compressor execution requires the `cutlass` feature".into(),
+            ));
+        }
+        #[cfg(feature = "cutlass")]
+        {
+            let operation = match (first, second) {
+                (
+                    DeepSeekV4CudaLinear::MainCompressorKv,
+                    DeepSeekV4CudaLinear::MainCompressorGate,
+                ) => KernelOperation::MainCompressorProjection,
+                (
+                    DeepSeekV4CudaLinear::IndexerCompressorKv,
+                    DeepSeekV4CudaLinear::IndexerCompressorGate,
+                ) => KernelOperation::IndexerCompressorProjection,
+                _ => {
+                    return Err(Error::Model(format!(
+                        "SM121 BF16 bundle does not bind {first:?}+{second:?}"
+                    )));
+                }
+            };
+            let descriptor = self.require_operation(layer, operation)?;
+            if descriptor.kernel.provider != KernelProviderId::CutlassCubin {
+                return Err(Error::Model(format!(
+                    "invalid SM121 compressor provider binding: {:?}",
+                    descriptor.kernel
+                )));
+            }
+            let first = self.readonly_prepared_linear(layer, first, input.len())?;
+            let second = self.readonly_prepared_linear(layer, second, input.len())?;
+            self.ops.artifact_bf16_compressor_cutlass_into(
+                &first.handle,
+                &second.handle,
+                input,
+                1,
+                first_output,
+                second_output,
+            )
+        }
     }
 
     pub(crate) fn linear_matvec_from_device_into(
@@ -3282,8 +3355,6 @@ impl DeepSeekV4CudaOperatorCache {
                 && image.layers.len() == layers.len()
                 && image.kernel_plan.layers.len() == kernel_plan.layers.len()
             {
-                #[cfg(feature = "cutlass")]
-                let _ = image.cutlass_bf16_workspaces.len();
                 return Ok(());
             }
             return Err(Error::Model(format!(
@@ -3321,18 +3392,6 @@ impl DeepSeekV4CudaOperatorCache {
             let key_value = self.upload_prepared_linear(&layer.attention.payload.key_value)?;
             let output_a = self.upload_prepared_linear(&layer.attention.payload.output_a)?;
             let output_b = self.upload_prepared_linear(&layer.attention.payload.output_b)?;
-            let cfg = layer.attention.config;
-            let grouped_output_a_f32 = if self.ops.grouped_output_a_bf16_mma_supported(
-                &output_a.handle,
-                cfg.output_latent_dim(),
-                cfg.output_group_input_dim(),
-                cfg.o_lora_rank,
-            ) {
-                None
-            } else {
-                let weights = layer.attention.payload.output_a.reference_weights_f32()?;
-                Some(self.ops.upload_f32_buffer(&weights)?)
-            };
             let main_compressor = layer
                 .attention
                 .compressed
@@ -3408,7 +3467,6 @@ impl DeepSeekV4CudaOperatorCache {
                 key_value,
                 output_a,
                 output_b,
-                grouped_output_a_f32,
                 indexer_query,
                 indexer_weights,
                 router,
@@ -3432,27 +3490,7 @@ impl DeepSeekV4CudaOperatorCache {
                 router_hash_table,
             });
         }
-        #[cfg(feature = "cutlass")]
-        let cutlass_bf16_workspaces = {
-            let mut workspaces = BTreeMap::new();
-            for rows in RowBucket::ALL {
-                let selected = kernel_plan.layers.iter().any(|set| {
-                    set.plan(rows)
-                        .and_then(|plan| plan.phase(KernelPhase::CompressorProjection))
-                        .is_some_and(|descriptor| {
-                            descriptor.kernel.provider == KernelProviderId::CutlassCubin
-                        })
-                });
-                if selected {
-                    workspaces.insert(
-                        rows,
-                        self.ops
-                            .cutlass_bf16_workspace(rows.rows(), model.config.hidden_size)?,
-                    );
-                }
-            }
-            workspaces
-        };
+
         self.execution_image = Some(DeepSeekV4CudaExecutionImage {
             generation,
             hc_config,
@@ -3460,8 +3498,6 @@ impl DeepSeekV4CudaOperatorCache {
             output_norm,
             layers: prepared.into_boxed_slice(),
             kernel_plan: kernel_plan.clone(),
-            #[cfg(feature = "cutlass")]
-            cutlass_bf16_workspaces,
         });
         Ok(())
     }
@@ -3472,6 +3508,39 @@ impl DeepSeekV4CudaOperatorCache {
                 "DeepSeek-V4 CUDA execution image was not compiled before execution".into(),
             )
         })
+    }
+
+    #[cfg(feature = "cutlass")]
+    fn require_operation(
+        &self,
+        layer: usize,
+        operation: KernelOperation,
+    ) -> Result<LaunchDescriptor> {
+        self.prepared_image()?
+            .kernel_plan
+            .layer(layer)
+            .and_then(|plan| plan.operation(operation))
+            .copied()
+            .ok_or_else(|| {
+                Error::Model(format!(
+                    "SM121 {operation:?} plan is missing for layer={layer}"
+                ))
+            })
+    }
+
+    #[cfg(feature = "cutlass")]
+    fn require_cutlass_operation(&self, layer: usize, operation: KernelOperation) -> Result<()> {
+        let descriptor = self.require_operation(layer, operation)?;
+        if descriptor.kernel.provider != KernelProviderId::CutlassCubin
+            || descriptor.kernel.operation != operation
+            || !descriptor.is_provider_managed()
+        {
+            return Err(Error::Model(format!(
+                "invalid SM121 semantic binding for layer={layer} operation={operation:?}: {:?}",
+                descriptor.kernel
+            )));
+        }
+        Ok(())
     }
 
     fn prepared_layer(&self, layer: usize) -> Result<&DeepSeekV4CudaPreparedLayer> {
@@ -3512,31 +3581,11 @@ impl DeepSeekV4CudaOperatorCache {
         linear: DeepSeekV4CudaLinear,
     ) -> Result<&DeepSeekV4CudaPreparedLinear> {
         let prepared = self.prepared_layer(layer)?;
-        let handle = match linear {
-            DeepSeekV4CudaLinear::QueryA => Some(&prepared.query_a),
-            DeepSeekV4CudaLinear::QueryB => Some(&prepared.query_b),
-            DeepSeekV4CudaLinear::KeyValue => Some(&prepared.key_value),
-            DeepSeekV4CudaLinear::OutputB => Some(&prepared.output_b),
-            DeepSeekV4CudaLinear::MainCompressorKv => {
-                prepared.main_compressor.as_ref().map(|value| &value.kv)
-            }
-            DeepSeekV4CudaLinear::MainCompressorGate => {
-                prepared.main_compressor.as_ref().map(|value| &value.gate)
-            }
-            DeepSeekV4CudaLinear::IndexerCompressorKv => {
-                prepared.indexer_compressor.as_ref().map(|value| &value.kv)
-            }
-            DeepSeekV4CudaLinear::IndexerCompressorGate => prepared
-                .indexer_compressor
-                .as_ref()
-                .map(|value| &value.gate),
-            DeepSeekV4CudaLinear::IndexerQuery => prepared.indexer_query.as_ref(),
-            DeepSeekV4CudaLinear::IndexerWeights => prepared.indexer_weights.as_ref(),
-            DeepSeekV4CudaLinear::Router => Some(&prepared.router),
-        };
+        let handle = prepared.linear(linear);
         handle.ok_or_else(|| {
             Error::Model(format!(
-                "DeepSeek-V4 layer {layer} CUDA {linear:?} linear is unavailable"
+                "DeepSeek-V4 layer {layer} CUDA {linear:?} ({:?}) linear is unavailable",
+                linear.operation()
             ))
         })
     }
@@ -3559,8 +3608,6 @@ impl DeepSeekV4CudaOperatorCache {
     ) -> Result<()> {
         let prepared = self.prepared_layer(layer)?;
         let weight = match norm {
-            DeepSeekV4CudaLayerNorm::Attention => &prepared.attention_norm,
-            DeepSeekV4CudaLayerNorm::FeedForward => &prepared.feed_forward_norm,
             DeepSeekV4CudaLayerNorm::Query => &prepared.query_norm,
             DeepSeekV4CudaLayerNorm::KeyValue => &prepared.key_value_norm,
         };
@@ -3587,8 +3634,6 @@ impl DeepSeekV4CudaOperatorCache {
     ) -> Result<()> {
         let prepared = self.prepared_layer(layer)?;
         let weight = match norm {
-            DeepSeekV4CudaLayerNorm::Attention => &prepared.attention_norm,
-            DeepSeekV4CudaLayerNorm::FeedForward => &prepared.feed_forward_norm,
             DeepSeekV4CudaLayerNorm::Query => &prepared.query_norm,
             DeepSeekV4CudaLayerNorm::KeyValue => &prepared.key_value_norm,
         };
@@ -3627,7 +3672,7 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn hc_pre_from_device_into(
+    pub(crate) fn hc_pre_rmsnorm_fp8_into<'a>(
         &self,
         layer: usize,
         stage: DeepSeekV4CudaHcStage,
@@ -3635,30 +3680,46 @@ impl DeepSeekV4CudaOperatorCache {
         tokens: usize,
         config: HyperConnectionConfig,
         hidden: &mut ferrule_cuda::context::CudaF32Buffer,
+        normalized: &mut ferrule_cuda::context::CudaF32Buffer,
         pre: &mut ferrule_cuda::context::CudaF32Buffer,
         post: &mut ferrule_cuda::context::CudaF32Buffer,
         comb: &mut ferrule_cuda::context::CudaF32Buffer,
-    ) -> Result<()> {
+        packed: &'a mut ferrule_cuda::context::CudaFp8ActivationPack,
+    ) -> Result<ferrule_cuda::context::CudaPreparedFp8Activation<'a>> {
+        #[cfg(feature = "cutlass")]
+        self.require_cutlass_operation(
+            layer,
+            match stage {
+                DeepSeekV4CudaHcStage::Attention => KernelOperation::AttentionHcPre,
+                DeepSeekV4CudaHcStage::FeedForward => KernelOperation::FeedForwardHcPre,
+            },
+        )?;
         let prepared = self.prepared_layer(layer)?;
-        let hw = match stage {
-            DeepSeekV4CudaHcStage::Attention => &prepared.attention_hc,
-            DeepSeekV4CudaHcStage::FeedForward => &prepared.feed_forward_hc,
+        let (hw, rms_weight) = match stage {
+            DeepSeekV4CudaHcStage::Attention => (&prepared.attention_hc, &prepared.attention_norm),
+            DeepSeekV4CudaHcStage::FeedForward => {
+                (&prepared.feed_forward_hc, &prepared.feed_forward_norm)
+            }
         };
-        self.ops.hc_pre_from_device_into(
+        self.ops.hc_pre_rmsnorm_fp8_into(
             state,
             &hw.function_col_major,
             &hw.scale,
             &hw.base,
+            rms_weight,
             tokens,
             config.hc_mult,
             config.hidden_size,
             config.sinkhorn_iters,
             config.eps,
             config.norm_eps,
+            config.norm_eps,
             hidden,
+            normalized,
             pre,
             post,
             comb,
+            packed,
         )
     }
 
@@ -4232,6 +4293,9 @@ impl DeepSeekV4CudaOperatorCache {
         &mut self,
         layer: usize,
         input_dev: &ferrule_cuda::context::CudaF32Buffer,
+        shared_input_fp8: &ferrule_cuda::context::CudaPreparedFp8Activation<'_>,
+        shared_hidden_f32: &mut ferrule_cuda::context::CudaF32Buffer,
+        shared_hidden_fp8: &mut ferrule_cuda::context::CudaFp8ActivationPack,
         token_ids: &[u32],
         row_to_sequence: Option<&[usize]>,
         sequence_phases: Option<&[ForwardPhase]>,
@@ -4247,7 +4311,6 @@ impl DeepSeekV4CudaOperatorCache {
         router_indices_dev: &mut ferrule_cuda::context::CudaI32Buffer,
         router_weights_dev: &mut ferrule_cuda::context::CudaF32Buffer,
         linear_workspace: &mut ferrule_cuda::context::CudaArtifactLinearWorkspace,
-        shared_workspace: &mut ferrule_cuda::context::CudaSwiGLUWorkspace,
         segment_workspace: &mut Option<ferrule_cuda::context::CudaMoeSegmentWorkspace>,
         route_output_dev: &mut ferrule_cuda::context::CudaF32Buffer,
         output_dev: &mut ferrule_cuda::context::CudaF32Buffer,
@@ -4313,19 +4376,22 @@ impl DeepSeekV4CudaOperatorCache {
         record_profile_duration(&mut self.moe_router_us, stage_start);
 
         let stage_start = profile_start(self.profile);
+        #[cfg(feature = "cutlass")]
+        self.require_cutlass_operation(layer, KernelOperation::SharedFfn)?;
         let prepared = self.prepared_layer(layer)?;
-        self.ops.artifact_swiglu_ffn_rows_from_device_into(
+        self.ops.artifact_shared_ffn_into(
             &prepared.shared_gate.handle,
             &prepared.shared_up.handle,
             &prepared.shared_down.handle,
-            input_dev,
+            shared_input_fp8,
+            shared_hidden_f32,
+            shared_hidden_fp8,
             tokens,
             1.0,
             shared_expert.swiglu_limit,
-            shared_workspace,
+            output_dev,
+            false,
         )?;
-        self.ops
-            .copy_f32_into_slot(shared_workspace.output(), output_dev, 0)?;
         record_profile_duration(&mut self.moe_shared_us, stage_start);
 
         let streaming_steps = self.routed_moe_prefill_segments_from_device(
@@ -4396,6 +4462,8 @@ impl DeepSeekV4CudaOperatorCache {
         route_output: &mut ferrule_cuda::context::CudaF32Buffer,
         output_dev: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<Vec<ExpertStreamingStep>> {
+        #[cfg(feature = "cutlass")]
+        self.require_cutlass_operation(layer, KernelOperation::RoutedFp4Moe)?;
         let tokens = routes_by_token.len();
         if tokens == 0 || !input_dev.len().is_multiple_of(tokens) {
             return Err(Error::Internal(format!(
@@ -4666,24 +4734,29 @@ impl DeepSeekV4CudaOperatorCache {
         &mut self,
         layer: usize,
         shared_expert: &SwiGluFfnPayload,
-        input: &ferrule_cuda::context::CudaF32Buffer,
-        shared_workspace: &mut ferrule_cuda::context::CudaSwiGLUWorkspace,
+        input: &ferrule_cuda::context::CudaPreparedFp8Activation<'_>,
+        hidden_f32: &mut ferrule_cuda::context::CudaF32Buffer,
+        hidden: &mut ferrule_cuda::context::CudaFp8ActivationPack,
         accumulator: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         let stage_start = profile_start(self.profile);
         let swiglu_limit = shared_expert.swiglu_limit;
+        #[cfg(feature = "cutlass")]
+        self.require_cutlass_operation(layer, KernelOperation::SharedFfn)?;
         let prepared = self.prepared_layer(layer)?;
-        self.ops.artifact_swiglu_ffn_from_device_into(
+        self.ops.artifact_shared_ffn_into(
             &prepared.shared_gate.handle,
             &prepared.shared_up.handle,
             &prepared.shared_down.handle,
             input,
+            hidden_f32,
+            hidden,
+            1,
             1.0,
             swiglu_limit,
-            shared_workspace,
+            accumulator,
+            false,
         )?;
-        self.ops
-            .copy_f32_into_slot(shared_workspace.output(), accumulator, 0)?;
         record_profile_duration(&mut self.moe_shared_us, stage_start);
         Ok(())
     }
@@ -4696,6 +4769,9 @@ impl DeepSeekV4CudaOperatorCache {
         &mut self,
         layer: usize,
         input: &ferrule_cuda::context::CudaF32Buffer,
+        shared_input_fp8: &ferrule_cuda::context::CudaPreparedFp8Activation<'_>,
+        shared_hidden_f32: &mut ferrule_cuda::context::CudaF32Buffer,
+        shared_hidden_fp8: &mut ferrule_cuda::context::CudaFp8ActivationPack,
         token_id: u32,
         router: &RouterArtifactPayload,
         router_policy: &ExpertRouterPolicy,
@@ -4707,7 +4783,6 @@ impl DeepSeekV4CudaOperatorCache {
         router_logits: &mut ferrule_cuda::context::CudaF32Buffer,
         router_indices: &mut ferrule_cuda::context::CudaI32Buffer,
         router_weights: &mut ferrule_cuda::context::CudaF32Buffer,
-        shared_workspace: &mut ferrule_cuda::context::CudaSwiGLUWorkspace,
         accumulator: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<Option<RoutedMoeStepOutput>> {
         let route_count = router_policy.top_k;
@@ -4802,8 +4877,9 @@ impl DeepSeekV4CudaOperatorCache {
         self.submit_shared_expert_from_device_into(
             layer,
             shared_expert,
-            input,
-            shared_workspace,
+            shared_input_fp8,
+            shared_hidden_f32,
+            shared_hidden_fp8,
             accumulator,
         )?;
 
@@ -5101,6 +5177,9 @@ impl DeepSeekV4CudaOperatorCache {
         &mut self,
         layer: usize,
         input: &ferrule_cuda::context::CudaF32Buffer,
+        shared_input_fp8: &ferrule_cuda::context::CudaPreparedFp8Activation<'_>,
+        shared_hidden_f32: &mut ferrule_cuda::context::CudaF32Buffer,
+        shared_hidden_fp8: &mut ferrule_cuda::context::CudaFp8ActivationPack,
         token_id: u32,
         router: &RouterArtifactPayload,
         predicted_experts: &[usize],
@@ -5114,7 +5193,6 @@ impl DeepSeekV4CudaOperatorCache {
         router_logits: &mut ferrule_cuda::context::CudaF32Buffer,
         router_indices: &mut ferrule_cuda::context::CudaI32Buffer,
         router_weights: &mut ferrule_cuda::context::CudaF32Buffer,
-        shared_workspace: &mut ferrule_cuda::context::CudaSwiGLUWorkspace,
         accumulator: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<RoutedMoeStepOutput> {
         if self.device_route_fast_path
@@ -5123,6 +5201,9 @@ impl DeepSeekV4CudaOperatorCache {
             && let Some(output) = self.try_routed_moe_step_device_resident_first(
                 layer,
                 input,
+                shared_input_fp8,
+                shared_hidden_f32,
+                shared_hidden_fp8,
                 token_id,
                 router,
                 router_policy,
@@ -5134,7 +5215,6 @@ impl DeepSeekV4CudaOperatorCache {
                 router_logits,
                 router_indices,
                 router_weights,
-                shared_workspace,
                 accumulator,
             )?
         {
@@ -5170,8 +5250,9 @@ impl DeepSeekV4CudaOperatorCache {
             self.submit_shared_expert_from_device_into(
                 layer,
                 shared_expert,
-                input,
-                shared_workspace,
+                shared_input_fp8,
+                shared_hidden_f32,
+                shared_hidden_fp8,
                 accumulator,
             )?;
 
@@ -5785,110 +5866,119 @@ impl DeepSeekV4CudaOperatorCache {
         }
     }
 
-    /// Batched device-resident grouped output_a into caller-owned output.
-    pub(crate) fn grouped_output_a_rows_from_device_into(
+    /// One-launch grouped output-A -> BF16 latent -> output-B MLA transaction.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn mla_output_rows_from_device_into(
         &self,
         context: &ferrule_cuda::context::CudaF32Buffer,
         rows: usize,
         cfg: DeepSeekV4AttentionConfig,
         layer: usize,
+        latent: &mut ferrule_cuda::context::CudaF32Buffer,
+        workspace: &mut ferrule_cuda::context::CudaArtifactLinearWorkspace,
         output: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
-        let prepared = self.prepared_layer(layer)?;
-        let handle = &prepared.output_a.handle;
-        if handle.shape().out_features() != cfg.output_latent_dim()
-            || handle.shape().in_features() != cfg.output_group_input_dim()
+        #[cfg(not(feature = "cutlass"))]
         {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} prepared grouped output_a shape mismatch"
-            )));
+            let _ = (context, rows, cfg, layer, latent, workspace, output);
+            return Err(Error::Model(
+                "GB10 MLA output execution requires the `cutlass` feature".into(),
+            ));
         }
-        if rows == 0 || context.len() != rows * cfg.q_full_dim() {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} CUDA grouped wo_a device rows context length mismatch: rows={} expected {}, got {}",
-                rows,
-                rows * cfg.q_full_dim(),
-                context.len()
-            )));
-        }
-        if output.len() != rows * cfg.output_latent_dim() {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} CUDA grouped wo_a output length mismatch: expected {}, got {}",
-                rows * cfg.output_latent_dim(),
-                output.len()
-            )));
-        }
-        let group_in = cfg.output_group_input_dim();
-        if self.ops.grouped_output_a_bf16_mma_supported(
-            handle,
-            cfg.output_latent_dim(),
-            group_in,
-            cfg.o_lora_rank,
-        ) {
-            return self.ops.grouped_output_a_bf16_mma_from_device_into(
+        #[cfg(feature = "cutlass")]
+        {
+            self.require_cutlass_operation(layer, KernelOperation::MlaOutput)?;
+            let prepared = self.prepared_layer(layer)?;
+            self.ops.artifact_mla_output_into(
                 context,
                 rows,
-                handle,
-                cfg.output_latent_dim(),
-                group_in,
+                &prepared.output_a.handle,
+                &prepared.output_b.handle,
+                cfg.o_groups,
+                cfg.output_group_input_dim(),
                 cfg.o_lora_rank,
+                latent,
+                workspace,
                 output,
-            );
+            )
         }
-
-        let weight_buf = prepared.grouped_output_a_f32.as_ref().ok_or_else(|| {
-            Error::Internal(format!(
-                "DeepSeek-V4 layer {layer} grouped output_a fallback was not prepared"
-            ))
-        })?;
-        self.ops.grouped_matvec_f32_rows_from_device_into(
-            context,
-            rows,
-            weight_buf,
-            cfg.output_latent_dim(),
-            group_in,
-            cfg.o_lora_rank,
-            output,
-        )
     }
 
-    pub(crate) fn prepare_linear_pair_fp8<'a>(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn query_a_kv_from_prepared_fp8_into(
         &self,
         layer: usize,
-        first: DeepSeekV4CudaLinear,
-        second: DeepSeekV4CudaLinear,
+        activation: &ferrule_cuda::context::CudaPreparedFp8Activation<'_>,
+        query_a_output: &mut ferrule_cuda::context::CudaF32Buffer,
+        key_value_output: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        #[cfg(not(feature = "cutlass"))]
+        {
+            let _ = (layer, activation, query_a_output, key_value_output);
+            return Err(Error::Model(
+                "GB10 QueryA+KV execution requires the `cutlass` feature".into(),
+            ));
+        }
+        #[cfg(feature = "cutlass")]
+        {
+            let query_a = self.prepared_linear(layer, DeepSeekV4CudaLinear::QueryA)?;
+            let key_value = self.prepared_linear(layer, DeepSeekV4CudaLinear::KeyValue)?;
+            let descriptor = self.require_operation(layer, KernelOperation::MlaQueryAKv)?;
+            if descriptor.kernel.provider != KernelProviderId::CutlassCubin {
+                return Err(Error::Model(format!(
+                    "invalid SM121 QueryA+KV provider binding: {:?}",
+                    descriptor.kernel
+                )));
+            }
+            self.ops.artifact_fp8_query_a_kv_cutlass_into(
+                &query_a.handle,
+                &key_value.handle,
+                activation,
+                query_a_output,
+                key_value_output,
+            )
+        }
+    }
+
+    pub(crate) fn compressor_rows_from_device_into(
+        &self,
+        layer: usize,
+        compressor: DeepSeekV4CudaCompressor,
         input: &ferrule_cuda::context::CudaF32Buffer,
         rows: usize,
-        storage: &'a mut ferrule_cuda::context::CudaFp8ActivationPack,
-    ) -> Result<Option<ferrule_cuda::context::CudaPreparedFp8Activation<'a>>> {
-        let first = self.prepared_linear(layer, first)?;
-        let second = self.prepared_linear(layer, second)?;
-        if !self.ops.artifact_linear_uses_fp8_mma(&first.handle)
-            || !self.ops.artifact_linear_uses_fp8_mma(&second.handle)
-            || first.handle.shape().in_features() != second.handle.shape().in_features()
+        kv_output: &mut ferrule_cuda::context::CudaF32Buffer,
+        gate_output: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        #[cfg(not(feature = "cutlass"))]
         {
-            return Ok(None);
+            let _ = (layer, compressor, input, rows, kv_output, gate_output);
+            return Err(Error::Model(
+                "GB10 compressor execution requires the `cutlass` feature".into(),
+            ));
         }
-        self.ops
-            .prepare_fp8_activation_from_device(
+        #[cfg(feature = "cutlass")]
+        {
+            let operation = match compressor {
+                DeepSeekV4CudaCompressor::Main => KernelOperation::MainCompressorProjection,
+                DeepSeekV4CudaCompressor::Indexer => KernelOperation::IndexerCompressorProjection,
+            };
+            let descriptor = self.require_operation(layer, operation)?;
+            if descriptor.kernel.provider != KernelProviderId::CutlassCubin {
+                return Err(Error::Model(format!(
+                    "invalid SM121 compressor provider binding: {:?}",
+                    descriptor.kernel
+                )));
+            }
+            let prepared = self.prepared_compressor(layer, compressor)?;
+            self.ops.artifact_bf16_compressor_cutlass_into(
+                &prepared.kv.handle,
+                &prepared.gate.handle,
                 input,
                 rows,
-                first.handle.shape().in_features(),
-                storage,
+                kv_output,
+                gate_output,
             )
-            .map(Some)
-    }
-
-    pub(crate) fn linear_rows_from_prepared_fp8_into(
-        &self,
-        layer: usize,
-        linear: DeepSeekV4CudaLinear,
-        activation: &ferrule_cuda::context::CudaPreparedFp8Activation<'_>,
-        output: &mut ferrule_cuda::context::CudaF32Buffer,
-    ) -> Result<()> {
-        let prepared = self.prepared_linear(layer, linear)?;
-        self.ops
-            .artifact_linear_rows_from_prepared_fp8_into(&prepared.handle, activation, output)
+        }
     }
 
     pub(crate) fn linear_rows_from_device_into(

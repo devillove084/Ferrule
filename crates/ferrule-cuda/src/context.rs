@@ -868,34 +868,6 @@ pub struct CudaFp4ExpertWorkspace {
     output_size: usize,
 }
 
-/// Persistent shared SwiGLU workspace for allocation-free `*_into` FFN execution.
-///
-/// This is the first E2 graph-safety blocker: the shared FFN path previously
-/// allocated `gated`, `upd`, and `hidden` buffers on every call, making it
-/// unsafe for CUDA graph capture. This workspace owns those scratch buffers so
-/// that `artifact_swiglu_ffn_from_device_into` and the add-into variant perform
-/// zero device allocation.
-///
-/// The workspace is sized for `rows` input rows with `intermediate_size`
-/// gate/up output and `output_size` down output. All buffers are reused across
-/// calls as long as the shape matches.
-pub struct CudaSwiGLUWorkspace {
-    /// Gate linear output: `[rows * intermediate_size]`.
-    gated: CudaF32Buffer,
-    /// Up linear output: `[rows * intermediate_size]`.
-    upd: CudaF32Buffer,
-    /// SwiGLU activation hidden: `[rows * intermediate_size]`.
-    hidden: CudaF32Buffer,
-    /// Down linear output: `[rows * output_size]`.
-    output: CudaF32Buffer,
-    /// Shared by the sequential gate, up, and down projections.
-    linear_scratch: CudaArtifactLinearWorkspace,
-    rows: usize,
-    input_size: usize,
-    intermediate_size: usize,
-    output_size: usize,
-}
-
 /// Caller-owned scratch for allocation-free artifact linear execution.
 ///
 /// FP8 MMA consumes packed activations and E8M0 scales. Other paths preserve
@@ -926,36 +898,6 @@ pub struct CudaPreparedFp8Activation<'a> {
     x_scales: &'a DeviceBuffer<u8>,
     rows: usize,
     row_width: usize,
-}
-
-impl CudaSwiGLUWorkspace {
-    pub fn rows(&self) -> usize {
-        self.rows
-    }
-
-    pub fn input_size(&self) -> usize {
-        self.input_size
-    }
-
-    pub fn intermediate_size(&self) -> usize {
-        self.intermediate_size
-    }
-
-    pub fn output_size(&self) -> usize {
-        self.output_size
-    }
-
-    /// Returns true if this workspace matches the requested shape.
-    pub fn matches(&self, rows: usize, intermediate_size: usize, output_size: usize) -> bool {
-        self.rows == rows
-            && self.intermediate_size == intermediate_size
-            && self.output_size == output_size
-    }
-
-    /// Returns a reference to the down-output buffer.
-    pub fn output(&self) -> &CudaF32Buffer {
-        &self.output
-    }
 }
 
 /// Reusable workspace for routed FP4 MoE batched execution.
@@ -1009,10 +951,11 @@ pub struct CudaMoeSegmentWorkspace {
     resolve: CudaExpertRouteResolveWorkspace,
     x_packed: DeviceBuffer<u8>,
     x_scales: DeviceBuffer<u8>,
-    y_gate: CudaF32Buffer,
-    y_up: CudaF32Buffer,
-    y_hidden_packed: DeviceBuffer<u8>,
-    y_hidden_scales: DeviceBuffer<u8>,
+    segment_states: DeviceBuffer<i32>,
+    segment_bindings: DeviceBuffer<u64>,
+    hidden_f32: DeviceBuffer<f32>,
+    hidden_packed: DeviceBuffer<u8>,
+    hidden_scales: DeviceBuffer<u8>,
     max_experts: usize,
     max_segments: usize,
     tokens: usize,
@@ -2342,109 +2285,6 @@ impl CudaArtifactOperatorContext {
                     block_k: 128,
                 } if out_features.is_multiple_of(16) && in_features.is_multiple_of(128)
             )
-    }
-
-    /// Allocate persistent activation-pack workspace for a CUTLASS BF16 row
-    /// bucket. The caller/execution image owns the allocation and reuses it.
-    #[cfg(feature = "cutlass")]
-    pub fn cutlass_bf16_workspace(
-        &self,
-        max_rows: usize,
-        in_features: usize,
-    ) -> Result<crate::cutlass::CutlassBf16Workspace> {
-        crate::cutlass::CutlassBf16Workspace::new(&self.stream, max_rows, in_features)
-    }
-
-    /// Whether the compiled CUTLASS catalog and shape contract support this
-    /// BF16 projection. Architecture-specific selection remains inside the
-    /// provider; model code sees only the semantic operation.
-    #[cfg(feature = "cutlass")]
-    pub fn artifact_linear_rows_bf16_cutlass_supported(
-        &self,
-        handle: &CudaArtifactLinearHandle,
-        rows: usize,
-    ) -> bool {
-        let Some(manifest) = crate::cutlass::provider_manifest() else {
-            return false;
-        };
-        manifest.supports(crate::cutlass::CutlassKernelId::Bf16MmaSync)
-            && rows > 0
-            && matches!(
-                handle.shape,
-                CudaArtifactLinearShape::Bf16Bytes {
-                    out_features,
-                    in_features,
-                } if out_features.is_multiple_of(4) && in_features.is_multiple_of(8)
-            )
-    }
-
-    /// Execute a BF16 projection through CUTLASS using caller-owned workspace.
-    /// No allocation, stream creation, synchronization, or ownership transfer
-    /// occurs inside the provider.
-    #[cfg(feature = "cutlass")]
-    pub fn artifact_linear_rows_bf16_cutlass_into(
-        &self,
-        handle: &CudaArtifactLinearHandle,
-        input: &CudaF32Buffer,
-        rows: usize,
-        output: &mut CudaF32Buffer,
-        workspace: &mut crate::cutlass::CutlassBf16Workspace,
-    ) -> Result<()> {
-        if !self.artifact_linear_rows_bf16_cutlass_supported(handle, rows) {
-            return Err(Error::Internal(format!(
-                "CUTLASS BF16 projection unsupported: shape={:?} rows={rows}",
-                handle.shape
-            )));
-        }
-        let CudaArtifactLinearShape::Bf16Bytes {
-            out_features,
-            in_features,
-        } = handle.shape
-        else {
-            unreachable!("shape was validated above")
-        };
-        let expected_input = rows
-            .checked_mul(in_features)
-            .ok_or_else(|| Error::Internal("CUTLASS BF16 input size overflow".into()))?;
-        let expected_output = rows
-            .checked_mul(out_features)
-            .ok_or_else(|| Error::Internal("CUTLASS BF16 output size overflow".into()))?;
-        if input.len != expected_input || output.len != expected_output {
-            return Err(Error::Internal(format!(
-                "CUTLASS BF16 projection buffer mismatch: input={}/{} output={}/{}",
-                input.len, expected_input, output.len, expected_output
-            )));
-        }
-        if !crate::cutlass::gemm_bf16_f32_can_implement(
-            &self.stream,
-            &input.buffer,
-            &handle.weight,
-            &mut output.buffer,
-            workspace,
-            rows,
-            out_features,
-            in_features,
-        )? {
-            return Err(Error::Internal(format!(
-                "compiled CUTLASS provider rejected BF16 shape rows={rows} n={out_features} k={in_features}"
-            )));
-        }
-        crate::cutlass::gemm_bf16_f32(
-            &self.stream,
-            &input.buffer,
-            &handle.weight,
-            &mut output.buffer,
-            workspace,
-            rows,
-            out_features,
-            in_features,
-            1.0,
-            0.0,
-        )?;
-        // One provider call launches the activation pack and GEMM kernels.
-        self.record_kernel_launch();
-        self.record_kernel_launch();
-        Ok(())
     }
 
     pub fn capture_decode_graph(
@@ -4233,12 +4073,254 @@ impl CudaArtifactOperatorContext {
             &mut storage.x_scales,
             storage.scale_capacity,
         )?;
+        self.prepared_fp8_activation_from_storage(storage, rows, row_width)
+    }
+
+    pub fn prepared_fp8_activation_from_storage<'a>(
+        &self,
+        storage: &'a CudaFp8ActivationPack,
+        rows: usize,
+        row_width: usize,
+    ) -> Result<CudaPreparedFp8Activation<'a>> {
+        let values = rows
+            .checked_mul(row_width)
+            .ok_or_else(|| Error::Internal("CUDA prepared FP8 activation size overflow".into()))?;
+        let scales = rows
+            .checked_mul(row_width.div_ceil(ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE))
+            .ok_or_else(|| Error::Internal("CUDA prepared FP8 scale size overflow".into()))?;
+        if rows == 0
+            || row_width == 0
+            || !row_width.is_multiple_of(ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE)
+            || storage.value_capacity != values
+            || storage.scale_capacity != scales
+        {
+            return Err(Error::Internal(format!(
+                "CUDA prepared FP8 activation storage mismatch: rows={rows} width={row_width} values={}/{} scales={}/{}",
+                storage.value_capacity, values, storage.scale_capacity, scales
+            )));
+        }
         Ok(CudaPreparedFp8Activation {
             x_packed: &storage.x_packed,
             x_scales: &storage.x_scales,
             rows,
             row_width,
         })
+    }
+
+    /// Execute the complete HC-pre + layer RMSNorm + FP8 activation producer.
+    #[allow(clippy::too_many_arguments)]
+    pub fn hc_pre_rmsnorm_fp8_into<'a>(
+        &self,
+        state: &CudaF32Buffer,
+        function_col_major: &CudaF32Buffer,
+        hc_scale: &CudaF32Buffer,
+        hc_base: &CudaF32Buffer,
+        layer_rms_weight: &CudaF32Buffer,
+        rows: usize,
+        hc: usize,
+        hidden_size: usize,
+        sinkhorn_iters: usize,
+        hc_eps: f32,
+        hc_norm_eps: f32,
+        layer_rms_eps: f32,
+        hidden_output: &mut CudaF32Buffer,
+        normalized_output: &mut CudaF32Buffer,
+        split_pre: &mut CudaF32Buffer,
+        split_post: &mut CudaF32Buffer,
+        split_comb: &mut CudaF32Buffer,
+        packed_output: &'a mut CudaFp8ActivationPack,
+    ) -> Result<CudaPreparedFp8Activation<'a>> {
+        #[cfg(not(feature = "cutlass"))]
+        {
+            let _ = (
+                state,
+                function_col_major,
+                hc_scale,
+                hc_base,
+                layer_rms_weight,
+                rows,
+                hc,
+                hidden_size,
+                sinkhorn_iters,
+                hc_eps,
+                hc_norm_eps,
+                layer_rms_eps,
+                hidden_output,
+                normalized_output,
+                split_pre,
+                split_post,
+                split_comb,
+                packed_output,
+            );
+            return Err(Error::Internal(
+                "GB10 HC producer execution requires the `cutlass` feature".into(),
+            ));
+        }
+        #[cfg(feature = "cutlass")]
+        {
+            crate::cutlass::hc_producer(
+                &self.stream,
+                &state.buffer,
+                &function_col_major.buffer,
+                &hc_scale.buffer,
+                &hc_base.buffer,
+                &layer_rms_weight.buffer,
+                &mut hidden_output.buffer,
+                &mut normalized_output.buffer,
+                &mut packed_output.x_packed,
+                &mut packed_output.x_scales,
+                &mut split_pre.buffer,
+                &mut split_post.buffer,
+                &mut split_comb.buffer,
+                rows,
+                hc,
+                hidden_size,
+                sinkhorn_iters,
+                hc_eps,
+                hc_norm_eps,
+                layer_rms_eps,
+            )?;
+            self.record_kernel_launch();
+            self.prepared_fp8_activation_from_storage(packed_output, rows, hidden_size)
+        }
+    }
+
+    /// Execute the required SM121 one-launch BF16 compressor dual projection.
+    #[cfg(feature = "cutlass")]
+    pub fn artifact_bf16_compressor_cutlass_into(
+        &self,
+        projection1: &CudaArtifactLinearHandle,
+        projection2: &CudaArtifactLinearHandle,
+        activation: &CudaF32Buffer,
+        rows: usize,
+        projection1_output: &mut CudaF32Buffer,
+        projection2_output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        let (
+            CudaArtifactLinearShape::Bf16Bytes {
+                out_features: n1,
+                in_features: k1,
+            },
+            CudaArtifactLinearShape::Bf16Bytes {
+                out_features: n2,
+                in_features: k2,
+            },
+        ) = (projection1.shape, projection2.shape)
+        else {
+            return Err(Error::Internal(format!(
+                "SM121 compressor requires BF16 weights, got first={:?} second={:?}",
+                projection1.shape, projection2.shape
+            )));
+        };
+        if k1 != k2 || activation.len != rows * k1 {
+            return Err(Error::Internal(format!(
+                "SM121 compressor input mismatch: rows={rows} first_k={k1} second_k={k2} input={}",
+                activation.len
+            )));
+        }
+        if projection1_output.len != rows * n1 || projection2_output.len != rows * n2 {
+            return Err(Error::Internal(format!(
+                "SM121 compressor output mismatch: first={}/{} second={}/{}",
+                projection1_output.len,
+                rows * n1,
+                projection2_output.len,
+                rows * n2
+            )));
+        }
+        crate::cutlass::bf16_compressor(
+            &self.stream,
+            &activation.buffer,
+            &projection1.weight,
+            &projection2.weight,
+            &mut projection1_output.buffer,
+            &mut projection2_output.buffer,
+            rows,
+            n1,
+            n2,
+            k1,
+        )?;
+        self.record_kernel_launch();
+        Ok(())
+    }
+
+    /// Execute the required SM121 one-launch QueryA+KV FP8 projection bundle.
+    /// Any shape, binding, or native-provider mismatch is fatal.
+    #[cfg(feature = "cutlass")]
+    pub fn artifact_fp8_query_a_kv_cutlass_into(
+        &self,
+        query_a: &CudaArtifactLinearHandle,
+        key_value: &CudaArtifactLinearHandle,
+        activation: &CudaPreparedFp8Activation<'_>,
+        query_a_output: &mut CudaF32Buffer,
+        key_value_output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        let (
+            CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
+                out_features: query_a_out,
+                in_features: query_a_in,
+                block_m: query_a_block_m,
+                block_k: query_a_block_k,
+            },
+            CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
+                out_features: kv_out,
+                in_features: kv_in,
+                block_m: kv_block_m,
+                block_k: kv_block_k,
+            },
+        ) = (query_a.shape, key_value.shape)
+        else {
+            return Err(Error::Internal(format!(
+                "SM121 QueryA+KV requires FP8 weights, got query_a={:?} kv={:?}",
+                query_a.shape, key_value.shape
+            )));
+        };
+        if query_a_in != kv_in
+            || query_a_in != activation.row_width
+            || query_a_block_m != 128
+            || query_a_block_k != 128
+            || kv_block_m != 128
+            || kv_block_k != 128
+        {
+            return Err(Error::Internal(format!(
+                "SM121 QueryA+KV binding mismatch: query_a={:?} kv={:?} activation_width={}",
+                query_a.shape, key_value.shape, activation.row_width
+            )));
+        }
+        let rows = activation.rows;
+        if query_a_output.len != rows * query_a_out || key_value_output.len != rows * kv_out {
+            return Err(Error::Internal(format!(
+                "CUTLASS FP8 QueryA+KV output mismatch: query_a={}/{} kv={}/{}",
+                query_a_output.len,
+                rows * query_a_out,
+                key_value_output.len,
+                rows * kv_out
+            )));
+        }
+        let query_a_scales = query_a.scale.as_ref().ok_or_else(|| {
+            Error::Internal("CUTLASS FP8 QueryA weight scales are missing".into())
+        })?;
+        let kv_scales = key_value
+            .scale
+            .as_ref()
+            .ok_or_else(|| Error::Internal("CUTLASS FP8 KV weight scales are missing".into()))?;
+
+        crate::cutlass::fp8_query_a_kv(
+            &self.stream,
+            activation.x_packed,
+            activation.x_scales,
+            &query_a.weight,
+            query_a_scales,
+            &key_value.weight,
+            kv_scales,
+            &mut query_a_output.buffer,
+            &mut key_value_output.buffer,
+            rows,
+            query_a_out,
+            kv_out,
+            query_a_in,
+        )?;
+        self.record_kernel_launch();
+        Ok(())
     }
 
     pub fn artifact_linear_rows_from_prepared_fp8_into(
@@ -4530,6 +4612,88 @@ impl CudaArtifactOperatorContext {
                 scale_cols as u32,
             )
         })
+    }
+
+    /// One-launch grouped output-A -> BF16 latent -> output-B MLA transaction.
+    #[cfg(feature = "cutlass")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn artifact_mla_output_into(
+        &self,
+        context: &CudaF32Buffer,
+        rows: usize,
+        output_a: &CudaArtifactLinearHandle,
+        output_b: &CudaArtifactLinearHandle,
+        groups: usize,
+        group_input: usize,
+        rank: usize,
+        latent: &mut CudaF32Buffer,
+        workspace: &mut CudaArtifactLinearWorkspace,
+        output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        let latent_size = groups
+            .checked_mul(rank)
+            .ok_or_else(|| Error::Internal("SM121 MLA latent size overflow".into()))?;
+        let context_size = groups
+            .checked_mul(group_input)
+            .ok_or_else(|| Error::Internal("SM121 MLA context size overflow".into()))?;
+        let hidden_size = match output_b.shape {
+            CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
+                out_features,
+                in_features,
+                block_m: 128,
+                block_k: 128,
+            } if in_features == latent_size => out_features,
+            _ => {
+                return Err(Error::Internal(format!(
+                    "SM121 MLA output-B requires FP8/E8M0 [{hidden_size},{latent_size}], got {:?}",
+                    output_b.shape,
+                    hidden_size = output.len.checked_div(rows).unwrap_or(0)
+                )));
+            }
+        };
+        if !matches!(
+            output_a.shape,
+            CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
+                out_features,
+                in_features,
+                block_m: 128,
+                block_k: 128,
+            } if out_features == latent_size && in_features == group_input
+        ) {
+            return Err(Error::Internal(format!(
+                "SM121 MLA output-A requires FP8/E8M0 [{latent_size},{group_input}], got {:?}",
+                output_a.shape
+            )));
+        }
+        let output_a_scales = output_a
+            .scale
+            .as_ref()
+            .ok_or_else(|| Error::Internal("SM121 MLA output-A scales are missing".into()))?;
+        let output_b_scales = output_b
+            .scale
+            .as_ref()
+            .ok_or_else(|| Error::Internal("SM121 MLA output-B scales are missing".into()))?;
+        crate::cutlass::mla_output(
+            &self.stream,
+            &context.buffer,
+            &output_a.weight,
+            output_a_scales,
+            &output_b.weight,
+            output_b_scales,
+            &mut latent.buffer,
+            &mut workspace.x_packed,
+            &mut workspace.x_scales,
+            &mut output.buffer,
+            rows,
+            context_size,
+            groups,
+            group_input,
+            rank,
+            latent_size,
+            hidden_size,
+        )?;
+        self.record_kernel_launch();
+        Ok(())
     }
 
     /// Device-resident batched grouped matvec for block-diagonal output-A
@@ -6421,204 +6585,135 @@ impl CudaArtifactOperatorContext {
         })
     }
 
-    /// Create a persistent shared SwiGLU workspace for an FFN whose input and
-    /// output widths are equal. This is the E2 graph-safety primitive: the
-    /// workspace owns all scratch buffers so `*_into` methods perform zero
-    /// device allocation. Use `swiglu_workspace_for_shape` when the widths differ.
-    pub fn swiglu_workspace(
-        &self,
-        rows: usize,
-        intermediate_size: usize,
-        output_size: usize,
-    ) -> Result<CudaSwiGLUWorkspace> {
-        self.swiglu_workspace_for_shape(rows, output_size, intermediate_size, output_size)
-    }
-
-    /// Create a workspace for a SwiGLU whose input and output widths differ.
-    pub fn swiglu_workspace_for_shape(
-        &self,
-        rows: usize,
-        input_size: usize,
-        intermediate_size: usize,
-        output_size: usize,
-    ) -> Result<CudaSwiGLUWorkspace> {
-        if rows == 0 || input_size == 0 || intermediate_size == 0 || output_size == 0 {
-            return Err(Error::Internal(format!(
-                "CUDA SwiGLU workspace requires positive dimensions: rows={rows} input={input_size} intermediate={intermediate_size} output={output_size}"
-            )));
-        }
-        let gated_len = rows
-            .checked_mul(intermediate_size)
-            .ok_or_else(|| Error::Internal("CUDA SwiGLU workspace gated size overflow".into()))?;
-        let output_len = rows
-            .checked_mul(output_size)
-            .ok_or_else(|| Error::Internal("CUDA SwiGLU workspace output size overflow".into()))?;
-        let max_linear_width = input_size.max(intermediate_size);
-        Ok(CudaSwiGLUWorkspace {
-            gated: CudaF32Buffer {
-                buffer: self.uninitialized_device_buffer::<f32>(gated_len)?,
-                len: gated_len,
-            },
-            upd: CudaF32Buffer {
-                buffer: self.uninitialized_device_buffer::<f32>(gated_len)?,
-                len: gated_len,
-            },
-            hidden: CudaF32Buffer {
-                buffer: self.uninitialized_device_buffer::<f32>(gated_len)?,
-                len: gated_len,
-            },
-            output: CudaF32Buffer {
-                buffer: self.uninitialized_device_buffer::<f32>(output_len)?,
-                len: output_len,
-            },
-            linear_scratch: self.artifact_linear_workspace(rows, max_linear_width)?,
-            rows,
-            input_size,
-            intermediate_size,
-            output_size,
-        })
-    }
-
-    /// Allocation-free single-row SwiGLU FFN from device input into workspace.
-    ///
-    /// This is the `*_into` variant of `artifact_swiglu_ffn_from_device`. It
-    /// writes the output into `workspace.output` and performs zero device
-    /// allocation, zero D2H, and zero stream-wide sync.
-    pub fn artifact_swiglu_ffn_from_device_into(
-        &self,
-        gate: &CudaArtifactLinearHandle,
-        up: &CudaArtifactLinearHandle,
-        down: &CudaArtifactLinearHandle,
-        input: &CudaF32Buffer,
-        output_scale: f32,
-        swiglu_limit: f32,
-        workspace: &mut CudaSwiGLUWorkspace,
-    ) -> Result<()> {
-        self.artifact_swiglu_ffn_rows_from_device_into(
-            gate,
-            up,
-            down,
-            input,
-            1,
-            output_scale,
-            swiglu_limit,
-            workspace,
-        )
-    }
-
-    /// Allocation-free multi-row SwiGLU FFN from device input into workspace.
-    ///
-    /// This is the `*_into` variant of `artifact_swiglu_ffn_rows_from_device`.
-    /// It writes the output into `workspace.output` and performs zero device
-    /// allocation, zero D2H, and zero stream-wide sync.
+    /// Execute the complete SM121 shared-expert gate/up -> SwiGLU -> down
+    /// bundle and write directly to the caller-owned destination.
     #[allow(clippy::too_many_arguments)]
-    pub fn artifact_swiglu_ffn_rows_from_device_into(
+    pub fn artifact_shared_ffn_into(
         &self,
         gate: &CudaArtifactLinearHandle,
         up: &CudaArtifactLinearHandle,
         down: &CudaArtifactLinearHandle,
-        input: &CudaF32Buffer,
+        input: &CudaPreparedFp8Activation<'_>,
+        hidden_f32: &mut CudaF32Buffer,
+        hidden: &mut CudaFp8ActivationPack,
         rows: usize,
         output_scale: f32,
         swiglu_limit: f32,
-        workspace: &mut CudaSwiGLUWorkspace,
+        output: &mut CudaF32Buffer,
+        accumulate_output: bool,
     ) -> Result<()> {
-        let in_features = gate.shape.in_features();
-        let intermediate = gate.shape.out_features();
-        if rows == 0 || input.len != rows * in_features || up.shape.in_features() != in_features {
+        let (
+            CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
+                out_features: intermediate,
+                in_features: input_size,
+                block_m: gate_block_m,
+                block_k: gate_block_k,
+            },
+            CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
+                out_features: up_out,
+                in_features: up_in,
+                block_m: up_block_m,
+                block_k: up_block_k,
+            },
+            CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
+                out_features: output_size,
+                in_features: down_in,
+                block_m: down_block_m,
+                block_k: down_block_k,
+            },
+        ) = (gate.shape, up.shape, down.shape)
+        else {
             return Err(Error::Internal(format!(
-                "CUDA batched SwiGLU input mismatch: rows={rows} input={} gate_in={} up_in={}",
-                input.len,
-                in_features,
-                up.shape.in_features()
-            )));
-        }
-        if up.shape.out_features() != intermediate || down.shape.in_features() != intermediate {
-            return Err(Error::Internal(format!(
-                "CUDA batched SwiGLU shape mismatch: gate={:?} up={:?} down={:?}",
+                "SM121 shared FFN requires FP8 weights: gate={:?} up={:?} down={:?}",
                 gate.shape, up.shape, down.shape
             )));
-        }
-        if workspace.input_size != in_features
-            || !workspace.matches(rows, intermediate, down.shape.out_features())
+        };
+        if rows == 0
+            || input_size != up_in
+            || intermediate != up_out
+            || intermediate != down_in
+            || input.rows != rows
+            || input.row_width != input_size
+            || hidden_f32.len < rows * intermediate
+            || hidden.value_capacity != rows * intermediate
+            || hidden.scale_capacity != rows * intermediate.div_ceil(128)
+            || output.len != rows * output_size
         {
             return Err(Error::Internal(format!(
-                "CUDA SwiGLU workspace mismatch: workspace=[rows={},input={},intermediate={},output={}] call=[rows={rows},input={in_features},intermediate={intermediate},output={}]",
-                workspace.rows,
-                workspace.input_size,
-                workspace.intermediate_size,
-                workspace.output_size,
-                down.shape.out_features()
+                "SM121 shared FFN shape mismatch: rows={rows} input=[{},{}] hidden_f32={} hidden=[{},{}] output={} gate={:?} up={:?} down={:?}",
+                input.rows,
+                input.row_width,
+                hidden_f32.len,
+                hidden.value_capacity,
+                hidden.scale_capacity,
+                output.len,
+                gate.shape,
+                up.shape,
+                down.shape
             )));
         }
-
-        // Gate/up share one producer-side FP8 pack when both handles use MMA.
-        self.artifact_linear_pair_rows_from_device_into_with_scratch(
-            gate,
-            up,
-            input,
-            rows,
-            &mut workspace.gated,
-            &mut workspace.upd,
-            &mut workspace.linear_scratch,
-        )?;
-
-        // SwiGLU activation: hidden = silu(gated * output_scale) * upd, clamped.
-        let total = rows * intermediate;
-        self.launched(unsafe {
-            self.module.swiglu_weighted_clamped(
-                &self.stream,
-                LaunchConfig::for_num_elems(total as u32),
-                &workspace.gated.buffer,
-                &workspace.upd.buffer,
-                &mut workspace.hidden.buffer,
-                total as u32,
+        let gate_scales = gate
+            .scale
+            .as_ref()
+            .ok_or_else(|| Error::Internal("SM121 shared gate scales are missing".into()))?;
+        let up_scales = up
+            .scale
+            .as_ref()
+            .ok_or_else(|| Error::Internal("SM121 shared up scales are missing".into()))?;
+        let down_scales = down
+            .scale
+            .as_ref()
+            .ok_or_else(|| Error::Internal("SM121 shared down scales are missing".into()))?;
+        #[cfg(not(feature = "cutlass"))]
+        {
+            let _ = (
+                gate_scales,
+                up_scales,
+                down_scales,
+                gate_block_m,
+                gate_block_k,
+                up_block_m,
+                up_block_k,
+                down_block_m,
+                down_block_k,
                 output_scale,
                 swiglu_limit,
-            )
-        })?;
-
-        // Down projection from hidden into workspace.output.
-        self.artifact_linear_rows_from_device_into_with_scratch(
-            down,
-            &workspace.hidden,
-            rows,
-            &mut workspace.output,
-            &mut workspace.linear_scratch,
-        )?;
-
-        Ok(())
-    }
-
-    /// Allocation-free SwiGLU FFN that adds its output directly into an
-    /// accumulator. This is the shared-FFN add-into primitive required by E2:
-    /// graph-safe MoE uses this instead of allocating a separate shared output
-    /// buffer and then calling `saxpy_into`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn artifact_swiglu_ffn_add_into_from_device(
-        &self,
-        gate: &CudaArtifactLinearHandle,
-        up: &CudaArtifactLinearHandle,
-        down: &CudaArtifactLinearHandle,
-        input: &CudaF32Buffer,
-        rows: usize,
-        output_scale: f32,
-        swiglu_limit: f32,
-        workspace: &mut CudaSwiGLUWorkspace,
-        accumulator: &mut CudaF32Buffer,
-    ) -> Result<()> {
-        self.artifact_swiglu_ffn_rows_from_device_into(
-            gate,
-            up,
-            down,
-            input,
-            rows,
-            output_scale,
-            swiglu_limit,
-            workspace,
-        )?;
-        self.saxpy_into(1.0, &workspace.output, accumulator)?;
-        Ok(())
+                accumulate_output,
+            );
+            return Err(Error::Internal(
+                "GB10 shared FFN execution requires the `cutlass` feature".into(),
+            ));
+        }
+        #[cfg(feature = "cutlass")]
+        {
+            crate::cutlass::shared_ffn(
+                &self.stream,
+                input.x_packed,
+                input.x_scales,
+                &gate.weight,
+                gate_scales,
+                &up.weight,
+                up_scales,
+                &down.weight,
+                down_scales,
+                &mut hidden_f32.buffer,
+                &mut hidden.x_packed,
+                &mut hidden.x_scales,
+                &mut output.buffer,
+                rows,
+                input_size,
+                intermediate,
+                output_size,
+                (gate_block_m, gate_block_k),
+                (up_block_m, up_block_k),
+                (down_block_m, down_block_k),
+                output_scale,
+                swiglu_limit,
+                accumulate_output,
+            )?;
+            self.record_kernel_launch();
+            Ok(())
+        }
     }
 
     pub fn moe_batched_workspace(
@@ -6744,10 +6839,9 @@ impl CudaArtifactOperatorContext {
         let segment_cols = max_segments
             .checked_mul(8)
             .ok_or_else(|| Error::Internal("CUDA MoE segment column capacity overflow".into()))?;
-        let total_inter = segment_cols.checked_mul(intermediate_size).ok_or_else(|| {
-            Error::Internal("CUDA MoE segment intermediate scratch size overflow".into())
+        let hidden_values = segment_cols.checked_mul(intermediate_size).ok_or_else(|| {
+            Error::Internal("CUDA MoE segment hidden scratch size overflow".into())
         })?;
-
         Ok(CudaMoeSegmentWorkspace {
             slot_counts: self.zeroed_device_buffer::<i32>(max_experts)?,
             slot_segment_offsets: self.zeroed_device_buffer::<i32>(max_experts)?,
@@ -6762,16 +6856,11 @@ impl CudaArtifactOperatorContext {
             resolve: self.expert_route_resolve_workspace(segment_cols, segment_cols)?,
             x_packed: self.uninitialized_device_buffer::<u8>(total_input / 2)?,
             x_scales: self.uninitialized_device_buffer::<u8>(total_input / 32)?,
-            y_gate: CudaF32Buffer {
-                buffer: self.uninitialized_device_buffer::<f32>(total_inter)?,
-                len: total_inter,
-            },
-            y_up: CudaF32Buffer {
-                buffer: self.uninitialized_device_buffer::<f32>(total_inter)?,
-                len: total_inter,
-            },
-            y_hidden_packed: self.uninitialized_device_buffer::<u8>(total_inter / 2)?,
-            y_hidden_scales: self.uninitialized_device_buffer::<u8>(total_inter / 32)?,
+            segment_states: self.uninitialized_device_buffer::<i32>(max_segments)?,
+            segment_bindings: self.uninitialized_device_buffer::<u64>(max_segments * 6)?,
+            hidden_f32: self.uninitialized_device_buffer::<f32>(hidden_values)?,
+            hidden_packed: self.uninitialized_device_buffer::<u8>(hidden_values / 2)?,
+            hidden_scales: self.uninitialized_device_buffer::<u8>(hidden_values / 32)?,
             max_experts,
             max_segments,
             tokens,
@@ -7137,39 +7226,17 @@ impl CudaArtifactOperatorContext {
                 workspace.max_experts
             )));
         }
-        let intermediate_size = checked_u32(
-            workspace.intermediate_size,
-            "stable segment execution",
-            "intermediate size",
-        )?;
-        let input_size = checked_u32(
-            workspace.input_size,
-            "stable segment execution",
-            "input size",
-        )?;
-        let hidden_size = checked_u32(
-            workspace.hidden_size,
-            "stable segment execution",
-            "hidden size",
-        )?;
-        let tokens = checked_u32(workspace.tokens, "stable segment execution", "tokens")?;
-        let slots = checked_u32(slot_capacity, "stable segment execution", "stable slots")?;
-        let segments = checked_u32(
-            workspace.max_segments,
-            "stable segment execution",
-            "segment capacity",
-        )?;
-        let routes = checked_u32(route_count, "stable segment execution", "routes")?;
-
         self.counters.add_moe_call(CudaMoeExecutionPath::TensorCore);
-        self.launched(unsafe {
-            self.module.moe_gemm_dual_fp4_mxf4_segmented(
+        #[cfg(not(feature = "cutlass"))]
+        {
+            return Err(Error::Internal(
+                "GB10 stable-frame FP4 MoE execution requires the `cutlass` feature".into(),
+            ));
+        }
+        #[cfg(feature = "cutlass")]
+        {
+            crate::cutlass::stable_frame_fp4_moe(
                 &self.stream,
-                LaunchConfig {
-                    grid_dim: (workspace.intermediate_size.div_ceil(16) as u32, segments, 1),
-                    block_dim: (32, 1, 1),
-                    shared_mem_bytes: 0,
-                },
                 &workspace.x_packed,
                 &workspace.x_scales,
                 &table.gate_weight,
@@ -7182,65 +7249,28 @@ impl CudaArtifactOperatorContext {
                 &workspace.segment_expert_slots,
                 &workspace.segment_generations,
                 &workspace.segment_token_indices,
-                &mut workspace.route_error,
-                &mut workspace.y_gate.buffer,
-                &mut workspace.y_up.buffer,
-                intermediate_size,
-                input_size,
-                tokens,
-                slots,
-                segments,
-            )
-        })?;
-        self.launched(unsafe {
-            self.module.moe_swiglu_fp4_packed_batched(
-                &self.stream,
-                LaunchConfig {
-                    grid_dim: ((workspace.intermediate_size / 32) as u32, segments, 8),
-                    block_dim: (32, 1, 1),
-                    shared_mem_bytes: 0,
-                },
-                &workspace.y_gate.buffer,
-                &workspace.y_up.buffer,
-                &workspace.segment_route_weights,
-                &mut workspace.y_hidden_packed,
-                &mut workspace.y_hidden_scales,
-                intermediate_size,
-                8,
-                segments,
-                swiglu_limit,
-            )
-        })?;
-        self.launched(unsafe {
-            self.module.moe_gemm_down_fp4_mxf4_segmented(
-                &self.stream,
-                LaunchConfig {
-                    grid_dim: (workspace.hidden_size.div_ceil(16) as u32, segments, 1),
-                    block_dim: (32, 1, 1),
-                    shared_mem_bytes: 0,
-                },
-                &workspace.y_hidden_packed,
-                &workspace.y_hidden_scales,
-                &table.gate_weight,
-                &table.gate_scale,
-                &table.up_weight,
-                &table.up_scale,
-                &table.down_weight,
-                &table.down_scale,
-                &table.slot_generation,
-                &workspace.segment_expert_slots,
-                &workspace.segment_generations,
                 &workspace.segment_route_indices,
+                &workspace.segment_route_weights,
+                &mut workspace.segment_states,
+                &mut workspace.segment_bindings,
+                &mut workspace.hidden_f32,
+                &mut workspace.hidden_packed,
+                &mut workspace.hidden_scales,
                 &mut workspace.route_written,
                 &mut workspace.route_error,
                 &mut route_output.buffer,
-                intermediate_size,
-                hidden_size,
-                slots,
-                segments,
-                routes,
-            )
-        })
+                workspace.input_size,
+                workspace.intermediate_size,
+                workspace.hidden_size,
+                workspace.tokens,
+                route_count,
+                slot_capacity,
+                workspace.max_segments,
+                swiglu_limit,
+            )?;
+            self.record_kernel_launch();
+            Ok(())
+        }
     }
 
     /// Add route-major expert outputs into an existing token-major accumulator.
@@ -8909,18 +8939,33 @@ impl CudaArtifactOperatorContext {
             CudaArtifactLinearShape::Bf16Bytes {
                 out_features,
                 in_features,
-            } => self.launched(unsafe {
-                self.module.gemm_bf16_bytes(
-                    &self.stream,
-                    LaunchConfig::for_num_elems((rows * out_features) as u32),
-                    input,
-                    &handle.weight,
-                    output,
-                    rows as u32,
-                    out_features as u32,
-                    in_features as u32,
-                )
-            }),
+            } => {
+                if rows == 0 || !in_features.is_multiple_of(16) {
+                    return Err(Error::Internal(format!(
+                        "SM121 BF16 MMA requires positive rows and K16: rows={rows} in_features={in_features}"
+                    )));
+                }
+                self.launched(unsafe {
+                    self.module.gemm_bf16_bytes(
+                        &self.stream,
+                        LaunchConfig {
+                            grid_dim: (
+                                out_features.div_ceil(16) as u32,
+                                rows.div_ceil(8) as u32,
+                                1,
+                            ),
+                            block_dim: (32, 1, 1),
+                            shared_mem_bytes: 0,
+                        },
+                        input,
+                        &handle.weight,
+                        output,
+                        rows as u32,
+                        out_features as u32,
+                        in_features as u32,
+                    )
+                })
+            }
             CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
                 out_features,
                 in_features,

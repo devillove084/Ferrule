@@ -3,55 +3,12 @@
 //! Implements Section 3.3 of the roadmap: multiple leaf kernel providers behind
 //! a versioned POD descriptor, without hot-path dynamic trait dispatch.
 //!
-//! These types live in `ferrule-common` so they are available to both the CUDA
-//! and CPU/reference execution paths.  The CUDA-specific provider
-//! implementation (loading cubins, managing `LoadedModule`) lives in
-//! `ferrule-cuda::provider`.
+//! These provider-neutral types live in `ferrule-common`; the GB10 CUDA
+//! provider implementation lives in `ferrule-cuda::provider`.
 //!
 //! Provider selection occurs during prepare/compile, not through string lookup
 //! or hot-path dynamic policy.  The hot path reads pre-resolved POD
 //! descriptors and dispatches directly.
-
-// ── Row bucket ────────────────────────────────────────────────────────
-
-/// Verification row bucket.  Maps directly to the roadmap's shape strategy
-/// (Section 3.4): rows=1 is the persistent single-token path, rows=2/4 are
-/// Tensor Core verification schedules, and rows=8 is enabled only when
-/// acceptance/serving evidence justifies it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(u8)]
-pub enum RowBucket {
-    /// Single-token decode.  Persistent small-M kernels; no padded batch-16 work.
-    R1 = 1,
-    /// 2-row verification batch.
-    R2 = 2,
-    /// 4-row verification batch.
-    R4 = 4,
-    /// 8-row batch (enabled only when acceptance evidence justifies it).
-    R8 = 8,
-}
-
-impl RowBucket {
-    /// Returns the row count for this bucket.
-    pub const fn rows(self) -> usize {
-        self as usize
-    }
-
-    /// Parses a row count into a bucket, or `None` if the count is not a
-    /// supported bucket size.
-    pub const fn from_rows(rows: usize) -> Option<Self> {
-        match rows {
-            1 => Some(Self::R1),
-            2 => Some(Self::R2),
-            4 => Some(Self::R4),
-            8 => Some(Self::R8),
-            _ => None,
-        }
-    }
-
-    /// All buckets in escalation order.
-    pub const ALL: [Self; 4] = [Self::R1, Self::R2, Self::R4, Self::R8];
-}
 
 // ── Provider and kernel identity ──────────────────────────────────────
 
@@ -91,47 +48,107 @@ pub enum KernelPhase {
     MlaOutput = 4,
     /// Shared FFN gate/up/down (Bundle C).
     SharedFfn = 5,
-    /// Routed MoE gate/up FP4 (Bundle D).
-    MoeGateUp = 6,
-    /// Routed MoE down + rank-ordered reduction (Bundle D).
-    MoeDown = 7,
+    /// Stable-frame routed FP4 expert bundle (Bundle D).
+    RoutedMoe = 6,
     /// BF16 compressor dual projection.
-    CompressorProjection = 8,
+    CompressorProjection = 7,
     /// FP8 activation pack.
-    Fp8ActivationPack = 9,
+    Fp8ActivationPack = 8,
     /// Output head: HC head + norm.
-    OutputHeadNorm = 10,
+    OutputHeadNorm = 9,
     /// Output head: vocabulary projection / drafted-token verification.
-    OutputHeadVocab = 11,
+    OutputHeadVocab = 10,
     /// Router scoring and top-k selection.
-    Router = 12,
+    Router = 11,
+}
+
+/// Stable semantic operation bound to a provider kernel.
+///
+/// A phase is only a profiling/scheduling group and is not a unique binding
+/// key: MLA projection, for example, contains QueryA, QueryB, KV, and indexer
+/// consumers. The operation is therefore stored in the executable plan while
+/// [`KernelOperation::phase`] recovers the coarse group when needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum KernelOperation {
+    Embed = 0,
+    AttentionHcPre = 1,
+    FeedForwardHcPre = 2,
+    MlaQueryA = 3,
+    MlaQueryB = 4,
+    MlaKeyValue = 5,
+    SparseAttention = 6,
+    /// One-launch grouped output-A -> BF16 latent -> output-B bundle.
+    MlaOutput = 7,
+    /// One-launch shared gate/up -> SwiGLU -> down bundle.
+    SharedFfn = 9,
+    /// One-launch stable-frame routed gate/up -> SwiGLU -> down bundle.
+    RoutedFp4Moe = 10,
+    MainCompressorProjection = 11,
+    IndexerCompressorProjection = 12,
+    Fp8ActivationPack = 13,
+    OutputHeadNorm = 14,
+    OutputHeadVocab = 15,
+    Router = 16,
+    IndexerQuery = 17,
+    IndexerWeights = 18,
+    /// One-launch QueryA + KV multi-output projection bundle.
+    MlaQueryAKv = 19,
+}
+
+impl KernelOperation {
+    pub const fn phase(self) -> KernelPhase {
+        match self {
+            Self::Embed => KernelPhase::Embed,
+            Self::AttentionHcPre | Self::FeedForwardHcPre => KernelPhase::HcPre,
+            Self::MlaQueryA
+            | Self::MlaQueryB
+            | Self::MlaKeyValue
+            | Self::MlaQueryAKv
+            | Self::IndexerQuery
+            | Self::IndexerWeights => KernelPhase::MlaProjection,
+            Self::SparseAttention => KernelPhase::SparseAttention,
+            Self::MlaOutput => KernelPhase::MlaOutput,
+            Self::SharedFfn => KernelPhase::SharedFfn,
+            Self::RoutedFp4Moe => KernelPhase::RoutedMoe,
+            Self::MainCompressorProjection | Self::IndexerCompressorProjection => {
+                KernelPhase::CompressorProjection
+            }
+            Self::Fp8ActivationPack => KernelPhase::Fp8ActivationPack,
+            Self::OutputHeadNorm => KernelPhase::OutputHeadNorm,
+            Self::OutputHeadVocab => KernelPhase::OutputHeadVocab,
+            Self::Router => KernelPhase::Router,
+        }
+    }
 }
 
 /// Unique identifier for a kernel within a provider's catalog.
 ///
-/// The `provider` + `phase` + `rows` triple uniquely determines which kernel
-/// function and launch configuration to use.  The `variant` field allows
-/// multiple implementations of the same phase (e.g., a fast path and a
-/// fallback).
+/// The `provider` + `operation` pair uniquely determines the semantic binding.
+/// Architecture-specific M ranges and tile schedules stay inside the provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct KernelId {
     pub provider: KernelProviderId,
-    pub phase: KernelPhase,
-    pub rows: RowBucket,
-    /// Implementation variant within the same provider/phase/rows.
-    /// 0 = default/primary, 1+ = alternate implementations.
+    pub operation: KernelOperation,
+    /// Semantic implementation revision, never a runtime M bucket.
     pub variant: u8,
+    /// Explicit padding reserved for ABI evolution.
+    pub reserved: u8,
 }
 
 impl KernelId {
-    pub const fn new(provider: KernelProviderId, phase: KernelPhase, rows: RowBucket) -> Self {
+    pub const fn new(provider: KernelProviderId, operation: KernelOperation) -> Self {
         Self {
             provider,
-            phase,
-            rows,
+            operation,
             variant: 0,
+            reserved: 0,
         }
+    }
+
+    pub const fn phase(self) -> KernelPhase {
+        self.operation.phase()
     }
 
     pub const fn with_variant(mut self, variant: u8) -> Self {
@@ -234,36 +251,102 @@ pub enum WeightLayout {
     CutlassInterleaved = 5,
 }
 
-/// Describes a weight tensor's device layout and workspace offset.
+/// Provider-neutral requirement for one linear bundle.
+///
+/// Multiple outputs share one input activation and producer contract. For
+/// example, compressor KV/gate are represented as one semantic operation with
+/// two output widths, allowing a provider to share the activation producer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinearBundleRequirement {
+    pub operation: KernelOperation,
+    pub input_features: usize,
+    pub output_features: Box<[usize]>,
+    pub weight_layout: WeightLayout,
+}
+
+impl LinearBundleRequirement {
+    pub fn new(
+        operation: KernelOperation,
+        input_features: usize,
+        output_features: impl Into<Box<[usize]>>,
+        weight_layout: WeightLayout,
+    ) -> Self {
+        Self {
+            operation,
+            input_features,
+            output_features: output_features.into(),
+            weight_layout,
+        }
+    }
+}
+
+/// Provider-neutral operation requirements for one model layer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LayerKernelRequirements {
+    pub linear_bundles: Vec<LinearBundleRequirement>,
+    pub semantic_operations: Vec<KernelOperation>,
+}
+
+impl LayerKernelRequirements {
+    pub fn add_linear_bundle(&mut self, requirement: LinearBundleRequirement) {
+        self.linear_bundles.push(requirement);
+    }
+
+    pub fn require_operation(&mut self, operation: KernelOperation) {
+        if !self.semantic_operations.contains(&operation) {
+            self.semantic_operations.push(operation);
+        }
+    }
+}
+
+/// Describes a weight tensor's semantic operand and device layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct WeightBinding {
+    /// Operation that consumes this tensor.
+    pub operation: KernelOperation,
     /// Device-native layout of this weight tensor.
     pub layout: WeightLayout,
+    /// Operand index within the operation (for example KV=0, gate=1).
+    pub operand: u8,
+    /// Explicit padding reserved for ABI-compatible flags.
+    pub reserved: [u8; 5],
     /// Byte offset into the layer's persistent weight arena.
     pub offset: u64,
     /// Byte length of this weight tensor in device memory.
     pub len: u64,
 }
 
+impl WeightBinding {
+    pub const fn new(
+        operation: KernelOperation,
+        operand: u8,
+        layout: WeightLayout,
+        offset: u64,
+        len: u64,
+    ) -> Self {
+        Self {
+            operation,
+            layout,
+            operand,
+            reserved: [0; 5],
+            offset,
+            len,
+        }
+    }
+}
+
 // ── Layer kernel plan ─────────────────────────────────────────────────
 
-/// Per-shape kernel plan for one layer.
+/// Semantic kernel plan for one layer.
 ///
-/// Section 3.2: each layer carries a `LayerKernelPlan[rows=1/2/4/8]` that
-/// binds specific kernel IDs, weight layouts, tile schedules, fusion
-/// descriptors, workspace offsets, and graph bucket bindings.
-///
-/// This structure is the compiled output of prepare/compile, not a hot-path
-/// decision.  The execution loop reads the plan for the active row bucket and
-/// dispatches directly.
+/// Row-count schedule dispatch is provider-owned. CUDA Graph capture buckets are
+/// a separate runtime concern and must not duplicate semantic bindings.
 #[derive(Debug, Clone)]
 pub struct LayerKernelPlan {
-    /// Row bucket this plan is compiled for.
-    pub rows: RowBucket,
-    /// Launch descriptor for each kernel phase in this layer.
-    pub phases: Vec<LaunchDescriptor>,
-    /// Weight bindings for this layer's tensors, indexed by phase.
+    /// Launch descriptor for each semantic operation in this layer.
+    pub launches: Vec<LaunchDescriptor>,
+    /// Weight bindings keyed by semantic operation and operand.
     pub weights: Vec<WeightBinding>,
     /// Workspace byte offset within the persistent arena.
     pub workspace_offset: u64,
@@ -274,11 +357,10 @@ pub struct LayerKernelPlan {
 }
 
 impl LayerKernelPlan {
-    /// Creates an empty plan for the given row bucket.
-    pub fn new(rows: RowBucket) -> Self {
+    /// Creates an empty semantic plan.
+    pub fn new() -> Self {
         Self {
-            rows,
-            phases: Vec::new(),
+            launches: Vec::new(),
             weights: Vec::new(),
             workspace_offset: 0,
             workspace_len: 0,
@@ -286,84 +368,43 @@ impl LayerKernelPlan {
         }
     }
 
-    /// Returns the launch descriptor for a specific phase, if present.
-    pub fn phase(&self, phase: KernelPhase) -> Option<&LaunchDescriptor> {
-        self.phases.iter().find(|d| d.kernel.phase == phase)
+    /// Returns the launch descriptor for one exact semantic operation.
+    pub fn operation(&self, operation: KernelOperation) -> Option<&LaunchDescriptor> {
+        self.launches
+            .iter()
+            .find(|descriptor| descriptor.kernel.operation == operation)
     }
 
-    /// Adds or replaces a phase launch descriptor.
-    pub fn set_phase(&mut self, descriptor: LaunchDescriptor) {
+    /// Iterates every operation in a coarse profiling/scheduling phase.
+    pub fn operations_in_phase(
+        &self,
+        phase: KernelPhase,
+    ) -> impl Iterator<Item = &LaunchDescriptor> {
+        self.launches
+            .iter()
+            .filter(move |descriptor| descriptor.kernel.phase() == phase)
+    }
+
+    /// Adds or replaces one exact semantic-operation launch descriptor.
+    pub fn set_operation(&mut self, descriptor: LaunchDescriptor) {
         if let Some(existing) = self
-            .phases
+            .launches
             .iter_mut()
-            .find(|d| d.kernel.phase == descriptor.kernel.phase)
+            .find(|existing| existing.kernel.operation == descriptor.kernel.operation)
         {
             *existing = descriptor;
         } else {
-            self.phases.push(descriptor);
+            self.launches.push(descriptor);
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.launches.is_empty()
     }
 
     /// Marks this plan as fully resident and capture-safe.
     pub fn mark_resident_capture_safe(&mut self) {
         self.resident_capture_safe = true;
-    }
-}
-
-/// Plans for all row buckets of one layer.
-///
-/// Indexed by [`RowBucket`].  Not all buckets need plans; unset buckets
-/// fall back to the eager path.
-#[derive(Debug, Clone, Default)]
-pub struct LayerKernelPlanSet {
-    r1: Option<LayerKernelPlan>,
-    r2: Option<LayerKernelPlan>,
-    r4: Option<LayerKernelPlan>,
-    r8: Option<LayerKernelPlan>,
-}
-
-impl LayerKernelPlanSet {
-    /// Creates an empty plan set.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Returns the plan for the given row bucket, if compiled.
-    pub fn plan(&self, rows: RowBucket) -> Option<&LayerKernelPlan> {
-        match rows {
-            RowBucket::R1 => self.r1.as_ref(),
-            RowBucket::R2 => self.r2.as_ref(),
-            RowBucket::R4 => self.r4.as_ref(),
-            RowBucket::R8 => self.r8.as_ref(),
-        }
-    }
-
-    /// Returns a mutable reference to the plan for the given row bucket.
-    pub fn plan_mut(&mut self, rows: RowBucket) -> &mut Option<LayerKernelPlan> {
-        match rows {
-            RowBucket::R1 => &mut self.r1,
-            RowBucket::R2 => &mut self.r2,
-            RowBucket::R4 => &mut self.r4,
-            RowBucket::R8 => &mut self.r8,
-        }
-    }
-
-    /// Sets the plan for the given row bucket.
-    pub fn set_plan(&mut self, plan: LayerKernelPlan) {
-        let slot = self.plan_mut(plan.rows);
-        *slot = Some(plan);
-    }
-
-    /// Returns `true` if any plan is compiled for the given row bucket.
-    pub fn has_plan(&self, rows: RowBucket) -> bool {
-        self.plan(rows).is_some()
-    }
-
-    /// Returns `true` if the plan for the given rows is marked
-    /// resident-capture-safe.
-    pub fn is_resident_capture_safe(&self, rows: RowBucket) -> bool {
-        self.plan(rows)
-            .is_some_and(|plan| plan.resident_capture_safe)
     }
 }
 
@@ -375,31 +416,32 @@ impl LayerKernelPlanSet {
 /// It is compiled during `prepare` and stored alongside the resource image.
 #[derive(Debug, Clone)]
 pub struct ModelKernelPlan {
-    /// Per-layer plan sets, indexed by layer number.
-    pub layers: Vec<LayerKernelPlanSet>,
+    /// Per-layer semantic plans, indexed by layer number.
+    pub layers: Vec<LayerKernelPlan>,
 }
 
 impl ModelKernelPlan {
     /// Creates an empty model plan with the given layer count.
     pub fn new(layer_count: usize) -> Self {
         Self {
-            layers: vec![LayerKernelPlanSet::new(); layer_count],
+            layers: (0..layer_count).map(|_| LayerKernelPlan::new()).collect(),
         }
     }
 
     /// Returns the plan set for the given layer.
-    pub fn layer(&self, layer: usize) -> Option<&LayerKernelPlanSet> {
+    pub fn layer(&self, layer: usize) -> Option<&LayerKernelPlan> {
         self.layers.get(layer)
     }
 
-    /// Returns a mutable reference to the plan set for the given layer.
-    pub fn layer_mut(&mut self, layer: usize) -> Option<&mut LayerKernelPlanSet> {
+    /// Returns a mutable reference to one layer's semantic plan.
+    pub fn layer_mut(&mut self, layer: usize) -> Option<&mut LayerKernelPlan> {
         self.layers.get_mut(layer)
     }
 
-    /// Returns `true` if any layer has a compiled plan for the given rows.
-    pub fn has_any_plan(&self, rows: RowBucket) -> bool {
-        self.layers.iter().any(|set| set.has_plan(rows))
+    pub fn has_operation(&self, layer: usize, operation: KernelOperation) -> bool {
+        self.layer(layer)
+            .and_then(|plan| plan.operation(operation))
+            .is_some()
     }
 }
 
@@ -486,34 +528,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn row_bucket_from_rows_roundtrips() {
-        assert_eq!(RowBucket::from_rows(1), Some(RowBucket::R1));
-        assert_eq!(RowBucket::from_rows(2), Some(RowBucket::R2));
-        assert_eq!(RowBucket::from_rows(4), Some(RowBucket::R4));
-        assert_eq!(RowBucket::from_rows(8), Some(RowBucket::R8));
-        assert_eq!(RowBucket::from_rows(3), None);
-        assert_eq!(RowBucket::from_rows(16), None);
-    }
-
-    #[test]
-    fn row_bucket_rows() {
-        assert_eq!(RowBucket::R1.rows(), 1);
-        assert_eq!(RowBucket::R2.rows(), 2);
-        assert_eq!(RowBucket::R4.rows(), 4);
-        assert_eq!(RowBucket::R8.rows(), 8);
-    }
-
-    #[test]
     fn kernel_id_construction() {
-        let id = KernelId::new(
-            KernelProviderId::CudaOxide,
-            KernelPhase::HcPre,
-            RowBucket::R1,
-        );
+        let id = KernelId::new(KernelProviderId::CudaOxide, KernelOperation::AttentionHcPre);
         assert_eq!(id.provider, KernelProviderId::CudaOxide);
-        assert_eq!(id.phase, KernelPhase::HcPre);
-        assert_eq!(id.rows, RowBucket::R1);
+        assert_eq!(id.operation, KernelOperation::AttentionHcPre);
+        assert_eq!(id.phase(), KernelPhase::HcPre);
         assert_eq!(id.variant, 0);
+        assert_eq!(id.reserved, 0);
 
         let id_v2 = id.with_variant(1);
         assert_eq!(id_v2.variant, 1);
@@ -532,11 +553,7 @@ mod tests {
 
     #[test]
     fn launch_descriptor_versioning() {
-        let id = KernelId::new(
-            KernelProviderId::CudaOxide,
-            KernelPhase::Embed,
-            RowBucket::R1,
-        );
+        let id = KernelId::new(KernelProviderId::CudaOxide, KernelOperation::Embed);
         let desc = LaunchDescriptor::new(id, (1, 1, 1), (256, 1, 1));
         assert_eq!(desc.version, LaunchDescriptor::ABI_VERSION);
         assert!(!desc.is_capture_safe());
@@ -547,43 +564,44 @@ mod tests {
     }
 
     #[test]
-    fn layer_kernel_plan_set_phase() {
-        let mut plan = LayerKernelPlan::new(RowBucket::R1);
-        let id = KernelId::new(
+    fn layer_kernel_plan_binds_operations_not_phases() {
+        let mut plan = LayerKernelPlan::new();
+        let attention_id =
+            KernelId::new(KernelProviderId::CudaOxide, KernelOperation::AttentionHcPre);
+        let feed_forward_id = KernelId::new(
             KernelProviderId::CudaOxide,
-            KernelPhase::HcPre,
-            RowBucket::R1,
+            KernelOperation::FeedForwardHcPre,
         );
-        let desc = LaunchDescriptor::new(id, (1, 1, 1), (128, 1, 1));
+        plan.set_operation(LaunchDescriptor::new(attention_id, (1, 1, 1), (128, 1, 1)));
+        plan.set_operation(LaunchDescriptor::new(
+            feed_forward_id,
+            (2, 1, 1),
+            (128, 1, 1),
+        ));
 
-        assert!(plan.phase(KernelPhase::HcPre).is_none());
-        plan.set_phase(desc);
-        assert!(plan.phase(KernelPhase::HcPre).is_some());
-        assert!(plan.phase(KernelPhase::Embed).is_none());
+        assert_eq!(plan.operations_in_phase(KernelPhase::HcPre).count(), 2);
+        assert_eq!(
+            plan.operation(KernelOperation::AttentionHcPre)
+                .unwrap()
+                .grid[0],
+            1
+        );
 
-        // Replace existing phase
-        let desc2 = LaunchDescriptor::new(id, (2, 1, 1), (128, 1, 1));
-        plan.set_phase(desc2);
-        assert_eq!(plan.phase(KernelPhase::HcPre).unwrap().grid[0], 2);
-    }
-
-    #[test]
-    fn layer_kernel_plan_set_buckets() {
-        let mut set = LayerKernelPlanSet::new();
-        assert!(!set.has_plan(RowBucket::R1));
-        assert!(!set.has_plan(RowBucket::R4));
-
-        let plan_r1 = LayerKernelPlan::new(RowBucket::R1);
-        set.set_plan(plan_r1);
-        assert!(set.has_plan(RowBucket::R1));
-        assert!(!set.has_plan(RowBucket::R4));
-
-        let mut plan_r4 = LayerKernelPlan::new(RowBucket::R4);
-        plan_r4.mark_resident_capture_safe();
-        set.set_plan(plan_r4);
-        assert!(set.has_plan(RowBucket::R4));
-        assert!(set.is_resident_capture_safe(RowBucket::R4));
-        assert!(!set.is_resident_capture_safe(RowBucket::R1));
+        // Replace only the exact operation, not another launch in the phase.
+        plan.set_operation(LaunchDescriptor::new(attention_id, (3, 1, 1), (128, 1, 1)));
+        assert_eq!(plan.operations_in_phase(KernelPhase::HcPre).count(), 2);
+        assert_eq!(
+            plan.operation(KernelOperation::AttentionHcPre)
+                .unwrap()
+                .grid[0],
+            3
+        );
+        assert_eq!(
+            plan.operation(KernelOperation::FeedForwardHcPre)
+                .unwrap()
+                .grid[0],
+            2
+        );
     }
 
     #[test]
@@ -593,10 +611,14 @@ mod tests {
         assert!(plan.layer(0).is_some());
         assert!(plan.layer(43).is_none());
 
-        let plan_r1 = LayerKernelPlan::new(RowBucket::R1);
-        plan.layer_mut(0).unwrap().set_plan(plan_r1);
-        assert!(plan.has_any_plan(RowBucket::R1));
-        assert!(!plan.has_any_plan(RowBucket::R2));
+        let launch = LaunchDescriptor::new(
+            KernelId::new(KernelProviderId::CudaOxide, KernelOperation::Embed),
+            (1, 1, 1),
+            (128, 1, 1),
+        );
+        plan.layer_mut(0).unwrap().set_operation(launch);
+        assert!(plan.has_operation(0, KernelOperation::Embed));
+        assert!(!plan.has_operation(0, KernelOperation::Router));
     }
 
     #[test]
@@ -622,13 +644,5 @@ mod tests {
         assert_eq!(layout as u8, 0);
         let layout = WeightLayout::Fp4PackedExpertMajor;
         assert_eq!(layout as u8, 2);
-    }
-
-    #[test]
-    fn all_row_buckets_in_order() {
-        assert_eq!(
-            RowBucket::ALL,
-            [RowBucket::R1, RowBucket::R2, RowBucket::R4, RowBucket::R8]
-        );
     }
 }

@@ -1,7 +1,6 @@
 # Ferrule build system
 #   just build      → auto-detect CUDA + arch, build release
-#   just build-cpu  → CPU-only
-#   just build-cuda → CUDA build via cargo oxide with detected arch
+#   just build-cuda → GB10 SM121a build via cargo oxide + CUTLASS
 #   just test-cuda  → CUDA tests via cargo oxide with detected arch
 #   just run-cuda ARGS... → CUDA build via cargo oxide, then run target/release/ferrule
 #   just chat MODEL → interactive chat (MODEL required)
@@ -39,37 +38,29 @@ _use-cuda := `if [ "${FERRULE_NO_CUDA:-}" = "1" ]; then echo 0; elif command -v 
 
 # ── Build ──────────────────────────────────────────────────────────────
 
-build:
-    @echo "=== Ferrule ==="
-    @echo "oxide: $([ {{ _has-oxide }} = 1 ] && echo yes || echo no)"
-    @echo "gpu:   $([ {{ _has-gpu }} = 1 ] && echo yes || echo no)"
-    @echo "arch:  {{ _cuda-arch }}"
-    @if [ "{{ _use-cuda }}" = "1" ]; then \
-        echo "→ CUDA build via cargo oxide (arch: {{ _cuda-arch }})"; \
-        cargo oxide build --features cuda --arch "{{ _cuda-arch }}" -- --release; \
-    else \
-        echo "→ CPU build"; \
-        cargo build --release; \
-    fi
+build: cutlass-setup
+    @echo "=== Ferrule GB10 ==="
+    @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: Ferrule requires cargo-oxide and an NVIDIA GB10 GPU"; exit 1; fi
+    @echo "arch: {{ _cuda-arch }}"
+    cargo oxide build --features cuda,cutlass --arch "{{ _cuda-arch }}" -- --release
 
-build-cpu:
-    cargo build --release
-
-build-cuda arch='':
+build-cuda arch='': cutlass-setup
     @if [ "{{ _has-oxide }}" != "1" ]; then echo "error: cargo-oxide not found; run 'cargo install --path ...' or 'cargo oxide setup'"; exit 1; fi
-    @arch="{{ arch }}"; test -n "$arch" || arch="{{ _cuda-arch }}"; echo "→ CUDA build via cargo oxide (arch: $arch)"; cargo oxide build --features cuda --arch "$arch" -- --release
+    @arch="{{ arch }}"; test -n "$arch" || arch="{{ _cuda-arch }}"; echo "→ GB10 build via cargo oxide (arch: $arch)"; cargo oxide build --features cuda,cutlass --arch "$arch" -- --release
 
-# Fetch the pinned header-only CUTLASS checkout into ignored build artifacts.
+# Idempotently fetch and verify the exact header-only CUTLASS revision. All GB10
+# build/test/run recipes depend on this target; build.rs itself remains offline.
 cutlass-setup:
-    @if [ -f target/vendor/cutlass/include/cutlass/version.h ]; then echo "→ CUTLASS 4.6.1 headers already present"; else mkdir -p target/vendor; git clone --depth 1 --branch v4.6.1 https://github.com/NVIDIA/cutlass.git target/vendor/cutlass; fi
+    ./scripts/setup_cutlass.sh
 
-# Build cuda-oxide control kernels plus CUTLASS leaf providers for this GPU.
-build-cutlass arch='': cutlass-setup
+# Explicit alias retained for discoverability; there is only one GB10 build path.
+build-cutlass arch='':
+    just build-cuda "{{ arch }}"
+
+test-cutlass-provider arch='': cutlass-setup
     @if [ "{{ _has-oxide }}" != "1" ]; then echo "error: cargo-oxide not found"; exit 1; fi
-    @arch="{{ arch }}"; test -n "$arch" || arch="{{ _cuda-arch }}"; echo "→ CUDA + CUTLASS build (arch: $arch)"; cargo oxide build --features cuda,cutlass --arch "$arch" -- --release
-
-test-cutlass-provider: cutlass-setup
-    cargo test -p ferrule-cuda --features cutlass --test cutlass_provider
+    @if [ "{{ _has-gpu }}" != "1" ]; then echo "error: no NVIDIA GPU detected"; exit 1; fi
+    @arch="{{ arch }}"; test -n "$arch" || arch="{{ _cuda-arch }}"; echo "→ CUTLASS provider tests via cargo oxide (arch: $arch)"; cargo oxide test --arch "$arch" -- -p ferrule-cuda --features cutlass --test cutlass_provider
 
 build-dev:
     cargo build
@@ -186,10 +177,10 @@ lint: fmt clippy-all
 
 # ── Run ─────────────────────────────────────────────────────────────────
 
-run-cuda *args='':
-    @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
-    @echo "→ CUDA run via cargo oxide build (arch: {{ _cuda-arch }})"
-    cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
+run-cuda *args='': cutlass-setup
+    @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: Ferrule requires cargo-oxide and an NVIDIA GB10 GPU"; exit 1; fi
+    @echo "→ GB10 run via cargo oxide build (arch: {{ _cuda-arch }})"
+    cargo oxide build --features cuda,cutlass --arch {{ _cuda-arch }} -- --release -p ferrule-cli
     ./target/release/ferrule {{ args }}
 
 chat model quant='q4' *args='':
@@ -205,27 +196,27 @@ dsv4-vllm-bench mode='smoke' *args='':
     ./scripts/bench_vllm_serve.sh {{ mode }} {{ args }}
 
 
-dsv4-runtime-driver-bench prompt1='Hello' prompt2='Explain Ferrule in one sentence.' tokens='1' warmup='1' chunk='4096' layers='43' *args='':
+dsv4-runtime-driver-bench prompt1='Hello' prompt2='Explain Ferrule in one sentence.' tokens='1' warmup='1' chunk='4096' layers='43' *args='': cutlass-setup
     @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
-    @echo "→ DSV4 ResidentTopKDriver benchmark via cargo oxide (arch: {{ _cuda-arch }}, tokens: {{ tokens }}, warmup: {{ warmup }}, chunk: {{ chunk }}, layers: {{ layers }})"
-    cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
+    @echo "→ DSV4 ResidentTopKDriver benchmark via CUDA + CUTLASS (arch: {{ _cuda-arch }}, tokens: {{ tokens }}, warmup: {{ warmup }}, chunk: {{ chunk }}, layers: {{ layers }})"
+    cargo oxide build --features cuda,cutlass --arch {{ _cuda-arch }} -- --release -p ferrule-cli
     ./target/release/ferrule bench-interactive models/DeepSeek-V4-Flash-DSpark -p "{{ prompt1 }}" -p "{{ prompt2 }}" -n {{ tokens }} --warmup-tokens {{ warmup }} --prefill-chunk-size {{ chunk }} --max-layers {{ layers }} --json {{ args }}
 
 # Exact target-pass roofline: capture selected experts once, then replay the same
 # decode with independent KV states and require zero selected expert I/O.
-dsv4-resident-roofline model='models/DeepSeek-V4-Flash-DSpark' prompt='Hello' layers='43' hotset='48' chunk='4096' output='target/bench/s0-profile/resident-replay.json' *args='':
+dsv4-resident-roofline model='models/DeepSeek-V4-Flash-DSpark' prompt='Hello' layers='43' hotset='48' chunk='4096' output='target/bench/s0-profile/resident-replay.json' *args='': cutlass-setup
     @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
-    @echo "→ DSV4 resident/no-I/O roofline (arch: {{ _cuda-arch }}, layers: {{ layers }}, hotset: {{ hotset }})"
-    cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
+    @echo "→ DSV4 resident/no-I/O roofline via CUDA + CUTLASS (arch: {{ _cuda-arch }}, layers: {{ layers }}, hotset: {{ hotset }})"
+    cargo oxide build --features cuda,cutlass --arch {{ _cuda-arch }} -- --release -p ferrule-cli
     mkdir -p target/bench/s0-profile
     FERRULE_EXPERT_IO_BACKEND=io_uring FERRULE_EXPERT_IO_QUEUE_DEPTH=2 FERRULE_EXPERT_IO_BUFFER_MIB=16 FERRULE_EXPERT_IO_SLABS=16 ./target/release/ferrule bench-interactive {{ model }} -p "{{ prompt }}" --max-layers {{ layers }} --output-head-chunk-rows {{ chunk }} --moe-prefetch-experts 0 --moe-hotset-experts {{ hotset }} --resident-replay --json {{ args }} | tee {{ output }}
 
 # Gate F1: reuse bench-interactive's resident harness for native
 # 1-sequence × V-row verification at V=2/4/8, including the output head.
-dsv4-verify-width-sweep model='models/DeepSeek-V4-Flash-DSpark' prompt='Explain Ferrule runtime architecture in one concise paragraph.' layers='43' hotset='48' chunk='4096' iterations='3' output='target/bench/gate-f1/verify-width-sweep.json' *args='':
+dsv4-verify-width-sweep model='models/DeepSeek-V4-Flash-DSpark' prompt='Explain Ferrule runtime architecture in one concise paragraph.' layers='43' hotset='48' chunk='4096' iterations='3' output='target/bench/gate-f1/verify-width-sweep.json' *args='': cutlass-setup
     @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
-    @echo "→ DSV4 Gate F1 resident verification width sweep (arch: {{ _cuda-arch }}, V=2/4/8, iterations: {{ iterations }})"
-    cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
+    @echo "→ DSV4 Gate F1 verification via CUDA + CUTLASS (arch: {{ _cuda-arch }}, V=2/4/8, iterations: {{ iterations }})"
+    cargo oxide build --features cuda,cutlass --arch {{ _cuda-arch }} -- --release -p ferrule-cli
     mkdir -p target/bench/gate-f1
     FERRULE_EXPERT_IO_BACKEND=io_uring FERRULE_EXPERT_IO_QUEUE_DEPTH=2 FERRULE_EXPERT_IO_BUFFER_MIB=16 FERRULE_EXPERT_IO_SLABS=16 ./target/release/ferrule bench-interactive {{ model }} -p "{{ prompt }}" --max-layers {{ layers }} --output-head-chunk-rows {{ chunk }} --moe-prefetch-experts 0 --moe-hotset-experts {{ hotset }} --verify-width-sweep --verify-iterations {{ iterations }} --json {{ args }} | tee {{ output }}
 
@@ -233,7 +224,7 @@ dsv4-verify-width-sweep model='models/DeepSeek-V4-Flash-DSpark' prompt='Explain 
 dsv4-runtime-driver-chunk-sweep chunks='1,2,4,8,16,4096' tokens='1' warmup='0' layers='43' output='target/dsv4-runtime-driver-chunk-sweep' sync='0' *args='':
     @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
     @echo "→ DSV4 ResidentTopKDriver chunk sweep (arch: {{ _cuda-arch }}, chunks: {{ chunks }}, tokens: {{ tokens }}, warmup: {{ warmup }}, layers: {{ layers }}, sync: {{ sync }})"
-    cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
+    cargo oxide build --features cuda,cutlass --arch {{ _cuda-arch }} -- --release -p ferrule-cli
     @sync_arg=""; if [ "{{ sync }}" = "1" ] || [ "{{ sync }}" = "true" ] || [ "{{ sync }}" = "sync" ]; then sync_arg="--profile-sync"; fi; python3 scripts/dsv4_runtime_driver_chunk_sweep.py --model models/DeepSeek-V4-Flash-DSpark --chunks "{{ chunks }}" --max-tokens {{ tokens }} --warmup-tokens {{ warmup }} --max-layers {{ layers }} --bin ./target/release/ferrule --output-dir {{ output }} $sync_arg {{ args }}
 
 # Short alias focused on Step-C prefill observation.
@@ -248,7 +239,7 @@ test-dsv4-runtime-driver-local *args='':
 dsv4-prefill-parity model='models/DeepSeek-V4-Flash-DSpark' prompt='Hello' layers='43' backend='cuda' *args='':
     @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
     @echo "-> DSV4 prefill parity harness (arch: {{ _cuda-arch }}, layers: {{ layers }}, backend: {{ backend }})"
-    cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
+    cargo oxide build --features cuda,cutlass --arch {{ _cuda-arch }} -- --release -p ferrule-cli
     ./target/release/ferrule deepseek-v4-prefill-parity {{ model }} -p "{{ prompt }}" --max-layers {{ layers }} --backend {{ backend }} {{ args }}
 
 cuda:
@@ -288,23 +279,23 @@ dsv4-cuda-generate prompt='Hello' tokens='4' chunk='4096' *args='':
 
 dsv4-cuda-generate-json prompt='Hello' tokens='4' chunk='4096' output='target/dsv4-generate.json' *args='':
     @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
-    @echo "→ CUDA JSON run via cargo oxide build (arch: {{ _cuda-arch }}, output: {{ output }})"
+    @echo "→ GB10 JSON run via cargo oxide build (arch: {{ _cuda-arch }}, output: {{ output }})"
     @mkdir -p target
-    cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
+    cargo oxide build --features cuda,cutlass --arch {{ _cuda-arch }} -- --release -p ferrule-cli
     ./target/release/ferrule deepseek-v4-generate models/DeepSeek-V4-Flash-DSpark --prompt "{{ prompt }}" --backend cuda --max-tokens {{ tokens }} --output-head-chunk-rows {{ chunk }} --json {{ args }} | tee {{ output }}
 
 dsv4-cuda-moe-profile prompt='Hello' tokens='4' chunk='4096' output='target/dsv4-moe-profile.json' *args='':
     @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
-    @echo "→ CUDA MoE timing JSON run (arch: {{ _cuda-arch }}, output: {{ output }})"
+    @echo "→ GB10 MoE timing JSON run (arch: {{ _cuda-arch }}, output: {{ output }})"
     @mkdir -p target
-    cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
+    cargo oxide build --features cuda,cutlass --arch {{ _cuda-arch }} -- --release -p ferrule-cli
     FERRULE_CUDA_MOE_TIMING=1 ./target/release/ferrule deepseek-v4-generate models/DeepSeek-V4-Flash-DSpark --prompt "{{ prompt }}" --backend cuda --max-tokens {{ tokens }} --output-head-chunk-rows {{ chunk }} --json {{ args }} | tee {{ output }}
 
 dsv4-cuda-moe-ab prompt='Hello' tokens='4' chunk='4096' *args='':
     @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
-    @echo "→ CUDA MoE TC/scalar A/B JSON timing (arch: {{ _cuda-arch }})"
+    @echo "→ GB10 MoE provider A/B JSON timing (arch: {{ _cuda-arch }})"
     @mkdir -p target
-    cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli
+    cargo oxide build --features cuda,cutlass --arch {{ _cuda-arch }} -- --release -p ferrule-cli
     FERRULE_CUDA_MOE_TIMING=1 FERRULE_CUDA_MOE_TC=1 ./target/release/ferrule deepseek-v4-generate models/DeepSeek-V4-Flash-DSpark --prompt "{{ prompt }}" --backend cuda --max-tokens {{ tokens }} --output-head-chunk-rows {{ chunk }} --json {{ args }} > target/dsv4-moe-tc.json
     FERRULE_CUDA_MOE_TIMING=1 FERRULE_CUDA_MOE_TC=0 ./target/release/ferrule deepseek-v4-generate models/DeepSeek-V4-Flash-DSpark --prompt "{{ prompt }}" --backend cuda --max-tokens {{ tokens }} --output-head-chunk-rows {{ chunk }} --json {{ args }} > target/dsv4-moe-scalar.json
     python3 -c 'import json; paths=[("tc","target/dsv4-moe-tc.json"),("scalar","target/dsv4-moe-scalar.json")]; [print("{}: decode_tok/s={:.3f} total={:.3f}s moe_calls={} tc/scalar/reduce={}/{}/{} moe_total={:.3f}s input={:.3f}s gate_up={:.3f}s swiglu={:.3f}s hidden_pack={:.3f}s down={:.3f}s".format(label,s["decode_tok_per_s"],d["total_seconds"],t["moe_calls"],t["moe_tc_calls"],t["moe_scalar_calls"],t["moe_reduce_calls"],t["moe_total_us"]/1e6,t["moe_input_prepare_us"]/1e6,t["moe_gate_up_us"]/1e6,t["moe_swiglu_us"]/1e6,t["moe_hidden_pack_us"]/1e6,t["moe_down_us"]/1e6)) for label,path in paths for d in [json.load(open(path))] for s in [d["summary"]] for t in [s["counters"]["timing"]]]; print("wrote target/dsv4-moe-tc.json and target/dsv4-moe-scalar.json")'
@@ -324,7 +315,7 @@ dsv4-parity-json prompt='Hello' output='target/dsv4_generation_parity.json' *arg
 
 dsv4-chat tokens='64' *args='':
     @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
-    @tokens="{{ tokens }}"; tokens="${tokens#tokens=}"; case "$tokens" in ''|*[!0-9]*) echo "error: dsv4-chat tokens must be an integer; use 'just dsv4-chat 64' or 'just dsv4-chat tokens=64'"; exit 2;; esac; echo "→ CUDA chat via cargo oxide build (arch: {{ _cuda-arch }}, tokens: $tokens)"; cargo oxide build --features cuda --arch {{ _cuda-arch }} -- --release -p ferrule-cli; ./target/release/ferrule chat models/DeepSeek-V4-Flash-DSpark -q cuda -n "$tokens" --chat-template deepseek-v4 --temp 0 {{ args }}
+    @tokens="{{ tokens }}"; tokens="${tokens#tokens=}"; case "$tokens" in ''|*[!0-9]*) echo "error: dsv4-chat tokens must be an integer; use 'just dsv4-chat 64' or 'just dsv4-chat tokens=64'"; exit 2;; esac; echo "→ GB10 chat via cargo oxide build (arch: {{ _cuda-arch }}, tokens: $tokens)"; cargo oxide build --features cuda,cutlass --arch {{ _cuda-arch }} -- --release -p ferrule-cli; ./target/release/ferrule chat models/DeepSeek-V4-Flash-DSpark -q cuda -n "$tokens" --chat-template deepseek-v4 --temp 0 {{ args }}
 
 info model:
     cargo run --release -p ferrule-cli -- info {{ model }}

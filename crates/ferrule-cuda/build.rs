@@ -65,12 +65,18 @@ fn main() {
     let cutlass_target = env::var(CUTLASS_ARCH_ENV)
         .ok()
         .or_else(|| env::var("CUDA_OXIDE_TARGET").ok())
-        .filter(|target| CudaTarget::parse(target).is_some())
-        .unwrap_or_else(|| "sm_80".into());
+        .unwrap_or_else(|| {
+            panic!(
+                "CUTLASS is a GB10-only provider; set {CUTLASS_ARCH_ENV}=sm_121a or build with --arch sm_121a"
+            )
+        });
     let parsed_target = CudaTarget::parse(&cutlass_target)
-        .unwrap_or_else(|| panic!("invalid {CUTLASS_ARCH_ENV} target '{cutlass_target}'"));
-    if !parsed_target.capabilities().portable_simt {
-        panic!("CUTLASS provider requires sm_80+, got '{cutlass_target}'");
+        .unwrap_or_else(|| panic!("invalid CUTLASS target '{cutlass_target}'"));
+    if !cutlass_target.starts_with("sm_")
+        || parsed_target.compute_capability() != 121
+        || !parsed_target.has_accelerated_target()
+    {
+        panic!("CUTLASS is a GB10-only provider and requires sm_121a, got '{cutlass_target}'");
     }
     let compute_target = cutlass_target.replacen("sm_", "compute_", 1);
     let generate_code = format!("--generate-code=arch={compute_target},code={cutlass_target}");
@@ -99,7 +105,7 @@ fn require_cutlass_headers(cutlass_dir: &Path) {
     let version_header = cutlass_dir.join("include/cutlass/version.h");
     if !version_header.is_file() {
         panic!(
-            "CUTLASS headers were not found at {}. Clone NVIDIA CUTLASS v4.6.1 there, or set {CUTLASS_DIR_ENV} to a pinned checkout",
+            "CUTLASS headers were not found at {}. Run `just cutlass-setup` to fetch v4.6.1 at e05f953a5b3d38adc240df2ff928e0421c2abba3, or set {CUTLASS_DIR_ENV} to that pinned checkout",
             cutlass_dir.display()
         );
     }

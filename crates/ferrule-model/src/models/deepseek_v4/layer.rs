@@ -27,7 +27,7 @@ use super::attention::{DeepSeekV4Attention, DeepSeekV4AttentionCache};
 use super::attention::{DeepSeekV4AttentionDecodeArena, DeepSeekV4AttentionRowsTransitionArena};
 use super::config::DeepSeekV4AttentionConfig;
 #[cfg(feature = "cuda")]
-use super::cuda_cache::{DeepSeekV4CudaHcStage, DeepSeekV4CudaLayerNorm};
+use super::cuda_cache::DeepSeekV4CudaHcStage;
 use super::helpers::rms_norm_rows_with_operators;
 use super::operators::{DeepSeekV4LayerProfileStage, DeepSeekV4OperatorContext};
 #[cfg(feature = "cuda")]
@@ -68,7 +68,6 @@ struct DeepSeekV4CompressorArenaShapeKey {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct DeepSeekV4AttentionArenaShapeKey {
     hidden_a_width: usize,
-    hidden_b_width: usize,
     q_latent_width: usize,
     q_norm_width: usize,
     q_indexer_width: usize,
@@ -189,7 +188,6 @@ impl DeepSeekV4LayerArenaShapeKey {
             ffn_norm_width: hidden,
             attention: DeepSeekV4AttentionArenaShapeKey {
                 hidden_a_width: cfg.hidden_size,
-                hidden_b_width: cfg.hidden_size,
                 q_latent_width: cfg.q_lora_rank,
                 q_norm_width: cfg.q_lora_rank,
                 q_indexer_width: cfg.q_lora_rank,
@@ -387,41 +385,27 @@ impl DeepSeekV4Layer {
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<DeepSeekV4LayerDeviceStepOutput> {
         let decode_start = operators.profile_start();
-        let norm_eps = self.hc_config.norm_eps;
 
         // ── Prefix: attention HC-pre + norm + attention + HC-post + FFN HC-pre + FFN norm ──
         let stage_start = operators.profile_start();
-        operators.cuda_mut()?.hc_pre_from_device_into(
+        let attention_fp8 = operators.cuda_mut()?.hc_pre_rmsnorm_fp8_into(
             self.layer,
             DeepSeekV4CudaHcStage::Attention,
             hc_state_dev,
             1,
             self.hc_config,
             &mut arena.attn_hidden,
+            &mut arena.attn_norm,
             &mut arena.attn_pre,
             &mut arena.attn_post,
             &mut arena.attn_comb,
+            &mut arena.hc_fp8_pack,
         )?;
         operators.capture_parity_checkpoint_last_row(
             self.layer,
             "attention_hc_hidden",
             &arena.attn_hidden,
             self.hc_config.hidden_size,
-        )?;
-        record_stage(
-            operators,
-            self.layer,
-            DeepSeekV4LayerProfileStage::AttnHcPre,
-            stage_start,
-        )?;
-
-        let stage_start = operators.profile_start();
-        operators.cuda_mut()?.rms_norm_layer_device_into(
-            self.layer,
-            DeepSeekV4CudaLayerNorm::Attention,
-            &arena.attn_hidden,
-            norm_eps,
-            &mut arena.attn_norm,
         )?;
         operators.capture_parity_checkpoint_last_row(
             self.layer,
@@ -432,7 +416,7 @@ impl DeepSeekV4Layer {
         record_stage(
             operators,
             self.layer,
-            DeepSeekV4LayerProfileStage::AttnNorm,
+            DeepSeekV4LayerProfileStage::AttnHcPre,
             stage_start,
         )?;
 
@@ -440,6 +424,7 @@ impl DeepSeekV4Layer {
         self.attention.decode_step_from_device_into(
             &mut state.kv,
             &arena.attn_norm,
+            &attention_fp8,
             position,
             operators,
             &mut arena.attention,
@@ -475,16 +460,18 @@ impl DeepSeekV4Layer {
         )?;
 
         let stage_start = operators.profile_start();
-        operators.cuda_mut()?.hc_pre_from_device_into(
+        let ffn_fp8 = operators.cuda_mut()?.hc_pre_rmsnorm_fp8_into(
             self.layer,
             DeepSeekV4CudaHcStage::FeedForward,
             &arena.after_attn,
             1,
             self.hc_config,
             &mut arena.ffn_hidden,
+            &mut arena.ffn_norm,
             &mut arena.ffn_pre,
             &mut arena.ffn_post,
             &mut arena.ffn_comb,
+            &mut arena.hc_fp8_pack,
         )?;
         record_stage(
             operators,
@@ -492,26 +479,11 @@ impl DeepSeekV4Layer {
             DeepSeekV4LayerProfileStage::FfnHcPre,
             stage_start,
         )?;
-
-        let stage_start = operators.profile_start();
-        operators.cuda_mut()?.rms_norm_layer_device_into(
-            self.layer,
-            DeepSeekV4CudaLayerNorm::FeedForward,
-            &arena.ffn_hidden,
-            norm_eps,
-            &mut arena.ffn_norm,
-        )?;
         operators.capture_parity_checkpoint_last_row(
             self.layer,
             "ffn_input",
             &arena.ffn_norm,
             self.hc_config.hidden_size,
-        )?;
-        record_stage(
-            operators,
-            self.layer,
-            DeepSeekV4LayerProfileStage::FfnNorm,
-            stage_start,
         )?;
 
         // ── Dispatch: eager MoE with host-side routing ──
@@ -521,6 +493,9 @@ impl DeepSeekV4Layer {
         let moe = operators.cuda_mut()?.routed_moe_step_device_output_into(
             self.layer,
             &arena.ffn_norm,
+            &ffn_fp8,
+            &mut arena.ffn_hidden,
+            &mut arena.shared_ffn_hidden_fp8,
             token_id,
             &self.router,
             predicted_experts,
@@ -534,7 +509,6 @@ impl DeepSeekV4Layer {
             &mut arena.router_logits,
             &mut arena.router_indices,
             &mut arena.router_weights,
-            &mut arena.shared_workspace,
             &mut arena.moe_output,
         )?;
         operators.capture_parity_checkpoint_last_row(
@@ -618,16 +592,18 @@ impl DeepSeekV4Layer {
                 "DeepSeek-V4 packed row/sequence metadata is inconsistent".into(),
             ));
         }
-        operators.cuda_mut()?.hc_pre_from_device_into(
+        let attention_fp8 = operators.cuda_mut()?.hc_pre_rmsnorm_fp8_into(
             self.layer,
             DeepSeekV4CudaHcStage::Attention,
             hc_state_dev,
             rows,
             self.hc_config,
             &mut arena.attn_hidden,
+            &mut arena.attn_norm,
             &mut arena.attn_pre,
             &mut arena.attn_post,
             &mut arena.attn_comb,
+            &mut arena.hc_fp8_pack,
         )?;
         operators.capture_parity_checkpoint_last_row(
             self.layer,
@@ -635,15 +611,6 @@ impl DeepSeekV4Layer {
             &arena.attn_hidden,
             self.hc_config.hidden_size,
         )?;
-        operators.cuda_mut()?.rms_norm_layer_rows_device_into(
-            self.layer,
-            DeepSeekV4CudaLayerNorm::Attention,
-            &arena.attn_hidden,
-            rows,
-            self.hc_config.norm_eps,
-            &mut arena.attn_norm,
-        )?;
-
         operators.capture_parity_checkpoint_last_row(
             self.layer,
             "attention_input",
@@ -662,6 +629,7 @@ impl DeepSeekV4Layer {
         self.attention.packed_rows_from_device_into(
             &mut attention_caches,
             &arena.attn_norm,
+            &attention_fp8,
             positions,
             row_to_sequence,
             sequence_major_rows,
@@ -687,24 +655,18 @@ impl DeepSeekV4Layer {
             &arena.after_attn,
             self.hc_config.hc_hidden_size(),
         )?;
-        operators.cuda_mut()?.hc_pre_from_device_into(
+        let ffn_fp8 = operators.cuda_mut()?.hc_pre_rmsnorm_fp8_into(
             self.layer,
             DeepSeekV4CudaHcStage::FeedForward,
             &arena.after_attn,
             rows,
             self.hc_config,
             &mut arena.ffn_hidden,
+            &mut arena.ffn_norm,
             &mut arena.ffn_pre,
             &mut arena.ffn_post,
             &mut arena.ffn_comb,
-        )?;
-        operators.cuda_mut()?.rms_norm_layer_rows_device_into(
-            self.layer,
-            DeepSeekV4CudaLayerNorm::FeedForward,
-            &arena.ffn_hidden,
-            rows,
-            self.hc_config.norm_eps,
-            &mut arena.ffn_norm,
+            &mut arena.hc_fp8_pack,
         )?;
         operators.capture_parity_checkpoint_last_row(
             self.layer,
@@ -725,6 +687,9 @@ impl DeepSeekV4Layer {
         let moe_access_events = operators.routed_moe_prefill_batch_from_device_into(
             self.layer,
             &arena.ffn_norm,
+            &ffn_fp8,
+            &mut arena.ffn_hidden,
+            &mut arena.shared_ffn_hidden_fp8,
             token_ids,
             Some(row_to_sequence),
             Some(sequence_phases),
@@ -740,7 +705,6 @@ impl DeepSeekV4Layer {
             &mut arena.router_indices,
             &mut arena.router_weights,
             &mut arena.attention.linear_workspace,
-            &mut arena.shared_workspace,
             &mut arena.moe_segment_workspace,
             &mut arena.moe_route_output,
             &mut arena.moe_output,
@@ -790,38 +754,24 @@ impl DeepSeekV4Layer {
         let prefill_start = operators.profile_start();
 
         let stage_start = operators.profile_start();
-        operators.cuda_mut()?.hc_pre_from_device_into(
+        let attention_fp8 = operators.cuda_mut()?.hc_pre_rmsnorm_fp8_into(
             self.layer,
             DeepSeekV4CudaHcStage::Attention,
             hc_state_dev,
             tokens,
             self.hc_config,
             &mut arena.attn_hidden,
+            &mut arena.attn_norm,
             &mut arena.attn_pre,
             &mut arena.attn_post,
             &mut arena.attn_comb,
+            &mut arena.hc_fp8_pack,
         )?;
         operators.capture_parity_checkpoint_last_row(
             self.layer,
             "attention_hc_hidden",
             &arena.attn_hidden,
             self.hc_config.hidden_size,
-        )?;
-        record_stage(
-            operators,
-            self.layer,
-            DeepSeekV4LayerProfileStage::AttnHcPre,
-            stage_start,
-        )?;
-
-        let stage_start = operators.profile_start();
-        operators.cuda_mut()?.rms_norm_layer_rows_device_into(
-            self.layer,
-            DeepSeekV4CudaLayerNorm::Attention,
-            &arena.attn_hidden,
-            tokens,
-            self.hc_config.norm_eps,
-            &mut arena.attn_norm,
         )?;
         operators.capture_parity_checkpoint_last_row(
             self.layer,
@@ -832,7 +782,7 @@ impl DeepSeekV4Layer {
         record_stage(
             operators,
             self.layer,
-            DeepSeekV4LayerProfileStage::AttnNorm,
+            DeepSeekV4LayerProfileStage::AttnHcPre,
             stage_start,
         )?;
 
@@ -840,6 +790,7 @@ impl DeepSeekV4Layer {
         self.attention.prefill_start_from_device_into(
             &mut state.kv,
             &arena.attn_norm,
+            &attention_fp8,
             start_pos,
             &mut arena.attention,
             operators,
@@ -875,16 +826,18 @@ impl DeepSeekV4Layer {
         )?;
 
         let stage_start = operators.profile_start();
-        operators.cuda_mut()?.hc_pre_from_device_into(
+        let ffn_fp8 = operators.cuda_mut()?.hc_pre_rmsnorm_fp8_into(
             self.layer,
             DeepSeekV4CudaHcStage::FeedForward,
             &arena.after_attn,
             tokens,
             self.hc_config,
             &mut arena.ffn_hidden,
+            &mut arena.ffn_norm,
             &mut arena.ffn_pre,
             &mut arena.ffn_post,
             &mut arena.ffn_comb,
+            &mut arena.hc_fp8_pack,
         )?;
         record_stage(
             operators,
@@ -892,27 +845,11 @@ impl DeepSeekV4Layer {
             DeepSeekV4LayerProfileStage::FfnHcPre,
             stage_start,
         )?;
-
-        let stage_start = operators.profile_start();
-        operators.cuda_mut()?.rms_norm_layer_rows_device_into(
-            self.layer,
-            DeepSeekV4CudaLayerNorm::FeedForward,
-            &arena.ffn_hidden,
-            tokens,
-            self.hc_config.norm_eps,
-            &mut arena.ffn_norm,
-        )?;
         operators.capture_parity_checkpoint_last_row(
             self.layer,
             "ffn_input",
             &arena.ffn_norm,
             self.hc_config.hidden_size,
-        )?;
-        record_stage(
-            operators,
-            self.layer,
-            DeepSeekV4LayerProfileStage::FfnNorm,
-            stage_start,
         )?;
         if !predicted_experts.is_empty() {
             operators.prefetch_predicted_experts(
@@ -929,6 +866,9 @@ impl DeepSeekV4Layer {
         let _ = operators.routed_moe_prefill_batch_from_device_into(
             self.layer,
             &arena.ffn_norm,
+            &ffn_fp8,
+            &mut arena.ffn_hidden,
+            &mut arena.shared_ffn_hidden_fp8,
             token_ids,
             None,
             None,
@@ -944,7 +884,6 @@ impl DeepSeekV4Layer {
             &mut arena.router_indices,
             &mut arena.router_weights,
             &mut arena.attention.linear_workspace,
-            &mut arena.shared_workspace,
             &mut arena.moe_segment_workspace,
             &mut arena.moe_route_output,
             &mut arena.moe_output,
@@ -1176,12 +1115,14 @@ pub(crate) struct DeepSeekV4LayerArena {
     attn_post: ferrule_cuda::context::CudaF32Buffer,
     attn_comb: ferrule_cuda::context::CudaF32Buffer,
     attn_norm: ferrule_cuda::context::CudaF32Buffer,
+    hc_fp8_pack: ferrule_cuda::context::CudaFp8ActivationPack,
     after_attn: ferrule_cuda::context::CudaF32Buffer,
     ffn_hidden: ferrule_cuda::context::CudaF32Buffer,
     ffn_pre: ferrule_cuda::context::CudaF32Buffer,
     ffn_post: ferrule_cuda::context::CudaF32Buffer,
     ffn_comb: ferrule_cuda::context::CudaF32Buffer,
     ffn_norm: ferrule_cuda::context::CudaF32Buffer,
+    shared_ffn_hidden_fp8: ferrule_cuda::context::CudaFp8ActivationPack,
     attention: DeepSeekV4AttentionDecodeArena,
     attention_transition: Option<DeepSeekV4AttentionRowsTransitionArena>,
     router_input: ferrule_cuda::context::CudaF32Buffer,
@@ -1189,7 +1130,6 @@ pub(crate) struct DeepSeekV4LayerArena {
     router_indices: ferrule_cuda::context::CudaI32Buffer,
     router_weights: ferrule_cuda::context::CudaF32Buffer,
     moe_output: ferrule_cuda::context::CudaF32Buffer,
-    shared_workspace: ferrule_cuda::context::CudaSwiGLUWorkspace,
     moe_segment_workspace: Option<ferrule_cuda::context::CudaMoeSegmentWorkspace>,
     moe_route_output: ferrule_cuda::context::CudaF32Buffer,
     layer_output: ferrule_cuda::context::CudaF32Buffer,
@@ -1293,12 +1233,20 @@ impl DeepSeekV4LayerArena {
             attn_post: operators.cuda_mut()?.ops.zero_f32_buffer(rows * hc)?,
             attn_comb: operators.cuda_mut()?.ops.zero_f32_buffer(rows * comb)?,
             attn_norm: operators.cuda_mut()?.ops.zero_f32_buffer(rows * hidden)?,
+            hc_fp8_pack: operators
+                .cuda_mut()?
+                .ops
+                .fp8_activation_pack(rows, hidden)?,
             after_attn: operators.cuda_mut()?.ops.zero_f32_buffer(rows * hc_dim)?,
             ffn_hidden: operators.cuda_mut()?.ops.zero_f32_buffer(rows * hidden)?,
             ffn_pre: operators.cuda_mut()?.ops.zero_f32_buffer(rows * hc)?,
             ffn_post: operators.cuda_mut()?.ops.zero_f32_buffer(rows * hc)?,
             ffn_comb: operators.cuda_mut()?.ops.zero_f32_buffer(rows * comb)?,
             ffn_norm: operators.cuda_mut()?.ops.zero_f32_buffer(rows * hidden)?,
+            shared_ffn_hidden_fp8: operators
+                .cuda_mut()?
+                .ops
+                .fp8_activation_pack(rows, layer.shared_ffn.gate.format.out_features())?,
             attention: DeepSeekV4AttentionDecodeArena::new(
                 &layer.attention,
                 rows,
@@ -1322,12 +1270,6 @@ impl DeepSeekV4LayerArena {
                 .ops
                 .zero_f32_buffer(rows * layer.router_policy.top_k)?,
             moe_output: operators.cuda_mut()?.ops.zero_f32_buffer(rows * hidden)?,
-            shared_workspace: operators.cuda_mut()?.ops.swiglu_workspace_for_shape(
-                rows,
-                hidden,
-                layer.shared_ffn.gate.format.out_features(),
-                hidden,
-            )?,
             moe_segment_workspace: None,
             moe_route_output: operators.cuda_mut()?.ops.allocate_moe_route_output(
                 rows,

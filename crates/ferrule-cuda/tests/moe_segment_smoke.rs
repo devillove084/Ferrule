@@ -190,6 +190,7 @@ fn expert_major_segments_gather_scatter_and_reduce() {
             &mut workspace,
         )
         .expect("group expert-0 resident window");
+    context.reset_counters();
     context
         .moe_expert_segments_stable_from_prepared(
             &table,
@@ -199,6 +200,7 @@ fn expert_major_segments_gather_scatter_and_reduce() {
             &mut route_output,
         )
         .expect("execute expert-0 resident window");
+    assert_eq!(context.counters().kernel_launches, 1);
 
     context
         .evict_expert_slot(&mut table, 0)
@@ -216,6 +218,7 @@ fn expert_major_segments_gather_scatter_and_reduce() {
             &mut workspace,
         )
         .expect("group expert-1 resident window");
+    context.reset_counters();
     context
         .moe_expert_segments_stable_from_prepared(
             &table,
@@ -225,6 +228,7 @@ fn expert_major_segments_gather_scatter_and_reduce() {
             &mut route_output,
         )
         .expect("execute expert-1 resident window");
+    assert_eq!(context.counters().kernel_launches, 1);
     context.sync_stream().expect("synchronize segments");
 
     // Quantized input remains exactly 1. Gate/up each produce 64, sigmoid(64)=1,

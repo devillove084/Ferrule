@@ -7,36 +7,24 @@
 use ferrule_common::{Error, Result};
 
 pub use ferrule_common::kernel_plan::{
-    KernelId, KernelPhase, KernelProviderId, LaunchDescriptor, LayerKernelPlan, LayerKernelPlanSet,
-    ModelKernelPlan, ProviderManifest, ProviderRegistry, RowBucket, WeightBinding, WeightLayout,
+    KernelId, KernelOperation, KernelPhase, KernelProviderId, LaunchDescriptor, LayerKernelPlan,
+    LayerKernelRequirements, LinearBundleRequirement, ModelKernelPlan, ProviderManifest,
+    ProviderRegistry, WeightBinding, WeightLayout,
 };
 
 /// Providers and native catalogs available in this build.
 #[derive(Debug, Clone)]
 pub struct CudaProviderCatalog {
     registry: ProviderRegistry,
-    cutlass: Option<crate::cutlass::CutlassProviderManifest>,
+    cutlass: crate::cutlass::CutlassProvider,
 }
 
 impl CudaProviderCatalog {
     /// Discover compiled providers once during prepare/compile.
     pub fn discover() -> Result<Self> {
         let mut registry = ProviderRegistry::with_cuda_oxide();
-        let cutlass = crate::cutlass::provider_manifest();
-        if let Some(manifest) = cutlass {
-            if manifest.abi_version != crate::cutlass::CUTLASS_ABI_VERSION {
-                return Err(Error::Internal(format!(
-                    "CUTLASS provider ABI mismatch: native={} rust={}",
-                    manifest.abi_version,
-                    crate::cutlass::CUTLASS_ABI_VERSION
-                )));
-            }
-            let execution_manifest =
-                crate::cutlass::execution_provider_manifest().ok_or_else(|| {
-                    Error::Internal("CUTLASS provider manifest conversion failed".into())
-                })?;
-            registry.register(execution_manifest);
-        }
+        let cutlass = crate::cutlass::discover_provider()?;
+        registry.register(cutlass.execution_manifest()?);
         Ok(Self { registry, cutlass })
     }
 
@@ -44,61 +32,139 @@ impl CudaProviderCatalog {
         &self.registry
     }
 
-    pub const fn cutlass_manifest(&self) -> Option<crate::cutlass::CutlassProviderManifest> {
-        self.cutlass
+    pub const fn cutlass_manifest(&self) -> crate::cutlass::CutlassProviderManifest {
+        self.cutlass.manifest()
     }
 
-    /// Compile the currently implemented DSV4 semantic phases for every row
-    /// bucket. Unsupported or absent phases remain on the eager fallback.
+    /// Compile provider-neutral requirements into one semantic plan per layer.
+    /// Native providers own row-count schedule dispatch. Missing capabilities
+    /// are fatal; production has no fallback path.
     pub fn compile_model_plan(
         &self,
-        layer_count: usize,
-        hidden_size: usize,
+        requirements: &[LayerKernelRequirements],
     ) -> Result<ModelKernelPlan> {
-        let mut model_plan = ModelKernelPlan::new(layer_count);
-        let Some(cutlass) = self.cutlass else {
-            return Ok(model_plan);
-        };
-        if !cutlass.supports(crate::cutlass::CutlassKernelId::Bf16MmaSync) {
-            return Ok(model_plan);
-        }
+        let mut model_plan = ModelKernelPlan::new(requirements.len());
+        let cutlass = self.cutlass;
 
-        for layer in 0..layer_count {
-            let plan_set = model_plan
+        for (layer, requirements) in requirements.iter().enumerate() {
+            let layer_plan = model_plan
                 .layer_mut(layer)
                 .ok_or_else(|| Error::Internal(format!("kernel plan lost layer slot {layer}")))?;
-            for rows in RowBucket::ALL {
-                let workspace_len = rows
-                    .rows()
-                    .checked_mul(hidden_size)
-                    .and_then(|elements| elements.checked_mul(std::mem::size_of::<u16>()))
-                    .and_then(|bytes| u64::try_from(bytes).ok())
-                    .ok_or_else(|| {
-                        Error::Internal(format!(
-                            "CUTLASS BF16 workspace overflow: rows={} hidden={hidden_size}",
-                            rows.rows()
-                        ))
-                    })?;
-                let kernel = KernelId::new(
-                    KernelProviderId::CutlassCubin,
-                    KernelPhase::CompressorProjection,
-                    rows,
-                )
-                .with_variant(crate::cutlass::CutlassKernelId::Bf16MmaSync as u8);
-                let descriptor = LaunchDescriptor::new(kernel, (0, 0, 0), (0, 0, 0))
-                    .provider_managed()
-                    .capture_safe();
-                let mut layer_plan = LayerKernelPlan::new(rows);
-                layer_plan.workspace_len = workspace_len;
-                layer_plan.set_phase(descriptor);
-                plan_set.set_plan(layer_plan);
+            for requirement in &requirements.linear_bundles {
+                require_cutlass_bundle(cutlass, requirement)?;
+                set_provider_operation(layer_plan, requirement.operation);
+            }
+            for &operation in &requirements.semantic_operations {
+                require_semantic_operation(cutlass, operation)?;
+                set_provider_operation(layer_plan, operation);
             }
         }
         Ok(model_plan)
     }
 }
 
-/// Discover providers and compile the default CUDA model plan.
-pub fn compile_cuda_model_plan(layer_count: usize, hidden_size: usize) -> Result<ModelKernelPlan> {
-    CudaProviderCatalog::discover()?.compile_model_plan(layer_count, hidden_size)
+fn set_provider_operation(plan: &mut LayerKernelPlan, operation: KernelOperation) {
+    let kernel = KernelId::new(KernelProviderId::CutlassCubin, operation);
+    let descriptor = LaunchDescriptor::new(kernel, (0, 0, 0), (0, 0, 0))
+        .provider_managed()
+        .capture_safe();
+    plan.set_operation(descriptor);
+}
+
+fn require_semantic_operation(
+    provider: crate::cutlass::CutlassProvider,
+    operation: KernelOperation,
+) -> Result<()> {
+    let kernel = match operation {
+        KernelOperation::AttentionHcPre | KernelOperation::FeedForwardHcPre => {
+            crate::cutlass::CutlassKernelId::HcProducerSm121
+        }
+        KernelOperation::MlaOutput => crate::cutlass::CutlassKernelId::MlaOutputSm121,
+        KernelOperation::SharedFfn => crate::cutlass::CutlassKernelId::SharedFfnSm121,
+        KernelOperation::RoutedFp4Moe => crate::cutlass::CutlassKernelId::StableFrameFp4MoeSm121,
+        _ => {
+            return Err(Error::Internal(format!(
+                "no SM121 semantic provider binding for operation={operation:?}"
+            )));
+        }
+    };
+    require_kernel(provider, operation, kernel)
+}
+
+fn require_cutlass_bundle(
+    provider: crate::cutlass::CutlassProvider,
+    requirement: &LinearBundleRequirement,
+) -> Result<()> {
+    let outputs_valid = requirement.output_features.len() == 2
+        && requirement
+            .output_features
+            .iter()
+            .all(|features| *features > 0);
+    if !outputs_valid {
+        return Err(Error::Internal(format!(
+            "SM121 operation {:?} requires exactly two non-empty outputs",
+            requirement.operation
+        )));
+    }
+    match (requirement.operation, requirement.weight_layout) {
+        (KernelOperation::MlaQueryAKv, WeightLayout::Fp8E4m3BlockScaled) => {
+            if !requirement.input_features.is_multiple_of(128) {
+                return Err(Error::Internal(format!(
+                    "SM121 FP8 QueryA+KV requires K128, got {}",
+                    requirement.input_features
+                )));
+            }
+            require_kernel(
+                provider,
+                requirement.operation,
+                crate::cutlass::CutlassKernelId::Fp8QueryAKvSm121,
+            )
+        }
+        (
+            KernelOperation::MainCompressorProjection
+            | KernelOperation::IndexerCompressorProjection,
+            WeightLayout::Bf16RowMajor,
+        ) => {
+            if !requirement.input_features.is_multiple_of(8)
+                || !requirement
+                    .output_features
+                    .iter()
+                    .all(|features| features.is_multiple_of(4))
+            {
+                return Err(Error::Internal(format!(
+                    "SM121 BF16 compressor shape is unsupported: operation={:?} K={} N={:?}",
+                    requirement.operation, requirement.input_features, requirement.output_features
+                )));
+            }
+            require_kernel(
+                provider,
+                requirement.operation,
+                crate::cutlass::CutlassKernelId::Bf16CompressorSm121,
+            )
+        }
+        _ => Err(Error::Internal(format!(
+            "no SM121 provider binding for operation={:?} layout={:?}",
+            requirement.operation, requirement.weight_layout
+        ))),
+    }
+}
+
+fn require_kernel(
+    provider: crate::cutlass::CutlassProvider,
+    operation: KernelOperation,
+    kernel: crate::cutlass::CutlassKernelId,
+) -> Result<()> {
+    if !provider.supports(kernel) {
+        return Err(Error::Internal(format!(
+            "required SM121 {operation:?} superkernel is not published"
+        )));
+    }
+    Ok(())
+}
+
+/// Discover providers and compile a CUDA model plan from semantic requirements.
+pub fn compile_cuda_model_plan(
+    requirements: &[LayerKernelRequirements],
+) -> Result<ModelKernelPlan> {
+    CudaProviderCatalog::discover()?.compile_model_plan(requirements)
 }

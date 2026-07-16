@@ -1161,8 +1161,10 @@ pub mod kernels {
         }
     }
 
+    /// Batched BF16 artifact GEMM using an SM121 `m16n8k16` Tensor Core tile.
+    /// Grid: `(ceil(n / 16), ceil(batch / 8))`, one warp per CTA.
     #[kernel]
-    pub fn gemm_bf16_bytes(
+    pub unsafe fn gemm_bf16_bytes(
         x: &[f32],
         w: &[u8],
         mut y: DisjointSlice<f32>,
@@ -1170,41 +1172,88 @@ pub mod kernels {
         n: u32,
         k: u32,
     ) {
-        let idx = thread::index_1d().get();
-        let total = batch as u64 * n as u64;
-        if (idx as u64) >= total {
+        static mut SMEM_A: SharedArray<u8, 512, 32> = SharedArray::UNINIT;
+        static mut SMEM_B: SharedArray<u8, 256, 32> = SharedArray::UNINIT;
+
+        let tid = thread::threadIdx_x() as usize;
+        let row_base = thread::blockIdx_x() as usize * 16;
+        let batch_base = thread::blockIdx_y() as usize * 8;
+        let batch = batch as usize;
+        let n = n as usize;
+        let k = k as usize;
+        if batch == 0 || n == 0 || k == 0 || !k.is_multiple_of(16) {
             return;
         }
-        let b = (idx as u32 / n) as usize;
-        let row = (idx as u32 % n) as usize;
-        let k = k as usize;
-        let x_base = b * k;
-        let w_base = row * k * 2;
-        let mut dot0 = 0.0f32;
-        let mut dot1 = 0.0f32;
-        let mut dot2 = 0.0f32;
-        let mut dot3 = 0.0f32;
-        let mut j = 0usize;
-        let k4 = k - k % 4;
-        while j < k4 {
-            let o0 = w_base + 2 * j;
-            let o1 = w_base + 2 * (j + 1);
-            let o2 = w_base + 2 * (j + 2);
-            let o3 = w_base + 2 * (j + 3);
-            dot0 += x[x_base + j] * bf16_pair_to_f32(w[o0], w[o0 + 1]);
-            dot1 += x[x_base + j + 1] * bf16_pair_to_f32(w[o1], w[o1 + 1]);
-            dot2 += x[x_base + j + 2] * bf16_pair_to_f32(w[o2], w[o2 + 1]);
-            dot3 += x[x_base + j + 3] * bf16_pair_to_f32(w[o3], w[o3 + 1]);
-            j += 4;
+
+        let mut accumulator = [0.0f32; 4];
+        let mut k_base = 0usize;
+        while k_base < k {
+            unsafe {
+                let a_dst = &raw mut SMEM_A as *mut u8;
+                let b_dst = &raw mut SMEM_B as *mut u16;
+                if tid < 16 {
+                    let row = row_base + tid;
+                    let destination = a_dst.add(tid * 32) as *mut u64;
+                    if row < n {
+                        let source = w.as_ptr().add((row * k + k_base) * 2) as *const u64;
+                        *destination = *source;
+                        *destination.add(1) = *source.add(1);
+                        *destination.add(2) = *source.add(2);
+                        *destination.add(3) = *source.add(3);
+                    } else {
+                        *destination = 0;
+                        *destination.add(1) = 0;
+                        *destination.add(2) = 0;
+                        *destination.add(3) = 0;
+                    }
+                }
+                let mut linear = tid;
+                while linear < 128 {
+                    let k_local = linear / 8;
+                    let row_local = linear & 7;
+                    let row = batch_base + row_local;
+                    let value = if row < batch {
+                        x[row * k + k_base + k_local]
+                    } else {
+                        0.0
+                    };
+                    *b_dst.add(linear) = cuda_device::tcgen05::f32_to_bf16_rne(value);
+                    linear += 32;
+                }
+            }
+            thread::sync_threads();
+
+            let a_fragment: [u32; 4] = unsafe {
+                let quad = tid / 8;
+                let row = (tid & 7) + if (quad & 1) != 0 { 8 } else { 0 };
+                let column_b16 = if quad >= 2 { 8 } else { 0 };
+                let address =
+                    (&raw const SMEM_A as *const u8).add(row * 32 + column_b16 * 2) as *const u32;
+                cuda_device::wmma::ldmatrix_x4(address)
+            };
+            let b_fragment: [u32; 2] = unsafe {
+                let row = tid & 0x0f;
+                let address = (&raw const SMEM_B as *const u8).add(row * 16) as *const u32;
+                cuda_device::wmma::ldmatrix_x2_trans(address)
+            };
+            accumulator = unsafe { mma_m16n8k16_f32_bf16(accumulator, a_fragment, b_fragment) };
+            thread::sync_threads();
+            k_base += 16;
         }
-        let mut dot = dot0 + dot1 + dot2 + dot3;
-        while j < k {
-            let off = w_base + 2 * j;
-            dot += x[x_base + j] * bf16_pair_to_f32(w[off], w[off + 1]);
-            j += 1;
-        }
-        if let Some(yi) = y.get_mut(thread::index_1d()) {
-            *yi = dot;
+
+        let channel_group = tid / 4;
+        let row_pair = tid & 3;
+        let output = y.as_mut_ptr();
+        let mut element = 0usize;
+        while element < 4 {
+            let channel = row_base + channel_group + if element >= 2 { 8 } else { 0 };
+            let row = batch_base + row_pair * 2 + (element & 1);
+            if channel < n && row < batch {
+                unsafe {
+                    *output.add(row * n + channel) = accumulator[element];
+                }
+            }
+            element += 1;
         }
     }
 
@@ -3598,17 +3647,22 @@ pub mod kernels {
                 unsafe {
                     let a_dst = &raw mut SMEM_A as *mut u8;
                     let b_dst = &raw mut SMEM_B as *mut u8;
-                    let mut i = tid;
-                    while i < 512 {
-                        let row_local = i / 32;
-                        let byte = i & 31;
-                        let row = row_base + row_local;
-                        *a_dst.add(i) = if row < n {
-                            weight[row * k + k_base + k_sub + byte]
+                    if tid < 16 {
+                        let row = row_base + tid;
+                        let destination = a_dst.add(tid * 32) as *mut u64;
+                        if row < n {
+                            let source =
+                                weight.as_ptr().add(row * k + k_base + k_sub) as *const u64;
+                            *destination = *source;
+                            *destination.add(1) = *source.add(1);
+                            *destination.add(2) = *source.add(2);
+                            *destination.add(3) = *source.add(3);
                         } else {
-                            0
-                        };
-                        i += 32;
+                            *destination = 0;
+                            *destination.add(1) = 0;
+                            *destination.add(2) = 0;
+                            *destination.add(3) = 0;
+                        }
                     }
                     let mut i = tid;
                     while i < 128 {
@@ -3735,17 +3789,22 @@ pub mod kernels {
                 unsafe {
                     let a_dst = &raw mut SMEM_A as *mut u8;
                     let b_dst = &raw mut SMEM_B as *mut u8;
-                    let mut i = tid;
-                    while i < 512 {
-                        let row_local = i / 32;
-                        let byte = i & 31;
-                        let row = row_base + row_local;
-                        *a_dst.add(i) = if row < n {
-                            weight[row * k + k_base + k_sub + byte]
+                    if tid < 16 {
+                        let row = row_base + tid;
+                        let destination = a_dst.add(tid * 32) as *mut u64;
+                        if row < n {
+                            let source =
+                                weight.as_ptr().add(row * k + k_base + k_sub) as *const u64;
+                            *destination = *source;
+                            *destination.add(1) = *source.add(1);
+                            *destination.add(2) = *source.add(2);
+                            *destination.add(3) = *source.add(3);
                         } else {
-                            0
-                        };
-                        i += 32;
+                            *destination = 0;
+                            *destination.add(1) = 0;
+                            *destination.add(2) = 0;
+                            *destination.add(3) = 0;
+                        }
                     }
                     let mut i = tid;
                     while i < 128 {

@@ -37,7 +37,6 @@ pub use architecture::{
 };
 pub use benchmark::{CudaSmokeBenchmark, run_gemv_rms_smoke_benchmark, run_smoke_benchmark};
 pub use context::CudaFailpoints;
-pub use context::CudaSwiGLUWorkspace;
 pub use context::cuda_probe;
 pub use context::{
     CombinedRingWindowLens, CudaArtifactOperatorContext, CudaCompressorRecurrentState,
@@ -49,8 +48,8 @@ pub use kv_page_pool::{
 };
 pub use provider::{
     CudaProviderCatalog, KernelId, KernelPhase, KernelProviderId, LaunchDescriptor,
-    LayerKernelPlan, LayerKernelPlanSet, ModelKernelPlan, ProviderManifest, ProviderRegistry,
-    RowBucket, WeightBinding, WeightLayout, compile_cuda_model_plan,
+    LayerKernelPlan, ModelKernelPlan, ProviderManifest, ProviderRegistry, WeightBinding,
+    WeightLayout, compile_cuda_model_plan,
 };
 pub use transformer::combined_ring::CombinedRingTopkLayout;
 pub use transformer::compressor_recurrent::CompressorRecurrentShape;

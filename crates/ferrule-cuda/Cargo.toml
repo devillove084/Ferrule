@@ -13,8 +13,6 @@ categories = ["science", "machine-learning"]
 [features]
 default = []
 cutlass = []
-# Backward-compatible alias for the original metadata-only bridge feature.
-cutlass-sm121a = ["cutlass"]
 
 [dependencies]
 ferrule-common = { path = "../ferrule-common" }

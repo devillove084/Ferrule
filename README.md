@@ -40,8 +40,7 @@ replay are implemented; a production MTP proposal source is not connected yet.
 The completed execution foundation includes:
 
 - one Rust-owned executable plan with prepare-time kernel-provider selection;
-- CUTLASS-first regular GEMM with architecture targets for SM86, SM90a, SM100a,
-  and SM121a;
+- a GB10/SM121a CUTLASS/CuTe provider exposing six semantic superkernels instead of generic-GEMM FFI;
 - explicit per-sequence state and native packed multi-session execution;
 - runtime-owned paged KV transactions, rollback, COW, and slot allocation;
 - request-centric continuous batching with expert-byte, pinned-memory, upload, and
@@ -54,13 +53,15 @@ Recent correctness work also made packed concurrency safe when a prefetched expe
 reserved victim is selected by the same batch: Ferrule cancels only the conflicting
 reservation, preserves completed staging/upload work, and re-reserves a safe slot.
 
-Ferrule is **not yet a single-node SOTA claim**. The remaining critical work is:
+Ferrule is **not yet a single-node SOTA claim**. The resident V=8 target path now reaches
+16.1958 verified rows/s p50 with parity, zero selected expert I/O, and zero steady-state
+allocation. The remaining critical work is:
 
-1. establish an exact resident/no-I/O 43-layer target-pass roofline;
-2. migrate regular operators to CUTLASS and specialize the measured GB10 hot path;
-3. add a device all-hit path so host work is proportional to actual expert misses;
-4. capture stable CUDA graph buckets after launch shapes stop changing;
-5. connect the real MTP proposal source and validate end-to-end DSpark acceptance.
+1. connect the real MTP proposal source to the prepared GB10 execution image;
+2. measure complete DSpark acceptance and accepted-token throughput for V=2/4/8;
+3. enforce the 0.658 GiB/accepted-token uncovered-I/O budget;
+4. add the device all-hit path and capture stable CUDA graphs;
+5. freeze the serving, competitor, and release artifact suite.
 
 The end target is **15–17 accepted output tokens/s**, not 15–17 complete target-model
 passes/s. See the [execution roadmap](docs/ROADMAP.md) for measured gates and phase
@@ -474,16 +475,15 @@ real router result
   -> promote/wait on a miss; never change model semantics
 ```
 
-The production reader, bounded selected takeover, compact router handoff, and
-device-global output-head merge are now implemented. The next optimization order is:
+The production reader, bounded selected takeover, compact router handoff, device-global
+output-head merge, and six GB10 semantic superkernels are implemented. The next optimization
+order is:
 
-1. measure an exact resident/no-I/O target-pass roofline;
-2. execute all-hit routed layers without host materialization;
-3. fuse the profiler-proven GB10 FP4 MoE stages and capture stable row buckets;
-4. drive residency and batch admission from route traces, deadlines, and incremental
-   unique-expert bytes;
-5. implement DSpark proposal, exact packed verification, and rollback with one
-   acceptance-aware I/O governor.
+1. connect production MTP proposal execution;
+2. measure complete DSpark acceptance for V=2/4/8;
+3. drive residency and admission from route traces and accepted-token I/O cost;
+4. execute all-hit routed layers without host materialization;
+5. capture stable forward-mode/capacity graphs and run the release suite.
 
 Ferrule cannot yet claim single-node SOTA: that requires reproducible end-to-end warm
 ITL, TTFT, throughput, memory, quality, and DSpark acceptance results against competing
@@ -499,7 +499,7 @@ this README; the roadmap defines the benchmark gates and raw artifacts remain un
 | Feature | Why it matters |
 |---|---|
 | **Executable model plan** | Prepare-time binding selects immutable buffers, launch descriptors, and the kernel provider; the token hot path performs no architecture discovery. |
-| **CUTLASS provider boundary** | Regular GEMM is delegated to CUTLASS while cuda-oxide remains available for sparse attention, routing, KV, oracle, and fused control kernels. |
+| **CUTLASS provider boundary** | GB10 semantic superkernels use pinned CUTLASS/CuTe primitives behind a versioned POD ABI; Rust retains stream, memory, plan, KV, and residency ownership. |
 | **Native packed execution** | `ExecutionBatch` represents continuous-batch `B × Q=1` decode and one-sequence `Q=V` DSpark verification without a CPU execution plan. |
 | **Expert-I/O scheduling** | Admission accounts for incremental expert bytes, inflight reads, pinned slabs, uploads, deadlines, and current residency instead of batching by row count alone. |
 | **Transactional KV and DSpark** | Physical multi-plane KV supports branch, rollback, and accepted-prefix replay for exact speculative verification. |
@@ -517,12 +517,12 @@ DSV4 math and immutable execution buffers; the selected kernel provider owns lau
 ```text
 request-centric scheduler
   -> executable DSV4 plan
-  -> CUTLASS regular math + cuda-oxide sparse/control kernels
+  -> GB10 CUTLASS/CuTe semantic superkernels + dedicated sparse/control kernels
   -> transactional KV and expert residency
 ```
 
-GB10 is the performance target. SM86 is a compile/correctness target, while H20/H200
-and B200 use the same provider boundary with architecture-specific CUTLASS kernels.
+GB10 / `sm_121a` is the only supported production target. Other hardware fails explicitly;
+a future target will receive an independent performance path.
 
 ---
 
@@ -540,6 +540,9 @@ just oxide-doctor
 ```
 
 2. **Build the CUDA release binary:**
+
+`just build-cuda` automatically fetches and verifies the pinned CUTLASS 4.6.1 checkout on
+the first build.
 
 ```bash
 just build-cuda
@@ -600,7 +603,7 @@ just chat models/OLMoE-Instruct q4 -n 256
 | Area | Status |
 |---|---|
 | Executable model fixture | OLMoE sparse MoE CUDA path via `GpuOlmoeRunner` |
-| Real large-model milestone | DeepSeek V4 Flash exact 43-layer CUDA target path plus `bench-interactive` through `ResidentTopKDriver`; DSpark execution remains a roadmap phase. |
+| Real large-model milestone | Exact 43-layer CUDA target path; resident V=8 verification reaches 16.1958 rows/s p50. Real MTP proposal and accepted-token Gate F2 remain open. |
 | Execution ABI | E1–E4 complete: public `ExecutionBatch`, prepared-executor traits, runtime-private `ScheduledBatch`, strict validation, and native packed multi-session execution |
 | DSV4 execution boundary | The model owns HC/MLA/compressor/router/MoE math; runtime remains model-neutral and owns scheduling plus logical page lifecycle through generic traits |
 | Expert streaming | Immutable source catalogs plus production `O_DIRECT + io_uring` fixed-file reads into registered CUDA-pinned slabs; CUDA promotes selected/on-time experts into ordinary device frames governed by stable slots, generations, leases, bounded admission, and selected takeover. |
@@ -610,7 +613,7 @@ just chat models/OLMoE-Instruct q4 -n 256
 | KV cache | `KvPageManager` plus bounded CUDA multi-plane pools, paged attention/indexer kernels, branch, rollback, COW, preempt/restore, and DSpark accepted-prefix replay |
 | Quantization | Q4_0/Q8_0, FP4 E2M1 + E8M0 scales, FP8 E4M3FN, mixed precision policy |
 | WeightPack | mmap'd reader, streaming writer, zero-copy slices, WeightPack-only load path |
-| Kernel plan | Prepare-time `ModelKernelPlan` and POD launch descriptors select CUTLASS or cuda-oxide without architecture discovery in the token hot path |
+| Kernel plan | One semantic `LayerKernelPlan` per layer binds the GB10 provider; M scheduling remains provider-private and missing capabilities fail explicitly |
 | Generation | Device/global top-k candidate selection, deterministic greedy commit, stop strings, EOS handling, and incremental token text; unsupported sampling is rejected at the API boundary |
 | Chat templates | OLMoE, ChatML, Llama3, Qwen, DeepSeek-V4, Plain |
 | Serving | `ferrule-server` + `ferrule serve`: Axum/Hyper/Tokio, dedicated model-owner thread, bounded queues, disconnect cancellation, `/health`, `/v1/models`, `/v1/chat/completions`, and `/v1/completions`; reusable `vllm bench serve` concurrency workflows; greedy only for now. |
@@ -694,9 +697,10 @@ just lint           # fmt + clippy
 
 | Document | Content |
 |---|---|
-| [CUTLASS](docs/CUTLASS.md) | Provider boundary, build targets, supported architectures, and regular-GEMM migration contract |
+| [GB10 superkernel journey](docs/GB10_SUPERKERNEL_JOURNEY.md) | Why 16 matters and how profiler-driven CUTLASS/CuTe fusion reached 16.1958 resident verified rows/s |
+| [CUTLASS](docs/CUTLASS.md) | GB10 semantic provider ABI, pinned dependency setup, validation, and benchmark contract |
 | [Serving](docs/serving.md) | Axum/Hyper/Tokio model-worker ownership, OpenAI/SSE contract, cancellation, admission, and benchmark workflows |
-| [Roadmap](docs/ROADMAP.md) | Canonical P0–P8 single-DGX Spark SOTA plan, feasibility gates, exact DSpark transaction, expert-aware scheduling, and release contract |
+| [Roadmap](docs/ROADMAP.md) | Current F1/F2/F3 status, remaining MTP/I/O/graph critical path, and release contract |
 | [Expert Memory & Telemetry](docs/expert-memory-architecture.md) | Host/pinned expert budgets, stable device residency, GB10 constraints, and benchmark-safe telemetry |
 
 ---
