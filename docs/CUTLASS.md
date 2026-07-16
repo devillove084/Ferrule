@@ -11,7 +11,7 @@ CUTLASS/CuTe 4.6.1
 
 Unsupported hardware, missing plans, and unsupported artifact shapes fail explicitly. There is no CPU or generic CUDA production fallback.
 
-For the optimization history and measurements, see [How We Pushed DeepSeek-V4 Verification Past 16 Rows/s on GB10](GB10_SUPERKERNEL_JOURNEY.md).
+
 
 ## Ownership boundary
 

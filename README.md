@@ -697,7 +697,7 @@ just lint           # fmt + clippy
 
 | Document | Content |
 |---|---|
-| [GB10 superkernel journey](docs/GB10_SUPERKERNEL_JOURNEY.md) | Why 16 matters and how profiler-driven CUTLASS/CuTe fusion reached 16.1958 resident verified rows/s |
+| [Scheduler Architecture](docs/scheduler-architecture.md) | Segment-scoped exact routing, global expert loads, UMA credits, draining, and deterministic simulation |
 | [CUTLASS](docs/CUTLASS.md) | GB10 semantic provider ABI, pinned dependency setup, validation, and benchmark contract |
 | [Serving](docs/serving.md) | Axum/Hyper/Tokio model-worker ownership, OpenAI/SSE contract, cancellation, admission, and benchmark workflows |
 | [Roadmap](docs/ROADMAP.md) | Current F1/F2/F3 status, remaining MTP/I/O/graph critical path, and release contract |

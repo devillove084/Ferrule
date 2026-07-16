@@ -150,7 +150,7 @@ The current GB10 path uses semantic fusion rather than host-side composition of 
 | FP8 QueryA + KV | 0.980 ms | 0.163 ms |
 | BF16 compressor pair | 0.669 ms | 0.339 ms |
 
-See `docs/GB10_SUPERKERNEL_JOURNEY.md` for the engineering narrative and rejected experiments.
+
 
 ### 3.3 Correctness checkpoint
 
