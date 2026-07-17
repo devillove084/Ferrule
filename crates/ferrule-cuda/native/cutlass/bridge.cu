@@ -1,6 +1,9 @@
 #include "ferrule_cutlass.h"
 #include "sm121_bf16_compressor_prefill.cuh"
-#include "sm121_fp4_moe.cuh"
+#include "sm121_dspark_main_project_norm.cuh"
+#include "sm121_dspark_hybrid_attention.cuh"
+#include "sm121_dspark_proposal_head.cuh"
+#include "sm121_fp4_moe.cuh"},{
 #include "sm121_fp8_query_kv_prefill.cuh"
 #include "sm121_hc_producer.cuh"
 #include "sm121_mla_output.cuh"
@@ -32,6 +35,12 @@ static_assert(sizeof(FerruleCutlassSharedFfnArgs) == 168,
               "Ferrule CUTLASS shared FFN ABI layout changed");
 static_assert(sizeof(FerruleCutlassMlaOutputArgs) == 120,
               "Ferrule CUTLASS MLA output ABI layout changed");
+static_assert(sizeof(FerruleCutlassDsparkMainProjectNormArgs) == 104,
+              "Ferrule CUTLASS DSpark main-project/norm ABI layout changed");
+static_assert(sizeof(FerruleCutlassDsparkHybridMlaAttentionArgs) == 160,
+              "Ferrule CUTLASS DSpark hybrid-attention ABI layout changed");
+static_assert(sizeof(FerruleCutlassDsparkProposalHeadArgs) == 184,
+              "Ferrule CUTLASS DSpark proposal-head ABI layout changed");
 static_assert(sizeof(FerruleCutlassStableFrameFp4MoeArgs) == 224,
               "Ferrule CUTLASS stable-frame FP4 MoE ABI layout changed");
 
@@ -97,6 +106,54 @@ FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassSharedFfnArgs, output_scale, 144);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassSharedFfnArgs, swiglu_limit, 148);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassSharedFfnArgs, flags, 152);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassSharedFfnArgs, stream, 160);
+
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkMainProjectNormArgs,
+                              abi_version, 0);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkMainProjectNormArgs, rows, 4);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkMainProjectNormArgs,
+                              input_size, 8);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkMainProjectNormArgs,
+                              output_size, 12);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkMainProjectNormArgs,
+                              rms_eps, 24);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkMainProjectNormArgs,
+                              input_f32, 32);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkMainProjectNormArgs,
+                              output_f32, 88);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkMainProjectNormArgs, stream,
+                              96);
+
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkHybridMlaAttentionArgs,
+                              abi_version, 0);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkHybridMlaAttentionArgs,
+                              block_rows, 4);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkHybridMlaAttentionArgs,
+                              sequence_tokens, 16);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkHybridMlaAttentionArgs,
+                              layer_index, 32);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkHybridMlaAttentionArgs,
+                              softmax_scale, 48);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkHybridMlaAttentionArgs,
+                              context_plane_elements, 56);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkHybridMlaAttentionArgs,
+                              query_f32, 64);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkHybridMlaAttentionArgs,
+                              query_bf16, 104);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkHybridMlaAttentionArgs,
+                              gathered_kv_bf16, 112);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkHybridMlaAttentionArgs,
+                              probabilities_bf16, 128);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkHybridMlaAttentionArgs,
+                              status_i32, 144);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkHybridMlaAttentionArgs,
+                              stream, 152);
+
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkProposalHeadArgs, abi_version,
+                              0);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkProposalHeadArgs, hc_eps, 32);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkProposalHeadArgs, hc_state_f32,
+                              40);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassDsparkProposalHeadArgs, stream, 176);
 
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassStableFrameFp4MoeArgs, abi_version,
                               0);
@@ -170,6 +227,9 @@ namespace {
 
 namespace fp8_prefill = ferrule::sm121_fp8_query_kv_prefill;
 namespace bf16_prefill = ferrule::cutlass::sm121_bf16_compressor_prefill;
+namespace dspark_main = ferrule::cutlass::sm121_dspark_main_project_norm;
+namespace dspark_attention = ferrule::cutlass::sm121_dspark_hybrid_attention;
+namespace dspark_head = ferrule::cutlass::sm121_dspark_proposal_head;
 namespace hc_producer = ferrule::sm121;
 namespace mla_output = ferrule::cutlass::sm121_mla_output;
 namespace shared_ffn = ferrule::cutlass::sm121_shared_ffn;
@@ -180,6 +240,12 @@ static_assert(sizeof(hc_producer::HcPreRmsNormFp8Args) ==
 static_assert(sizeof(shared_ffn::Args) == 152);
 static_assert(sizeof(mla_output::Args) ==
               sizeof(FerruleCutlassMlaOutputArgs));
+static_assert(sizeof(dspark_main::Args) ==
+              sizeof(FerruleCutlassDsparkMainProjectNormArgs));
+static_assert(sizeof(dspark_attention::Args) ==
+              sizeof(FerruleCutlassDsparkHybridMlaAttentionArgs));
+static_assert(sizeof(dspark_head::Args) ==
+              sizeof(FerruleCutlassDsparkProposalHeadArgs));
 static_assert(sizeof(fp4_moe::Args) ==
               sizeof(FerruleCutlassStableFrameFp4MoeArgs));
 
@@ -682,6 +748,96 @@ mla_output::Args make_mla_output_args(
   };
 }
 
+dspark_main::Args make_dspark_main_args(
+    const FerruleCutlassDsparkMainProjectNormArgs &args) {
+  return dspark_main::Args{
+      dspark_main::kArgsVersion,
+      args.rows,
+      args.input_size,
+      args.output_size,
+      args.scale_cols,
+      args.reserved0,
+      args.rms_eps,
+      args.reserved1,
+      args.input_f32,
+      args.activation_fp8,
+      args.activation_ue8m0,
+      args.weight_fp8,
+      args.weight_ue8m0,
+      args.norm_weight_f32,
+      args.inv_rms_f32,
+      args.output_f32,
+      args.stream,
+  };
+}
+
+dspark_attention::Args make_dspark_attention_args(
+    const FerruleCutlassDsparkHybridMlaAttentionArgs &args) {
+  return dspark_attention::Args{
+      dspark_attention::kArgsVersion,
+      args.block_rows,
+      args.heads,
+      args.head_dim,
+      args.sequence_tokens,
+      args.window_size,
+      args.page_tokens,
+      args.elements_per_token,
+      args.layer_index,
+      args.layer_count,
+      args.block_slot_offset,
+      args.block_slot_count,
+      args.softmax_scale,
+      args.reserved0,
+      args.context_plane_elements,
+      args.query_f32,
+      args.context_plane_f32,
+      args.block_kv_f32,
+      args.block_slots_i32,
+      args.attention_sink_f32,
+      args.query_bf16,
+      args.gathered_kv_bf16,
+      args.scores_f32,
+      args.probabilities_bf16,
+      args.output_f32,
+      args.status_i32,
+      args.stream,
+  };
+}
+
+dspark_head::Args make_dspark_head_args(
+    const FerruleCutlassDsparkProposalHeadArgs &args) {
+  return dspark_head::Args{
+      dspark_head::kArgsVersion,
+      args.rows,
+      args.hc,
+      args.hidden,
+      args.vocab,
+      args.markov_rank,
+      args.partial_capacity,
+      args.reserved0,
+      args.hc_eps,
+      args.norm_eps,
+      args.hc_state_f32,
+      args.hc_function_f32,
+      args.hc_scale_f32,
+      args.hc_base_f32,
+      args.norm_weight_f32,
+      args.lm_head_bf16,
+      args.markov_w1_bf16,
+      args.markov_w2_bf16,
+      args.confidence_weight_bf16,
+      args.hidden_f32,
+      args.normalized_f32,
+      args.base_logits_f32,
+      args.partial_values_f32,
+      args.partial_indices_i32,
+      args.token_ids_i32,
+      args.confidence_f32,
+      args.status_i32,
+      args.stream,
+  };
+}
+
 fp4_moe::Args make_fp4_moe_args(
     const FerruleCutlassStableFrameFp4MoeArgs &args) {
   return fp4_moe::Args{
@@ -752,7 +908,7 @@ ferrule_cutlass_provider_manifest(void) {
       FERRULE_CUTLASS_ABI_VERSION,
       CUTLASS_VERSION,
       FERRULE_CUTLASS_TARGET_SM,
-      6u,
+      9u,
       FERRULE_CUTLASS_KERNEL_BIT(
           FERRULE_CUTLASS_KERNEL_FP8_QUERY_A_KV_SM121) |
           FERRULE_CUTLASS_KERNEL_BIT(
@@ -764,7 +920,13 @@ ferrule_cutlass_provider_manifest(void) {
           FERRULE_CUTLASS_KERNEL_BIT(
               FERRULE_CUTLASS_KERNEL_STABLE_FRAME_FP4_MOE_SM121) |
           FERRULE_CUTLASS_KERNEL_BIT(
-              FERRULE_CUTLASS_KERNEL_MLA_OUTPUT_SM121),
+              FERRULE_CUTLASS_KERNEL_MLA_OUTPUT_SM121) |
+          FERRULE_CUTLASS_KERNEL_BIT(
+              FERRULE_CUTLASS_KERNEL_DSPARK_MAIN_PROJECT_NORM_SM121) |
+          FERRULE_CUTLASS_KERNEL_BIT(
+              FERRULE_CUTLASS_KERNEL_DSPARK_HYBRID_MLA_ATTENTION_SM121) |
+          FERRULE_CUTLASS_KERNEL_BIT(
+              FERRULE_CUTLASS_KERNEL_DSPARK_PROPOSAL_HEAD_SM121),
   };
 }
 
@@ -895,6 +1057,65 @@ extern "C" int32_t ferrule_cutlass_mla_output_launch(
   }
   const auto native_args = make_mla_output_args(*args);
   return static_cast<int32_t>(mla_output::launch(&native_args));
+}
+
+extern "C" int32_t ferrule_cutlass_dspark_main_project_norm_can_implement(
+    const FerruleCutlassDsparkMainProjectNormArgs *args) {
+  if (args == nullptr || args->abi_version != FERRULE_CUTLASS_ABI_VERSION) {
+    return FERRULE_CUTLASS_INVALID_ABI;
+  }
+  const auto native_args = make_dspark_main_args(*args);
+  return static_cast<int32_t>(dspark_main::validate(&native_args));
+}
+
+extern "C" int32_t ferrule_cutlass_dspark_main_project_norm_launch(
+    const FerruleCutlassDsparkMainProjectNormArgs *args) {
+  const int32_t status =
+      ferrule_cutlass_dspark_main_project_norm_can_implement(args);
+  if (status != FERRULE_CUTLASS_SUCCESS) {
+    return status;
+  }
+  const auto native_args = make_dspark_main_args(*args);
+  return static_cast<int32_t>(dspark_main::launch(&native_args));
+}
+
+extern "C" int32_t ferrule_cutlass_dspark_hybrid_mla_attention_can_implement(
+    const FerruleCutlassDsparkHybridMlaAttentionArgs *args) {
+  if (args == nullptr || args->abi_version != FERRULE_CUTLASS_ABI_VERSION) {
+    return FERRULE_CUTLASS_INVALID_ABI;
+  }
+  const auto native_args = make_dspark_attention_args(*args);
+  return static_cast<int32_t>(dspark_attention::validate(&native_args));
+}
+
+extern "C" int32_t ferrule_cutlass_dspark_hybrid_mla_attention_launch(
+    const FerruleCutlassDsparkHybridMlaAttentionArgs *args) {
+  const int32_t status =
+      ferrule_cutlass_dspark_hybrid_mla_attention_can_implement(args);
+  if (status != FERRULE_CUTLASS_SUCCESS) {
+    return status;
+  }
+  const auto native_args = make_dspark_attention_args(*args);
+  return static_cast<int32_t>(dspark_attention::launch(&native_args));
+}
+
+extern "C" int32_t ferrule_cutlass_dspark_proposal_head_can_implement(
+    const FerruleCutlassDsparkProposalHeadArgs *args) {
+  if (args == nullptr || args->abi_version != FERRULE_CUTLASS_ABI_VERSION) {
+    return FERRULE_CUTLASS_INVALID_ABI;
+  }
+  const auto native_args = make_dspark_head_args(*args);
+  return static_cast<int32_t>(dspark_head::validate(&native_args));
+}
+
+extern "C" int32_t ferrule_cutlass_dspark_proposal_head_launch(
+    const FerruleCutlassDsparkProposalHeadArgs *args) {
+  const int32_t status = ferrule_cutlass_dspark_proposal_head_can_implement(args);
+  if (status != FERRULE_CUTLASS_SUCCESS) {
+    return status;
+  }
+  const auto native_args = make_dspark_head_args(*args);
+  return static_cast<int32_t>(dspark_head::launch(&native_args));
 }
 
 extern "C" int32_t ferrule_cutlass_stable_frame_fp4_moe_can_implement(

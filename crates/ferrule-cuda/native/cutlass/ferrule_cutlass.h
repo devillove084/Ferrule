@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define FERRULE_CUTLASS_ABI_VERSION 5u
+#define FERRULE_CUTLASS_ABI_VERSION 8u
 
 #ifndef FERRULE_CUTLASS_TARGET_SM
 #define FERRULE_CUTLASS_TARGET_SM 0u
@@ -19,6 +19,9 @@ extern "C" {
 #define FERRULE_CUTLASS_KERNEL_SHARED_FFN_SM121 4u
 #define FERRULE_CUTLASS_KERNEL_STABLE_FRAME_FP4_MOE_SM121 5u
 #define FERRULE_CUTLASS_KERNEL_MLA_OUTPUT_SM121 6u
+#define FERRULE_CUTLASS_KERNEL_DSPARK_MAIN_PROJECT_NORM_SM121 7u
+#define FERRULE_CUTLASS_KERNEL_DSPARK_HYBRID_MLA_ATTENTION_SM121 8u
+#define FERRULE_CUTLASS_KERNEL_DSPARK_PROPOSAL_HEAD_SM121 9u
 #define FERRULE_CUTLASS_KERNEL_BIT(id) (1ull << ((id) - 1u))
 
 typedef enum FerruleCutlassStatus {
@@ -177,6 +180,104 @@ typedef struct FerruleCutlassMlaOutputArgs {
   uint64_t stream;
 } FerruleCutlassMlaOutputArgs;
 
+// DSpark stage-zero target-tap projection and normalization. The input and
+// output are F32 storage carrying the checkpoint's BF16 numerical boundaries.
+// Activation FP8/E8M0 and inverse-RMS storage are graph-stable Ferrule-owned
+// scratch. The provider performs one cooperative launch.
+typedef struct FerruleCutlassDsparkMainProjectNormArgs {
+  uint32_t abi_version;
+  uint32_t rows;
+  uint32_t input_size;
+  uint32_t output_size;
+  uint32_t scale_cols;
+  uint32_t reserved0;
+  float rms_eps;
+  uint32_t reserved1;
+
+  uint64_t input_f32;
+  uint64_t activation_fp8;
+  uint64_t activation_ue8m0;
+  uint64_t weight_fp8;
+  uint64_t weight_ue8m0;
+  uint64_t norm_weight_f32;
+  uint64_t inv_rms_f32;
+  uint64_t output_f32;
+  uint64_t stream;
+} FerruleCutlassDsparkMainProjectNormArgs;
+
+// Checkpoint-native DSpark proposal attention. The release shape is fixed at
+// five proposal rows, 64 heads, D=512, a 128-token committed window, and
+// 16-token pages. All heads share each latent K/V row. Every proposal query sees
+// the complete ephemeral five-row block; only committed context is page-backed.
+// Scores, BF16 probabilities, output, and device status are Ferrule-owned.
+typedef struct FerruleCutlassDsparkHybridMlaAttentionArgs {
+  uint32_t abi_version;
+  uint32_t block_rows;
+  uint32_t heads;
+  uint32_t head_dim;
+  uint32_t sequence_tokens;
+  uint32_t window_size;
+  uint32_t page_tokens;
+  uint32_t elements_per_token;
+  uint32_t layer_index;
+  uint32_t layer_count;
+  uint32_t block_slot_offset;
+  uint32_t block_slot_count;
+  float softmax_scale;
+  uint32_t reserved0;
+  uint64_t context_plane_elements;
+
+  uint64_t query_f32;
+  uint64_t context_plane_f32;
+  uint64_t block_kv_f32;
+  uint64_t block_slots_i32;
+  uint64_t attention_sink_f32;
+  uint64_t query_bf16;
+  uint64_t gathered_kv_bf16;
+  uint64_t scores_f32;
+  uint64_t probabilities_bf16;
+  uint64_t output_f32;
+  uint64_t status_i32;
+  uint64_t stream;
+} FerruleCutlassDsparkHybridMlaAttentionArgs;
+
+// Checkpoint-native DSpark proposal head. One semantic launch performs the
+// five-row HC head and final norm, one tensor-core BF16 base-LM projection, then
+// sequential device-only Markov bias/argmax and confidence. Token dependency
+// never crosses the host boundary.
+typedef struct FerruleCutlassDsparkProposalHeadArgs {
+  uint32_t abi_version;
+  uint32_t rows;
+  uint32_t hc;
+  uint32_t hidden;
+  uint32_t vocab;
+  uint32_t markov_rank;
+  uint32_t partial_capacity;
+  uint32_t reserved0;
+  float hc_eps;
+  float norm_eps;
+
+  uint64_t hc_state_f32;
+  uint64_t hc_function_f32;
+  uint64_t hc_scale_f32;
+  uint64_t hc_base_f32;
+  uint64_t norm_weight_f32;
+  uint64_t lm_head_bf16;
+  uint64_t markov_w1_bf16;
+  uint64_t markov_w2_bf16;
+  uint64_t confidence_weight_bf16;
+
+  uint64_t hidden_f32;
+  uint64_t normalized_f32;
+  uint64_t base_logits_f32;
+  uint64_t partial_values_f32;
+  uint64_t partial_indices_i32;
+  uint64_t token_ids_i32;
+  uint64_t confidence_f32;
+  uint64_t status_i32;
+  uint64_t stream;
+} FerruleCutlassDsparkProposalHeadArgs;
+
 typedef struct FerruleCutlassStableFrameFp4MoeArgs {
   uint32_t abi_version;
   uint32_t reserved0;
@@ -238,6 +339,18 @@ int32_t ferrule_cutlass_mla_output_can_implement(
     const FerruleCutlassMlaOutputArgs *args);
 int32_t ferrule_cutlass_mla_output_launch(
     const FerruleCutlassMlaOutputArgs *args);
+int32_t ferrule_cutlass_dspark_main_project_norm_can_implement(
+    const FerruleCutlassDsparkMainProjectNormArgs *args);
+int32_t ferrule_cutlass_dspark_main_project_norm_launch(
+    const FerruleCutlassDsparkMainProjectNormArgs *args);
+int32_t ferrule_cutlass_dspark_hybrid_mla_attention_can_implement(
+    const FerruleCutlassDsparkHybridMlaAttentionArgs *args);
+int32_t ferrule_cutlass_dspark_hybrid_mla_attention_launch(
+    const FerruleCutlassDsparkHybridMlaAttentionArgs *args);
+int32_t ferrule_cutlass_dspark_proposal_head_can_implement(
+    const FerruleCutlassDsparkProposalHeadArgs *args);
+int32_t ferrule_cutlass_dspark_proposal_head_launch(
+    const FerruleCutlassDsparkProposalHeadArgs *args);
 int32_t ferrule_cutlass_stable_frame_fp4_moe_can_implement(
     const FerruleCutlassStableFrameFp4MoeArgs *args);
 int32_t ferrule_cutlass_stable_frame_fp4_moe_launch(

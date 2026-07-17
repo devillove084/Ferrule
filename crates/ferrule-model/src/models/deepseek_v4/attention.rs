@@ -17,7 +17,7 @@ use super::config::{DeepSeekV4AttentionConfig, DeepSeekV4RopeParams};
 #[cfg(feature = "cuda")]
 use super::cuda_cache::{
     DeepSeekV4CudaCompressor, DeepSeekV4CudaLayerNorm, DeepSeekV4CudaLinear,
-    DeepSeekV4CudaSequenceKvState,
+    DeepSeekV4CudaSequenceKvState, DeepSeekV4DsparkAttentionBuffers,
 };
 use super::helpers::{
     apply_rotary_tail, apply_rotary_tail_scaled, bind_aux_linear, check_len, check_linear,
@@ -310,14 +310,14 @@ pub(crate) struct DeepSeekV4AttentionDecodeArena {
     kv: ferrule_cuda::context::CudaF32Buffer,
     index_query: ferrule_cuda::context::CudaF32Buffer,
     index_weights: ferrule_cuda::context::CudaF32Buffer,
-    positions: ferrule_cuda::context::CudaI32Buffer,
-    window_lens: ferrule_cuda::context::CudaI32Buffer,
-    compressed_lens: ferrule_cuda::context::CudaI32Buffer,
-    visible_lens: ferrule_cuda::context::CudaI32Buffer,
-    main_positions: ferrule_cuda::context::CudaI32Buffer,
-    main_mask: ferrule_cuda::context::CudaI32Buffer,
-    indexer_positions: ferrule_cuda::context::CudaI32Buffer,
-    indexer_mask: ferrule_cuda::context::CudaI32Buffer,
+    positions: ferrule_cuda::context::CudaI32HostMirror,
+    window_lens: ferrule_cuda::context::CudaI32HostMirror,
+    compressed_lens: ferrule_cuda::context::CudaI32HostMirror,
+    visible_lens: ferrule_cuda::context::CudaI32HostMirror,
+    main_positions: ferrule_cuda::context::CudaI32HostMirror,
+    main_mask: ferrule_cuda::context::CudaI32HostMirror,
+    indexer_positions: ferrule_cuda::context::CudaI32HostMirror,
+    indexer_mask: ferrule_cuda::context::CudaI32HostMirror,
     topk: ferrule_cuda::context::CudaI32Buffer,
     topk_selectors: ferrule_cuda::context::CudaI32Buffer,
     context: ferrule_cuda::context::CudaF32Buffer,
@@ -378,6 +378,7 @@ impl DeepSeekV4AttentionDecodeArena {
             .max(cfg.head_dim)
             .max(cfg.output_latent_dim())
             .max(cfg.index_n_heads * cfg.index_head_dim);
+        let zero_control_rows = vec![0i32; rows];
         Ok(Self {
             hidden_a: ops.zero_f32_buffer(rows * cfg.hidden_size)?,
             q_latent: ops.zero_f32_buffer(rows * cfg.q_lora_rank)?,
@@ -389,14 +390,14 @@ impl DeepSeekV4AttentionDecodeArena {
             kv: ops.zero_f32_buffer(rows * cfg.head_dim)?,
             index_query: ops.zero_f32_buffer(rows * cfg.index_n_heads * cfg.index_head_dim)?,
             index_weights: ops.zero_f32_buffer(rows * cfg.index_n_heads)?,
-            positions: ops.zero_i32_buffer(rows)?,
-            window_lens: ops.zero_i32_buffer(rows)?,
-            compressed_lens: ops.zero_i32_buffer(rows)?,
-            visible_lens: ops.zero_i32_buffer(rows)?,
-            main_positions: ops.zero_i32_buffer(rows)?,
-            main_mask: ops.zero_i32_buffer(rows)?,
-            indexer_positions: ops.zero_i32_buffer(rows)?,
-            indexer_mask: ops.zero_i32_buffer(rows)?,
+            positions: ops.i32_host_mirror(&zero_control_rows)?,
+            window_lens: ops.i32_host_mirror(&zero_control_rows)?,
+            compressed_lens: ops.i32_host_mirror(&zero_control_rows)?,
+            visible_lens: ops.i32_host_mirror(&zero_control_rows)?,
+            main_positions: ops.i32_host_mirror(&zero_control_rows)?,
+            main_mask: ops.i32_host_mirror(&zero_control_rows)?,
+            indexer_positions: ops.i32_host_mirror(&zero_control_rows)?,
+            indexer_mask: ops.i32_host_mirror(&zero_control_rows)?,
             topk: ops.zero_i32_buffer(rows * (cfg.window_size + cfg.index_topk))?,
             topk_selectors: ops.zero_i32_buffer(rows * (cfg.window_size + cfg.index_topk))?,
             context: ops.zero_f32_buffer(rows * cfg.q_full_dim())?,
@@ -2126,7 +2127,7 @@ impl DeepSeekV4Attention {
         let position_i32 = i32::try_from(position)
             .map_err(|_| Error::Model("DeepSeek-V4 decode position exceeds i32 ABI".into()))?;
         operators.cuda_mut()?.ops.fill_i32_sequence_prefix(
-            &mut arena.positions,
+            arena.positions.device_mut_invalidate_host(),
             position_i32,
             1,
         )?;
@@ -2441,8 +2442,8 @@ impl DeepSeekV4Attention {
             let positions_i32 = decode_metadata_i32(positions, "position")?;
             {
                 let ops = &operators.cuda_mut()?.ops;
-                ops.overwrite_i32_prefix(&positions_i32, &mut arena.positions)?;
-                ops.overwrite_i32_prefix(&visible_lens, &mut arena.visible_lens)?;
+                ops.update_i32_host_mirror(&positions_i32, &mut arena.positions)?;
+                ops.update_i32_host_mirror(&visible_lens, &mut arena.visible_lens)?;
             }
             self.project_decode_rows_from_device_into(
                 hidden_dev,
@@ -2516,8 +2517,8 @@ impl DeepSeekV4Attention {
         let positions_i32 = decode_metadata_i32(positions, "position")?;
         {
             let ops = &operators.cuda_mut()?.ops;
-            ops.overwrite_i32_prefix(&positions_i32, &mut arena.positions)?;
-            ops.overwrite_i32_prefix(&visible_lens, &mut arena.visible_lens)?;
+            ops.update_i32_host_mirror(&positions_i32, &mut arena.positions)?;
+            ops.update_i32_host_mirror(&visible_lens, &mut arena.visible_lens)?;
         }
         self.project_decode_rows_from_device_into(
             hidden_dev,
@@ -2575,13 +2576,24 @@ impl DeepSeekV4Attention {
                 let sequence = row_to_sequence[row];
                 let cache = &mut caches[sequence];
                 cache.window.append(positions[row], &zero_kv)?;
-                operators.cuda_mut()?.ops.copy_f32_range(
-                    hidden_dev,
-                    row * cfg.hidden_size,
-                    &mut transition.input,
-                    0,
-                    cfg.hidden_size,
-                )?;
+                operators
+                    .cuda_mut()?
+                    .ops
+                    .copy_f32_range(
+                        hidden_dev,
+                        row * cfg.hidden_size,
+                        &mut transition.input,
+                        0,
+                        cfg.hidden_size,
+                    )
+                    .map_err(|error| {
+                        Error::Internal(format!(
+                            "DeepSeek-V4 layer {} row {row} transition input copy failed: source_len={} destination_len={}: {error}",
+                            self.layer,
+                            hidden_dev.len(),
+                            transition.input.len()
+                        ))
+                    })?;
 
                 if let Some(indexer) = compressed.indexer.as_ref() {
                     let new_indexer_kv = {
@@ -2648,21 +2660,35 @@ impl DeepSeekV4Attention {
                             Error::Model("packed indexer position exceeds i32 ABI".into())
                         })?;
                         indexer_mask[row] = 1;
-                        operators.cuda_mut()?.ops.copy_f32_range(
-                            &transition
-                                .indexer_compressor
-                                .as_ref()
-                                .expect("indexer compressor row arena exists")
-                                .normalized,
-                            0,
-                            &mut arena
-                                .indexer_compressor
-                                .as_mut()
-                                .expect("indexer compressor arena exists")
-                                .normalized,
-                            row * cfg.index_head_dim,
-                            cfg.index_head_dim,
-                        )?;
+                        let transition_normalized = &transition
+                            .indexer_compressor
+                            .as_ref()
+                            .expect("indexer compressor row arena exists")
+                            .normalized;
+                        let packed_normalized = &mut arena
+                            .indexer_compressor
+                            .as_mut()
+                            .expect("indexer compressor arena exists")
+                            .normalized;
+                        operators
+                            .cuda_mut()?
+                            .ops
+                            .copy_f32_range(
+                                transition_normalized,
+                                0,
+                                packed_normalized,
+                                row * cfg.index_head_dim,
+                                cfg.index_head_dim,
+                            )
+                            .map_err(|error| {
+                                Error::Internal(format!(
+                                    "DeepSeek-V4 layer {} row {row} indexer normalized copy failed: source_len={} destination_len={} row_dim={}: {error}",
+                                    self.layer,
+                                    transition_normalized.len(),
+                                    packed_normalized.len(),
+                                    cfg.index_head_dim
+                                ))
+                            })?;
                     }
                 }
 
@@ -2730,21 +2756,35 @@ impl DeepSeekV4Attention {
                         Error::Model("packed main compressed position exceeds i32 ABI".into())
                     })?;
                     main_mask[row] = 1;
-                    operators.cuda_mut()?.ops.copy_f32_range(
-                        &transition
-                            .main_compressor
-                            .as_ref()
-                            .expect("main compressor row arena exists")
-                            .normalized,
-                        0,
-                        &mut arena
-                            .main_compressor
-                            .as_mut()
-                            .expect("main compressor arena exists")
-                            .normalized,
-                        row * cfg.head_dim,
-                        cfg.head_dim,
-                    )?;
+                    let transition_normalized = &transition
+                        .main_compressor
+                        .as_ref()
+                        .expect("main compressor row arena exists")
+                        .normalized;
+                    let packed_normalized = &mut arena
+                        .main_compressor
+                        .as_mut()
+                        .expect("main compressor arena exists")
+                        .normalized;
+                    operators
+                        .cuda_mut()?
+                        .ops
+                        .copy_f32_range(
+                            transition_normalized,
+                            0,
+                            packed_normalized,
+                            row * cfg.head_dim,
+                            cfg.head_dim,
+                        )
+                        .map_err(|error| {
+                            Error::Internal(format!(
+                                "DeepSeek-V4 layer {} row {row} main normalized copy failed: source_len={} destination_len={} row_dim={}: {error}",
+                                self.layer,
+                                transition_normalized.len(),
+                                packed_normalized.len(),
+                                cfg.head_dim
+                            ))
+                        })?;
                 }
                 window_lens[row] = cache.window.len;
                 if compressed.indexer.is_some() {
@@ -2754,10 +2794,10 @@ impl DeepSeekV4Attention {
 
             {
                 let ops = &operators.cuda_mut()?.ops;
-                ops.overwrite_i32_prefix(&main_positions, &mut arena.main_positions)?;
-                ops.overwrite_i32_prefix(&main_mask, &mut arena.main_mask)?;
-                ops.overwrite_i32_prefix(&indexer_positions, &mut arena.indexer_positions)?;
-                ops.overwrite_i32_prefix(&indexer_mask, &mut arena.indexer_mask)?;
+                ops.update_i32_host_mirror(&main_positions, &mut arena.main_positions)?;
+                ops.update_i32_host_mirror(&main_mask, &mut arena.main_mask)?;
+                ops.update_i32_host_mirror(&indexer_positions, &mut arena.indexer_positions)?;
+                ops.update_i32_host_mirror(&indexer_mask, &mut arena.indexer_mask)?;
             }
             operators.cuda_mut()?.paged_scatter_rows_from_device(
                 1,
@@ -2839,8 +2879,8 @@ impl DeepSeekV4Attention {
             let compressed_lens_i32 = decode_metadata_i32(&compressed_lens, "compressed length")?;
             {
                 let ops = &operators.cuda_mut()?.ops;
-                ops.overwrite_i32_prefix(&window_lens_i32, &mut arena.window_lens)?;
-                ops.overwrite_i32_prefix(&compressed_lens_i32, &mut arena.compressed_lens)?;
+                ops.update_i32_host_mirror(&window_lens_i32, &mut arena.window_lens)?;
+                ops.update_i32_host_mirror(&compressed_lens_i32, &mut arena.compressed_lens)?;
             }
             let weight_scale =
                 (cfg.index_head_dim as f32).powf(-0.5) * (cfg.index_n_heads as f32).powf(-0.5);
@@ -3532,6 +3572,208 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
         Ok(())
+    }
+
+    /// DSpark proposal attention is deliberately separate from ordinary packed
+    /// target attention: all five rows see the complete ephemeral block, and the
+    /// block KV is never appended to the committed page table.
+    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    pub(crate) fn dspark_proposal_block_from_device_into(
+        &self,
+        stage: usize,
+        hidden_fp8: &ferrule_cuda::context::CudaPreparedFp8Activation<'_>,
+        sequence_tokens: usize,
+        operators: &mut DeepSeekV4OperatorContext,
+        arena: &mut DeepSeekV4AttentionDecodeArena,
+        dspark: &mut DeepSeekV4DsparkAttentionBuffers,
+    ) -> Result<()> {
+        let cfg = self.config;
+        let rows = ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS;
+        if sequence_tokens == 0
+            || cfg.compress_ratio != 0
+            || arena.query.len() != rows.saturating_mul(cfg.q_full_dim())
+            || arena.kv.len() != rows.saturating_mul(cfg.head_dim)
+            || arena.context.len() != rows.saturating_mul(cfg.q_full_dim())
+        {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 DSpark proposal-attention shape mismatch at stage {stage}: sequence_tokens={sequence_tokens} compress_ratio={} query={} kv={} context={} rows={rows}",
+                cfg.compress_ratio,
+                arena.query.len(),
+                arena.kv.len(),
+                arena.context.len()
+            )));
+        }
+        let required_positions = sequence_tokens
+            .checked_add(rows)
+            .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark proposal position overflow".into()))?;
+        let rope_name = format!("rope_dspark_stage_{stage}");
+        operators.cuda_mut()?.ensure_rope_tables_with_params(
+            &rope_name,
+            cfg.rope_head_dim,
+            cfg.rope_params(),
+            required_positions,
+        )?;
+        operators.record_attention_call(self.layer, rows);
+
+        let stage_start = operators.profile_start();
+        operators.cuda_mut()?.query_a_kv_from_prepared_fp8_into(
+            self.layer,
+            hidden_fp8,
+            &mut arena.q_latent,
+            &mut arena.kv_raw,
+        )?;
+        record_attention_stage(
+            operators,
+            self.layer,
+            DeepSeekV4AttentionProfileStage::Qa,
+            stage_start,
+        )?;
+
+        let stage_start = operators.profile_start();
+        operators.cuda_mut()?.rms_norm_layer_rows_device_into(
+            self.layer,
+            DeepSeekV4CudaLayerNorm::Query,
+            &arena.q_latent,
+            rows,
+            cfg.norm_eps,
+            &mut arena.q_norm,
+        )?;
+        record_attention_stage(
+            operators,
+            self.layer,
+            DeepSeekV4AttentionProfileStage::QNorm,
+            stage_start,
+        )?;
+
+        let stage_start = operators.profile_start();
+        operators.cuda_mut()?.linear_rows_from_device_into(
+            self.layer,
+            DeepSeekV4CudaLinear::QueryB,
+            &arena.q_norm,
+            rows,
+            &mut arena.query_raw,
+            &mut arena.linear_workspace,
+        )?;
+        record_attention_stage(
+            operators,
+            self.layer,
+            DeepSeekV4AttentionProfileStage::Qb,
+            stage_start,
+        )?;
+
+        let stage_start = operators.profile_start();
+        operators.cuda_mut()?.rms_norm_heads_from_device_into(
+            &arena.query_raw,
+            rows * cfg.num_heads,
+            cfg.head_dim,
+            cfg.norm_eps,
+            &mut arena.query,
+        )?;
+        record_attention_stage(
+            operators,
+            self.layer,
+            DeepSeekV4AttentionProfileStage::QHeadNorm,
+            stage_start,
+        )?;
+        operators.cuda_mut()?.rope_tail_rows_from_device(
+            &rope_name,
+            &mut arena.query,
+            u32::try_from(sequence_tokens).map_err(|_| {
+                Error::Model("DeepSeek-V4 DSpark proposal position exceeds u32".into())
+            })?,
+            u32::try_from(rows)
+                .map_err(|_| Error::Model("DeepSeek-V4 DSpark row count exceeds u32".into()))?,
+            u32::try_from(cfg.num_heads)
+                .map_err(|_| Error::Model("DeepSeek-V4 DSpark head count exceeds u32".into()))?,
+            u32::try_from(cfg.head_dim)
+                .map_err(|_| Error::Model("DeepSeek-V4 DSpark head dim exceeds u32".into()))?,
+            u32::try_from(cfg.rope_head_dim)
+                .map_err(|_| Error::Model("DeepSeek-V4 DSpark RoPE dim exceeds u32".into()))?,
+            false,
+        )?;
+
+        let stage_start = operators.profile_start();
+        operators.cuda_mut()?.rms_norm_layer_rows_device_into(
+            self.layer,
+            DeepSeekV4CudaLayerNorm::KeyValue,
+            &arena.kv_raw,
+            rows,
+            cfg.norm_eps,
+            &mut arena.kv,
+        )?;
+        operators.cuda_mut()?.rope_tail_rows_from_device(
+            &rope_name,
+            &mut arena.kv,
+            u32::try_from(sequence_tokens).map_err(|_| {
+                Error::Model("DeepSeek-V4 DSpark proposal position exceeds u32".into())
+            })?,
+            u32::try_from(rows)
+                .map_err(|_| Error::Model("DeepSeek-V4 DSpark row count exceeds u32".into()))?,
+            1,
+            u32::try_from(cfg.head_dim)
+                .map_err(|_| Error::Model("DeepSeek-V4 DSpark head dim exceeds u32".into()))?,
+            u32::try_from(cfg.rope_head_dim)
+                .map_err(|_| Error::Model("DeepSeek-V4 DSpark RoPE dim exceeds u32".into()))?,
+            false,
+        )?;
+        operators
+            .cuda_mut()?
+            .ops
+            .fp8_attention_kv_qat_quantize_buffer_in_place(
+                &mut arena.kv,
+                cfg.head_dim,
+                cfg.rope_head_dim,
+            )?;
+        record_attention_stage(
+            operators,
+            self.layer,
+            DeepSeekV4AttentionProfileStage::KvNorm,
+            stage_start,
+        )?;
+
+        let stage_start = operators.profile_start();
+        operators.cuda_mut()?.dspark_hybrid_attention_device_into(
+            stage,
+            self.layer,
+            cfg,
+            sequence_tokens,
+            &arena.query,
+            &arena.kv,
+            &mut arena.context,
+            dspark,
+        )?;
+        record_attention_stage(
+            operators,
+            self.layer,
+            DeepSeekV4AttentionProfileStage::SparseAttention,
+            stage_start,
+        )?;
+
+        operators.cuda_mut()?.rope_tail_rows_from_device(
+            &rope_name,
+            &mut arena.context,
+            u32::try_from(sequence_tokens).map_err(|_| {
+                Error::Model("DeepSeek-V4 DSpark proposal position exceeds u32".into())
+            })?,
+            u32::try_from(rows)
+                .map_err(|_| Error::Model("DeepSeek-V4 DSpark row count exceeds u32".into()))?,
+            u32::try_from(cfg.num_heads)
+                .map_err(|_| Error::Model("DeepSeek-V4 DSpark head count exceeds u32".into()))?,
+            u32::try_from(cfg.head_dim)
+                .map_err(|_| Error::Model("DeepSeek-V4 DSpark head dim exceeds u32".into()))?,
+            u32::try_from(cfg.rope_head_dim)
+                .map_err(|_| Error::Model("DeepSeek-V4 DSpark RoPE dim exceeds u32".into()))?,
+            true,
+        )?;
+        operators.cuda_mut()?.mla_output_rows_from_device_into(
+            &arena.context,
+            rows,
+            cfg,
+            self.layer,
+            &mut arena.latent,
+            &mut arena.linear_workspace,
+            &mut arena.output,
+        )
     }
 }
 
@@ -4529,11 +4771,15 @@ impl DeepSeekV4WindowKvCache {
         Ok(())
     }
 
-    /// Advance only the ring-validity metadata after a successful device KV
-    /// write. CUDA paths intentionally do not mirror values back to host, but
+    /// Advance only the ring-validity metadata after successful device KV
+    /// writes. CUDA paths intentionally do not mirror values back to host, but
     /// graph preparation and top-k masking still require the same valid length.
     fn record_device_append(&mut self) {
-        self.len = self.window_size.min(self.len + 1);
+        self.record_device_rows(1);
+    }
+
+    pub(crate) fn record_device_rows(&mut self, rows: usize) {
+        self.len = self.window_size.min(self.len.saturating_add(rows));
     }
 
     pub fn topk_indices(&self, position: usize, topk: usize) -> Vec<isize> {

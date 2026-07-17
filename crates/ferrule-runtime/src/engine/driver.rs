@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::num::NonZeroU32;
+use std::time::Instant;
 
 use ferrule_common::execution::{ExecutionOutput, KvBindingMode, KvReservation, StateSlot};
 use ferrule_common::{Error, Result};
-use ferrule_model::{ExpertIoModelRunner, MultiSessionRunner};
+use ferrule_model::{DsparkProposalRunner, ExpertIoModelRunner, MultiSessionRunner};
 use tracing;
 
 use crate::cache::{KvPageManager, PreemptedKvState};
@@ -14,6 +15,7 @@ use crate::scheduling::{
     SchedulerAction, SequenceFinishReason, SequenceSlotPool, SequenceState, SessionId,
     ZeroExpertIoAdvisor,
 };
+use crate::speculation::{DSparkMetrics, TargetFrontier, run_dspark_verification};
 
 use super::NativeMultiSessionExecutor;
 
@@ -51,6 +53,7 @@ pub struct ResidentTopKDriverStats {
     pub emitted_tokens: usize,
     pub staged_tokens: usize,
     pub finished_sequences: usize,
+    pub dspark: DSparkMetrics,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1309,6 +1312,470 @@ where
 
 impl<R, C> ResidentTopKDriver<R, C>
 where
+    R: ExpertIoModelRunner + DsparkProposalRunner,
+    C: SequenceSlotPool,
+{
+    /// Execute the single production DSpark serving path.
+    ///
+    /// Prefill continues through the native packed executor. Decode actions never
+    /// use ordinary one-token target decode: every ready sequence executes its
+    /// checkpoint-native proposal followed by one exact Q=1..6 transaction.
+    pub fn step_with_dspark_model_expert_io<F>(
+        &mut self,
+        on_token: &mut F,
+        expert_budget: ExpertIoBudget,
+    ) -> Result<ResidentDriverStep>
+    where
+        F: FnMut(&ResidentTokenEvent) -> Result<()>,
+    {
+        if self.scheduler.config().allow_mixed_batches {
+            return Err(Error::Execution(
+                "production DSpark serving requires separate prefill and decode dispatch".into(),
+            ));
+        }
+        if self.config.append_eos_to_session {
+            return Err(Error::Execution(
+                "production DSpark serving requires append_eos_to_session=false".into(),
+            ));
+        }
+        if self.page_manager.is_none() {
+            return Err(Error::Execution(
+                "production DSpark serving requires an authoritative KvPageManager".into(),
+            ));
+        }
+
+        self.prepare_step()?;
+        let mut advisor = ModelExpertIoAdvisor::new(self.executor.runner(), &self.sequence_states);
+        let action = self.scheduler.next_action_with_expert_io(
+            &mut self.slot_pool,
+            &mut advisor,
+            expert_budget,
+        )?;
+        drop(advisor);
+        let Some(action) = action else {
+            return Ok(self.no_action_step());
+        };
+        match action {
+            SchedulerAction::DecodeBatch(actions) => {
+                self.execute_dspark_decode_batch(actions, on_token)
+            }
+            SchedulerAction::Execute { .. } => Err(Error::Internal(
+                "DSpark scheduler produced a mixed action while mixed dispatch is disabled".into(),
+            )),
+            action => self.execute_planned_action(action, on_token),
+        }
+    }
+
+    fn execute_dspark_decode_batch<F>(
+        &mut self,
+        actions: Vec<DecodeAction>,
+        on_token: &mut F,
+    ) -> Result<ResidentDriverStep>
+    where
+        F: FnMut(&ResidentTokenEvent) -> Result<()>,
+    {
+        if actions.is_empty() {
+            return Err(Error::Internal(
+                "production DSpark decode batch cannot be empty".into(),
+            ));
+        }
+
+        let mut rows = 0usize;
+        let mut staged = 0usize;
+        let mut finished = 0usize;
+        for action in &actions {
+            match self.execute_dspark_decode_action(action, on_token) {
+                Ok(outcome) => {
+                    rows = rows.saturating_add(outcome.rows);
+                    staged += outcome.staged;
+                    finished += outcome.finished;
+                }
+                Err(error) => {
+                    return Err(self.abort_dspark_decode_batch(
+                        &actions,
+                        error,
+                        "production DSpark decode",
+                    ));
+                }
+            }
+        }
+        self.stats.actions += 1;
+        self.stats.decode_steps += actions.len();
+        Ok(ResidentDriverStep::Executed {
+            action_kind: ResidentActionKind::Decode,
+            rows,
+            staged,
+            finished,
+        })
+    }
+
+    fn execute_dspark_decode_action<F>(
+        &mut self,
+        action: &DecodeAction,
+        on_token: &mut F,
+    ) -> Result<DsparkActionOutcome>
+    where
+        F: FnMut(&ResidentTokenEvent) -> Result<()>,
+    {
+        let cycle_start = Instant::now();
+        let sequence = self
+            .scheduler
+            .active_sequence(action.session_id)
+            .cloned()
+            .ok_or_else(|| {
+                Error::Internal(format!(
+                    "cannot execute DSpark for inactive session {:?}",
+                    action.session_id
+                ))
+            })?;
+        if sequence.request_id != action.request_id
+            || sequence.kv_handle != action.kv_handle
+            || sequence.position != action.position
+            || sequence.next_decode_token != Some(action.token_id)
+        {
+            return Err(Error::Internal(format!(
+                "DSpark action no longer matches session {:?}: action(request={:?}, kv={:?}, position={}, token={}), sequence(request={:?}, kv={:?}, position={}, token={:?})",
+                action.session_id,
+                action.request_id,
+                action.kv_handle,
+                action.position,
+                action.token_id,
+                sequence.request_id,
+                sequence.kv_handle,
+                sequence.position,
+                sequence.next_decode_token,
+            )));
+        }
+        let remaining_output = sequence.max_new_tokens.saturating_sub(sequence.generated);
+        let remaining_context = self.config.ctx_size.saturating_sub(sequence.position);
+        let commit_capacity = remaining_output.min(remaining_context);
+        if commit_capacity == 0 {
+            return Err(Error::Internal(format!(
+                "DSpark decode action for session {:?} has no output/context capacity",
+                action.session_id
+            )));
+        }
+        let max_drafts = commit_capacity.saturating_sub(1);
+        let page_slot = *self.page_slots.get(&action.session_id).ok_or_else(|| {
+            Error::Internal(format!(
+                "DSpark session {:?} has no authoritative page slot",
+                action.session_id
+            ))
+        })?;
+        let mut model_state = self
+            .sequence_states
+            .remove(&action.session_id)
+            .ok_or_else(|| {
+                Error::Internal(format!(
+                    "DSpark session {:?} has no model sequence state",
+                    action.session_id
+                ))
+            })?;
+
+        let proposal_start = Instant::now();
+        let proposal_result = if max_drafts == 0 {
+            Ok(Vec::new())
+        } else {
+            self.executor
+                .with_sequence_state(&mut model_state, |runner| {
+                    let proposal = runner.propose_dspark(action.token_id)?;
+                    proposal.validate()?;
+                    Ok(proposal.token_ids)
+                })
+        };
+        let proposal_time_us = proposal_start.elapsed().as_micros() as u64;
+        let mut proposal = match proposal_result {
+            Ok(proposal) => proposal,
+            Err(error) => {
+                self.sequence_states.insert(action.session_id, model_state);
+                return Err(error);
+            }
+        };
+        proposal.truncate(max_drafts);
+        proposal = match self.truncate_dspark_proposal_at_output_boundary(
+            &sequence,
+            action.token_id,
+            proposal,
+        ) {
+            Ok(proposal) => proposal,
+            Err(error) => {
+                self.sequence_states.insert(action.session_id, model_state);
+                return Err(error);
+            }
+        };
+
+        let verification = match self.page_manager.as_mut() {
+            Some(page_manager) => run_dspark_verification(
+                &mut self.executor,
+                page_manager,
+                &mut model_state,
+                page_slot,
+                0,
+                &proposal,
+                self.top_k,
+                TargetFrontier {
+                    position: action.position,
+                    top1: ferrule_common::execution::TokenLogit::new(
+                        action.token_id,
+                        action.logit.unwrap_or(0.0),
+                    ),
+                },
+            ),
+            None => Err(Error::Internal(
+                "authoritative KvPageManager disappeared during DSpark cycle".into(),
+            )),
+        };
+        let previous = self.sequence_states.insert(action.session_id, model_state);
+        debug_assert!(previous.is_none());
+        let result = verification?;
+
+        let externally_committed = result
+            .accepted
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| Error::Internal("DSpark external token count overflow".into()))?;
+        if result.accounting.externally_committed_tokens != externally_committed {
+            return Err(Error::Internal(format!(
+                "DSpark transaction committed {} rows but returned {} external tokens",
+                result.accounting.externally_committed_tokens, externally_committed
+            )));
+        }
+
+        self.scheduler.commit_decode_action(action)?;
+        self.scheduler
+            .active_sequence_mut(action.session_id)
+            .ok_or_else(|| {
+                Error::Internal(format!(
+                    "DSpark session {:?} disappeared after anchor commit",
+                    action.session_id
+                ))
+            })?
+            .extend_generated(&result.accepted);
+        self.emit_dspark_committed_tokens(action, &result.accepted, on_token)?;
+
+        let eos_token_id = self.executor.runner().eos_token_id();
+        let mut finish_reason = {
+            let sequence = self
+                .scheduler
+                .active_sequence(action.session_id)
+                .ok_or_else(|| {
+                    Error::Internal(format!(
+                        "DSpark session {:?} disappeared before frontier staging",
+                        action.session_id
+                    ))
+                })?;
+            if sequence.generated >= sequence.max_new_tokens {
+                Some(SequenceFinishReason::MaxTokens)
+            } else if matched_stop(&sequence.generated_text, &sequence.stop) {
+                Some(SequenceFinishReason::StopString)
+            } else if sequence.position >= self.config.ctx_size {
+                Some(SequenceFinishReason::Context)
+            } else {
+                None
+            }
+        };
+
+        let mut staged = 0usize;
+        if finish_reason.is_none() {
+            finish_reason = match result.target_next {
+                None => Some(SequenceFinishReason::NoCandidate),
+                Some(next)
+                    if self.config.stop_at_eos
+                        && !sequence.ignore_eos
+                        && eos_token_id == Some(next.token_id) =>
+                {
+                    Some(SequenceFinishReason::Eos)
+                }
+                Some(next) => {
+                    self.scheduler.stage_decode_candidate(
+                        action.session_id,
+                        next.token_id,
+                        Some(next.logit),
+                    )?;
+                    self.stats.staged_tokens += 1;
+                    staged = 1;
+                    None
+                }
+            };
+        }
+
+        let mut finished = 0usize;
+        if let Some(reason) = finish_reason {
+            let position = self.scheduler.active_sequence(action.session_id).map_or(
+                action.position.saturating_add(externally_committed),
+                |sequence| sequence.position,
+            );
+            self.scheduler
+                .finish_sequence(action.session_id, reason, &mut self.slot_pool)?;
+            self.finalize_sequence_state(action.session_id, position);
+            self.stats.finished_sequences += 1;
+            finished = 1;
+        }
+
+        let complete_cycle_time_us = cycle_start.elapsed().as_micros() as u64;
+        self.stats
+            .dspark
+            .record_complete_cycle(&result, proposal_time_us, complete_cycle_time_us);
+        self.stats
+            .dspark
+            .record_emitted_tokens(externally_committed);
+        let metrics = &self.stats.dspark;
+        if metrics.cycles == 1 || metrics.cycles % 64 == 0 {
+            tracing::info!(
+                cycles = metrics.cycles,
+                proposed_tokens = metrics.proposed_tokens,
+                verified_rows = metrics.verified_rows,
+                accepted_draft_tokens = metrics.accepted_draft_tokens,
+                externally_emitted_tokens = metrics.externally_emitted_tokens,
+                acceptance = metrics.acceptance_rate(),
+                proposal_us = proposal_time_us,
+                verify_us = result.verify_time_us,
+                cycle_us = complete_cycle_time_us,
+                "production DSpark cycle"
+            );
+        }
+
+        Ok(DsparkActionOutcome {
+            rows: result.accounting.verified_rows,
+            staged,
+            finished,
+        })
+    }
+
+    fn truncate_dspark_proposal_at_output_boundary(
+        &self,
+        sequence: &SequenceState,
+        anchor_token_id: u32,
+        proposal: Vec<u32>,
+    ) -> Result<Vec<u32>> {
+        let eos_token_id = self.executor.runner().eos_token_id();
+        if self.config.stop_at_eos && !sequence.ignore_eos && eos_token_id == Some(anchor_token_id)
+        {
+            return Err(Error::Internal(
+                "an EOS token must not be staged as a DSpark anchor".into(),
+            ));
+        }
+
+        let mut decode_state = sequence.incremental_decode.clone();
+        let mut generated_text = sequence.generated_text.clone();
+        let anchor_text = self
+            .executor
+            .runner()
+            .decode_incremental(anchor_token_id, &mut decode_state)?
+            .unwrap_or_default();
+        generated_text.push_str(&anchor_text);
+        if matched_stop(&generated_text, &sequence.stop) {
+            return Ok(Vec::new());
+        }
+
+        let mut admitted = Vec::with_capacity(proposal.len());
+        for token_id in proposal {
+            if self.config.stop_at_eos && !sequence.ignore_eos && eos_token_id == Some(token_id) {
+                break;
+            }
+            let text = self
+                .executor
+                .runner()
+                .decode_incremental(token_id, &mut decode_state)?
+                .unwrap_or_default();
+            generated_text.push_str(&text);
+            admitted.push(token_id);
+            if matched_stop(&generated_text, &sequence.stop) {
+                break;
+            }
+        }
+        Ok(admitted)
+    }
+
+    fn emit_dspark_committed_tokens<F>(
+        &mut self,
+        action: &DecodeAction,
+        accepted: &[u32],
+        on_token: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&ResidentTokenEvent) -> Result<()>,
+    {
+        let mut tokens = Vec::with_capacity(accepted.len() + 1);
+        tokens.push((action.token_id, action.logit));
+        tokens.extend(accepted.iter().copied().map(|token| (token, None)));
+        let runner = self.executor.runner();
+        let sequence = self
+            .scheduler
+            .active_sequence_mut(action.session_id)
+            .ok_or_else(|| {
+                Error::Internal(format!(
+                    "cannot emit DSpark block for inactive session {:?}",
+                    action.session_id
+                ))
+            })?;
+        let start_index = sequence
+            .generated
+            .checked_sub(tokens.len())
+            .ok_or_else(|| {
+                Error::Internal("DSpark emitted block exceeds committed generation count".into())
+            })?;
+        for (offset, (token, logit)) in tokens.into_iter().enumerate() {
+            let text = runner
+                .decode_incremental(token, &mut sequence.incremental_decode)?
+                .unwrap_or_default();
+            sequence.append_generated_text(&text);
+            let event = ResidentTokenEvent {
+                session_id: sequence.session_id,
+                request_id: sequence.request_id,
+                index: start_index + offset,
+                token,
+                logit,
+                text,
+            };
+            self.stats.emitted_tokens += 1;
+            on_token(&event)?;
+        }
+        Ok(())
+    }
+
+    fn abort_dspark_decode_batch(
+        &mut self,
+        actions: &[DecodeAction],
+        error: Error,
+        stage: &'static str,
+    ) -> Error {
+        if !self.executor.is_poisoned() {
+            self.executor.poison(stage, &error);
+        }
+        let mut cleanup_errors = Vec::new();
+        for action in actions {
+            if self.scheduler.active_sequence(action.session_id).is_some() {
+                if let Err(cleanup) = self
+                    .scheduler
+                    .fail_sequence(action.session_id, &mut self.slot_pool)
+                {
+                    cleanup_errors.push(format!(
+                        "session {:?} scheduler cleanup failed: {cleanup}",
+                        action.session_id
+                    ));
+                }
+                if let Err(cleanup) = self.try_release_sequence_state(action.session_id) {
+                    cleanup_errors.push(format!(
+                        "session {:?} state cleanup failed: {cleanup}",
+                        action.session_id
+                    ));
+                }
+            }
+        }
+        if cleanup_errors.is_empty() {
+            error
+        } else {
+            Error::Internal(format!(
+                "{stage} failed ({error}); {}",
+                cleanup_errors.join("; ")
+            ))
+        }
+    }
+}
+
+impl<R, C> ResidentTopKDriver<R, C>
+where
     R: ExpertIoModelRunner,
     C: SequenceSlotPool,
 {
@@ -1333,6 +1800,13 @@ where
         };
         self.execute_planned_action(action, on_token)
     }
+}
+
+#[derive(Default)]
+struct DsparkActionOutcome {
+    rows: usize,
+    staged: usize,
+    finished: usize,
 }
 
 #[derive(Default)]

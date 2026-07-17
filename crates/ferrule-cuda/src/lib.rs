@@ -40,7 +40,8 @@ pub use context::CudaFailpoints;
 pub use context::cuda_probe;
 pub use context::{
     CombinedRingWindowLens, CudaArtifactOperatorContext, CudaCompressorRecurrentState,
-    CudaF32Buffer, CudaI32Buffer,
+    CudaDsparkHybridAttentionWorkspace, CudaDsparkProposalHeadWorkspace, CudaF32Buffer,
+    CudaI32Buffer,
 };
 pub use counters::CudaOpCounters;
 pub use kv_page_pool::{

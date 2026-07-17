@@ -2,21 +2,23 @@
 
 > Canonical engineering and release plan for exact DeepSeek-V4-Flash-DSpark inference on one NVIDIA DGX Spark / GB10.
 >
-> Updated: 2026-07-16.
+> Updated: 2026-07-17.
 
 ## 0. Current decision
 
-The project remains **GO**, but no SOTA claim is currently valid.
+The project remains **GO as an engineering program**, but the first production OpenAI-server/vLLM runs show that complete-cycle viability is still below the release gate and no SOTA claim is valid. The resident target-only path is useful feasibility evidence, but it did not predict production behavior under proposal, expert movement, transaction, and serving overhead.
 
-The resident target-compute feasibility question has changed materially: the GB10 semantic-superkernel path now verifies V=8 at 16.1958 rows/s p50, with parity, zero selected expert I/O, and zero steady-state allocation. Gate F1 therefore no longer rejects the 16 tok/s headline on resident compute alone.
+The checkpoint-native DSpark protocol is now frozen from the DeepSeek reference model, official DeepSpec implementation, and serving integrations. The prepared GB10 path implements the real proposal backbone and heads, exact packed target verification, and the correction/bonus transaction using the production CUDA/CUTLASS execution image.
+
+The single production server path now executes real DSpark proposal, exact target verification, branch commit/rollback/replay, scheduler/token/EOS/stop reconciliation, and OpenAI streaming. Initial complete-cycle probes exposed zero draft acceptance, excessive expert movement, host coordination, and hot-path allocation. This is a measured F2/F3 failure and a system-coordination problem, not evidence that the landed fused operators are unused.
 
 The critical path is now:
 
-1. connect the real MTP proposal source to the prepared GB10 execution image;
-2. run the complete exact DSpark transaction and measure real acceptance;
-3. enforce the acceptance-aware expert-I/O budget;
-4. remove resident host barriers and capture stable graphs;
-5. run the frozen serving and competitor release suite.
+1. prove official proposal/logit/confidence parity and fix the observed zero-acceptance production behavior before further performance claims;
+2. produce one authoritative full-cycle profile that attributes scheduler, I/O, proposal, target, transaction, tokenizer, and serving time without hiding cold work inside aggregate latency;
+3. make scheduler admission account for the marginal expert union of the proposal plus exact target/replay transaction rather than the anchor token alone;
+4. remove all-hit router host barriers, eliminate hot-path allocation, and capture stable graph buckets only after correctness and I/O accounting are exact;
+5. rerun the frozen warm vLLM serving suite, then the same-contract competitor suite.
 
 ## 1. Release contract
 
@@ -32,7 +34,7 @@ under a frozen warm workload using:
 
 - the exact `models/DeepSeek-V4-Flash-DSpark` checkpoint;
 - exact target verification and real router/expert execution;
-- the production MTP proposal source;
+- the production checkpoint-native DSpark proposal source;
 - complete draft, verify, commit/rollback, and uncovered-I/O timing;
 - bounded memory with no swap or page-cache collapse;
 - zero headline request failures;
@@ -42,13 +44,25 @@ Verified rows/s, target passes/s, kernel TFLOP/s, and isolated microbenchmarks a
 
 ### 1.2 Release equation
 
-For verification width `V`, mean committed tokens `A(V)`, and complete cycle latency `T_cycle(V)`:
+The production DSpark contract uses separate quantities:
 
 ```text
-accepted tok/s = A(V) / T_cycle(V)
+gamma                    = draft slots produced by the checkpoint attachment
+Q                        = target rows executed by verification
+accepted_draft_tokens    = draft prefix accepted by the target
+correction_tokens        = target correction or trailing bonus tokens
+C                        = externally committed output tokens
 ```
 
-`T_cycle(V)` includes:
+The checkpoint declares `gamma=5`. The DeepSeek reference model, official DeepSpec code, vLLM, and SGLang agree on `Q=gamma+1=6`: target verification consumes the carried anchor plus five draft tokens and externally commits `accepted_draft_tokens + 1`, where the extra target token is a correction after the first rejection or a trailing bonus after full acceptance. Any width override remains experimental and requires independent proposal/logit/confidence and acceptance evidence.
+
+For a frozen operating point `Q`, mean externally committed tokens `C(Q)`, and complete cycle latency `T_cycle(Q)`:
+
+```text
+output tok/s = C(Q) / T_cycle(Q)
+```
+
+`T_cycle(Q)` includes:
 
 ```text
 draft proposal
@@ -61,16 +75,14 @@ draft proposal
 The release gate is:
 
 ```text
-A(V) / T_cycle(V) >= 16
+C(Q) / T_cycle(Q) >= 16
 ```
+
+Accepted draft prefix length is explanatory telemetry, not the release numerator.
 
 ### 1.3 I/O budget
 
-The measured storage baseline is approximately 10.53 GiB/s. At 16 accepted tok/s, long-run uncovered reads must satisfy:
-
-```text
-bytes per accepted token <= 10.53 / 16 = 0.658 GiB
-```
+At release throughput, long-run uncovered reads must remain inside the acceptance-aware budget derived from measured storage bandwidth. Raw bandwidth and per-run byte figures belong in benchmark artifacts rather than this roadmap.
 
 This requires a cache-heavy, acceptance-aware regime. Resident target compute cannot compensate for excessive cold expert traffic.
 
@@ -102,14 +114,17 @@ Other hardware is unsupported by this release path and must fail explicitly.
 
 Each layer has one semantic `LayerKernelPlan`. M scheduling is private to the provider; the model plan does not contain M=1/2/4/8 variants.
 
-The CUTLASS manifest currently publishes six semantic superkernels:
+The CUTLASS manifest currently publishes semantic superkernels for:
 
-1. FP8 QueryA + KV;
-2. BF16 compressor;
-3. HC producer;
-4. shared FFN;
-5. stable-frame routed MXFP4 MoE;
-6. MLA OutputA → latent pack → OutputB.
+- FP8 QueryA and KV;
+- BF16 compression;
+- HC production;
+- shared FFN;
+- stable-frame routed MXFP4 MoE;
+- MLA output and latent packing;
+- DSpark target-tap FP8 main projection, BF16 boundary, and RMSNorm;
+- DSpark committed-paged-context plus ephemeral full-block hybrid MLA attention;
+- DSpark HC head, final norm, base LM head, sequential Markov selection, and confidence projection.
 
 Routing, sparse attention, paged control, and recurrent metadata may remain dedicated CUDA operations where fusion has not demonstrated an end-to-end win.
 
@@ -117,40 +132,30 @@ Routing, sparse attention, paged control, and recurrent metadata may remain dedi
 
 ### 3.1 Gate F1 resident verification
 
-Artifact:
+Completed:
 
-```text
-target/bench/gate-f1/verify-width-sweep-superkernels-3iter.json
-```
-
-| V | p50 `T_verify` | p95 `T_verify` | p50 verified rows/s |
-|---:|---:|---:|---:|
-| 2 | 0.433132 s | 0.448342 s | 4.6175 |
-| 4 | 0.418125 s | 0.419454 s | 9.5665 |
-| 8 | 0.493955 s | 0.497114 s | **16.1958** |
-
-All measured widths reported parity, resident/no-I/O execution, and zero steady-state allocation.
-
-Interpretation:
-
-- **passed:** F1 headline viability through V=8;
-- **failed:** V4/A4 250 ms operating point;
-- **failed:** provisional 200 ms verification allowance for a 50 ms non-verification budget;
-- **not measured by F1:** real acceptance and complete accepted tok/s.
+- packed target verification covers diagnostic widths and the checkpoint-native width with parity;
+- the resident path performs no selected-expert I/O and remains allocation-stable after prepare;
+- sequential-prefill and packed-row arenas are separated so their compressed buffers cannot alias;
+- persistent pinned mirrors remove repeated packed-attention metadata staging;
+- compact router control transfer overlaps the already-fused shared FFN;
+- target-only execution remains feasibility evidence, not a complete-cycle or output-throughput result;
+- experimental width overrides remain excluded from release evidence until proposal and acceptance parity are established.
 
 ### 3.2 Operator optimization checkpoint
 
-The current GB10 path uses semantic fusion rather than host-side composition of small GEMMs. Selected improvements include:
+The current GB10 path uses semantic CUTLASS fusion rather than host-side composition of small GEMMs. Completed operator work includes:
 
-| Kernel work | Before | Current checkpoint |
-|---|---:|---:|
-| routed FP4 MoE | 40.86 ms/layer | approximately 2.83 ms/layer |
-| generic FP8 MMA | 0.844 ms | 0.290 ms |
-| generic BF16 | 1.085 ms | 0.340 ms |
-| FP8 QueryA + KV | 0.980 ms | 0.163 ms |
-| BF16 compressor pair | 0.669 ms | 0.339 ms |
+- stable-frame routed MXFP4 MoE;
+- optimized generic FP8 and BF16 matrix paths;
+- fused FP8 QueryA and KV production;
+- fused BF16 compressor work;
+- fused shared FFN and MLA output stages;
+- DSpark target-tap projection and normalization;
+- DSpark hybrid paged/block attention;
+- DSpark proposal head, Markov selection, and confidence projection.
 
-
+These operators are connected to the production server path. Their isolated wins remain supporting evidence only; complete-cycle profiling is authoritative.
 
 ### 3.3 Correctness checkpoint
 
@@ -158,81 +163,144 @@ Verified commands include:
 
 - kernel-plan unit tests;
 - CUTLASS provider ABI/semantic tests;
-- dynamic-M coverage including 4,097 rows;
+- dynamic-M coverage including the large prefill shape;
 - MXFP4 MoE and FP8/BF16 MMA smoke tests;
-- 43-layer packed CUDA versus token-loop CUDA parity.
+- full-model packed CUDA versus token-loop CUDA parity.
 
-The latest 43-layer parity run reported `max_abs_diff=0` at every layer and matching cut points 1/5/23/43.
+The latest full-model parity run matched every layer and the selected intermediate cut points exactly.
 
-### 3.4 DSpark transaction checkpoint
+### 3.4 DSpark execution and transaction checkpoint
 
-Implemented in the generic runtime:
+Implemented in the prepared GB10 execution path:
 
-- packed `1 sequence × V rows` exact verification;
-- causal accepted-prefix computation;
-- physical/logical KV branch handling;
-- full-accept promotion;
-- partial-accept replay;
-- zero-accept rollback;
-- internal transaction tests for full, partial, and zero acceptance.
+- target hidden taps are captured and packed directly on device without host materialization;
+- CUTLASS performs the checkpoint's target-tap projection, numerical boundary, and normalization;
+- DSpark execution stages maintain independent committed context-KV state from the projected target context;
+- packed prompt prefill and target verification publish DSpark context updates inside the same provisional paged transaction as target KV;
+- hybrid attention combines committed paged context with ephemeral proposal-block context without publishing proposal KV;
+- the proposal head, final normalization, base LM head, sequential Markov dependency, greedy selection, and confidence projection execute on device;
+- resident embedding gather builds the checkpoint-native anchor/noise proposal input from the prepared embedding table;
+- one compact final transfer returns proposal status, token IDs, and confidence logits.
 
-Not yet implemented in production:
+Implemented in the production runtime/server path:
 
-- MTP proposal execution in the prepared GB10 image;
-- prediction-head execution and proposal identity/hash;
-- end-to-end accepted-prefix histogram and `A(V)`;
-- complete draft/verify/commit/rollback timing from a real proposal source.
+- a model-neutral `DsparkProposalRunner` capability executes against authoritative per-session state;
+- native-width verification and shorter tails use the same semantic packed target path;
+- full acceptance promotes the provisional branch, while rejection rolls it back and replays the accepted frontier;
+- scheduler metadata, externally emitted tokens, incremental text, limits, EOS, stop strings, correction/bonus staging, cancellation, and failure cleanup reconcile in the production driver;
+- the OpenAI server no longer uses ordinary one-token target decode for DeepSeek-V4 headline serving;
+- runtime transaction tests cover full, partial, and zero acceptance, including the single-row rejection replay.
+
+Correctness status:
+
+- the real proposal is deterministic within one numerical target path and does not mutate committed DSpark context during proposal;
+- server integration exposed missing packed-context updates and missing single-row semantic replay support; both defects were corrected;
+- provider and runtime tests pass, but observed production draft acceptance remains zero;
+- therefore official Python proposal/logit/confidence parity is **not established**, and the current production proposal cannot yet be treated as semantically validated;
+- immutable proposal identity/hash and a frozen official near-tie fixture remain required.
 
 ### 3.5 I/O checkpoint
 
 The platform has `O_DIRECT + io_uring` reads into registered pinned slabs and stable expert slot/generation/lease semantics. GB10 direct NVMe-to-GPU GDS is not claimed: platform checks reported the GPU model and P2PDMA path unsupported, so compatibility mode is only a baseline.
 
-Gate F3 still needs acceptance-aware long-run measurements against the 0.658 GiB/accepted-token budget.
+Initial production traces are already a decisive negative checkpoint for the current policy: physical expert movement substantially exceeds the release budget. Enlarging the per-layer hotset reduced within-cycle thrash but did not preserve residency across route changes. Scheduler decode admission currently sees an anchor-token estimate rather than the realized proposal, target, and replay expert union, so advisor accounting does not reconcile with physical loads. Gate F3 therefore fails until prediction, admission, physical accounting, and residency use one shared cycle plan.
+
+### 3.6 Production OpenAI/vLLM serving checkpoint
+
+Completed:
+
+- the existing OpenAI-compatible server and official vLLM serving benchmark exercise the production DSpark path;
+- no synthetic proposal source, target-only driver, or CPU fallback is used for serving results;
+- proposal, verification, transaction, expert residency/I/O, CUDA/runtime, and externally emitted-token telemetry are collected from the real cycle;
+- packed prompt/verification now updates DSpark context state inside the provisional transaction;
+- rejection replay uses the same semantic packed CUDA path, including the single-row tail;
+- production smoke requests complete through OpenAI streaming without introducing a second server or benchmark driver;
+- runtime, server, CLI, CUDA build, and CUTLASS provider validation pass through the project `justfile`.
+
+The initial probes show zero observed draft acceptance and system-level residency/I/O overhead that dominates the fused operator path. Official DSpark parity and end-to-end viability therefore remain open. Raw measurements stay in benchmark artifacts and logs rather than being duplicated as volatile figures in this roadmap.
 
 ## 4. Remaining execution plan
 
-### Phase R1 — Production MTP proposal path
+### Immediate next pass — authoritative full-cycle profile
 
-Purpose: make the real DSpark attachment executable on GB10.
+The next optimization pass must instrument the existing `just dsv4-serve` → `just dsv4-vllm-bench` production path. It must not introduce a second server, model driver, transaction implementation, or headline benchmark path.
+
+Every request cycle receives one immutable request/session/cycle-attempt identity that follows it through HTTP handling, scheduler decisions, logical expert dependencies, physical loads, CUDA submissions, transaction state, emitted tokens, and the vLLM result artifact. Host spans use monotonic timestamps; device spans use CUDA events on the owning streams. Profiling must not add a device-wide synchronization to obtain timings, and overlapping spans must report both wall-clock critical path and per-service busy time rather than being summed into a false serial total.
+
+Required decomposition:
+
+- **Request and server:** HTTP parse, chat-template/tokenizer input work, request admission wait, scheduler queue wait, incremental detokenization, token callback/SSE enqueue and flush, cancellation, and final response completion.
+- **Scheduler:** candidate classification, route prediction, predicted incremental expert union/bytes, hard-credit decision, resident-ready versus miss-blocked classification, selected plan identity, wake reason, and actual-versus-predicted reconciliation.
+- **Prefill:** embedding; each target layer's HC, attention, router, fused shared FFN, and routed MoE; output head; target tap capture; fused `main_proj/main_norm`; and DSpark context-KV publication.
+- **Proposal:** resident embedding gather; for each execution stage 43–45, HC pre, hybrid attention, router, fused shared FFN, routed MoE, and HC post; final HC head; final norm/base LM head; sequential Markov embedding/bias and token selection; confidence projection; compact result transfer; and proposal expert I/O.
+- **Verification:** provisional branch fork, KV page reserve/bind, packed Q-row target layers, per-layer exact target expert union, output head, accepted-prefix comparison, and the effective Q width.
+- **Transaction:** full promotion, rollback, correction replay, runtime page commit, backend page commit, DSpark context commit, externally committed frontier, and state/resource release.
+- **Physical I/O:** scheduler-admitted bytes; logical requested, aligned physical read, uploaded, shared/joined, cancelled, and rejected-prefetch bytes; fixed-file/slab queue wait; `O_DIRECT` read time; pinned-slab wait; upload wait; residency publication; eviction; and bytes charged per externally emitted token.
+- **GPU/runtime:** kernel and graph launch/replay counts; per-stream CUDA-event durations; H2D/D2H operation counts and bytes; stream/event waits; stream-wide synchronizations; allocation count; arena/workspace high watermarks; graph-bucket identity; and compute/transfer interference.
+
+The profile is complete only when:
+
+1. cold-start, warmed-cache, and forced all-hit runs are reported separately under the same frozen request contract;
+2. proposal, target, replay, and physical expert operations are charged to one evolving cycle plan, with predicted and exact per-segment unions distinguished rather than pretending dynamically routed experts are known early;
+3. scheduler-admitted bytes reconcile with physical loads through an explicit ledger for cache hits, inflight joins, alignment, sharing, cancellation, eviction, and rejected prefetch;
+4. internal proposal/accept/commit counters reconcile exactly with externally returned vLLM tokens and EOS/stop behavior;
+5. vLLM E2E wall time reconciles with server queueing plus production cycle critical paths, with no unexplained remainder and no double-counting of overlap;
+6. raw machine-readable spans, counters, source/model/config identities, server log, and vLLM result JSON are preserved together in one artifact directory.
+
+The first use of this profile is correctness localization for zero acceptance, followed by I/O/scheduler residency repair, and only then all-hit graph/kernel optimization.
+
+### Phase R1 — Production DSpark proposal parity
+
+Purpose: prove official checkpoint parity for the already-landed CUDA/CUTLASS DSpark attachment before treating its tokens, confidence, or acceptance as valid.
 
 Work:
 
-- load MTP layers and prediction heads into the single-owner prepared resources;
-- assign non-aliasing execution-layer identities after the 43 target layers;
-- compile MTP weights, workspaces, expert catalogs, and kernel plans into the GB10 execution image;
-- implement the stage-zero main projection/norm contract;
-- execute MTP transformer stages with explicit sequence/KV state;
-- implement HC head, final norm, Markov head, confidence head, and proposal token output;
-- expose an immutable proposal-source identity and hash;
-- fail if any MTP plan, tensor, expert frame, or target capability is missing.
+- use the official DeepSpec repository at commit `005e03b81cec38b7da6399833d609ee89a2587f2`, the checkpoint reference model, vLLM, and SGLang as protocol references;
+- load the three DSpark stages and prediction heads into the single-owner prepared resources with non-aliasing execution identities 43–45;
+- preserve the landed device-side target hidden-tap 40/41/42 capture and fused stage-zero `main_proj`/`main_norm` path, then prove official Python fixture parity and measure its complete latency;
+- preserve the landed dedicated sliding-window context-KV state per DSpark stage. Prefill/update it from projected target context; never publish ephemeral proposal-block KV as committed context;
+- construct the five-row draft input `[anchor, noise × 4]`, share the target embedding, and run the entire block through all three stages with non-causal intra-block visibility using the landed hybrid-attention semantic bundle;
+- compile DSpark weights, block workspaces, expert catalogs, and kernel plans into the GB10 execution image;
+- apply the final HC head, final norm, and shared target LM head to produce five base-logit rows;
+- generate five proposals sequentially: each row's base logits receive the low-rank Markov bias from the previous sampled token;
+- compute per-position confidence from `[final hidden, previous-token Markov embedding]` and expose the native block plus confidence/survival telemetry to the scheduler;
+- expose an immutable proposal-source identity/hash and fail if any DSpark plan, tensor, expert frame, context state, or target capability is missing.
 
 Exit gate:
 
-- real checkpoint proposes deterministic V=2/4/8 token blocks;
+- the checkpoint-native `gamma=5` proposal block, `[anchor, noise × 4]` backbone input, non-causal block attention, six-row target layout, and correction/bonus behavior are explicitly documented and tested;
+- any shorter adaptive verification window is a confidence-selected prefix of the already computed native block and does not rerun the backbone with a different block shape;
+- any width above the checkpoint declaration, including the historical V=8 probe, is experimental until independent proposal/logit/confidence parity and acceptance evidence pass;
 - proposal execution is CUDA-only and allocation-free after prepare;
 - proposal parity and state-transition tests pass;
 - no target-model or synthetic proposal source is used for headline data.
 
 ### Phase R2 — Gate F2 real acceptance
 
-Purpose: determine whether real acceptance converts the resident V=8 compute result into a viable complete cycle.
+Purpose: first establish the exact checkpoint-native proposal/accept/bonus transaction, then determine whether the optimized device path converts it into a viable complete cycle.
 
 Work:
 
-- add a production F2 benchmark entry;
-- measure draft, verify, accepted-prefix, commit, rollback, and uncovered-I/O components;
-- record accepted-prefix histograms and `A(V)` for V=2/4/8;
+- instrument the existing production server and `dsv4-vllm-bench` path rather than adding a parallel F2 driver;
+- measure draft, verify, accepted-prefix, commit, rollback, and uncovered-I/O components under the authoritative full-cycle profile;
+- record `gamma`, target rows, accepted-draft histograms, correction/bonus tokens, and externally committed `C(Q)` for every supported operating point;
 - reconcile internal committed tokens with externally returned tokens;
 - preserve route union, rejected-prefetch, and KV transaction traces;
 - run full-, partial-, zero-accept, EOS, cancellation, and failure cases.
 
-Exit gate:
+Correctness exit gate R2a, before graph optimization:
+
+- proposal, target verification, accepted draft prefix, correction/bonus, KV state, and externally returned tokens reconcile exactly;
+- component timing and acceptance artifacts exist for the checkpoint-native operating point;
+- full-, partial-, zero-accept, EOS, cancellation, and failure cases pass.
+
+Performance exit gate R2b, after the R4 device-path work:
 
 ```text
-A(V) / T_cycle(V) >= 16
+C(Q) / T_cycle(Q) >= 16
 ```
 
-for at least one viable width, or a measured optimization budget identifies a credible path. If every viable width is below 16 with no credible budget, the current release target is rejected.
+for at least one production-validated operating point. The checkpoint-native target-only path leaves a narrow complete-cycle budget, so R2b remains unmeasured and highly constrained. Experimental width overrides cannot satisfy R2b without independent proposal parity and acceptance evidence. If every production-valid point is below the release target with no credible optimization budget, the current release target is rejected.
 
 ### Phase R3 — Gate F3 acceptance-aware expert I/O
 
@@ -240,7 +308,9 @@ Purpose: keep cold expert traffic inside the storage and capacity envelope.
 
 Work:
 
-- connect route/cache prediction to admitted incremental expert bytes;
+- carry one authoritative, evolving cycle plan across proposal, target Q verification, and possible replay, separating predicted route unions from exact per-segment unions at the legal restart boundaries;
+- connect route/cache prediction to admitted marginal unique expert objects and bytes;
+- reconcile scheduler-admitted bytes with actual shared physical loads, inflight joins, cache hits, alignment, cancellation, and evictions;
 - charge rejected-prefetch bytes to the cycle that caused them;
 - separate resident-ready work from miss-blocked work;
 - enforce fixed-file, slab, upload, and device-frame credits;
@@ -249,7 +319,7 @@ Work:
 
 Exit gate:
 
-- uncovered reads remain at or below 0.658 GiB per accepted token at the release operating point;
+- uncovered reads remain within the acceptance-aware storage budget at the release operating point;
 - no swap or page-cache collapse;
 - expert memory and temporary workspace remain bounded;
 - every miss, stale generation, and failed upload remains exact and recoverable.
@@ -264,7 +334,8 @@ Work:
 - keep miss side effects behind an explicit restart/rollback boundary;
 - freeze graph-stable descriptors and ping-pong workspaces;
 - capture graph buckets by forward mode and padded capacity, not by model-plan M variants;
-- reprofile the final superkernel path after graph capture.
+- reprofile the final superkernel path after graph capture;
+- rerun the complete R2b cycle gate rather than reporting launch-count reduction alone.
 
 Exit gate:
 
@@ -298,20 +369,24 @@ Implemented:
 
 ```bash
 just cutlass-setup
-just build-cuda
-just test-cutlass-provider
+just build-cuda sm_121a
+just test-cutlass-provider sm_121a
+just test-runtime
+just test-server
+just test-cli
 just dsv4-prefill-parity
 just dsv4-verify-width-sweep
+just dsv4-serve
+just dsv4-vllm-bench
 ```
 
 Planned and not yet valid release commands:
 
 ```text
-dsv4-dspark-cycle-sweep
-dsv4-route-cache-oracle
-dsv4-static-ingest-ab
-dsv4-release-manifest
-dsv4-release-suite
+just dsv4-route-cache-oracle
+just dsv4-static-ingest-ab
+just dsv4-release-manifest
+just dsv4-release-suite
 ```
 
 A phase is complete only when its correctness and measured exit gates pass. Compiling code, reducing API calls, or winning a microbenchmark is not phase completion.
@@ -320,11 +395,12 @@ A phase is complete only when its correctness and measured exit gates pass. Comp
 
 ### Target and DSpark
 
-- verification width and rows/cycle;
-- proposal count and immutable source identity;
-- accepted-prefix histogram and `A(V)`;
+- checkpoint `gamma`, requested proposal slots, target verification rows, and graph tier;
+- proposal count and immutable source identity/hash;
+- proposed tokens, verified rows, accepted draft tokens, correction/bonus tokens, externally committed tokens, and rolled-back rows;
+- accepted-draft-prefix histogram and mean externally committed `C(Q)`;
 - draft/verify/prefix/commit/rollback latency;
-- complete cycle latency and accepted tok/s;
+- complete cycle latency and externally committed output tok/s;
 - internal/external committed-token reconciliation.
 
 ### GPU
@@ -340,7 +416,7 @@ A phase is complete only when its correctness and measured exit gates pass. Comp
 - selected, resident-hit, inflight-hit, and cold-miss experts;
 - unique expert union per cycle;
 - requested/read/uploaded/rejected-prefetch bytes;
-- uncovered I/O time and bytes per accepted token;
+- uncovered I/O time and bytes per externally committed output token;
 - slot generations, evictions, waits, and stale-binding failures.
 
 ### Memory and serving
@@ -353,21 +429,33 @@ A phase is complete only when its correctness and measured exit gates pass. Comp
 
 ### Feasibility
 
-- [x] F1 headline viability via resident V=8 target verification.
-- [ ] F2 real MTP acceptance.
+- [x] F1 target-only packed roofline/parity evidence at Q=2/4/6/8.
+- [x] Checkpoint-native proposal, target-row, and correction/bonus protocol contract frozen; target-only path measured.
+- [x] F1 checkpoint-native target-only path establishes resident-compute feasibility.
+- [x] Production OpenAI/vLLM path executes real CUDA DSpark proposal, exact target transaction, and external token streaming.
+- [x] First production checkpoint-native trace captured; it currently fails both F2 throughput/acceptance and F3 I/O budget.
+- [ ] F2 real DSpark acceptance and complete-cycle viability.
 - [ ] F3 acceptance-aware I/O and capacity.
 
 ### Exactness
 
 - [x] 43-layer packed CUDA parity.
 - [x] Exact target branch/commit/rollback transaction tests.
-- [ ] Real MTP proposal parity.
+- [x] Packed prompt/verification updates provisional DSpark context state, and rejection replay supports Q=1 on the semantic CUDA path.
+- [x] Production server uses the single real DSpark proposal/verify/commit path rather than ordinary one-token decode.
+- [ ] Official Python fixture parity for target taps, `main_x`, stage outputs, proposal logits/tokens, and confidence.
+- [ ] Real DSpark block/logit/confidence proposal parity.
 - [ ] Long-output, cancellation, EOS, and near-tie release corpus.
 
 ### Performance
 
-- [x] Resident V=8 p50 and p95 verified-row rates exceed 16 rows/s.
-- [ ] Complete accepted throughput lower 95% confidence bound reaches 16 tok/s.
+- [x] Checkpoint-native target path establishes the resident target-only feasibility checkpoint.
+- [x] Persistent pinned metadata mirrors remove repeated staging and synchronization from packed verification.
+- [x] Router-control transfer overlaps the fused shared FFN.
+- [x] Existing server/vLLM recipes execute the CUTLASS semantic bundles in the production DSpark cycle.
+- [ ] Authoritative full-cycle profiling explains production latency across scheduler, I/O, proposal, verification, transaction, and serving.
+- [ ] Device all-hit, graph, and further DSpark-specific CUTLASS work recover enough complete-cycle budget to meet the release gate.
+- [ ] Complete externally committed throughput lower 95% confidence bound reaches 16 tok/s.
 - [ ] Device all-hit and graph paths win end to end.
 - [ ] Memory remains bounded with zero headline failures.
 

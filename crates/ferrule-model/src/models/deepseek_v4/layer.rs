@@ -27,7 +27,7 @@ use super::attention::{DeepSeekV4Attention, DeepSeekV4AttentionCache};
 use super::attention::{DeepSeekV4AttentionDecodeArena, DeepSeekV4AttentionRowsTransitionArena};
 use super::config::DeepSeekV4AttentionConfig;
 #[cfg(feature = "cuda")]
-use super::cuda_cache::DeepSeekV4CudaHcStage;
+use super::cuda_cache::{DeepSeekV4CudaHcStage, DeepSeekV4DsparkAttentionBuffers};
 use super::helpers::rms_norm_rows_with_operators;
 use super::operators::{DeepSeekV4LayerProfileStage, DeepSeekV4OperatorContext};
 #[cfg(feature = "cuda")]
@@ -578,7 +578,7 @@ impl DeepSeekV4Layer {
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<Vec<DeepSeekV4SequenceMoeAccessEvent>> {
         let rows = token_ids.len();
-        if rows < 2
+        if rows == 0
             || positions.len() != rows
             || row_to_sequence.len() != rows
             || sequence_major_rows.len() != rows
@@ -729,6 +729,132 @@ impl DeepSeekV4Layer {
             "layer_output",
             &arena.layer_output,
             self.hc_config.hc_hidden_size(),
+        )?;
+        std::mem::swap(hc_state_dev, &mut arena.layer_output);
+        Ok(moe_access_events)
+    }
+
+    /// One complete checkpoint-native DSpark transformer stage over the shared
+    /// five-row proposal block. Unlike target packed execution, attention never
+    /// publishes the ephemeral block KV into the page table.
+    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn dspark_proposal_block_device_hc_device(
+        &self,
+        stage: usize,
+        sequence_tokens: usize,
+        residency: &mut dyn ExpertResidencyControl,
+        source_catalog: &ExpertSourceCatalog,
+        prefetch_capacity: usize,
+        arena: &mut DeepSeekV4LayerArena,
+        hc_state_dev: &mut ferrule_cuda::context::CudaF32Buffer,
+        token_ids: &[u32],
+        predicted_experts: &[usize],
+        expert_reader: &ExpertStreamingReader,
+        operators: &mut DeepSeekV4OperatorContext,
+        dspark_attention: &mut DeepSeekV4DsparkAttentionBuffers,
+    ) -> Result<Vec<DeepSeekV4SequenceMoeAccessEvent>> {
+        let rows = ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS;
+        if token_ids.len() != rows
+            || hc_state_dev.len() != rows.saturating_mul(self.hc_config.hc_hidden_size())
+        {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 DSpark stage {stage} input mismatch: tokens={} hc={} expected_tokens={rows} expected_hc={}",
+                token_ids.len(),
+                hc_state_dev.len(),
+                rows.saturating_mul(self.hc_config.hc_hidden_size())
+            )));
+        }
+
+        let attention_fp8 = operators.cuda_mut()?.hc_pre_rmsnorm_fp8_into(
+            self.layer,
+            DeepSeekV4CudaHcStage::Attention,
+            hc_state_dev,
+            rows,
+            self.hc_config,
+            &mut arena.attn_hidden,
+            &mut arena.attn_norm,
+            &mut arena.attn_pre,
+            &mut arena.attn_post,
+            &mut arena.attn_comb,
+            &mut arena.hc_fp8_pack,
+        )?;
+        self.attention.dspark_proposal_block_from_device_into(
+            stage,
+            &attention_fp8,
+            sequence_tokens,
+            operators,
+            &mut arena.attention,
+            dspark_attention,
+        )?;
+        operators.cuda_mut()?.hc_post_from_device_into(
+            &arena.attention.output,
+            hc_state_dev,
+            &arena.attn_post,
+            &arena.attn_comb,
+            rows,
+            self.hc_config,
+            &mut arena.after_attn,
+        )?;
+
+        let ffn_fp8 = operators.cuda_mut()?.hc_pre_rmsnorm_fp8_into(
+            self.layer,
+            DeepSeekV4CudaHcStage::FeedForward,
+            &arena.after_attn,
+            rows,
+            self.hc_config,
+            &mut arena.ffn_hidden,
+            &mut arena.ffn_norm,
+            &mut arena.ffn_pre,
+            &mut arena.ffn_post,
+            &mut arena.ffn_comb,
+            &mut arena.hc_fp8_pack,
+        )?;
+        if !predicted_experts.is_empty() {
+            operators.prefetch_predicted_experts(
+                self.layer,
+                predicted_experts,
+                residency,
+                source_catalog,
+                prefetch_capacity,
+                expert_reader,
+            )?;
+        }
+        let row_to_sequence = [0usize; ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS];
+        let sequence_phases = [ForwardPhase::Decode];
+        let moe_access_events = operators.routed_moe_prefill_batch_from_device_into(
+            self.layer,
+            &arena.ffn_norm,
+            &ffn_fp8,
+            &mut arena.ffn_hidden,
+            &mut arena.shared_ffn_hidden_fp8,
+            token_ids,
+            Some(&row_to_sequence),
+            Some(&sequence_phases),
+            &self.router,
+            predicted_experts,
+            &self.router_policy,
+            residency,
+            source_catalog,
+            prefetch_capacity,
+            expert_reader,
+            &self.shared_ffn,
+            &mut arena.router_logits,
+            &mut arena.router_indices,
+            &mut arena.router_weights,
+            &mut arena.attention.linear_workspace,
+            &mut arena.moe_segment_workspace,
+            &mut arena.moe_route_output,
+            &mut arena.moe_output,
+        )?;
+        operators.cuda_mut()?.hc_post_from_device_into(
+            &arena.moe_output,
+            &arena.after_attn,
+            &arena.ffn_post,
+            &arena.ffn_comb,
+            rows,
+            self.hc_config,
+            &mut arena.layer_output,
         )?;
         std::mem::swap(hc_state_dev, &mut arena.layer_output);
         Ok(moe_access_events)
@@ -1160,7 +1286,13 @@ impl DeepSeekV4LayerArenaVariants {
         rows: usize,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<Self> {
-        Self::try_build_with_row_transitions(layers, rows, mode == ForwardMode::Decode, operators)
+        Self::try_build_with_row_transitions(
+            layers,
+            rows,
+            mode == ForwardMode::Decode,
+            rows > 1,
+            operators,
+        )
     }
 
     pub(crate) fn try_build_for_packed_mode(
@@ -1168,13 +1300,14 @@ impl DeepSeekV4LayerArenaVariants {
         rows: usize,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<Self> {
-        Self::try_build_with_row_transitions(layers, rows, true, operators)
+        Self::try_build_with_row_transitions(layers, rows, true, true, operators)
     }
 
     fn try_build_with_row_transitions(
         layers: &[DeepSeekV4Layer],
         rows: usize,
         independent_rows: bool,
+        allocate_row_transition: bool,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<Self> {
         let (layer_to_variant, representative_layers) = layer_arena_variant_layout(layers);
@@ -1184,6 +1317,7 @@ impl DeepSeekV4LayerArenaVariants {
                 &layers[layer_idx],
                 rows,
                 independent_rows,
+                allocate_row_transition,
                 operators,
             )?);
         }
@@ -1216,6 +1350,7 @@ impl DeepSeekV4LayerArena {
         layer: &DeepSeekV4Layer,
         rows: usize,
         independent_rows: bool,
+        allocate_row_transition: bool,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<Self> {
         let config = layer.hc_config;
@@ -1253,7 +1388,7 @@ impl DeepSeekV4LayerArena {
                 independent_rows,
                 operators,
             )?,
-            attention_transition: (rows > 1)
+            attention_transition: allocate_row_transition
                 .then(|| DeepSeekV4AttentionRowsTransitionArena::new(&layer.attention, operators))
                 .transpose()?,
             router_input: operators.cuda_mut()?.ops.zero_f32_buffer(rows * hidden)?,

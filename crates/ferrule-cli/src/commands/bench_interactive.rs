@@ -212,6 +212,7 @@ pub fn cmd_bench_interactive(
     let max_tensor_bytes = output_head_chunk_bytes.max(128 * 1024 * 1024);
     let load_start = Instant::now();
     let model = DeepSeekV4ArtifactModel::load_hf_with_limit(model_path, max_tensor_bytes)?;
+    let checkpoint_dspark_block_size = model.config.dspark_block_size;
     let runner =
         DeepSeekV4Runner::new_with_operator_backend(model, options, ModelExecutionBackend::Cuda)?;
     let artifact_load_us = duration_us(load_start.elapsed());
@@ -227,6 +228,7 @@ pub fn cmd_bench_interactive(
             output_head_chunk_rows,
             moe_prefetch_experts,
             moe_hotset_experts,
+            checkpoint_dspark_block_size,
             verify_iterations,
             json,
         );
@@ -936,6 +938,7 @@ fn resident_driver_stats_delta(
         finished_sequences: after
             .finished_sequences
             .saturating_sub(before.finished_sequences),
+        dspark: Default::default(),
     }
 }
 
@@ -2434,7 +2437,10 @@ fn resident_verify_sample_json(sample: &ResidentVerifySample) -> serde_json::Val
 }
 
 #[cfg(feature = "cuda")]
-fn resident_verify_width_json(measurement: &ResidentVerifyWidthMeasurement) -> serde_json::Value {
+fn resident_verify_width_json(
+    measurement: &ResidentVerifyWidthMeasurement,
+    checkpoint_reference_verify_rows: usize,
+) -> serde_json::Value {
     let p50_us = verify_percentile_us(measurement, 50);
     let p95_us = verify_percentile_us(measurement, 95);
     serde_json::json!({
@@ -2447,6 +2453,8 @@ fn resident_verify_width_json(measurement: &ResidentVerifyWidthMeasurement) -> s
         "target_cycles_per_s_p50": if p50_us == 0 { 0.0 } else {
             1_000_000.0 / p50_us as f64
         },
+        "checkpoint_reference_width": measurement.width == checkpoint_reference_verify_rows,
+        "experimental_above_checkpoint_width": measurement.width > checkpoint_reference_verify_rows,
         "resident_no_io": measurement.resident_no_io,
         "allocation_free": measurement.allocation_free,
         "parity": measurement.parity,
@@ -2471,10 +2479,16 @@ fn run_resident_verify_width_sweep(
     output_head_chunk_rows: usize,
     moe_prefetch_experts: usize,
     moe_hotset_experts: usize,
+    checkpoint_dspark_block_size: usize,
     iterations: usize,
     json: bool,
 ) -> anyhow::Result<()> {
-    const WIDTHS: [usize; 3] = [2, 4, 8];
+    let checkpoint_reference_verify_rows = checkpoint_dspark_block_size
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("checkpoint DSpark verification width overflow"))?;
+    let mut widths = vec![2, 4, checkpoint_reference_verify_rows, 8];
+    widths.sort_unstable();
+    widths.dedup();
     if prompts.len() != 1 {
         anyhow::bail!(
             "--verify-width-sweep requires exactly one --prompt, got {}",
@@ -2497,7 +2511,7 @@ fn run_resident_verify_width_sweep(
 
     let full_prompt = chat_template.format_turn(&prompts[0], true);
     let token_ids = runner.encode(&full_prompt)?;
-    let max_width = *WIDTHS.last().expect("verification widths are non-empty");
+    let max_width = *widths.last().expect("verification widths are non-empty");
     if token_ids.len() <= max_width {
         anyhow::bail!(
             "--verify-width-sweep prompt encoded to {} tokens; need at least {}",
@@ -2514,16 +2528,22 @@ fn run_resident_verify_width_sweep(
     let capture_slot = diagnostic.create_sequence(0)?;
     let replay_slot = diagnostic.create_sequence(0)?;
 
-    let mut measurements = Vec::with_capacity(WIDTHS.len());
-    for (width_index, width) in WIDTHS.into_iter().enumerate() {
+    let mut measurements = Vec::with_capacity(widths.len());
+    for (width_index, width) in widths.into_iter().enumerate() {
         if width_index > 0 {
             diagnostic.reset_sequence(capture_slot)?;
             diagnostic.reset_sequence(replay_slot)?;
         }
         for slot in [capture_slot, replay_slot] {
-            diagnostic.execute_sequence_step(slot, ForwardPhase::Prefill, prefix, |runner| {
-                runner.prefill_tokens_no_logits_batched(prefix)
-            })?;
+            diagnostic
+                .execute_sequence_step(slot, ForwardPhase::Prefill, prefix, |runner| {
+                    runner.prefill_tokens_no_logits_batched(prefix)
+                })
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "Gate F1 V={width} initial prefill failed for slot {slot:?}: {error}"
+                    )
+                })?;
         }
 
         let candidate_rows = &candidates[..width];
@@ -2536,25 +2556,40 @@ fn run_resident_verify_width_sweep(
             if iteration > 0 {
                 for slot in [capture_slot, replay_slot] {
                     diagnostic.reset_sequence(slot)?;
-                    diagnostic.execute_sequence_step(
-                        slot,
-                        ForwardPhase::Prefill,
-                        prefix,
-                        |runner| runner.prefill_tokens_no_logits_batched(prefix),
-                    )?;
+                    diagnostic
+                        .execute_sequence_step(
+                            slot,
+                            ForwardPhase::Prefill,
+                            prefix,
+                            |runner| runner.prefill_tokens_no_logits_batched(prefix),
+                        )
+                        .map_err(|error| {
+                            anyhow::anyhow!(
+                                "Gate F1 V={width} iteration={iteration} reset prefill failed for slot {slot:?}: {error}"
+                            )
+                        })?;
                 }
             }
             // Capture is deliberately outside T_verify. It installs exactly the
             // route union used by the immediately following replay sample.
             let capture =
-                measure_resident_verify_rows(&mut diagnostic, capture_slot, candidate_rows)?;
+                measure_resident_verify_rows(&mut diagnostic, capture_slot, candidate_rows)
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "Gate F1 V={width} iteration={iteration} capture failed: {error}"
+                        )
+                    })?;
             if let Some(baseline) = &capture_top1 {
                 parity &= same_top1_bits(baseline, &capture.top1);
             } else {
                 capture_top1 = Some(capture.top1.clone());
             }
-            let sample =
-                measure_resident_verify_rows(&mut diagnostic, replay_slot, candidate_rows)?;
+            let sample = measure_resident_verify_rows(&mut diagnostic, replay_slot, candidate_rows)
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "Gate F1 V={width} iteration={iteration} replay failed: {error}"
+                    )
+                })?;
             parity &= same_top1_bits(
                 capture_top1
                     .as_deref()
@@ -2581,6 +2616,30 @@ fn run_resident_verify_width_sweep(
         .find(|measurement| measurement.width == 4)
         .ok_or_else(|| anyhow::anyhow!("V=4 verification measurement is missing"))?;
     let v4_p50_us = verify_percentile_us(v4, 50);
+    let checkpoint_reference = measurements
+        .iter()
+        .find(|measurement| measurement.width == checkpoint_reference_verify_rows)
+        .ok_or_else(|| {
+            anyhow::anyhow!("checkpoint-reference verification measurement is missing")
+        })?;
+    let checkpoint_reference_p50_us = verify_percentile_us(checkpoint_reference, 50);
+    let checkpoint_reference_rows_per_s_p50 = if checkpoint_reference_p50_us == 0 {
+        0.0
+    } else {
+        checkpoint_reference_verify_rows as f64 * 1_000_000.0 / checkpoint_reference_p50_us as f64
+    };
+    let checkpoint_native_max_external_commit_tokens = checkpoint_reference_verify_rows;
+    let target_only_non_target_budget_s_at_16_p50 =
+        (checkpoint_native_max_external_commit_tokens as f64 / 16.0
+            - checkpoint_reference_p50_us as f64 / 1_000_000.0)
+            .max(0.0);
+    let experimental_above_checkpoint_reaches_16 = measurements.iter().any(|measurement| {
+        if measurement.width <= checkpoint_reference_verify_rows {
+            return false;
+        }
+        let p50_us = verify_percentile_us(measurement, 50);
+        p50_us != 0 && measurement.width as f64 * 1_000_000.0 / p50_us as f64 >= 16.0
+    });
     let parity = measurements.iter().all(|measurement| measurement.parity);
     let resident_no_io = measurements
         .iter()
@@ -2588,10 +2647,6 @@ fn run_resident_verify_width_sweep(
     let allocation_free = measurements
         .iter()
         .all(|measurement| measurement.allocation_free);
-    let all_rates_at_most_16 = measurements.iter().all(|measurement| {
-        let p50_us = verify_percentile_us(measurement, 50);
-        p50_us == 0 || measurement.width as f64 * 1_000_000.0 / p50_us as f64 <= 16.0
-    });
 
     if json {
         println!(
@@ -2604,27 +2659,39 @@ fn run_resident_verify_width_sweep(
                 "prompt_token_ids": token_ids,
                 "prefix_tokens": prefix_len,
                 "verification_token_ids": candidates,
+                "checkpoint_dspark_block_size": checkpoint_dspark_block_size,
+                "checkpoint_reference_verify_rows": checkpoint_reference_verify_rows,
                 "iterations": iterations,
                 "max_layers": max_layers,
                 "output_head_chunk_rows": output_head_chunk_rows,
                 "moe_prefetch_experts": moe_prefetch_experts,
                 "moe_hotset_experts": moe_hotset_experts,
                 "artifact_load_s": artifact_load_us as f64 / 1_000_000.0,
-                "widths": measurements.iter().map(resident_verify_width_json).collect::<Vec<_>>(),
+                "widths": measurements.iter().map(|measurement| {
+                    resident_verify_width_json(measurement, checkpoint_reference_verify_rows)
+                }).collect::<Vec<_>>(),
                 "gate_f1": {
+                    "roofline_probe_only": true,
+                    "checkpoint_native_width_contract_applied": true,
+                    "checkpoint_native_max_external_commit_tokens": checkpoint_native_max_external_commit_tokens,
+                    "target_only_non_target_budget_s_at_16_p50": target_only_non_target_budget_s_at_16_p50,
+                    "complete_cycle_viability_measured": false,
                     "parity": parity,
                     "resident_no_io": resident_no_io,
                     "allocation_free": allocation_free,
                     "v4_over_250_ms": v4_p50_us > 250_000,
                     "v4_over_200_ms": v4_p50_us > 200_000,
-                    "all_measured_rates_at_most_16_tok_s": all_rates_at_most_16,
-                    "headline_rate_viable": !all_rates_at_most_16,
+                    "checkpoint_reference_rows_per_s_p50": checkpoint_reference_rows_per_s_p50,
+                    "checkpoint_reference_target_only_reaches_16_rows_s": checkpoint_reference_rows_per_s_p50 >= 16.0,
+                    "experimental_above_checkpoint_reaches_16_rows_s": experimental_above_checkpoint_reaches_16,
                 },
             }))?
         );
     } else {
-        println!("=== DSV4 Gate F1 Resident Verification Width Sweep ===");
+        println!("=== DSV4 Gate F1 Resident Verification Roofline Sweep ===");
         println!("prefix tokens:      {prefix_len}");
+        println!("checkpoint gamma:   {checkpoint_dspark_block_size}");
+        println!("reference rows:     {checkpoint_reference_verify_rows}");
         println!("iterations:         {iterations}");
         println!("resident no-I/O:    {resident_no_io}");
         println!("allocation-free:    {allocation_free}");
@@ -2650,7 +2717,15 @@ fn run_resident_verify_width_sweep(
         }
         println!("V=4 > 250 ms:       {}", v4_p50_us > 250_000);
         println!("V=4 > 200 ms:       {}", v4_p50_us > 200_000);
-        println!("headline viable:    {}", !all_rates_at_most_16);
+        println!("reference rows/s:     {checkpoint_reference_rows_per_s_p50:.3} (target-only)");
+        println!(
+            "non-target budget:     {:.3} ms at 16 tok/s and 100% acceptance",
+            target_only_non_target_budget_s_at_16_p50 * 1_000.0
+        );
+        println!(
+            "experimental >=16:    {experimental_above_checkpoint_reaches_16} (not a release gate)"
+        );
+        println!("complete cycle:      not measured");
     }
 
     if !parity {

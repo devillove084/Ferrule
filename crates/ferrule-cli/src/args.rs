@@ -93,8 +93,8 @@ pub(crate) enum Command {
         /// capture, resident-with-head, and resident-body-only target passes.
         #[arg(long)]
         resident_replay: bool,
-        /// Extend the resident replay harness with native 1-sequence × V-row
-        /// target verification for V=2/4/8 (Gate F1).
+        /// Run the resident target-verification roofline at V=2/4, the
+        /// checkpoint-reference width (`dspark_block_size + 1`), and experimental V=8.
         #[arg(long)]
         verify_width_sweep: bool,
         /// Number of measured all-resident samples per verification width.
@@ -296,7 +296,7 @@ pub(crate) struct ServeArgs {
     #[arg(long, default_value_t = 0)]
     pub(crate) moe_prefetch_experts: usize,
     /// Bound resident routed experts per layer (0 = managed default).
-    #[arg(long, default_value_t = 12)]
+    #[arg(long, default_value_t = 48)]
     pub(crate) moe_hotset_experts: usize,
     /// Predicted incremental expert source bytes admitted per scheduler batch in MiB (0 = unbounded).
     #[arg(long = "expert-io-batch-mb", default_value_t = 2693)]

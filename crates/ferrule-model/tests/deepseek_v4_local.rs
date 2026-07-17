@@ -1,6 +1,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+use ferrule_model::models::deepseek_v4::DeepSeekV4ArtifactModel;
 use ferrule_model::{
     AttentionKind, EnginePlanStatus, HfSafetensorsIndex, HfSafetensorsInventory, ModelDescriptor,
     ModelFamily, PolicyArea, RouterKind, SpeculationMode, TensorClass, TensorRole, WeightSource,
@@ -144,6 +145,32 @@ fn local_deepseek_v4_flash_dspark_descriptor_smoke_if_present() {
     assert_missing(&plan, PolicyArea::Router, "hash-assisted routing");
     assert_missing(&plan, PolicyArea::Speculation, "speculative decoding");
     assert_missing(&plan, PolicyArea::Tokenizer, "external tokenizer/encoding");
+}
+
+#[test]
+#[ignore = "reads the local DSpark attachment payloads"]
+fn local_deepseek_v4_flash_dspark_mtp_attachment_loads() {
+    let model_dir = local_deepseek_v4_dir().expect("local DeepSeek V4 checkpoint is required");
+    let model = DeepSeekV4ArtifactModel::load_hf_with_limit(&model_dir, 128 * 1024 * 1024)
+        .expect("local DeepSeek V4 artifact should load");
+    let mtp = model
+        .load_mtp()
+        .expect("local DSpark attachment should bind")
+        .expect("local checkpoint should contain an MTP attachment");
+
+    assert_eq!(mtp.config.block_size, 5);
+    assert_eq!(mtp.config.noise_token_id, Some(128_799));
+    assert_eq!(mtp.config.target_layer_ids, vec![40, 41, 42]);
+    assert_eq!(mtp.config.markov_rank, Some(256));
+    assert_eq!(mtp.layers.len(), 3);
+    assert!(mtp.prediction_heads.is_some());
+    for (stage, layer) in mtp.layers.iter().enumerate() {
+        assert_eq!(layer.mtp_index, stage);
+        assert_eq!(layer.execution_layer, 43 + stage);
+        assert_eq!(layer.expert_source_catalog.count(), 256);
+        assert_eq!(layer.main_proj.is_some(), stage == 0);
+        assert_eq!(layer.main_norm.is_some(), stage == 0);
+    }
 }
 
 fn local_deepseek_v4_dir() -> Option<PathBuf> {

@@ -986,7 +986,7 @@ impl DeepSeekV4OperatorContext {
     pub(crate) fn configure_expert_frame_pool(
         &mut self,
         expert_capacity: usize,
-        layer_slot_capacities: &[usize],
+        layer_slot_capacities: &[(usize, usize)],
         hidden_size: usize,
         intermediate_size: usize,
     ) -> Result<()> {

@@ -31,20 +31,23 @@
 
 ## Current milestone
 
-Ferrule has a real, lossless 43-layer CUDA DeepSeek-V4 Flash target path on GB10.
-Native packed decode, ragged prefill, mixed batches, physical paged multi-plane KV,
-FP4 routed MoE, compressed attention state, and deterministic greedy generation are
-active. Exact DSpark packed verification, acceptance, rollback, and accepted-prefix
-replay are implemented; a production MTP proposal source is not connected yet.
+Ferrule has a real, lossless CUDA DeepSeek-V4 Flash target path on GB10. Native packed
+decode, ragged prefill, physical paged multi-plane KV, FP4 routed MoE, compressed
+attention state, and deterministic greedy generation are active.
+
+The checkpoint-native DSpark production path is now connected end to end: device-side
+target-tap projection and normalization feed independent proposal-stage context state;
+hybrid attention, proposal heads, sequential Markov selection, and confidence execute
+through the prepared CUDA/CUTLASS image; exact packed target verification feeds
+acceptance, correction/bonus, rollback/replay, and OpenAI streaming.
 
 The completed execution foundation includes:
 
 - one Rust-owned executable plan with prepare-time kernel-provider selection;
-- a GB10/SM121a CUTLASS/CuTe provider exposing six semantic superkernels instead of generic-GEMM FFI;
-- explicit per-sequence state and native packed multi-session execution;
+- a GB10/SM121a CUTLASS/CuTe provider exposing semantic target and DSpark bundles instead of generic-GEMM FFI;
+- explicit per-sequence state and native packed execution;
 - runtime-owned paged KV transactions, rollback, COW, and slot allocation;
-- request-centric continuous batching with expert-byte, pinned-memory, upload, and
-  deadline admission budgets;
+- request-centric admission with expert-byte, pinned-memory, upload, and deadline budgets;
 - production `O_DIRECT + io_uring` expert reads into registered CUDA-pinned slabs;
 - device routing and stable expert slot/generation/lease residency;
 - OpenAI-compatible HTTP/SSE serving with bounded admission and cancellation.
@@ -53,19 +56,22 @@ Recent correctness work also made packed concurrency safe when a prefetched expe
 reserved victim is selected by the same batch: Ferrule cancels only the conflicting
 reservation, preserves completed staging/upload work, and re-reserves a safe slot.
 
-Ferrule is **not yet a single-node SOTA claim**. The resident V=8 target path now reaches
-16.1958 verified rows/s p50 with parity, zero selected expert I/O, and zero steady-state
-allocation. The remaining critical work is:
+Ferrule is **not yet a single-node SOTA claim**. The official checkpoint-native DSpark
+protocol, CUDA/CUTLASS proposal image, exact target transaction, production server path,
+and serving telemetry are connected. Initial end-to-end runs exposed unresolved official
+proposal parity, acceptance, expert-residency accounting, host coordination, and hot-path
+allocation work.
 
-1. connect the real MTP proposal source to the prepared GB10 execution image;
-2. measure complete DSpark acceptance and accepted-token throughput for V=2/4/8;
-3. enforce the 0.658 GiB/accepted-token uncovered-I/O budget;
-4. add the device all-hit path and capture stable CUDA graphs;
-5. freeze the serving, competitor, and release artifact suite.
+The remaining critical work is:
 
-The end target is **15–17 accepted output tokens/s**, not 15–17 complete target-model
-passes/s. See the [execution roadmap](docs/ROADMAP.md) for measured gates and phase
-ordering.
+1. prove official Python fixture parity for proposal tokens, logits, confidence, and state transitions;
+2. profile the existing production server path across scheduler, I/O, proposal, target, transaction, and serving stages;
+3. unify scheduler admission with the physical expert union and load ledger of the complete DSpark cycle;
+4. remove all-hit host barriers and hot-path allocations before capturing stable graph buckets;
+5. run the frozen serving and same-contract competitor release suite.
+
+See the [execution roadmap](docs/ROADMAP.md) for the release contract, measured artifacts,
+and phase ordering.
 
 ---
 
@@ -187,68 +193,71 @@ The exact $B_{\mathrm{um}}$ must come from the S0 target-pass roofline in
 capacity example, not a measured Ferrule token rate. It illustrates why 15–17 full
 43-layer passes/s is not the correct single-Spark target.
 
-For DSpark, distinguish the number of target rows verified in one cycle, $V$, from
-the average number of tokens actually committed, $A$, where $A \le V$. The accepted-token
-rate is:
+For DSpark, distinguish checkpoint draft slots $\gamma$, target rows $Q$, accepted
+draft tokens, correction/bonus tokens, and mean externally committed output tokens $C$.
+The checkpoint declares $\gamma=5$: target verification uses $Q=6$ rows and can commit
+at most five accepted drafts plus one correction/bonus token. Widths above six are not
+checkpoint-native and require separate proposal/confidence/acceptance evidence. The
+release rate is:
 
-$$R_{\mathrm{accepted}} = \frac{A}{T_{\mathrm{cycle}}(V)}.$$
+$$R_{\mathrm{output}} = \frac{C(Q)}{T_{\mathrm{cycle}}(Q)}.$$
 
-The verification width is not free. Its resource lower bound must use width-dependent
+The target-row width is not free. Its resource lower bound must use width-dependent
 work and traffic:
 
-$$T_{\mathrm{verify}}(V) \ge \max\left( \frac{F_{\mathrm{gpu}}(V)}{\eta_{\mathrm{gpu}}P_{\mathrm{gpu}}}, \frac{B_{\mathrm{um}}(V)}{\eta_{\mathrm{um}}W_{\mathrm{um}}}, \frac{B_{\mathrm{nvme}}(V)}{\eta_{\mathrm{nvme}}W_{\mathrm{nvme}}}, T_{\mathrm{verify,serial}}(V) \right).$$
+$$T_{\mathrm{verify}}(Q) \ge \max\left( \frac{F_{\mathrm{gpu}}(Q)}{\eta_{\mathrm{gpu}}P_{\mathrm{gpu}}}, \frac{B_{\mathrm{um}}(Q)}{\eta_{\mathrm{um}}W_{\mathrm{um}}}, \frac{B_{\mathrm{nvme}}(Q)}{\eta_{\mathrm{nvme}}W_{\mathrm{nvme}}}, T_{\mathrm{verify,serial}}(Q) \right).$$
 
 A complete single-sequence cycle is then:
 
-$$T_{\mathrm{cycle}}(V) = T_{\mathrm{draft}}(V) + T_{\mathrm{verify}}(V) + T_{\mathrm{commit/rollback}}(V) - T_{\mathrm{safe\ overlap}}(V).$$
+$$T_{\mathrm{cycle}}(Q) = T_{\mathrm{draft}}(Q) + T_{\mathrm{verify}}(Q) + T_{\mathrm{commit/rollback}}(Q) - T_{\mathrm{safe\ overlap}}(Q).$$
 
-For example, $A=4$ committed tokens from a complete
-$T_{\mathrm{cycle}}(V)=250\ \mathrm{ms}$ cycle imply:
+For example, $C=4$ externally committed tokens from a complete
+$T_{\mathrm{cycle}}(Q)=250\ \mathrm{ms}$ cycle imply:
 
-$$R_{\mathrm{accepted}} = \frac{4}{0.25\ \mathrm{s}} = 16\ \mathrm{tokens/s}.$$
+$$R_{\mathrm{output}} = \frac{4}{0.25\ \mathrm{s}} = 16\ \mathrm{tokens/s}.$$
 
 This is the architectural meaning of Ferrule's 15–17 tok/s goal; it is a target
 operating point, not a current result. It is incorrect in general to multiply the
-single-row target-pass roof by $A$, because $F_{\mathrm{gpu}}(V)$,
-$B_{\mathrm{um}}(V)$, and $B_{\mathrm{nvme}}(V)$ all depend on verification width
-and route overlap.
+single-row target-pass roof by accepted draft length, because $F_{\mathrm{gpu}}(Q)$,
+$B_{\mathrm{um}}(Q)$, and $B_{\mathrm{nvme}}(Q)$ all depend on target rows and
+route overlap.
 
-For routed experts, let $E_{\ell,v}$ be the exact selected-expert set for verified row
-$v$ at layer $\ell$, and let $S_e=12.75\ \mathrm{MiB}$ be one expert payload. The
-all-cold routed bytes for a width-$V$ verification are:
+For routed experts, let $E_{\ell,q}$ be the exact selected-expert set for target row
+$q$ at layer $\ell$, and let $S_e=12.75\ \mathrm{MiB}$ be one expert payload. The
+all-cold routed bytes for a $Q$-row verification are:
 
-$$B_{\mathrm{routed,cold}}(V) = S_e \sum_{\ell=1}^{43} \left|\bigcup_{v=1}^{V} E_{\ell,v}\right|.$$
+$$B_{\mathrm{routed,cold}}(Q) = S_e \sum_{\ell=1}^{43} \left|\bigcup_{q=1}^{Q} E_{\ell,q}\right|.$$
 
 Because every row selects six distinct experts per layer:
 
-$$3.21\ \mathrm{GiB} \le B_{\mathrm{routed,cold}}(V) \le 3.21V\ \mathrm{GiB},$$
+$$3.21\ \mathrm{GiB} \le B_{\mathrm{routed,cold}}(Q) \le 3.21Q\ \mathrm{GiB},$$
 
 until the per-layer union reaches all 256 experts. The lower bound requires every
 verified row to select the same experts; the upper bound corresponds to disjoint
 selected sets. Under an independent uniform-routing approximation, the expected union
 per layer is:
 
-$$\mathbb{E}[U(V)] = 256\left[1-\left(1-\frac{6}{256}\right)^V\right].$$
+$$\mathbb{E}[U(Q)] = 256\left[1-\left(1-\frac{6}{256}\right)^Q\right].$$
 
-At $V=4$, this approximation gives about $23.17$ unique experts per layer and:
+At $Q=4$, this approximation gives about $23.17$ unique experts per layer and:
 
 $$\mathbb{E}\left[B_{\mathrm{routed,cold}}(4)\right] \approx 43 \cdot 23.17 \cdot 12.75\ \mathrm{MiB} \approx 12.40\ \mathrm{GiB/cycle}.$$
 
 If all of those bytes came from the measured $10.53\ \mathrm{GiB/s}$ NVMe path and
-$A=4$, the storage-only accepted-token ceiling would be only:
+$C=4$, the storage-only output-token ceiling would be only:
 
-$$R_{\mathrm{accepted,nvme}}(4) \le \frac{4 \cdot 10.53}{12.40} \approx 3.40\ \mathrm{tokens/s}.$$
+$$R_{\mathrm{output,nvme}}(4) \le \frac{4 \cdot 10.53}{12.40} \approx 3.40\ \mathrm{tokens/s}.$$
 
 Actual DeepSeek routing is neither uniform nor independent; measured route traces must
 supply the real union. The formula shows why wider verification produces useful weight
 reuse only when routes overlap or the required experts are already resident.
 
-For a desired accepted throughput $R^{\star}(\mathrm{accepted})$, the measured NVMe
+For a desired output throughput $R^{\star}(\mathrm{output})$, the measured NVMe
 path imposes this per-cycle read budget:
 
-$$B^{\star}(\mathrm{NVMe/cycle}) \le \frac{A W(\mathrm{NVMe,observed})}{R^{\star}(\mathrm{accepted})}.$$
+$$B^{\star}(\mathrm{NVMe/cycle}) \le \frac{C W(\mathrm{NVMe,observed})}{R^{\star}(\mathrm{output})}.$$
 
-At $A=4$, $R^{\star}(\mathrm{accepted})=16\ \mathrm{tok/s}$, and
+At $C=4$, $R^{\star}(\mathrm{output})=16\ \mathrm{tok/s}$, and
 $W(\mathrm{NVMe,observed})=10.53\ \mathrm{GiB/s}$:
 
 $$B^{\star}(\mathrm{NVMe/cycle}) \le \frac{4 \cdot 10.53}{16} \approx 2.63\ \mathrm{GiB/cycle}.$$
@@ -327,7 +336,7 @@ Practical scaling order is therefore:
 2. prefer expert/pipeline placement that minimizes per-layer cross-node collectives;
 3. increase useful batch or verification width to amortize communication latency;
 4. replicate storage or shard it across independent paths when streaming remains;
-5. report scaling efficiency and accepted tokens/s, not only aggregate peak FLOPs.
+5. report scaling efficiency and externally committed output tokens/s, not only aggregate peak FLOPs.
 
 ### GDS capability result
 
@@ -476,14 +485,22 @@ real router result
 ```
 
 The production reader, bounded selected takeover, compact router handoff, device-global
-output-head merge, and six GB10 semantic superkernels are implemented. The next optimization
-order is:
+output-head merge, and GB10 semantic superkernels are implemented. Device-side target-tap
+capture and fused projection/normalization execute against the real checkpoint. Independent
+committed DSpark context states feed hybrid attention over paged history plus the ephemeral
+proposal block, while proposal heads, sequential Markov selection, and confidence execute
+inside the prepared CUDA/CUTLASS image. The production server now carries this proposal
+through exact target verification, correction/bonus handling, rollback/replay, and external
+output reconciliation.
 
-1. connect production MTP proposal execution;
-2. measure complete DSpark acceptance for V=2/4/8;
-3. drive residency and admission from route traces and accepted-token I/O cost;
-4. execute all-hit routed layers without host materialization;
-5. capture stable forward-mode/capacity graphs and run the release suite.
+The next optimization order is:
+
+1. export official Python fixtures and localize proposal numerical differences;
+2. prove proposal/logit/confidence and state-transition parity;
+3. reconcile scheduler predictions and admission with actual physical expert operations;
+4. execute all-hit routed layers without host materialization and remove hot-path allocation;
+5. capture stable graphs only after correctness and I/O accounting are exact;
+6. rerun the production serving and release suite.
 
 Ferrule cannot yet claim single-node SOTA: that requires reproducible end-to-end warm
 ITL, TTFT, throughput, memory, quality, and DSpark acceptance results against competing
@@ -603,7 +620,7 @@ just chat models/OLMoE-Instruct q4 -n 256
 | Area | Status |
 |---|---|
 | Executable model fixture | OLMoE sparse MoE CUDA path via `GpuOlmoeRunner` |
-| Real large-model milestone | Exact 43-layer CUDA target path; resident V=8 verification reaches 16.1958 rows/s p50. Real MTP proposal and accepted-token Gate F2 remain open. |
+| Real large-model milestone | The exact CUDA target, checkpoint-native DSpark proposal, packed verification, correction/bonus transaction, and production OpenAI serving path are connected. Official proposal parity, acceptance, full-cycle residency/I/O coordination, and release throughput remain open. |
 | Execution ABI | E1–E4 complete: public `ExecutionBatch`, prepared-executor traits, runtime-private `ScheduledBatch`, strict validation, and native packed multi-session execution |
 | DSV4 execution boundary | The model owns HC/MLA/compressor/router/MoE math; runtime remains model-neutral and owns scheduling plus logical page lifecycle through generic traits |
 | Expert streaming | Immutable source catalogs plus production `O_DIRECT + io_uring` fixed-file reads into registered CUDA-pinned slabs; CUDA promotes selected/on-time experts into ordinary device frames governed by stable slots, generations, leases, bounded admission, and selected takeover. |
@@ -617,7 +634,7 @@ just chat models/OLMoE-Instruct q4 -n 256
 | Generation | Device/global top-k candidate selection, deterministic greedy commit, stop strings, EOS handling, and incremental token text; unsupported sampling is rejected at the API boundary |
 | Chat templates | OLMoE, ChatML, Llama3, Qwen, DeepSeek-V4, Plain |
 | Serving | `ferrule-server` + `ferrule serve`: Axum/Hyper/Tokio, dedicated model-owner thread, bounded queues, disconnect cancellation, `/health`, `/v1/models`, `/v1/chat/completions`, and `/v1/completions`; reusable `vllm bench serve` concurrency workflows; greedy only for now. |
-| Speculation | Exact one-sequence `Q=V` packed verification, acceptance, rollback, and accepted-prefix replay are implemented; production MTP proposal generation remains to be connected. |
+| Speculation | The checkpoint-native DSpark block contract is frozen. Device-side target context, non-causal proposal execution, proposal heads, exact packed verification, draft-prefix acceptance, correction/bonus handling, rollback/replay, and external-output reconciliation are connected. Official fixture parity and measured acceptance remain open. |
 | Training/RL | design target, not implemented |
 
 ---

@@ -22,6 +22,7 @@ use crate::moe::streaming::{ExpertMemoryPolicy, ExpertSourceCatalog, ExpertStrea
 
 use super::artifact::DeepSeekV4ArtifactModel;
 use super::layer::DeepSeekV4Layer;
+use super::mtp::DeepSeekV4MtpModel;
 
 static NEXT_PREPARED_GENERATION: AtomicU64 = AtomicU64::new(1);
 
@@ -393,11 +394,18 @@ pub struct DeepSeekV4PreparedResources {
     options: DeepSeekV4PrepareOptions,
     layers: Box<[DeepSeekV4Layer]>,
     layer_experts: Box<[DeepSeekV4PreparedLayerExperts]>,
+    /// Bound DSpark attachment owned by the same immutable prepared generation
+    /// as the target model. CUDA image compilation is a subsequent R1 step.
+    mtp: Option<DeepSeekV4MtpModel>,
+    mtp_layer_experts: Box<[DeepSeekV4PreparedLayerExperts]>,
     kv_layout: DeepSeekV4KvLayoutSchema,
     policy: DeepSeekV4ExecutionPolicy,
     /// Required per-layer semantic superkernel plan. Missing operations are
     /// prepare-time errors; row-count schedule selection is provider-owned.
     kernel_plan: ModelKernelPlan,
+    /// Transformer-body and stage-zero DSpark projection plan for attachment
+    /// execution layers. Prediction-head plans remain explicit follow-up work.
+    mtp_transformer_kernel_plan: Option<ModelKernelPlan>,
 }
 
 impl DeepSeekV4PreparedResources {
@@ -415,6 +423,14 @@ impl DeepSeekV4PreparedResources {
 
     pub fn layer_experts(&self) -> &[DeepSeekV4PreparedLayerExperts] {
         &self.layer_experts
+    }
+
+    pub const fn mtp(&self) -> Option<&DeepSeekV4MtpModel> {
+        self.mtp.as_ref()
+    }
+
+    pub fn mtp_layer_experts(&self) -> &[DeepSeekV4PreparedLayerExperts] {
+        &self.mtp_layer_experts
     }
 
     pub fn layer_expert_source_catalog(&self, layer: usize) -> Option<&Arc<ExpertSourceCatalog>> {
@@ -447,6 +463,10 @@ impl DeepSeekV4PreparedResources {
     pub fn kernel_plan(&self) -> &ModelKernelPlan {
         &self.kernel_plan
     }
+
+    pub const fn mtp_transformer_kernel_plan(&self) -> Option<&ModelKernelPlan> {
+        self.mtp_transformer_kernel_plan.as_ref()
+    }
 }
 
 pub type DeepSeekV4PreparedModelPlan = PreparedModel<DeepSeekV4PreparedResources>;
@@ -459,6 +479,8 @@ pub fn prepare(
     validate_options(&model, options)?;
     let policy = DeepSeekV4ExecutionPolicy::resolve()?;
     let capabilities = execution_capabilities(model.config.vocab_size)?;
+    let mtp = model.load_mtp()?;
+    validate_mtp_attachment(&model, mtp.as_ref())?;
 
     let mut layers = Vec::new();
     layers
@@ -495,6 +517,21 @@ pub fn prepare(
             expert_streaming_policy.clone(),
         ));
     }
+    let mtp_layer_experts = mtp
+        .as_ref()
+        .map(|mtp| {
+            mtp.layers
+                .iter()
+                .map(|layer| {
+                    DeepSeekV4PreparedLayerExperts::new(
+                        Arc::clone(&layer.expert_source_catalog),
+                        expert_streaming_policy.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+        .into_boxed_slice();
 
     let max_compress_ratio = model
         .config
@@ -509,43 +546,57 @@ pub fn prepare(
     let indexer_metadata_width = 4usize
         .saturating_mul(max_compress_ratio)
         .saturating_mul(model.config.index_head_dim);
+    // DSpark stages own committed target-context KV at their non-aliasing
+    // execution identities (43–45 for the release checkpoint). Keeping these
+    // slots in the same paged transaction makes target and DSpark context
+    // promotion/rollback atomic while proposal-block KV remains scratch-only.
+    let kv_layer_count = if let Some(mtp) = mtp.as_ref() {
+        let attachment_end = model
+            .config
+            .num_layers
+            .checked_add(mtp.layers.len())
+            .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark KV layer count overflow".into()))?;
+        options.max_layers.max(attachment_end)
+    } else {
+        options.max_layers
+    };
     let kv_layout = DeepSeekV4KvLayoutSchema {
         binding_mode: KvBindingMode::None,
         max_sequences: usize::MAX,
-        layer_count: options.max_layers,
+        layer_count: kv_layer_count,
         window_size: model.config.window_size,
         head_dim: model.config.head_dim,
         planes: vec![
             KvPlaneDescriptor {
                 name: "window_latent_kv",
                 elements_per_token: model.config.head_dim,
-                layer_count: options.max_layers,
+                layer_count: kv_layer_count,
             },
             KvPlaneDescriptor {
                 name: "compressed_main_kv",
                 elements_per_token: model.config.head_dim,
-                layer_count: options.max_layers,
+                layer_count: kv_layer_count,
             },
             KvPlaneDescriptor {
                 name: "indexer_kv",
                 elements_per_token: model.config.index_head_dim,
-                layer_count: options.max_layers,
+                layer_count: kv_layer_count,
             },
             KvPlaneDescriptor {
                 name: "compressor_metadata",
                 elements_per_token: main_metadata_width,
-                layer_count: options.max_layers,
+                layer_count: kv_layer_count,
             },
             KvPlaneDescriptor {
                 name: "indexer_metadata",
                 elements_per_token: indexer_metadata_width,
-                layer_count: options.max_layers,
+                layer_count: kv_layer_count,
             },
         ]
         .into_boxed_slice(),
         page_size: 16,
         max_sequence_len: u32::MAX as usize,
-        compress_ratios: (0..options.max_layers)
+        compress_ratios: (0..kv_layer_count)
             .map(|layer| {
                 model
                     .config
@@ -565,16 +616,42 @@ pub fn prepare(
             .collect::<Result<Vec<_>>>()?;
         ferrule_cuda::provider::compile_cuda_model_plan(&requirements)?
     };
+    #[cfg(feature = "cuda")]
+    let mtp_transformer_kernel_plan = mtp
+        .as_ref()
+        .map(|mtp| {
+            let requirements = mtp
+                .layers
+                .iter()
+                .enumerate()
+                .map(|(stage, layer)| {
+                    deepseek_v4_mtp_kernel_requirements(
+                        stage,
+                        layer,
+                        mtp.config.target_layer_ids.len(),
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            ferrule_cuda::provider::compile_cuda_model_plan(&requirements)
+        })
+        .transpose()?;
     #[cfg(not(feature = "cuda"))]
     let kernel_plan = ModelKernelPlan::new(options.max_layers);
+    #[cfg(not(feature = "cuda"))]
+    let mtp_transformer_kernel_plan = mtp
+        .as_ref()
+        .map(|mtp| ModelKernelPlan::new(mtp.layers.len()));
     let resources = DeepSeekV4PreparedResources {
         model,
         options,
         layers: layers.into_boxed_slice(),
         layer_experts: layer_experts.into_boxed_slice(),
+        mtp,
+        mtp_layer_experts,
         kv_layout,
         policy,
         kernel_plan,
+        mtp_transformer_kernel_plan,
     };
 
     publish_prepared(Ok((capabilities, resources)))
@@ -680,6 +757,70 @@ fn validate_shared_ffn_requirement(layer: &DeepSeekV4Layer) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn deepseek_v4_mtp_kernel_requirements(
+    stage: usize,
+    layer: &super::mtp::DeepSeekV4MtpLayer,
+    target_layer_count: usize,
+) -> Result<LayerKernelRequirements> {
+    let mut requirements = deepseek_v4_layer_kernel_requirements(&layer.transformer)?;
+    let attention = layer.transformer.attention.config;
+    if attention.num_heads != ferrule_cuda::cutlass::DSPARK_ATTENTION_HEADS
+        || attention.head_dim != ferrule_cuda::cutlass::DSPARK_ATTENTION_HEAD_DIM
+        || attention.window_size != ferrule_cuda::cutlass::DSPARK_ATTENTION_WINDOW
+        || attention.compress_ratio != 0
+    {
+        return Err(Error::Model(format!(
+            "SM121 DSpark hybrid attention shape mismatch at stage {stage}: heads={} head_dim={} window={} compress_ratio={}",
+            attention.num_heads,
+            attention.head_dim,
+            attention.window_size,
+            attention.compress_ratio
+        )));
+    }
+    requirements.require_operation(KernelOperation::DsparkHybridMlaAttention);
+    if stage == 0 {
+        requirements.require_operation(KernelOperation::DsparkProposalHead);
+    }
+    if stage != 0 {
+        return Ok(requirements);
+    }
+    let main_proj = layer
+        .main_proj
+        .as_ref()
+        .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark stage zero is missing main_proj".into()))?;
+    let main_norm = layer
+        .main_norm
+        .as_deref()
+        .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark stage zero is missing main_norm".into()))?;
+    let ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+        out_features,
+        in_features,
+        block_m: 128,
+        block_k: 128,
+    } = &main_proj.format
+    else {
+        return Err(Error::Model(format!(
+            "SM121 DSpark main projection requires FP8/E8M0 K128 weights, got {:?}",
+            main_proj.format
+        )));
+    };
+    if *out_features != layer.transformer.hc_config.hidden_size
+        || *in_features != main_norm.len().saturating_mul(target_layer_count)
+        || main_norm.len() != *out_features
+        || !out_features.is_multiple_of(128)
+        || !in_features.is_multiple_of(128)
+    {
+        return Err(Error::Model(format!(
+            "SM121 DSpark main projection shape mismatch: weight=[{out_features},{in_features}] norm={} hidden={} target_layers={target_layer_count}",
+            main_norm.len(),
+            layer.transformer.hc_config.hidden_size
+        )));
+    }
+    requirements.require_operation(KernelOperation::DsparkMainProjectNorm);
+    Ok(requirements)
 }
 
 #[cfg(feature = "cuda")]
@@ -797,6 +938,96 @@ fn bf16_linear_bundle_requirement(
         [*first_out, *second_out],
         WeightLayout::Bf16RowMajor,
     ))
+}
+
+fn validate_mtp_attachment(
+    model: &DeepSeekV4ArtifactModel,
+    mtp: Option<&DeepSeekV4MtpModel>,
+) -> Result<()> {
+    let declares_attachment = model.config.num_mtp_layers > 0
+        || model.config.dspark_block_size > 1
+        || !model.config.dspark_target_layer_ids.is_empty()
+        || model.config.dspark_markov_rank.is_some();
+    if !declares_attachment {
+        return Ok(());
+    }
+
+    let mtp = mtp.ok_or_else(|| {
+        Error::Model(
+            "DeepSeek-V4 config declares a DSpark attachment but no MTP tensors were found".into(),
+        )
+    })?;
+    let _protocol = mtp.protocol()?;
+    if mtp.config.block_size == 0 {
+        return Err(Error::Model(
+            "DeepSeek-V4 DSpark block size must be greater than zero".into(),
+        ));
+    }
+    let noise_token_id = mtp.config.noise_token_id.ok_or_else(|| {
+        Error::Model("DeepSeek-V4 DSpark attachment is missing its noise token id".into())
+    })?;
+    if noise_token_id as usize >= model.config.vocab_size {
+        return Err(Error::Model(format!(
+            "DeepSeek-V4 DSpark noise token {noise_token_id} exceeds vocabulary {}",
+            model.config.vocab_size
+        )));
+    }
+    if mtp.config.target_layer_ids.is_empty() {
+        return Err(Error::Model(
+            "DeepSeek-V4 DSpark attachment requires target hidden-state layers".into(),
+        ));
+    }
+    for &target_layer in &mtp.config.target_layer_ids {
+        if target_layer >= model.config.num_layers {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 DSpark target layer {target_layer} exceeds target layer count {}",
+                model.config.num_layers
+            )));
+        }
+    }
+    if mtp
+        .config
+        .target_layer_ids
+        .windows(2)
+        .any(|pair| pair[0] >= pair[1])
+    {
+        return Err(Error::Model(
+            "DeepSeek-V4 DSpark target layers must be strictly increasing".into(),
+        ));
+    }
+    if mtp.layers.len() != model.config.num_mtp_layers {
+        return Err(Error::Model(format!(
+            "DeepSeek-V4 prepared MTP stage count {} does not match config {}",
+            mtp.layers.len(),
+            model.config.num_mtp_layers
+        )));
+    }
+    if mtp.prediction_heads.is_none() {
+        return Err(Error::Model(
+            "DeepSeek-V4 DSpark attachment is missing prediction heads".into(),
+        ));
+    }
+    for (stage, layer) in mtp.layers.iter().enumerate() {
+        let expected_execution_layer = model
+            .config
+            .num_layers
+            .checked_add(stage)
+            .ok_or_else(|| Error::Model("DeepSeek-V4 MTP execution layer overflow".into()))?;
+        if layer.mtp_index != stage || layer.execution_layer != expected_execution_layer {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 MTP stage {stage} has checkpoint index {} and execution layer {}, expected execution layer {expected_execution_layer}",
+                layer.mtp_index, layer.execution_layer
+            )));
+        }
+        let is_stage_zero = stage == 0;
+        if layer.main_proj.is_some() != is_stage_zero || layer.main_norm.is_some() != is_stage_zero
+        {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 MTP stage {stage} has an invalid stage-zero projection contract"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_options(

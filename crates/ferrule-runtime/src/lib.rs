@@ -49,6 +49,6 @@ pub use scheduling::{
 };
 
 pub use speculation::{
-    DSparkCycleResult, DSparkMetrics, DraftSource, TargetFrontier, VerificationWidth,
-    run_dspark_verification,
+    DSparkCycleResult, DSparkMetrics, SpeculativeCycleAccounting, TargetFrontier,
+    VerificationWidth, run_dspark_verification,
 };

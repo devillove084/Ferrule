@@ -520,6 +520,37 @@ pub mod kernels {
         }
     }
 
+    /// Gather the fixed DSpark `[anchor, noise × (rows-1)]` input directly
+    /// from a resident BF16 embedding table and expand each row across HC lanes.
+    #[kernel]
+    pub fn dspark_embedding_hc_bf16(
+        embedding: &[u8],
+        mut output: DisjointSlice<f32>,
+        anchor_token: u32,
+        noise_token: u32,
+        rows: u32,
+        hc_mult: u32,
+        hidden: u32,
+    ) {
+        let index = thread::index_1d().get();
+        let row_width = hc_mult as usize * hidden as usize;
+        let values = rows as usize * row_width;
+        if index >= values || row_width == 0 {
+            return;
+        }
+        let row = index / row_width;
+        let dimension = index % hidden as usize;
+        let token = if row == 0 {
+            anchor_token as usize
+        } else {
+            noise_token as usize
+        };
+        let byte = (token * hidden as usize + dimension) * 2;
+        if let Some(value) = output.get_mut(thread::index_1d()) {
+            *value = bf16_pair_to_f32(embedding[byte], embedding[byte + 1]);
+        }
+    }
+
     #[kernel]
     pub fn fill_i32_sequence(mut output: DisjointSlice<i32>, start: i32, len: u32) {
         let index = thread::index_1d().get();
@@ -547,6 +578,31 @@ pub mod kernels {
             indices[pair]
         } else {
             weights[pair].to_bits() as i32
+        };
+        if let Some(output) = output.get_mut(thread::index_1d()) {
+            *output = value;
+        }
+    }
+
+    #[kernel]
+    pub fn pack_dspark_proposal_result(
+        status: &[i32],
+        token_ids: &[i32],
+        confidence: &[f32],
+        mut output: DisjointSlice<i32>,
+        rows: u32,
+    ) {
+        let index = thread::index_1d().get();
+        let rows = rows as usize;
+        if index >= 1 + 2 * rows {
+            return;
+        }
+        let value = if index == 0 {
+            status[0]
+        } else if index <= rows {
+            token_ids[index]
+        } else {
+            confidence[index - rows - 1].to_bits() as i32
         };
         if let Some(output) = output.get_mut(thread::index_1d()) {
             *output = value;
@@ -8876,6 +8932,46 @@ pub mod kernels {
         }
         if let Some(o) = output.get_mut(thread::index_1d()) {
             *o = split_post[token * hc + out_copy] * hidden[token * dim + d] + residual_mix;
+        }
+    }
+
+    /// Mean the HC copies for each row and scatter directly into one target-tap
+    /// slot of a row-major DSpark main-hidden buffer.
+    #[kernel]
+    pub fn hc_mean_scatter_f32(
+        state: &[f32],
+        mut output: DisjointSlice<f32>,
+        rows: u32,
+        hc_mult: u32,
+        hidden_size: u32,
+        tap_slot: u32,
+        tap_count: u32,
+    ) {
+        let index = thread::index_1d().get() as usize;
+        let rows = rows as usize;
+        let hc = hc_mult as usize;
+        let hidden = hidden_size as usize;
+        let tap_slot = tap_slot as usize;
+        let tap_count = tap_count as usize;
+        let row_stride = tap_count * hidden;
+        let values = rows * row_stride;
+        if index >= values || hc == 0 || tap_slot >= tap_count {
+            return;
+        }
+        let row = index / row_stride;
+        let within_row = index - row * row_stride;
+        let output_tap = within_row / hidden;
+        if output_tap != tap_slot {
+            return;
+        }
+        let dim = within_row - output_tap * hidden;
+        let state_base = row * hc * hidden + dim;
+        let mut sum = 0.0f32;
+        for copy in 0..hc {
+            sum += state[state_base + copy * hidden];
+        }
+        if let Some(value) = output.get_mut(thread::index_1d()) {
+            *value = sum / hc as f32;
         }
     }
 

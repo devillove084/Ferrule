@@ -70,7 +70,9 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
         max_active_sequences: args.max_active_sequences,
         max_decode_batch: args.max_active_sequences,
         max_batch_tokens: args.max_batch_tokens,
-        allow_mixed_batches: true,
+        // DSpark decode owns a Q=1..6 transaction per ready sequence. Keep
+        // prefill dispatch separate until cross-sequence Q packing is implemented.
+        allow_mixed_batches: false,
     };
     let driver_config = ResidentTopKDriverConfig {
         ctx_size: args.ctx_size,

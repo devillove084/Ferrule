@@ -27,7 +27,7 @@ Rust remains the unique owner of:
 
 ## Semantic ABI
 
-The production FFI unit is a semantic superkernel, not a generic GEMM. ABI version 5 publishes six operations:
+The production FFI unit is a semantic superkernel, not a generic GEMM. ABI version 7 publishes eight operations:
 
 | Operation | Fused boundary |
 |---|---|
@@ -37,6 +37,8 @@ The production FFI unit is a semantic superkernel, not a generic GEMM. ABI versi
 | shared FFN | gate/up → SwiGLU → hidden pack → down |
 | routed MXFP4 MoE | stable-frame resolve → gate/up → pack → down |
 | MLA output | OutputA → BF16 latent boundary → FP8 pack → OutputB |
+| DSpark main projection/norm | target-tap FP8 projection → BF16 boundary → RMSNorm |
+| DSpark hybrid MLA attention | committed paged context + ephemeral full-block KV → sink-aware tensor-core QK/softmax/PV |
 
 Model plans bind one operation per semantic role. Small-M and tiled schedules are provider-private; model plans do not contain M=1/2/4/8 kernel variants. The semantic entry supports cross-tile M and validates its real grid/resource range.
 

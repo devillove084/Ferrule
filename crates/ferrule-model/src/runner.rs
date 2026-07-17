@@ -279,6 +279,39 @@ pub trait MultiSessionRunner: TopKModelRunner {
     fn multi_session_capabilities(&self) -> ExecutionCapabilities;
 }
 
+/// One checkpoint-native DSpark proposal block.
+///
+/// `token_ids` are ordered draft candidates after the carried target anchor.
+/// Confidence values use the same row order and remain telemetry until an exact
+/// confidence admission policy is enabled.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DsparkProposal {
+    pub token_ids: Vec<u32>,
+    pub confidence_logits: Vec<f32>,
+}
+
+impl DsparkProposal {
+    pub fn validate(&self) -> Result<()> {
+        if self.token_ids.len() != self.confidence_logits.len() {
+            return Err(ferrule_common::Error::Model(format!(
+                "DSpark proposal returned {} tokens but {} confidence logits",
+                self.token_ids.len(),
+                self.confidence_logits.len()
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Optional production capability for a checkpoint-native DSpark proposal.
+///
+/// Implementations execute against the currently active explicit sequence state.
+/// The proposal block may read committed target/DSpark context but must not
+/// append proposal-block KV to the committed sequence.
+pub trait DsparkProposalRunner: MultiSessionRunner {
+    fn propose_dspark(&mut self, anchor_token_id: u32) -> Result<DsparkProposal>;
+}
+
 /// Optional model-owned expert-I/O oracle consumed by the generic runtime
 /// scheduler. Implementations keep route prediction and cache interpretation in
 /// the model crate while exposing only model-neutral cost estimates.

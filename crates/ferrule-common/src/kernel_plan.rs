@@ -60,6 +60,8 @@ pub enum KernelPhase {
     OutputHeadVocab = 10,
     /// Router scoring and top-k selection.
     Router = 11,
+    /// DSpark proposal attachment operations.
+    DsparkProposal = 12,
 }
 
 /// Stable semantic operation bound to a provider kernel.
@@ -94,6 +96,14 @@ pub enum KernelOperation {
     IndexerWeights = 18,
     /// One-launch QueryA + KV multi-output projection bundle.
     MlaQueryAKv = 19,
+    /// DSpark stage-zero target-tap projection followed by RMSNorm.
+    DsparkMainProjectNorm = 20,
+    /// Checkpoint-native DSpark non-causal block attention over committed paged
+    /// context plus ephemeral proposal KV.
+    DsparkHybridMlaAttention = 21,
+    /// Checkpoint-native DSpark HC head, base LM projection, sequential Markov
+    /// proposal selection, and confidence bundle.
+    DsparkProposalHead = 22,
 }
 
 impl KernelOperation {
@@ -118,6 +128,9 @@ impl KernelOperation {
             Self::OutputHeadNorm => KernelPhase::OutputHeadNorm,
             Self::OutputHeadVocab => KernelPhase::OutputHeadVocab,
             Self::Router => KernelPhase::Router,
+            Self::DsparkMainProjectNorm
+            | Self::DsparkHybridMlaAttention
+            | Self::DsparkProposalHead => KernelPhase::DsparkProposal,
         }
     }
 }

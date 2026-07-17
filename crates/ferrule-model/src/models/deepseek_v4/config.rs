@@ -72,6 +72,7 @@ fn deepseek_v4_role_uses_official_linear_activation_quantization(role: &TensorRo
             | TensorRole::SharedExpertUp
             | TensorRole::SharedExpertDown
             | TensorRole::AuxIndexer
+            | TensorRole::SpeculativeProjection
     )
 }
 

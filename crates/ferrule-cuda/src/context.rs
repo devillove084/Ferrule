@@ -881,6 +881,53 @@ pub struct CudaArtifactLinearWorkspace {
     scale_capacity: usize,
 }
 
+/// Graph-stable scratch for one checkpoint-native DSpark hybrid-attention launch.
+///
+/// The five-row query and block KV remain caller-owned stage values. This workspace
+/// owns only the BF16 boundaries, score/probability matrices, output, and device
+/// status needed by the semantic CUTLASS bundle.
+pub struct CudaDsparkHybridAttentionWorkspace {
+    query_bf16: DeviceBuffer<u16>,
+    gathered_kv_bf16: DeviceBuffer<u16>,
+    scores: CudaF32Buffer,
+    probabilities_bf16: DeviceBuffer<u16>,
+    status: CudaI32Buffer,
+}
+
+impl CudaDsparkHybridAttentionWorkspace {
+    pub fn status(&self) -> &CudaI32Buffer {
+        &self.status
+    }
+}
+
+/// Graph-stable outputs and reduction scratch for the checkpoint-native DSpark
+/// HC/LM/Markov/confidence semantic bundle.
+pub struct CudaDsparkProposalHeadWorkspace {
+    hidden: CudaF32Buffer,
+    normalized: CudaF32Buffer,
+    base_logits: CudaF32Buffer,
+    partial_values: CudaF32Buffer,
+    partial_indices: CudaI32Buffer,
+    token_ids: CudaI32HostMirror,
+    confidence: CudaF32Buffer,
+    status: CudaI32Buffer,
+    result: CudaI32HostMirror,
+}
+
+impl CudaDsparkProposalHeadWorkspace {
+    pub fn token_ids(&self) -> &CudaI32Buffer {
+        self.token_ids.device()
+    }
+
+    pub fn confidence(&self) -> &CudaF32Buffer {
+        &self.confidence
+    }
+
+    pub fn status(&self) -> &CudaI32Buffer {
+        &self.status
+    }
+}
+
 /// Dedicated storage for a producer-owned FP8 activation pack.
 pub struct CudaFp8ActivationPack {
     x_packed: DeviceBuffer<u8>,
@@ -1081,6 +1128,14 @@ impl CudaI32HostMirror {
 
     pub fn device(&self) -> &CudaI32Buffer {
         &self.device
+    }
+
+    /// Gives a device kernel mutable access and invalidates the host equality
+    /// cache. A subsequent host-mirror update will therefore republish its full
+    /// payload instead of incorrectly skipping a changed device buffer.
+    pub fn device_mut_invalidate_host(&mut self) -> &mut CudaI32Buffer {
+        self.host.clear();
+        &mut self.device
     }
 }
 
@@ -2583,6 +2638,53 @@ impl CudaArtifactOperatorContext {
         })
     }
 
+    pub fn dspark_hybrid_attention_workspace(&self) -> Result<CudaDsparkHybridAttentionWorkspace> {
+        let output_values = crate::cutlass::DSPARK_PROPOSAL_ROWS
+            .checked_mul(crate::cutlass::DSPARK_ATTENTION_HEADS)
+            .and_then(|value| value.checked_mul(crate::cutlass::DSPARK_ATTENTION_HEAD_DIM))
+            .ok_or_else(|| Error::Internal("DSpark attention output size overflow".into()))?;
+        let score_values = crate::cutlass::DSPARK_PROPOSAL_ROWS
+            .checked_mul(crate::cutlass::DSPARK_ATTENTION_HEADS)
+            .and_then(|value| value.checked_mul(crate::cutlass::DSPARK_ATTENTION_TOKEN_CAPACITY))
+            .ok_or_else(|| Error::Internal("DSpark attention score size overflow".into()))?;
+        let gathered_values = crate::cutlass::DSPARK_ATTENTION_TOKEN_CAPACITY
+            .checked_mul(crate::cutlass::DSPARK_ATTENTION_HEAD_DIM)
+            .ok_or_else(|| Error::Internal("DSpark gathered KV size overflow".into()))?;
+        Ok(CudaDsparkHybridAttentionWorkspace {
+            query_bf16: self.zeroed_device_buffer::<u16>(output_values)?,
+            gathered_kv_bf16: self.zeroed_device_buffer::<u16>(gathered_values)?,
+            scores: self.zero_f32_buffer(score_values)?,
+            probabilities_bf16: self.zeroed_device_buffer::<u16>(score_values)?,
+            status: self.zero_i32_buffer(1)?,
+        })
+    }
+
+    pub fn dspark_proposal_head_workspace(
+        &self,
+        rows: usize,
+        hidden: usize,
+        vocab: usize,
+        partial_capacity: usize,
+    ) -> Result<CudaDsparkProposalHeadWorkspace> {
+        let hidden_values = rows
+            .checked_mul(hidden)
+            .ok_or_else(|| Error::Internal("DSpark proposal hidden size overflow".into()))?;
+        let logits_values = rows
+            .checked_mul(vocab)
+            .ok_or_else(|| Error::Internal("DSpark proposal logits size overflow".into()))?;
+        Ok(CudaDsparkProposalHeadWorkspace {
+            hidden: self.zero_f32_buffer(hidden_values)?,
+            normalized: self.zero_f32_buffer(hidden_values)?,
+            base_logits: self.zero_f32_buffer(logits_values)?,
+            partial_values: self.zero_f32_buffer(partial_capacity)?,
+            partial_indices: self.zero_i32_buffer(partial_capacity)?,
+            token_ids: self.i32_host_mirror(&vec![0; rows + 1])?,
+            confidence: self.zero_f32_buffer(rows)?,
+            status: self.zero_i32_buffer(1)?,
+            result: self.i32_host_mirror(&vec![0; 1 + 2 * rows])?,
+        })
+    }
+
     /// Zero an existing device buffer in-place (cuMemsetD32Async, no allocation).
     /// Safe for CUDA graph capture.
     pub fn zero_f32_buffer_in_place(&self, buf: &mut CudaF32Buffer) -> Result<()> {
@@ -2834,6 +2936,36 @@ impl CudaArtifactOperatorContext {
         })
     }
 
+    pub fn download_i32_host_mirror_after(
+        &self,
+        mirror: &mut CudaI32HostMirror,
+        produced: &CudaComputeEvent,
+    ) -> Result<Vec<i32>> {
+        self.check_capture_safe("i32 control mirror download")?;
+        cu(self.control_stream.wait(&produced.event))?;
+        let bytes = element_bytes::<i32>(mirror.device.len) as usize;
+        let staging = mirror.staging.as_mut_slice();
+        let result = unsafe {
+            cuda_bindings::cuMemcpyDtoHAsync_v2(
+                staging.as_mut_ptr().cast(),
+                mirror.device.buffer.cu_deviceptr(),
+                bytes,
+                self.control_stream.cu_stream(),
+            )
+        };
+        if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+            return Err(Error::Internal(format!(
+                "CUDA i32 control mirror D2H failed: error {result}"
+            )));
+        }
+        let copied = cu(self.control_stream.record_event(None))?;
+        cu(copied.synchronize())?;
+        self.counters.add_device_to_host(bytes as u64);
+        mirror.host.clear();
+        mirror.host.extend_from_slice(staging);
+        Ok(mirror.host.clone())
+    }
+
     pub fn update_i32_host_mirror(
         &self,
         values: &[i32],
@@ -2879,6 +3011,24 @@ impl CudaArtifactOperatorContext {
             buffer: self.zeroed_device_buffer::<i32>(len)?,
             len,
         })
+    }
+
+    fn zero_i32_buffer_in_place(&self, buf: &mut CudaI32Buffer) -> Result<()> {
+        let result = unsafe {
+            cuda_bindings::cuMemsetD32Async(
+                buf.buffer.cu_deviceptr(),
+                0,
+                buf.len,
+                self.stream.cu_stream(),
+            )
+        };
+        if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+            return Err(Error::Internal(format!(
+                "cuMemsetD32Async i32 failed: error {result}"
+            )));
+        }
+        self.counters.add_kernel_launch();
+        Ok(())
     }
 
     pub fn pack_i32_f32_pairs_into(
@@ -3140,6 +3290,72 @@ impl CudaArtifactOperatorContext {
         })
     }
 
+    pub fn dspark_embedding_hc_from_resident_bf16_into(
+        &self,
+        embedding: &CudaArtifactLinearHandle,
+        anchor_token: u32,
+        noise_token: u32,
+        rows: usize,
+        hc_mult: usize,
+        output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        embedding.validate_storage()?;
+        let CudaArtifactLinearShape::Bf16Bytes {
+            out_features: vocab,
+            in_features: hidden,
+        } = embedding.shape
+        else {
+            return Err(Error::Internal(format!(
+                "DSpark resident embedding requires BF16 storage, got {:?}",
+                embedding.shape
+            )));
+        };
+        if rows == 0
+            || hc_mult == 0
+            || anchor_token as usize >= vocab
+            || noise_token as usize >= vocab
+        {
+            return Err(Error::Internal(format!(
+                "DSpark embedding gather shape/token mismatch: rows={rows} hc_mult={hc_mult} hidden={hidden} vocab={vocab} anchor={anchor_token} noise={noise_token}"
+            )));
+        }
+        let expected = rows
+            .checked_mul(hc_mult)
+            .and_then(|values| values.checked_mul(hidden))
+            .ok_or_else(|| Error::Internal("DSpark embedding gather size overflow".into()))?;
+        if output.len != expected {
+            return Err(Error::Internal(format!(
+                "DSpark embedding gather output mismatch: output={} expected={expected}",
+                output.len
+            )));
+        }
+        self.launched(unsafe {
+            self.module.dspark_embedding_hc_bf16(
+                &self.stream,
+                LaunchConfig::for_num_elems(checked_u32(
+                    expected,
+                    "dspark_embedding_hc_from_resident_bf16_into",
+                    "output values",
+                )?),
+                &embedding.weight,
+                &mut output.buffer,
+                anchor_token,
+                noise_token,
+                checked_u32(rows, "dspark_embedding_hc_from_resident_bf16_into", "rows")?,
+                checked_u32(
+                    hc_mult,
+                    "dspark_embedding_hc_from_resident_bf16_into",
+                    "hc_mult",
+                )?,
+                checked_u32(
+                    hidden,
+                    "dspark_embedding_hc_from_resident_bf16_into",
+                    "hidden",
+                )?,
+            )
+        })
+    }
+
     pub fn gather_f32_rows(
         &self,
         src: &CudaF32Buffer,
@@ -3217,6 +3433,169 @@ impl CudaArtifactOperatorContext {
                 row_width as u32,
             )
         })
+    }
+
+    /// Run the checkpoint-native DSpark HC/LM/Markov/confidence proposal head.
+    #[cfg(feature = "cutlass")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn artifact_dspark_proposal_head_cutlass_into(
+        &self,
+        hc_state: &CudaF32Buffer,
+        hc_function: &CudaF32Buffer,
+        hc_scale: &CudaF32Buffer,
+        hc_base: &CudaF32Buffer,
+        norm_weight: &CudaF32Buffer,
+        lm_head: &CudaArtifactLinearHandle,
+        markov_w1: &CudaArtifactLinearHandle,
+        markov_w2: &CudaArtifactLinearHandle,
+        confidence_weight: &CudaArtifactLinearHandle,
+        anchor_token_id: u32,
+        layout: crate::cutlass::DsparkProposalHeadLayout,
+        workspace: &mut CudaDsparkProposalHeadWorkspace,
+    ) -> Result<()> {
+        let expected = [
+            (
+                "LM head",
+                lm_head.shape,
+                CudaArtifactLinearShape::Bf16Bytes {
+                    out_features: layout.vocab,
+                    in_features: layout.hidden,
+                },
+            ),
+            (
+                "Markov W1",
+                markov_w1.shape,
+                CudaArtifactLinearShape::Bf16Bytes {
+                    out_features: layout.vocab,
+                    in_features: layout.markov_rank,
+                },
+            ),
+            (
+                "Markov W2",
+                markov_w2.shape,
+                CudaArtifactLinearShape::Bf16Bytes {
+                    out_features: layout.vocab,
+                    in_features: layout.markov_rank,
+                },
+            ),
+            (
+                "confidence",
+                confidence_weight.shape,
+                CudaArtifactLinearShape::Bf16Bytes {
+                    out_features: 1,
+                    in_features: layout.hidden + layout.markov_rank,
+                },
+            ),
+        ];
+        for (name, actual, required) in expected {
+            if actual != required {
+                return Err(Error::Internal(format!(
+                    "DSpark proposal-head {name} shape mismatch: actual={actual:?} expected={required:?}"
+                )));
+            }
+        }
+        let anchor = i32::try_from(anchor_token_id)
+            .map_err(|_| Error::Internal("DSpark anchor token exceeds i32 ABI".into()))?;
+        let mut token_ids = vec![0i32; layout.rows + 1];
+        token_ids[0] = anchor;
+        self.update_i32_host_mirror(&token_ids, &mut workspace.token_ids)?;
+        crate::cutlass::dspark_proposal_head(
+            &self.stream,
+            &hc_state.buffer,
+            &hc_function.buffer,
+            &hc_scale.buffer,
+            &hc_base.buffer,
+            &norm_weight.buffer,
+            &lm_head.weight,
+            &markov_w1.weight,
+            &markov_w2.weight,
+            &confidence_weight.weight,
+            &mut workspace.hidden.buffer,
+            &mut workspace.normalized.buffer,
+            &mut workspace.base_logits.buffer,
+            &mut workspace.partial_values.buffer,
+            &mut workspace.partial_indices.buffer,
+            &mut workspace.token_ids.device_mut_invalidate_host().buffer,
+            &mut workspace.confidence.buffer,
+            &mut workspace.status.buffer,
+            layout,
+        )?;
+        self.record_kernel_launch();
+        self.record_kernel_launch();
+        self.record_kernel_launch();
+        Ok(())
+    }
+
+    #[cfg(feature = "cutlass")]
+    pub fn download_dspark_proposal_head_result(
+        &self,
+        workspace: &mut CudaDsparkProposalHeadWorkspace,
+    ) -> Result<Vec<i32>> {
+        let rows = workspace.confidence.len;
+        let result_values = 1usize
+            .checked_add(rows.saturating_mul(2))
+            .ok_or_else(|| Error::Internal("DSpark proposal result size overflow".into()))?;
+        if workspace.token_ids.len() != rows + 1 || workspace.result.len() != result_values {
+            return Err(Error::Internal(format!(
+                "DSpark proposal compact result shape mismatch: tokens={} confidence={} result={} expected_result={result_values}",
+                workspace.token_ids.len(),
+                rows,
+                workspace.result.len(),
+            )));
+        }
+        self.launched(unsafe {
+            self.module.pack_dspark_proposal_result(
+                &self.stream,
+                LaunchConfig::for_num_elems(checked_u32(
+                    result_values,
+                    "download_dspark_proposal_head_result",
+                    "result values",
+                )?),
+                &workspace.status.buffer,
+                &workspace.token_ids.device().buffer,
+                &workspace.confidence.buffer,
+                &mut workspace.result.device_mut_invalidate_host().buffer,
+                checked_u32(rows, "download_dspark_proposal_head_result", "rows")?,
+            )
+        })?;
+        let produced = self.record_compute_event()?;
+        self.download_i32_host_mirror_after(&mut workspace.result, &produced)
+    }
+
+    /// Compute a BF16-compressed two-projection bundle on device.
+    /// Run checkpoint-native DSpark attention over committed paged context and
+    /// one read-only five-row proposal block. All scratch remains caller-owned.
+    #[cfg(feature = "cutlass")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn dspark_hybrid_mla_attention_into(
+        &self,
+        query: &CudaF32Buffer,
+        context_plane: &CudaF32Buffer,
+        block_kv: &CudaF32Buffer,
+        block_slots: &CudaI32Buffer,
+        attention_sink: &CudaF32Buffer,
+        layout: crate::cutlass::DsparkHybridMlaAttentionLayout,
+        output: &mut CudaF32Buffer,
+        workspace: &mut CudaDsparkHybridAttentionWorkspace,
+    ) -> Result<()> {
+        self.zero_i32_buffer_in_place(&mut workspace.status)?;
+        crate::cutlass::dspark_hybrid_mla_attention(
+            &self.stream,
+            &query.buffer,
+            &context_plane.buffer,
+            &block_kv.buffer,
+            &block_slots.buffer,
+            &attention_sink.buffer,
+            &mut workspace.query_bf16,
+            &mut workspace.gathered_kv_bf16,
+            &mut workspace.scores.buffer,
+            &mut workspace.probabilities_bf16,
+            &mut output.buffer,
+            &mut workspace.status.buffer,
+            layout,
+        )?;
+        self.record_kernel_launch();
+        Ok(())
     }
 
     /// Scatter `[rows, layout.elements_per_token]` values into one layer of a
@@ -3427,6 +3806,54 @@ impl CudaArtifactOperatorContext {
             weight,
             scale,
         })
+    }
+
+    /// Prepare-time bounded ingest into a preallocated artifact weight. This is
+    /// used for the resident DSpark LM head so the hot path has one stable pointer
+    /// without materializing the complete tensor in host RAM.
+    pub fn overwrite_artifact_linear_weight_range(
+        &self,
+        handle: &mut CudaArtifactLinearHandle,
+        offset: usize,
+        bytes: &[u8],
+    ) -> Result<()> {
+        self.check_capture_safe("artifact linear weight-range upload")?;
+        let end = offset
+            .checked_add(bytes.len())
+            .ok_or_else(|| Error::Internal("artifact weight-range overflow".into()))?;
+        if end > handle.weight.len() || handle.scale.is_some() {
+            return Err(Error::Internal(format!(
+                "artifact weight-range mismatch: offset={offset} bytes={} capacity={} shape={:?}",
+                bytes.len(),
+                handle.weight.len(),
+                handle.shape
+            )));
+        }
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let destination = handle
+            .weight
+            .cu_deviceptr()
+            .checked_add(offset as u64)
+            .ok_or_else(|| Error::Internal("artifact device address overflow".into()))?;
+        let status = unsafe {
+            cuda_bindings::cuMemcpyHtoDAsync_v2(
+                destination,
+                bytes.as_ptr().cast(),
+                bytes.len(),
+                self.upload_stream.cu_stream(),
+            )
+        };
+        if status != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+            return Err(Error::Internal(format!(
+                "artifact weight-range upload failed: error {status}"
+            )));
+        }
+        self.record_stream_wide_sync(self.upload_stream.synchronize())?;
+        self.counters.add_host_to_device(bytes.len() as u64);
+        self.counters.add_artifact_upload(bytes.len() as u64);
+        Ok(())
     }
 
     /// Overwrite a preallocated artifact handle from pinned host storage.
@@ -4238,6 +4665,93 @@ impl CudaArtifactOperatorContext {
             n1,
             n2,
             k1,
+        )?;
+        self.record_kernel_launch();
+        Ok(())
+    }
+
+    /// Execute the checkpoint-native DSpark stage-zero target-tap projection and
+    /// RMSNorm in one cooperative SM121 semantic launch.
+    #[cfg(feature = "cutlass")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn artifact_dspark_main_project_norm_cutlass_into(
+        &self,
+        projection: &CudaArtifactLinearHandle,
+        norm_weight: &CudaF32Buffer,
+        input: &CudaF32Buffer,
+        rows: usize,
+        rms_eps: f32,
+        activation: &mut CudaFp8ActivationPack,
+        inv_rms: &mut CudaF32Buffer,
+        output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        let CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
+            out_features,
+            in_features,
+            block_m,
+            block_k,
+        } = projection.shape
+        else {
+            return Err(Error::Internal(format!(
+                "SM121 DSpark main projection requires FP8/E8M0 weights, got {:?}",
+                projection.shape
+            )));
+        };
+        if block_m != 128 || block_k != 128 || !out_features.is_multiple_of(128) {
+            return Err(Error::Internal(format!(
+                "SM121 DSpark main projection requires K128/N128 layout, got {:?}",
+                projection.shape
+            )));
+        }
+        let input_len = rows.checked_mul(in_features).ok_or_else(|| {
+            Error::Internal("SM121 DSpark main projection input size overflow".into())
+        })?;
+        let output_len = rows.checked_mul(out_features).ok_or_else(|| {
+            Error::Internal("SM121 DSpark main projection output size overflow".into())
+        })?;
+        let scale_len = rows.checked_mul(in_features / 128).ok_or_else(|| {
+            Error::Internal("SM121 DSpark main projection scale size overflow".into())
+        })?;
+        if input.len != input_len
+            || norm_weight.len != out_features
+            || activation.value_capacity != input_len
+            || activation.scale_capacity != scale_len
+            || inv_rms.len != rows
+            || output.len != output_len
+        {
+            return Err(Error::Internal(format!(
+                "SM121 DSpark main-project/norm binding mismatch: input={}/{} norm={}/{} activation={}/{} scales={}/{} inv_rms={}/{} output={}/{}",
+                input.len,
+                input_len,
+                norm_weight.len,
+                out_features,
+                activation.value_capacity,
+                input_len,
+                activation.scale_capacity,
+                scale_len,
+                inv_rms.len,
+                rows,
+                output.len,
+                output_len
+            )));
+        }
+        let weight_scales = projection.scale.as_ref().ok_or_else(|| {
+            Error::Internal("SM121 DSpark main projection weight scales are missing".into())
+        })?;
+        crate::cutlass::dspark_main_project_norm(
+            &self.stream,
+            &input.buffer,
+            &mut activation.x_packed,
+            &mut activation.x_scales,
+            &projection.weight,
+            weight_scales,
+            &norm_weight.buffer,
+            &mut inv_rms.buffer,
+            &mut output.buffer,
+            rows,
+            in_features,
+            out_features,
+            rms_eps,
         )?;
         self.record_kernel_launch();
         Ok(())
@@ -8623,6 +9137,60 @@ impl CudaArtifactOperatorContext {
             )
         })?;
         self.download_f32(&hidden, tokens * hidden_size)
+    }
+
+    /// Compute `mean(hc)` for each row and scatter it directly into one slot of
+    /// the concatenated DSpark target-tap buffer.
+    #[allow(clippy::too_many_arguments)]
+    pub fn hc_mean_scatter_from_device_into(
+        &self,
+        state: &CudaF32Buffer,
+        rows: usize,
+        hc_mult: usize,
+        hidden_size: usize,
+        tap_slot: usize,
+        tap_count: usize,
+        output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        let expected_state = rows
+            .checked_mul(hc_mult)
+            .and_then(|value| value.checked_mul(hidden_size))
+            .ok_or_else(|| Error::Internal("CUDA HC mean input size overflow".into()))?;
+        let expected_output = rows
+            .checked_mul(tap_count)
+            .and_then(|value| value.checked_mul(hidden_size))
+            .ok_or_else(|| Error::Internal("CUDA HC mean output size overflow".into()))?;
+        if rows == 0
+            || hc_mult == 0
+            || hidden_size == 0
+            || tap_count == 0
+            || tap_slot >= tap_count
+            || state.len != expected_state
+            || output.len != expected_output
+        {
+            return Err(Error::Internal(format!(
+                "CUDA HC mean-scatter shape mismatch: state={}/{} output={}/{} rows={rows} hc={hc_mult} hidden={hidden_size} tap={tap_slot}/{tap_count}",
+                state.len, expected_state, output.len, expected_output
+            )));
+        }
+        let values = rows
+            .checked_mul(tap_count)
+            .and_then(|value| value.checked_mul(hidden_size))
+            .ok_or_else(|| Error::Internal("CUDA HC mean launch size overflow".into()))?;
+        let values = checked_u32(values, "hc_mean_scatter", "rows * hidden_size")?;
+        self.launched(unsafe {
+            self.module.hc_mean_scatter_f32(
+                &self.stream,
+                LaunchConfig::for_num_elems(values),
+                &state.buffer,
+                &mut output.buffer,
+                checked_u32(rows, "hc_mean_scatter", "rows")?,
+                checked_u32(hc_mult, "hc_mean_scatter", "hc_mult")?,
+                checked_u32(hidden_size, "hc_mean_scatter", "hidden_size")?,
+                checked_u32(tap_slot, "hc_mean_scatter", "tap_slot")?,
+                checked_u32(tap_count, "hc_mean_scatter", "tap_count")?,
+            )
+        })
     }
 
     /// Device-resident `hc_head`: state and weights are already on device,

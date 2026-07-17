@@ -304,7 +304,7 @@ mod tests {
             vec![ExpertResidency::Cold; 4].into_boxed_slice(),
         );
         let snapshot = DeepSeekV4ExpertIoSnapshot::new(vec![layer].into_boxed_slice(), 1);
-        let state = DeepSeekV4SequenceExecutionState::new(Vec::new(), 4);
+        let state = DeepSeekV4SequenceExecutionState::new(Vec::new(), Vec::new(), 4);
         let mut batch = DeepSeekV4ExpertIoBatchState::new(snapshot);
 
         let (estimate, admission) = batch

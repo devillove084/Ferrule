@@ -3,6 +3,10 @@
 #![cfg(feature = "cuda")]
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+#[cfg(feature = "cutlass")]
+use std::fs::File;
+#[cfg(feature = "cutlass")]
+use std::io::{Read, Seek, SeekFrom};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
@@ -22,7 +26,9 @@ use crate::artifact::linear::{
     ArtifactActivationQuantization, ArtifactLinearFormat, ArtifactLinearPayload,
 };
 use crate::artifact::linear::{artifact_linear_cache_key, artifact_linear_row_cache_key};
-use crate::artifact::tensor::{ArtifactTensorReader, ArtifactTensorSlice};
+use crate::artifact::tensor::{
+    ArtifactDType, ArtifactMatrixSlice, ArtifactTensorReader, ArtifactTensorSlice,
+};
 use crate::attention_backend::SparseAttentionSpec;
 use crate::ffn::SwiGluFfnPayload;
 use crate::hyper_connection::{HyperConnectionConfig, HyperConnectionWeights};
@@ -45,6 +51,7 @@ use crate::runner::TokenLogit;
 use super::attention::DeepSeekV4CompressorPayload;
 use super::config::{DeepSeekV4AttentionConfig, DeepSeekV4RopeParams};
 use super::helpers::{rank_logits_desc, yarn_frequency};
+use super::layer::{DeepSeekV4Layer, DeepSeekV4LayerState};
 
 use super::operators::DeepSeekV4OperatorRuntimeCounters;
 use super::prepared::{
@@ -214,7 +221,7 @@ pub(crate) struct DeepSeekV4CudaOperatorCache {
     router_token_ids: HashMap<usize, ferrule_cuda::context::CudaDsv4RouterTokenIds>,
     /// Interleaved expert-id/weight-bit buffers used to return one compact route
     /// payload per layer instead of two host-blocking D2H transfers.
-    router_compact_buffers: HashMap<usize, ferrule_cuda::context::CudaI32Buffer>,
+    router_compact_buffers: HashMap<usize, ferrule_cuda::context::CudaI32HostMirror>,
     /// Typed precomputed RoPE tables keyed by their stable layer/resource name.
     /// Each entry records its parameters and growable position capacity so a
     /// same-name shape/configuration mismatch cannot be silently reused.
@@ -435,8 +442,43 @@ struct DeepSeekV4CudaExecutionImage {
     hc_config: HyperConnectionConfig,
     hc_head: HcHeadDeviceWeights,
     output_norm: ferrule_cuda::context::CudaF32Buffer,
+    #[cfg(feature = "cutlass")]
+    embedding: ferrule_cuda::context::CudaArtifactLinearHandle,
+    #[cfg(feature = "cutlass")]
+    output_head: ferrule_cuda::context::CudaArtifactLinearHandle,
     layers: Box<[DeepSeekV4CudaPreparedLayer]>,
     kernel_plan: ModelKernelPlan,
+    mtp: Option<DeepSeekV4CudaPreparedMtp>,
+}
+
+/// Immutable DSpark resources are prepared before publication even though the
+/// execution methods are connected in a subsequent R1 step. Holding them in the
+/// image gives every pointer the same generation and CUDA-context lifetime.
+#[allow(dead_code)]
+struct DeepSeekV4CudaPreparedMtp {
+    block_size: usize,
+    noise_token_id: u32,
+    target_layer_ids: Box<[usize]>,
+    layers: Box<[DeepSeekV4CudaPreparedMtpLayer]>,
+    heads: DeepSeekV4CudaPreparedMtpHeads,
+    transformer_kernel_plan: ModelKernelPlan,
+}
+
+#[allow(dead_code)]
+struct DeepSeekV4CudaPreparedMtpLayer {
+    execution_layer: usize,
+    transformer: DeepSeekV4CudaPreparedLayer,
+    main_proj: Option<DeepSeekV4CudaPreparedLinear>,
+    main_norm: Option<ferrule_cuda::context::CudaF32Buffer>,
+}
+
+#[allow(dead_code)]
+struct DeepSeekV4CudaPreparedMtpHeads {
+    hc_head: HcHeadDeviceWeights,
+    norm: ferrule_cuda::context::CudaF32Buffer,
+    markov_w1: DeepSeekV4CudaPreparedLinear,
+    markov_w2: DeepSeekV4CudaPreparedLinear,
+    confidence_proj: DeepSeekV4CudaPreparedLinear,
 }
 
 #[cfg(feature = "cuda")]
@@ -538,6 +580,7 @@ fn validate_router_hash_table_shape(
 #[derive(Default)]
 struct DeepSeekV4DecodeArena {
     hidden: Option<ferrule_cuda::context::CudaF32Buffer>,
+    dspark_main: HashMap<usize, DeepSeekV4DsparkMainBuffers>,
     hc_inputs: HashMap<usize, ferrule_cuda::context::CudaF32Buffer>,
     final_hiddens: HashMap<usize, ferrule_cuda::context::CudaF32Buffer>,
     final_norms: HashMap<usize, ferrule_cuda::context::CudaF32Buffer>,
@@ -556,6 +599,28 @@ struct DeepSeekV4DecodeArena {
     /// routes are resolved for the exact miss-only completion pass.
     moe_miss_resolve_workspaces:
         HashMap<usize, ferrule_cuda::context::CudaExpertRouteResolveWorkspace>,
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) struct DeepSeekV4DsparkMainBuffers {
+    pub(crate) target_taps: ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) positions: ferrule_cuda::context::CudaI32Buffer,
+    activation: ferrule_cuda::context::CudaFp8ActivationPack,
+    inv_rms: ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) main_x: ferrule_cuda::context::CudaF32Buffer,
+    context_kv_raw: ferrule_cuda::context::CudaF32Buffer,
+    context_kv: ferrule_cuda::context::CudaF32Buffer,
+    context_linear_workspace: ferrule_cuda::context::CudaArtifactLinearWorkspace,
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) struct DeepSeekV4DsparkAttentionBuffers {
+    workspace: ferrule_cuda::context::CudaDsparkHybridAttentionWorkspace,
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) struct DeepSeekV4DsparkProposalHeadBuffers {
+    workspace: ferrule_cuda::context::CudaDsparkProposalHeadWorkspace,
 }
 
 #[cfg(feature = "cuda")]
@@ -1712,6 +1777,667 @@ impl DeepSeekV4CudaOperatorCache {
             .insert(buffers.topk_row.len(), buffers.topk_row);
     }
 
+    pub(crate) fn take_dspark_main_buffers(
+        &mut self,
+        rows: usize,
+    ) -> Result<DeepSeekV4DsparkMainBuffers> {
+        if rows == 0 {
+            return Err(Error::Model(
+                "DeepSeek-V4 DSpark main buffers require at least one row".into(),
+            ));
+        }
+        if let Some(buffers) = self.decode_arena.dspark_main.remove(&rows) {
+            return Ok(buffers);
+        }
+        let (tap_count, input_size, output_size, context_kv_size) = {
+            let mtp =
+                self.prepared_image()?.mtp.as_ref().ok_or_else(|| {
+                    Error::Model("DeepSeek-V4 CUDA DSpark image is missing".into())
+                })?;
+            let stage_zero = mtp.layers.first().ok_or_else(|| {
+                Error::Model("DeepSeek-V4 CUDA DSpark image has no stages".into())
+            })?;
+            let projection = stage_zero.main_proj.as_ref().ok_or_else(|| {
+                Error::Model("DeepSeek-V4 CUDA DSpark stage zero main projection is missing".into())
+            })?;
+            let output_size = projection.handle.shape().out_features();
+            let context_kv_size = stage_zero
+                .transformer
+                .key_value
+                .handle
+                .shape()
+                .out_features();
+            for (stage, layer) in mtp.layers.iter().enumerate() {
+                let key_value = &layer.transformer.key_value.handle;
+                if key_value.shape().in_features() != output_size
+                    || key_value.shape().out_features() != context_kv_size
+                    || layer.transformer.key_value_norm.len() != context_kv_size
+                {
+                    return Err(Error::Model(format!(
+                        "DeepSeek-V4 CUDA DSpark stage {stage} context-KV shape mismatch: wkv={:?} norm={} main_x={output_size} expected_kv={context_kv_size}",
+                        key_value.shape(),
+                        layer.transformer.key_value_norm.len()
+                    )));
+                }
+            }
+            (
+                mtp.target_layer_ids.len(),
+                projection.handle.shape().in_features(),
+                output_size,
+                context_kv_size,
+            )
+        };
+        if tap_count == 0 || input_size % tap_count != 0 {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 CUDA DSpark tap layout is invalid: taps={tap_count} input={input_size}"
+            )));
+        }
+        let target_taps_len = rows.checked_mul(input_size).ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA DSpark target-tap size overflow".into())
+        })?;
+        let main_x_len = rows
+            .checked_mul(output_size)
+            .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA DSpark main-x size overflow".into()))?;
+        let context_kv_len = rows.checked_mul(context_kv_size).ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA DSpark context-KV size overflow".into())
+        })?;
+        Ok(DeepSeekV4DsparkMainBuffers {
+            target_taps: self.ops.zero_f32_buffer(target_taps_len)?,
+            positions: self.ops.zero_i32_buffer(rows)?,
+            activation: self.ops.fp8_activation_pack(rows, input_size)?,
+            inv_rms: self.ops.zero_f32_buffer(rows)?,
+            main_x: self.ops.zero_f32_buffer(main_x_len)?,
+            context_kv_raw: self.ops.zero_f32_buffer(context_kv_len)?,
+            context_kv: self.ops.zero_f32_buffer(context_kv_len)?,
+            context_linear_workspace: self.ops.artifact_linear_workspace(rows, output_size)?,
+        })
+    }
+
+    pub(crate) fn restore_dspark_main_buffers(
+        &mut self,
+        rows: usize,
+        buffers: DeepSeekV4DsparkMainBuffers,
+    ) {
+        self.decode_arena.dspark_main.insert(rows, buffers);
+    }
+
+    pub(crate) fn allocate_dspark_attention_buffers(
+        &self,
+    ) -> Result<DeepSeekV4DsparkAttentionBuffers> {
+        let mtp = self
+            .prepared_image()?
+            .mtp
+            .as_ref()
+            .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA DSpark image is missing".into()))?;
+        if mtp.block_size != ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 CUDA DSpark attention requires {} proposal rows, checkpoint declares {}",
+                ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS,
+                mtp.block_size
+            )));
+        }
+        Ok(DeepSeekV4DsparkAttentionBuffers {
+            workspace: self.ops.dspark_hybrid_attention_workspace()?,
+        })
+    }
+
+    #[cfg(feature = "cutlass")]
+    pub(crate) fn dspark_proposal_input_device_into(
+        &self,
+        anchor_token_id: u32,
+        output: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<()> {
+        let image = self.prepared_image()?;
+        let mtp = image
+            .mtp
+            .as_ref()
+            .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA DSpark image is missing".into()))?;
+        self.ops.dspark_embedding_hc_from_resident_bf16_into(
+            &image.embedding,
+            anchor_token_id,
+            mtp.noise_token_id,
+            mtp.block_size,
+            image.hc_config.hc_mult,
+            output,
+        )
+    }
+
+    #[cfg(feature = "cutlass")]
+    pub(crate) fn allocate_dspark_proposal_head_buffers(
+        &self,
+    ) -> Result<DeepSeekV4DsparkProposalHeadBuffers> {
+        const PARTIAL_CAPACITY: usize = 64;
+        let image = self.prepared_image()?;
+        let mtp = image
+            .mtp
+            .as_ref()
+            .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA DSpark image is missing".into()))?;
+        let output_shape = image.output_head.shape();
+        let vocab = output_shape.out_features();
+        let hidden = output_shape.in_features();
+        let markov_rank = mtp.heads.markov_w1.handle.shape().in_features();
+        if mtp.block_size != ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS
+            || hidden != image.hc_config.hidden_size
+            || mtp.heads.markov_w1.handle.shape().out_features() != vocab
+            || mtp.heads.markov_w2.handle.shape().out_features() != vocab
+            || mtp.heads.markov_w2.handle.shape().in_features() != markov_rank
+            || mtp.heads.confidence_proj.handle.shape().out_features() != 1
+            || mtp.heads.confidence_proj.handle.shape().in_features()
+                != hidden.saturating_add(markov_rank)
+        {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 DSpark proposal-head shape mismatch: output={output_shape:?} block={} w1={:?} w2={:?} confidence={:?}",
+                mtp.block_size,
+                mtp.heads.markov_w1.handle.shape(),
+                mtp.heads.markov_w2.handle.shape(),
+                mtp.heads.confidence_proj.handle.shape()
+            )));
+        }
+        Ok(DeepSeekV4DsparkProposalHeadBuffers {
+            workspace: self.ops.dspark_proposal_head_workspace(
+                mtp.block_size,
+                hidden,
+                vocab,
+                PARTIAL_CAPACITY,
+            )?,
+        })
+    }
+
+    pub(crate) fn dspark_main_debug_snapshot(
+        &self,
+        rows: usize,
+    ) -> Result<Option<(Vec<f32>, Vec<f32>)>> {
+        let Some(buffers) = self.decode_arena.dspark_main.get(&rows) else {
+            return Ok(None);
+        };
+        Ok(Some((
+            self.ops.download_f32_buffer(&buffers.target_taps)?,
+            self.ops.download_f32_buffer(&buffers.main_x)?,
+        )))
+    }
+
+    pub(crate) fn capture_dspark_target_tap_from_device(
+        &self,
+        target_layer: usize,
+        hc_state: &ferrule_cuda::context::CudaF32Buffer,
+        rows: usize,
+        target_taps: &mut ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<bool> {
+        let image = self.prepared_image()?;
+        let mtp = image
+            .mtp
+            .as_ref()
+            .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA DSpark image is missing".into()))?;
+        let Some(tap_slot) = mtp
+            .target_layer_ids
+            .iter()
+            .position(|layer| *layer == target_layer)
+        else {
+            return Ok(false);
+        };
+        self.ops.hc_mean_scatter_from_device_into(
+            hc_state,
+            rows,
+            image.hc_config.hc_mult,
+            image.hc_config.hidden_size,
+            tap_slot,
+            mtp.target_layer_ids.len(),
+            target_taps,
+        )?;
+        Ok(true)
+    }
+
+    #[cfg(feature = "cutlass")]
+    pub(crate) fn dspark_main_project_norm_device_into(
+        &self,
+        rows: usize,
+        buffers: &mut DeepSeekV4DsparkMainBuffers,
+    ) -> Result<()> {
+        let descriptor = self.require_mtp_operation(0, KernelOperation::DsparkMainProjectNorm)?;
+        if descriptor.kernel.provider != KernelProviderId::CutlassCubin
+            || !descriptor.is_provider_managed()
+        {
+            return Err(Error::Model(format!(
+                "invalid SM121 DSpark main-project/norm provider binding: {:?}",
+                descriptor.kernel
+            )));
+        }
+        let image = self.prepared_image()?;
+        let stage_zero = image
+            .mtp
+            .as_ref()
+            .and_then(|mtp| mtp.layers.first())
+            .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA DSpark stage zero is missing".into()))?;
+        let projection = stage_zero.main_proj.as_ref().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA DSpark stage-zero projection is missing".into())
+        })?;
+        let norm = stage_zero.main_norm.as_ref().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA DSpark stage-zero norm is missing".into())
+        })?;
+        self.ops.artifact_dspark_main_project_norm_cutlass_into(
+            &projection.handle,
+            norm,
+            &buffers.target_taps,
+            rows,
+            image.hc_config.norm_eps,
+            &mut buffers.activation,
+            &mut buffers.inv_rms,
+            &mut buffers.main_x,
+        )
+    }
+
+    #[cfg(feature = "cutlass")]
+    pub(crate) fn dspark_proposal_head_device_into(
+        &self,
+        anchor_token_id: u32,
+        hc_state: &ferrule_cuda::context::CudaF32Buffer,
+        buffers: &mut DeepSeekV4DsparkProposalHeadBuffers,
+    ) -> Result<()> {
+        let descriptor = self.require_mtp_operation(0, KernelOperation::DsparkProposalHead)?;
+        if descriptor.kernel.provider != KernelProviderId::CutlassCubin
+            || !descriptor.is_provider_managed()
+        {
+            return Err(Error::Model(format!(
+                "invalid SM121 DSpark proposal-head provider binding: {:?}",
+                descriptor.kernel
+            )));
+        }
+        let image = self.prepared_image()?;
+        let mtp = image
+            .mtp
+            .as_ref()
+            .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA DSpark image is missing".into()))?;
+        let output_shape = image.output_head.shape();
+        let markov_rank = mtp.heads.markov_w1.handle.shape().in_features();
+        self.ops.artifact_dspark_proposal_head_cutlass_into(
+            hc_state,
+            &mtp.heads.hc_head.function_row_major,
+            &mtp.heads.hc_head.scale,
+            &mtp.heads.hc_head.base,
+            &mtp.heads.norm,
+            &image.output_head,
+            &mtp.heads.markov_w1.handle,
+            &mtp.heads.markov_w2.handle,
+            &mtp.heads.confidence_proj.handle,
+            anchor_token_id,
+            ferrule_cuda::cutlass::DsparkProposalHeadLayout {
+                rows: mtp.block_size,
+                hc: image.hc_config.hc_mult,
+                hidden: output_shape.in_features(),
+                vocab: output_shape.out_features(),
+                markov_rank,
+                partial_capacity: 64,
+                hc_eps: image.hc_config.eps,
+                norm_eps: image.hc_config.norm_eps,
+            },
+            &mut buffers.workspace,
+        )
+    }
+
+    #[cfg(feature = "cutlass")]
+    pub(crate) fn dspark_proposal_head_result(
+        &self,
+        buffers: &mut DeepSeekV4DsparkProposalHeadBuffers,
+    ) -> Result<(Vec<u32>, Vec<f32>)> {
+        let compact = self
+            .ops
+            .download_dspark_proposal_head_result(&mut buffers.workspace)?;
+        let rows = ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS;
+        if compact.len() != 1 + 2 * rows || compact[0] != 0 {
+            return Err(Error::Execution(format!(
+                "DeepSeek-V4 DSpark compact proposal-head result is invalid: {compact:?}"
+            )));
+        }
+        let token_ids = compact[1..1 + rows]
+            .iter()
+            .copied()
+            .map(|token| {
+                u32::try_from(token).map_err(|_| {
+                    Error::Execution(format!(
+                        "DeepSeek-V4 DSpark proposal emitted invalid token {token}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let confidence = compact[1 + rows..]
+            .iter()
+            .map(|bits| f32::from_bits(*bits as u32))
+            .collect();
+        Ok((token_ids, confidence))
+    }
+
+    /// Execute the official DSpark hybrid attention against one stage's
+    /// committed paged context and the read-only five-row proposal KV block.
+    /// The stage is resolved only through the prepared MTP image; target-layer
+    /// bindings are never consulted.
+    #[cfg(feature = "cutlass")]
+    pub(crate) fn dspark_hybrid_attention_device_into(
+        &self,
+        stage: usize,
+        expected_execution_layer: usize,
+        config: DeepSeekV4AttentionConfig,
+        sequence_tokens: usize,
+        query: &ferrule_cuda::context::CudaF32Buffer,
+        block_kv: &ferrule_cuda::context::CudaF32Buffer,
+        output: &mut ferrule_cuda::context::CudaF32Buffer,
+        buffers: &mut DeepSeekV4DsparkAttentionBuffers,
+    ) -> Result<()> {
+        let descriptor =
+            self.require_mtp_operation(stage, KernelOperation::DsparkHybridMlaAttention)?;
+        if descriptor.kernel.provider != KernelProviderId::CutlassCubin
+            || !descriptor.is_provider_managed()
+        {
+            return Err(Error::Model(format!(
+                "invalid SM121 DSpark hybrid-attention provider binding at stage {stage}: {:?}",
+                descriptor.kernel
+            )));
+        }
+        let prepared = self.prepared_mtp_stage(stage)?;
+        let execution_layer = prepared.execution_layer;
+        if execution_layer != expected_execution_layer {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 DSpark stage/execution-layer mismatch: stage={stage} prepared={execution_layer} requested={expected_execution_layer}"
+            )));
+        }
+        if config.num_heads != ferrule_cuda::cutlass::DSPARK_ATTENTION_HEADS
+            || config.head_dim != ferrule_cuda::cutlass::DSPARK_ATTENTION_HEAD_DIM
+            || config.window_size != ferrule_cuda::cutlass::DSPARK_ATTENTION_WINDOW
+            || config.compress_ratio != 0
+        {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 DSpark hybrid-attention shape mismatch at stage {stage}: heads={} head_dim={} window={} compress_ratio={}",
+                config.num_heads, config.head_dim, config.window_size, config.compress_ratio
+            )));
+        }
+        let active = self.active_paged_kv.as_ref().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 DSpark hybrid attention has no active paged binding".into())
+        })?;
+        if active.sequence_count != 1
+            || sequence_tokens == 0
+            || sequence_tokens
+                > active
+                    .physical_block_slots
+                    .len()
+                    .saturating_mul(active.page_tokens)
+            || execution_layer >= active.layer_count
+        {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 DSpark hybrid-attention binding mismatch: stage={stage} execution_layer={execution_layer} sequence_tokens={sequence_tokens} sequences={} slots={} page_tokens={} layer_count={}",
+                active.sequence_count,
+                active.physical_block_slots.len(),
+                active.page_tokens,
+                active.layer_count
+            )));
+        }
+        let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        })?;
+        let context_plane = pool
+            .plane_storage(0)
+            .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark window KV plane is missing".into()))?;
+        let plane = pool.planes().first().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 DSpark window KV descriptor is missing".into())
+        })?;
+        if active.page_tokens != ferrule_cuda::cutlass::DSPARK_ATTENTION_PAGE_TOKENS
+            || plane.elements_per_token != config.head_dim
+            || plane.layer_count != active.layer_count
+        {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 DSpark hybrid-attention plane mismatch: page_tokens={} elements_per_token={} layer_count={} expected_page_tokens={} expected_head_dim={} active_layers={}",
+                active.page_tokens,
+                plane.elements_per_token,
+                plane.layer_count,
+                ferrule_cuda::cutlass::DSPARK_ATTENTION_PAGE_TOKENS,
+                config.head_dim,
+                active.layer_count
+            )));
+        }
+        self.ops.dspark_hybrid_mla_attention_into(
+            query,
+            context_plane,
+            block_kv,
+            &active.block_slots_device,
+            &prepared.transformer.attention_sink,
+            ferrule_cuda::cutlass::DsparkHybridMlaAttentionLayout {
+                sequence_tokens,
+                page_tokens: active.page_tokens,
+                elements_per_token: plane.elements_per_token,
+                layer_index: execution_layer,
+                layer_count: active.layer_count,
+                block_slot_offset: 0,
+                block_slot_count: active.physical_block_slots.len(),
+                softmax_scale: (config.head_dim as f32).powf(-0.5),
+            },
+            output,
+            &mut buffers.workspace,
+        )
+    }
+
+    /// Official DSpark context branch: every stage projects the same committed
+    /// target `main_x` into an independent window-KV slot. This deliberately
+    /// performs no query, attention, HC, or FFN work and never publishes the
+    /// later proposal-block KV.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn dspark_context_kv_stage_device_into(
+        &mut self,
+        stage: usize,
+        config: DeepSeekV4AttentionConfig,
+        state: &mut DeepSeekV4LayerState,
+        rows: usize,
+        start_pos: usize,
+        buffers: &mut DeepSeekV4DsparkMainBuffers,
+    ) -> Result<()> {
+        const ROPE_NAMES: [&str; 8] = [
+            "rope_dspark_stage_0",
+            "rope_dspark_stage_1",
+            "rope_dspark_stage_2",
+            "rope_dspark_stage_3",
+            "rope_dspark_stage_4",
+            "rope_dspark_stage_5",
+            "rope_dspark_stage_6",
+            "rope_dspark_stage_7",
+        ];
+        if rows == 0 || config.compress_ratio != 0 {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 DSpark stage {stage} context-KV requires positive rows and uncompressed attention: rows={rows} compress_ratio={}",
+                config.compress_ratio
+            )));
+        }
+        let rope_name = ROPE_NAMES.get(stage).copied().ok_or_else(|| {
+            Error::Model(format!(
+                "DeepSeek-V4 DSpark stage {stage} exceeds the prepared RoPE identity table"
+            ))
+        })?;
+        let execution_layer = self.prepared_mtp_stage(stage)?.execution_layer;
+        if buffers.main_x.len() != rows.saturating_mul(config.hidden_size)
+            || buffers.context_kv_raw.len() != rows.saturating_mul(config.head_dim)
+            || buffers.context_kv.len() != rows.saturating_mul(config.head_dim)
+        {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 DSpark stage {stage} context-KV buffer mismatch: main_x={}/{} raw={}/{} kv={}/{}",
+                buffers.main_x.len(),
+                rows.saturating_mul(config.hidden_size),
+                buffers.context_kv_raw.len(),
+                rows.saturating_mul(config.head_dim),
+                buffers.context_kv.len(),
+                rows.saturating_mul(config.head_dim)
+            )));
+        }
+
+        {
+            let prepared = self.prepared_mtp_stage(stage)?;
+            self.ops
+                .artifact_linear_rows_from_device_into_with_scratch(
+                    &prepared.transformer.key_value.handle,
+                    &buffers.main_x,
+                    rows,
+                    &mut buffers.context_kv_raw,
+                    &mut buffers.context_linear_workspace,
+                )?;
+        }
+        {
+            let prepared = self.prepared_mtp_stage(stage)?;
+            self.ops.rms_norm_rows_from_device_into(
+                &buffers.context_kv_raw,
+                rows,
+                &prepared.transformer.key_value_norm,
+                config.norm_eps,
+                &mut buffers.context_kv,
+            )?;
+        }
+        let required_positions = start_pos
+            .checked_add(rows)
+            .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark context position overflow".into()))?;
+        self.ensure_rope_tables_with_params(
+            rope_name,
+            config.rope_head_dim,
+            config.rope_params(),
+            required_positions,
+        )?;
+        self.rope_tail_rows_from_device(
+            rope_name,
+            &mut buffers.context_kv,
+            u32::try_from(start_pos).map_err(|_| {
+                Error::Model("DeepSeek-V4 DSpark context position exceeds u32".into())
+            })?,
+            u32::try_from(rows).map_err(|_| {
+                Error::Model("DeepSeek-V4 DSpark context row count exceeds u32".into())
+            })?,
+            1,
+            u32::try_from(config.head_dim).map_err(|_| {
+                Error::Model("DeepSeek-V4 DSpark context head dimension exceeds u32".into())
+            })?,
+            u32::try_from(config.rope_head_dim).map_err(|_| {
+                Error::Model("DeepSeek-V4 DSpark context RoPE dimension exceeds u32".into())
+            })?,
+            false,
+        )?;
+        self.ops.fp8_attention_kv_qat_quantize_buffer_in_place(
+            &mut buffers.context_kv,
+            config.head_dim,
+            config.rope_head_dim,
+        )?;
+        self.paged_write_rows(
+            0,
+            execution_layer,
+            &buffers.context_kv,
+            start_pos,
+            rows,
+            config.head_dim,
+        )?;
+        state.kv.window.record_device_rows(rows);
+        Ok(())
+    }
+
+    /// Packed variant of the official DSpark context branch. Target rows may
+    /// belong to multiple sequences, so RoPE and paged publication use the
+    /// authoritative per-row positions and active row-to-sequence bindings.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn dspark_context_kv_stage_packed_device_into(
+        &mut self,
+        stage: usize,
+        config: DeepSeekV4AttentionConfig,
+        rows: usize,
+        max_position: usize,
+        buffers: &mut DeepSeekV4DsparkMainBuffers,
+    ) -> Result<()> {
+        const ROPE_NAMES: [&str; 8] = [
+            "rope_dspark_stage_0",
+            "rope_dspark_stage_1",
+            "rope_dspark_stage_2",
+            "rope_dspark_stage_3",
+            "rope_dspark_stage_4",
+            "rope_dspark_stage_5",
+            "rope_dspark_stage_6",
+            "rope_dspark_stage_7",
+        ];
+        if rows == 0 || config.compress_ratio != 0 || buffers.positions.len() != rows {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 packed DSpark stage {stage} context-KV shape mismatch: rows={rows} positions={} compress_ratio={}",
+                buffers.positions.len(),
+                config.compress_ratio
+            )));
+        }
+        let rope_name = ROPE_NAMES.get(stage).copied().ok_or_else(|| {
+            Error::Model(format!(
+                "DeepSeek-V4 DSpark stage {stage} exceeds the prepared RoPE identity table"
+            ))
+        })?;
+        let execution_layer = self.prepared_mtp_stage(stage)?.execution_layer;
+        if buffers.main_x.len() != rows.saturating_mul(config.hidden_size)
+            || buffers.context_kv_raw.len() != rows.saturating_mul(config.head_dim)
+            || buffers.context_kv.len() != rows.saturating_mul(config.head_dim)
+        {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 packed DSpark stage {stage} context-KV buffer mismatch: main_x={}/{} raw={}/{} kv={}/{}",
+                buffers.main_x.len(),
+                rows.saturating_mul(config.hidden_size),
+                buffers.context_kv_raw.len(),
+                rows.saturating_mul(config.head_dim),
+                buffers.context_kv.len(),
+                rows.saturating_mul(config.head_dim)
+            )));
+        }
+
+        {
+            let prepared = self.prepared_mtp_stage(stage)?;
+            self.ops
+                .artifact_linear_rows_from_device_into_with_scratch(
+                    &prepared.transformer.key_value.handle,
+                    &buffers.main_x,
+                    rows,
+                    &mut buffers.context_kv_raw,
+                    &mut buffers.context_linear_workspace,
+                )?;
+        }
+        {
+            let prepared = self.prepared_mtp_stage(stage)?;
+            self.ops.rms_norm_rows_from_device_into(
+                &buffers.context_kv_raw,
+                rows,
+                &prepared.transformer.key_value_norm,
+                config.norm_eps,
+                &mut buffers.context_kv,
+            )?;
+        }
+        let required_positions = max_position
+            .checked_add(1)
+            .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark context position overflow".into()))?;
+        self.ensure_rope_tables_with_params(
+            rope_name,
+            config.rope_head_dim,
+            config.rope_params(),
+            required_positions,
+        )?;
+        self.rope_tail_rows_indexed_from_device(
+            rope_name,
+            &mut buffers.context_kv,
+            &buffers.positions,
+            max_position,
+            1,
+            u32::try_from(config.head_dim).map_err(|_| {
+                Error::Model("DeepSeek-V4 DSpark context head dimension exceeds u32".into())
+            })?,
+            u32::try_from(config.rope_head_dim).map_err(|_| {
+                Error::Model("DeepSeek-V4 DSpark context RoPE dimension exceeds u32".into())
+            })?,
+            false,
+        )?;
+        self.ops.fp8_attention_kv_qat_quantize_buffer_in_place(
+            &mut buffers.context_kv,
+            config.head_dim,
+            config.rope_head_dim,
+        )?;
+        self.paged_scatter_rows_from_device(
+            0,
+            execution_layer,
+            &buffers.context_kv,
+            &buffers.positions,
+            None,
+            config.head_dim,
+        )
+    }
+
     pub(crate) fn drain_moe_access_events(&mut self) -> Vec<ExpertBatchAccessEvent> {
         std::mem::take(&mut self.moe_access_events)
     }
@@ -1880,7 +2606,7 @@ impl DeepSeekV4CudaOperatorCache {
     pub(crate) fn configure_expert_frame_pool(
         &mut self,
         expert_capacity: usize,
-        layer_slot_capacities: &[usize],
+        layer_slot_capacities: &[(usize, usize)],
         hidden_size: usize,
         intermediate_size: usize,
     ) -> Result<()> {
@@ -1893,15 +2619,28 @@ impl DeepSeekV4CudaOperatorCache {
                 "DeepSeek-V4 stable expert frame pool was configured after use".into(),
             ));
         }
-        if layer_slot_capacities.is_empty() || layer_slot_capacities.contains(&0) {
+        if layer_slot_capacities.is_empty() {
             return Err(Error::Model(
-                "DeepSeek-V4 stable expert frame pool requires non-zero layer capacities".into(),
+                "DeepSeek-V4 stable expert frame pool requires layer capacities".into(),
             ));
+        }
+        let mut configured_layers = BTreeSet::new();
+        for &(layer, capacity) in layer_slot_capacities {
+            if capacity == 0 {
+                return Err(Error::Model(format!(
+                    "DeepSeek-V4 stable expert frame pool layer {layer} has zero capacity"
+                )));
+            }
+            if !configured_layers.insert(layer) {
+                return Err(Error::Model(format!(
+                    "DeepSeek-V4 stable expert frame pool layer {layer} is configured twice"
+                )));
+            }
         }
         let resident_frames =
             layer_slot_capacities
                 .iter()
-                .try_fold(0usize, |total, capacity| {
+                .try_fold(0usize, |total, (_, capacity)| {
                     total.checked_add(*capacity).ok_or_else(|| {
                         Error::Model(
                             "DeepSeek-V4 stable expert resident-frame capacity overflow".into(),
@@ -1915,7 +2654,7 @@ impl DeepSeekV4CudaOperatorCache {
             .checked_add(shadow_frames)
             .ok_or_else(|| Error::Model("DeepSeek-V4 expert frame capacity overflow".into()))?;
 
-        for (layer, slot_capacity) in layer_slot_capacities.iter().copied().enumerate() {
+        for &(layer, slot_capacity) in layer_slot_capacities {
             self.ensure_expert_slot_table(layer, expert_capacity, slot_capacity)?;
         }
         for _ in 0..shadow_frames {
@@ -3308,6 +4047,67 @@ impl DeepSeekV4CudaOperatorCache {
         })
     }
 
+    #[cfg(feature = "cutlass")]
+    fn upload_resident_bf16_matrix(
+        &self,
+        matrix: &ArtifactMatrixSlice,
+    ) -> Result<ferrule_cuda::context::CudaArtifactLinearHandle> {
+        const CHUNK_BYTES: usize = 16 * 1024 * 1024;
+        if matrix.slice.dtype != ArtifactDType::Bf16 {
+            return Err(Error::Model(format!(
+                "resident BF16 matrix '{}' has dtype {:?}",
+                matrix.slice.name, matrix.slice.dtype
+            )));
+        }
+        let expected_bytes = matrix
+            .rows
+            .checked_mul(matrix.cols)
+            .and_then(|elements| elements.checked_mul(2))
+            .ok_or_else(|| Error::Model("resident BF16 matrix size overflow".into()))?;
+        if matrix.slice.bytes != expected_bytes as u64 {
+            return Err(Error::Model(format!(
+                "resident BF16 matrix '{}' byte mismatch: slice={} expected={expected_bytes}",
+                matrix.slice.name, matrix.slice.bytes
+            )));
+        }
+        let shape = ferrule_cuda::context::CudaArtifactLinearShape::Bf16Bytes {
+            out_features: matrix.rows,
+            in_features: matrix.cols,
+        };
+        let mut handle = self.ops.allocate_artifact_linear_device(shape)?;
+        let mut file = File::open(&matrix.slice.path).map_err(|error| {
+            Error::Model(format!(
+                "open resident BF16 matrix '{}': {error}",
+                matrix.slice.path.display()
+            ))
+        })?;
+        file.seek(SeekFrom::Start(matrix.slice.offset))
+            .map_err(|error| {
+                Error::Model(format!(
+                    "seek resident BF16 matrix '{}': {error}",
+                    matrix.slice.path.display()
+                ))
+            })?;
+        let mut chunk = vec![0u8; CHUNK_BYTES.min(expected_bytes)];
+        let mut offset = 0usize;
+        while offset < expected_bytes {
+            let bytes = chunk.len().min(expected_bytes - offset);
+            file.read_exact(&mut chunk[..bytes]).map_err(|error| {
+                Error::Model(format!(
+                    "read resident BF16 matrix '{}' at {offset}: {error}",
+                    matrix.slice.name
+                ))
+            })?;
+            self.ops.overwrite_artifact_linear_weight_range(
+                &mut handle,
+                offset,
+                &chunk[..bytes],
+            )?;
+            offset += bytes;
+        }
+        Ok(handle)
+    }
+
     fn upload_prepared_linear(
         &self,
         linear: &ArtifactLinearPayload,
@@ -3328,6 +4128,204 @@ impl DeepSeekV4CudaOperatorCache {
             kv: self.upload_prepared_linear(&payload.wkv)?,
             gate: self.upload_prepared_linear(&payload.wgate)?,
         })
+    }
+
+    fn upload_prepared_layer(
+        &self,
+        layer: &DeepSeekV4Layer,
+    ) -> Result<DeepSeekV4CudaPreparedLayer> {
+        let layer_id = layer.layer;
+        let query_a = self.upload_prepared_linear(&layer.attention.payload.query_a)?;
+        let query_b = self.upload_prepared_linear(&layer.attention.payload.query_b)?;
+        let key_value = self.upload_prepared_linear(&layer.attention.payload.key_value)?;
+        let output_a = self.upload_prepared_linear(&layer.attention.payload.output_a)?;
+        let output_b = self.upload_prepared_linear(&layer.attention.payload.output_b)?;
+        let main_compressor = layer
+            .attention
+            .compressed
+            .as_ref()
+            .map(|compressed| self.upload_compressor_resources(&compressed.compressor))
+            .transpose()?;
+        let indexer_compressor = layer
+            .attention
+            .compressed
+            .as_ref()
+            .and_then(|compressed| compressed.indexer.as_ref())
+            .map(|indexer| self.upload_compressor_resources(&indexer.compressor))
+            .transpose()?;
+        let indexer_query = layer
+            .attention
+            .compressed
+            .as_ref()
+            .and_then(|compressed| compressed.indexer.as_ref())
+            .map(|indexer| self.upload_prepared_linear(&indexer.wq_b))
+            .transpose()?;
+        let indexer_weights = layer
+            .attention
+            .compressed
+            .as_ref()
+            .and_then(|compressed| compressed.indexer.as_ref())
+            .map(|indexer| self.upload_prepared_linear(&indexer.weights_proj))
+            .transpose()?;
+        let router = self.upload_prepared_linear(&layer.router.weight)?;
+        let shared_gate = self.upload_prepared_linear(&layer.shared_ffn.gate)?;
+        let shared_up = self.upload_prepared_linear(&layer.shared_ffn.up)?;
+        let shared_down = self.upload_prepared_linear(&layer.shared_ffn.down)?;
+        let experts = layer.router.weight.format.out_features();
+        let router_bias = layer
+            .router
+            .bias
+            .as_deref()
+            .map(|bias| {
+                if bias.len() != experts {
+                    return Err(Error::Model(format!(
+                        "DeepSeek-V4 layer {layer_id} router bias length mismatch: got {} expected {experts}",
+                        bias.len()
+                    )));
+                }
+                self.ops.upload_f32_buffer(bias)
+            })
+            .transpose()?;
+        let router_hash_table = match layer.router_policy.selection {
+            RouterSelectionPolicy::ScoreTopK => None,
+            RouterSelectionPolicy::Hash => {
+                let table = layer.router.hash_table.as_deref().ok_or_else(|| {
+                    Error::Model(format!(
+                        "DeepSeek-V4 layer {layer_id} hash router is missing its hash table"
+                    ))
+                })?;
+                validate_router_hash_table_shape(
+                    layer_id,
+                    table,
+                    layer.router.hash_rows,
+                    layer.router.hash_cols,
+                )?;
+                Some(self.ops.upload_dsv4_router_hash_table(
+                    table,
+                    layer.router.hash_rows,
+                    layer.router.hash_cols,
+                    experts,
+                    layer.router_policy.top_k,
+                )?)
+            }
+        };
+        Ok(DeepSeekV4CudaPreparedLayer {
+            query_a,
+            query_b,
+            key_value,
+            output_a,
+            output_b,
+            indexer_query,
+            indexer_weights,
+            router,
+            shared_gate,
+            shared_up,
+            shared_down,
+            attention_norm: self.upload_norm_weight(&layer.attn_norm)?,
+            feed_forward_norm: self.upload_norm_weight(&layer.ffn_norm)?,
+            query_norm: self.upload_norm_weight(&layer.attention.payload.query_norm)?,
+            key_value_norm: self.upload_norm_weight(&layer.attention.payload.key_value_norm)?,
+            attention_hc: self.upload_hc_device_weights(&layer.hc_attention, layer.hc_config)?,
+            feed_forward_hc: self
+                .upload_hc_device_weights(&layer.hc_feed_forward, layer.hc_config)?,
+            attention_sink: self
+                .ops
+                .upload_f32_buffer(&layer.attention.payload.attention_sink)?,
+            main_compressor,
+            indexer_compressor,
+            router_bias,
+            router_hash_table,
+        })
+    }
+
+    fn upload_prepared_mtp(
+        &self,
+        resources: &DeepSeekV4PreparedResources,
+        hc_config: HyperConnectionConfig,
+    ) -> Result<Option<DeepSeekV4CudaPreparedMtp>> {
+        let Some(mtp) = resources.mtp() else {
+            return Ok(None);
+        };
+        let transformer_kernel_plan = resources
+            .mtp_transformer_kernel_plan()
+            .ok_or_else(|| Error::Model("DeepSeek-V4 MTP transformer plan is missing".into()))?;
+        if transformer_kernel_plan.layers.len() != mtp.layers.len() {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 MTP kernel plan has {} layers for {} prepared stages",
+                transformer_kernel_plan.layers.len(),
+                mtp.layers.len()
+            )));
+        }
+
+        let mut layers = Vec::new();
+        layers
+            .try_reserve_exact(mtp.layers.len())
+            .map_err(|error| {
+                Error::Model(format!(
+                    "DeepSeek-V4 CUDA MTP image allocation failed for {} stages: {error}",
+                    mtp.layers.len()
+                ))
+            })?;
+        for (stage, layer) in mtp.layers.iter().enumerate() {
+            if layer.mtp_index != stage {
+                return Err(Error::Model(format!(
+                    "DeepSeek-V4 CUDA MTP stage identity mismatch: slot={stage} checkpoint_stage={}",
+                    layer.mtp_index
+                )));
+            }
+            if layer.transformer.layer != layer.execution_layer {
+                return Err(Error::Model(format!(
+                    "DeepSeek-V4 CUDA MTP execution identity mismatch: stage={stage} transformer_layer={} execution_layer={}",
+                    layer.transformer.layer, layer.execution_layer
+                )));
+            }
+            layers.push(DeepSeekV4CudaPreparedMtpLayer {
+                execution_layer: layer.execution_layer,
+                transformer: self.upload_prepared_layer(&layer.transformer)?,
+                main_proj: layer
+                    .main_proj
+                    .as_ref()
+                    .map(|linear| self.upload_prepared_linear(linear))
+                    .transpose()?,
+                main_norm: layer
+                    .main_norm
+                    .as_deref()
+                    .map(|norm| self.upload_norm_weight(norm))
+                    .transpose()?,
+            });
+        }
+
+        let prediction_heads = mtp.prediction_heads.as_ref().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA MTP image requires prediction heads".into())
+        })?;
+        prediction_heads.hc_head.validate(hc_config)?;
+        let heads = DeepSeekV4CudaPreparedMtpHeads {
+            hc_head: HcHeadDeviceWeights {
+                function_row_major: self
+                    .ops
+                    .upload_f32_buffer(&prediction_heads.hc_head.function)?,
+                scale: self
+                    .ops
+                    .upload_f32_buffer(&prediction_heads.hc_head.scale)?,
+                base: self.ops.upload_f32_buffer(&prediction_heads.hc_head.base)?,
+            },
+            norm: self.upload_norm_weight(&prediction_heads.norm)?,
+            markov_w1: self.upload_prepared_linear(&prediction_heads.markov_w1)?,
+            markov_w2: self.upload_prepared_linear(&prediction_heads.markov_w2)?,
+            confidence_proj: self.upload_prepared_linear(&prediction_heads.confidence_proj)?,
+        };
+        let noise_token_id = mtp.config.noise_token_id.ok_or_else(|| {
+            Error::Model("DeepSeek-V4 CUDA MTP image requires a noise token id".into())
+        })?;
+
+        Ok(Some(DeepSeekV4CudaPreparedMtp {
+            block_size: mtp.config.block_size,
+            noise_token_id,
+            target_layer_ids: mtp.config.target_layer_ids.clone().into_boxed_slice(),
+            layers: layers.into_boxed_slice(),
+            heads,
+            transformer_kernel_plan: transformer_kernel_plan.clone(),
+        }))
     }
 
     /// Compile immutable model CUDA resources before any model execution.
@@ -3351,9 +4349,12 @@ impl DeepSeekV4CudaOperatorCache {
             )));
         }
         if let Some(image) = self.execution_image.as_ref() {
+            let image_mtp_layers = image.mtp.as_ref().map_or(0, |mtp| mtp.layers.len());
+            let requested_mtp_layers = resources.mtp().map_or(0, |mtp| mtp.layers.len());
             if image.generation == generation
                 && image.layers.len() == layers.len()
                 && image.kernel_plan.layers.len() == kernel_plan.layers.len()
+                && image_mtp_layers == requested_mtp_layers
             {
                 return Ok(());
             }
@@ -3372,6 +4373,10 @@ impl DeepSeekV4CudaOperatorCache {
             base: self.ops.upload_f32_buffer(&model.hc_head.base)?,
         };
         let output_norm = self.upload_norm_weight(&model.output_norm)?;
+        #[cfg(feature = "cutlass")]
+        let embedding = self.upload_resident_bf16_matrix(&model.embedding)?;
+        #[cfg(feature = "cutlass")]
+        let output_head = self.upload_resident_bf16_matrix(&model.output_head)?;
 
         let mut prepared = Vec::new();
         prepared.try_reserve_exact(layers.len()).map_err(|error| {
@@ -3387,117 +4392,22 @@ impl DeepSeekV4CudaOperatorCache {
                     layer.layer
                 )));
             }
-            let query_a = self.upload_prepared_linear(&layer.attention.payload.query_a)?;
-            let query_b = self.upload_prepared_linear(&layer.attention.payload.query_b)?;
-            let key_value = self.upload_prepared_linear(&layer.attention.payload.key_value)?;
-            let output_a = self.upload_prepared_linear(&layer.attention.payload.output_a)?;
-            let output_b = self.upload_prepared_linear(&layer.attention.payload.output_b)?;
-            let main_compressor = layer
-                .attention
-                .compressed
-                .as_ref()
-                .map(|compressed| self.upload_compressor_resources(&compressed.compressor))
-                .transpose()?;
-            let indexer_compressor = layer
-                .attention
-                .compressed
-                .as_ref()
-                .and_then(|compressed| compressed.indexer.as_ref())
-                .map(|indexer| self.upload_compressor_resources(&indexer.compressor))
-                .transpose()?;
-            let indexer_query = layer
-                .attention
-                .compressed
-                .as_ref()
-                .and_then(|compressed| compressed.indexer.as_ref())
-                .map(|indexer| self.upload_prepared_linear(&indexer.wq_b))
-                .transpose()?;
-            let indexer_weights = layer
-                .attention
-                .compressed
-                .as_ref()
-                .and_then(|compressed| compressed.indexer.as_ref())
-                .map(|indexer| self.upload_prepared_linear(&indexer.weights_proj))
-                .transpose()?;
-            let router = self.upload_prepared_linear(&layer.router.weight)?;
-            let shared_gate = self.upload_prepared_linear(&layer.shared_ffn.gate)?;
-            let shared_up = self.upload_prepared_linear(&layer.shared_ffn.up)?;
-            let shared_down = self.upload_prepared_linear(&layer.shared_ffn.down)?;
-            let experts = layer.router.weight.format.out_features();
-            let router_bias = layer
-                .router
-                .bias
-                .as_deref()
-                .map(|bias| {
-                    if bias.len() != experts {
-                        return Err(Error::Model(format!(
-                            "DeepSeek-V4 layer {layer_index} router bias length mismatch: got {} expected {experts}",
-                            bias.len()
-                        )));
-                    }
-                    self.ops.upload_f32_buffer(bias)
-                })
-                .transpose()?;
-            let router_hash_table = match layer.router_policy.selection {
-                RouterSelectionPolicy::ScoreTopK => None,
-                RouterSelectionPolicy::Hash => {
-                    let table = layer.router.hash_table.as_deref().ok_or_else(|| {
-                        Error::Model(format!(
-                            "DeepSeek-V4 layer {layer_index} hash router is missing its hash table"
-                        ))
-                    })?;
-                    validate_router_hash_table_shape(
-                        layer_index,
-                        table,
-                        layer.router.hash_rows,
-                        layer.router.hash_cols,
-                    )?;
-                    Some(self.ops.upload_dsv4_router_hash_table(
-                        table,
-                        layer.router.hash_rows,
-                        layer.router.hash_cols,
-                        experts,
-                        layer.router_policy.top_k,
-                    )?)
-                }
-            };
-            prepared.push(DeepSeekV4CudaPreparedLayer {
-                query_a,
-                query_b,
-                key_value,
-                output_a,
-                output_b,
-                indexer_query,
-                indexer_weights,
-                router,
-                shared_gate,
-                shared_up,
-                shared_down,
-                attention_norm: self.upload_norm_weight(&layer.attn_norm)?,
-                feed_forward_norm: self.upload_norm_weight(&layer.ffn_norm)?,
-                query_norm: self.upload_norm_weight(&layer.attention.payload.query_norm)?,
-                key_value_norm: self.upload_norm_weight(&layer.attention.payload.key_value_norm)?,
-                attention_hc: self
-                    .upload_hc_device_weights(&layer.hc_attention, layer.hc_config)?,
-                feed_forward_hc: self
-                    .upload_hc_device_weights(&layer.hc_feed_forward, layer.hc_config)?,
-                attention_sink: self
-                    .ops
-                    .upload_f32_buffer(&layer.attention.payload.attention_sink)?,
-                main_compressor,
-                indexer_compressor,
-                router_bias,
-                router_hash_table,
-            });
+            prepared.push(self.upload_prepared_layer(layer)?);
         }
 
+        let prepared_mtp = self.upload_prepared_mtp(resources, hc_config)?;
         self.execution_image = Some(DeepSeekV4CudaExecutionImage {
             generation,
             hc_config,
             hc_head,
             output_norm,
+            #[cfg(feature = "cutlass")]
+            embedding,
+            #[cfg(feature = "cutlass")]
+            output_head,
             layers: prepared.into_boxed_slice(),
             kernel_plan: kernel_plan.clone(),
+            mtp: prepared_mtp,
         });
         Ok(())
     }
@@ -3513,17 +4423,48 @@ impl DeepSeekV4CudaOperatorCache {
     #[cfg(feature = "cutlass")]
     fn require_operation(
         &self,
-        layer: usize,
+        execution_layer: usize,
+        operation: KernelOperation,
+    ) -> Result<LaunchDescriptor> {
+        let image = self.prepared_image()?;
+        let descriptor = image
+            .kernel_plan
+            .layer(execution_layer)
+            .and_then(|plan| plan.operation(operation))
+            .copied()
+            .or_else(|| {
+                let mtp = image.mtp.as_ref()?;
+                let stage = mtp
+                    .layers
+                    .iter()
+                    .position(|layer| layer.execution_layer == execution_layer)?;
+                mtp.transformer_kernel_plan
+                    .layer(stage)
+                    .and_then(|plan| plan.operation(operation))
+                    .copied()
+            });
+        descriptor.ok_or_else(|| {
+            Error::Model(format!(
+                "SM121 {operation:?} plan is missing for execution layer={execution_layer}"
+            ))
+        })
+    }
+
+    #[cfg(feature = "cutlass")]
+    fn require_mtp_operation(
+        &self,
+        stage: usize,
         operation: KernelOperation,
     ) -> Result<LaunchDescriptor> {
         self.prepared_image()?
-            .kernel_plan
-            .layer(layer)
+            .mtp
+            .as_ref()
+            .and_then(|mtp| mtp.transformer_kernel_plan.layer(stage))
             .and_then(|plan| plan.operation(operation))
             .copied()
             .ok_or_else(|| {
                 Error::Model(format!(
-                    "SM121 {operation:?} plan is missing for layer={layer}"
+                    "DeepSeek-V4 CUDA MTP stage {stage} is missing required operation {operation:?}"
                 ))
             })
     }
@@ -3543,12 +4484,37 @@ impl DeepSeekV4CudaOperatorCache {
         Ok(())
     }
 
-    fn prepared_layer(&self, layer: usize) -> Result<&DeepSeekV4CudaPreparedLayer> {
-        self.prepared_image()?.layers.get(layer).ok_or_else(|| {
-            Error::Model(format!(
-                "DeepSeek-V4 CUDA execution image layer {layer} is out of range"
-            ))
-        })
+    fn prepared_layer(&self, execution_layer: usize) -> Result<&DeepSeekV4CudaPreparedLayer> {
+        let image = self.prepared_image()?;
+        if let Some(layer) = image.layers.get(execution_layer) {
+            return Ok(layer);
+        }
+        image
+            .mtp
+            .as_ref()
+            .and_then(|mtp| {
+                mtp.layers
+                    .iter()
+                    .find(|layer| layer.execution_layer == execution_layer)
+            })
+            .map(|layer| &layer.transformer)
+            .ok_or_else(|| {
+                Error::Model(format!(
+                    "DeepSeek-V4 CUDA execution layer {execution_layer} is not prepared"
+                ))
+            })
+    }
+
+    fn prepared_mtp_stage(&self, stage: usize) -> Result<&DeepSeekV4CudaPreparedMtpLayer> {
+        self.prepared_image()?
+            .mtp
+            .as_ref()
+            .and_then(|mtp| mtp.layers.get(stage))
+            .ok_or_else(|| {
+                Error::Model(format!(
+                    "DeepSeek-V4 CUDA DSpark stage {stage} is out of range"
+                ))
+            })
     }
 
     fn prepared_attention_sink(
@@ -3923,6 +4889,18 @@ impl DeepSeekV4CudaOperatorCache {
         // The host residency planner still consumes compact routes for miss
         // materialization and telemetry. Compute continues from these same
         // device ids/weights through stable slot resolution and grouping.
+        let (compact_len, produced) =
+            self.prepare_dsv4_router_route_download(indices_dev, weights_dev, tokens, top_k)?;
+        self.finish_dsv4_router_route_download(compact_len, tokens, top_k, &produced)
+    }
+
+    fn prepare_dsv4_router_route_download(
+        &mut self,
+        indices_dev: &ferrule_cuda::context::CudaI32Buffer,
+        weights_dev: &ferrule_cuda::context::CudaF32Buffer,
+        tokens: usize,
+        top_k: usize,
+    ) -> Result<(usize, ferrule_cuda::context::CudaComputeEvent)> {
         let route_count = tokens
             .checked_mul(top_k)
             .ok_or_else(|| Error::Internal("CUDA router route count overflow".into()))?;
@@ -3930,16 +4908,36 @@ impl DeepSeekV4CudaOperatorCache {
             .checked_mul(2)
             .ok_or_else(|| Error::Internal("CUDA compact route size overflow".into()))?;
         if !self.router_compact_buffers.contains_key(&compact_len) {
-            let buffer = self.ops.zero_i32_buffer(compact_len)?;
+            let buffer = self.ops.i32_host_mirror(&vec![0; compact_len])?;
             self.router_compact_buffers.insert(compact_len, buffer);
         }
         let compact_dev = self
             .router_compact_buffers
             .get_mut(&compact_len)
             .expect("compact router buffer inserted above");
-        self.ops
-            .pack_i32_f32_pairs_into(indices_dev, weights_dev, compact_dev, route_count)?;
-        let compact = self.ops.download_i32_buffer(compact_dev)?;
+        self.ops.pack_i32_f32_pairs_into(
+            indices_dev,
+            weights_dev,
+            compact_dev.device_mut_invalidate_host(),
+            route_count,
+        )?;
+        Ok((compact_len, self.ops.record_compute_event()?))
+    }
+
+    fn finish_dsv4_router_route_download(
+        &mut self,
+        compact_len: usize,
+        tokens: usize,
+        top_k: usize,
+        produced: &ferrule_cuda::context::CudaComputeEvent,
+    ) -> Result<Vec<Vec<ExpertRoute>>> {
+        let compact_dev = self
+            .router_compact_buffers
+            .get_mut(&compact_len)
+            .ok_or_else(|| Error::Internal("CUDA compact route buffer is missing".into()))?;
+        let compact = self
+            .ops
+            .download_i32_host_mirror_after(compact_dev, produced)?;
         let mut routes_by_token = Vec::with_capacity(tokens);
         for token in 0..tokens {
             let mut routes = Vec::with_capacity(top_k);
@@ -4360,7 +5358,7 @@ impl DeepSeekV4CudaOperatorCache {
             router_logits_dev,
             linear_workspace,
         )?;
-        let routes_by_token = self.dsv4_router_topk_routes_from_device_logits(
+        self.dsv4_router_topk_routes_from_device_logits(
             layer,
             router_logits_dev,
             token_ids,
@@ -4368,13 +5366,19 @@ impl DeepSeekV4CudaOperatorCache {
             router_policy,
             router_indices_dev,
             router_weights_dev,
-            true,
+            false,
         )?;
-        for routes in &routes_by_token {
-            self.expert_selected = self.expert_selected.saturating_add(routes.len() as u64);
-        }
+        let (compact_len, routes_ready) = self.prepare_dsv4_router_route_download(
+            router_indices_dev,
+            router_weights_dev,
+            tokens,
+            router_policy.top_k,
+        )?;
         record_profile_duration(&mut self.moe_router_us, stage_start);
 
+        // The compact route copy runs on the control stream after `routes_ready`.
+        // Submit the independent fused shared FFN on the primary stream before
+        // waiting for host route materialization so both operations can overlap.
         let stage_start = profile_start(self.profile);
         #[cfg(feature = "cutlass")]
         self.require_cutlass_operation(layer, KernelOperation::SharedFfn)?;
@@ -4392,6 +5396,15 @@ impl DeepSeekV4CudaOperatorCache {
             output_dev,
             false,
         )?;
+        let routes_by_token = self.finish_dsv4_router_route_download(
+            compact_len,
+            tokens,
+            router_policy.top_k,
+            &routes_ready,
+        )?;
+        for routes in &routes_by_token {
+            self.expert_selected = self.expert_selected.saturating_add(routes.len() as u64);
+        }
         record_profile_duration(&mut self.moe_shared_us, stage_start);
 
         let streaming_steps = self.routed_moe_prefill_segments_from_device(

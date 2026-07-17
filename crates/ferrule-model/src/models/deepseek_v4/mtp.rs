@@ -1,12 +1,12 @@
-//! DeepSeek-V4 MTP (Multi-Token Prediction) model for DSpark speculative decoding.
+//! DeepSeek-V4 DSpark attachment stored under the checkpoint's `mtp.*` namespace.
 //!
-//! The DeepSeek-V4-Flash-DSpark checkpoint contains MTP layers used for
-//! speculative decoding. Each MTP layer has the same structure as a main
-//! transformer layer (MLA attention, MoE FFN, HyperConnection) plus a
-//! `main_proj` / `main_norm` pair that projects the concatenated hidden state
-//! and token embedding into the layer's input.
+//! This is not an ordinary autoregressive MTP stack. Stage zero projects and
+//! normalizes the concatenated target hidden taps, while a separate five-row
+//! `[anchor, noise × 4]` embedding block flows through three transformer stages.
+//! Each stage attends to its committed target-context KV plus the complete
+//! non-causal proposal block; proposal-block KV is ephemeral.
 //!
-//! The last MTP layer additionally carries prediction heads:
+//! The last checkpoint stage additionally carries prediction heads:
 //! - `hc_head` – final HyperConnection reduction
 //! - `norm` – final RMSNorm
 //! - `markov_head` – low-rank Markov prediction head (markov_w1, markov_w2)
@@ -42,15 +42,16 @@ use ferrule_common::{Error, Result};
 use super::attention::{DeepSeekV4Attention, DeepSeekV4CompressedAttentionPayload};
 use super::config::{
     DSparkConfig, DeepSeekV4AttentionConfig, with_deepseek_v4_attention_execution_policies,
-    with_deepseek_v4_swiglu_execution_policies,
+    with_deepseek_v4_linear_execution_policy, with_deepseek_v4_swiglu_execution_policies,
 };
 use super::helpers::decode_vector_f32;
 use super::layer::DeepSeekV4Layer;
 
 /// One MTP layer's bound weights.
 ///
-/// Structurally mirrors `DeepSeekV4Layer` but adds `main_proj` / `main_norm`
-/// for the input projection step unique to MTP layers.
+/// Structurally mirrors `DeepSeekV4Layer`. Stage zero additionally owns the
+/// projection/norm for concatenated target hidden taps; proposal token embeddings
+/// remain a separate DSpark backbone input.
 pub struct DeepSeekV4MtpLayer {
     /// Checkpoint stage index under `mtp.{stage}`.
     pub mtp_index: usize,
@@ -76,14 +77,93 @@ pub struct DeepSeekV4MtpPredictionHeads {
     pub confidence_proj: ArtifactLinearPayload,
 }
 
-/// Complete MTP model with all layers.
+/// Complete DSpark attachment with all checkpoint `mtp.*` stages.
 pub struct DeepSeekV4MtpModel {
     pub layers: Vec<DeepSeekV4MtpLayer>,
     pub prediction_heads: Option<DeepSeekV4MtpPredictionHeads>,
     pub config: DSparkConfig,
 }
 
-/// Output of a single MTP forward pass.
+/// Frozen checkpoint-native DSpark row and commit contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeepSeekV4DsparkProtocol {
+    /// Number of proposed draft tokens produced by one native block.
+    pub gamma: usize,
+    /// Backbone query rows: one anchor followed by `gamma - 1` noise rows.
+    pub draft_backbone_rows: usize,
+    /// Target rows: one carried anchor followed by `gamma` draft tokens.
+    pub target_verify_rows: usize,
+    /// Maximum externally committed tokens after full acceptance and bonus.
+    pub max_external_commit_tokens: usize,
+    pub noise_token_id: u32,
+    pub target_layer_ids: Vec<usize>,
+}
+
+impl TryFrom<&DSparkConfig> for DeepSeekV4DsparkProtocol {
+    type Error = Error;
+
+    fn try_from(config: &DSparkConfig) -> Result<Self> {
+        if config.block_size == 0 {
+            return Err(Error::Model(
+                "DeepSeek-V4 DSpark gamma must be greater than zero".into(),
+            ));
+        }
+        let noise_token_id = config.noise_token_id.ok_or_else(|| {
+            Error::Model("DeepSeek-V4 DSpark protocol requires a noise token id".into())
+        })?;
+        if config.target_layer_ids.is_empty() {
+            return Err(Error::Model(
+                "DeepSeek-V4 DSpark protocol requires target hidden-state layers".into(),
+            ));
+        }
+        if config
+            .target_layer_ids
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        {
+            return Err(Error::Model(
+                "DeepSeek-V4 DSpark target layers must be strictly increasing".into(),
+            ));
+        }
+        let target_verify_rows = config
+            .block_size
+            .checked_add(1)
+            .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark target width overflow".into()))?;
+        Ok(Self {
+            gamma: config.block_size,
+            draft_backbone_rows: config.block_size,
+            target_verify_rows,
+            max_external_commit_tokens: target_verify_rows,
+            noise_token_id,
+            target_layer_ids: config.target_layer_ids.clone(),
+        })
+    }
+}
+
+impl DeepSeekV4DsparkProtocol {
+    /// Builds the native semi-autoregressive backbone input. The first row is the
+    /// carried target token; remaining rows use the checkpoint noise token.
+    pub fn draft_input_ids(&self, anchor_token_id: u32) -> Vec<u32> {
+        let mut input = vec![self.noise_token_id; self.draft_backbone_rows];
+        input[0] = anchor_token_id;
+        input
+    }
+
+    /// One carried anchor is verified in addition to every admitted draft token.
+    pub fn target_rows_for_drafts(&self, proposed_draft_tokens: usize) -> Result<usize> {
+        if proposed_draft_tokens > self.gamma {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 DSpark requested {proposed_draft_tokens} drafts above checkpoint gamma {}",
+                self.gamma
+            )));
+        }
+        proposed_draft_tokens
+            .checked_add(1)
+            .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark target width overflow".into()))
+    }
+}
+
+/// Output of a single DSpark proposal block.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeepSeekV4MtpForwardOutput {
     pub token_ids: Vec<u32>,
@@ -333,6 +413,7 @@ fn read_mtp_linear_payload(
         .transpose()?;
 
     ArtifactLinearPayload::from_weight_and_scale(role, weight_payload, scale_payload)
+        .map(with_deepseek_v4_linear_execution_policy)
 }
 
 /// Reads a named norm vector from the MTP tensor list.
@@ -567,15 +648,77 @@ pub fn load_mtp_prediction_heads(
     })
 }
 
+fn round_to_bf16(value: f32) -> f32 {
+    let bits = value.to_bits();
+    if (bits & 0x7f80_0000) == 0x7f80_0000 {
+        return value;
+    }
+    let rounding_bias = 0x7fffu32 + ((bits >> 16) & 1);
+    f32::from_bits(bits.wrapping_add(rounding_bias) & 0xffff_0000)
+}
+
 impl DeepSeekV4MtpModel {
-    /// CPU reference forward pass stub.
-    ///
-    /// Processes a single hidden state through all MTP layers and returns
-    /// predicted token IDs and confidence scores. The full attention and MoE
-    /// computation requires KV-cache and expert-runtime infrastructure that is
-    /// not yet wired into the MTP path; this stub outlines the computation
-    /// and will be completed when the CUDA layer-execution infrastructure is
-    /// reused for MTP.
+    pub fn protocol(&self) -> Result<DeepSeekV4DsparkProtocol> {
+        DeepSeekV4DsparkProtocol::try_from(&self.config)
+    }
+
+    /// CPU oracle for the official stage-zero `main_norm(main_proj(taps))`
+    /// boundary. Both the projection result and normalized output are rounded to
+    /// BF16 exactly where the checkpoint Python returns BF16 tensors.
+    pub fn stage_zero_main_reference(&self, target_taps: &[f32], rows: usize) -> Result<Vec<f32>> {
+        let stage_zero = self
+            .layers
+            .first()
+            .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark stage zero is missing".into()))?;
+        let projection = stage_zero.main_proj.as_ref().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 DSpark stage-zero main projection is missing".into())
+        })?;
+        let norm = stage_zero.main_norm.as_deref().ok_or_else(|| {
+            Error::Model("DeepSeek-V4 DSpark stage-zero main norm is missing".into())
+        })?;
+        let input_size = projection.format.in_features();
+        let output_size = projection.format.out_features();
+        let expected = rows.checked_mul(input_size).ok_or_else(|| {
+            Error::Model("DeepSeek-V4 DSpark stage-zero reference input size overflow".into())
+        })?;
+        if rows == 0 || target_taps.len() != expected || norm.len() != output_size {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 DSpark stage-zero reference shape mismatch: rows={rows} taps={}/{} norm={}/{}",
+                target_taps.len(),
+                expected,
+                norm.len(),
+                output_size
+            )));
+        }
+        let mut output = Vec::with_capacity(rows * output_size);
+        for row in 0..rows {
+            let start = row * input_size;
+            let mut projected =
+                projection.reference_matvec(&target_taps[start..start + input_size])?;
+            projected
+                .iter_mut()
+                .for_each(|value| *value = round_to_bf16(*value));
+            let mean_square = projected
+                .iter()
+                .fold(0.0f32, |sum, value| value.mul_add(*value, sum))
+                / output_size as f32;
+            let inverse_rms = (mean_square + stage_zero.transformer.hc_config.norm_eps)
+                .sqrt()
+                .recip();
+            output.extend(
+                projected
+                    .iter()
+                    .zip(norm)
+                    .map(|(value, weight)| round_to_bf16(value * inverse_rms * weight)),
+            );
+        }
+        Ok(output)
+    }
+
+    /// Legacy placeholder retained until the CUDA DSpark block entry point is
+    /// published. A single hidden row cannot represent the exact DSpark input:
+    /// execution requires committed target taps, per-stage context KV, and the
+    /// complete anchor/noise proposal block.
     pub fn forward(
         &self,
         hidden_state: &[f32],
@@ -583,29 +726,9 @@ impl DeepSeekV4MtpModel {
         position: usize,
     ) -> Result<DeepSeekV4MtpForwardOutput> {
         let _ = (hidden_state, token_id, position);
-        // TODO: Implement the full MTP forward pass:
-        //
-        // For each MTP layer:
-        //   1. Concatenate the input hidden state with the token embedding.
-        //   2. Project through `main_proj` -> `main_norm` (RMSNorm).
-        //   3. Apply `attn_norm` (RMSNorm) -> MLA attention -> HC post.
-        //   4. Apply `ffn_norm` (RMSNorm) -> MoE FFN (router + experts + shared)
-        //      -> HC post.
-        //   5. The output becomes the input for the next MTP layer.
-        //
-        // For the last layer:
-        //   6. Apply `hc_head` to reduce HC state.
-        //   7. Apply `norm` (final RMSNorm).
-        //   8. Apply `markov_w1` -> activation -> `markov_w2` to get logits.
-        //   9. Apply `confidence_proj` to get confidence scores.
-        //  10. Return argmax token IDs and confidence scores.
-        //
-        // The attention step requires a KV-cache and position embeddings, which
-        // are managed by the sequence execution state. The MoE step requires an
-        // expert runtime and reader. These will be provided when the MTP forward
-        // is integrated with the existing layer execution infrastructure.
         Err(Error::Model(
-            "MTP forward pass is not yet implemented; requires KV-cache and expert runtime".into(),
+            "generic single-row MTP forward is invalid for DSpark semi-autoregressive block execution"
+                .into(),
         ))
     }
 }
@@ -714,24 +837,30 @@ mod tests {
     }
 
     #[test]
-    fn mtp_forward_stub_returns_not_implemented() {
+    fn dspark_protocol_freezes_native_block_and_target_layout() {
         let model = DeepSeekV4MtpModel {
             layers: Vec::new(),
             prediction_heads: None,
             config: DSparkConfig {
-                block_size: 1,
-                noise_token_id: None,
-                target_layer_ids: Vec::new(),
-                markov_rank: None,
+                block_size: 5,
+                noise_token_id: Some(128_799),
+                target_layer_ids: vec![40, 41, 42],
+                markov_rank: Some(256),
             },
         };
-        let result = model.forward(&[1.0], 0, 0);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("not yet implemented")
+
+        let protocol = model.protocol().unwrap();
+        assert_eq!(protocol.gamma, 5);
+        assert_eq!(protocol.draft_backbone_rows, 5);
+        assert_eq!(protocol.target_verify_rows, 6);
+        assert_eq!(protocol.max_external_commit_tokens, 6);
+        assert_eq!(
+            protocol.draft_input_ids(17),
+            vec![17, 128_799, 128_799, 128_799, 128_799]
         );
+        assert_eq!(protocol.target_rows_for_drafts(0).unwrap(), 1);
+        assert_eq!(protocol.target_rows_for_drafts(5).unwrap(), 6);
+        assert!(protocol.target_rows_for_drafts(6).is_err());
+        assert!(model.forward(&[1.0], 0, 0).is_err());
     }
 }

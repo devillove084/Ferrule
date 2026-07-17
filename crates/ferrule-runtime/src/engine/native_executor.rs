@@ -169,15 +169,34 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         self.runner.release_sequence_state(state)
     }
 
+    /// Execute one owner-thread operation against an explicit sequence state.
+    ///
+    /// This is the only escape hatch for model-owned operations that are not an
+    /// `ExecutionBatch` (for example a checkpoint-native DSpark proposal). It
+    /// preserves poison, residency initialization, and pending-batch invariants
+    /// before swapping the state into the shared runner.
+    pub fn with_sequence_state<T>(
+        &mut self,
+        state: &mut R::SequenceState,
+        execute: impl FnOnce(&mut R) -> Result<T>,
+    ) -> Result<T> {
+        self.ensure_execution_ready()?;
+        if self.batch_prepared {
+            return Err(Error::Execution(
+                "cannot execute an explicit sequence operation with an uncommitted backend batch"
+                    .into(),
+            ));
+        }
+        self.runner.with_sequence_state(state, execute)
+    }
+
     /// Feed a token into one explicit sequence state.
     pub fn feed_sequence_token(
         &mut self,
         state: &mut R::SequenceState,
         token_id: u32,
     ) -> Result<()> {
-        self.ensure_execution_ready()?;
-        self.runner
-            .with_sequence_state(state, |runner| runner.feed_token(token_id))
+        self.with_sequence_state(state, |runner| runner.feed_token(token_id))
     }
 
     /// Release physical pages whose runtime refcount reached zero.
@@ -1008,7 +1027,7 @@ mod tests {
 
     #[test]
     fn exact_dspark_full_accept_promotes_verification_branch() {
-        let mut executor = dspark_executor(&[11, 12, 42]);
+        let mut executor = dspark_executor(&[11, 12, 13, 42]);
         let mut pages = dspark_page_manager();
         let mut source = MockSequenceState {
             position: 0,
@@ -1020,7 +1039,7 @@ mod tests {
             &mut source,
             StateSlot::new(0),
             0,
-            &[10, 11, 12],
+            &[11, 12, 13],
             nz(1),
             TargetFrontier {
                 position: 0,
@@ -1029,8 +1048,58 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.accepted, vec![10, 11, 12]);
+        assert_eq!(result.accepted, vec![11, 12, 13]);
+        assert_eq!(result.accounting.proposed_tokens, 3);
+        assert_eq!(result.accounting.verified_rows, 4);
+        assert_eq!(result.accounting.accepted_draft_tokens, 3);
+        assert_eq!(result.accounting.correction_tokens, 0);
+        assert_eq!(result.accounting.externally_committed_tokens, 4);
+        assert_eq!(result.accounting.rolled_back_rows, 0);
         assert_eq!(result.target_next.unwrap().token_id, 42);
+        assert_eq!(source.position, 4);
+        assert_eq!(source.fed_tokens, vec![10, 11, 12, 13]);
+        assert_eq!(
+            pages
+                .block_table(StateSlot::new(0))
+                .unwrap()
+                .committed_tokens(),
+            4
+        );
+        assert_eq!(executor.runner().prepares, 1);
+        assert_eq!(executor.runner().commits, 1);
+        assert_eq!(executor.runner().rollbacks, 0);
+    }
+
+    #[test]
+    fn exact_dspark_partial_accept_replays_only_committed_prefix() {
+        let mut executor = dspark_executor(&[11, 12, 99, 42]);
+        let mut pages = dspark_page_manager();
+        let mut source = MockSequenceState {
+            position: 0,
+            fed_tokens: Vec::new(),
+        };
+        let result = run_dspark_verification(
+            &mut executor,
+            &mut pages,
+            &mut source,
+            StateSlot::new(0),
+            0,
+            &[11, 12, 13],
+            nz(1),
+            TargetFrontier {
+                position: 0,
+                top1: ExecutionTokenLogit::new(10, 1.0),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.accepted, vec![11, 12]);
+        assert_eq!(result.rejected, Some(13));
+        assert_eq!(result.target_correction, Some(99));
+        assert_eq!(result.accounting.accepted_draft_tokens, 2);
+        assert_eq!(result.accounting.correction_tokens, 1);
+        assert_eq!(result.accounting.externally_committed_tokens, 3);
+        assert_eq!(result.accounting.rolled_back_rows, 4);
         assert_eq!(source.position, 3);
         assert_eq!(source.fed_tokens, vec![10, 11, 12]);
         assert_eq!(
@@ -1040,14 +1109,14 @@ mod tests {
                 .committed_tokens(),
             3
         );
-        assert_eq!(executor.runner().prepares, 1);
+        assert_eq!(executor.runner().prepares, 2);
         assert_eq!(executor.runner().commits, 1);
-        assert_eq!(executor.runner().rollbacks, 0);
+        assert_eq!(executor.runner().rollbacks, 1);
     }
 
     #[test]
-    fn exact_dspark_partial_accept_replays_only_committed_prefix() {
-        let mut executor = dspark_executor(&[11, 99, 42]);
+    fn exact_dspark_zero_accept_commits_anchor_and_rolls_back_drafts() {
+        let mut executor = dspark_executor(&[99, 12, 13, 42]);
         let mut pages = dspark_page_manager();
         let mut source = MockSequenceState {
             position: 0,
@@ -1059,7 +1128,7 @@ mod tests {
             &mut source,
             StateSlot::new(0),
             0,
-            &[10, 11, 12],
+            &[11, 12, 13],
             nz(1),
             TargetFrontier {
                 position: 0,
@@ -1068,59 +1137,23 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.accepted, vec![10, 11]);
-        assert_eq!(result.rejected, Some(12));
+        assert!(result.accepted.is_empty());
         assert_eq!(result.target_correction, Some(99));
-        assert_eq!(source.position, 2);
-        assert_eq!(source.fed_tokens, vec![10, 11]);
+        assert_eq!(result.accounting.accepted_draft_tokens, 0);
+        assert_eq!(result.accounting.correction_tokens, 1);
+        assert_eq!(result.accounting.externally_committed_tokens, 1);
+        assert_eq!(result.accounting.rolled_back_rows, 4);
+        assert_eq!(source.position, 1);
+        assert_eq!(source.fed_tokens, vec![10]);
         assert_eq!(
             pages
                 .block_table(StateSlot::new(0))
                 .unwrap()
                 .committed_tokens(),
-            2
+            1
         );
         assert_eq!(executor.runner().prepares, 2);
         assert_eq!(executor.runner().commits, 1);
-        assert_eq!(executor.runner().rollbacks, 1);
-    }
-
-    #[test]
-    fn exact_dspark_zero_accept_preserves_source_and_rolls_back_pages() {
-        let mut executor = dspark_executor(&[11, 12, 42]);
-        let mut pages = dspark_page_manager();
-        let mut source = MockSequenceState {
-            position: 0,
-            fed_tokens: Vec::new(),
-        };
-        let result = run_dspark_verification(
-            &mut executor,
-            &mut pages,
-            &mut source,
-            StateSlot::new(0),
-            0,
-            &[10, 11, 12],
-            nz(1),
-            TargetFrontier {
-                position: 0,
-                top1: ExecutionTokenLogit::new(99, 1.0),
-            },
-        )
-        .unwrap();
-
-        assert!(result.accepted.is_empty());
-        assert_eq!(result.target_correction, Some(99));
-        assert_eq!(source.position, 0);
-        assert!(source.fed_tokens.is_empty());
-        assert_eq!(
-            pages
-                .block_table(StateSlot::new(0))
-                .unwrap()
-                .committed_tokens(),
-            0
-        );
-        assert_eq!(executor.runner().prepares, 1);
-        assert_eq!(executor.runner().commits, 0);
         assert_eq!(executor.runner().rollbacks, 1);
     }
 

@@ -5,8 +5,8 @@ use super::config::*;
 use super::helpers::*;
 use super::layer::*;
 use super::runner::{
-    PackedBatchMetadata, begin_packed_sequence_steps, commit_packed_sequence_steps,
-    poison_packed_sequence_steps,
+    DeepSeekV4LayerArenaPoolKey, DeepSeekV4LayerArenaRowLayout, PackedBatchMetadata,
+    begin_packed_sequence_steps, commit_packed_sequence_steps, poison_packed_sequence_steps,
 };
 use super::sequence::DeepSeekV4SequenceExecutionState;
 
@@ -16,6 +16,7 @@ use crate::TensorRole;
 use crate::artifact::binding::{MlaAttentionArtifactPayload, RouterArtifactPayload};
 use crate::artifact::linear::{ArtifactLinearPayload, artifact_linear_cache_key};
 use crate::artifact::tensor::{ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice};
+use crate::execution::ExecutionShapeKey;
 use crate::families::deepseek_v4;
 use crate::ffn::SwiGluFfnPayload;
 use crate::hyper_connection::{HyperConnectionConfig, HyperConnectionWeights};
@@ -270,6 +271,18 @@ fn dsv4_arena_shapes_deduplicate_43_layers_without_merging_compressor_variants()
 }
 
 #[test]
+fn dsv4_arena_pool_key_separates_sequential_prefill_from_independent_rows() {
+    let shape = ExecutionShapeKey::new(ForwardMode::Prefill, 6, 1, 6);
+
+    let sequential =
+        DeepSeekV4LayerArenaPoolKey::new(shape, DeepSeekV4LayerArenaRowLayout::SequentialPrefill);
+    let packed =
+        DeepSeekV4LayerArenaPoolKey::new(shape, DeepSeekV4LayerArenaRowLayout::IndependentRows);
+
+    assert_ne!(sequential, packed);
+}
+
+#[test]
 fn packed_metadata_lowers_ragged_prefill_with_non_dense_state_slots() {
     let batch = packed_metadata_batch(
         ForwardMode::Prefill,
@@ -324,7 +337,7 @@ fn ragged_prefill_commits_each_sequence_once_by_query_length() {
     );
     let metadata = PackedBatchMetadata::lower(&batch, 3).unwrap();
     let mut states = (0..3)
-        .map(|_| DeepSeekV4SequenceExecutionState::new(Vec::new(), 8))
+        .map(|_| DeepSeekV4SequenceExecutionState::new(Vec::new(), Vec::new(), 8))
         .collect::<Vec<_>>();
 
     let bindings = begin_packed_sequence_steps(&states, &metadata).unwrap();
@@ -352,7 +365,7 @@ fn mixed_failure_poisons_each_sequence_once_without_committing_rows() {
     );
     let metadata = PackedBatchMetadata::lower(&batch, 2).unwrap();
     let mut states = (0..2)
-        .map(|_| DeepSeekV4SequenceExecutionState::new(Vec::new(), 8))
+        .map(|_| DeepSeekV4SequenceExecutionState::new(Vec::new(), Vec::new(), 8))
         .collect::<Vec<_>>();
 
     let bindings = begin_packed_sequence_steps(&states, &metadata).unwrap();
@@ -482,7 +495,7 @@ fn release_capacity_preserves_initialized_layer_slots() {
     let cfg = official_tiny_cfg();
     let mut state = DeepSeekV4LayerState::new(cfg);
     state.kv.compressed.reserve(128);
-    let mut sequence = DeepSeekV4SequenceExecutionState::new(vec![state], 1);
+    let mut sequence = DeepSeekV4SequenceExecutionState::new(vec![state], Vec::new(), 1);
 
     sequence.release_capacity();
 

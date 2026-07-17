@@ -82,6 +82,15 @@ fn require_semantic_operation(
         KernelOperation::MlaOutput => crate::cutlass::CutlassKernelId::MlaOutputSm121,
         KernelOperation::SharedFfn => crate::cutlass::CutlassKernelId::SharedFfnSm121,
         KernelOperation::RoutedFp4Moe => crate::cutlass::CutlassKernelId::StableFrameFp4MoeSm121,
+        KernelOperation::DsparkMainProjectNorm => {
+            crate::cutlass::CutlassKernelId::DsparkMainProjectNormSm121
+        }
+        KernelOperation::DsparkHybridMlaAttention => {
+            crate::cutlass::CutlassKernelId::DsparkHybridMlaAttentionSm121
+        }
+        KernelOperation::DsparkProposalHead => {
+            crate::cutlass::CutlassKernelId::DsparkProposalHeadSm121
+        }
         _ => {
             return Err(Error::Internal(format!(
                 "no SM121 semantic provider binding for operation={operation:?}"

@@ -13,7 +13,7 @@
 //! | `cuda_cache` | `DeepSeekV4CudaOperatorCache` — device-resident weight/KV cache |
 //! | `attention` | `DeepSeekV4Attention`, compressor, window KV, attention cache |
 //! | `layer` | `DeepSeekV4Layer` - one transformer block (HC + attention + MoE) |
-//! | `mtp` | `DeepSeekV4MtpModel` - MTP layers for DSpark speculative decoding |
+//! | `mtp` | `DeepSeekV4MtpModel` - DSpark stages stored under `mtp.*` |
 //! | `runner` | `DeepSeekV4Runner` - `ModelRunner` implementation |
 //! | `helpers` | Free functions: RMSNorm, RoPE, YaRN, top-k, cache keys |
 
@@ -47,7 +47,7 @@ pub use layer::{
     DeepSeekV4Layer, DeepSeekV4LayerExpertRuntime, DeepSeekV4LayerState, DeepSeekV4LayerStepOutput,
 };
 pub use mtp::{
-    DeepSeekV4MtpForwardOutput, DeepSeekV4MtpLayer, DeepSeekV4MtpModel,
+    DeepSeekV4DsparkProtocol, DeepSeekV4MtpForwardOutput, DeepSeekV4MtpLayer, DeepSeekV4MtpModel,
     DeepSeekV4MtpPredictionHeads,
 };
 pub use operators::{

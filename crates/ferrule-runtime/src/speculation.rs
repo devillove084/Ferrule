@@ -17,8 +17,8 @@
 //! the target verifies them in one packed pass. Transaction ownership remains
 //! with the caller: verification must run on a disposable model/KV branch.
 //!
-//! The draft source (MTP model) plugs in through [`DraftSource`].  The
-//! verification uses the existing `MultiSessionRunner` packed batch path.
+//! Proposal execution is a checkpoint-native model capability. Verification
+//! uses the existing `MultiSessionRunner` packed batch path.
 
 use std::num::NonZeroU32;
 use std::time::Instant;
@@ -33,25 +33,31 @@ use ferrule_model::MultiSessionRunner;
 use crate::cache::{KvPageManager, KvReservationBindings};
 use crate::engine::NativeMultiSessionExecutor;
 
-// ── Draft source ──────────────────────────────────────────────────────
-
-/// Source of draft token proposals for DSpark verification.
-///
-/// The MTP model implements this trait.  A simple greedy-decode fallback
-/// (using the target model itself) can also implement it for testing.
-pub trait DraftSource {
-    /// Propose up to `max_tokens` candidate tokens given the current context.
-    ///
-    /// Returns the proposed token IDs.  The proposal may be shorter than
-    /// `max_tokens` if the draft source decides to stop early (e.g., EOS).
-    fn propose(&mut self, context: &[u32], max_tokens: usize) -> Result<Vec<u32>>;
-}
-
 // ── Transaction types ─────────────────────────────────────────────────
 
-/// Verification width V.
+/// Number of target rows submitted by one packed verification transaction.
+///
+/// This is intentionally not called the draft width: DSpark checkpoints may
+/// distinguish an anchor token, draft slots, target verification rows, and the
+/// trailing target bonus. The production proposal source must define that
+/// mapping explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VerificationWidth(pub usize);
+
+/// Counters for one speculative transaction.
+///
+/// These values are deliberately separate. Accepted draft tokens, target
+/// correction/bonus tokens, and externally committed output tokens are not
+/// interchangeable.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SpeculativeCycleAccounting {
+    pub proposed_tokens: usize,
+    pub verified_rows: usize,
+    pub accepted_draft_tokens: usize,
+    pub correction_tokens: usize,
+    pub externally_committed_tokens: usize,
+    pub rolled_back_rows: usize,
+}
 
 /// Target prediction at the current committed frontier.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -74,43 +80,45 @@ pub struct DSparkCycleResult {
     /// acceptance this equals the correction; for full acceptance it comes from
     /// the final packed row and avoids an extra target pass.
     pub target_next: Option<TokenLogit>,
-    /// Number of draft tokens proposed.
-    pub proposed: usize,
-    /// Wall-clock time for the complete cycle (draft + verify + commit/rollback).
-    pub cycle_time_us: u64,
+    pub accounting: SpeculativeCycleAccounting,
+    /// Wall-clock time for target verification plus this function's
+    /// commit/rollback work. Proposal generation happens before this function
+    /// and is therefore not included.
+    pub transaction_time_us: u64,
     /// Wall-clock time for the verification forward pass only.
     pub verify_time_us: u64,
 }
 
 impl DSparkCycleResult {
-    /// Acceptance rate: accepted / proposed.
+    /// Draft acceptance rate. This is explanatory telemetry, not serving
+    /// throughput.
     pub fn acceptance_rate(&self) -> f32 {
-        if self.proposed == 0 {
+        if self.accounting.proposed_tokens == 0 {
             0.0
         } else {
-            self.accepted.len() as f32 / self.proposed as f32
-        }
-    }
-
-    /// Accepted tokens per second.
-    pub fn accepted_tok_per_s(&self) -> f64 {
-        if self.cycle_time_us == 0 {
-            0.0
-        } else {
-            (self.accepted.len() as f64) * 1_000_000.0 / (self.cycle_time_us as f64)
+            self.accounting.accepted_draft_tokens as f32 / self.accounting.proposed_tokens as f32
         }
     }
 }
 
 /// Accumulated DSpark telemetry across multiple cycles.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DSparkMetrics {
     pub cycles: usize,
     pub proposed_tokens: usize,
-    pub accepted_tokens: usize,
+    pub verified_rows: usize,
+    pub accepted_draft_tokens: usize,
+    pub correction_tokens: usize,
+    pub externally_committed_tokens: usize,
+    pub externally_emitted_tokens: usize,
+    pub rolled_back_rows: usize,
     pub rejected_tokens: usize,
-    pub total_cycle_time_us: u64,
+    /// Indexed by accepted draft-prefix length.
+    pub accepted_prefix_histogram: Vec<usize>,
+    pub total_proposal_time_us: u64,
+    pub total_transaction_time_us: u64,
     pub total_verify_time_us: u64,
+    pub total_cycle_time_us: u64,
 }
 
 impl DSparkMetrics {
@@ -118,15 +126,15 @@ impl DSparkMetrics {
         if self.proposed_tokens == 0 {
             0.0
         } else {
-            self.accepted_tokens as f32 / self.proposed_tokens as f32
+            self.accepted_draft_tokens as f32 / self.proposed_tokens as f32
         }
     }
 
-    pub fn accepted_tok_per_s(&self) -> f64 {
-        if self.total_cycle_time_us == 0 {
-            0.0
+    pub fn mean_transaction_time_us(&self) -> u64 {
+        if self.cycles == 0 {
+            0
         } else {
-            (self.accepted_tokens as f64) * 1_000_000.0 / (self.total_cycle_time_us as f64)
+            self.total_transaction_time_us / self.cycles as u64
         }
     }
 
@@ -139,12 +147,41 @@ impl DSparkMetrics {
     }
 
     pub fn record(&mut self, result: &DSparkCycleResult) {
+        let accounting = result.accounting;
         self.cycles += 1;
-        self.proposed_tokens += result.proposed;
-        self.accepted_tokens += result.accepted.len();
+        self.proposed_tokens += accounting.proposed_tokens;
+        self.verified_rows += accounting.verified_rows;
+        self.accepted_draft_tokens += accounting.accepted_draft_tokens;
+        self.correction_tokens += accounting.correction_tokens;
+        self.externally_committed_tokens += accounting.externally_committed_tokens;
+        self.rolled_back_rows += accounting.rolled_back_rows;
         self.rejected_tokens += result.rejected.is_some() as usize;
-        self.total_cycle_time_us += result.cycle_time_us;
+        if self.accepted_prefix_histogram.len() <= accounting.accepted_draft_tokens {
+            self.accepted_prefix_histogram
+                .resize(accounting.accepted_draft_tokens + 1, 0);
+        }
+        self.accepted_prefix_histogram[accounting.accepted_draft_tokens] += 1;
+        self.total_transaction_time_us += result.transaction_time_us;
         self.total_verify_time_us += result.verify_time_us;
+        self.total_cycle_time_us += result.transaction_time_us;
+    }
+
+    pub fn record_complete_cycle(
+        &mut self,
+        result: &DSparkCycleResult,
+        proposal_time_us: u64,
+        complete_cycle_time_us: u64,
+    ) {
+        self.record(result);
+        self.total_proposal_time_us += proposal_time_us;
+        self.total_cycle_time_us = self
+            .total_cycle_time_us
+            .saturating_sub(result.transaction_time_us)
+            .saturating_add(complete_cycle_time_us);
+    }
+
+    pub fn record_emitted_tokens(&mut self, token_count: usize) {
+        self.externally_emitted_tokens += token_count;
     }
 }
 
@@ -152,16 +189,18 @@ impl DSparkMetrics {
 
 /// Runs one DSpark verification cycle.
 ///
-/// Given a draft proposal of V tokens, this function:
+/// Given a draft proposal, this function:
 ///
-/// 1. Creates a packed verification batch (1 sequence × V rows)
+/// 1. Creates a packed provisional verification batch
 /// 2. Executes the target model forward pass
 /// 3. Compares target top-1 with draft proposals
-/// 4. Returns the accepted prefix and rejection info
+/// 4. Promotes a full-accept branch, or rolls it back and replays an accepted prefix
+/// 5. Returns the accepted draft prefix and an uncommitted target correction/bonus
 ///
-/// The caller is responsible for committing the accepted prefix to the
-/// sequence state (via `commit_multi_session_batch`) or rolling back
-/// (via `rollback_multi_session_batch`).
+/// Proposal generation is outside this function's timer. The caller remains
+/// responsible for committing the returned target correction/bonus according
+/// to the production DSpark protocol and for reconciling externally emitted
+/// tokens with [`SpeculativeCycleAccounting`].
 ///
 /// # Arguments
 ///
@@ -183,21 +222,16 @@ pub fn run_dspark_verification<R>(
 where
     R: MultiSessionRunner,
 {
-    let cycle_start = Instant::now();
+    let transaction_start = Instant::now();
     let width = proposal.len();
-    if width == 0 {
-        return Ok(DSparkCycleResult {
-            accepted: Vec::new(),
-            rejected: None,
-            target_correction: None,
-            target_next: Some(frontier.top1),
-            proposed: 0,
-            cycle_time_us: 0,
-            verify_time_us: 0,
-        });
-    }
+    let verified_rows = width
+        .checked_add(1)
+        .ok_or_else(|| Error::Execution("DSpark verification row count overflow".into()))?;
+    let mut verification_tokens = Vec::with_capacity(verified_rows);
+    verification_tokens.push(frontier.top1.token_id);
+    verification_tokens.extend_from_slice(proposal);
 
-    let reservation = page_manager.reserve(state_slot, generation, width)?;
+    let reservation = page_manager.reserve(state_slot, generation, verified_rows)?;
     if reservation.positions.start != frontier.position {
         let actual = reservation.positions.start;
         let error = Error::Execution(format!(
@@ -213,7 +247,7 @@ where
         }
     };
     let verification_batch = match build_dspark_batch(
-        proposal,
+        &verification_tokens,
         frontier.position,
         &bindings,
         Some(top_k),
@@ -250,7 +284,7 @@ where
         }
     };
     let verify_time_us = verify_start.elapsed().as_micros() as u64;
-    let verification = match verify_causal_prefix(&output, proposal, frontier.top1) {
+    let verification = match verify_causal_prefix(&output, proposal) {
         Ok(verification) => verification,
         Err(error) => {
             return Err(discard_verification_branch(
@@ -264,8 +298,9 @@ where
     };
 
     let accepted_rows = verification.accepted;
+    let committed_rows = accepted_rows + 1;
     if accepted_rows == width {
-        let freed = match page_manager.commit_prefix_with_freed(reservation, accepted_rows) {
+        let freed = match page_manager.commit_prefix_with_freed(reservation, verified_rows) {
             Ok(freed) => freed,
             Err(error) => {
                 let backend_cleanup = executor.rollback_prepared_batch().err();
@@ -297,74 +332,69 @@ where
         if let Err(error) = executor.release_sequence_state(verification_branch) {
             return Err(rollback_reservation(page_manager, reservation, error));
         }
-        if accepted_rows == 0 {
-            page_manager.commit_prefix_with_freed(reservation, 0)?;
-        } else {
-            let prefix_view =
-                match page_manager.reservation_prefix_view(&reservation, accepted_rows) {
-                    Ok(view) => view,
-                    Err(error) => {
-                        return Err(rollback_reservation(page_manager, reservation, error));
-                    }
-                };
-            let prefix_bindings = match page_manager.reservation_bindings(&prefix_view) {
-                Ok(bindings) => bindings,
+        let prefix_view = match page_manager.reservation_prefix_view(&reservation, committed_rows) {
+            Ok(view) => view,
+            Err(error) => {
+                return Err(rollback_reservation(page_manager, reservation, error));
+            }
+        };
+        let prefix_bindings = match page_manager.reservation_bindings(&prefix_view) {
+            Ok(bindings) => bindings,
+            Err(error) => {
+                return Err(rollback_reservation(page_manager, reservation, error));
+            }
+        };
+        let replay_batch = match build_dspark_batch(
+            &verification_tokens[..committed_rows],
+            frontier.position,
+            &prefix_bindings,
+            None,
+            ExecutionIntent::Committed,
+        ) {
+            Ok(batch) => batch,
+            Err(error) => {
+                return Err(rollback_reservation(page_manager, reservation, error));
+            }
+        };
+        let mut accepted_branch =
+            match executor.fork_sequence_state_from(source_state, frontier.position) {
+                Ok(branch) => branch,
                 Err(error) => {
                     return Err(rollback_reservation(page_manager, reservation, error));
                 }
             };
-            let replay_batch = match build_dspark_batch(
-                &proposal[..accepted_rows],
-                frontier.position,
-                &prefix_bindings,
-                None,
-                ExecutionIntent::Committed,
-            ) {
-                Ok(batch) => batch,
-                Err(error) => {
-                    return Err(rollback_reservation(page_manager, reservation, error));
-                }
-            };
-            let mut accepted_branch =
-                match executor.fork_sequence_state_from(source_state, frontier.position) {
-                    Ok(branch) => branch,
-                    Err(error) => {
-                        return Err(rollback_reservation(page_manager, reservation, error));
-                    }
-                };
-            if let Err(error) = executor.execute_batch_with_kv(
-                std::slice::from_mut(&mut accepted_branch),
-                &replay_batch,
-                std::slice::from_ref(&prefix_view),
-            ) {
-                return Err(discard_verification_branch(
-                    executor,
-                    page_manager,
-                    reservation,
-                    accepted_branch,
+        if let Err(error) = executor.execute_batch_with_kv(
+            std::slice::from_mut(&mut accepted_branch),
+            &replay_batch,
+            std::slice::from_ref(&prefix_view),
+        ) {
+            return Err(discard_verification_branch(
+                executor,
+                page_manager,
+                reservation,
+                accepted_branch,
+                error,
+            ));
+        }
+        let freed = match page_manager.commit_prefix_with_freed(reservation, committed_rows) {
+            Ok(freed) => freed,
+            Err(error) => {
+                let backend_cleanup = executor.rollback_prepared_batch().err();
+                let state_cleanup = executor.release_sequence_state(accepted_branch).err();
+                return Err(with_cleanup_errors(
                     error,
+                    backend_cleanup,
+                    None,
+                    state_cleanup,
                 ));
             }
-            let freed = match page_manager.commit_prefix_with_freed(reservation, accepted_rows) {
-                Ok(freed) => freed,
-                Err(error) => {
-                    let backend_cleanup = executor.rollback_prepared_batch().err();
-                    let state_cleanup = executor.release_sequence_state(accepted_branch).err();
-                    return Err(with_cleanup_errors(
-                        error,
-                        backend_cleanup,
-                        None,
-                        state_cleanup,
-                    ));
-                }
-            };
-            if let Err(error) = executor.commit_prepared_batch() {
-                promote_branch(executor, source_state, accepted_branch)?;
-                return Err(error);
-            }
+        };
+        if let Err(error) = executor.commit_prepared_batch() {
             promote_branch(executor, source_state, accepted_branch)?;
-            executor.release_kv_pages(&freed)?;
+            return Err(error);
         }
+        promote_branch(executor, source_state, accepted_branch)?;
+        executor.release_kv_pages(&freed)?;
     }
 
     let accepted = proposal[..accepted_rows].to_vec();
@@ -374,8 +404,23 @@ where
         rejected,
         target_correction: rejected.map(|_| verification.target_next.token_id),
         target_next: Some(verification.target_next),
-        proposed: width,
-        cycle_time_us: cycle_start.elapsed().as_micros() as u64,
+        accounting: SpeculativeCycleAccounting {
+            proposed_tokens: width,
+            verified_rows,
+            accepted_draft_tokens: accepted_rows,
+            // The correction/bonus is the next exact frontier and is not part
+            // of the committed input rows until the following cycle.
+            correction_tokens: usize::from(accepted_rows < width),
+            externally_committed_tokens: committed_rows,
+            // Partial acceptance rolls back the complete provisional branch
+            // before replaying `[anchor, accepted draft prefix]`.
+            rolled_back_rows: if accepted_rows == width {
+                0
+            } else {
+                verified_rows
+            },
+        },
+        transaction_time_us: transaction_start.elapsed().as_micros() as u64,
         verify_time_us,
     })
 }
@@ -475,21 +520,20 @@ struct CausalVerification {
     target_next: TokenLogit,
 }
 
-/// Predictions are causally shifted: the committed frontier verifies proposal
-/// row zero, while packed output row `i` verifies proposal row `i + 1`.
-fn verify_causal_prefix(
-    output: &ExecutionOutput,
-    proposal: &[u32],
-    frontier: TokenLogit,
-) -> Result<CausalVerification> {
-    let mut row_top1 = vec![None; proposal.len()];
+/// The packed target input is `[anchor, draft × V]`. Output row `i` verifies
+/// draft `i`, while output row `V` is the exact correction/bonus frontier.
+fn verify_causal_prefix(output: &ExecutionOutput, proposal: &[u32]) -> Result<CausalVerification> {
+    let verified_rows = proposal
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| Error::Execution("DSpark output row count overflow".into()))?;
+    let mut row_top1 = vec![None; verified_rows];
     for row in &output.logits {
         let row_index = usize::try_from(row.input_row)
             .map_err(|_| Error::Execution("DSpark output row exceeds usize".into()))?;
         let slot = row_top1.get_mut(row_index).ok_or_else(|| {
             Error::Execution(format!(
-                "DSpark output row {row_index} exceeds verification width {}",
-                proposal.len()
+                "DSpark output row {row_index} exceeds verification row count {verified_rows}"
             ))
         })?;
         if slot.is_some() {
@@ -515,14 +559,12 @@ fn verify_causal_prefix(
         .collect::<Result<Vec<_>>>()?;
 
     let mut accepted = 0usize;
-    let mut prediction = frontier;
-    while accepted < proposal.len() && prediction.token_id == proposal[accepted] {
-        prediction = row_top1[accepted];
+    while accepted < proposal.len() && row_top1[accepted].token_id == proposal[accepted] {
         accepted += 1;
     }
     Ok(CausalVerification {
         accepted,
-        target_next: prediction,
+        target_next: row_top1[accepted],
     })
 }
 
@@ -535,12 +577,13 @@ mod tests {
     fn accepted_prefix_all_accepted() {
         let proposal = vec![10, 11, 12, 13];
         let output = ExecutionOutput::new(vec![
-            LogitsRow::new(0, LogitsOutput::TopK(vec![logit(11, 1.0)])),
-            LogitsRow::new(1, LogitsOutput::TopK(vec![logit(12, 1.0)])),
-            LogitsRow::new(2, LogitsOutput::TopK(vec![logit(13, 1.0)])),
-            LogitsRow::new(3, LogitsOutput::TopK(vec![logit(42, 1.0)])),
+            LogitsRow::new(0, LogitsOutput::TopK(vec![logit(10, 1.0)])),
+            LogitsRow::new(1, LogitsOutput::TopK(vec![logit(11, 1.0)])),
+            LogitsRow::new(2, LogitsOutput::TopK(vec![logit(12, 1.0)])),
+            LogitsRow::new(3, LogitsOutput::TopK(vec![logit(13, 1.0)])),
+            LogitsRow::new(4, LogitsOutput::TopK(vec![logit(42, 1.0)])),
         ]);
-        let verification = verify_causal_prefix(&output, &proposal, logit(10, 1.0)).unwrap();
+        let verification = verify_causal_prefix(&output, &proposal).unwrap();
         assert_eq!(verification.accepted, 4);
         assert_eq!(verification.target_next.token_id, 42);
     }
@@ -549,12 +592,13 @@ mod tests {
     fn accepted_prefix_partial_rejection() {
         let proposal = vec![10, 11, 12, 13];
         let output = ExecutionOutput::new(vec![
-            LogitsRow::new(0, LogitsOutput::TopK(vec![logit(11, 1.0)])),
-            LogitsRow::new(1, LogitsOutput::TopK(vec![logit(99, 1.0)])),
-            LogitsRow::new(2, LogitsOutput::TopK(vec![logit(13, 1.0)])),
-            LogitsRow::new(3, LogitsOutput::TopK(vec![logit(42, 1.0)])),
+            LogitsRow::new(0, LogitsOutput::TopK(vec![logit(10, 1.0)])),
+            LogitsRow::new(1, LogitsOutput::TopK(vec![logit(11, 1.0)])),
+            LogitsRow::new(2, LogitsOutput::TopK(vec![logit(99, 1.0)])),
+            LogitsRow::new(3, LogitsOutput::TopK(vec![logit(13, 1.0)])),
+            LogitsRow::new(4, LogitsOutput::TopK(vec![logit(42, 1.0)])),
         ]);
-        let verification = verify_causal_prefix(&output, &proposal, logit(10, 1.0)).unwrap();
+        let verification = verify_causal_prefix(&output, &proposal).unwrap();
         assert_eq!(verification.accepted, 2);
         assert_eq!(verification.target_next.token_id, 99);
     }
@@ -563,23 +607,24 @@ mod tests {
     fn accepted_prefix_first_rejected() {
         let proposal = vec![10, 11, 12];
         let output = ExecutionOutput::new(vec![
-            LogitsRow::new(0, LogitsOutput::TopK(vec![logit(11, 1.0)])),
-            LogitsRow::new(1, LogitsOutput::TopK(vec![logit(12, 1.0)])),
-            LogitsRow::new(2, LogitsOutput::TopK(vec![logit(13, 1.0)])),
+            LogitsRow::new(0, LogitsOutput::TopK(vec![logit(99, 1.0)])),
+            LogitsRow::new(1, LogitsOutput::TopK(vec![logit(11, 1.0)])),
+            LogitsRow::new(2, LogitsOutput::TopK(vec![logit(12, 1.0)])),
+            LogitsRow::new(3, LogitsOutput::TopK(vec![logit(13, 1.0)])),
         ]);
-        let verification = verify_causal_prefix(&output, &proposal, logit(99, 1.0)).unwrap();
+        let verification = verify_causal_prefix(&output, &proposal).unwrap();
         assert_eq!(verification.accepted, 0);
         assert_eq!(verification.target_next.token_id, 99);
     }
 
     #[test]
-    fn verification_width_one_uses_frontier_and_preserves_next_prediction() {
+    fn verification_width_one_preserves_bonus_prediction() {
         let proposal = vec![10];
-        let output = ExecutionOutput::new(vec![LogitsRow::new(
-            0,
-            LogitsOutput::TopK(vec![logit(77, 1.0)]),
-        )]);
-        let verification = verify_causal_prefix(&output, &proposal, logit(10, 1.0)).unwrap();
+        let output = ExecutionOutput::new(vec![
+            LogitsRow::new(0, LogitsOutput::TopK(vec![logit(10, 1.0)])),
+            LogitsRow::new(1, LogitsOutput::TopK(vec![logit(77, 1.0)])),
+        ]);
+        let verification = verify_causal_prefix(&output, &proposal).unwrap();
         assert_eq!(verification.accepted, 1);
         assert_eq!(verification.target_next.token_id, 77);
     }
@@ -590,19 +635,26 @@ mod tests {
             0,
             LogitsOutput::TopK(vec![logit(11, 1.0)]),
         )]);
-        assert!(verify_causal_prefix(&output, &[10, 11], logit(10, 1.0)).is_err());
+        assert!(verify_causal_prefix(&output, &[10, 11]).is_err());
     }
 
     #[test]
-    fn dspark_metrics_record_and_rates() {
+    fn dspark_metrics_record_explicit_accounting() {
         let mut metrics = DSparkMetrics::default();
         metrics.record(&DSparkCycleResult {
             accepted: vec![10, 11],
             rejected: Some(12),
             target_correction: Some(99),
             target_next: Some(logit(99, 1.0)),
-            proposed: 3,
-            cycle_time_us: 100_000,
+            accounting: SpeculativeCycleAccounting {
+                proposed_tokens: 3,
+                verified_rows: 3,
+                accepted_draft_tokens: 2,
+                correction_tokens: 0,
+                externally_committed_tokens: 2,
+                rolled_back_rows: 3,
+            },
+            transaction_time_us: 100_000,
             verify_time_us: 80_000,
         });
         metrics.record(&DSparkCycleResult {
@@ -610,34 +662,51 @@ mod tests {
             rejected: None,
             target_correction: None,
             target_next: Some(logit(24, 1.0)),
-            proposed: 4,
-            cycle_time_us: 120_000,
+            accounting: SpeculativeCycleAccounting {
+                proposed_tokens: 4,
+                verified_rows: 4,
+                accepted_draft_tokens: 4,
+                correction_tokens: 0,
+                externally_committed_tokens: 4,
+                rolled_back_rows: 0,
+            },
+            transaction_time_us: 120_000,
             verify_time_us: 90_000,
         });
         assert_eq!(metrics.cycles, 2);
         assert_eq!(metrics.proposed_tokens, 7);
-        assert_eq!(metrics.accepted_tokens, 6);
+        assert_eq!(metrics.verified_rows, 7);
+        assert_eq!(metrics.accepted_draft_tokens, 6);
+        assert_eq!(metrics.correction_tokens, 0);
+        assert_eq!(metrics.externally_committed_tokens, 6);
+        assert_eq!(metrics.rolled_back_rows, 3);
         assert_eq!(metrics.rejected_tokens, 1);
-        assert_eq!(metrics.total_cycle_time_us, 220_000);
+        assert_eq!(metrics.total_transaction_time_us, 220_000);
         assert_eq!(metrics.total_verify_time_us, 170_000);
         assert!((metrics.acceptance_rate() - 6.0 / 7.0).abs() < 1e-6);
-        assert!((metrics.accepted_tok_per_s() - 6.0 * 1_000_000.0 / 220_000.0).abs() < 0.01);
-        assert_eq!(metrics.mean_cycle_time_us(), 110_000);
+        assert_eq!(metrics.mean_transaction_time_us(), 110_000);
     }
 
     #[test]
-    fn cycle_result_accepted_tok_per_s() {
+    fn cycle_result_acceptance_uses_draft_counters_only() {
         let result = DSparkCycleResult {
             accepted: vec![10, 11, 12, 13],
             rejected: None,
             target_correction: None,
             target_next: Some(logit(14, 1.0)),
-            proposed: 4,
-            cycle_time_us: 250_000,
+            accounting: SpeculativeCycleAccounting {
+                proposed_tokens: 4,
+                verified_rows: 4,
+                accepted_draft_tokens: 4,
+                correction_tokens: 1,
+                externally_committed_tokens: 5,
+                rolled_back_rows: 0,
+            },
+            transaction_time_us: 250_000,
             verify_time_us: 200_000,
         };
-        assert!((result.accepted_tok_per_s() - 4.0 * 1_000_000.0 / 250_000.0).abs() < 0.01);
         assert!((result.acceptance_rate() - 1.0).abs() < 1e-6);
+        assert_eq!(result.accounting.externally_committed_tokens, 5);
     }
 
     fn logit(token_id: u32, logit: f32) -> ferrule_common::execution::TokenLogit {

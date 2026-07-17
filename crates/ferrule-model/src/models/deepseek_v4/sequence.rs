@@ -38,8 +38,11 @@ pub(crate) struct DeepSeekV4SequenceMoeAccessEvent {
 #[derive(Debug)]
 pub struct DeepSeekV4SequenceExecutionState {
     pub(crate) core: SequenceStateCore,
-    /// Fully initialized per-layer attention/compressor/indexer/physical KV state.
+    /// Fully initialized target-layer attention/compressor/indexer/physical KV state.
     pub(crate) layers: Vec<DeepSeekV4LayerState>,
+    /// Dedicated DSpark stage context state. These caches hold only committed
+    /// projected target context; proposal-block KV remains ephemeral scratch.
+    pub(crate) dspark_stages: Vec<DeepSeekV4LayerState>,
     /// Sequence-specific expert prediction state.
     pub(crate) predictor: ScoreBasedExpertPredictor,
     #[cfg(feature = "cuda")]
@@ -47,11 +50,16 @@ pub struct DeepSeekV4SequenceExecutionState {
 }
 
 impl DeepSeekV4SequenceExecutionState {
-    pub fn new(layers: Vec<DeepSeekV4LayerState>, num_routed_experts: usize) -> Self {
+    pub fn new(
+        layers: Vec<DeepSeekV4LayerState>,
+        dspark_stages: Vec<DeepSeekV4LayerState>,
+        num_routed_experts: usize,
+    ) -> Self {
         let max_layers = layers.len();
         Self {
             core: SequenceStateCore::new(),
             layers,
+            dspark_stages,
             predictor: ScoreBasedExpertPredictor::new(max_layers, num_routed_experts),
             #[cfg(feature = "cuda")]
             paged_kv_binding: None,
@@ -60,6 +68,10 @@ impl DeepSeekV4SequenceExecutionState {
 
     pub fn max_layers(&self) -> usize {
         self.layers.len()
+    }
+
+    pub fn dspark_stage_count(&self) -> usize {
+        self.dspark_stages.len()
     }
 
     pub fn generation(&self) -> u64 {
@@ -103,12 +115,18 @@ impl DeepSeekV4SequenceExecutionState {
         for state in &mut self.layers {
             state.reset_sequence();
         }
+        for state in &mut self.dspark_stages {
+            state.reset_sequence();
+        }
         self.finish_reset();
     }
 
     /// Resets semantic state and releases all per-sequence layer/KV capacity.
     pub fn release_capacity(&mut self) {
         for state in &mut self.layers {
+            state.release_sequence_capacity();
+        }
+        for state in &mut self.dspark_stages {
             state.release_sequence_capacity();
         }
         self.finish_reset();
@@ -130,7 +148,7 @@ mod tests {
 
     #[test]
     fn release_increments_generation_and_clears_state() {
-        let mut seq = DeepSeekV4SequenceExecutionState::new(Vec::new(), 256);
+        let mut seq = DeepSeekV4SequenceExecutionState::new(Vec::new(), Vec::new(), 256);
         let binding = seq.begin_step().unwrap();
         seq.commit_step(binding, 42).unwrap();
         let gen0 = seq.generation();
@@ -142,7 +160,7 @@ mod tests {
 
     #[test]
     fn poison_prevents_use_until_reset() {
-        let mut seq = DeepSeekV4SequenceExecutionState::new(Vec::new(), 64);
+        let mut seq = DeepSeekV4SequenceExecutionState::new(Vec::new(), Vec::new(), 64);
         assert!(!seq.is_poisoned());
         seq.poison();
         assert!(seq.is_poisoned());
@@ -152,7 +170,7 @@ mod tests {
 
     #[test]
     fn reset_invalidates_existing_binding() {
-        let mut seq = DeepSeekV4SequenceExecutionState::new(Vec::new(), 64);
+        let mut seq = DeepSeekV4SequenceExecutionState::new(Vec::new(), Vec::new(), 64);
         let initial = seq.begin_step().unwrap();
         seq.commit_step(initial, 15).unwrap();
         let stale = seq.begin_step().unwrap();
@@ -162,7 +180,7 @@ mod tests {
 
     #[test]
     fn failed_step_keeps_cursor_uncommitted_and_blocks_reuse() {
-        let mut seq = DeepSeekV4SequenceExecutionState::new(Vec::new(), 64);
+        let mut seq = DeepSeekV4SequenceExecutionState::new(Vec::new(), Vec::new(), 64);
         let binding = seq.begin_step().unwrap();
         seq.poison_step(binding);
         assert_eq!(seq.position(), 0);
@@ -176,8 +194,8 @@ mod tests {
 
     #[test]
     fn interleaved_sequences_commit_independently() {
-        let mut a = DeepSeekV4SequenceExecutionState::new(Vec::new(), 64);
-        let mut b = DeepSeekV4SequenceExecutionState::new(Vec::new(), 64);
+        let mut a = DeepSeekV4SequenceExecutionState::new(Vec::new(), Vec::new(), 64);
+        let mut b = DeepSeekV4SequenceExecutionState::new(Vec::new(), Vec::new(), 64);
         let a0 = a.begin_step().unwrap();
         let b0 = b.begin_step().unwrap();
         a.commit_step(a0, 5).unwrap();

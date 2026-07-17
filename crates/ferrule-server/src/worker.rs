@@ -7,8 +7,8 @@ use std::thread::JoinHandle;
 use ferrule_model::{ModelRunner, MultiSessionRunner, models::deepseek_v4::DeepSeekV4Runner};
 use ferrule_runtime::{
     CancelRequestResult, ExpertIoBudget, FixedSequenceSlotPool, GenerateRequest, RequestId,
-    ResidentDriverStep, ResidentTokenEvent, ResidentTopKDriver, SequenceFinishReason,
-    SequenceSlotPool, SequenceState, SessionId,
+    ResidentActionKind, ResidentDriverStep, ResidentTokenEvent, ResidentTopKDriver,
+    SequenceFinishReason, SequenceSlotPool, SequenceState, SessionId,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -80,9 +80,87 @@ where
             on_token(event);
             Ok(())
         };
-        self.driver
-            .step_with_model_expert_io(&mut adapter, self.expert_budget)
-            .map_err(|error| error.to_string())
+        let counters_before = self.driver.executor().runner().operator_runtime_counters();
+        let dspark_before = self.driver.stats().dspark.clone();
+        let result = self
+            .driver
+            .step_with_dspark_model_expert_io(&mut adapter, self.expert_budget);
+        if matches!(
+            &result,
+            Ok(ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Decode,
+                ..
+            })
+        ) {
+            let counters_after = self.driver.executor().runner().operator_runtime_counters();
+            let dspark_after = &self.driver.stats().dspark;
+            let proposed = dspark_after
+                .proposed_tokens
+                .saturating_sub(dspark_before.proposed_tokens);
+            let accepted = dspark_after
+                .accepted_draft_tokens
+                .saturating_sub(dspark_before.accepted_draft_tokens);
+            tracing::info!(
+                cycles = dspark_after.cycles.saturating_sub(dspark_before.cycles),
+                proposed_tokens = proposed,
+                verified_rows = dspark_after
+                    .verified_rows
+                    .saturating_sub(dspark_before.verified_rows),
+                accepted_draft_tokens = accepted,
+                externally_emitted_tokens = dspark_after
+                    .externally_emitted_tokens
+                    .saturating_sub(dspark_before.externally_emitted_tokens),
+                acceptance = if proposed == 0 {
+                    0.0
+                } else {
+                    accepted as f64 / proposed as f64
+                },
+                kernel_launches = counters_after
+                    .kernel_launches
+                    .saturating_sub(counters_before.kernel_launches),
+                h2d_copies = counters_after
+                    .host_to_device_copies
+                    .saturating_sub(counters_before.host_to_device_copies),
+                h2d_bytes = counters_after
+                    .host_to_device_bytes
+                    .saturating_sub(counters_before.host_to_device_bytes),
+                d2h_copies = counters_after
+                    .device_to_host_copies
+                    .saturating_sub(counters_before.device_to_host_copies),
+                d2h_bytes = counters_after
+                    .device_to_host_bytes
+                    .saturating_sub(counters_before.device_to_host_bytes),
+                device_allocations = counters_after
+                    .device_allocations
+                    .saturating_sub(counters_before.device_allocations),
+                stream_wide_syncs = counters_after
+                    .stream_wide_syncs
+                    .saturating_sub(counters_before.stream_wide_syncs),
+                selected_experts = counters_after
+                    .expert_selected
+                    .saturating_sub(counters_before.expert_selected),
+                resident_hits = counters_after
+                    .expert_selected_resident_hits
+                    .saturating_sub(counters_before.expert_selected_resident_hits),
+                cold_misses = counters_after
+                    .expert_selected_cold_misses
+                    .saturating_sub(counters_before.expert_selected_cold_misses),
+                expert_loads = counters_after
+                    .expert_loads
+                    .saturating_sub(counters_before.expert_loads),
+                expert_load_bytes = counters_after
+                    .expert_load_bytes
+                    .saturating_sub(counters_before.expert_load_bytes),
+                expert_io_requested_bytes = counters_after
+                    .expert_io_requested_bytes
+                    .saturating_sub(counters_before.expert_io_requested_bytes),
+                moe_total_us = counters_after
+                    .moe_total_us
+                    .saturating_sub(counters_before.moe_total_us),
+                "production DSpark decode counters"
+            );
+        }
+        result.map_err(|error| error.to_string())
     }
 
     fn cancel_request(&mut self, request_id: RequestId) -> Result<CancelRequestResult, String> {
