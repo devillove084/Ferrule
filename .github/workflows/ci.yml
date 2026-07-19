@@ -35,7 +35,7 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@df6247429542221bc30d46a036ee47af1102c451 # v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: lint
       - name: Run lint checks
@@ -59,7 +59,7 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@6d9ce389421e24f7b73aff5e841bbe5a6b4c974c # nextest
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@df6247429542221bc30d46a036ee47af1102c451 # v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: test
       - name: Run CPU test suite
@@ -95,7 +95,7 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@b98dda19e8b67e904c9e78a0cbd773be4105a74f # cargo-llvm-cov
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@df6247429542221bc30d46a036ee47af1102c451 # v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: coverage
       - name: Generate coverage reports
@@ -129,7 +129,7 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@df6247429542221bc30d46a036ee47af1102c451 # v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: miri
       - name: Run Miri
