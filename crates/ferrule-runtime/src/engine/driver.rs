@@ -671,10 +671,10 @@ where
                 None => errors.push("authoritative page manager is missing".into()),
             }
         }
-        if let Some(state) = self.sequence_states.remove(&session_id) {
-            if let Err(error) = self.executor.release_sequence_state(state) {
-                errors.push(format!("model sequence-state release failed: {error}"));
-            }
+        if let Some(state) = self.sequence_states.remove(&session_id)
+            && let Err(error) = self.executor.release_sequence_state(state)
+        {
+            errors.push(format!("model sequence-state release failed: {error}"));
         }
         if errors.is_empty() {
             Ok(())
@@ -837,11 +837,11 @@ where
             },
             None => Vec::new(),
         };
-        if let Some(batch) = scheduled.as_mut() {
-            if let Err(error) = self.bind_reserved_pages(batch, &page_reservations) {
-                self.rollback_page_reservations(std::mem::take(&mut page_reservations));
-                return Err(self.abort_action(&action, error, false, "KV binding"));
-            }
+        if let Some(batch) = scheduled.as_mut()
+            && let Err(error) = self.bind_reserved_pages(batch, &page_reservations)
+        {
+            self.rollback_page_reservations(std::mem::take(&mut page_reservations));
+            return Err(self.abort_action(&action, error, false, "KV binding"));
         }
 
         // Collect the sequence states referenced by this batch into a dense
@@ -1620,7 +1620,7 @@ where
             .dspark
             .record_emitted_tokens(externally_committed);
         let metrics = &self.stats.dspark;
-        if metrics.cycles == 1 || metrics.cycles % 64 == 0 {
+        if metrics.cycles == 1 || metrics.cycles.is_multiple_of(64) {
             tracing::info!(
                 cycles = metrics.cycles,
                 proposed_tokens = metrics.proposed_tokens,
@@ -2080,7 +2080,7 @@ mod tests {
             state.fed = std::mem::take(&mut self.fed);
             state.fail_next_mutation = self.fail_next_mutation;
             state.mutation_calls = self.mutation_calls;
-            state.prefills.extend(self.prefills.drain(..));
+            state.prefills.append(&mut self.prefills);
 
             self.position = saved_position;
             self.outputs = saved_outputs;

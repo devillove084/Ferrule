@@ -143,14 +143,14 @@ fn validate_policy(
             policy.route_scale
         )));
     }
-    if let Some(bias) = bias {
-        if bias.len() != logits.len() {
-            return Err(Error::Model(format!(
-                "router bias length mismatch: expected {}, got {}",
-                logits.len(),
-                bias.len()
-            )));
-        }
+    if let Some(bias) = bias
+        && bias.len() != logits.len()
+    {
+        return Err(Error::Model(format!(
+            "router bias length mismatch: expected {}, got {}",
+            logits.len(),
+            bias.len()
+        )));
     }
     for (idx, value) in logits.iter().enumerate() {
         if !value.is_finite() {

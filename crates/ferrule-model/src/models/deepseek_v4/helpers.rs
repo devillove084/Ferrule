@@ -369,6 +369,10 @@ pub(crate) fn compress_rows_softmax(
     Ok(out)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the indexer kernel keeps model inputs, cache coordinates, and operator state explicit"
+)]
 pub(crate) fn indexer_topk_indices(
     indexer: &DeepSeekV4IndexerPayload,
     cfg: DeepSeekV4AttentionConfig,

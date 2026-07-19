@@ -62,6 +62,10 @@ fn assert_close_slice(actual: &[f32], expected: &[f32], tolerance: f32, label: &
 }
 
 #[test]
+#[allow(
+    unsafe_code,
+    reason = "validated smoke test buffers and launch geometry require raw kernel launches"
+)]
 fn bf16_block_gemv_matches_legacy_for_real_dsv4_shapes() {
     if !has_cuda() {
         eprintln!("SKIP: no CUDA");
@@ -193,6 +197,10 @@ fn bf16_block_gemv_matches_legacy_for_real_dsv4_shapes() {
 }
 
 #[test]
+#[allow(
+    unsafe_code,
+    reason = "validated smoke test buffers and launch geometry require raw kernel launches"
+)]
 fn artifact_format_kernels_produce_expected_tiny_outputs() {
     if !has_cuda() {
         eprintln!("SKIP: no CUDA");
@@ -200,13 +208,13 @@ fn artifact_format_kernels_produce_expected_tiny_outputs() {
     }
 
     let fp4 = assert_cuda(
-        cuda_gemv_fp4_e2m1_e8m0(&vec![1.0; 32], &vec![0x42u8; 16], &vec![127u8; 1], 1, 32),
+        cuda_gemv_fp4_e2m1_e8m0(&[1.0; 32], &[0x42u8; 16], &[127u8; 1], 1, 32),
         "standalone FP4 GEMV",
     );
     assert_close_slice(&fp4, &[48.0], 1e-4, "standalone FP4 GEMV");
 
     let fp8 = assert_cuda(
-        cuda_gemv_fp8_e4m3fn_e8m0_2d(&[1.0, 2.0], &vec![0x38u8; 4], &vec![127u8; 4], 2, 2, 1, 1),
+        cuda_gemv_fp8_e4m3fn_e8m0_2d(&[1.0, 2.0], &[0x38u8; 4], &[127u8; 4], 2, 2, 1, 1),
         "standalone FP8 GEMV 2D",
     );
     assert_close_slice(&fp8, &[3.0, 3.0], 1e-4, "standalone FP8 GEMV 2D");

@@ -80,9 +80,7 @@ pub fn compare_interactive_trace(
         ..Default::default()
     };
 
-    for i in 0..comparison.turns_compared {
-        let expected = &golden.turns[i];
-        let observed = &observed_turns[i];
+    for (i, (expected, observed)) in golden.turns.iter().zip(observed_turns).enumerate() {
         let mut ok = true;
         let mut messages: Vec<String> = Vec::new();
 

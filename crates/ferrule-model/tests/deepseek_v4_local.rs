@@ -177,8 +177,8 @@ fn local_deepseek_v4_dir() -> Option<PathBuf> {
     if let Ok(path) = env::var("FERRULE_DEEPSEEK_V4_DIR") {
         let path = PathBuf::from(path);
         assert!(
-            path.join("config.json").exists(),
-            "FERRULE_DEEPSEEK_V4_DIR must point at a HF model directory with config.json"
+            has_complete_deepseek_v4_artifact(&path),
+            "FERRULE_DEEPSEEK_V4_DIR must point at a complete 48-shard HF model directory"
         );
         return Some(path);
     }
@@ -187,7 +187,17 @@ fn local_deepseek_v4_dir() -> Option<PathBuf> {
         .join("../..")
         .join("models")
         .join("DeepSeek-V4-Flash-DSpark");
-    default.join("config.json").exists().then_some(default)
+    has_complete_deepseek_v4_artifact(&default).then_some(default)
+}
+
+fn has_complete_deepseek_v4_artifact(path: &Path) -> bool {
+    path.join("config.json").is_file()
+        && path.join("model.safetensors.index.json").is_file()
+        && path.join("tokenizer.json").is_file()
+        && (1..=48).all(|shard| {
+            path.join(format!("model-{shard:05}-of-00048.safetensors"))
+                .is_file()
+        })
 }
 
 fn tensor_class_count(descriptor: &ModelDescriptor, class: &TensorClass) -> usize {

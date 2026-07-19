@@ -69,11 +69,7 @@ impl CombinedRingTopkLayout {
     }
 
     pub fn derived_window_len(&self, row: usize) -> Result<usize> {
-        Ok(self
-            .position(row)?
-            .checked_add(1)
-            .unwrap_or(usize::MAX)
-            .min(self.window_size))
+        Ok(self.position(row)?.saturating_add(1).min(self.window_size))
     }
 
     /// Returns `(logical_index, plane_selector)`, or `(-1, -1)` when invalid.
@@ -95,10 +91,7 @@ impl CombinedRingTopkLayout {
                 Err(_) => (-1, -1),
             });
         }
-        let maximum_visible = position
-            .checked_add(1)
-            .unwrap_or(usize::MAX)
-            .min(self.window_size);
+        let maximum_visible = position.saturating_add(1).min(self.window_size);
         if valid_window_len > maximum_visible {
             return Ok((-1, -1));
         }

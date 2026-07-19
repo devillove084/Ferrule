@@ -10,9 +10,9 @@ keywords = ["llm", "inference", "openai", "server", "rust"]
 categories = ["science", "machine-learning", "web-programming::http-server"]
 
 [dependencies]
-ferrule-common = { path = "../ferrule-common" }
-ferrule-model = { path = "../ferrule-model" }
-ferrule-runtime = { path = "../ferrule-runtime" }
+ferrule-common = { version = "0.2.0", path = "../ferrule-common" }
+ferrule-model = { version = "0.2.0", path = "../ferrule-model" }
+ferrule-runtime = { version = "0.2.0", path = "../ferrule-runtime" }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 serde = { version = "1", features = ["derive"] }

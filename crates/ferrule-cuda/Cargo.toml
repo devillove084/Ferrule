@@ -15,15 +15,15 @@ default = []
 cutlass = []
 
 [dependencies]
-ferrule-common = { path = "../ferrule-common" }
+ferrule-common = { version = "0.2.0", path = "../ferrule-common" }
 rayon = "1.10"
 memmap2 = "0.9"
 tracing = "0.1"
 libm = "0.2"
-cuda-core = { git = "https://github.com/devillove084/cuda-oxide.git", branch = "fp-and-graph-support" }
-cuda-device = { git = "https://github.com/devillove084/cuda-oxide.git", branch = "fp-and-graph-support" }
-cuda-host = { git = "https://github.com/devillove084/cuda-oxide.git", branch = "fp-and-graph-support" }
-cuda-bindings = { git = "https://github.com/devillove084/cuda-oxide.git", branch = "fp-and-graph-support" }
+cuda-core = { version = "0.2.1", git = "https://github.com/devillove084/cuda-oxide.git", branch = "fp-and-graph-support" }
+cuda-device = { version = "0.2.1", git = "https://github.com/devillove084/cuda-oxide.git", branch = "fp-and-graph-support" }
+cuda-host = { version = "0.2.1", git = "https://github.com/devillove084/cuda-oxide.git", branch = "fp-and-graph-support" }
+cuda-bindings = { version = "0.2.1", git = "https://github.com/devillove084/cuda-oxide.git", branch = "fp-and-graph-support" }
 
 [build-dependencies]
 cc = "1.2"

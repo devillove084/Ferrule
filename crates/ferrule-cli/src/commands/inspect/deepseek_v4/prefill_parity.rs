@@ -583,7 +583,7 @@ struct DsparkProposalParity {
 fn run_dspark_proposal_if_ready(
     runner: &mut DeepSeekV4Runner,
     anchor_token_id: u32,
-    main_snapshot_rows: usize,
+    _main_snapshot_rows: usize,
 ) -> FerruleResult<Option<DsparkProposalReport>> {
     if runner.operator_backend() != ModelExecutionBackend::Cuda || runner.mtp().is_none() {
         return Ok(None);
@@ -601,19 +601,20 @@ fn run_dspark_proposal_if_ready(
     #[cfg(all(feature = "cuda", feature = "cutlass"))]
     {
         let (target_taps, main_x) = runner
-            .dspark_main_debug_snapshot(main_snapshot_rows)?
+            .dspark_main_debug_snapshot(_main_snapshot_rows)?
             .ok_or_else(|| {
                 Error::Execution(format!(
-                    "production DSpark main snapshot for {main_snapshot_rows} rows is unavailable"
+                    "production DSpark main snapshot for {_main_snapshot_rows} rows is unavailable"
                 ))
             })?;
-        let tap_width = target_taps.len() / main_snapshot_rows;
-        let main_width = main_x.len() / main_snapshot_rows;
+        let tap_width = target_taps.len() / _main_snapshot_rows;
+        let main_width = main_x.len() / _main_snapshot_rows;
         let target_taps_last_row = target_taps
-            [(main_snapshot_rows - 1) * tap_width..main_snapshot_rows * tap_width]
+            [(_main_snapshot_rows - 1) * tap_width.._main_snapshot_rows * tap_width]
             .to_vec();
-        let main_x_last_row =
-            main_x[(main_snapshot_rows - 1) * main_width..main_snapshot_rows * main_width].to_vec();
+        let main_x_last_row = main_x
+            [(_main_snapshot_rows - 1) * main_width.._main_snapshot_rows * main_width]
+            .to_vec();
         let counters_before = runner.operator_runtime_counters();
         let started = Instant::now();
         let proposal = runner.dspark_proposal_cuda(anchor_token_id)?;

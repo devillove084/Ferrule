@@ -10,7 +10,9 @@ use cuda_core::{DeviceBuffer, stream::CudaStream};
 use ferrule_common::{Error, Result};
 
 pub const CUTLASS_ABI_VERSION: u32 = 8;
+#[cfg(feature = "cutlass")]
 const PINNED_CUTLASS_VERSION: u32 = 461;
+#[cfg(feature = "cutlass")]
 const GB10_SM: u32 = 121;
 
 pub const DSPARK_PROPOSAL_ROWS: usize = 5;
@@ -128,6 +130,7 @@ pub fn discover_provider() -> Result<CutlassProvider> {
     }
 }
 
+#[cfg(feature = "cutlass")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassBf16CompressorArgs {
@@ -145,6 +148,7 @@ struct CutlassBf16CompressorArgs {
     stream: u64,
 }
 
+#[cfg(feature = "cutlass")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassFp8QueryAKvArgs {
@@ -165,6 +169,7 @@ struct CutlassFp8QueryAKvArgs {
     stream: u64,
 }
 
+#[cfg(feature = "cutlass")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassDsparkMainProjectNormArgs {
@@ -187,6 +192,7 @@ struct CutlassDsparkMainProjectNormArgs {
     stream: u64,
 }
 
+#[cfg(feature = "cutlass")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassDsparkHybridMlaAttentionArgs {
@@ -219,6 +225,7 @@ struct CutlassDsparkHybridMlaAttentionArgs {
     stream: u64,
 }
 
+#[cfg(feature = "cutlass")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassDsparkProposalHeadArgs {
@@ -276,6 +283,7 @@ pub struct DsparkHybridMlaAttentionLayout {
     pub softmax_scale: f32,
 }
 
+#[cfg(feature = "cutlass")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassHcProducerArgs {
@@ -304,6 +312,7 @@ struct CutlassHcProducerArgs {
     stream: u64,
 }
 
+#[cfg(feature = "cutlass")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassSharedFfnArgs {
@@ -336,6 +345,7 @@ struct CutlassSharedFfnArgs {
     stream: u64,
 }
 
+#[cfg(feature = "cutlass")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassMlaOutputArgs {
@@ -361,6 +371,7 @@ struct CutlassMlaOutputArgs {
     stream: u64,
 }
 
+#[cfg(feature = "cutlass")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassStableFrameFp4MoeArgs {
@@ -2023,18 +2034,21 @@ mod tests {
     #[test]
     fn pod_layout_matches_native_contract() {
         assert_eq!(std::mem::size_of::<CutlassProviderManifest>(), 24);
-        assert_eq!(std::mem::size_of::<CutlassFp8QueryAKvArgs>(), 96);
-        assert_eq!(std::mem::size_of::<CutlassBf16CompressorArgs>(), 72);
-        assert_eq!(std::mem::size_of::<CutlassDsparkMainProjectNormArgs>(), 104);
-        assert_eq!(
-            std::mem::size_of::<CutlassDsparkHybridMlaAttentionArgs>(),
-            160
-        );
-        assert_eq!(std::mem::size_of::<CutlassDsparkProposalHeadArgs>(), 184);
-        assert_eq!(std::mem::size_of::<CutlassHcProducerArgs>(), 144);
-        assert_eq!(std::mem::size_of::<CutlassSharedFfnArgs>(), 168);
-        assert_eq!(std::mem::size_of::<CutlassMlaOutputArgs>(), 120);
-        assert_eq!(std::mem::size_of::<CutlassStableFrameFp4MoeArgs>(), 224);
+        #[cfg(feature = "cutlass")]
+        {
+            assert_eq!(std::mem::size_of::<CutlassFp8QueryAKvArgs>(), 96);
+            assert_eq!(std::mem::size_of::<CutlassBf16CompressorArgs>(), 72);
+            assert_eq!(std::mem::size_of::<CutlassDsparkMainProjectNormArgs>(), 104);
+            assert_eq!(
+                std::mem::size_of::<CutlassDsparkHybridMlaAttentionArgs>(),
+                160
+            );
+            assert_eq!(std::mem::size_of::<CutlassDsparkProposalHeadArgs>(), 184);
+            assert_eq!(std::mem::size_of::<CutlassHcProducerArgs>(), 144);
+            assert_eq!(std::mem::size_of::<CutlassSharedFfnArgs>(), 168);
+            assert_eq!(std::mem::size_of::<CutlassMlaOutputArgs>(), 120);
+            assert_eq!(std::mem::size_of::<CutlassStableFrameFp4MoeArgs>(), 224);
+        }
     }
 
     #[cfg(feature = "cutlass")]

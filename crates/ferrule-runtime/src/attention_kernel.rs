@@ -3,7 +3,7 @@
 //! Implements the Flash Attention approach (tiled QK^T + online softmax) adapted
 //! for Multi-Latent Attention-style artifact payloads:
 //!   1. query A → query norm → query B → reshape to [heads, head_dim]
-//!   2. key/value projection → key/value norm → [kv_dim] (compressed KV)
+//!   2. key/value projection → key/value norm → `[kv_dim]` (compressed KV)
 //!   3. Sparse top-k gather over sliding window KV cache
 //!   4. Online softmax with attention sink
 //!   5. wo_a + wo_b output projection

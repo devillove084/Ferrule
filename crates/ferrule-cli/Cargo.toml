@@ -14,11 +14,11 @@ name = "ferrule"
 path = "src/main.rs"
 
 [dependencies]
-ferrule-common = { path = "../ferrule-common" }
-ferrule-model = { path = "../ferrule-model" }
-ferrule-runtime = { path = "../ferrule-runtime" }
-ferrule-server = { path = "../ferrule-server" }
-ferrule-cuda = { path = "../ferrule-cuda", optional = true }
+ferrule-common = { version = "0.2.0", path = "../ferrule-common" }
+ferrule-model = { version = "0.2.0", path = "../ferrule-model" }
+ferrule-runtime = { version = "0.2.0", path = "../ferrule-runtime" }
+ferrule-server = { version = "0.2.0", path = "../ferrule-server" }
+ferrule-cuda = { version = "0.2.0", path = "../ferrule-cuda", optional = true }
 memmap2 = "0.9"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"

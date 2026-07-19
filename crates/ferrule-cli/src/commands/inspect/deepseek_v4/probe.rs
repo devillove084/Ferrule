@@ -225,23 +225,23 @@ fn compare_deepseek_v4_probe_reference(
 ) -> anyhow::Result<()> {
     let text = std::fs::read_to_string(path)?;
     let json: serde_json::Value = serde_json::from_str(&text)?;
-    if let Some(expected_prompt) = json.get("prompt").and_then(|value| value.as_str()) {
-        if expected_prompt != prompt {
-            anyhow::bail!(
-                "reference prompt mismatch: expected {:?}, got {:?}",
-                expected_prompt,
-                prompt
-            );
-        }
+    if let Some(expected_prompt) = json.get("prompt").and_then(|value| value.as_str())
+        && expected_prompt != prompt
+    {
+        anyhow::bail!(
+            "reference prompt mismatch: expected {:?}, got {:?}",
+            expected_prompt,
+            prompt
+        );
     }
-    if let Some(expected_layers) = json.get("max_layers").and_then(|value| value.as_u64()) {
-        if expected_layers as usize != max_layers {
-            anyhow::bail!(
-                "reference max_layers mismatch: expected {}, got {}",
-                expected_layers,
-                max_layers
-            );
-        }
+    if let Some(expected_layers) = json.get("max_layers").and_then(|value| value.as_u64())
+        && expected_layers as usize != max_layers
+    {
+        anyhow::bail!(
+            "reference max_layers mismatch: expected {}, got {}",
+            expected_layers,
+            max_layers
+        );
     }
     if let Some(expected_tokens) = json.get("tokens").and_then(|value| value.as_array()) {
         let expected = expected_tokens
@@ -261,17 +261,17 @@ fn compare_deepseek_v4_probe_reference(
             );
         }
     }
-    if let Some(actual) = row_logits {
-        if let Some(expected) = json.get("row_logits") {
-            compare_logit_array(expected, actual, atol, "row_logits")?;
-            println!("reference: row_logits matched within atol={atol}");
-        }
+    if let Some(actual) = row_logits
+        && let Some(expected) = json.get("row_logits")
+    {
+        compare_logit_array(expected, actual, atol, "row_logits")?;
+        println!("reference: row_logits matched within atol={atol}");
     }
-    if let Some(actual) = top_logits {
-        if let Some(expected) = json.get("top_logits") {
-            compare_logit_array(expected, actual, atol, "top_logits")?;
-            println!("reference: top_logits matched within atol={atol}");
-        }
+    if let Some(actual) = top_logits
+        && let Some(expected) = json.get("top_logits")
+    {
+        compare_logit_array(expected, actual, atol, "top_logits")?;
+        println!("reference: top_logits matched within atol={atol}");
     }
     Ok(())
 }

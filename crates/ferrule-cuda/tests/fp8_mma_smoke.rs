@@ -89,6 +89,10 @@ fn activation_pack_reference(values: &[f32], row_width: usize) -> (Vec<u8>, Vec<
 }
 
 #[test]
+#[allow(
+    unsafe_code,
+    reason = "validated CUDA smoke buffers and launch geometry require a raw kernel launch"
+)]
 fn fp8_activation_pack_matches_cpu_reference() {
     let _guard = cuda_test_guard();
     if !has_cuda() {
@@ -138,6 +142,10 @@ fn fp8_activation_pack_matches_cpu_reference() {
 }
 
 #[test]
+#[allow(
+    unsafe_code,
+    reason = "fixed-size CUDA smoke buffers match the one-warp kernel contract"
+)]
 fn fp8_mma_tile_matches_scalar_reference() {
     let _guard = cuda_test_guard();
     if !has_cuda() {
@@ -153,7 +161,7 @@ fn fp8_mma_tile_matches_scalar_reference() {
     let mut x = vec![0u8; N * K];
     for row in 0..M {
         for col in 0..K {
-            let sign = if (row * 7 + col * 3) % 11 == 0 {
+            let sign = if (row * 7 + col * 3).is_multiple_of(11) {
                 0x80
             } else {
                 0
@@ -163,7 +171,11 @@ fn fp8_mma_tile_matches_scalar_reference() {
     }
     for row in 0..N {
         for col in 0..K {
-            let sign = if (row * 5 + col) % 13 == 0 { 0x80 } else { 0 };
+            let sign = if (row * 5 + col).is_multiple_of(13) {
+                0x80
+            } else {
+                0
+            };
             x[row * K + col] = positive_codes[(row * 3 + col * 2) % positive_codes.len()] | sign;
         }
     }
@@ -243,7 +255,7 @@ fn grouped_output_a_bf16_mma_matches_grouped_reference() {
     let mut weight = vec![0u8; OUT * GROUP_IN];
     for row in 0..OUT {
         for col in 0..GROUP_IN {
-            let sign = if (row * 3 + col * 5) % 19 == 0 {
+            let sign = if (row * 3 + col * 5).is_multiple_of(19) {
                 0x80
             } else {
                 0
@@ -328,7 +340,11 @@ fn fp8_mma_rows_match_allocation_free_matvec() {
     let mut weight = vec![0u8; OUT * K];
     for row in 0..OUT {
         for col in 0..K {
-            let sign = if (row + col * 3) % 17 == 0 { 0x80 } else { 0 };
+            let sign = if (row + col * 3).is_multiple_of(17) {
+                0x80
+            } else {
+                0
+            };
             weight[row * K + col] = positive_codes[(row * 5 + col) % positive_codes.len()] | sign;
         }
     }

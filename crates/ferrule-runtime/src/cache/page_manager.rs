@@ -453,10 +453,10 @@ impl KvPageManager {
         if let Err(error) = validation {
             let mut recycled = std::collections::HashSet::new();
             for reservation in &reservations {
-                if let Some(cow) = reservation.cow_replacement {
-                    if recycled.insert(cow.replacement) {
-                        self.free_pages.push(cow.replacement);
-                    }
+                if let Some(cow) = reservation.cow_replacement
+                    && recycled.insert(cow.replacement)
+                {
+                    self.free_pages.push(cow.replacement);
                 }
                 for page in &reservation.newly_allocated {
                     if recycled.insert(*page) {

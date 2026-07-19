@@ -281,7 +281,6 @@ mod tests {
         assert_eq!(kp.regions.len(), 1);
         assert_eq!(kp.regions[0].label, "my_kernel");
         assert_eq!(kp.regions[0].calls, 1);
-        assert!(kp.regions[0].elapsed_us > 0 || kp.regions[0].elapsed_us == 0);
     }
 
     #[test]

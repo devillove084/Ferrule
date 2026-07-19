@@ -36,8 +36,10 @@ use ferrule_common::{Error, Result};
 use super::artifact::DeepSeekV4ArtifactModel;
 use super::config::deepseek_v4_linear_activation_quantization;
 #[cfg(feature = "cuda")]
+use super::cuda_cache::DeepSeekV4DecodeBuffers;
+#[cfg(all(feature = "cuda", feature = "cutlass"))]
 use super::cuda_cache::{
-    DeepSeekV4DecodeBuffers, DeepSeekV4DsparkAttentionBuffers, DeepSeekV4DsparkMainBuffers,
+    DeepSeekV4DsparkAttentionBuffers, DeepSeekV4DsparkMainBuffers,
     DeepSeekV4DsparkProposalHeadBuffers,
 };
 use super::expert_io::{DeepSeekV4ExpertIoLayerSnapshot, DeepSeekV4ExpertIoSnapshot};
@@ -1912,7 +1914,7 @@ impl DeepSeekV4Runner {
                 .transpose()?
         };
         let position = self.sequence.core.position();
-        let mut layer_result: Result<()> = (|| {
+        let layer_result: Result<()> = (|| {
             self.operators
                 .cuda_mut()?
                 .ops
@@ -1998,6 +2000,8 @@ impl DeepSeekV4Runner {
             }
             Ok(())
         })();
+        #[cfg(feature = "cutlass")]
+        let mut layer_result = layer_result;
         drop(arena_lease);
         #[cfg(feature = "cutlass")]
         if layer_result.is_ok() {
@@ -2390,7 +2394,7 @@ impl DeepSeekV4Runner {
             Error::Execution("runtime expert residency controller is not installed".into())
         })?;
         let layer_experts = self.plan.resources().layer_experts();
-        let mut execution = (|| {
+        let execution = (|| {
             self.operators
                 .cuda_mut()?
                 .ops
@@ -2441,6 +2445,8 @@ impl DeepSeekV4Runner {
                 .ops
                 .download_f32_buffer(&buffers.hc_input)
         })();
+        #[cfg(feature = "cutlass")]
+        let mut execution = execution;
         drop(arena_lease);
         #[cfg(feature = "cutlass")]
         if execution.is_ok() {
@@ -2827,9 +2833,9 @@ impl DeepSeekV4Runner {
         Ok(trace)
     }
 
-    /// Convenience: run the last-token HC trace through hc_head + output_norm
-    /// + lm_head top-k, returning the top-1 token id.  Mirrors what
-    /// `prefill_tokens_topk_batched` does with the final hidden.
+    /// Run the last-token HC trace through hc_head + output_norm + lm_head top-k.
+    ///
+    /// This mirrors what `prefill_tokens_topk_batched` does with the final hidden.
     pub fn topk_from_hc_trace(&mut self, hc_state: &[f32]) -> Result<Vec<TokenLogit>> {
         let hidden = self.normalized_last_hidden_profiled(hc_state, 1)?;
         self.plan
@@ -3011,65 +3017,6 @@ fn source_catalog_fallback_enabled(
 
 fn duration_us(duration: Duration) -> u64 {
     duration.as_micros().min(u128::from(u64::MAX)) as u64
-}
-
-#[cfg(test)]
-mod expert_runtime_tests {
-    use std::sync::Arc;
-
-    use crate::moe::streaming::{
-        ExpertId, ExpertLoadSource, ExpertSourceCatalog, ExpertStreamingPolicy,
-    };
-
-    use super::*;
-
-    fn prepared_layer() -> DeepSeekV4PreparedLayerExperts {
-        DeepSeekV4PreparedLayerExperts::new(
-            Arc::new(ExpertSourceCatalog::from_sources([(
-                ExpertId::new(0, 0),
-                ExpertLoadSource::LocalShard {
-                    path: "expert.safetensors".into(),
-                    offset: 0,
-                    bytes: 16,
-                },
-            )])),
-            ExpertStreamingPolicy::quality_first(1),
-        )
-    }
-
-    #[test]
-    fn runner_allocates_layer_expert_runtime_only_for_cpu() {
-        let layers = [prepared_layer()];
-        let cpu = build_cpu_expert_runtimes(ModelExecutionBackend::Cpu, &layers);
-        let cuda = build_cpu_expert_runtimes(ModelExecutionBackend::Cuda, &layers);
-
-        assert_eq!(cpu.as_deref().map(<[_]>::len), Some(1));
-        assert!(cuda.is_none());
-        assert!(Arc::ptr_eq(
-            cpu.as_ref().unwrap()[0].expert_planner.source_catalog(),
-            layers[0].source_catalog(),
-        ));
-    }
-
-    #[test]
-    fn source_catalog_fallback_is_disabled_only_for_cuda_decode() {
-        assert!(source_catalog_fallback_enabled(
-            ModelExecutionBackend::Cpu,
-            ExpertAccessPhase::Prefill,
-        ));
-        assert!(source_catalog_fallback_enabled(
-            ModelExecutionBackend::Cpu,
-            ExpertAccessPhase::Decode,
-        ));
-        assert!(source_catalog_fallback_enabled(
-            ModelExecutionBackend::Cuda,
-            ExpertAccessPhase::Prefill,
-        ));
-        assert!(!source_catalog_fallback_enabled(
-            ModelExecutionBackend::Cuda,
-            ExpertAccessPhase::Decode,
-        ));
-    }
 }
 
 impl ModelRunner for DeepSeekV4Runner {
@@ -3500,5 +3447,64 @@ impl MultiSessionRunner for DeepSeekV4Runner {
                 }
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod expert_runtime_tests {
+    use std::sync::Arc;
+
+    use crate::moe::streaming::{
+        ExpertId, ExpertLoadSource, ExpertSourceCatalog, ExpertStreamingPolicy,
+    };
+
+    use super::*;
+
+    fn prepared_layer() -> DeepSeekV4PreparedLayerExperts {
+        DeepSeekV4PreparedLayerExperts::new(
+            Arc::new(ExpertSourceCatalog::from_sources([(
+                ExpertId::new(0, 0),
+                ExpertLoadSource::LocalShard {
+                    path: "expert.safetensors".into(),
+                    offset: 0,
+                    bytes: 16,
+                },
+            )])),
+            ExpertStreamingPolicy::quality_first(1),
+        )
+    }
+
+    #[test]
+    fn runner_allocates_layer_expert_runtime_only_for_cpu() {
+        let layers = [prepared_layer()];
+        let cpu = build_cpu_expert_runtimes(ModelExecutionBackend::Cpu, &layers);
+        let cuda = build_cpu_expert_runtimes(ModelExecutionBackend::Cuda, &layers);
+
+        assert_eq!(cpu.as_deref().map(<[_]>::len), Some(1));
+        assert!(cuda.is_none());
+        assert!(Arc::ptr_eq(
+            cpu.as_ref().unwrap()[0].expert_planner.source_catalog(),
+            layers[0].source_catalog(),
+        ));
+    }
+
+    #[test]
+    fn source_catalog_fallback_is_disabled_only_for_cuda_decode() {
+        assert!(source_catalog_fallback_enabled(
+            ModelExecutionBackend::Cpu,
+            ExpertAccessPhase::Prefill,
+        ));
+        assert!(source_catalog_fallback_enabled(
+            ModelExecutionBackend::Cpu,
+            ExpertAccessPhase::Decode,
+        ));
+        assert!(source_catalog_fallback_enabled(
+            ModelExecutionBackend::Cuda,
+            ExpertAccessPhase::Prefill,
+        ));
+        assert!(!source_catalog_fallback_enabled(
+            ModelExecutionBackend::Cuda,
+            ExpertAccessPhase::Decode,
+        ));
     }
 }

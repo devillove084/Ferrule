@@ -69,7 +69,7 @@ fn pack_low_first(elems: &[u8]) -> Vec<u8> {
     assert!(elems.len().is_multiple_of(2));
     let mut packed = vec![0u8; elems.len() / 2];
     for (i, &nibble) in elems.iter().enumerate() {
-        if i % 2 == 0 {
+        if i.is_multiple_of(2) {
             packed[i / 2] = nibble & 0x0f;
         } else {
             packed[i / 2] |= (nibble & 0x0f) << 4;
@@ -122,6 +122,10 @@ fn format_lane_matrix(values: &[Option<usize>]) -> String {
 }
 
 #[test]
+#[allow(
+    unsafe_code,
+    reason = "fixed-size CUDA smoke buffers match the one-warp kernel contract"
+)]
 fn fp4_mxf4_matches_scalar_reference() {
     let _guard = cuda_test_guard();
     if !has_cuda() {
@@ -145,10 +149,14 @@ fn fp4_mxf4_matches_scalar_reference() {
     for r in 0..M {
         for c in 0..K {
             let mag = ((r + c) % 6) as u8;
-            let sign = if (r * K + c) % 3 == 0 { 0x08 } else { 0 };
+            let sign = if (r * K + c).is_multiple_of(3) {
+                0x08
+            } else {
+                0
+            };
             let nibble = mag | sign;
             a_elems[r * K + c] = nibble;
-            if c % 2 == 0 {
+            if c.is_multiple_of(2) {
                 a_packed[r * (K / 2) + c / 2] = nibble;
             } else {
                 a_packed[r * (K / 2) + c / 2] |= nibble << 4;
@@ -167,10 +175,14 @@ fn fp4_mxf4_matches_scalar_reference() {
     for col in 0..N {
         for r in 0..K {
             let mag = ((r + col + 1) % 6) as u8;
-            let sign = if (r * N + col) % 4 == 0 { 0x08 } else { 0 };
+            let sign = if (r * N + col).is_multiple_of(4) {
+                0x08
+            } else {
+                0
+            };
             let nibble = mag | sign;
             b_elems[col * K + r] = nibble;
-            if r % 2 == 0 {
+            if r.is_multiple_of(2) {
                 b_packed[col * (K / 2) + r / 2] = nibble;
             } else {
                 b_packed[col * (K / 2) + r / 2] |= nibble << 4;
@@ -240,6 +252,10 @@ fn fp4_mxf4_matches_scalar_reference() {
 }
 
 #[test]
+#[allow(
+    unsafe_code,
+    reason = "fixed-size CUDA smoke buffers match the one-warp kernel contract"
+)]
 fn fp4_mxf4_full_tile_matches_per_row_col_scale_reference() {
     let _guard = cuda_test_guard();
     if !has_cuda() {
@@ -261,7 +277,11 @@ fn fp4_mxf4_full_tile_matches_per_row_col_scale_reference() {
     for r in 0..M {
         for c in 0..K {
             let mag = ((r * 5 + c * 3 + 1) % 6) as u8;
-            let sign = if (r * 11 + c) % 9 == 0 { 0x08 } else { 0 };
+            let sign = if (r * 11 + c).is_multiple_of(9) {
+                0x08
+            } else {
+                0
+            };
             a_elems[r * K + c] = mag | sign;
         }
     }
@@ -273,7 +293,11 @@ fn fp4_mxf4_full_tile_matches_per_row_col_scale_reference() {
         let mut col_elems = vec![0u8; K];
         for k in 0..K {
             let mag = ((col * 7 + k * 5 + 2) % 6) as u8;
-            let sign = if (col + k * 3) % 10 == 0 { 0x08 } else { 0 };
+            let sign = if (col + k * 3).is_multiple_of(10) {
+                0x08
+            } else {
+                0
+            };
             let nibble = mag | sign;
             col_elems[k] = nibble;
             b_elems[col * K + k] = nibble;
@@ -345,6 +369,10 @@ fn fp4_mxf4_full_tile_matches_per_row_col_scale_reference() {
 }
 
 #[test]
+#[allow(
+    unsafe_code,
+    reason = "validated CUDA smoke buffers and launch geometry require a raw kernel launch"
+)]
 fn fp4_activation_pack_kernel_matches_cpu_reference() {
     let _guard = cuda_test_guard();
     if !has_cuda() {
@@ -362,7 +390,7 @@ fn fp4_activation_pack_kernel_matches_cpu_reference() {
     let values = (0..ROWS * COLS)
         .map(|i| {
             let centered = (i as i32 % 17) - 8;
-            centered as f32 * 0.375 + if i % 11 == 0 { 4.25 } else { 0.0 }
+            centered as f32 * 0.375 + if i.is_multiple_of(11) { 4.25 } else { 0.0 }
         })
         .collect::<Vec<_>>();
 
@@ -416,6 +444,10 @@ fn fp4_activation_pack_kernel_matches_cpu_reference() {
 }
 
 #[test]
+#[allow(
+    unsafe_code,
+    reason = "fixed-size CUDA smoke buffers match the one-warp kernel contract"
+)]
 fn fp4_mxf4_gemv8_tile_matches_scalar_reference() {
     let _guard = cuda_test_guard();
     if !has_cuda() {
@@ -436,17 +468,17 @@ fn fp4_mxf4_gemv8_tile_matches_scalar_reference() {
     for r in 0..M {
         for c in 0..K {
             let mag = ((r * 3 + c * 5 + 2) % 6) as u8;
-            let sign = if (r + c) % 7 == 0 { 0x08 } else { 0 };
+            let sign = if (r + c).is_multiple_of(7) { 0x08 } else { 0 };
             a_elems[r * K + c] = mag | sign;
         }
     }
     let a_packed = pack_low_first(&a_elems);
 
     let mut x_elems = vec![0u8; K];
-    for c in 0..K {
+    for (c, value) in x_elems.iter_mut().enumerate() {
         let mag = ((c * 3 + 1) % 6) as u8;
-        let sign = if c % 5 == 0 { 0x08 } else { 0 };
-        x_elems[c] = mag | sign;
+        let sign = if c.is_multiple_of(5) { 0x08 } else { 0 };
+        *value = mag | sign;
     }
     let x_packed = pack_low_first(&x_elems);
 
@@ -506,6 +538,10 @@ fn fp4_mxf4_gemv8_tile_matches_scalar_reference() {
 }
 
 #[test]
+#[allow(
+    unsafe_code,
+    reason = "fixed-size CUDA smoke buffers match the one-warp kernel contract"
+)]
 fn fp4_mxf4_scale_lane_selector_probe() {
     let _guard = cuda_test_guard();
     if !has_cuda() {

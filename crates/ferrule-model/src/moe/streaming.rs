@@ -842,6 +842,7 @@ impl ExpertComputeBundle {
 /// from the page cache without disk I/O.
 static MMAP_CACHE: Mutex<Option<HashMap<PathBuf, Arc<memmap2::Mmap>>>> = Mutex::new(None);
 
+#[allow(unsafe_code)]
 fn get_or_open_mmap(path: &Path) -> Result<Arc<memmap2::Mmap>> {
     let mut guard = MMAP_CACHE.lock().expect("mmap cache poisoned");
     if guard.is_none() {
@@ -853,6 +854,8 @@ fn get_or_open_mmap(path: &Path) -> Result<Arc<memmap2::Mmap>> {
     }
     let file = std::fs::File::open(path)
         .map_err(|e| Error::Model(format!("expert mmap open '{}': {e}", path.display())))?;
+    // SAFETY: expert shards are immutable while the reader is active. The
+    // mapping is read-only and remains owned by the cached `Mmap` value.
     let mmap = unsafe {
         memmap2::MmapOptions::new()
             .map(&file)
@@ -1124,7 +1127,6 @@ impl ExpertStreamingReader {
     ///
     /// When mmap is enabled, reads from the mmap'd file region instead.
     /// The OS page cache provides automatic caching across reads.
-
     fn read_local_slice_positioned_with_mmap(
         slice: &ExpertTensorSlice,
         use_mmap: bool,
@@ -1631,7 +1633,7 @@ pub fn classify_expert_residency(
 }
 
 enum AsyncHostStagedExpertResult {
-    Loaded(ExpertComputeBundle),
+    Loaded(Box<ExpertComputeBundle>),
     Failed { expert: ExpertId, error: String },
 }
 
@@ -1713,7 +1715,7 @@ impl AsyncHostStagedExpertLoader {
                 .read_load_source_concurrent(expert, &source)
                 .and_then(ExpertComputeBundle::from_artifact_payload);
             let message = match result {
-                Ok(bundle) => AsyncHostStagedExpertResult::Loaded(bundle),
+                Ok(bundle) => AsyncHostStagedExpertResult::Loaded(Box::new(bundle)),
                 Err(error) => AsyncHostStagedExpertResult::Failed {
                     expert,
                     error: error.to_string(),
@@ -1785,7 +1787,7 @@ impl AsyncHostStagedExpertLoader {
         match result {
             AsyncHostStagedExpertResult::Loaded(bundle) => {
                 self.in_flight.remove(&bundle.expert);
-                let bundle = Arc::new(bundle);
+                let bundle = Arc::from(bundle);
                 if !cache.insert_shared(Arc::clone(&bundle)) {
                     unretained.insert(bundle.expert, bundle);
                 }
@@ -2023,7 +2025,7 @@ mod tests {
         let mut unretained = HashMap::new();
 
         assert!(loader.handle_result(
-            AsyncHostStagedExpertResult::Loaded(synthetic_bundle(0, 7, 12)),
+            AsyncHostStagedExpertResult::Loaded(Box::new(synthetic_bundle(0, 7, 12))),
             &mut cache,
             &mut unretained,
         ));

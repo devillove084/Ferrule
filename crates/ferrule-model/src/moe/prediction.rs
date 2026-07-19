@@ -119,7 +119,7 @@ impl ExpertBatchAccessEvent {
             phase,
             token_count.max(1),
             &routes_by_token,
-            &[streaming.clone()],
+            std::slice::from_ref(streaming),
         )
     }
 
@@ -574,16 +574,16 @@ impl ExpertHotsetPredictor for ScoreBasedExpertPredictor {
             self.stats.observed_experts = self.stats.observed_experts.saturating_add(1);
         }
 
-        if let Some(last) = &self.last_layer {
-            if last.layer.saturating_add(1) == event.layer {
-                for (prev_expert, prev_weight) in &last.experts {
-                    for (next_expert, next_weight) in &observed {
-                        let key = (last.layer, *prev_expert, *next_expert);
-                        let entry = self.transition_scores.entry(key).or_insert(0.0);
-                        *entry = self.config.transition_decay * *entry + prev_weight * next_weight;
-                        self.stats.transition_observations =
-                            self.stats.transition_observations.saturating_add(1);
-                    }
+        if let Some(last) = &self.last_layer
+            && last.layer.saturating_add(1) == event.layer
+        {
+            for (prev_expert, prev_weight) in &last.experts {
+                for (next_expert, next_weight) in &observed {
+                    let key = (last.layer, *prev_expert, *next_expert);
+                    let entry = self.transition_scores.entry(key).or_insert(0.0);
+                    *entry = self.config.transition_decay * *entry + prev_weight * next_weight;
+                    self.stats.transition_observations =
+                        self.stats.transition_observations.saturating_add(1);
                 }
             }
         }

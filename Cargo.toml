@@ -34,3 +34,7 @@ strip = "symbols"
 
 [profile.dev]
 opt-level = 1
+
+[profile.miri]
+inherits = "dev"
+opt-level = 0

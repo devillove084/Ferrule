@@ -161,7 +161,7 @@ pub fn capture_decode_graph(
 /// 1. First `launch_or_capture` call executes directly (warmup).
 /// 2. If the recorded properties are stable, the second call captures a graph.
 /// 3. Subsequent calls replay the captured graph.
-/// 4. If [`set_properties`] changes the data pointers / shapes, the graph is
+/// 4. If `set_properties` changes the data pointers / shapes, the graph is
 ///    invalidated and the warmup cycle restarts.
 ///
 /// This is the recommended path for stable decode buckets once all host

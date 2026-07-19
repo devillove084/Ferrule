@@ -1,7 +1,7 @@
 //! GGUF (GPT-Generated Unified Format) reader.
 #![allow(clippy::needless_range_loop)]
 //!
-//! Full spec: https://github.com/ggml-org/ggml/blob/master/docs/gguf.md
+//! Full spec: <https://github.com/ggml-org/ggml/blob/master/docs/gguf.md>
 //!
 //! ## Key design:
 //! - Mmap-based: the entire file is memory-mapped, zero-copy where possible
@@ -18,9 +18,8 @@
 //! ```
 //!
 //! # Safety
-//! Uses unsafe for memory-mapped I/O and raw pointer casting for
-//! tensor data reinterpretation. All unsafe is internal and bounds-checked.
-#![allow(unsafe_code)]
+//! Memory mapping is encapsulated by the file readers, which expose only
+//! bounds-checked immutable views of model artifacts.
 
 use ferrule_common::{Error, QuantType, Result};
 pub mod safetensors;
@@ -224,8 +223,11 @@ fn quant_block_bytes(qt: QuantType) -> usize {
 
 impl GgufFile {
     /// Open and parse a GGUF file. The underlying file is memory-mapped.
+    #[allow(unsafe_code)]
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let file = std::fs::File::open(path.as_ref())?;
+        // SAFETY: model artifacts are treated as immutable while loaded. The
+        // mapping is read-only, and `Mmap` keeps it alive after `file` is dropped.
         let mmap = unsafe { Mmap::map(&file)? };
 
         let data: &[u8] = &mmap;

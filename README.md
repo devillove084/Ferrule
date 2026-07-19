@@ -683,13 +683,15 @@ cargo run -p ferrule-cli -- expert-stream-smoke models/OLMoE-Instruct --layer 0 
 ### Validation
 
 ```bash
-just test           # All tests
-just test-graph     # Graph IR tests
-just test-runtime   # Runtime tests
-just test-cuda      # CUDA tests (via cargo oxide)
+cargo install --locked cargo-nextest # One-time local test runner setup
+just test           # CPU tests via nextest, doctests, optional CUDA tests
+just test-runtime   # Targeted runtime tests with cargo test
+just test-cuda      # CUDA tests via cargo oxide when available
 just fmt            # Format check
-just clippy         # Lint
-just lint           # fmt + clippy
+just clippy         # Workspace/all-target Clippy with warnings denied
+just lint           # fmt + clippy + strict Rustdoc
+just miri           # Runtime library tests under Miri
+just deny           # Advisories, licenses, bans, and source policy
 ```
 
 ---

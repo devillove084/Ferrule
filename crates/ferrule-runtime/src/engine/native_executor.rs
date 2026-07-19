@@ -829,16 +829,15 @@ mod tests {
                 .logits()
                 .iter()
                 .enumerate()
-                .filter_map(|(row, request)| {
-                    matches!(request, LogitsRequest::TopK(_)).then(|| {
-                        LogitsRow::new(
-                            row as u32,
-                            LogitsOutput::TopK(vec![ExecutionTokenLogit::new(
-                                self.packed_predictions[row],
-                                1.0,
-                            )]),
-                        )
-                    })
+                .filter(|(_, request)| matches!(request, LogitsRequest::TopK(_)))
+                .map(|(row, _)| {
+                    LogitsRow::new(
+                        row as u32,
+                        LogitsOutput::TopK(vec![ExecutionTokenLogit::new(
+                            self.packed_predictions[row],
+                            1.0,
+                        )]),
+                    )
                 })
                 .collect();
             Ok(Some(ExecutionOutput::new(logits)))

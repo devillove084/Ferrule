@@ -27,7 +27,9 @@ use super::attention::{DeepSeekV4Attention, DeepSeekV4AttentionCache};
 use super::attention::{DeepSeekV4AttentionDecodeArena, DeepSeekV4AttentionRowsTransitionArena};
 use super::config::DeepSeekV4AttentionConfig;
 #[cfg(feature = "cuda")]
-use super::cuda_cache::{DeepSeekV4CudaHcStage, DeepSeekV4DsparkAttentionBuffers};
+use super::cuda_cache::DeepSeekV4CudaHcStage;
+#[cfg(all(feature = "cuda", feature = "cutlass"))]
+use super::cuda_cache::DeepSeekV4DsparkAttentionBuffers;
 use super::helpers::rms_norm_rows_with_operators;
 use super::operators::{DeepSeekV4LayerProfileStage, DeepSeekV4OperatorContext};
 #[cfg(feature = "cuda")]
@@ -258,6 +260,10 @@ pub(crate) fn layer_arena_variant_layout(layers: &[DeepSeekV4Layer]) -> (Vec<usi
 }
 
 impl DeepSeekV4Layer {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the layer decode API explicitly carries sequence, expert, and execution state"
+    )]
     pub fn decode_step_reference(
         &self,
         state: &mut DeepSeekV4LayerState,
@@ -283,6 +289,10 @@ impl DeepSeekV4Layer {
         )
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the layer decode API explicitly carries sequence, expert, and execution state"
+    )]
     pub fn decode_step_with_operators(
         &self,
         state: &mut DeepSeekV4LayerState,
@@ -1057,6 +1067,10 @@ impl DeepSeekV4Layer {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the layer prefill API explicitly carries sequence, expert, and execution state"
+    )]
     pub fn prefill_start_with_operators(
         &self,
         state: &mut DeepSeekV4LayerState,

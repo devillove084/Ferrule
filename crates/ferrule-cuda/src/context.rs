@@ -887,9 +887,25 @@ pub struct CudaArtifactLinearWorkspace {
 /// owns only the BF16 boundaries, score/probability matrices, output, and device
 /// status needed by the semantic CUTLASS bundle.
 pub struct CudaDsparkHybridAttentionWorkspace {
+    #[cfg_attr(
+        not(feature = "cutlass"),
+        allow(dead_code, reason = "keeps native CUTLASS query scratch alive")
+    )]
     query_bf16: DeviceBuffer<u16>,
+    #[cfg_attr(
+        not(feature = "cutlass"),
+        allow(dead_code, reason = "keeps native CUTLASS KV scratch alive")
+    )]
     gathered_kv_bf16: DeviceBuffer<u16>,
+    #[cfg_attr(
+        not(feature = "cutlass"),
+        allow(dead_code, reason = "keeps native CUTLASS score scratch alive")
+    )]
     scores: CudaF32Buffer,
+    #[cfg_attr(
+        not(feature = "cutlass"),
+        allow(dead_code, reason = "keeps native CUTLASS probability scratch alive")
+    )]
     probabilities_bf16: DeviceBuffer<u16>,
     status: CudaI32Buffer,
 }
@@ -903,14 +919,38 @@ impl CudaDsparkHybridAttentionWorkspace {
 /// Graph-stable outputs and reduction scratch for the checkpoint-native DSpark
 /// HC/LM/Markov/confidence semantic bundle.
 pub struct CudaDsparkProposalHeadWorkspace {
+    #[cfg_attr(
+        not(feature = "cutlass"),
+        allow(dead_code, reason = "keeps native CUTLASS hidden scratch alive")
+    )]
     hidden: CudaF32Buffer,
+    #[cfg_attr(
+        not(feature = "cutlass"),
+        allow(dead_code, reason = "keeps native CUTLASS normalization scratch alive")
+    )]
     normalized: CudaF32Buffer,
+    #[cfg_attr(
+        not(feature = "cutlass"),
+        allow(dead_code, reason = "keeps native CUTLASS logits scratch alive")
+    )]
     base_logits: CudaF32Buffer,
+    #[cfg_attr(
+        not(feature = "cutlass"),
+        allow(dead_code, reason = "keeps native CUTLASS reduction values alive")
+    )]
     partial_values: CudaF32Buffer,
+    #[cfg_attr(
+        not(feature = "cutlass"),
+        allow(dead_code, reason = "keeps native CUTLASS reduction indices alive")
+    )]
     partial_indices: CudaI32Buffer,
     token_ids: CudaI32HostMirror,
     confidence: CudaF32Buffer,
     status: CudaI32Buffer,
+    #[cfg_attr(
+        not(feature = "cutlass"),
+        allow(dead_code, reason = "keeps the CUTLASS result mirror alive")
+    )]
     result: CudaI32HostMirror,
 }
 
@@ -998,10 +1038,30 @@ pub struct CudaMoeSegmentWorkspace {
     resolve: CudaExpertRouteResolveWorkspace,
     x_packed: DeviceBuffer<u8>,
     x_scales: DeviceBuffer<u8>,
+    #[cfg_attr(
+        not(feature = "cutlass"),
+        allow(dead_code, reason = "keeps native CUTLASS segment state alive")
+    )]
     segment_states: DeviceBuffer<i32>,
+    #[cfg_attr(
+        not(feature = "cutlass"),
+        allow(dead_code, reason = "keeps native CUTLASS segment bindings alive")
+    )]
     segment_bindings: DeviceBuffer<u64>,
+    #[cfg_attr(
+        not(feature = "cutlass"),
+        allow(dead_code, reason = "keeps native CUTLASS hidden scratch alive")
+    )]
     hidden_f32: DeviceBuffer<f32>,
+    #[cfg_attr(
+        not(feature = "cutlass"),
+        allow(dead_code, reason = "keeps native CUTLASS packed scratch alive")
+    )]
     hidden_packed: DeviceBuffer<u8>,
+    #[cfg_attr(
+        not(feature = "cutlass"),
+        allow(dead_code, reason = "keeps native CUTLASS scale scratch alive")
+    )]
     hidden_scales: DeviceBuffer<u8>,
     max_experts: usize,
     max_segments: usize,
@@ -1124,6 +1184,10 @@ pub struct CudaI32HostMirror {
 impl CudaI32HostMirror {
     pub fn len(&self) -> usize {
         self.device.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.device.is_empty()
     }
 
     pub fn device(&self) -> &CudaI32Buffer {
@@ -3013,6 +3077,7 @@ impl CudaArtifactOperatorContext {
         })
     }
 
+    #[cfg(feature = "cutlass")]
     fn zero_i32_buffer_in_place(&self, buf: &mut CudaI32Buffer) -> Result<()> {
         let result = unsafe {
             cuda_bindings::cuMemsetD32Async(
@@ -3369,7 +3434,7 @@ impl CudaArtifactOperatorContext {
                 row_indices.len
             )));
         }
-        if src.len % row_width != 0 {
+        if !src.len.is_multiple_of(row_width) {
             return Err(Error::Internal(format!(
                 "CUDA row gather source length {} is not divisible by row_width {row_width}",
                 src.len
@@ -3416,7 +3481,7 @@ impl CudaArtifactOperatorContext {
                 src.len
             )));
         }
-        if dst.len % row_width != 0 {
+        if !dst.len.is_multiple_of(row_width) {
             return Err(Error::Internal(format!(
                 "CUDA row scatter destination length {} is not divisible by row_width {row_width}",
                 dst.len
@@ -3696,13 +3761,13 @@ impl CudaArtifactOperatorContext {
                 "CUDA paged plane scatter requires block slots for non-empty rows".into(),
             ));
         }
-        if let Some(mask) = mask {
-            if mask.len != rows {
-                return Err(Error::Internal(format!(
-                    "CUDA paged plane scatter mask length mismatch: got {} expected {rows}",
-                    mask.len
-                )));
-            }
+        if let Some(mask) = mask
+            && mask.len != rows
+        {
+            return Err(Error::Internal(format!(
+                "CUDA paged plane scatter mask length mismatch: got {} expected {rows}",
+                mask.len
+            )));
         }
         let slot_elements = layout
             .layer_count
@@ -3765,7 +3830,7 @@ impl CudaArtifactOperatorContext {
     /// Device-side accumulate: `y += scale * x`.
     ///
     /// Used to accumulate routed expert outputs on the GPU without
-    /// downloading each expert's output to host and accumulating in Vec<f32>.
+    /// downloading each expert's output to host and accumulating in `Vec<f32>`.
     pub fn saxpy_into(&self, scale: f32, x: &CudaF32Buffer, y: &mut CudaF32Buffer) -> Result<()> {
         if x.len != y.len {
             return Err(Error::Internal(format!(
@@ -4579,9 +4644,9 @@ impl CudaArtifactOperatorContext {
                 split_comb,
                 packed_output,
             );
-            return Err(Error::Internal(
+            Err(Error::Internal(
                 "GB10 HC producer execution requires the `cutlass` feature".into(),
-            ));
+            ))
         }
         #[cfg(feature = "cutlass")]
         {
@@ -7194,9 +7259,9 @@ impl CudaArtifactOperatorContext {
                 swiglu_limit,
                 accumulate_output,
             );
-            return Err(Error::Internal(
+            Err(Error::Internal(
                 "GB10 shared FFN execution requires the `cutlass` feature".into(),
-            ));
+            ))
         }
         #[cfg(feature = "cutlass")]
         {
@@ -7743,9 +7808,9 @@ impl CudaArtifactOperatorContext {
         self.counters.add_moe_call(CudaMoeExecutionPath::TensorCore);
         #[cfg(not(feature = "cutlass"))]
         {
-            return Err(Error::Internal(
+            Err(Error::Internal(
                 "GB10 stable-frame FP4 MoE execution requires the `cutlass` feature".into(),
-            ));
+            ))
         }
         #[cfg(feature = "cutlass")]
         {
@@ -10837,7 +10902,7 @@ mod tests {
         // expected: row0 = 1.0*1.0*1.0 + 0.5*2.0*1.0 + (-1.0)*(-1.0)*0.5 + 3.0*0.0*0.5 = 1.0+1.0+0.5+0 = 2.5
         match cuda_gemv_fp8_e4m3fn_e8m0_2d(&x, &weight, &scales, 2, 4, 1, 2) {
             Ok(actual) => {
-                assert!(actual.len() >= 1);
+                assert!(!actual.is_empty());
                 // Just verify finite and not panic
                 assert!(actual[0].is_finite());
             }

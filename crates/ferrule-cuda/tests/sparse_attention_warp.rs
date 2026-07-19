@@ -7,23 +7,36 @@ fn has_cuda() -> bool {
     CudaContext::new(0).is_ok()
 }
 
-fn sparse_attention_reference(
-    query: &[f32],
-    values: &[f32],
-    topk: &[i32],
-    sink: &[f32],
+#[derive(Clone, Copy)]
+struct SparseAttentionShape {
     tokens: usize,
     kv_len: usize,
     heads: usize,
     head_dim: usize,
     topk_len: usize,
     softmax_scale: f32,
+}
+
+fn sparse_attention_reference(
+    query: &[f32],
+    values: &[f32],
+    topk: &[i32],
+    sink: &[f32],
+    shape: SparseAttentionShape,
 ) -> Vec<f32> {
+    let SparseAttentionShape {
+        tokens,
+        kv_len,
+        heads,
+        head_dim,
+        topk_len,
+        softmax_scale,
+    } = shape;
     let mut output = vec![0.0f32; tokens * heads * head_dim];
     for token in 0..tokens {
-        for head in 0..heads {
+        for (head, &sink_score) in sink.iter().take(heads).enumerate() {
             let query_offset = (token * heads + head) * head_dim;
-            let mut max_score = sink[head];
+            let mut max_score = sink_score;
             for slot in 0..topk_len {
                 let kv_index = topk[token * topk_len + slot];
                 if kv_index < 0 || kv_index as usize >= kv_len {
@@ -37,7 +50,7 @@ fn sparse_attention_reference(
                 max_score = max_score.max(dot * softmax_scale);
             }
 
-            let mut denominator = libm::expf(sink[head] - max_score);
+            let mut denominator = libm::expf(sink_score - max_score);
             let output_offset = query_offset;
             for slot in 0..topk_len {
                 let kv_index = topk[token * topk_len + slot];
@@ -93,12 +106,14 @@ fn dsv4_warp_sparse_attention_matches_scalar_reference() {
         &values,
         &topk,
         &sink,
-        TOKENS,
-        KV_LEN,
-        HEADS,
-        HEAD_DIM,
-        TOPK,
-        softmax_scale,
+        SparseAttentionShape {
+            tokens: TOKENS,
+            kv_len: KV_LEN,
+            heads: HEADS,
+            head_dim: HEAD_DIM,
+            topk_len: TOPK,
+            softmax_scale,
+        },
     );
     let actual = cuda_sparse_attention_sink_f32(
         &query,

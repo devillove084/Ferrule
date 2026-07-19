@@ -50,7 +50,7 @@ fn route_ranked_reducer_preserves_prefix_and_uses_token_major_routes() {
     for route in 0..route_count {
         for row in 0..HIDDEN_SIZE {
             let magnitude = (route * 16 + row + 1) as f32;
-            routes[route * HIDDEN_SIZE + row] = if route % 2 == 0 {
+            routes[route * HIDDEN_SIZE + row] = if route.is_multiple_of(2) {
                 magnitude
             } else {
                 -magnitude

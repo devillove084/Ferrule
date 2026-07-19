@@ -92,6 +92,7 @@ impl RegisteredBuffer {
         }
     }
 
+    #[allow(unsafe_code)]
     fn as_mut_ptr(&mut self) -> Result<*mut u8> {
         match &mut self.backing {
             RegisteredBufferBacking::Pageable(blocks) => Ok(blocks.as_mut_ptr().cast()),
@@ -112,6 +113,7 @@ impl RegisteredBuffer {
         })
     }
 
+    #[allow(unsafe_code)]
     fn range(&self, offset: usize, len: usize) -> Result<&[u8]> {
         let end = offset
             .checked_add(len)
@@ -124,6 +126,10 @@ impl RegisteredBuffer {
         }
         match &self.backing {
             RegisteredBufferBacking::Pageable(blocks) => {
+                // SAFETY: `AlignedBlock` contains exactly 4096 bytes with no
+                // trailing padding, and boxed slices store blocks contiguously.
+                // `self.len` is fixed to `blocks.len() * 4096`, and the shared
+                // slice cannot mutate the backing allocation.
                 let bytes =
                     unsafe { std::slice::from_raw_parts(blocks.as_ptr().cast::<u8>(), self.len) };
                 Ok(&bytes[offset..end])
@@ -161,6 +167,13 @@ struct DirectReadExtent {
     aligned_len: usize,
     required_end: usize,
     views: Vec<DirectReadView>,
+}
+
+struct PendingDirectReadExtent {
+    path: PathBuf,
+    start: u64,
+    end: u64,
+    slices: Vec<(usize, ExpertTensorSlice)>,
 }
 
 struct IoUringDirectState {
@@ -204,6 +217,7 @@ impl IoUringDirectState {
         Self::new_with_buffers(queue_depth, buffer_bytes, buffers)
     }
 
+    #[allow(unsafe_code)]
     fn new_with_buffers(
         queue_depth: usize,
         buffer_bytes: usize,
@@ -293,7 +307,7 @@ impl IoUringDirectState {
         });
 
         let mut extents = Vec::new();
-        let mut current: Option<(PathBuf, u64, u64, Vec<(usize, ExpertTensorSlice)>)> = None;
+        let mut current: Option<PendingDirectReadExtent> = None;
         for (slice_index, slice) in ordered {
             if slice.bytes == 0 {
                 return Err(Error::Model("expert tensor slice is empty".into()));
@@ -302,37 +316,48 @@ impl IoUringDirectState {
                 .offset
                 .checked_add(slice.bytes)
                 .ok_or_else(|| Error::Model("expert tensor slice end overflow".into()))?;
-            let can_merge = current.as_ref().is_some_and(|(path, start, end, _)| {
-                if path != &slice.path
-                    || slice.offset > end.saturating_add(DIRECT_IO_ALIGNMENT as u64)
+            let can_merge = current.as_ref().is_some_and(|current| {
+                if current.path != slice.path
+                    || slice.offset > current.end.saturating_add(DIRECT_IO_ALIGNMENT as u64)
                 {
                     return false;
                 }
-                let aligned_start = start / DIRECT_IO_ALIGNMENT as u64 * DIRECT_IO_ALIGNMENT as u64;
-                let merged_required = slice_end.max(*end).saturating_sub(aligned_start);
+                let aligned_start =
+                    current.start / DIRECT_IO_ALIGNMENT as u64 * DIRECT_IO_ALIGNMENT as u64;
+                let merged_required = slice_end.max(current.end).saturating_sub(aligned_start);
                 usize::try_from(merged_required)
                     .ok()
                     .and_then(|required| align_up(required, DIRECT_IO_ALIGNMENT).ok())
                     .is_some_and(|aligned| aligned <= self.buffer_bytes)
             });
             if can_merge {
-                let (_, _, end, views) = current.as_mut().expect("checked above");
-                *end = (*end).max(slice_end);
-                views.push((slice_index, slice));
+                let current = current.as_mut().expect("checked above");
+                current.end = current.end.max(slice_end);
+                current.slices.push((slice_index, slice));
                 continue;
             }
-            if let Some((path, start, end, views)) = current.take() {
-                extents.push(self.build_extent(path, start, end, views)?);
+            if let Some(current) = current.take() {
+                extents.push(self.build_extent(
+                    current.path,
+                    current.start,
+                    current.end,
+                    current.slices,
+                )?);
             }
-            current = Some((
-                slice.path.clone(),
-                slice.offset,
-                slice_end,
-                vec![(slice_index, slice)],
-            ));
+            current = Some(PendingDirectReadExtent {
+                path: slice.path.clone(),
+                start: slice.offset,
+                end: slice_end,
+                slices: vec![(slice_index, slice)],
+            });
         }
-        if let Some((path, start, end, views)) = current {
-            extents.push(self.build_extent(path, start, end, views)?);
+        if let Some(current) = current {
+            extents.push(self.build_extent(
+                current.path,
+                current.start,
+                current.end,
+                current.slices,
+            )?);
         }
         Ok(extents)
     }
@@ -382,6 +407,7 @@ impl IoUringDirectState {
         })
     }
 
+    #[allow(unsafe_code)]
     fn push_read(
         &mut self,
         extent_index: usize,

@@ -15,14 +15,14 @@ cuda = ["dep:ferrule-cuda"]
 cutlass = ["cuda", "ferrule-cuda/cutlass"]
 
 [dependencies]
-ferrule-common = { path = "../ferrule-common" }
-ferrule-cuda = { path = "../ferrule-cuda", optional = true }
+ferrule-common = { version = "0.2.0", path = "../ferrule-common" }
+ferrule-cuda = { version = "0.2.0", path = "../ferrule-cuda", optional = true }
 memmap2 = "0.9"
 byteorder = "1"
 half = "2"
 tracing = "0.1"
 thiserror = "2"
-tokenizers = "0.21"
+tokenizers = { version = "0.22.2", default-features = false, features = ["onig"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rayon = "1.10"

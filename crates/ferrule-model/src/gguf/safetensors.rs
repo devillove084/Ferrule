@@ -74,8 +74,11 @@ impl SafeTensorsFile {
     /// Open a safetensors file. Uses regular mmap (no MAP_POPULATE) —
     /// deferred page faults let the OS pipeline I/O with subsequent BF16→F32
     /// conversion, avoiding the 30s blocking pre-fault for 15 GB+ models.
+    #[allow(unsafe_code)]
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let file = std::fs::File::open(path.as_ref())?;
+        // SAFETY: safetensors shards are immutable model artifacts. The mapping
+        // is read-only, and `Mmap` owns the mapping after `file` is dropped.
         let mmap = unsafe { MmapOptions::new().map(&file)? };
         let data: &[u8] = &mmap;
 
@@ -193,21 +196,20 @@ impl SafeTensorsFile {
         let mut out = vec![0.0f32; n];
         match dtype {
             SafeDtype::F32 => {
-                let src = unsafe { std::slice::from_raw_parts(raw.as_ptr() as *const f32, n) };
-                out.copy_from_slice(src);
+                for (value, bytes) in out.iter_mut().zip(raw.chunks_exact(4)) {
+                    *value = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                }
             }
             SafeDtype::F16 => {
-                let src =
-                    unsafe { std::slice::from_raw_parts(raw.as_ptr() as *const half::f16, n) };
-                for (o, s) in out.iter_mut().zip(src.iter()) {
-                    *o = s.to_f32();
+                for (value, bytes) in out.iter_mut().zip(raw.chunks_exact(2)) {
+                    let bits = u16::from_le_bytes([bytes[0], bytes[1]]);
+                    *value = half::f16::from_bits(bits).to_f32();
                 }
             }
             SafeDtype::Bf16 => {
-                let src =
-                    unsafe { std::slice::from_raw_parts(raw.as_ptr() as *const half::bf16, n) };
-                for (o, s) in out.iter_mut().zip(src.iter()) {
-                    *o = s.to_f32();
+                for (value, bytes) in out.iter_mut().zip(raw.chunks_exact(2)) {
+                    let bits = u16::from_le_bytes([bytes[0], bytes[1]]);
+                    *value = half::bf16::from_bits(bits).to_f32();
                 }
             }
             SafeDtype::F8E4M3 => {

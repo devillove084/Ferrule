@@ -528,7 +528,7 @@ fn device_segment_grouping_preserves_route_identity_boundaries_and_padding() {
         .collect::<Vec<_>>();
     let mut scattered_routes = Vec::new();
     let mut padding = 0;
-    for segment in 0..valid_segments.len() {
+    for (segment, &valid_slot) in valid_segments.iter().enumerate() {
         for column in 0..8 {
             let metadata = segment * 8 + column;
             let route = grouping.segment_route_indices[metadata];
@@ -547,7 +547,7 @@ fn device_segment_grouping_preserves_route_identity_boundaries_and_padding() {
             } else {
                 expert_two.slot
             };
-            assert_eq!(valid_segments[segment], expected_slot);
+            assert_eq!(valid_slot, expected_slot);
             scattered_routes.push(route);
         }
     }

@@ -15,9 +15,9 @@ cuda = ["dep:ferrule-cuda"]
 cutlass = ["cuda", "ferrule-cuda/cutlass", "ferrule-model/cutlass"]
 
 [dependencies]
-ferrule-common = { path = "../ferrule-common" }
-ferrule-model = { path = "../ferrule-model" }
-ferrule-cuda = { path = "../ferrule-cuda", optional = true }
+ferrule-common = { version = "0.2.0", path = "../ferrule-common" }
+ferrule-model = { version = "0.2.0", path = "../ferrule-model" }
+ferrule-cuda = { version = "0.2.0", path = "../ferrule-cuda", optional = true }
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1"
 

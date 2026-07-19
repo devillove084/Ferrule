@@ -11,9 +11,9 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use ferrule_common::execution::{ForwardPhase, KvCowReplacement, KvLayoutSchema, KvPageId};
-use ferrule_common::kernel_plan::ModelKernelPlan;
+use ferrule_common::kernel_plan::{KernelOperation, ModelKernelPlan};
 #[cfg(feature = "cutlass")]
-use ferrule_common::kernel_plan::{KernelOperation, KernelProviderId, LaunchDescriptor};
+use ferrule_common::kernel_plan::{KernelProviderId, LaunchDescriptor};
 use ferrule_common::{
     Error, ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertKey, ExpertLease,
     ExpertResidencyControl, ExpertResidencyGrant, ExpertSlotBinding, MemoryPoolLimits,
@@ -26,9 +26,9 @@ use crate::artifact::linear::{
     ArtifactActivationQuantization, ArtifactLinearFormat, ArtifactLinearPayload,
 };
 use crate::artifact::linear::{artifact_linear_cache_key, artifact_linear_row_cache_key};
-use crate::artifact::tensor::{
-    ArtifactDType, ArtifactMatrixSlice, ArtifactTensorReader, ArtifactTensorSlice,
-};
+#[cfg(feature = "cutlass")]
+use crate::artifact::tensor::{ArtifactDType, ArtifactMatrixSlice};
+use crate::artifact::tensor::{ArtifactTensorReader, ArtifactTensorSlice};
 use crate::attention_backend::SparseAttentionSpec;
 use crate::ffn::SwiGluFfnPayload;
 use crate::hyper_connection::{HyperConnectionConfig, HyperConnectionWeights};

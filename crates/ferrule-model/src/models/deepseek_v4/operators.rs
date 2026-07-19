@@ -725,6 +725,10 @@ impl DeepSeekV4OperatorContext {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the operator boundary keeps tensor views, dimensions, and kernel specification explicit"
+    )]
     pub(crate) fn sparse_attention(
         &mut self,
         query: &[f32],

@@ -14,10 +14,12 @@ use ferrule_common::execution::ForwardPhase;
 use ferrule_common::{Error, Result};
 
 use super::config::{DeepSeekV4AttentionConfig, DeepSeekV4RopeParams};
+#[cfg(all(feature = "cuda", feature = "cutlass"))]
+use super::cuda_cache::DeepSeekV4DsparkAttentionBuffers;
 #[cfg(feature = "cuda")]
 use super::cuda_cache::{
     DeepSeekV4CudaCompressor, DeepSeekV4CudaLayerNorm, DeepSeekV4CudaLinear,
-    DeepSeekV4CudaSequenceKvState, DeepSeekV4DsparkAttentionBuffers,
+    DeepSeekV4CudaSequenceKvState,
 };
 use super::helpers::{
     apply_rotary_tail, apply_rotary_tail_scaled, bind_aux_linear, check_len, check_linear,
@@ -3982,6 +3984,11 @@ impl DeepSeekV4AttentionCache {
     }
 }
 
+struct DeepSeekV4CompressorProjection {
+    kv: Vec<f32>,
+    score: Vec<f32>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeepSeekV4CompressorState {
     ratio: usize,
@@ -4042,11 +4049,11 @@ impl DeepSeekV4CompressorState {
         self.score_state.fill(f32::NEG_INFINITY);
 
         let tokens = hidden.len() / payload.wkv.format.in_features();
-        let kv_rows = operators.linear_rows(&payload.wkv, hidden, tokens)?;
-        let score_rows = operators.linear_rows(&payload.wgate, hidden, tokens)?;
-        self.prefill_start_projected(
-            payload, tokens, kv_rows, score_rows, rope_dim, rope, operators,
-        )
+        let projection = DeepSeekV4CompressorProjection {
+            kv: operators.linear_rows(&payload.wkv, hidden, tokens)?,
+            score: operators.linear_rows(&payload.wgate, hidden, tokens)?,
+        };
+        self.prefill_start_projected(payload, tokens, projection, rope_dim, rope, operators)
     }
 
     #[cfg(feature = "cuda")]
@@ -4186,12 +4193,15 @@ impl DeepSeekV4CompressorState {
         &mut self,
         payload: &DeepSeekV4CompressorPayload,
         tokens: usize,
-        kv_rows: Vec<f32>,
-        score_rows: Vec<f32>,
+        projection: DeepSeekV4CompressorProjection,
         rope_dim: usize,
         rope: DeepSeekV4RopeParams,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<Vec<f32>> {
+        let DeepSeekV4CompressorProjection {
+            kv: kv_rows,
+            score: score_rows,
+        } = projection;
         if kv_rows.len() != tokens * self.out_dim || score_rows.len() != tokens * self.out_dim {
             return Err(Error::Model(format!(
                 "DeepSeek-V4 compressor prefill rows matvec length mismatch: kv={} score={} expected {}x{}",
@@ -4318,9 +4328,11 @@ impl DeepSeekV4CompressorState {
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<Option<Vec<f32>>> {
         self.validate_append_payload(payload)?;
-        let kv = operators.linear_matvec(&payload.wkv, hidden)?;
-        let score = operators.linear_matvec(&payload.wgate, hidden)?;
-        self.append_projected_step(payload, kv, score, position, rope_dim, rope, operators)
+        let projection = DeepSeekV4CompressorProjection {
+            kv: operators.linear_matvec(&payload.wkv, hidden)?,
+            score: operators.linear_matvec(&payload.wgate, hidden)?,
+        };
+        self.append_projected_step(payload, projection, position, rope_dim, rope, operators)
     }
 
     #[cfg(feature = "cuda")]
@@ -4572,14 +4584,13 @@ impl DeepSeekV4CompressorState {
     fn append_projected_step(
         &mut self,
         payload: &DeepSeekV4CompressorPayload,
-        kv: Vec<f32>,
-        score: Vec<f32>,
+        projection: DeepSeekV4CompressorProjection,
         position: usize,
         rope_dim: usize,
         rope: DeepSeekV4RopeParams,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<Option<Vec<f32>>> {
-        if !self.append_projected_state(payload, kv, score, position)? {
+        if !self.append_projected_state(payload, projection.kv, projection.score, position)? {
             return Ok(None);
         }
 

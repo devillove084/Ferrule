@@ -369,6 +369,12 @@ pub struct LayerKernelPlan {
     pub resident_capture_safe: bool,
 }
 
+impl Default for LayerKernelPlan {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LayerKernelPlan {
     /// Creates an empty semantic plan.
     pub fn new() -> Self {

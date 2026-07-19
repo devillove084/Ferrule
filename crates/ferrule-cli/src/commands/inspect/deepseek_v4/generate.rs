@@ -405,7 +405,7 @@ pub fn cmd_deepseek_v4_generate(
         println!("generated_tokens: {:?}", generated);
         println!("position:   {final_position}");
         println!("bound layers: {}", runner.bound_layer_count());
-        print_deepseek_v4_runtime_stats(&runner);
+        print_deepseek_v4_runtime_stats(runner);
         println!("run:        {:.3} ms", elapsed.as_secs_f64() * 1000.0);
     }
     Ok(())

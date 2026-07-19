@@ -1,7 +1,25 @@
+[advisories]
+ignore = [
+  { id = "RUSTSEC-2024-0436", reason = "paste is an unmaintained transitive dependency of tokenizers without a known vulnerability" },
+]
+
 [licenses]
-allow = ["Apache-2.0","MIT","BSD-3-Clause","Unlicense","ISC","MPL-2.0","BSL-1.0","Zlib"]
-exceptions = [{name="cuda-bindings",allow=["Unlicense"]},{name="cuda-core",allow=["Unlicense"]},{name="cuda-device",allow=["Unlicense"]},{name="cuda-host",allow=["Unlicense"]}]
+allow = [
+  "Apache-2.0",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "ISC",
+  "MIT",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+
 [bans]
 multiple-versions = "allow"
+wildcards = "deny"
+
 [sources]
-unknown-git = "allow"
+unknown-git = "deny"
+unknown-registry = "deny"
+allow-git = ["https://github.com/devillove084/cuda-oxide.git"]

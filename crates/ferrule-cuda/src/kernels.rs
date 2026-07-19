@@ -574,7 +574,7 @@ pub mod kernels {
             return;
         }
         let pair = output_index / 2;
-        let value = if output_index % 2 == 0 {
+        let value = if output_index.is_multiple_of(2) {
             indices[pair]
         } else {
             weights[pair].to_bits() as i32
@@ -594,7 +594,7 @@ pub mod kernels {
     ) {
         let index = thread::index_1d().get();
         let rows = rows as usize;
-        if index >= 1 + 2 * rows {
+        if index > 2 * rows {
             return;
         }
         let value = if index == 0 {
@@ -810,6 +810,12 @@ pub mod kernels {
     /// each weight tile is dequantized directly to BF16 in shared memory.
     ///
     /// Grid: `(ceil(output_latent_dim / 16), ceil(rows / 8))`, one warp per CTA.
+    ///
+    /// # Safety
+    ///
+    /// Launch with exactly 32 threads per CTA and the grid described above. All
+    /// buffers must cover the shapes encoded by the dimension arguments, and
+    /// `group_in` must be K16-aligned with a matching `scale_cols` layout.
     #[kernel]
     pub unsafe fn grouped_output_a_bf16_mma_from_fp8(
         context: &[f32],
@@ -1219,6 +1225,12 @@ pub mod kernels {
 
     /// Batched BF16 artifact GEMM using an SM121 `m16n8k16` Tensor Core tile.
     /// Grid: `(ceil(n / 16), ceil(batch / 8))`, one warp per CTA.
+    ///
+    /// # Safety
+    ///
+    /// Launch with exactly 32 threads per CTA and the grid described above.
+    /// `x`, `w`, and `y` must respectively contain at least `batch * k` f32s,
+    /// `n * k * 2` bytes, and `batch * n` f32s; `k` must be K16-aligned.
     #[kernel]
     pub unsafe fn gemm_bf16_bytes(
         x: &[f32],
@@ -3667,6 +3679,12 @@ pub mod kernels {
     /// Grid: `(ceil(n / 16), ceil(batch / 8))`, one warp per CTA. Weight rows
     /// form MMA A; eight activation rows form MMA B columns. Four K32 MMA
     /// operations are folded before applying the model's K128 E8M0 scales.
+    ///
+    /// # Safety
+    ///
+    /// Launch with exactly 32 threads per CTA and the grid described above.
+    /// Inputs, scale tables, and output must cover the matrix shapes encoded by
+    /// `batch`, `n`, `k`, and `scale_cols`; `k` must be K128-aligned.
     #[kernel]
     pub unsafe fn gemm_fp8_e4m3fn_e8m0_2d_mma(
         x_packed: &[u8],
@@ -3794,6 +3812,13 @@ pub mod kernels {
     /// Allocation-free single-row variant used by decode and CUDA graphs.
     /// It quantizes each K128 activation block cooperatively into shared memory
     /// and uses the exact same MMA/scale fold as the batched rows kernel.
+    ///
+    /// # Safety
+    ///
+    /// Launch with exactly 32 threads per CTA and grid
+    /// `(ceil(n / 16), 1, 1)`. The input, weight, scale, and output buffers must
+    /// cover the shapes encoded by `n`, `k`, and `scale_cols`; `k` must be
+    /// K128-aligned.
     #[kernel]
     pub unsafe fn gemv_fp8_e4m3fn_e8m0_2d_mma_from_f32(
         x: &[f32],
@@ -4546,7 +4571,7 @@ pub mod kernels {
 
     /// Fused RMS norm: parallel reduction via shared memory + rsqrt + apply.
     /// Replaces the compute_rms + rms_norm_apply two-kernel sequence.
-    /// Pattern: llama.cpp's block_reduce<SUM> + rsqrtf + element-wise apply.
+    /// Pattern: llama.cpp's `block_reduce<SUM>` + rsqrtf + element-wise apply.
     /// Launch with up to 1024 threads, 1 block. Handles n > blockDim via striding.
     #[kernel]
     pub fn rms_norm_fused(x: &[f32], w: &[f32], mut y: DisjointSlice<f32>, n: u32, eps: f32) {
@@ -7223,6 +7248,13 @@ pub mod kernels {
     /// Outputs are laid out as `[expert, batch_col, output_row]`; with
     /// `batch_cols=1` this is identical to the historical `[expert, row]` GEMV
     /// layout used by the rest of the decode path.
+    ///
+    /// # Safety
+    ///
+    /// Launch with exactly 32 threads per CTA and the grid described above.
+    /// Packed inputs and outputs must cover the documented expert-major shapes;
+    /// each nonzero pointer-table entry must remain a valid device allocation for
+    /// its complete packed weight or scale matrix until the launch completes.
     #[kernel]
     pub unsafe fn moe_gemm_dual_fp4_mxf4_batched(
         x_packed: &[u8],
@@ -7653,6 +7685,13 @@ pub mod kernels {
     /// Grid: `(ceil(hidden_size / 16), num_experts)`, blockDim.x = 32.
     /// `y_hidden_packed` is laid out as `[expert, batch_col, intermediate/2]`;
     /// results overwrite expert-major scratch `[expert, batch_col, hidden_row]`.
+    ///
+    /// # Safety
+    ///
+    /// Launch with exactly 32 threads per CTA and the grid described above.
+    /// Packed hidden inputs and outputs must cover the documented expert-major
+    /// shapes; each nonzero pointer-table entry must remain a valid device
+    /// allocation for its complete packed weight or scale matrix.
     #[kernel]
     pub unsafe fn moe_gemm_down_fp4_mxf4_batched(
         y_hidden_packed: &[u8],
@@ -8123,6 +8162,13 @@ pub mod kernels {
     /// Each segment owns eight columns and one resident expert slot. Input columns
     /// gather from the full-token packed input through `segment_token_indices`;
     /// `-1` padding columns are materialized as zero.
+    ///
+    /// # Safety
+    ///
+    /// Launch with exactly 32 threads per CTA and the grid described above. All
+    /// segment tables and packed buffers must cover their encoded capacities;
+    /// validated pointer-table entries must remain live device allocations for
+    /// their complete weight and scale matrices until the launch completes.
     #[kernel]
     pub unsafe fn moe_gemm_dual_fp4_mxf4_segmented(
         x_packed: &[u8],
@@ -8384,6 +8430,13 @@ pub mod kernels {
     /// Grid: `(ceil(hidden_size / 16), num_segments)`, blockDim.x = 32. Hidden
     /// activations are `[segment, 8, intermediate]`. Each real column scatters
     /// directly to `route_output[route_index, hidden]`; `-1` padding is skipped.
+    ///
+    /// # Safety
+    ///
+    /// Launch with exactly 32 threads per CTA and the grid described above. All
+    /// segment tables, hidden scratch, route outputs, and pointer tables must
+    /// cover their encoded capacities, and referenced device allocations must
+    /// remain live until the launch completes.
     #[kernel]
     pub unsafe fn moe_gemm_down_fp4_mxf4_segmented(
         y_hidden_packed: &[u8],
@@ -9076,6 +9129,11 @@ pub mod kernels {
     //   b_scales:  8 cols × 2 bytes.
     //
     // One CTA = one warp (32 threads). Grid: (1,1,1).
+    ///
+    /// # Safety
+    ///
+    /// Launch exactly one 32-thread CTA. The buffers must have the fixed lengths
+    /// documented on the parameters and remain valid until the launch completes.
     #[kernel]
     pub unsafe fn fp4_mxf4_smoke(
         a_packed: &[u8],             // 512 bytes: 16 × 32
@@ -9173,6 +9231,11 @@ pub mod kernels {
     /// within each quad, giving two row scale vectors per quad; B uses lane
     /// `%4 == 0`, giving one column scale vector per quad. Each scale register
     /// packs K-block 0 in byte 0 and K-block 1 in byte 1.
+    ///
+    /// # Safety
+    ///
+    /// Launch exactly one 32-thread CTA. The buffers must have the fixed lengths
+    /// documented on the parameters and remain valid until the launch completes.
     #[kernel]
     pub unsafe fn fp4_mxf4_full_tile(
         a_packed: &[u8],             // 512 bytes: 16 × 32
@@ -9258,6 +9321,11 @@ pub mod kernels {
     /// of one `m16n8k64` MMA. This is the decode-batch=1 building block for the
     /// first MoE tensor-core path; it intentionally wastes the upper 8 rows and
     /// N=7 columns until a wider batching/speculation path can use them.
+    ///
+    /// # Safety
+    ///
+    /// Launch exactly one 32-thread CTA. The buffers must have the fixed lengths
+    /// documented on the parameters and remain valid until the launch completes.
     #[kernel]
     pub unsafe fn fp4_mxf4_gemv8_tile(
         a_packed: &[u8],             // 256 bytes: 8 rows × 32
@@ -9335,6 +9403,11 @@ pub mod kernels {
     /// `lane_a_scales` and `lane_b_scales` are `[32, 2]` E8M0 bytes. Each lane
     /// supplies its own packed two-block scale register; the output reveals which
     /// lane/byte the fixed `{byte=0, thread=0}` selectors actually consume.
+    ///
+    /// # Safety
+    ///
+    /// Launch exactly one 32-thread CTA. The buffers must have the fixed lengths
+    /// documented on the parameters and remain valid until the launch completes.
     #[kernel]
     pub unsafe fn fp4_mxf4_scale_lane_probe(
         a_packed: &[u8],             // 512 bytes: 16 × 32

@@ -2738,6 +2738,10 @@ fn run_resident_verify_width_sweep(
 }
 
 #[cfg(not(feature = "cuda"))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the non-CUDA stub mirrors the CUDA command interface"
+)]
 pub fn cmd_bench_interactive(
     _model_dir: &str,
     _prompts: &[String],

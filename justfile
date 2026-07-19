@@ -10,8 +10,7 @@
 #   just dsv4-serve → OpenAI-compatible DSV4 HTTP/SSE server
 #   just dsv4-vllm-bench → vLLM official serving benchmark against a running server
 #   just dsv4-prefill-chunk-sweep → DSV4 runtime-driver prefill chunk sweep CSV/JSONL
-#   just test       → all workspace tests
-#   just test-graph → runtime graph IR tests
+#   just test       → CPU tests via nextest + doctests + optional CUDA tests
 
 # ── Default ────────────────────────────────────────────────────────────
 
@@ -73,10 +72,10 @@ build-dev:
 # ── Check ──────────────────────────────────────────────────────────────
 
 check:
-    cargo check -p ferrule-cli
+    cargo check --locked -p ferrule-cli
 
 check-cuda:
-    cargo check -p ferrule-cli --features cuda
+    cargo check --locked -p ferrule-cli --features cuda
 
 cuda-info:
     @echo "oxide: $([ {{ _has-oxide }} = 1 ] && echo yes || echo no)"
@@ -101,29 +100,33 @@ oxide-test *args='':
 
 # ── Test ───────────────────────────────────────────────────────────────
 
-test: test-graph test-runtime test-model test-server test-cuda test-cli
+test: test-nextest test-docs test-cuda
 
-test-graph:
-    cargo test -p ferrule-runtime graph
+test-nextest:
+    @if ! command -v cargo-nextest >/dev/null 2>&1; then echo "error: cargo-nextest not found; run 'cargo install --locked cargo-nextest'"; exit 1; fi
+    cargo nextest run --locked --workspace --exclude ferrule-cuda
+
+test-docs:
+    cargo test --locked --workspace --exclude ferrule-cuda --doc
 
 test-runtime:
-    cargo test -p ferrule-runtime
+    cargo test --locked -p ferrule-runtime
 
 test-model:
-    cargo test -p ferrule-model
+    cargo test --locked -p ferrule-model
 
 test-server:
-    cargo test -p ferrule-server
+    cargo test --locked -p ferrule-server
 
 
 test-cuda *args='':
     @if [ "{{ _use-cuda }}" != "1" ]; then \
         echo "→ CUDA tests skipped (oxide={{ _has-oxide }}, gpu={{ _has-gpu }}, FERRULE_NO_CUDA=$FERRULE_NO_CUDA)"; \
         echo "  Run 'just oxide-doctor' to configure CUDA tests, or 'just test-cuda-required' to fail when unavailable."; \
-        exit 0; \
+    else \
+        echo "→ CUDA tests via cargo oxide (arch: {{ _cuda-arch }})"; \
+        cargo oxide test --arch {{ _cuda-arch }} -- -p ferrule-cuda {{ args }}; \
     fi
-    @echo "→ CUDA tests via cargo oxide (arch: {{ _cuda-arch }})"
-    cargo oxide test --arch {{ _cuda-arch }} -- -p ferrule-cuda {{ args }}
 
 test-cuda-required *args='':
     @if [ "{{ _has-oxide }}" != "1" ]; then echo "error: cargo-oxide not found"; exit 1; fi
@@ -132,7 +135,7 @@ test-cuda-required *args='':
     cargo oxide test --arch {{ _cuda-arch }} -- -p ferrule-cuda {{ args }}
 
 test-cli:
-    cargo test -p ferrule-cli
+    cargo test --locked -p ferrule-cli
 
 test-all: test
     @echo "=== All tests passed ==="
@@ -140,16 +143,18 @@ test-all: test
 # ── Code quality ───────────────────────────────────────────────────────
 
 fmt:
-    cargo fmt -- --check
+    cargo fmt --all -- --check
 
 fmt-fix:
     cargo fmt
 
 clippy:
-    cargo clippy -p ferrule-common -p ferrule-model -p ferrule-runtime -p ferrule-server -p ferrule-cli -- -D warnings
+    cargo clippy --locked --workspace --all-targets -- -D warnings
 
+# Optional GB10/CUDA feature lint. This is intentionally separate from the
+# platform-independent CI gate and does not enable CUTLASS.
 clippy-cuda:
-    cargo clippy -p ferrule-common -p ferrule-model -p ferrule-runtime -p ferrule-server -p ferrule-cli --features cuda -- -D warnings
+    cargo clippy --locked -p ferrule-cli --all-targets --features cuda -- -D warnings
 
 clippy-all: clippy clippy-cuda
     @echo "=== Clippy passed ==="
@@ -160,13 +165,16 @@ audit:
     cargo audit
 
 deny:
-    -cargo deny check || true
+    cargo deny check
 
 udeps:
     cargo udeps
 
 miri:
-    cargo +nightly miri test -p ferrule-runtime
+    cargo miri test --locked --profile miri -p ferrule-runtime --lib
+
+docs:
+    RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 
 # ── MLIR (future kernel backend) ────────────────────────────────────────
 # Replaces hand-written PTX with compiler-generated MLIR → NVVM/SPIR-V.
@@ -177,7 +185,7 @@ miri:
 # mlir-build:
 #     cargo oxide build --features cuda,mlir
 
-lint: fmt clippy-all
+lint: fmt clippy docs
     @echo "=== Lint passed ==="
 
 # ── Run ─────────────────────────────────────────────────────────────────
