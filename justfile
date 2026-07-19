@@ -148,8 +148,11 @@ fmt:
 fmt-fix:
     cargo fmt
 
+# ferrule-cuda's bindings require CUDA toolkit headers even without CUTLASS, so
+# the platform-independent lane checks every CPU crate and leaves CUDA to the
+# explicit CUDA lane below.
 clippy:
-    cargo clippy --locked --workspace --all-targets -- -D warnings
+    cargo clippy --locked --workspace --exclude ferrule-cuda --all-targets -- -D warnings
 
 # Optional GB10/CUDA feature lint. This is intentionally separate from the
 # platform-independent CI gate and does not enable CUTLASS.
@@ -167,6 +170,16 @@ audit:
 deny:
     cargo deny check
 
+coverage:
+    @if ! command -v cargo-nextest >/dev/null 2>&1; then echo "error: cargo-nextest not found; run 'cargo install --locked cargo-nextest'"; exit 1; fi
+    @if ! command -v cargo-llvm-cov >/dev/null 2>&1; then echo "error: cargo-llvm-cov not found; run 'cargo install --locked cargo-llvm-cov'"; exit 1; fi
+    rm -rf target/coverage
+    mkdir -p target/coverage
+    cargo llvm-cov nextest --locked --workspace --exclude ferrule-cuda --no-report
+    cargo llvm-cov report --lcov --output-path target/coverage/lcov.info
+    cargo llvm-cov report --html --output-dir target/coverage
+    cargo llvm-cov report --summary-only --output-path target/coverage/summary.txt --fail-under-lines 60
+
 udeps:
     cargo udeps
 
@@ -174,7 +187,7 @@ miri:
     cargo miri test --locked --profile miri -p ferrule-runtime --lib
 
 docs:
-    RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+    RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --exclude ferrule-cuda --no-deps
 
 # ── MLIR (future kernel backend) ────────────────────────────────────────
 # Replaces hand-written PTX with compiler-generated MLIR → NVVM/SPIR-V.

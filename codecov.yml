@@ -1,0 +1,18 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: 70%
+        informational: true
+
+comment:
+  layout: "reach, diff, flags, tree"
+  behavior: default
+  require_changes: true
+
+ignore:
+  - "crates/ferrule-cuda/**"

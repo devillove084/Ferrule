@@ -10,6 +10,8 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/devillove084/Ferrule/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/devillove084/Ferrule/actions/workflows/ci.yml/badge.svg" /></a>
+  <a href="https://codecov.io/gh/devillove084/Ferrule"><img alt="Coverage" src="https://codecov.io/gh/devillove084/Ferrule/graph/badge.svg?branch=main" /></a>
   <img alt="Rust" src="https://img.shields.io/badge/Rust-native-f97316?style=flat-square" />
   <img alt="CUDA" src="https://img.shields.io/badge/CUDA-cuda--oxide-22c55e?style=flat-square" />
   <img alt="MoE" src="https://img.shields.io/badge/MoE-router%20%2B%20top--k%20experts-8b5cf6?style=flat-square" />
@@ -688,11 +690,17 @@ just test           # CPU tests via nextest, doctests, optional CUDA tests
 just test-runtime   # Targeted runtime tests with cargo test
 just test-cuda      # CUDA tests via cargo oxide when available
 just fmt            # Format check
-just clippy         # Workspace/all-target Clippy with warnings denied
-just lint           # fmt + clippy + strict Rustdoc
+just clippy         # CPU workspace/all-target Clippy with warnings denied
+just clippy-cuda    # CUDA feature lint on a configured CUDA host
+just lint           # fmt + CPU clippy + strict Rustdoc
 just miri           # Runtime library tests under Miri
 just deny           # Advisories, licenses, bans, and source policy
+just coverage       # CPU HTML/LCOV reports via llvm-cov + nextest
 ```
+
+CI publishes the Nextest JUnit report as a GitHub Check and downloadable
+artifact. CPU coverage is enforced at a 60% line baseline, reported by Codecov
+on pull requests, and uploaded as browsable HTML plus an LCOV artifact.
 
 ---
 
