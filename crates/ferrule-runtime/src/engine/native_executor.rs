@@ -647,7 +647,9 @@ fn execution_error(message: impl Into<String>) -> Error {
 mod tests {
     use super::*;
     use crate::cache::KvPageManager;
-    use crate::speculation::{TargetFrontier, run_dspark_verification};
+    use crate::speculation::{
+        TargetFrontier, run_acceptance_aware_dspark_verification, run_dspark_verification,
+    };
     use ferrule_common::execution::{
         ExecutionBatch, ExecutionCapabilities, ExecutionSequence, ForwardMode, KvLayoutSchema,
         KvPlaneDescriptor, LogitsRequest,
@@ -1154,6 +1156,84 @@ mod tests {
         assert_eq!(executor.runner().prepares, 2);
         assert_eq!(executor.runner().commits, 1);
         assert_eq!(executor.runner().rollbacks, 1);
+    }
+
+    #[test]
+    fn acceptance_aware_dspark_first_miss_commits_probe_without_full_verify_or_replay() {
+        let mut executor = dspark_executor(&[99, 12, 13, 42]);
+        let mut pages = dspark_page_manager();
+        let mut source = MockSequenceState {
+            position: 0,
+            fed_tokens: Vec::new(),
+        };
+        let result = run_acceptance_aware_dspark_verification(
+            &mut executor,
+            &mut pages,
+            &mut source,
+            StateSlot::new(0),
+            0,
+            &[11, 12, 13],
+            nz(1),
+            TargetFrontier {
+                position: 0,
+                top1: ExecutionTokenLogit::new(10, 1.0),
+            },
+        )
+        .unwrap();
+
+        assert!(result.accepted.is_empty());
+        assert_eq!(result.rejected, Some(11));
+        assert_eq!(result.target_correction, Some(99));
+        assert_eq!(result.accounting.proposed_tokens, 3);
+        assert_eq!(result.accounting.verified_rows, 1);
+        assert_eq!(result.accounting.accepted_draft_tokens, 0);
+        assert_eq!(result.accounting.correction_tokens, 1);
+        assert_eq!(result.accounting.externally_committed_tokens, 1);
+        assert_eq!(result.accounting.rolled_back_rows, 0);
+        assert_eq!(source.position, 1);
+        assert_eq!(source.fed_tokens, vec![10]);
+        assert_eq!(executor.runner().prepares, 1);
+        assert_eq!(executor.runner().commits, 1);
+        assert_eq!(executor.runner().rollbacks, 0);
+    }
+
+    #[test]
+    fn acceptance_aware_dspark_first_hit_rolls_back_probe_then_uses_full_transaction() {
+        let mut executor = dspark_executor(&[11, 99, 13, 42]);
+        let mut pages = dspark_page_manager();
+        let mut source = MockSequenceState {
+            position: 0,
+            fed_tokens: Vec::new(),
+        };
+        let result = run_acceptance_aware_dspark_verification(
+            &mut executor,
+            &mut pages,
+            &mut source,
+            StateSlot::new(0),
+            0,
+            &[11, 12, 13],
+            nz(1),
+            TargetFrontier {
+                position: 0,
+                top1: ExecutionTokenLogit::new(10, 1.0),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.accepted, vec![11]);
+        assert_eq!(result.rejected, Some(12));
+        assert_eq!(result.target_correction, Some(99));
+        assert_eq!(result.accounting.proposed_tokens, 3);
+        assert_eq!(result.accounting.verified_rows, 5);
+        assert_eq!(result.accounting.accepted_draft_tokens, 1);
+        assert_eq!(result.accounting.correction_tokens, 1);
+        assert_eq!(result.accounting.externally_committed_tokens, 2);
+        assert_eq!(result.accounting.rolled_back_rows, 5);
+        assert_eq!(source.position, 2);
+        assert_eq!(source.fed_tokens, vec![10, 11]);
+        assert_eq!(executor.runner().prepares, 3);
+        assert_eq!(executor.runner().commits, 1);
+        assert_eq!(executor.runner().rollbacks, 2);
     }
 
     #[test]

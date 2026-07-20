@@ -938,6 +938,9 @@ fn resident_driver_stats_delta(
         finished_sequences: after
             .finished_sequences
             .saturating_sub(before.finished_sequences),
+        dropped_dspark_cycle_traces: after
+            .dropped_dspark_cycle_traces
+            .saturating_sub(before.dropped_dspark_cycle_traces),
         dspark: Default::default(),
     }
 }

@@ -1,21 +1,26 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroU32;
 use std::time::Instant;
 
 use ferrule_common::execution::{ExecutionOutput, KvBindingMode, KvReservation, StateSlot};
 use ferrule_common::{Error, Result};
-use ferrule_model::{DsparkProposalRunner, ExpertIoModelRunner, MultiSessionRunner};
+use ferrule_model::{
+    DsparkProposalRunner, DsparkProposalSource, ExpertIoModelRunner, MultiSessionRunner,
+};
 use tracing;
 
 use crate::cache::{KvPageManager, PreemptedKvState};
 use crate::scheduling::resident::{SuspendedSequenceSchedule, greedy_candidate};
 use crate::scheduling::{
-    CancelRequestResult, DecodeAction, ExpertIoAdvisor, ExpertIoBudget, GenerateRequest,
-    ModelExpertIoAdvisor, RequestId, ResidentScheduler, ResidentSchedulerConfig, ScheduledBatch,
-    SchedulerAction, SequenceFinishReason, SequenceSlotPool, SequenceState, SessionId,
-    ZeroExpertIoAdvisor,
+    CancelRequestResult, DecodeAction, ExpertIoAdvisor, ExpertIoBudget, ExpertIoDecisionTrace,
+    ExpertIoPhase, GenerateRequest, ModelExpertIoAdvisor, RequestId, ResidentScheduler,
+    ResidentSchedulerConfig, ScheduledBatch, SchedulerAction, SequenceFinishReason,
+    SequenceSlotPool, SequenceState, SessionId, ZeroExpertIoAdvisor,
 };
-use crate::speculation::{DSparkMetrics, TargetFrontier, run_dspark_verification};
+use crate::speculation::{
+    DSparkMetrics, SpeculativeCycleAccounting, TargetFrontier,
+    run_acceptance_aware_dspark_verification,
+};
 
 use super::NativeMultiSessionExecutor;
 
@@ -53,7 +58,51 @@ pub struct ResidentTopKDriverStats {
     pub emitted_tokens: usize,
     pub staged_tokens: usize,
     pub finished_sequences: usize,
+    pub dropped_dspark_cycle_traces: usize,
     pub dspark: DSparkMetrics,
+}
+
+/// One completed production DSpark cycle with stable request/session/attempt identity.
+///
+/// Consumers should drain these records after each driver step. The values keep
+/// speculative transaction accounting distinct from externally emitted tokens
+/// so profiling artifacts can prove, rather than assume, token reconciliation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DSparkCycleTrace {
+    pub request_id: RequestId,
+    pub session_id: SessionId,
+    pub cycle_attempt: u64,
+    pub position: usize,
+    pub anchor_token: u32,
+    pub proposal_source: DsparkProposalSource,
+    pub proposal_executed: bool,
+    pub native_proposed_tokens: Vec<u32>,
+    pub native_confidence_logits: Vec<f32>,
+    pub proposed_tokens: Vec<u32>,
+    pub confidence_logits: Vec<f32>,
+    pub capacity_truncated_tokens: usize,
+    pub output_boundary_truncated_tokens: usize,
+    pub scheduler_expert_io: Vec<ExpertIoDecisionTrace>,
+    pub accepted_tokens: Vec<u32>,
+    pub rejected_token: Option<u32>,
+    pub target_correction_token: Option<u32>,
+    pub target_next_token: Option<u32>,
+    pub target_row_top1: Vec<ferrule_common::execution::TokenLogit>,
+    pub accounting: SpeculativeCycleAccounting,
+    /// Runtime token callback invocations. Worker/SSE delivery is reconciled at
+    /// the serving boundary and is intentionally not claimed here.
+    pub runtime_emitted_tokens: usize,
+    pub proposal_time_us: u64,
+    pub verify_time_us: u64,
+    pub transaction_time_us: u64,
+    pub complete_cycle_time_us: u64,
+    pub finish_reason: Option<SequenceFinishReason>,
+}
+
+impl DSparkCycleTrace {
+    pub fn runtime_tokens_reconcile(&self) -> bool {
+        self.accounting.externally_committed_tokens == self.runtime_emitted_tokens
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -128,6 +177,8 @@ where
     next_page_slot: u32,
     config: ResidentTopKDriverConfig,
     stats: ResidentTopKDriverStats,
+    next_dspark_cycle_attempt: u64,
+    dspark_cycle_traces: VecDeque<DSparkCycleTrace>,
 }
 
 impl<R, C> ResidentTopKDriver<R, C>
@@ -181,6 +232,8 @@ where
             next_page_slot: 0,
             config,
             stats: ResidentTopKDriverStats::default(),
+            next_dspark_cycle_attempt: 1,
+            dspark_cycle_traces: VecDeque::new(),
         }
     }
 
@@ -394,6 +447,24 @@ where
 
     pub fn stats(&self) -> &ResidentTopKDriverStats {
         &self.stats
+    }
+
+    /// Drain completed production DSpark cycle records in execution order while
+    /// retaining the queue allocation for the next driver step.
+    pub fn drain_dspark_cycle_traces(
+        &mut self,
+    ) -> std::collections::vec_deque::Drain<'_, DSparkCycleTrace> {
+        self.dspark_cycle_traces.drain(..)
+    }
+
+    fn record_dspark_cycle_trace(&mut self, trace: DSparkCycleTrace) {
+        const MAX_PENDING_DSPARK_CYCLE_TRACES: usize = 1024;
+        if self.dspark_cycle_traces.len() == MAX_PENDING_DSPARK_CYCLE_TRACES {
+            self.dspark_cycle_traces.pop_front();
+            self.stats.dropped_dspark_cycle_traces =
+                self.stats.dropped_dspark_cycle_traces.saturating_add(1);
+        }
+        self.dspark_cycle_traces.push_back(trace);
     }
 
     /// Validate scheduler policy against the truthful capabilities of the native
@@ -1355,9 +1426,10 @@ where
         let Some(action) = action else {
             return Ok(self.no_action_step());
         };
+        let expert_io_trace = self.scheduler.expert_io_trace().to_vec();
         match action {
             SchedulerAction::DecodeBatch(actions) => {
-                self.execute_dspark_decode_batch(actions, on_token)
+                self.execute_dspark_decode_batch(actions, &expert_io_trace, on_token)
             }
             SchedulerAction::Execute { .. } => Err(Error::Internal(
                 "DSpark scheduler produced a mixed action while mixed dispatch is disabled".into(),
@@ -1369,6 +1441,7 @@ where
     fn execute_dspark_decode_batch<F>(
         &mut self,
         actions: Vec<DecodeAction>,
+        expert_io_trace: &[ExpertIoDecisionTrace],
         on_token: &mut F,
     ) -> Result<ResidentDriverStep>
     where
@@ -1384,13 +1457,45 @@ where
         let mut staged = 0usize;
         let mut finished = 0usize;
         for action in &actions {
-            match self.execute_dspark_decode_action(action, on_token) {
+            let action_expert_io_trace = expert_io_trace
+                .iter()
+                .filter(|trace| {
+                    trace.session_id == action.session_id && trace.phase == ExpertIoPhase::Decode
+                })
+                .copied()
+                .collect::<Vec<_>>();
+            let cycle_attempt = self.next_dspark_cycle_attempt;
+            self.next_dspark_cycle_attempt = self
+                .next_dspark_cycle_attempt
+                .checked_add(1)
+                .ok_or_else(|| Error::Internal("DSpark cycle-attempt identity overflow".into()))?;
+            let attempt_started_at = Instant::now();
+            match self.execute_dspark_decode_action(
+                action,
+                cycle_attempt,
+                &action_expert_io_trace,
+                on_token,
+            ) {
                 Ok(outcome) => {
                     rows = rows.saturating_add(outcome.rows);
                     staged += outcome.staged;
                     finished += outcome.finished;
                 }
                 Err(error) => {
+                    tracing::error!(
+                        target: "ferrule_dspark_cycle",
+                        event = "dspark_cycle_failed",
+                        request_id = action.request_id.map_or(0, |request_id| request_id.0),
+                        has_request_id = action.request_id.is_some(),
+                        session_id = action.session_id.0,
+                        cycle_attempt,
+                        position = action.position,
+                        anchor_token = action.token_id,
+                        scheduler_expert_io = ?action_expert_io_trace,
+                        cycle_us = attempt_started_at.elapsed().as_micros() as u64,
+                        error = %error,
+                        "production DSpark cycle failed"
+                    );
                     return Err(self.abort_dspark_decode_batch(
                         &actions,
                         error,
@@ -1412,6 +1517,8 @@ where
     fn execute_dspark_decode_action<F>(
         &mut self,
         action: &DecodeAction,
+        cycle_attempt: u64,
+        scheduler_expert_io: &[ExpertIoDecisionTrace],
         on_token: &mut F,
     ) -> Result<DsparkActionOutcome>
     where
@@ -1446,6 +1553,12 @@ where
                 sequence.next_decode_token,
             )));
         }
+        let request_id = action.request_id.ok_or_else(|| {
+            Error::Internal(format!(
+                "production DSpark action for session {:?} has no request identity",
+                action.session_id
+            ))
+        })?;
         let remaining_output = sequence.max_new_tokens.saturating_sub(sequence.generated);
         let remaining_context = self.config.ctx_size.saturating_sub(sequence.position);
         let commit_capacity = remaining_output.min(remaining_context);
@@ -1462,6 +1575,8 @@ where
                 action.session_id
             ))
         })?;
+        let proposal_source = self.executor.runner().dspark_proposal_source()?;
+        proposal_source.validate()?;
         let mut model_state = self
             .sequence_states
             .remove(&action.session_id)
@@ -1473,25 +1588,30 @@ where
             })?;
 
         let proposal_start = Instant::now();
-        let proposal_result = if max_drafts == 0 {
-            Ok(Vec::new())
+        let proposal_result: Result<(Vec<u32>, Vec<f32>, bool)> = if max_drafts == 0 {
+            Ok((Vec::new(), Vec::new(), false))
         } else {
             self.executor
                 .with_sequence_state(&mut model_state, |runner| {
                     let proposal = runner.propose_dspark(action.token_id)?;
-                    proposal.validate()?;
-                    Ok(proposal.token_ids)
+                    proposal.validate_for_source(proposal_source)?;
+                    Ok((proposal.token_ids, proposal.confidence_logits, true))
                 })
         };
         let proposal_time_us = proposal_start.elapsed().as_micros() as u64;
-        let mut proposal = match proposal_result {
-            Ok(proposal) => proposal,
-            Err(error) => {
-                self.sequence_states.insert(action.session_id, model_state);
-                return Err(error);
-            }
-        };
-        proposal.truncate(max_drafts);
+        let (native_proposed_tokens, native_confidence_logits, proposal_executed) =
+            match proposal_result {
+                Ok(proposal) => proposal,
+                Err(error) => {
+                    self.sequence_states.insert(action.session_id, model_state);
+                    return Err(error);
+                }
+            };
+        let capacity_width = native_proposed_tokens.len().min(max_drafts);
+        let capacity_truncated_tokens = native_proposed_tokens.len() - capacity_width;
+        let mut proposal = native_proposed_tokens[..capacity_width].to_vec();
+        let mut confidence_logits = native_confidence_logits[..capacity_width].to_vec();
+        let before_output_boundary = proposal.len();
         proposal = match self.truncate_dspark_proposal_at_output_boundary(
             &sequence,
             action.token_id,
@@ -1503,9 +1623,11 @@ where
                 return Err(error);
             }
         };
+        let output_boundary_truncated_tokens = before_output_boundary - proposal.len();
+        confidence_logits.truncate(proposal.len());
 
         let verification = match self.page_manager.as_mut() {
-            Some(page_manager) => run_dspark_verification(
+            Some(page_manager) => run_acceptance_aware_dspark_verification(
                 &mut self.executor,
                 page_manager,
                 &mut model_state,
@@ -1551,7 +1673,14 @@ where
                 ))
             })?
             .extend_generated(&result.accepted);
-        self.emit_dspark_committed_tokens(action, &result.accepted, on_token)?;
+        let runtime_emitted_tokens =
+            self.emit_dspark_committed_tokens(action, &result.accepted, on_token)?;
+        if result.accounting.externally_committed_tokens != runtime_emitted_tokens {
+            return Err(Error::Internal(format!(
+                "DSpark transaction committed {} tokens but invoked {runtime_emitted_tokens} runtime token callbacks",
+                result.accounting.externally_committed_tokens
+            )));
+        }
 
         let eos_token_id = self.executor.runner().eos_token_id();
         let mut finish_reason = {
@@ -1618,7 +1747,38 @@ where
             .record_complete_cycle(&result, proposal_time_us, complete_cycle_time_us);
         self.stats
             .dspark
-            .record_emitted_tokens(externally_committed);
+            .record_runtime_emitted_tokens(runtime_emitted_tokens);
+        let verified_rows = result.accounting.verified_rows;
+        let trace = DSparkCycleTrace {
+            request_id,
+            session_id: action.session_id,
+            cycle_attempt,
+            position: action.position,
+            anchor_token: action.token_id,
+            proposal_source,
+            proposal_executed,
+            native_proposed_tokens,
+            native_confidence_logits,
+            proposed_tokens: proposal,
+            confidence_logits,
+            capacity_truncated_tokens,
+            output_boundary_truncated_tokens,
+            scheduler_expert_io: scheduler_expert_io.to_vec(),
+            accepted_tokens: result.accepted,
+            rejected_token: result.rejected,
+            target_correction_token: result.target_correction,
+            target_next_token: result.target_next.map(|token| token.token_id),
+            target_row_top1: result.target_row_top1,
+            accounting: result.accounting,
+            runtime_emitted_tokens,
+            proposal_time_us,
+            verify_time_us: result.verify_time_us,
+            transaction_time_us: result.transaction_time_us,
+            complete_cycle_time_us,
+            finish_reason,
+        };
+        debug_assert!(trace.runtime_tokens_reconcile());
+        self.record_dspark_cycle_trace(trace);
         let metrics = &self.stats.dspark;
         if metrics.cycles == 1 || metrics.cycles.is_multiple_of(64) {
             tracing::info!(
@@ -1626,7 +1786,7 @@ where
                 proposed_tokens = metrics.proposed_tokens,
                 verified_rows = metrics.verified_rows,
                 accepted_draft_tokens = metrics.accepted_draft_tokens,
-                externally_emitted_tokens = metrics.externally_emitted_tokens,
+                runtime_emitted_tokens = metrics.runtime_emitted_tokens,
                 acceptance = metrics.acceptance_rate(),
                 proposal_us = proposal_time_us,
                 verify_us = result.verify_time_us,
@@ -1636,7 +1796,7 @@ where
         }
 
         Ok(DsparkActionOutcome {
-            rows: result.accounting.verified_rows,
+            rows: verified_rows,
             staged,
             finished,
         })
@@ -1692,13 +1852,14 @@ where
         action: &DecodeAction,
         accepted: &[u32],
         on_token: &mut F,
-    ) -> Result<()>
+    ) -> Result<usize>
     where
         F: FnMut(&ResidentTokenEvent) -> Result<()>,
     {
         let mut tokens = Vec::with_capacity(accepted.len() + 1);
         tokens.push((action.token_id, action.logit));
         tokens.extend(accepted.iter().copied().map(|token| (token, None)));
+        let emitted_tokens = tokens.len();
         let runner = self.executor.runner();
         let sequence = self
             .scheduler
@@ -1731,7 +1892,7 @@ where
             self.stats.emitted_tokens += 1;
             on_token(&event)?;
         }
-        Ok(())
+        Ok(emitted_tokens)
     }
 
     fn abort_dspark_decode_batch(
@@ -1859,10 +2020,13 @@ fn action_rows(action: &SchedulerAction) -> usize {
 mod tests {
     use std::collections::VecDeque;
 
-    use ferrule_common::execution::{KvLayoutSchema, KvPlaneDescriptor};
+    use ferrule_common::execution::{
+        ExecutionIntent, KvLayoutSchema, KvPlaneDescriptor, LogitsOutput, LogitsRequest, LogitsRow,
+    };
     use ferrule_common::{Error, Result};
     use ferrule_model::{
-        ModelInfo, ModelRunner, MultiSessionRunner, PrefillMode, TokenLogit, TopKModelRunner,
+        DsparkProposal, DsparkProposalRunner, DsparkProposalSource, ExpertIoModelRunner, ModelInfo,
+        ModelRunner, MultiSessionRunner, PrefillMode, TokenLogit, TopKModelRunner,
     };
 
     use crate::scheduling::FixedSequenceSlotPool;
@@ -1904,6 +2068,9 @@ mod tests {
         mutation_calls: usize,
         released_sequence_states: usize,
         released_kv_pages: Vec<ferrule_common::execution::KvPageId>,
+        dspark_proposals: VecDeque<DsparkProposal>,
+        packed_predictions: VecDeque<Vec<TokenLogit>>,
+        paged: bool,
     }
 
     impl MockTopKRunner {
@@ -1918,7 +2085,21 @@ mod tests {
                 mutation_calls: 0,
                 released_sequence_states: 0,
                 released_kv_pages: Vec::new(),
+                dspark_proposals: VecDeque::new(),
+                packed_predictions: VecDeque::new(),
+                paged: false,
             }
+        }
+
+        fn with_dspark_cycle(
+            mut self,
+            proposal: DsparkProposal,
+            target_row_top1: Vec<TokenLogit>,
+        ) -> Self {
+            self.dspark_proposals.push_back(proposal);
+            self.packed_predictions.push_back(target_row_top1);
+            self.paged = true;
+            self
         }
 
         fn failing_next_mutation(mut self) -> Self {
@@ -2023,6 +2204,49 @@ mod tests {
         fn decode_topk(&mut self, token_id: u32, _top_k: usize) -> Result<Vec<TokenLogit>> {
             self.feed_token(token_id)?;
             Ok(self.next_output())
+        }
+    }
+
+    impl DsparkProposalRunner for MockTopKRunner {
+        fn dspark_proposal_source(&self) -> Result<DsparkProposalSource> {
+            Ok(DsparkProposalSource {
+                implementation: "mock-dspark-v1",
+                prepared_plan_id: 0xfeed,
+                native_width: 2,
+            })
+        }
+
+        fn propose_dspark(&mut self, _anchor_token_id: u32) -> Result<DsparkProposal> {
+            self.dspark_proposals
+                .pop_front()
+                .ok_or_else(|| Error::Model("mock DSpark proposal queue is empty".into()))
+        }
+    }
+
+    impl ExpertIoModelRunner for MockTopKRunner {
+        type ExpertIoBatchState = ();
+        type ExpertIoAdmission = ();
+
+        fn begin_expert_io_batch(&self) -> Self::ExpertIoBatchState {}
+
+        fn estimate_expert_io(
+            &self,
+            _batch: &mut Self::ExpertIoBatchState,
+            _sequence: &Self::SequenceState,
+            _phase: ferrule_common::expert_io::ExpertIoPhase,
+            _token_ids: &[u32],
+        ) -> Result<(
+            ferrule_common::expert_io::ExpertIoEstimate,
+            Self::ExpertIoAdmission,
+        )> {
+            Ok((ferrule_common::expert_io::ExpertIoEstimate::default(), ()))
+        }
+
+        fn admit_expert_io(
+            &self,
+            _batch: &mut Self::ExpertIoBatchState,
+            _admission: Self::ExpertIoAdmission,
+        ) {
         }
     }
 
@@ -2142,6 +2366,48 @@ mod tests {
             Ok(())
         }
 
+        fn execute_multi_session_batch(
+            &mut self,
+            states: &mut [Self::SequenceState],
+            batch: &ferrule_common::execution::ExecutionBatch,
+        ) -> Result<Option<ExecutionOutput>> {
+            if batch.intent() != ExecutionIntent::ProvisionalVerification {
+                return Ok(None);
+            }
+            if states.len() != 1 || batch.sequences().len() != 1 {
+                return Err(Error::Internal(
+                    "mock DSpark packed verification requires one sequence".into(),
+                ));
+            }
+            let predictions = self.packed_predictions.pop_front().ok_or_else(|| {
+                Error::Model("mock DSpark packed prediction queue is empty".into())
+            })?;
+            if predictions.len() != batch.token_ids().len() {
+                return Err(Error::Model(format!(
+                    "mock DSpark packed predictions {} do not match {} input rows",
+                    predictions.len(),
+                    batch.token_ids().len()
+                )));
+            }
+            let sequence = &batch.sequences()[0];
+            let query_start = sequence.query.start as usize;
+            let query_end = sequence.query.end as usize;
+            states[0].position = states[0]
+                .position
+                .checked_add(query_end - query_start)
+                .ok_or_else(|| Error::Internal("mock DSpark position overflow".into()))?;
+            states[0]
+                .fed
+                .extend_from_slice(&batch.token_ids()[query_start..query_end]);
+            let logits = predictions
+                .into_iter()
+                .enumerate()
+                .filter(|(row, _)| matches!(batch.logits()[*row], LogitsRequest::TopK(_)))
+                .map(|(row, top1)| LogitsRow::new(row as u32, LogitsOutput::TopK(vec![top1])))
+                .collect();
+            Ok(Some(ExecutionOutput::new(logits)))
+        }
+
         fn multi_session_capabilities(&self) -> ferrule_common::execution::ExecutionCapabilities {
             ferrule_common::execution::ExecutionCapabilities {
                 max_batch_tokens: 1024,
@@ -2153,8 +2419,16 @@ mod tests {
                 supports_decode: true,
                 supports_mixed: true,
                 full_logits_width: None,
-                kv_binding_mode: ferrule_common::execution::KvBindingMode::None,
-                logits_row_policy: ferrule_common::execution::LogitsRowPolicy::LastPerSequence,
+                kv_binding_mode: if self.paged {
+                    ferrule_common::execution::KvBindingMode::Paged
+                } else {
+                    ferrule_common::execution::KvBindingMode::None
+                },
+                logits_row_policy: if self.paged {
+                    ferrule_common::execution::LogitsRowPolicy::Any
+                } else {
+                    ferrule_common::execution::LogitsRowPolicy::LastPerSequence
+                },
             }
         }
     }
@@ -2226,6 +2500,197 @@ mod tests {
             NonZeroU32::new(1).unwrap(),
             ResidentTopKDriverConfig::default(),
         )
+    }
+
+    fn dspark_cycle_trace(
+        cycle_attempt: u64,
+        committed_tokens: usize,
+        emitted_tokens: usize,
+    ) -> DSparkCycleTrace {
+        DSparkCycleTrace {
+            request_id: RequestId(7),
+            session_id: SessionId(7),
+            cycle_attempt,
+            position: 12,
+            anchor_token: 41,
+            proposal_source: DsparkProposalSource {
+                implementation: "test-dspark-v1",
+                prepared_plan_id: 0x1234,
+                native_width: 2,
+            },
+            proposal_executed: true,
+            native_proposed_tokens: vec![42, 43],
+            native_confidence_logits: vec![0.5, -0.25],
+            proposed_tokens: vec![42, 43],
+            confidence_logits: vec![0.5, -0.25],
+            capacity_truncated_tokens: 0,
+            output_boundary_truncated_tokens: 0,
+            scheduler_expert_io: Vec::new(),
+            accepted_tokens: vec![42],
+            rejected_token: Some(43),
+            target_correction_token: Some(44),
+            target_next_token: Some(44),
+            target_row_top1: vec![
+                ferrule_common::execution::TokenLogit::new(42, 1.0),
+                ferrule_common::execution::TokenLogit::new(44, 0.5),
+            ],
+            accounting: SpeculativeCycleAccounting {
+                proposed_tokens: 2,
+                verified_rows: 3,
+                accepted_draft_tokens: 1,
+                correction_tokens: 1,
+                externally_committed_tokens: committed_tokens,
+                rolled_back_rows: 3,
+            },
+            runtime_emitted_tokens: emitted_tokens,
+            proposal_time_us: 10,
+            verify_time_us: 20,
+            transaction_time_us: 30,
+            complete_cycle_time_us: 40,
+            finish_reason: None,
+        }
+    }
+
+    #[test]
+    fn dspark_cycle_trace_reconciles_committed_and_runtime_callbacks() {
+        assert!(dspark_cycle_trace(1, 2, 2).runtime_tokens_reconcile());
+        assert!(!dspark_cycle_trace(2, 2, 1).runtime_tokens_reconcile());
+    }
+
+    #[test]
+    fn driver_drains_dspark_cycle_traces_once_in_execution_order() {
+        let mut driver = driver_from_runner(MockTopKRunner::new(Vec::new()));
+        driver.record_dspark_cycle_trace(dspark_cycle_trace(1, 2, 2));
+        driver.record_dspark_cycle_trace(dspark_cycle_trace(2, 1, 1));
+
+        let traces = driver.drain_dspark_cycle_traces().collect::<Vec<_>>();
+        assert_eq!(
+            traces
+                .iter()
+                .map(|trace| trace.cycle_attempt)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(driver.drain_dspark_cycle_traces().count(), 0);
+    }
+
+    #[test]
+    fn driver_bounds_undrained_dspark_cycle_traces_and_reports_drops() {
+        let mut driver = driver_from_runner(MockTopKRunner::new(Vec::new()));
+        for attempt in 1..=1025 {
+            driver.record_dspark_cycle_trace(dspark_cycle_trace(attempt, 1, 1));
+        }
+        assert_eq!(driver.dspark_cycle_traces.len(), 1024);
+        assert_eq!(driver.stats().dropped_dspark_cycle_traces, 1);
+        assert_eq!(
+            driver
+                .dspark_cycle_traces
+                .front()
+                .map(|trace| trace.cycle_attempt),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn production_dspark_zero_accept_trace_reconciles_proposal_scheduler_and_target() {
+        let runner = MockTopKRunner::new(vec![top(10)]).with_dspark_cycle(
+            DsparkProposal {
+                token_ids: vec![11, 12],
+                confidence_logits: vec![0.75, -0.5],
+            },
+            vec![TokenLogit::new(99, 9.0)],
+        );
+        let mut driver = ResidentTopKDriver::with_configs(
+            runner,
+            FixedSequenceSlotPool::new(1),
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 8,
+                max_active_sequences: 1,
+                max_decode_batch: 1,
+                allow_mixed_batches: false,
+                ..Default::default()
+            },
+            NonZeroU32::new(1).unwrap(),
+            ResidentTopKDriverConfig {
+                ctx_size: 16,
+                stop_at_eos: true,
+                append_eos_to_session: false,
+                max_steps_per_run: 16,
+            },
+        )
+        .with_page_manager(KvPageManager::new(Box::new(DriverTestKvSchema), 16));
+        let mut request = request(77, &[1], 3, Vec::new());
+        request.session_id = Some(SessionId(77));
+        driver.submit(request);
+        let mut events = Vec::new();
+
+        let prefill = driver
+            .step_with_dspark_model_expert_io(
+                &mut |event| {
+                    events.push(event.clone());
+                    Ok(())
+                },
+                ExpertIoBudget::unbounded(),
+            )
+            .unwrap();
+        assert!(matches!(
+            prefill,
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                ..
+            }
+        ));
+
+        let decode = driver
+            .step_with_dspark_model_expert_io(
+                &mut |event| {
+                    events.push(event.clone());
+                    Ok(())
+                },
+                ExpertIoBudget::unbounded(),
+            )
+            .unwrap();
+        assert!(matches!(
+            decode,
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Decode,
+                ..
+            }
+        ));
+
+        let traces = driver.drain_dspark_cycle_traces().collect::<Vec<_>>();
+        assert_eq!(traces.len(), 1);
+        let trace = &traces[0];
+        assert_eq!(trace.request_id, RequestId(77));
+        assert_eq!(trace.session_id, SessionId(77));
+        assert_eq!(trace.cycle_attempt, 1);
+        assert_eq!(trace.proposal_source.implementation, "mock-dspark-v1");
+        assert_eq!(trace.native_proposed_tokens, vec![11, 12]);
+        assert_eq!(trace.native_confidence_logits, vec![0.75, -0.5]);
+        assert_eq!(trace.proposed_tokens, vec![11, 12]);
+        assert_eq!(trace.confidence_logits, vec![0.75, -0.5]);
+        assert_eq!(trace.accounting.accepted_draft_tokens, 0);
+        assert_eq!(trace.accounting.verified_rows, 1);
+        assert_eq!(trace.accounting.rolled_back_rows, 0);
+        assert_eq!(trace.rejected_token, Some(11));
+        assert_eq!(trace.target_correction_token, Some(99));
+        assert_eq!(
+            trace
+                .target_row_top1
+                .iter()
+                .map(|token| token.token_id)
+                .collect::<Vec<_>>(),
+            vec![99]
+        );
+        assert_eq!(trace.scheduler_expert_io.len(), 1);
+        assert!(trace.scheduler_expert_io[0].admitted);
+        assert_eq!(
+            trace.scheduler_expert_io[0].queue,
+            crate::scheduling::ExpertIoQueueClass::ResidentReady
+        );
+        assert!(trace.runtime_tokens_reconcile());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].token, 10);
     }
 
     #[test]

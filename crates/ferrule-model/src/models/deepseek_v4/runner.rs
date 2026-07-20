@@ -21,8 +21,8 @@ use crate::moe::prediction::{
 use crate::moe::routed::RoutedMoeStepOutput;
 use crate::moe::streaming::ExpertStreamingReader;
 use crate::runner::{
-    DsparkProposal, DsparkProposalRunner, ModelInfo, ModelRunner, MultiSessionRunner, PrefillMode,
-    TokenLogit, TopKModelRunner,
+    DsparkProposal, DsparkProposalRunner, DsparkProposalSource, ModelInfo, ModelRunner,
+    MultiSessionRunner, PrefillMode, TokenLogit, TopKModelRunner,
 };
 #[cfg(any(feature = "cuda", test))]
 use ferrule_common::execution::{ExecutionBatch, ForwardMode, ForwardPhase};
@@ -152,6 +152,7 @@ pub struct DeepSeekV4Runner {
         PersistentArenaPool<DeepSeekV4LayerArenaPoolKey, DeepSeekV4LayerArenaVariants>,
     #[cfg(all(feature = "cuda", feature = "cutlass"))]
     dspark_proposal_arena: Option<DeepSeekV4DsparkProposalArena>,
+    dspark_proposal_source: Option<DsparkProposalSource>,
     /// E3: per-sequence state. The runner wraps one default sequence.
     sequence: DeepSeekV4SequenceExecutionState,
     prefill_stats: DeepSeekV4PrefillRuntimeStats,
@@ -190,6 +191,41 @@ struct DeepSeekV4DsparkProposalArena {
     hc_state: ferrule_cuda::context::CudaF32Buffer,
 }
 
+/// Diagnostic-only proposal backbone boundaries for official-reference parity.
+#[derive(Debug, Clone)]
+pub struct DeepSeekV4DsparkBackboneDebugSnapshot {
+    pub initial_hc_state: Vec<f32>,
+    pub stage_hc_states: Vec<Vec<f32>>,
+    pub stage_boundaries: Vec<DeepSeekV4DsparkStageDebugSnapshot>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeepSeekV4DsparkStageDebugSnapshot {
+    pub attention: DeepSeekV4DsparkAttentionDebugSnapshot,
+    pub attention_hidden: Vec<f32>,
+    pub attention_normalized: Vec<f32>,
+    pub attention_output: Vec<f32>,
+    pub after_attention: Vec<f32>,
+    pub ffn_hidden: Vec<f32>,
+    pub ffn_normalized: Vec<f32>,
+    pub moe_output: Vec<f32>,
+}
+
+pub type DeepSeekV4DsparkProposalHeadDebugSnapshot = (Vec<f32>, Vec<f32>, Vec<f32>);
+
+#[derive(Debug, Clone)]
+pub struct DeepSeekV4DsparkAttentionDebugSnapshot {
+    pub query_latent: Vec<f32>,
+    pub query_normalized: Vec<f32>,
+    pub query_projected: Vec<f32>,
+    pub query_rope: Vec<f32>,
+    pub kv_raw: Vec<f32>,
+    pub kv_rope_qat: Vec<f32>,
+    pub context_inverse_rope: Vec<f32>,
+    pub output_a: Vec<f32>,
+    pub output_b: Vec<f32>,
+}
+
 #[cfg(feature = "cuda")]
 fn expert_residency_layer_capacities(resources: &DeepSeekV4PreparedResources) -> Vec<usize> {
     let mut capacities = resources
@@ -207,6 +243,28 @@ fn expert_residency_layer_capacities(resources: &DeepSeekV4PreparedResources) ->
         }
     }
     capacities
+}
+
+const DSPARK_PROPOSAL_IMPLEMENTATION: &str = "deepseek-v4-dspark-cuda-cutlass-v1";
+
+fn prepared_dspark_proposal_source(
+    plan: &DeepSeekV4PreparedModelPlan,
+) -> Result<Option<DsparkProposalSource>> {
+    let Some(mtp) = plan.resources().mtp() else {
+        return Ok(None);
+    };
+    if mtp.prediction_heads.is_none() {
+        return Err(Error::Model(
+            "DeepSeek-V4 DSpark proposal source is missing prediction heads".into(),
+        ));
+    }
+    let source = DsparkProposalSource {
+        implementation: DSPARK_PROPOSAL_IMPLEMENTATION,
+        prepared_plan_id: plan.generation(),
+        native_width: mtp.config.block_size,
+    };
+    source.validate()?;
+    Ok(Some(source))
 }
 
 fn cold_expert_residency(
@@ -414,6 +472,7 @@ impl DeepSeekV4Runner {
         operator_backend: ModelExecutionBackend,
     ) -> Result<Self> {
         let plan = prepare(model, options)?;
+        let dspark_proposal_source = prepared_dspark_proposal_source(&plan)?;
         let options = *plan.resources().prepare_options();
         let policy = plan.resources().policy();
         let model = plan.resources().model();
@@ -542,6 +601,7 @@ impl DeepSeekV4Runner {
             layer_arena_pool: PersistentArenaPool::new(),
             #[cfg(all(feature = "cuda", feature = "cutlass"))]
             dspark_proposal_arena,
+            dspark_proposal_source,
             sequence,
             prefill_stats: DeepSeekV4PrefillRuntimeStats::default(),
             output_profile: DeepSeekV4OutputProfileStats::default(),
@@ -593,6 +653,37 @@ impl DeepSeekV4Runner {
         &mut self,
         anchor_token_id: u32,
     ) -> Result<DeepSeekV4MtpForwardOutput> {
+        self.dspark_proposal_cuda_impl(anchor_token_id, false)
+            .map(|(output, _)| output)
+    }
+
+    /// Re-run one proposal while downloading the initial and per-stage HC states.
+    /// Production callers must use [`Self::dspark_proposal_cuda`] so these device
+    /// synchronizations never enter serving counters or latency.
+    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    pub fn dspark_proposal_cuda_debug(
+        &mut self,
+        anchor_token_id: u32,
+    ) -> Result<(
+        DeepSeekV4MtpForwardOutput,
+        DeepSeekV4DsparkBackboneDebugSnapshot,
+    )> {
+        let (output, snapshot) = self.dspark_proposal_cuda_impl(anchor_token_id, true)?;
+        Ok((
+            output,
+            snapshot.expect("debug proposal execution always captures a snapshot"),
+        ))
+    }
+
+    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    fn dspark_proposal_cuda_impl(
+        &mut self,
+        anchor_token_id: u32,
+        capture_debug: bool,
+    ) -> Result<(
+        DeepSeekV4MtpForwardOutput,
+        Option<DeepSeekV4DsparkBackboneDebugSnapshot>,
+    )> {
         if self.operators.backend() != ModelExecutionBackend::Cuda {
             return Err(Error::Model(
                 "DeepSeek-V4 DSpark production proposal requires CUDA".into(),
@@ -624,6 +715,18 @@ impl DeepSeekV4Runner {
             self.operators
                 .cuda_mut()?
                 .dspark_proposal_input_device_into(anchor_token_id, &mut proposal.hc_state)?;
+            let mut debug_snapshot = if capture_debug {
+                Some(DeepSeekV4DsparkBackboneDebugSnapshot {
+                    initial_hc_state: self
+                        .operators
+                        .cuda_mut()?
+                        .download_f32_debug_snapshot(&proposal.hc_state)?,
+                    stage_hc_states: Vec::new(),
+                    stage_boundaries: Vec::new(),
+                })
+            } else {
+                None
+            };
             let mtp = self
                 .plan
                 .resources()
@@ -659,6 +762,54 @@ impl DeepSeekV4Runner {
                     &mut self.operators,
                     &mut proposal.attention,
                 )?;
+                if let Some(snapshot) = debug_snapshot.as_mut() {
+                    snapshot.stage_hc_states.push(
+                        self.operators
+                            .cuda_mut()?
+                            .download_f32_debug_snapshot(&proposal.hc_state)?,
+                    );
+                    let buffers = proposal.stages[stage].dspark_debug_buffers();
+                    let cuda = self.operators.cuda_mut()?;
+                    snapshot
+                        .stage_boundaries
+                        .push(DeepSeekV4DsparkStageDebugSnapshot {
+                            attention: DeepSeekV4DsparkAttentionDebugSnapshot {
+                                query_latent: cuda
+                                    .download_f32_debug_snapshot(buffers.attention.query_latent)?,
+                                query_normalized: cuda.download_f32_debug_snapshot(
+                                    buffers.attention.query_normalized,
+                                )?,
+                                query_projected: cuda.download_f32_debug_snapshot(
+                                    buffers.attention.query_projected,
+                                )?,
+                                query_rope: cuda
+                                    .download_f32_debug_snapshot(buffers.attention.query_rope)?,
+                                kv_raw: cuda
+                                    .download_f32_debug_snapshot(buffers.attention.kv_raw)?,
+                                kv_rope_qat: cuda
+                                    .download_f32_debug_snapshot(buffers.attention.kv_rope_qat)?,
+                                context_inverse_rope: cuda.download_f32_debug_snapshot(
+                                    buffers.attention.context_inverse_rope,
+                                )?,
+                                output_a: cuda
+                                    .download_f32_debug_snapshot(buffers.attention.output_a)?,
+                                output_b: cuda
+                                    .download_f32_debug_snapshot(buffers.attention.output_b)?,
+                            },
+                            attention_hidden: cuda
+                                .download_f32_debug_snapshot(buffers.attention_hidden)?,
+                            attention_normalized: cuda
+                                .download_f32_debug_snapshot(buffers.attention_normalized)?,
+                            attention_output: cuda
+                                .download_f32_debug_snapshot(buffers.attention_output)?,
+                            after_attention: cuda
+                                .download_f32_debug_snapshot(buffers.after_attention)?,
+                            ffn_hidden: cuda.download_f32_debug_snapshot(buffers.ffn_hidden)?,
+                            ffn_normalized: cuda
+                                .download_f32_debug_snapshot(buffers.ffn_normalized)?,
+                            moe_output: cuda.download_f32_debug_snapshot(buffers.moe_output)?,
+                        });
+                }
             }
             self.operators
                 .cuda_mut()?
@@ -667,25 +818,49 @@ impl DeepSeekV4Runner {
                     &proposal.hc_state,
                     &mut proposal.head,
                 )?;
-            self.operators
+            let (token_ids, confidence_scores) = self
+                .operators
                 .cuda_mut()?
-                .dspark_proposal_head_result(&mut proposal.head)
+                .dspark_proposal_head_result(&mut proposal.head)?;
+            Ok((token_ids, confidence_scores, debug_snapshot))
         })();
         self.dspark_proposal_arena = Some(proposal);
         let deactivate = self.operators.cuda_mut()?.activate_paged_binding(None);
         match (execution, deactivate) {
-            (Ok((token_ids, confidence_scores)), Ok(())) => {
+            (Ok((token_ids, confidence_scores, snapshot)), Ok(())) => {
                 self.observe_pending_moe_access_events();
-                Ok(DeepSeekV4MtpForwardOutput {
-                    token_ids,
-                    confidence_scores,
-                })
+                Ok((
+                    DeepSeekV4MtpForwardOutput {
+                        token_ids,
+                        confidence_scores,
+                    },
+                    snapshot,
+                ))
             }
             (Err(error), _) | (Ok(_), Err(error)) => {
                 self.discard_pending_moe_access_events();
                 Err(error)
             }
         }
+    }
+
+    /// Diagnostic-only snapshot of the final HC hidden, normalized hidden, and
+    /// base LM logits produced by the most recent CUDA DSpark proposal.
+    pub fn dspark_proposal_head_debug_snapshot(
+        &mut self,
+    ) -> Result<Option<DeepSeekV4DsparkProposalHeadDebugSnapshot>> {
+        #[cfg(all(feature = "cuda", feature = "cutlass"))]
+        if self.operators.backend == ModelExecutionBackend::Cuda {
+            let proposal = self.dspark_proposal_arena.as_ref().ok_or_else(|| {
+                Error::Internal("DeepSeek-V4 DSpark proposal arena is unavailable".into())
+            })?;
+            return self
+                .operators
+                .cuda_mut()?
+                .dspark_proposal_head_debug_snapshot(&proposal.head)
+                .map(Some);
+        }
+        Ok(None)
     }
 
     /// Diagnostic-only snapshot used to compare the captured official target
@@ -3113,6 +3288,12 @@ impl TopKModelRunner for DeepSeekV4Runner {
 }
 
 impl DsparkProposalRunner for DeepSeekV4Runner {
+    fn dspark_proposal_source(&self) -> Result<DsparkProposalSource> {
+        self.dspark_proposal_source.ok_or_else(|| {
+            Error::Model("DeepSeek-V4 DSpark proposal source identity is unavailable".into())
+        })
+    }
+
     fn propose_dspark(&mut self, anchor_token_id: u32) -> Result<DsparkProposal> {
         #[cfg(all(feature = "cuda", feature = "cutlass"))]
         {
@@ -3121,7 +3302,7 @@ impl DsparkProposalRunner for DeepSeekV4Runner {
                 token_ids: output.token_ids,
                 confidence_logits: output.confidence_scores,
             };
-            proposal.validate()?;
+            proposal.validate_for_source(self.dspark_proposal_source()?)?;
             return Ok(proposal);
         }
         #[cfg(not(all(feature = "cuda", feature = "cutlass")))]

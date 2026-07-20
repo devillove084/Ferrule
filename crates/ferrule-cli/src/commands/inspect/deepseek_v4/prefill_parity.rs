@@ -9,9 +9,13 @@ use std::time::Instant;
 
 use ferrule_common::execution::ForwardPhase;
 use ferrule_common::{Error, Result as FerruleResult};
+#[cfg(all(feature = "cuda", feature = "cutlass"))]
+use ferrule_model::models::deepseek_v4::DeepSeekV4MtpModel;
 use ferrule_model::{
     ChatTemplate, ModelExecutionBackend,
-    models::deepseek_v4::{DeepSeekV4PrepareOptions, DeepSeekV4Runner},
+    models::deepseek_v4::{
+        DeepSeekV4DsparkBackboneDebugSnapshot, DeepSeekV4PrepareOptions, DeepSeekV4Runner,
+    },
 };
 
 use crate::commands::resident::build_page_managed_diagnostic_harness;
@@ -290,14 +294,14 @@ pub fn cmd_deepseek_v4_prefill_parity(
                     .first()
                     .ok_or_else(|| Error::Execution("target prefill returned no frontier".into()))?
                     .token_id;
-                let first = run_dspark_proposal_if_ready(runner, anchor, token_ids.len())?
+                let first = run_dspark_proposal_if_ready(runner, anchor, token_ids.len(), true)?
                     .ok_or_else(|| {
                         Error::Execution(
                             "production DSpark proposal was unavailable after batched prefill"
                                 .into(),
                         )
                     })?;
-                let repeat = run_dspark_proposal_if_ready(runner, anchor, token_ids.len())?
+                let repeat = run_dspark_proposal_if_ready(runner, anchor, token_ids.len(), false)?
                     .ok_or_else(|| {
                         Error::Execution(
                             "production DSpark proposal repeat was unavailable after batched prefill"
@@ -327,18 +331,20 @@ pub fn cmd_deepseek_v4_prefill_parity(
                     .first()
                     .ok_or_else(|| Error::Execution("target decode returned no frontier".into()))?
                     .token_id;
-                let first = run_dspark_proposal_if_ready(runner, anchor, 1)?.ok_or_else(|| {
-                    Error::Execution(
-                        "production DSpark proposal was unavailable after token-loop prefill"
-                            .into(),
-                    )
-                })?;
-                let repeat = run_dspark_proposal_if_ready(runner, anchor, 1)?.ok_or_else(|| {
-                    Error::Execution(
+                let first =
+                    run_dspark_proposal_if_ready(runner, anchor, 1, true)?.ok_or_else(|| {
+                        Error::Execution(
+                            "production DSpark proposal was unavailable after token-loop prefill"
+                                .into(),
+                        )
+                    })?;
+                let repeat =
+                    run_dspark_proposal_if_ready(runner, anchor, 1, false)?.ok_or_else(|| {
+                        Error::Execution(
                         "production DSpark proposal repeat was unavailable after token-loop prefill"
                             .into(),
                     )
-                })?;
+                    })?;
                 Ok((first, repeat))
             },
         )?;
@@ -376,6 +382,56 @@ pub fn cmd_deepseek_v4_prefill_parity(
                     report.counters.expert_loads,
                     report.counters.expert_load_bytes,
                 );
+                if let Some(debug) = report.backbone_debug.as_ref() {
+                    println!(
+                        "  backbone: initial_rms={:.6e} initial_max_abs={:.6e} stages={}",
+                        vector_rms(&debug.initial_hc_state),
+                        vector_max_abs(&debug.initial_hc_state),
+                        debug.stage_hc_states.len(),
+                    );
+                    for (stage, state) in debug.stage_hc_states.iter().enumerate() {
+                        let boundaries = &debug.stage_boundaries[stage];
+                        println!(
+                            "    stage={stage} hc_rms={:.6e} hc_max_abs={:.6e} attn_hidden_rms={:.6e} attn_norm_rms={:.6e} attn_output_rms={:.6e} after_attn_rms={:.6e} ffn_hidden_rms={:.6e} ffn_norm_rms={:.6e} moe_output_rms={:.6e}",
+                            vector_rms(state),
+                            vector_max_abs(state),
+                            vector_rms(&boundaries.attention_hidden),
+                            vector_rms(&boundaries.attention_normalized),
+                            vector_rms(&boundaries.attention_output),
+                            vector_rms(&boundaries.after_attention),
+                            vector_rms(&boundaries.ffn_hidden),
+                            vector_rms(&boundaries.ffn_normalized),
+                            vector_rms(&boundaries.moe_output),
+                        );
+                    }
+                }
+                if let Some(debug) = report.head_debug.as_ref() {
+                    println!(
+                        "  head: hidden_rms={:.6e} hidden_max_abs={:.6e} normalized_rms={:.6e} normalized_max_abs={:.6e} cpu_confidence_max_abs_diff={:.6e}",
+                        vector_rms(&debug.hidden),
+                        vector_max_abs(&debug.hidden),
+                        vector_rms(&debug.normalized),
+                        vector_max_abs(&debug.normalized),
+                        debug.cpu_confidence_max_abs_diff,
+                    );
+                    for row in &debug.rows {
+                        println!(
+                            "    row={} previous={} emitted={} cpu={} base_topk={:?} markov_topk={:?} combined_topk={:?} emitted_parts=({:.6e}, {:.6e}, {:.6e}) confidence=({:.6e}, {:.6e})",
+                            row.row,
+                            row.previous_token_id,
+                            row.emitted_token_id,
+                            row.cpu_token_id,
+                            row.base_topk,
+                            row.markov_bias_topk,
+                            row.combined_topk,
+                            row.emitted_base_logit,
+                            row.emitted_markov_bias,
+                            row.emitted_combined_logit,
+                            row.gpu_confidence,
+                            row.cpu_confidence,
+                        );
+                    }
+                }
             }
         }
         (
@@ -545,7 +601,40 @@ struct DsparkProposalReport {
     context_kv_after: Vec<usize>,
     target_taps_last_row: Vec<f32>,
     main_x_last_row: Vec<f32>,
+    main_x_full: Option<Vec<f32>>,
+    backbone_debug: Option<DeepSeekV4DsparkBackboneDebugSnapshot>,
+    head_debug: Option<DsparkProposalHeadDebugReport>,
     counters: DsparkProposalCounterDelta,
+}
+
+#[derive(Debug)]
+struct DsparkProposalHeadDebugReport {
+    hidden: Vec<f32>,
+    normalized: Vec<f32>,
+    rows: Vec<DsparkProposalHeadDebugRow>,
+    cpu_confidence_max_abs_diff: f32,
+}
+
+#[derive(Debug)]
+struct DsparkProposalHeadDebugRow {
+    row: usize,
+    previous_token_id: u32,
+    emitted_token_id: u32,
+    cpu_token_id: u32,
+    base_topk: Vec<DsparkRankedLogit>,
+    markov_bias_topk: Vec<DsparkRankedLogit>,
+    combined_topk: Vec<DsparkRankedLogit>,
+    emitted_base_logit: f32,
+    emitted_markov_bias: f32,
+    emitted_combined_logit: f32,
+    gpu_confidence: f32,
+    cpu_confidence: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DsparkRankedLogit {
+    token_id: u32,
+    logit: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -584,6 +673,7 @@ fn run_dspark_proposal_if_ready(
     runner: &mut DeepSeekV4Runner,
     anchor_token_id: u32,
     _main_snapshot_rows: usize,
+    _capture_head_debug: bool,
 ) -> FerruleResult<Option<DsparkProposalReport>> {
     if runner.operator_backend() != ModelExecutionBackend::Cuda || runner.mtp().is_none() {
         return Ok(None);
@@ -676,6 +766,49 @@ fn run_dspark_proposal_if_ready(
                 "DSpark proposal mutated committed context-KV lengths: before={context_kv_before:?} after={context_kv_after:?}"
             )));
         }
+        let backbone_debug = if _capture_head_debug {
+            let (debug_proposal, snapshot) = runner.dspark_proposal_cuda_debug(anchor_token_id)?;
+            if debug_proposal.token_ids != proposal.token_ids
+                || max_abs_difference(
+                    &debug_proposal.confidence_scores,
+                    &proposal.confidence_scores,
+                ) > 1e-5
+            {
+                return Err(Error::Execution(format!(
+                    "DSpark diagnostic rerun changed proposal output: production={:?}/{:?} debug={:?}/{:?}",
+                    proposal.token_ids,
+                    proposal.confidence_scores,
+                    debug_proposal.token_ids,
+                    debug_proposal.confidence_scores,
+                )));
+            }
+            Some(snapshot)
+        } else {
+            None
+        };
+        let head_debug = if _capture_head_debug {
+            let (hidden, normalized, base_logits) = runner
+                .dspark_proposal_head_debug_snapshot()?
+                .ok_or_else(|| {
+                Error::Execution(
+                    "production DSpark proposal-head debug snapshot is unavailable".into(),
+                )
+            })?;
+            let mtp = runner.mtp().ok_or_else(|| {
+                Error::Execution("DSpark proposal exists without MTP resources".into())
+            })?;
+            Some(build_dspark_proposal_head_debug_report(
+                mtp,
+                anchor_token_id,
+                &proposal.token_ids,
+                &proposal.confidence_scores,
+                hidden,
+                normalized,
+                base_logits,
+            )?)
+        } else {
+            None
+        };
         return Ok(Some(DsparkProposalReport {
             anchor_token_id,
             token_ids: proposal.token_ids,
@@ -685,6 +818,9 @@ fn run_dspark_proposal_if_ready(
             context_kv_after,
             target_taps_last_row,
             main_x_last_row,
+            main_x_full: _capture_head_debug.then_some(main_x),
+            backbone_debug,
+            head_debug,
             counters,
         }));
     }
@@ -694,6 +830,293 @@ fn run_dspark_proposal_if_ready(
         let _ = anchor_token_id;
         Ok(None)
     }
+}
+
+#[cfg(all(feature = "cuda", feature = "cutlass"))]
+const DSPARK_HEAD_TOP_K: usize = 8;
+
+#[cfg(all(feature = "cuda", feature = "cutlass"))]
+#[allow(clippy::too_many_arguments)]
+fn build_dspark_proposal_head_debug_report(
+    mtp: &DeepSeekV4MtpModel,
+    anchor_token_id: u32,
+    proposal_token_ids: &[u32],
+    gpu_confidence: &[f32],
+    hidden: Vec<f32>,
+    normalized: Vec<f32>,
+    base_logits: Vec<f32>,
+) -> FerruleResult<DsparkProposalHeadDebugReport> {
+    let heads = mtp
+        .prediction_heads
+        .as_ref()
+        .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark prediction heads are missing".into()))?;
+    let rows = proposal_token_ids.len();
+    let hidden_size = heads.norm.len();
+    let markov_rank = heads.markov_w1.format.in_features();
+    let vocab = heads.markov_w2.format.out_features();
+    if rows == 0
+        || gpu_confidence.len() != rows
+        || hidden.len() != rows.saturating_mul(hidden_size)
+        || normalized.len() != hidden.len()
+        || base_logits.len() != rows.saturating_mul(vocab)
+        || heads.markov_w1.format.out_features() != vocab
+        || heads.markov_w2.format.in_features() != markov_rank
+        || heads.confidence_proj.format.in_features() != hidden_size + markov_rank
+        || heads.confidence_proj.format.out_features() != 1
+    {
+        return Err(Error::Model(format!(
+            "DeepSeek-V4 DSpark debug shape mismatch: rows={rows} hidden={}/{} normalized={} base_logits={}/{} confidence={}/{} w1={:?} w2={:?} confidence_head={:?}",
+            hidden.len(),
+            rows.saturating_mul(hidden_size),
+            normalized.len(),
+            base_logits.len(),
+            rows.saturating_mul(vocab),
+            gpu_confidence.len(),
+            rows,
+            heads.markov_w1.format,
+            heads.markov_w2.format,
+            heads.confidence_proj.format,
+        )));
+    }
+
+    let previous_token_ids = std::iter::once(anchor_token_id)
+        .chain(
+            proposal_token_ids
+                .iter()
+                .copied()
+                .take(rows.saturating_sub(1)),
+        )
+        .collect::<Vec<_>>();
+    if previous_token_ids
+        .iter()
+        .any(|token_id| *token_id as usize >= vocab)
+    {
+        return Err(Error::Model(format!(
+            "DeepSeek-V4 DSpark debug previous token is outside vocab {vocab}: {previous_token_ids:?}"
+        )));
+    }
+
+    // Decode W1 once, retain only the five selected embedding rows, then release
+    // it before decoding W2 so this diagnostic never holds both full matrices.
+    let markov_w1 = heads.markov_w1.reference_weights_f32()?;
+    let markov_embeds = previous_token_ids
+        .iter()
+        .map(|token_id| {
+            let start = *token_id as usize * markov_rank;
+            markov_w1[start..start + markov_rank].to_vec()
+        })
+        .collect::<Vec<_>>();
+    drop(markov_w1);
+    let markov_w2 = heads.markov_w2.reference_weights_f32()?;
+
+    let mut debug_rows = Vec::with_capacity(rows);
+    for row in 0..rows {
+        let base_row = &base_logits[row * vocab..(row + 1) * vocab];
+        let markov_embed = &markov_embeds[row];
+        let mut base_topk = Vec::with_capacity(DSPARK_HEAD_TOP_K);
+        let mut markov_bias_topk = Vec::with_capacity(DSPARK_HEAD_TOP_K);
+        let mut combined_topk = Vec::with_capacity(DSPARK_HEAD_TOP_K);
+        let emitted_token_id = proposal_token_ids[row];
+        let emitted_index = emitted_token_id as usize;
+        if emitted_index >= vocab {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 DSpark debug emitted token {emitted_token_id} is outside vocab {vocab}"
+            )));
+        }
+        let mut emitted_markov_bias = 0.0f32;
+        for token in 0..vocab {
+            let weight_row = &markov_w2[token * markov_rank..(token + 1) * markov_rank];
+            let markov_bias = weight_row
+                .iter()
+                .zip(markov_embed)
+                .fold(0.0f32, |sum, (weight, value)| weight.mul_add(*value, sum));
+            let combined = base_row[token] + markov_bias;
+            offer_ranked_logit(
+                &mut base_topk,
+                DsparkRankedLogit {
+                    token_id: token as u32,
+                    logit: base_row[token],
+                },
+                DSPARK_HEAD_TOP_K,
+            );
+            offer_ranked_logit(
+                &mut markov_bias_topk,
+                DsparkRankedLogit {
+                    token_id: token as u32,
+                    logit: markov_bias,
+                },
+                DSPARK_HEAD_TOP_K,
+            );
+            offer_ranked_logit(
+                &mut combined_topk,
+                DsparkRankedLogit {
+                    token_id: token as u32,
+                    logit: combined,
+                },
+                DSPARK_HEAD_TOP_K,
+            );
+            if token == emitted_index {
+                emitted_markov_bias = markov_bias;
+            }
+        }
+        let cpu_token_id = combined_topk
+            .first()
+            .map(|entry| entry.token_id)
+            .unwrap_or(u32::MAX);
+        let hidden_row = &hidden[row * hidden_size..(row + 1) * hidden_size];
+        let mut confidence_input = Vec::with_capacity(hidden_size + markov_rank);
+        confidence_input.extend_from_slice(hidden_row);
+        confidence_input.extend_from_slice(markov_embed);
+        let cpu_confidence = heads.confidence_proj.reference_matvec(&confidence_input)?[0];
+        debug_rows.push(DsparkProposalHeadDebugRow {
+            row,
+            previous_token_id: previous_token_ids[row],
+            emitted_token_id,
+            cpu_token_id,
+            base_topk,
+            markov_bias_topk,
+            combined_topk,
+            emitted_base_logit: base_row[emitted_index],
+            emitted_markov_bias,
+            emitted_combined_logit: base_row[emitted_index] + emitted_markov_bias,
+            gpu_confidence: gpu_confidence[row],
+            cpu_confidence,
+        });
+    }
+
+    let cpu_confidence_max_abs_diff = debug_rows.iter().fold(0.0f32, |maximum, row| {
+        maximum.max((row.gpu_confidence - row.cpu_confidence).abs())
+    });
+    Ok(DsparkProposalHeadDebugReport {
+        hidden,
+        normalized,
+        rows: debug_rows,
+        cpu_confidence_max_abs_diff,
+    })
+}
+
+#[cfg(all(feature = "cuda", feature = "cutlass"))]
+fn offer_ranked_logit(
+    top: &mut Vec<DsparkRankedLogit>,
+    candidate: DsparkRankedLogit,
+    capacity: usize,
+) {
+    let insert_at = top
+        .iter()
+        .position(|current| {
+            candidate.logit > current.logit
+                || (candidate.logit == current.logit && candidate.token_id < current.token_id)
+        })
+        .unwrap_or(top.len());
+    if insert_at < capacity {
+        top.insert(insert_at, candidate);
+        top.truncate(capacity);
+    } else if top.len() < capacity {
+        top.push(candidate);
+    }
+}
+
+fn vector_rms(values: &[f32]) -> f32 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    (values.iter().fold(0.0f64, |sum, value| {
+        (*value as f64).mul_add(*value as f64, sum)
+    }) / values.len() as f64)
+        .sqrt() as f32
+}
+
+fn vector_max_abs(values: &[f32]) -> f32 {
+    values
+        .iter()
+        .fold(0.0f32, |maximum, value| maximum.max(value.abs()))
+}
+
+fn ranked_logits_json(values: &[DsparkRankedLogit]) -> Vec<serde_json::Value> {
+    values
+        .iter()
+        .map(|entry| {
+            serde_json::json!({
+                "token_id": entry.token_id,
+                "logit": entry.logit,
+            })
+        })
+        .collect()
+}
+
+fn dspark_head_debug_json(report: &DsparkProposalHeadDebugReport) -> serde_json::Value {
+    serde_json::json!({
+        "hidden": {
+            "values": report.hidden,
+            "rms": vector_rms(&report.hidden),
+            "max_abs": vector_max_abs(&report.hidden),
+        },
+        "normalized": {
+            "values": report.normalized,
+            "rms": vector_rms(&report.normalized),
+            "max_abs": vector_max_abs(&report.normalized),
+        },
+        "cpu_confidence_max_abs_diff": report.cpu_confidence_max_abs_diff,
+        "rows": report.rows.iter().map(|row| {
+            serde_json::json!({
+                "row": row.row,
+                "previous_token_id": row.previous_token_id,
+                "emitted_token_id": row.emitted_token_id,
+                "cpu_token_id": row.cpu_token_id,
+                "cpu_token_matches": row.cpu_token_id == row.emitted_token_id,
+                "base_topk": ranked_logits_json(&row.base_topk),
+                "markov_bias_topk": ranked_logits_json(&row.markov_bias_topk),
+                "combined_topk": ranked_logits_json(&row.combined_topk),
+                "emitted_base_logit": row.emitted_base_logit,
+                "emitted_markov_bias": row.emitted_markov_bias,
+                "emitted_combined_logit": row.emitted_combined_logit,
+                "gpu_confidence": row.gpu_confidence,
+                "cpu_confidence": row.cpu_confidence,
+                "confidence_abs_diff": (row.gpu_confidence - row.cpu_confidence).abs(),
+            })
+        }).collect::<Vec<_>>(),
+    })
+}
+
+fn dspark_backbone_debug_json(report: &DeepSeekV4DsparkBackboneDebugSnapshot) -> serde_json::Value {
+    serde_json::json!({
+        "initial_hc_state": {
+            "values": report.initial_hc_state,
+            "rms": vector_rms(&report.initial_hc_state),
+            "max_abs": vector_max_abs(&report.initial_hc_state),
+        },
+        "stage_hc_states": report.stage_hc_states.iter().enumerate().map(|(stage, values)| {
+            serde_json::json!({
+                "stage": stage,
+                "values": values,
+                "rms": vector_rms(values),
+                "max_abs": vector_max_abs(values),
+            })
+        }).collect::<Vec<_>>(),
+        "stage_boundaries": report.stage_boundaries.iter().enumerate().map(|(stage, values)| {
+            serde_json::json!({
+                "stage": stage,
+                "attention": {
+                    "query_latent": values.attention.query_latent,
+                    "query_normalized": values.attention.query_normalized,
+                    "query_projected": values.attention.query_projected,
+                    "query_rope": values.attention.query_rope,
+                    "kv_raw": values.attention.kv_raw,
+                    "kv_rope_qat": values.attention.kv_rope_qat,
+                    "context_inverse_rope": values.attention.context_inverse_rope,
+                    "output_a": values.attention.output_a,
+                    "output_b": values.attention.output_b,
+                },
+                "attention_hidden": values.attention_hidden,
+                "attention_normalized": values.attention_normalized,
+                "attention_output": values.attention_output,
+                "after_attention": values.after_attention,
+                "ffn_hidden": values.ffn_hidden,
+                "ffn_normalized": values.ffn_normalized,
+                "moe_output": values.moe_output,
+            })
+        }).collect::<Vec<_>>(),
+    })
 }
 
 fn dspark_proposal_json(report: &DsparkProposalReport) -> serde_json::Value {
@@ -707,6 +1130,9 @@ fn dspark_proposal_json(report: &DsparkProposalReport) -> serde_json::Value {
         "committed_context_unchanged": report.context_kv_before == report.context_kv_after,
         "target_taps_last_row_values": report.target_taps_last_row.len(),
         "main_x_last_row_values": report.main_x_last_row.len(),
+        "main_x_full": report.main_x_full,
+        "backbone_debug": report.backbone_debug.as_ref().map(dspark_backbone_debug_json),
+        "head_debug": report.head_debug.as_ref().map(dspark_head_debug_json),
         "counters": {
             "kernel_launches": report.counters.kernel_launches,
             "host_to_device_copies": report.counters.host_to_device_copies,

@@ -80,6 +80,8 @@ pub struct DSparkCycleResult {
     /// acceptance this equals the correction; for full acceptance it comes from
     /// the final packed row and avoids an extra target pass.
     pub target_next: Option<TokenLogit>,
+    /// Target top-1 for every packed verification row, in input-row order.
+    pub target_row_top1: Vec<TokenLogit>,
     pub accounting: SpeculativeCycleAccounting,
     /// Wall-clock time for target verification plus this function's
     /// commit/rollback work. Proposal generation happens before this function
@@ -110,7 +112,8 @@ pub struct DSparkMetrics {
     pub accepted_draft_tokens: usize,
     pub correction_tokens: usize,
     pub externally_committed_tokens: usize,
-    pub externally_emitted_tokens: usize,
+    /// Runtime token callback invocations; serving delivery is tracked separately.
+    pub runtime_emitted_tokens: usize,
     pub rolled_back_rows: usize,
     pub rejected_tokens: usize,
     /// Indexed by accepted draft-prefix length.
@@ -180,12 +183,182 @@ impl DSparkMetrics {
             .saturating_add(complete_cycle_time_us);
     }
 
-    pub fn record_emitted_tokens(&mut self, token_count: usize) {
-        self.externally_emitted_tokens += token_count;
+    pub fn record_runtime_emitted_tokens(&mut self, token_count: usize) {
+        self.runtime_emitted_tokens += token_count;
     }
 }
 
 // ── DSpark transaction ────────────────────────────────────────────────
+
+/// Run a one-row exact probe before the full packed verification.
+///
+/// A first-draft miss commits the already-computed anchor branch directly, so
+/// the rejected suffix is never executed or replayed. A first-draft hit rolls
+/// the probe back completely and delegates to the original atomic packed
+/// transaction. This preserves exactness while making target work proportional
+/// to observed acceptance.
+pub fn run_acceptance_aware_dspark_verification<R>(
+    executor: &mut NativeMultiSessionExecutor<R>,
+    page_manager: &mut KvPageManager,
+    source_state: &mut R::SequenceState,
+    state_slot: StateSlot,
+    generation: u64,
+    proposal: &[u32],
+    top_k: NonZeroU32,
+    frontier: TargetFrontier,
+) -> Result<DSparkCycleResult>
+where
+    R: MultiSessionRunner,
+{
+    if proposal.is_empty() {
+        return run_dspark_verification(
+            executor,
+            page_manager,
+            source_state,
+            state_slot,
+            generation,
+            proposal,
+            top_k,
+            frontier,
+        );
+    }
+
+    let transaction_start = Instant::now();
+    let reservation = page_manager.reserve(state_slot, generation, 1)?;
+    if reservation.positions.start != frontier.position {
+        let actual = reservation.positions.start;
+        let error = Error::Execution(format!(
+            "DSpark probe frontier position {} does not match committed KV position {actual}",
+            frontier.position
+        ));
+        return Err(rollback_reservation(page_manager, reservation, error));
+    }
+    let bindings = match page_manager.reservation_bindings(&reservation) {
+        Ok(bindings) => bindings,
+        Err(error) => {
+            return Err(rollback_reservation(page_manager, reservation, error));
+        }
+    };
+    let probe_batch = match build_dspark_batch(
+        std::slice::from_ref(&frontier.top1.token_id),
+        frontier.position,
+        &bindings,
+        Some(top_k),
+        ExecutionIntent::ProvisionalVerification,
+    ) {
+        Ok(batch) => batch,
+        Err(error) => {
+            return Err(rollback_reservation(page_manager, reservation, error));
+        }
+    };
+    let mut probe_branch = match executor.fork_sequence_state_from(source_state, frontier.position)
+    {
+        Ok(branch) => branch,
+        Err(error) => {
+            return Err(rollback_reservation(page_manager, reservation, error));
+        }
+    };
+
+    let verify_start = Instant::now();
+    let output = match executor.execute_batch_with_kv(
+        std::slice::from_mut(&mut probe_branch),
+        &probe_batch,
+        std::slice::from_ref(&reservation),
+    ) {
+        Ok(output) => output,
+        Err(error) => {
+            return Err(discard_verification_branch(
+                executor,
+                page_manager,
+                reservation,
+                probe_branch,
+                error,
+            ));
+        }
+    };
+    let probe_verify_time_us = verify_start.elapsed().as_micros() as u64;
+    let probe = match verify_causal_prefix(&output, &[]) {
+        Ok(verification) => verification,
+        Err(error) => {
+            return Err(discard_verification_branch(
+                executor,
+                page_manager,
+                reservation,
+                probe_branch,
+                error,
+            ));
+        }
+    };
+
+    if probe.target_next.token_id != proposal[0] {
+        let freed = match page_manager.commit_prefix_with_freed(reservation, 1) {
+            Ok(freed) => freed,
+            Err(error) => {
+                let backend_cleanup = executor.rollback_prepared_batch().err();
+                let state_cleanup = executor.release_sequence_state(probe_branch).err();
+                return Err(with_cleanup_errors(
+                    error,
+                    backend_cleanup,
+                    None,
+                    state_cleanup,
+                ));
+            }
+        };
+        if let Err(error) = executor.commit_prepared_batch() {
+            promote_branch(executor, source_state, probe_branch)?;
+            return Err(error);
+        }
+        promote_branch(executor, source_state, probe_branch)?;
+        executor.release_kv_pages(&freed)?;
+        return Ok(DSparkCycleResult {
+            accepted: Vec::new(),
+            rejected: Some(proposal[0]),
+            target_correction: Some(probe.target_next.token_id),
+            target_next: Some(probe.target_next),
+            target_row_top1: probe.target_row_top1,
+            accounting: SpeculativeCycleAccounting {
+                proposed_tokens: proposal.len(),
+                verified_rows: 1,
+                accepted_draft_tokens: 0,
+                correction_tokens: 1,
+                externally_committed_tokens: 1,
+                rolled_back_rows: 0,
+            },
+            transaction_time_us: transaction_start.elapsed().as_micros() as u64,
+            verify_time_us: probe_verify_time_us,
+        });
+    }
+
+    if let Err(error) = executor.rollback_prepared_batch() {
+        return Err(discard_verification_branch(
+            executor,
+            page_manager,
+            reservation,
+            probe_branch,
+            error,
+        ));
+    }
+    if let Err(error) = executor.release_sequence_state(probe_branch) {
+        return Err(rollback_reservation(page_manager, reservation, error));
+    }
+    page_manager.rollback(reservation)?;
+
+    let mut result = run_dspark_verification(
+        executor,
+        page_manager,
+        source_state,
+        state_slot,
+        generation,
+        proposal,
+        top_k,
+        frontier,
+    )?;
+    result.accounting.verified_rows = result.accounting.verified_rows.saturating_add(1);
+    result.accounting.rolled_back_rows = result.accounting.rolled_back_rows.saturating_add(1);
+    result.verify_time_us = result.verify_time_us.saturating_add(probe_verify_time_us);
+    result.transaction_time_us = transaction_start.elapsed().as_micros() as u64;
+    Ok(result)
+}
 
 /// Runs one DSpark verification cycle.
 ///
@@ -399,11 +572,13 @@ where
 
     let accepted = proposal[..accepted_rows].to_vec();
     let rejected = proposal.get(accepted_rows).copied();
+    let target_next = verification.target_next;
     Ok(DSparkCycleResult {
         accepted,
         rejected,
-        target_correction: rejected.map(|_| verification.target_next.token_id),
-        target_next: Some(verification.target_next),
+        target_correction: rejected.map(|_| target_next.token_id),
+        target_next: Some(target_next),
+        target_row_top1: verification.target_row_top1,
         accounting: SpeculativeCycleAccounting {
             proposed_tokens: width,
             verified_rows,
@@ -514,10 +689,11 @@ fn with_cleanup_errors(
     ))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct CausalVerification {
     accepted: usize,
     target_next: TokenLogit,
+    target_row_top1: Vec<TokenLogit>,
 }
 
 /// The packed target input is `[anchor, draft × V]`. Output row `i` verifies
@@ -565,6 +741,7 @@ fn verify_causal_prefix(output: &ExecutionOutput, proposal: &[u32]) -> Result<Ca
     Ok(CausalVerification {
         accepted,
         target_next: row_top1[accepted],
+        target_row_top1: row_top1,
     })
 }
 
@@ -646,6 +823,7 @@ mod tests {
             rejected: Some(12),
             target_correction: Some(99),
             target_next: Some(logit(99, 1.0)),
+            target_row_top1: vec![logit(10, 1.0), logit(11, 1.0), logit(99, 1.0)],
             accounting: SpeculativeCycleAccounting {
                 proposed_tokens: 3,
                 verified_rows: 3,
@@ -662,6 +840,13 @@ mod tests {
             rejected: None,
             target_correction: None,
             target_next: Some(logit(24, 1.0)),
+            target_row_top1: vec![
+                logit(20, 1.0),
+                logit(21, 1.0),
+                logit(22, 1.0),
+                logit(23, 1.0),
+                logit(24, 1.0),
+            ],
             accounting: SpeculativeCycleAccounting {
                 proposed_tokens: 4,
                 verified_rows: 4,
@@ -694,6 +879,13 @@ mod tests {
             rejected: None,
             target_correction: None,
             target_next: Some(logit(14, 1.0)),
+            target_row_top1: vec![
+                logit(10, 1.0),
+                logit(11, 1.0),
+                logit(12, 1.0),
+                logit(13, 1.0),
+                logit(14, 1.0),
+            ],
             accounting: SpeculativeCycleAccounting {
                 proposed_tokens: 4,
                 verified_rows: 4,

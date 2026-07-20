@@ -1277,6 +1277,34 @@ pub(crate) struct DeepSeekV4LayerArena {
     hc_mult: usize,
 }
 
+#[cfg(feature = "cuda")]
+pub(crate) struct DeepSeekV4DsparkStageDebugBuffers<'a> {
+    pub(crate) attention: super::attention::DeepSeekV4DsparkAttentionDebugBuffers<'a>,
+    pub(crate) attention_hidden: &'a ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) attention_normalized: &'a ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) attention_output: &'a ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) after_attention: &'a ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) ffn_hidden: &'a ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) ffn_normalized: &'a ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) moe_output: &'a ferrule_cuda::context::CudaF32Buffer,
+}
+
+#[cfg(feature = "cuda")]
+impl DeepSeekV4LayerArena {
+    pub(crate) fn dspark_debug_buffers(&self) -> DeepSeekV4DsparkStageDebugBuffers<'_> {
+        DeepSeekV4DsparkStageDebugBuffers {
+            attention: self.attention.dspark_debug_buffers(),
+            attention_hidden: &self.attn_hidden,
+            attention_normalized: &self.attn_norm,
+            attention_output: &self.attention.output,
+            after_attention: &self.after_attn,
+            ffn_hidden: &self.ffn_hidden,
+            ffn_normalized: &self.ffn_norm,
+            moe_output: &self.moe_output,
+        }
+    }
+}
+
 /// One exact phase/rows bucket containing one arena per unique DSV4 scratch shape.
 #[cfg(feature = "cuda")]
 pub(crate) struct DeepSeekV4LayerArenaVariants {

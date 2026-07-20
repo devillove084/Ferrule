@@ -279,6 +279,30 @@ pub trait MultiSessionRunner: TopKModelRunner {
     fn multi_session_capabilities(&self) -> ExecutionCapabilities;
 }
 
+/// Immutable identity of one prepared checkpoint-native proposal source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DsparkProposalSource {
+    /// Stable implementation/protocol name, independent of a request or session.
+    pub implementation: &'static str,
+    /// Immutable prepared-plan generation within this process. This is not a
+    /// checkpoint content hash; release manifests must provide that separately.
+    pub prepared_plan_id: u64,
+    /// Number of draft tokens produced by the native checkpoint block.
+    pub native_width: usize,
+}
+
+impl DsparkProposalSource {
+    pub fn validate(&self) -> Result<()> {
+        if self.implementation.is_empty() || self.prepared_plan_id == 0 || self.native_width == 0 {
+            return Err(ferrule_common::Error::Model(format!(
+                "invalid DSpark proposal source: implementation={:?} prepared_plan_id={} native_width={}",
+                self.implementation, self.prepared_plan_id, self.native_width
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// One checkpoint-native DSpark proposal block.
 ///
 /// `token_ids` are ordered draft candidates after the carried target anchor.
@@ -299,6 +323,31 @@ impl DsparkProposal {
                 self.confidence_logits.len()
             )));
         }
+        if let Some((row, confidence)) = self
+            .confidence_logits
+            .iter()
+            .enumerate()
+            .find(|(_, confidence)| !confidence.is_finite())
+        {
+            return Err(ferrule_common::Error::Model(format!(
+                "DSpark proposal confidence row {row} is not finite: {confidence}"
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn validate_for_source(&self, source: DsparkProposalSource) -> Result<()> {
+        source.validate()?;
+        self.validate()?;
+        if self.token_ids.len() != source.native_width {
+            return Err(ferrule_common::Error::Model(format!(
+                "DSpark proposal source {}:{} declares native width {} but returned {} tokens",
+                source.implementation,
+                source.prepared_plan_id,
+                source.native_width,
+                self.token_ids.len()
+            )));
+        }
         Ok(())
     }
 }
@@ -309,6 +358,8 @@ impl DsparkProposal {
 /// The proposal block may read committed target/DSpark context but must not
 /// append proposal-block KV to the committed sequence.
 pub trait DsparkProposalRunner: MultiSessionRunner {
+    fn dspark_proposal_source(&self) -> Result<DsparkProposalSource>;
+
     fn propose_dspark(&mut self, anchor_token_id: u32) -> Result<DsparkProposal>;
 }
 
@@ -362,6 +413,55 @@ mod tests {
         AttentionKind, ModelFamily, ModelSupportContract, MoeSpec, QuantFormatCount, RouterKind,
         TransformerSpec, WeightSource,
     };
+
+    fn dspark_source(native_width: usize) -> DsparkProposalSource {
+        DsparkProposalSource {
+            implementation: "test-dspark-v1",
+            prepared_plan_id: 0x1234,
+            native_width,
+        }
+    }
+
+    #[test]
+    fn dspark_proposal_validates_native_width_and_finite_confidence() {
+        let proposal = DsparkProposal {
+            token_ids: vec![10, 11],
+            confidence_logits: vec![0.5, -0.25],
+        };
+        proposal.validate_for_source(dspark_source(2)).unwrap();
+
+        let width_error = proposal
+            .validate_for_source(dspark_source(3))
+            .unwrap_err()
+            .to_string();
+        assert!(width_error.contains("declares native width 3"));
+
+        let invalid_confidence = DsparkProposal {
+            token_ids: vec![10],
+            confidence_logits: vec![f32::NAN],
+        }
+        .validate_for_source(dspark_source(1))
+        .unwrap_err()
+        .to_string();
+        assert!(invalid_confidence.contains("not finite"));
+    }
+
+    #[test]
+    fn dspark_proposal_rejects_missing_source_identity() {
+        let proposal = DsparkProposal {
+            token_ids: vec![10],
+            confidence_logits: vec![0.0],
+        };
+        let error = proposal
+            .validate_for_source(DsparkProposalSource {
+                implementation: "",
+                prepared_plan_id: 0,
+                native_width: 1,
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("invalid DSpark proposal source"));
+    }
 
     #[test]
     fn unsupported_runtime_message_reports_engine_plan_gaps() {

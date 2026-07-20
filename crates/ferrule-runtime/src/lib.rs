@@ -24,7 +24,7 @@ pub use cache::{
     PreparedKvSequenceFork,
 };
 pub use engine::{
-    NativeMultiSessionExecutor, PageManagedDiagnosticHarness, ResidentActionKind,
+    DSparkCycleTrace, NativeMultiSessionExecutor, PageManagedDiagnosticHarness, ResidentActionKind,
     ResidentDriverStep, ResidentTokenEvent, ResidentTopKDriver, ResidentTopKDriverConfig,
     ResidentTopKDriverStats,
 };

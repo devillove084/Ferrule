@@ -2074,6 +2074,22 @@ impl DeepSeekV4CudaOperatorCache {
         )
     }
 
+    pub(crate) fn download_f32_debug_snapshot(
+        &self,
+        buffer: &ferrule_cuda::context::CudaF32Buffer,
+    ) -> Result<Vec<f32>> {
+        self.ops.download_f32_buffer(buffer)
+    }
+
+    #[cfg(feature = "cutlass")]
+    pub(crate) fn dspark_proposal_head_debug_snapshot(
+        &self,
+        buffers: &DeepSeekV4DsparkProposalHeadBuffers,
+    ) -> Result<(Vec<f32>, Vec<f32>, Vec<f32>)> {
+        self.ops
+            .download_dspark_proposal_head_debug_snapshot(&buffers.workspace)
+    }
+
     #[cfg(feature = "cutlass")]
     pub(crate) fn dspark_proposal_head_result(
         &self,

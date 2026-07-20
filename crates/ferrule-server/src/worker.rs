@@ -3,6 +3,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use ferrule_model::{ModelRunner, MultiSessionRunner, models::deepseek_v4::DeepSeekV4Runner};
 use ferrule_runtime::{
@@ -39,6 +40,7 @@ where
 {
     driver: ResidentTopKDriver<DeepSeekV4Runner, C>,
     expert_budget: ExpertIoBudget,
+    next_execution_step_id: u64,
 }
 
 impl<C> DeepSeekV4ResidentEngine<C>
@@ -52,6 +54,7 @@ where
         Self {
             driver,
             expert_budget,
+            next_execution_step_id: 1,
         }
     }
 }
@@ -76,6 +79,11 @@ where
         &mut self,
         on_token: &mut dyn FnMut(&ResidentTokenEvent),
     ) -> Result<ResidentDriverStep, String> {
+        let execution_step_id = self.next_execution_step_id;
+        self.next_execution_step_id = self
+            .next_execution_step_id
+            .checked_add(1)
+            .ok_or_else(|| "production execution-step identity overflow".to_string())?;
         let mut adapter = |event: &ResidentTokenEvent| {
             on_token(event);
             Ok(())
@@ -85,6 +93,102 @@ where
         let result = self
             .driver
             .step_with_dspark_model_expert_io(&mut adapter, self.expert_budget);
+        let counters_after = self.driver.executor().runner().operator_runtime_counters();
+        let traces = self.driver.drain_dspark_cycle_traces().collect::<Vec<_>>();
+        let cycle_identities = traces
+            .iter()
+            .map(|trace| (trace.request_id.0, trace.session_id.0, trace.cycle_attempt))
+            .collect::<Vec<_>>();
+        let physical_counters_cycle_exact = matches!(
+            &result,
+            Ok(ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Decode,
+                ..
+            })
+        ) && traces.len() == 1;
+        for trace in traces {
+            tracing::debug!(
+                target: "ferrule_dspark_cycle",
+                event = "dspark_cycle",
+                request_id = trace.request_id.0,
+                session_id = trace.session_id.0,
+                cycle_attempt = trace.cycle_attempt,
+                execution_step_id,
+                position = trace.position,
+                anchor_token = trace.anchor_token,
+                proposal_source = trace.proposal_source.implementation,
+                proposal_prepared_plan_id = trace.proposal_source.prepared_plan_id,
+                native_proposal_width = trace.proposal_source.native_width,
+                proposal_executed = trace.proposal_executed,
+                native_proposal_token_ids = ?trace.native_proposed_tokens,
+                native_confidence_logits = ?trace.native_confidence_logits,
+                proposal_token_ids = ?trace.proposed_tokens,
+                confidence_logits = ?trace.confidence_logits,
+                capacity_truncated_tokens = trace.capacity_truncated_tokens,
+                output_boundary_truncated_tokens = trace.output_boundary_truncated_tokens,
+                scheduler_expert_io = ?trace.scheduler_expert_io,
+                accepted_token_ids = ?trace.accepted_tokens,
+                rejected_token = ?trace.rejected_token,
+                target_correction_token = ?trace.target_correction_token,
+                target_next_token = ?trace.target_next_token,
+                target_row_top1 = ?trace.target_row_top1,
+                proposed_tokens = trace.accounting.proposed_tokens,
+                verified_rows = trace.accounting.verified_rows,
+                accepted_draft_tokens = trace.accounting.accepted_draft_tokens,
+                correction_tokens = trace.accounting.correction_tokens,
+                externally_committed_tokens = trace.accounting.externally_committed_tokens,
+                runtime_emitted_tokens = trace.runtime_emitted_tokens,
+                rolled_back_rows = trace.accounting.rolled_back_rows,
+                runtime_tokens_reconcile = trace.runtime_tokens_reconcile(),
+                proposal_us = trace.proposal_time_us,
+                verify_us = trace.verify_time_us,
+                transaction_us = trace.transaction_time_us,
+                cycle_us = trace.complete_cycle_time_us,
+                finish_reason = trace.finish_reason.map(|reason| reason.as_str()).unwrap_or("none"),
+                "production DSpark cycle trace"
+            );
+        }
+        if !cycle_identities.is_empty() || result.is_err() {
+            tracing::debug!(
+                target: "ferrule_runtime_step",
+                event = "dspark_physical_counters",
+                execution_step_id,
+                cycle_identities = ?cycle_identities,
+                step_succeeded = result.is_ok(),
+                physical_counters_cycle_exact,
+                dropped_cycle_traces = self.driver.stats().dropped_dspark_cycle_traces,
+                kernel_launches = counters_after.kernel_launches.saturating_sub(counters_before.kernel_launches),
+                h2d_copies = counters_after.host_to_device_copies.saturating_sub(counters_before.host_to_device_copies),
+                h2d_bytes = counters_after.host_to_device_bytes.saturating_sub(counters_before.host_to_device_bytes),
+                d2h_copies = counters_after.device_to_host_copies.saturating_sub(counters_before.device_to_host_copies),
+                d2h_bytes = counters_after.device_to_host_bytes.saturating_sub(counters_before.device_to_host_bytes),
+                artifact_uploads = counters_after.artifact_uploads.saturating_sub(counters_before.artifact_uploads),
+                artifact_upload_bytes = counters_after.artifact_upload_bytes.saturating_sub(counters_before.artifact_upload_bytes),
+                device_allocation_attempts = counters_after.device_allocation_attempts.saturating_sub(counters_before.device_allocation_attempts),
+                device_allocations = counters_after.device_allocations.saturating_sub(counters_before.device_allocations),
+                device_allocation_failures = counters_after.device_allocation_failures.saturating_sub(counters_before.device_allocation_failures),
+                device_allocation_bytes = counters_after.device_allocation_bytes.saturating_sub(counters_before.device_allocation_bytes),
+                stream_wide_syncs = counters_after.stream_wide_syncs.saturating_sub(counters_before.stream_wide_syncs),
+                selected_experts = counters_after.expert_selected.saturating_sub(counters_before.expert_selected),
+                resident_hits = counters_after.expert_selected_resident_hits.saturating_sub(counters_before.expert_selected_resident_hits),
+                upload_hits = counters_after.expert_selected_upload_hits.saturating_sub(counters_before.expert_selected_upload_hits),
+                host_staged_hits = counters_after.expert_selected_host_staged_hits.saturating_sub(counters_before.expert_selected_host_staged_hits),
+                cold_misses = counters_after.expert_selected_cold_misses.saturating_sub(counters_before.expert_selected_cold_misses),
+                expert_loads = counters_after.expert_loads.saturating_sub(counters_before.expert_loads),
+                expert_load_bytes = counters_after.expert_load_bytes.saturating_sub(counters_before.expert_load_bytes),
+                expert_io_submitted_extents = counters_after.expert_io_submitted_extents.saturating_sub(counters_before.expert_io_submitted_extents),
+                expert_io_completed_extents = counters_after.expert_io_completed_extents.saturating_sub(counters_before.expert_io_completed_extents),
+                expert_io_failed_extents = counters_after.expert_io_failed_extents.saturating_sub(counters_before.expert_io_failed_extents),
+                expert_io_requested_bytes = counters_after.expert_io_requested_bytes.saturating_sub(counters_before.expert_io_requested_bytes),
+                expert_io_aligned_bytes = counters_after.expert_io_aligned_bytes.saturating_sub(counters_before.expert_io_aligned_bytes),
+                expert_io_read_us = counters_after.expert_io_read_us.saturating_sub(counters_before.expert_io_read_us),
+                expert_async_upload_bytes = counters_after.expert_async_upload_bytes.saturating_sub(counters_before.expert_async_upload_bytes),
+                expert_frame_reuses = counters_after.expert_frame_reuses.saturating_sub(counters_before.expert_frame_reuses),
+                expert_frame_waits = counters_after.expert_frame_waits.saturating_sub(counters_before.expert_frame_waits),
+                abandoned_uploads = counters_after.expert_abandoned_uploads.saturating_sub(counters_before.expert_abandoned_uploads),
+                "production DSpark physical counter delta"
+            );
+        }
         if matches!(
             &result,
             Ok(ResidentDriverStep::Executed {
@@ -92,7 +196,6 @@ where
                 ..
             })
         ) {
-            let counters_after = self.driver.executor().runner().operator_runtime_counters();
             let dspark_after = &self.driver.stats().dspark;
             let proposed = dspark_after
                 .proposed_tokens
@@ -107,9 +210,9 @@ where
                     .verified_rows
                     .saturating_sub(dspark_before.verified_rows),
                 accepted_draft_tokens = accepted,
-                externally_emitted_tokens = dspark_after
-                    .externally_emitted_tokens
-                    .saturating_sub(dspark_before.externally_emitted_tokens),
+                runtime_emitted_tokens = dspark_after
+                    .runtime_emitted_tokens
+                    .saturating_sub(dspark_before.runtime_emitted_tokens),
                 acceptance = if proposed == 0 {
                     0.0
                 } else {
@@ -252,6 +355,7 @@ pub(crate) enum WorkerEvent {
 
 struct SubmitCommand {
     request_id: RequestId,
+    enqueued_at: Instant,
     request: WorkerRequest,
     events: mpsc::Sender<WorkerEvent>,
     cancellation: Arc<AtomicBool>,
@@ -272,6 +376,9 @@ enum WorkerCommand {
 struct ActiveRequest {
     events: mpsc::Sender<WorkerEvent>,
     cancellation: Arc<AtomicBool>,
+    session_id: SessionId,
+    submitted_at: Instant,
+    emitted_tokens: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -318,11 +425,13 @@ impl ModelWorkerHandle {
         request: WorkerRequest,
     ) -> Result<EventSubscription, SubmitError> {
         let request_id = RequestId(self.next_request_id.fetch_add(1, Ordering::Relaxed));
+        let enqueued_at = Instant::now();
         let (events, receiver) = mpsc::channel(self.config.event_queue_capacity);
         let (accepted, acceptance) = oneshot::channel();
         let cancellation = Arc::new(AtomicBool::new(false));
         let command = WorkerCommand::Submit(SubmitCommand {
             request_id,
+            enqueued_at,
             request,
             events,
             cancellation: Arc::clone(&cancellation),
@@ -585,7 +694,7 @@ where
                 let Some(request_id) = event.request_id else {
                     return;
                 };
-                let Some(request) = active.get(&request_id) else {
+                let Some(request) = active.get_mut(&request_id) else {
                     return;
                 };
                 if request
@@ -596,6 +705,8 @@ where
                     .is_err()
                 {
                     request.cancellation.store(true, Ordering::Release);
+                } else {
+                    request.emitted_tokens = request.emitted_tokens.saturating_add(1);
                 }
             };
             engine.step(&mut emit)
@@ -632,12 +743,15 @@ where
             false
         }
         WorkerCommand::Submit(command) => {
+            let worker_started_at = Instant::now();
+            let worker_queue_us = command.enqueued_at.elapsed().as_micros() as u64;
             if let Some(error) = fatal_error {
                 let _ = command
                     .accepted
                     .send(Err(format!("model worker is unavailable: {error}")));
                 return false;
             }
+            let tokenize_started_at = Instant::now();
             let prompt_tokens = match engine.encode(&command.request.prompt) {
                 Ok(tokens) if !tokens.is_empty() => tokens,
                 Ok(_) => {
@@ -653,10 +767,14 @@ where
                     return false;
                 }
             };
+            let tokenization_us = tokenize_started_at.elapsed().as_micros() as u64;
             let request_id = command.request_id;
+            let session_id = SessionId(request_id.0);
+            let prompt_token_count = prompt_tokens.len();
+            let max_new_tokens = command.request.max_tokens;
             let request = GenerateRequest {
                 id: request_id,
-                session_id: Some(SessionId(request_id.0)),
+                session_id: Some(session_id),
                 prompt_tokens,
                 max_new_tokens: command.request.max_tokens,
                 stop: command.request.stop,
@@ -668,7 +786,22 @@ where
                 ActiveRequest {
                     events: command.events,
                     cancellation: Arc::clone(&command.cancellation),
+                    session_id,
+                    submitted_at: command.enqueued_at,
+                    emitted_tokens: 0,
                 },
+            );
+            tracing::debug!(
+                target: "ferrule_request",
+                event = "request_admitted",
+                request_id = request_id.0,
+                session_id = session_id.0,
+                worker_queue_us,
+                tokenization_us,
+                worker_admission_us = worker_started_at.elapsed().as_micros() as u64,
+                prompt_tokens = prompt_token_count,
+                max_new_tokens,
+                "production request admitted"
             );
             if command.accepted.send(Ok(())).is_err() {
                 command.cancellation.store(true, Ordering::Release);
@@ -696,6 +829,14 @@ fn cancel_disconnected<E>(
         if let Err(error) = engine.cancel_request(request_id)
             && let Some(request) = active.remove(&request_id)
         {
+            trace_worker_request_terminal(
+                request_id,
+                request.session_id,
+                "failed",
+                "cancellation_failed",
+                &request,
+                None,
+            );
             let _ = request.events.try_send(WorkerEvent::Failed {
                 message: format!("request cancellation failed: {error}"),
             });
@@ -717,6 +858,14 @@ where
         let reason = sequence
             .finish_reason
             .unwrap_or(SequenceFinishReason::NoCandidate);
+        trace_worker_request_terminal(
+            request_id,
+            sequence.session_id,
+            "finished",
+            reason.as_str(),
+            &request,
+            Some(sequence.generated),
+        );
         let _ = request.events.try_send(WorkerEvent::Finished {
             reason,
             usage: Usage::new(sequence.prompt_len, sequence.generated),
@@ -727,6 +876,14 @@ where
             continue;
         };
         if let Some(request) = active.remove(&request_id) {
+            trace_worker_request_terminal(
+                request_id,
+                sequence.session_id,
+                "cancelled",
+                SequenceFinishReason::Cancelled.as_str(),
+                &request,
+                Some(sequence.generated),
+            );
             let _ = request.events.try_send(WorkerEvent::Cancelled);
         }
     }
@@ -735,11 +892,42 @@ where
             continue;
         };
         if let Some(request) = active.remove(&request_id) {
+            trace_worker_request_terminal(
+                request_id,
+                sequence.session_id,
+                "failed",
+                "model_execution_failed",
+                &request,
+                Some(sequence.generated),
+            );
             let _ = request.events.try_send(WorkerEvent::Failed {
                 message: "model execution failed".into(),
             });
         }
     }
+}
+
+fn trace_worker_request_terminal(
+    request_id: RequestId,
+    session_id: SessionId,
+    status: &'static str,
+    finish_reason: &'static str,
+    request: &ActiveRequest,
+    generated_tokens: Option<usize>,
+) {
+    tracing::debug!(
+        target: "ferrule_request",
+        event = "request_worker_terminal",
+        request_id = request_id.0,
+        session_id = session_id.0,
+        status,
+        finish_reason,
+        worker_request_us = request.submitted_at.elapsed().as_micros() as u64,
+        generated_tokens = ?generated_tokens,
+        emitted_token_events = request.emitted_tokens,
+        tokens_reconcile = ?generated_tokens.map(|generated| generated == request.emitted_tokens),
+        "production request reached worker terminal state"
+    );
 }
 
 fn fail_all<E>(engine: &mut E, active: &mut HashMap<RequestId, ActiveRequest>, message: String)
@@ -750,6 +938,14 @@ where
     for request_id in request_ids {
         let _ = engine.cancel_request(request_id);
         if let Some(request) = active.remove(&request_id) {
+            trace_worker_request_terminal(
+                request_id,
+                request.session_id,
+                "failed",
+                "fatal_engine_error",
+                &request,
+                None,
+            );
             let _ = request.events.try_send(WorkerEvent::Failed {
                 message: message.clone(),
             });
@@ -768,7 +964,16 @@ where
         let _ = engine.cancel_request(request_id);
     }
     drain_terminal(engine, active);
-    active.clear();
+    for (request_id, request) in active.drain() {
+        trace_worker_request_terminal(
+            request_id,
+            request.session_id,
+            "cancelled",
+            "worker_shutdown",
+            &request,
+            None,
+        );
+    }
 }
 
 // Keep this concrete alias visible in rustdoc as the intended production engine shape.
@@ -877,6 +1082,9 @@ mod tests {
             ActiveRequest {
                 events,
                 cancellation: Arc::new(AtomicBool::new(true)),
+                session_id: SessionId(1),
+                submitted_at: Instant::now(),
+                emitted_tokens: 0,
             },
         );
         let mut scratch = Vec::with_capacity(1);
@@ -897,6 +1105,9 @@ mod tests {
             ActiveRequest {
                 events,
                 cancellation: Arc::new(AtomicBool::new(false)),
+                session_id: SessionId(2),
+                submitted_at: Instant::now(),
+                emitted_tokens: 0,
             },
         );
         cancel_disconnected(&mut engine, &mut active, &mut scratch);

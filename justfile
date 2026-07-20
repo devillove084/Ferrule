@@ -125,14 +125,14 @@ test-cuda *args='':
         echo "  Run 'just oxide-doctor' to configure CUDA tests, or 'just test-cuda-required' to fail when unavailable."; \
     else \
         echo "→ CUDA tests via cargo oxide (arch: {{ _cuda-arch }})"; \
-        cargo oxide test --arch {{ _cuda-arch }} -- -p ferrule-cuda {{ args }}; \
+        cargo oxide test --arch {{ _cuda-arch }} -- --features cutlass -p ferrule-cuda {{ args }}; \
     fi
 
 test-cuda-required *args='':
     @if [ "{{ _has-oxide }}" != "1" ]; then echo "error: cargo-oxide not found"; exit 1; fi
     @if [ "{{ _has-gpu }}" != "1" ]; then echo "error: no NVIDIA GPU detected"; exit 1; fi
     @echo "→ CUDA tests via cargo oxide (arch: {{ _cuda-arch }})"
-    cargo oxide test --arch {{ _cuda-arch }} -- -p ferrule-cuda {{ args }}
+    cargo oxide test --arch {{ _cuda-arch }} -- --features cutlass -p ferrule-cuda {{ args }}
 
 test-cli:
     cargo test --locked -p ferrule-cli

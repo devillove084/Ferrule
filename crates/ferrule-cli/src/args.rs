@@ -296,7 +296,7 @@ pub(crate) struct ServeArgs {
     #[arg(long, default_value_t = 0)]
     pub(crate) moe_prefetch_experts: usize,
     /// Bound resident routed experts per layer (0 = managed default).
-    #[arg(long, default_value_t = 48)]
+    #[arg(long, default_value_t = 96)]
     pub(crate) moe_hotset_experts: usize,
     /// Predicted incremental expert source bytes admitted per scheduler batch in MiB (0 = unbounded).
     #[arg(long = "expert-io-batch-mb", default_value_t = 2693)]
@@ -379,5 +379,14 @@ mod tests {
     #[test]
     fn cli_arguments_are_unique() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn serve_defaults_to_the_measured_dspark_hotset() {
+        let cli = Cli::try_parse_from(["ferrule", "serve", "model"]).unwrap();
+        let Command::Serve(args) = cli.command else {
+            panic!("serve command was not parsed");
+        };
+        assert_eq!(args.moe_hotset_experts, 96);
     }
 }

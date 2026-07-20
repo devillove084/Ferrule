@@ -10,8 +10,8 @@ mod native_executor;
 
 pub use diagnostic::PageManagedDiagnosticHarness;
 pub use driver::{
-    ResidentActionKind, ResidentDriverStep, ResidentTokenEvent, ResidentTopKDriver,
-    ResidentTopKDriverConfig, ResidentTopKDriverStats,
+    DSparkCycleTrace, ResidentActionKind, ResidentDriverStep, ResidentTokenEvent,
+    ResidentTopKDriver, ResidentTopKDriverConfig, ResidentTopKDriverStats,
 };
 
 pub use native_executor::NativeMultiSessionExecutor;

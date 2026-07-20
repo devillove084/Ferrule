@@ -127,8 +127,9 @@ pub use moe::{
 
 // ── Re-exports: runner ────────────────────────────────────────────────────
 pub use runner::{
-    DsparkProposal, DsparkProposalRunner, ExpertIoModelRunner, ModelInfo, ModelRunner,
-    MultiSessionRunner, PrefillMode, TokenLogit, TopKModelRunner, unsupported_runtime_message,
+    DsparkProposal, DsparkProposalRunner, DsparkProposalSource, ExpertIoModelRunner, ModelInfo,
+    ModelRunner, MultiSessionRunner, PrefillMode, TokenLogit, TopKModelRunner,
+    unsupported_runtime_message,
 };
 
 // ── Re-exports: attention_backend ─────────────────────────────────────────

@@ -332,7 +332,34 @@ pub(crate) struct DeepSeekV4AttentionDecodeArena {
 }
 
 #[cfg(feature = "cuda")]
+pub(crate) struct DeepSeekV4DsparkAttentionDebugBuffers<'a> {
+    pub(crate) query_latent: &'a ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) query_normalized: &'a ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) query_projected: &'a ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) query_rope: &'a ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) kv_raw: &'a ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) kv_rope_qat: &'a ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) context_inverse_rope: &'a ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) output_a: &'a ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) output_b: &'a ferrule_cuda::context::CudaF32Buffer,
+}
+
+#[cfg(feature = "cuda")]
 impl DeepSeekV4AttentionDecodeArena {
+    pub(crate) fn dspark_debug_buffers(&self) -> DeepSeekV4DsparkAttentionDebugBuffers<'_> {
+        DeepSeekV4DsparkAttentionDebugBuffers {
+            query_latent: &self.q_latent,
+            query_normalized: &self.q_norm,
+            query_projected: &self.query_raw,
+            query_rope: &self.query,
+            kv_raw: &self.kv_raw,
+            kv_rope_qat: &self.kv,
+            context_inverse_rope: &self.context,
+            output_a: &self.latent,
+            output_b: &self.output,
+        }
+    }
+
     pub(crate) fn new(
         attention: &DeepSeekV4Attention,
         rows: usize,

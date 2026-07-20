@@ -3591,6 +3591,20 @@ impl CudaArtifactOperatorContext {
         Ok(())
     }
 
+    /// Download proposal-head numerical boundaries for diagnostic parity checks.
+    /// This is intentionally separate from the compact production result path.
+    #[cfg(feature = "cutlass")]
+    pub fn download_dspark_proposal_head_debug_snapshot(
+        &self,
+        workspace: &CudaDsparkProposalHeadWorkspace,
+    ) -> Result<(Vec<f32>, Vec<f32>, Vec<f32>)> {
+        Ok((
+            self.download_f32_buffer(&workspace.hidden)?,
+            self.download_f32_buffer(&workspace.normalized)?,
+            self.download_f32_buffer(&workspace.base_logits)?,
+        ))
+    }
+
     #[cfg(feature = "cutlass")]
     pub fn download_dspark_proposal_head_result(
         &self,

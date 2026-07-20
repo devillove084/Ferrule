@@ -59,7 +59,8 @@ pub use prepared::{
     DeepSeekV4PreparedResources, prepare,
 };
 pub use runner::{
-    DeepSeekV4LayerRuntimeStats, DeepSeekV4OutputProfileStats, DeepSeekV4PrefillRuntimeStats,
-    DeepSeekV4PrepareOptions, DeepSeekV4Runner,
+    DeepSeekV4DsparkAttentionDebugSnapshot, DeepSeekV4DsparkBackboneDebugSnapshot,
+    DeepSeekV4DsparkStageDebugSnapshot, DeepSeekV4LayerRuntimeStats, DeepSeekV4OutputProfileStats,
+    DeepSeekV4PrefillRuntimeStats, DeepSeekV4PrepareOptions, DeepSeekV4Runner,
 };
 pub use sequence::DeepSeekV4SequenceExecutionState;

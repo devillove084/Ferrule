@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, State};
@@ -91,6 +91,7 @@ async fn chat_completions(
     State(state): State<ServerState>,
     payload: Result<Json<ChatCompletionRequest>, JsonRejection>,
 ) -> Response {
+    let request_started_at = Instant::now();
     let Json(request) = match payload {
         Ok(payload) => payload,
         Err(rejection) => return json_rejection(rejection),
@@ -118,6 +119,12 @@ async fn chat_completions(
         Err(error) => return submit_error(error),
     };
 
+    trace_http_request_admitted(
+        subscription.request_id.0,
+        "chat.completions",
+        stream,
+        request_started_at,
+    );
     let completion_id = format!("chatcmpl-ferrule-{}", subscription.request_id.0);
     let created = unix_timestamp();
     if stream {
@@ -127,6 +134,7 @@ async fn chat_completions(
             state.registration.id.clone(),
             created,
             include_usage,
+            request_started_at,
         );
         let mut response = Sse::new(event_stream)
             .keep_alive(
@@ -149,6 +157,7 @@ async fn chat_completions(
             completion_id,
             state.registration.id.clone(),
             created,
+            request_started_at,
         )
         .await
     }
@@ -193,12 +202,36 @@ async fn chat_non_streaming_response(
     completion_id: String,
     model: String,
     created: u64,
+    request_started_at: Instant,
 ) -> Response {
+    let request_id = subscription.request_id.0;
+    let mut token_events = 0usize;
+    let mut disconnect_guard = NonStreamingDisconnectGuard {
+        request_id,
+        endpoint: "chat.completions",
+        request_started_at,
+        token_events: 0,
+        terminal_seen: false,
+    };
     let mut content = String::new();
     while let Some(event) = subscription.recv().await {
         match event {
-            WorkerEvent::Token { text } => content.push_str(&text),
+            WorkerEvent::Token { text } => {
+                token_events = token_events.saturating_add(1);
+                disconnect_guard.token_events = token_events;
+                content.push_str(&text);
+            }
             WorkerEvent::Finished { reason, usage } => {
+                disconnect_guard.terminal_seen = true;
+                trace_http_request_terminal(
+                    request_id,
+                    "chat.completions",
+                    false,
+                    "finished",
+                    reason.as_str(),
+                    token_events,
+                    request_started_at,
+                );
                 return Json(ChatCompletionResponse {
                     id: &completion_id,
                     object: "chat.completion",
@@ -217,6 +250,16 @@ async fn chat_non_streaming_response(
                 .into_response();
             }
             WorkerEvent::Cancelled => {
+                disconnect_guard.terminal_seen = true;
+                trace_http_request_terminal(
+                    request_id,
+                    "chat.completions",
+                    false,
+                    "cancelled",
+                    "cancelled",
+                    token_events,
+                    request_started_at,
+                );
                 return api_error(
                     StatusCode::REQUEST_TIMEOUT,
                     "generation request was cancelled",
@@ -224,10 +267,30 @@ async fn chat_non_streaming_response(
                 );
             }
             WorkerEvent::Failed { message } => {
+                disconnect_guard.terminal_seen = true;
+                trace_http_request_terminal(
+                    request_id,
+                    "chat.completions",
+                    false,
+                    "failed",
+                    "model_execution_failed",
+                    token_events,
+                    request_started_at,
+                );
                 return api_error(StatusCode::INTERNAL_SERVER_ERROR, &message, "server_error");
             }
         }
     }
+    disconnect_guard.terminal_seen = true;
+    trace_http_request_terminal(
+        request_id,
+        "chat.completions",
+        false,
+        "failed",
+        "worker_channel_closed",
+        token_events,
+        request_started_at,
+    );
     api_error(
         StatusCode::INTERNAL_SERVER_ERROR,
         "model worker closed the request without a terminal event",
@@ -239,6 +302,7 @@ async fn completions(
     State(state): State<ServerState>,
     payload: Result<Json<CompletionRequest>, JsonRejection>,
 ) -> Response {
+    let request_started_at = Instant::now();
     let Json(request) = match payload {
         Ok(payload) => payload,
         Err(rejection) => return json_rejection(rejection),
@@ -265,6 +329,12 @@ async fn completions(
         Err(error) => return submit_error(error),
     };
 
+    trace_http_request_admitted(
+        subscription.request_id.0,
+        "completions",
+        stream,
+        request_started_at,
+    );
     let completion_id = format!("cmpl-ferrule-{}", subscription.request_id.0);
     let created = unix_timestamp();
     if stream {
@@ -274,6 +344,7 @@ async fn completions(
             state.registration.id.clone(),
             created,
             include_usage,
+            request_started_at,
         );
         let mut response = Sse::new(event_stream)
             .keep_alive(
@@ -296,6 +367,7 @@ async fn completions(
             completion_id,
             state.registration.id.clone(),
             created,
+            request_started_at,
         )
         .await
     }
@@ -306,12 +378,36 @@ async fn completion_non_streaming_response(
     completion_id: String,
     model: String,
     created: u64,
+    request_started_at: Instant,
 ) -> Response {
+    let request_id = subscription.request_id.0;
+    let mut token_events = 0usize;
+    let mut disconnect_guard = NonStreamingDisconnectGuard {
+        request_id,
+        endpoint: "completions",
+        request_started_at,
+        token_events: 0,
+        terminal_seen: false,
+    };
     let mut content = String::new();
     while let Some(event) = subscription.recv().await {
         match event {
-            WorkerEvent::Token { text } => content.push_str(&text),
+            WorkerEvent::Token { text } => {
+                token_events = token_events.saturating_add(1);
+                disconnect_guard.token_events = token_events;
+                content.push_str(&text);
+            }
             WorkerEvent::Finished { reason, usage } => {
+                disconnect_guard.terminal_seen = true;
+                trace_http_request_terminal(
+                    request_id,
+                    "completions",
+                    false,
+                    "finished",
+                    reason.as_str(),
+                    token_events,
+                    request_started_at,
+                );
                 return Json(CompletionResponse {
                     id: &completion_id,
                     object: "text_completion",
@@ -328,6 +424,16 @@ async fn completion_non_streaming_response(
                 .into_response();
             }
             WorkerEvent::Cancelled => {
+                disconnect_guard.terminal_seen = true;
+                trace_http_request_terminal(
+                    request_id,
+                    "completions",
+                    false,
+                    "cancelled",
+                    "cancelled",
+                    token_events,
+                    request_started_at,
+                );
                 return api_error(
                     StatusCode::REQUEST_TIMEOUT,
                     "generation request was cancelled",
@@ -335,15 +441,101 @@ async fn completion_non_streaming_response(
                 );
             }
             WorkerEvent::Failed { message } => {
+                disconnect_guard.terminal_seen = true;
+                trace_http_request_terminal(
+                    request_id,
+                    "completions",
+                    false,
+                    "failed",
+                    "model_execution_failed",
+                    token_events,
+                    request_started_at,
+                );
                 return api_error(StatusCode::INTERNAL_SERVER_ERROR, &message, "server_error");
             }
         }
     }
+    disconnect_guard.terminal_seen = true;
+    trace_http_request_terminal(
+        request_id,
+        "completions",
+        false,
+        "failed",
+        "worker_channel_closed",
+        token_events,
+        request_started_at,
+    );
     api_error(
         StatusCode::INTERNAL_SERVER_ERROR,
         "model worker closed the request without a terminal event",
         "server_error",
     )
+}
+
+fn trace_http_request_admitted(
+    request_id: u64,
+    endpoint: &'static str,
+    stream: bool,
+    request_started_at: Instant,
+) {
+    tracing::debug!(
+        target: "ferrule_request",
+        event = "request_http_admitted",
+        request_id,
+        session_id = request_id,
+        endpoint,
+        stream,
+        http_admission_us = request_started_at.elapsed().as_micros() as u64,
+        "production HTTP request admitted"
+    );
+}
+
+fn trace_http_request_terminal(
+    request_id: u64,
+    endpoint: &'static str,
+    stream: bool,
+    status: &'static str,
+    finish_reason: &'static str,
+    token_events: usize,
+    request_started_at: Instant,
+) {
+    tracing::debug!(
+        target: "ferrule_request",
+        event = "request_http_terminal",
+        request_id,
+        session_id = request_id,
+        endpoint,
+        stream,
+        status,
+        finish_reason,
+        token_events,
+        http_response_enqueue_us = request_started_at.elapsed().as_micros() as u64,
+        "production HTTP request reached response terminal state"
+    );
+}
+
+struct NonStreamingDisconnectGuard {
+    request_id: u64,
+    endpoint: &'static str,
+    request_started_at: Instant,
+    token_events: usize,
+    terminal_seen: bool,
+}
+
+impl Drop for NonStreamingDisconnectGuard {
+    fn drop(&mut self) {
+        if !self.terminal_seen {
+            trace_http_request_terminal(
+                self.request_id,
+                self.endpoint,
+                false,
+                "cancelled",
+                "client_disconnect",
+                self.token_events,
+                self.request_started_at,
+            );
+        }
+    }
 }
 
 struct ChatEventStream {
@@ -352,6 +544,8 @@ struct ChatEventStream {
     model: String,
     created: u64,
     include_usage: bool,
+    request_started_at: Instant,
+    token_events: usize,
     pending: VecDeque<Result<Event, Infallible>>,
     done: bool,
 }
@@ -363,6 +557,7 @@ impl ChatEventStream {
         model: String,
         created: u64,
         include_usage: bool,
+        request_started_at: Instant,
     ) -> Self {
         Self {
             subscription,
@@ -370,6 +565,8 @@ impl ChatEventStream {
             model,
             created,
             include_usage,
+            request_started_at,
+            token_events: 0,
             pending: VecDeque::new(),
             done: false,
         }
@@ -396,9 +593,22 @@ impl ChatEventStream {
         self.push_done();
     }
 
+    fn trace_terminal(&self, status: &'static str, finish_reason: &'static str) {
+        trace_http_request_terminal(
+            self.subscription.request_id.0,
+            "chat.completions",
+            true,
+            status,
+            finish_reason,
+            self.token_events,
+            self.request_started_at,
+        );
+    }
+
     fn queue_event(&mut self, event: WorkerEvent) {
         match event {
             WorkerEvent::Token { text } => {
+                self.token_events = self.token_events.saturating_add(1);
                 let chunk = ChatCompletionChunk {
                     id: &self.completion_id,
                     object: "chat.completion.chunk",
@@ -417,6 +627,7 @@ impl ChatEventStream {
                 self.pending.push_back(Ok(event));
             }
             WorkerEvent::Finished { reason, usage } => {
+                self.trace_terminal("finished", reason.as_str());
                 let finish_reason = openai_finish_reason(reason);
                 let chunk = ChatCompletionChunk {
                     id: &self.completion_id,
@@ -447,9 +658,21 @@ impl ChatEventStream {
                 self.push_done();
             }
             WorkerEvent::Cancelled => {
+                self.trace_terminal("cancelled", "cancelled");
                 self.push_error("generation request was cancelled", "request_cancelled");
             }
-            WorkerEvent::Failed { message } => self.push_error(&message, "server_error"),
+            WorkerEvent::Failed { message } => {
+                self.trace_terminal("failed", "model_execution_failed");
+                self.push_error(&message, "server_error");
+            }
+        }
+    }
+}
+
+impl Drop for ChatEventStream {
+    fn drop(&mut self) {
+        if !self.done {
+            self.trace_terminal("cancelled", "client_disconnect");
         }
     }
 }
@@ -470,6 +693,7 @@ impl Stream for ChatEventStream {
                 Poll::Ready(self.pending.pop_front())
             }
             Poll::Ready(None) => {
+                self.trace_terminal("failed", "worker_channel_closed");
                 self.push_error(
                     "model worker closed the stream without a terminal event",
                     "server_error",
@@ -487,6 +711,8 @@ struct CompletionEventStream {
     model: String,
     created: u64,
     include_usage: bool,
+    request_started_at: Instant,
+    token_events: usize,
     pending: VecDeque<Result<Event, Infallible>>,
     done: bool,
 }
@@ -498,6 +724,7 @@ impl CompletionEventStream {
         model: String,
         created: u64,
         include_usage: bool,
+        request_started_at: Instant,
     ) -> Self {
         Self {
             subscription,
@@ -505,6 +732,8 @@ impl CompletionEventStream {
             model,
             created,
             include_usage,
+            request_started_at,
+            token_events: 0,
             pending: VecDeque::new(),
             done: false,
         }
@@ -531,9 +760,22 @@ impl CompletionEventStream {
         self.push_done();
     }
 
+    fn trace_terminal(&self, status: &'static str, finish_reason: &'static str) {
+        trace_http_request_terminal(
+            self.subscription.request_id.0,
+            "completions",
+            true,
+            status,
+            finish_reason,
+            self.token_events,
+            self.request_started_at,
+        );
+    }
+
     fn queue_event(&mut self, event: WorkerEvent) {
         match event {
             WorkerEvent::Token { text } => {
+                self.token_events = self.token_events.saturating_add(1);
                 let chunk = CompletionChunk {
                     id: &self.completion_id,
                     object: "text_completion",
@@ -550,6 +792,7 @@ impl CompletionEventStream {
                 self.pending.push_back(Ok(json_event(&chunk)));
             }
             WorkerEvent::Finished { reason, usage } => {
+                self.trace_terminal("finished", reason.as_str());
                 let chunk = CompletionChunk {
                     id: &self.completion_id,
                     object: "text_completion",
@@ -578,9 +821,21 @@ impl CompletionEventStream {
                 self.push_done();
             }
             WorkerEvent::Cancelled => {
+                self.trace_terminal("cancelled", "cancelled");
                 self.push_error("generation request was cancelled", "request_cancelled");
             }
-            WorkerEvent::Failed { message } => self.push_error(&message, "server_error"),
+            WorkerEvent::Failed { message } => {
+                self.trace_terminal("failed", "model_execution_failed");
+                self.push_error(&message, "server_error");
+            }
+        }
+    }
+}
+
+impl Drop for CompletionEventStream {
+    fn drop(&mut self) {
+        if !self.done {
+            self.trace_terminal("cancelled", "client_disconnect");
         }
     }
 }
@@ -601,6 +856,7 @@ impl Stream for CompletionEventStream {
                 Poll::Ready(self.pending.pop_front())
             }
             Poll::Ready(None) => {
+                self.trace_terminal("failed", "worker_channel_closed");
                 self.push_error(
                     "model worker closed the stream without a terminal event",
                     "server_error",
