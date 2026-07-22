@@ -58,6 +58,8 @@ jobs:
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
       - name: Install cargo-nextest
         uses: taiki-e/install-action@6d9ce389421e24f7b73aff5e841bbe5a6b4c974c # nextest
+        with:
+          tool: nextest
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
@@ -92,8 +94,12 @@ jobs:
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
       - name: Install cargo-nextest
         uses: taiki-e/install-action@6d9ce389421e24f7b73aff5e841bbe5a6b4c974c # nextest
+        with:
+          tool: nextest
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@6d9ce389421e24f7b73aff5e841bbe5a6b4c974c # cargo-llvm-cov
+        with:
+          tool: cargo-llvm-cov
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
@@ -150,6 +156,8 @@ jobs:
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
       - name: Install cargo-deny
         uses: taiki-e/install-action@6d9ce389421e24f7b73aff5e841bbe5a6b4c974c # cargo-deny
+        with:
+          tool: cargo-deny
       - name: Check advisories, licenses, bans, and sources
         run: just deny
 
