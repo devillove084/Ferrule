@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, mpsc};
 
 use crate::HfRoutedExpertTensorInfo;
 use crate::semantic::{RoutedExpertMatrix, RoutedExpertTensorPart, RoutedExpertTensorRef};
@@ -78,7 +78,6 @@ impl ExpertTensorSlice {
 pub enum ExpertStorageTier {
     Gpu,
     Cpu,
-    HostMmap,
     LocalStorage,
     Remote,
     Loading,
@@ -90,10 +89,7 @@ impl ExpertStorageTier {
     }
 
     pub fn is_streamable(self) -> bool {
-        matches!(
-            self,
-            Self::Cpu | Self::HostMmap | Self::LocalStorage | Self::Remote
-        )
+        matches!(self, Self::Cpu | Self::LocalStorage | Self::Remote)
     }
 }
 
@@ -101,11 +97,6 @@ impl ExpertStorageTier {
 pub enum ExpertLoadSource {
     GpuResident,
     CpuResident,
-    HostMmap {
-        artifact: PathBuf,
-        offset: u64,
-        bytes: u64,
-    },
     LocalShard {
         path: PathBuf,
         offset: u64,
@@ -131,7 +122,6 @@ impl ExpertLoadSource {
         match self {
             Self::GpuResident => ExpertStorageTier::Gpu,
             Self::CpuResident => ExpertStorageTier::Cpu,
-            Self::HostMmap { .. } => ExpertStorageTier::HostMmap,
             Self::LocalShard { .. }
             | Self::LocalTensorSet { .. }
             | Self::WeightPackChunk { .. } => ExpertStorageTier::LocalStorage,
@@ -142,8 +132,7 @@ impl ExpertLoadSource {
     pub fn bytes(&self) -> u64 {
         match self {
             Self::GpuResident | Self::CpuResident => 0,
-            Self::HostMmap { bytes, .. }
-            | Self::LocalShard { bytes, .. }
+            Self::LocalShard { bytes, .. }
             | Self::WeightPackChunk { bytes, .. }
             | Self::Remote { bytes, .. } => *bytes,
             Self::LocalTensorSet { tensors } => tensors.iter().map(|tensor| tensor.bytes).sum(),
@@ -332,7 +321,7 @@ pub struct ExpertStreamingPolicy {
     /// Keep the exact artifact payload/format; do not force a conversion policy here.
     pub preserve_artifact_quantization: bool,
     /// Whether CPU RAM staging is allowed. Disabling this models very constrained
-    /// hosts where streaming should go directly from mmap/local/remote chunks.
+    /// hosts where streaming should go directly from local/remote chunks.
     pub allow_cpu_staging: bool,
     /// Whether remote/object/LAN sources may satisfy expert loads.
     pub allow_remote_sources: bool,
@@ -836,36 +825,6 @@ impl ExpertComputeBundle {
     }
 }
 
-/// Cache of mmap'd safetensors files, keyed by path.
-/// The OS page cache provides automatic caching of file contents across reads.
-/// Once a page is faulted in, subsequent reads of the same region are served
-/// from the page cache without disk I/O.
-static MMAP_CACHE: Mutex<Option<HashMap<PathBuf, Arc<memmap2::Mmap>>>> = Mutex::new(None);
-
-#[allow(unsafe_code)]
-fn get_or_open_mmap(path: &Path) -> Result<Arc<memmap2::Mmap>> {
-    let mut guard = MMAP_CACHE.lock().expect("mmap cache poisoned");
-    if guard.is_none() {
-        *guard = Some(HashMap::new());
-    }
-    let cache = guard.as_mut().expect("initialized above");
-    if let Some(mmap) = cache.get(path) {
-        return Ok(mmap.clone());
-    }
-    let file = std::fs::File::open(path)
-        .map_err(|e| Error::Model(format!("expert mmap open '{}': {e}", path.display())))?;
-    // SAFETY: expert shards are immutable while the reader is active. The
-    // mapping is read-only and remains owned by the cached `Mmap` value.
-    let mmap = unsafe {
-        memmap2::MmapOptions::new()
-            .map(&file)
-            .map_err(|e| Error::Model(format!("expert mmap map '{}': {e}", path.display())))?
-    };
-    let mmap = Arc::new(mmap);
-    cache.insert(path.to_path_buf(), mmap.clone());
-    Ok(mmap)
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ExpertIoStats {
     pub submitted_extents: u64,
@@ -890,9 +849,6 @@ pub(crate) struct PinnedExpertArtifactPayload {
 #[derive(Clone)]
 pub struct ExpertStreamingReader {
     max_slice_bytes: u64,
-    /// When true, fallback reads use mmap'd file regions instead of pread.
-    /// The mmap cache is shared across all reader instances (static).
-    use_mmap: bool,
     #[cfg(target_os = "linux")]
     io_uring: Option<Arc<super::io_uring_reader::IoUringExpertReader>>,
 }
@@ -911,7 +867,6 @@ impl ExpertStreamingReader {
     pub fn new(max_slice_bytes: u64) -> Self {
         Self {
             max_slice_bytes,
-            use_mmap: true,
             #[cfg(target_os = "linux")]
             io_uring: None,
         }
@@ -919,15 +874,10 @@ impl ExpertStreamingReader {
 
     pub fn from_env(max_slice_bytes: u64) -> Result<Self> {
         let backend = std::env::var("FERRULE_EXPERT_IO_BACKEND")
-            .unwrap_or_else(|_| "mmap".to_string())
+            .unwrap_or_else(|_| default_expert_io_backend().to_string())
             .to_ascii_lowercase();
         match backend.as_str() {
-            "mmap" => Ok(Self::new(max_slice_bytes)),
-            "pread" | "positioned" => {
-                let mut reader = Self::new(max_slice_bytes);
-                reader.use_mmap = false;
-                Ok(reader)
-            }
+            "pread" | "positioned" => Ok(Self::new(max_slice_bytes)),
             "io_uring" | "uring" => {
                 let queue_depth = parse_expert_io_usize("FERRULE_EXPERT_IO_QUEUE_DEPTH", 2)?;
                 let buffer_mib = parse_expert_io_usize("FERRULE_EXPERT_IO_BUFFER_MIB", 16)?;
@@ -937,7 +887,7 @@ impl ExpertStreamingReader {
                 Self::with_io_uring(max_slice_bytes, queue_depth, buffer_bytes)
             }
             other => Err(Error::Model(format!(
-                "unsupported FERRULE_EXPERT_IO_BACKEND '{other}'; expected mmap, pread, or io_uring"
+                "unsupported FERRULE_EXPERT_IO_BACKEND '{other}'; expected pread or io_uring"
             ))),
         }
     }
@@ -948,7 +898,7 @@ impl ExpertStreamingReader {
         allocator: ferrule_cuda::context::CudaPinnedHostAllocator,
     ) -> Result<Self> {
         let backend = std::env::var("FERRULE_EXPERT_IO_BACKEND")
-            .unwrap_or_else(|_| "mmap".to_string())
+            .unwrap_or_else(|_| "io_uring".to_string())
             .to_ascii_lowercase();
         if !matches!(backend.as_str(), "io_uring" | "uring") {
             return Self::from_env(max_slice_bytes);
@@ -961,7 +911,6 @@ impl ExpertStreamingReader {
             .ok_or_else(|| Error::Model("FERRULE_EXPERT_IO_BUFFER_MIB overflows usize".into()))?;
         Ok(Self {
             max_slice_bytes,
-            use_mmap: false,
             io_uring: Some(Arc::new(
                 super::io_uring_reader::IoUringExpertReader::new_cuda_pinned(
                     queue_depth,
@@ -981,7 +930,6 @@ impl ExpertStreamingReader {
     ) -> Result<Self> {
         Ok(Self {
             max_slice_bytes,
-            use_mmap: false,
             io_uring: Some(Arc::new(super::io_uring_reader::IoUringExpertReader::new(
                 queue_depth,
                 buffer_bytes,
@@ -1005,7 +953,7 @@ impl ExpertStreamingReader {
         if self.io_uring.is_some() {
             return "io_uring";
         }
-        if self.use_mmap { "mmap" } else { "pread" }
+        "pread"
     }
 
     pub fn max_slice_bytes(&self) -> u64 {
@@ -1121,48 +1069,9 @@ impl ExpertStreamingReader {
         })
     }
 
-    /// Read a single tensor slice using positioned read (pread) — no seek needed.
-    /// Uses `std::os::unix::fs::FileExt::read_exact_at` on Unix for a single
-    /// syscall instead of open+seek+read (3 syscalls).
-    ///
-    /// When mmap is enabled, reads from the mmap'd file region instead.
-    /// The OS page cache provides automatic caching across reads.
-    fn read_local_slice_positioned_with_mmap(
-        slice: &ExpertTensorSlice,
-        use_mmap: bool,
-    ) -> Result<ExpertTensorPayload> {
-        if use_mmap {
-            // Try mmap path first — OS page cache handles caching.
-            match get_or_open_mmap(&slice.path) {
-                Ok(mmap) => {
-                    let end = slice.offset as usize + slice.bytes as usize;
-                    if end > mmap.len() {
-                        return Err(Error::Model(format!(
-                            "expert mmap slice out of bounds: '{}': offset {} + bytes {} > mmap len {}",
-                            slice.path.display(),
-                            slice.offset,
-                            slice.bytes,
-                            mmap.len()
-                        )));
-                    }
-                    // Copy from mmap'd region — OS page cache will serve repeated reads.
-                    let bytes = mmap[slice.offset as usize..end].to_vec();
-                    return Ok(ExpertTensorPayload {
-                        slice: slice.clone(),
-                        bytes,
-                    });
-                }
-                Err(e) => {
-                    // Fall back to pread if mmap fails (e.g. special filesystem).
-                    tracing::trace!(
-                        "expert mmap failed for '{}': {e}, falling back to pread",
-                        slice.path.display()
-                    );
-                }
-            }
-        }
-
-        // Fallback: positioned read (pread).
+    /// Read a single tensor slice using positioned read (pread) with no shared
+    /// file cursor or virtual-memory mapping.
+    fn read_local_slice_positioned(slice: &ExpertTensorSlice) -> Result<ExpertTensorPayload> {
         use std::os::unix::fs::FileExt;
         let file = std::fs::File::open(&slice.path).map_err(|e| {
             Error::Model(format!(
@@ -1258,16 +1167,26 @@ impl ExpertStreamingReader {
         if !parallel_fallback || slices.len() <= 1 {
             return slices
                 .iter()
-                .map(|slice| Self::read_local_slice_positioned_with_mmap(slice, self.use_mmap))
+                .map(Self::read_local_slice_positioned)
                 .collect();
         }
 
-        let use_mmap = self.use_mmap;
         let results = slices
             .par_iter()
-            .map(|slice| Self::read_local_slice_positioned_with_mmap(slice, use_mmap))
+            .map(Self::read_local_slice_positioned)
             .collect::<Vec<_>>();
         results.into_iter().collect()
+    }
+}
+
+fn default_expert_io_backend() -> &'static str {
+    #[cfg(target_os = "linux")]
+    {
+        "io_uring"
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        "pread"
     }
 }
 

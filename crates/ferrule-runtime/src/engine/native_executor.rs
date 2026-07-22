@@ -267,6 +267,72 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         }
     }
 
+    /// Retain an exact model-owned prefix while leaving the prepared backend KV
+    /// reservation pending for the normal transaction commit.
+    pub fn retain_prepared_prefix(
+        &mut self,
+        source: &R::SequenceState,
+        branch: &mut R::SequenceState,
+        executed_rows: usize,
+        retained_rows: usize,
+    ) -> Result<bool> {
+        self.ensure_ready()?;
+        if !self.batch_prepared {
+            return Err(Error::Execution(
+                "cannot retain a provisional prefix without a prepared backend batch".into(),
+            ));
+        }
+        if retained_rows == 0 || retained_rows >= executed_rows {
+            return Err(Error::Execution(format!(
+                "invalid provisional prefix retention: retained={retained_rows} executed={executed_rows}"
+            )));
+        }
+        self.runner
+            .retain_provisional_prefix(source, branch, executed_rows, retained_rows)
+    }
+
+    /// Retain exact model-owned prefixes for an entire provisional cohort while
+    /// leaving the prepared backend KV reservation pending for commit.
+    pub fn retain_prepared_prefixes(
+        &mut self,
+        sources: &[R::SequenceState],
+        branches: &mut [R::SequenceState],
+        executed_rows: &[usize],
+        retained_rows: &[usize],
+    ) -> Result<bool> {
+        self.ensure_ready()?;
+        if !self.batch_prepared {
+            return Err(Error::Execution(
+                "cannot retain provisional prefixes without a prepared backend batch".into(),
+            ));
+        }
+        let sequence_count = sources.len();
+        if sequence_count == 0
+            || branches.len() != sequence_count
+            || executed_rows.len() != sequence_count
+            || retained_rows.len() != sequence_count
+        {
+            return Err(Error::Execution(format!(
+                "provisional prefix cohort shape mismatch: sources={} branches={} executed={} retained={}",
+                sequence_count,
+                branches.len(),
+                executed_rows.len(),
+                retained_rows.len()
+            )));
+        }
+        for (sequence, (&executed, &retained)) in
+            executed_rows.iter().zip(retained_rows).enumerate()
+        {
+            if executed == 0 || retained == 0 || retained > executed {
+                return Err(Error::Execution(format!(
+                    "invalid provisional prefix for sequence {sequence}: retained={retained} executed={executed}"
+                )));
+            }
+        }
+        self.runner
+            .retain_provisional_prefixes(sources, branches, executed_rows, retained_rows)
+    }
+
     /// Prepare paged KV for a diagnostic operation against explicit sequence states.
     ///
     /// Unlike [`execute_batch_with_kv`](Self::execute_batch_with_kv), the caller
@@ -669,9 +735,11 @@ mod tests {
         transactional: bool,
         paged: bool,
         packed_predictions: Vec<u32>,
+        retain_prefixes: bool,
         prepares: usize,
         commits: usize,
         rollbacks: usize,
+        retained_prefixes: usize,
         expert_residency_requirements: Option<ExpertResidencyRequirements>,
         expert_residency_install_attempts: usize,
         expert_residency_control: Option<Box<dyn ExpertResidencyControl>>,
@@ -855,6 +923,31 @@ mod tests {
             Ok(())
         }
 
+        fn retain_provisional_prefix(
+            &mut self,
+            source: &Self::SequenceState,
+            branch: &mut Self::SequenceState,
+            executed_rows: usize,
+            retained_rows: usize,
+        ) -> Result<bool> {
+            if !self.retain_prefixes {
+                return Ok(false);
+            }
+            if branch.position != source.position + executed_rows
+                || branch.fed_tokens.len() != source.fed_tokens.len() + executed_rows
+            {
+                return Err(Error::Execution(
+                    "mock retained branch does not match executed rows".into(),
+                ));
+            }
+            branch.position = source.position + retained_rows;
+            branch
+                .fed_tokens
+                .truncate(source.fed_tokens.len() + retained_rows);
+            self.retained_prefixes += 1;
+            Ok(true)
+        }
+
         fn with_sequence_state<T>(
             &mut self,
             state: &mut Self::SequenceState,
@@ -975,6 +1068,18 @@ mod tests {
             transactional: true,
             paged: true,
             packed_predictions: predictions.to_vec(),
+            ..MockMultiSessionRunner::default()
+        })
+    }
+
+    fn dspark_prefix_executor(
+        predictions: &[u32],
+    ) -> NativeMultiSessionExecutor<MockMultiSessionRunner> {
+        NativeMultiSessionExecutor::new(MockMultiSessionRunner {
+            transactional: true,
+            paged: true,
+            packed_predictions: predictions.to_vec(),
+            retain_prefixes: true,
             ..MockMultiSessionRunner::default()
         })
     }
@@ -1113,6 +1218,50 @@ mod tests {
         assert_eq!(executor.runner().prepares, 2);
         assert_eq!(executor.runner().commits, 1);
         assert_eq!(executor.runner().rollbacks, 1);
+    }
+
+    #[test]
+    fn exact_dspark_partial_accept_promotes_arbitrary_width_prefix_without_replay() {
+        let mut executor = dspark_prefix_executor(&[11, 12, 13, 14, 15, 99, 17, 18, 42]);
+        let mut pages = dspark_page_manager();
+        let mut source = MockSequenceState {
+            position: 0,
+            fed_tokens: Vec::new(),
+        };
+        let result = run_dspark_verification(
+            &mut executor,
+            &mut pages,
+            &mut source,
+            StateSlot::new(0),
+            0,
+            &[11, 12, 13, 14, 15, 16, 17, 18],
+            nz(1),
+            TargetFrontier {
+                position: 0,
+                top1: ExecutionTokenLogit::new(10, 1.0),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.accepted, vec![11, 12, 13, 14, 15]);
+        assert_eq!(result.rejected, Some(16));
+        assert_eq!(result.target_correction, Some(99));
+        assert_eq!(result.accounting.verified_rows, 9);
+        assert_eq!(result.accounting.externally_committed_tokens, 6);
+        assert_eq!(result.accounting.rolled_back_rows, 3);
+        assert_eq!(source.position, 6);
+        assert_eq!(source.fed_tokens, vec![10, 11, 12, 13, 14, 15]);
+        assert_eq!(
+            pages
+                .block_table(StateSlot::new(0))
+                .unwrap()
+                .committed_tokens(),
+            6
+        );
+        assert_eq!(executor.runner().prepares, 1);
+        assert_eq!(executor.runner().commits, 1);
+        assert_eq!(executor.runner().rollbacks, 0);
+        assert_eq!(executor.runner().retained_prefixes, 1);
     }
 
     #[test]

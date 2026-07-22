@@ -289,17 +289,7 @@ FERRULE_CUTLASS_ASSERT_SAME_OFFSET(FerruleCutlassStableFrameFp4MoeArgs,
 #undef FERRULE_CUTLASS_ASSERT_WRAPPED_OFFSET
 #undef FERRULE_CUTLASS_ASSERT_SAME_OFFSET
 
-using Sm121Fp8Mma =
-    cute::SM120_16x8x32_TN<cute::float_e4m3_t, cute::float_e4m3_t,
-                           float>;
 using Sm121Bf16Mma = cute::SM80_16x8x16_F32BF16BF16F32_TN;
-
-struct alignas(16) Fp8QueryAKvSharedStorage {
-  alignas(16) uint8_t activation[256];
-  alignas(16) uint8_t query_a_weight[512];
-  alignas(16) uint8_t kv_weight[512];
-  alignas(16) uint8_t activation_scales[8];
-};
 
 struct alignas(16) Bf16CompressorSharedStorage {
   alignas(16) uint16_t activation[128];
@@ -307,11 +297,7 @@ struct alignas(16) Bf16CompressorSharedStorage {
   alignas(16) uint16_t projection2_weight[256];
 };
 
-__device__ __forceinline__ float ue8m0_to_float(uint8_t value) {
-  // Match Ferrule's artifact semantics for the UE8M0 zero encoding.
-  uint32_t bits = value == 0 ? (1u << 22) : (static_cast<uint32_t>(value) << 23);
-  return __uint_as_float(bits);
-}
+
 
 __device__ __forceinline__ uint16_t f32_to_bf16_rne(float value) {
   uint32_t bits = __float_as_uint(value);
@@ -342,14 +328,7 @@ load_b_fragment_16_byte_rows(const uint8_t *shared, uint32_t lane,
   cute::SM75_U16x4_LDSM_T::copy(source, fragment[0], fragment[1]);
 }
 
-__device__ __forceinline__ void
-mma_fp8_e4m3(float (&accumulator)[4], const uint32_t (&a)[4],
-             const uint32_t (&b)[2]) {
-  Sm121Fp8Mma::fma(accumulator[0], accumulator[1], accumulator[2],
-                   accumulator[3], a[0], a[1], a[2], a[3], b[0], b[1],
-                   accumulator[0], accumulator[1], accumulator[2],
-                   accumulator[3]);
-}
+
 
 __device__ __forceinline__ void
 mma_bf16(float (&accumulator)[4], const uint32_t (&a)[4],
@@ -360,154 +339,7 @@ mma_bf16(float (&accumulator)[4], const uint32_t (&a)[4],
                     accumulator[3]);
 }
 
-__global__ void
-ferrule_fp8_query_a_kv_sm121(FerruleCutlassFp8QueryAKvArgs args) {
-  __shared__ Fp8QueryAKvSharedStorage shared;
 
-  uint32_t lane = threadIdx.x;
-  uint32_t channel_base = blockIdx.x * 16u;
-  auto *activation = reinterpret_cast<const uint8_t *>(
-      static_cast<uintptr_t>(args.activation_fp8));
-  auto *activation_scales = reinterpret_cast<const uint8_t *>(
-      static_cast<uintptr_t>(args.activation_ue8m0));
-  auto *query_a_weight = reinterpret_cast<const uint8_t *>(
-      static_cast<uintptr_t>(args.query_a_weight_fp8));
-  auto *query_a_weight_scales = reinterpret_cast<const uint8_t *>(
-      static_cast<uintptr_t>(args.query_a_weight_ue8m0));
-  auto *kv_weight = reinterpret_cast<const uint8_t *>(
-      static_cast<uintptr_t>(args.kv_weight_fp8));
-  auto *kv_weight_scales = reinterpret_cast<const uint8_t *>(
-      static_cast<uintptr_t>(args.kv_weight_ue8m0));
-  auto *query_a_output = reinterpret_cast<float *>(
-      static_cast<uintptr_t>(args.query_a_output_f32));
-  auto *kv_output = reinterpret_cast<float *>(
-      static_cast<uintptr_t>(args.kv_output_f32));
-
-  float query_a_accumulator[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-  float kv_accumulator[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-
-  for (uint32_t scale_block = 0; scale_block < args.scale_cols;
-       ++scale_block) {
-    if (lane < args.rows) {
-      shared.activation_scales[lane] =
-          activation_scales[static_cast<uint64_t>(lane) * args.scale_cols +
-                            scale_block];
-    }
-    __syncthreads();
-
-    float query_a_block_accumulator[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    float kv_block_accumulator[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    uint32_t k_block = scale_block * 128u;
-
-#pragma unroll
-    for (uint32_t k_sub = 0; k_sub < 128u; k_sub += 32u) {
-      if (lane < 16u) {
-        const uint32_t channel = channel_base + lane;
-        auto *query_a_destination =
-            reinterpret_cast<uint4 *>(shared.query_a_weight + lane * 32u);
-        auto *kv_destination =
-            reinterpret_cast<uint4 *>(shared.kv_weight + lane * 32u);
-        const uint4 zero = make_uint4(0u, 0u, 0u, 0u);
-        if (channel < args.n1) {
-          auto *source = reinterpret_cast<const uint4 *>(
-              query_a_weight + static_cast<uint64_t>(channel) * args.k +
-              k_block + k_sub);
-          query_a_destination[0] = source[0];
-          query_a_destination[1] = source[1];
-        } else {
-          query_a_destination[0] = zero;
-          query_a_destination[1] = zero;
-        }
-        if (channel < args.n2) {
-          auto *source = reinterpret_cast<const uint4 *>(
-              kv_weight + static_cast<uint64_t>(channel) * args.k + k_block +
-              k_sub);
-          kv_destination[0] = source[0];
-          kv_destination[1] = source[1];
-        } else {
-          kv_destination[0] = zero;
-          kv_destination[1] = zero;
-        }
-      }
-
-      for (uint32_t linear = lane; linear < 256u; linear += 32u) {
-        uint32_t k_pair = linear >> 4;
-        uint32_t pair_byte = linear & 15u;
-        uint32_t row = pair_byte >> 1;
-        uint32_t byte = pair_byte & 1u;
-        uint64_t k_index = static_cast<uint64_t>(k_block) + k_sub +
-                           k_pair * 2u + byte;
-        shared.activation[linear] =
-            row < args.rows
-                ? activation[static_cast<uint64_t>(row) * args.k + k_index]
-                : 0;
-      }
-      __syncthreads();
-
-      uint32_t query_a_fragment[4];
-      uint32_t kv_fragment[4];
-      uint32_t activation_fragment[2];
-      load_a_fragment_16x32_bytes(shared.query_a_weight, lane,
-                                  query_a_fragment);
-      load_a_fragment_16x32_bytes(shared.kv_weight, lane, kv_fragment);
-      load_b_fragment_16_byte_rows(shared.activation, lane,
-                                   activation_fragment);
-      mma_fp8_e4m3(query_a_block_accumulator, query_a_fragment,
-                   activation_fragment);
-      mma_fp8_e4m3(kv_block_accumulator, kv_fragment,
-                   activation_fragment);
-      __syncthreads();
-    }
-
-    float query_a_weight_scale =
-        channel_base < args.n1
-            ? ue8m0_to_float(query_a_weight_scales[
-                  static_cast<uint64_t>(channel_base / 128u) *
-                      args.scale_cols +
-                  scale_block])
-            : 0.0f;
-    float kv_weight_scale =
-        channel_base < args.n2
-            ? ue8m0_to_float(kv_weight_scales[
-                  static_cast<uint64_t>(channel_base / 128u) *
-                      args.scale_cols +
-                  scale_block])
-            : 0.0f;
-    uint32_t row_pair = lane & 3u;
-
-#pragma unroll
-    for (uint32_t element = 0; element < 4u; ++element) {
-      uint32_t row = row_pair * 2u + (element & 1u);
-      if (row < args.rows) {
-        float activation_scale =
-            ue8m0_to_float(shared.activation_scales[row]);
-        query_a_accumulator[element] += query_a_block_accumulator[element] *
-                                        query_a_weight_scale *
-                                        activation_scale;
-        kv_accumulator[element] += kv_block_accumulator[element] *
-                                   kv_weight_scale * activation_scale;
-      }
-    }
-    __syncthreads();
-  }
-
-  uint32_t channel_group = lane >> 2;
-  uint32_t row_pair = lane & 3u;
-#pragma unroll
-  for (uint32_t element = 0; element < 4u; ++element) {
-    uint32_t channel = channel_base + channel_group +
-                       (element >= 2u ? 8u : 0u);
-    uint32_t row = row_pair * 2u + (element & 1u);
-    if (row < args.rows && channel < args.n1) {
-      query_a_output[static_cast<uint64_t>(row) * args.n1 + channel] =
-          query_a_accumulator[element];
-    }
-    if (row < args.rows && channel < args.n2) {
-      kv_output[static_cast<uint64_t>(row) * args.n2 + channel] =
-          kv_accumulator[element];
-    }
-  }
-}
 
 __global__ void
 ferrule_bf16_compressor_sm121(FerruleCutlassBf16CompressorArgs args) {
@@ -608,9 +440,8 @@ ferrule_bf16_compressor_sm121(FerruleCutlassBf16CompressorArgs args) {
   }
 }
 
-// Row scheduling is provider-private. The semantic ABI accepts the complete
-// grid-backed M range; only the launch implementation decides whether the
-// latency-tuned single-tile schedule is preferable.
+// The BF16 compressor retains its latency-tuned single-tile schedule for
+// verification-width inputs; QueryA+KV always uses its pipelined provider.
 inline constexpr uint32_t kTinyLinearRows = 8u;
 
 fp8_prefill::Args make_prefill_args(
@@ -908,7 +739,7 @@ ferrule_cutlass_provider_manifest(void) {
       FERRULE_CUTLASS_ABI_VERSION,
       CUTLASS_VERSION,
       FERRULE_CUTLASS_TARGET_SM,
-      9u,
+      10u,
       FERRULE_CUTLASS_KERNEL_BIT(
           FERRULE_CUTLASS_KERNEL_FP8_QUERY_A_KV_SM121) |
           FERRULE_CUTLASS_KERNEL_BIT(
@@ -926,7 +757,9 @@ ferrule_cutlass_provider_manifest(void) {
           FERRULE_CUTLASS_KERNEL_BIT(
               FERRULE_CUTLASS_KERNEL_DSPARK_HYBRID_MLA_ATTENTION_SM121) |
           FERRULE_CUTLASS_KERNEL_BIT(
-              FERRULE_CUTLASS_KERNEL_DSPARK_PROPOSAL_HEAD_SM121),
+              FERRULE_CUTLASS_KERNEL_DSPARK_PROPOSAL_HEAD_SM121) |
+          FERRULE_CUTLASS_KERNEL_BIT(
+              FERRULE_CUTLASS_KERNEL_FP8_PROJECTION_SM121),
   };
 }
 
@@ -953,16 +786,36 @@ extern "C" int32_t ferrule_cutlass_fp8_query_a_kv_launch(
 
   auto stream =
       reinterpret_cast<cudaStream_t>(static_cast<uintptr_t>(args->stream));
-  if (args->rows > kTinyLinearRows) {
-    return helper_launch_status(
-        fp8_prefill::launch(make_prefill_args(*args), stream));
+  return helper_launch_status(
+      fp8_prefill::launch(make_prefill_args(*args), stream));
+}
+
+extern "C" int32_t ferrule_cutlass_fp8_projection_can_implement(
+    const FerruleCutlassFp8QueryAKvArgs *args) {
+  if (args == nullptr || args->abi_version != FERRULE_CUTLASS_ABI_VERSION) {
+    return FERRULE_CUTLASS_INVALID_ABI;
   }
-  uint32_t max_n = args->n1 > args->n2 ? args->n1 : args->n2;
-  uint32_t blocks = static_cast<uint32_t>(
-      (static_cast<uint64_t>(max_n) + 15u) / 16u);
-  ferrule_fp8_query_a_kv_sm121<<<blocks, 32, 0, stream>>>(*args);
-  return cudaGetLastError() == cudaSuccess ? FERRULE_CUTLASS_SUCCESS
-                                           : FERRULE_CUTLASS_LAUNCH_FAILED;
+  if (args->n2 != 0u || args->kv_weight_fp8 != 0u ||
+      args->kv_weight_ue8m0 != 0u || args->kv_output_f32 != 0u ||
+      args->scale_cols != args->k / 128u) {
+    return FERRULE_CUTLASS_INVALID_ARGUMENT;
+  }
+  return fp8_prefill::validate_single(make_prefill_args(*args)) ==
+                 fp8_prefill::ValidationResult::kSuccess
+             ? FERRULE_CUTLASS_SUCCESS
+             : FERRULE_CUTLASS_INVALID_ARGUMENT;
+}
+
+extern "C" int32_t ferrule_cutlass_fp8_projection_launch(
+    const FerruleCutlassFp8QueryAKvArgs *args) {
+  const int32_t status = ferrule_cutlass_fp8_projection_can_implement(args);
+  if (status != FERRULE_CUTLASS_SUCCESS) {
+    return status;
+  }
+  auto stream =
+      reinterpret_cast<cudaStream_t>(static_cast<uintptr_t>(args->stream));
+  return helper_launch_status(
+      fp8_prefill::launch_single(make_prefill_args(*args), stream));
 }
 
 extern "C" int32_t ferrule_cutlass_bf16_compressor_can_implement(

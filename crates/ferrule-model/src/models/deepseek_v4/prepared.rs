@@ -139,7 +139,6 @@ pub struct DeepSeekV4ExecutionPolicy {
     hash_decode_prefetch_window: bool,
     prefill_hash_lookahead: bool,
     managed_experts: bool,
-    device_route_fast_path: bool,
     fused_indexer_topk: bool,
     fused_indexer_topk_prefill: bool,
     fused_indexer_topk_decode: bool,
@@ -158,7 +157,6 @@ impl Default for DeepSeekV4ExecutionPolicy {
             hash_decode_prefetch_window: false,
             prefill_hash_lookahead: false,
             managed_experts: true,
-            device_route_fast_path: false,
             fused_indexer_topk: true,
             fused_indexer_topk_prefill: false,
             fused_indexer_topk_decode: false,
@@ -193,10 +191,6 @@ impl DeepSeekV4ExecutionPolicy {
 
     pub const fn managed_experts(&self) -> bool {
         self.managed_experts
-    }
-
-    pub const fn device_route_fast_path(&self) -> bool {
-        self.device_route_fast_path
     }
 
     pub const fn fused_indexer_prefill_topk(&self) -> bool {
@@ -265,11 +259,6 @@ impl DeepSeekV4ExecutionPolicy {
             lookup("FERRULE_MANAGED_EXPERTS")?,
             true,
         )?;
-        let device_route_fast_path = parse_env_bool(
-            "FERRULE_DSV4_DEVICE_ROUTE_FAST_PATH",
-            lookup("FERRULE_DSV4_DEVICE_ROUTE_FAST_PATH")?,
-            false,
-        )?;
         let fused_indexer_topk = parse_env_bool(
             "FERRULE_DSV4_FUSED_INDEXER_TOPK",
             lookup("FERRULE_DSV4_FUSED_INDEXER_TOPK")?,
@@ -318,7 +307,6 @@ impl DeepSeekV4ExecutionPolicy {
             hash_decode_prefetch_window,
             prefill_hash_lookahead,
             managed_experts,
-            device_route_fast_path,
             fused_indexer_topk,
             fused_indexer_topk_prefill,
             fused_indexer_topk_decode,
@@ -692,6 +680,10 @@ fn deepseek_v4_layer_kernel_requirements(
             &layer.attention.payload.key_value,
         ],
     )?);
+    requirements.add_linear_bundle(fp8_single_linear_requirement(
+        KernelOperation::MlaQueryB,
+        &layer.attention.payload.query_b,
+    )?);
 
     let Some(compressed) = layer.attention.compressed.as_ref() else {
         return Ok(requirements);
@@ -902,6 +894,30 @@ fn fp8_linear_bundle_requirement(
         operation,
         *first_in,
         [*first_out, *second_out],
+        WeightLayout::Fp8E4m3BlockScaled,
+    ))
+}
+
+#[cfg(feature = "cuda")]
+fn fp8_single_linear_requirement(
+    operation: KernelOperation,
+    linear: &ArtifactLinearPayload,
+) -> Result<LinearBundleRequirement> {
+    let ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+        out_features,
+        in_features,
+        block_m: 128,
+        block_k: 128,
+    } = &linear.format
+    else {
+        return Err(Error::Model(format!(
+            "DeepSeek-V4 {operation:?} requires one FP8 K128 binding"
+        )));
+    };
+    Ok(LinearBundleRequirement::new(
+        operation,
+        *in_features,
+        [*out_features],
         WeightLayout::Fp8E4m3BlockScaled,
     ))
 }

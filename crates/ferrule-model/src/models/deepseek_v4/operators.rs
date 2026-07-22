@@ -229,7 +229,10 @@ pub struct DeepSeekV4OperatorRuntimeCounters {
     pub output_head_upload_us: u64,
     pub output_head_topk_us: u64,
     pub output_head_merge_us: u64,
+    /// Sum of selected routes across MoE layer invocations.
     pub expert_selected: u64,
+    /// Sum of unique experts within each MoE layer invocation.
+    pub expert_unique_selected: u64,
     pub expert_selected_load_requests: u64,
     pub expert_loads: u64,
     pub expert_load_bytes: u64,

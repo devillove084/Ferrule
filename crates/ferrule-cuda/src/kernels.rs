@@ -1223,12 +1223,13 @@ pub mod kernels {
         }
     }
 
-    /// Batched BF16 artifact GEMM using an SM121 `m16n8k16` Tensor Core tile.
-    /// Grid: `(ceil(n / 16), ceil(batch / 8))`, one warp per CTA.
+    /// Batched BF16 artifact GEMM with four independent N16 warps sharing one
+    /// BF16-rounded 8x16 activation tile per CTA.
+    /// Grid: `(ceil(n / 64), ceil(batch / 8))`, four warps per CTA.
     ///
     /// # Safety
     ///
-    /// Launch with exactly 32 threads per CTA and the grid described above.
+    /// Launch with exactly 128 threads per CTA and the grid described above.
     /// `x`, `w`, and `y` must respectively contain at least `batch * k` f32s,
     /// `n * k * 2` bytes, and `batch * n` f32s; `k` must be K16-aligned.
     #[kernel]
@@ -1240,11 +1241,13 @@ pub mod kernels {
         n: u32,
         k: u32,
     ) {
-        static mut SMEM_A: SharedArray<u8, 512, 32> = SharedArray::UNINIT;
+        static mut SMEM_A: SharedArray<u8, 2048, 32> = SharedArray::UNINIT;
         static mut SMEM_B: SharedArray<u8, 256, 32> = SharedArray::UNINIT;
 
         let tid = thread::threadIdx_x() as usize;
-        let row_base = thread::blockIdx_x() as usize * 16;
+        let warp = tid / 32;
+        let lane = tid & 31;
+        let row_base = thread::blockIdx_x() as usize * 64 + warp * 16;
         let batch_base = thread::blockIdx_y() as usize * 8;
         let batch = batch as usize;
         let n = n as usize;
@@ -1259,9 +1262,9 @@ pub mod kernels {
             unsafe {
                 let a_dst = &raw mut SMEM_A as *mut u8;
                 let b_dst = &raw mut SMEM_B as *mut u16;
-                if tid < 16 {
-                    let row = row_base + tid;
-                    let destination = a_dst.add(tid * 32) as *mut u64;
+                if lane < 16 {
+                    let row = row_base + lane;
+                    let destination = a_dst.add(warp * 512 + lane * 32) as *mut u64;
                     if row < n {
                         let source = w.as_ptr().add((row * k + k_base) * 2) as *const u64;
                         *destination = *source;
@@ -1275,32 +1278,29 @@ pub mod kernels {
                         *destination.add(3) = 0;
                     }
                 }
-                let mut linear = tid;
-                while linear < 128 {
-                    let k_local = linear / 8;
-                    let row_local = linear & 7;
-                    let row = batch_base + row_local;
-                    let value = if row < batch {
-                        x[row * k + k_base + k_local]
-                    } else {
-                        0.0
-                    };
-                    *b_dst.add(linear) = cuda_device::tcgen05::f32_to_bf16_rne(value);
-                    linear += 32;
-                }
+                let k_local = tid / 8;
+                let row_local = tid & 7;
+                let row = batch_base + row_local;
+                let value = if row < batch {
+                    x[row * k + k_base + k_local]
+                } else {
+                    0.0
+                };
+                *b_dst.add(tid) = cuda_device::tcgen05::f32_to_bf16_rne(value);
             }
             thread::sync_threads();
 
             let a_fragment: [u32; 4] = unsafe {
-                let quad = tid / 8;
-                let row = (tid & 7) + if (quad & 1) != 0 { 8 } else { 0 };
+                let quad = lane / 8;
+                let row = (lane & 7) + if (quad & 1) != 0 { 8 } else { 0 };
                 let column_b16 = if quad >= 2 { 8 } else { 0 };
-                let address =
-                    (&raw const SMEM_A as *const u8).add(row * 32 + column_b16 * 2) as *const u32;
+                let address = (&raw const SMEM_A as *const u8)
+                    .add(warp * 512 + row * 32 + column_b16 * 2)
+                    as *const u32;
                 cuda_device::wmma::ldmatrix_x4(address)
             };
             let b_fragment: [u32; 2] = unsafe {
-                let row = tid & 0x0f;
+                let row = lane & 0x0f;
                 let address = (&raw const SMEM_B as *const u8).add(row * 16) as *const u32;
                 cuda_device::wmma::ldmatrix_x2_trans(address)
             };
@@ -1309,8 +1309,8 @@ pub mod kernels {
             k_base += 16;
         }
 
-        let channel_group = tid / 4;
-        let row_pair = tid & 3;
+        let channel_group = lane / 4;
+        let row_pair = lane & 3;
         let output = y.as_mut_ptr();
         let mut element = 0usize;
         while element < 4 {

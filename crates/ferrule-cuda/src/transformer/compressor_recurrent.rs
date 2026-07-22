@@ -553,4 +553,127 @@ mod tests {
             overlap: true,
         });
     }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn cuda_recurrent_checkpoint_slab_restores_arbitrary_slot() {
+        use crate::context::CudaArtifactOperatorContext;
+
+        let shape = CompressorRecurrentShape {
+            ratio: 2,
+            head_dim: 2,
+            out_dim: 4,
+            overlap: true,
+        };
+        let slots = 9;
+        let restored_slot = 7;
+        let context = CudaArtifactOperatorContext::new().unwrap();
+        let mut state = context
+            .create_compressor_recurrent_state(
+                shape.ratio,
+                shape.head_dim,
+                shape.out_dim,
+                shape.overlap,
+            )
+            .unwrap();
+        let mut checkpoints = context
+            .create_compressor_recurrent_checkpoint_slab(&state, slots)
+            .unwrap();
+        assert_eq!(checkpoints.slots(), slots);
+
+        let ape: Vec<f32> = (0..shape.ape_elements().unwrap())
+            .map(|index| index as f32 * 0.03125 - 0.125)
+            .collect();
+        let ape_device = context.upload_f32_buffer(&ape).unwrap();
+        let mut kv_device = context.zero_f32_buffer(shape.out_dim).unwrap();
+        let mut score_device = context.zero_f32_buffer(shape.out_dim).unwrap();
+        let mut output = context.zero_f32_buffer(shape.head_dim).unwrap();
+        let mut reference = ReferenceState::new(shape);
+        let mut expected = None;
+
+        for position in 0..slots {
+            let kv: Vec<f32> = (0..shape.out_dim)
+                .map(|dim| position as f32 + dim as f32 * 0.25)
+                .collect();
+            let score: Vec<f32> = (0..shape.out_dim)
+                .map(|dim| dim as f32 * 0.125 - position as f32 * 0.0625)
+                .collect();
+            context.overwrite_f32_buffer(&kv, &mut kv_device).unwrap();
+            context
+                .overwrite_f32_buffer(&score, &mut score_device)
+                .unwrap();
+            let boundary = reference.append(&kv, &score, &ape, position);
+            assert_eq!(
+                context
+                    .compressor_recurrent_append_projected(
+                        &mut state,
+                        &kv_device,
+                        &score_device,
+                        &ape_device,
+                        position,
+                    )
+                    .unwrap(),
+                boundary
+            );
+            if boundary {
+                context
+                    .compressor_recurrent_boundary_into(&mut state, &mut output)
+                    .unwrap();
+                reference.advance();
+            }
+
+            let before = context.counters();
+            context
+                .capture_compressor_recurrent_checkpoint(&state, &mut checkpoints, position)
+                .unwrap();
+            let after = context.counters();
+            assert_eq!(after.device_allocations, before.device_allocations);
+            assert_eq!(after.device_to_host_copies, before.device_to_host_copies);
+            if position == restored_slot {
+                expected = Some((reference.kv.clone(), reference.score.clone()));
+            }
+        }
+
+        let mut restored = context
+            .create_compressor_recurrent_state(
+                shape.ratio,
+                shape.head_dim,
+                shape.out_dim,
+                shape.overlap,
+            )
+            .unwrap();
+        let before = context.counters();
+        context
+            .restore_compressor_recurrent_checkpoint(&checkpoints, restored_slot, &mut restored)
+            .unwrap();
+        let after = context.counters();
+        assert_eq!(after.device_allocations, before.device_allocations);
+        assert_eq!(after.device_to_host_copies, before.device_to_host_copies);
+
+        let (expected_kv, expected_score) = expected.unwrap();
+        assert_eq!(
+            context
+                .download_f32_buffer(restored.kv_state())
+                .unwrap()
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            expected_kv
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            context
+                .download_f32_buffer(restored.score_state())
+                .unwrap()
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            expected_score
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+    }
 }

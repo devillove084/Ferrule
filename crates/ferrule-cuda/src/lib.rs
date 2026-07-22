@@ -39,9 +39,9 @@ pub use benchmark::{CudaSmokeBenchmark, run_gemv_rms_smoke_benchmark, run_smoke_
 pub use context::CudaFailpoints;
 pub use context::cuda_probe;
 pub use context::{
-    CombinedRingWindowLens, CudaArtifactOperatorContext, CudaCompressorRecurrentState,
-    CudaDsparkHybridAttentionWorkspace, CudaDsparkProposalHeadWorkspace, CudaF32Buffer,
-    CudaI32Buffer,
+    CombinedRingWindowLens, CudaArtifactOperatorContext, CudaCompressorRecurrentCheckpointSlab,
+    CudaCompressorRecurrentState, CudaDsparkHybridAttentionWorkspace,
+    CudaDsparkProposalHeadWorkspace, CudaF32Buffer, CudaI32Buffer,
 };
 pub use counters::CudaOpCounters;
 pub use kv_page_pool::{

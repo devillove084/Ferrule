@@ -59,6 +59,12 @@ pub struct ResidentSchedulerConfig {
     pub prefill_chunk_size: usize,
     pub max_active_sequences: usize,
     pub max_decode_batch: usize,
+    /// Desired number of ready decode sequences before dispatch. Normalized to
+    /// `1..=max_decode_batch`.
+    pub decode_cohort_target: usize,
+    /// Maximum consecutive prefill-only decisions allowed while a non-empty
+    /// decode cohort is below target. Zero preserves eager decode dispatch.
+    pub decode_cohort_max_deferrals: usize,
     /// Maximum total packed tokens in one execution batch. Zero means no limit.
     /// This bounds the combined prefill + decode token count per batch.
     pub max_batch_tokens: usize,
@@ -74,6 +80,8 @@ impl Default for ResidentSchedulerConfig {
             prefill_chunk_size: super::actions::DEFAULT_CHUNK_SIZE,
             max_active_sequences: 1,
             max_decode_batch: 1,
+            decode_cohort_target: 1,
+            decode_cohort_max_deferrals: 0,
             max_batch_tokens: super::actions::DEFAULT_CHUNK_SIZE,
             allow_mixed_batches: true,
         }
@@ -99,10 +107,13 @@ pub enum CancelRequestResult {
 
 impl ResidentSchedulerConfig {
     fn normalized(self) -> Self {
+        let max_decode_batch = self.max_decode_batch.max(1);
         Self {
             prefill_chunk_size: self.prefill_chunk_size.max(1),
             max_active_sequences: self.max_active_sequences.max(1),
-            max_decode_batch: self.max_decode_batch.max(1),
+            max_decode_batch,
+            decode_cohort_target: self.decode_cohort_target.clamp(1, max_decode_batch),
+            decode_cohort_max_deferrals: self.decode_cohort_max_deferrals,
             max_batch_tokens: self.max_batch_tokens,
             allow_mixed_batches: self.allow_mixed_batches,
         }
@@ -142,6 +153,7 @@ pub struct ResidentScheduler {
     active: BTreeMap<SessionId, SequenceState>,
     prefill_queue: VecDeque<SessionId>,
     decode_ready: VecDeque<SessionId>,
+    decode_cohort_deferrals: usize,
     finished: Vec<SequenceState>,
     cancelled: Vec<SequenceState>,
     failed: Vec<SequenceState>,
@@ -164,6 +176,7 @@ impl ResidentScheduler {
             active: BTreeMap::new(),
             prefill_queue: VecDeque::new(),
             decode_ready: VecDeque::new(),
+            decode_cohort_deferrals: 0,
             finished: Vec::new(),
             cancelled: Vec::new(),
             failed: Vec::new(),
@@ -564,6 +577,11 @@ impl ResidentScheduler {
         A: ExpertIoAdvisor,
     {
         self.admit_waiting(slot_pool)?;
+        let defer_decode = !self.config.allow_mixed_batches
+            && !self.decode_ready.is_empty()
+            && self.decode_ready.len() < self.config.decode_cohort_target
+            && !self.prefill_queue.is_empty()
+            && self.decode_cohort_deferrals < self.config.decode_cohort_max_deferrals;
         let token_budget = if self.config.max_batch_tokens == 0 {
             usize::MAX
         } else {
@@ -573,7 +591,11 @@ impl ResidentScheduler {
         let mut expert_usage = ExpertIoBatchUsage::default();
         let mut decodes = Vec::new();
         let mut blocked_decode = None;
-        let decode_candidates = self.decode_ready.len();
+        let decode_candidates = if defer_decode {
+            0
+        } else {
+            self.decode_ready.len()
+        };
         for _ in 0..decode_candidates {
             if remaining == 0 || decodes.len() >= self.config.max_decode_batch {
                 break;
@@ -705,11 +727,21 @@ impl ResidentScheduler {
         }
 
         if prefills.is_empty() && decodes.is_empty() {
+            if self.decode_ready.is_empty() {
+                self.decode_cohort_deferrals = 0;
+            }
             Ok(None)
         } else if !self.config.allow_mixed_batches {
             if decodes.is_empty() {
-                Ok(prefills.pop().map(SchedulerAction::PrefillChunk))
+                let action = prefills.pop().map(SchedulerAction::PrefillChunk);
+                if action.is_some() && defer_decode {
+                    self.decode_cohort_deferrals = self.decode_cohort_deferrals.saturating_add(1);
+                } else if self.decode_ready.is_empty() {
+                    self.decode_cohort_deferrals = 0;
+                }
+                Ok(action)
             } else {
+                self.decode_cohort_deferrals = 0;
                 Ok(Some(SchedulerAction::DecodeBatch(decodes)))
             }
         } else {
@@ -784,8 +816,12 @@ impl ResidentScheduler {
         }
 
         if actions.is_empty() {
+            if self.decode_ready.is_empty() {
+                self.decode_cohort_deferrals = 0;
+            }
             Ok(None)
         } else {
+            self.decode_cohort_deferrals = 0;
             Ok(Some(SchedulerAction::DecodeBatch(actions)))
         }
     }
@@ -1258,6 +1294,136 @@ mod tests {
     }
 
     #[test]
+    fn resident_scheduler_defers_decode_to_form_target_cohort() {
+        let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
+            prefill_chunk_size: 4,
+            max_active_sequences: 2,
+            max_decode_batch: 2,
+            decode_cohort_target: 2,
+            decode_cohort_max_deferrals: 1,
+            allow_mixed_batches: false,
+            ..Default::default()
+        });
+        let mut kv = FixedSequenceSlotPool::new(2);
+        scheduler.submit(request(1, vec![1]));
+        scheduler.submit(request(2, vec![2]));
+
+        let first = scheduler.next_action(&mut kv).unwrap().unwrap();
+        let SchedulerAction::PrefillChunk(first_prefill) = &first else {
+            panic!("expected first prefill");
+        };
+        assert_eq!(first_prefill.session_id, SessionId(1));
+        scheduler.commit_action(&first).unwrap();
+        scheduler.stage_decode_token(SessionId(1), 10).unwrap();
+
+        let second = scheduler.next_action(&mut kv).unwrap().unwrap();
+        let SchedulerAction::PrefillChunk(second_prefill) = &second else {
+            panic!("expected cohort-forming prefill");
+        };
+        assert_eq!(second_prefill.session_id, SessionId(2));
+        assert_eq!(scheduler.decode_cohort_deferrals, 1);
+        scheduler.commit_action(&second).unwrap();
+        scheduler.stage_decode_token(SessionId(2), 20).unwrap();
+
+        let action = scheduler.next_action(&mut kv).unwrap().unwrap();
+        let SchedulerAction::DecodeBatch(decodes) = action else {
+            panic!("expected decode cohort");
+        };
+        assert_eq!(decodes.len(), 2);
+        assert_eq!(
+            decodes
+                .iter()
+                .map(|decode| decode.session_id)
+                .collect::<Vec<_>>(),
+            vec![SessionId(1), SessionId(2)]
+        );
+        assert_eq!(scheduler.decode_cohort_deferrals, 0);
+    }
+
+    #[test]
+    fn resident_scheduler_decode_cohort_max_deferrals_forces_progress() {
+        let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
+            prefill_chunk_size: 1,
+            max_active_sequences: 2,
+            max_decode_batch: 2,
+            decode_cohort_target: 2,
+            decode_cohort_max_deferrals: 1,
+            allow_mixed_batches: false,
+            ..Default::default()
+        });
+        let mut kv = FixedSequenceSlotPool::new(2);
+        scheduler.submit(request(1, vec![1]));
+        scheduler.submit(request(2, vec![2, 3, 4]));
+
+        let first = scheduler.next_action(&mut kv).unwrap().unwrap();
+        scheduler.commit_action(&first).unwrap();
+        scheduler.stage_decode_token(SessionId(1), 10).unwrap();
+
+        let deferred = scheduler.next_action(&mut kv).unwrap().unwrap();
+        let SchedulerAction::PrefillChunk(prefill) = &deferred else {
+            panic!("expected one deferred prefill");
+        };
+        assert_eq!(prefill.session_id, SessionId(2));
+        scheduler.commit_action(&deferred).unwrap();
+        assert_eq!(scheduler.prefill_queue_len(), 1);
+
+        let action = scheduler.next_action(&mut kv).unwrap().unwrap();
+        let SchedulerAction::DecodeBatch(decodes) = action else {
+            panic!("expected forced singleton decode");
+        };
+        assert_eq!(decodes.len(), 1);
+        assert_eq!(decodes[0].session_id, SessionId(1));
+        assert_eq!(scheduler.decode_cohort_deferrals, 0);
+    }
+
+    #[test]
+    fn resident_scheduler_default_decode_cohort_policy_is_eager() {
+        let defaults = ResidentSchedulerConfig::default();
+        assert_eq!(defaults.decode_cohort_target, 1);
+        assert_eq!(defaults.decode_cohort_max_deferrals, 0);
+
+        let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
+            prefill_chunk_size: 4,
+            max_active_sequences: 2,
+            max_decode_batch: 2,
+            allow_mixed_batches: false,
+            ..defaults
+        });
+        let mut kv = FixedSequenceSlotPool::new(2);
+        scheduler.submit(request(1, vec![1]));
+        scheduler.submit(request(2, vec![2]));
+
+        let first = scheduler.next_action(&mut kv).unwrap().unwrap();
+        scheduler.commit_action(&first).unwrap();
+        scheduler.stage_decode_token(SessionId(1), 10).unwrap();
+
+        let action = scheduler.next_action(&mut kv).unwrap().unwrap();
+        let SchedulerAction::DecodeBatch(decodes) = action else {
+            panic!("expected eager decode");
+        };
+        assert_eq!(decodes.len(), 1);
+        assert_eq!(decodes[0].session_id, SessionId(1));
+        assert_eq!(scheduler.prefill_queue_len(), 1);
+    }
+
+    #[test]
+    fn resident_scheduler_normalizes_decode_cohort_target() {
+        let lower = ResidentScheduler::new(ResidentSchedulerConfig {
+            max_decode_batch: 2,
+            decode_cohort_target: 0,
+            ..Default::default()
+        });
+        assert_eq!(lower.config().decode_cohort_target, 1);
+
+        let upper = ResidentScheduler::new(ResidentSchedulerConfig {
+            max_decode_batch: 2,
+            decode_cohort_target: 3,
+            ..Default::default()
+        });
+        assert_eq!(upper.config().decode_cohort_target, 2);
+    }
+
+    #[test]
     fn native_scheduler_enforces_token_budget_and_mixes_decode_with_ragged_prefill() {
         let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
             prefill_chunk_size: 8,
@@ -1265,6 +1431,7 @@ mod tests {
             max_decode_batch: 2,
             max_batch_tokens: 3,
             allow_mixed_batches: true,
+            ..Default::default()
         });
         let mut kv = FixedSequenceSlotPool::new(2);
         scheduler.submit(request(1, vec![1]));
@@ -1298,6 +1465,7 @@ mod tests {
             max_decode_batch: 2,
             max_batch_tokens: 2,
             allow_mixed_batches: true,
+            ..Default::default()
         });
         let mut kv = FixedSequenceSlotPool::new(2);
         scheduler.submit(request(1, vec![1]));
@@ -1347,6 +1515,7 @@ mod tests {
             max_decode_batch: 2,
             max_batch_tokens: 2,
             allow_mixed_batches: true,
+            ..Default::default()
         });
         let mut kv = FixedSequenceSlotPool::new(2);
         scheduler.submit(request(1, vec![1]));
@@ -1390,6 +1559,7 @@ mod tests {
             max_decode_batch: 2,
             max_batch_tokens: 2,
             allow_mixed_batches: true,
+            ..Default::default()
         });
         let mut kv = FixedSequenceSlotPool::new(2);
         scheduler.submit(request(1, vec![1]));

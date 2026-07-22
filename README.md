@@ -33,44 +33,34 @@
 
 ## Current milestone
 
-Ferrule has a real, lossless CUDA DeepSeek-V4 Flash target path on GB10. Native packed
-decode, ragged prefill, physical paged multi-plane KV, FP4 routed MoE, compressed
-attention state, and deterministic greedy generation are active.
+Ferrule now runs the checkpoint-native DeepSeek-V4 Flash DSpark cycle through the
+production CUDA/CUTLASS and OpenAI serving path: proposal, exact target verification,
+commit or rollback, correction or bonus staging, and external token reconciliation share
+one runtime-owned transaction.
 
-The checkpoint-native DSpark production path is now connected end to end: device-side
-target-tap projection and normalization feed independent proposal-stage context state;
-hybrid attention, proposal heads, sequential Markov selection, and confidence execute
-through the prepared CUDA/CUTLASS image; exact packed target verification feeds
-acceptance, correction/bonus, rollback/replay, and OpenAI streaming.
+Production verification is a true multi-sequence cohort. Per-session proposal generation
+remains isolated, ragged proposal rows are packed into one target execution, and each
+sequence independently retains its exact accepted prefix. Runtime and backend KV state
+are committed atomically for the cohort without replaying accepted target rows.
 
 The completed execution foundation includes:
 
 - one Rust-owned executable plan with prepare-time kernel-provider selection;
-- a GB10/SM121a CUTLASS/CuTe provider exposing semantic target and DSpark bundles instead of generic-GEMM FFI;
-- explicit per-sequence state and native packed execution;
-- runtime-owned paged KV transactions, rollback, COW, and slot allocation;
-- request-centric admission with expert-byte, pinned-memory, upload, and deadline budgets;
-- production `O_DIRECT + io_uring` expert reads into registered CUDA-pinned slabs;
+- a GB10/SM121a CUTLASS/CuTe provider exposing semantic target and DSpark bundles;
+- arbitrary-width packed verification with per-sequence provisional checkpoints;
+- runtime-owned paged KV transactions with atomic prefix retention, COW, and slot allocation;
+- continuous-batching cohort formation with bounded deferral and forced progress;
+- production `O_DIRECT + io_uring` expert reads into registered CUDA-pinned slabs, with no expert-streaming mmap backend;
 - device routing and stable expert slot/generation/lease residency;
-- OpenAI-compatible HTTP/SSE serving with bounded admission and cancellation.
+- owned arena checkout/checkin as the lifetime foundation for resumable execution;
+- OpenAI-compatible HTTP/SSE serving validated through the official vLLM benchmark path.
 
-Recent correctness work also made packed concurrency safe when a prefetched expert's
-reserved victim is selected by the same batch: Ferrule cancels only the conflicting
-reservation, preserves completed staging/upload work, and re-reserves a safe slot.
-
-Ferrule is **not yet a single-node SOTA claim**. The official checkpoint-native DSpark
-protocol, CUDA/CUTLASS proposal image, exact target transaction, production server path,
-and serving telemetry are connected. Initial end-to-end runs exposed unresolved official
-proposal parity, acceptance, expert-residency accounting, host coordination, and hot-path
-allocation work.
-
-The remaining critical work is:
-
-1. prove official Python fixture parity for proposal tokens, logits, confidence, and state transitions;
-2. profile the existing production server path across scheduler, I/O, proposal, target, transaction, and serving stages;
-3. unify scheduler admission with the physical expert union and load ledger of the complete DSpark cycle;
-4. remove all-hit host barriers and hot-path allocations before capturing stable graph buckets;
-5. run the frozen serving and same-contract competitor release suite.
+Ferrule is **not yet a single-node SOTA claim**. Packed cohorts improve production
+concurrency, but exact expert misses still synchronously block the model worker while
+reads and uploads complete. The next milestone is resumable layer execution plus a
+global I/O/CUDA completion reactor, allowing the scheduler to run other ready cohorts
+while expert data moves. Official proposal parity, the all-resident kernel floor, stable
+graph capture, and the frozen release suite remain required in parallel.
 
 See the [execution roadmap](docs/ROADMAP.md) for the release contract, measured artifacts,
 and phase ordering.

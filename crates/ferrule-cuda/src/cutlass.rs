@@ -9,7 +9,7 @@
 use cuda_core::{DeviceBuffer, stream::CudaStream};
 use ferrule_common::{Error, Result};
 
-pub const CUTLASS_ABI_VERSION: u32 = 8;
+pub const CUTLASS_ABI_VERSION: u32 = 9;
 #[cfg(feature = "cutlass")]
 const PINNED_CUTLASS_VERSION: u32 = 461;
 #[cfg(feature = "cutlass")]
@@ -34,6 +34,7 @@ pub enum CutlassKernelId {
     DsparkMainProjectNormSm121 = 7,
     DsparkHybridMlaAttentionSm121 = 8,
     DsparkProposalHeadSm121 = 9,
+    Fp8ProjectionSm121 = 10,
 }
 
 impl CutlassKernelId {
@@ -501,6 +502,47 @@ impl CutlassFp8QueryAKvArgs {
             kv_weight_ue8m0: kv_weight_scales.cu_deviceptr(),
             query_a_output_f32: query_a_output.cu_deviceptr(),
             kv_output_f32: kv_output.cu_deviceptr(),
+            stream: stream.cu_stream() as usize as u64,
+        })
+    }
+
+    fn from_single_buffers(
+        stream: &CudaStream,
+        activation: &DeviceBuffer<u8>,
+        activation_scales: &DeviceBuffer<u8>,
+        weight: &DeviceBuffer<u8>,
+        weight_scales: &DeviceBuffer<u8>,
+        output: &mut DeviceBuffer<f32>,
+        rows: usize,
+        n: usize,
+        k: usize,
+    ) -> Result<Self> {
+        validate_fp8_projection_problem(
+            activation,
+            activation_scales,
+            weight,
+            weight_scales,
+            output,
+            rows,
+            n,
+            k,
+        )?;
+        let scale_cols = k / 128;
+        Ok(Self {
+            abi_version: CUTLASS_ABI_VERSION,
+            rows: checked_u32(rows, "rows")?,
+            n1: checked_u32(n, "n")?,
+            n2: 0,
+            k: checked_u32(k, "k")?,
+            scale_cols: checked_u32(scale_cols, "scale_cols")?,
+            activation_fp8: activation.cu_deviceptr(),
+            activation_ue8m0: activation_scales.cu_deviceptr(),
+            query_a_weight_fp8: weight.cu_deviceptr(),
+            query_a_weight_ue8m0: weight_scales.cu_deviceptr(),
+            kv_weight_fp8: 0,
+            kv_weight_ue8m0: 0,
+            query_a_output_f32: output.cu_deviceptr(),
+            kv_output_f32: 0,
             stream: stream.cu_stream() as usize as u64,
         })
     }
@@ -1087,6 +1129,56 @@ fn validate_fp8_problem(
 }
 
 #[cfg(feature = "cutlass")]
+#[allow(clippy::too_many_arguments)]
+fn validate_fp8_projection_problem(
+    activation: &DeviceBuffer<u8>,
+    activation_scales: &DeviceBuffer<u8>,
+    weight: &DeviceBuffer<u8>,
+    weight_scales: &DeviceBuffer<u8>,
+    output: &DeviceBuffer<f32>,
+    rows: usize,
+    n: usize,
+    k: usize,
+) -> Result<()> {
+    if rows == 0 || n == 0 || k == 0 || !k.is_multiple_of(128) {
+        return Err(Error::Internal(format!(
+            "invalid SM121 FP8 projection shape: rows={rows} n={n} k={k}"
+        )));
+    }
+    let scale_cols = k / 128;
+    let activation_required = checked_mul(rows, k, "activation")?;
+    let activation_scales_required = checked_mul(rows, scale_cols, "activation scales")?;
+    if activation.len() < activation_required
+        || activation_scales.len() < activation_scales_required
+    {
+        return Err(Error::Internal(format!(
+            "SM121 FP8 projection scratch too small: activation={}/{} scales={}/{}",
+            activation.len(),
+            activation_required,
+            activation_scales.len(),
+            activation_scales_required
+        )));
+    }
+    let required = [
+        ("weight", weight.len(), checked_mul(n, k, "weight")?),
+        (
+            "weight scales",
+            weight_scales.len(),
+            checked_mul(n.div_ceil(128), scale_cols, "weight scales")?,
+        ),
+        ("output", output.len(), checked_mul(rows, n, "output")?),
+    ];
+    for (name, actual, expected) in required {
+        if actual != expected {
+            return Err(Error::Internal(format!(
+                "SM121 FP8 projection {name} length mismatch: actual={actual} expected={expected}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cutlass")]
 fn checked_mul(lhs: usize, rhs: usize, name: &str) -> Result<usize> {
     lhs.checked_mul(rhs)
         .ok_or_else(|| Error::Internal(format!("SM121 FP8 {name} size overflow")))
@@ -1183,6 +1275,43 @@ pub fn fp8_query_a_kv(
         Ok(())
     } else {
         Err(native_error("launch SM121 FP8 QueryA+KV", status))
+    }
+}
+
+/// Launch one small-M FP8 projection through the native SM121 pipeline.
+#[cfg(feature = "cutlass")]
+#[allow(clippy::too_many_arguments)]
+pub fn fp8_projection(
+    stream: &CudaStream,
+    activation: &DeviceBuffer<u8>,
+    activation_scales: &DeviceBuffer<u8>,
+    weight: &DeviceBuffer<u8>,
+    weight_scales: &DeviceBuffer<u8>,
+    output: &mut DeviceBuffer<f32>,
+    rows: usize,
+    n: usize,
+    k: usize,
+) -> Result<()> {
+    let args = CutlassFp8QueryAKvArgs::from_single_buffers(
+        stream,
+        activation,
+        activation_scales,
+        weight,
+        weight_scales,
+        output,
+        rows,
+        n,
+        k,
+    )?;
+    let can_implement = unsafe { ffi::ferrule_cutlass_fp8_projection_can_implement(&args) };
+    if can_implement != status::SUCCESS {
+        return Err(native_error("validate SM121 FP8 projection", can_implement));
+    }
+    let status = unsafe { ffi::ferrule_cutlass_fp8_projection_launch(&args) };
+    if status == status::SUCCESS {
+        Ok(())
+    } else {
+        Err(native_error("launch SM121 FP8 projection", status))
     }
 }
 
@@ -1716,6 +1845,7 @@ pub fn mla_output(
     validate_lengths("SM121 MLA output", &required)?;
     let latent_values = checked_mul(rows, latent_size, "MLA output latent FP8")?;
     let latent_scale_values = checked_mul(rows, latent_size / 128, "MLA output latent scales")?;
+
     if latent_fp8.len() < latent_values || latent_scales.len() < latent_scale_values {
         return Err(Error::Internal(format!(
             "SM121 MLA output scratch is too small: latent_fp8={}/{} latent_scales={}/{}",
@@ -1725,6 +1855,7 @@ pub fn mla_output(
             latent_scale_values
         )));
     }
+
     let args = CutlassMlaOutputArgs {
         abi_version: CUTLASS_ABI_VERSION,
         rows: checked_u32(rows, "rows")?,
@@ -1993,6 +2124,10 @@ mod ffi {
             args: *const CutlassFp8QueryAKvArgs,
         ) -> i32;
         pub fn ferrule_cutlass_fp8_query_a_kv_launch(args: *const CutlassFp8QueryAKvArgs) -> i32;
+        pub fn ferrule_cutlass_fp8_projection_can_implement(
+            args: *const CutlassFp8QueryAKvArgs,
+        ) -> i32;
+        pub fn ferrule_cutlass_fp8_projection_launch(args: *const CutlassFp8QueryAKvArgs) -> i32;
         pub fn ferrule_cutlass_dspark_main_project_norm_can_implement(
             args: *const CutlassDsparkMainProjectNormArgs,
         ) -> i32;
@@ -2059,7 +2194,7 @@ mod tests {
         assert_eq!(manifest.abi_version, CUTLASS_ABI_VERSION);
         assert_eq!(manifest.cutlass_version, PINNED_CUTLASS_VERSION);
         assert_eq!(manifest.target_sm, GB10_SM);
-        assert_eq!(manifest.kernel_count, 9);
+        assert_eq!(manifest.kernel_count, 10);
         assert!(manifest.supports(CutlassKernelId::Fp8QueryAKvSm121));
         assert!(manifest.supports(CutlassKernelId::Bf16CompressorSm121));
         assert!(manifest.supports(CutlassKernelId::HcProducerSm121));
@@ -2069,5 +2204,6 @@ mod tests {
         assert!(manifest.supports(CutlassKernelId::DsparkMainProjectNormSm121));
         assert!(manifest.supports(CutlassKernelId::DsparkHybridMlaAttentionSm121));
         assert!(manifest.supports(CutlassKernelId::DsparkProposalHeadSm121));
+        assert!(manifest.supports(CutlassKernelId::Fp8ProjectionSm121));
     }
 }

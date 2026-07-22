@@ -126,6 +126,7 @@ where
                 confidence_logits = ?trace.confidence_logits,
                 capacity_truncated_tokens = trace.capacity_truncated_tokens,
                 output_boundary_truncated_tokens = trace.output_boundary_truncated_tokens,
+                confidence_truncated_tokens = trace.confidence_truncated_tokens,
                 scheduler_expert_io = ?trace.scheduler_expert_io,
                 accepted_token_ids = ?trace.accepted_tokens,
                 rejected_token = ?trace.rejected_token,

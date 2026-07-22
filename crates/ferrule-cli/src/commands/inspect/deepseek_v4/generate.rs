@@ -100,6 +100,7 @@ pub fn cmd_deepseek_v4_generate(
                 stop_at_eos,
                 // Preserve this command's historical EOS behavior.
                 append_eos_to_session: false,
+                dspark_confidence_threshold: 0.2,
                 max_steps_per_run: ctx_size.saturating_add(token_budget).saturating_add(64),
             },
         )

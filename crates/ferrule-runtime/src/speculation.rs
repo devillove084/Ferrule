@@ -21,16 +21,17 @@
 //! uses the existing `MultiSessionRunner` packed batch path.
 
 use std::num::NonZeroU32;
+use std::ops::Range;
 use std::time::Instant;
 
 use ferrule_common::execution::{
-    ExecutionBatch, ExecutionIntent, ExecutionOutput, ForwardMode, ForwardPhase, LogitsOutput,
-    LogitsRequest, StateSlot, TokenLogit,
+    ExecutionBatch, ExecutionIntent, ExecutionOutput, ExecutionSequence, ForwardMode, ForwardPhase,
+    LogitsOutput, LogitsRequest, StateSlot, TokenLogit,
 };
 use ferrule_common::{Error, Result};
 use ferrule_model::MultiSessionRunner;
 
-use crate::cache::{KvPageManager, KvReservationBindings};
+use crate::cache::{KvPageManager, KvReservationBindings, KvReservationCommit};
 use crate::engine::NativeMultiSessionExecutor;
 
 // ── Transaction types ─────────────────────────────────────────────────
@@ -101,6 +102,31 @@ impl DSparkCycleResult {
             self.accounting.accepted_draft_tokens as f32 / self.accounting.proposed_tokens as f32
         }
     }
+}
+
+/// One sequence in a packed DSpark verification cohort.
+///
+/// `state_slot` and `generation` identify the sequence in the logical page
+/// manager. Model state is supplied separately, in the same sequence-major
+/// order, so this request remains model-neutral.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DSparkVerificationItem<'a> {
+    pub state_slot: StateSlot,
+    pub generation: u64,
+    pub proposal: &'a [u32],
+    pub frontier: TargetFrontier,
+}
+
+/// Results from one true multi-sequence DSpark verification transaction.
+///
+/// The entries in `results` correspond one-for-one with the input items. Each
+/// cycle result carries the same shared timings for compatibility with scalar
+/// DSpark metrics; the top-level fields make their cohort-wide nature explicit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DSparkCohortResult {
+    pub results: Vec<DSparkCycleResult>,
+    pub transaction_time_us: u64,
+    pub verify_time_us: u64,
 }
 
 /// Accumulated DSpark telemetry across multiple cycles.
@@ -189,6 +215,296 @@ impl DSparkMetrics {
 }
 
 // ── DSpark transaction ────────────────────────────────────────────────
+
+/// Runs one true multi-sequence DSpark verification cohort.
+///
+/// The cohort is sequence-major and may be ragged: each item contributes one
+/// anchor row followed by its local proposal. The target executes exactly one
+/// provisional packed batch. Every accepted prefix must then be retained by the
+/// backend as one atomic cohort operation; this path deliberately does not
+/// replay prefixes when retention is unavailable.
+pub fn run_dspark_verification_cohort<R>(
+    executor: &mut NativeMultiSessionExecutor<R>,
+    page_manager: &mut KvPageManager,
+    source_states: &mut [R::SequenceState],
+    items: &[DSparkVerificationItem<'_>],
+    top_k: NonZeroU32,
+) -> Result<DSparkCohortResult>
+where
+    R: MultiSessionRunner,
+{
+    let transaction_start = Instant::now();
+    if items.is_empty() {
+        return Err(Error::Execution(
+            "DSpark verification cohort must contain at least one sequence".into(),
+        ));
+    }
+    if source_states.len() != items.len() {
+        return Err(Error::Execution(format!(
+            "DSpark verification cohort state/item mismatch: states={} items={}",
+            source_states.len(),
+            items.len()
+        )));
+    }
+
+    let executed_rows = items
+        .iter()
+        .map(|item| {
+            item.proposal
+                .len()
+                .checked_add(1)
+                .ok_or_else(|| Error::Execution("DSpark verification row count overflow".into()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut reservations = Vec::with_capacity(items.len());
+    for (sequence, (item, &rows)) in items.iter().zip(&executed_rows).enumerate() {
+        let reservation = match page_manager.reserve(item.state_slot, item.generation, rows) {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                return Err(discard_dspark_cohort(
+                    executor,
+                    page_manager,
+                    reservations,
+                    Vec::new(),
+                    false,
+                    error,
+                ));
+            }
+        };
+        reservations.push(reservation);
+        if reservations[sequence].positions.start != item.frontier.position {
+            let actual = reservations[sequence].positions.start;
+            let error = Error::Execution(format!(
+                "DSpark cohort sequence {sequence} frontier position {} does not match committed KV position {actual}",
+                item.frontier.position
+            ));
+            return Err(discard_dspark_cohort(
+                executor,
+                page_manager,
+                reservations,
+                Vec::new(),
+                false,
+                error,
+            ));
+        }
+    }
+
+    let mut bindings = Vec::with_capacity(reservations.len());
+    for reservation in &reservations {
+        match page_manager.reservation_bindings(reservation) {
+            Ok(sequence_bindings) => bindings.push(sequence_bindings),
+            Err(error) => {
+                return Err(discard_dspark_cohort(
+                    executor,
+                    page_manager,
+                    reservations,
+                    Vec::new(),
+                    false,
+                    error,
+                ));
+            }
+        }
+    }
+    let (verification_batch, query_ranges) =
+        match build_dspark_cohort_batch(items, &bindings, top_k) {
+            Ok(batch) => batch,
+            Err(error) => {
+                return Err(discard_dspark_cohort(
+                    executor,
+                    page_manager,
+                    reservations,
+                    Vec::new(),
+                    false,
+                    error,
+                ));
+            }
+        };
+
+    let mut verification_branches = Vec::with_capacity(items.len());
+    for (source, item) in source_states.iter().zip(items) {
+        match executor.fork_sequence_state_from(source, item.frontier.position) {
+            Ok(branch) => verification_branches.push(branch),
+            Err(error) => {
+                return Err(discard_dspark_cohort(
+                    executor,
+                    page_manager,
+                    reservations,
+                    verification_branches,
+                    false,
+                    error,
+                ));
+            }
+        }
+    }
+
+    let verify_start = Instant::now();
+    let output = match executor.execute_batch_with_kv(
+        &mut verification_branches,
+        &verification_batch,
+        &reservations,
+    ) {
+        Ok(output) => output,
+        Err(error) => {
+            return Err(discard_dspark_cohort(
+                executor,
+                page_manager,
+                reservations,
+                verification_branches,
+                true,
+                error,
+            ));
+        }
+    };
+    let verify_time_us = verify_start.elapsed().as_micros() as u64;
+
+    let global_row_top1 = match collect_global_row_top1(&output, verification_batch.len()) {
+        Ok(rows) => rows,
+        Err(error) => {
+            return Err(discard_dspark_cohort(
+                executor,
+                page_manager,
+                reservations,
+                verification_branches,
+                true,
+                error,
+            ));
+        }
+    };
+    let mut verifications = Vec::with_capacity(items.len());
+    for (sequence, (item, query)) in items.iter().zip(&query_ranges).enumerate() {
+        let local_rows = match global_row_top1.get(query.clone()) {
+            Some(rows) => rows,
+            None => {
+                let error = Error::Execution(format!(
+                    "DSpark cohort sequence {sequence} query range {query:?} exceeds {} global rows",
+                    global_row_top1.len()
+                ));
+                return Err(discard_dspark_cohort(
+                    executor,
+                    page_manager,
+                    reservations,
+                    verification_branches,
+                    true,
+                    error,
+                ));
+            }
+        };
+        match verify_causal_slice(local_rows, item.proposal) {
+            Ok(verification) => verifications.push(verification),
+            Err(error) => {
+                return Err(discard_dspark_cohort(
+                    executor,
+                    page_manager,
+                    reservations,
+                    verification_branches,
+                    true,
+                    error,
+                ));
+            }
+        }
+    }
+
+    let retained_rows = verifications
+        .iter()
+        .map(|verification| verification.accepted + 1)
+        .collect::<Vec<_>>();
+    let retained = match executor.retain_prepared_prefixes(
+        source_states,
+        &mut verification_branches,
+        &executed_rows,
+        &retained_rows,
+    ) {
+        Ok(retained) => retained,
+        Err(error) => {
+            return Err(discard_dspark_cohort(
+                executor,
+                page_manager,
+                reservations,
+                verification_branches,
+                true,
+                error,
+            ));
+        }
+    };
+    if !retained {
+        return Err(discard_dspark_cohort(
+            executor,
+            page_manager,
+            reservations,
+            verification_branches,
+            true,
+            Error::Execution(
+                "DSpark cohort backend cannot atomically retain all accepted prefixes; replay is disabled"
+                    .into(),
+            ),
+        ));
+    }
+
+    let commits = reservations
+        .into_iter()
+        .zip(&retained_rows)
+        .map(|(reservation, &rows)| KvReservationCommit::new(reservation, rows))
+        .collect();
+    let freed = match page_manager.commit_prefix_batch_with_freed(commits) {
+        Ok(freed) => freed,
+        Err(error) => {
+            return Err(discard_dspark_cohort(
+                executor,
+                page_manager,
+                Vec::new(),
+                verification_branches,
+                true,
+                error,
+            ));
+        }
+    };
+
+    let backend_commit_error = executor.commit_prepared_batch().err();
+    let state_promotion_error =
+        promote_cohort_branches(executor, source_states, verification_branches).err();
+    let page_release_error = executor.release_kv_pages(&freed).err();
+    finish_dspark_cohort_publication(
+        backend_commit_error,
+        state_promotion_error,
+        page_release_error,
+    )?;
+
+    let transaction_time_us = transaction_start.elapsed().as_micros() as u64;
+    let results = items
+        .iter()
+        .zip(verifications)
+        .zip(executed_rows)
+        .map(|((item, verification), verified_rows)| {
+            let accepted_rows = verification.accepted;
+            let committed_rows = accepted_rows + 1;
+            let rejected = item.proposal.get(accepted_rows).copied();
+            let target_next = verification.target_next;
+            DSparkCycleResult {
+                accepted: item.proposal[..accepted_rows].to_vec(),
+                rejected,
+                target_correction: rejected.map(|_| target_next.token_id),
+                target_next: Some(target_next),
+                target_row_top1: verification.target_row_top1,
+                accounting: SpeculativeCycleAccounting {
+                    proposed_tokens: item.proposal.len(),
+                    verified_rows,
+                    accepted_draft_tokens: accepted_rows,
+                    correction_tokens: usize::from(accepted_rows < item.proposal.len()),
+                    externally_committed_tokens: committed_rows,
+                    rolled_back_rows: verified_rows - committed_rows,
+                },
+                transaction_time_us,
+                verify_time_us,
+            }
+        })
+        .collect();
+    Ok(DSparkCohortResult {
+        results,
+        transaction_time_us,
+        verify_time_us,
+    })
+}
 
 /// Run a one-row exact probe before the full packed verification.
 ///
@@ -472,6 +788,7 @@ where
 
     let accepted_rows = verification.accepted;
     let committed_rows = accepted_rows + 1;
+    let mut prefix_promoted = false;
     if accepted_rows == width {
         let freed = match page_manager.commit_prefix_with_freed(reservation, verified_rows) {
             Ok(freed) => freed,
@@ -493,81 +810,122 @@ where
         promote_branch(executor, source_state, verification_branch)?;
         executor.release_kv_pages(&freed)?;
     } else {
-        if let Err(error) = executor.rollback_prepared_batch() {
-            return Err(discard_verification_branch(
-                executor,
-                page_manager,
-                reservation,
-                verification_branch,
-                error,
-            ));
-        }
-        if let Err(error) = executor.release_sequence_state(verification_branch) {
-            return Err(rollback_reservation(page_manager, reservation, error));
-        }
-        let prefix_view = match page_manager.reservation_prefix_view(&reservation, committed_rows) {
-            Ok(view) => view,
-            Err(error) => {
-                return Err(rollback_reservation(page_manager, reservation, error));
-            }
-        };
-        let prefix_bindings = match page_manager.reservation_bindings(&prefix_view) {
-            Ok(bindings) => bindings,
-            Err(error) => {
-                return Err(rollback_reservation(page_manager, reservation, error));
-            }
-        };
-        let replay_batch = match build_dspark_batch(
-            &verification_tokens[..committed_rows],
-            frontier.position,
-            &prefix_bindings,
-            None,
-            ExecutionIntent::Committed,
+        let retained = match executor.retain_prepared_prefix(
+            source_state,
+            &mut verification_branch,
+            verified_rows,
+            committed_rows,
         ) {
-            Ok(batch) => batch,
+            Ok(retained) => retained,
             Err(error) => {
-                return Err(rollback_reservation(page_manager, reservation, error));
+                return Err(discard_verification_branch(
+                    executor,
+                    page_manager,
+                    reservation,
+                    verification_branch,
+                    error,
+                ));
             }
         };
-        let mut accepted_branch =
-            match executor.fork_sequence_state_from(source_state, frontier.position) {
-                Ok(branch) => branch,
+        if retained {
+            prefix_promoted = true;
+            let freed = match page_manager.commit_prefix_with_freed(reservation, committed_rows) {
+                Ok(freed) => freed,
+                Err(error) => {
+                    let backend_cleanup = executor.rollback_prepared_batch().err();
+                    let state_cleanup = executor.release_sequence_state(verification_branch).err();
+                    return Err(with_cleanup_errors(
+                        error,
+                        backend_cleanup,
+                        None,
+                        state_cleanup,
+                    ));
+                }
+            };
+            if let Err(error) = executor.commit_prepared_batch() {
+                promote_branch(executor, source_state, verification_branch)?;
+                return Err(error);
+            }
+            promote_branch(executor, source_state, verification_branch)?;
+            executor.release_kv_pages(&freed)?;
+        } else {
+            if let Err(error) = executor.rollback_prepared_batch() {
+                return Err(discard_verification_branch(
+                    executor,
+                    page_manager,
+                    reservation,
+                    verification_branch,
+                    error,
+                ));
+            }
+            if let Err(error) = executor.release_sequence_state(verification_branch) {
+                return Err(rollback_reservation(page_manager, reservation, error));
+            }
+            let prefix_view =
+                match page_manager.reservation_prefix_view(&reservation, committed_rows) {
+                    Ok(view) => view,
+                    Err(error) => {
+                        return Err(rollback_reservation(page_manager, reservation, error));
+                    }
+                };
+            let prefix_bindings = match page_manager.reservation_bindings(&prefix_view) {
+                Ok(bindings) => bindings,
                 Err(error) => {
                     return Err(rollback_reservation(page_manager, reservation, error));
                 }
             };
-        if let Err(error) = executor.execute_batch_with_kv(
-            std::slice::from_mut(&mut accepted_branch),
-            &replay_batch,
-            std::slice::from_ref(&prefix_view),
-        ) {
-            return Err(discard_verification_branch(
-                executor,
-                page_manager,
-                reservation,
-                accepted_branch,
-                error,
-            ));
-        }
-        let freed = match page_manager.commit_prefix_with_freed(reservation, committed_rows) {
-            Ok(freed) => freed,
-            Err(error) => {
-                let backend_cleanup = executor.rollback_prepared_batch().err();
-                let state_cleanup = executor.release_sequence_state(accepted_branch).err();
-                return Err(with_cleanup_errors(
+            let replay_batch = match build_dspark_batch(
+                &verification_tokens[..committed_rows],
+                frontier.position,
+                &prefix_bindings,
+                None,
+                ExecutionIntent::Committed,
+            ) {
+                Ok(batch) => batch,
+                Err(error) => {
+                    return Err(rollback_reservation(page_manager, reservation, error));
+                }
+            };
+            let mut accepted_branch =
+                match executor.fork_sequence_state_from(source_state, frontier.position) {
+                    Ok(branch) => branch,
+                    Err(error) => {
+                        return Err(rollback_reservation(page_manager, reservation, error));
+                    }
+                };
+            if let Err(error) = executor.execute_batch_with_kv(
+                std::slice::from_mut(&mut accepted_branch),
+                &replay_batch,
+                std::slice::from_ref(&prefix_view),
+            ) {
+                return Err(discard_verification_branch(
+                    executor,
+                    page_manager,
+                    reservation,
+                    accepted_branch,
                     error,
-                    backend_cleanup,
-                    None,
-                    state_cleanup,
                 ));
             }
-        };
-        if let Err(error) = executor.commit_prepared_batch() {
+            let freed = match page_manager.commit_prefix_with_freed(reservation, committed_rows) {
+                Ok(freed) => freed,
+                Err(error) => {
+                    let backend_cleanup = executor.rollback_prepared_batch().err();
+                    let state_cleanup = executor.release_sequence_state(accepted_branch).err();
+                    return Err(with_cleanup_errors(
+                        error,
+                        backend_cleanup,
+                        None,
+                        state_cleanup,
+                    ));
+                }
+            };
+            if let Err(error) = executor.commit_prepared_batch() {
+                promote_branch(executor, source_state, accepted_branch)?;
+                return Err(error);
+            }
             promote_branch(executor, source_state, accepted_branch)?;
-            return Err(error);
+            executor.release_kv_pages(&freed)?;
         }
-        promote_branch(executor, source_state, accepted_branch)?;
-        executor.release_kv_pages(&freed)?;
     }
 
     let accepted = proposal[..accepted_rows].to_vec();
@@ -587,10 +945,10 @@ where
             // of the committed input rows until the following cycle.
             correction_tokens: usize::from(accepted_rows < width),
             externally_committed_tokens: committed_rows,
-            // Partial acceptance rolls back the complete provisional branch
-            // before replaying `[anchor, accepted draft prefix]`.
             rolled_back_rows: if accepted_rows == width {
                 0
+            } else if prefix_promoted {
+                verified_rows - committed_rows
             } else {
                 verified_rows
             },
@@ -598,6 +956,109 @@ where
         transaction_time_us: transaction_start.elapsed().as_micros() as u64,
         verify_time_us,
     })
+}
+
+fn build_dspark_cohort_batch(
+    items: &[DSparkVerificationItem<'_>],
+    bindings: &[KvReservationBindings],
+    top_k: NonZeroU32,
+) -> Result<(ExecutionBatch, Vec<Range<usize>>)> {
+    if items.is_empty() || items.len() != bindings.len() {
+        return Err(Error::Execution(format!(
+            "DSpark cohort batch shape mismatch: items={} bindings={}",
+            items.len(),
+            bindings.len()
+        )));
+    }
+    let total_rows = items.iter().try_fold(0usize, |total, item| {
+        total
+            .checked_add(item.proposal.len())
+            .and_then(|rows| rows.checked_add(1))
+            .ok_or_else(|| Error::Execution("DSpark cohort packed row count overflow".into()))
+    })?;
+
+    let mut token_ids = Vec::with_capacity(total_rows);
+    let mut positions = Vec::with_capacity(total_rows);
+    let mut kv_write_slots = Vec::with_capacity(total_rows);
+    let mut logits = Vec::with_capacity(total_rows);
+    let mut sequences = Vec::with_capacity(items.len());
+    let mut kv_block_ids = Vec::new();
+    let mut query_ranges = Vec::with_capacity(items.len());
+
+    for (sequence, (item, bindings)) in items.iter().zip(bindings).enumerate() {
+        let local_rows = item
+            .proposal
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| Error::Execution("DSpark verification row count overflow".into()))?;
+        if bindings.write_slots.len() != local_rows {
+            return Err(Error::Execution(format!(
+                "DSpark cohort sequence {sequence} has {} KV write slots for {local_rows} rows",
+                bindings.write_slots.len()
+            )));
+        }
+
+        let query_start = token_ids.len();
+        let query_end = query_start
+            .checked_add(local_rows)
+            .ok_or_else(|| Error::Execution("DSpark cohort packed query range overflow".into()))?;
+        let query_start_u32 = u32::try_from(query_start)
+            .map_err(|_| Error::Execution("DSpark cohort query start exceeds u32".into()))?;
+        let query_end_u32 = u32::try_from(query_end)
+            .map_err(|_| Error::Execution("DSpark cohort query end exceeds u32".into()))?;
+        let context_len = u32::try_from(item.frontier.position).map_err(|_| {
+            Error::Execution(format!(
+                "DSpark cohort sequence {sequence} frontier position exceeds u32"
+            ))
+        })?;
+        let local_rows_u32 = u32::try_from(local_rows).map_err(|_| {
+            Error::Execution(format!(
+                "DSpark cohort sequence {sequence} verification width exceeds u32"
+            ))
+        })?;
+        let sequence_len = context_len.checked_add(local_rows_u32).ok_or_else(|| {
+            Error::Execution(format!(
+                "DSpark cohort sequence {sequence} sequence length overflow"
+            ))
+        })?;
+        let block_start = u32::try_from(kv_block_ids.len())
+            .map_err(|_| Error::Execution("DSpark cohort block table exceeds u32".into()))?;
+        kv_block_ids.extend_from_slice(&bindings.block_ids);
+        let block_end = u32::try_from(kv_block_ids.len())
+            .map_err(|_| Error::Execution("DSpark cohort block table exceeds u32".into()))?;
+        let dense_state_slot = u32::try_from(sequence)
+            .map(StateSlot::new)
+            .map_err(|_| Error::Execution("DSpark cohort sequence count exceeds u32".into()))?;
+
+        token_ids.push(item.frontier.top1.token_id);
+        token_ids.extend_from_slice(item.proposal);
+        positions.extend(context_len..sequence_len);
+        kv_write_slots.extend(bindings.write_slots.iter().copied().map(Some));
+        logits.extend(std::iter::repeat_n(LogitsRequest::TopK(top_k), local_rows));
+        sequences.push(ExecutionSequence::new(
+            dense_state_slot,
+            ForwardPhase::Prefill,
+            query_start_u32..query_end_u32,
+            context_len,
+            sequence_len,
+            block_start..block_end,
+        ));
+        query_ranges.push(query_start..query_end);
+    }
+
+    Ok((
+        ExecutionBatch::new(
+            ForwardMode::Prefill,
+            token_ids,
+            positions,
+            kv_write_slots,
+            logits,
+            sequences,
+            kv_block_ids,
+        )
+        .with_intent(ExecutionIntent::ProvisionalVerification),
+        query_ranges,
+    ))
 }
 
 fn build_dspark_batch(
@@ -638,6 +1099,93 @@ fn build_dspark_batch(
         bindings.block_ids.clone(),
     )
     .with_intent(intent))
+}
+
+fn discard_dspark_cohort<R: MultiSessionRunner>(
+    executor: &mut NativeMultiSessionExecutor<R>,
+    page_manager: &mut KvPageManager,
+    reservations: Vec<ferrule_common::execution::KvReservation>,
+    branches: Vec<R::SequenceState>,
+    rollback_backend: bool,
+    cause: Error,
+) -> Error {
+    let mut cleanup_errors = Vec::new();
+    if rollback_backend && let Err(error) = executor.rollback_prepared_batch() {
+        cleanup_errors.push(format!("backend rollback: {error}"));
+    }
+    for (sequence, reservation) in reservations.into_iter().enumerate() {
+        if let Err(error) = page_manager.rollback(reservation) {
+            cleanup_errors.push(format!("logical rollback for sequence {sequence}: {error}"));
+        }
+    }
+    for (sequence, branch) in branches.into_iter().enumerate() {
+        if let Err(error) = executor.release_sequence_state(branch) {
+            cleanup_errors.push(format!("branch release for sequence {sequence}: {error}"));
+        }
+    }
+    if cleanup_errors.is_empty() {
+        cause
+    } else {
+        Error::Execution(format!(
+            "{cause}; DSpark cohort cleanup also failed: {}",
+            cleanup_errors.join("; ")
+        ))
+    }
+}
+
+fn promote_cohort_branches<R: MultiSessionRunner>(
+    executor: &mut NativeMultiSessionExecutor<R>,
+    sources: &mut [R::SequenceState],
+    branches: Vec<R::SequenceState>,
+) -> Result<()> {
+    let branch_count = branches.len();
+    let mut branches = branches.into_iter();
+    let mut errors = Vec::new();
+    for (sequence, source) in sources.iter_mut().enumerate() {
+        let Some(branch) = branches.next() else {
+            errors.push(format!("missing branch for sequence {sequence}"));
+            continue;
+        };
+        let previous = std::mem::replace(source, branch);
+        if let Err(error) = executor.release_sequence_state(previous) {
+            errors.push(format!("source release for sequence {sequence}: {error}"));
+        }
+    }
+    for (offset, branch) in branches.enumerate() {
+        if let Err(error) = executor.release_sequence_state(branch) {
+            errors.push(format!(
+                "extra branch release for sequence {}: {error}",
+                sources.len() + offset
+            ));
+        }
+    }
+    if branch_count != sources.len() {
+        errors.push(format!(
+            "state/branch promotion mismatch: states={} branches={branch_count}",
+            sources.len()
+        ));
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::Execution(format!(
+            "DSpark cohort state promotion failed: {}",
+            errors.join("; ")
+        )))
+    }
+}
+
+fn finish_dspark_cohort_publication(
+    backend: Option<Error>,
+    state: Option<Error>,
+    pages: Option<Error>,
+) -> Result<()> {
+    if backend.is_none() && state.is_none() && pages.is_none() {
+        return Ok(());
+    }
+    Err(Error::Execution(format!(
+        "DSpark cohort publication failed: backend={backend:?} state={state:?} pages={pages:?}"
+    )))
 }
 
 fn promote_branch<R: MultiSessionRunner>(
@@ -696,20 +1244,17 @@ struct CausalVerification {
     target_row_top1: Vec<TokenLogit>,
 }
 
-/// The packed target input is `[anchor, draft × V]`. Output row `i` verifies
-/// draft `i`, while output row `V` is the exact correction/bonus frontier.
-fn verify_causal_prefix(output: &ExecutionOutput, proposal: &[u32]) -> Result<CausalVerification> {
-    let verified_rows = proposal
-        .len()
-        .checked_add(1)
-        .ok_or_else(|| Error::Execution("DSpark output row count overflow".into()))?;
-    let mut row_top1 = vec![None; verified_rows];
+fn collect_global_row_top1(
+    output: &ExecutionOutput,
+    expected_rows: usize,
+) -> Result<Vec<TokenLogit>> {
+    let mut row_top1 = vec![None; expected_rows];
     for row in &output.logits {
         let row_index = usize::try_from(row.input_row)
             .map_err(|_| Error::Execution("DSpark output row exceeds usize".into()))?;
         let slot = row_top1.get_mut(row_index).ok_or_else(|| {
             Error::Execution(format!(
-                "DSpark output row {row_index} exceeds verification row count {verified_rows}"
+                "DSpark output row {row_index} exceeds verification row count {expected_rows}"
             ))
         })?;
         if slot.is_some() {
@@ -726,14 +1271,29 @@ fn verify_causal_prefix(output: &ExecutionOutput, proposal: &[u32]) -> Result<Ca
             Error::Execution(format!("DSpark output row {row_index} has empty top-k"))
         })?);
     }
-    let row_top1 = row_top1
+    row_top1
         .into_iter()
         .enumerate()
         .map(|(row, top1)| {
             top1.ok_or_else(|| Error::Execution(format!("DSpark output is missing row {row}")))
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect()
+}
 
+/// The local target input is `[anchor, draft × V]`. Local output row `i`
+/// verifies draft `i`, while local row `V` is the exact correction/bonus
+/// frontier.
+fn verify_causal_slice(row_top1: &[TokenLogit], proposal: &[u32]) -> Result<CausalVerification> {
+    let verified_rows = proposal
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| Error::Execution("DSpark output row count overflow".into()))?;
+    if row_top1.len() != verified_rows {
+        return Err(Error::Execution(format!(
+            "DSpark causal slice has {} rows, expected {verified_rows}",
+            row_top1.len()
+        )));
+    }
     let mut accepted = 0usize;
     while accepted < proposal.len() && row_top1[accepted].token_id == proposal[accepted] {
         accepted += 1;
@@ -741,8 +1301,17 @@ fn verify_causal_prefix(output: &ExecutionOutput, proposal: &[u32]) -> Result<Ca
     Ok(CausalVerification {
         accepted,
         target_next: row_top1[accepted],
-        target_row_top1: row_top1,
+        target_row_top1: row_top1.to_vec(),
     })
+}
+
+fn verify_causal_prefix(output: &ExecutionOutput, proposal: &[u32]) -> Result<CausalVerification> {
+    let verified_rows = proposal
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| Error::Execution("DSpark output row count overflow".into()))?;
+    let row_top1 = collect_global_row_top1(output, verified_rows)?;
+    verify_causal_slice(&row_top1, proposal)
 }
 
 #[cfg(test)]
@@ -813,6 +1382,64 @@ mod tests {
             LogitsOutput::TopK(vec![logit(11, 1.0)]),
         )]);
         assert!(verify_causal_prefix(&output, &[10, 11]).is_err());
+    }
+
+    #[test]
+    fn ragged_global_spans_verify_distinct_local_acceptance() {
+        let output = ExecutionOutput::new(vec![
+            LogitsRow::new(6, LogitsOutput::TopK(vec![logit(42, 1.0)])),
+            LogitsRow::new(1, LogitsOutput::TopK(vec![logit(99, 1.0)])),
+            LogitsRow::new(4, LogitsOutput::TopK(vec![logit(21, 1.0)])),
+            LogitsRow::new(0, LogitsOutput::TopK(vec![logit(10, 1.0)])),
+            LogitsRow::new(5, LogitsOutput::TopK(vec![logit(22, 1.0)])),
+            LogitsRow::new(2, LogitsOutput::TopK(vec![logit(77, 1.0)])),
+            LogitsRow::new(3, LogitsOutput::TopK(vec![logit(20, 1.0)])),
+        ]);
+        let global = collect_global_row_top1(&output, 7).unwrap();
+        let first = verify_causal_slice(&global[0..3], &[10, 11]).unwrap();
+        let second = verify_causal_slice(&global[3..7], &[20, 21, 22]).unwrap();
+
+        assert_eq!(first.accepted, 1);
+        assert_eq!(first.target_next.token_id, 99);
+        assert_eq!(first.target_row_top1.len(), 3);
+        assert_eq!(second.accepted, 3);
+        assert_eq!(second.target_next.token_id, 42);
+        assert_eq!(second.target_row_top1.len(), 4);
+    }
+
+    #[test]
+    fn global_row_collection_rejects_duplicate_missing_and_out_of_range_rows() {
+        let duplicate = ExecutionOutput::new(vec![
+            LogitsRow::new(0, LogitsOutput::TopK(vec![logit(10, 1.0)])),
+            LogitsRow::new(0, LogitsOutput::TopK(vec![logit(11, 1.0)])),
+        ]);
+        let missing = ExecutionOutput::new(vec![LogitsRow::new(
+            0,
+            LogitsOutput::TopK(vec![logit(10, 1.0)]),
+        )]);
+        let out_of_range = ExecutionOutput::new(vec![
+            LogitsRow::new(0, LogitsOutput::TopK(vec![logit(10, 1.0)])),
+            LogitsRow::new(2, LogitsOutput::TopK(vec![logit(11, 1.0)])),
+        ]);
+
+        assert!(
+            collect_global_row_top1(&duplicate, 2)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate row 0")
+        );
+        assert!(
+            collect_global_row_top1(&missing, 2)
+                .unwrap_err()
+                .to_string()
+                .contains("missing row 1")
+        );
+        assert!(
+            collect_global_row_top1(&out_of_range, 2)
+                .unwrap_err()
+                .to_string()
+                .contains("row 2 exceeds")
+        );
     }
 
     #[test]

@@ -201,6 +201,59 @@ fn bf16_block_gemv_matches_legacy_for_real_dsv4_shapes() {
     unsafe_code,
     reason = "validated smoke test buffers and launch geometry require raw kernel launches"
 )]
+fn bf16_rows_cover_batch_and_channel_tails() {
+    if !has_cuda() {
+        eprintln!("SKIP: no CUDA");
+        return;
+    }
+
+    const ROWS: usize = 9;
+    const N: usize = 65;
+    const K: usize = 16;
+
+    let (_ctx, module, stream) = assert_cuda(load(), "load CUDA kernel module");
+    let input = assert_cuda(
+        DeviceBuffer::from_host(&stream, &vec![1.0f32; ROWS * K]),
+        "upload BF16 rows input",
+    );
+    let weight = assert_cuda(
+        DeviceBuffer::from_host(&stream, &vec![0x80u8, 0x3f].repeat(N * K)),
+        "upload BF16 rows weight",
+    );
+    let mut output = assert_cuda(
+        DeviceBuffer::<f32>::zeroed(&stream, ROWS * N),
+        "allocate BF16 rows output",
+    );
+
+    assert_cuda(
+        unsafe {
+            module.gemm_bf16_bytes(
+                &stream,
+                LaunchConfig {
+                    grid_dim: (N.div_ceil(64) as u32, ROWS.div_ceil(8) as u32, 1),
+                    block_dim: (128, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                &input,
+                &weight,
+                &mut output,
+                ROWS as u32,
+                N as u32,
+                K as u32,
+            )
+        },
+        "launch BF16 rows tail smoke",
+    );
+
+    let output = assert_cuda(output.to_host_vec(&stream), "download BF16 rows output");
+    assert_eq!(output, vec![16.0f32; ROWS * N]);
+}
+
+#[test]
+#[allow(
+    unsafe_code,
+    reason = "validated smoke test buffers and launch geometry require raw kernel launches"
+)]
 fn artifact_format_kernels_produce_expected_tiny_outputs() {
     if !has_cuda() {
         eprintln!("SKIP: no CUDA");

@@ -834,6 +834,23 @@ pub struct CudaCompressorRecurrentState {
     shape: CompressorRecurrentShape,
 }
 
+pub struct CudaCompressorRecurrentCheckpointSlab {
+    kv_states: CudaF32Buffer,
+    score_states: CudaF32Buffer,
+    shape: CompressorRecurrentShape,
+    slots: usize,
+}
+
+impl CudaCompressorRecurrentCheckpointSlab {
+    pub fn supports(&self, state: &CudaCompressorRecurrentState, slots: usize) -> bool {
+        self.shape == state.shape && self.slots >= slots
+    }
+
+    pub fn slots(&self) -> usize {
+        self.slots
+    }
+}
+
 impl CudaCompressorRecurrentState {
     pub fn ratio(&self) -> usize {
         self.shape.ratio
@@ -4554,6 +4571,76 @@ impl CudaArtifactOperatorContext {
         self.artifact_linear_rows_device(handle, &scratch.cloned.buffer, rows, &mut output.buffer)
     }
 
+    #[cfg(feature = "cutlass")]
+    pub fn artifact_fp8_projection_cutlass_rows_from_device_into_with_scratch(
+        &self,
+        handle: &CudaArtifactLinearHandle,
+        input: &CudaF32Buffer,
+        rows: usize,
+        output: &mut CudaF32Buffer,
+        scratch: &mut CudaArtifactLinearWorkspace,
+    ) -> Result<()> {
+        let CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
+            out_features,
+            in_features,
+            block_m: 128,
+            block_k: 128,
+        } = handle.shape
+        else {
+            return Err(Error::Internal(
+                "SM121 FP8 projection requires an FP8 K128 artifact".into(),
+            ));
+        };
+        let input_len = rows
+            .checked_mul(in_features)
+            .ok_or_else(|| Error::Internal("SM121 FP8 projection input size overflow".into()))?;
+        let output_len = rows
+            .checked_mul(out_features)
+            .ok_or_else(|| Error::Internal("SM121 FP8 projection output size overflow".into()))?;
+        if rows == 0 || input.len != input_len || output.len != output_len {
+            return Err(Error::Internal(format!(
+                "SM121 FP8 projection shape mismatch: rows={rows} input={}/{} output={}/{}",
+                input.len, input_len, output.len, output_len
+            )));
+        }
+        let scale_cols = in_features / ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE;
+        let scale_len = rows
+            .checked_mul(scale_cols)
+            .ok_or_else(|| Error::Internal("SM121 FP8 projection scale size overflow".into()))?;
+        if input_len > scratch.value_capacity || scale_len > scratch.scale_capacity {
+            return Err(Error::Internal(format!(
+                "SM121 FP8 projection scratch too small: packed={input_len}/{} scales={scale_len}/{}",
+                scratch.value_capacity, scratch.scale_capacity
+            )));
+        }
+        let weight_scales = handle
+            .scale
+            .as_ref()
+            .ok_or_else(|| Error::Internal("SM121 FP8 projection scales are missing".into()))?;
+        self.pack_fp8_rows_from_f32_preallocated(
+            &input.buffer,
+            rows,
+            in_features,
+            &mut scratch.x_packed,
+            scratch.value_capacity,
+            &mut scratch.x_scales,
+            scratch.scale_capacity,
+        )?;
+        crate::cutlass::fp8_projection(
+            &self.stream,
+            &scratch.x_packed,
+            &scratch.x_scales,
+            &handle.weight,
+            weight_scales,
+            &mut output.buffer,
+            rows,
+            out_features,
+            in_features,
+        )?;
+        self.record_kernel_launch();
+        Ok(())
+    }
+
     pub fn prepare_fp8_activation_from_device<'a>(
         &self,
         input: &CudaF32Buffer,
@@ -5207,7 +5294,8 @@ impl CudaArtifactOperatorContext {
         })
     }
 
-    /// One-launch grouped output-A -> BF16 latent -> output-B MLA transaction.
+    /// Grouped output-A -> BF16 latent -> output-B MLA transaction. Single-row
+    /// execution uses three ordered kernels; wider inputs use one cooperative kernel.
     #[cfg(feature = "cutlass")]
     #[allow(clippy::too_many_arguments)]
     pub fn artifact_mla_output_into(
@@ -5286,6 +5374,10 @@ impl CudaArtifactOperatorContext {
             hidden_size,
         )?;
         self.record_kernel_launch();
+        if rows == 1 {
+            self.record_kernel_launch();
+            self.record_kernel_launch();
+        }
         Ok(())
     }
 
@@ -6035,6 +6127,105 @@ impl CudaArtifactOperatorContext {
         };
         self.reset_compressor_recurrent_state(&mut state)?;
         Ok(state)
+    }
+
+    pub fn clone_compressor_recurrent_state(
+        &self,
+        source: &CudaCompressorRecurrentState,
+    ) -> Result<CudaCompressorRecurrentState> {
+        source.shape.validate()?;
+        Ok(CudaCompressorRecurrentState {
+            kv_state: self.clone_f32_buffer(&source.kv_state)?,
+            score_state: self.clone_f32_buffer(&source.score_state)?,
+            shape: source.shape,
+        })
+    }
+
+    pub fn create_compressor_recurrent_checkpoint_slab(
+        &self,
+        source: &CudaCompressorRecurrentState,
+        slots: usize,
+    ) -> Result<CudaCompressorRecurrentCheckpointSlab> {
+        source.shape.validate()?;
+        if slots == 0 {
+            return Err(Error::Internal(
+                "compressor recurrent checkpoint slab requires at least one slot".into(),
+            ));
+        }
+        let state_elements = source.shape.state_elements()?;
+        let slab_elements = state_elements.checked_mul(slots).ok_or_else(|| {
+            Error::Internal("compressor recurrent checkpoint slab size overflow".into())
+        })?;
+        Ok(CudaCompressorRecurrentCheckpointSlab {
+            kv_states: self.zero_f32_buffer(slab_elements)?,
+            score_states: self.zero_f32_buffer(slab_elements)?,
+            shape: source.shape,
+            slots,
+        })
+    }
+
+    pub fn capture_compressor_recurrent_checkpoint(
+        &self,
+        source: &CudaCompressorRecurrentState,
+        checkpoints: &mut CudaCompressorRecurrentCheckpointSlab,
+        slot: usize,
+    ) -> Result<()> {
+        if checkpoints.shape != source.shape || slot >= checkpoints.slots {
+            return Err(Error::Internal(format!(
+                "compressor recurrent checkpoint capture mismatch: slot={slot} capacity={} source={:?} slab={:?}",
+                checkpoints.slots, source.shape, checkpoints.shape
+            )));
+        }
+        let state_elements = source.shape.state_elements()?;
+        let offset = slot.checked_mul(state_elements).ok_or_else(|| {
+            Error::Internal("compressor recurrent checkpoint offset overflow".into())
+        })?;
+        self.copy_f32_range(
+            &source.kv_state,
+            0,
+            &mut checkpoints.kv_states,
+            offset,
+            state_elements,
+        )?;
+        self.copy_f32_range(
+            &source.score_state,
+            0,
+            &mut checkpoints.score_states,
+            offset,
+            state_elements,
+        )
+    }
+
+    pub fn restore_compressor_recurrent_checkpoint(
+        &self,
+        checkpoints: &CudaCompressorRecurrentCheckpointSlab,
+        slot: usize,
+        destination: &mut CudaCompressorRecurrentState,
+    ) -> Result<()> {
+        if checkpoints.shape != destination.shape || slot >= checkpoints.slots {
+            return Err(Error::Internal(format!(
+                "compressor recurrent checkpoint restore mismatch: slot={slot} capacity={} destination={:?} slab={:?}",
+                checkpoints.slots, destination.shape, checkpoints.shape
+            )));
+        }
+        let state_elements = destination.shape.state_elements()?;
+        let offset = slot.checked_mul(state_elements).ok_or_else(|| {
+            Error::Internal("compressor recurrent checkpoint offset overflow".into())
+        })?;
+        self.copy_f32_range(
+            &checkpoints.kv_states,
+            offset,
+            &mut destination.kv_state,
+            0,
+            state_elements,
+        )?;
+        self.copy_f32_range(
+            &checkpoints.score_states,
+            offset,
+            &mut destination.score_state,
+            0,
+            state_elements,
+        )
     }
 
     pub fn reset_compressor_recurrent_state(
@@ -9597,11 +9788,11 @@ impl CudaArtifactOperatorContext {
                         &self.stream,
                         LaunchConfig {
                             grid_dim: (
-                                out_features.div_ceil(16) as u32,
+                                out_features.div_ceil(64) as u32,
                                 rows.div_ceil(8) as u32,
                                 1,
                             ),
-                            block_dim: (32, 1, 1),
+                            block_dim: (128, 1, 1),
                             shared_mem_bytes: 0,
                         },
                         input,

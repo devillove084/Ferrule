@@ -42,7 +42,8 @@ inline constexpr std::uint32_t kMaxRows = 65535u * kMmaRows;
 //     -> output_f32 [rows, hidden_size]
 //
 // The caller-owned latent tensor is both the numerical BF16 boundary and the
-// warmed cross-grid scratch. The provider issues one cooperative launch and no
+// warmed cross-kernel scratch. The provider uses a three-phase same-stream path
+// for one row and one cooperative launch for wider inputs. Neither path uses a
 // host-side GEMM, allocation, synchronization, or fallback.
 struct Args {
   std::uint32_t args_version;
@@ -436,8 +437,8 @@ __device__ __forceinline__ void output_b_task(
              channel_base, lane, accumulator, false);
 }
 
-__global__ __launch_bounds__(kThreads, 1) void kernel(Args args,
-                                                      Binding binding) {
+__global__ __launch_bounds__(kThreads, 1) void cooperative_kernel(
+    Args args, Binding binding) {
   extern __shared__ __align__(16) std::uint8_t storage[];
   auto *stages = reinterpret_cast<WarpStage *>(storage);
   const std::uint32_t warp = threadIdx.x / kWarpSize;
@@ -487,6 +488,49 @@ __global__ __launch_bounds__(kThreads, 1) void kernel(Args args,
   }
 }
 
+__global__ __launch_bounds__(kThreads, 1) void output_a_single_row_kernel(
+    Args args, Binding binding) {
+  extern __shared__ __align__(16) std::uint8_t storage[];
+  auto *stages = reinterpret_cast<WarpStage *>(storage);
+  const std::uint32_t warp = threadIdx.x / kWarpSize;
+  const std::uint32_t lane = threadIdx.x & (kWarpSize - 1u);
+  const std::uint32_t global_warp = blockIdx.x * kWarps + warp;
+  const std::uint32_t warp_stride = gridDim.x * kWarps;
+  const std::uint32_t tasks =
+      (args.latent_size + kMmaColumns - 1u) / kMmaColumns;
+  for (std::uint32_t task = global_warp; task < tasks;
+       task += warp_stride) {
+    output_a_task(args, binding, stages[warp], 0u, task * kMmaColumns,
+                  lane);
+  }
+}
+
+__global__ __launch_bounds__(kWarpSize, 1) void pack_latent_single_row_kernel(
+    Args args, Binding binding) {
+  const std::uint32_t task = blockIdx.x;
+  const std::uint32_t tasks = args.latent_size / 128u;
+  if (task < tasks) {
+    pack_latent_task(args, binding, 0u, task, threadIdx.x);
+  }
+}
+
+__global__ __launch_bounds__(kThreads, 1) void output_b_single_row_kernel(
+    Args args, Binding binding) {
+  extern __shared__ __align__(16) std::uint8_t storage[];
+  auto *stages = reinterpret_cast<WarpStage *>(storage);
+  const std::uint32_t warp = threadIdx.x / kWarpSize;
+  const std::uint32_t lane = threadIdx.x & (kWarpSize - 1u);
+  const std::uint32_t global_warp = blockIdx.x * kWarps + warp;
+  const std::uint32_t warp_stride = gridDim.x * kWarps;
+  const std::uint32_t tasks =
+      (args.hidden_size + kMmaColumns - 1u) / kMmaColumns;
+  for (std::uint32_t task = global_warp; task < tasks;
+       task += warp_stride) {
+    output_b_task(args, binding, stages[warp], 0u, task * kMmaColumns,
+                  lane);
+  }
+}
+
 } // namespace detail
 
 inline Status validate(const Args *args) {
@@ -527,17 +571,6 @@ inline Status launch(const Args *args) {
   if (validation != Status::kSuccess) {
     return validation;
   }
-  const std::uint32_t row_tiles =
-      (args->rows + kMmaRows - 1u) / kMmaRows;
-  const std::uint32_t output_a_tasks =
-      row_tiles * ((args->latent_size + kMmaColumns - 1u) / kMmaColumns);
-  const std::uint32_t pack_tasks =
-      args->rows * (args->latent_size / 128u);
-  const std::uint32_t output_b_tasks =
-      row_tiles * ((args->hidden_size + kMmaColumns - 1u) / kMmaColumns);
-  const std::uint32_t warp_tasks = max(output_a_tasks, max(pack_tasks, output_b_tasks));
-  const std::uint32_t blocks =
-      min(kGb10CooperativeBlocks, (warp_tasks + kWarps - 1u) / kWarps);
   const auto stream =
       reinterpret_cast<cudaStream_t>(static_cast<std::uintptr_t>(args->stream));
   const Binding binding{
@@ -558,12 +591,55 @@ inline Status launch(const Args *args) {
           static_cast<std::uintptr_t>(args->latent_ue8m0)),
       reinterpret_cast<float *>(static_cast<std::uintptr_t>(args->output_f32)),
   };
+
+  if (args->rows == 1u) {
+    const std::uint32_t output_a_tasks =
+        (args->latent_size + kMmaColumns - 1u) / kMmaColumns;
+    const std::uint32_t output_a_blocks =
+        (output_a_tasks + kWarps - 1u) / kWarps;
+    detail::output_a_single_row_kernel
+        <<<output_a_blocks, kThreads, required_shared_storage_bytes(), stream>>>(
+            *args, binding);
+    if (cudaGetLastError() != cudaSuccess) {
+      return Status::kLaunchFailed;
+    }
+
+    const std::uint32_t pack_blocks = args->latent_size / 128u;
+    detail::pack_latent_single_row_kernel
+        <<<pack_blocks, kWarpSize, 0u, stream>>>(*args, binding);
+    if (cudaGetLastError() != cudaSuccess) {
+      return Status::kLaunchFailed;
+    }
+
+    const std::uint32_t output_b_tasks =
+        (args->hidden_size + kMmaColumns - 1u) / kMmaColumns;
+    const std::uint32_t output_b_blocks =
+        (output_b_tasks + kWarps - 1u) / kWarps;
+    detail::output_b_single_row_kernel
+        <<<output_b_blocks, kThreads, required_shared_storage_bytes(), stream>>>(
+            *args, binding);
+    return cudaGetLastError() == cudaSuccess ? Status::kSuccess
+                                             : Status::kLaunchFailed;
+  }
+
+  const std::uint32_t row_tiles =
+      (args->rows + kMmaRows - 1u) / kMmaRows;
+  const std::uint32_t output_a_tasks =
+      row_tiles * ((args->latent_size + kMmaColumns - 1u) / kMmaColumns);
+  const std::uint32_t pack_tasks =
+      args->rows * (args->latent_size / 128u);
+  const std::uint32_t output_b_tasks =
+      row_tiles * ((args->hidden_size + kMmaColumns - 1u) / kMmaColumns);
+  const std::uint32_t warp_tasks =
+      max(output_a_tasks, max(pack_tasks, output_b_tasks));
+  const std::uint32_t blocks =
+      min(kGb10CooperativeBlocks, (warp_tasks + kWarps - 1u) / kWarps);
   void *kernel_args[] = {const_cast<Args *>(args),
                          const_cast<Binding *>(&binding)};
   const cudaError_t status = cudaLaunchCooperativeKernel(
-      reinterpret_cast<void *>(detail::kernel), dim3(blocks, 1u, 1u),
-      dim3(kThreads, 1u, 1u), kernel_args, required_shared_storage_bytes(),
-      stream);
+      reinterpret_cast<void *>(detail::cooperative_kernel),
+      dim3(blocks, 1u, 1u), dim3(kThreads, 1u, 1u), kernel_args,
+      required_shared_storage_bytes(), stream);
   return status == cudaSuccess ? Status::kSuccess : Status::kLaunchFailed;
 }
 

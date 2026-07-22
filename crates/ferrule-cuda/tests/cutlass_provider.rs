@@ -34,6 +34,12 @@ fn sm121_plan_selects_only_published_semantic_bundles() {
         WeightLayout::Fp8E4m3BlockScaled,
     ));
     layer.add_linear_bundle(LinearBundleRequirement::new(
+        KernelOperation::MlaQueryB,
+        1024,
+        [32768],
+        WeightLayout::Fp8E4m3BlockScaled,
+    ));
+    layer.add_linear_bundle(LinearBundleRequirement::new(
         KernelOperation::MainCompressorProjection,
         4096,
         [1024, 1024],
@@ -54,6 +60,13 @@ fn sm121_plan_selects_only_published_semantic_bundles() {
     assert_eq!(launch.kernel.provider, KernelProviderId::CutlassCubin);
     assert_eq!(launch.kernel.variant, 0);
     assert!(launch.is_capture_safe());
+
+    let query_b = plan.layers[0]
+        .operation(KernelOperation::MlaQueryB)
+        .expect("SM121 QueryB launch");
+    assert_eq!(query_b.kernel.provider, KernelProviderId::CutlassCubin);
+    assert_eq!(query_b.kernel.variant, 0);
+    assert!(query_b.is_capture_safe());
 
     let compressor = plan.layers[0]
         .operation(KernelOperation::MainCompressorProjection)
@@ -101,7 +114,7 @@ fn sm121_manifest_contains_no_compatibility_provider() {
     assert_eq!(manifest.abi_version, cutlass::CUTLASS_ABI_VERSION);
     assert_eq!(manifest.cutlass_version, 461);
     assert_eq!(manifest.target_sm, 121);
-    assert_eq!(manifest.kernel_count, 9);
+    assert_eq!(manifest.kernel_count, 10);
     assert!(manifest.supports(CutlassKernelId::Fp8QueryAKvSm121));
     assert!(manifest.supports(CutlassKernelId::Bf16CompressorSm121));
     assert!(manifest.supports(CutlassKernelId::HcProducerSm121));
@@ -111,6 +124,174 @@ fn sm121_manifest_contains_no_compatibility_provider() {
     assert!(manifest.supports(CutlassKernelId::DsparkMainProjectNormSm121));
     assert!(manifest.supports(CutlassKernelId::DsparkHybridMlaAttentionSm121));
     assert!(manifest.supports(CutlassKernelId::DsparkProposalHeadSm121));
+    assert!(manifest.supports(CutlassKernelId::Fp8ProjectionSm121));
+}
+
+#[test]
+fn sm121_mla_output_single_row_matches_cooperative_path_bitwise() {
+    let context = CudaContext::new(0).expect("CUDA context");
+    context.bind_to_thread().expect("bind CUDA context");
+    let stream = context.new_stream().expect("create CUDA stream");
+
+    const SINGLE_ROWS: usize = 1;
+    const COOPERATIVE_ROWS: usize = 2;
+    const GROUPS: usize = 2;
+    const GROUP_INPUT: usize = 256;
+    const CONTEXT: usize = GROUPS * GROUP_INPUT;
+    const RANK: usize = 128;
+    const LATENT: usize = GROUPS * RANK;
+    const HIDDEN: usize = 192;
+
+    let context_row = (0..CONTEXT)
+        .map(|index| ((index % 8) + 1) as f32 * 0.125)
+        .collect::<Vec<_>>();
+    let mut cooperative_context_host = context_row.clone();
+    cooperative_context_host.extend_from_slice(&context_row);
+    let output_a_weight_host = (0..LATENT * GROUP_INPUT)
+        .map(|index| if index % 3 == 0 { 0x30u8 } else { 0x38u8 })
+        .collect::<Vec<_>>();
+    let output_b_weight_host = (0..HIDDEN * LATENT)
+        .map(|index| if index % 5 == 0 { 0x30u8 } else { 0x38u8 })
+        .collect::<Vec<_>>();
+
+    let single_context =
+        DeviceBuffer::from_host(&stream, &context_row).expect("upload single-row MLA context");
+    let cooperative_context = DeviceBuffer::from_host(&stream, &cooperative_context_host)
+        .expect("upload cooperative MLA context");
+    let output_a_weight = DeviceBuffer::from_host(&stream, &output_a_weight_host)
+        .expect("upload MLA output-A weight");
+    let output_a_scales = DeviceBuffer::from_host(
+        &stream,
+        &vec![127u8; LATENT.div_ceil(128) * (GROUP_INPUT / 128)],
+    )
+    .expect("upload MLA output-A scales");
+    let output_b_weight = DeviceBuffer::from_host(&stream, &output_b_weight_host)
+        .expect("upload MLA output-B weight");
+    let output_b_scales =
+        DeviceBuffer::from_host(&stream, &vec![127u8; HIDDEN.div_ceil(128) * (LATENT / 128)])
+            .expect("upload MLA output-B scales");
+
+    let mut single_latent =
+        DeviceBuffer::<f32>::zeroed(&stream, SINGLE_ROWS * LATENT).expect("single-row latent");
+    let mut single_latent_fp8 =
+        DeviceBuffer::<u8>::zeroed(&stream, SINGLE_ROWS * LATENT).expect("single-row latent FP8");
+    let mut single_latent_scales =
+        DeviceBuffer::<u8>::zeroed(&stream, SINGLE_ROWS * (LATENT / 128))
+            .expect("single-row latent scales");
+
+    let mut single_output =
+        DeviceBuffer::<f32>::zeroed(&stream, SINGLE_ROWS * HIDDEN).expect("single-row output");
+    cutlass::mla_output(
+        &stream,
+        &single_context,
+        &output_a_weight,
+        &output_a_scales,
+        &output_b_weight,
+        &output_b_scales,
+        &mut single_latent,
+        &mut single_latent_fp8,
+        &mut single_latent_scales,
+        &mut single_output,
+        SINGLE_ROWS,
+        CONTEXT,
+        GROUPS,
+        GROUP_INPUT,
+        RANK,
+        LATENT,
+        HIDDEN,
+    )
+    .expect("single-row MLA split launch");
+
+    let mut cooperative_latent = DeviceBuffer::<f32>::zeroed(&stream, COOPERATIVE_ROWS * LATENT)
+        .expect("cooperative latent");
+    let mut cooperative_latent_fp8 = DeviceBuffer::<u8>::zeroed(&stream, COOPERATIVE_ROWS * LATENT)
+        .expect("cooperative latent FP8");
+    let mut cooperative_latent_scales =
+        DeviceBuffer::<u8>::zeroed(&stream, COOPERATIVE_ROWS * (LATENT / 128))
+            .expect("cooperative latent scales");
+
+    let mut cooperative_output = DeviceBuffer::<f32>::zeroed(&stream, COOPERATIVE_ROWS * HIDDEN)
+        .expect("cooperative output");
+    cutlass::mla_output(
+        &stream,
+        &cooperative_context,
+        &output_a_weight,
+        &output_a_scales,
+        &output_b_weight,
+        &output_b_scales,
+        &mut cooperative_latent,
+        &mut cooperative_latent_fp8,
+        &mut cooperative_latent_scales,
+        &mut cooperative_output,
+        COOPERATIVE_ROWS,
+        CONTEXT,
+        GROUPS,
+        GROUP_INPUT,
+        RANK,
+        LATENT,
+        HIDDEN,
+    )
+    .expect("cooperative MLA launch");
+
+    let single_latent = single_latent
+        .to_host_vec(&stream)
+        .expect("download single-row latent");
+    let cooperative_latent = cooperative_latent
+        .to_host_vec(&stream)
+        .expect("download cooperative latent");
+    assert_eq!(
+        single_latent
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+        cooperative_latent[..LATENT]
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        single_latent_fp8
+            .to_host_vec(&stream)
+            .expect("download single-row latent FP8"),
+        cooperative_latent_fp8
+            .to_host_vec(&stream)
+            .expect("download cooperative latent FP8")[..LATENT]
+    );
+    assert_eq!(
+        single_latent_scales
+            .to_host_vec(&stream)
+            .expect("download single-row latent scales"),
+        cooperative_latent_scales
+            .to_host_vec(&stream)
+            .expect("download cooperative latent scales")[..LATENT / 128]
+    );
+
+    let single_output = single_output
+        .to_host_vec(&stream)
+        .expect("download single-row MLA output");
+    let cooperative_output = cooperative_output
+        .to_host_vec(&stream)
+        .expect("download cooperative MLA output");
+    let single_output_bits = single_output
+        .iter()
+        .map(|value| value.to_bits())
+        .collect::<Vec<_>>();
+    assert!(single_output.iter().all(|value| value.is_finite()));
+    assert!(single_output.iter().any(|value| *value != 0.0));
+    assert_eq!(
+        single_output_bits,
+        cooperative_output[..HIDDEN]
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        single_output_bits,
+        cooperative_output[HIDDEN..]
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -817,6 +998,113 @@ fn sm121_linear_semantic_entry_supports_grid_derived_row_range() {
     {
         assert_eq!(value, 16.0);
     }
+}
+
+#[test]
+fn sm121_hc_single_row_tile_matches_tiled_path_bitwise() {
+    let context = CudaContext::new(0).expect("CUDA context");
+    context.bind_to_thread().expect("bind CUDA context");
+    let stream = context.default_stream();
+
+    const HC: usize = 4;
+    const HIDDEN: usize = 4096;
+    const MIX: usize = 24;
+    const SCALES: usize = HIDDEN / 128;
+    let state_row = (0..HC * HIDDEN)
+        .map(|index| ((index % 17) as f32 - 8.0) * 0.01)
+        .collect::<Vec<_>>();
+    let mut tiled_state_host = state_row.clone();
+    tiled_state_host.extend_from_slice(&state_row);
+    let function_host = (0..HC * HIDDEN * MIX)
+        .map(|index| ((index % 13) as f32 - 6.0) * 0.0001)
+        .collect::<Vec<_>>();
+    let rms_weight_host = (0..HIDDEN)
+        .map(|index| 1.0 + (index % 5) as f32 * 0.01)
+        .collect::<Vec<_>>();
+
+    let single_state =
+        DeviceBuffer::from_host(&stream, &state_row).expect("upload single-row HC state");
+    let tiled_state =
+        DeviceBuffer::from_host(&stream, &tiled_state_host).expect("upload tiled HC state");
+    let function = DeviceBuffer::from_host(&stream, &function_host).expect("upload HC function");
+    let hc_scale =
+        DeviceBuffer::from_host(&stream, &[0.7f32, -0.3, 0.2]).expect("upload HC scales");
+    let hc_base_host = (0..MIX)
+        .map(|index| (index as f32 - 12.0) * 0.001)
+        .collect::<Vec<_>>();
+    let hc_base = DeviceBuffer::from_host(&stream, &hc_base_host).expect("upload HC base");
+    let rms_weight = DeviceBuffer::from_host(&stream, &rms_weight_host).expect("upload RMS weight");
+
+    let run = |state: &DeviceBuffer<f32>, rows: usize| {
+        let mut hidden = DeviceBuffer::<f32>::zeroed(&stream, rows * HIDDEN).expect("HC hidden");
+        let mut normalized =
+            DeviceBuffer::<f32>::zeroed(&stream, rows * HIDDEN).expect("HC normalized");
+        let mut packed = DeviceBuffer::<u8>::zeroed(&stream, rows * HIDDEN).expect("HC packed");
+        let mut scales = DeviceBuffer::<u8>::zeroed(&stream, rows * SCALES).expect("HC scales");
+        let mut pre = DeviceBuffer::<f32>::zeroed(&stream, rows * HC).expect("HC pre");
+        let mut post = DeviceBuffer::<f32>::zeroed(&stream, rows * HC).expect("HC post");
+        let mut comb = DeviceBuffer::<f32>::zeroed(&stream, rows * HC * HC).expect("HC comb");
+        cutlass::hc_producer(
+            &stream,
+            state,
+            &function,
+            &hc_scale,
+            &hc_base,
+            &rms_weight,
+            &mut hidden,
+            &mut normalized,
+            &mut packed,
+            &mut scales,
+            &mut pre,
+            &mut post,
+            &mut comb,
+            rows,
+            HC,
+            HIDDEN,
+            20,
+            1.0e-6,
+            1.0e-6,
+            1.0e-6,
+        )
+        .expect("HC producer launch");
+        (
+            hidden.to_host_vec(&stream).expect("download HC hidden"),
+            normalized
+                .to_host_vec(&stream)
+                .expect("download HC normalized"),
+            packed.to_host_vec(&stream).expect("download HC packed"),
+            scales.to_host_vec(&stream).expect("download HC scales"),
+            pre.to_host_vec(&stream).expect("download HC pre"),
+            post.to_host_vec(&stream).expect("download HC post"),
+            comb.to_host_vec(&stream).expect("download HC comb"),
+        )
+    };
+    let single = run(&single_state, 1);
+    let tiled = run(&tiled_state, 2);
+
+    let assert_f32_rows = |label: &str, single: &[f32], tiled: &[f32], width: usize| {
+        let bits = |values: &[f32]| {
+            values
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(bits(single), bits(&tiled[..width]), "{label} single/tiled");
+        assert_eq!(
+            bits(&tiled[..width]),
+            bits(&tiled[width..]),
+            "{label} duplicate tiled rows"
+        );
+    };
+    assert_f32_rows("hidden", &single.0, &tiled.0, HIDDEN);
+    assert_f32_rows("normalized", &single.1, &tiled.1, HIDDEN);
+    assert_eq!(single.2, tiled.2[..HIDDEN]);
+    assert_eq!(tiled.2[..HIDDEN], tiled.2[HIDDEN..]);
+    assert_eq!(single.3, tiled.3[..SCALES]);
+    assert_eq!(tiled.3[..SCALES], tiled.3[SCALES..]);
+    assert_f32_rows("pre", &single.4, &tiled.4, HC);
+    assert_f32_rows("post", &single.5, &tiled.5, HC);
+    assert_f32_rows("comb", &single.6, &tiled.6, HC * HC);
 }
 
 #[test]

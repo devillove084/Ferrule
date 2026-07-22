@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define FERRULE_CUTLASS_ABI_VERSION 8u
+#define FERRULE_CUTLASS_ABI_VERSION 9u
 
 #ifndef FERRULE_CUTLASS_TARGET_SM
 #define FERRULE_CUTLASS_TARGET_SM 0u
@@ -22,6 +22,7 @@ extern "C" {
 #define FERRULE_CUTLASS_KERNEL_DSPARK_MAIN_PROJECT_NORM_SM121 7u
 #define FERRULE_CUTLASS_KERNEL_DSPARK_HYBRID_MLA_ATTENTION_SM121 8u
 #define FERRULE_CUTLASS_KERNEL_DSPARK_PROPOSAL_HEAD_SM121 9u
+#define FERRULE_CUTLASS_KERNEL_FP8_PROJECTION_SM121 10u
 #define FERRULE_CUTLASS_KERNEL_BIT(id) (1ull << ((id) - 1u))
 
 typedef enum FerruleCutlassStatus {
@@ -322,6 +323,10 @@ FerruleCutlassProviderManifest ferrule_cutlass_provider_manifest(void);
 int32_t ferrule_cutlass_fp8_query_a_kv_can_implement(
     const FerruleCutlassFp8QueryAKvArgs *args);
 int32_t ferrule_cutlass_fp8_query_a_kv_launch(
+    const FerruleCutlassFp8QueryAKvArgs *args);
+int32_t ferrule_cutlass_fp8_projection_can_implement(
+    const FerruleCutlassFp8QueryAKvArgs *args);
+int32_t ferrule_cutlass_fp8_projection_launch(
     const FerruleCutlassFp8QueryAKvArgs *args);
 int32_t ferrule_cutlass_bf16_compressor_can_implement(
     const FerruleCutlassBf16CompressorArgs *args);

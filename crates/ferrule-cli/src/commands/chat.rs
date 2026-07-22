@@ -231,6 +231,7 @@ fn run_deepseek_v4_greedy_chat_loop_lazy(
         ctx_size: generation.ctx_size,
         stop_at_eos: generation.stop_at_eos,
         append_eos_to_session: generation.append_eos_to_session,
+        dspark_confidence_threshold: 0.2,
         max_steps_per_run: generation
             .ctx_size
             .saturating_add(generation.max_new_tokens)

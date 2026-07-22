@@ -64,6 +64,7 @@ fn deepseek_v4_runs_latest_resident_runtime_driver_local() -> Result<()> {
             ctx_size: 4096,
             stop_at_eos: true,
             append_eos_to_session: true,
+            dspark_confidence_threshold: 0.2,
             max_steps_per_run: 4096 + 16,
         },
     )
@@ -202,12 +203,14 @@ fn deepseek_v4_native_packed_decode_batch2_and_batch4_are_exact_local() -> Resul
             max_decode_batch: 4,
             max_batch_tokens: 4096,
             allow_mixed_batches: true,
+            ..Default::default()
         },
         NonZeroU32::new(1).unwrap(),
         ResidentTopKDriverConfig {
             ctx_size: 4096,
             stop_at_eos: false,
             append_eos_to_session: false,
+            dspark_confidence_threshold: 0.2,
             max_steps_per_run: 4096,
         },
     )
@@ -367,12 +370,14 @@ fn deepseek_v4_native_ragged_prefill_and_mixed_are_exact_local() -> Result<()> {
             max_decode_batch: 2,
             max_batch_tokens: 4,
             allow_mixed_batches: true,
+            ..Default::default()
         },
         NonZeroU32::new(1).unwrap(),
         ResidentTopKDriverConfig {
             ctx_size: 4096,
             stop_at_eos: false,
             append_eos_to_session: false,
+            dspark_confidence_threshold: 0.2,
             max_steps_per_run: 32,
         },
     )
@@ -464,12 +469,14 @@ fn deepseek_v4_exact_prefix_fork_cow_matches_full_serial_local() -> Result<()> {
             max_decode_batch: 2,
             max_batch_tokens: 4096,
             allow_mixed_batches: true,
+            ..Default::default()
         },
         NonZeroU32::new(1).unwrap(),
         ResidentTopKDriverConfig {
             ctx_size: 4096,
             stop_at_eos: false,
             append_eos_to_session: false,
+            dspark_confidence_threshold: 0.2,
             max_steps_per_run: 32,
         },
     )

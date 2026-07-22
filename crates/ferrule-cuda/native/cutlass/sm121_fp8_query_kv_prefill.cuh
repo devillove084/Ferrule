@@ -111,23 +111,34 @@ constexpr std::uint32_t kStages = 2;
 // rejects SM120's .kind::f8f6f4 and block_scale encodings for sm_121a.
 using Fp8Mma = cute::SM89_16x8x32_F32E4M3E4M3F32_TN;
 
-struct alignas(16) StageStorage {
+template <bool DualProjection> struct alignas(16) StageStorage;
+
+template <> struct alignas(16) StageStorage<true> {
   // Each K32 sub-tile has the exact ldmatrix layout consumed by one MMA.
   alignas(16) std::uint8_t query_a_weight[kMmaKSteps][kTileN * kMmaK];
   alignas(16) std::uint8_t kv_weight[kMmaKSteps][kTileN * kMmaK];
   alignas(16) std::uint8_t activation[kMmaKSteps][kTileM * kMmaK];
 };
 
-struct alignas(16) SharedStorage {
-  StageStorage stage[kStages];
+template <> struct alignas(16) StageStorage<false> {
+  alignas(16) std::uint8_t query_a_weight[kMmaKSteps][kTileN * kMmaK];
+  alignas(16) std::uint8_t activation[kMmaKSteps][kTileM * kMmaK];
+};
+
+template <bool DualProjection> struct alignas(16) SharedStorage {
+  StageStorage<DualProjection> stage[kStages];
   volatile std::int32_t ready[kStages];
   volatile std::int32_t done[kStages];
 };
 
-static_assert(sizeof(StageStorage) == 5120,
-              "Unexpected per-stage shared-memory footprint");
-static_assert(sizeof(SharedStorage) == 10256,
-              "Unexpected kernel shared-memory footprint");
+static_assert(sizeof(StageStorage<true>) == 5120,
+              "Unexpected dual-projection stage footprint");
+static_assert(sizeof(SharedStorage<true>) == 10256,
+              "Unexpected dual-projection shared-memory footprint");
+static_assert(sizeof(StageStorage<false>) == 3072,
+              "Unexpected single-projection stage footprint");
+static_assert(sizeof(SharedStorage<false>) == 6160,
+              "Unexpected single-projection shared-memory footprint");
 
 template <class T>
 __device__ __forceinline__ T device_load(const T *pointer) {
@@ -210,7 +221,9 @@ __device__ __forceinline__ void mma(float (&accumulator)[4],
 }
 
 struct QueryAKvCollective {
-  __device__ static void producer(const Args &args, SharedStorage &shared,
+  template <bool DualProjection>
+  __device__ static void producer(const Args &args,
+                                  SharedStorage<DualProjection> &shared,
                                   std::uint32_t lane,
                                   std::uint32_t row_base,
                                   std::uint32_t channel_base) {
@@ -224,7 +237,7 @@ struct QueryAKvCollective {
                    static_cast<std::int32_t>(scale_block - kStages));
       }
 
-      StageStorage &stage = shared.stage[stage_index];
+      StageStorage<DualProjection> &stage = shared.stage[stage_index];
       const std::uint64_t k_base =
           static_cast<std::uint64_t>(scale_block) * kScaleK;
 
@@ -253,16 +266,18 @@ struct QueryAKvCollective {
           clear_16(query_destination);
         }
 
-        void *kv_destination =
-            stage.kv_weight[k_step] + local_channel * kMmaK +
-            k_half * 16u;
-        if (channel < args.n_kv) {
-          cp_async_16(kv_destination,
-                      args.kv_weight_fp8 +
-                          static_cast<std::uint64_t>(channel) * args.k +
-                          k_offset);
-        } else {
-          clear_16(kv_destination);
+        if constexpr (DualProjection) {
+          void *kv_destination =
+              stage.kv_weight[k_step] + local_channel * kMmaK +
+              k_half * 16u;
+          if (channel < args.n_kv) {
+            cp_async_16(kv_destination,
+                        args.kv_weight_fp8 +
+                            static_cast<std::uint64_t>(channel) * args.k +
+                            k_offset);
+          } else {
+            clear_16(kv_destination);
+          }
         }
       }
 
@@ -300,7 +315,9 @@ struct QueryAKvCollective {
     }
   }
 
-  __device__ static void consumer(const Args &args, SharedStorage &shared,
+  template <bool DualProjection>
+  __device__ static void consumer(const Args &args,
+                                  SharedStorage<DualProjection> &shared,
                                   std::uint32_t lane,
                                   std::uint32_t row_base,
                                   std::uint32_t channel_base) {
@@ -317,18 +334,20 @@ struct QueryAKvCollective {
 
       float query_a_block_accumulator[4] = {0.0f, 0.0f, 0.0f, 0.0f};
       float kv_block_accumulator[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-      const StageStorage &stage = shared.stage[stage_index];
+      const StageStorage<DualProjection> &stage = shared.stage[stage_index];
 #pragma unroll
       for (std::uint32_t k_step = 0; k_step < kMmaKSteps; ++k_step) {
         std::uint32_t query_a_fragment[4];
-        std::uint32_t kv_fragment[4];
         std::uint32_t activation_fragment[2];
         load_a_fragment(stage.query_a_weight[k_step], lane, query_a_fragment);
-        load_a_fragment(stage.kv_weight[k_step], lane, kv_fragment);
         load_b_fragment(stage.activation[k_step], lane, activation_fragment);
         mma(query_a_block_accumulator, query_a_fragment,
             activation_fragment);
-        mma(kv_block_accumulator, kv_fragment, activation_fragment);
+        if constexpr (DualProjection) {
+          std::uint32_t kv_fragment[4];
+          load_a_fragment(stage.kv_weight[k_step], lane, kv_fragment);
+          mma(kv_block_accumulator, kv_fragment, activation_fragment);
+        }
       }
 
       const float query_weight_scale =
@@ -338,13 +357,17 @@ struct QueryAKvCollective {
                         scale_columns +
                     scale_block])
               : 0.0f;
-      const float kv_weight_scale =
-          channel_base < args.n_kv
-              ? ue8m0_to_float(args.kv_weight_ue8m0[
-                    static_cast<std::uint64_t>(channel_base / 128u) *
-                        scale_columns +
-                    scale_block])
-              : 0.0f;
+      float kv_weight_scale = 0.0f;
+      if constexpr (DualProjection) {
+        kv_weight_scale =
+            channel_base < args.n_kv
+                ? ue8m0_to_float(args.kv_weight_ue8m0[
+                      static_cast<std::uint64_t>(channel_base / 128u) *
+                          scale_columns +
+                      scale_block])
+                : 0.0f;
+      }
+
       const std::uint32_t row_pair = lane & 3u;
 #pragma unroll
       for (std::uint32_t element = 0; element < 4u; ++element) {
@@ -358,8 +381,10 @@ struct QueryAKvCollective {
           query_a_accumulator[element] +=
               query_a_block_accumulator[element] * query_weight_scale *
               activation_scale;
-          kv_accumulator[element] += kv_block_accumulator[element] *
-                                     kv_weight_scale * activation_scale;
+          if constexpr (DualProjection) {
+            kv_accumulator[element] += kv_block_accumulator[element] *
+                                       kv_weight_scale * activation_scale;
+          }
         }
       }
 
@@ -383,9 +408,11 @@ struct QueryAKvCollective {
             static_cast<std::uint64_t>(row) * args.n_query_a + channel] =
             query_a_accumulator[element];
       }
-      if (row < args.m && channel < args.n_kv) {
-        args.kv_output_f32[static_cast<std::uint64_t>(row) * args.n_kv +
-                           channel] = kv_accumulator[element];
+      if constexpr (DualProjection) {
+        if (row < args.m && channel < args.n_kv) {
+          args.kv_output_f32[static_cast<std::uint64_t>(row) * args.n_kv +
+                             channel] = kv_accumulator[element];
+        }
       }
     }
   }
@@ -393,12 +420,12 @@ struct QueryAKvCollective {
 
 } // namespace detail
 
-// One CTA owns one 8x16 output tile for both projections. Warp 0 is the
-// double-buffered global-to-shared producer; warp 1 is the dual-accumulator
-// K128-scaled FP8 MMA consumer. The M dimension is part of the grid, so M=9
-// already launches two independently schedulable CTAs.
+// One CTA owns one 8x16 output tile. Warp 0 is the double-buffered
+// global-to-shared producer and warp 1 is the K128-scaled FP8 MMA consumer.
+// The specialization owns either one projection or the fused QueryA+KV pair.
+template <bool DualProjection>
 __global__ __launch_bounds__(detail::kThreads, 2) void kernel(Args args) {
-  __shared__ detail::SharedStorage shared;
+  __shared__ detail::SharedStorage<DualProjection> shared;
 
   const std::uint32_t warp = threadIdx.x >> 5;
   const std::uint32_t lane = threadIdx.x & 31u;
@@ -412,11 +439,11 @@ __global__ __launch_bounds__(detail::kThreads, 2) void kernel(Args args) {
   __syncthreads();
 
   if (warp == 0u) {
-    detail::QueryAKvCollective::producer(args, shared, lane, row_base,
-                                         channel_base);
+    detail::QueryAKvCollective::producer<DualProjection>(
+        args, shared, lane, row_base, channel_base);
   } else {
-    detail::QueryAKvCollective::consumer(args, shared, lane, row_base,
-                                         channel_base);
+    detail::QueryAKvCollective::consumer<DualProjection>(
+        args, shared, lane, row_base, channel_base);
   }
 }
 
@@ -431,7 +458,47 @@ inline cudaError_t launch(const Args &args, cudaStream_t stream) noexcept {
       1u + (max_n - 1u) / detail::kTileN;
   const dim3 grid(grid_n,
                   (args.m + detail::kTileM - 1u) / detail::kTileM, 1u);
-  kernel<<<grid, detail::kThreads, 0, stream>>>(args);
+  kernel<true><<<grid, detail::kThreads, 0, stream>>>(args);
+  return cudaPeekAtLastError();
+}
+
+inline ValidationResult validate_single(const Args &args) noexcept {
+  if (args.activation_fp8 == nullptr || args.activation_ue8m0 == nullptr ||
+      args.query_a_weight_fp8 == nullptr ||
+      args.query_a_weight_ue8m0 == nullptr ||
+      args.query_a_output_f32 == nullptr) {
+    return ValidationResult::kNullPointer;
+  }
+  if (!is_aligned_16(args.activation_fp8) ||
+      !is_aligned_16(args.activation_ue8m0) ||
+      !is_aligned_16(args.query_a_weight_fp8) ||
+      !is_aligned_16(args.query_a_weight_ue8m0) ||
+      !is_aligned_16(args.query_a_output_f32)) {
+    return ValidationResult::kMisalignedPointer;
+  }
+  if (args.m == 0u || args.m > kMaxRows) {
+    return ValidationResult::kUnsupportedM;
+  }
+  if (args.n_query_a == 0u) {
+    return ValidationResult::kInvalidN;
+  }
+  if (args.k == 0u || (args.k & 127u) != 0u) {
+    return ValidationResult::kInvalidK;
+  }
+  return ValidationResult::kSuccess;
+}
+
+inline cudaError_t launch_single(const Args &args,
+                                 cudaStream_t stream) noexcept {
+  if (validate_single(args) != ValidationResult::kSuccess) {
+    return cudaErrorInvalidValue;
+  }
+
+  const std::uint32_t grid_n =
+      1u + (args.n_query_a - 1u) / detail::kTileN;
+  const dim3 grid(grid_n,
+                  (args.m + detail::kTileM - 1u) / detail::kTileM, 1u);
+  kernel<false><<<grid, detail::kThreads, 0, stream>>>(args);
   return cudaPeekAtLastError();
 }
 

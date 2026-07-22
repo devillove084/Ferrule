@@ -237,11 +237,11 @@ dsv4-resident-roofline model='models/DeepSeek-V4-Flash-DSpark' prompt='Hello' la
     mkdir -p target/bench/s0-profile
     FERRULE_EXPERT_IO_BACKEND=io_uring FERRULE_EXPERT_IO_QUEUE_DEPTH=2 FERRULE_EXPERT_IO_BUFFER_MIB=16 FERRULE_EXPERT_IO_SLABS=16 ./target/release/ferrule bench-interactive {{ model }} -p "{{ prompt }}" --max-layers {{ layers }} --output-head-chunk-rows {{ chunk }} --moe-prefetch-experts 0 --moe-hotset-experts {{ hotset }} --resident-replay --json {{ args }} | tee {{ output }}
 
-# Gate F1 roofline: target-only 1-sequence × V-row verification at V=2/4,
+# Gate F1 roofline: target-only 1-sequence × V-row verification at V=1/2/4,
 # checkpoint dspark_block_size+1, and experimental V=8, including the output head.
 dsv4-verify-width-sweep model='models/DeepSeek-V4-Flash-DSpark' prompt='Explain Ferrule runtime architecture in one concise paragraph.' layers='43' hotset='48' chunk='4096' iterations='3' output='target/bench/gate-f1/verify-width-sweep.json' *args='': cutlass-setup
     @if [ "{{ _use-cuda }}" != "1" ]; then echo "error: CUDA run requires cargo-oxide and an NVIDIA GPU (oxide={{ _has-oxide }}, gpu={{ _has-gpu }})"; exit 1; fi
-    @echo "→ DSV4 Gate F1 target-only roofline via CUDA + CUTLASS (arch: {{ _cuda-arch }}, checkpoint width + V=2/4/8 probes, iterations: {{ iterations }})"
+    @echo "→ DSV4 Gate F1 target-only roofline via CUDA + CUTLASS (arch: {{ _cuda-arch }}, checkpoint width + V=1/2/4/8 probes, iterations: {{ iterations }})"
     cargo oxide build --features cuda,cutlass --arch {{ _cuda-arch }} -- --release -p ferrule-cli
     mkdir -p target/bench/gate-f1
     FERRULE_EXPERT_IO_BACKEND=io_uring FERRULE_EXPERT_IO_QUEUE_DEPTH=2 FERRULE_EXPERT_IO_BUFFER_MIB=16 FERRULE_EXPERT_IO_SLABS=16 ./target/release/ferrule bench-interactive {{ model }} -p "{{ prompt }}" --max-layers {{ layers }} --output-head-chunk-rows {{ chunk }} --moe-prefetch-experts 0 --moe-hotset-experts {{ hotset }} --verify-width-sweep --verify-iterations {{ iterations }} --json {{ args }} | tee {{ output }}

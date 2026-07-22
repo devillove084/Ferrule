@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 
@@ -19,6 +19,7 @@ pub struct PersistentArenaPoolStats {
 ///
 /// A lease mutably borrows the pool, making the single-active-lease rule explicit
 /// in the type system. Dropping the lease returns its arena to the same exact key.
+/// An owned checkout instead permits independent pool access until explicitly checked in.
 #[derive(Debug)]
 pub struct PersistentArenaPool<K, A> {
     available: HashMap<K, A>,
@@ -64,6 +65,24 @@ where
         self.available.clear();
     }
 
+    fn take_or_build<F>(&mut self, key: K, build: F) -> Result<(K, A, bool)>
+    where
+        F: FnOnce() -> Result<A>,
+    {
+        match self.available.remove_entry(&key) {
+            Some((key, arena)) => {
+                self.stats.hits = self.stats.hits.saturating_add(1);
+                Ok((key, arena, true))
+            }
+            None => {
+                self.stats.misses = self.stats.misses.saturating_add(1);
+                let arena = build()?;
+                self.stats.installs = self.stats.installs.saturating_add(1);
+                Ok((key, arena, false))
+            }
+        }
+    }
+
     /// Acquires an exact bucket, building it only when that exact key is absent.
     ///
     /// A failed build is returned directly and never publishes a pool entry.
@@ -71,18 +90,7 @@ where
     where
         F: FnOnce() -> Result<A>,
     {
-        let (key, arena, reused) = match self.available.remove_entry(&key) {
-            Some((key, arena)) => {
-                self.stats.hits = self.stats.hits.saturating_add(1);
-                (key, arena, true)
-            }
-            None => {
-                self.stats.misses = self.stats.misses.saturating_add(1);
-                let arena = build()?;
-                self.stats.installs = self.stats.installs.saturating_add(1);
-                (key, arena, false)
-            }
-        };
+        let (key, arena, reused) = self.take_or_build(key, build)?;
         Ok(ArenaLease {
             available: &mut self.available,
             key: Some(key),
@@ -91,12 +99,88 @@ where
         })
     }
 
+    /// Checks out an owned exact bucket without borrowing the pool after return.
+    ///
+    /// A failed build is returned directly and never publishes a pool entry.
+    pub fn checkout<F>(&mut self, key: K, build: F) -> Result<OwnedArenaCheckout<K, A>>
+    where
+        F: FnOnce() -> Result<A>,
+    {
+        let (key, arena, reused) = self.take_or_build(key, build)?;
+        Ok(OwnedArenaCheckout { key, arena, reused })
+    }
+
+    /// Returns an owned checkout to its exact-key bucket.
+    ///
+    /// If that key is already available, the available arena is preserved and an error
+    /// is returned instead of silently replacing it.
+    pub fn checkin(&mut self, checkout: OwnedArenaCheckout<K, A>) -> Result<()> {
+        let OwnedArenaCheckout {
+            key,
+            arena,
+            reused: _,
+        } = checkout;
+        match self.available.entry(key) {
+            Entry::Vacant(entry) => {
+                entry.insert(arena);
+                Ok(())
+            }
+            Entry::Occupied(_) => Err(ferrule_common::Error::Execution(
+                "arena checkout exact-key bucket is already available".into(),
+            )),
+        }
+    }
+
     /// Alias emphasizing that allocation/build may fail.
     pub fn try_lease<F>(&mut self, key: K, build: F) -> Result<ArenaLease<'_, K, A>>
     where
         F: FnOnce() -> Result<A>,
     {
         self.acquire(key, build)
+    }
+}
+
+/// Owned checkout of one persistent arena bucket.
+///
+/// Unlike [`ArenaLease`], this value does not borrow its originating pool. It must be
+/// passed to [`PersistentArenaPool::checkin`] to make its arena available for reuse.
+#[derive(Debug)]
+pub struct OwnedArenaCheckout<K, A> {
+    key: K,
+    arena: A,
+    reused: bool,
+}
+
+impl<K, A> OwnedArenaCheckout<K, A> {
+    pub fn key(&self) -> &K {
+        &self.key
+    }
+
+    /// Whether this checkout reused an existing exact-key bucket.
+    pub const fn reused(&self) -> bool {
+        self.reused
+    }
+
+    pub fn get(&self) -> &A {
+        &self.arena
+    }
+
+    pub fn get_mut(&mut self) -> &mut A {
+        &mut self.arena
+    }
+}
+
+impl<K, A> Deref for OwnedArenaCheckout<K, A> {
+    type Target = A;
+
+    fn deref(&self) -> &Self::Target {
+        self.get()
+    }
+}
+
+impl<K, A> DerefMut for OwnedArenaCheckout<K, A> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.get_mut()
     }
 }
 
@@ -284,5 +368,91 @@ mod tests {
             })
             .unwrap();
         assert_eq!(*lease, 41);
+    }
+
+    #[test]
+    fn owned_checkout_does_not_borrow_pool() {
+        let checkout = pool_checkout_for_independent_access();
+        assert_eq!(checkout.key(), &'A');
+        assert_eq!(*checkout, 10);
+    }
+
+    fn pool_checkout_for_independent_access() -> OwnedArenaCheckout<char, u32> {
+        let mut pool = PersistentArenaPool::<char, u32>::new();
+        let checkout_a = pool.checkout('A', || Ok(10)).unwrap();
+
+        assert!(pool.is_empty());
+        let checkout_b = pool.checkout('B', || Ok(20)).unwrap();
+        pool.checkin(checkout_b).unwrap();
+        assert!(pool.contains(&'B'));
+        assert_eq!(
+            pool.stats(),
+            PersistentArenaPoolStats {
+                hits: 0,
+                misses: 2,
+                installs: 2,
+            }
+        );
+
+        checkout_a
+    }
+
+    #[test]
+    fn owned_checkout_mutation_survives_checkin_and_recheckout() {
+        let mut pool = PersistentArenaPool::<u32, Vec<u32>>::new();
+        let mut checkout = pool.checkout(7, || Ok(vec![1])).unwrap();
+        assert_eq!(checkout.key(), &7);
+        assert!(!checkout.reused());
+        assert_eq!(checkout.get(), &[1]);
+        checkout.get_mut().push(2);
+        checkout.push(3);
+        pool.checkin(checkout).unwrap();
+
+        let checkout = pool
+            .checkout(7, || -> Result<Vec<u32>> {
+                panic!("checked-in exact bucket should be reused")
+            })
+            .unwrap();
+        assert!(checkout.reused());
+        assert_eq!(&*checkout, &[1, 2, 3]);
+        assert_eq!(
+            pool.stats(),
+            PersistentArenaPoolStats {
+                hits: 1,
+                misses: 1,
+                installs: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn owned_checkouts_for_different_exact_keys_coexist() {
+        let mut pool = PersistentArenaPool::<char, u32>::new();
+        let checkout_a = pool.checkout('A', || Ok(10)).unwrap();
+        let checkout_b = pool.checkout('B', || Ok(20)).unwrap();
+
+        pool.checkin(checkout_a).unwrap();
+        pool.checkin(checkout_b).unwrap();
+        assert_eq!(pool.len(), 2);
+        assert!(pool.contains(&'A'));
+        assert!(pool.contains(&'B'));
+    }
+
+    #[test]
+    fn duplicate_key_checkin_is_rejected_without_replacement() {
+        let mut pool = PersistentArenaPool::<u32, u32>::new();
+        let first = pool.checkout(5, || Ok(10)).unwrap();
+        let second = pool.checkout(5, || Ok(20)).unwrap();
+        pool.checkin(second).unwrap();
+
+        let result = pool.checkin(first);
+        assert!(matches!(result, Err(Error::Execution(_))));
+
+        let checkout = pool
+            .checkout(5, || -> Result<u32> {
+                panic!("duplicate checkin must preserve the available bucket")
+            })
+            .unwrap();
+        assert_eq!(*checkout, 20);
     }
 }

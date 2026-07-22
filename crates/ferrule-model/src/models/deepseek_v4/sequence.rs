@@ -4,6 +4,8 @@
 //! [`crate::execution::SequenceStateCore`]. This object composes that core with
 //! DeepSeek-V4-specific layer and predictor state.
 
+#[cfg(feature = "cuda")]
+use ferrule_common::Error;
 use ferrule_common::Result;
 
 use crate::execution::{SequenceStateCore, SequenceStepBinding};
@@ -20,6 +22,27 @@ pub(crate) struct DeepSeekV4PagedKvBinding {
     pub(crate) sequence_len: usize,
     pub(crate) page_tokens: usize,
     pub(crate) layer_count: usize,
+}
+
+#[cfg(feature = "cuda")]
+impl DeepSeekV4PagedKvBinding {
+    pub(crate) fn retain_sequence_len(&mut self, sequence_len: usize) -> Result<()> {
+        if self.page_tokens == 0 {
+            return Err(Error::Model(
+                "DeepSeek-V4 paged binding has zero page size".into(),
+            ));
+        }
+        let retained_blocks = sequence_len.div_ceil(self.page_tokens);
+        if retained_blocks > self.physical_block_slots.len() {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 paged binding prefix needs {retained_blocks} blocks but only {} are available",
+                self.physical_block_slots.len()
+            )));
+        }
+        self.physical_block_slots.truncate(retained_blocks);
+        self.sequence_len = sequence_len;
+        Ok(())
+    }
 }
 
 #[cfg(feature = "cuda")]

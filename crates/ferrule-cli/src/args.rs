@@ -93,7 +93,7 @@ pub(crate) enum Command {
         /// capture, resident-with-head, and resident-body-only target passes.
         #[arg(long)]
         resident_replay: bool,
-        /// Run the resident target-verification roofline at V=2/4, the
+        /// Run the resident target-verification roofline at V=1/2/4, the
         /// checkpoint-reference width (`dspark_block_size + 1`), and experimental V=8.
         #[arg(long)]
         verify_width_sweep: bool,
@@ -262,6 +262,12 @@ pub(crate) struct ServeArgs {
     /// Maximum simultaneously resident requests.
     #[arg(long = "max-active-sequences", default_value_t = 4)]
     pub(crate) max_active_sequences: usize,
+    /// Desired number of ready decode requests before dispatching a cohort.
+    #[arg(long = "decode-cohort-target", default_value_t = 4)]
+    pub(crate) decode_cohort_target: usize,
+    /// Maximum prefill decisions used to form a decode cohort before forcing progress.
+    #[arg(long = "decode-cohort-max-deferrals", default_value_t = 3)]
+    pub(crate) decode_cohort_max_deferrals: usize,
     /// Maximum prompt tokens processed by one prefill chunk.
     #[arg(long = "prefill-chunk-size", default_value_t = 512)]
     pub(crate) prefill_chunk_size: usize,

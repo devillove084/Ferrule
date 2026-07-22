@@ -373,6 +373,32 @@ fn fp8_mma_rows_match_allocation_free_matvec() {
         .download_f32_buffer(&rows_output)
         .expect("rows download");
 
+    #[cfg(feature = "cutlass")]
+    {
+        let mut native_output = ops.zero_f32_buffer(ROWS * OUT).expect("native output");
+        let mut workspace = ops
+            .artifact_linear_workspace(ROWS, K)
+            .expect("native workspace");
+        ops.artifact_fp8_projection_cutlass_rows_from_device_into_with_scratch(
+            &handle,
+            &input_dev,
+            ROWS,
+            &mut native_output,
+            &mut workspace,
+        )
+        .expect("native rows MMA");
+        let native_output = ops
+            .download_f32_buffer(&native_output)
+            .expect("native rows download");
+        for (index, (&rust, &native)) in rows_output.iter().zip(&native_output).enumerate() {
+            assert_eq!(
+                rust.to_bits(),
+                native.to_bits(),
+                "Rust/native rows mismatch at {index}: rust={rust} native={native}"
+            );
+        }
+    }
+
     for row in 0..ROWS {
         let matvec = ops
             .artifact_linear_matvec(&handle, &input[row * K..(row + 1) * K])

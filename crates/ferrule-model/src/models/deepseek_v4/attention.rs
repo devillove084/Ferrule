@@ -18,8 +18,8 @@ use super::config::{DeepSeekV4AttentionConfig, DeepSeekV4RopeParams};
 use super::cuda_cache::DeepSeekV4DsparkAttentionBuffers;
 #[cfg(feature = "cuda")]
 use super::cuda_cache::{
-    DeepSeekV4CudaCompressor, DeepSeekV4CudaLayerNorm, DeepSeekV4CudaLinear,
-    DeepSeekV4CudaSequenceKvState,
+    DeepSeekV4CudaAttentionPrefixMetadata, DeepSeekV4CudaCompressor, DeepSeekV4CudaLayerNorm,
+    DeepSeekV4CudaLinear, DeepSeekV4CudaOperatorCache, DeepSeekV4CudaSequenceKvState,
 };
 use super::helpers::{
     apply_rotary_tail, apply_rotary_tail_scaled, bind_aux_linear, check_len, check_linear,
@@ -954,6 +954,7 @@ impl DeepSeekV4Attention {
                     cfg.index_head_dim
                 )));
             }
+            cache.record_indexer_compressed_rows(indexer_values.len() / cfg.index_head_dim)?;
             cache.indexer_compressed.extend_from_slice(&indexer_values);
         }
 
@@ -987,6 +988,7 @@ impl DeepSeekV4Attention {
                 cfg.head_dim
             )));
         }
+        cache.record_compressed_rows(main_compressed.len() / cfg.head_dim)?;
         cache.compressed.extend_from_slice(&main_compressed);
 
         let stage_start = operators.profile_start();
@@ -1583,10 +1585,7 @@ impl DeepSeekV4Attention {
                 DeepSeekV4AttentionProfileStage::IndexerCompress,
                 stage_start,
             )?;
-            cache.indexer_compressed.resize(
-                cache.indexer_compressed.len() + indexer_groups * cfg.index_head_dim,
-                0.0,
-            );
+            cache.record_indexer_compressed_rows(indexer_groups)?;
             let indexer_rows = arena
                 .indexer_compressor
                 .as_ref()
@@ -1646,9 +1645,7 @@ impl DeepSeekV4Attention {
             DeepSeekV4AttentionProfileStage::MainCompress,
             stage_start,
         )?;
-        cache
-            .compressed
-            .resize(cache.compressed.len() + main_groups * cfg.head_dim, 0.0);
+        cache.record_compressed_rows(main_groups)?;
 
         let stage_start = operators.profile_start();
         operators.cuda_mut()?.paged_write_rows(
@@ -2682,9 +2679,7 @@ impl DeepSeekV4Attention {
                     operators.fail_compressor_transition_if_armed(true)?;
                     if new_indexer_kv {
                         let index = cache.indexer_compressed_len(cfg.index_head_dim);
-                        cache
-                            .indexer_compressed
-                            .resize(cache.indexer_compressed.len() + cfg.index_head_dim, 0.0);
+                        cache.record_indexer_compressed_rows(1)?;
                         indexer_positions[row] = i32::try_from(index).map_err(|_| {
                             Error::Model("packed indexer position exceeds i32 ABI".into())
                         })?;
@@ -2778,9 +2773,7 @@ impl DeepSeekV4Attention {
                 operators.fail_compressor_transition_if_armed(false)?;
                 if new_main_kv {
                     let index = cache.compressed_len();
-                    cache
-                        .compressed
-                        .resize(cache.compressed.len() + cfg.head_dim, 0.0);
+                    cache.record_compressed_rows(1)?;
                     main_positions[row] = i32::try_from(index).map_err(|_| {
                         Error::Model("packed main compressed position exceeds i32 ABI".into())
                     })?;
@@ -2819,6 +2812,16 @@ impl DeepSeekV4Attention {
                 if compressed.indexer.is_some() {
                     compressed_lens[row] = cache.indexer_compressed_len(cfg.index_head_dim);
                 }
+                operators
+                    .cuda_mut()?
+                    .capture_provisional_prefix_checkpoint(
+                        self.layer,
+                        row,
+                        cache.window.cuda_state(),
+                        cache.window.len,
+                        cache.compressed_rows,
+                        cache.indexer_compressed_rows,
+                    )?;
             }
 
             {
@@ -3038,9 +3041,7 @@ impl DeepSeekV4Attention {
             operators.fail_compressor_transition_if_armed(true)?;
             if new_indexer_kv {
                 let compressed_index = cache.indexer_compressed_len(cfg.index_head_dim);
-                cache
-                    .indexer_compressed
-                    .resize(cache.indexer_compressed.len() + cfg.index_head_dim, 0.0);
+                cache.record_indexer_compressed_rows(1)?;
                 operators.cuda_mut()?.paged_write_rows(
                     2,
                     self.layer,
@@ -3095,9 +3096,7 @@ impl DeepSeekV4Attention {
         )?;
         operators.fail_compressor_transition_if_armed(false)?;
         if new_main_kv {
-            cache
-                .compressed
-                .resize(cache.compressed.len() + cfg.head_dim, 0.0);
+            cache.record_compressed_rows(1)?;
         }
 
         // Combined KV cache window append already done above (device path).
@@ -3905,6 +3904,8 @@ pub struct DeepSeekV4AttentionCache {
     pub window: DeepSeekV4WindowKvCache,
     pub compressed: Vec<f32>,
     pub indexer_compressed: Vec<f32>,
+    compressed_rows: usize,
+    indexer_compressed_rows: usize,
     main_compressor: Option<DeepSeekV4CompressorState>,
     indexer_compressor: Option<DeepSeekV4CompressorState>,
 }
@@ -3916,6 +3917,8 @@ impl DeepSeekV4AttentionCache {
             window: DeepSeekV4WindowKvCache::new(cfg.window_size, cfg.head_dim),
             compressed: Vec::new(),
             indexer_compressed: Vec::new(),
+            compressed_rows: 0,
+            indexer_compressed_rows: 0,
             main_compressor: compressed.then(|| {
                 DeepSeekV4CompressorState::new(
                     cfg.compress_ratio,
@@ -3938,20 +3941,19 @@ impl DeepSeekV4AttentionCache {
     }
 
     pub fn compressed_len(&self) -> usize {
-        self.compressed.len() / self.window.head_dim
+        self.compressed_rows
     }
 
-    pub fn indexer_compressed_len(&self, index_head_dim: usize) -> usize {
-        self.indexer_compressed
-            .len()
-            .checked_div(index_head_dim)
-            .unwrap_or(0)
+    pub fn indexer_compressed_len(&self, _index_head_dim: usize) -> usize {
+        self.indexer_compressed_rows
     }
 
     pub fn reset_sequence(&mut self) {
         self.window.clear();
         self.compressed.clear();
         self.indexer_compressed.clear();
+        self.compressed_rows = 0;
+        self.indexer_compressed_rows = 0;
         if let Some(state) = &mut self.main_compressor {
             state.reset();
         }
@@ -3963,16 +3965,93 @@ impl DeepSeekV4AttentionCache {
     /// Fork continuation metadata for a runtime-shared paged prefix.
     ///
     /// Historical window/compressed/indexer values are deliberately absent: the
-    /// runtime page table is authoritative and the next packed batch rebuilds its
-    /// paged binding.
+    /// runtime page table owns those bytes. Logical lengths and recurrent
+    /// continuation remain model-owned and must survive an exact fork.
+    #[cfg(any(feature = "cuda", test))]
     pub(crate) fn fork_paged_prefix_metadata(&self) -> Self {
+        let mut window =
+            DeepSeekV4WindowKvCache::new(self.window.window_size, self.window.head_dim);
+        window.len = self.window.len;
         Self {
-            window: DeepSeekV4WindowKvCache::new(self.window.window_size, self.window.head_dim),
+            window,
             compressed: Vec::new(),
             indexer_compressed: Vec::new(),
+            compressed_rows: self.compressed_rows,
+            indexer_compressed_rows: self.indexer_compressed_rows,
             main_compressor: self.main_compressor.clone(),
             indexer_compressor: self.indexer_compressor.clone(),
         }
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn fork_paged_prefix_metadata_with_cuda(
+        &self,
+        cuda: &DeepSeekV4CudaOperatorCache,
+    ) -> Result<Self> {
+        let mut fork = self.fork_paged_prefix_metadata();
+        fork.window.cuda = cuda.fork_sequence_kv_state(&self.window.cuda)?;
+        Ok(fork)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn restore_provisional_prefix_metadata(
+        &mut self,
+        metadata: DeepSeekV4CudaAttentionPrefixMetadata,
+    ) -> Result<()> {
+        if metadata.window_len > self.window.window_size {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 restored window length {} exceeds capacity {}",
+                metadata.window_len, self.window.window_size
+            )));
+        }
+        self.window.len = metadata.window_len;
+        self.compressed_rows = metadata.compressed_rows;
+        self.indexer_compressed_rows = metadata.indexer_compressed_rows;
+        self.compressed.clear();
+        self.indexer_compressed.clear();
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn restore_uncompressed_prefix_from(
+        &mut self,
+        source: &Self,
+        retained_rows: usize,
+    ) -> Result<()> {
+        if self.main_compressor.is_some()
+            || self.indexer_compressor.is_some()
+            || source.main_compressor.is_some()
+            || source.indexer_compressor.is_some()
+        {
+            return Err(Error::Model(
+                "DeepSeek-V4 uncompressed prefix restore received compressor state".into(),
+            ));
+        }
+        self.window.len = self
+            .window
+            .window_size
+            .min(source.window.len.saturating_add(retained_rows));
+        self.compressed_rows = source.compressed_rows;
+        self.indexer_compressed_rows = source.indexer_compressed_rows;
+        Ok(())
+    }
+
+    fn record_compressed_rows(&mut self, rows: usize) -> Result<()> {
+        self.compressed_rows = self
+            .compressed_rows
+            .checked_add(rows)
+            .ok_or_else(|| Error::Model("DeepSeek-V4 compressed KV row count overflow".into()))?;
+        Ok(())
+    }
+
+    fn record_indexer_compressed_rows(&mut self, rows: usize) -> Result<()> {
+        self.indexer_compressed_rows =
+            self.indexer_compressed_rows
+                .checked_add(rows)
+                .ok_or_else(|| {
+                    Error::Model("DeepSeek-V4 indexer compressed KV row count overflow".into())
+                })?;
+        Ok(())
     }
 
     fn append_compressed(&mut self, value: &[f32]) -> Result<()> {
@@ -3983,6 +4062,7 @@ impl DeepSeekV4AttentionCache {
                 value.len()
             )));
         }
+        self.record_compressed_rows(1)?;
         self.compressed.extend_from_slice(value);
         Ok(())
     }
@@ -3994,6 +4074,7 @@ impl DeepSeekV4AttentionCache {
                 value.len()
             )));
         }
+        self.record_indexer_compressed_rows(1)?;
         self.indexer_compressed.extend_from_slice(value);
         Ok(())
     }
@@ -4862,6 +4943,11 @@ impl DeepSeekV4WindowKvCache {
     }
 
     #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_state(&self) -> &DeepSeekV4CudaSequenceKvState {
+        &self.cuda
+    }
+
+    #[cfg(feature = "cuda")]
     pub(crate) fn cuda_state_mut(&mut self) -> &mut DeepSeekV4CudaSequenceKvState {
         &mut self.cuda
     }
@@ -4901,13 +4987,20 @@ mod tests {
         source.window.append(0, &[1.0, 2.0])?;
         source.compressed.extend_from_slice(&[3.0, 4.0]);
         source.indexer_compressed.extend_from_slice(&[5.0, 6.0]);
+        source.compressed_rows = 1;
+        source.indexer_compressed_rows = 1;
         source.main_compressor.as_mut().unwrap().kv_state[0] = 7.0;
 
         let fork = source.fork_paged_prefix_metadata();
-        assert!(fork.window.is_empty());
+        assert_eq!(fork.window.len(), source.window.len());
         assert!(fork.window.values_full().iter().all(|value| *value == 0.0));
         assert!(fork.compressed.is_empty());
         assert!(fork.indexer_compressed.is_empty());
+        assert_eq!(fork.compressed_len(), source.compressed_len());
+        assert_eq!(
+            fork.indexer_compressed_len(2),
+            source.indexer_compressed_len(2)
+        );
         assert_eq!(fork.main_compressor, source.main_compressor);
         assert_eq!(
             fork.main_compressor.as_ref().unwrap().kv_state[0],

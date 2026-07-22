@@ -450,10 +450,10 @@ impl ExecutionBatch {
         }
 
         if self.intent == ExecutionIntent::ProvisionalVerification
-            && (self.mode != ForwardMode::Prefill || self.sequences.len() != 1)
+            && self.mode != ForwardMode::Prefill
         {
             return Err(execution_error(
-                "provisional verification currently requires exactly one prefill-phase sequence",
+                "provisional verification requires prefill-phase sequences",
             ));
         }
 
@@ -1229,22 +1229,25 @@ mod tests {
     fn provisional_verification_is_explicit_and_shape_distinct_from_decode() {
         let batch = ExecutionBatch::new(
             ForwardMode::Prefill,
-            vec![10, 11, 12, 13],
-            vec![8, 9, 10, 11],
-            vec![None; 4],
-            vec![LogitsRequest::TopK(nz(1)); 4],
-            vec![sequence(0, ForwardPhase::Prefill, 0..4, 8, 12)],
+            vec![10, 11, 12, 20, 21],
+            vec![8, 9, 10, 17, 18],
+            vec![None; 5],
+            vec![LogitsRequest::TopK(nz(1)); 5],
+            vec![
+                sequence(0, ForwardPhase::Prefill, 0..3, 8, 11),
+                sequence(1, ForwardPhase::Prefill, 3..5, 17, 19),
+            ],
             vec![],
         )
         .with_intent(ExecutionIntent::ProvisionalVerification);
-        batch.validate(1, &capabilities()).unwrap();
+        batch.validate(2, &capabilities()).unwrap();
         assert_eq!(
             batch.shape().unwrap(),
             ExecutionShape {
                 intent: ExecutionIntent::ProvisionalVerification,
-                sequence_count: 1,
-                total_rows: 4,
-                max_query_tokens: 4,
+                sequence_count: 2,
+                total_rows: 5,
+                max_query_tokens: 3,
                 decode_rows: 0,
             }
         );

@@ -1,6 +1,6 @@
 //! DeepSeek-V4 runner: ModelRunner implementation.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 #[cfg(any(feature = "cuda", test))]
 use std::ops::Range;
 use std::path::Path;
@@ -28,7 +28,8 @@ use crate::runner::{
 use ferrule_common::execution::{ExecutionBatch, ForwardMode, ForwardPhase};
 #[cfg(feature = "cuda")]
 use ferrule_common::execution::{
-    ExecutionOutput, LogitsOutput, LogitsRequest, LogitsRow, TokenLogit as ExecutionTokenLogit,
+    ExecutionIntent, ExecutionOutput, LogitsOutput, LogitsRequest, LogitsRow,
+    TokenLogit as ExecutionTokenLogit,
 };
 use ferrule_common::expert_residency::{ExpertResidencyControl, ExpertResidencyRequirements};
 use ferrule_common::{Error, Result};
@@ -157,6 +158,8 @@ pub struct DeepSeekV4Runner {
     sequence: DeepSeekV4SequenceExecutionState,
     prefill_stats: DeepSeekV4PrefillRuntimeStats,
     output_profile: DeepSeekV4OutputProfileStats,
+    expert_access_trace_enabled: bool,
+    expert_access_trace: VecDeque<ExpertBatchAccessEvent>,
     expert_reader: ExpertStreamingReader,
     expert_executor: CpuReferenceExpertExecutor,
     shutdown: bool,
@@ -589,6 +592,10 @@ impl DeepSeekV4Runner {
         };
         #[cfg(not(feature = "cuda"))]
         let expert_reader = ExpertStreamingReader::from_env(expert_reader_max_tensor_bytes)?;
+        let expert_access_trace_enabled = matches!(
+            std::env::var("FERRULE_DSV4_EXPERT_ACCESS_TRACE").as_deref(),
+            Ok("1" | "true" | "yes")
+        );
         Ok(Self {
             plan,
             operators,
@@ -605,6 +612,8 @@ impl DeepSeekV4Runner {
             sequence,
             prefill_stats: DeepSeekV4PrefillRuntimeStats::default(),
             output_profile: DeepSeekV4OutputProfileStats::default(),
+            expert_access_trace_enabled,
+            expert_access_trace: VecDeque::new(),
             expert_reader,
             expert_executor: CpuReferenceExpertExecutor::new(swiglu_limit)
                 .with_activation_quantization(deepseek_v4_linear_activation_quantization()),
@@ -742,13 +751,14 @@ impl DeepSeekV4Runner {
                     self.plan.resources().mtp_layer_experts().len()
                 )));
             }
+            let mut proposal_moe_access_events = Vec::with_capacity(mtp.layers.len());
             for stage in 0..mtp.layers.len() {
                 let layer = &mtp.layers[stage].transformer;
                 let prepared = &self.plan.resources().mtp_layer_experts()[stage];
                 let residency = self.expert_residency.as_deref_mut().ok_or_else(|| {
                     Error::Execution("runtime expert residency controller is not installed".into())
                 })?;
-                layer.dspark_proposal_block_device_hc_device(
+                let layer_events = layer.dspark_proposal_block_device_hc_device(
                     stage,
                     sequence_tokens,
                     residency,
@@ -762,6 +772,8 @@ impl DeepSeekV4Runner {
                     &mut self.operators,
                     &mut proposal.attention,
                 )?;
+                proposal_moe_access_events
+                    .extend(layer_events.into_iter().map(|attributed| attributed.event));
                 if let Some(snapshot) = debug_snapshot.as_mut() {
                     snapshot.stage_hc_states.push(
                         self.operators
@@ -810,6 +822,9 @@ impl DeepSeekV4Runner {
                             moe_output: cuda.download_f32_debug_snapshot(buffers.moe_output)?,
                         });
                 }
+            }
+            for event in &proposal_moe_access_events {
+                self.record_expert_access_trace(event);
             }
             self.operators
                 .cuda_mut()?
@@ -1025,12 +1040,13 @@ impl DeepSeekV4Runner {
     /// Fork the default runner sequence as a runtime-shared paged prefix.
     pub fn fork_sequence_state(&mut self) -> Result<DeepSeekV4SequenceExecutionState> {
         let position = self.sequence.position();
-        Self::fork_sequence_state_from_explicit(&self.sequence, position)
+        Self::fork_sequence_state_from_explicit(&self.sequence, position, &self.operators)
     }
 
     fn fork_sequence_state_from_explicit(
         source: &DeepSeekV4SequenceExecutionState,
         expected_position: usize,
+        operators: &DeepSeekV4OperatorContext,
     ) -> Result<DeepSeekV4SequenceExecutionState> {
         source.begin_step()?;
         if source.position() != expected_position {
@@ -1047,17 +1063,14 @@ impl DeepSeekV4Runner {
                     "DeepSeek-V4 paged fork layer metadata allocation failed: {error}"
                 ))
             })?;
-        layers.extend(
-            source
-                .layers
-                .iter()
-                .map(DeepSeekV4LayerState::fork_paged_prefix_metadata),
-        );
+        for layer in &source.layers {
+            layers.push(layer.fork_paged_prefix_metadata(operators)?);
+        }
         let dspark_stages = source
             .dspark_stages
             .iter()
-            .map(DeepSeekV4LayerState::fork_paged_prefix_metadata)
-            .collect();
+            .map(|stage| stage.fork_paged_prefix_metadata(operators))
+            .collect::<Result<Vec<_>>>()?;
         Ok(DeepSeekV4SequenceExecutionState {
             core: source.core.forked()?,
             layers,
@@ -1235,10 +1248,26 @@ impl DeepSeekV4Runner {
             ));
     }
 
+    fn record_expert_access_trace(&mut self, event: &ExpertBatchAccessEvent) {
+        const MAX_EXPERT_ACCESS_TRACE_EVENTS: usize = 16 * 1024;
+        if !self.expert_access_trace_enabled {
+            return;
+        }
+        if self.expert_access_trace.len() == MAX_EXPERT_ACCESS_TRACE_EVENTS {
+            self.expert_access_trace.pop_front();
+        }
+        self.expert_access_trace.push_back(event.clone());
+    }
+
     fn observe_pending_moe_access_events(&mut self) {
         for event in self.operators.drain_moe_access_events() {
+            self.record_expert_access_trace(&event);
             self.sequence.predictor.observe_batch(event);
         }
+    }
+
+    pub fn drain_expert_access_trace(&mut self) -> Vec<ExpertBatchAccessEvent> {
+        self.expert_access_trace.drain(..).collect()
     }
 
     fn discard_pending_moe_access_events(&mut self) {
@@ -1713,6 +1742,25 @@ impl DeepSeekV4Runner {
             );
         }
         let max_layers = self.plan.resources().prepare_options().max_layers;
+        if batch.intent() == ExecutionIntent::ProvisionalVerification {
+            let sequence_shapes = metadata
+                .sequences
+                .iter()
+                .map(|sequence| {
+                    (
+                        states[sequence.state_index].position(),
+                        sequence.query.len(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            self.operators
+                .cuda_mut()?
+                .begin_provisional_prefix_checkpoints(&sequence_shapes, max_layers)?;
+        } else {
+            self.operators
+                .cuda_mut()?
+                .disable_provisional_prefix_checkpoints();
+        }
         let hidden_size = self.plan.resources().model().config.hidden_size;
         let hc_row_size = hc_state.len() / rows;
 
@@ -1722,10 +1770,10 @@ impl DeepSeekV4Runner {
             ExecutionShapeKey::from_batch(batch)?,
             DeepSeekV4LayerArenaRowLayout::IndependentRows,
         );
-        let mut arena_lease = {
+        let mut arena_checkout = {
             let layers = self.plan.resources().layers();
             let operators = &mut self.operators;
-            self.layer_arena_pool.acquire(arena_key, || {
+            self.layer_arena_pool.checkout(arena_key, || {
                 DeepSeekV4LayerArenaVariants::try_build_for_packed_mode(layers, rows, operators)
             })?
         };
@@ -1781,7 +1829,7 @@ impl DeepSeekV4Runner {
                 .activate_paged_bindings_for_rows(&binding_refs, &metadata.row_to_sequence)?;
 
             for layer_idx in 0..max_layers {
-                let arena = arena_lease
+                let arena = arena_checkout
                     .get_mut()
                     .get_for_layer_mut(layer_idx)
                     .expect("pooled layer arena variants match prepared layers");
@@ -1924,7 +1972,7 @@ impl DeepSeekV4Runner {
             Ok(logits)
         })();
 
-        drop(arena_lease);
+        let arena_checkin = self.layer_arena_pool.checkin(arena_checkout);
         let _ = self.operators.cuda_mut()?.activate_paged_binding(None);
         self.restore_cuda_decode_buffers(decode_buffers);
         #[cfg(feature = "cutlass")]
@@ -1933,11 +1981,21 @@ impl DeepSeekV4Runner {
                 .cuda_mut()?
                 .restore_dspark_main_buffers(rows, dspark);
         }
-        let logits = match execution {
-            Ok(logits) => logits,
-            Err(error) => {
+        let logits = match (execution, arena_checkin) {
+            (Ok(logits), Ok(())) => logits,
+            (Err(error), Ok(())) => {
                 poison_packed_sequence_steps(states, metadata, &bindings);
                 return Err(error);
+            }
+            (Ok(_), Err(error)) => {
+                poison_packed_sequence_steps(states, metadata, &bindings);
+                return Err(error);
+            }
+            (Err(execution_error), Err(checkin_error)) => {
+                poison_packed_sequence_steps(states, metadata, &bindings);
+                return Err(Error::Internal(format!(
+                    "DeepSeek-V4 packed execution failed ({execution_error}); returning its owned arena also failed ({checkin_error})"
+                )));
             }
         };
 
@@ -1977,6 +2035,7 @@ impl DeepSeekV4Runner {
         }
         commit_packed_sequence_steps(states, metadata, bindings)?;
         for attributed in moe_access_events {
+            self.record_expert_access_trace(&attributed.event);
             let state_index = metadata.sequences[attributed.sequence_index].state_index;
             states[state_index]
                 .predictor
@@ -3509,6 +3568,154 @@ impl MultiSessionRunner for DeepSeekV4Runner {
         Ok(())
     }
 
+    fn retain_provisional_prefix(
+        &mut self,
+        source: &Self::SequenceState,
+        branch: &mut Self::SequenceState,
+        executed_rows: usize,
+        retained_rows: usize,
+    ) -> Result<bool> {
+        self.retain_provisional_prefixes(
+            std::slice::from_ref(source),
+            std::slice::from_mut(branch),
+            std::slice::from_ref(&executed_rows),
+            std::slice::from_ref(&retained_rows),
+        )
+    }
+
+    fn retain_provisional_prefixes(
+        &mut self,
+        sources: &[Self::SequenceState],
+        branches: &mut [Self::SequenceState],
+        executed_rows: &[usize],
+        retained_rows: &[usize],
+    ) -> Result<bool> {
+        #[cfg(not(feature = "cuda"))]
+        {
+            let _ = (sources, branches, executed_rows, retained_rows);
+            Ok(false)
+        }
+
+        #[cfg(feature = "cuda")]
+        {
+            if self.operators.backend() != ModelExecutionBackend::Cuda {
+                return Ok(false);
+            }
+            let sequence_count = sources.len();
+            if sequence_count == 0
+                || branches.len() != sequence_count
+                || executed_rows.len() != sequence_count
+                || retained_rows.len() != sequence_count
+            {
+                return Err(Error::Model(format!(
+                    "DeepSeek-V4 provisional cohort shape mismatch: sources={} branches={} executed={} retained={}",
+                    sequence_count,
+                    branches.len(),
+                    executed_rows.len(),
+                    retained_rows.len()
+                )));
+            }
+
+            for sequence_index in 0..sequence_count {
+                let source = &sources[sequence_index];
+                let branch = &branches[sequence_index];
+                let executed = executed_rows[sequence_index];
+                let retained = retained_rows[sequence_index];
+                if executed == 0 || retained == 0 || retained > executed {
+                    return Err(Error::Model(format!(
+                        "invalid DeepSeek-V4 retained prefix for sequence {sequence_index}: retained={retained} executed={executed}"
+                    )));
+                }
+                let expected_branch_position = source
+                    .position()
+                    .checked_add(executed)
+                    .ok_or_else(|| Error::Model("DeepSeek-V4 branch position overflow".into()))?;
+                if branch.position() != expected_branch_position
+                    || source.layers.len() != branch.layers.len()
+                    || source.dspark_stages.len() != branch.dspark_stages.len()
+                    || branch.paged_kv_binding.is_none()
+                {
+                    return Err(Error::Model(format!(
+                        "DeepSeek-V4 provisional branch mismatch for sequence {sequence_index}: source_position={} branch_position={} expected={} source_layers={} branch_layers={} source_stages={} branch_stages={} paged_binding={}",
+                        source.position(),
+                        branch.position(),
+                        expected_branch_position,
+                        source.layers.len(),
+                        branch.layers.len(),
+                        source.dspark_stages.len(),
+                        branch.dspark_stages.len(),
+                        branch.paged_kv_binding.is_some()
+                    )));
+                }
+                if retained < executed
+                    && !self.operators.cuda.as_ref().is_some_and(|cuda| {
+                        cuda.provisional_prefix_matches(
+                            sequence_index,
+                            source.position(),
+                            executed,
+                            branch.layers.len(),
+                        )
+                    })
+                {
+                    return Ok(false);
+                }
+            }
+
+            for sequence_index in 0..sequence_count {
+                let source = &sources[sequence_index];
+                let branch = &mut branches[sequence_index];
+                let executed = executed_rows[sequence_index];
+                let retained = retained_rows[sequence_index];
+                if retained == executed {
+                    continue;
+                }
+
+                for (layer, (source_state, state)) in
+                    source.layers.iter().zip(&mut branch.layers).enumerate()
+                {
+                    let metadata = self
+                        .operators
+                        .cuda_mut()?
+                        .restore_provisional_prefix_checkpoint(
+                            sequence_index,
+                            layer,
+                            retained,
+                            state.kv.window.cuda_state_mut(),
+                        )?;
+                    if let Some(metadata) = metadata {
+                        state.kv.restore_provisional_prefix_metadata(metadata)?;
+                    } else {
+                        state
+                            .kv
+                            .restore_uncompressed_prefix_from(&source_state.kv, retained)?;
+                    }
+                }
+                for (source_stage, branch_stage) in
+                    source.dspark_stages.iter().zip(&mut branch.dspark_stages)
+                {
+                    branch_stage
+                        .kv
+                        .restore_uncompressed_prefix_from(&source_stage.kv, retained)?;
+                }
+
+                let final_position = source
+                    .position()
+                    .checked_add(retained)
+                    .ok_or_else(|| Error::Model("DeepSeek-V4 retained position overflow".into()))?;
+                branch
+                    .paged_kv_binding
+                    .as_mut()
+                    .expect("validated provisional paged binding")
+                    .retain_sequence_len(final_position)?;
+                branch.predictor = source.predictor.clone();
+                branch.core.restore_from(&source.core);
+                let binding = branch.core.begin_step()?;
+                branch.core.commit_step(binding, retained)?;
+            }
+            Ok(true)
+        }
+    }
+
     fn execute_multi_session_batch(
         &mut self,
         states: &mut [Self::SequenceState],
@@ -3560,7 +3767,7 @@ impl MultiSessionRunner for DeepSeekV4Runner {
         source: &Self::SequenceState,
         expected_position: usize,
     ) -> Result<Self::SequenceState> {
-        Self::fork_sequence_state_from_explicit(source, expected_position)
+        Self::fork_sequence_state_from_explicit(source, expected_position, &self.operators)
     }
 
     fn reset_sequence_state(&mut self, state: &mut Self::SequenceState) -> Result<()> {

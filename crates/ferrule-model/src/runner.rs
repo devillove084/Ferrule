@@ -259,6 +259,52 @@ pub trait MultiSessionRunner: TopKModelRunner {
         Ok(())
     }
 
+    /// Retain an exact prefix of one provisional sequence.
+    ///
+    /// `Ok(true)` means `branch` is equivalent to executing only `retained_rows`
+    /// from `source` and the prepared backend reservation remains publishable.
+    /// `Ok(false)` must leave the branch unchanged so callers can use replay.
+    fn retain_provisional_prefix(
+        &mut self,
+        _source: &Self::SequenceState,
+        _branch: &mut Self::SequenceState,
+        _executed_rows: usize,
+        _retained_rows: usize,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Atomically retain independent exact prefixes for a provisional cohort.
+    ///
+    /// Full-width entries are already exact and require no restoration. For a
+    /// multi-sequence batch, `Ok(false)` must be returned before mutating any
+    /// branch. Backends that only support the scalar contract retain the existing
+    /// one-sequence behavior through this default implementation.
+    fn retain_provisional_prefixes(
+        &mut self,
+        sources: &[Self::SequenceState],
+        branches: &mut [Self::SequenceState],
+        executed_rows: &[usize],
+        retained_rows: &[usize],
+    ) -> Result<bool> {
+        if sources.len() != 1
+            || branches.len() != 1
+            || executed_rows.len() != 1
+            || retained_rows.len() != 1
+        {
+            return Ok(false);
+        }
+        if retained_rows[0] == executed_rows[0] {
+            return Ok(true);
+        }
+        self.retain_provisional_prefix(
+            &sources[0],
+            &mut branches[0],
+            executed_rows[0],
+            retained_rows[0],
+        )
+    }
+
     /// Execute a complete packed multi-session batch in one backend pipeline.
     ///
     /// Model families with native ragged/mixed execution override this method and

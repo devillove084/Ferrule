@@ -1472,11 +1472,19 @@ impl DeepSeekV4LayerState {
         self.kv.reset_sequence();
     }
 
-    pub(crate) fn fork_paged_prefix_metadata(&self) -> Self {
-        Self {
-            attention_config: self.attention_config,
-            kv: self.kv.fork_paged_prefix_metadata(),
+    pub(crate) fn fork_paged_prefix_metadata(
+        &self,
+        _operators: &DeepSeekV4OperatorContext,
+    ) -> Result<Self> {
+        #[cfg(feature = "cuda")]
+        if let Some(cuda) = _operators.cuda.as_ref() {
+            return Ok(Self {
+                attention_config: self.attention_config,
+                kv: self.kv.fork_paged_prefix_metadata_with_cuda(cuda)?,
+            });
         }
+
+        Ok(self.clone())
     }
 
     pub fn release_sequence_capacity(&mut self) {

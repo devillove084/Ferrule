@@ -35,13 +35,13 @@ use ferrule_model::{
         DeepSeekV4OperatorRuntimeCounters, DeepSeekV4OutputProfileStats,
         DeepSeekV4PrefillRuntimeStats, DeepSeekV4PrepareOptions, DeepSeekV4Runner,
     },
-    moe::ExpertPredictionStats,
+    moe::{ExpertBatchAccessEvent, ExpertPredictionStats},
 };
 #[cfg(feature = "cuda")]
 use ferrule_runtime::{
-    GenerateRequest, PageManagedDiagnosticHarness, RequestId, ResidentActionKind,
-    ResidentDriverStep, ResidentSchedulerConfig, ResidentTopKDriverConfig, ResidentTopKDriverStats,
-    SessionId,
+    DSparkCycleTrace, DSparkMetrics, ExpertIoBudget, GenerateRequest, PageManagedDiagnosticHarness,
+    RequestId, ResidentActionKind, ResidentDriverStep, ResidentSchedulerConfig,
+    ResidentTopKDriverConfig, ResidentTopKDriverStats, SessionId,
 };
 
 #[cfg(feature = "cuda")]
@@ -61,6 +61,8 @@ struct RuntimeStepMeasurement {
     dsv4_layer_profile_stats: Vec<DeepSeekV4LayerProfileStats>,
     dsv4_attention_profile_stats: Vec<DeepSeekV4AttentionProfileStats>,
     dsv4_output_profile_stats: DeepSeekV4OutputProfileStats,
+    expert_access_trace: Vec<ExpertBatchAccessEvent>,
+    dspark_cycles: Vec<DSparkCycleTrace>,
 }
 
 #[cfg(feature = "cuda")]
@@ -257,7 +259,7 @@ pub fn cmd_bench_interactive(
         output_head_chunk_rows,
         moe_prefetch_experts,
         moe_hotset_experts,
-        runtime_path: "resident_topk_driver".into(),
+        runtime_path: "resident_topk_driver_dspark".into(),
         dsv4_profile_sync: runner.execution_policy().profile_sync(),
         artifact_load_us,
         warmup_tokens,
@@ -571,12 +573,14 @@ fn run_with_resident_driver(
         prefill_chunk_size: report.prefill_chunk_size.max(1),
         max_active_sequences: 1,
         max_decode_batch: 1,
+        allow_mixed_batches: false,
         ..Default::default()
     };
     let driver_config = ResidentTopKDriverConfig {
         ctx_size: gen_cfg.ctx_size,
         stop_at_eos: gen_cfg.stop_at_eos,
-        append_eos_to_session: gen_cfg.append_eos_to_session,
+        append_eos_to_session: false,
+        dspark_confidence_threshold: 0.2,
         max_steps_per_run: gen_cfg
             .ctx_size
             .saturating_add(gen_cfg.max_new_tokens)
@@ -601,9 +605,21 @@ fn run_with_resident_driver(
         );
         let warmup_start = Instant::now();
         driver.submit(warmup_request);
-        let warmup_stats = driver.run_until_blocked(|_| Ok(()))?;
+        loop {
+            match driver
+                .step_with_dspark_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())?
+            {
+                ResidentDriverStep::Idle => break,
+                ResidentDriverStep::Blocked => {
+                    anyhow::bail!("DSpark warmup blocked while running resident benchmark")
+                }
+                ResidentDriverStep::Executed { .. } => {
+                    driver.drain_dspark_cycle_traces().for_each(drop);
+                }
+            }
+        }
         report.warmup_us = duration_us(warmup_start.elapsed());
-        report.warmup_generated_tokens = warmup_stats.emitted_tokens;
+        report.warmup_generated_tokens = driver.stats().emitted_tokens;
         let _ = driver.drain_finished();
         let mut runner = driver.into_runner()?;
         runner.reset_session()?;
@@ -668,12 +684,16 @@ fn run_with_resident_driver(
                 driver.executor().runner().attention_profile_stats();
             let step_output_profile_before = driver.executor().runner().output_profile_stats();
             let step_start = Instant::now();
-            let step = driver.step(&mut |event| {
-                first_token_us.get_or_insert_with(|| duration_us(turn_start.elapsed()));
-                generated_tokens.push(event.token);
-                Ok(())
-            })?;
+            let step = driver.step_with_dspark_model_expert_io(
+                &mut |event| {
+                    first_token_us.get_or_insert_with(|| duration_us(turn_start.elapsed()));
+                    generated_tokens.push(event.token);
+                    Ok(())
+                },
+                ExpertIoBudget::unbounded(),
+            )?;
             let step_us = duration_us(step_start.elapsed());
+            let step_dspark_cycles = driver.drain_dspark_cycle_traces().collect::<Vec<_>>();
             let step_operator_counters = dsv4_operator_counters_delta(
                 step_operator_counters_before,
                 driver.executor().runner().operator_runtime_counters(),
@@ -690,6 +710,10 @@ fn run_with_resident_driver(
                 step_output_profile_before,
                 driver.executor().runner().output_profile_stats(),
             );
+            let step_expert_access_trace = driver
+                .executor_mut()
+                .runner_mut()
+                .drain_expert_access_trace();
             match step {
                 ResidentDriverStep::Executed {
                     action_kind,
@@ -720,6 +744,8 @@ fn run_with_resident_driver(
                         dsv4_layer_profile_stats: step_layer_profile_stats,
                         dsv4_attention_profile_stats: step_attention_profile_stats,
                         dsv4_output_profile_stats: step_output_profile_stats,
+                        expert_access_trace: step_expert_access_trace,
+                        dspark_cycles: step_dspark_cycles,
                     });
                 }
                 ResidentDriverStep::Idle => break,
@@ -941,7 +967,65 @@ fn resident_driver_stats_delta(
         dropped_dspark_cycle_traces: after
             .dropped_dspark_cycle_traces
             .saturating_sub(before.dropped_dspark_cycle_traces),
-        dspark: Default::default(),
+        dspark: dspark_metrics_delta(&before.dspark, &after.dspark),
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn dspark_metrics_delta(before: &DSparkMetrics, after: &DSparkMetrics) -> DSparkMetrics {
+    let histogram_len = after
+        .accepted_prefix_histogram
+        .len()
+        .max(before.accepted_prefix_histogram.len());
+    let accepted_prefix_histogram = (0..histogram_len)
+        .map(|index| {
+            after
+                .accepted_prefix_histogram
+                .get(index)
+                .copied()
+                .unwrap_or_default()
+                .saturating_sub(
+                    before
+                        .accepted_prefix_histogram
+                        .get(index)
+                        .copied()
+                        .unwrap_or_default(),
+                )
+        })
+        .collect();
+    DSparkMetrics {
+        cycles: after.cycles.saturating_sub(before.cycles),
+        proposed_tokens: after.proposed_tokens.saturating_sub(before.proposed_tokens),
+        verified_rows: after.verified_rows.saturating_sub(before.verified_rows),
+        accepted_draft_tokens: after
+            .accepted_draft_tokens
+            .saturating_sub(before.accepted_draft_tokens),
+        correction_tokens: after
+            .correction_tokens
+            .saturating_sub(before.correction_tokens),
+        externally_committed_tokens: after
+            .externally_committed_tokens
+            .saturating_sub(before.externally_committed_tokens),
+        runtime_emitted_tokens: after
+            .runtime_emitted_tokens
+            .saturating_sub(before.runtime_emitted_tokens),
+        rolled_back_rows: after
+            .rolled_back_rows
+            .saturating_sub(before.rolled_back_rows),
+        rejected_tokens: after.rejected_tokens.saturating_sub(before.rejected_tokens),
+        accepted_prefix_histogram,
+        total_proposal_time_us: after
+            .total_proposal_time_us
+            .saturating_sub(before.total_proposal_time_us),
+        total_transaction_time_us: after
+            .total_transaction_time_us
+            .saturating_sub(before.total_transaction_time_us),
+        total_verify_time_us: after
+            .total_verify_time_us
+            .saturating_sub(before.total_verify_time_us),
+        total_cycle_time_us: after
+            .total_cycle_time_us
+            .saturating_sub(before.total_cycle_time_us),
     }
 }
 
@@ -1194,6 +1278,9 @@ fn dsv4_operator_counters_delta(
             .output_head_merge_us
             .saturating_sub(before.output_head_merge_us),
         expert_selected: after.expert_selected.saturating_sub(before.expert_selected),
+        expert_unique_selected: after
+            .expert_unique_selected
+            .saturating_sub(before.expert_unique_selected),
         expert_selected_load_requests: after
             .expert_selected_load_requests
             .saturating_sub(before.expert_selected_load_requests),
@@ -1573,6 +1660,68 @@ fn runtime_step_json(step: &RuntimeStepMeasurement) -> serde_json::Value {
         "dsv4_layer_profile_summary": dsv4_layer_profile_summary_json(&step.dsv4_layer_profile_stats),
         "dsv4_attention_profile_summary": dsv4_attention_profile_summary_json(&step.dsv4_attention_profile_stats),
         "dsv4_output_profile": dsv4_output_profile_stats_json(&step.dsv4_output_profile_stats),
+        "expert_access_trace": step.expert_access_trace.iter().map(expert_access_event_json).collect::<Vec<_>>(),
+        "dspark_cycles": step.dspark_cycles.iter().map(dspark_cycle_trace_json).collect::<Vec<_>>(),
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn expert_access_event_json(event: &ExpertBatchAccessEvent) -> serde_json::Value {
+    serde_json::json!({
+        "layer": event.layer,
+        "phase": format!("{:?}", event.phase),
+        "token_count": event.token_count,
+        "experts": event.experts.iter().map(|expert| serde_json::json!({
+            "expert": expert.expert.expert,
+            "columns": expert.columns,
+            "total_route_weight": expert.total_route_weight,
+            "outcome": format!("{:?}", expert.outcome),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn dspark_cycle_trace_json(trace: &DSparkCycleTrace) -> serde_json::Value {
+    serde_json::json!({
+        "request_id": trace.request_id.0,
+        "session_id": trace.session_id.0,
+        "cycle_attempt": trace.cycle_attempt,
+        "position": trace.position,
+        "anchor_token": trace.anchor_token,
+        "proposal_source": format!("{:?}", trace.proposal_source),
+        "proposal_executed": trace.proposal_executed,
+        "native_proposed_tokens": &trace.native_proposed_tokens,
+        "native_confidence_logits": &trace.native_confidence_logits,
+        "proposed_tokens": &trace.proposed_tokens,
+        "confidence_logits": &trace.confidence_logits,
+        "capacity_truncated_tokens": trace.capacity_truncated_tokens,
+        "output_boundary_truncated_tokens": trace.output_boundary_truncated_tokens,
+        "confidence_truncated_tokens": trace.confidence_truncated_tokens,
+        "scheduler_expert_io_decisions": trace.scheduler_expert_io.len(),
+        "accepted_tokens": &trace.accepted_tokens,
+        "rejected_token": trace.rejected_token,
+        "target_correction_token": trace.target_correction_token,
+        "target_next_token": trace.target_next_token,
+        "target_row_top1": trace.target_row_top1.iter().map(|token| serde_json::json!({
+            "token_id": token.token_id,
+            "logit": token.logit,
+            "logit_bits": token.logit.to_bits(),
+        })).collect::<Vec<_>>(),
+        "accounting": {
+            "proposed_tokens": trace.accounting.proposed_tokens,
+            "verified_rows": trace.accounting.verified_rows,
+            "accepted_draft_tokens": trace.accounting.accepted_draft_tokens,
+            "correction_tokens": trace.accounting.correction_tokens,
+            "externally_committed_tokens": trace.accounting.externally_committed_tokens,
+            "rolled_back_rows": trace.accounting.rolled_back_rows,
+        },
+        "runtime_emitted_tokens": trace.runtime_emitted_tokens,
+        "runtime_tokens_reconcile": trace.runtime_tokens_reconcile(),
+        "proposal_s": trace.proposal_time_us as f64 / 1_000_000.0,
+        "verify_s": trace.verify_time_us as f64 / 1_000_000.0,
+        "transaction_s": trace.transaction_time_us as f64 / 1_000_000.0,
+        "complete_cycle_s": trace.complete_cycle_time_us as f64 / 1_000_000.0,
+        "finish_reason": trace.finish_reason.map(|reason| format!("{reason:?}")),
     })
 }
 
@@ -1682,6 +1831,30 @@ fn resident_driver_stats_json(stats: &ResidentTopKDriverStats) -> serde_json::Va
         "emitted_tokens": stats.emitted_tokens,
         "staged_tokens": stats.staged_tokens,
         "finished_sequences": stats.finished_sequences,
+        "dropped_dspark_cycle_traces": stats.dropped_dspark_cycle_traces,
+        "dspark": dspark_metrics_json(&stats.dspark),
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn dspark_metrics_json(metrics: &DSparkMetrics) -> serde_json::Value {
+    serde_json::json!({
+        "cycles": metrics.cycles,
+        "proposed_tokens": metrics.proposed_tokens,
+        "verified_rows": metrics.verified_rows,
+        "accepted_draft_tokens": metrics.accepted_draft_tokens,
+        "acceptance_rate": metrics.acceptance_rate(),
+        "correction_tokens": metrics.correction_tokens,
+        "externally_committed_tokens": metrics.externally_committed_tokens,
+        "runtime_emitted_tokens": metrics.runtime_emitted_tokens,
+        "rolled_back_rows": metrics.rolled_back_rows,
+        "rejected_tokens": metrics.rejected_tokens,
+        "accepted_prefix_histogram": &metrics.accepted_prefix_histogram,
+        "total_proposal_s": metrics.total_proposal_time_us as f64 / 1_000_000.0,
+        "total_verify_s": metrics.total_verify_time_us as f64 / 1_000_000.0,
+        "total_transaction_s": metrics.total_transaction_time_us as f64 / 1_000_000.0,
+        "total_cycle_s": metrics.total_cycle_time_us as f64 / 1_000_000.0,
+        "mean_cycle_s": metrics.mean_cycle_time_us() as f64 / 1_000_000.0,
     })
 }
 
@@ -1822,6 +1995,7 @@ fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> ser
             stats.output_head_hidden_uploads,
         );
         u64_field("expert_selected", stats.expert_selected);
+        u64_field("expert_unique_selected", stats.expert_unique_selected);
         u64_field(
             "expert_selected_load_requests",
             stats.expert_selected_load_requests,
@@ -2489,7 +2663,7 @@ fn run_resident_verify_width_sweep(
     let checkpoint_reference_verify_rows = checkpoint_dspark_block_size
         .checked_add(1)
         .ok_or_else(|| anyhow::anyhow!("checkpoint DSpark verification width overflow"))?;
-    let mut widths = vec![2, 4, checkpoint_reference_verify_rows, 8];
+    let mut widths = vec![1, 2, 4, checkpoint_reference_verify_rows, 8];
     widths.sort_unstable();
     widths.dedup();
     if prompts.len() != 1 {

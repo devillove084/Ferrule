@@ -120,7 +120,8 @@ mod tests {
     fn tokenizer_handle_eos() {
         let bpe = tokenizers::models::bpe::BPE::default();
         let mut tok = tokenizers::Tokenizer::new(bpe);
-        tok.add_special_tokens(&[tokenizers::AddedToken::from("<unk>", true)]);
+        tok.add_special_tokens([tokenizers::AddedToken::from("<unk>", true)])
+            .expect("add test special token");
         let handle = TokenizerHandle {
             inner: tok,
             eos_token_id: Some(2),
@@ -151,7 +152,8 @@ mod tests {
     fn tokenizer_handle_encode_decode_roundtrip() {
         let bpe = tokenizers::models::bpe::BPE::default();
         let mut tok = tokenizers::Tokenizer::new(bpe);
-        tok.add_special_tokens(&[tokenizers::AddedToken::from("hello", true)]);
+        tok.add_special_tokens([tokenizers::AddedToken::from("hello", true)])
+            .expect("add test special token");
 
         let handle = TokenizerHandle {
             inner: tok,

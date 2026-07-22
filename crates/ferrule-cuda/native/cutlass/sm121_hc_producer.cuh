@@ -30,6 +30,7 @@ inline constexpr std::uint32_t kHcHidden = kHc * kHidden;
 inline constexpr std::uint32_t kFp8Block = 128;
 inline constexpr std::uint32_t kScaleColumns = kHidden / kFp8Block;
 inline constexpr std::uint32_t kFunctionTileColumns = 128;
+inline constexpr std::uint32_t kSingleRowFunctionTileColumns = 256;
 
 static_assert(sizeof(cute::uint128_t) == 16);
 
@@ -235,12 +236,53 @@ struct alignas(16) SharedStorage {
   float mix[kMix];
   float pre[kHc];
   float comb[kHc * kHc];
-  alignas(16) float function_tile[kFunctionTileColumns * kMix];
-  alignas(16) float state_tile[kFunctionTileColumns];
+  alignas(16) float function_tile[kSingleRowFunctionTileColumns * kMix];
+  alignas(16) float state_tile[kSingleRowFunctionTileColumns];
 };
 
 static_assert((kFunctionTileColumns * kMix) % 4 == 0);
 static_assert(kFunctionTileColumns % 4 == 0);
+static_assert((kSingleRowFunctionTileColumns * kMix) % 4 == 0);
+static_assert(kSingleRowFunctionTileColumns % 4 == 0);
+
+
+template <std::uint32_t TileColumns>
+__device__ __forceinline__ float mix_state_function(
+    SharedStorage &shared, const float *state, const float *function_col_major,
+    std::uint32_t state_base, std::uint32_t tid) {
+  float accumulator = 0.0f;
+  for (std::uint32_t tile_base = 0; tile_base < kHcHidden;
+       tile_base += TileColumns) {
+    auto const *function_vectors = reinterpret_cast<cute::uint128_t const *>(
+        function_col_major + tile_base * kMix);
+    auto *shared_function_vectors =
+        reinterpret_cast<cute::uint128_t *>(shared.function_tile);
+    constexpr std::uint32_t kFunctionVectors = TileColumns * kMix / 4;
+    for (std::uint32_t vector = tid; vector < kFunctionVectors;
+         vector += kThreads) {
+      shared_function_vectors[vector] = function_vectors[vector];
+    }
+
+    if (tid < TileColumns / 4) {
+      auto const *state_vectors = reinterpret_cast<cute::uint128_t const *>(
+          state + state_base + tile_base);
+      auto *shared_state_vectors =
+          reinterpret_cast<cute::uint128_t *>(shared.state_tile);
+      shared_state_vectors[tid] = state_vectors[tid];
+    }
+    __syncthreads();
+
+    if (tid < kMix) {
+#pragma unroll
+      for (std::uint32_t column = 0; column < TileColumns; ++column) {
+        accumulator += shared.function_tile[column * kMix + tid] *
+                       shared.state_tile[column];
+      }
+    }
+    __syncthreads();
+  }
+  return accumulator;
+}
 
 } // namespace detail
 
@@ -325,41 +367,16 @@ __global__ __launch_bounds__(kThreads) void hc_pre_rmsnorm_fp8_kernel(
   __syncthreads();
   float state_rms = shared.reduction[0];
 
-  // Stage 128 contiguous columns at a time. CuTe's uint128_t is transport only;
-  // each of the 24 arithmetic lanes still consumes columns in increasing order.
+  // CuTe's uint128_t is transport only; each of the 24 arithmetic lanes still
+  // consumes columns in increasing order. A single row uses a wider tile to
+  // halve CTA barriers; wider inputs preserve the original 128-column path.
   float mix_accumulator = 0.0f;
-  for (std::uint32_t tile_base = 0; tile_base < kHcHidden;
-       tile_base += kFunctionTileColumns) {
-    auto const *function_vectors = reinterpret_cast<cute::uint128_t const *>(
-        function_col_major + tile_base * kMix);
-    auto *shared_function_vectors =
-        reinterpret_cast<cute::uint128_t *>(shared.function_tile);
-    constexpr std::uint32_t kFunctionVectors =
-        kFunctionTileColumns * kMix / 4;
-    for (std::uint32_t vector = tid; vector < kFunctionVectors;
-         vector += kThreads) {
-      shared_function_vectors[vector] = function_vectors[vector];
-    }
-
-    if (tid < kFunctionTileColumns / 4) {
-      auto const *state_vectors = reinterpret_cast<cute::uint128_t const *>(
-          state + state_base + tile_base);
-      auto *shared_state_vectors =
-          reinterpret_cast<cute::uint128_t *>(shared.state_tile);
-      shared_state_vectors[tid] = state_vectors[tid];
-    }
-    __syncthreads();
-
-    if (tid < kMix) {
-#pragma unroll
-      for (std::uint32_t column = 0; column < kFunctionTileColumns;
-           ++column) {
-        mix_accumulator +=
-            shared.function_tile[column * kMix + tid] *
-            shared.state_tile[column];
-      }
-    }
-    __syncthreads();
+  if (args.rows == 1u) {
+    mix_accumulator = detail::mix_state_function<kSingleRowFunctionTileColumns>(
+        shared, state, function_col_major, state_base, tid);
+  } else {
+    mix_accumulator = detail::mix_state_function<kFunctionTileColumns>(
+        shared, state, function_col_major, state_base, tid);
   }
 
   if (tid < kMix) {

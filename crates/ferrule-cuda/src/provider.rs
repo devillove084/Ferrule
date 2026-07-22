@@ -104,23 +104,20 @@ fn require_cutlass_bundle(
     provider: crate::cutlass::CutlassProvider,
     requirement: &LinearBundleRequirement,
 ) -> Result<()> {
-    let outputs_valid = requirement.output_features.len() == 2
-        && requirement
-            .output_features
-            .iter()
-            .all(|features| *features > 0);
-    if !outputs_valid {
+    if requirement.output_features.is_empty() || requirement.output_features.contains(&0) {
         return Err(Error::Internal(format!(
-            "SM121 operation {:?} requires exactly two non-empty outputs",
+            "SM121 operation {:?} requires non-empty outputs",
             requirement.operation
         )));
     }
     match (requirement.operation, requirement.weight_layout) {
         (KernelOperation::MlaQueryAKv, WeightLayout::Fp8E4m3BlockScaled) => {
-            if !requirement.input_features.is_multiple_of(128) {
+            if requirement.output_features.len() != 2
+                || !requirement.input_features.is_multiple_of(128)
+            {
                 return Err(Error::Internal(format!(
-                    "SM121 FP8 QueryA+KV requires K128, got {}",
-                    requirement.input_features
+                    "SM121 FP8 QueryA+KV requires two outputs and K128, got K={} N={:?}",
+                    requirement.input_features, requirement.output_features
                 )));
             }
             require_kernel(
@@ -129,12 +126,28 @@ fn require_cutlass_bundle(
                 crate::cutlass::CutlassKernelId::Fp8QueryAKvSm121,
             )
         }
+        (KernelOperation::MlaQueryB, WeightLayout::Fp8E4m3BlockScaled) => {
+            if requirement.output_features.len() != 1
+                || !requirement.input_features.is_multiple_of(128)
+            {
+                return Err(Error::Internal(format!(
+                    "SM121 FP8 QueryB requires one output and K128, got K={} N={:?}",
+                    requirement.input_features, requirement.output_features
+                )));
+            }
+            require_kernel(
+                provider,
+                requirement.operation,
+                crate::cutlass::CutlassKernelId::Fp8ProjectionSm121,
+            )
+        }
         (
             KernelOperation::MainCompressorProjection
             | KernelOperation::IndexerCompressorProjection,
             WeightLayout::Bf16RowMajor,
         ) => {
-            if !requirement.input_features.is_multiple_of(8)
+            if requirement.output_features.len() != 2
+                || !requirement.input_features.is_multiple_of(8)
                 || !requirement
                     .output_features
                     .iter()

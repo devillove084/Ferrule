@@ -69,15 +69,18 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
         prefill_chunk_size: args.prefill_chunk_size,
         max_active_sequences: args.max_active_sequences,
         max_decode_batch: args.max_active_sequences,
+        decode_cohort_target: args.decode_cohort_target,
+        decode_cohort_max_deferrals: args.decode_cohort_max_deferrals,
         max_batch_tokens: args.max_batch_tokens,
-        // DSpark decode owns a Q=1..6 transaction per ready sequence. Keep
-        // prefill dispatch separate until cross-sequence Q packing is implemented.
+        // DSpark decode packs one variable-width transaction across ready sequences.
+        // Keep prefill separate so provisional cohort ownership remains unambiguous.
         allow_mixed_batches: false,
     };
     let driver_config = ResidentTopKDriverConfig {
         ctx_size: args.ctx_size,
         stop_at_eos: true,
         append_eos_to_session: false,
+        dspark_confidence_threshold: 0.2,
         // The serving worker executes exactly one step at a time; this remains a
         // safety bound only for callers that explicitly use run_until_blocked.
         max_steps_per_run: args.ctx_size.saturating_mul(2).max(1024),
