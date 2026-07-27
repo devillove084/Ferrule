@@ -20,13 +20,14 @@ pub mod speculation;
 // ── Convenience re-exports ────────────────────────────────────────────────
 pub use attention_kernel::AttentionKernel;
 pub use cache::{
-    KvPageManager, KvPageManagerStats, KvReservationBindings, PageBlockTable, PreemptedKvState,
-    PreparedKvSequenceFork,
+    KvPageManager, KvPageManagerStats, KvReservation, KvReservationBindings, KvReservationCommit,
+    KvReservationId, PageBlockTable, PreemptedKvState, PreparedKvSequenceFork,
 };
 pub use engine::{
-    DSparkCycleTrace, NativeMultiSessionExecutor, PageManagedDiagnosticHarness, ResidentActionKind,
-    ResidentDriverStep, ResidentTokenEvent, ResidentTopKDriver, ResidentTopKDriverConfig,
-    ResidentTopKDriverStats,
+    InferenceCancelProgress, InferenceCompletionOwner, InferenceCompletionReactor, InferenceEngine,
+    LocalResidentInferenceEngine, NativeMultiSessionExecutor, ResidentActionKind,
+    ResidentDriverStep, ResidentInferenceEngine, ResidentTokenEvent, ResidentTopKDriver,
+    ResidentTopKDriverConfig, ResidentTopKDriverStats,
 };
 pub use expert_residency::{
     ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertInstallReason, ExpertKey, ExpertLease,
@@ -41,7 +42,9 @@ pub use scheduling::{
     CancelRequestResult, DecodeAction, ExpertIoAdvisor, ExpertIoBudget, ExpertIoCandidate,
     ExpertIoDecisionTrace, ExpertIoEstimate, ExpertIoPhase, ExpertIoQueueClass, ExpertIoRejection,
     FixedSequenceSlotPool, KvHandle, LogitsSelection, PrefillChunkAction, ResidentScheduler,
-    ResidentSchedulerConfig, SchedulerAction, SequenceSlotPool, ZeroExpertIoAdvisor,
+    ResidentSchedulerConfig, ResourceBroker, ResourceBrokerBuilder, ResourceBrokerStats,
+    ResourceClaim, ResourceClass, ResourceGrantId, ResourceId, ResourceRejection, ResourceRequest,
+    ResourceSnapshot, ResourceUnit, SchedulerAction, SequenceSlotPool, ZeroExpertIoAdvisor,
     plan_prefill_chunk,
 };
 pub use scheduling::{
@@ -49,6 +52,5 @@ pub use scheduling::{
 };
 
 pub use speculation::{
-    DSparkCycleResult, DSparkMetrics, SpeculativeCycleAccounting, TargetFrontier,
-    VerificationWidth, run_dspark_verification,
+    SpeculativeCycleAccounting, SpeculativeCycleResult, SpeculativeMetrics, TargetFrontier,
 };

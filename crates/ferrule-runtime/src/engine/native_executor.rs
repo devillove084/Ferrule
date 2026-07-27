@@ -3,39 +3,48 @@
 //! This executor wraps any [`MultiSessionRunner`] and implements the neutral
 //! `ExecutionBatch` -> `ExecutionOutput` contract for batches containing
 //! multiple sequences, ragged prefill chunks, and mixed prefill/decode rows.
-//!
-//! Each sequence is routed through the runner's `with_sequence_state` swap path
-//! so that all sequences share one set of prepared resources (weights, expert
-//! residency, arenas).
 
-use std::num::NonZeroU32;
+use std::collections::HashMap;
 
 use ferrule_common::execution::{
-    ExecutionBatch, ExecutionCapabilities, ExecutionOutput, ForwardMode, ForwardPhase,
-    KvReservation, LogitsOutput, LogitsRequest, LogitsRow, StateSlot,
-    TokenLogit as ExecutionTokenLogit,
+    ExecutionBatch, ExecutionCapabilities, ExecutionOutput, ExecutionTransactionId,
+    KvReservationView,
 };
 use ferrule_common::{Error, Result};
-use ferrule_model::{MultiSessionRunner, PrefillMode, TokenLogit};
+use ferrule_model::{
+    BatchContinuationCancelOutcome, BatchContinuationId, MultiSessionBatchProgress,
+    MultiSessionRunner, PendingModelProgress,
+};
 
 use crate::expert_residency::ExpertResidencyController;
+use crate::scheduling::{ExpertIoResourceBrokerHandle, ResourceBrokerStats, ResourceSnapshot};
+
+/// Progress from a resumable native multi-session batch.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NativeBatchExecutionProgress {
+    Complete(ExecutionOutput),
+    Waiting(PendingModelProgress),
+}
 
 /// Native multi-session executor wrapping any [`MultiSessionRunner`].
 ///
-/// The executor owns the runner and its default sequence. Additional sequences
-/// are managed externally and passed to `execute_batch` through the state slice.
-/// Each sequence in the batch is executed through `with_sequence_state`, which
-/// swaps the sequence state into the runner for the duration of the call.
-///
-/// Poison semantics: a model execution or output-contract failure poisons the
-/// executor. A poisoned executor rejects further execution until
-/// [`reset`](Self::reset) clears the poison.
+/// Every prepared or suspended execution is tracked by its stable transaction
+/// identity. Transactions may be prepared, waiting, resumed, and finalized in
+/// any order; continuation ownership remains local to the transaction that
+/// created it.
 pub struct NativeMultiSessionExecutor<R: MultiSessionRunner> {
     runner: R,
     capabilities: ExecutionCapabilities,
     poison: Option<PoisonState>,
-    batch_prepared: bool,
+    transactions: HashMap<ExecutionTransactionId, NativeTransaction>,
     expert_residency_initialized: bool,
+    expert_io_resources: Option<ExpertIoResourceBrokerHandle>,
+}
+
+#[derive(Debug)]
+struct NativeTransaction {
+    batch: ExecutionBatch,
+    pending_model_progress: Option<PendingModelProgress>,
 }
 
 #[derive(Debug)]
@@ -52,9 +61,37 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
             runner,
             capabilities,
             poison: None,
-            batch_prepared: false,
+            transactions: HashMap::new(),
             expert_residency_initialized: false,
+            expert_io_resources: None,
         }
+    }
+
+    pub(crate) fn with_expert_io_resources(
+        mut self,
+        resources: ExpertIoResourceBrokerHandle,
+    ) -> Self {
+        self.expert_io_resources = Some(resources);
+        self
+    }
+
+    pub fn expert_io_resource_snapshots(&self) -> Result<Vec<ResourceSnapshot>> {
+        self.expert_io_resources
+            .as_ref()
+            .map_or_else(|| Ok(Vec::new()), ExpertIoResourceBrokerHandle::snapshots)
+    }
+
+    pub fn expert_io_resource_stats(&self) -> Result<Option<ResourceBrokerStats>> {
+        self.expert_io_resources
+            .as_ref()
+            .map(ExpertIoResourceBrokerHandle::stats)
+            .transpose()
+    }
+
+    pub fn active_expert_io_grants(&self) -> Result<usize> {
+        self.expert_io_resources
+            .as_ref()
+            .map_or_else(|| Ok(0), ExpertIoResourceBrokerHandle::active_grants)
     }
 
     /// Returns the truthful capabilities of the native multi-session path.
@@ -62,63 +99,92 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         &self.capabilities
     }
 
-    /// Returns a reference to the underlying runner.
-    pub fn runner(&self) -> &R {
+    /// Returns a reference to the underlying runner for runtime-owned policy and
+    /// publication logic.
+    pub(crate) fn runner(&self) -> &R {
         &self.runner
     }
 
-    /// Returns a mutable reference to the underlying runner.
-    pub fn runner_mut(&mut self) -> &mut R {
+    /// Returns a mutable reference to the underlying runner for runtime-owned
+    /// lifecycle operations.
+    pub(crate) fn runner_mut(&mut self) -> &mut R {
         &mut self.runner
     }
 
     /// Configure backend physical KV capacity and refresh truthful capabilities.
     pub fn configure_kv_page_capacity(&mut self, max_pages: usize) -> Result<()> {
-        if self.batch_prepared {
-            return Err(Error::Execution(
-                "cannot reconfigure KV capacity with an uncommitted backend batch".into(),
-            ));
-        }
+        self.ensure_registry_empty("reconfigure KV capacity")?;
         self.runner.configure_kv_page_capacity(max_pages)?;
         self.capabilities = self.runner.multi_session_capabilities();
         Ok(())
     }
 
-    /// Extracts the runner if the executor is not poisoned.
-    pub fn into_runner(self) -> Result<R> {
-        if self.batch_prepared {
-            return Err(Error::Execution(
-                "cannot extract runner with an uncommitted backend batch".into(),
-            ));
+    /// Describe why the runner cannot currently be extracted without consuming
+    /// the executor or abandoning retained transaction resources.
+    pub(crate) fn runner_extraction_error(&self) -> Option<Error> {
+        if !self.transactions.is_empty() {
+            return Some(Error::Execution(format!(
+                "cannot extract runner with active execution transactions {:?}",
+                self.sorted_transaction_ids()
+            )));
         }
-        if let Some(poison) = self.poison {
-            return Err(Error::Execution(format!(
+        self.poison.as_ref().map(|poison| {
+            Error::Execution(format!(
                 "cannot extract runner after {} failed: {}",
                 poison.operation, poison.cause
-            )));
+            ))
+        })
+    }
+
+    /// Extract the runner or return the untouched executor with the error.
+    pub fn try_into_runner(self) -> std::result::Result<R, Box<(Error, Self)>> {
+        if let Some(error) = self.runner_extraction_error() {
+            return Err(Box::new((error, self)));
         }
         Ok(self.runner)
     }
 
-    /// Whether a model mutation failed and left state potentially inconsistent.
+    /// Whether a shared model mutation failed and may have left state inconsistent.
     pub fn is_poisoned(&self) -> bool {
         self.poison.is_some()
     }
 
     pub fn poison_operation(&self) -> Option<&'static str> {
-        self.poison.as_ref().map(|p| p.operation)
+        self.poison.as_ref().map(|poison| poison.operation)
     }
 
     pub fn poison_cause(&self) -> Option<&str> {
-        self.poison.as_ref().map(|p| p.cause.as_str())
+        self.poison.as_ref().map(|poison| poison.cause.as_str())
+    }
+
+    /// Return the current model-owned wait state for one transaction.
+    pub fn pending_model_progress(
+        &self,
+        transaction: ExecutionTransactionId,
+    ) -> Option<&PendingModelProgress> {
+        self.transactions
+            .get(&transaction)
+            .and_then(|transaction| transaction.pending_model_progress.as_ref())
+    }
+
+    /// Iterate over registered transaction IDs in arbitrary order.
+    pub fn transaction_ids(&self) -> impl Iterator<Item = ExecutionTransactionId> + '_ {
+        self.transactions.keys().copied()
+    }
+
+    /// Whether any prepared, completed, or suspended transaction is registered.
+    pub fn has_transactions(&self) -> bool {
+        !self.transactions.is_empty()
+    }
+
+    /// Whether one exact transaction identity remains registered.
+    pub fn has_transaction(&self, transaction: ExecutionTransactionId) -> bool {
+        self.transactions.contains_key(&transaction)
     }
 
     /// Reset the default runner session and clear poison.
     pub fn reset(&mut self) -> Result<()> {
-        if self.batch_prepared {
-            self.runner.rollback_multi_session_batch()?;
-            self.batch_prepared = false;
-        }
+        self.ensure_registry_empty("reset the native executor")?;
         match self.runner.reset_session() {
             Ok(()) => {
                 self.poison = None;
@@ -131,8 +197,8 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         }
     }
 
-    /// Mark the executor as poisoned after a runtime-side failure (e.g. token
-    /// callback error) that may have left sequence state inconsistent.
+    /// Mark the executor as poisoned after a runtime-side failure that may have
+    /// left shared model state inconsistent.
     pub fn poison(&mut self, operation: &'static str, cause: &Error) {
         self.record_poison(operation, cause);
     }
@@ -150,17 +216,13 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         expected_position: usize,
     ) -> Result<R::SequenceState> {
         self.ensure_ready()?;
-        if self.batch_prepared {
-            return Err(Error::Execution(
-                "cannot fork a sequence with an uncommitted backend batch".into(),
-            ));
-        }
         self.runner
             .fork_sequence_state_from(source, expected_position)
     }
 
     /// Reset a sequence state for reuse with a new logical sequence.
     pub fn reset_sequence_state(&mut self, state: &mut R::SequenceState) -> Result<()> {
+        self.ensure_ready()?;
         self.runner.reset_sequence_state(state)
     }
 
@@ -170,33 +232,13 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
     }
 
     /// Execute one owner-thread operation against an explicit sequence state.
-    ///
-    /// This is the only escape hatch for model-owned operations that are not an
-    /// `ExecutionBatch` (for example a checkpoint-native DSpark proposal). It
-    /// preserves poison, residency initialization, and pending-batch invariants
-    /// before swapping the state into the shared runner.
     pub fn with_sequence_state<T>(
         &mut self,
         state: &mut R::SequenceState,
         execute: impl FnOnce(&mut R) -> Result<T>,
     ) -> Result<T> {
         self.ensure_execution_ready()?;
-        if self.batch_prepared {
-            return Err(Error::Execution(
-                "cannot execute an explicit sequence operation with an uncommitted backend batch"
-                    .into(),
-            ));
-        }
         self.runner.with_sequence_state(state, execute)
-    }
-
-    /// Feed a token into one explicit sequence state.
-    pub fn feed_sequence_token(
-        &mut self,
-        state: &mut R::SequenceState,
-        token_id: u32,
-    ) -> Result<()> {
-        self.with_sequence_state(state, |runner| runner.feed_token(token_id))
     }
 
     /// Release physical pages whose runtime refcount reached zero.
@@ -204,6 +246,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         &mut self,
         pages: &[ferrule_common::execution::KvPageId],
     ) -> Result<()> {
+        self.ensure_registry_empty("release KV pages")?;
         self.runner.release_kv_pages(pages)
     }
 
@@ -212,11 +255,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         pages: &[ferrule_common::execution::KvPageId],
     ) -> Result<()> {
         self.ensure_ready()?;
-        if self.batch_prepared {
-            return Err(Error::Execution(
-                "cannot preempt KV pages with an uncommitted backend batch".into(),
-            ));
-        }
+        self.ensure_registry_empty("preempt KV pages")?;
         self.runner.preempt_kv_pages(pages)
     }
 
@@ -225,87 +264,45 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         pages: &[ferrule_common::execution::KvPageId],
     ) -> Result<()> {
         self.ensure_ready()?;
-        if self.batch_prepared {
-            return Err(Error::Execution(
-                "cannot restore KV pages with an uncommitted backend batch".into(),
-            ));
-        }
+        self.ensure_registry_empty("restore KV pages")?;
         self.runner.restore_kv_pages(pages)
     }
 
-    /// Commit the backend resources prepared by the last successful execution.
-    pub fn commit_prepared_batch(&mut self) -> Result<()> {
-        if !self.batch_prepared {
-            return Ok(());
-        }
-        match self.runner.commit_multi_session_batch() {
-            Ok(()) => {
-                self.batch_prepared = false;
-                Ok(())
-            }
-            Err(error) => {
-                self.record_poison("backend_kv_commit", &error);
-                Err(error)
-            }
-        }
-    }
-
-    /// Roll back the backend resources prepared by the current execution.
-    pub fn rollback_prepared_batch(&mut self) -> Result<()> {
-        if !self.batch_prepared {
-            return Ok(());
-        }
-        match self.runner.rollback_multi_session_batch() {
-            Ok(()) => {
-                self.batch_prepared = false;
-                Ok(())
-            }
-            Err(error) => {
-                self.record_poison("backend_kv_rollback", &error);
-                Err(error)
-            }
-        }
-    }
-
-    /// Retain an exact model-owned prefix while leaving the prepared backend KV
-    /// reservation pending for the normal transaction commit.
-    pub fn retain_prepared_prefix(
+    /// Commit one completed backend transaction exactly once.
+    pub fn commit_prepared_batch(
         &mut self,
-        source: &R::SequenceState,
-        branch: &mut R::SequenceState,
-        executed_rows: usize,
-        retained_rows: usize,
-    ) -> Result<bool> {
-        self.ensure_ready()?;
-        if !self.batch_prepared {
-            return Err(Error::Execution(
-                "cannot retain a provisional prefix without a prepared backend batch".into(),
-            ));
-        }
-        if retained_rows == 0 || retained_rows >= executed_rows {
-            return Err(Error::Execution(format!(
-                "invalid provisional prefix retention: retained={retained_rows} executed={executed_rows}"
-            )));
-        }
+        transaction: ExecutionTransactionId,
+        states: &mut [R::SequenceState],
+    ) -> Result<()> {
+        self.quiescent_transaction(transaction)?;
         self.runner
-            .retain_provisional_prefix(source, branch, executed_rows, retained_rows)
+            .commit_multi_session_batch(transaction, states)?;
+        self.remove_transaction(transaction);
+        Ok(())
+    }
+
+    /// Roll back one completed backend transaction exactly once.
+    pub fn rollback_prepared_batch(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        states: &mut [R::SequenceState],
+    ) -> Result<()> {
+        self.quiescent_transaction(transaction)?;
+        self.rollback_transaction_inner(transaction, states)
     }
 
     /// Retain exact model-owned prefixes for an entire provisional cohort while
-    /// leaving the prepared backend KV reservation pending for commit.
+    /// leaving one prepared backend KV reservation pending for commit.
     pub fn retain_prepared_prefixes(
         &mut self,
+        transaction: ExecutionTransactionId,
         sources: &[R::SequenceState],
         branches: &mut [R::SequenceState],
         executed_rows: &[usize],
         retained_rows: &[usize],
-    ) -> Result<bool> {
+    ) -> Result<()> {
         self.ensure_ready()?;
-        if !self.batch_prepared {
-            return Err(Error::Execution(
-                "cannot retain provisional prefixes without a prepared backend batch".into(),
-            ));
-        }
+        self.quiescent_transaction(transaction)?;
         let sequence_count = sources.len();
         if sequence_count == 0
             || branches.len() != sequence_count
@@ -329,224 +326,348 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
                 )));
             }
         }
+        self.runner.retain_provisional_prefixes(
+            transaction,
+            sources,
+            branches,
+            executed_rows,
+            retained_rows,
+        )
+    }
+
+    /// Start a packed batch that may suspend on model-owned work.
+    pub fn begin_resumable_batch_with_kv(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        states: &mut [R::SequenceState],
+        batch: &ExecutionBatch,
+        kv_reservations: &[KvReservationView],
+    ) -> Result<NativeBatchExecutionProgress> {
+        self.ensure_execution_ready()?;
+        if self.transactions.contains_key(&transaction) {
+            return Err(Error::Execution(format!(
+                "execution transaction {transaction:?} is already registered"
+            )));
+        }
+        batch.validate(states.len(), &self.capabilities)?;
+
         self.runner
-            .retain_provisional_prefixes(sources, branches, executed_rows, retained_rows)
-    }
-
-    /// Prepare paged KV for a diagnostic operation against explicit sequence states.
-    ///
-    /// Unlike [`execute_batch_with_kv`](Self::execute_batch_with_kv), the caller
-    /// supplies the model operation so model-family diagnostics can capture
-    /// intermediate state while retaining the runtime's normal KV transaction.
-    /// A successful call leaves the backend transaction prepared; the caller must
-    /// commit or roll it back together with the authoritative page manager.
-    pub fn execute_diagnostic_batch_with_kv<T>(
-        &mut self,
-        states: &mut [R::SequenceState],
-        batch: &ExecutionBatch,
-        kv_reservations: &[KvReservation],
-        execute: impl FnOnce(&mut R, &mut [R::SequenceState]) -> Result<T>,
-    ) -> Result<T> {
-        self.ensure_execution_ready()?;
-        if self.batch_prepared {
-            return Err(Error::Execution(
-                "native executor has an uncommitted backend batch".into(),
-            ));
-        }
-        batch.validate(states.len(), &self.capabilities)?;
-        self.batch_prepared =
-            self.runner
-                .prepare_multi_session_batch(states, batch, kv_reservations)?;
-
-        match execute(&mut self.runner, states) {
-            Ok(output) => Ok(output),
-            Err(error) => {
-                let rollback = self.rollback_prepared_batch();
-                self.record_poison("diagnostic_model_execution", &error);
-                match rollback {
-                    Ok(()) => Err(error),
-                    Err(rollback_error) => Err(Error::Execution(format!(
-                        "diagnostic model execution failed ({error}); backend rollback also failed ({rollback_error})"
-                    ))),
-                }
-            }
-        }
-    }
-
-    /// Execute a batch with multiple sequences.
-    ///
-    /// Each sequence in the batch is executed through the runner's
-    /// `with_sequence_state` swap path. Output rows are correlated by
-    /// `input_row` and collected into one [`ExecutionOutput`].
-    ///
-    /// The batch is validated against the executor's capabilities before any
-    /// mutation. A model execution or output-contract failure poisons the
-    /// executor.
-    pub fn execute_batch(
-        &mut self,
-        states: &mut [R::SequenceState],
-        batch: &ExecutionBatch,
-    ) -> Result<ExecutionOutput> {
-        self.execute_batch_with_kv(states, batch, &[])
-    }
-
-    /// Execute using the runtime's authoritative provisional KV reservations.
-    pub fn execute_batch_with_kv(
-        &mut self,
-        states: &mut [R::SequenceState],
-        batch: &ExecutionBatch,
-        kv_reservations: &[KvReservation],
-    ) -> Result<ExecutionOutput> {
-        self.ensure_execution_ready()?;
-        if self.batch_prepared {
-            return Err(Error::Execution(
-                "native executor has an uncommitted backend batch".into(),
-            ));
-        }
-        batch.validate(states.len(), &self.capabilities)?;
-        self.batch_prepared =
-            self.runner
-                .prepare_multi_session_batch(states, batch, kv_reservations)?;
-
-        let result = match self.runner.execute_multi_session_batch(states, batch) {
-            Ok(Some(output)) => Ok(output),
-            Ok(None) => match batch.mode() {
-                ForwardMode::Prefill => self.execute_prefill_batch(states, batch),
-                ForwardMode::Decode => self.execute_decode_batch(states, batch),
-                ForwardMode::Mixed => self.execute_mixed_batch(states, batch),
+            .prepare_multi_session_batch(transaction, states, batch, kv_reservations)?;
+        self.transactions.insert(
+            transaction,
+            NativeTransaction {
+                batch: batch.clone(),
+                pending_model_progress: None,
             },
-            Err(error) => Err(error),
+        );
+
+        let progress =
+            match self
+                .runner
+                .execute_multi_session_batch_progress(transaction, states, batch)
+            {
+                Ok(progress) => progress,
+                Err(error) => {
+                    return Err(self.fail_transaction(
+                        transaction,
+                        states,
+                        "model execution",
+                        error,
+                    ));
+                }
+            };
+        self.handle_progress(transaction, states, batch, None, progress)
+    }
+
+    /// Resume one suspended packed batch after its model-owned work is ready.
+    pub fn resume_resumable_batch(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        states: &mut [R::SequenceState],
+        batch: &ExecutionBatch,
+        continuation: BatchContinuationId,
+    ) -> Result<NativeBatchExecutionProgress> {
+        self.ensure_ready()?;
+        self.ensure_continuation_owner(transaction, continuation)?;
+        let expected_batch = &self
+            .transactions
+            .get(&transaction)
+            .expect("continuation index must reference a registered transaction")
+            .batch;
+        if expected_batch != batch {
+            return Err(Error::Execution(format!(
+                "resume batch does not exactly match transaction {transaction:?}"
+            )));
+        }
+        batch.validate(states.len(), &self.capabilities)?;
+
+        let progress =
+            self.runner
+                .resume_multi_session_batch(transaction, states, batch, continuation)?;
+        self.handle_progress(transaction, states, batch, Some(continuation), progress)
+    }
+
+    /// Cancel one suspended batch and roll back only its backend transaction.
+    pub fn cancel_resumable_batch(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        states: &mut [R::SequenceState],
+        continuation: BatchContinuationId,
+    ) -> Result<()> {
+        self.ensure_continuation_owner(transaction, continuation)?;
+        let model_cleanup_error = match self.runner.cancel_multi_session_batch(
+            transaction,
+            states,
+            continuation,
+        ) {
+            BatchContinuationCancelOutcome::Cancelled => None,
+            BatchContinuationCancelOutcome::StillActive(cancel_error) => {
+                return Err(Error::Execution(format!(
+                    "transaction {transaction:?} cancellation did not confirm quiescence: {cancel_error}"
+                )));
+            }
+            BatchContinuationCancelOutcome::Quiesced(cleanup_error) => Some(cleanup_error),
         };
 
-        match result {
-            Ok(output) => {
-                if let Err(error) = output.validate_with_capabilities(batch, &self.capabilities) {
-                    let rollback = self.rollback_prepared_batch();
-                    self.record_poison("output_contract", &error);
-                    return match rollback {
-                        Ok(()) => Err(error),
-                        Err(rollback_error) => Err(Error::Execution(format!(
-                            "output contract failed ({error}); backend rollback also failed ({rollback_error})"
-                        ))),
-                    };
+        self.clear_continuation(transaction, continuation);
+        let rollback_error = self.rollback_transaction_inner(transaction, states).err();
+        match (model_cleanup_error, rollback_error) {
+            (None, None) => Ok(()),
+            (None, Some(rollback_error)) => Err(Error::Execution(format!(
+                "transaction {transaction:?} cancellation completed but backend rollback failed: {rollback_error}"
+            ))),
+            (Some(cleanup_error), None) => Err(Error::Execution(format!(
+                "transaction {transaction:?} model work quiesced but cleanup failed: {cleanup_error}"
+            ))),
+            (Some(cleanup_error), Some(rollback_error)) => Err(Error::Execution(format!(
+                "transaction {transaction:?} model work quiesced but cleanup failed ({cleanup_error}); backend rollback also failed ({rollback_error})"
+            ))),
+        }
+    }
+
+    fn handle_progress(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        states: &mut [R::SequenceState],
+        batch: &ExecutionBatch,
+        previous_continuation: Option<BatchContinuationId>,
+        progress: MultiSessionBatchProgress,
+    ) -> Result<NativeBatchExecutionProgress> {
+        match progress {
+            MultiSessionBatchProgress::Complete(output) => {
+                if let Some(continuation) = previous_continuation {
+                    self.clear_continuation(transaction, continuation);
                 }
-                Ok(output)
+                match output.validate_with_capabilities(batch, &self.capabilities) {
+                    Ok(()) => Ok(NativeBatchExecutionProgress::Complete(output)),
+                    Err(error) => {
+                        Err(self.fail_transaction(transaction, states, "output contract", error))
+                    }
+                }
             }
-            Err(error) => {
-                let rollback = self.rollback_prepared_batch();
-                self.record_poison("model_execution", &error);
-                match rollback {
-                    Ok(()) => Err(error),
-                    Err(rollback_error) => Err(Error::Execution(format!(
-                        "model execution failed ({error}); backend rollback also failed ({rollback_error})"
-                    ))),
+            MultiSessionBatchProgress::Waiting(pending) => {
+                if pending.transaction() != transaction {
+                    let error = Error::Execution(format!(
+                        "runner returned waiting progress for transaction {:?} while executing transaction {transaction:?}",
+                        pending.transaction()
+                    ));
+                    return Err(self.reject_invalid_waiting_progress(
+                        transaction,
+                        states,
+                        pending,
+                        error,
+                    ));
                 }
+                self.transition_to_waiting(transaction, previous_continuation, &pending)?;
+                Ok(NativeBatchExecutionProgress::Waiting(pending))
             }
         }
     }
 
-    fn execute_prefill_batch(
+    fn transition_to_waiting(
         &mut self,
-        states: &mut [R::SequenceState],
-        batch: &ExecutionBatch,
-    ) -> Result<ExecutionOutput> {
-        let mut output_rows = Vec::new();
-
-        for sequence in batch.sequences() {
-            let state_index = state_slot_index(sequence.state_slot, states.len())?;
-            let state = &mut states[state_index];
-
-            let (query_start, query_end) = query_range(sequence)?;
-            let token_ids = &batch.token_ids()[query_start..query_end];
-            let last_row = query_end - 1;
-            let logits_request = batch.logits()[last_row];
-
-            execute_prefill_sequence(
-                &mut self.runner,
-                state,
-                token_ids,
-                logits_request,
-                last_row,
-                &mut output_rows,
-            )?;
+        transaction: ExecutionTransactionId,
+        previous_continuation: Option<BatchContinuationId>,
+        pending: &PendingModelProgress,
+    ) -> Result<()> {
+        let current_continuation = self
+            .transactions
+            .get(&transaction)
+            .ok_or_else(|| {
+                Error::Execution(format!(
+                    "waiting progress belongs to unregistered transaction {transaction:?}"
+                ))
+            })?
+            .pending_model_progress
+            .as_ref()
+            .map(PendingModelProgress::continuation);
+        if current_continuation != previous_continuation {
+            let error = Error::Execution(format!(
+                "transaction {transaction:?} expected previous continuation {current_continuation:?}, runner progress followed {previous_continuation:?}"
+            ));
+            self.record_poison("resumable_batch_contract", &error);
+            return Err(error);
         }
-
-        Ok(ExecutionOutput::new(output_rows))
+        self.transactions
+            .get_mut(&transaction)
+            .expect("waiting progress transaction was validated above")
+            .pending_model_progress = Some(pending.clone());
+        Ok(())
     }
 
-    fn execute_decode_batch(
+    fn reject_invalid_waiting_progress(
         &mut self,
+        transaction: ExecutionTransactionId,
         states: &mut [R::SequenceState],
-        batch: &ExecutionBatch,
-    ) -> Result<ExecutionOutput> {
-        let mut output_rows = Vec::new();
-
-        for sequence in batch.sequences() {
-            let state_index = state_slot_index(sequence.state_slot, states.len())?;
-            let state = &mut states[state_index];
-
-            let (query_start, _query_end) = query_range(sequence)?;
-            let row = query_start;
-            let token_id = batch.token_ids()[row];
-            let logits_request = batch.logits()[row];
-
-            execute_decode_sequence(
-                &mut self.runner,
-                state,
-                token_id,
-                logits_request,
-                row,
-                &mut output_rows,
-            )?;
-        }
-
-        Ok(ExecutionOutput::new(output_rows))
-    }
-
-    fn execute_mixed_batch(
-        &mut self,
-        states: &mut [R::SequenceState],
-        batch: &ExecutionBatch,
-    ) -> Result<ExecutionOutput> {
-        let mut output_rows = Vec::new();
-
-        for sequence in batch.sequences() {
-            let state_index = state_slot_index(sequence.state_slot, states.len())?;
-            let state = &mut states[state_index];
-
-            let (query_start, query_end) = query_range(sequence)?;
-
-            match sequence.phase {
-                ForwardPhase::Prefill => {
-                    let token_ids = &batch.token_ids()[query_start..query_end];
-                    let last_row = query_end - 1;
-                    let logits_request = batch.logits()[last_row];
-                    execute_prefill_sequence(
-                        &mut self.runner,
-                        state,
-                        token_ids,
-                        logits_request,
-                        last_row,
-                        &mut output_rows,
-                    )?;
-                }
-                ForwardPhase::Decode => {
-                    let row = query_start;
-                    let token_id = batch.token_ids()[row];
-                    let logits_request = batch.logits()[row];
-                    execute_decode_sequence(
-                        &mut self.runner,
-                        state,
-                        token_id,
-                        logits_request,
-                        row,
-                        &mut output_rows,
-                    )?;
-                }
+        pending: PendingModelProgress,
+        contract_error: Error,
+    ) -> Error {
+        self.record_poison("resumable_batch_contract", &contract_error);
+        let continuation = pending.continuation();
+        match self
+            .runner
+            .cancel_multi_session_batch(transaction, states, continuation)
+        {
+            BatchContinuationCancelOutcome::Cancelled => self.fail_transaction(
+                transaction,
+                states,
+                "waiting progress contract",
+                contract_error,
+            ),
+            BatchContinuationCancelOutcome::Quiesced(cleanup_error) => {
+                let combined = Error::Execution(format!(
+                    "{contract_error}; model continuation quiesced with cleanup failure: {cleanup_error}"
+                ));
+                self.fail_transaction(transaction, states, "waiting progress contract", combined)
+            }
+            BatchContinuationCancelOutcome::StillActive(cancel_error) => {
+                let corrected = PendingModelProgress::new(
+                    transaction,
+                    continuation,
+                    pending.expert_loads().to_vec(),
+                )
+                .expect("validated pending expert loads remain valid under corrected ownership");
+                self.transactions
+                    .get_mut(&transaction)
+                    .expect("invalid progress must still belong to a registered transaction")
+                    .pending_model_progress = Some(corrected);
+                Error::Execution(format!(
+                    "{contract_error}; cancellation did not quiesce the invalid continuation: {cancel_error}"
+                ))
             }
         }
+    }
 
-        Ok(ExecutionOutput::new(output_rows))
+    fn fail_transaction(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        states: &mut [R::SequenceState],
+        failure_context: &'static str,
+        error: Error,
+    ) -> Error {
+        match self.rollback_transaction_inner(transaction, states) {
+            Ok(()) => error,
+            Err(rollback_error) => Error::Execution(format!(
+                "{failure_context} failed ({error}); backend rollback also failed ({rollback_error})"
+            )),
+        }
+    }
+
+    fn rollback_transaction_inner(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        states: &mut [R::SequenceState],
+    ) -> Result<()> {
+        if !self.transactions.contains_key(&transaction) {
+            return Err(Error::Execution(format!(
+                "execution transaction {transaction:?} is not registered"
+            )));
+        }
+        if let Err(error) = self
+            .runner
+            .rollback_multi_session_batch(transaction, states)
+        {
+            self.record_poison("backend_kv_rollback", &error);
+            return Err(error);
+        }
+        self.remove_transaction(transaction);
+        Ok(())
+    }
+
+    fn remove_transaction(&mut self, transaction: ExecutionTransactionId) {
+        self.transactions.remove(&transaction);
+    }
+
+    fn clear_continuation(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        continuation: BatchContinuationId,
+    ) {
+        if let Some(transaction_state) = self.transactions.get_mut(&transaction)
+            && transaction_state
+                .pending_model_progress
+                .as_ref()
+                .is_some_and(|pending| pending.continuation() == continuation)
+        {
+            transaction_state.pending_model_progress = None;
+        }
+    }
+
+    fn ensure_continuation_owner(
+        &self,
+        transaction: ExecutionTransactionId,
+        continuation: BatchContinuationId,
+    ) -> Result<()> {
+        let pending = self
+            .transactions
+            .get(&transaction)
+            .and_then(|transaction| transaction.pending_model_progress.as_ref())
+            .ok_or_else(|| {
+                Error::Execution(format!(
+                    "transaction {transaction:?} has no active model continuation"
+                ))
+            })?;
+        if pending.continuation() != continuation {
+            return Err(Error::Execution(format!(
+                "transaction {transaction:?} owns continuation {:?}, not {continuation:?}",
+                pending.continuation()
+            )));
+        }
+        Ok(())
+    }
+
+    fn quiescent_transaction(
+        &self,
+        transaction: ExecutionTransactionId,
+    ) -> Result<&NativeTransaction> {
+        let transaction_state = self.transactions.get(&transaction).ok_or_else(|| {
+            Error::Execution(format!(
+                "execution transaction {transaction:?} is not registered"
+            ))
+        })?;
+        if let Some(pending) = &transaction_state.pending_model_progress {
+            return Err(Error::Execution(format!(
+                "cannot finalize transaction {transaction:?} with active batch continuation {:?}; resume or cancel it first",
+                pending.continuation()
+            )));
+        }
+        Ok(transaction_state)
+    }
+
+    fn ensure_registry_empty(&self, operation: &str) -> Result<()> {
+        if self.transactions.is_empty() {
+            return Ok(());
+        }
+        Err(Error::Execution(format!(
+            "cannot {operation} with active execution transactions {:?}",
+            self.sorted_transaction_ids()
+        )))
+    }
+
+    fn sorted_transaction_ids(&self) -> Vec<ExecutionTransactionId> {
+        let mut transactions: Vec<_> = self.transactions.keys().copied().collect();
+        transactions.sort_unstable();
+        transactions
     }
 
     fn ensure_ready(&self) -> Result<()> {
@@ -596,155 +717,83 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
     }
 }
 
-fn execute_prefill_sequence<R: MultiSessionRunner>(
-    runner: &mut R,
-    state: &mut R::SequenceState,
-    token_ids: &[u32],
-    logits_request: LogitsRequest,
-    last_row: usize,
-    output_rows: &mut Vec<LogitsRow>,
-) -> Result<()> {
-    match logits_request {
-        LogitsRequest::None => {
-            runner.with_sequence_state(state, |r| {
-                r.prefill_tokens(token_ids, PrefillMode::Batched)
-            })?;
-        }
-        LogitsRequest::TopK(top_k) => {
-            let runner_top_k = top_k_to_usize(top_k)?;
-            let logits = runner.with_sequence_state(state, |r| {
-                r.prefill_topk(token_ids, runner_top_k, PrefillMode::Batched)
-            })?;
-            let input_row = row_to_u32(last_row, "prefill input row")?;
-            output_rows.push(LogitsRow::new(
-                input_row,
-                LogitsOutput::TopK(convert_logits(logits)),
-            ));
-        }
-        LogitsRequest::Full => {
-            return Err(execution_error(
-                "native multi-session prefill does not yet support full logits",
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn execute_decode_sequence<R: MultiSessionRunner>(
-    runner: &mut R,
-    state: &mut R::SequenceState,
-    token_id: u32,
-    logits_request: LogitsRequest,
-    row: usize,
-    output_rows: &mut Vec<LogitsRow>,
-) -> Result<()> {
-    match logits_request {
-        LogitsRequest::None => {
-            runner.with_sequence_state(state, |r| r.feed_token(token_id))?;
-        }
-        LogitsRequest::TopK(top_k) => {
-            let runner_top_k = top_k_to_usize(top_k)?;
-            let logits =
-                runner.with_sequence_state(state, |r| r.decode_topk(token_id, runner_top_k))?;
-            let input_row = row_to_u32(row, "decode input row")?;
-            output_rows.push(LogitsRow::new(
-                input_row,
-                LogitsOutput::TopK(convert_logits(logits)),
-            ));
-        }
-        LogitsRequest::Full => {
-            return Err(execution_error(
-                "native multi-session decode does not yet support full logits",
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn state_slot_index(slot: StateSlot, state_count: usize) -> Result<usize> {
-    let index = slot.try_as_usize().map_err(|_| {
-        execution_error(format!(
-            "state slot {} cannot be represented as usize",
-            slot.get()
-        ))
-    })?;
-    if index >= state_count {
-        return Err(execution_error(format!(
-            "state slot {} is out of range for {state_count} states",
-            slot.get()
-        )));
-    }
-    Ok(index)
-}
-
-fn query_range(sequence: &ferrule_common::execution::ExecutionSequence) -> Result<(usize, usize)> {
-    let start = usize::try_from(sequence.query.start)
-        .map_err(|_| execution_error("query start overflows usize"))?;
-    let end = usize::try_from(sequence.query.end)
-        .map_err(|_| execution_error("query end overflows usize"))?;
-    Ok((start, end))
-}
-
-fn top_k_to_usize(top_k: NonZeroU32) -> Result<usize> {
-    usize::try_from(top_k.get()).map_err(|_| {
-        execution_error(format!(
-            "requested top-k {} cannot be represented as usize",
-            top_k.get()
-        ))
-    })
-}
-
-fn row_to_u32(row: usize, context: &str) -> Result<u32> {
-    u32::try_from(row).map_err(|_| execution_error(format!("{context} {row} overflows u32")))
-}
-
-fn convert_logits(logits: Vec<TokenLogit>) -> Vec<ExecutionTokenLogit> {
-    logits
-        .into_iter()
-        .map(|entry| ExecutionTokenLogit::new(entry.token_id, entry.logit))
-        .collect()
-}
-
-fn execution_error(message: impl Into<String>) -> Error {
-    Error::Execution(message.into())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::cache::KvPageManager;
-    use crate::speculation::{
-        TargetFrontier, run_acceptance_aware_dspark_verification, run_dspark_verification,
-    };
-    use ferrule_common::execution::{
-        ExecutionBatch, ExecutionCapabilities, ExecutionSequence, ForwardMode, KvLayoutSchema,
-        KvPlaneDescriptor, LogitsRequest,
-    };
-    use ferrule_common::{ExpertResidencyControl, ExpertResidencyRequirements};
-    use ferrule_model::{
-        ModelInfo, ModelRunner, MultiSessionRunner, PrefillMode, TokenLogit, TopKModelRunner,
-    };
+    use std::collections::{HashMap, HashSet, VecDeque};
+    use std::num::NonZeroU32;
 
-    /// A mock runner that supports multi-session execution by tracking per-sequence
-    /// position and KV state in a simple way.
-    #[derive(Default)]
-    struct MockMultiSessionRunner {
+    use super::*;
+    use ferrule_common::execution::{
+        ExecutionSequence, ForwardMode, ForwardPhase, LogitsOutput, LogitsRequest, LogitsRow,
+        StateSlot, TokenLogit,
+    };
+    use ferrule_model::{ModelInfo, ModelRunner, PendingExpertLoad};
+
+    #[derive(Debug, Default)]
+    struct MockSequenceState {
         position: usize,
+    }
+
+    #[derive(Debug)]
+    enum MockCancelOutcome {
+        Cancelled,
+        StillActive,
+        Quiesced,
+    }
+
+    #[derive(Debug, Default)]
+    struct MockMultiSessionRunner {
+        progress: HashMap<ExecutionTransactionId, VecDeque<Result<MultiSessionBatchProgress>>>,
+        cancel_outcomes: HashMap<ExecutionTransactionId, VecDeque<MockCancelOutcome>>,
+        fail_prepares: HashSet<ExecutionTransactionId>,
+        fail_rollbacks: HashSet<ExecutionTransactionId>,
+        prepares: Vec<ExecutionTransactionId>,
+        executes: Vec<ExecutionTransactionId>,
+        resumes: Vec<(ExecutionTransactionId, BatchContinuationId)>,
+        cancels: Vec<(ExecutionTransactionId, BatchContinuationId)>,
+        commits: Vec<ExecutionTransactionId>,
+        rollbacks: Vec<ExecutionTransactionId>,
         sequences_created: usize,
         sequences_forked: usize,
-        transactional: bool,
-        paged: bool,
-        packed_predictions: Vec<u32>,
-        retain_prefixes: bool,
-        prepares: usize,
-        commits: usize,
-        rollbacks: usize,
-        retained_prefixes: usize,
-        expert_residency_requirements: Option<ExpertResidencyRequirements>,
-        expert_residency_install_attempts: usize,
-        expert_residency_control: Option<Box<dyn ExpertResidencyControl>>,
-        fail_expert_residency_install: bool,
-        decode_topk_calls: usize,
+        sequences_released: usize,
+    }
+
+    impl MockMultiSessionRunner {
+        fn push_progress(
+            &mut self,
+            transaction: ExecutionTransactionId,
+            progress: Result<MultiSessionBatchProgress>,
+        ) {
+            self.progress
+                .entry(transaction)
+                .or_default()
+                .push_back(progress);
+        }
+
+        fn push_cancel_outcome(
+            &mut self,
+            transaction: ExecutionTransactionId,
+            outcome: MockCancelOutcome,
+        ) {
+            self.cancel_outcomes
+                .entry(transaction)
+                .or_default()
+                .push_back(outcome);
+        }
+
+        fn next_progress(
+            &mut self,
+            transaction: ExecutionTransactionId,
+        ) -> Result<MultiSessionBatchProgress> {
+            self.progress
+                .get_mut(&transaction)
+                .and_then(VecDeque::pop_front)
+                .unwrap_or_else(|| {
+                    Err(Error::Execution(format!(
+                        "mock has no progress for transaction {transaction:?}"
+                    )))
+                })
+        }
     }
 
     impl ModelRunner for MockMultiSessionRunner {
@@ -762,219 +811,46 @@ mod tests {
                 backend: "mock",
             }
         }
+
         fn encode(&self, text: &str) -> Result<Vec<u32>> {
             Ok(text.bytes().map(u32::from).collect())
         }
+
         fn decode(&self, tokens: &[u32]) -> Result<String> {
             Ok(tokens
                 .iter()
-                .map(|t| char::from_u32(*t).unwrap_or('?'))
+                .map(|token| char::from_u32(*token).unwrap_or('?'))
                 .collect())
         }
-        fn prefill(&mut self, tokens: &[u32]) -> Result<Vec<f32>> {
-            self.position += tokens.len();
-            Ok(vec![0.0, 1.0])
-        }
-        fn decode_token(&mut self, _token: u32) -> Result<Vec<f32>> {
-            self.position += 1;
-            Ok(vec![0.0, 1.0])
-        }
+
         fn reset_session(&mut self) -> Result<()> {
-            self.position = 0;
             Ok(())
         }
+
         fn eos_token_id(&self) -> Option<u32> {
             None
         }
     }
 
-    impl TopKModelRunner for MockMultiSessionRunner {
-        fn position(&self) -> usize {
-            self.position
-        }
-        fn feed_token(&mut self, _token_id: u32) -> Result<()> {
-            if self.expert_residency_requirements.is_some()
-                && self.expert_residency_control.is_none()
-            {
-                return Err(Error::Execution(
-                    "mock execution started before expert residency installation".into(),
-                ));
-            }
-            self.position += 1;
-            Ok(())
-        }
-        fn max_top_k(&self) -> usize {
-            40
-        }
-        fn prefill_topk(
-            &mut self,
-            token_ids: &[u32],
-            _top_k: usize,
-            _mode: PrefillMode,
-        ) -> Result<Vec<TokenLogit>> {
-            self.position += token_ids.len();
-            Ok(vec![TokenLogit {
-                token_id: 1,
-                logit: 2.0,
-            }])
-        }
-        fn decode_topk(&mut self, _token_id: u32, _top_k: usize) -> Result<Vec<TokenLogit>> {
-            if self.expert_residency_requirements.is_some()
-                && self.expert_residency_control.is_none()
-            {
-                return Err(Error::Execution(
-                    "mock execution started before expert residency installation".into(),
-                ));
-            }
-            self.position += 1;
-            self.decode_topk_calls += 1;
-            Ok(vec![TokenLogit {
-                token_id: 2,
-                logit: 3.0,
-            }])
-        }
-    }
-
-    /// Per-sequence state for the mock runner.
-    #[derive(Debug)]
-    struct MockSequenceState {
-        position: usize,
-        fed_tokens: Vec<u32>,
-    }
-
     impl MultiSessionRunner for MockMultiSessionRunner {
         type SequenceState = MockSequenceState;
 
-        fn expert_residency_requirements(&self) -> Option<ExpertResidencyRequirements> {
-            self.expert_residency_requirements.clone()
-        }
-
-        fn expert_residency_control_installed(&self) -> bool {
-            self.expert_residency_control.is_some()
-        }
-
-        fn install_expert_residency_control(
-            &mut self,
-            control: Box<dyn ExpertResidencyControl>,
-        ) -> Result<()> {
-            self.expert_residency_install_attempts += 1;
-            if self.fail_expert_residency_install {
-                return Err(Error::Execution(
-                    "mock expert residency install failed".into(),
-                ));
-            }
-            self.expert_residency_control = Some(control);
-            Ok(())
-        }
-
-        fn prepare_multi_session_batch(
-            &mut self,
-            _states: &mut [Self::SequenceState],
-            _batch: &ExecutionBatch,
-            _kv_reservations: &[KvReservation],
-        ) -> Result<bool> {
-            if self.transactional {
-                self.prepares += 1;
-            }
-            Ok(self.transactional)
-        }
-
-        fn execute_multi_session_batch(
-            &mut self,
-            states: &mut [Self::SequenceState],
-            batch: &ExecutionBatch,
-        ) -> Result<Option<ExecutionOutput>> {
-            if self.packed_predictions.is_empty() {
-                return Ok(None);
-            }
-            if self.packed_predictions.len() < batch.len() {
-                return Err(Error::Execution(
-                    "mock packed predictions are incomplete".into(),
-                ));
-            }
-            let state = &mut states[0];
-            state.position += batch.len();
-            state.fed_tokens.extend_from_slice(batch.token_ids());
-            let logits = batch
-                .logits()
-                .iter()
-                .enumerate()
-                .filter(|(_, request)| matches!(request, LogitsRequest::TopK(_)))
-                .map(|(row, _)| {
-                    LogitsRow::new(
-                        row as u32,
-                        LogitsOutput::TopK(vec![ExecutionTokenLogit::new(
-                            self.packed_predictions[row],
-                            1.0,
-                        )]),
-                    )
-                })
-                .collect();
-            Ok(Some(ExecutionOutput::new(logits)))
-        }
-
-        fn commit_multi_session_batch(&mut self) -> Result<()> {
-            self.commits += 1;
-            Ok(())
-        }
-
-        fn rollback_multi_session_batch(&mut self) -> Result<()> {
-            self.rollbacks += 1;
-            Ok(())
-        }
-
-        fn retain_provisional_prefix(
-            &mut self,
-            source: &Self::SequenceState,
-            branch: &mut Self::SequenceState,
-            executed_rows: usize,
-            retained_rows: usize,
-        ) -> Result<bool> {
-            if !self.retain_prefixes {
-                return Ok(false);
-            }
-            if branch.position != source.position + executed_rows
-                || branch.fed_tokens.len() != source.fed_tokens.len() + executed_rows
-            {
-                return Err(Error::Execution(
-                    "mock retained branch does not match executed rows".into(),
-                ));
-            }
-            branch.position = source.position + retained_rows;
-            branch
-                .fed_tokens
-                .truncate(source.fed_tokens.len() + retained_rows);
-            self.retained_prefixes += 1;
-            Ok(true)
-        }
-
         fn with_sequence_state<T>(
             &mut self,
-            state: &mut Self::SequenceState,
+            _state: &mut Self::SequenceState,
             execute: impl FnOnce(&mut Self) -> Result<T>,
         ) -> Result<T> {
-            let saved = self.position;
-            self.position = state.position;
-            let result = execute(self);
-            state.position = self.position;
-            self.position = saved;
-            result
+            execute(self)
         }
 
         fn create_sequence_state(&mut self) -> Result<Self::SequenceState> {
             self.sequences_created += 1;
-            Ok(MockSequenceState {
-                position: 0,
-                fed_tokens: Vec::new(),
-            })
+            Ok(MockSequenceState::default())
         }
 
         fn fork_sequence_state(&mut self) -> Result<Self::SequenceState> {
             self.sequences_forked += 1;
-            Ok(MockSequenceState {
-                position: 0,
-                fed_tokens: Vec::new(),
-            })
+            Ok(MockSequenceState::default())
         }
 
         fn fork_sequence_state_from(
@@ -988,795 +864,642 @@ mod tests {
             self.sequences_forked += 1;
             Ok(MockSequenceState {
                 position: source.position,
-                fed_tokens: source.fed_tokens.clone(),
             })
         }
 
         fn reset_sequence_state(&mut self, state: &mut Self::SequenceState) -> Result<()> {
             state.position = 0;
-            state.fed_tokens.clear();
             Ok(())
         }
 
         fn release_sequence_state(&mut self, _state: Self::SequenceState) -> Result<()> {
+            self.sequences_released += 1;
             Ok(())
+        }
+
+        fn configure_kv_page_capacity(&mut self, _max_pages: usize) -> Result<()> {
+            Ok(())
+        }
+
+        fn release_kv_pages(
+            &mut self,
+            _pages: &[ferrule_common::execution::KvPageId],
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn preempt_kv_pages(
+            &mut self,
+            _pages: &[ferrule_common::execution::KvPageId],
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn restore_kv_pages(
+            &mut self,
+            _pages: &[ferrule_common::execution::KvPageId],
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn prepare_multi_session_batch(
+            &mut self,
+            transaction: ExecutionTransactionId,
+            _states: &mut [Self::SequenceState],
+            _batch: &ExecutionBatch,
+            _kv_reservations: &[KvReservationView],
+        ) -> Result<()> {
+            self.prepares.push(transaction);
+            if self.fail_prepares.contains(&transaction) {
+                return Err(Error::Execution("mock prepare failed".into()));
+            }
+            Ok(())
+        }
+
+        fn retain_provisional_prefixes(
+            &mut self,
+            _transaction: ExecutionTransactionId,
+            _sources: &[Self::SequenceState],
+            _branches: &mut [Self::SequenceState],
+            _executed_rows: &[usize],
+            _retained_rows: &[usize],
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn execute_multi_session_batch_progress(
+            &mut self,
+            transaction: ExecutionTransactionId,
+            _states: &mut [Self::SequenceState],
+            _batch: &ExecutionBatch,
+        ) -> Result<MultiSessionBatchProgress> {
+            self.executes.push(transaction);
+            self.next_progress(transaction)
+        }
+
+        fn resume_multi_session_batch(
+            &mut self,
+            transaction: ExecutionTransactionId,
+            _states: &mut [Self::SequenceState],
+            _batch: &ExecutionBatch,
+            continuation: BatchContinuationId,
+        ) -> Result<MultiSessionBatchProgress> {
+            self.resumes.push((transaction, continuation));
+            self.next_progress(transaction)
+        }
+
+        fn cancel_multi_session_batch(
+            &mut self,
+            transaction: ExecutionTransactionId,
+            _states: &mut [Self::SequenceState],
+            continuation: BatchContinuationId,
+        ) -> BatchContinuationCancelOutcome {
+            self.cancels.push((transaction, continuation));
+            match self
+                .cancel_outcomes
+                .get_mut(&transaction)
+                .and_then(VecDeque::pop_front)
+                .unwrap_or(MockCancelOutcome::Cancelled)
+            {
+                MockCancelOutcome::Cancelled => BatchContinuationCancelOutcome::Cancelled,
+                MockCancelOutcome::StillActive => BatchContinuationCancelOutcome::StillActive(
+                    Error::Execution("mock cancellation is still active".into()),
+                ),
+                MockCancelOutcome::Quiesced => BatchContinuationCancelOutcome::Quiesced(
+                    Error::Execution("mock cancellation cleanup failed".into()),
+                ),
+            }
+        }
+
+        fn commit_multi_session_batch(
+            &mut self,
+            transaction: ExecutionTransactionId,
+            _states: &mut [Self::SequenceState],
+        ) -> Result<()> {
+            self.commits.push(transaction);
+            Ok(())
+        }
+
+        fn rollback_multi_session_batch(
+            &mut self,
+            transaction: ExecutionTransactionId,
+            _states: &mut [Self::SequenceState],
+        ) -> Result<()> {
+            self.rollbacks.push(transaction);
+            if self.fail_rollbacks.contains(&transaction) {
+                Err(Error::Execution("mock backend rollback failed".into()))
+            } else {
+                Ok(())
+            }
         }
 
         fn multi_session_capabilities(&self) -> ExecutionCapabilities {
             ExecutionCapabilities {
-                max_batch_tokens: 1024,
+                max_batch_tokens: 16,
                 max_sequences: 4,
-                max_prefill_query_tokens_per_sequence: 1024,
+                max_prefill_query_tokens_per_sequence: 16,
                 max_decode_query_tokens_per_sequence: 1,
-                max_top_k: NonZeroU32::new(40),
+                max_top_k: NonZeroU32::new(8),
                 supports_prefill: true,
                 supports_decode: true,
                 supports_mixed: true,
                 full_logits_width: None,
-                kv_binding_mode: if self.paged {
-                    ferrule_common::execution::KvBindingMode::Paged
-                } else {
-                    ferrule_common::execution::KvBindingMode::None
-                },
-                logits_row_policy: if self.paged {
-                    ferrule_common::execution::LogitsRowPolicy::Any
-                } else {
-                    ferrule_common::execution::LogitsRowPolicy::LastPerSequence
-                },
+                kv_binding_mode: ferrule_common::execution::KvBindingMode::None,
+                logits_row_policy: ferrule_common::execution::LogitsRowPolicy::LastPerSequence,
             }
         }
     }
 
-    #[test]
-    fn serving_admission_constructs_fresh_state_without_forking_default_session() {
-        let mut executor = NativeMultiSessionExecutor::new(MockMultiSessionRunner::default());
-        let state = executor.create_sequence_state().unwrap();
-        assert_eq!(state.position, 0);
-        assert_eq!(executor.runner().sequences_created, 1);
-        assert_eq!(executor.runner().sequences_forked, 0);
+    fn transaction(value: u64) -> ExecutionTransactionId {
+        ExecutionTransactionId::new(value).unwrap()
     }
 
-    fn nz(n: u32) -> NonZeroU32 {
-        NonZeroU32::new(n).unwrap()
+    fn continuation(value: u64) -> BatchContinuationId {
+        BatchContinuationId::new(value).unwrap()
     }
 
-    #[derive(Debug)]
-    struct TestPagedSchema;
-
-    static TEST_KV_PLANE: KvPlaneDescriptor = KvPlaneDescriptor {
-        name: "mock",
-        elements_per_token: 1,
-        layer_count: 1,
-    };
-
-    impl KvLayoutSchema for TestPagedSchema {
-        fn planes(&self) -> &[KvPlaneDescriptor] {
-            std::slice::from_ref(&TEST_KV_PLANE)
-        }
-
-        fn page_size(&self) -> usize {
-            4
-        }
-
-        fn max_sequence_len(&self) -> usize {
-            1024
-        }
+    fn waiting(
+        transaction: ExecutionTransactionId,
+        continuation: BatchContinuationId,
+    ) -> MultiSessionBatchProgress {
+        MultiSessionBatchProgress::Waiting(
+            PendingModelProgress::new(
+                transaction,
+                continuation,
+                vec![PendingExpertLoad::new(continuation.get(), 0, 1).unwrap()],
+            )
+            .unwrap(),
+        )
     }
 
-    fn dspark_executor(predictions: &[u32]) -> NativeMultiSessionExecutor<MockMultiSessionRunner> {
-        NativeMultiSessionExecutor::new(MockMultiSessionRunner {
-            transactional: true,
-            paged: true,
-            packed_predictions: predictions.to_vec(),
-            ..MockMultiSessionRunner::default()
-        })
+    fn complete(token: u32) -> MultiSessionBatchProgress {
+        MultiSessionBatchProgress::Complete(ExecutionOutput::new(vec![LogitsRow::new(
+            0,
+            LogitsOutput::TopK(vec![TokenLogit::new(token, 1.0)]),
+        )]))
     }
 
-    fn dspark_prefix_executor(
-        predictions: &[u32],
-    ) -> NativeMultiSessionExecutor<MockMultiSessionRunner> {
-        NativeMultiSessionExecutor::new(MockMultiSessionRunner {
-            transactional: true,
-            paged: true,
-            packed_predictions: predictions.to_vec(),
-            retain_prefixes: true,
-            ..MockMultiSessionRunner::default()
-        })
-    }
-
-    fn dspark_page_manager() -> KvPageManager {
-        let mut manager = KvPageManager::new(Box::new(TestPagedSchema), 16);
-        manager.alloc_sequence(StateSlot::new(0), 0).unwrap();
-        manager
-    }
-
-    fn make_decode_batch(num_sequences: usize) -> (Vec<MockSequenceState>, ExecutionBatch) {
-        let states: Vec<_> = (0..num_sequences)
-            .map(|_| MockSequenceState {
-                position: 10,
-                fed_tokens: Vec::new(),
-            })
-            .collect();
-
-        let mut token_ids = Vec::new();
-        let mut positions = Vec::new();
-        let mut logits = Vec::new();
-        let mut sequences = Vec::new();
-
-        for i in 0..num_sequences {
-            let row = i as u32;
-            token_ids.push(100 + i as u32);
-            positions.push(10);
-            logits.push(LogitsRequest::TopK(nz(5)));
-            sequences.push(ExecutionSequence::new(
-                StateSlot::new(row),
-                ForwardPhase::Decode,
-                row..row + 1,
-                10,
-                11,
-                0..0,
-            ));
-        }
-
+    fn decode_batch(token: u32) -> (Vec<MockSequenceState>, ExecutionBatch) {
+        let states = vec![MockSequenceState { position: 10 }];
         let batch = ExecutionBatch::new(
             ForwardMode::Decode,
-            token_ids,
-            positions,
-            vec![None; num_sequences],
-            logits,
-            sequences,
-            Vec::new(),
-        );
-
-        (states, batch)
-    }
-
-    #[test]
-    fn exact_dspark_full_accept_promotes_verification_branch() {
-        let mut executor = dspark_executor(&[11, 12, 13, 42]);
-        let mut pages = dspark_page_manager();
-        let mut source = MockSequenceState {
-            position: 0,
-            fed_tokens: Vec::new(),
-        };
-        let result = run_dspark_verification(
-            &mut executor,
-            &mut pages,
-            &mut source,
-            StateSlot::new(0),
-            0,
-            &[11, 12, 13],
-            nz(1),
-            TargetFrontier {
-                position: 0,
-                top1: ExecutionTokenLogit::new(10, 1.0),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(result.accepted, vec![11, 12, 13]);
-        assert_eq!(result.accounting.proposed_tokens, 3);
-        assert_eq!(result.accounting.verified_rows, 4);
-        assert_eq!(result.accounting.accepted_draft_tokens, 3);
-        assert_eq!(result.accounting.correction_tokens, 0);
-        assert_eq!(result.accounting.externally_committed_tokens, 4);
-        assert_eq!(result.accounting.rolled_back_rows, 0);
-        assert_eq!(result.target_next.unwrap().token_id, 42);
-        assert_eq!(source.position, 4);
-        assert_eq!(source.fed_tokens, vec![10, 11, 12, 13]);
-        assert_eq!(
-            pages
-                .block_table(StateSlot::new(0))
-                .unwrap()
-                .committed_tokens(),
-            4
-        );
-        assert_eq!(executor.runner().prepares, 1);
-        assert_eq!(executor.runner().commits, 1);
-        assert_eq!(executor.runner().rollbacks, 0);
-    }
-
-    #[test]
-    fn exact_dspark_partial_accept_replays_only_committed_prefix() {
-        let mut executor = dspark_executor(&[11, 12, 99, 42]);
-        let mut pages = dspark_page_manager();
-        let mut source = MockSequenceState {
-            position: 0,
-            fed_tokens: Vec::new(),
-        };
-        let result = run_dspark_verification(
-            &mut executor,
-            &mut pages,
-            &mut source,
-            StateSlot::new(0),
-            0,
-            &[11, 12, 13],
-            nz(1),
-            TargetFrontier {
-                position: 0,
-                top1: ExecutionTokenLogit::new(10, 1.0),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(result.accepted, vec![11, 12]);
-        assert_eq!(result.rejected, Some(13));
-        assert_eq!(result.target_correction, Some(99));
-        assert_eq!(result.accounting.accepted_draft_tokens, 2);
-        assert_eq!(result.accounting.correction_tokens, 1);
-        assert_eq!(result.accounting.externally_committed_tokens, 3);
-        assert_eq!(result.accounting.rolled_back_rows, 4);
-        assert_eq!(source.position, 3);
-        assert_eq!(source.fed_tokens, vec![10, 11, 12]);
-        assert_eq!(
-            pages
-                .block_table(StateSlot::new(0))
-                .unwrap()
-                .committed_tokens(),
-            3
-        );
-        assert_eq!(executor.runner().prepares, 2);
-        assert_eq!(executor.runner().commits, 1);
-        assert_eq!(executor.runner().rollbacks, 1);
-    }
-
-    #[test]
-    fn exact_dspark_partial_accept_promotes_arbitrary_width_prefix_without_replay() {
-        let mut executor = dspark_prefix_executor(&[11, 12, 13, 14, 15, 99, 17, 18, 42]);
-        let mut pages = dspark_page_manager();
-        let mut source = MockSequenceState {
-            position: 0,
-            fed_tokens: Vec::new(),
-        };
-        let result = run_dspark_verification(
-            &mut executor,
-            &mut pages,
-            &mut source,
-            StateSlot::new(0),
-            0,
-            &[11, 12, 13, 14, 15, 16, 17, 18],
-            nz(1),
-            TargetFrontier {
-                position: 0,
-                top1: ExecutionTokenLogit::new(10, 1.0),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(result.accepted, vec![11, 12, 13, 14, 15]);
-        assert_eq!(result.rejected, Some(16));
-        assert_eq!(result.target_correction, Some(99));
-        assert_eq!(result.accounting.verified_rows, 9);
-        assert_eq!(result.accounting.externally_committed_tokens, 6);
-        assert_eq!(result.accounting.rolled_back_rows, 3);
-        assert_eq!(source.position, 6);
-        assert_eq!(source.fed_tokens, vec![10, 11, 12, 13, 14, 15]);
-        assert_eq!(
-            pages
-                .block_table(StateSlot::new(0))
-                .unwrap()
-                .committed_tokens(),
-            6
-        );
-        assert_eq!(executor.runner().prepares, 1);
-        assert_eq!(executor.runner().commits, 1);
-        assert_eq!(executor.runner().rollbacks, 0);
-        assert_eq!(executor.runner().retained_prefixes, 1);
-    }
-
-    #[test]
-    fn exact_dspark_zero_accept_commits_anchor_and_rolls_back_drafts() {
-        let mut executor = dspark_executor(&[99, 12, 13, 42]);
-        let mut pages = dspark_page_manager();
-        let mut source = MockSequenceState {
-            position: 0,
-            fed_tokens: Vec::new(),
-        };
-        let result = run_dspark_verification(
-            &mut executor,
-            &mut pages,
-            &mut source,
-            StateSlot::new(0),
-            0,
-            &[11, 12, 13],
-            nz(1),
-            TargetFrontier {
-                position: 0,
-                top1: ExecutionTokenLogit::new(10, 1.0),
-            },
-        )
-        .unwrap();
-
-        assert!(result.accepted.is_empty());
-        assert_eq!(result.target_correction, Some(99));
-        assert_eq!(result.accounting.accepted_draft_tokens, 0);
-        assert_eq!(result.accounting.correction_tokens, 1);
-        assert_eq!(result.accounting.externally_committed_tokens, 1);
-        assert_eq!(result.accounting.rolled_back_rows, 4);
-        assert_eq!(source.position, 1);
-        assert_eq!(source.fed_tokens, vec![10]);
-        assert_eq!(
-            pages
-                .block_table(StateSlot::new(0))
-                .unwrap()
-                .committed_tokens(),
-            1
-        );
-        assert_eq!(executor.runner().prepares, 2);
-        assert_eq!(executor.runner().commits, 1);
-        assert_eq!(executor.runner().rollbacks, 1);
-    }
-
-    #[test]
-    fn acceptance_aware_dspark_first_miss_commits_probe_without_full_verify_or_replay() {
-        let mut executor = dspark_executor(&[99, 12, 13, 42]);
-        let mut pages = dspark_page_manager();
-        let mut source = MockSequenceState {
-            position: 0,
-            fed_tokens: Vec::new(),
-        };
-        let result = run_acceptance_aware_dspark_verification(
-            &mut executor,
-            &mut pages,
-            &mut source,
-            StateSlot::new(0),
-            0,
-            &[11, 12, 13],
-            nz(1),
-            TargetFrontier {
-                position: 0,
-                top1: ExecutionTokenLogit::new(10, 1.0),
-            },
-        )
-        .unwrap();
-
-        assert!(result.accepted.is_empty());
-        assert_eq!(result.rejected, Some(11));
-        assert_eq!(result.target_correction, Some(99));
-        assert_eq!(result.accounting.proposed_tokens, 3);
-        assert_eq!(result.accounting.verified_rows, 1);
-        assert_eq!(result.accounting.accepted_draft_tokens, 0);
-        assert_eq!(result.accounting.correction_tokens, 1);
-        assert_eq!(result.accounting.externally_committed_tokens, 1);
-        assert_eq!(result.accounting.rolled_back_rows, 0);
-        assert_eq!(source.position, 1);
-        assert_eq!(source.fed_tokens, vec![10]);
-        assert_eq!(executor.runner().prepares, 1);
-        assert_eq!(executor.runner().commits, 1);
-        assert_eq!(executor.runner().rollbacks, 0);
-    }
-
-    #[test]
-    fn acceptance_aware_dspark_first_hit_rolls_back_probe_then_uses_full_transaction() {
-        let mut executor = dspark_executor(&[11, 99, 13, 42]);
-        let mut pages = dspark_page_manager();
-        let mut source = MockSequenceState {
-            position: 0,
-            fed_tokens: Vec::new(),
-        };
-        let result = run_acceptance_aware_dspark_verification(
-            &mut executor,
-            &mut pages,
-            &mut source,
-            StateSlot::new(0),
-            0,
-            &[11, 12, 13],
-            nz(1),
-            TargetFrontier {
-                position: 0,
-                top1: ExecutionTokenLogit::new(10, 1.0),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(result.accepted, vec![11]);
-        assert_eq!(result.rejected, Some(12));
-        assert_eq!(result.target_correction, Some(99));
-        assert_eq!(result.accounting.proposed_tokens, 3);
-        assert_eq!(result.accounting.verified_rows, 5);
-        assert_eq!(result.accounting.accepted_draft_tokens, 1);
-        assert_eq!(result.accounting.correction_tokens, 1);
-        assert_eq!(result.accounting.externally_committed_tokens, 2);
-        assert_eq!(result.accounting.rolled_back_rows, 5);
-        assert_eq!(source.position, 2);
-        assert_eq!(source.fed_tokens, vec![10, 11]);
-        assert_eq!(executor.runner().prepares, 3);
-        assert_eq!(executor.runner().commits, 1);
-        assert_eq!(executor.runner().rollbacks, 2);
-    }
-
-    #[test]
-    fn expert_residency_controller_is_shared_across_batches_and_survives_reset() {
-        let requirements = ExpertResidencyRequirements::new(73, vec![2, 3]);
-        let runner = MockMultiSessionRunner {
-            expert_residency_requirements: Some(requirements.clone()),
-            ..MockMultiSessionRunner::default()
-        };
-        let mut executor = NativeMultiSessionExecutor::new(runner);
-
-        assert_eq!(executor.runner().expert_residency_install_attempts, 0);
-        assert!(executor.runner().expert_residency_control.is_none());
-        executor.create_sequence_state().unwrap();
-        assert_eq!(executor.runner().expert_residency_install_attempts, 0);
-
-        let (mut first_states, first_batch) = make_decode_batch(1);
-        executor
-            .execute_batch(&mut first_states, &first_batch)
-            .unwrap();
-        assert_eq!(executor.runner().expert_residency_install_attempts, 1);
-        assert_eq!(
-            executor
-                .runner()
-                .expert_residency_control
-                .as_deref()
-                .unwrap()
-                .requirements(),
-            requirements
-        );
-        let first_control = executor
-            .runner()
-            .expert_residency_control
-            .as_deref()
-            .unwrap() as *const dyn ExpertResidencyControl as *const ();
-
-        executor.reset().unwrap();
-        let (mut second_states, second_batch) = make_decode_batch(1);
-        executor
-            .execute_batch(&mut second_states, &second_batch)
-            .unwrap();
-        let second_control = executor
-            .runner()
-            .expert_residency_control
-            .as_deref()
-            .unwrap() as *const dyn ExpertResidencyControl
-            as *const ();
-        assert_eq!(executor.runner().expert_residency_install_attempts, 1);
-        assert_eq!(first_control, second_control);
-
-        let runner = executor.into_runner().unwrap();
-        assert_eq!(
-            runner
-                .expert_residency_control
-                .as_deref()
-                .unwrap()
-                .requirements(),
-            requirements
-        );
-        let mut rebuilt = NativeMultiSessionExecutor::new(runner);
-        let (mut third_states, third_batch) = make_decode_batch(1);
-        rebuilt
-            .execute_batch(&mut third_states, &third_batch)
-            .unwrap();
-        assert_eq!(rebuilt.runner().expert_residency_install_attempts, 1);
-        let third_control = rebuilt
-            .runner()
-            .expert_residency_control
-            .as_deref()
-            .unwrap() as *const dyn ExpertResidencyControl as *const ();
-        assert_eq!(first_control, third_control);
-    }
-
-    #[test]
-    fn expert_residency_install_failure_poisons_reports_and_can_be_reset() {
-        let runner = MockMultiSessionRunner {
-            expert_residency_requirements: Some(ExpertResidencyRequirements::new(91, vec![1])),
-            fail_expert_residency_install: true,
-            ..MockMultiSessionRunner::default()
-        };
-        let mut executor = NativeMultiSessionExecutor::new(runner);
-        let (mut states, batch) = make_decode_batch(1);
-
-        let error = executor.execute_batch(&mut states, &batch).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("mock expert residency install failed")
-        );
-        assert!(executor.is_poisoned());
-        assert_eq!(
-            executor.poison_operation(),
-            Some("expert_residency_initialization")
-        );
-        assert!(
-            executor
-                .poison_cause()
-                .unwrap()
-                .contains("mock expert residency install failed")
-        );
-        assert_eq!(executor.runner().expert_residency_install_attempts, 1);
-        assert_eq!(executor.runner().decode_topk_calls, 0);
-
-        let poisoned = executor.execute_batch(&mut states, &batch).unwrap_err();
-        assert!(poisoned.to_string().contains("native executor is poisoned"));
-        assert_eq!(executor.runner().expert_residency_install_attempts, 1);
-
-        executor.runner_mut().fail_expert_residency_install = false;
-        executor.reset().unwrap();
-        assert!(!executor.is_poisoned());
-        executor.execute_batch(&mut states, &batch).unwrap();
-        assert_eq!(executor.runner().expert_residency_install_attempts, 2);
-        assert_eq!(executor.runner().decode_topk_calls, 1);
-    }
-
-    #[test]
-    fn expert_residency_is_installed_before_feed_and_diagnostic_paths() {
-        let requirements = ExpertResidencyRequirements::new(102, vec![1]);
-        let runner = MockMultiSessionRunner {
-            expert_residency_requirements: Some(requirements.clone()),
-            ..MockMultiSessionRunner::default()
-        };
-        let mut executor = NativeMultiSessionExecutor::new(runner);
-        let mut state = MockSequenceState {
-            position: 0,
-            fed_tokens: Vec::new(),
-        };
-
-        executor.feed_sequence_token(&mut state, 4).unwrap();
-        assert_eq!(state.position, 1);
-        assert_eq!(executor.runner().expert_residency_install_attempts, 1);
-
-        let (mut states, batch) = make_decode_batch(1);
-        executor
-            .execute_diagnostic_batch_with_kv(&mut states, &batch, &[], |runner, _states| {
-                assert_eq!(
-                    runner
-                        .expert_residency_control
-                        .as_deref()
-                        .unwrap()
-                        .requirements(),
-                    requirements
-                );
-                Ok(())
-            })
-            .unwrap();
-        assert_eq!(executor.runner().expert_residency_install_attempts, 1);
-    }
-
-    #[test]
-    fn runner_without_expert_residency_requirements_never_receives_control() {
-        let mut executor = NativeMultiSessionExecutor::new(MockMultiSessionRunner::default());
-        let (mut states, batch) = make_decode_batch(1);
-
-        executor.execute_batch(&mut states, &batch).unwrap();
-        executor.execute_batch(&mut states, &batch).unwrap();
-
-        assert!(executor.expert_residency_initialized);
-        assert_eq!(executor.runner().expert_residency_install_attempts, 0);
-        assert!(executor.runner().expert_residency_control.is_none());
-    }
-
-    #[test]
-    fn executor_reports_runner_capabilities() {
-        let runner = MockMultiSessionRunner::default();
-        let executor = NativeMultiSessionExecutor::new(runner);
-        let caps = executor.capabilities();
-        assert_eq!(caps.max_sequences, 4);
-        assert!(caps.supports_mixed);
-        assert!(caps.supports_prefill);
-        assert!(caps.supports_decode);
-    }
-
-    #[test]
-    fn execute_multi_sequence_decode_produces_one_output_per_sequence() {
-        let runner = MockMultiSessionRunner::default();
-        let mut executor = NativeMultiSessionExecutor::new(runner);
-        let (mut states, batch) = make_decode_batch(3);
-        let output = executor.execute_batch(&mut states, &batch).unwrap();
-        assert_eq!(output.logits.len(), 3);
-        assert_eq!(output.logits[0].input_row, 0);
-        assert_eq!(output.logits[1].input_row, 1);
-        assert_eq!(output.logits[2].input_row, 2);
-    }
-
-    #[test]
-    fn execute_decode_without_logits_returns_empty_output() {
-        let runner = MockMultiSessionRunner::default();
-        let mut executor = NativeMultiSessionExecutor::new(runner);
-
-        let mut states = vec![MockSequenceState {
-            position: 5,
-            fed_tokens: Vec::new(),
-        }];
-
-        let batch = ExecutionBatch::new(
-            ForwardMode::Decode,
-            vec![42],
-            vec![5],
+            vec![token],
+            vec![10],
             vec![None],
-            vec![LogitsRequest::None],
+            vec![LogitsRequest::TopK(NonZeroU32::new(5).unwrap())],
             vec![ExecutionSequence::new(
                 StateSlot::new(0),
                 ForwardPhase::Decode,
                 0..1,
-                5,
-                6,
+                10,
+                11,
                 0..0,
             )],
             Vec::new(),
         );
-
-        let output = executor.execute_batch(&mut states, &batch).unwrap();
-        assert!(output.logits.is_empty());
+        (states, batch)
     }
 
     #[test]
-    fn execute_prefill_with_topk_returns_last_row_output() {
-        let runner = MockMultiSessionRunner::default();
+    fn transactions_wait_together_and_finish_in_reverse_without_a_yield_loop() {
+        let transaction_a = transaction(1);
+        let transaction_b = transaction(2);
+        let continuation_a = continuation(101);
+        let continuation_b = continuation(102);
+        let mut runner = MockMultiSessionRunner::default();
+        runner.push_progress(transaction_a, Ok(waiting(transaction_a, continuation_a)));
+        runner.push_progress(transaction_a, Ok(complete(11)));
+        runner.push_progress(transaction_b, Ok(waiting(transaction_b, continuation_b)));
+        runner.push_progress(transaction_b, Ok(complete(12)));
         let mut executor = NativeMultiSessionExecutor::new(runner);
+        let (mut states_a, batch_a) = decode_batch(21);
+        let (mut states_b, batch_b) = decode_batch(22);
 
-        let mut states = vec![MockSequenceState {
-            position: 0,
-            fed_tokens: Vec::new(),
-        }];
-
-        let batch = ExecutionBatch::new(
-            ForwardMode::Prefill,
-            vec![1, 2, 3],
-            vec![0, 1, 2],
-            vec![None, None, None],
-            vec![
-                LogitsRequest::None,
-                LogitsRequest::None,
-                LogitsRequest::TopK(nz(5)),
-            ],
-            vec![ExecutionSequence::new(
-                StateSlot::new(0),
-                ForwardPhase::Prefill,
-                0..3,
-                0,
-                3,
-                0..0,
-            )],
-            Vec::new(),
+        assert!(matches!(
+            executor
+                .begin_resumable_batch_with_kv(transaction_a, &mut states_a, &batch_a, &[])
+                .unwrap(),
+            NativeBatchExecutionProgress::Waiting(_)
+        ));
+        assert!(matches!(
+            executor
+                .begin_resumable_batch_with_kv(transaction_b, &mut states_b, &batch_b, &[])
+                .unwrap(),
+            NativeBatchExecutionProgress::Waiting(_)
+        ));
+        assert!(executor.runner().resumes.is_empty());
+        assert!(executor.has_transactions());
+        assert_eq!(
+            executor.transaction_ids().collect::<HashSet<_>>(),
+            HashSet::from([transaction_a, transaction_b])
         );
 
-        let output = executor.execute_batch(&mut states, &batch).unwrap();
-        assert_eq!(output.logits.len(), 1);
-        assert_eq!(output.logits[0].input_row, 2);
-    }
-
-    #[test]
-    fn execute_mixed_batch_routes_prefill_and_decode_separately() {
-        let runner = MockMultiSessionRunner::default();
-        let mut executor = NativeMultiSessionExecutor::new(runner);
-
-        // Sequence 0: prefill 2 tokens, last row gets top-k
-        // Sequence 1: decode 1 token with top-k
-        let mut states = vec![
-            MockSequenceState {
-                position: 0,
-                fed_tokens: Vec::new(),
-            },
-            MockSequenceState {
-                position: 5,
-                fed_tokens: Vec::new(),
-            },
-        ];
-
-        let batch = ExecutionBatch::new(
-            ForwardMode::Mixed,
-            vec![10, 20, 30],
-            vec![0, 1, 5],
-            vec![None, None, None],
-            vec![
-                LogitsRequest::None,
-                LogitsRequest::TopK(nz(5)),
-                LogitsRequest::TopK(nz(5)),
-            ],
-            vec![
-                ExecutionSequence::new(StateSlot::new(0), ForwardPhase::Prefill, 0..2, 0, 2, 0..0),
-                ExecutionSequence::new(StateSlot::new(1), ForwardPhase::Decode, 2..3, 5, 6, 0..0),
-            ],
-            Vec::new(),
+        assert!(matches!(
+            executor
+                .resume_resumable_batch(transaction_b, &mut states_b, &batch_b, continuation_b,)
+                .unwrap(),
+            NativeBatchExecutionProgress::Complete(_)
+        ));
+        executor
+            .commit_prepared_batch(transaction_b, &mut states_b)
+            .unwrap();
+        assert_eq!(
+            executor
+                .pending_model_progress(transaction_a)
+                .unwrap()
+                .continuation(),
+            continuation_a
         );
 
-        let output = executor.execute_batch(&mut states, &batch).unwrap();
-        assert_eq!(output.logits.len(), 2);
-        assert_eq!(output.logits[0].input_row, 1); // prefill last row
-        assert_eq!(output.logits[1].input_row, 2); // decode row
+        executor
+            .resume_resumable_batch(transaction_a, &mut states_a, &batch_a, continuation_a)
+            .unwrap();
+        executor
+            .commit_prepared_batch(transaction_a, &mut states_a)
+            .unwrap();
+        assert_eq!(
+            executor.runner().commits,
+            vec![transaction_b, transaction_a]
+        );
+        assert!(!executor.has_transactions());
     }
 
     #[test]
-    fn batched_decode_matches_serial_execution_exactly() {
-        let (mut batched_states, batch) = make_decode_batch(2);
-        let mut batched = NativeMultiSessionExecutor::new(MockMultiSessionRunner::default());
-        let batched_output = batched.execute_batch(&mut batched_states, &batch).unwrap();
-
-        let mut serial = NativeMultiSessionExecutor::new(MockMultiSessionRunner::default());
-        let (mut state_a, batch_a) = make_decode_batch(1);
-        let output_a = serial.execute_batch(&mut state_a, &batch_a).unwrap();
-        let (mut state_b, batch_b) = make_decode_batch(1);
-        let output_b = serial.execute_batch(&mut state_b, &batch_b).unwrap();
-
-        assert_eq!(batched_output.logits[0].logits, output_a.logits[0].logits);
-        assert_eq!(batched_output.logits[1].logits, output_b.logits[0].logits);
-        assert_eq!(batched_states[0].position, state_a[0].position);
-        assert_eq!(batched_states[1].position, state_b[0].position);
-    }
-
-    #[test]
-    fn backend_batch_transaction_requires_explicit_commit_or_rollback() {
-        let runner = MockMultiSessionRunner {
-            transactional: true,
-            ..MockMultiSessionRunner::default()
-        };
+    fn wrong_transaction_never_takes_another_transactions_continuation() {
+        let transaction_a = transaction(3);
+        let transaction_b = transaction(4);
+        let continuation_a = continuation(103);
+        let continuation_b = continuation(104);
+        let mut runner = MockMultiSessionRunner::default();
+        runner.push_progress(transaction_a, Ok(waiting(transaction_a, continuation_a)));
+        runner.push_progress(transaction_b, Ok(waiting(transaction_b, continuation_b)));
         let mut executor = NativeMultiSessionExecutor::new(runner);
-        let (mut states, batch) = make_decode_batch(1);
+        let (mut states_a, batch_a) = decode_batch(31);
+        let (mut states_b, batch_b) = decode_batch(32);
+        executor
+            .begin_resumable_batch_with_kv(transaction_a, &mut states_a, &batch_a, &[])
+            .unwrap();
+        executor
+            .begin_resumable_batch_with_kv(transaction_b, &mut states_b, &batch_b, &[])
+            .unwrap();
 
-        executor.execute_batch(&mut states, &batch).unwrap();
-        assert_eq!(executor.runner().prepares, 1);
-        assert!(executor.execute_batch(&mut states, &batch).is_err());
-        executor.commit_prepared_batch().unwrap();
-        assert_eq!(executor.runner().commits, 1);
-
-        let (_, next_batch) = make_decode_batch(1);
-        executor.execute_batch(&mut states, &next_batch).unwrap();
-        executor.rollback_prepared_batch().unwrap();
-        assert_eq!(executor.runner().rollbacks, 1);
+        assert!(
+            executor
+                .resume_resumable_batch(transaction_b, &mut states_b, &batch_b, continuation_a,)
+                .unwrap_err()
+                .to_string()
+                .contains("owns continuation")
+        );
+        assert!(
+            executor
+                .cancel_resumable_batch(transaction_b, &mut states_b, continuation_a)
+                .unwrap_err()
+                .to_string()
+                .contains("owns continuation")
+        );
+        assert!(executor.runner().resumes.is_empty());
+        assert!(executor.runner().cancels.is_empty());
+        assert_eq!(
+            executor
+                .pending_model_progress(transaction_a)
+                .unwrap()
+                .continuation(),
+            continuation_a
+        );
+        assert_eq!(
+            executor
+                .pending_model_progress(transaction_b)
+                .unwrap()
+                .continuation(),
+            continuation_b
+        );
     }
 
     #[test]
-    fn reset_of_one_sequence_does_not_change_another() {
-        let mut executor = NativeMultiSessionExecutor::new(MockMultiSessionRunner::default());
-        let (mut states, batch) = make_decode_batch(2);
-        executor.execute_batch(&mut states, &batch).unwrap();
-        let b_position = states[1].position;
-        executor.reset_sequence_state(&mut states[0]).unwrap();
-        assert_eq!(states[0].position, 0);
-        assert_eq!(states[1].position, b_position);
-    }
-
-    #[test]
-    fn poisoned_executor_rejects_further_execution() {
-        let runner = MockMultiSessionRunner::default();
+    fn invalid_waiting_transaction_is_cancelled_and_rolled_back_atomically() {
+        let expected = transaction(17);
+        let reported = transaction(18);
+        let continuation = continuation(117);
+        let mut runner = MockMultiSessionRunner::default();
+        runner.push_progress(expected, Ok(waiting(reported, continuation)));
         let mut executor = NativeMultiSessionExecutor::new(runner);
-        executor.poison = Some(PoisonState {
-            operation: "test",
-            cause: "test failure".into(),
-        });
+        let (mut states, batch) = decode_batch(33);
+
+        let error = executor
+            .begin_resumable_batch_with_kv(expected, &mut states, &batch, &[])
+            .unwrap_err();
+
+        assert!(error.to_string().contains("while executing transaction"));
+        assert_eq!(executor.runner().cancels, vec![(expected, continuation)]);
+        assert_eq!(executor.runner().rollbacks, vec![expected]);
+        assert!(executor.pending_model_progress(expected).is_none());
+        assert!(!executor.has_transactions());
         assert!(executor.is_poisoned());
-        let (mut states, batch) = make_decode_batch(1);
-        let err = executor.execute_batch(&mut states, &batch).unwrap_err();
-        assert!(err.to_string().contains("poisoned"));
     }
 
     #[test]
-    fn reset_clears_poison() {
-        let runner = MockMultiSessionRunner::default();
+    fn invalid_waiting_transaction_still_active_retains_cancellable_ownership() {
+        let expected = transaction(19);
+        let reported = transaction(20);
+        let continuation = continuation(119);
+        let mut runner = MockMultiSessionRunner::default();
+        runner.push_progress(expected, Ok(waiting(reported, continuation)));
+        runner.push_cancel_outcome(expected, MockCancelOutcome::StillActive);
+        runner.push_cancel_outcome(expected, MockCancelOutcome::Cancelled);
         let mut executor = NativeMultiSessionExecutor::new(runner);
-        executor.poison = Some(PoisonState {
-            operation: "test",
-            cause: "test failure".into(),
-        });
-        assert!(executor.is_poisoned());
-        executor.reset().unwrap();
+        let (mut states, batch) = decode_batch(34);
+
+        let error = executor
+            .begin_resumable_batch_with_kv(expected, &mut states, &batch, &[])
+            .unwrap_err();
+
+        assert!(error.to_string().contains("did not quiesce"));
+        let pending = executor.pending_model_progress(expected).unwrap();
+        assert_eq!(pending.transaction(), expected);
+        assert_eq!(pending.continuation(), continuation);
+        assert!(executor.runner().rollbacks.is_empty());
+
+        executor
+            .cancel_resumable_batch(expected, &mut states, continuation)
+            .unwrap();
+        assert_eq!(executor.runner().rollbacks, vec![expected]);
+        assert!(!executor.has_transactions());
+    }
+
+    #[test]
+    fn cancelling_one_transaction_does_not_disturb_another() {
+        let transaction_a = transaction(5);
+        let transaction_b = transaction(6);
+        let continuation_a = continuation(105);
+        let continuation_b = continuation(106);
+        let mut runner = MockMultiSessionRunner::default();
+        runner.push_progress(transaction_a, Ok(waiting(transaction_a, continuation_a)));
+        runner.push_progress(transaction_b, Ok(waiting(transaction_b, continuation_b)));
+        runner.push_progress(transaction_b, Ok(complete(16)));
+        let mut executor = NativeMultiSessionExecutor::new(runner);
+        let (mut states_a, batch_a) = decode_batch(41);
+        let (mut states_b, batch_b) = decode_batch(42);
+        executor
+            .begin_resumable_batch_with_kv(transaction_a, &mut states_a, &batch_a, &[])
+            .unwrap();
+        executor
+            .begin_resumable_batch_with_kv(transaction_b, &mut states_b, &batch_b, &[])
+            .unwrap();
+
+        executor
+            .cancel_resumable_batch(transaction_a, &mut states_a, continuation_a)
+            .unwrap();
+        assert_eq!(executor.runner().rollbacks, vec![transaction_a]);
+        assert!(executor.pending_model_progress(transaction_a).is_none());
+        assert_eq!(
+            executor
+                .pending_model_progress(transaction_b)
+                .unwrap()
+                .continuation(),
+            continuation_b
+        );
+        assert!(!executor.is_poisoned());
+
+        executor
+            .resume_resumable_batch(transaction_b, &mut states_b, &batch_b, continuation_b)
+            .unwrap();
+        executor
+            .commit_prepared_batch(transaction_b, &mut states_b)
+            .unwrap();
+        assert_eq!(executor.runner().commits, vec![transaction_b]);
+    }
+
+    #[test]
+    fn still_active_preserves_registry_and_ownership_until_cancelled() {
+        let transaction = transaction(7);
+        let continuation = continuation(107);
+        let mut runner = MockMultiSessionRunner::default();
+        runner.push_progress(transaction, Ok(waiting(transaction, continuation)));
+        runner.push_cancel_outcome(transaction, MockCancelOutcome::StillActive);
+        runner.push_cancel_outcome(transaction, MockCancelOutcome::Cancelled);
+        let mut executor = NativeMultiSessionExecutor::new(runner);
+        let (mut states, batch) = decode_batch(51);
+        executor
+            .begin_resumable_batch_with_kv(transaction, &mut states, &batch, &[])
+            .unwrap();
+
+        let error = executor
+            .cancel_resumable_batch(transaction, &mut states, continuation)
+            .unwrap_err();
+        assert!(error.to_string().contains("did not confirm quiescence"));
+        assert_eq!(
+            executor
+                .pending_model_progress(transaction)
+                .unwrap()
+                .continuation(),
+            continuation
+        );
+        assert!(executor.has_transactions());
+        assert!(executor.runner().rollbacks.is_empty());
+        assert!(!executor.is_poisoned());
+
+        executor
+            .cancel_resumable_batch(transaction, &mut states, continuation)
+            .unwrap();
+        assert_eq!(executor.runner().rollbacks, vec![transaction]);
+        assert!(!executor.has_transactions());
+    }
+
+    #[test]
+    fn quiesced_cleanup_error_still_rolls_back_and_releases_transaction() {
+        let transaction = transaction(8);
+        let continuation = continuation(108);
+        let mut runner = MockMultiSessionRunner::default();
+        runner.push_progress(transaction, Ok(waiting(transaction, continuation)));
+        runner.push_cancel_outcome(transaction, MockCancelOutcome::Quiesced);
+        let mut executor = NativeMultiSessionExecutor::new(runner);
+        let (mut states, batch) = decode_batch(61);
+        executor
+            .begin_resumable_batch_with_kv(transaction, &mut states, &batch, &[])
+            .unwrap();
+
+        let error = executor
+            .cancel_resumable_batch(transaction, &mut states, continuation)
+            .unwrap_err();
+        assert!(error.to_string().contains("model work quiesced"));
+        assert_eq!(executor.runner().rollbacks, vec![transaction]);
+        assert!(!executor.has_transactions());
         assert!(!executor.is_poisoned());
     }
 
     #[test]
-    fn state_slot_index_rejects_out_of_range() {
-        assert!(state_slot_index(StateSlot::new(0), 2).is_ok());
-        assert!(state_slot_index(StateSlot::new(1), 2).is_ok());
-        assert!(state_slot_index(StateSlot::new(2), 2).is_err());
+    fn commit_and_rollback_are_invoked_exactly_once() {
+        let committed = transaction(9);
+        let rolled_back = transaction(10);
+        let mut runner = MockMultiSessionRunner::default();
+        runner.push_progress(committed, Ok(complete(19)));
+        runner.push_progress(rolled_back, Ok(complete(20)));
+        let mut executor = NativeMultiSessionExecutor::new(runner);
+        let (mut committed_states, committed_batch) = decode_batch(71);
+        let (mut rolled_back_states, rolled_back_batch) = decode_batch(72);
+        executor
+            .begin_resumable_batch_with_kv(committed, &mut committed_states, &committed_batch, &[])
+            .unwrap();
+        executor
+            .begin_resumable_batch_with_kv(
+                rolled_back,
+                &mut rolled_back_states,
+                &rolled_back_batch,
+                &[],
+            )
+            .unwrap();
+
+        executor
+            .commit_prepared_batch(committed, &mut committed_states)
+            .unwrap();
+        assert!(
+            executor
+                .commit_prepared_batch(committed, &mut committed_states)
+                .is_err()
+        );
+        executor
+            .rollback_prepared_batch(rolled_back, &mut rolled_back_states)
+            .unwrap();
+        assert!(
+            executor
+                .rollback_prepared_batch(rolled_back, &mut rolled_back_states)
+                .is_err()
+        );
+        assert_eq!(executor.runner().commits, vec![committed]);
+        assert_eq!(executor.runner().rollbacks, vec![rolled_back]);
     }
 
     #[test]
-    fn convert_logits_preserves_order_and_values() {
-        let input = vec![
-            TokenLogit {
-                token_id: 1,
-                logit: 2.0,
-            },
-            TokenLogit {
-                token_id: 5,
-                logit: 1.0,
-            },
-        ];
-        let output = convert_logits(input);
-        assert_eq!(output.len(), 2);
-        assert_eq!(output[0].token_id, 1);
-        assert_eq!(output[0].logit, 2.0);
-        assert_eq!(output[1].token_id, 5);
-        assert_eq!(output[1].logit, 1.0);
+    fn prepare_and_execute_errors_leave_unrelated_transaction_usable() {
+        let waiting_transaction = transaction(11);
+        let prepare_failure = transaction(12);
+        let execute_failure = transaction(13);
+        let waiting_continuation = continuation(111);
+        let mut runner = MockMultiSessionRunner::default();
+        runner.push_progress(
+            waiting_transaction,
+            Ok(waiting(waiting_transaction, waiting_continuation)),
+        );
+        runner.fail_prepares.insert(prepare_failure);
+        runner.push_progress(
+            execute_failure,
+            Err(Error::Execution("mock execution failed".into())),
+        );
+        let mut executor = NativeMultiSessionExecutor::new(runner);
+        let (mut waiting_states, waiting_batch) = decode_batch(81);
+        let (mut failed_states, failed_batch) = decode_batch(82);
+        executor
+            .begin_resumable_batch_with_kv(
+                waiting_transaction,
+                &mut waiting_states,
+                &waiting_batch,
+                &[],
+            )
+            .unwrap();
+
+        assert!(
+            executor
+                .begin_resumable_batch_with_kv(
+                    prepare_failure,
+                    &mut failed_states,
+                    &failed_batch,
+                    &[],
+                )
+                .is_err()
+        );
+        assert!(executor.runner().rollbacks.is_empty());
+        assert!(
+            executor
+                .begin_resumable_batch_with_kv(
+                    execute_failure,
+                    &mut failed_states,
+                    &failed_batch,
+                    &[],
+                )
+                .is_err()
+        );
+        assert_eq!(executor.runner().rollbacks, vec![execute_failure]);
+        assert!(!executor.is_poisoned());
+        assert_eq!(
+            executor
+                .pending_model_progress(waiting_transaction)
+                .unwrap()
+                .continuation(),
+            waiting_continuation
+        );
+    }
+
+    #[test]
+    fn sequence_ownership_operations_ignore_unrelated_transactions_but_global_operations_do_not() {
+        let transaction = transaction(14);
+        let continuation = continuation(114);
+        let mut runner = MockMultiSessionRunner::default();
+        runner.push_progress(transaction, Ok(waiting(transaction, continuation)));
+        let mut executor = NativeMultiSessionExecutor::new(runner);
+        let (mut states, batch) = decode_batch(91);
+        executor
+            .begin_resumable_batch_with_kv(transaction, &mut states, &batch, &[])
+            .unwrap();
+
+        let state = executor.create_sequence_state().unwrap();
+        let fork = executor
+            .fork_sequence_state_from(&state, state.position)
+            .unwrap();
+        executor.release_sequence_state(fork).unwrap();
+        assert_eq!(executor.runner().sequences_created, 1);
+        assert_eq!(executor.runner().sequences_forked, 1);
+        assert_eq!(executor.runner().sequences_released, 1);
+        assert!(executor.reset().is_err());
+        assert!(executor.configure_kv_page_capacity(16).is_err());
+
+        let failure = executor.try_into_runner().unwrap_err();
+        let (error, mut executor) = *failure;
+        assert!(error.to_string().contains("active execution transactions"));
+        executor
+            .cancel_resumable_batch(transaction, &mut states, continuation)
+            .unwrap();
+        executor.reset().unwrap();
+        executor.configure_kv_page_capacity(16).unwrap();
+        assert!(executor.try_into_runner().is_ok());
+    }
+
+    #[test]
+    fn rollback_failure_poisons_and_retains_only_the_failed_transaction() {
+        let failed = transaction(15);
+        let unaffected = transaction(16);
+        let mut runner = MockMultiSessionRunner::default();
+        runner.fail_rollbacks.insert(failed);
+        runner.push_progress(
+            failed,
+            Err(Error::Execution("mock execution failed".into())),
+        );
+        runner.push_progress(unaffected, Ok(complete(26)));
+        let mut executor = NativeMultiSessionExecutor::new(runner);
+        let (mut failed_states, failed_batch) = decode_batch(101);
+        let (mut unaffected_states, unaffected_batch) = decode_batch(102);
+        executor
+            .begin_resumable_batch_with_kv(
+                unaffected,
+                &mut unaffected_states,
+                &unaffected_batch,
+                &[],
+            )
+            .unwrap();
+
+        let error = executor
+            .begin_resumable_batch_with_kv(failed, &mut failed_states, &failed_batch, &[])
+            .unwrap_err();
+        assert!(error.to_string().contains("backend rollback also failed"));
+        assert!(executor.is_poisoned());
+        assert_eq!(
+            executor.transaction_ids().collect::<HashSet<_>>(),
+            HashSet::from([failed, unaffected])
+        );
+        assert!(
+            executor
+                .commit_prepared_batch(unaffected, &mut unaffected_states)
+                .is_ok()
+        );
+        assert_eq!(executor.transaction_ids().collect::<Vec<_>>(), vec![failed]);
     }
 }

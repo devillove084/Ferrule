@@ -10,7 +10,7 @@ use ferrule_model::{
     TensorRole, TokenizerHandle, bind_attention_from_hf, bind_hyper_connection_from_hf,
     bind_hyper_connection_head_from_hf, bind_router_from_hf, bind_shared_swiglu_ffn_from_hf,
     families::deepseek_v4,
-    models::deepseek_v4::{DeepSeekV4ArtifactModel, DeepSeekV4PrepareOptions, DeepSeekV4Runner},
+    models::deepseek_v4::DeepSeekV4ArtifactModel,
     semantic::{AttentionTensorKind, HyperConnectionStage, RouterTensorKind},
 };
 
@@ -391,121 +391,6 @@ fn local_deepseek_v4_model_binds_top_level_if_present() {
     assert_eq!(model.output_head.cols, deepseek_v4::HIDDEN_SIZE);
     assert_eq!(model.hc_head.scale.len(), 1);
     assert_eq!(model.model_info().backend, "deepseek-v4-artifact");
-}
-
-#[test]
-fn local_deepseek_v4_model_reads_real_embedding_and_output_head_rows_if_present() {
-    let Some(model_dir) = local_deepseek_v4_dir() else {
-        return;
-    };
-
-    let model = DeepSeekV4ArtifactModel::load_hf_with_limit(&model_dir, 64 * 1024 * 1024)
-        .expect("local DeepSeek V4 top-level artifact model should bind real metadata/HC head");
-    let embedding = model
-        .embedding_for_token(0)
-        .expect("single embedding row should be readable without loading the full table");
-    assert_eq!(embedding.len(), deepseek_v4::HIDDEN_SIZE);
-    assert!(embedding.iter().all(|value| value.is_finite()));
-
-    let hc_state = model
-        .initial_hc_state_for_token(0)
-        .expect("embedding row should expand into HC state");
-    assert_eq!(
-        hc_state.len(),
-        deepseek_v4::HC_MULT * deepseek_v4::HIDDEN_SIZE
-    );
-    let hidden = model
-        .normalized_hidden_from_hc_state(&hc_state)
-        .expect("HC head + output norm should run on real top-level tensors");
-    assert_eq!(hidden.len(), deepseek_v4::HIDDEN_SIZE);
-    let logits = model
-        .logits_for_hidden_row_range(&hidden, 0, 8)
-        .expect("lm_head rows should be readable and executable in small chunks");
-    assert_eq!(logits.len(), 8);
-    assert!(logits.iter().all(|value| value.is_finite()));
-}
-
-#[test]
-fn local_deepseek_v4_runner_decodes_top_level_logits_rows_if_present() {
-    let Some(model_dir) = local_deepseek_v4_dir() else {
-        return;
-    };
-
-    let options = DeepSeekV4PrepareOptions {
-        max_layers: 0,
-        output_head_chunk_rows: 8,
-        expert_reader_max_tensor_bytes: 64 * 1024 * 1024,
-        moe_prefetch_experts: 0,
-        moe_hotset_experts: 0,
-        ..DeepSeekV4PrepareOptions::default()
-    };
-    let mut runner = DeepSeekV4Runner::load_hf_with_options(&model_dir, 64 * 1024 * 1024, options)
-        .expect("local DeepSeek V4 runner should load real top-level artifacts");
-    let logits = runner
-        .decode_token_logits_row_range(0, 0, 8)
-        .expect("max_layers=0 runner should produce real top-level logits row range");
-    assert_eq!(logits.len(), 8);
-    assert_eq!(runner.position(), 1);
-    assert!(logits.iter().all(|value| value.is_finite()));
-    runner.reset().expect("runner reset should succeed");
-    assert_eq!(runner.position(), 0);
-}
-
-#[test]
-fn local_deepseek_v4_runner_prefills_prompt_top_level_if_present() {
-    let Some(model_dir) = local_deepseek_v4_dir() else {
-        return;
-    };
-
-    let options = DeepSeekV4PrepareOptions {
-        max_layers: 0,
-        output_head_chunk_rows: 8,
-        expert_reader_max_tensor_bytes: 64 * 1024 * 1024,
-        moe_prefetch_experts: 0,
-        moe_hotset_experts: 0,
-        ..DeepSeekV4PrepareOptions::default()
-    };
-    let mut runner = DeepSeekV4Runner::load_hf_with_options(&model_dir, 64 * 1024 * 1024, options)
-        .expect("local DeepSeek V4 runner should load real top-level artifacts");
-    let token_ids = runner
-        .model()
-        .tokenizer
-        .encode("Ferrule DSV4 prefill smoke")
-        .expect("local tokenizer should encode prompt");
-    assert!(!token_ids.is_empty());
-    let logits = runner
-        .prefill_tokens_logits_row_range(&token_ids, 0, 8)
-        .expect("sequential prefill fallback should produce row logits");
-    assert_eq!(logits.len(), 8);
-    assert_eq!(runner.position(), token_ids.len());
-    assert_eq!(runner.bound_layer_count(), 0);
-    assert!(logits.iter().all(|value| value.is_finite()));
-}
-
-#[test]
-#[ignore = "expensive: executes real DSV4 layer-0 CPU reference path over local shards"]
-fn local_deepseek_v4_runner_decodes_one_real_layer_if_present() {
-    let Some(model_dir) = local_deepseek_v4_dir() else {
-        return;
-    };
-
-    let options = DeepSeekV4PrepareOptions {
-        max_layers: 1,
-        output_head_chunk_rows: 8,
-        expert_reader_max_tensor_bytes: 64 * 1024 * 1024,
-        moe_prefetch_experts: 0,
-        moe_hotset_experts: 0,
-        ..DeepSeekV4PrepareOptions::default()
-    };
-    let mut runner = DeepSeekV4Runner::load_hf_with_options(&model_dir, 128 * 1024 * 1024, options)
-        .expect("local DeepSeek V4 runner should load real artifacts");
-    let logits = runner
-        .decode_token_logits_row_range(0, 0, 1)
-        .expect("layer-0 reference path should produce one logit row");
-    assert_eq!(logits.len(), 1);
-    assert_eq!(runner.position(), 1);
-    assert_eq!(runner.bound_layer_count(), 1);
-    assert!(logits[0].is_finite());
 }
 
 #[test]

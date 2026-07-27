@@ -918,22 +918,36 @@ fn unix_timestamp() -> u64 {
 mod tests {
     use super::*;
     use crate::config::WorkerConfig;
-    use crate::worker::{ModelEngine, spawn_model_worker};
+    use crate::worker::spawn_model_worker;
+    use ferrule_common::CompletionHub;
     use ferrule_runtime::{
-        CancelRequestResult, GenerateRequest, RequestId, ResidentDriverStep, SequenceFinishReason,
-        SequenceState,
+        CancelRequestResult, GenerateRequest, InferenceCancelProgress, InferenceCompletionReactor,
+        InferenceEngine, RequestId, ResidentDriverStep, SequenceFinishReason, SequenceState,
     };
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
     #[derive(Default)]
     struct ImmediateEngine {
+        completion_hub: CompletionHub,
         request: Option<GenerateRequest>,
         finished: Vec<SequenceState>,
         cancelled: Vec<SequenceState>,
     }
 
-    impl ModelEngine for ImmediateEngine {
+    impl InferenceEngine for ImmediateEngine {
+        fn completion_hub(&self) -> CompletionHub {
+            self.completion_hub.clone()
+        }
+
+        fn take_completion_reactors(&mut self) -> Vec<InferenceCompletionReactor> {
+            Vec::new()
+        }
+
+        fn has_pending_async_work(&self) -> bool {
+            false
+        }
+
         fn encode(&self, prompt: &str) -> Result<Vec<u32>, String> {
             Ok(prompt.bytes().map(u32::from).collect())
         }
@@ -944,7 +958,7 @@ mod tests {
 
         fn step(
             &mut self,
-            on_token: &mut dyn FnMut(&ferrule_runtime::ResidentTokenEvent),
+            on_token: &mut dyn FnMut(&ferrule_runtime::ResidentTokenEvent) -> Result<(), String>,
         ) -> Result<ResidentDriverStep, String> {
             let Some(request) = self.request.take() else {
                 return Ok(ResidentDriverStep::Idle);
@@ -957,7 +971,7 @@ mod tests {
                 token: 42,
                 logit: Some(1.0),
                 text: "ok".into(),
-            });
+            })?;
             let mut state = SequenceState::from_request(&request, session_id);
             state.generated = 1;
             state.finish_reason = Some(SequenceFinishReason::MaxTokens);
@@ -970,18 +984,25 @@ mod tests {
             })
         }
 
-        fn cancel_request(&mut self, request_id: RequestId) -> Result<CancelRequestResult, String> {
+        fn cancel_request(
+            &mut self,
+            request_id: RequestId,
+        ) -> Result<InferenceCancelProgress, String> {
             let Some(request) = self.request.take() else {
-                return Ok(CancelRequestResult::NotFound { request_id });
+                return Ok(InferenceCancelProgress::Complete(
+                    CancelRequestResult::NotFound { request_id },
+                ));
             };
             let session_id = request.session_id.unwrap();
             let mut state = SequenceState::from_request(&request, session_id);
             state.finish_reason = Some(SequenceFinishReason::Cancelled);
             self.cancelled.push(state);
-            Ok(CancelRequestResult::Waiting {
-                request_id,
-                session_id,
-            })
+            Ok(InferenceCancelProgress::Complete(
+                CancelRequestResult::Waiting {
+                    request_id,
+                    session_id,
+                },
+            ))
         }
 
         fn drain_finished(&mut self) -> Vec<SequenceState> {

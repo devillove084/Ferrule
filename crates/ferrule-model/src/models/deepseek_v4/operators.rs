@@ -5,20 +5,18 @@ use std::time::{Duration, Instant};
 
 #[cfg(feature = "cuda")]
 use ferrule_common::ExpertResidencyControl;
-#[cfg(feature = "cuda")]
-use ferrule_common::execution::ForwardPhase;
-use ferrule_common::{Error, ExpertResidencyStats, MemoryPoolStats, Result};
+
+use ferrule_common::{CompletionHub, Error, ExpertResidencyStats, MemoryPoolStats, Result};
 
 use crate::artifact::binding::RouterArtifactPayload;
 use crate::artifact::linear::ArtifactLinearPayload;
-use crate::artifact::tensor::{ArtifactTensorReader, ArtifactTensorSlice};
+
 use crate::attention_backend::{SparseAttentionSpec, sparse_attention_reference};
 use crate::execution::ModelExecutionBackend;
 use crate::ffn::SwiGluFfnPayload;
 use crate::hyper_connection::{
-    HyperConnectionConfig, HyperConnectionHeadWeights, HyperConnectionPreOutput,
-    HyperConnectionSplit, HyperConnectionWeights, hc_head_reference, hc_post_reference,
-    hc_pre_reference,
+    HyperConnectionConfig, HyperConnectionPreOutput, HyperConnectionSplit, HyperConnectionWeights,
+    hc_post_reference, hc_pre_reference,
 };
 use crate::moe::executor::ExpertExecutor;
 use crate::moe::handle::CpuExpertHandleStore;
@@ -30,17 +28,14 @@ use crate::moe::routing::ExpertRouterPolicy;
 #[cfg(feature = "cuda")]
 use crate::moe::streaming::ExpertSourceCatalog;
 use crate::moe::streaming::{ExpertMemoryPolicy, ExpertStreamingPlanner, ExpertStreamingReader};
-use crate::runner::TokenLogit;
 
 use super::config::DeepSeekV4AttentionConfig;
 #[cfg(feature = "cuda")]
 use super::cuda_cache::DeepSeekV4CudaOperatorCache;
-use super::helpers::{grouped_output_a, rank_logits_desc, rms_norm, rms_norm_heads_in_place};
+use super::helpers::{grouped_output_a, rms_norm, rms_norm_heads_in_place};
 use super::prepared::DeepSeekV4ExecutionPolicy;
 #[cfg(feature = "cuda")]
 use super::prepared::DeepSeekV4PreparedResources;
-#[cfg(feature = "cuda")]
-use super::sequence::DeepSeekV4SequenceMoeAccessEvent;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DeepSeekV4LayerProfileStats {
@@ -130,8 +125,6 @@ pub(crate) enum DeepSeekV4AttentionProfileStage {
     KvCacheAppend,
     IndexerCompress,
     MainCompress,
-    #[cfg(feature = "cuda")]
-    CompressedKvUpload,
     TopkBuild,
     SparseAttention,
     ContextRope,
@@ -200,7 +193,6 @@ pub struct DeepSeekV4OperatorRuntimeCounters {
     pub expert_io_aligned_bytes: u64,
     pub expert_io_coalesced_slices: u64,
     pub expert_io_fixed_file_registrations: u64,
-    pub expert_io_fallback_count: u64,
     pub expert_io_slab_exhaustions: u64,
     pub expert_io_peak_queue_depth: usize,
     pub expert_io_read_us: u64,
@@ -219,16 +211,8 @@ pub struct DeepSeekV4OperatorRuntimeCounters {
     pub moe_compute_submit_us: u64,
     pub moe_commit_us: u64,
     pub output_head_calls: u64,
-    pub output_head_chunks: u64,
     pub output_head_rows: u64,
-    pub output_head_cache_hits: u64,
-    pub output_head_cache_misses: u64,
-    pub output_head_hidden_uploads: u64,
-    pub output_head_hidden_upload_us: u64,
-    pub output_head_read_us: u64,
-    pub output_head_upload_us: u64,
     pub output_head_topk_us: u64,
-    pub output_head_merge_us: u64,
     /// Sum of selected routes across MoE layer invocations.
     pub expert_selected: u64,
     /// Sum of unique experts within each MoE layer invocation.
@@ -269,13 +253,6 @@ pub struct DeepSeekV4OperatorContext {
     /// sampling elapsed wall time. This is expensive but gives attribution that
     /// includes queued GPU work instead of only host enqueue time.
     profile_sync: bool,
-    #[cfg(feature = "cuda")]
-    fused_indexer_prefill_topk: bool,
-    #[cfg(feature = "cuda")]
-    fused_indexer_decode_topk: bool,
-    #[cfg(feature = "cuda")]
-    parity_checkpoint_selection: Option<(usize, String)>,
-    parity_checkpoints: BTreeMap<String, Vec<f32>>,
     moe_access_events: Vec<ExpertBatchAccessEvent>,
     #[cfg(feature = "cuda")]
     pub(crate) cuda: Option<DeepSeekV4CudaOperatorCache>,
@@ -287,29 +264,34 @@ impl DeepSeekV4OperatorContext {
         policy: &DeepSeekV4ExecutionPolicy,
         expert_memory_policy: ExpertMemoryPolicy,
     ) -> Result<Self> {
+        Self::new_with_completion_hub(backend, policy, expert_memory_policy, CompletionHub::new())
+    }
+
+    pub(crate) fn new_with_completion_hub(
+        backend: ModelExecutionBackend,
+        policy: &DeepSeekV4ExecutionPolicy,
+        expert_memory_policy: ExpertMemoryPolicy,
+        completion_hub: CompletionHub,
+    ) -> Result<Self> {
         #[cfg(not(feature = "cuda"))]
-        let _ = expert_memory_policy;
+        let _ = (expert_memory_policy, completion_hub);
         Ok(Self {
             backend,
             layer_profiles: BTreeMap::new(),
             attention_profiles: BTreeMap::new(),
             profile: policy.profile_enabled(),
             profile_sync: policy.profile_sync(),
-            #[cfg(feature = "cuda")]
-            fused_indexer_prefill_topk: policy.fused_indexer_prefill_topk(),
-            #[cfg(feature = "cuda")]
-            fused_indexer_decode_topk: policy.fused_indexer_decode_topk(),
-            #[cfg(feature = "cuda")]
-            parity_checkpoint_selection: policy.parity_checkpoint_selection(),
-            parity_checkpoints: BTreeMap::new(),
             moe_access_events: Vec::new(),
             #[cfg(feature = "cuda")]
             cuda: match backend {
                 ModelExecutionBackend::Cpu => None,
-                ModelExecutionBackend::Cuda => Some(DeepSeekV4CudaOperatorCache::new(
-                    policy,
-                    expert_memory_policy,
-                )?),
+                ModelExecutionBackend::Cuda => {
+                    Some(DeepSeekV4CudaOperatorCache::new_with_completion_hub(
+                        policy,
+                        expert_memory_policy,
+                        completion_hub,
+                    )?)
+                }
             },
         })
     }
@@ -324,81 +306,6 @@ impl DeepSeekV4OperatorContext {
 
     pub fn backend(&self) -> ModelExecutionBackend {
         self.backend
-    }
-
-    pub(crate) fn take_parity_checkpoints(&mut self) -> BTreeMap<String, Vec<f32>> {
-        std::mem::take(&mut self.parity_checkpoints)
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(crate) fn capture_parity_checkpoint_host(
-        &mut self,
-        layer: usize,
-        stage: &str,
-        values: &[f32],
-    ) {
-        if self.parity_checkpoint_selected(layer, stage) {
-            self.parity_checkpoints
-                .insert(stage.to_string(), values.to_vec());
-        }
-    }
-
-    #[cfg(feature = "cuda")]
-    fn parity_checkpoint_selected(&self, layer: usize, stage: &str) -> bool {
-        let Some((selected_layer, selected_stage)) = &self.parity_checkpoint_selection else {
-            return false;
-        };
-        *selected_layer == layer
-            && (selected_stage == "all" || selected_stage == "*" || selected_stage == stage)
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(crate) fn capture_parity_checkpoint_last_row(
-        &mut self,
-        layer: usize,
-        stage: &str,
-        values: &ferrule_cuda::context::CudaF32Buffer,
-        row_width: usize,
-    ) -> Result<()> {
-        if !self.parity_checkpoint_selected(layer, stage) {
-            return Ok(());
-        }
-        if row_width == 0 || values.len() == 0 || !values.len().is_multiple_of(row_width) {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 parity checkpoint {stage} has invalid row shape: len={} row_width={row_width}",
-                values.len()
-            )));
-        }
-        let host = self.cuda_mut()?.ops.download_f32_buffer(values)?;
-        let start = host.len() - row_width;
-        self.parity_checkpoints
-            .insert(stage.to_string(), host[start..].to_vec());
-        Ok(())
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(crate) fn capture_parity_checkpoint_rows(
-        &mut self,
-        layer: usize,
-        stage: &str,
-        values: &ferrule_cuda::context::CudaF32Buffer,
-        row_width: usize,
-    ) -> Result<()> {
-        if !self.parity_checkpoint_selected(layer, stage) {
-            return Ok(());
-        }
-        if row_width == 0 || values.len() == 0 || !values.len().is_multiple_of(row_width) {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 parity checkpoint {stage} has invalid row shape: len={} row_width={row_width}",
-                values.len()
-            )));
-        }
-        let host = self.cuda_mut()?.ops.download_f32_buffer(values)?;
-        self.parity_checkpoints
-            .entry(stage.to_string())
-            .or_default()
-            .extend(host);
-        Ok(())
     }
 
     pub fn runtime_counters(&self) -> DeepSeekV4OperatorRuntimeCounters {
@@ -434,16 +341,6 @@ impl DeepSeekV4OperatorContext {
 
     pub fn profile_sync_enabled(&self) -> bool {
         self.profile && self.profile_sync
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(crate) const fn fused_indexer_prefill_topk_enabled(&self) -> bool {
-        self.fused_indexer_prefill_topk
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(crate) const fn fused_indexer_decode_topk_enabled(&self) -> bool {
-        self.fused_indexer_decode_topk
     }
 
     pub(crate) fn record_moe_access_event(&mut self, event: ExpertBatchAccessEvent) {
@@ -493,16 +390,6 @@ impl DeepSeekV4OperatorContext {
         let stats = self.layer_profile_entry(layer);
         stats.state_init_calls = stats.state_init_calls.saturating_add(1);
         stats.state_init_us = stats.state_init_us.saturating_add(elapsed_us);
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(crate) fn record_layer_decode(&mut self, layer: usize, elapsed_us: u64) {
-        if !self.profile {
-            return;
-        }
-        let stats = self.layer_profile_entry(layer);
-        stats.decode_calls = stats.decode_calls.saturating_add(1);
-        stats.decode_total_us = stats.decode_total_us.saturating_add(elapsed_us);
     }
 
     pub(crate) fn record_layer_prefill(&mut self, layer: usize, tokens: usize, elapsed_us: u64) {
@@ -608,11 +495,7 @@ impl DeepSeekV4OperatorContext {
             DeepSeekV4AttentionProfileStage::MainCompress => {
                 stats.main_compress_us = stats.main_compress_us.saturating_add(elapsed_us)
             }
-            #[cfg(feature = "cuda")]
-            DeepSeekV4AttentionProfileStage::CompressedKvUpload => {
-                stats.compressed_kv_upload_us =
-                    stats.compressed_kv_upload_us.saturating_add(elapsed_us)
-            }
+
             DeepSeekV4AttentionProfileStage::TopkBuild => {
                 stats.topk_build_us = stats.topk_build_us.saturating_add(elapsed_us)
             }
@@ -673,59 +556,6 @@ impl DeepSeekV4OperatorContext {
             output.extend_from_slice(&linear.reference_matvec(&input[start..start + in_features])?);
         }
         Ok(output)
-    }
-
-    pub(crate) fn linear_topk(
-        &mut self,
-        linear: &ArtifactLinearPayload,
-        input: &[f32],
-        top_k: usize,
-    ) -> Result<Vec<TokenLogit>> {
-        if top_k == 0 {
-            return Ok(Vec::new());
-        }
-        let logits = linear.reference_matvec(input)?;
-        let mut top = logits
-            .into_iter()
-            .enumerate()
-            .map(|(token_id, logit)| TokenLogit {
-                token_id: token_id as u32,
-                logit,
-            })
-            .collect::<Vec<_>>();
-        top.sort_by(rank_logits_desc);
-        top.truncate(top_k);
-        Ok(top)
-    }
-
-    pub(crate) fn output_head_topk_chunks(
-        &mut self,
-        slice: &ArtifactTensorSlice,
-        hidden: &[f32],
-        top_k: usize,
-        chunk_rows: usize,
-        reader: &ArtifactTensorReader,
-    ) -> Result<Vec<TokenLogit>> {
-        #[cfg(not(feature = "cuda"))]
-        let _ = (slice, hidden, top_k, chunk_rows, reader);
-        match self.backend {
-            ModelExecutionBackend::Cpu => Err(Error::Internal(
-                "CPU output-head chunk top-k should use the reference row-read loop".into(),
-            )),
-            ModelExecutionBackend::Cuda => {
-                #[cfg(feature = "cuda")]
-                {
-                    self.cuda_mut()?
-                        .output_head_topk_chunks(slice, hidden, top_k, chunk_rows, reader)
-                }
-                #[cfg(not(feature = "cuda"))]
-                {
-                    Err(Error::Model(
-                        "CUDA model execution requires the ferrule-model/cuda feature".into(),
-                    ))
-                }
-            }
-        }
     }
 
     #[expect(
@@ -820,16 +650,6 @@ impl DeepSeekV4OperatorContext {
         hc_post_reference(hidden, residual, config, split)
     }
 
-    pub(crate) fn hc_head(
-        &mut self,
-        state: &[f32],
-        tokens: usize,
-        config: HyperConnectionConfig,
-        weights: &HyperConnectionHeadWeights,
-    ) -> Result<Vec<f32>> {
-        hc_head_reference(state, tokens, config, weights)
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn routed_moe_step(
         &mut self,
@@ -914,66 +734,6 @@ impl DeepSeekV4OperatorContext {
             &streaming_steps,
         ));
         Ok(output)
-    }
-
-    #[cfg(feature = "cuda")]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn routed_moe_prefill_batch_from_device_into(
-        &mut self,
-        layer: usize,
-        input: &ferrule_cuda::context::CudaF32Buffer,
-        shared_input_fp8: &ferrule_cuda::context::CudaPreparedFp8Activation<'_>,
-        shared_hidden_f32: &mut ferrule_cuda::context::CudaF32Buffer,
-        shared_hidden_fp8: &mut ferrule_cuda::context::CudaFp8ActivationPack,
-        token_ids: &[u32],
-        row_to_sequence: Option<&[usize]>,
-        sequence_phases: Option<&[ForwardPhase]>,
-        router: &RouterArtifactPayload,
-        predicted_experts: &[usize],
-        router_policy: &ExpertRouterPolicy,
-        residency: &mut dyn ExpertResidencyControl,
-        source_catalog: &ExpertSourceCatalog,
-        prefetch_capacity: usize,
-        reader: &ExpertStreamingReader,
-        shared_expert: &SwiGluFfnPayload,
-        router_logits: &mut ferrule_cuda::context::CudaF32Buffer,
-        router_indices: &mut ferrule_cuda::context::CudaI32Buffer,
-        router_weights: &mut ferrule_cuda::context::CudaF32Buffer,
-        linear_workspace: &mut ferrule_cuda::context::CudaArtifactLinearWorkspace,
-        segment_workspace: &mut Option<ferrule_cuda::context::CudaMoeSegmentWorkspace>,
-        route_output: &mut ferrule_cuda::context::CudaF32Buffer,
-        output: &mut ferrule_cuda::context::CudaF32Buffer,
-    ) -> Result<Vec<DeepSeekV4SequenceMoeAccessEvent>> {
-        if self.backend != ModelExecutionBackend::Cuda {
-            return Err(Error::Model(
-                "DeepSeek-V4 device-resident MoE prefill requires CUDA backend".into(),
-            ));
-        }
-        self.cuda_mut()?.routed_moe_prefill_batch_from_device_into(
-            layer,
-            input,
-            shared_input_fp8,
-            shared_hidden_f32,
-            shared_hidden_fp8,
-            token_ids,
-            row_to_sequence,
-            sequence_phases,
-            router,
-            predicted_experts,
-            router_policy,
-            residency,
-            source_catalog,
-            prefetch_capacity,
-            reader,
-            shared_expert,
-            router_logits,
-            router_indices,
-            router_weights,
-            linear_workspace,
-            segment_workspace,
-            route_output,
-            output,
-        )
     }
 
     #[cfg(feature = "cuda")]
@@ -1096,31 +856,6 @@ impl DeepSeekV4OperatorContext {
             return Err(Error::Internal(
                 "deterministic failpoint: DeepSeek-V4 arena acquire".into(),
             ));
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(crate) fn record_cuda_arena_pool_hit(&self) -> Result<()> {
-        let cuda = self.cuda.as_ref().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA operator cache is not initialized".into())
-        })?;
-        cuda.ops.add_arena_hit();
-        cuda.ops.add_arena_reuse();
-        Ok(())
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(crate) fn record_cuda_arena_pool_miss(&self, installed: bool) -> Result<()> {
-        let cuda = self.cuda.as_ref().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA operator cache is not initialized".into())
-        })?;
-        cuda.ops.add_arena_miss();
-        if installed {
-            // The CUDA counter surface predates pool installs. A successful new
-            // exact bucket grows the persistent arena footprint, so map install
-            // to its existing grow counter.
-            cuda.ops.add_arena_grow();
         }
         Ok(())
     }

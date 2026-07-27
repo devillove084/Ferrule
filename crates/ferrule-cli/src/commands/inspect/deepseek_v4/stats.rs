@@ -1,7 +1,6 @@
-use ferrule_model::models::deepseek_v4::DeepSeekV4Runner;
+use ferrule_model::models::deepseek_v4::DeepSeekV4LayerRuntimeStats;
 
-pub(super) fn print_deepseek_v4_runtime_stats(runner: &DeepSeekV4Runner) {
-    let stats = runner.layer_runtime_stats();
+pub(super) fn print_deepseek_v4_runtime_stats(stats: &[DeepSeekV4LayerRuntimeStats]) {
     if stats.is_empty() {
         return;
     }

@@ -1,10 +1,31 @@
+use std::future::Future;
+use std::pin::Pin;
+
 use ferrule_common::execution::{
-    ExecutionBatch, ExecutionCapabilities, ExecutionOutput, KvReservation,
+    ExecutionBatch, ExecutionCapabilities, ExecutionOutput, ExecutionTransactionId,
+    KvReservationView,
 };
 
-use crate::{EnginePlan, IncrementalDecodeState, ModelDescriptor};
-use ferrule_common::Result;
+use crate::{IncrementalDecodeState, ModelDescriptor};
 pub use ferrule_common::execution::TokenLogit;
+use ferrule_common::{CompletionHub, Error, Result};
+
+/// Owned model-side completion reactor.
+///
+/// Reactors are claimed once by the inference owner. They do not borrow the
+/// runner and need not be `Send`, allowing Linux `AsyncFd` pumps to run on the
+/// owner's local task set.
+pub type ModelCompletionReactor = Pin<Box<dyn Future<Output = Result<()>> + 'static>>;
+
+/// Build the allocation-free callback used by non-model producer threads.
+#[cfg(any(feature = "cuda", test))]
+pub(crate) fn completion_notify_callback(
+    completion_hub: CompletionHub,
+) -> impl FnOnce() + Send + 'static {
+    move || {
+        completion_hub.notify();
+    }
+}
 
 // ── ModelInfo ─────────────────────────────────────────────────────────────
 
@@ -42,17 +63,6 @@ impl ModelInfo {
 
 // ── ModelRunner trait ────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PrefillMode {
-    /// Correctness-first prompt processing. Backends may use a true batched
-    /// prefill implementation or a reference fallback.
-    Batched,
-    /// Append all prompt tokens except the last without materializing logits,
-    /// then return top-k for the last token. This is useful for interactive chat
-    /// and resident serving workers.
-    Interactive,
-}
-
 pub trait ModelRunner {
     fn model_info(&self) -> ModelInfo;
     fn encode(&self, text: &str) -> Result<Vec<u32>>;
@@ -64,8 +74,6 @@ pub trait ModelRunner {
     ) -> Result<Option<String>> {
         state.step(token, |tokens| self.decode(tokens))
     }
-    fn prefill(&mut self, tokens: &[u32]) -> Result<Vec<f32>>;
-    fn decode_token(&mut self, token: u32) -> Result<Vec<f32>>;
     fn reset_session(&mut self) -> Result<()>;
     fn eos_token_id(&self) -> Option<u32>;
     /// Optional count of model layers/materialized execution states currently bound
@@ -81,56 +89,171 @@ pub trait ModelRunner {
     }
 }
 
-/// Optional capability for model runners that can produce top-k logits without
-/// materializing a full vocabulary logits vector.
+/// Opaque identity for one resumable packed-batch continuation.
 ///
-/// `ferrule-runtime` owns generation/session algorithms over this trait; concrete
-/// model families only implement the primitive operations. This keeps runtime code
-/// generic and prevents it from depending on DeepSeek/Qwen/etc. runner types.
-pub trait TopKModelRunner: ModelRunner {
-    fn position(&self) -> usize;
-    fn feed_token(&mut self, token_id: u32) -> Result<()>;
+/// IDs are scoped to the runner that created them. Callers must pass the same ID
+/// back to that runner when resuming or cancelling a waiting batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BatchContinuationId(std::num::NonZeroU64);
 
-    /// Maximum top-k request the active backend can validate before mutating
-    /// sequence state. Backends with a smaller kernel limit must override this.
-    fn max_top_k(&self) -> usize {
-        usize::MAX
+impl BatchContinuationId {
+    /// Construct a continuation ID, rejecting zero because it is reserved as an
+    /// invalid or absent identity.
+    pub fn new(value: u64) -> Result<Self> {
+        std::num::NonZeroU64::new(value)
+            .map(Self)
+            .ok_or_else(|| Error::Execution("batch continuation ID must be non-zero".into()))
     }
 
-    /// Append prompt tokens without requiring logits for the last row.
+    /// Return the validated non-zero numeric identity.
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+/// One model-neutral expert load operation blocking a resumable batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PendingExpertLoad {
+    operation_id: u64,
+    layer: u32,
+    expert: u32,
+}
+
+impl PendingExpertLoad {
+    /// Construct a pending expert load.
     ///
-    /// The default keeps existing implementations correct by feeding tokens one
-    /// at a time. Model runners with real segment/chunked prefill should override
-    /// this so runtime can execute non-final prefill chunks without materializing
-    /// hidden states or lm_head logits.
-    fn prefill_tokens(&mut self, token_ids: &[u32], _mode: PrefillMode) -> Result<()> {
-        for &token_id in token_ids {
-            self.feed_token(token_id)?;
+    /// `operation_id` identifies the durable load operation owned by the runner
+    /// and must be non-zero. Layer and expert numbers are model-relative indices.
+    pub fn new(operation_id: u64, layer: u32, expert: u32) -> Result<Self> {
+        if operation_id == 0 {
+            return Err(Error::Execution(
+                "pending expert load operation ID must be non-zero".into(),
+            ));
         }
-        Ok(())
+        Ok(Self {
+            operation_id,
+            layer,
+            expert,
+        })
     }
 
-    fn prefill_topk(
-        &mut self,
-        token_ids: &[u32],
-        top_k: usize,
-        mode: PrefillMode,
-    ) -> Result<Vec<TokenLogit>>;
-    fn decode_topk(&mut self, token_id: u32, top_k: usize) -> Result<Vec<TokenLogit>>;
+    /// Return the validated non-zero load operation identity.
+    pub const fn operation_id(self) -> u64 {
+        self.operation_id
+    }
+
+    /// Return the model-relative layer index.
+    pub const fn layer(self) -> u32 {
+        self.layer
+    }
+
+    /// Return the model-relative expert index within the layer.
+    pub const fn expert(self) -> u32 {
+        self.expert
+    }
+}
+
+/// Model-owned wait state for an asynchronous operation.
+///
+/// An empty expert list means the continuation is waiting on non-expert model
+/// work, such as a device-to-host result transfer. Expert operation IDs must be
+/// non-zero and unique within the continuation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingModelProgress {
+    transaction: ExecutionTransactionId,
+    continuation: BatchContinuationId,
+    expert_loads: Vec<PendingExpertLoad>,
+}
+
+impl PendingModelProgress {
+    /// Construct a validated model wait state. `expert_loads` may be empty when
+    /// progress depends on another model-owned completion source.
+    pub fn new(
+        transaction: ExecutionTransactionId,
+        continuation: BatchContinuationId,
+        expert_loads: Vec<PendingExpertLoad>,
+    ) -> Result<Self> {
+        let mut operation_ids = std::collections::HashSet::with_capacity(expert_loads.len());
+        for operation in &expert_loads {
+            if operation.operation_id == 0 {
+                return Err(Error::Execution(
+                    "pending expert load operation ID must be non-zero".into(),
+                ));
+            }
+            if !operation_ids.insert(operation.operation_id) {
+                return Err(Error::Execution(format!(
+                    "pending expert load operation ID {} is duplicated",
+                    operation.operation_id
+                )));
+            }
+        }
+        Ok(Self {
+            transaction,
+            continuation,
+            expert_loads,
+        })
+    }
+
+    /// Return the stable end-to-end transaction owning this wait.
+    pub const fn transaction(&self) -> ExecutionTransactionId {
+        self.transaction
+    }
+
+    /// Return the continuation to pass to the corresponding resume or cancel API.
+    pub const fn continuation(&self) -> BatchContinuationId {
+        self.continuation
+    }
+
+    /// Return expert loads currently blocking progress. This may be empty when
+    /// the model is waiting on another asynchronous completion source.
+    pub fn expert_loads(&self) -> &[PendingExpertLoad] {
+        &self.expert_loads
+    }
+}
+
+/// Progress reported by one checkpoint-native proposal operation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NativeProposalProgress {
+    /// Proposal generation completed and the runner released its continuation.
+    Complete(NativeProposal),
+    /// The runner retained the continuation and awaits model-owned work.
+    Waiting(PendingModelProgress),
+}
+
+/// Progress reported by native packed multi-session execution.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MultiSessionBatchProgress {
+    /// The batch completed with its final model output.
+    Complete(ExecutionOutput),
+    /// The runner retained a continuation and is waiting for model-owned work.
+    Waiting(PendingModelProgress),
+}
+
+/// Ownership result of cancelling one retained batch continuation.
+#[derive(Debug)]
+pub enum BatchContinuationCancelOutcome {
+    /// Model work is quiescent and all model-owned continuation cleanup succeeded.
+    Cancelled,
+    /// Cancellation failed before quiescence; the same continuation remains owned
+    /// by the runner and may be cancelled again.
+    StillActive(Error),
+    /// Model work is quiescent, but model-owned cleanup reported an error. The
+    /// caller must drop continuation ownership and continue backend rollback.
+    Quiesced(Error),
 }
 
 /// A model runner that supports explicit per-sequence state for multi-session
 /// execution.
 ///
-/// This trait extends [`TopKModelRunner`] with the ability to swap sequence state
-/// in and out of the runner, enabling multiple independent sequences to share
-/// one set of prepared resources (weights, expert residency, arenas).
+/// This trait extends [`ModelRunner`] with explicit sequence state and one
+/// mandatory packed execution protocol, enabling multiple independent sequences
+/// to share prepared resources without a serial fallback.
 ///
 /// Models implement this trait; the runtime crate provides a generic
 /// [`NativeMultiSessionExecutor`] that works over any `MultiSessionRunner`.
 ///
 /// [`NativeMultiSessionExecutor`]: ../../ferrule_runtime/engine/struct.NativeMultiSessionExecutor.html
-pub trait MultiSessionRunner: TopKModelRunner {
+pub trait MultiSessionRunner: ModelRunner {
     /// Per-sequence execution state (position, KV, predictor, etc.).
     type SequenceState;
 
@@ -182,12 +305,9 @@ pub trait MultiSessionRunner: TopKModelRunner {
 
     /// Create a fresh independent sequence state at position zero.
     ///
-    /// Serving admission should use this hook rather than cloning the runner's
-    /// default session. The default preserves compatibility for runners that do
-    /// not yet distinguish fresh construction from an explicit state fork.
-    fn create_sequence_state(&mut self) -> Result<Self::SequenceState> {
-        self.fork_sequence_state()
-    }
+    /// Serving admission must use this hook rather than cloning the runner's
+    /// default session.
+    fn create_sequence_state(&mut self) -> Result<Self::SequenceState>;
 
     /// Create an independent sequence state forked from the runner's default
     /// session, including any model-owned continuation state.
@@ -210,28 +330,19 @@ pub trait MultiSessionRunner: TopKModelRunner {
     /// Release a sequence state and its physical capacity.
     fn release_sequence_state(&mut self, state: Self::SequenceState) -> Result<()>;
 
-    /// Configure the maximum number of backend physical KV pages. Runners that
-    /// own a physical page pool override this hook; metadata-only runners ignore it.
-    fn configure_kv_page_capacity(&mut self, _max_pages: usize) -> Result<()> {
-        Ok(())
-    }
+    /// Configure the maximum number of backend physical KV pages.
+    fn configure_kv_page_capacity(&mut self, max_pages: usize) -> Result<()>;
 
     /// Release backend physical slots or suspended snapshots after runtime
     /// refcounts reach zero.
-    fn release_kv_pages(&mut self, _pages: &[ferrule_common::execution::KvPageId]) -> Result<()> {
-        Ok(())
-    }
+    fn release_kv_pages(&mut self, pages: &[ferrule_common::execution::KvPageId]) -> Result<()>;
 
     /// Move exclusively owned pages out of backend device residency. Backends
     /// retain any opaque host snapshots required by `restore_kv_pages`.
-    fn preempt_kv_pages(&mut self, _pages: &[ferrule_common::execution::KvPageId]) -> Result<()> {
-        Ok(())
-    }
+    fn preempt_kv_pages(&mut self, pages: &[ferrule_common::execution::KvPageId]) -> Result<()>;
 
     /// Restore pages previously moved out of backend device residency.
-    fn restore_kv_pages(&mut self, _pages: &[ferrule_common::execution::KvPageId]) -> Result<()> {
-        Ok(())
-    }
+    fn restore_kv_pages(&mut self, pages: &[ferrule_common::execution::KvPageId]) -> Result<()>;
 
     /// Reserve backend-owned physical resources for one packed batch.
     ///
@@ -240,85 +351,83 @@ pub trait MultiSessionRunner: TopKModelRunner {
     /// must leave the previously committed view unchanged when prepare fails.
     fn prepare_multi_session_batch(
         &mut self,
-        _states: &mut [Self::SequenceState],
-        _batch: &ExecutionBatch,
-        _kv_reservations: &[KvReservation],
-    ) -> Result<bool> {
-        Ok(false)
-    }
+        transaction: ExecutionTransactionId,
+        states: &mut [Self::SequenceState],
+        batch: &ExecutionBatch,
+        kv_reservations: &[KvReservationView],
+    ) -> Result<()>;
 
-    /// Publish resources prepared for the current batch after the runtime KV
-    /// transaction has committed.
-    fn commit_multi_session_batch(&mut self) -> Result<()> {
-        Ok(())
-    }
+    /// Atomically publish backend resources prepared for the current batch.
+    ///
+    /// Runtime logical KV metadata is published immediately after this returns
+    /// successfully. An error must mean the backend transaction is still
+    /// uncommitted and can be rolled back with `rollback_multi_session_batch`.
+    fn commit_multi_session_batch(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        states: &mut [Self::SequenceState],
+    ) -> Result<()>;
 
     /// Discard resources prepared for the current batch. This must be safe after
     /// model execution fails and must restore the previous committed KV view.
-    fn rollback_multi_session_batch(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    /// Retain an exact prefix of one provisional sequence.
-    ///
-    /// `Ok(true)` means `branch` is equivalent to executing only `retained_rows`
-    /// from `source` and the prepared backend reservation remains publishable.
-    /// `Ok(false)` must leave the branch unchanged so callers can use replay.
-    fn retain_provisional_prefix(
+    fn rollback_multi_session_batch(
         &mut self,
-        _source: &Self::SequenceState,
-        _branch: &mut Self::SequenceState,
-        _executed_rows: usize,
-        _retained_rows: usize,
-    ) -> Result<bool> {
-        Ok(false)
-    }
+        transaction: ExecutionTransactionId,
+        states: &mut [Self::SequenceState],
+    ) -> Result<()>;
 
     /// Atomically retain independent exact prefixes for a provisional cohort.
     ///
-    /// Full-width entries are already exact and require no restoration. For a
-    /// multi-sequence batch, `Ok(false)` must be returned before mutating any
-    /// branch. Backends that only support the scalar contract retain the existing
-    /// one-sequence behavior through this default implementation.
+    /// Full-width entries are already exact and require no restoration. Failure
+    /// must be reported before mutating any branch.
     fn retain_provisional_prefixes(
         &mut self,
+        transaction: ExecutionTransactionId,
         sources: &[Self::SequenceState],
         branches: &mut [Self::SequenceState],
         executed_rows: &[usize],
         retained_rows: &[usize],
-    ) -> Result<bool> {
-        if sources.len() != 1
-            || branches.len() != 1
-            || executed_rows.len() != 1
-            || retained_rows.len() != 1
-        {
-            return Ok(false);
-        }
-        if retained_rows[0] == executed_rows[0] {
-            return Ok(true);
-        }
-        self.retain_provisional_prefix(
-            &sources[0],
-            &mut branches[0],
-            executed_rows[0],
-            retained_rows[0],
-        )
-    }
+    ) -> Result<()>;
 
-    /// Execute a complete packed multi-session batch in one backend pipeline.
+    /// Begin native packed execution and report whether it completed or retained
+    /// a continuation waiting on model-owned resource work.
     ///
-    /// Model families with native ragged/mixed execution override this method and
-    /// consume the authoritative row positions, page tables, and KV write slots
-    /// directly from `batch`. Returning `Ok(None)` selects the generic serial
-    /// correctness path in `ferrule-runtime`; it must not be reported as native
-    /// packed execution by performance gates.
-    fn execute_multi_session_batch(
+    /// This is the only multi-session execution path. Implementations must consume
+    /// authoritative row positions, page tables, and KV write slots directly from
+    /// `batch`; there is no runtime serial or single-token fallback.
+    fn execute_multi_session_batch_progress(
         &mut self,
-        _states: &mut [Self::SequenceState],
-        _batch: &ExecutionBatch,
-    ) -> Result<Option<ExecutionOutput>> {
-        Ok(None)
-    }
+        transaction: ExecutionTransactionId,
+        states: &mut [Self::SequenceState],
+        batch: &ExecutionBatch,
+    ) -> Result<MultiSessionBatchProgress>;
+
+    /// Resume a batch previously reported as waiting by this runner.
+    ///
+    /// Returning `Err` must leave the same continuation active and cancellable.
+    /// A runner that reaches quiescence with an error must report that ownership
+    /// transition through a future structured progress result rather than losing
+    /// the continuation implicitly.
+    ///
+    fn resume_multi_session_batch(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        states: &mut [Self::SequenceState],
+        batch: &ExecutionBatch,
+        continuation: BatchContinuationId,
+    ) -> Result<MultiSessionBatchProgress>;
+
+    /// Cancel a batch continuation previously created by this runner.
+    ///
+    /// Implementations must explicitly report whether an error happened before or
+    /// after quiescence. Callers retain state ownership only for
+    /// [`BatchContinuationCancelOutcome::StillActive`].
+    fn cancel_multi_session_batch(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        states: &mut [Self::SequenceState],
+        continuation: BatchContinuationId,
+    ) -> BatchContinuationCancelOutcome;
 
     /// Truthful capabilities for multi-session execution. This should report
     /// `max_sequences > 1` and `supports_mixed` accurately for this backend.
@@ -327,7 +436,7 @@ pub trait MultiSessionRunner: TopKModelRunner {
 
 /// Immutable identity of one prepared checkpoint-native proposal source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DsparkProposalSource {
+pub struct NativeProposalSource {
     /// Stable implementation/protocol name, independent of a request or session.
     pub implementation: &'static str,
     /// Immutable prepared-plan generation within this process. This is not a
@@ -337,11 +446,11 @@ pub struct DsparkProposalSource {
     pub native_width: usize,
 }
 
-impl DsparkProposalSource {
+impl NativeProposalSource {
     pub fn validate(&self) -> Result<()> {
         if self.implementation.is_empty() || self.prepared_plan_id == 0 || self.native_width == 0 {
             return Err(ferrule_common::Error::Model(format!(
-                "invalid DSpark proposal source: implementation={:?} prepared_plan_id={} native_width={}",
+                "invalid native proposal source: implementation={:?} prepared_plan_id={} native_width={}",
                 self.implementation, self.prepared_plan_id, self.native_width
             )));
         }
@@ -349,22 +458,22 @@ impl DsparkProposalSource {
     }
 }
 
-/// One checkpoint-native DSpark proposal block.
+/// One checkpoint-native proposal block.
 ///
 /// `token_ids` are ordered draft candidates after the carried target anchor.
 /// Confidence values use the same row order and remain telemetry until an exact
 /// confidence admission policy is enabled.
 #[derive(Debug, Clone, PartialEq)]
-pub struct DsparkProposal {
+pub struct NativeProposal {
     pub token_ids: Vec<u32>,
     pub confidence_logits: Vec<f32>,
 }
 
-impl DsparkProposal {
+impl NativeProposal {
     pub fn validate(&self) -> Result<()> {
         if self.token_ids.len() != self.confidence_logits.len() {
             return Err(ferrule_common::Error::Model(format!(
-                "DSpark proposal returned {} tokens but {} confidence logits",
+                "native proposal returned {} tokens but {} confidence logits",
                 self.token_ids.len(),
                 self.confidence_logits.len()
             )));
@@ -376,18 +485,18 @@ impl DsparkProposal {
             .find(|(_, confidence)| !confidence.is_finite())
         {
             return Err(ferrule_common::Error::Model(format!(
-                "DSpark proposal confidence row {row} is not finite: {confidence}"
+                "native proposal confidence row {row} is not finite: {confidence}"
             )));
         }
         Ok(())
     }
 
-    pub fn validate_for_source(&self, source: DsparkProposalSource) -> Result<()> {
+    pub fn validate_for_source(&self, source: NativeProposalSource) -> Result<()> {
         source.validate()?;
         self.validate()?;
         if self.token_ids.len() != source.native_width {
             return Err(ferrule_common::Error::Model(format!(
-                "DSpark proposal source {}:{} declares native width {} but returned {} tokens",
+                "native proposal source {}:{} declares native width {} but returned {} tokens",
                 source.implementation,
                 source.prepared_plan_id,
                 source.native_width,
@@ -398,23 +507,27 @@ impl DsparkProposal {
     }
 }
 
-/// Optional production capability for a checkpoint-native DSpark proposal.
-///
-/// Implementations execute against the currently active explicit sequence state.
-/// The proposal block may read committed target/DSpark context but must not
-/// append proposal-block KV to the committed sequence.
-pub trait DsparkProposalRunner: MultiSessionRunner {
-    fn dspark_proposal_source(&self) -> Result<DsparkProposalSource>;
-
-    fn propose_dspark(&mut self, anchor_token_id: u32) -> Result<DsparkProposal>;
-}
-
 /// Optional model-owned expert-I/O oracle consumed by the generic runtime
 /// scheduler. Implementations keep route prediction and cache interpretation in
 /// the model crate while exposing only model-neutral cost estimates.
 pub trait ExpertIoModelRunner: MultiSessionRunner {
     type ExpertIoBatchState;
     type ExpertIoAdmission;
+
+    /// Exact physical capacity of the hardware/model expert materialization path.
+    fn expert_io_resource_limits(
+        &self,
+    ) -> Result<ferrule_common::expert_io::ExpertIoResourceLimits>;
+
+    /// Install the unique runtime-owned hard-admission service before execution.
+    fn install_expert_io_resource_control(
+        &mut self,
+        control: Box<dyn ferrule_common::expert_io::ExpertIoResourceControl>,
+    ) -> Result<()>;
+
+    /// Remove the runtime-owned admission service before returning a quiescent
+    /// runner to its caller. A later driver may then install a fresh service.
+    fn uninstall_expert_io_resource_control(&mut self) -> Result<()>;
 
     fn begin_expert_io_batch(&self) -> Self::ExpertIoBatchState;
 
@@ -436,112 +549,176 @@ pub trait ExpertIoModelRunner: MultiSessionRunner {
     );
 }
 
-// ── Engine-plan helpers ──────────────────────────────────────────────────
+/// Model capability consumed by the resident inference scheduler.
+///
+/// Expert-I/O estimation is mandatory for resident scheduling. Checkpoint-native
+/// speculative proposals are optional: models without that capability return
+/// `None` and execute the same packed target path without a serving-side special
+/// case.
+pub trait ResidentModelRunner: ExpertIoModelRunner {
+    type ObservabilitySnapshot: Clone;
 
-pub fn unsupported_runtime_message(plan: &EnginePlan) -> String {
-    let mut message = format!(
-        "{} metadata is recognized, but the current executable backend cannot run it yet (engine plan: {})",
-        plan.family, plan.status
-    );
-    if !plan.missing.is_empty() {
-        message.push_str(". Missing policies:");
-        for item in &plan.missing {
-            message.push_str(&format!(" {}: {};", item.area, item.reason));
-        }
-    }
-    message
+    /// Return one model-owned typed observability snapshot. Runtime transports the
+    /// associated type without knowing model-specific fields.
+    fn observability_snapshot(&self) -> Self::ObservabilitySnapshot;
+
+    /// Return the cloneable wake hub shared by every model-side completion producer.
+    fn completion_hub(&self) -> CompletionHub;
+
+    /// Transfer ownership of all model-side completion reactors to the caller.
+    ///
+    /// Each reactor is returned at most once. The futures are `'static`, do not
+    /// borrow the runner, and may be polled on a local (non-`Send`) task set.
+    fn take_completion_reactors(&mut self) -> Vec<ModelCompletionReactor>;
+
+    fn native_proposal_source(&self) -> Result<Option<NativeProposalSource>>;
+
+    /// Begin a checkpoint-native proposal without synchronously waiting for
+    /// model-owned I/O or device result transfers.
+    fn begin_native_proposal(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        anchor_token_id: u32,
+    ) -> Result<NativeProposalProgress>;
+
+    /// Resume a proposal previously returned as [`NativeProposalProgress::Waiting`].
+    /// Returning `Err` leaves the same continuation owned by the runner and
+    /// cancellable by the caller.
+    fn resume_native_proposal(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        continuation: BatchContinuationId,
+    ) -> Result<NativeProposalProgress>;
+
+    /// Cancel a retained native proposal continuation.
+    fn cancel_native_proposal(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        continuation: BatchContinuationId,
+    ) -> BatchContinuationCancelOutcome;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        AttentionKind, ModelFamily, ModelSupportContract, MoeSpec, QuantFormatCount, RouterKind,
-        TransformerSpec, WeightSource,
-    };
 
-    fn dspark_source(native_width: usize) -> DsparkProposalSource {
-        DsparkProposalSource {
-            implementation: "test-dspark-v1",
+    fn native_source(native_width: usize) -> NativeProposalSource {
+        NativeProposalSource {
+            implementation: "test-native-v1",
             prepared_plan_id: 0x1234,
             native_width,
         }
     }
 
     #[test]
-    fn dspark_proposal_validates_native_width_and_finite_confidence() {
-        let proposal = DsparkProposal {
+    fn batch_continuation_id_rejects_zero_and_round_trips_non_zero_values() {
+        let error = BatchContinuationId::new(0).unwrap_err().to_string();
+        assert!(error.contains("continuation ID must be non-zero"));
+
+        let continuation = BatchContinuationId::new(42).unwrap();
+        assert_eq!(continuation.get(), 42);
+    }
+
+    #[test]
+    fn pending_expert_load_validates_operation_id_and_exposes_coordinates() {
+        let error = PendingExpertLoad::new(0, 3, 7).unwrap_err().to_string();
+        assert!(error.contains("operation ID must be non-zero"));
+
+        let operation = PendingExpertLoad::new(11, 3, 7).unwrap();
+        assert_eq!(operation.operation_id(), 11);
+        assert_eq!(operation.layer(), 3);
+        assert_eq!(operation.expert(), 7);
+    }
+
+    #[test]
+    fn pending_model_progress_allows_empty_work_and_rejects_duplicate_operations() {
+        let transaction = ExecutionTransactionId::new(7).unwrap();
+        let continuation = BatchContinuationId::new(23).unwrap();
+        let empty = PendingModelProgress::new(transaction, continuation, Vec::new()).unwrap();
+        assert_eq!(empty.transaction(), transaction);
+        assert_eq!(empty.continuation(), continuation);
+        assert!(empty.expert_loads().is_empty());
+
+        let duplicate = PendingModelProgress::new(
+            transaction,
+            continuation,
+            vec![
+                PendingExpertLoad::new(31, 2, 4).unwrap(),
+                PendingExpertLoad::new(31, 3, 5).unwrap(),
+            ],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(duplicate.contains("operation ID 31 is duplicated"));
+    }
+
+    #[test]
+    fn pending_model_progress_preserves_expert_load_order() {
+        let transaction = ExecutionTransactionId::new(11).unwrap();
+        let continuation = BatchContinuationId::new(29).unwrap();
+        let expert_loads = vec![
+            PendingExpertLoad::new(41, 7, 1).unwrap(),
+            PendingExpertLoad::new(42, 7, 8).unwrap(),
+        ];
+        let pending =
+            PendingModelProgress::new(transaction, continuation, expert_loads.clone()).unwrap();
+        assert_eq!(pending.transaction(), transaction);
+        assert_eq!(pending.expert_loads(), expert_loads.as_slice());
+        assert_eq!(
+            NativeProposalProgress::Waiting(pending.clone()),
+            NativeProposalProgress::Waiting(pending)
+        );
+    }
+
+    #[test]
+    fn native_proposal_validates_native_width_and_finite_confidence() {
+        let proposal = NativeProposal {
             token_ids: vec![10, 11],
             confidence_logits: vec![0.5, -0.25],
         };
-        proposal.validate_for_source(dspark_source(2)).unwrap();
+        proposal.validate_for_source(native_source(2)).unwrap();
 
         let width_error = proposal
-            .validate_for_source(dspark_source(3))
+            .validate_for_source(native_source(3))
             .unwrap_err()
             .to_string();
         assert!(width_error.contains("declares native width 3"));
 
-        let invalid_confidence = DsparkProposal {
+        let invalid_confidence = NativeProposal {
             token_ids: vec![10],
             confidence_logits: vec![f32::NAN],
         }
-        .validate_for_source(dspark_source(1))
+        .validate_for_source(native_source(1))
         .unwrap_err()
         .to_string();
         assert!(invalid_confidence.contains("not finite"));
     }
 
     #[test]
-    fn dspark_proposal_rejects_missing_source_identity() {
-        let proposal = DsparkProposal {
+    fn native_proposal_rejects_missing_source_identity() {
+        let proposal = NativeProposal {
             token_ids: vec![10],
             confidence_logits: vec![0.0],
         };
         let error = proposal
-            .validate_for_source(DsparkProposalSource {
+            .validate_for_source(NativeProposalSource {
                 implementation: "",
                 prepared_plan_id: 0,
                 native_width: 1,
             })
             .unwrap_err()
             .to_string();
-        assert!(error.contains("invalid DSpark proposal source"));
+        assert!(error.contains("invalid native proposal source"));
     }
 
     #[test]
-    fn unsupported_runtime_message_reports_engine_plan_gaps() {
-        let spec = TransformerSpec {
-            family: ModelFamily::DeepSeekV4,
-            architecture: Some("deepseek4".into()),
-            weight_source: WeightSource::Gguf,
-            hidden_size: Some(7168),
-            num_layers: Some(1),
-            vocab_size: Some(129280),
-            num_heads: Some(128),
-            num_kv_heads: None,
-            head_dim: None,
-            attention: AttentionKind::MultiLatentAttention,
-            moe: MoeSpec {
-                num_experts: Some(256),
-                num_experts_per_tok: Some(8),
-                has_shared_experts: true,
-                router: RouterKind::HashAssistedTopK,
-            },
-            semantics: Default::default(),
-            tensor_count: Some(1),
-            quantization: vec![QuantFormatCount {
-                format: "Q4_K".into(),
-                tensors: 1,
-            }],
-            notes: Vec::new(),
-        };
-        let plan = ModelSupportContract::from_spec(&spec, &[]).engine_plan();
-        let message = unsupported_runtime_message(&plan);
-        assert!(message.contains("DeepSeek-V4"));
-        assert!(message.contains("engine plan: metadata-only"));
-        assert!(message.contains("attention:"));
-        assert!(message.contains("quantization:"));
-        assert!(message.contains("router:"));
+    fn completion_callback_publishes_to_the_shared_hub() {
+        let hub = CompletionHub::new();
+        let callback = completion_notify_callback(hub.clone());
+        assert_eq!(hub.epoch(), 0);
+
+        callback();
+
+        assert_eq!(hub.epoch(), 1);
     }
 }

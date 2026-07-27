@@ -1,5 +1,6 @@
 //! Ferrule Common — shared types, errors, and observability infrastructure.
 
+pub mod async_wake;
 pub mod execution;
 pub mod expert_io;
 pub mod expert_residency;
@@ -7,6 +8,7 @@ pub mod kernel_plan;
 pub mod memory;
 pub mod observability;
 
+pub use async_wake::{CompletionHub, CompletionListener, CompletionWake};
 pub use expert_io::{ExpertIoEstimate, ExpertIoPhase};
 pub use expert_residency::{
     ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertInstallReason, ExpertKey, ExpertLease,

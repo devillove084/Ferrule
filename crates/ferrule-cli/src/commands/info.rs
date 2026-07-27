@@ -1,4 +1,6 @@
-use ferrule_model::{EnginePlan, ModelDescriptor, ModelInfo, TensorClassCount, TransformerSpec};
+#[cfg(feature = "cuda")]
+use ferrule_model::ModelInfo;
+use ferrule_model::{EnginePlan, ModelDescriptor, TensorClassCount, TransformerSpec};
 use std::path::Path;
 
 // ── info ─────────────────────────────────────────────────────────────────────
@@ -11,6 +13,7 @@ pub fn cmd_info(model_dir: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "cuda")]
 pub fn print_model_info(info: &ModelInfo) {
     let moe = if info.num_experts > 0 {
         format!(", {}e top-{}", info.num_experts, info.num_experts_per_tok)

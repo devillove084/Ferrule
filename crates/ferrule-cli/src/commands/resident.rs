@@ -1,23 +1,26 @@
+use std::future::Future;
 use std::num::NonZeroU32;
 
 use ferrule_common::execution::KvLayoutSchema;
-use ferrule_model::MultiSessionRunner;
+use ferrule_model::{MultiSessionRunner, ResidentModelRunner};
 use ferrule_runtime::cache::KvPageManager;
 use ferrule_runtime::{
-    FixedSequenceSlotPool, PageManagedDiagnosticHarness, ResidentSchedulerConfig,
-    ResidentTopKDriver, ResidentTopKDriverConfig,
+    FixedSequenceSlotPool, ResidentSchedulerConfig, ResidentTopKDriver, ResidentTopKDriverConfig,
 };
 
-pub(crate) fn build_page_managed_diagnostic_harness<R>(
-    runner: R,
-    schema: Box<dyn KvLayoutSchema>,
-    max_tokens: usize,
-    max_sequences: usize,
-) -> anyhow::Result<PageManagedDiagnosticHarness<R>>
+/// Run a non-`Send` inference owner on the calling OS thread.
+///
+/// CUDA context creation, completion reactors, stream callbacks, and every model
+/// step therefore remain attached to one owner thread.
+pub(crate) fn block_on_local_inference<F, T>(future: F) -> anyhow::Result<T>
 where
-    R: MultiSessionRunner,
+    F: Future<Output = anyhow::Result<T>>,
 {
-    PageManagedDiagnosticHarness::new(runner, schema, max_tokens, max_sequences).map_err(Into::into)
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let local = tokio::task::LocalSet::new();
+    local.block_on(&runtime, future)
 }
 
 pub(crate) fn build_resident_topk_driver<R>(
@@ -27,7 +30,7 @@ pub(crate) fn build_resident_topk_driver<R>(
     driver_config: ResidentTopKDriverConfig,
 ) -> anyhow::Result<ResidentTopKDriver<R, FixedSequenceSlotPool>>
 where
-    R: MultiSessionRunner,
+    R: MultiSessionRunner + ResidentModelRunner,
 {
     build_resident_topk_driver_with_page_limit(
         runner,
@@ -46,7 +49,7 @@ pub(crate) fn build_resident_topk_driver_with_page_limit<R>(
     max_page_limit: Option<usize>,
 ) -> anyhow::Result<ResidentTopKDriver<R, FixedSequenceSlotPool>>
 where
-    R: MultiSessionRunner,
+    R: MultiSessionRunner + ResidentModelRunner,
 {
     if driver_config.ctx_size == 0 {
         anyhow::bail!("resident driver ctx_size must be greater than zero");

@@ -594,6 +594,7 @@ dependencies = [
 name = "ferrule-common"
 version = "0.2.0"
 dependencies = [
+ "atomic-waker",
  "serde",
  "thiserror",
  "tracing",
@@ -632,6 +633,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokenizers",
+ "tokio",
  "tracing",
 ]
 
@@ -643,6 +645,7 @@ dependencies = [
  "ferrule-cuda",
  "ferrule-model",
  "serde",
+ "tokio",
  "tracing",
 ]
 

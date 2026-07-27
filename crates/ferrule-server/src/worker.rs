@@ -5,331 +5,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use ferrule_model::{ModelRunner, MultiSessionRunner, models::deepseek_v4::DeepSeekV4Runner};
 use ferrule_runtime::{
-    CancelRequestResult, ExpertIoBudget, FixedSequenceSlotPool, GenerateRequest, RequestId,
-    ResidentActionKind, ResidentDriverStep, ResidentTokenEvent, ResidentTopKDriver,
-    SequenceFinishReason, SequenceSlotPool, SequenceState, SessionId,
+    GenerateRequest, InferenceCancelProgress, InferenceCompletionOwner, InferenceEngine, RequestId,
+    ResidentDriverStep, ResidentTokenEvent, SequenceFinishReason, SessionId,
 };
 use tokio::sync::{mpsc, oneshot};
 
 use crate::config::WorkerConfig;
 use crate::openai::Usage;
-
-/// Synchronous model execution boundary owned by one dedicated worker thread.
-///
-/// The HTTP layer only sees [`ModelWorkerHandle`]. This trait exists so the
-/// ownership loop can be tested without a concrete model and so protocol code
-/// never depends on a model family.
-pub trait ModelEngine: Send + 'static {
-    fn encode(&self, prompt: &str) -> Result<Vec<u32>, String>;
-    fn submit(&mut self, request: GenerateRequest);
-    fn step(
-        &mut self,
-        on_token: &mut dyn FnMut(&ResidentTokenEvent),
-    ) -> Result<ResidentDriverStep, String>;
-    fn cancel_request(&mut self, request_id: RequestId) -> Result<CancelRequestResult, String>;
-    fn drain_finished(&mut self) -> Vec<SequenceState>;
-    fn drain_cancelled(&mut self) -> Vec<SequenceState>;
-    fn drain_failed(&mut self) -> Vec<SequenceState>;
-}
-
-pub struct DeepSeekV4ResidentEngine<C>
-where
-    C: SequenceSlotPool,
-{
-    driver: ResidentTopKDriver<DeepSeekV4Runner, C>,
-    expert_budget: ExpertIoBudget,
-    next_execution_step_id: u64,
-}
-
-impl<C> DeepSeekV4ResidentEngine<C>
-where
-    C: SequenceSlotPool,
-{
-    pub fn new(
-        driver: ResidentTopKDriver<DeepSeekV4Runner, C>,
-        expert_budget: ExpertIoBudget,
-    ) -> Self {
-        Self {
-            driver,
-            expert_budget,
-            next_execution_step_id: 1,
-        }
-    }
-}
-
-impl<C> ModelEngine for DeepSeekV4ResidentEngine<C>
-where
-    C: SequenceSlotPool + Send + 'static,
-{
-    fn encode(&self, prompt: &str) -> Result<Vec<u32>, String> {
-        self.driver
-            .executor()
-            .runner()
-            .encode(prompt)
-            .map_err(|error| error.to_string())
-    }
-
-    fn submit(&mut self, request: GenerateRequest) {
-        self.driver.submit(request);
-    }
-
-    fn step(
-        &mut self,
-        on_token: &mut dyn FnMut(&ResidentTokenEvent),
-    ) -> Result<ResidentDriverStep, String> {
-        let execution_step_id = self.next_execution_step_id;
-        self.next_execution_step_id = self
-            .next_execution_step_id
-            .checked_add(1)
-            .ok_or_else(|| "production execution-step identity overflow".to_string())?;
-        let mut adapter = |event: &ResidentTokenEvent| {
-            on_token(event);
-            Ok(())
-        };
-        let counters_before = self.driver.executor().runner().operator_runtime_counters();
-        let dspark_before = self.driver.stats().dspark.clone();
-        let result = self
-            .driver
-            .step_with_dspark_model_expert_io(&mut adapter, self.expert_budget);
-        let counters_after = self.driver.executor().runner().operator_runtime_counters();
-        let traces = self.driver.drain_dspark_cycle_traces().collect::<Vec<_>>();
-        let cycle_identities = traces
-            .iter()
-            .map(|trace| (trace.request_id.0, trace.session_id.0, trace.cycle_attempt))
-            .collect::<Vec<_>>();
-        let physical_counters_cycle_exact = matches!(
-            &result,
-            Ok(ResidentDriverStep::Executed {
-                action_kind: ResidentActionKind::Decode,
-                ..
-            })
-        ) && traces.len() == 1;
-        for trace in traces {
-            tracing::debug!(
-                target: "ferrule_dspark_cycle",
-                event = "dspark_cycle",
-                request_id = trace.request_id.0,
-                session_id = trace.session_id.0,
-                cycle_attempt = trace.cycle_attempt,
-                execution_step_id,
-                position = trace.position,
-                anchor_token = trace.anchor_token,
-                proposal_source = trace.proposal_source.implementation,
-                proposal_prepared_plan_id = trace.proposal_source.prepared_plan_id,
-                native_proposal_width = trace.proposal_source.native_width,
-                proposal_executed = trace.proposal_executed,
-                native_proposal_token_ids = ?trace.native_proposed_tokens,
-                native_confidence_logits = ?trace.native_confidence_logits,
-                proposal_token_ids = ?trace.proposed_tokens,
-                confidence_logits = ?trace.confidence_logits,
-                capacity_truncated_tokens = trace.capacity_truncated_tokens,
-                output_boundary_truncated_tokens = trace.output_boundary_truncated_tokens,
-                confidence_truncated_tokens = trace.confidence_truncated_tokens,
-                scheduler_expert_io = ?trace.scheduler_expert_io,
-                accepted_token_ids = ?trace.accepted_tokens,
-                rejected_token = ?trace.rejected_token,
-                target_correction_token = ?trace.target_correction_token,
-                target_next_token = ?trace.target_next_token,
-                target_row_top1 = ?trace.target_row_top1,
-                proposed_tokens = trace.accounting.proposed_tokens,
-                verified_rows = trace.accounting.verified_rows,
-                accepted_draft_tokens = trace.accounting.accepted_draft_tokens,
-                correction_tokens = trace.accounting.correction_tokens,
-                externally_committed_tokens = trace.accounting.externally_committed_tokens,
-                runtime_emitted_tokens = trace.runtime_emitted_tokens,
-                rolled_back_rows = trace.accounting.rolled_back_rows,
-                runtime_tokens_reconcile = trace.runtime_tokens_reconcile(),
-                proposal_us = trace.proposal_time_us,
-                verify_us = trace.verify_time_us,
-                transaction_us = trace.transaction_time_us,
-                cycle_us = trace.complete_cycle_time_us,
-                finish_reason = trace.finish_reason.map(|reason| reason.as_str()).unwrap_or("none"),
-                "production DSpark cycle trace"
-            );
-        }
-        if !cycle_identities.is_empty() || result.is_err() {
-            tracing::debug!(
-                target: "ferrule_runtime_step",
-                event = "dspark_physical_counters",
-                execution_step_id,
-                cycle_identities = ?cycle_identities,
-                step_succeeded = result.is_ok(),
-                physical_counters_cycle_exact,
-                dropped_cycle_traces = self.driver.stats().dropped_dspark_cycle_traces,
-                kernel_launches = counters_after.kernel_launches.saturating_sub(counters_before.kernel_launches),
-                h2d_copies = counters_after.host_to_device_copies.saturating_sub(counters_before.host_to_device_copies),
-                h2d_bytes = counters_after.host_to_device_bytes.saturating_sub(counters_before.host_to_device_bytes),
-                d2h_copies = counters_after.device_to_host_copies.saturating_sub(counters_before.device_to_host_copies),
-                d2h_bytes = counters_after.device_to_host_bytes.saturating_sub(counters_before.device_to_host_bytes),
-                artifact_uploads = counters_after.artifact_uploads.saturating_sub(counters_before.artifact_uploads),
-                artifact_upload_bytes = counters_after.artifact_upload_bytes.saturating_sub(counters_before.artifact_upload_bytes),
-                device_allocation_attempts = counters_after.device_allocation_attempts.saturating_sub(counters_before.device_allocation_attempts),
-                device_allocations = counters_after.device_allocations.saturating_sub(counters_before.device_allocations),
-                device_allocation_failures = counters_after.device_allocation_failures.saturating_sub(counters_before.device_allocation_failures),
-                device_allocation_bytes = counters_after.device_allocation_bytes.saturating_sub(counters_before.device_allocation_bytes),
-                stream_wide_syncs = counters_after.stream_wide_syncs.saturating_sub(counters_before.stream_wide_syncs),
-                selected_experts = counters_after.expert_selected.saturating_sub(counters_before.expert_selected),
-                resident_hits = counters_after.expert_selected_resident_hits.saturating_sub(counters_before.expert_selected_resident_hits),
-                upload_hits = counters_after.expert_selected_upload_hits.saturating_sub(counters_before.expert_selected_upload_hits),
-                host_staged_hits = counters_after.expert_selected_host_staged_hits.saturating_sub(counters_before.expert_selected_host_staged_hits),
-                cold_misses = counters_after.expert_selected_cold_misses.saturating_sub(counters_before.expert_selected_cold_misses),
-                expert_loads = counters_after.expert_loads.saturating_sub(counters_before.expert_loads),
-                expert_load_bytes = counters_after.expert_load_bytes.saturating_sub(counters_before.expert_load_bytes),
-                expert_io_submitted_extents = counters_after.expert_io_submitted_extents.saturating_sub(counters_before.expert_io_submitted_extents),
-                expert_io_completed_extents = counters_after.expert_io_completed_extents.saturating_sub(counters_before.expert_io_completed_extents),
-                expert_io_failed_extents = counters_after.expert_io_failed_extents.saturating_sub(counters_before.expert_io_failed_extents),
-                expert_io_requested_bytes = counters_after.expert_io_requested_bytes.saturating_sub(counters_before.expert_io_requested_bytes),
-                expert_io_aligned_bytes = counters_after.expert_io_aligned_bytes.saturating_sub(counters_before.expert_io_aligned_bytes),
-                expert_io_read_us = counters_after.expert_io_read_us.saturating_sub(counters_before.expert_io_read_us),
-                expert_async_upload_bytes = counters_after.expert_async_upload_bytes.saturating_sub(counters_before.expert_async_upload_bytes),
-                expert_frame_reuses = counters_after.expert_frame_reuses.saturating_sub(counters_before.expert_frame_reuses),
-                expert_frame_waits = counters_after.expert_frame_waits.saturating_sub(counters_before.expert_frame_waits),
-                abandoned_uploads = counters_after.expert_abandoned_uploads.saturating_sub(counters_before.expert_abandoned_uploads),
-                "production DSpark physical counter delta"
-            );
-        }
-        if matches!(
-            &result,
-            Ok(ResidentDriverStep::Executed {
-                action_kind: ResidentActionKind::Decode,
-                ..
-            })
-        ) {
-            let dspark_after = &self.driver.stats().dspark;
-            let proposed = dspark_after
-                .proposed_tokens
-                .saturating_sub(dspark_before.proposed_tokens);
-            let accepted = dspark_after
-                .accepted_draft_tokens
-                .saturating_sub(dspark_before.accepted_draft_tokens);
-            tracing::info!(
-                cycles = dspark_after.cycles.saturating_sub(dspark_before.cycles),
-                proposed_tokens = proposed,
-                verified_rows = dspark_after
-                    .verified_rows
-                    .saturating_sub(dspark_before.verified_rows),
-                accepted_draft_tokens = accepted,
-                runtime_emitted_tokens = dspark_after
-                    .runtime_emitted_tokens
-                    .saturating_sub(dspark_before.runtime_emitted_tokens),
-                acceptance = if proposed == 0 {
-                    0.0
-                } else {
-                    accepted as f64 / proposed as f64
-                },
-                kernel_launches = counters_after
-                    .kernel_launches
-                    .saturating_sub(counters_before.kernel_launches),
-                h2d_copies = counters_after
-                    .host_to_device_copies
-                    .saturating_sub(counters_before.host_to_device_copies),
-                h2d_bytes = counters_after
-                    .host_to_device_bytes
-                    .saturating_sub(counters_before.host_to_device_bytes),
-                d2h_copies = counters_after
-                    .device_to_host_copies
-                    .saturating_sub(counters_before.device_to_host_copies),
-                d2h_bytes = counters_after
-                    .device_to_host_bytes
-                    .saturating_sub(counters_before.device_to_host_bytes),
-                device_allocations = counters_after
-                    .device_allocations
-                    .saturating_sub(counters_before.device_allocations),
-                stream_wide_syncs = counters_after
-                    .stream_wide_syncs
-                    .saturating_sub(counters_before.stream_wide_syncs),
-                selected_experts = counters_after
-                    .expert_selected
-                    .saturating_sub(counters_before.expert_selected),
-                resident_hits = counters_after
-                    .expert_selected_resident_hits
-                    .saturating_sub(counters_before.expert_selected_resident_hits),
-                cold_misses = counters_after
-                    .expert_selected_cold_misses
-                    .saturating_sub(counters_before.expert_selected_cold_misses),
-                expert_loads = counters_after
-                    .expert_loads
-                    .saturating_sub(counters_before.expert_loads),
-                expert_load_bytes = counters_after
-                    .expert_load_bytes
-                    .saturating_sub(counters_before.expert_load_bytes),
-                expert_io_requested_bytes = counters_after
-                    .expert_io_requested_bytes
-                    .saturating_sub(counters_before.expert_io_requested_bytes),
-                moe_total_us = counters_after
-                    .moe_total_us
-                    .saturating_sub(counters_before.moe_total_us),
-                "production DSpark decode counters"
-            );
-        }
-        result.map_err(|error| error.to_string())
-    }
-
-    fn cancel_request(&mut self, request_id: RequestId) -> Result<CancelRequestResult, String> {
-        self.driver
-            .cancel_request(request_id)
-            .map_err(|error| error.to_string())
-    }
-
-    fn drain_finished(&mut self) -> Vec<SequenceState> {
-        self.driver.drain_finished()
-    }
-
-    fn drain_cancelled(&mut self) -> Vec<SequenceState> {
-        self.driver.drain_cancelled()
-    }
-
-    fn drain_failed(&mut self) -> Vec<SequenceState> {
-        self.driver.drain_failed()
-    }
-}
-
-impl<R, C> ModelEngine for ResidentTopKDriver<R, C>
-where
-    R: MultiSessionRunner + Send + 'static,
-    R::SequenceState: Send + 'static,
-    C: SequenceSlotPool + Send + 'static,
-{
-    fn encode(&self, prompt: &str) -> Result<Vec<u32>, String> {
-        self.executor()
-            .runner()
-            .encode(prompt)
-            .map_err(|error| error.to_string())
-    }
-
-    fn submit(&mut self, request: GenerateRequest) {
-        ResidentTopKDriver::submit(self, request);
-    }
-
-    fn step(
-        &mut self,
-        on_token: &mut dyn FnMut(&ResidentTokenEvent),
-    ) -> Result<ResidentDriverStep, String> {
-        let mut adapter = |event: &ResidentTokenEvent| {
-            on_token(event);
-            Ok(())
-        };
-        ResidentTopKDriver::step(self, &mut adapter).map_err(|error| error.to_string())
-    }
-
-    fn cancel_request(&mut self, request_id: RequestId) -> Result<CancelRequestResult, String> {
-        ResidentTopKDriver::cancel_request(self, request_id).map_err(|error| error.to_string())
-    }
-
-    fn drain_finished(&mut self) -> Vec<SequenceState> {
-        ResidentTopKDriver::drain_finished(self)
-    }
-
-    fn drain_cancelled(&mut self) -> Vec<SequenceState> {
-        ResidentTopKDriver::drain_cancelled(self)
-    }
-
-    fn drain_failed(&mut self) -> Vec<SequenceState> {
-        ResidentTopKDriver::drain_failed(self)
-    }
-}
 
 #[derive(Debug)]
 pub(crate) struct WorkerRequest {
@@ -592,7 +275,7 @@ impl Drop for ModelWorker {
 
 pub fn spawn_model_worker<E>(engine: E, config: WorkerConfig) -> Result<ModelWorker, String>
 where
-    E: ModelEngine,
+    E: InferenceEngine,
 {
     spawn_model_worker_with(move || Ok(engine), config)
 }
@@ -608,7 +291,7 @@ pub fn spawn_model_worker_with<F, E>(
 ) -> Result<ModelWorker, String>
 where
     F: FnOnce() -> Result<E, String> + Send + 'static,
-    E: ModelEngine,
+    E: InferenceEngine,
 {
     config.validate().map_err(str::to_string)?;
     let (commands, receiver) = mpsc::channel(config.command_queue_capacity);
@@ -616,14 +299,32 @@ where
     let thread_config = config.clone();
     let thread = std::thread::Builder::new()
         .name("ferrule-model-worker".into())
-        .spawn(move || match factory() {
-            Ok(engine) => {
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    let _ = ready_sender.send(Err(format!(
+                        "failed to build model-owner async runtime: {error}"
+                    )));
+                    return;
+                }
+            };
+            let local = tokio::task::LocalSet::new();
+            local.block_on(&runtime, async move {
+                let mut engine = match factory() {
+                    Ok(engine) => engine,
+                    Err(error) => {
+                        let _ = ready_sender.send(Err(error));
+                        return;
+                    }
+                };
+                let completion_owner = InferenceCompletionOwner::attach(&mut engine);
                 let _ = ready_sender.send(Ok(()));
-                run_worker(engine, receiver, thread_config);
-            }
-            Err(error) => {
-                let _ = ready_sender.send(Err(error));
-            }
+                run_worker(engine, completion_owner, receiver, thread_config).await;
+            });
         })
         .map_err(|error| format!("failed to spawn model worker: {error}"))?;
 
@@ -649,9 +350,13 @@ where
     }
 }
 
-fn run_worker<E>(mut engine: E, mut commands: mpsc::Receiver<WorkerCommand>, config: WorkerConfig)
-where
-    E: ModelEngine,
+async fn run_worker<E>(
+    mut engine: E,
+    mut completion_owner: InferenceCompletionOwner,
+    mut commands: mpsc::Receiver<WorkerCommand>,
+    config: WorkerConfig,
+) where
+    E: InferenceEngine,
 {
     let mut active = HashMap::<RequestId, ActiveRequest>::new();
     let mut cancellation_scratch = Vec::<RequestId>::new();
@@ -659,12 +364,20 @@ where
 
     loop {
         if active.is_empty() {
-            let Some(command) = commands.blocking_recv() else {
-                break;
-            };
-            if handle_command(command, &mut engine, &mut active, fatal_error.as_deref()) {
-                cancel_all(&mut engine, &mut active);
-                break;
+            tokio::select! {
+                error = completion_owner.reactor_failure() => {
+                    tracing::error!(error = %error, "model completion reactor failed");
+                    fatal_error = Some(error);
+                }
+                command = commands.recv() => {
+                    let Some(command) = command else {
+                        break;
+                    };
+                    if handle_command(command, &mut engine, &mut active, fatal_error.as_deref()) {
+                        cancel_all(&mut engine, &mut completion_owner, &mut active).await;
+                        break;
+                    }
+                }
             }
         }
 
@@ -672,13 +385,13 @@ where
             match commands.try_recv() {
                 Ok(command) => {
                     if handle_command(command, &mut engine, &mut active, fatal_error.as_deref()) {
-                        cancel_all(&mut engine, &mut active);
+                        cancel_all(&mut engine, &mut completion_owner, &mut active).await;
                         return;
                     }
                 }
                 Err(mpsc::error::TryRecvError::Empty) => break,
                 Err(mpsc::error::TryRecvError::Disconnected) => {
-                    cancel_all(&mut engine, &mut active);
+                    cancel_all(&mut engine, &mut completion_owner, &mut active).await;
                     return;
                 }
             }
@@ -690,13 +403,16 @@ where
             continue;
         }
 
+        // Arm before inspecting model state. A producer racing with `step` either
+        // changes the epoch observed by this listener or wakes it after registration.
+        let completion = completion_owner.listen();
         let step_result = {
-            let mut emit = |event: &ResidentTokenEvent| {
+            let mut emit = |event: &ResidentTokenEvent| -> Result<(), String> {
                 let Some(request_id) = event.request_id else {
-                    return;
+                    return Ok(());
                 };
                 let Some(request) = active.get_mut(&request_id) else {
-                    return;
+                    return Ok(());
                 };
                 if request
                     .events
@@ -709,12 +425,47 @@ where
                 } else {
                     request.emitted_tokens = request.emitted_tokens.saturating_add(1);
                 }
+                Ok(())
             };
             engine.step(&mut emit)
         };
 
         match step_result {
-            Ok(ResidentDriverStep::Blocked) => std::thread::sleep(config.blocked_backoff),
+            Ok(ResidentDriverStep::WaitingForModelProgress(_) | ResidentDriverStep::Blocked) => {
+                if !engine.has_pending_async_work() {
+                    let error = "runtime reported blocked work without an owned async continuation"
+                        .to_owned();
+                    tracing::error!(error = %error, "model worker entered a fatal scheduling state");
+                    fatal_error = Some(error.clone());
+                    fail_all(&mut engine, &mut active, error);
+                    continue;
+                }
+                tokio::select! {
+                    wake = completion => {
+                        if matches!(wake, ferrule_common::CompletionWake::Closed) {
+                            let error = "model completion source closed with live async work".to_owned();
+                            tracing::error!(error = %error, "model completion source closed");
+                            fatal_error = Some(error.clone());
+                            fail_all(&mut engine, &mut active, error);
+                        }
+                    }
+                    error = completion_owner.reactor_failure() => {
+                        tracing::error!(error = %error, "model completion reactor failed");
+                        fatal_error = Some(error.clone());
+                        fail_all(&mut engine, &mut active, error);
+                    }
+                    command = commands.recv() => {
+                        let Some(command) = command else {
+                            cancel_all(&mut engine, &mut completion_owner, &mut active).await;
+                            return;
+                        };
+                        if handle_command(command, &mut engine, &mut active, fatal_error.as_deref()) {
+                            cancel_all(&mut engine, &mut completion_owner, &mut active).await;
+                            return;
+                        }
+                    }
+                }
+            }
             Ok(ResidentDriverStep::Idle | ResidentDriverStep::Executed { .. }) => {}
             Err(error) => {
                 tracing::error!(error = %error, "model worker entered a fatal execution state");
@@ -734,7 +485,7 @@ fn handle_command<E>(
     fatal_error: Option<&str>,
 ) -> bool
 where
-    E: ModelEngine,
+    E: InferenceEngine,
 {
     match command {
         WorkerCommand::Shutdown => true,
@@ -817,7 +568,7 @@ fn cancel_disconnected<E>(
     active: &mut HashMap<RequestId, ActiveRequest>,
     scratch: &mut Vec<RequestId>,
 ) where
-    E: ModelEngine,
+    E: InferenceEngine,
 {
     scratch.clear();
     scratch.extend(active.iter().filter_map(|(request_id, request)| {
@@ -827,27 +578,33 @@ fn cancel_disconnected<E>(
             .then_some(*request_id)
     }));
     for request_id in scratch.iter().copied() {
-        if let Err(error) = engine.cancel_request(request_id)
-            && let Some(request) = active.remove(&request_id)
-        {
-            trace_worker_request_terminal(
-                request_id,
-                request.session_id,
-                "failed",
-                "cancellation_failed",
-                &request,
-                None,
-            );
-            let _ = request.events.try_send(WorkerEvent::Failed {
-                message: format!("request cancellation failed: {error}"),
-            });
+        match engine.cancel_request(request_id) {
+            Ok(
+                InferenceCancelProgress::Complete(_)
+                | InferenceCancelProgress::WaitingForModelProgress,
+            ) => {}
+            Err(error) => {
+                if let Some(request) = active.remove(&request_id) {
+                    trace_worker_request_terminal(
+                        request_id,
+                        request.session_id,
+                        "failed",
+                        "cancellation_failed",
+                        &request,
+                        None,
+                    );
+                    let _ = request.events.try_send(WorkerEvent::Failed {
+                        message: format!("request cancellation failed: {error}"),
+                    });
+                }
+            }
         }
     }
 }
 
 fn drain_terminal<E>(engine: &mut E, active: &mut HashMap<RequestId, ActiveRequest>)
 where
-    E: ModelEngine,
+    E: InferenceEngine,
 {
     for sequence in engine.drain_finished() {
         let Some(request_id) = sequence.request_id else {
@@ -933,7 +690,7 @@ fn trace_worker_request_terminal(
 
 fn fail_all<E>(engine: &mut E, active: &mut HashMap<RequestId, ActiveRequest>, message: String)
 where
-    E: ModelEngine,
+    E: InferenceEngine,
 {
     let request_ids = active.keys().copied().collect::<Vec<_>>();
     for request_id in request_ids {
@@ -956,15 +713,59 @@ where
     let _ = engine.drain_failed();
 }
 
-fn cancel_all<E>(engine: &mut E, active: &mut HashMap<RequestId, ActiveRequest>)
-where
-    E: ModelEngine,
+async fn cancel_all<E>(
+    engine: &mut E,
+    completion_owner: &mut InferenceCompletionOwner,
+    active: &mut HashMap<RequestId, ActiveRequest>,
+) where
+    E: InferenceEngine,
 {
-    let request_ids = active.keys().copied().collect::<Vec<_>>();
-    for request_id in request_ids {
-        let _ = engine.cancel_request(request_id);
+    loop {
+        let completion = completion_owner.listen();
+        let request_ids = active.keys().copied().collect::<Vec<_>>();
+        let mut waiting = false;
+        for request_id in request_ids {
+            match engine.cancel_request(request_id) {
+                Ok(InferenceCancelProgress::Complete(_)) => {}
+                Ok(InferenceCancelProgress::WaitingForModelProgress) => waiting = true,
+                Err(error) => {
+                    if let Some(request) = active.remove(&request_id) {
+                        trace_worker_request_terminal(
+                            request_id,
+                            request.session_id,
+                            "failed",
+                            "shutdown_cancellation_failed",
+                            &request,
+                            None,
+                        );
+                        let _ = request.events.try_send(WorkerEvent::Failed {
+                            message: format!(
+                                "request cancellation failed during shutdown: {error}"
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+        drain_terminal(engine, active);
+        if active.is_empty() {
+            return;
+        }
+        if !waiting {
+            break;
+        }
+        if !engine.has_pending_async_work() {
+            tracing::error!(
+                "engine reported pending cancellation without an owned async continuation"
+            );
+            break;
+        }
+        if let Err(error) = completion_owner.wait(completion).await {
+            tracing::error!(%error, "failed while waiting for model cancellation during shutdown");
+            break;
+        }
     }
-    drain_terminal(engine, active);
+
     for (request_id, request) in active.drain() {
         trace_worker_request_terminal(
             request_id,
@@ -974,26 +775,41 @@ where
             &request,
             None,
         );
+        let _ = request.events.try_send(WorkerEvent::Cancelled);
     }
 }
-
-// Keep this concrete alias visible in rustdoc as the intended production engine shape.
-#[allow(dead_code)]
-type DefaultResidentEngine<R> = ResidentTopKDriver<R, FixedSequenceSlotPool>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferrule_common::CompletionHub;
+    use ferrule_common::execution::ExecutionTransactionId;
+    use ferrule_model::{BatchContinuationId, PendingExpertLoad, PendingModelProgress};
+    use ferrule_runtime::{CancelRequestResult, InferenceCompletionReactor, SequenceState};
     use std::sync::atomic::AtomicUsize;
 
     struct DisconnectEngine {
+        completion_hub: CompletionHub,
         request: Option<GenerateRequest>,
         token_index: usize,
         cancellation_count: Arc<AtomicUsize>,
+        cancellation_waits_remaining: usize,
         cancelled: Vec<SequenceState>,
     }
 
-    impl ModelEngine for DisconnectEngine {
+    impl InferenceEngine for DisconnectEngine {
+        fn completion_hub(&self) -> CompletionHub {
+            self.completion_hub.clone()
+        }
+
+        fn take_completion_reactors(&mut self) -> Vec<InferenceCompletionReactor> {
+            Vec::new()
+        }
+
+        fn has_pending_async_work(&self) -> bool {
+            self.request.is_some() && self.cancellation_count.load(Ordering::Acquire) > 0
+        }
+
         fn encode(&self, prompt: &str) -> Result<Vec<u32>, String> {
             Ok(prompt.bytes().map(u32::from).collect())
         }
@@ -1005,7 +821,7 @@ mod tests {
 
         fn step(
             &mut self,
-            on_token: &mut dyn FnMut(&ResidentTokenEvent),
+            on_token: &mut dyn FnMut(&ResidentTokenEvent) -> Result<(), String>,
         ) -> Result<ResidentDriverStep, String> {
             std::thread::sleep(std::time::Duration::from_millis(2));
             let Some(request) = self.request.as_ref() else {
@@ -1018,7 +834,7 @@ mod tests {
                 token: 1,
                 logit: Some(1.0),
                 text: "x".into(),
-            });
+            })?;
             self.token_index += 1;
             Ok(ResidentDriverStep::Executed {
                 action_kind: ferrule_runtime::ResidentActionKind::Decode,
@@ -1028,19 +844,31 @@ mod tests {
             })
         }
 
-        fn cancel_request(&mut self, request_id: RequestId) -> Result<CancelRequestResult, String> {
-            let Some(request) = self.request.take() else {
-                return Ok(CancelRequestResult::NotFound { request_id });
-            };
+        fn cancel_request(
+            &mut self,
+            request_id: RequestId,
+        ) -> Result<InferenceCancelProgress, String> {
             self.cancellation_count.fetch_add(1, Ordering::AcqRel);
+            if self.cancellation_waits_remaining > 0 {
+                self.cancellation_waits_remaining -= 1;
+                self.completion_hub.notify();
+                return Ok(InferenceCancelProgress::WaitingForModelProgress);
+            }
+            let Some(request) = self.request.take() else {
+                return Ok(InferenceCancelProgress::Complete(
+                    CancelRequestResult::NotFound { request_id },
+                ));
+            };
             let session_id = request.session_id.unwrap();
             let mut sequence = SequenceState::from_request(&request, session_id);
             sequence.finish_reason = Some(SequenceFinishReason::Cancelled);
             self.cancelled.push(sequence);
-            Ok(CancelRequestResult::Active {
-                request_id,
-                session_id,
-            })
+            Ok(InferenceCancelProgress::Complete(
+                CancelRequestResult::Active {
+                    request_id,
+                    session_id,
+                },
+            ))
         }
 
         fn drain_finished(&mut self) -> Vec<SequenceState> {
@@ -1049,6 +877,106 @@ mod tests {
 
         fn drain_cancelled(&mut self) -> Vec<SequenceState> {
             std::mem::take(&mut self.cancelled)
+        }
+
+        fn drain_failed(&mut self) -> Vec<SequenceState> {
+            Vec::new()
+        }
+    }
+
+    struct CompletionDrivenEngine {
+        completion_hub: CompletionHub,
+        ready: Arc<AtomicBool>,
+        step_calls: Arc<AtomicUsize>,
+        request: Option<GenerateRequest>,
+        finished: Vec<SequenceState>,
+    }
+
+    impl InferenceEngine for CompletionDrivenEngine {
+        fn completion_hub(&self) -> CompletionHub {
+            self.completion_hub.clone()
+        }
+
+        fn take_completion_reactors(&mut self) -> Vec<InferenceCompletionReactor> {
+            Vec::new()
+        }
+
+        fn has_pending_async_work(&self) -> bool {
+            self.request.is_some() && !self.ready.load(Ordering::Acquire)
+        }
+
+        fn encode(&self, prompt: &str) -> Result<Vec<u32>, String> {
+            Ok(prompt.bytes().map(u32::from).collect())
+        }
+
+        fn submit(&mut self, request: GenerateRequest) {
+            self.request = Some(request);
+        }
+
+        fn step(
+            &mut self,
+            on_token: &mut dyn FnMut(&ResidentTokenEvent) -> Result<(), String>,
+        ) -> Result<ResidentDriverStep, String> {
+            self.step_calls.fetch_add(1, Ordering::AcqRel);
+            if self.request.is_none() {
+                return Ok(ResidentDriverStep::Idle);
+            }
+            if !self.ready.load(Ordering::Acquire) {
+                let continuation =
+                    BatchContinuationId::new(1).map_err(|error| error.to_string())?;
+                let load = PendingExpertLoad::new(1, 0, 0).map_err(|error| error.to_string())?;
+                let transaction =
+                    ExecutionTransactionId::new(1).map_err(|error| error.to_string())?;
+                let pending = PendingModelProgress::new(transaction, continuation, vec![load])
+                    .map_err(|error| error.to_string())?;
+                return Ok(ResidentDriverStep::WaitingForModelProgress(vec![pending]));
+            }
+
+            let request = self.request.take().expect("checked request above");
+            let session_id = request.session_id.expect("worker assigns a session");
+            on_token(&ResidentTokenEvent {
+                session_id,
+                request_id: Some(request.id),
+                index: 0,
+                token: 1,
+                logit: Some(1.0),
+                text: "ready".into(),
+            })?;
+            let mut sequence = SequenceState::from_request(&request, session_id);
+            sequence.generated = 1;
+            sequence.finish_reason = Some(SequenceFinishReason::MaxTokens);
+            self.finished.push(sequence);
+            Ok(ResidentDriverStep::Executed {
+                action_kind: ferrule_runtime::ResidentActionKind::Decode,
+                rows: 1,
+                staged: 0,
+                finished: 1,
+            })
+        }
+
+        fn cancel_request(
+            &mut self,
+            request_id: RequestId,
+        ) -> Result<InferenceCancelProgress, String> {
+            let Some(request) = self.request.take() else {
+                return Ok(InferenceCancelProgress::Complete(
+                    CancelRequestResult::NotFound { request_id },
+                ));
+            };
+            Ok(InferenceCancelProgress::Complete(
+                CancelRequestResult::Active {
+                    request_id,
+                    session_id: request.session_id.expect("worker assigns a session"),
+                },
+            ))
+        }
+
+        fn drain_finished(&mut self) -> Vec<SequenceState> {
+            std::mem::take(&mut self.finished)
+        }
+
+        fn drain_cancelled(&mut self) -> Vec<SequenceState> {
+            Vec::new()
         }
 
         fn drain_failed(&mut self) -> Vec<SequenceState> {
@@ -1071,9 +999,11 @@ mod tests {
     fn disconnected_cancellation_reuses_scratch_without_stale_requests() {
         let cancellation_count = Arc::new(AtomicUsize::new(0));
         let mut engine = DisconnectEngine {
+            completion_hub: CompletionHub::new(),
             request: Some(test_request(1)),
             token_index: 0,
             cancellation_count: Arc::clone(&cancellation_count),
+            cancellation_waits_remaining: 0,
             cancelled: Vec::new(),
         };
         let mut active = HashMap::new();
@@ -1123,13 +1053,144 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn waiting_worker_resumes_only_after_completion_wake() {
+        let completion_hub = CompletionHub::new();
+        let ready = Arc::new(AtomicBool::new(false));
+        let step_calls = Arc::new(AtomicUsize::new(0));
+        let worker = spawn_model_worker(
+            CompletionDrivenEngine {
+                completion_hub: completion_hub.clone(),
+                ready: Arc::clone(&ready),
+                step_calls: Arc::clone(&step_calls),
+                request: None,
+                finished: Vec::new(),
+            },
+            WorkerConfig::default(),
+        )
+        .unwrap();
+        let mut subscription = worker
+            .handle()
+            .submit(WorkerRequest {
+                prompt: "wake".into(),
+                max_tokens: 1,
+                stop: Vec::new(),
+                ignore_eos: false,
+            })
+            .await
+            .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while step_calls.load(Ordering::Acquire) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("worker never entered the waiting model step");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(step_calls.load(Ordering::Acquire), 1);
+
+        ready.store(true, Ordering::Release);
+        completion_hub.notify();
+        assert!(matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), subscription.recv())
+                .await
+                .unwrap(),
+            Some(WorkerEvent::Token { text }) if text == "ready"
+        ));
+        assert!(matches!(
+            subscription.recv().await,
+            Some(WorkerEvent::Finished { .. })
+        ));
+        assert_eq!(step_calls.load(Ordering::Acquire), 2);
+        worker.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn pending_cancellation_retains_request_ownership_until_model_quiesces() {
+        let cancellation_count = Arc::new(AtomicUsize::new(0));
+        let mut engine = DisconnectEngine {
+            completion_hub: CompletionHub::new(),
+            request: Some(test_request(3)),
+            token_index: 0,
+            cancellation_count: Arc::clone(&cancellation_count),
+            cancellation_waits_remaining: 1,
+            cancelled: Vec::new(),
+        };
+        let mut active = HashMap::new();
+        let (events, _events_receiver) = mpsc::channel(1);
+        active.insert(
+            RequestId(3),
+            ActiveRequest {
+                events,
+                cancellation: Arc::new(AtomicBool::new(true)),
+                session_id: SessionId(3),
+                submitted_at: Instant::now(),
+                emitted_tokens: 0,
+            },
+        );
+        let mut scratch = Vec::new();
+
+        cancel_disconnected(&mut engine, &mut active, &mut scratch);
+
+        assert!(active.contains_key(&RequestId(3)));
+        assert!(engine.request.is_some());
+        assert!(engine.cancelled.is_empty());
+        assert_eq!(cancellation_count.load(Ordering::Acquire), 1);
+
+        cancel_disconnected(&mut engine, &mut active, &mut scratch);
+
+        assert!(active.contains_key(&RequestId(3)));
+        assert!(engine.request.is_none());
+        assert_eq!(cancellation_count.load(Ordering::Acquire), 2);
+        drain_terminal(&mut engine, &mut active);
+        assert!(active.is_empty());
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_pending_model_cancellation_before_dropping_ownership() {
+        let cancellation_count = Arc::new(AtomicUsize::new(0));
+        let mut engine = DisconnectEngine {
+            completion_hub: CompletionHub::new(),
+            request: Some(test_request(4)),
+            token_index: 0,
+            cancellation_count: Arc::clone(&cancellation_count),
+            cancellation_waits_remaining: 1,
+            cancelled: Vec::new(),
+        };
+        let mut completion_owner = InferenceCompletionOwner::attach(&mut engine);
+        let mut active = HashMap::new();
+        let (events, mut events_receiver) = mpsc::channel(1);
+        active.insert(
+            RequestId(4),
+            ActiveRequest {
+                events,
+                cancellation: Arc::new(AtomicBool::new(false)),
+                session_id: SessionId(4),
+                submitted_at: Instant::now(),
+                emitted_tokens: 0,
+            },
+        );
+
+        cancel_all(&mut engine, &mut completion_owner, &mut active).await;
+
+        assert!(active.is_empty());
+        assert_eq!(cancellation_count.load(Ordering::Acquire), 2);
+        assert!(matches!(
+            events_receiver.recv().await,
+            Some(WorkerEvent::Cancelled)
+        ));
+    }
+
+    #[tokio::test]
     async fn dropping_event_subscription_cancels_without_poisoning_worker() {
         let cancellation_count = Arc::new(AtomicUsize::new(0));
         let worker = spawn_model_worker(
             DisconnectEngine {
+                completion_hub: CompletionHub::new(),
                 request: None,
                 token_index: 0,
                 cancellation_count: Arc::clone(&cancellation_count),
+                cancellation_waits_remaining: 0,
                 cancelled: Vec::new(),
             },
             WorkerConfig {

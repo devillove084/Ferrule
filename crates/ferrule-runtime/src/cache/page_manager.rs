@@ -7,21 +7,22 @@
 //! ## Lifecycle
 //!
 //! ```text
-//! reserve -> execute -> commit
-//!                  ↘ rollback on failure
+//! reserve -> execute -> prepare logical commit -> commit backend -> publish logical commit
+//!                      ↘ backend rollback -> abort reservation
+//! publish/abort/free -> quarantine -> release backend pages -> confirm retirement -> reuse
 //! ```
 //!
-//! Pages are reserved before model execution and committed only after success.
-//! A failure or cancellation rolls back all newly allocated pages, restoring
-//! the previous committed KV view.
-//!
-//! The backend (CUDA or reference) owns the physical device buffers. The page
-//! manager owns logical allocation and metadata only.
+//! Reservation, prepared-commit, and retirement values are non-cloneable ownership
+//! tokens. Logical publication cannot precede backend commit, and a page cannot be
+//! reused until backend retirement is explicitly confirmed.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ferrule_common::execution::{
-    KvBlockId, KvCowReplacement, KvLayoutSchema, KvPageId, KvReservation, KvWriteSlot, StateSlot,
+    KvBlockId, KvCowReplacement, KvLayoutSchema, KvPageId, KvReservationView, KvWriteSlot,
+    StateSlot,
 };
 use ferrule_common::{Error, Result};
 
@@ -94,6 +95,41 @@ pub struct KvReservationBindings {
     pub write_slots: Vec<KvWriteSlot>,
 }
 
+/// Unique identity of one live logical KV reservation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct KvReservationId(NonZeroU64);
+
+impl KvReservationId {
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+/// Non-cloneable ownership token for one provisional logical KV reservation.
+#[derive(Debug)]
+pub struct KvReservation {
+    id: KvReservationId,
+    view: KvReservationView,
+}
+
+impl KvReservation {
+    pub const fn id(&self) -> KvReservationId {
+        self.id
+    }
+
+    pub const fn view(&self) -> &KvReservationView {
+        &self.view
+    }
+}
+
+impl std::ops::Deref for KvReservation {
+    type Target = KvReservationView;
+
+    fn deref(&self) -> &Self::Target {
+        &self.view
+    }
+}
+
 /// Model-agnostic commit decision for one provisional KV reservation.
 ///
 /// Packed transactions carry one decision per sequence. `committed_rows` may be
@@ -114,6 +150,110 @@ impl KvReservationCommit {
     }
 }
 
+#[derive(Debug)]
+struct PreparedKvCommitEntry {
+    reservation_id: KvReservationId,
+    state_slot: StateSlot,
+    after: BlockTable,
+    retained_pages: Vec<KvPageId>,
+    cow_source: Option<KvPageId>,
+    rejected_pages: Vec<KvPageId>,
+    abort_pages: Vec<KvPageId>,
+}
+
+/// Entire validated packed logical KV commit, still invisible to readers.
+///
+/// This token is deliberately non-cloneable and cannot be split per sequence.
+/// The owning backend transaction must commit before this token is published.
+#[must_use = "a prepared KV commit must be published or aborted"]
+#[derive(Debug)]
+pub struct PreparedKvCommit {
+    manager_id: u64,
+    entries: Vec<PreparedKvCommitEntry>,
+    retirement_capacity: usize,
+}
+
+/// Failure to prepare a logical commit without consuming reservation ownership.
+#[derive(Debug)]
+pub struct PrepareKvCommitError {
+    error: Error,
+    commits: Vec<KvReservationCommit>,
+}
+
+impl PrepareKvCommitError {
+    pub fn into_parts(self) -> (Error, Vec<KvReservationCommit>) {
+        (self.error, self.commits)
+    }
+}
+
+impl std::fmt::Display for PrepareKvCommitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+impl std::error::Error for PrepareKvCommitError {}
+
+/// Failure to abort reservations without consuming their ownership tokens.
+#[derive(Debug)]
+pub struct AbortKvReservationsError {
+    error: Error,
+    reservations: Vec<KvReservation>,
+}
+
+impl AbortKvReservationsError {
+    pub fn into_parts(self) -> (Error, Vec<KvReservation>) {
+        (self.error, self.reservations)
+    }
+}
+
+impl std::fmt::Display for AbortKvReservationsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+impl std::error::Error for AbortKvReservationsError {}
+
+/// Pages quarantined until their backend storage is no longer reachable.
+#[must_use = "retiring KV pages must be released and confirmed"]
+#[derive(Debug)]
+pub struct KvRetirement {
+    manager_id: u64,
+    pages: Vec<KvPageId>,
+}
+
+impl KvRetirement {
+    pub fn pages(&self) -> &[KvPageId] {
+        &self.pages
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pages.is_empty()
+    }
+}
+
+/// Failed retirement confirmation retaining the linear retirement token.
+#[derive(Debug)]
+pub struct ConfirmKvRetirementError {
+    error: Error,
+    retirement: KvRetirement,
+}
+
+impl ConfirmKvRetirementError {
+    pub fn into_parts(self) -> (Error, KvRetirement) {
+        (self.error, self.retirement)
+    }
+}
+
+impl std::fmt::Display for ConfirmKvRetirementError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+impl std::error::Error for ConfirmKvRetirementError {}
+
 /// Validated but unpublished exact-prefix page-table fork.
 #[derive(Debug)]
 pub struct PreparedKvSequenceFork {
@@ -127,6 +267,7 @@ pub struct PreparedKvSequenceFork {
 pub struct KvPageManagerStats {
     pub allocated_pages: usize,
     pub free_pages: usize,
+    pub retiring_pages: usize,
     pub shared_pages: usize,
     pub committed_tokens: usize,
     pub capacity_tokens: usize,
@@ -134,11 +275,22 @@ pub struct KvPageManagerStats {
     pub fragmentation: f64,
 }
 
+static NEXT_PAGE_MANAGER_ID: AtomicU64 = AtomicU64::new(1);
+
 pub struct KvPageManager {
+    manager_id: u64,
     /// The KV layout schema describing page size and planes.
     schema: Box<dyn KvLayoutSchema>,
     /// Free list of available page IDs.
     free_pages: Vec<KvPageId>,
+    /// Pages whose logical refcount reached zero but whose backend retirement has
+    /// not yet been acknowledged. These pages are not allocatable.
+    retiring_pages: HashSet<KvPageId>,
+    /// Live reservation identities and their immutable views.
+    pending_reservations: HashMap<KvReservationId, KvReservationView>,
+    /// At most one live reservation may own a sequence state slot.
+    reservation_owners: HashMap<u32, KvReservationId>,
+    next_reservation_id: NonZeroU64,
     /// Next page ID to allocate if the free list is empty.
     next_page_id: u32,
     /// Maximum number of pages (0 = unlimited).
@@ -156,6 +308,8 @@ impl std::fmt::Debug for KvPageManager {
             .field("free_pages", &self.free_pages.len())
             .field("next_page_id", &self.next_page_id)
             .field("max_pages", &self.max_pages)
+            .field("retiring_pages", &self.retiring_pages.len())
+            .field("pending_reservations", &self.pending_reservations.len())
             .field("active_sequences", &self.sequences.len())
             .finish_non_exhaustive()
     }
@@ -164,9 +318,16 @@ impl std::fmt::Debug for KvPageManager {
 impl KvPageManager {
     /// Create a new page manager with the given schema and maximum page count.
     pub fn new(schema: Box<dyn KvLayoutSchema>, max_pages: usize) -> Self {
+        let manager_id = NEXT_PAGE_MANAGER_ID.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(manager_id, 0, "KV page-manager identity space exhausted");
         Self {
+            manager_id,
             schema,
             free_pages: Vec::new(),
+            retiring_pages: HashSet::new(),
+            pending_reservations: HashMap::new(),
+            reservation_owners: HashMap::new(),
+            next_reservation_id: NonZeroU64::new(1).expect("one is non-zero"),
             next_page_id: 0,
             max_pages,
             sequences: BTreeMap::new(),
@@ -177,6 +338,111 @@ impl KvPageManager {
     /// Returns the page size in tokens.
     pub fn page_size(&self) -> usize {
         self.schema.page_size()
+    }
+
+    fn take_reservation_id(&mut self) -> Result<KvReservationId> {
+        let id = KvReservationId(self.next_reservation_id);
+        let next = self
+            .next_reservation_id
+            .get()
+            .checked_add(1)
+            .and_then(NonZeroU64::new)
+            .ok_or_else(|| Error::Execution("KV reservation ID space exhausted".into()))?;
+        self.next_reservation_id = next;
+        Ok(id)
+    }
+
+    fn validate_live_reservations(&self, reservations: &[&KvReservation]) -> Result<()> {
+        let mut ids = HashSet::with_capacity(reservations.len());
+        let mut slots = HashSet::with_capacity(reservations.len());
+        for reservation in reservations {
+            if !ids.insert(reservation.id) {
+                return Err(Error::Execution(format!(
+                    "page manager: reservation {} appears more than once",
+                    reservation.id.get()
+                )));
+            }
+            let slot = reservation.state_slot.get();
+            if !slots.insert(slot) {
+                return Err(Error::Execution(format!(
+                    "page manager: packed transaction contains duplicate state slot {slot}"
+                )));
+            }
+            let stored = self
+                .pending_reservations
+                .get(&reservation.id)
+                .ok_or_else(|| {
+                    Error::Execution(format!(
+                        "page manager: reservation {} is not live",
+                        reservation.id.get()
+                    ))
+                })?;
+            if stored != &reservation.view
+                || self.reservation_owners.get(&slot) != Some(&reservation.id)
+            {
+                return Err(Error::Internal(format!(
+                    "page manager: reservation {} ownership changed",
+                    reservation.id.get()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn release_reservation_ownership(&mut self, id: KvReservationId, slot: StateSlot) {
+        let stored = self
+            .pending_reservations
+            .remove(&id)
+            .expect("prepared reservation must remain registered");
+        assert_eq!(stored.state_slot, slot);
+        let owner = self
+            .reservation_owners
+            .remove(&slot.get())
+            .expect("prepared reservation owner must remain registered");
+        assert_eq!(owner, id);
+    }
+
+    fn begin_retirement(&mut self, mut pages: Vec<KvPageId>) -> KvRetirement {
+        pages.sort_unstable_by_key(|page| page.0);
+        pages.dedup();
+        self.retiring_pages.reserve(pages.len());
+        for page in &pages {
+            assert!(
+                self.retiring_pages.insert(*page),
+                "page {} entered retirement more than once",
+                page.0
+            );
+        }
+        KvRetirement {
+            manager_id: self.manager_id,
+            pages,
+        }
+    }
+
+    /// Publish backend retirement completion and make pages allocatable again.
+    pub fn confirm_page_retirement(
+        &mut self,
+        retirement: KvRetirement,
+    ) -> std::result::Result<(), ConfirmKvRetirementError> {
+        let invalid = if retirement.manager_id != self.manager_id {
+            Some(Error::Execution(
+                "page manager: retirement belongs to another manager".into(),
+            ))
+        } else {
+            retirement.pages.iter().find_map(|page| {
+                (!self.retiring_pages.contains(page)).then(|| {
+                    Error::Execution(format!("page manager: page {} is not retiring", page.0))
+                })
+            })
+        };
+        if let Some(error) = invalid {
+            return Err(ConfirmKvRetirementError { error, retirement });
+        }
+        for page in &retirement.pages {
+            self.retiring_pages.remove(page);
+        }
+        self.free_pages.extend(retirement.pages);
+        Ok(())
     }
 
     /// Returns the configured physical page limit. Zero means logically unlimited.
@@ -226,6 +492,7 @@ impl KvPageManager {
         KvPageManagerStats {
             allocated_pages,
             free_pages: self.free_pages.len(),
+            retiring_pages: self.retiring_pages.len(),
             shared_pages: self
                 .page_refcounts
                 .values()
@@ -267,6 +534,12 @@ impl KvPageManager {
         token_count: usize,
     ) -> Result<KvReservation> {
         let slot = state_slot.get();
+        if let Some(owner) = self.reservation_owners.get(&slot) {
+            return Err(Error::Execution(format!(
+                "page manager: state slot {slot} is already owned by reservation {}",
+                owner.get()
+            )));
+        }
         let seq = self.sequences.get(&slot).ok_or_else(|| {
             Error::Internal(format!(
                 "page manager: cannot reserve for unallocated state slot {slot}"
@@ -324,256 +597,270 @@ impl KvPageManager {
             None
         };
 
-        Ok(KvReservation {
+        let view = KvReservationView {
             state_slot,
             positions,
             newly_allocated: reserved_pages,
             generation,
             cow_replacement,
+        };
+        let id = self.take_reservation_id()?;
+        self.pending_reservations.insert(id, view.clone());
+        self.reservation_owners.insert(slot, id);
+        Ok(KvReservation { id, view })
+    }
+
+    /// Validate and seal an entire packed logical commit without publishing it.
+    ///
+    /// On failure every reservation token is returned unchanged and manager state
+    /// remains untouched. On success the returned token owns the complete cohort.
+    pub fn prepare_commit(
+        &mut self,
+        commits: Vec<KvReservationCommit>,
+    ) -> std::result::Result<PreparedKvCommit, PrepareKvCommitError> {
+        let reservations = commits
+            .iter()
+            .map(|commit| &commit.reservation)
+            .collect::<Vec<_>>();
+        let planned = (|| -> Result<(Vec<PreparedKvCommitEntry>, usize, usize)> {
+            self.validate_live_reservations(&reservations)?;
+            let mut provisional_pages = HashSet::new();
+            let mut entries = Vec::with_capacity(commits.len());
+            let mut retirement_capacity = 0usize;
+            let mut retained_capacity = 0usize;
+
+            for commit in &commits {
+                let reservation = &commit.reservation;
+                let slot = reservation.state_slot.get();
+                let sequence = self.sequences.get(&slot).ok_or_else(|| {
+                    Error::Internal(format!(
+                        "page manager: cannot commit unallocated state slot {slot}"
+                    ))
+                })?;
+                if sequence.generation != reservation.generation {
+                    return Err(Error::Execution(format!(
+                        "page manager: stale generation on commit for state slot {slot}"
+                    )));
+                }
+                if sequence.block_table.committed_tokens != reservation.positions.start {
+                    return Err(Error::Execution(format!(
+                        "page manager: reservation starts at {}, committed view is {}",
+                        reservation.positions.start, sequence.block_table.committed_tokens
+                    )));
+                }
+                if commit.committed_rows > reservation.positions.len() {
+                    return Err(Error::Execution(format!(
+                        "page manager: committed prefix {} exceeds reservation length {}",
+                        commit.committed_rows,
+                        reservation.positions.len()
+                    )));
+                }
+
+                let final_end = reservation
+                    .positions
+                    .start
+                    .checked_add(commit.committed_rows)
+                    .ok_or_else(|| Error::Execution("page manager: prefix end overflow".into()))?;
+                let pages_before = self.schema.pages_for_tokens(reservation.positions.start);
+                let pages_after = self.schema.pages_for_tokens(final_end);
+                let kept_new_pages = pages_after.checked_sub(pages_before).ok_or_else(|| {
+                    Error::Internal("page manager: committed page count moved backwards".into())
+                })?;
+                if kept_new_pages > reservation.newly_allocated.len() {
+                    return Err(Error::Internal(format!(
+                        "page manager: prefix ending at {final_end} needs {kept_new_pages} new pages but reservation has {}",
+                        reservation.newly_allocated.len()
+                    )));
+                }
+
+                let mut after = sequence.block_table.clone();
+                let mut retained_pages = Vec::with_capacity(
+                    kept_new_pages
+                        + usize::from(
+                            commit.committed_rows > 0 && reservation.cow_replacement.is_some(),
+                        ),
+                );
+                let mut rejected_pages = Vec::with_capacity(
+                    reservation.newly_allocated.len() - kept_new_pages
+                        + usize::from(
+                            commit.committed_rows == 0 && reservation.cow_replacement.is_some(),
+                        ),
+                );
+                let mut abort_pages = Vec::with_capacity(
+                    reservation.newly_allocated.len()
+                        + usize::from(reservation.cow_replacement.is_some()),
+                );
+                let mut cow_source = None;
+
+                if let Some(cow) = reservation.cow_replacement {
+                    if sequence.block_table.pages.get(cow.logical_page) != Some(&cow.source) {
+                        return Err(Error::Execution(
+                            "page manager: stale COW tail mapping".into(),
+                        ));
+                    }
+                    if self.page_refcount(cow.source) == 0 {
+                        return Err(Error::Internal(
+                            "page manager: COW source has no live refcount".into(),
+                        ));
+                    }
+                    if !provisional_pages.insert(cow.replacement)
+                        || self.page_refcounts.contains_key(&cow.replacement)
+                    {
+                        return Err(Error::Execution(
+                            "page manager: COW replacement is already allocated".into(),
+                        ));
+                    }
+                    abort_pages.push(cow.replacement);
+                    if commit.committed_rows == 0 {
+                        rejected_pages.push(cow.replacement);
+                    } else {
+                        after.pages[cow.logical_page] = cow.replacement;
+                        retained_pages.push(cow.replacement);
+                        cow_source = Some(cow.source);
+                    }
+                }
+
+                for page in &reservation.newly_allocated {
+                    if !provisional_pages.insert(*page) || self.page_refcounts.contains_key(page) {
+                        return Err(Error::Execution(
+                            "page manager: provisional page is already allocated".into(),
+                        ));
+                    }
+                }
+                retained_pages.extend_from_slice(&reservation.newly_allocated[..kept_new_pages]);
+                rejected_pages.extend_from_slice(&reservation.newly_allocated[kept_new_pages..]);
+                abort_pages.extend_from_slice(&reservation.newly_allocated);
+                after
+                    .pages
+                    .extend_from_slice(&reservation.newly_allocated[..kept_new_pages]);
+                after.committed_tokens = final_end;
+
+                retirement_capacity = retirement_capacity
+                    .checked_add(rejected_pages.len() + usize::from(cow_source.is_some()))
+                    .ok_or_else(|| Error::Execution("page retirement capacity overflow".into()))?;
+                retained_capacity = retained_capacity
+                    .checked_add(retained_pages.len())
+                    .ok_or_else(|| Error::Execution("page commit capacity overflow".into()))?;
+                entries.push(PreparedKvCommitEntry {
+                    reservation_id: reservation.id,
+                    state_slot: reservation.state_slot,
+                    after,
+                    retained_pages,
+                    cow_source,
+                    rejected_pages,
+                    abort_pages,
+                });
+            }
+            Ok((entries, retirement_capacity, retained_capacity))
+        })();
+
+        let (entries, retirement_capacity, retained_capacity) = match planned {
+            Ok(planned) => planned,
+            Err(error) => return Err(PrepareKvCommitError { error, commits }),
+        };
+        self.page_refcounts.reserve(retained_capacity);
+        self.retiring_pages.reserve(retirement_capacity);
+        Ok(PreparedKvCommit {
+            manager_id: self.manager_id,
+            entries,
+            retirement_capacity,
         })
     }
 
-    /// Commit a reservation, making its pages part of the committed KV view.
-    pub fn commit(&mut self, reservation: KvReservation) -> Result<()> {
-        self.commit_batch_with_freed(vec![reservation]).map(|_| ())
-    }
-
-    /// Commit only the first `committed_rows` tokens of a provisional reservation.
-    pub fn commit_prefix_with_freed(
-        &mut self,
-        reservation: KvReservation,
-        committed_rows: usize,
-    ) -> Result<Vec<KvPageId>> {
-        self.commit_prefix_batch_with_freed(vec![KvReservationCommit::new(
-            reservation,
-            committed_rows,
-        )])
-    }
-
-    /// Atomically publish independent prefixes of a packed provisional batch.
-    ///
-    /// Every sequence identity, generation, COW mapping, provisional page, and
-    /// prefix length is validated before any committed block table changes. Pages
-    /// used only by rejected suffixes are recycled after the retained prefixes are
-    /// published. A zero-length decision validates the reservation but publishes
-    /// no pages, making cancellation and mixed commit/rollback cohorts explicit.
-    pub fn commit_prefix_batch_with_freed(
-        &mut self,
-        commits: Vec<KvReservationCommit>,
-    ) -> Result<Vec<KvPageId>> {
-        let validation = self.validate_commit_batch(
-            &commits
-                .iter()
-                .map(|commit| &commit.reservation)
-                .collect::<Vec<_>>(),
+    /// Publish one backend-committed packed transaction in a single infallible step.
+    pub fn publish_commit(&mut self, prepared: PreparedKvCommit) -> KvRetirement {
+        assert_eq!(
+            prepared.manager_id, self.manager_id,
+            "prepared KV commit belongs to another manager"
         );
-        if let Err(error) = validation {
-            self.recycle_commit_pages(commits.iter().map(|commit| &commit.reservation));
-            return Err(error);
-        }
-
-        let mut layouts = Vec::with_capacity(commits.len());
-        for commit in &commits {
-            let reservation = &commit.reservation;
-            let reserved_rows = reservation.positions.len();
-            if commit.committed_rows > reserved_rows {
-                let error = Error::Execution(format!(
-                    "page manager: committed prefix {} exceeds reservation length {reserved_rows}",
-                    commit.committed_rows
-                ));
-                self.recycle_commit_pages(commits.iter().map(|commit| &commit.reservation));
-                return Err(error);
-            }
-            let final_end = reservation
-                .positions
-                .start
-                .checked_add(commit.committed_rows)
-                .ok_or_else(|| Error::Execution("page manager: prefix end overflow".into()));
-            let final_end = match final_end {
-                Ok(final_end) => final_end,
-                Err(error) => {
-                    self.recycle_commit_pages(commits.iter().map(|commit| &commit.reservation));
-                    return Err(error);
-                }
-            };
-            let pages_before = self.schema.pages_for_tokens(reservation.positions.start);
-            let pages_after = self.schema.pages_for_tokens(final_end);
-            let kept_new_pages = match pages_after.checked_sub(pages_before) {
-                Some(kept) if kept <= reservation.newly_allocated.len() => kept,
-                _ => {
-                    let error = Error::Internal(format!(
-                        "page manager: prefix ending at {final_end} cannot be represented by reservation {:?}",
-                        reservation.positions
-                    ));
-                    self.recycle_commit_pages(commits.iter().map(|commit| &commit.reservation));
-                    return Err(error);
-                }
-            };
-            layouts.push((final_end, kept_new_pages));
-        }
-
-        let mut retained = Vec::with_capacity(commits.len());
-        let mut rejected_pages = Vec::new();
-        for (commit, (final_end, kept_new_pages)) in commits.into_iter().zip(layouts) {
-            let mut reservation = commit.reservation;
-            if commit.committed_rows == 0
-                && let Some(cow) = reservation.cow_replacement.take()
-            {
-                rejected_pages.push(cow.replacement);
-            }
-            rejected_pages.extend(reservation.newly_allocated.split_off(kept_new_pages));
-            reservation.positions.end = final_end;
-            retained.push(reservation);
-        }
-
-        let mut freed = self.publish_validated_batch(retained)?;
-        self.free_pages.extend(rejected_pages.iter().copied());
-        freed.extend(rejected_pages);
-        Ok(freed)
-    }
-
-    /// Atomically publish all reservations in a packed batch.
-    ///
-    /// Every reservation is validated before any block table or refcount changes.
-    /// A batch cannot contain multiple reservations for the same state slot because
-    /// their ordering would otherwise be implicit rather than part of the ABI.
-    pub fn commit_batch_with_freed(
-        &mut self,
-        reservations: Vec<KvReservation>,
-    ) -> Result<Vec<KvPageId>> {
-        if let Err(error) = self.validate_commit_batch(&reservations.iter().collect::<Vec<_>>()) {
-            self.recycle_commit_pages(reservations.iter());
-            return Err(error);
-        }
-        self.publish_validated_batch(reservations)
-    }
-
-    fn validate_commit_batch(&self, reservations: &[&KvReservation]) -> Result<()> {
-        let mut slots = std::collections::HashSet::with_capacity(reservations.len());
-        let mut provisional_pages = std::collections::HashSet::new();
-        for reservation in reservations {
-            let slot = reservation.state_slot.get();
-            if !slots.insert(slot) {
-                return Err(Error::Execution(format!(
-                    "page manager: packed commit contains duplicate state slot {slot}"
-                )));
-            }
-            let seq = self.sequences.get(&slot).ok_or_else(|| {
-                Error::Internal(format!(
-                    "page manager: cannot commit for unallocated state slot {slot}"
-                ))
-            })?;
-            if seq.generation != reservation.generation {
-                return Err(Error::Execution(format!(
-                    "page manager: stale generation on commit for state slot {slot}"
-                )));
-            }
-            if seq.block_table.committed_tokens != reservation.positions.start {
-                return Err(Error::Execution(format!(
-                    "page manager: reservation starts at {}, committed view is {}",
-                    reservation.positions.start, seq.block_table.committed_tokens
-                )));
-            }
-            if let Some(cow) = reservation.cow_replacement {
-                if seq.block_table.pages.get(cow.logical_page) != Some(&cow.source) {
-                    return Err(Error::Execution(
-                        "page manager: stale COW tail mapping".into(),
-                    ));
-                }
-                if self.page_refcount(cow.source) == 0 {
-                    return Err(Error::Internal(
-                        "page manager: COW source has no live refcount".into(),
-                    ));
-                }
-                if !provisional_pages.insert(cow.replacement)
-                    || self.page_refcounts.contains_key(&cow.replacement)
-                {
-                    return Err(Error::Execution(
-                        "page manager: COW replacement is already allocated".into(),
-                    ));
-                }
-            }
-            for page in &reservation.newly_allocated {
-                if !provisional_pages.insert(*page) || self.page_refcounts.contains_key(page) {
-                    return Err(Error::Execution(
-                        "page manager: provisional page is already allocated".into(),
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn recycle_commit_pages<'a>(
-        &mut self,
-        reservations: impl IntoIterator<Item = &'a KvReservation>,
-    ) {
-        let mut recycled = std::collections::HashSet::new();
-        for reservation in reservations {
-            if let Some(cow) = reservation.cow_replacement
-                && recycled.insert(cow.replacement)
-            {
-                self.free_pages.push(cow.replacement);
-            }
-            for page in &reservation.newly_allocated {
-                if recycled.insert(*page) {
-                    self.free_pages.push(*page);
-                }
-            }
-        }
-    }
-
-    fn publish_validated_batch(
-        &mut self,
-        reservations: Vec<KvReservation>,
-    ) -> Result<Vec<KvPageId>> {
-        let mut freed_pages = Vec::new();
-        for reservation in reservations {
-            let seq = self
+        let mut retiring = Vec::with_capacity(prepared.retirement_capacity);
+        for entry in prepared.entries {
+            self.release_reservation_ownership(entry.reservation_id, entry.state_slot);
+            let sequence = self
                 .sequences
-                .get_mut(&reservation.state_slot.get())
-                .expect("packed reservation was validated");
-            if let Some(cow) = reservation.cow_replacement {
-                seq.block_table.pages[cow.logical_page] = cow.replacement;
-                self.page_refcounts.insert(cow.replacement, 1);
-                if decrement_refcount(&mut self.page_refcounts, &mut self.free_pages, cow.source)? {
-                    freed_pages.push(cow.source);
-                }
+                .get_mut(&entry.state_slot.get())
+                .expect("prepared KV sequence must remain allocated");
+            sequence.block_table = entry.after;
+            for page in entry.retained_pages {
+                assert!(
+                    self.page_refcounts.insert(page, 1).is_none(),
+                    "prepared provisional page was already committed"
+                );
             }
-            for page_id in reservation.newly_allocated {
-                seq.block_table.pages.push(page_id);
-                self.page_refcounts.insert(page_id, 1);
+            if let Some(source) = entry.cow_source
+                && decrement_refcount_infallible(&mut self.page_refcounts, source)
+            {
+                retiring.push(source);
             }
-            seq.block_table.committed_tokens = reservation.positions.end;
+            retiring.extend(entry.rejected_pages);
         }
-        Ok(freed_pages)
+        self.begin_retirement(retiring)
     }
 
-    /// Rollback a reservation, freeing its newly allocated pages.
-    pub fn rollback(&mut self, reservation: KvReservation) -> Result<()> {
-        if let Some(cow) = reservation.cow_replacement {
-            self.free_pages.push(cow.replacement);
+    /// Abort a prepared logical commit after backend rollback has quiesced it.
+    pub fn abort_prepared_commit(&mut self, prepared: PreparedKvCommit) -> KvRetirement {
+        assert_eq!(
+            prepared.manager_id, self.manager_id,
+            "prepared KV commit belongs to another manager"
+        );
+        let mut retiring = Vec::new();
+        for entry in prepared.entries {
+            self.release_reservation_ownership(entry.reservation_id, entry.state_slot);
+            retiring.extend(entry.abort_pages);
         }
-        self.free_pages.extend(reservation.newly_allocated);
-        Ok(())
+        self.begin_retirement(retiring)
     }
 
-    /// Free a sequence and return physical page IDs no longer referenced globally.
-    pub fn free_sequence_pages(&mut self, state_slot: StateSlot) -> Result<Vec<KvPageId>> {
+    /// Abort a packed set of live reservations without partial consumption.
+    pub fn abort_reservations(
+        &mut self,
+        reservations: Vec<KvReservation>,
+    ) -> std::result::Result<KvRetirement, AbortKvReservationsError> {
+        let references = reservations.iter().collect::<Vec<_>>();
+        if let Err(error) = self.validate_live_reservations(&references) {
+            return Err(AbortKvReservationsError {
+                error,
+                reservations,
+            });
+        }
+        let mut retiring = Vec::new();
+        for reservation in reservations {
+            self.release_reservation_ownership(reservation.id, reservation.state_slot);
+            retiring.extend(reservation.view.newly_allocated);
+            if let Some(cow) = reservation.view.cow_replacement {
+                retiring.push(cow.replacement);
+            }
+        }
+        Ok(self.begin_retirement(retiring))
+    }
+
+    /// Free a sequence and quarantine pages whose global refcount reaches zero.
+    pub fn free_sequence_pages(&mut self, state_slot: StateSlot) -> Result<KvRetirement> {
         let slot = state_slot.get();
-        let seq = self.sequences.remove(&slot).ok_or_else(|| {
-            Error::Internal(format!(
-                "page manager: cannot free unallocated state slot {slot}"
-            ))
-        })?;
-
-        let mut freed_pages = Vec::new();
-        for page_id in seq.block_table.pages {
-            if decrement_refcount(&mut self.page_refcounts, &mut self.free_pages, page_id)? {
-                freed_pages.push(page_id);
-            }
+        if let Some(owner) = self.reservation_owners.get(&slot) {
+            return Err(Error::Execution(format!(
+                "page manager: cannot free state slot {slot} owned by reservation {}",
+                owner.get()
+            )));
         }
-        Ok(freed_pages)
+        let pages = self
+            .sequences
+            .get(&slot)
+            .ok_or_else(|| {
+                Error::Internal(format!(
+                    "page manager: cannot free unallocated state slot {slot}"
+                ))
+            })?
+            .block_table
+            .pages
+            .clone();
+        self.validate_refcount_decrements(&pages)?;
+        self.sequences.remove(&slot);
+        let retiring = pages
+            .into_iter()
+            .filter(|page| decrement_refcount_infallible(&mut self.page_refcounts, *page))
+            .collect();
+        Ok(self.begin_retirement(retiring))
     }
 
     /// Returns the block table for a sequence.
@@ -681,6 +968,13 @@ impl KvPageManager {
 
     /// Detach a sequence from scheduling while retaining its page references.
     pub fn preempt_sequence(&mut self, state_slot: StateSlot) -> Result<PreemptedKvState> {
+        if let Some(owner) = self.reservation_owners.get(&state_slot.get()) {
+            return Err(Error::Execution(format!(
+                "page manager: cannot preempt state slot {} owned by reservation {}",
+                state_slot.get(),
+                owner.get()
+            )));
+        }
         let state = self.sequences.remove(&state_slot.get()).ok_or_else(|| {
             Error::Internal("page manager: cannot preempt an unallocated sequence".into())
         })?;
@@ -719,19 +1013,49 @@ impl KvPageManager {
         Ok(())
     }
 
-    /// Release a preempted state and return pages whose global refcount reached zero.
-    pub fn release_preempted_pages(&mut self, state: PreemptedKvState) -> Result<Vec<KvPageId>> {
-        let mut freed = Vec::new();
-        for page in state.block_table.pages {
-            if decrement_refcount(&mut self.page_refcounts, &mut self.free_pages, page)? {
-                freed.push(page);
-            }
-        }
-        Ok(freed)
+    /// Release a preempted state and quarantine pages whose refcount reaches zero.
+    pub fn release_preempted_pages(&mut self, state: PreemptedKvState) -> Result<KvRetirement> {
+        self.validate_refcount_decrements(&state.block_table.pages)?;
+        let retiring = state
+            .block_table
+            .pages
+            .into_iter()
+            .filter(|page| decrement_refcount_infallible(&mut self.page_refcounts, *page))
+            .collect();
+        Ok(self.begin_retirement(retiring))
     }
 
     pub fn page_refcount(&self, page: KvPageId) -> u32 {
         self.page_refcounts.get(&page).copied().unwrap_or(0)
+    }
+
+    pub fn reservation_view(&self, reservation: &KvReservation) -> Result<KvReservationView> {
+        let stored = self
+            .pending_reservations
+            .get(&reservation.id)
+            .ok_or_else(|| {
+                Error::Execution(format!(
+                    "page manager: reservation {} is not live",
+                    reservation.id.get()
+                ))
+            })?;
+        if stored != &reservation.view {
+            return Err(Error::Internal(format!(
+                "page manager: reservation {} view changed",
+                reservation.id.get()
+            )));
+        }
+        Ok(stored.clone())
+    }
+
+    pub fn reservation_views(
+        &self,
+        reservations: &[KvReservation],
+    ) -> Result<Vec<KvReservationView>> {
+        reservations
+            .iter()
+            .map(|reservation| self.reservation_view(reservation))
+            .collect()
     }
 
     /// Derive a read-only prefix view for backend replay without publishing or
@@ -740,30 +1064,30 @@ impl KvPageManager {
         &self,
         reservation: &KvReservation,
         prefix_rows: usize,
-    ) -> Result<KvReservation> {
-        if prefix_rows > reservation.positions.len() {
+    ) -> Result<KvReservationView> {
+        let mut view = self.reservation_view(reservation)?;
+        if prefix_rows > view.positions.len() {
             return Err(Error::Execution(format!(
                 "page manager: reservation prefix {prefix_rows} exceeds reserved rows {}",
-                reservation.positions.len()
+                view.positions.len()
             )));
         }
-        let prefix_end = reservation
+        let prefix_end = view
             .positions
             .start
             .checked_add(prefix_rows)
             .ok_or_else(|| Error::Execution("page manager: prefix view end overflow".into()))?;
-        let pages_before = self.schema.pages_for_tokens(reservation.positions.start);
+        let pages_before = self.schema.pages_for_tokens(view.positions.start);
         let pages_after = self.schema.pages_for_tokens(prefix_end);
         let prefix_new_pages = pages_after.checked_sub(pages_before).ok_or_else(|| {
             Error::Internal("page manager: prefix view page count moved backwards".into())
         })?;
-        if prefix_new_pages > reservation.newly_allocated.len() {
+        if prefix_new_pages > view.newly_allocated.len() {
             return Err(Error::Internal(format!(
                 "page manager: prefix view needs {prefix_new_pages} new pages but reservation has {}",
-                reservation.newly_allocated.len()
+                view.newly_allocated.len()
             )));
         }
-        let mut view = reservation.clone();
         view.positions.end = prefix_end;
         view.newly_allocated.truncate(prefix_new_pages);
         if prefix_rows == 0 {
@@ -775,7 +1099,7 @@ impl KvPageManager {
     /// Build provisional block/write bindings without publishing the reservation.
     pub fn reservation_bindings(
         &self,
-        reservation: &KvReservation,
+        reservation: &KvReservationView,
     ) -> Result<KvReservationBindings> {
         let state = self
             .sequences
@@ -822,6 +1146,28 @@ impl KvPageManager {
         })
     }
 
+    fn validate_refcount_decrements(&self, pages: &[KvPageId]) -> Result<()> {
+        let mut decrements = HashMap::<KvPageId, u32>::new();
+        for page in pages {
+            let count = decrements.entry(*page).or_default();
+            *count = count.checked_add(1).ok_or_else(|| {
+                Error::Execution("page manager: refcount decrement overflow".into())
+            })?;
+        }
+        for (page, decrement) in decrements {
+            let refcount = self.page_refcounts.get(&page).copied().ok_or_else(|| {
+                Error::Internal(format!("page manager: page {} has no refcount", page.0))
+            })?;
+            if refcount < decrement {
+                return Err(Error::Internal(format!(
+                    "page manager: page {} refcount {refcount} is below decrement {decrement}",
+                    page.0
+                )));
+            }
+        }
+        Ok(())
+    }
+
     fn alloc_page(&mut self) -> Result<KvPageId> {
         if let Some(page_id) = self.free_pages.pop() {
             return Ok(page_id);
@@ -840,27 +1186,18 @@ impl KvPageManager {
     }
 }
 
-fn decrement_refcount(
-    refcounts: &mut HashMap<KvPageId, u32>,
-    free_pages: &mut Vec<KvPageId>,
-    page: KvPageId,
-) -> Result<bool> {
+fn decrement_refcount_infallible(refcounts: &mut HashMap<KvPageId, u32>, page: KvPageId) -> bool {
     let refcount = refcounts
         .get_mut(&page)
-        .ok_or_else(|| Error::Internal(format!("page manager: page {} has no refcount", page.0)))?;
-    if *refcount == 0 {
-        return Err(Error::Internal(format!(
-            "page manager: page {} has zero refcount",
-            page.0
-        )));
-    }
+        .expect("validated page must have a refcount");
+    assert!(*refcount > 0, "validated page refcount must be non-zero");
     *refcount -= 1;
     if *refcount == 0 {
         refcounts.remove(&page);
-        free_pages.push(page);
-        return Ok(true);
+        true
+    } else {
+        false
     }
-    Ok(false)
 }
 
 #[cfg(test)]
@@ -896,6 +1233,15 @@ mod tests {
         StateSlot::new(n)
     }
 
+    fn commit_full(manager: &mut KvPageManager, reservation: KvReservation) {
+        let rows = reservation.positions.len();
+        let prepared = manager
+            .prepare_commit(vec![KvReservationCommit::new(reservation, rows)])
+            .unwrap();
+        let retirement = manager.publish_commit(prepared);
+        manager.confirm_page_retirement(retirement).unwrap();
+    }
+
     fn publish_exact_fork(
         manager: &mut KvPageManager,
         source: StateSlot,
@@ -917,7 +1263,8 @@ mod tests {
         let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
         mgr.alloc_sequence(slot(0), 0).unwrap();
         assert_eq!(mgr.active_sequences(), 1);
-        mgr.free_sequence_pages(slot(0)).unwrap();
+        let retirement = mgr.free_sequence_pages(slot(0)).unwrap();
+        mgr.confirm_page_retirement(retirement).unwrap();
         assert_eq!(mgr.active_sequences(), 0);
     }
 
@@ -929,7 +1276,7 @@ mod tests {
         // Reserve 4 tokens = 1 page
         let res = mgr.reserve(slot(0), 0, 4).unwrap();
         assert_eq!(res.newly_allocated.len(), 1);
-        mgr.commit(res).unwrap();
+        commit_full(&mut mgr, res);
 
         let table = mgr.block_table(slot(0)).unwrap();
         assert_eq!(table.committed_tokens(), 4);
@@ -941,7 +1288,7 @@ mod tests {
         let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
         mgr.alloc_sequence(slot(0), 0).unwrap();
         let initial = mgr.reserve(slot(0), 0, 3).unwrap();
-        mgr.commit(initial).unwrap();
+        commit_full(&mut mgr, initial);
 
         let reservation = mgr.reserve(slot(0), 0, 10).unwrap();
         assert_eq!(reservation.newly_allocated.len(), 3);
@@ -955,23 +1302,35 @@ mod tests {
         assert_eq!(reservation.positions, 3..13);
         assert_eq!(reservation.newly_allocated.len(), 3);
 
-        mgr.rollback(reservation).unwrap();
+        let retirement = mgr.abort_reservations(vec![reservation]).unwrap();
         assert_eq!(mgr.block_table(slot(0)).unwrap().committed_tokens(), 3);
+        assert_eq!(mgr.free_pages(), 0);
+        assert_eq!(mgr.stats().retiring_pages, 3);
+        mgr.confirm_page_retirement(retirement).unwrap();
+        assert_eq!(mgr.free_pages(), 3);
     }
 
     #[test]
-    fn commit_prefix_recycles_rejected_suffix_pages() {
+    fn commit_prefix_quarantines_rejected_suffix_until_confirmation() {
         let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
         mgr.alloc_sequence(slot(0), 0).unwrap();
 
         let reservation = mgr.reserve(slot(0), 0, 10).unwrap();
         let rejected_page = reservation.newly_allocated[2];
-        let freed = mgr.commit_prefix_with_freed(reservation, 5).unwrap();
+        let prepared = mgr
+            .prepare_commit(vec![KvReservationCommit::new(reservation, 5)])
+            .unwrap();
+        assert_eq!(mgr.block_table(slot(0)).unwrap().committed_tokens(), 0);
+        let retirement = mgr.publish_commit(prepared);
 
         let table = mgr.block_table(slot(0)).unwrap();
         assert_eq!(table.committed_tokens(), 5);
         assert_eq!(table.num_pages(), 2);
-        assert_eq!(freed, vec![rejected_page]);
+        assert_eq!(retirement.pages(), &[rejected_page]);
+        assert_eq!(mgr.allocated_pages(), 3);
+        assert_eq!(mgr.free_pages(), 0);
+        assert_eq!(mgr.stats().retiring_pages, 1);
+        mgr.confirm_page_retirement(retirement).unwrap();
         assert_eq!(mgr.allocated_pages(), 2);
         assert_eq!(mgr.free_pages(), 1);
     }
@@ -984,41 +1343,60 @@ mod tests {
 
         let first = mgr.reserve(slot(0), 0, 10).unwrap();
         let second = mgr.reserve(slot(1), 0, 7).unwrap();
-        let freed = mgr
-            .commit_prefix_batch_with_freed(vec![
+        let prepared = mgr
+            .prepare_commit(vec![
                 KvReservationCommit::new(first, 5),
                 KvReservationCommit::new(second, 3),
             ])
             .unwrap();
+        assert_eq!(mgr.block_table(slot(0)).unwrap().committed_tokens(), 0);
+        assert_eq!(mgr.block_table(slot(1)).unwrap().committed_tokens(), 0);
+        let retirement = mgr.publish_commit(prepared);
 
         assert_eq!(mgr.block_table(slot(0)).unwrap().committed_tokens(), 5);
         assert_eq!(mgr.block_table(slot(1)).unwrap().committed_tokens(), 3);
         assert_eq!(mgr.block_table(slot(0)).unwrap().num_pages(), 2);
         assert_eq!(mgr.block_table(slot(1)).unwrap().num_pages(), 1);
-        assert_eq!(freed.len(), 2);
+        assert_eq!(retirement.pages().len(), 2);
+        assert_eq!(mgr.allocated_pages(), 5);
+        assert_eq!(mgr.free_pages(), 0);
+        mgr.confirm_page_retirement(retirement).unwrap();
         assert_eq!(mgr.allocated_pages(), 3);
         assert_eq!(mgr.free_pages(), 2);
     }
 
     #[test]
-    fn packed_prefix_validation_failure_publishes_nothing() {
+    fn packed_prefix_validation_failure_returns_all_ownership_without_publication() {
         let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 32);
         mgr.alloc_sequence(slot(0), 0).unwrap();
         mgr.alloc_sequence(slot(1), 0).unwrap();
 
         let first = mgr.reserve(slot(0), 0, 10).unwrap();
         let mut stale = mgr.reserve(slot(1), 0, 7).unwrap();
-        stale.generation = 1;
-        assert!(
-            mgr.commit_prefix_batch_with_freed(vec![
+        stale.view.generation = 1;
+        let error = mgr
+            .prepare_commit(vec![
                 KvReservationCommit::new(first, 5),
                 KvReservationCommit::new(stale, 3),
             ])
-            .is_err()
-        );
+            .unwrap_err();
+        let (_, mut commits) = error.into_parts();
 
         assert_eq!(mgr.block_table(slot(0)).unwrap().committed_tokens(), 0);
         assert_eq!(mgr.block_table(slot(1)).unwrap().committed_tokens(), 0);
+        assert_eq!(mgr.allocated_pages(), 5);
+        assert_eq!(mgr.free_pages(), 0);
+        commits[1].reservation.view.generation = 0;
+        let retirement = mgr
+            .abort_reservations(
+                commits
+                    .into_iter()
+                    .map(|commit| commit.reservation)
+                    .collect(),
+            )
+            .unwrap();
+        assert_eq!(retirement.pages().len(), 5);
+        mgr.confirm_page_retirement(retirement).unwrap();
         assert_eq!(mgr.allocated_pages(), 0);
         assert_eq!(mgr.free_pages(), 5);
     }
@@ -1031,62 +1409,151 @@ mod tests {
 
         let committed = mgr.reserve(slot(0), 0, 5).unwrap();
         let cancelled = mgr.reserve(slot(1), 0, 5).unwrap();
-        let freed = mgr
-            .commit_prefix_batch_with_freed(vec![
+        let prepared = mgr
+            .prepare_commit(vec![
                 KvReservationCommit::new(committed, 5),
                 KvReservationCommit::new(cancelled, 0),
             ])
             .unwrap();
+        let retirement = mgr.publish_commit(prepared);
 
         assert_eq!(mgr.block_table(slot(0)).unwrap().committed_tokens(), 5);
         assert_eq!(mgr.block_table(slot(1)).unwrap().committed_tokens(), 0);
-        assert_eq!(freed.len(), 2);
+        assert_eq!(retirement.pages().len(), 2);
+        assert_eq!(mgr.allocated_pages(), 4);
+        mgr.confirm_page_retirement(retirement).unwrap();
         assert_eq!(mgr.allocated_pages(), 2);
     }
 
     #[test]
-    fn zero_prefix_is_an_exact_reservation_rollback() {
+    fn zero_prefix_is_an_exact_quarantined_rollback() {
         let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
         mgr.alloc_sequence(slot(0), 0).unwrap();
 
         let reservation = mgr.reserve(slot(0), 0, 9).unwrap();
         let expected = reservation.newly_allocated.clone();
-        let freed = mgr.commit_prefix_with_freed(reservation, 0).unwrap();
+        let prepared = mgr
+            .prepare_commit(vec![KvReservationCommit::new(reservation, 0)])
+            .unwrap();
+        let retirement = mgr.publish_commit(prepared);
 
-        assert_eq!(freed, expected);
+        assert_eq!(retirement.pages(), expected);
         assert_eq!(mgr.block_table(slot(0)).unwrap().committed_tokens(), 0);
+        assert_eq!(mgr.allocated_pages(), 3);
+        assert_eq!(mgr.free_pages(), 0);
+        mgr.confirm_page_retirement(retirement).unwrap();
         assert_eq!(mgr.allocated_pages(), 0);
         assert_eq!(mgr.free_pages(), 3);
     }
 
     #[test]
-    fn commit_prefix_rejects_lengths_beyond_the_reservation() {
+    fn commit_prefix_rejects_lengths_beyond_the_reservation_without_consuming_it() {
         let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
         mgr.alloc_sequence(slot(0), 0).unwrap();
         let reservation = mgr.reserve(slot(0), 0, 2).unwrap();
 
-        assert!(mgr.commit_prefix_with_freed(reservation, 3).is_err());
+        let error = mgr
+            .prepare_commit(vec![KvReservationCommit::new(reservation, 3)])
+            .unwrap_err();
+        let (_, commits) = error.into_parts();
         assert_eq!(mgr.block_table(slot(0)).unwrap().committed_tokens(), 0);
+        assert_eq!(mgr.allocated_pages(), 1);
+        let retirement = mgr
+            .abort_reservations(
+                commits
+                    .into_iter()
+                    .map(|commit| commit.reservation)
+                    .collect(),
+            )
+            .unwrap();
+        mgr.confirm_page_retirement(retirement).unwrap();
         assert_eq!(mgr.allocated_pages(), 0);
     }
 
     #[test]
-    fn reserve_rollback_frees_pages() {
-        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
+    fn reservation_abort_requires_retirement_confirmation_before_reuse() {
+        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 1);
         mgr.alloc_sequence(slot(0), 0).unwrap();
+        mgr.alloc_sequence(slot(1), 0).unwrap();
 
-        let res = mgr.reserve(slot(0), 0, 4).unwrap();
-        let _page_id = res.newly_allocated[0];
-        mgr.rollback(res).unwrap();
+        let reservation = mgr.reserve(slot(0), 0, 4).unwrap();
+        let page_id = reservation.newly_allocated[0];
+        let retirement = mgr.abort_reservations(vec![reservation]).unwrap();
+        assert_eq!(retirement.pages(), &[page_id]);
+        assert_eq!(mgr.free_pages(), 0);
+        assert_eq!(mgr.allocated_pages(), 1);
+        assert!(mgr.reserve(slot(1), 0, 4).is_err());
 
-        // Page should be back on the free list
+        mgr.confirm_page_retirement(retirement).unwrap();
+        let reused = mgr.reserve(slot(1), 0, 4).unwrap();
+        assert_eq!(reused.newly_allocated, vec![page_id]);
+    }
+
+    #[test]
+    fn one_state_slot_cannot_have_two_live_reservations() {
+        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 4);
+        mgr.alloc_sequence(slot(0), 0).unwrap();
+        let first = mgr.reserve(slot(0), 0, 1).unwrap();
+        let error = mgr.reserve(slot(0), 0, 1).unwrap_err();
+        assert!(error.to_string().contains("already owned by reservation"));
+        assert_eq!(mgr.pending_reservations.len(), 1);
+        let retirement = mgr.abort_reservations(vec![first]).unwrap();
+        mgr.confirm_page_retirement(retirement).unwrap();
+    }
+
+    #[test]
+    fn duplicate_retirement_confirmation_is_rejected_without_free_list_mutation() {
+        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 1);
+        mgr.alloc_sequence(slot(0), 0).unwrap();
+        let reservation = mgr.reserve(slot(0), 0, 4).unwrap();
+        let retirement = mgr.abort_reservations(vec![reservation]).unwrap();
+        let duplicate = KvRetirement {
+            manager_id: retirement.manager_id,
+            pages: retirement.pages.clone(),
+        };
+        mgr.confirm_page_retirement(retirement).unwrap();
         assert_eq!(mgr.free_pages(), 1);
-        assert_eq!(mgr.allocated_pages(), 0);
 
-        // Block table should not have been extended
-        let table = mgr.block_table(slot(0)).unwrap();
-        assert_eq!(table.committed_tokens(), 0);
-        assert_eq!(table.num_pages(), 0);
+        let error = mgr.confirm_page_retirement(duplicate).unwrap_err();
+        let (_, duplicate) = error.into_parts();
+        assert_eq!(duplicate.pages().len(), 1);
+        assert_eq!(mgr.free_pages(), 1);
+        assert_eq!(mgr.stats().retiring_pages, 0);
+    }
+
+    #[test]
+    fn retirement_cannot_be_confirmed_by_another_manager() {
+        let mut owner = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 1);
+        let mut other = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 1);
+        owner.alloc_sequence(slot(0), 0).unwrap();
+        let reservation = owner.reserve(slot(0), 0, 4).unwrap();
+        let retirement = owner.abort_reservations(vec![reservation]).unwrap();
+
+        let error = other.confirm_page_retirement(retirement).unwrap_err();
+        let (_, retirement) = error.into_parts();
+        assert_eq!(other.free_pages(), 0);
+        owner.confirm_page_retirement(retirement).unwrap();
+        assert_eq!(owner.free_pages(), 1);
+    }
+
+    #[test]
+    fn consumed_reservation_token_cannot_change_manager_state() {
+        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 1);
+        mgr.alloc_sequence(slot(0), 0).unwrap();
+        let reservation = mgr.reserve(slot(0), 0, 4).unwrap();
+        let id = reservation.id;
+        let view = reservation.view.clone();
+        let retirement = mgr.abort_reservations(vec![reservation]).unwrap();
+        mgr.confirm_page_retirement(retirement).unwrap();
+        let free_before = mgr.free_pages();
+
+        let consumed = KvReservation { id, view };
+        let error = mgr.abort_reservations(vec![consumed]).unwrap_err();
+        let (_, returned) = error.into_parts();
+        assert_eq!(returned.len(), 1);
+        assert_eq!(mgr.free_pages(), free_before);
+        assert_eq!(mgr.stats().retiring_pages, 0);
+        assert!(mgr.pending_reservations.is_empty());
     }
 
     #[test]
@@ -1099,17 +1566,35 @@ mod tests {
     }
 
     #[test]
-    fn packed_commit_validation_failure_publishes_nothing_and_recycles_pages() {
+    fn packed_full_commit_validation_failure_is_failure_atomic() {
         let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
         mgr.alloc_sequence(slot(0), 0).unwrap();
         mgr.alloc_sequence(slot(1), 0).unwrap();
         let first = mgr.reserve(slot(0), 0, 4).unwrap();
         let mut stale = mgr.reserve(slot(1), 0, 4).unwrap();
-        stale.generation = 1;
+        stale.view.generation = 1;
 
-        assert!(mgr.commit_batch_with_freed(vec![first, stale]).is_err());
+        let error = mgr
+            .prepare_commit(vec![
+                KvReservationCommit::new(first, 4),
+                KvReservationCommit::new(stale, 4),
+            ])
+            .unwrap_err();
+        let (_, mut commits) = error.into_parts();
         assert_eq!(mgr.block_table(slot(0)).unwrap().committed_tokens(), 0);
         assert_eq!(mgr.block_table(slot(1)).unwrap().committed_tokens(), 0);
+        assert_eq!(mgr.allocated_pages(), 2);
+        assert_eq!(mgr.free_pages(), 0);
+        commits[1].reservation.view.generation = 0;
+        let retirement = mgr
+            .abort_reservations(
+                commits
+                    .into_iter()
+                    .map(|commit| commit.reservation)
+                    .collect(),
+            )
+            .unwrap();
+        mgr.confirm_page_retirement(retirement).unwrap();
         assert_eq!(mgr.allocated_pages(), 0);
         assert_eq!(mgr.free_pages(), 2);
     }
@@ -1122,7 +1607,7 @@ mod tests {
         // 10 tokens with page_size=4 = 3 pages
         let res = mgr.reserve(slot(0), 0, 10).unwrap();
         assert_eq!(res.newly_allocated.len(), 3);
-        mgr.commit(res).unwrap();
+        commit_full(&mut mgr, res);
 
         let table = mgr.block_table(slot(0)).unwrap();
         assert_eq!(table.committed_tokens(), 10);
@@ -1140,12 +1625,12 @@ mod tests {
 
         // First batch: 4 tokens = 1 page
         let res = mgr.reserve(slot(0), 0, 4).unwrap();
-        mgr.commit(res).unwrap();
+        commit_full(&mut mgr, res);
 
         // Second batch: 4 more tokens = 1 more page
         let res = mgr.reserve(slot(0), 0, 4).unwrap();
         assert_eq!(res.newly_allocated.len(), 1);
-        mgr.commit(res).unwrap();
+        commit_full(&mut mgr, res);
 
         let table = mgr.block_table(slot(0)).unwrap();
         assert_eq!(table.committed_tokens(), 8);
@@ -1159,11 +1644,11 @@ mod tests {
 
         // 4 tokens = 1 page, OK
         let res = mgr.reserve(slot(0), 0, 4).unwrap();
-        mgr.commit(res).unwrap();
+        commit_full(&mut mgr, res);
 
         // 4 more tokens = 1 more page, OK (total 2)
         let res = mgr.reserve(slot(0), 0, 4).unwrap();
-        mgr.commit(res).unwrap();
+        commit_full(&mut mgr, res);
 
         // 4 more tokens = 1 more page, OOM
         let res = mgr.reserve(slot(0), 0, 4);
@@ -1176,10 +1661,14 @@ mod tests {
         mgr.alloc_sequence(slot(0), 0).unwrap();
 
         let res = mgr.reserve(slot(0), 0, 8).unwrap();
-        mgr.commit(res).unwrap();
+        commit_full(&mut mgr, res);
         assert_eq!(mgr.allocated_pages(), 2);
 
-        mgr.free_sequence_pages(slot(0)).unwrap();
+        let retirement = mgr.free_sequence_pages(slot(0)).unwrap();
+        assert_eq!(mgr.allocated_pages(), 2);
+        assert_eq!(mgr.free_pages(), 0);
+        assert_eq!(mgr.stats().retiring_pages, 2);
+        mgr.confirm_page_retirement(retirement).unwrap();
         assert_eq!(mgr.allocated_pages(), 0);
         assert_eq!(mgr.free_pages(), 2);
     }
@@ -1190,8 +1679,9 @@ mod tests {
         mgr.alloc_sequence(slot(0), 0).unwrap();
         let res = mgr.reserve(slot(0), 0, 4).unwrap();
         let first_page = res.newly_allocated[0];
-        mgr.commit(res).unwrap();
-        mgr.free_sequence_pages(slot(0)).unwrap();
+        commit_full(&mut mgr, res);
+        let retirement = mgr.free_sequence_pages(slot(0)).unwrap();
+        mgr.confirm_page_retirement(retirement).unwrap();
 
         // Allocate a new sequence - should reuse the freed page
         mgr.alloc_sequence(slot(1), 0).unwrap();
@@ -1204,13 +1694,13 @@ mod tests {
         let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 2048);
         mgr.alloc_sequence(slot(0), 0).unwrap();
         let first = mgr.reserve(slot(0), 0, 4095).unwrap();
-        mgr.commit(first).unwrap();
+        commit_full(&mut mgr, first);
         let boundary = mgr.reserve(slot(0), 0, 3).unwrap();
         let bindings = mgr.reservation_bindings(&boundary).unwrap();
         assert_eq!(boundary.positions, 4095..4098);
         assert_eq!(bindings.write_slots.len(), 3);
         assert_eq!(bindings.block_ids.len(), 1025);
-        mgr.commit(boundary).unwrap();
+        commit_full(&mut mgr, boundary);
         assert_eq!(mgr.block_table(slot(0)).unwrap().committed_tokens(), 4098);
     }
 
@@ -1219,7 +1709,7 @@ mod tests {
         let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
         mgr.alloc_sequence(slot(0), 0).unwrap();
         let initial = mgr.reserve(slot(0), 0, 3).unwrap();
-        mgr.commit(initial).unwrap();
+        commit_full(&mut mgr, initial);
         let shared_page = mgr.block_table(slot(0)).unwrap().pages()[0];
         publish_exact_fork(&mut mgr, slot(0), slot(1), 7, 3).unwrap();
         assert_eq!(mgr.page_refcount(shared_page), 2);
@@ -1227,7 +1717,7 @@ mod tests {
         let append = mgr.reserve(slot(1), 7, 1).unwrap();
         let cow = append.cow_replacement.expect("shared tail requires COW");
         assert_eq!(cow.source, shared_page);
-        mgr.commit(append).unwrap();
+        commit_full(&mut mgr, append);
         assert_ne!(mgr.block_table(slot(1)).unwrap().pages()[0], shared_page);
         assert_eq!(mgr.block_table(slot(0)).unwrap().pages()[0], shared_page);
         assert_eq!(mgr.page_refcount(shared_page), 1);
@@ -1238,7 +1728,7 @@ mod tests {
         let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
         mgr.alloc_sequence(slot(0), 0).unwrap();
         let initial = mgr.reserve(slot(0), 0, 6).unwrap();
-        mgr.commit(initial).unwrap();
+        commit_full(&mut mgr, initial);
         let pages = mgr.block_table(slot(0)).unwrap().pages().to_vec();
 
         let prepared = mgr
@@ -1257,7 +1747,7 @@ mod tests {
         let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
         mgr.alloc_sequence(slot(0), 0).unwrap();
         let initial = mgr.reserve(slot(0), 0, 6).unwrap();
-        mgr.commit(initial).unwrap();
+        commit_full(&mut mgr, initial);
         let pages = mgr.block_table(slot(0)).unwrap().pages().to_vec();
         let before = pages
             .iter()
@@ -1281,7 +1771,7 @@ mod tests {
         let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
         mgr.alloc_sequence(slot(0), 0).unwrap();
         let initial = mgr.reserve(slot(0), 0, 8).unwrap();
-        mgr.commit(initial).unwrap();
+        commit_full(&mut mgr, initial);
         let pages = mgr.block_table(slot(0)).unwrap().pages().to_vec();
         mgr.page_refcounts.insert(pages[1], u32::MAX);
 
@@ -1297,11 +1787,12 @@ mod tests {
         let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
         mgr.alloc_sequence(slot(0), 0).unwrap();
         let initial = mgr.reserve(slot(0), 0, 3).unwrap();
-        mgr.commit(initial).unwrap();
+        commit_full(&mut mgr, initial);
         publish_exact_fork(&mut mgr, slot(0), slot(1), 1, 3).unwrap();
         let before = mgr.block_table(slot(1)).unwrap().clone();
         let append = mgr.reserve(slot(1), 1, 1).unwrap();
-        mgr.rollback(append).unwrap();
+        let retirement = mgr.abort_reservations(vec![append]).unwrap();
+        mgr.confirm_page_retirement(retirement).unwrap();
         assert_eq!(mgr.block_table(slot(1)).unwrap().pages(), before.pages());
         assert_eq!(mgr.block_table(slot(1)).unwrap().committed_tokens(), 3);
     }
@@ -1311,7 +1802,7 @@ mod tests {
         let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
         mgr.alloc_sequence(slot(0), 9).unwrap();
         let reservation = mgr.reserve(slot(0), 9, 9).unwrap();
-        mgr.commit(reservation).unwrap();
+        commit_full(&mut mgr, reservation);
         let before = mgr.block_table(slot(0)).unwrap().clone();
         let preempted = mgr.preempt_sequence(slot(0)).unwrap();
         assert_eq!(mgr.active_sequences(), 0);

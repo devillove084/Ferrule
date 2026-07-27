@@ -2,9 +2,9 @@
 """Sweep DSV4 ResidentTopKDriver prefill chunk sizes.
 
 This script intentionally stays outside the Rust crates: it is benchmark plumbing,
-not runtime architecture. It runs `ferrule bench-interactive --runtime-driver --json`
-for each chunk size, keeps the full JSON report for every run, and writes a compact
-CSV that is easy to paste into perf notes.
+not runtime architecture. It runs the unique `ferrule bench-interactive --json`
+production path for each chunk size, keeps the full JSON report for every run, and
+writes a compact CSV that is easy to paste into perf notes.
 """
 
 from __future__ import annotations
@@ -137,8 +137,6 @@ SUMMARY_FIELDS = [
     "dsv4_start_segment_tokens",
     "dsv4_append_segment_calls",
     "dsv4_append_segment_tokens",
-    "dsv4_token_fallback_calls",
-    "dsv4_token_fallback_tokens",
     "finish_reasons_json",
     "generated_token_ids_json",
     "error",
@@ -340,8 +338,6 @@ def summarize(report: dict[str, Any], chunk: int, elapsed_s: float) -> dict[str,
         "dsv4_start_segment_tokens": i64(dsv4.get("start_segment_tokens")),
         "dsv4_append_segment_calls": i64(dsv4.get("append_segment_calls")),
         "dsv4_append_segment_tokens": i64(dsv4.get("append_segment_tokens")),
-        "dsv4_token_fallback_calls": i64(dsv4.get("token_fallback_calls")),
-        "dsv4_token_fallback_tokens": i64(dsv4.get("token_fallback_tokens")),
         "finish_reasons_json": json.dumps(finish_reasons, separators=(",", ":")),
         "generated_token_ids_json": json.dumps(generated_token_ids, separators=(",", ":")),
         "error": "",
@@ -365,7 +361,7 @@ def build_cuda(arch: str) -> None:
         "oxide",
         "build",
         "--features",
-        "cuda",
+        "cuda,cutlass",
         "--arch",
         arch,
         "--",
@@ -385,7 +381,6 @@ def run_chunk(args: argparse.Namespace, chunk: int) -> tuple[dict[str, Any], str
         [
             "-n",
             str(args.max_tokens),
-            "--runtime-driver",
             "--warmup-tokens",
             str(args.warmup_tokens),
             "--prefill-chunk-size",
@@ -422,7 +417,7 @@ def main() -> int:
     parser.add_argument("--max-layers", type=int, default=43)
     parser.add_argument("--chunks", type=parse_chunks, default=parse_chunks(DEFAULT_CHUNKS))
     parser.add_argument("--bin", default="./target/release/ferrule")
-    parser.add_argument("--output-dir", default="target/dsv4-runtime-driver-chunk-sweep")
+    parser.add_argument("--output-dir", default="target/bench/io-scheduler-e2e/chunks")
     parser.add_argument("--keep-going", action="store_true")
     parser.add_argument("--profile-sync", action="store_true")
     parser.add_argument("--build-cuda", action="store_true")
@@ -459,13 +454,12 @@ def main() -> int:
                 rows.append(row)
                 print(
                     "[sweep] chunk={chunk} ttft={ttft:.3f}s prefill={prefill:.2f} tok/s "
-                    "no_logits={no_logits} append_seg={append_seg} fallback={fallback}".format(
+                    "no_logits={no_logits} append_seg={append_seg}".format(
                         chunk=chunk,
                         ttft=row["time_to_first_token_s"],
                         prefill=row["aggregate_prefill_tok_per_s"],
                         no_logits=row["dsv4_no_logits_tokens"],
                         append_seg=row["dsv4_append_segment_tokens"],
-                        fallback=row["dsv4_token_fallback_tokens"],
                     ),
                     file=sys.stderr,
                 )

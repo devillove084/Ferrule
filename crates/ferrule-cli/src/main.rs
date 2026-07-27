@@ -4,15 +4,16 @@ mod args;
 mod bench;
 mod commands;
 
+#[cfg(feature = "cuda")]
+pub(crate) use args::GenerationConfig;
+pub(crate) use args::SamplingArgs;
 use args::{Cli, Command};
-pub(crate) use args::{GenerationConfig, SamplingArgs};
 use commands::bench_interactive::cmd_bench_interactive;
 use commands::chat::cmd_chat;
 use commands::cuda::cmd_cuda;
 use commands::info::cmd_info;
 use commands::inspect::{
-    cmd_deepseek_v4_generate, cmd_deepseek_v4_prefill_parity, cmd_deepseek_v4_probe,
-    cmd_expert_stream_smoke, cmd_inspect_weightpack,
+    cmd_deepseek_v4_generate, cmd_expert_stream_smoke, cmd_inspect_weightpack,
 };
 
 use commands::serve::cmd_serve;
@@ -27,16 +28,9 @@ fn main() -> anyhow::Result<()> {
         Command::Chat {
             model,
             max_tokens,
-            quant,
             sampling,
             chat_template,
-        } => cmd_chat(
-            &model,
-            max_tokens,
-            &quant,
-            &sampling,
-            chat_template.as_deref(),
-        ),
+        } => cmd_chat(&model, max_tokens, &sampling, chat_template.as_deref()),
         Command::BenchInteractive {
             model,
             prompts,
@@ -50,9 +44,6 @@ fn main() -> anyhow::Result<()> {
             moe_hotset_experts,
             golden,
             json,
-            resident_replay,
-            verify_width_sweep,
-            verify_iterations,
         } => cmd_bench_interactive(
             &model,
             &prompts,
@@ -66,9 +57,6 @@ fn main() -> anyhow::Result<()> {
             moe_hotset_experts,
             golden.as_deref(),
             json,
-            resident_replay,
-            verify_width_sweep,
-            verify_iterations,
         ),
 
         Command::InspectWeightPack { path } => cmd_inspect_weightpack(&path),
@@ -87,7 +75,6 @@ fn main() -> anyhow::Result<()> {
             output_head_chunk_rows,
             max_tensor_mb,
             expert_reader_max_slice_mb,
-            backend,
             no_stop_eos,
             verbose_tokens,
             chat,
@@ -103,7 +90,6 @@ fn main() -> anyhow::Result<()> {
             output_head_chunk_rows,
             max_tensor_mb,
             expert_reader_max_slice_mb,
-            &backend,
             !no_stop_eos,
             verbose_tokens,
             chat,
@@ -111,58 +97,6 @@ fn main() -> anyhow::Result<()> {
             warmup_tokens,
             moe_prefetch_experts,
             moe_hotset_experts,
-        ),
-        Command::DeepSeekV4Probe {
-            model,
-            prompt,
-            max_layers,
-            start_row,
-            row_count,
-            top_k,
-            full_vocab_topk,
-            output_head_chunk_rows,
-            max_tensor_mb,
-            expert_reader_max_slice_mb,
-            backend,
-            reference_json,
-            reference_atol,
-        } => cmd_deepseek_v4_probe(
-            &model,
-            &prompt,
-            max_layers,
-            start_row,
-            row_count,
-            top_k,
-            full_vocab_topk,
-            output_head_chunk_rows,
-            max_tensor_mb,
-            expert_reader_max_slice_mb,
-            &backend,
-            reference_json.as_deref(),
-            reference_atol,
-        ),
-        Command::DeepSeekV4PrefillParity {
-            model,
-            prompt,
-            max_layers,
-            max_tensor_mb,
-            expert_reader_max_slice_mb,
-            backend,
-            chat,
-            atol,
-            cuts,
-            json,
-        } => cmd_deepseek_v4_prefill_parity(
-            &model,
-            &prompt,
-            max_layers,
-            max_tensor_mb,
-            expert_reader_max_slice_mb,
-            &backend,
-            chat,
-            atol,
-            &cuts,
-            json,
         ),
     }
 }

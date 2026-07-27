@@ -5,8 +5,8 @@ use super::config::*;
 use super::helpers::*;
 use super::layer::*;
 use super::runner::{
-    DeepSeekV4LayerArenaPoolKey, DeepSeekV4LayerArenaRowLayout, PackedBatchMetadata,
-    begin_packed_sequence_steps, commit_packed_sequence_steps, poison_packed_sequence_steps,
+    PackedBatchMetadata, begin_packed_sequence_steps, commit_packed_sequence_steps,
+    poison_packed_sequence_steps,
 };
 use super::sequence::DeepSeekV4SequenceExecutionState;
 
@@ -14,9 +14,9 @@ use std::path::{Path, PathBuf};
 
 use crate::TensorRole;
 use crate::artifact::binding::{MlaAttentionArtifactPayload, RouterArtifactPayload};
-use crate::artifact::linear::{ArtifactLinearPayload, artifact_linear_cache_key};
+use crate::artifact::linear::ArtifactLinearPayload;
 use crate::artifact::tensor::{ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice};
-use crate::execution::ExecutionShapeKey;
+
 use crate::families::deepseek_v4;
 use crate::ffn::SwiGluFfnPayload;
 use crate::hyper_connection::{HyperConnectionConfig, HyperConnectionWeights};
@@ -38,19 +38,6 @@ fn attention_shape_contract_accepts_official_dimensions() {
     let attention = DeepSeekV4Attention::new(0, cfg, payload).unwrap();
     assert_eq!(attention.config.output_group_input_dim(), 4096);
     assert_eq!(attention.config.output_latent_dim(), 8192);
-}
-
-#[test]
-fn artifact_linear_cache_key_distinguishes_same_named_slices() {
-    let first = f32_linear(TensorRole::OutputHead, "head", 2, 2);
-    let mut second = first.clone();
-    second.weight.slice.offset += 8;
-    second.weight.slice.bytes = 8;
-
-    assert_ne!(
-        artifact_linear_cache_key(&first),
-        artifact_linear_cache_key(&second)
-    );
 }
 
 #[test]
@@ -268,18 +255,6 @@ fn dsv4_arena_shapes_deduplicate_43_layers_without_merging_compressor_variants()
     assert_ne!(layer_to_variant[19], layer_to_variant[20]);
     assert_ne!(layer_to_variant[29], layer_to_variant[30]);
     assert_ne!(layer_to_variant[41], layer_to_variant[42]);
-}
-
-#[test]
-fn dsv4_arena_pool_key_separates_sequential_prefill_from_independent_rows() {
-    let shape = ExecutionShapeKey::new(ForwardMode::Prefill, 6, 1, 6);
-
-    let sequential =
-        DeepSeekV4LayerArenaPoolKey::new(shape, DeepSeekV4LayerArenaRowLayout::SequentialPrefill);
-    let packed =
-        DeepSeekV4LayerArenaPoolKey::new(shape, DeepSeekV4LayerArenaRowLayout::IndependentRows);
-
-    assert_ne!(sequential, packed);
 }
 
 #[test]

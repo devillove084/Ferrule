@@ -12,8 +12,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 
 use crate::HfRoutedExpertTensorInfo;
+use crate::runner::ModelCompletionReactor;
 use crate::semantic::{RoutedExpertMatrix, RoutedExpertTensorPart, RoutedExpertTensorRef};
-use ferrule_common::{Error, MemoryPoolLimits, MemoryPoolStats, OwnerMemoryLru, Result};
+use ferrule_common::{
+    CompletionHub, Error, MemoryPoolLimits, MemoryPoolStats, OwnerMemoryLru, Result,
+};
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -834,7 +837,6 @@ pub struct ExpertIoStats {
     pub aligned_bytes: u64,
     pub coalesced_slices: u64,
     pub fixed_file_registrations: u64,
-    pub fallback_count: u64,
     pub slab_exhaustions: u64,
     pub peak_queue_depth: usize,
     pub read_us: u64,
@@ -844,11 +846,41 @@ pub struct ExpertIoStats {
 pub(crate) struct PinnedExpertArtifactPayload {
     pub(crate) expert: ExpertId,
     pub(crate) tensors: Vec<super::io_uring_reader::PinnedExpertTensorPayload>,
+    pub(crate) resource_grant: ferrule_common::expert_io::ExpertIoResourceGrant,
+}
+
+#[cfg(all(target_os = "linux", feature = "cuda"))]
+pub(crate) struct PinnedExpertLoadPlan {
+    expert: ExpertId,
+    reader: super::io_uring_reader::PinnedExpertReadPlan,
+}
+
+#[cfg(all(target_os = "linux", feature = "cuda"))]
+impl PinnedExpertLoadPlan {
+    pub(crate) const fn demand(&self) -> ferrule_common::expert_io::ExpertIoResourceDemand {
+        self.reader.demand()
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "cuda"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct PinnedExpertReadTicket {
+    expert: ExpertId,
+    reader: super::io_uring_reader::PinnedExpertReadTicket,
+}
+
+#[cfg(all(target_os = "linux", feature = "cuda"))]
+pub(crate) enum PinnedExpertReadPoll {
+    Pending,
+    Ready(PinnedExpertArtifactPayload),
+    Failed(Error),
+    Cancelled,
 }
 
 #[derive(Clone)]
 pub struct ExpertStreamingReader {
     max_slice_bytes: u64,
+    completion_hub: CompletionHub,
     #[cfg(target_os = "linux")]
     io_uring: Option<Arc<super::io_uring_reader::IoUringExpertReader>>,
 }
@@ -865,26 +897,49 @@ impl std::fmt::Debug for ExpertStreamingReader {
 
 impl ExpertStreamingReader {
     pub fn new(max_slice_bytes: u64) -> Self {
+        Self::new_with_completion_hub(max_slice_bytes, CompletionHub::new())
+    }
+
+    pub(crate) fn new_with_completion_hub(
+        max_slice_bytes: u64,
+        completion_hub: CompletionHub,
+    ) -> Self {
         Self {
             max_slice_bytes,
+            completion_hub,
             #[cfg(target_os = "linux")]
             io_uring: None,
         }
     }
 
     pub fn from_env(max_slice_bytes: u64) -> Result<Self> {
+        Self::from_env_with_completion_hub(max_slice_bytes, CompletionHub::new())
+    }
+
+    pub(crate) fn from_env_with_completion_hub(
+        max_slice_bytes: u64,
+        completion_hub: CompletionHub,
+    ) -> Result<Self> {
         let backend = std::env::var("FERRULE_EXPERT_IO_BACKEND")
             .unwrap_or_else(|_| default_expert_io_backend().to_string())
             .to_ascii_lowercase();
         match backend.as_str() {
-            "pread" | "positioned" => Ok(Self::new(max_slice_bytes)),
+            "pread" | "positioned" => Ok(Self::new_with_completion_hub(
+                max_slice_bytes,
+                completion_hub,
+            )),
             "io_uring" | "uring" => {
                 let queue_depth = parse_expert_io_usize("FERRULE_EXPERT_IO_QUEUE_DEPTH", 2)?;
                 let buffer_mib = parse_expert_io_usize("FERRULE_EXPERT_IO_BUFFER_MIB", 16)?;
                 let buffer_bytes = buffer_mib.checked_mul(1024 * 1024).ok_or_else(|| {
                     Error::Model("FERRULE_EXPERT_IO_BUFFER_MIB overflows usize".into())
                 })?;
-                Self::with_io_uring(max_slice_bytes, queue_depth, buffer_bytes)
+                Self::with_io_uring_and_completion_hub(
+                    max_slice_bytes,
+                    queue_depth,
+                    buffer_bytes,
+                    completion_hub,
+                )
             }
             other => Err(Error::Model(format!(
                 "unsupported FERRULE_EXPERT_IO_BACKEND '{other}'; expected pread or io_uring"
@@ -896,13 +951,12 @@ impl ExpertStreamingReader {
     pub(crate) fn from_env_with_cuda_pinned(
         max_slice_bytes: u64,
         allocator: ferrule_cuda::context::CudaPinnedHostAllocator,
+        completion_hub: CompletionHub,
     ) -> Result<Self> {
         let backend = std::env::var("FERRULE_EXPERT_IO_BACKEND")
             .unwrap_or_else(|_| "io_uring".to_string())
             .to_ascii_lowercase();
-        if !matches!(backend.as_str(), "io_uring" | "uring") {
-            return Self::from_env(max_slice_bytes);
-        }
+        validate_cuda_resident_expert_io_backend(&backend)?;
         let queue_depth = parse_expert_io_usize("FERRULE_EXPERT_IO_QUEUE_DEPTH", 2)?;
         let buffer_mib = parse_expert_io_usize("FERRULE_EXPERT_IO_BUFFER_MIB", 16)?;
         let slab_count = parse_expert_io_usize("FERRULE_EXPERT_IO_SLABS", 16)?;
@@ -911,12 +965,14 @@ impl ExpertStreamingReader {
             .ok_or_else(|| Error::Model("FERRULE_EXPERT_IO_BUFFER_MIB overflows usize".into()))?;
         Ok(Self {
             max_slice_bytes,
+            completion_hub: completion_hub.clone(),
             io_uring: Some(Arc::new(
                 super::io_uring_reader::IoUringExpertReader::new_cuda_pinned(
                     queue_depth,
                     buffer_bytes,
                     slab_count,
                     &allocator,
+                    completion_hub,
                 )?,
             )),
         })
@@ -928,20 +984,52 @@ impl ExpertStreamingReader {
         queue_depth: usize,
         buffer_bytes: usize,
     ) -> Result<Self> {
+        Self::with_io_uring_and_completion_hub(
+            max_slice_bytes,
+            queue_depth,
+            buffer_bytes,
+            CompletionHub::new(),
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    fn with_io_uring_and_completion_hub(
+        max_slice_bytes: u64,
+        queue_depth: usize,
+        buffer_bytes: usize,
+        completion_hub: CompletionHub,
+    ) -> Result<Self> {
         Ok(Self {
             max_slice_bytes,
+            completion_hub: completion_hub.clone(),
             io_uring: Some(Arc::new(super::io_uring_reader::IoUringExpertReader::new(
                 queue_depth,
                 buffer_bytes,
+                completion_hub,
             )?)),
         })
     }
 
     #[cfg(not(target_os = "linux"))]
     pub fn with_io_uring(
+        max_slice_bytes: u64,
+        queue_depth: usize,
+        buffer_bytes: usize,
+    ) -> Result<Self> {
+        Self::with_io_uring_and_completion_hub(
+            max_slice_bytes,
+            queue_depth,
+            buffer_bytes,
+            CompletionHub::new(),
+        )
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn with_io_uring_and_completion_hub(
         _max_slice_bytes: u64,
         _queue_depth: usize,
         _buffer_bytes: usize,
+        _completion_hub: CompletionHub,
     ) -> Result<Self> {
         Err(Error::Model(
             "io_uring expert streaming is supported only on Linux".into(),
@@ -960,71 +1048,142 @@ impl ExpertStreamingReader {
         self.max_slice_bytes
     }
 
+    pub(crate) fn completion_hub(&self) -> CompletionHub {
+        self.completion_hub.clone()
+    }
+
+    pub(crate) fn take_completion_reactors(&self) -> Vec<ModelCompletionReactor> {
+        #[cfg(target_os = "linux")]
+        if let Some(reader) = self.io_uring.as_ref()
+            && let Some(reactor) = reader.take_completion_reactor()
+        {
+            return vec![reactor];
+        }
+        Vec::new()
+    }
+
     pub fn io_stats(&self) -> ExpertIoStats {
         #[cfg(target_os = "linux")]
         if let Some(reader) = self.io_uring.as_ref() {
-            let stats = reader.stats();
-            return ExpertIoStats {
-                submitted_extents: stats.submitted_extents,
-                completed_extents: stats.completed_extents,
-                failed_extents: stats.failed_extents,
-                requested_bytes: stats.requested_bytes,
-                aligned_bytes: stats.aligned_bytes,
-                coalesced_slices: stats.coalesced_slices,
-                fixed_file_registrations: stats.fixed_file_registrations,
-                fallback_count: stats.fallback_count,
-                slab_exhaustions: stats.slab_exhaustions,
-                peak_queue_depth: stats.peak_queue_depth,
-                read_us: stats.read_us,
-            };
+            return reader.stats();
         }
         ExpertIoStats::default()
     }
 
     #[cfg(all(target_os = "linux", feature = "cuda"))]
-    pub(crate) fn direct_expert_capacity(&self) -> Option<usize> {
+    pub(crate) fn physical_resource_capacity(
+        &self,
+    ) -> Result<Option<ferrule_common::expert_io::ExpertIoResourceDemand>> {
         self.io_uring
             .as_ref()
-            .and_then(|reader| reader.direct_expert_capacity())
+            .map_or(Ok(None), |reader| reader.physical_resource_capacity())
     }
 
     #[cfg(all(target_os = "linux", feature = "cuda"))]
-    pub(crate) fn available_direct_experts(&self) -> Option<usize> {
-        self.io_uring
-            .as_ref()
-            .and_then(|reader| reader.available_direct_experts())
+    pub(crate) fn plan_load_source_pinned(
+        &self,
+        expert: ExpertId,
+        load_source: &ExpertLoadSource,
+    ) -> Result<Option<PinnedExpertLoadPlan>> {
+        let Some(reader) = self.io_uring.as_ref() else {
+            return Ok(None);
+        };
+        let slices = self.bounded_slices_for_load_source(expert, load_source)?;
+        Ok(Some(PinnedExpertLoadPlan {
+            expert,
+            reader: reader.plan_slices_pinned(&slices)?,
+        }))
+    }
+
+    #[cfg(all(target_os = "linux", feature = "cuda"))]
+    pub(crate) fn submit_load_source_pinned(
+        &self,
+        plan: PinnedExpertLoadPlan,
+        resource_grant: ferrule_common::expert_io::ExpertIoResourceGrant,
+    ) -> Result<PinnedExpertReadTicket> {
+        let reader = self.io_uring.as_ref().ok_or_else(|| {
+            Error::Model("pinned expert read plan requires the io_uring backend".into())
+        })?;
+        Ok(PinnedExpertReadTicket {
+            expert: plan.expert,
+            reader: reader.submit_slices_pinned(plan.reader, resource_grant)?,
+        })
+    }
+
+    #[cfg(all(target_os = "linux", feature = "cuda"))]
+    pub(crate) fn poll_load_source_pinned(
+        &self,
+        ticket: PinnedExpertReadTicket,
+        max_completions: usize,
+    ) -> Result<PinnedExpertReadPoll> {
+        let reader = self.io_uring.as_ref().ok_or_else(|| {
+            Error::Model("pinned expert read ticket requires the io_uring backend".into())
+        })?;
+        match reader.poll_slices_pinned(ticket.reader, max_completions)? {
+            super::io_uring_reader::PinnedExpertReadPoll::Pending => {
+                Ok(PinnedExpertReadPoll::Pending)
+            }
+            super::io_uring_reader::PinnedExpertReadPoll::Ready(result) => {
+                let resource_grant = result.resource_grant.ok_or_else(|| {
+                    Error::Internal(
+                        "pinned expert read completed without its physical resource grant".into(),
+                    )
+                })?;
+                Ok(PinnedExpertReadPoll::Ready(PinnedExpertArtifactPayload {
+                    expert: ticket.expert,
+                    tensors: result.payloads,
+                    resource_grant,
+                }))
+            }
+            super::io_uring_reader::PinnedExpertReadPoll::Failed(error) => {
+                Ok(PinnedExpertReadPoll::Failed(error))
+            }
+            super::io_uring_reader::PinnedExpertReadPoll::Cancelled => {
+                Ok(PinnedExpertReadPoll::Cancelled)
+            }
+        }
+    }
+
+    #[cfg(all(target_os = "linux", feature = "cuda"))]
+    pub(crate) fn detach_load_source_pinned(&self, ticket: PinnedExpertReadTicket) -> Result<()> {
+        let reader = self.io_uring.as_ref().ok_or_else(|| {
+            Error::Model("pinned expert read ticket requires the io_uring backend".into())
+        })?;
+        reader.detach_slices_pinned(ticket.reader)
     }
 
     #[cfg(all(target_os = "linux", feature = "cuda"))]
     pub(crate) fn read_load_source_pinned(
         &self,
+        plan: PinnedExpertLoadPlan,
+        resource_grant: ferrule_common::expert_io::ExpertIoResourceGrant,
+    ) -> Result<PinnedExpertArtifactPayload> {
+        let reader = self.io_uring.as_ref().ok_or_else(|| {
+            Error::Model("pinned expert read plan requires the io_uring backend".into())
+        })?;
+        let expert = plan.expert;
+        let result = reader.read_slices_pinned(plan.reader, resource_grant)?;
+        let resource_grant = result.resource_grant.ok_or_else(|| {
+            Error::Internal(
+                "blocking pinned expert read completed without its physical resource grant".into(),
+            )
+        })?;
+        Ok(PinnedExpertArtifactPayload {
+            expert,
+            tensors: result.payloads,
+            resource_grant,
+        })
+    }
+
+    #[cfg(all(target_os = "linux", feature = "cuda"))]
+    fn bounded_slices_for_load_source(
+        &self,
         expert: ExpertId,
         load_source: &ExpertLoadSource,
-    ) -> Result<Option<PinnedExpertArtifactPayload>> {
-        let Some(reader) = self.io_uring.as_ref() else {
-            return Ok(None);
-        };
+    ) -> Result<Vec<ExpertTensorSlice>> {
         let slices = Self::slices_for_load_source(expert, load_source)?;
-        for slice in &slices {
-            if slice.bytes > self.max_slice_bytes {
-                return Err(Error::Model(format!(
-                    "expert tensor slice exceeds bounded read size: {} > {} bytes",
-                    slice.bytes, self.max_slice_bytes
-                )));
-            }
-        }
-        match reader.read_slices_pinned(&slices) {
-            Ok(tensors) => Ok(Some(PinnedExpertArtifactPayload { expert, tensors })),
-            Err(error) => {
-                reader.record_fallback();
-                tracing::debug!(
-                    error = %error,
-                    slices = slices.len(),
-                    "CUDA-pinned expert io_uring read unavailable; falling back to pageable staging"
-                );
-                Ok(None)
-            }
-        }
+        self.validate_bounded_slices(&slices)?;
+        Ok(slices)
     }
 
     pub fn read_load_source(
@@ -1092,10 +1251,8 @@ impl ExpertStreamingReader {
         })
     }
 
-    /// Read all tensor slices for one expert concurrently using a tokio
-    /// blocking thread pool. Each slice uses positioned read (pread) so
-    /// multiple slices from the same file can be read in parallel without
-    /// seeking.
+    /// Read all tensor slices for one expert concurrently. The configured
+    /// backend is attempted first, with positioned reads as its fallback.
     pub fn read_load_source_concurrent(
         &self,
         expert: ExpertId,
@@ -1103,6 +1260,19 @@ impl ExpertStreamingReader {
     ) -> Result<ExpertArtifactPayload> {
         let slices = Self::slices_for_load_source(expert, load_source)?;
         let tensors = self.read_slices_with_backend(&slices, true)?;
+        Ok(ExpertArtifactPayload { expert, tensors })
+    }
+
+    /// Read one expert using positioned reads only, without consulting the
+    /// configured backend.
+    #[allow(dead_code)]
+    pub(crate) fn read_load_source_positioned(
+        &self,
+        expert: ExpertId,
+        load_source: &ExpertLoadSource,
+    ) -> Result<ExpertArtifactPayload> {
+        let slices = Self::slices_for_load_source(expert, load_source)?;
+        let tensors = self.read_slices_positioned(&slices, true)?;
         Ok(ExpertArtifactPayload { expert, tensors })
     }
 
@@ -1135,11 +1305,7 @@ impl ExpertStreamingReader {
         }
     }
 
-    fn read_slices_with_backend(
-        &self,
-        slices: &[ExpertTensorSlice],
-        parallel_fallback: bool,
-    ) -> Result<Vec<ExpertTensorPayload>> {
+    fn validate_bounded_slices(&self, slices: &[ExpertTensorSlice]) -> Result<()> {
         for slice in slices {
             if slice.bytes > self.max_slice_bytes {
                 return Err(Error::Model(format!(
@@ -1148,23 +1314,23 @@ impl ExpertStreamingReader {
                 )));
             }
         }
+        Ok(())
+    }
 
-        #[cfg(target_os = "linux")]
-        if let Some(reader) = self.io_uring.as_ref() {
-            match reader.read_slices(slices) {
-                Ok(payloads) => return Ok(payloads),
-                Err(error) => {
-                    reader.record_fallback();
-                    tracing::debug!(
-                        error = %error,
-                        slices = slices.len(),
-                        "expert io_uring read failed; falling back to positioned reads"
-                    );
-                }
-            }
-        }
+    fn read_slices_positioned(
+        &self,
+        slices: &[ExpertTensorSlice],
+        parallel: bool,
+    ) -> Result<Vec<ExpertTensorPayload>> {
+        self.validate_bounded_slices(slices)?;
+        Self::read_slices_positioned_unchecked(slices, parallel)
+    }
 
-        if !parallel_fallback || slices.len() <= 1 {
+    fn read_slices_positioned_unchecked(
+        slices: &[ExpertTensorSlice],
+        parallel: bool,
+    ) -> Result<Vec<ExpertTensorPayload>> {
+        if !parallel || slices.len() <= 1 {
             return slices
                 .iter()
                 .map(Self::read_local_slice_positioned)
@@ -1177,6 +1343,40 @@ impl ExpertStreamingReader {
             .collect::<Vec<_>>();
         results.into_iter().collect()
     }
+
+    fn read_slices_with_backend(
+        &self,
+        slices: &[ExpertTensorSlice],
+        parallel_fallback: bool,
+    ) -> Result<Vec<ExpertTensorPayload>> {
+        self.validate_bounded_slices(slices)?;
+
+        #[cfg(target_os = "linux")]
+        if let Some(reader) = self.io_uring.as_ref() {
+            match reader.read_slices(slices) {
+                Ok(payloads) => return Ok(payloads),
+                Err(error) => {
+                    tracing::debug!(
+                        error = %error,
+                        slices = slices.len(),
+                        "expert io_uring read failed; falling back to positioned reads"
+                    );
+                }
+            }
+        }
+
+        Self::read_slices_positioned_unchecked(slices, parallel_fallback)
+    }
+}
+
+#[cfg(any(all(target_os = "linux", feature = "cuda"), test))]
+fn validate_cuda_resident_expert_io_backend(backend: &str) -> Result<()> {
+    if backend == "io_uring" {
+        return Ok(());
+    }
+    Err(Error::Model(format!(
+        "unsupported FERRULE_EXPERT_IO_BACKEND '{backend}' for CUDA resident expert materialization; expected io_uring"
+    )))
 }
 
 fn default_expert_io_backend() -> &'static str {
@@ -1628,6 +1828,7 @@ impl AsyncHostStagedExpertLoader {
         self.in_flight.insert(expert);
         self.submitted = self.submitted.saturating_add(1);
         let tx = self.tx.clone();
+        let completion_hub = reader.completion_hub();
         let reader = reader.clone();
         rayon::spawn(move || {
             let result = reader
@@ -1641,6 +1842,7 @@ impl AsyncHostStagedExpertLoader {
                 },
             };
             let _ = tx.send(message);
+            completion_hub.notify();
         });
         true
     }
@@ -2252,6 +2454,19 @@ mod tests {
     }
 
     #[test]
+    fn cuda_resident_expert_io_accepts_only_exact_io_uring_backend() {
+        validate_cuda_resident_expert_io_backend("io_uring").unwrap();
+        for backend in ["pread", "positioned", "uring"] {
+            let error = validate_cuda_resident_expert_io_backend(backend)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(&format!("'{backend}'")));
+            assert!(error.ends_with("expected io_uring"));
+            assert!(!error.contains("pread or io_uring"));
+        }
+    }
+
+    #[test]
     fn reader_rejects_slices_larger_than_bound() {
         let dir = unique_temp_dir("ferrule-expert-streaming-bound-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -2270,6 +2485,27 @@ mod tests {
             .read_local_slice(&slice)
             .unwrap_err();
         assert!(err.to_string().contains("bounded read size"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn positioned_reader_reads_the_requested_bytes() {
+        let dir = unique_temp_dir("ferrule-expert-positioned-reader-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let shard = dir.join("slice.bin");
+        std::fs::write(&shard, (0u8..16).collect::<Vec<_>>()).unwrap();
+        let expert = ExpertId::new(0, 0);
+        let source = ExpertLoadSource::LocalShard {
+            path: shard,
+            offset: 4,
+            bytes: 6,
+        };
+        let reader = ExpertStreamingReader::new(16);
+        let payload = reader.read_load_source_positioned(expert, &source).unwrap();
+
+        assert_eq!(payload.expert, expert);
+        assert_eq!(payload.tensors.len(), 1);
+        assert_eq!(payload.tensors[0].bytes, vec![4, 5, 6, 7, 8, 9]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

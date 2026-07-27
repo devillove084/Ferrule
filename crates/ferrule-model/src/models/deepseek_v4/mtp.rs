@@ -163,13 +163,6 @@ impl DeepSeekV4DsparkProtocol {
     }
 }
 
-/// Output of a single DSpark proposal block.
-#[derive(Debug, Clone, PartialEq)]
-pub struct DeepSeekV4MtpForwardOutput {
-    pub token_ids: Vec<u32>,
-    pub confidence_scores: Vec<f32>,
-}
-
 // ── MTP tensor name parsing ──────────────────────────────────────────────
 //
 // The family parse functions in `families/deepseek_v4.rs` only recognize the
@@ -714,23 +707,6 @@ impl DeepSeekV4MtpModel {
         }
         Ok(output)
     }
-
-    /// Legacy placeholder retained until the CUDA DSpark block entry point is
-    /// published. A single hidden row cannot represent the exact DSpark input:
-    /// execution requires committed target taps, per-stage context KV, and the
-    /// complete anchor/noise proposal block.
-    pub fn forward(
-        &self,
-        hidden_state: &[f32],
-        token_id: u32,
-        position: usize,
-    ) -> Result<DeepSeekV4MtpForwardOutput> {
-        let _ = (hidden_state, token_id, position);
-        Err(Error::Model(
-            "generic single-row MTP forward is invalid for DSpark semi-autoregressive block execution"
-                .into(),
-        ))
-    }
 }
 
 #[cfg(test)]
@@ -861,6 +837,5 @@ mod tests {
         assert_eq!(protocol.target_rows_for_drafts(0).unwrap(), 1);
         assert_eq!(protocol.target_rows_for_drafts(5).unwrap(), 6);
         assert!(protocol.target_rows_for_drafts(6).is_err());
-        assert!(model.forward(&[1.0], 0, 0).is_err());
     }
 }

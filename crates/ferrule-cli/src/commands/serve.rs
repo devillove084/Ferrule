@@ -8,10 +8,11 @@ use ferrule_model::{
     ChatTemplate, ExpertMemoryPolicy, ModelDescriptor, ModelExecutionBackend, ModelFamily,
     models::deepseek_v4::{DeepSeekV4PrepareOptions, DeepSeekV4Runner},
 };
-use ferrule_runtime::{ExpertIoBudget, ResidentSchedulerConfig, ResidentTopKDriverConfig};
+use ferrule_runtime::{
+    ExpertIoBudget, ResidentInferenceEngine, ResidentSchedulerConfig, ResidentTopKDriverConfig,
+};
 use ferrule_server::{
-    DeepSeekV4ResidentEngine, ModelRegistration, ServerState, WorkerConfig, serve_with_shutdown,
-    spawn_model_worker_with,
+    ModelRegistration, ServerState, WorkerConfig, serve_with_shutdown, spawn_model_worker_with,
 };
 
 use crate::args::ServeArgs;
@@ -32,8 +33,7 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("unknown chat template '{name}'"))?,
         None => ChatTemplate::DeepSeekV4,
     };
-    let backend = ModelExecutionBackend::parse(&args.backend)?;
-    if matches!(backend, ModelExecutionBackend::Cuda) && !cfg!(feature = "cuda") {
+    if !cfg!(feature = "cuda") {
         anyhow::bail!("CUDA serving requires building ferrule-cli with --features cuda");
     }
 
@@ -63,6 +63,10 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
             args.expert_io_batch_mb,
             "expert-io-batch-mb",
         )?,
+        // Serving cannot wait on a predictive budget: no physical completion
+        // exists until work is submitted. Force the oldest singleton immediately;
+        // hard admission belongs to the physical resource broker.
+        max_expert_io_deferrals: 0,
         ..ExpertIoBudget::unbounded()
     };
     let scheduler_config = ResidentSchedulerConfig {
@@ -72,18 +76,12 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
         decode_cohort_target: args.decode_cohort_target,
         decode_cohort_max_deferrals: args.decode_cohort_max_deferrals,
         max_batch_tokens: args.max_batch_tokens,
-        // DSpark decode packs one variable-width transaction across ready sequences.
-        // Keep prefill separate so provisional cohort ownership remains unambiguous.
-        allow_mixed_batches: false,
+        ..ResidentSchedulerConfig::default()
     };
     let driver_config = ResidentTopKDriverConfig {
         ctx_size: args.ctx_size,
         stop_at_eos: true,
-        append_eos_to_session: false,
-        dspark_confidence_threshold: 0.2,
-        // The serving worker executes exactly one step at a time; this remains a
-        // safety bound only for callers that explicitly use run_until_blocked.
-        max_steps_per_run: args.ctx_size.saturating_mul(2).max(1024),
+        proposal_confidence_threshold: 0.2,
     };
     let worker_config = WorkerConfig {
         command_queue_capacity: args.request_queue_capacity,
@@ -93,9 +91,8 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
     };
 
     eprintln!(
-        "loading {} on {} in the dedicated model worker...",
+        "loading {} on cuda in the dedicated model worker...",
         args.served_model_name,
-        backend.as_str()
     );
     let worker = spawn_model_worker_with(
         move || {
@@ -103,7 +100,7 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
                 &model_path,
                 max_tensor_bytes,
                 prepare_options,
-                backend,
+                ModelExecutionBackend::Cuda,
             )
             .map_err(|error| error.to_string())?;
             let schema = runner.kv_layout_schema().clone();
@@ -134,7 +131,7 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
                 Some(page_limit),
             )
             .map_err(|error| error.to_string())?;
-            Ok(DeepSeekV4ResidentEngine::new(driver, expert_io_budget))
+            Ok(ResidentInferenceEngine::new(driver, expert_io_budget))
         },
         worker_config,
     )

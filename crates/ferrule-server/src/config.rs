@@ -32,8 +32,6 @@ pub struct WorkerConfig {
     pub event_queue_capacity: usize,
     /// Maximum commands handled between model steps so request floods cannot starve decode.
     pub max_commands_per_tick: usize,
-    /// Backoff when the runtime reports work but cannot currently schedule it.
-    pub blocked_backoff: Duration,
     /// Maximum time an HTTP handler waits for tokenization and runtime admission.
     pub admission_timeout: Duration,
 }
@@ -44,7 +42,6 @@ impl Default for WorkerConfig {
             command_queue_capacity: 256,
             event_queue_capacity: 32,
             max_commands_per_tick: 64,
-            blocked_backoff: Duration::from_millis(1),
             admission_timeout: Duration::from_secs(30),
         }
     }

@@ -47,8 +47,7 @@ pub use layer::{
     DeepSeekV4Layer, DeepSeekV4LayerExpertRuntime, DeepSeekV4LayerState, DeepSeekV4LayerStepOutput,
 };
 pub use mtp::{
-    DeepSeekV4DsparkProtocol, DeepSeekV4MtpForwardOutput, DeepSeekV4MtpLayer, DeepSeekV4MtpModel,
-    DeepSeekV4MtpPredictionHeads,
+    DeepSeekV4DsparkProtocol, DeepSeekV4MtpLayer, DeepSeekV4MtpModel, DeepSeekV4MtpPredictionHeads,
 };
 pub use operators::{
     DeepSeekV4AttentionProfileStats, DeepSeekV4LayerProfileStats, DeepSeekV4OperatorContext,
@@ -59,8 +58,7 @@ pub use prepared::{
     DeepSeekV4PreparedResources, prepare,
 };
 pub use runner::{
-    DeepSeekV4DsparkAttentionDebugSnapshot, DeepSeekV4DsparkBackboneDebugSnapshot,
-    DeepSeekV4DsparkStageDebugSnapshot, DeepSeekV4LayerRuntimeStats, DeepSeekV4OutputProfileStats,
-    DeepSeekV4PrefillRuntimeStats, DeepSeekV4PrepareOptions, DeepSeekV4Runner,
+    DeepSeekV4LayerRuntimeStats, DeepSeekV4ObservabilitySnapshot, DeepSeekV4OutputProfileStats,
+    DeepSeekV4PrepareOptions, DeepSeekV4Runner,
 };
 pub use sequence::DeepSeekV4SequenceExecutionState;

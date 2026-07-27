@@ -43,7 +43,7 @@ remains isolated, ragged proposal rows are packed into one target execution, and
 sequence independently retains its exact accepted prefix. Runtime and backend KV state
 are committed atomically for the cohort without replaying accepted target rows.
 
-The completed execution foundation includes:
+The post-I/O/scheduler-refactor execution foundation includes:
 
 - one Rust-owned executable plan with prepare-time kernel-provider selection;
 - a GB10/SM121a CUTLASS/CuTe provider exposing semantic target and DSpark bundles;
@@ -52,27 +52,70 @@ The completed execution foundation includes:
 - continuous-batching cohort formation with bounded deferral and forced progress;
 - production `O_DIRECT + io_uring` expert reads into registered CUDA-pinned slabs, with no expert-streaming mmap backend;
 - device routing and stable expert slot/generation/lease residency;
-- owned arena checkout/checkin as the lifetime foundation for resumable execution;
-- OpenAI-compatible HTTP/SSE serving validated through the official vLLM benchmark path.
+- resumable pre-MoE continuation retaining owned arena and transaction state across a yield;
+- event-driven completion wake, hard physical-resource admission, and deferred exact KV/sequence cleanup;
+- OpenAI-compatible HTTP/SSE serving exercised through the official vLLM benchmark path.
 
-Ferrule is **not yet a single-node SOTA claim**. Packed cohorts improve production
-concurrency, but exact expert misses still synchronously block the model worker while
-reads and uploads complete. The next milestone is resumable layer execution plus a
-global I/O/CUDA completion reactor, allowing the scheduler to run other ready cohorts
-while expert data moves. Official proposal parity, the all-resident kernel floor, stable
-graph capture, and the frozen release suite remain required in parallel.
+Ferrule is **not a single-node SOTA claim**, and **16 output tok/s is the release target,
+not a current result**. Proposal-enabled continuation currently serializes across cohorts
+to protect shared topology, so true cross-cohort overlap is not implemented yet. The
+post-refactor serving and complete-cycle numbers below are diagnostic, small-sample
+measurements rather than release evidence.
 
-See the [execution roadmap](docs/ROADMAP.md) for the release contract, measured artifacts,
-and phase ordering.
+The [execution roadmap](docs/ROADMAP.md) is authoritative for the release gate, evidence
+requirements, and remaining phase ordering.
 
 ---
 
 ## DGX Spark platform evidence and SOTA direction
 
-The following measurements were collected on **2026-07-14** on one DGX Spark with
-an integrated NVIDIA GB10 GPU. They establish the platform-specific I/O and memory
-constraints for Ferrule's single-node DeepSeek-V4 work; they are not yet an
-end-to-end model throughput claim.
+The platform measurements below were collected on **2026-07-14** on one DGX Spark
+with an integrated NVIDIA GB10 GPU. They establish the platform-specific I/O and
+memory constraints for Ferrule's single-node DeepSeek-V4 work. The newer serving
+and complete-cycle measurements in the next subsection are diagnostics, not a
+single-node SOTA or release claim.
+
+### Post-refactor serving and cycle diagnostics
+
+After the I/O/scheduler fixes, the real OpenAI/vLLM `in8/out8` sweep completed all
+requests at each tested concurrency:
+
+| Concurrency | Successful / failed requests | Output throughput | Observed delta vs. the prior nominal `in8/out8` workload |
+|---:|---:|---:|---:|
+| 1 | 8 / 0 | 2.683 tok/s | +28.0% |
+| 2 | 8 / 0 | 3.265 tok/s | +43.9% |
+| 4 | 8 / 0 | 3.587 tok/s | +50.2% |
+
+The runs used different configurations and hotsets, so the deltas are not a controlled
+refactor A/B and cannot be attributed entirely to the scheduler changes or concurrency.
+A separate direct diagnostic recorded **3.7586 tok/s** from summed internal cohort-cycle
+telemetry. It is not top-level driver throughput, the frozen release workload, or a
+replacement for the serving result: the best
+point in the serving sweep, 3.587 tok/s, is about **22.4% of the 16 tok/s release
+target**, leaving a **4.46×** gap.
+
+The current proposal-enabled continuation protects shared topology by running cohorts
+serially; it does not yet provide true cross-cohort overlap. Measured physical expert
+traffic over the entire short prompt-plus-decode run was **1.733 GiB/output token**. At
+the observed 10.53 GiB/s storage ceiling, sustaining 16 tok/s with that workload permits
+**0.658 GiB/output token**, so its total physical expert traffic must fall by about
+**62%**. This is not a pure decode-cycle or frozen-workload cache bound.
+
+These results are diagnostic, small-sample measurements. Raw artifacts live under
+`target/bench/`; they are not release or SOTA evidence. Use the existing
+[serving benchmark workflow](docs/serving.md#official-benchmark-targets) to reproduce
+the sweep:
+
+```bash
+# Terminal 1
+just dsv4-serve
+
+# Terminal 2
+just dsv4-vllm-bench sweep
+```
+
+The [roadmap](docs/ROADMAP.md) remains authoritative for the release gate and required
+evidence; the commands above collect benchmark artifacts rather than declaring a release.
 
 ### Test platform
 
@@ -182,8 +225,8 @@ $$R_{\mathrm{um}} \le \frac{254.25\ \mathrm{GiB/s}}{B_{\mathrm{um}}} \in [11.6,1
 
 The exact $B_{\mathrm{um}}$ must come from the S0 target-pass roofline in
 [`docs/ROADMAP.md`](docs/ROADMAP.md); 20–22 GiB is an intentionally optimistic
-capacity example, not a measured Ferrule token rate. It illustrates why 15–17 full
-43-layer passes/s is not the correct single-Spark target.
+capacity example, not a measured Ferrule token rate. It illustrates why 16 full
+43-layer passes/s is not the correct interpretation of the single-Spark release target.
 
 For DSpark, distinguish checkpoint draft slots $\gamma$, target rows $Q$, accepted
 draft tokens, correction/bonus tokens, and mean externally committed output tokens $C$.
@@ -208,9 +251,9 @@ $T_{\mathrm{cycle}}(Q)=250\ \mathrm{ms}$ cycle imply:
 
 $$R_{\mathrm{output}} = \frac{4}{0.25\ \mathrm{s}} = 16\ \mathrm{tokens/s}.$$
 
-This is the architectural meaning of Ferrule's 15–17 tok/s goal; it is a target
-operating point, not a current result. It is incorrect in general to multiply the
-single-row target-pass roof by accepted draft length, because $F_{\mathrm{gpu}}(Q)$,
+This illustrates the architectural meaning of Ferrule's 16 tok/s release target; it
+is not a current result. It is incorrect in general to multiply the single-row
+target-pass roof by accepted draft length, because $F_{\mathrm{gpu}}(Q)$,
 $B_{\mathrm{um}}(Q)$, and $B_{\mathrm{nvme}}(Q)$ all depend on target rows and
 route overlap.
 
@@ -254,9 +297,9 @@ $W(\mathrm{NVMe,observed})=10.53\ \mathrm{GiB/s}$:
 
 $$B^{\star}(\mathrm{NVMe/cycle}) \le \frac{4 \cdot 10.53}{16} \approx 2.63\ \mathrm{GiB/cycle}.$$
 
-Thus 15–17 tok/s is physically plausible only in a cache-heavy speculative regime.
-Even the perfect-route-reuse all-cold minimum of $3.21\ \mathrm{GiB/cycle}$ exceeds
-the $2.63\ \mathrm{GiB/cycle}$ storage budget for 16 tok/s.
+Thus the 16 tok/s release target is physically plausible only in a cache-heavy
+speculative regime. Even the perfect-route-reuse all-cold minimum of
+$3.21\ \mathrm{GiB/cycle}$ exceeds the $2.63\ \mathrm{GiB/cycle}$ storage budget.
 
 #### One host with multiple GPUs
 
@@ -481,25 +524,20 @@ output-head merge, and GB10 semantic superkernels are implemented. Device-side t
 capture and fused projection/normalization execute against the real checkpoint. Independent
 committed DSpark context states feed hybrid attention over paged history plus the ephemeral
 proposal block, while proposal heads, sequential Markov selection, and confidence execute
-inside the prepared CUDA/CUTLASS image. The production server now carries this proposal
-through exact target verification, correction/bonus handling, rollback/replay, and external
-output reconciliation.
+inside the prepared CUDA/CUTLASS image. The production server carries this proposal through
+exact target verification, correction/bonus handling, rollback/replay, and external output
+reconciliation.
 
-The next optimization order is:
+The I/O/scheduler refactor adds resumable pre-MoE continuation, event-driven completion
+wake, hard physical-resource admission, and deferred exact KV/sequence cleanup. The
+remaining overlap, physical-traffic, correctness, resident-kernel, and frozen-suite gates
+are tracked in the [roadmap](docs/ROADMAP.md) rather than duplicated here.
 
-1. export official Python fixtures and localize proposal numerical differences;
-2. prove proposal/logit/confidence and state-transition parity;
-3. reconcile scheduler predictions and admission with actual physical expert operations;
-4. execute all-hit routed layers without host materialization and remove hot-path allocation;
-5. capture stable graphs only after correctness and I/O accounting are exact;
-6. rerun the production serving and release suite.
-
-Ferrule cannot yet claim single-node SOTA: that requires reproducible end-to-end warm
-ITL, TTFT, throughput, memory, quality, and DSpark acceptance results against competing
-runtimes under the same model, prompt distribution, tokenizer, sampling, and
-concurrency. Current end-to-end diagnostic numbers are intentionally not presented in
-this README; the roadmap defines the benchmark gates and raw artifacts remain under
-`target/bench/`.
+Ferrule cannot claim single-node SOTA: that requires reproducible end-to-end warm ITL,
+TTFT, throughput, memory, quality, and DSpark acceptance results against competing
+runtimes under the same model, prompt distribution, tokenizer, sampling, and concurrency.
+The current numbers above are diagnostics; the raw artifacts under `target/bench/` are
+not release or SOTA evidence.
 
 ---
 
@@ -509,9 +547,9 @@ this README; the roadmap defines the benchmark gates and raw artifacts remain un
 |---|---|
 | **Executable model plan** | Prepare-time binding selects immutable buffers, launch descriptors, and the kernel provider; the token hot path performs no architecture discovery. |
 | **CUTLASS provider boundary** | GB10 semantic superkernels use pinned CUTLASS/CuTe primitives behind a versioned POD ABI; Rust retains stream, memory, plan, KV, and residency ownership. |
-| **Native packed execution** | `ExecutionBatch` represents continuous-batch `B × Q=1` decode and one-sequence `Q=V` DSpark verification without a CPU execution plan. |
-| **Expert-I/O scheduling** | Admission accounts for incremental expert bytes, inflight reads, pinned slabs, uploads, deadlines, and current residency instead of batching by row count alone. |
-| **Transactional KV and DSpark** | Physical multi-plane KV supports branch, rollback, and accepted-prefix replay for exact speculative verification. |
+| **Native packed execution** | `ExecutionBatch` represents continuous-batch decode and ragged multi-sequence DSpark verification without a CPU execution plan. |
+| **Expert-I/O scheduling** | Resumable pre-MoE continuation yields across exact misses; event-driven completion wake and hard admission account for physical reads, slabs, uploads, frames, leases, and ready work. |
+| **Transactional KV and DSpark** | Physical multi-plane KV supports branch, rollback, accepted-prefix replay, and deferred exact KV/sequence cleanup for resumable verification. |
 | **Single-owner safetensors ingest** | DSV4 tensors and expert extents are bound with bounded reads rather than loading the checkpoint into RAM. |
 | **Narrow validation anchors** | CPU/reference code is retained only where it acts as a numerical oracle for CUDA correctness. |
 
@@ -612,21 +650,21 @@ just chat models/OLMoE-Instruct q4 -n 256
 | Area | Status |
 |---|---|
 | Executable model fixture | OLMoE sparse MoE CUDA path via `GpuOlmoeRunner` |
-| Real large-model milestone | The exact CUDA target, checkpoint-native DSpark proposal, packed verification, correction/bonus transaction, and production OpenAI serving path are connected. Official proposal parity, acceptance, full-cycle residency/I/O coordination, and release throughput remain open. |
+| Real large-model milestone | The exact CUDA target, checkpoint-native DSpark proposal, packed verification, correction/bonus transaction, resumable pre-MoE continuation, and production OpenAI serving path are connected. Official proposal parity, true cross-cohort overlap, physical-traffic reduction, and release throughput remain open. |
 | Execution ABI | E1–E4 complete: public `ExecutionBatch`, prepared-executor traits, runtime-private `ScheduledBatch`, strict validation, and native packed multi-session execution |
 | DSV4 execution boundary | The model owns HC/MLA/compressor/router/MoE math; runtime remains model-neutral and owns scheduling plus logical page lifecycle through generic traits |
-| Expert streaming | Immutable source catalogs plus production `O_DIRECT + io_uring` fixed-file reads into registered CUDA-pinned slabs; CUDA promotes selected/on-time experts into ordinary device frames governed by stable slots, generations, leases, bounded admission, and selected takeover. |
-| Expert residency | Runtime-owned stable slots, generations, leases, host/pinned budgets, upload admission, and dense residency snapshots feed the DSV4 expert-I/O advisor |
+| Expert streaming | Immutable source catalogs plus production `O_DIRECT + io_uring` fixed-file reads into registered CUDA-pinned slabs; resumable continuations wake from event-driven completion and CUDA promotes selected/on-time experts into stable device frames. |
+| Expert residency | Runtime-owned stable slots, generations, leases, host/pinned budgets, uploads, frames, and GPU-ready work participate in hard physical-resource admission. |
 | Attention | OLMoE GQA executable; DSV4 MLA sparse attention correctness-first CUDA path |
 | Hyper-connections | DSV4 HC source binding + reference `hc_pre`/`hc_post`/`hc_head` |
-| KV cache | `KvPageManager` plus bounded CUDA multi-plane pools, paged attention/indexer kernels, branch, rollback, COW, preempt/restore, and DSpark accepted-prefix replay |
+| KV cache | `KvPageManager` plus bounded CUDA multi-plane pools, paged attention/indexer kernels, branch, rollback, COW, preempt/restore, DSpark accepted-prefix replay, and deferred exact cleanup |
 | Quantization | Q4_0/Q8_0, FP4 E2M1 + E8M0 scales, FP8 E4M3FN, mixed precision policy |
 | WeightPack | mmap'd reader, streaming writer, zero-copy slices, WeightPack-only load path |
 | Kernel plan | One semantic `LayerKernelPlan` per layer binds the GB10 provider; M scheduling remains provider-private and missing capabilities fail explicitly |
 | Generation | Device/global top-k candidate selection, deterministic greedy commit, stop strings, EOS handling, and incremental token text; unsupported sampling is rejected at the API boundary |
 | Chat templates | OLMoE, ChatML, Llama3, Qwen, DeepSeek-V4, Plain |
-| Serving | `ferrule-server` + `ferrule serve`: Axum/Hyper/Tokio, dedicated model-owner thread, bounded queues, disconnect cancellation, `/health`, `/v1/models`, `/v1/chat/completions`, and `/v1/completions`; reusable `vllm bench serve` concurrency workflows; greedy only for now. |
-| Speculation | The checkpoint-native DSpark block contract is frozen. Device-side target context, non-causal proposal execution, proposal heads, exact packed verification, draft-prefix acceptance, correction/bonus handling, rollback/replay, and external-output reconciliation are connected. Official fixture parity and measured acceptance remain open. |
+| Serving | `ferrule-server` + `ferrule serve`: Axum/Hyper/Tokio, dedicated model-owner thread, bounded queues, disconnect cancellation, `/health`, `/v1/models`, `/v1/chat/completions`, and `/v1/completions`; the post-refactor c1/c2/c4 vLLM diagnostic completed 8/0 requests at each point; greedy only for now. |
+| Speculation | The checkpoint-native DSpark block contract is frozen. Device-side proposal, exact packed verification, draft-prefix acceptance, correction/bonus handling, rollback/replay, and external-output reconciliation are connected. Proposal-enabled continuation currently serializes across cohorts to protect shared topology; official fixture parity, a release-qualified acceptance corpus, and true cross-cohort overlap remain open. |
 | Training/RL | design target, not implemented |
 
 ---
@@ -638,10 +676,9 @@ just chat models/OLMoE-Instruct q4 -n 256
 ```bash
 just cuda-info          # Show GPU/arch detection
 just oxide-doctor       # cuda-oxide environment check
-just build              # Auto-detect: CUDA if available, CPU otherwise
-just build-cuda         # Explicit CUDA build
-just build-cpu          # CPU-only build
-just check              # Quick check
+just build              # GB10 CUDA + CUTLASS release build
+just build-cuda         # Explicit GB10 CUDA + CUTLASS build
+just check              # Quick platform-independent CLI check
 ```
 
 ### DeepSeek V4 / DSpark
@@ -651,14 +688,12 @@ just dsv4-chat tokens=128                        # Interactive chat
 just dsv4-serve                                  # OpenAI-compatible HTTP/SSE server
 just dsv4-vllm-bench smoke                       # vLLM API compatibility smoke
 just dsv4-vllm-bench baseline                    # Saved official single-concurrency result
-just dsv4-vllm-bench sweep                       # Saved concurrency 1/2/4 results
-just dsv4-runtime-driver-bench                   # bench-interactive via ResidentTopKDriver
+just dsv4-vllm-bench sweep                       # Save c1/c2/c4 diagnostic artifacts
+just dsv4-runtime-driver-bench                   # Production-path end-to-end benchmark
 # positional override: prompt1 prompt2 tokens warmup chunk layers
 just dsv4-runtime-driver-bench "Hello" "Explain Ferrule in one sentence." 1 0 2 43
-just test-dsv4-runtime-driver-local              # opt-in ignored local runtime-driver test
+just dsv4-runtime-driver-chunk-sweep             # Persist full reports plus compact CSV
 just dsv4-cuda-generate Hello 2 4096 --chat       # One-shot generation
-just dsv4-cuda-first-token Hello 1               # First-token diagnostic
-just dsv4-cuda-probe "one two three" 3 1 0       # Layer-limited probe
 just dsv4-parity-json "Who are you?" output.json # Tokenizer parity JSON
 ```
 
@@ -696,17 +731,14 @@ on pull requests, and uploaded as browsable HTML plus an LCOV artifact.
 
 ## Active development focus
 
-1. **Run official serving smoke tests** — validate Ferrule against `vllm bench serve`
-   and SGLang `benchmark.serving` using identical prompts, tokenizer, greedy settings,
-   and concurrency.
-2. **Build stable E7 graph buckets** — lower the unified allocation-free eager stages
-   into reusable graphs without restoring the deleted token-specific one-shot path.
-3. **Complete E8 device sampling and fusion** — move non-greedy sampling off the host
-   path and optimize only profiler-proven stages.
-4. **Connect automatic radix-prefix lookup and production metrics** — E5 already owns
-   exact fork/COW primitives; independent API requests still need lookup/admission.
-5. **Publish controlled comparisons** — report TTFT, TPOT, ITL, throughput, memory,
-   page utilization, and quality under fixed vLLM/SGLang-compatible workloads.
+1. **Enable true cross-cohort overlap** without violating the shared proposal topology.
+2. **Cut physical expert traffic** from the measured 1.733 GiB/output token toward the
+   0.658 GiB/output-token budget required by the 16 tok/s release target.
+3. **Lower the all-resident compute floor** and capture stable graphs only after exactness
+   and physical-resource accounting remain intact.
+4. **Close proposal parity and acceptance evidence** against the official fixtures.
+5. **Run the frozen release and competitor suites** only at roadmap-qualified operating
+   points, then report controlled TTFT, TPOT, ITL, throughput, memory, and quality results.
 
 ---
 
@@ -717,7 +749,7 @@ on pull requests, and uploaded as browsable HTML plus an LCOV artifact.
 | [Scheduler Architecture](docs/scheduler-architecture.md) | Segment-scoped exact routing, global expert loads, UMA credits, draining, and deterministic simulation |
 | [CUTLASS](docs/CUTLASS.md) | GB10 semantic provider ABI, pinned dependency setup, validation, and benchmark contract |
 | [Serving](docs/serving.md) | Axum/Hyper/Tokio model-worker ownership, OpenAI/SSE contract, cancellation, admission, and benchmark workflows |
-| [Roadmap](docs/ROADMAP.md) | Current F1/F2/F3 status, remaining MTP/I/O/graph critical path, and release contract |
+| [Roadmap](docs/ROADMAP.md) | Authoritative release contract, gates, evidence requirements, and phase ordering |
 | [Expert Memory & Telemetry](docs/expert-memory-architecture.md) | Host/pinned expert budgets, stable device residency, GB10 constraints, and benchmark-safe telemetry |
 
 ---

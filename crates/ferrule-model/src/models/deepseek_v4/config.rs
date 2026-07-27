@@ -5,8 +5,7 @@ use std::path::Path;
 use crate::TensorRole;
 use crate::artifact::binding::MlaAttentionArtifactPayload;
 use crate::artifact::linear::{
-    ArtifactActivationQuantization, ArtifactLinearExecutionPolicy, ArtifactLinearFormat,
-    ArtifactLinearPayload,
+    ArtifactLinearExecutionPolicy, ArtifactLinearFormat, ArtifactLinearPayload,
 };
 use crate::attention_backend::SparseAttentionSpec;
 use crate::families::deepseek_v4;
@@ -17,12 +16,6 @@ use ferrule_common::{Error, Result};
 use super::helpers::{f32_key, usize_key};
 
 const DSV4_LINEAR_ACTIVATION_QUANT_BLOCK_SIZE: usize = 128;
-
-pub(crate) fn deepseek_v4_linear_activation_quantization() -> ArtifactActivationQuantization {
-    ArtifactActivationQuantization::Fp8E4M3WithE8M0Scale {
-        block_size: DSV4_LINEAR_ACTIVATION_QUANT_BLOCK_SIZE,
-    }
-}
 
 fn deepseek_v4_quantized_linear_execution_policy() -> ArtifactLinearExecutionPolicy {
     ArtifactLinearExecutionPolicy::fp8_e4m3_e8m0_activation(DSV4_LINEAR_ACTIVATION_QUANT_BLOCK_SIZE)

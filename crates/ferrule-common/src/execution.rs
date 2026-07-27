@@ -6,7 +6,7 @@
 //! other.
 
 use std::collections::HashSet;
-use std::num::{NonZeroU32, TryFromIntError};
+use std::num::{NonZeroU32, NonZeroU64, TryFromIntError};
 use std::ops::Range;
 
 use crate::{Error, Result};
@@ -63,6 +63,25 @@ macro_rules! define_u32_id {
             }
         }
     };
+}
+
+/// Stable identity for one end-to-end execution transaction.
+///
+/// The transaction starts before logical/backend KV reservation and outlives any
+/// transient model continuation. It is therefore distinct from continuation IDs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ExecutionTransactionId(NonZeroU64);
+
+impl ExecutionTransactionId {
+    pub fn new(value: u64) -> Result<Self> {
+        NonZeroU64::new(value)
+            .map(Self)
+            .ok_or_else(|| Error::Execution("execution transaction ID must be non-zero".into()))
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
 }
 
 define_u32_id! {
@@ -936,69 +955,6 @@ impl ExecutionOutput {
     }
 }
 
-/// Initial cursor and capacity requested for a new backend sequence state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SequenceStateInit {
-    pub initial_position: u32,
-    pub max_sequence_len: u32,
-}
-
-impl SequenceStateInit {
-    pub const fn new(initial_position: u32, max_sequence_len: u32) -> Self {
-        Self {
-            initial_position,
-            max_sequence_len,
-        }
-    }
-}
-
-/// Immutable model-global prepared execution description.
-pub trait PreparedModelPlan {
-    fn capabilities(&self) -> &ExecutionCapabilities;
-
-    fn validate_batch(&self, state_count: usize, batch: &ExecutionBatch) -> Result<()> {
-        batch.validate(state_count, self.capabilities())
-    }
-
-    fn validate_output(&self, batch: &ExecutionBatch, output: &ExecutionOutput) -> Result<()> {
-        output.validate_with_capabilities(batch, self.capabilities())
-    }
-}
-
-/// Backend lifecycle and execution boundary for a prepared model plan.
-pub trait ModelBatchExecutor {
-    type Plan: PreparedModelPlan;
-    type SequenceState;
-
-    fn create_sequence_state(
-        &mut self,
-        plan: &Self::Plan,
-        init: SequenceStateInit,
-    ) -> Result<Self::SequenceState>;
-
-    fn reset_sequence_state(
-        &mut self,
-        plan: &Self::Plan,
-        state: &mut Self::SequenceState,
-    ) -> Result<()>;
-
-    fn release_sequence_state(
-        &mut self,
-        _plan: &Self::Plan,
-        state: Self::SequenceState,
-    ) -> Result<()> {
-        drop(state);
-        Ok(())
-    }
-
-    fn execute(
-        &mut self,
-        plan: &Self::Plan,
-        states: &mut [Self::SequenceState],
-        batch: &ExecutionBatch,
-    ) -> Result<ExecutionOutput>;
-}
-
 fn execution_error(message: impl Into<String>) -> Error {
     Error::Execution(message.into())
 }
@@ -1057,12 +1013,13 @@ pub struct KvCowReplacement {
     pub replacement: KvPageId,
 }
 
-/// Reservation of pages for one sequence before execution.
+/// Read-only description of one provisional KV reservation.
 ///
-/// Pages are reserved before model execution and committed only after
-/// successful completion. A failure rolls back all newly allocated pages.
-#[derive(Debug, Clone)]
-pub struct KvReservation {
+/// This value can be cloned for backend lowering, but it owns no logical pages
+/// and cannot be committed or rolled back. The runtime cache exposes a separate
+/// non-cloneable reservation token for those transitions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KvReservationView {
     /// State slot this reservation belongs to.
     pub state_slot: StateSlot,
     /// Position range covered by this reservation.
@@ -1078,9 +1035,6 @@ pub struct KvReservation {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-    use std::rc::Rc;
-
     use super::*;
 
     fn nz(value: u32) -> NonZeroU32 {
@@ -1857,93 +1811,5 @@ mod tests {
         ExecutionOutput::default()
             .validate(&one_row_prefill(LogitsRequest::None))
             .unwrap();
-    }
-
-    struct TestPlan {
-        capabilities: ExecutionCapabilities,
-    }
-
-    impl PreparedModelPlan for TestPlan {
-        fn capabilities(&self) -> &ExecutionCapabilities {
-            &self.capabilities
-        }
-    }
-
-    #[test]
-    fn prepared_plan_default_validation_uses_its_capabilities() {
-        let plan = TestPlan {
-            capabilities: capabilities(),
-        };
-        plan.validate_batch(2, &prefill_batch()).unwrap();
-        assert_execution_error(plan.validate_batch(1, &prefill_batch()));
-    }
-
-    #[test]
-    fn prepared_plan_default_output_validation_uses_its_capabilities() {
-        let plan = TestPlan {
-            capabilities: capabilities(),
-        };
-        let batch = one_row_prefill(LogitsRequest::Full);
-        let valid =
-            ExecutionOutput::new(vec![LogitsRow::new(0, LogitsOutput::Full(vec![1.0, 0.5]))]);
-        plan.validate_output(&batch, &valid).unwrap();
-
-        let wrong_width =
-            ExecutionOutput::new(vec![LogitsRow::new(0, LogitsOutput::Full(vec![1.0]))]);
-        assert_execution_error(plan.validate_output(&batch, &wrong_width));
-    }
-
-    struct DropState(Rc<Cell<bool>>);
-
-    impl Drop for DropState {
-        fn drop(&mut self) {
-            self.0.set(true);
-        }
-    }
-
-    struct TestExecutor;
-
-    impl ModelBatchExecutor for TestExecutor {
-        type Plan = TestPlan;
-        type SequenceState = DropState;
-
-        fn create_sequence_state(
-            &mut self,
-            _plan: &Self::Plan,
-            _init: SequenceStateInit,
-        ) -> Result<Self::SequenceState> {
-            Ok(DropState(Rc::new(Cell::new(false))))
-        }
-
-        fn reset_sequence_state(
-            &mut self,
-            _plan: &Self::Plan,
-            _state: &mut Self::SequenceState,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        fn execute(
-            &mut self,
-            plan: &Self::Plan,
-            states: &mut [Self::SequenceState],
-            batch: &ExecutionBatch,
-        ) -> Result<ExecutionOutput> {
-            plan.validate_batch(states.len(), batch)?;
-            Ok(ExecutionOutput::default())
-        }
-    }
-
-    #[test]
-    fn executor_default_release_drops_sequence_state() {
-        let plan = TestPlan {
-            capabilities: capabilities(),
-        };
-        let dropped = Rc::new(Cell::new(false));
-        let state = DropState(Rc::clone(&dropped));
-
-        TestExecutor.release_sequence_state(&plan, state).unwrap();
-
-        assert!(dropped.get());
     }
 }

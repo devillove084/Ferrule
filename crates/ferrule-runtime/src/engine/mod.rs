@@ -4,14 +4,19 @@
 //! per-sequence model state, and authoritative paged-KV transactions without
 //! depending on a concrete model family.
 
-mod diagnostic;
 mod driver;
+mod inference;
 mod native_executor;
+mod observability;
 
-pub use diagnostic::PageManagedDiagnosticHarness;
 pub use driver::{
-    DSparkCycleTrace, ResidentActionKind, ResidentDriverStep, ResidentTokenEvent,
-    ResidentTopKDriver, ResidentTopKDriverConfig, ResidentTopKDriverStats,
+    ResidentActionKind, ResidentDriverStep, ResidentTokenEvent, ResidentTopKDriver,
+    ResidentTopKDriverConfig,
 };
+pub use inference::{
+    InferenceCancelProgress, InferenceCompletionOwner, InferenceCompletionReactor, InferenceEngine,
+    LocalResidentInferenceEngine, ResidentInferenceEngine,
+};
+pub use observability::ResidentTopKDriverStats;
 
-pub use native_executor::NativeMultiSessionExecutor;
+pub use native_executor::{NativeBatchExecutionProgress, NativeMultiSessionExecutor};

@@ -11,8 +11,7 @@
 
 #[cfg(feature = "cuda")]
 use std::collections::BTreeMap;
-#[cfg(feature = "cuda")]
-use std::num::NonZeroU32;
+
 #[cfg(feature = "cuda")]
 use std::path::Path;
 #[cfg(feature = "cuda")]
@@ -23,29 +22,26 @@ use crate::GenerationConfig;
 #[cfg(feature = "cuda")]
 use crate::bench::{GoldenTurn, InteractiveTrace, compare_interactive_trace};
 #[cfg(feature = "cuda")]
-use ferrule_common::{
-    MemoryPoolStats,
-    execution::{ExecutionOutput, ForwardPhase, LogitsOutput, LogitsRequest, StateSlot},
-};
+use ferrule_common::MemoryPoolStats;
 #[cfg(feature = "cuda")]
 use ferrule_model::{
-    ChatTemplate, ModelExecutionBackend, ModelRunner,
+    ChatTemplate, ModelExecutionBackend,
     models::deepseek_v4::{
         DeepSeekV4ArtifactModel, DeepSeekV4AttentionProfileStats, DeepSeekV4LayerProfileStats,
-        DeepSeekV4OperatorRuntimeCounters, DeepSeekV4OutputProfileStats,
-        DeepSeekV4PrefillRuntimeStats, DeepSeekV4PrepareOptions, DeepSeekV4Runner,
+        DeepSeekV4ObservabilitySnapshot, DeepSeekV4OperatorRuntimeCounters,
+        DeepSeekV4OutputProfileStats, DeepSeekV4PrepareOptions, DeepSeekV4Runner,
     },
-    moe::{ExpertBatchAccessEvent, ExpertPredictionStats},
+    moe::ExpertPredictionStats,
 };
 #[cfg(feature = "cuda")]
 use ferrule_runtime::{
-    DSparkCycleTrace, DSparkMetrics, ExpertIoBudget, GenerateRequest, PageManagedDiagnosticHarness,
-    RequestId, ResidentActionKind, ResidentDriverStep, ResidentSchedulerConfig,
-    ResidentTopKDriverConfig, ResidentTopKDriverStats, SessionId,
+    ExpertIoBudget, GenerateRequest, LocalResidentInferenceEngine, RequestId, ResidentActionKind,
+    ResidentDriverStep, ResidentSchedulerConfig, ResidentTopKDriverConfig, ResidentTopKDriverStats,
+    SessionId, SpeculativeMetrics,
 };
 
 #[cfg(feature = "cuda")]
-use super::resident::{build_page_managed_diagnostic_harness, build_resident_topk_driver};
+use super::resident::{block_on_local_inference, build_resident_topk_driver};
 
 /// A single turn measurement captured by the interactive benchmark.
 #[cfg(feature = "cuda")]
@@ -61,8 +57,6 @@ struct RuntimeStepMeasurement {
     dsv4_layer_profile_stats: Vec<DeepSeekV4LayerProfileStats>,
     dsv4_attention_profile_stats: Vec<DeepSeekV4AttentionProfileStats>,
     dsv4_output_profile_stats: DeepSeekV4OutputProfileStats,
-    expert_access_trace: Vec<ExpertBatchAccessEvent>,
-    dspark_cycles: Vec<DSparkCycleTrace>,
 }
 
 #[cfg(feature = "cuda")]
@@ -80,7 +74,6 @@ struct InteractiveTurnMeasurement {
     stopped_by_string: Option<String>,
     runtime_driver_stats: ResidentTopKDriverStats,
     dsv4_operator_counters: DeepSeekV4OperatorRuntimeCounters,
-    dsv4_prefill_stats: DeepSeekV4PrefillRuntimeStats,
     dsv4_layer_profile_stats: Vec<DeepSeekV4LayerProfileStats>,
     dsv4_attention_profile_stats: Vec<DeepSeekV4AttentionProfileStats>,
     dsv4_output_profile_stats: DeepSeekV4OutputProfileStats,
@@ -138,8 +131,6 @@ struct InteractiveBenchReport {
     runtime_driver_stats: ResidentTopKDriverStats,
     /// DSV4 CUDA/operator counters for measured turns only.
     dsv4_operator_counters: DeepSeekV4OperatorRuntimeCounters,
-    /// DSV4 prefill-path counters for measured turns only.
-    dsv4_prefill_stats: DeepSeekV4PrefillRuntimeStats,
     /// DSV4 per-layer profile counters for measured turns only.
     dsv4_layer_profile_stats: Vec<DeepSeekV4LayerProfileStats>,
     /// DSV4 per-layer attention-internal profile counters for measured turns only.
@@ -176,9 +167,6 @@ pub fn cmd_bench_interactive(
     moe_hotset_experts: usize,
     golden_trace_path: Option<&str>,
     json: bool,
-    resident_replay: bool,
-    verify_width_sweep: bool,
-    verify_iterations: usize,
 ) -> anyhow::Result<()> {
     let model_path = Path::new(model_dir);
     let max_layers = max_layers.max(1);
@@ -193,7 +181,6 @@ pub fn cmd_bench_interactive(
         max_new_tokens,
         stop: Vec::new(),
         ctx_size: 4096,
-        append_eos_to_session: true,
         ..GenerationConfig::default()
     };
 
@@ -214,41 +201,9 @@ pub fn cmd_bench_interactive(
     let max_tensor_bytes = output_head_chunk_bytes.max(128 * 1024 * 1024);
     let load_start = Instant::now();
     let model = DeepSeekV4ArtifactModel::load_hf_with_limit(model_path, max_tensor_bytes)?;
-    let checkpoint_dspark_block_size = model.config.dspark_block_size;
     let runner =
         DeepSeekV4Runner::new_with_operator_backend(model, options, ModelExecutionBackend::Cuda)?;
     let artifact_load_us = duration_us(load_start.elapsed());
-
-    if verify_width_sweep {
-        return run_resident_verify_width_sweep(
-            runner,
-            model_dir,
-            &chat_template,
-            prompts,
-            artifact_load_us,
-            max_layers,
-            output_head_chunk_rows,
-            moe_prefetch_experts,
-            moe_hotset_experts,
-            checkpoint_dspark_block_size,
-            verify_iterations,
-            json,
-        );
-    }
-    if resident_replay {
-        return run_resident_replay(
-            runner,
-            model_dir,
-            &chat_template,
-            prompts,
-            artifact_load_us,
-            max_layers,
-            output_head_chunk_rows,
-            moe_prefetch_experts,
-            moe_hotset_experts,
-            json,
-        );
-    }
 
     let mut report = InteractiveBenchReport {
         model_dir: model_dir.to_string(),
@@ -259,11 +214,11 @@ pub fn cmd_bench_interactive(
         output_head_chunk_rows,
         moe_prefetch_experts,
         moe_hotset_experts,
-        runtime_path: "resident_topk_driver_dspark".into(),
+        runtime_path: "resident_topk_driver_speculative".into(),
         dsv4_profile_sync: runner.execution_policy().profile_sync(),
         artifact_load_us,
         warmup_tokens,
-        expert_prewarm_enabled: dsv4_expert_prewarm_enabled(),
+        expert_prewarm_enabled: false,
         ..Default::default()
     };
 
@@ -306,7 +261,6 @@ pub fn cmd_bench_interactive(
             "aggregate_decode_tok_per_s": report.aggregate_decode_tok_per_s,
             "runtime_driver_stats": resident_driver_stats_json(&report.runtime_driver_stats),
             "dsv4_operator_counters": dsv4_operator_counters_json(&report.dsv4_operator_counters),
-            "dsv4_prefill_stats": dsv4_prefill_stats_json(&report.dsv4_prefill_stats),
             "dsv4_layer_profile_summary": dsv4_layer_profile_summary_json(&report.dsv4_layer_profile_stats),
             "dsv4_layer_profile": dsv4_layer_profile_stats_json(&report.dsv4_layer_profile_stats),
             "dsv4_attention_profile_summary": dsv4_attention_profile_summary_json(&report.dsv4_attention_profile_stats),
@@ -437,20 +391,7 @@ pub fn cmd_bench_interactive(
                     );
                 }
             }
-            let prefill = turn.dsv4_prefill_stats;
-            if prefill.logits_calls > 0 || prefill.no_logits_calls > 0 {
-                println!(
-                    "  dsv4_prefill: logits={}/{} no_logits={}/{} start_seg={}/{} append_seg={}/{}",
-                    prefill.logits_calls,
-                    prefill.logits_tokens,
-                    prefill.no_logits_calls,
-                    prefill.no_logits_tokens,
-                    prefill.start_segment_calls,
-                    prefill.start_segment_tokens,
-                    prefill.append_segment_calls,
-                    prefill.append_segment_tokens
-                );
-            }
+
             if !turn.dsv4_layer_profile_stats.is_empty() {
                 let summary = sum_layer_profile_stats(&turn.dsv4_layer_profile_stats);
                 let attention = sum_attention_profile_stats(&turn.dsv4_attention_profile_stats);
@@ -489,17 +430,7 @@ pub fn cmd_bench_interactive(
             report.runtime_driver_stats.decode_steps,
             report.runtime_driver_stats.emitted_tokens
         );
-        println!(
-            "dsv4_prefill:              logits={}/{} no_logits={}/{} start_seg={}/{} append_seg={}/{}",
-            report.dsv4_prefill_stats.logits_calls,
-            report.dsv4_prefill_stats.logits_tokens,
-            report.dsv4_prefill_stats.no_logits_calls,
-            report.dsv4_prefill_stats.no_logits_tokens,
-            report.dsv4_prefill_stats.start_segment_calls,
-            report.dsv4_prefill_stats.start_segment_tokens,
-            report.dsv4_prefill_stats.append_segment_calls,
-            report.dsv4_prefill_stats.append_segment_tokens
-        );
+
         if !report.dsv4_layer_profile_stats.is_empty() {
             let summary = sum_layer_profile_stats(&report.dsv4_layer_profile_stats);
             let attention = sum_attention_profile_stats(&report.dsv4_attention_profile_stats);
@@ -531,36 +462,28 @@ pub fn cmd_bench_interactive(
 }
 
 #[cfg(feature = "cuda")]
-fn maybe_prewarm_runner(
-    runner: &mut DeepSeekV4Runner,
+fn run_with_resident_driver(
+    runner: DeepSeekV4Runner,
+    chat_template: &ChatTemplate,
+    gen_cfg: &GenerationConfig,
+    prompts: &[String],
+    warmup_tokens: usize,
+    json: bool,
     report: &mut InteractiveBenchReport,
 ) -> anyhow::Result<()> {
-    report.expert_prewarm_enabled = dsv4_expert_prewarm_enabled();
-    if !report.expert_prewarm_enabled {
-        return Ok(());
-    }
-    let counters_before = runner.operator_runtime_counters();
-    let start = Instant::now();
-    let warmed = runner.prewarm_predicted_experts()?;
-    let elapsed_us = duration_us(start.elapsed());
-    let counters_after = runner.operator_runtime_counters();
-    report.expert_prewarm_us = report.expert_prewarm_us.saturating_add(elapsed_us);
-    report.expert_prewarm_experts = report.expert_prewarm_experts.saturating_add(warmed);
-    report.expert_prewarm_loads = report.expert_prewarm_loads.saturating_add(
-        counters_after
-            .expert_loads
-            .saturating_sub(counters_before.expert_loads),
-    );
-    report.expert_prewarm_load_bytes = report.expert_prewarm_load_bytes.saturating_add(
-        counters_after
-            .expert_load_bytes
-            .saturating_sub(counters_before.expert_load_bytes),
-    );
-    Ok(())
+    block_on_local_inference(run_with_resident_driver_async(
+        runner,
+        chat_template,
+        gen_cfg,
+        prompts,
+        warmup_tokens,
+        json,
+        report,
+    ))
 }
 
 #[cfg(feature = "cuda")]
-fn run_with_resident_driver(
+async fn run_with_resident_driver_async(
     runner: DeepSeekV4Runner,
     chat_template: &ChatTemplate,
     gen_cfg: &GenerationConfig,
@@ -579,23 +502,18 @@ fn run_with_resident_driver(
     let driver_config = ResidentTopKDriverConfig {
         ctx_size: gen_cfg.ctx_size,
         stop_at_eos: gen_cfg.stop_at_eos,
-        append_eos_to_session: false,
-        dspark_confidence_threshold: 0.2,
-        max_steps_per_run: gen_cfg
-            .ctx_size
-            .saturating_add(gen_cfg.max_new_tokens)
-            .saturating_add(warmup_tokens)
-            .saturating_add(64),
+        proposal_confidence_threshold: 0.2,
     };
     let build_driver = |runner: DeepSeekV4Runner| {
         let schema = runner.kv_layout_schema().clone();
         build_resident_topk_driver(runner, Box::new(schema), scheduler_config, driver_config)
     };
-    let mut driver = build_driver(runner)?;
+    let mut driver =
+        LocalResidentInferenceEngine::new(build_driver(runner)?, ExpertIoBudget::unbounded());
 
     if warmup_tokens > 0 {
         let warmup_prompt = chat_template.format_turn("warmup", true);
-        let warmup_prompt_tokens = driver.executor().runner().encode(&warmup_prompt)?;
+        let warmup_prompt_tokens = driver.encode(&warmup_prompt)?;
         let warmup_request = driver_request(
             0,
             SessionId(u64::MAX),
@@ -606,33 +524,27 @@ fn run_with_resident_driver(
         let warmup_start = Instant::now();
         driver.submit(warmup_request);
         loop {
-            match driver
-                .step_with_dspark_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())?
-            {
+            match driver.step(&mut |_| Ok(())).await? {
                 ResidentDriverStep::Idle => break,
                 ResidentDriverStep::Blocked => {
-                    anyhow::bail!("DSpark warmup blocked while running resident benchmark")
+                    anyhow::bail!("speculative warmup blocked while running resident benchmark")
                 }
-                ResidentDriverStep::Executed { .. } => {
-                    driver.drain_dspark_cycle_traces().for_each(drop);
-                }
+                ResidentDriverStep::WaitingForModelProgress(_) => {}
+                ResidentDriverStep::Executed { .. } => {}
             }
         }
         report.warmup_us = duration_us(warmup_start.elapsed());
         report.warmup_generated_tokens = driver.stats().emitted_tokens;
         let _ = driver.drain_finished();
-        let mut runner = driver.into_runner()?;
-        runner.reset_session()?;
-        maybe_prewarm_runner(&mut runner, report)?;
-        driver = build_driver(runner)?;
     }
 
-    let counters_baseline = driver.executor().runner().operator_runtime_counters();
+    let observability_baseline: DeepSeekV4ObservabilitySnapshot =
+        driver.model_observability_snapshot();
+    let counters_baseline = observability_baseline.operator;
     let driver_stats_baseline = driver.stats().clone();
-    let prefill_stats_baseline = driver.executor().runner().prefill_runtime_stats();
-    let layer_profile_baseline = driver.executor().runner().layer_profile_stats();
-    let attention_profile_baseline = driver.executor().runner().attention_profile_stats();
-    let output_profile_baseline = driver.executor().runner().output_profile_stats();
+    let layer_profile_baseline = observability_baseline.layers;
+    let attention_profile_baseline = observability_baseline.attention;
+    let output_profile_baseline = observability_baseline.output;
     let mut first_token_measured = false;
     let mut total_prefill_us: u64 = 0;
     let mut total_decode_us: u64 = 0;
@@ -642,7 +554,7 @@ fn run_with_resident_driver(
     for (turn_idx, prompt_text) in prompts.iter().enumerate() {
         let first_turn = turn_idx == 0;
         let full_prompt = chat_template.format_turn(prompt_text, first_turn);
-        let prompt_tokens = driver.executor().runner().encode(&full_prompt)?;
+        let prompt_tokens = driver.encode(&full_prompt)?;
 
         if prompt_tokens.is_empty() {
             if !json {
@@ -662,11 +574,11 @@ fn run_with_resident_driver(
             &gen_cfg.stop,
         );
         let turn_driver_stats_before = driver.stats().clone();
-        let turn_operator_counters_before = driver.executor().runner().operator_runtime_counters();
-        let turn_prefill_stats_before = driver.executor().runner().prefill_runtime_stats();
-        let turn_layer_profile_before = driver.executor().runner().layer_profile_stats();
-        let turn_attention_profile_before = driver.executor().runner().attention_profile_stats();
-        let turn_output_profile_before = driver.executor().runner().output_profile_stats();
+        let turn_observability_before = driver.model_observability_snapshot();
+        let turn_operator_counters_before = turn_observability_before.operator;
+        let turn_layer_profile_before = turn_observability_before.layers;
+        let turn_attention_profile_before = turn_observability_before.attention;
+        let turn_output_profile_before = turn_observability_before.output;
         driver.submit(request);
 
         let turn_start = Instant::now();
@@ -677,43 +589,38 @@ fn run_with_resident_driver(
         let mut runtime_steps = Vec::new();
 
         loop {
-            let step_operator_counters_before =
-                driver.executor().runner().operator_runtime_counters();
-            let step_layer_profile_before = driver.executor().runner().layer_profile_stats();
-            let step_attention_profile_before =
-                driver.executor().runner().attention_profile_stats();
-            let step_output_profile_before = driver.executor().runner().output_profile_stats();
+            let step_observability_before = driver.model_observability_snapshot();
+            let step_operator_counters_before = step_observability_before.operator;
+            let step_layer_profile_before = step_observability_before.layers;
+            let step_attention_profile_before = step_observability_before.attention;
+            let step_output_profile_before = step_observability_before.output;
             let step_start = Instant::now();
-            let step = driver.step_with_dspark_model_expert_io(
-                &mut |event| {
+            let step = driver
+                .step(&mut |event| {
                     first_token_us.get_or_insert_with(|| duration_us(turn_start.elapsed()));
                     generated_tokens.push(event.token);
                     Ok(())
-                },
-                ExpertIoBudget::unbounded(),
-            )?;
+                })
+                .await?;
             let step_us = duration_us(step_start.elapsed());
-            let step_dspark_cycles = driver.drain_dspark_cycle_traces().collect::<Vec<_>>();
+            let step_observability_after = driver.model_observability_snapshot();
             let step_operator_counters = dsv4_operator_counters_delta(
                 step_operator_counters_before,
-                driver.executor().runner().operator_runtime_counters(),
+                step_observability_after.operator,
             );
             let step_layer_profile_stats = dsv4_layer_profile_stats_delta(
                 &step_layer_profile_before,
-                &driver.executor().runner().layer_profile_stats(),
+                &step_observability_after.layers,
             );
             let step_attention_profile_stats = dsv4_attention_profile_stats_delta(
                 &step_attention_profile_before,
-                &driver.executor().runner().attention_profile_stats(),
+                &step_observability_after.attention,
             );
             let step_output_profile_stats = dsv4_output_profile_stats_delta(
                 step_output_profile_before,
-                driver.executor().runner().output_profile_stats(),
+                step_observability_after.output,
             );
-            let step_expert_access_trace = driver
-                .executor_mut()
-                .runner_mut()
-                .drain_expert_access_trace();
+
             match step {
                 ResidentDriverStep::Executed {
                     action_kind,
@@ -739,13 +646,26 @@ fn run_with_resident_driver(
                         staged,
                         finished,
                         elapsed_us: step_us,
-                        runner_position: driver.executor().runner().position(),
+                        runner_position: step_observability_after.position,
                         dsv4_operator_counters: step_operator_counters,
                         dsv4_layer_profile_stats: step_layer_profile_stats,
                         dsv4_attention_profile_stats: step_attention_profile_stats,
                         dsv4_output_profile_stats: step_output_profile_stats,
-                        expert_access_trace: step_expert_access_trace,
-                        dspark_cycles: step_dspark_cycles,
+                    });
+                }
+                ResidentDriverStep::WaitingForModelProgress(_) => {
+                    decode_us = decode_us.saturating_add(step_us);
+                    runtime_steps.push(RuntimeStepMeasurement {
+                        action_kind: "expert_wait".to_string(),
+                        rows: 0,
+                        staged: 0,
+                        finished: 0,
+                        elapsed_us: step_us,
+                        runner_position: step_observability_after.position,
+                        dsv4_operator_counters: step_operator_counters,
+                        dsv4_layer_profile_stats: step_layer_profile_stats,
+                        dsv4_attention_profile_stats: step_attention_profile_stats,
+                        dsv4_output_profile_stats: step_output_profile_stats,
                     });
                 }
                 ResidentDriverStep::Idle => break,
@@ -787,25 +707,23 @@ fn run_with_resident_driver(
 
         let turn_driver_stats =
             resident_driver_stats_delta(turn_driver_stats_before, driver.stats().clone());
+        let turn_observability_after = driver.model_observability_snapshot();
         let turn_operator_counters = dsv4_operator_counters_delta(
             turn_operator_counters_before,
-            driver.executor().runner().operator_runtime_counters(),
+            turn_observability_after.operator,
         );
-        let turn_prefill_stats = dsv4_prefill_stats_delta(
-            turn_prefill_stats_before,
-            driver.executor().runner().prefill_runtime_stats(),
-        );
+
         let turn_layer_profile_stats = dsv4_layer_profile_stats_delta(
             &turn_layer_profile_before,
-            &driver.executor().runner().layer_profile_stats(),
+            &turn_observability_after.layers,
         );
         let turn_attention_profile_stats = dsv4_attention_profile_stats_delta(
             &turn_attention_profile_before,
-            &driver.executor().runner().attention_profile_stats(),
+            &turn_observability_after.attention,
         );
         let turn_output_profile_stats = dsv4_output_profile_stats_delta(
             turn_output_profile_before,
-            driver.executor().runner().output_profile_stats(),
+            turn_observability_after.output,
         );
 
         report.turns.push(InteractiveTurnMeasurement {
@@ -823,7 +741,6 @@ fn run_with_resident_driver(
             stopped_by_string,
             runtime_driver_stats: turn_driver_stats,
             dsv4_operator_counters: turn_operator_counters,
-            dsv4_prefill_stats: turn_prefill_stats,
             dsv4_layer_profile_stats: turn_layer_profile_stats,
             dsv4_attention_profile_stats: turn_attention_profile_stats,
             dsv4_output_profile_stats: turn_output_profile_stats,
@@ -831,27 +748,20 @@ fn run_with_resident_driver(
         });
     }
 
-    let counters_now = driver.executor().runner().operator_runtime_counters();
+    let observability_now = driver.model_observability_snapshot();
+    let counters_now = observability_now.operator;
     report.runtime_driver_stats =
         resident_driver_stats_delta(driver_stats_baseline, driver.stats().clone());
     report.dsv4_operator_counters = dsv4_operator_counters_delta(counters_baseline, counters_now);
-    report.dsv4_prefill_stats = dsv4_prefill_stats_delta(
-        prefill_stats_baseline,
-        driver.executor().runner().prefill_runtime_stats(),
-    );
-    report.dsv4_layer_profile_stats = dsv4_layer_profile_stats_delta(
-        &layer_profile_baseline,
-        &driver.executor().runner().layer_profile_stats(),
-    );
+    report.dsv4_layer_profile_stats =
+        dsv4_layer_profile_stats_delta(&layer_profile_baseline, &observability_now.layers);
     report.dsv4_attention_profile_stats = dsv4_attention_profile_stats_delta(
         &attention_profile_baseline,
-        &driver.executor().runner().attention_profile_stats(),
+        &observability_now.attention,
     );
-    report.dsv4_output_profile_stats = dsv4_output_profile_stats_delta(
-        output_profile_baseline,
-        driver.executor().runner().output_profile_stats(),
-    );
-    let layer_stats = driver.executor().runner().layer_runtime_stats();
+    report.dsv4_output_profile_stats =
+        dsv4_output_profile_stats_delta(output_profile_baseline, observability_now.output);
+    let layer_stats = observability_now.layer_runtime;
     finish_report_counters(
         report,
         total_prefill_us,
@@ -964,15 +874,15 @@ fn resident_driver_stats_delta(
         finished_sequences: after
             .finished_sequences
             .saturating_sub(before.finished_sequences),
-        dropped_dspark_cycle_traces: after
-            .dropped_dspark_cycle_traces
-            .saturating_sub(before.dropped_dspark_cycle_traces),
-        dspark: dspark_metrics_delta(&before.dspark, &after.dspark),
+        speculative: speculative_metrics_delta(&before.speculative, &after.speculative),
     }
 }
 
 #[cfg(feature = "cuda")]
-fn dspark_metrics_delta(before: &DSparkMetrics, after: &DSparkMetrics) -> DSparkMetrics {
+fn speculative_metrics_delta(
+    before: &SpeculativeMetrics,
+    after: &SpeculativeMetrics,
+) -> SpeculativeMetrics {
     let histogram_len = after
         .accepted_prefix_histogram
         .len()
@@ -993,7 +903,7 @@ fn dspark_metrics_delta(before: &DSparkMetrics, after: &DSparkMetrics) -> DSpark
                 )
         })
         .collect();
-    DSparkMetrics {
+    SpeculativeMetrics {
         cycles: after.cycles.saturating_sub(before.cycles),
         proposed_tokens: after.proposed_tokens.saturating_sub(before.proposed_tokens),
         verified_rows: after.verified_rows.saturating_sub(before.verified_rows),
@@ -1195,9 +1105,6 @@ fn dsv4_operator_counters_delta(
         expert_io_fixed_file_registrations: after
             .expert_io_fixed_file_registrations
             .saturating_sub(before.expert_io_fixed_file_registrations),
-        expert_io_fallback_count: after
-            .expert_io_fallback_count
-            .saturating_sub(before.expert_io_fallback_count),
         expert_io_slab_exhaustions: after
             .expert_io_slab_exhaustions
             .saturating_sub(before.expert_io_slab_exhaustions),
@@ -1247,36 +1154,12 @@ fn dsv4_operator_counters_delta(
         output_head_calls: after
             .output_head_calls
             .saturating_sub(before.output_head_calls),
-        output_head_chunks: after
-            .output_head_chunks
-            .saturating_sub(before.output_head_chunks),
         output_head_rows: after
             .output_head_rows
             .saturating_sub(before.output_head_rows),
-        output_head_cache_hits: after
-            .output_head_cache_hits
-            .saturating_sub(before.output_head_cache_hits),
-        output_head_cache_misses: after
-            .output_head_cache_misses
-            .saturating_sub(before.output_head_cache_misses),
-        output_head_hidden_uploads: after
-            .output_head_hidden_uploads
-            .saturating_sub(before.output_head_hidden_uploads),
-        output_head_hidden_upload_us: after
-            .output_head_hidden_upload_us
-            .saturating_sub(before.output_head_hidden_upload_us),
-        output_head_read_us: after
-            .output_head_read_us
-            .saturating_sub(before.output_head_read_us),
-        output_head_upload_us: after
-            .output_head_upload_us
-            .saturating_sub(before.output_head_upload_us),
         output_head_topk_us: after
             .output_head_topk_us
             .saturating_sub(before.output_head_topk_us),
-        output_head_merge_us: after
-            .output_head_merge_us
-            .saturating_sub(before.output_head_merge_us),
         expert_selected: after.expert_selected.saturating_sub(before.expert_selected),
         expert_unique_selected: after
             .expert_unique_selected
@@ -1524,41 +1407,6 @@ fn dsv4_output_profile_stats_delta(
 }
 
 #[cfg(feature = "cuda")]
-fn dsv4_prefill_stats_delta(
-    before: DeepSeekV4PrefillRuntimeStats,
-    after: DeepSeekV4PrefillRuntimeStats,
-) -> DeepSeekV4PrefillRuntimeStats {
-    DeepSeekV4PrefillRuntimeStats {
-        logits_calls: after.logits_calls.saturating_sub(before.logits_calls),
-        logits_tokens: after.logits_tokens.saturating_sub(before.logits_tokens),
-        no_logits_calls: after.no_logits_calls.saturating_sub(before.no_logits_calls),
-        no_logits_tokens: after
-            .no_logits_tokens
-            .saturating_sub(before.no_logits_tokens),
-        interactive_calls: after
-            .interactive_calls
-            .saturating_sub(before.interactive_calls),
-        interactive_tokens: after
-            .interactive_tokens
-            .saturating_sub(before.interactive_tokens),
-        batched_calls: after.batched_calls.saturating_sub(before.batched_calls),
-        batched_tokens: after.batched_tokens.saturating_sub(before.batched_tokens),
-        start_segment_calls: after
-            .start_segment_calls
-            .saturating_sub(before.start_segment_calls),
-        start_segment_tokens: after
-            .start_segment_tokens
-            .saturating_sub(before.start_segment_tokens),
-        append_segment_calls: after
-            .append_segment_calls
-            .saturating_sub(before.append_segment_calls),
-        append_segment_tokens: after
-            .append_segment_tokens
-            .saturating_sub(before.append_segment_tokens),
-    }
-}
-
-#[cfg(feature = "cuda")]
 fn sum_layer_profile_stats(stats: &[DeepSeekV4LayerProfileStats]) -> DeepSeekV4LayerProfileStats {
     let mut out = DeepSeekV4LayerProfileStats::default();
     for item in stats {
@@ -1637,7 +1485,6 @@ fn interactive_turn_json(turn: &InteractiveTurnMeasurement) -> serde_json::Value
         "stopped_by_string": &turn.stopped_by_string,
         "runtime_driver_stats": resident_driver_stats_json(&turn.runtime_driver_stats),
         "dsv4_operator_counters": dsv4_operator_counters_json(&turn.dsv4_operator_counters),
-        "dsv4_prefill_stats": dsv4_prefill_stats_json(&turn.dsv4_prefill_stats),
         "dsv4_layer_profile_summary": dsv4_layer_profile_summary_json(&turn.dsv4_layer_profile_stats),
         "dsv4_layer_profile": dsv4_layer_profile_stats_json(&turn.dsv4_layer_profile_stats),
         "dsv4_attention_profile_summary": dsv4_attention_profile_summary_json(&turn.dsv4_attention_profile_stats),
@@ -1660,68 +1507,6 @@ fn runtime_step_json(step: &RuntimeStepMeasurement) -> serde_json::Value {
         "dsv4_layer_profile_summary": dsv4_layer_profile_summary_json(&step.dsv4_layer_profile_stats),
         "dsv4_attention_profile_summary": dsv4_attention_profile_summary_json(&step.dsv4_attention_profile_stats),
         "dsv4_output_profile": dsv4_output_profile_stats_json(&step.dsv4_output_profile_stats),
-        "expert_access_trace": step.expert_access_trace.iter().map(expert_access_event_json).collect::<Vec<_>>(),
-        "dspark_cycles": step.dspark_cycles.iter().map(dspark_cycle_trace_json).collect::<Vec<_>>(),
-    })
-}
-
-#[cfg(feature = "cuda")]
-fn expert_access_event_json(event: &ExpertBatchAccessEvent) -> serde_json::Value {
-    serde_json::json!({
-        "layer": event.layer,
-        "phase": format!("{:?}", event.phase),
-        "token_count": event.token_count,
-        "experts": event.experts.iter().map(|expert| serde_json::json!({
-            "expert": expert.expert.expert,
-            "columns": expert.columns,
-            "total_route_weight": expert.total_route_weight,
-            "outcome": format!("{:?}", expert.outcome),
-        })).collect::<Vec<_>>(),
-    })
-}
-
-#[cfg(feature = "cuda")]
-fn dspark_cycle_trace_json(trace: &DSparkCycleTrace) -> serde_json::Value {
-    serde_json::json!({
-        "request_id": trace.request_id.0,
-        "session_id": trace.session_id.0,
-        "cycle_attempt": trace.cycle_attempt,
-        "position": trace.position,
-        "anchor_token": trace.anchor_token,
-        "proposal_source": format!("{:?}", trace.proposal_source),
-        "proposal_executed": trace.proposal_executed,
-        "native_proposed_tokens": &trace.native_proposed_tokens,
-        "native_confidence_logits": &trace.native_confidence_logits,
-        "proposed_tokens": &trace.proposed_tokens,
-        "confidence_logits": &trace.confidence_logits,
-        "capacity_truncated_tokens": trace.capacity_truncated_tokens,
-        "output_boundary_truncated_tokens": trace.output_boundary_truncated_tokens,
-        "confidence_truncated_tokens": trace.confidence_truncated_tokens,
-        "scheduler_expert_io_decisions": trace.scheduler_expert_io.len(),
-        "accepted_tokens": &trace.accepted_tokens,
-        "rejected_token": trace.rejected_token,
-        "target_correction_token": trace.target_correction_token,
-        "target_next_token": trace.target_next_token,
-        "target_row_top1": trace.target_row_top1.iter().map(|token| serde_json::json!({
-            "token_id": token.token_id,
-            "logit": token.logit,
-            "logit_bits": token.logit.to_bits(),
-        })).collect::<Vec<_>>(),
-        "accounting": {
-            "proposed_tokens": trace.accounting.proposed_tokens,
-            "verified_rows": trace.accounting.verified_rows,
-            "accepted_draft_tokens": trace.accounting.accepted_draft_tokens,
-            "correction_tokens": trace.accounting.correction_tokens,
-            "externally_committed_tokens": trace.accounting.externally_committed_tokens,
-            "rolled_back_rows": trace.accounting.rolled_back_rows,
-        },
-        "runtime_emitted_tokens": trace.runtime_emitted_tokens,
-        "runtime_tokens_reconcile": trace.runtime_tokens_reconcile(),
-        "proposal_s": trace.proposal_time_us as f64 / 1_000_000.0,
-        "verify_s": trace.verify_time_us as f64 / 1_000_000.0,
-        "transaction_s": trace.transaction_time_us as f64 / 1_000_000.0,
-        "complete_cycle_s": trace.complete_cycle_time_us as f64 / 1_000_000.0,
-        "finish_reason": trace.finish_reason.map(|reason| format!("{reason:?}")),
     })
 }
 
@@ -1831,13 +1616,12 @@ fn resident_driver_stats_json(stats: &ResidentTopKDriverStats) -> serde_json::Va
         "emitted_tokens": stats.emitted_tokens,
         "staged_tokens": stats.staged_tokens,
         "finished_sequences": stats.finished_sequences,
-        "dropped_dspark_cycle_traces": stats.dropped_dspark_cycle_traces,
-        "dspark": dspark_metrics_json(&stats.dspark),
+        "speculative": speculative_metrics_json(&stats.speculative),
     })
 }
 
 #[cfg(feature = "cuda")]
-fn dspark_metrics_json(metrics: &DSparkMetrics) -> serde_json::Value {
+fn speculative_metrics_json(metrics: &SpeculativeMetrics) -> serde_json::Value {
     serde_json::json!({
         "cycles": metrics.cycles,
         "proposed_tokens": metrics.proposed_tokens,
@@ -1960,7 +1744,6 @@ fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> ser
             "expert_io_fixed_file_registrations",
             stats.expert_io_fixed_file_registrations,
         );
-        u64_field("expert_io_fallback_count", stats.expert_io_fallback_count);
         u64_field(
             "expert_io_slab_exhaustions",
             stats.expert_io_slab_exhaustions,
@@ -1986,14 +1769,7 @@ fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> ser
         );
 
         u64_field("output_head_calls", stats.output_head_calls);
-        u64_field("output_head_chunks", stats.output_head_chunks);
         u64_field("output_head_rows", stats.output_head_rows);
-        u64_field("output_head_cache_hits", stats.output_head_cache_hits);
-        u64_field("output_head_cache_misses", stats.output_head_cache_misses);
-        u64_field(
-            "output_head_hidden_uploads",
-            stats.output_head_hidden_uploads,
-        );
         u64_field("expert_selected", stats.expert_selected);
         u64_field("expert_unique_selected", stats.expert_unique_selected);
         u64_field(
@@ -2207,711 +1983,10 @@ fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> ser
         seconds_field("moe_workspace_s", stats.moe_workspace_us);
         seconds_field("moe_compute_submit_s", stats.moe_compute_submit_us);
         seconds_field("moe_commit_s", stats.moe_commit_us);
-        seconds_field(
-            "output_head_hidden_upload_s",
-            stats.output_head_hidden_upload_us,
-        );
-        seconds_field("output_head_read_s", stats.output_head_read_us);
-        seconds_field("output_head_upload_s", stats.output_head_upload_us);
         seconds_field("output_head_topk_s", stats.output_head_topk_us);
-        seconds_field("output_head_merge_s", stats.output_head_merge_us);
     }
 
     serde_json::Value::Object(out)
-}
-
-#[cfg(feature = "cuda")]
-fn dsv4_prefill_stats_json(stats: &DeepSeekV4PrefillRuntimeStats) -> serde_json::Value {
-    serde_json::json!({
-        "logits_calls": stats.logits_calls,
-        "logits_tokens": stats.logits_tokens,
-        "no_logits_calls": stats.no_logits_calls,
-        "no_logits_tokens": stats.no_logits_tokens,
-        "interactive_calls": stats.interactive_calls,
-        "interactive_tokens": stats.interactive_tokens,
-        "batched_calls": stats.batched_calls,
-        "batched_tokens": stats.batched_tokens,
-        "start_segment_calls": stats.start_segment_calls,
-        "start_segment_tokens": stats.start_segment_tokens,
-        "append_segment_calls": stats.append_segment_calls,
-        "append_segment_tokens": stats.append_segment_tokens,
-    })
-}
-
-#[cfg(feature = "cuda")]
-struct ResidentReplayMeasurement {
-    label: &'static str,
-    elapsed_us: u64,
-    counters: DeepSeekV4OperatorRuntimeCounters,
-    layer_profile: Vec<DeepSeekV4LayerProfileStats>,
-    attention_profile: Vec<DeepSeekV4AttentionProfileStats>,
-    output_profile: DeepSeekV4OutputProfileStats,
-    top1: Option<(u32, f32)>,
-}
-
-#[cfg(feature = "cuda")]
-fn measure_resident_replay_topk(
-    diagnostic: &mut PageManagedDiagnosticHarness<DeepSeekV4Runner>,
-    slot: StateSlot,
-    token_id: u32,
-    label: &'static str,
-) -> anyhow::Result<ResidentReplayMeasurement> {
-    let counters_before = diagnostic.runner().operator_runtime_counters();
-    let layer_before = diagnostic.runner().layer_profile_stats();
-    let attention_before = diagnostic.runner().attention_profile_stats();
-    let output_before = diagnostic.runner().output_profile_stats();
-    let started = Instant::now();
-    let top = diagnostic.execute_sequence_step(
-        slot,
-        ForwardPhase::Decode,
-        std::slice::from_ref(&token_id),
-        |runner| runner.decode_token_topk(token_id, 1),
-    )?;
-    let elapsed_us = duration_us(started.elapsed());
-    let top1 = top
-        .first()
-        .map(|item| (item.token_id, item.logit))
-        .ok_or_else(|| anyhow::anyhow!("resident replay top-k pass produced no token"))?;
-    Ok(ResidentReplayMeasurement {
-        label,
-        elapsed_us,
-        counters: dsv4_operator_counters_delta(
-            counters_before,
-            diagnostic.runner().operator_runtime_counters(),
-        ),
-        layer_profile: dsv4_layer_profile_stats_delta(
-            &layer_before,
-            &diagnostic.runner().layer_profile_stats(),
-        ),
-        attention_profile: dsv4_attention_profile_stats_delta(
-            &attention_before,
-            &diagnostic.runner().attention_profile_stats(),
-        ),
-        output_profile: dsv4_output_profile_stats_delta(
-            output_before,
-            diagnostic.runner().output_profile_stats(),
-        ),
-        top1: Some(top1),
-    })
-}
-
-#[cfg(feature = "cuda")]
-fn measure_resident_replay_body(
-    diagnostic: &mut PageManagedDiagnosticHarness<DeepSeekV4Runner>,
-    slot: StateSlot,
-    token_id: u32,
-) -> anyhow::Result<ResidentReplayMeasurement> {
-    let counters_before = diagnostic.runner().operator_runtime_counters();
-    let layer_before = diagnostic.runner().layer_profile_stats();
-    let attention_before = diagnostic.runner().attention_profile_stats();
-    let output_before = diagnostic.runner().output_profile_stats();
-    let started = Instant::now();
-    diagnostic.execute_sequence_step(
-        slot,
-        ForwardPhase::Decode,
-        std::slice::from_ref(&token_id),
-        |runner| runner.feed_token(token_id),
-    )?;
-    let elapsed_us = duration_us(started.elapsed());
-    Ok(ResidentReplayMeasurement {
-        label: "resident_body_without_output_head",
-        elapsed_us,
-        counters: dsv4_operator_counters_delta(
-            counters_before,
-            diagnostic.runner().operator_runtime_counters(),
-        ),
-        layer_profile: dsv4_layer_profile_stats_delta(
-            &layer_before,
-            &diagnostic.runner().layer_profile_stats(),
-        ),
-        attention_profile: dsv4_attention_profile_stats_delta(
-            &attention_before,
-            &diagnostic.runner().attention_profile_stats(),
-        ),
-        output_profile: dsv4_output_profile_stats_delta(
-            output_before,
-            diagnostic.runner().output_profile_stats(),
-        ),
-        top1: None,
-    })
-}
-
-#[cfg(feature = "cuda")]
-fn resident_replay_measurement_json(measurement: &ResidentReplayMeasurement) -> serde_json::Value {
-    serde_json::json!({
-        "label": measurement.label,
-        "elapsed_s": measurement.elapsed_us as f64 / 1_000_000.0,
-        "target_passes_per_s": if measurement.elapsed_us == 0 {
-            0.0
-        } else {
-            1_000_000.0 / measurement.elapsed_us as f64
-        },
-        "top1_token_id": measurement.top1.map(|top1| top1.0),
-        "top1_logit": measurement.top1.map(|top1| top1.1),
-        "dsv4_operator_counters": dsv4_operator_counters_json(&measurement.counters),
-        "dsv4_layer_profile_summary": dsv4_layer_profile_summary_json(&measurement.layer_profile),
-        "dsv4_attention_profile_summary": dsv4_attention_profile_summary_json(&measurement.attention_profile),
-        "dsv4_output_profile": dsv4_output_profile_stats_json(&measurement.output_profile),
-    })
-}
-
-#[cfg(feature = "cuda")]
-#[allow(clippy::too_many_arguments)]
-fn run_resident_replay(
-    runner: DeepSeekV4Runner,
-    model_dir: &str,
-    chat_template: &ChatTemplate,
-    prompts: &[String],
-    artifact_load_us: u64,
-    max_layers: usize,
-    output_head_chunk_rows: usize,
-    moe_prefetch_experts: usize,
-    moe_hotset_experts: usize,
-    json: bool,
-) -> anyhow::Result<()> {
-    if prompts.len() != 1 {
-        anyhow::bail!(
-            "--resident-replay requires exactly one --prompt, got {}",
-            prompts.len()
-        );
-    }
-    if moe_prefetch_experts != 0 {
-        anyhow::bail!(
-            "--resident-replay requires --moe-prefetch-experts 0 so capture installs only exact selected experts"
-        );
-    }
-    let full_prompt = chat_template.format_turn(&prompts[0], true);
-    let token_ids = runner.encode(&full_prompt)?;
-    if token_ids.len() < 2 {
-        anyhow::bail!(
-            "--resident-replay requires a prompt encoding to at least two tokens, got {}",
-            token_ids.len()
-        );
-    }
-    let decode_token_id = *token_ids.last().expect("token length checked above");
-    let prefix = &token_ids[..token_ids.len() - 1];
-    let schema = runner.kv_layout_schema().clone();
-    let mut diagnostic =
-        build_page_managed_diagnostic_harness(runner, Box::new(schema), token_ids.len(), 3)?;
-    let capture_slot = diagnostic.create_sequence(0)?;
-    let resident_head_slot = diagnostic.create_sequence(0)?;
-    let resident_body_slot = diagnostic.create_sequence(0)?;
-
-    for slot in [capture_slot, resident_head_slot, resident_body_slot] {
-        diagnostic.execute_sequence_step(slot, ForwardPhase::Prefill, prefix, |runner| {
-            runner.prefill_tokens_topk_batched(prefix, 1).map(|_| ())
-        })?;
-    }
-
-    let capture = measure_resident_replay_topk(
-        &mut diagnostic,
-        capture_slot,
-        decode_token_id,
-        "capture_with_output_head",
-    )?;
-    let resident_head = measure_resident_replay_topk(
-        &mut diagnostic,
-        resident_head_slot,
-        decode_token_id,
-        "resident_with_output_head",
-    )?;
-    let resident_body =
-        measure_resident_replay_body(&mut diagnostic, resident_body_slot, decode_token_id)?;
-
-    let capture_top1 = capture.top1.expect("top-k capture records top-1");
-    let resident_top1 = resident_head.top1.expect("top-k replay records top-1");
-    let token_equal = capture_top1.0 == resident_top1.0;
-    let logit_bits_equal = capture_top1.1.to_bits() == resident_top1.1.to_bits();
-    let resident_no_io = resident_head.counters.expert_load_bytes == 0
-        && resident_head.counters.expert_selected_cold_misses == 0
-        && resident_body.counters.expert_load_bytes == 0
-        && resident_body.counters.expert_selected_cold_misses == 0;
-    if !token_equal || !logit_bits_equal {
-        anyhow::bail!(
-            "resident replay changed top-1: capture=({}, {:?}) resident=({}, {:?})",
-            capture_top1.0,
-            capture_top1.1,
-            resident_top1.0,
-            resident_top1.1
-        );
-    }
-    if !resident_no_io {
-        anyhow::bail!(
-            "resident replay still performed selected expert I/O: with_head bytes={} cold={} body bytes={} cold={}",
-            resident_head.counters.expert_load_bytes,
-            resident_head.counters.expert_selected_cold_misses,
-            resident_body.counters.expert_load_bytes,
-            resident_body.counters.expert_selected_cold_misses
-        );
-    }
-
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "mode": "resident_no_io_replay",
-                "model": model_dir,
-                "prompt": prompts[0],
-                "chat_template": chat_template.name(),
-                "prompt_token_ids": token_ids,
-                "prefix_tokens": prefix.len(),
-                "decode_token_id": decode_token_id,
-                "max_layers": max_layers,
-                "output_head_chunk_rows": output_head_chunk_rows,
-                "moe_prefetch_experts": moe_prefetch_experts,
-                "moe_hotset_experts": moe_hotset_experts,
-                "artifact_load_s": artifact_load_us as f64 / 1_000_000.0,
-                "parity": {
-                    "token_equal": token_equal,
-                    "logit_bits_equal": logit_bits_equal,
-                    "capture_top1_token_id": capture_top1.0,
-                    "resident_top1_token_id": resident_top1.0,
-                },
-                "resident_no_io": resident_no_io,
-                "capture": resident_replay_measurement_json(&capture),
-                "resident_with_head": resident_replay_measurement_json(&resident_head),
-                "resident_body_without_output_head": resident_replay_measurement_json(&resident_body),
-            }))?
-        );
-    } else {
-        println!("=== DSV4 Resident/No-I/O Replay ===");
-        println!("prompt:             {:?}", prompts[0]);
-        println!("prefix/decode:      {}/{}", prefix.len(), decode_token_id);
-        println!("top-1:              {}", capture_top1.0);
-        println!("resident_no_io:     {resident_no_io}");
-        for measurement in [&capture, &resident_head, &resident_body] {
-            println!(
-                "{:<28} {:>8.3} ms  loads={:<4} bytes={:<12} cold={}",
-                measurement.label,
-                measurement.elapsed_us as f64 / 1_000.0,
-                measurement.counters.expert_loads,
-                measurement.counters.expert_load_bytes,
-                measurement.counters.expert_selected_cold_misses,
-            );
-        }
-    }
-    Ok(())
-}
-
-#[cfg(feature = "cuda")]
-struct ResidentVerifySample {
-    elapsed_us: u64,
-    counters: DeepSeekV4OperatorRuntimeCounters,
-    layer_profile: Vec<DeepSeekV4LayerProfileStats>,
-    attention_profile: Vec<DeepSeekV4AttentionProfileStats>,
-    output_profile: DeepSeekV4OutputProfileStats,
-    top1: Vec<(u32, f32)>,
-}
-
-#[cfg(feature = "cuda")]
-struct ResidentVerifyWidthMeasurement {
-    width: usize,
-    capture_top1: Vec<(u32, f32)>,
-    samples: Vec<ResidentVerifySample>,
-    parity: bool,
-    resident_no_io: bool,
-    allocation_free: bool,
-}
-
-#[cfg(feature = "cuda")]
-fn packed_output_top1(output: &ExecutionOutput, rows: usize) -> anyhow::Result<Vec<(u32, f32)>> {
-    let mut top1 = Vec::with_capacity(rows);
-    for input_row in 0..rows {
-        let row = output
-            .logits
-            .iter()
-            .find(|row| row.input_row as usize == input_row)
-            .ok_or_else(|| {
-                anyhow::anyhow!("packed verification output is missing row {input_row}")
-            })?;
-        let LogitsOutput::TopK(logits) = &row.logits else {
-            anyhow::bail!("packed verification output row {input_row} is not top-k");
-        };
-        let token = logits.first().ok_or_else(|| {
-            anyhow::anyhow!("packed verification output row {input_row} has no top-1 token")
-        })?;
-        top1.push((token.token_id, token.logit));
-    }
-    Ok(top1)
-}
-
-#[cfg(feature = "cuda")]
-fn same_top1_bits(left: &[(u32, f32)], right: &[(u32, f32)]) -> bool {
-    left.len() == right.len()
-        && left
-            .iter()
-            .zip(right)
-            .all(|(left, right)| left.0 == right.0 && left.1.to_bits() == right.1.to_bits())
-}
-
-#[cfg(feature = "cuda")]
-fn measure_resident_verify_rows(
-    diagnostic: &mut PageManagedDiagnosticHarness<DeepSeekV4Runner>,
-    slot: StateSlot,
-    token_ids: &[u32],
-) -> anyhow::Result<ResidentVerifySample> {
-    let top_one = NonZeroU32::new(1).expect("one is non-zero");
-    let logits = vec![LogitsRequest::TopK(top_one); token_ids.len()];
-    let counters_before = diagnostic.runner().operator_runtime_counters();
-    let layer_before = diagnostic.runner().layer_profile_stats();
-    let attention_before = diagnostic.runner().attention_profile_stats();
-    let output_before = diagnostic.runner().output_profile_stats();
-    let started = Instant::now();
-    let output =
-        diagnostic.execute_sequence_batch(slot, ForwardPhase::Prefill, token_ids, &logits)?;
-    Ok(ResidentVerifySample {
-        elapsed_us: duration_us(started.elapsed()),
-        counters: dsv4_operator_counters_delta(
-            counters_before,
-            diagnostic.runner().operator_runtime_counters(),
-        ),
-        layer_profile: dsv4_layer_profile_stats_delta(
-            &layer_before,
-            &diagnostic.runner().layer_profile_stats(),
-        ),
-        attention_profile: dsv4_attention_profile_stats_delta(
-            &attention_before,
-            &diagnostic.runner().attention_profile_stats(),
-        ),
-        output_profile: dsv4_output_profile_stats_delta(
-            output_before,
-            diagnostic.runner().output_profile_stats(),
-        ),
-        top1: packed_output_top1(&output, token_ids.len())?,
-    })
-}
-
-#[cfg(feature = "cuda")]
-fn verify_percentile_us(measurement: &ResidentVerifyWidthMeasurement, percentile: usize) -> u64 {
-    let mut values = measurement
-        .samples
-        .iter()
-        .map(|sample| sample.elapsed_us)
-        .collect::<Vec<_>>();
-    values.sort_unstable();
-    let rank = values
-        .len()
-        .saturating_sub(1)
-        .saturating_mul(percentile.min(100))
-        .div_ceil(100);
-    values[rank.min(values.len().saturating_sub(1))]
-}
-
-#[cfg(feature = "cuda")]
-fn resident_verify_sample_json(sample: &ResidentVerifySample) -> serde_json::Value {
-    serde_json::json!({
-        "elapsed_s": sample.elapsed_us as f64 / 1_000_000.0,
-        "top1": sample.top1.iter().map(|(token_id, logit)| serde_json::json!({
-            "token_id": token_id,
-            "logit": logit,
-            "logit_bits": logit.to_bits(),
-        })).collect::<Vec<_>>(),
-        "dsv4_operator_counters": dsv4_operator_counters_json(&sample.counters),
-        "dsv4_layer_profile_summary": dsv4_layer_profile_summary_json(&sample.layer_profile),
-        "dsv4_attention_profile_summary": dsv4_attention_profile_summary_json(&sample.attention_profile),
-        "dsv4_output_profile": dsv4_output_profile_stats_json(&sample.output_profile),
-    })
-}
-
-#[cfg(feature = "cuda")]
-fn resident_verify_width_json(
-    measurement: &ResidentVerifyWidthMeasurement,
-    checkpoint_reference_verify_rows: usize,
-) -> serde_json::Value {
-    let p50_us = verify_percentile_us(measurement, 50);
-    let p95_us = verify_percentile_us(measurement, 95);
-    serde_json::json!({
-        "v": measurement.width,
-        "t_verify_p50_s": p50_us as f64 / 1_000_000.0,
-        "t_verify_p95_s": p95_us as f64 / 1_000_000.0,
-        "rows_per_s_p50": if p50_us == 0 { 0.0 } else {
-            measurement.width as f64 * 1_000_000.0 / p50_us as f64
-        },
-        "target_cycles_per_s_p50": if p50_us == 0 { 0.0 } else {
-            1_000_000.0 / p50_us as f64
-        },
-        "checkpoint_reference_width": measurement.width == checkpoint_reference_verify_rows,
-        "experimental_above_checkpoint_width": measurement.width > checkpoint_reference_verify_rows,
-        "resident_no_io": measurement.resident_no_io,
-        "allocation_free": measurement.allocation_free,
-        "parity": measurement.parity,
-        "capture_top1": measurement.capture_top1.iter().map(|(token_id, logit)| serde_json::json!({
-            "token_id": token_id,
-            "logit": logit,
-            "logit_bits": logit.to_bits(),
-        })).collect::<Vec<_>>(),
-        "samples": measurement.samples.iter().map(resident_verify_sample_json).collect::<Vec<_>>(),
-    })
-}
-
-#[cfg(feature = "cuda")]
-#[allow(clippy::too_many_arguments)]
-fn run_resident_verify_width_sweep(
-    runner: DeepSeekV4Runner,
-    model_dir: &str,
-    chat_template: &ChatTemplate,
-    prompts: &[String],
-    artifact_load_us: u64,
-    max_layers: usize,
-    output_head_chunk_rows: usize,
-    moe_prefetch_experts: usize,
-    moe_hotset_experts: usize,
-    checkpoint_dspark_block_size: usize,
-    iterations: usize,
-    json: bool,
-) -> anyhow::Result<()> {
-    let checkpoint_reference_verify_rows = checkpoint_dspark_block_size
-        .checked_add(1)
-        .ok_or_else(|| anyhow::anyhow!("checkpoint DSpark verification width overflow"))?;
-    let mut widths = vec![1, 2, 4, checkpoint_reference_verify_rows, 8];
-    widths.sort_unstable();
-    widths.dedup();
-    if prompts.len() != 1 {
-        anyhow::bail!(
-            "--verify-width-sweep requires exactly one --prompt, got {}",
-            prompts.len()
-        );
-    }
-    if iterations == 0 {
-        anyhow::bail!("--verify-iterations must be greater than zero");
-    }
-    if moe_prefetch_experts != 0 {
-        anyhow::bail!(
-            "--verify-width-sweep requires --moe-prefetch-experts 0 so measured I/O is exact"
-        );
-    }
-    if moe_hotset_experts < 48 {
-        anyhow::bail!(
-            "--verify-width-sweep requires --moe-hotset-experts >= 48 for the maximum V=8 route set"
-        );
-    }
-
-    let full_prompt = chat_template.format_turn(&prompts[0], true);
-    let token_ids = runner.encode(&full_prompt)?;
-    let max_width = *widths.last().expect("verification widths are non-empty");
-    if token_ids.len() <= max_width {
-        anyhow::bail!(
-            "--verify-width-sweep prompt encoded to {} tokens; need at least {}",
-            token_ids.len(),
-            max_width + 1
-        );
-    }
-    let prefix_len = token_ids.len() - max_width;
-    let prefix = &token_ids[..prefix_len];
-    let candidates = &token_ids[prefix_len..];
-    let schema = runner.kv_layout_schema().clone();
-    let mut diagnostic =
-        build_page_managed_diagnostic_harness(runner, Box::new(schema), token_ids.len(), 2)?;
-    let capture_slot = diagnostic.create_sequence(0)?;
-    let replay_slot = diagnostic.create_sequence(0)?;
-
-    let mut measurements = Vec::with_capacity(widths.len());
-    for (width_index, width) in widths.into_iter().enumerate() {
-        if width_index > 0 {
-            diagnostic.reset_sequence(capture_slot)?;
-            diagnostic.reset_sequence(replay_slot)?;
-        }
-        for slot in [capture_slot, replay_slot] {
-            diagnostic
-                .execute_sequence_step(slot, ForwardPhase::Prefill, prefix, |runner| {
-                    runner.prefill_tokens_no_logits_batched(prefix)
-                })
-                .map_err(|error| {
-                    anyhow::anyhow!(
-                        "Gate F1 V={width} initial prefill failed for slot {slot:?}: {error}"
-                    )
-                })?;
-        }
-
-        let candidate_rows = &candidates[..width];
-        let mut capture_top1: Option<Vec<(u32, f32)>> = None;
-        let mut samples = Vec::with_capacity(iterations);
-        let mut parity = true;
-        let mut resident_no_io = true;
-        let mut allocation_free = true;
-        for iteration in 0..iterations {
-            if iteration > 0 {
-                for slot in [capture_slot, replay_slot] {
-                    diagnostic.reset_sequence(slot)?;
-                    diagnostic
-                        .execute_sequence_step(
-                            slot,
-                            ForwardPhase::Prefill,
-                            prefix,
-                            |runner| runner.prefill_tokens_no_logits_batched(prefix),
-                        )
-                        .map_err(|error| {
-                            anyhow::anyhow!(
-                                "Gate F1 V={width} iteration={iteration} reset prefill failed for slot {slot:?}: {error}"
-                            )
-                        })?;
-                }
-            }
-            // Capture is deliberately outside T_verify. It installs exactly the
-            // route union used by the immediately following replay sample.
-            let capture =
-                measure_resident_verify_rows(&mut diagnostic, capture_slot, candidate_rows)
-                    .map_err(|error| {
-                        anyhow::anyhow!(
-                            "Gate F1 V={width} iteration={iteration} capture failed: {error}"
-                        )
-                    })?;
-            if let Some(baseline) = &capture_top1 {
-                parity &= same_top1_bits(baseline, &capture.top1);
-            } else {
-                capture_top1 = Some(capture.top1.clone());
-            }
-            let sample = measure_resident_verify_rows(&mut diagnostic, replay_slot, candidate_rows)
-                .map_err(|error| {
-                    anyhow::anyhow!(
-                        "Gate F1 V={width} iteration={iteration} replay failed: {error}"
-                    )
-                })?;
-            parity &= same_top1_bits(
-                capture_top1
-                    .as_deref()
-                    .expect("capture baseline is initialized"),
-                &sample.top1,
-            );
-            resident_no_io &= sample.counters.expert_load_bytes == 0
-                && sample.counters.expert_selected_cold_misses == 0;
-            allocation_free &= sample.counters.device_allocations == 0;
-            samples.push(sample);
-        }
-        measurements.push(ResidentVerifyWidthMeasurement {
-            width,
-            capture_top1: capture_top1.expect("at least one verification iteration"),
-            samples,
-            parity,
-            resident_no_io,
-            allocation_free,
-        });
-    }
-
-    let v4 = measurements
-        .iter()
-        .find(|measurement| measurement.width == 4)
-        .ok_or_else(|| anyhow::anyhow!("V=4 verification measurement is missing"))?;
-    let v4_p50_us = verify_percentile_us(v4, 50);
-    let checkpoint_reference = measurements
-        .iter()
-        .find(|measurement| measurement.width == checkpoint_reference_verify_rows)
-        .ok_or_else(|| {
-            anyhow::anyhow!("checkpoint-reference verification measurement is missing")
-        })?;
-    let checkpoint_reference_p50_us = verify_percentile_us(checkpoint_reference, 50);
-    let checkpoint_reference_rows_per_s_p50 = if checkpoint_reference_p50_us == 0 {
-        0.0
-    } else {
-        checkpoint_reference_verify_rows as f64 * 1_000_000.0 / checkpoint_reference_p50_us as f64
-    };
-    let checkpoint_native_max_external_commit_tokens = checkpoint_reference_verify_rows;
-    let target_only_non_target_budget_s_at_16_p50 =
-        (checkpoint_native_max_external_commit_tokens as f64 / 16.0
-            - checkpoint_reference_p50_us as f64 / 1_000_000.0)
-            .max(0.0);
-    let experimental_above_checkpoint_reaches_16 = measurements.iter().any(|measurement| {
-        if measurement.width <= checkpoint_reference_verify_rows {
-            return false;
-        }
-        let p50_us = verify_percentile_us(measurement, 50);
-        p50_us != 0 && measurement.width as f64 * 1_000_000.0 / p50_us as f64 >= 16.0
-    });
-    let parity = measurements.iter().all(|measurement| measurement.parity);
-    let resident_no_io = measurements
-        .iter()
-        .all(|measurement| measurement.resident_no_io);
-    let allocation_free = measurements
-        .iter()
-        .all(|measurement| measurement.allocation_free);
-
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "mode": "resident_verify_width_sweep",
-                "model": model_dir,
-                "prompt": prompts[0],
-                "chat_template": chat_template.name(),
-                "prompt_token_ids": token_ids,
-                "prefix_tokens": prefix_len,
-                "verification_token_ids": candidates,
-                "checkpoint_dspark_block_size": checkpoint_dspark_block_size,
-                "checkpoint_reference_verify_rows": checkpoint_reference_verify_rows,
-                "iterations": iterations,
-                "max_layers": max_layers,
-                "output_head_chunk_rows": output_head_chunk_rows,
-                "moe_prefetch_experts": moe_prefetch_experts,
-                "moe_hotset_experts": moe_hotset_experts,
-                "artifact_load_s": artifact_load_us as f64 / 1_000_000.0,
-                "widths": measurements.iter().map(|measurement| {
-                    resident_verify_width_json(measurement, checkpoint_reference_verify_rows)
-                }).collect::<Vec<_>>(),
-                "gate_f1": {
-                    "roofline_probe_only": true,
-                    "checkpoint_native_width_contract_applied": true,
-                    "checkpoint_native_max_external_commit_tokens": checkpoint_native_max_external_commit_tokens,
-                    "target_only_non_target_budget_s_at_16_p50": target_only_non_target_budget_s_at_16_p50,
-                    "complete_cycle_viability_measured": false,
-                    "parity": parity,
-                    "resident_no_io": resident_no_io,
-                    "allocation_free": allocation_free,
-                    "v4_over_250_ms": v4_p50_us > 250_000,
-                    "v4_over_200_ms": v4_p50_us > 200_000,
-                    "checkpoint_reference_rows_per_s_p50": checkpoint_reference_rows_per_s_p50,
-                    "checkpoint_reference_target_only_reaches_16_rows_s": checkpoint_reference_rows_per_s_p50 >= 16.0,
-                    "experimental_above_checkpoint_reaches_16_rows_s": experimental_above_checkpoint_reaches_16,
-                },
-            }))?
-        );
-    } else {
-        println!("=== DSV4 Gate F1 Resident Verification Roofline Sweep ===");
-        println!("prefix tokens:      {prefix_len}");
-        println!("checkpoint gamma:   {checkpoint_dspark_block_size}");
-        println!("reference rows:     {checkpoint_reference_verify_rows}");
-        println!("iterations:         {iterations}");
-        println!("resident no-I/O:    {resident_no_io}");
-        println!("allocation-free:    {allocation_free}");
-        println!("parity:             {parity}");
-        for measurement in &measurements {
-            let p50_us = verify_percentile_us(measurement, 50);
-            let p95_us = verify_percentile_us(measurement, 95);
-            let rows_per_s = if p50_us == 0 {
-                0.0
-            } else {
-                measurement.width as f64 * 1_000_000.0 / p50_us as f64
-            };
-            println!(
-                "V={:<2} p50={:>9.3} ms p95={:>9.3} ms rows/s={:>8.3} no_io={} alloc_free={} parity={}",
-                measurement.width,
-                p50_us as f64 / 1_000.0,
-                p95_us as f64 / 1_000.0,
-                rows_per_s,
-                measurement.resident_no_io,
-                measurement.allocation_free,
-                measurement.parity,
-            );
-        }
-        println!("V=4 > 250 ms:       {}", v4_p50_us > 250_000);
-        println!("V=4 > 200 ms:       {}", v4_p50_us > 200_000);
-        println!("reference rows/s:     {checkpoint_reference_rows_per_s_p50:.3} (target-only)");
-        println!(
-            "non-target budget:     {:.3} ms at 16 tok/s and 100% acceptance",
-            target_only_non_target_budget_s_at_16_p50 * 1_000.0
-        );
-        println!(
-            "experimental >=16:    {experimental_above_checkpoint_reaches_16} (not a release gate)"
-        );
-        println!("complete cycle:      not measured");
-    }
-
-    if !parity {
-        anyhow::bail!("Gate F1 packed verification parity failed");
-    }
-    if !resident_no_io {
-        anyhow::bail!("Gate F1 measured verification performed selected-expert I/O");
-    }
-    Ok(())
 }
 
 #[cfg(not(feature = "cuda"))]
@@ -2932,23 +2007,11 @@ pub fn cmd_bench_interactive(
     _moe_hotset_experts: usize,
     _golden_trace_path: Option<&str>,
     _json: bool,
-    _resident_replay: bool,
-    _verify_width_sweep: bool,
-    _verify_iterations: usize,
 ) -> anyhow::Result<()> {
     anyhow::bail!("bench-interactive requires --features cuda")
 }
 
 #[cfg(feature = "cuda")]
-fn dsv4_expert_prewarm_enabled() -> bool {
-    std::env::var("FERRULE_DSV4_EXPERT_PREWARM")
-        .map(|value| {
-            let value = value.trim().to_ascii_lowercase();
-            value == "1" || value == "true" || value == "on"
-        })
-        .unwrap_or(false)
-}
-
 #[cfg(feature = "cuda")]
 fn duration_us(d: Duration) -> u64 {
     d.as_micros().min(u128::from(u64::MAX)) as u64

@@ -3,6 +3,8 @@
 pub mod page_manager;
 
 pub use page_manager::{
-    BlockTable as PageBlockTable, KvPageManager, KvPageManagerStats, KvReservationBindings,
-    KvReservationCommit, PreemptedKvState, PreparedKvSequenceFork,
+    AbortKvReservationsError, BlockTable as PageBlockTable, ConfirmKvRetirementError,
+    KvPageManager, KvPageManagerStats, KvReservation, KvReservationBindings, KvReservationCommit,
+    KvReservationId, KvRetirement, PreemptedKvState, PrepareKvCommitError, PreparedKvCommit,
+    PreparedKvSequenceFork,
 };

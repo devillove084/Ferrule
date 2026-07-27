@@ -1,6 +1,5 @@
 //! Free helper functions: RMSNorm, RoPE, YaRN, top-k, cache keys.
 
-use std::cmp::Ordering;
 use std::path::Path;
 
 use crate::artifact::format::{
@@ -19,7 +18,6 @@ use super::config::{
     DeepSeekV4AttentionConfig, DeepSeekV4RopeParams, with_deepseek_v4_linear_execution_policy,
 };
 use super::operators::DeepSeekV4OperatorContext;
-use crate::runner::TokenLogit;
 
 pub(crate) fn bind_aux_linear(
     auxiliary: &[ArtifactTensorSlice],
@@ -726,13 +724,6 @@ pub(crate) fn f32_key(json: &serde_json::Value, keys: &[&str]) -> Option<f32> {
             .and_then(|value| value.as_f64())
             .map(|value| value as f32)
     })
-}
-
-pub(crate) fn rank_logits_desc(left: &TokenLogit, right: &TokenLogit) -> Ordering {
-    right
-        .logit
-        .total_cmp(&left.logit)
-        .then_with(|| left.token_id.cmp(&right.token_id))
 }
 
 pub(crate) fn dot(a: &[f32], b: &[f32]) -> f32 {

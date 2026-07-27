@@ -4,15 +4,15 @@ use std::time::{Duration, Instant};
 
 use crate::bench::{RuntimeBenchSummary, RuntimeCounters};
 use ferrule_model::{
-    ChatTemplate, ModelExecutionBackend, ModelRunner,
+    ChatTemplate, ModelExecutionBackend,
     models::deepseek_v4::{DeepSeekV4PrepareOptions, DeepSeekV4Runner},
 };
 use ferrule_runtime::{
-    GenerateRequest, RequestId, ResidentActionKind, ResidentDriverStep, ResidentSchedulerConfig,
-    ResidentTopKDriverConfig, SessionId,
+    ExpertIoBudget, GenerateRequest, LocalResidentInferenceEngine, RequestId, ResidentActionKind,
+    ResidentDriverStep, ResidentSchedulerConfig, ResidentTopKDriverConfig, SessionId,
 };
 
-use crate::commands::resident::build_resident_topk_driver;
+use crate::commands::resident::{block_on_local_inference, build_resident_topk_driver};
 
 use super::stats::print_deepseek_v4_runtime_stats;
 
@@ -27,7 +27,41 @@ pub fn cmd_deepseek_v4_generate(
     output_head_chunk_rows: usize,
     max_tensor_mb: u64,
     expert_reader_max_slice_mb: u64,
-    backend: &str,
+    stop_at_eos: bool,
+    verbose_tokens: bool,
+    chat_prompt: bool,
+    json: bool,
+    warmup_tokens: usize,
+    moe_prefetch_experts: usize,
+    moe_hotset_experts: usize,
+) -> anyhow::Result<()> {
+    block_on_local_inference(cmd_deepseek_v4_generate_async(
+        model_dir,
+        prompt,
+        max_new_tokens,
+        max_layers,
+        output_head_chunk_rows,
+        max_tensor_mb,
+        expert_reader_max_slice_mb,
+        stop_at_eos,
+        verbose_tokens,
+        chat_prompt,
+        json,
+        warmup_tokens,
+        moe_prefetch_experts,
+        moe_hotset_experts,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_deepseek_v4_generate_async(
+    model_dir: &str,
+    prompt: &str,
+    max_new_tokens: usize,
+    max_layers: usize,
+    output_head_chunk_rows: usize,
+    max_tensor_mb: u64,
+    expert_reader_max_slice_mb: u64,
     stop_at_eos: bool,
     verbose_tokens: bool,
     chat_prompt: bool,
@@ -45,13 +79,12 @@ pub fn cmd_deepseek_v4_generate(
         moe_hotset_experts,
         ..DeepSeekV4PrepareOptions::default()
     };
-    let operator_backend = ModelExecutionBackend::parse(backend)?;
     let load_start = Instant::now();
-    let mut runner = DeepSeekV4Runner::load_hf_with_options_and_backend(
+    let runner = DeepSeekV4Runner::load_hf_with_options_and_backend(
         model_path,
         max_tensor_mb.saturating_mul(1024 * 1024),
         options,
-        operator_backend,
+        ModelExecutionBackend::Cuda,
     )?;
     let load_elapsed = load_start.elapsed();
 
@@ -89,7 +122,7 @@ pub fn cmd_deepseek_v4_generate(
         max_decode_batch: 1,
         ..Default::default()
     };
-    let build_driver = |runner: DeepSeekV4Runner, ctx_size: usize, token_budget: usize| {
+    let build_driver = |runner: DeepSeekV4Runner, ctx_size: usize| {
         let schema = runner.kv_layout_schema().clone();
         build_resident_topk_driver(
             runner,
@@ -99,20 +132,24 @@ pub fn cmd_deepseek_v4_generate(
                 ctx_size,
                 stop_at_eos,
                 // Preserve this command's historical EOS behavior.
-                append_eos_to_session: false,
-                dspark_confidence_threshold: 0.2,
-                max_steps_per_run: ctx_size.saturating_add(token_budget).saturating_add(64),
+                proposal_confidence_threshold: 0.2,
             },
         )
     };
 
-    // Warmup uses its own explicit session and driver. Rebuilding the driver keeps
-    // warmed expert residency while preventing warmup KV/session state and driver
-    // counters from entering the measured run.
+    // Warmup and measurement share one completion owner because model completion
+    // reactors are transferred exactly once. The dedicated warmup session is
+    // drained before measurement, and counter baselines exclude its work.
+    let runtime_ctx = prompt_tokens
+        .len()
+        .saturating_add(max_new_tokens.max(warmup_tokens))
+        .max(1);
+    let mut driver = LocalResidentInferenceEngine::new(
+        build_driver(runner, runtime_ctx)?,
+        ExpertIoBudget::unbounded(),
+    );
     if max_new_tokens > 0 && warmup_tokens > 0 {
-        let warmup_ctx = prompt_tokens.len().saturating_add(warmup_tokens).max(1);
-        let mut warmup_driver = build_driver(runner, warmup_ctx, warmup_tokens)?;
-        warmup_driver.submit(GenerateRequest {
+        driver.submit(GenerateRequest {
             id: RequestId(0),
             session_id: Some(SessionId(u64::MAX)),
             prompt_tokens: prompt_tokens.clone(),
@@ -121,22 +158,27 @@ pub fn cmd_deepseek_v4_generate(
             ignore_eos: !stop_at_eos,
         });
         let warmup_start = Instant::now();
-        warmup_driver.run_until_blocked(|_| Ok(()))?;
-        let _ = warmup_driver.drain_finished();
+        loop {
+            match driver.step(&mut |_| Ok(())).await? {
+                ResidentDriverStep::Idle => break,
+                ResidentDriverStep::Blocked => {
+                    anyhow::bail!("resident warmup remained blocked after a completion wake")
+                }
+                ResidentDriverStep::WaitingForModelProgress(_)
+                | ResidentDriverStep::Executed { .. } => {}
+            }
+        }
+        let _ = driver.drain_finished();
         if !json {
             eprintln!(
                 "[warmup] {warmup_tokens} tokens in {:.3}s",
                 warmup_start.elapsed().as_secs_f64()
             );
         }
-        runner = warmup_driver.into_runner()?;
-        runner.reset_session()?;
     }
 
-    let measured_ctx = prompt_tokens.len().saturating_add(max_new_tokens).max(1);
-    let mut driver = build_driver(runner, measured_ctx, max_new_tokens)?;
     let mut generated = Vec::new();
-    let mut final_position = driver.executor().runner().position();
+    let mut final_position = driver.model_observability_snapshot().position;
     let mut prefill_elapsed = Duration::ZERO;
     let mut decode_elapsed = Duration::ZERO;
     let mut decode_counters_baseline: Option<
@@ -155,33 +197,36 @@ pub fn cmd_deepseek_v4_generate(
 
         loop {
             let step_start = Instant::now();
-            let step = driver.step(&mut |event| {
-                if verbose_tokens {
-                    eprintln!(
-                        "[{}] token={} logit={:.6}",
-                        event.index,
-                        event.token,
-                        event.logit.unwrap_or(f32::NAN)
-                    );
-                }
-                if !json {
-                    print!("{}", event.text);
-                    std::io::stdout().flush()?;
-                }
-                generated.push(event.token);
-                Ok(())
-            })?;
+            let step = driver
+                .step(&mut |event| {
+                    if verbose_tokens {
+                        eprintln!(
+                            "[{}] token={} logit={:.6}",
+                            event.index,
+                            event.token,
+                            event.logit.unwrap_or(f32::NAN)
+                        );
+                    }
+                    if !json {
+                        print!("{}", event.text);
+                        std::io::stdout().flush()?;
+                    }
+                    generated.push(event.token);
+                    Ok(())
+                })
+                .await?;
             let step_elapsed = step_start.elapsed();
             match step {
                 ResidentDriverStep::Executed { action_kind, .. } => match action_kind {
                     ResidentActionKind::Prefill | ResidentActionKind::Mixed => {
                         prefill_elapsed += step_elapsed;
                         decode_counters_baseline =
-                            Some(driver.executor().runner().operator_runtime_counters());
+                            Some(driver.model_observability_snapshot().operator);
                     }
                     ResidentActionKind::Decode => decode_elapsed += step_elapsed,
                     ResidentActionKind::Finish | ResidentActionKind::Cancel => {}
                 },
+                ResidentDriverStep::WaitingForModelProgress(_) => decode_elapsed += step_elapsed,
                 ResidentDriverStep::Idle => break,
                 ResidentDriverStep::Blocked => {
                     anyhow::bail!("resident runtime driver blocked during DSV4 generation")
@@ -197,9 +242,11 @@ pub fn cmd_deepseek_v4_generate(
     }
 
     let elapsed = prefill_elapsed + decode_elapsed;
-    let runner = driver.executor().runner();
+    let model_info = driver.model_info();
+    let bound_layer_count = driver.bound_layer_count().unwrap_or_default();
+    let observability = driver.model_observability_snapshot();
     if json {
-        let layer_stats = runner.layer_runtime_stats();
+        let layer_stats = observability.layer_runtime;
         let resident_experts = layer_stats.iter().map(|stat| stat.resident_experts).sum();
         let resident_bytes = layer_stats
             .iter()
@@ -218,7 +265,7 @@ pub fn cmd_deepseek_v4_generate(
                 })
             })
             .collect::<Vec<_>>();
-        let op_counters = runner.operator_runtime_counters();
+        let op_counters = observability.operator;
         // If warmup ran, subtract warmup baseline so counters reflect
         // only the timed decode phase.
         let (expert_loads, expert_load_bytes, expert_evictions, expert_selected) =
@@ -380,7 +427,7 @@ pub fn cmd_deepseek_v4_generate(
         let summary = RuntimeBenchSummary::new(counters, prompt_tokens.len(), generated.len());
         let out = serde_json::json!({
             "model": model_dir,
-            "backend": runner.operator_backend().as_str(),
+            "backend": model_info.backend,
             "prompt": prompt,
             "prompt_tokens": prompt_tokens.len(),
             "prompt_token_ids": prompt_tokens,
@@ -390,7 +437,7 @@ pub fn cmd_deepseek_v4_generate(
             "warmup_tokens": warmup_tokens,
             "moe_prefetch_experts": moe_prefetch_experts,
             "moe_hotset_experts": moe_hotset_experts,
-            "bound_layers": runner.bound_layer_count(),
+            "bound_layers": bound_layer_count,
             "position": final_position,
             "layers": layers,
             "load_seconds": load_elapsed.as_secs_f64(),
@@ -405,8 +452,8 @@ pub fn cmd_deepseek_v4_generate(
         println!("--- stats ---");
         println!("generated_tokens: {:?}", generated);
         println!("position:   {final_position}");
-        println!("bound layers: {}", runner.bound_layer_count());
-        print_deepseek_v4_runtime_stats(runner);
+        println!("bound layers: {bound_layer_count}");
+        print_deepseek_v4_runtime_stats(&observability.layer_runtime);
         println!("run:        {:.3} ms", elapsed.as_secs_f64() * 1000.0);
     }
     Ok(())

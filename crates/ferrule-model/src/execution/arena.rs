@@ -1,4 +1,4 @@
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 
@@ -7,22 +7,23 @@ use ferrule_common::Result;
 /// Cumulative lifecycle statistics for a [`PersistentArenaPool`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PersistentArenaPoolStats {
-    /// Acquisitions that reused an existing exact-key bucket.
+    /// Acquisitions that reused an idle arena from the exact-key bucket.
     pub hits: u64,
-    /// Acquisitions for which the exact key was absent, including failed builds.
+    /// Acquisitions for which the exact-key bucket had no idle arena, including failed builds.
     pub misses: u64,
-    /// Successfully built buckets. Failed builds are never installed or counted.
+    /// Successfully built arenas. Failed builds are never installed or counted.
     pub installs: u64,
 }
 
-/// Reusable arenas indexed only by exact execution-shape buckets.
+/// Reusable arenas grouped into exact execution-shape buckets.
 ///
-/// A lease mutably borrows the pool, making the single-active-lease rule explicit
-/// in the type system. Dropping the lease returns its arena to the same exact key.
-/// An owned checkout instead permits independent pool access until explicitly checked in.
+/// Each key may retain multiple idle arenas. A lease mutably borrows the pool, making
+/// the single-active-lease rule explicit in the type system. Dropping the lease returns
+/// its arena to the same exact key. An owned checkout instead permits independent pool
+/// access until explicitly checked in.
 #[derive(Debug)]
 pub struct PersistentArenaPool<K, A> {
-    available: HashMap<K, A>,
+    available: HashMap<K, Vec<A>>,
     stats: PersistentArenaPoolStats,
 }
 
@@ -43,7 +44,7 @@ where
         Self::default()
     }
 
-    /// Number of exact buckets currently available for leasing.
+    /// Number of exact-key buckets containing at least one idle arena.
     pub fn len(&self) -> usize {
         self.available.len()
     }
@@ -60,7 +61,7 @@ where
         self.stats
     }
 
-    /// Drops all buckets without resetting cumulative lifecycle statistics.
+    /// Drops all idle arenas without resetting cumulative lifecycle statistics.
     pub fn clear(&mut self) {
         self.available.clear();
     }
@@ -69,21 +70,26 @@ where
     where
         F: FnOnce() -> Result<A>,
     {
-        match self.available.remove_entry(&key) {
-            Some((key, arena)) => {
-                self.stats.hits = self.stats.hits.saturating_add(1);
-                Ok((key, arena, true))
+        if let Some((arena, bucket_is_empty)) = self.available.get_mut(&key).map(|bucket| {
+            let arena = bucket
+                .pop()
+                .expect("available exact-key bucket contains an arena");
+            (arena, bucket.is_empty())
+        }) {
+            if bucket_is_empty {
+                self.available.remove(&key);
             }
-            None => {
-                self.stats.misses = self.stats.misses.saturating_add(1);
-                let arena = build()?;
-                self.stats.installs = self.stats.installs.saturating_add(1);
-                Ok((key, arena, false))
-            }
+            self.stats.hits = self.stats.hits.saturating_add(1);
+            Ok((key, arena, true))
+        } else {
+            self.stats.misses = self.stats.misses.saturating_add(1);
+            let arena = build()?;
+            self.stats.installs = self.stats.installs.saturating_add(1);
+            Ok((key, arena, false))
         }
     }
 
-    /// Acquires an exact bucket, building it only when that exact key is absent.
+    /// Acquires an arena, building it only when its exact-key bucket has no idle arena.
     ///
     /// A failed build is returned directly and never publishes a pool entry.
     pub fn acquire<F>(&mut self, key: K, build: F) -> Result<ArenaLease<'_, K, A>>
@@ -99,7 +105,7 @@ where
         })
     }
 
-    /// Checks out an owned exact bucket without borrowing the pool after return.
+    /// Checks out an owned arena without borrowing the pool after return.
     ///
     /// A failed build is returned directly and never publishes a pool entry.
     pub fn checkout<F>(&mut self, key: K, build: F) -> Result<OwnedArenaCheckout<K, A>>
@@ -112,23 +118,16 @@ where
 
     /// Returns an owned checkout to its exact-key bucket.
     ///
-    /// If that key is already available, the available arena is preserved and an error
-    /// is returned instead of silently replacing it.
+    /// Consuming the checkout preserves exactly-once checkin semantics. The arena is
+    /// appended even when the same key already has other idle arenas.
     pub fn checkin(&mut self, checkout: OwnedArenaCheckout<K, A>) -> Result<()> {
         let OwnedArenaCheckout {
             key,
             arena,
             reused: _,
         } = checkout;
-        match self.available.entry(key) {
-            Entry::Vacant(entry) => {
-                entry.insert(arena);
-                Ok(())
-            }
-            Entry::Occupied(_) => Err(ferrule_common::Error::Execution(
-                "arena checkout exact-key bucket is already available".into(),
-            )),
-        }
+        self.available.entry(key).or_default().push(arena);
+        Ok(())
     }
 
     /// Alias emphasizing that allocation/build may fail.
@@ -190,7 +189,7 @@ pub struct ArenaLease<'a, K, A>
 where
     K: Eq + Hash,
 {
-    available: &'a mut HashMap<K, A>,
+    available: &'a mut HashMap<K, Vec<A>>,
     key: Option<K>,
     arena: Option<A>,
     reused: bool,
@@ -248,11 +247,7 @@ where
             .arena
             .take()
             .expect("arena lease value is present on drop");
-        let replaced = self.available.insert(key, arena);
-        debug_assert!(
-            replaced.is_none(),
-            "leased arena bucket was already present"
-        );
+        self.available.entry(key).or_default().push(arena);
     }
 }
 
@@ -439,20 +434,117 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_key_checkin_is_rejected_without_replacement() {
+    fn same_key_owned_checkouts_coexist_and_can_be_checked_in_in_reverse_order() {
         let mut pool = PersistentArenaPool::<u32, u32>::new();
         let first = pool.checkout(5, || Ok(10)).unwrap();
         let second = pool.checkout(5, || Ok(20)).unwrap();
+
+        assert!(!first.reused());
+        assert!(!second.reused());
+        assert!(pool.is_empty());
+
         pool.checkin(second).unwrap();
+        pool.checkin(first).unwrap();
+        assert_eq!(pool.len(), 1);
 
-        let result = pool.checkin(first);
-        assert!(matches!(result, Err(Error::Execution(_))));
-
-        let checkout = pool
+        let first_reused = pool
             .checkout(5, || -> Result<u32> {
-                panic!("duplicate checkin must preserve the available bucket")
+                panic!("first checked-in arena should be reused")
             })
             .unwrap();
-        assert_eq!(*checkout, 20);
+        let second_reused = pool
+            .checkout(5, || -> Result<u32> {
+                panic!("second checked-in arena should be reused")
+            })
+            .unwrap();
+        assert!(first_reused.reused());
+        assert!(second_reused.reused());
+
+        let mut values = [*first_reused, *second_reused];
+        values.sort_unstable();
+        assert_eq!(values, [10, 20]);
+        assert_eq!(
+            pool.stats(),
+            PersistentArenaPoolStats {
+                hits: 2,
+                misses: 2,
+                installs: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn same_key_bucket_reuses_every_arena_across_repeated_rounds() {
+        let mut pool = PersistentArenaPool::<u32, &'static str>::new();
+        let first = pool.checkout(9, || Ok("first")).unwrap();
+        let second = pool.checkout(9, || Ok("second")).unwrap();
+        pool.checkin(first).unwrap();
+        pool.checkin(second).unwrap();
+
+        for _ in 0..3 {
+            let first = pool
+                .checkout(9, || -> Result<&'static str> {
+                    panic!("all arenas should remain reusable")
+                })
+                .unwrap();
+            let second = pool
+                .checkout(9, || -> Result<&'static str> {
+                    panic!("all arenas should remain reusable")
+                })
+                .unwrap();
+
+            let mut values = [*first, *second];
+            values.sort_unstable();
+            assert_eq!(values, ["first", "second"]);
+
+            pool.checkin(second).unwrap();
+            pool.checkin(first).unwrap();
+        }
+
+        assert_eq!(
+            pool.stats(),
+            PersistentArenaPoolStats {
+                hits: 6,
+                misses: 2,
+                installs: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn failed_build_does_not_affect_other_owned_checkouts() {
+        let mut pool = PersistentArenaPool::<char, u32>::new();
+        let checkout_a = pool.checkout('A', || Ok(10)).unwrap();
+        let checkout_b = pool.checkout('B', || Ok(20)).unwrap();
+
+        let failed_a = pool.checkout('A', || Err(Error::Execution("A failed".into())));
+        assert!(matches!(failed_a, Err(Error::Execution(_))));
+        assert_eq!(*checkout_a, 10);
+        assert_eq!(*checkout_b, 20);
+        assert!(pool.is_empty());
+
+        pool.checkin(checkout_b).unwrap();
+        pool.checkin(checkout_a).unwrap();
+
+        let reused_a = pool
+            .checkout('A', || -> Result<u32> {
+                panic!("existing A checkout should remain reusable")
+            })
+            .unwrap();
+        let reused_b = pool
+            .checkout('B', || -> Result<u32> {
+                panic!("existing B checkout should remain reusable")
+            })
+            .unwrap();
+        assert_eq!(*reused_a, 10);
+        assert_eq!(*reused_b, 20);
+        assert_eq!(
+            pool.stats(),
+            PersistentArenaPoolStats {
+                hits: 2,
+                misses: 3,
+                installs: 2,
+            }
+        );
     }
 }

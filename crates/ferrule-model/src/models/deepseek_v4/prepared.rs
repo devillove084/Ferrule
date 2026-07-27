@@ -1,13 +1,11 @@
 //! Immutable DeepSeek-V4 preparation output and execution policy resolution.
 
 use std::env as process_environment;
-use std::num::NonZeroU32;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use ferrule_common::execution::{
-    ExecutionCapabilities, KvBindingMode, KvLayoutSchema, KvPlaneDescriptor, LogitsRowPolicy,
-};
+use ferrule_common::execution::{KvLayoutSchema, KvPlaneDescriptor};
 use ferrule_common::kernel_plan::ModelKernelPlan;
 #[cfg(feature = "cuda")]
 use ferrule_common::kernel_plan::{
@@ -53,11 +51,9 @@ impl Default for DeepSeekV4PrepareOptions {
     }
 }
 
-/// Prepared external KV contract for the current serial DSV4 runner.
+/// Physical paged-KV layout compiled for DeepSeek-V4 resident execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeepSeekV4KvLayoutSchema {
-    binding_mode: KvBindingMode,
-    max_sequences: usize,
     layer_count: usize,
     window_size: usize,
     head_dim: usize,
@@ -68,14 +64,6 @@ pub struct DeepSeekV4KvLayoutSchema {
 }
 
 impl DeepSeekV4KvLayoutSchema {
-    pub const fn binding_mode(&self) -> KvBindingMode {
-        self.binding_mode
-    }
-
-    pub const fn max_sequences(&self) -> usize {
-        self.max_sequences
-    }
-
     pub const fn layer_count(&self) -> usize {
         self.layer_count
     }
@@ -139,13 +127,9 @@ pub struct DeepSeekV4ExecutionPolicy {
     hash_decode_prefetch_window: bool,
     prefill_hash_lookahead: bool,
     managed_experts: bool,
-    fused_indexer_topk: bool,
-    fused_indexer_topk_prefill: bool,
-    fused_indexer_topk_decode: bool,
     expert_upload_inflight: usize,
     profile: bool,
     profile_sync: bool,
-    parity_checkpoint_selection: Option<(usize, String)>,
 }
 
 impl Default for DeepSeekV4ExecutionPolicy {
@@ -157,13 +141,9 @@ impl Default for DeepSeekV4ExecutionPolicy {
             hash_decode_prefetch_window: false,
             prefill_hash_lookahead: false,
             managed_experts: true,
-            fused_indexer_topk: true,
-            fused_indexer_topk_prefill: false,
-            fused_indexer_topk_decode: false,
             expert_upload_inflight: 32,
             profile: false,
             profile_sync: false,
-            parity_checkpoint_selection: None,
         }
     }
 }
@@ -193,14 +173,6 @@ impl DeepSeekV4ExecutionPolicy {
         self.managed_experts
     }
 
-    pub const fn fused_indexer_prefill_topk(&self) -> bool {
-        self.fused_indexer_topk && self.fused_indexer_topk_prefill
-    }
-
-    pub const fn fused_indexer_decode_topk(&self) -> bool {
-        self.fused_indexer_topk && self.fused_indexer_topk_decode
-    }
-
     pub const fn expert_upload_inflight(&self) -> usize {
         self.expert_upload_inflight
     }
@@ -211,10 +183,6 @@ impl DeepSeekV4ExecutionPolicy {
 
     pub const fn profile_sync(&self) -> bool {
         self.profile_sync
-    }
-
-    pub fn parity_checkpoint_selection(&self) -> Option<(usize, String)> {
-        self.parity_checkpoint_selection.clone()
     }
 
     fn resolve() -> Result<Self> {
@@ -259,21 +227,6 @@ impl DeepSeekV4ExecutionPolicy {
             lookup("FERRULE_MANAGED_EXPERTS")?,
             true,
         )?;
-        let fused_indexer_topk = parse_env_bool(
-            "FERRULE_DSV4_FUSED_INDEXER_TOPK",
-            lookup("FERRULE_DSV4_FUSED_INDEXER_TOPK")?,
-            true,
-        )?;
-        let fused_indexer_topk_prefill = parse_env_bool(
-            "FERRULE_DSV4_FUSED_INDEXER_TOPK_PREFILL",
-            lookup("FERRULE_DSV4_FUSED_INDEXER_TOPK_PREFILL")?,
-            false,
-        )?;
-        let fused_indexer_topk_decode = parse_env_bool(
-            "FERRULE_DSV4_FUSED_INDEXER_TOPK_DECODE",
-            lookup("FERRULE_DSV4_FUSED_INDEXER_TOPK_DECODE")?,
-            false,
-        )?;
 
         let expert_upload_inflight = parse_env_usize(
             "FERRULE_DSV4_EXPERT_UPLOAD_INFLIGHT",
@@ -295,10 +248,6 @@ impl DeepSeekV4ExecutionPolicy {
                 lookup("FERRULE_DSV4_PROFILE")?,
                 false,
             )?;
-        let parity_checkpoint_selection = parse_parity_checkpoint_selection(
-            lookup("FERRULE_DSV4_PARITY_CHECKPOINT_LAYER")?,
-            lookup("FERRULE_DSV4_PARITY_CHECKPOINT_STAGE")?,
-        )?;
 
         Ok(Self {
             prefill_progress,
@@ -307,13 +256,9 @@ impl DeepSeekV4ExecutionPolicy {
             hash_decode_prefetch_window,
             prefill_hash_lookahead,
             managed_experts,
-            fused_indexer_topk,
-            fused_indexer_topk_prefill,
-            fused_indexer_topk_decode,
             expert_upload_inflight,
             profile,
             profile_sync,
-            parity_checkpoint_selection,
         })
     }
 }
@@ -466,7 +411,6 @@ pub fn prepare(
 ) -> Result<DeepSeekV4PreparedModelPlan> {
     validate_options(&model, options)?;
     let policy = DeepSeekV4ExecutionPolicy::resolve()?;
-    let capabilities = execution_capabilities(model.config.vocab_size)?;
     let mtp = model.load_mtp()?;
     validate_mtp_attachment(&model, mtp.as_ref())?;
 
@@ -549,8 +493,6 @@ pub fn prepare(
         options.max_layers
     };
     let kv_layout = DeepSeekV4KvLayoutSchema {
-        binding_mode: KvBindingMode::None,
-        max_sequences: usize::MAX,
         layer_count: kv_layer_count,
         window_size: model.config.window_size,
         head_dim: model.config.head_dim,
@@ -642,7 +584,7 @@ pub fn prepare(
         mtp_transformer_kernel_plan,
     };
 
-    publish_prepared(Ok((capabilities, resources)))
+    publish_prepared(Ok(resources))
 }
 
 #[cfg(feature = "cuda")]
@@ -1081,42 +1023,17 @@ fn validate_options(
     Ok(())
 }
 
-fn execution_capabilities(vocab_size: usize) -> Result<ExecutionCapabilities> {
-    let vocab_size = u32::try_from(vocab_size)
-        .ok()
-        .and_then(NonZeroU32::new)
-        .ok_or_else(|| {
-            Error::Model(format!(
-                "DeepSeek-V4 vocabulary size {vocab_size} is not representable as a non-zero u32"
-            ))
-        })?;
-    let max_packed_rows = usize::try_from(u32::MAX).unwrap_or(usize::MAX);
-    Ok(ExecutionCapabilities {
-        max_batch_tokens: max_packed_rows,
-        max_sequences: 1,
-        max_prefill_query_tokens_per_sequence: max_packed_rows,
-        max_decode_query_tokens_per_sequence: 1,
-        max_top_k: NonZeroU32::new(40),
-        supports_prefill: true,
-        supports_decode: true,
-        supports_mixed: false,
-        full_logits_width: Some(vocab_size),
-        kv_binding_mode: KvBindingMode::None,
-        logits_row_policy: LogitsRowPolicy::LastPerSequence,
-    })
-}
-
-fn publish_prepared<R>(prepared: Result<(ExecutionCapabilities, R)>) -> Result<PreparedModel<R>> {
+fn publish_prepared<R>(prepared: Result<R>) -> Result<PreparedModel<R>> {
     publish_prepared_with_generation(&NEXT_PREPARED_GENERATION, prepared)
 }
 
 fn publish_prepared_with_generation<R>(
     generations: &AtomicU64,
-    prepared: Result<(ExecutionCapabilities, R)>,
+    prepared: Result<R>,
 ) -> Result<PreparedModel<R>> {
-    let (capabilities, resources) = prepared?;
+    let resources = prepared?;
     let generation = generations.fetch_add(1, Ordering::Relaxed);
-    Ok(PreparedModel::new(generation, capabilities, resources))
+    Ok(PreparedModel::new(generation, resources))
 }
 
 fn parse_env_bool(name: &str, value: Option<String>, default: bool) -> Result<bool> {
@@ -1143,33 +1060,9 @@ fn parse_env_usize(name: &str, value: Option<String>, default: usize) -> Result<
     })
 }
 
-fn parse_parity_checkpoint_selection(
-    layer: Option<String>,
-    stage: Option<String>,
-) -> Result<Option<(usize, String)>> {
-    match (layer, stage) {
-        (None, None) => Ok(None),
-        (Some(layer), Some(stage)) => {
-            let layer = parse_env_usize("FERRULE_DSV4_PARITY_CHECKPOINT_LAYER", Some(layer), 0)?;
-            let stage = stage.trim();
-            if stage.is_empty() {
-                return Err(Error::Model(
-                    "DeepSeek-V4 execution policy FERRULE_DSV4_PARITY_CHECKPOINT_STAGE must not be empty".into(),
-                ));
-            }
-            Ok(Some((layer, stage.to_owned())))
-        }
-        _ => Err(Error::Model(
-            "DeepSeek-V4 parity checkpoint selection requires both FERRULE_DSV4_PARITY_CHECKPOINT_LAYER and FERRULE_DSV4_PARITY_CHECKPOINT_STAGE".into(),
-        )),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-
-    use ferrule_common::execution::{KvBindingMode, LogitsRowPolicy};
 
     use super::*;
     use crate::execution::ModelExecutionBackend;
@@ -1201,27 +1094,8 @@ mod tests {
     }
 
     #[test]
-    fn dsv4_capabilities_truthfully_describe_serial_runner() {
-        let capabilities = execution_capabilities(129_280).unwrap();
-        assert_eq!(capabilities.max_sequences, 1);
-        assert_eq!(capabilities.max_decode_query_tokens_per_sequence, 1);
-        assert_eq!(capabilities.max_top_k.unwrap().get(), 40);
-        assert!(capabilities.supports_prefill);
-        assert!(capabilities.supports_decode);
-        assert!(!capabilities.supports_mixed);
-        assert_eq!(capabilities.full_logits_width.unwrap().get(), 129_280);
-        assert_eq!(capabilities.kv_binding_mode, KvBindingMode::None);
-        assert_eq!(
-            capabilities.logits_row_policy,
-            LogitsRowPolicy::LastPerSequence
-        );
-    }
-
-    #[test]
     fn dsv4_kv_schema_publishes_all_physical_planes() {
         let schema = DeepSeekV4KvLayoutSchema {
-            binding_mode: KvBindingMode::None,
-            max_sequences: 8,
             layer_count: 2,
             window_size: 128,
             head_dim: 64,
@@ -1282,12 +1156,9 @@ mod tests {
             ("FERRULE_DSV4_LOOKAHEAD_PREFETCH", "0"),
             ("FERRULE_DSV4_HASH_PREFETCH_WINDOW", "true"),
             ("FERRULE_MANAGED_EXPERTS", "false"),
-            ("FERRULE_DSV4_FUSED_INDEXER_TOPK_PREFILL", "true"),
             ("FERRULE_DSV4_EXPERT_UPLOAD_INFLIGHT", "7"),
             ("FERRULE_DSV4_PROFILE", "0"),
             ("FERRULE_DSV4_PROFILE_SYNC", "1"),
-            ("FERRULE_DSV4_PARITY_CHECKPOINT_LAYER", "4"),
-            ("FERRULE_DSV4_PARITY_CHECKPOINT_STAGE", "attention"),
         ]);
         let policy = DeepSeekV4ExecutionPolicy::resolve_with(|name| {
             Ok(values.get(name).map(ToString::to_string))
@@ -1300,15 +1171,9 @@ mod tests {
         assert!(policy.hash_decode_prefetch_window());
         assert!(!policy.prefill_hash_lookahead());
         assert!(!policy.managed_experts());
-        assert!(policy.fused_indexer_prefill_topk());
-        assert!(!policy.fused_indexer_decode_topk());
         assert_eq!(policy.expert_upload_inflight(), 7);
         assert!(policy.profile_enabled());
         assert!(policy.profile_sync());
-        assert_eq!(
-            policy.parity_checkpoint_selection(),
-            Some((4, "attention".to_owned()))
-        );
     }
 
     #[test]
@@ -1377,12 +1242,6 @@ mod tests {
 
         let error = DeepSeekV4ExecutionPolicy::resolve_with(|name| {
             Ok((name == "FERRULE_DSV4_EXPERT_UPLOAD_INFLIGHT").then(|| "many".to_string()))
-        })
-        .unwrap_err();
-        assert!(matches!(error, Error::Model(_)));
-
-        let error = DeepSeekV4ExecutionPolicy::resolve_with(|name| {
-            Ok((name == "FERRULE_DSV4_PARITY_CHECKPOINT_LAYER").then(|| "2".to_string()))
         })
         .unwrap_err();
         assert!(matches!(error, Error::Model(_)));

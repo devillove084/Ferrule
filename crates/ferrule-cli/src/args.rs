@@ -2,22 +2,22 @@ use std::net::IpAddr;
 
 use clap::{Args, Parser, Subcommand};
 
+#[cfg(feature = "cuda")]
 #[derive(Debug, Clone)]
 pub(crate) struct GenerationConfig {
     pub(crate) max_new_tokens: usize,
     pub(crate) stop: Vec<String>,
     pub(crate) stop_at_eos: bool,
-    pub(crate) append_eos_to_session: bool,
     pub(crate) ctx_size: usize,
 }
 
+#[cfg(feature = "cuda")]
 impl Default for GenerationConfig {
     fn default() -> Self {
         Self {
             max_new_tokens: 16,
             stop: Vec::new(),
             stop_at_eos: true,
-            append_eos_to_session: true,
             ctx_size: 4096,
         }
     }
@@ -41,8 +41,6 @@ pub(crate) enum Command {
         model: String,
         #[arg(short = 'n', long, default_value = "256")]
         max_tokens: usize,
-        #[arg(short = 'q', long, default_value = "cuda")]
-        quant: String,
         #[command(flatten)]
         sampling: SamplingArgs,
         /// Override auto-detected chat template.
@@ -89,17 +87,6 @@ pub(crate) enum Command {
         /// JSON output for machine consumption.
         #[arg(long)]
         json: bool,
-        /// Replay one identical decode across independent sequence states to measure
-        /// capture, resident-with-head, and resident-body-only target passes.
-        #[arg(long)]
-        resident_replay: bool,
-        /// Run the resident target-verification roofline at V=1/2/4, the
-        /// checkpoint-reference width (`dspark_block_size + 1`), and experimental V=8.
-        #[arg(long)]
-        verify_width_sweep: bool,
-        /// Number of measured all-resident samples per verification width.
-        #[arg(long, default_value_t = 3)]
-        verify_iterations: usize,
     },
 
     /// Inspect a WeightPack file header.
@@ -138,9 +125,6 @@ pub(crate) enum Command {
         /// Maximum single expert artifact read size.
         #[arg(long = "expert-max-slice-mb", default_value_t = 64)]
         expert_reader_max_slice_mb: u64,
-        /// Operator backend: cuda or cpu.
-        #[arg(long, default_value = "cuda")]
-        backend: String,
         /// Do not stop when eos_token_id is generated.
         #[arg(long)]
         no_stop_eos: bool,
@@ -163,78 +147,6 @@ pub(crate) enum Command {
         #[arg(long, default_value_t = 48)]
         moe_hotset_experts: usize,
     },
-    /// Probe real local DeepSeek-V4 HF shards through the DSV4-specific reference path.
-    #[command(name = "deepseek-v4-probe")]
-    DeepSeekV4Probe {
-        model: String,
-        #[arg(short = 'p', long, default_value = "Hello")]
-        prompt: String,
-        /// Number of DSV4 base layers to execute. Use 0 for fast top-level IO smoke.
-        #[arg(long, default_value_t = 0)]
-        max_layers: usize,
-        /// First lm_head row to print when not using --full-vocab-topk.
-        #[arg(long, default_value_t = 0)]
-        start_row: usize,
-        /// Number of lm_head rows to print when not using --full-vocab-topk.
-        #[arg(long, default_value_t = 16)]
-        row_count: usize,
-        /// Top-K logits to print.
-        #[arg(long, default_value_t = 8)]
-        top_k: usize,
-        /// Scan all lm_head rows in chunks and print full-vocab top-K.
-        #[arg(long)]
-        full_vocab_topk: bool,
-        /// lm_head chunk size in rows for full-vocab logits/top-K scans.
-        #[arg(long, default_value_t = 1024)]
-        output_head_chunk_rows: usize,
-        /// Maximum single artifact tensor read size for top-level/layer tensors.
-        #[arg(long = "max-tensor-mb", default_value_t = 128)]
-        max_tensor_mb: u64,
-        /// Maximum single expert artifact read size.
-        #[arg(long = "expert-max-slice-mb", default_value_t = 64)]
-        expert_reader_max_slice_mb: u64,
-        /// Operator backend: cpu or cuda.
-        #[arg(long, default_value = "cpu")]
-        backend: String,
-        /// Optional official/reference JSON to compare prompt tokens and logits against.
-        #[arg(long = "reference-json")]
-        reference_json: Option<String>,
-        /// Absolute tolerance for --reference-json logit comparisons.
-        #[arg(long = "reference-atol", default_value_t = 1e-3)]
-        reference_atol: f32,
-    },
-    /// Compare batched/device prefill vs token-loop append, reporting the first
-    /// diverging layer and top-1 token at cut points (1L/5L/23L/43L).
-    #[command(name = "deepseek-v4-prefill-parity")]
-    DeepSeekV4PrefillParity {
-        model: String,
-        #[arg(short = 'p', long, default_value = "Hello")]
-        prompt: String,
-        /// Number of DSV4 base layers to execute (should match the depth under test).
-        #[arg(long, default_value_t = 43)]
-        max_layers: usize,
-        /// Maximum single artifact tensor read size for top-level/layer tensors.
-        #[arg(long = "max-tensor-mb", default_value_t = 128)]
-        max_tensor_mb: u64,
-        /// Maximum single expert artifact read size.
-        #[arg(long = "expert-max-slice-mb", default_value_t = 64)]
-        expert_reader_max_slice_mb: u64,
-        /// Operator backend: cuda or cpu.
-        #[arg(long, default_value = "cuda")]
-        backend: String,
-        /// Wrap --prompt with the official DeepSeek-V4 chat encoding.
-        #[arg(long)]
-        chat: bool,
-        /// Absolute tolerance for HC state comparison.
-        #[arg(long, default_value_t = 1e-4)]
-        atol: f32,
-        /// Layer-depth cut points to report top-1 for. Can be repeated.
-        #[arg(long = "cut")]
-        cuts: Vec<usize>,
-        /// Emit machine-readable JSON.
-        #[arg(long)]
-        json: bool,
-    },
 }
 
 #[derive(Args, Clone)]
@@ -250,9 +162,6 @@ pub(crate) struct ServeArgs {
     /// Listening TCP port.
     #[arg(long, default_value_t = 8000)]
     pub(crate) port: u16,
-    /// Operator backend: cuda or cpu.
-    #[arg(long, default_value = "cuda")]
-    pub(crate) backend: String,
     /// Override the model-family default chat template.
     #[arg(long = "chat-template")]
     pub(crate) chat_template: Option<String>,
@@ -358,6 +267,7 @@ pub(crate) struct SamplingArgs {
     ctx_size: usize,
 }
 
+#[cfg(feature = "cuda")]
 impl SamplingArgs {
     pub(crate) fn supports_fast_greedy(&self) -> bool {
         self.temp <= 0.0 && (self.repeat_penalty - 1.0).abs() < f32::EPSILON && self.logprobs == 0
@@ -388,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn serve_defaults_to_the_measured_dspark_hotset() {
+    fn serve_defaults_to_the_measured_speculative_hotset() {
         let cli = Cli::try_parse_from(["ferrule", "serve", "model"]).unwrap();
         let Command::Serve(args) = cli.command else {
             panic!("serve command was not parsed");

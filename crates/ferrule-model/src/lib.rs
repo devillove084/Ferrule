@@ -127,9 +127,10 @@ pub use moe::{
 
 // ── Re-exports: runner ────────────────────────────────────────────────────
 pub use runner::{
-    DsparkProposal, DsparkProposalRunner, DsparkProposalSource, ExpertIoModelRunner, ModelInfo,
-    ModelRunner, MultiSessionRunner, PrefillMode, TokenLogit, TopKModelRunner,
-    unsupported_runtime_message,
+    BatchContinuationCancelOutcome, BatchContinuationId, ExpertIoModelRunner,
+    ModelCompletionReactor, ModelInfo, ModelRunner, MultiSessionBatchProgress, MultiSessionRunner,
+    NativeProposal, NativeProposalProgress, NativeProposalSource, PendingExpertLoad,
+    PendingModelProgress, ResidentModelRunner, TokenLogit,
 };
 
 // ── Re-exports: attention_backend ─────────────────────────────────────────

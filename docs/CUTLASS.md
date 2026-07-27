@@ -67,7 +67,7 @@ All GB10 build/test/run recipes depend on `cutlass-setup`, so normal use does no
 ```bash
 just build-cuda
 just test-cutlass-provider
-just dsv4-prefill-parity
+just dsv4-runtime-driver-bench
 ```
 
 CUTLASS is header-only in this integration. `crates/ferrule-cuda/build.rs` stays offline and uses NVCC through `cc::Build` to compile `native/cutlass/bridge.cu` for `sm_121a`. Keeping network access out of Cargo build scripts preserves offline and reproducible builds.

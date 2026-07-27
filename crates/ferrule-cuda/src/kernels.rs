@@ -520,6 +520,36 @@ pub mod kernels {
         }
     }
 
+    /// Gather arbitrary device token IDs from a resident BF16 embedding table
+    /// and expand every embedding row across the packed HC lanes.
+    #[kernel]
+    pub fn resident_embedding_hc_bf16(
+        embedding: &[u8],
+        token_ids: &[i32],
+        mut output: DisjointSlice<f32>,
+        rows: u32,
+        vocab: u32,
+        hc_mult: u32,
+        hidden: u32,
+    ) {
+        let index = thread::index_1d().get();
+        let row_width = hc_mult as usize * hidden as usize;
+        let values = rows as usize * row_width;
+        if index >= values || row_width == 0 {
+            return;
+        }
+        let row = index / row_width;
+        let token = token_ids[row];
+        if token < 0 || token as usize >= vocab as usize {
+            return;
+        }
+        let dimension = index % hidden as usize;
+        let byte = (token as usize * hidden as usize + dimension) * 2;
+        if let Some(value) = output.get_mut(thread::index_1d()) {
+            *value = bf16_pair_to_f32(embedding[byte], embedding[byte + 1]);
+        }
+    }
+
     /// Gather the fixed DSpark `[anchor, noise × (rows-1)]` input directly
     /// from a resident BF16 embedding table and expand each row across HC lanes.
     #[kernel]
@@ -6227,7 +6257,7 @@ pub mod kernels {
     #[kernel]
     pub fn topk_vocab_rows(
         logits: &[f32],
-        mut out_idx: DisjointSlice<f32>,
+        mut out_idx: DisjointSlice<i32>,
         mut out_val: DisjointSlice<f32>,
         rows: u32,
         vocab: u32,
@@ -6278,88 +6308,10 @@ pub mod kernels {
             let val_ptr = out_val.as_mut_ptr();
             for j in 0..k {
                 unsafe {
-                    *idx_ptr.add(output_offset + j) = best_idx[j] as f32;
+                    *idx_ptr.add(output_offset + j) = best_idx[j] as i32;
                     *val_ptr.add(output_offset + j) = best_val[j];
                 }
             }
-        }
-    }
-
-    /// Merge one chunk's row-wise top-k into persistent global row-wise top-k.
-    /// Token IDs remain encoded as exact f32 integers because the vocabulary is
-    /// well below the 24-bit exact-integer range of f32.
-    #[kernel]
-    pub fn merge_topk_rows_in_place(
-        chunk_idx: &[f32],
-        chunk_val: &[f32],
-        mut global_idx: DisjointSlice<f32>,
-        mut global_val: DisjointSlice<f32>,
-        rows: u32,
-        global_k: u32,
-        chunk_k: u32,
-        token_offset: u32,
-        has_existing: u32,
-    ) {
-        let row = thread::blockIdx_x() as usize;
-        let tid = thread::threadIdx_x() as usize;
-        let rows = rows as usize;
-        let global_k = global_k as usize;
-        let chunk_k = chunk_k as usize;
-        if row >= rows || tid != 0 {
-            return;
-        }
-
-        let mut best_val = [f32::NEG_INFINITY; 40];
-        let mut best_idx = [u32::MAX; 40];
-        let global_offset = row * global_k;
-        let global_idx_ptr = global_idx.as_mut_ptr();
-        let global_val_ptr = global_val.as_mut_ptr();
-        if has_existing != 0 {
-            let mut slot = 0usize;
-            while slot < global_k {
-                unsafe {
-                    best_idx[slot] = *global_idx_ptr.add(global_offset + slot) as u32;
-                    best_val[slot] = *global_val_ptr.add(global_offset + slot);
-                }
-                slot += 1;
-            }
-        }
-
-        let chunk_offset = row * chunk_k;
-        let mut candidate = 0usize;
-        while candidate < chunk_k {
-            let value = chunk_val[chunk_offset + candidate];
-            let token = chunk_idx[chunk_offset + candidate] as u32 + token_offset;
-            let mut position = global_k;
-            while position > 0 {
-                let previous = position - 1;
-                let better = value > best_val[previous]
-                    || (value == best_val[previous] && token < best_idx[previous]);
-                if !better {
-                    break;
-                }
-                position -= 1;
-            }
-            if position < global_k {
-                let mut shift = global_k - 1;
-                while shift > position {
-                    best_val[shift] = best_val[shift - 1];
-                    best_idx[shift] = best_idx[shift - 1];
-                    shift -= 1;
-                }
-                best_val[position] = value;
-                best_idx[position] = token;
-            }
-            candidate += 1;
-        }
-
-        let mut slot = 0usize;
-        while slot < global_k {
-            unsafe {
-                *global_idx_ptr.add(global_offset + slot) = best_idx[slot] as f32;
-                *global_val_ptr.add(global_offset + slot) = best_val[slot];
-            }
-            slot += 1;
         }
     }
 

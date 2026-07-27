@@ -1196,6 +1196,13 @@ pub struct CudaI32HostMirror {
     device: CudaI32Buffer,
     staging: PinnedHostBuffer<i32>,
     copy_event: CudaEvent,
+    active_download: Option<Arc<CudaEvent>>,
+}
+
+/// Non-blocking device-to-host transfer into a persistent i32 mirror.
+pub struct CudaI32HostDownload {
+    copied: Arc<CudaEvent>,
+    bytes: u64,
 }
 
 impl CudaI32HostMirror {
@@ -1230,6 +1237,9 @@ impl std::ops::Deref for CudaI32HostMirror {
 
 impl Drop for CudaI32HostMirror {
     fn drop(&mut self) {
+        if let Some(download) = self.active_download.take() {
+            let _ = download.synchronize();
+        }
         let _ = self.copy_event.synchronize();
     }
 }
@@ -2487,10 +2497,42 @@ impl CudaArtifactOperatorContext {
         })
     }
 
+    /// Enqueue an allocation-free completion notification after all currently
+    /// submitted upload-stream work. The callback executes on a CUDA driver
+    /// thread and must not call CUDA APIs or block.
+    pub fn notify_upload_stream<F>(&self, notify: F) -> Result<()>
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        cu(self.upload_stream.launch_host_function(notify))
+    }
+
+    /// Enqueue a completion callback after all current control-stream work.
+    pub fn notify_control_stream<F>(&self, notify: F) -> Result<()>
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        cu(self.control_stream.launch_host_function(notify))
+    }
+
+    /// Enqueue a completion callback after all current primary-stream work.
+    pub fn notify_compute_stream<F>(&self, notify: F) -> Result<()>
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        cu(self.stream.launch_host_function(notify))
+    }
+
     pub fn record_compute_event(&self) -> Result<CudaComputeEvent> {
-        Ok(CudaComputeEvent {
-            event: cu(self.stream.record_event(None))?,
-        })
+        match self.stream.record_event(None) {
+            Ok(event) => Ok(CudaComputeEvent { event }),
+            Err(error) => {
+                self.record_stream_wide_sync(self.stream.synchronize())?;
+                Err(Error::Internal(format!(
+                    "CUDA compute completion event failed after submission: {error:?}"
+                )))
+            }
+        }
     }
 
     pub fn reset_counters(&self) {
@@ -3014,16 +3056,27 @@ impl CudaArtifactOperatorContext {
             },
             staging,
             copy_event,
+            active_download: None,
         })
     }
 
-    pub fn download_i32_host_mirror_after(
+    pub fn begin_i32_host_mirror_download_after(
         &self,
         mirror: &mut CudaI32HostMirror,
         produced: &CudaComputeEvent,
-    ) -> Result<Vec<i32>> {
+    ) -> Result<CudaI32HostDownload> {
         self.check_capture_safe("i32 control mirror download")?;
-        cu(self.control_stream.wait(&produced.event))?;
+        if mirror.active_download.is_some() {
+            return Err(Error::Internal(
+                "CUDA i32 host mirror already owns an active D2H download".into(),
+            ));
+        }
+        if let Err(error) = cu(self.control_stream.wait(&produced.event)) {
+            let cleanup = produced.synchronize();
+            return Err(Error::Internal(format!(
+                "CUDA i32 control mirror wait failed ({error}); producer cleanup={cleanup:?}"
+            )));
+        }
         let bytes = element_bytes::<i32>(mirror.device.len) as usize;
         let staging = mirror.staging.as_mut_slice();
         let result = unsafe {
@@ -3035,16 +3088,48 @@ impl CudaArtifactOperatorContext {
             )
         };
         if result != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
+            let cleanup = produced.synchronize();
             return Err(Error::Internal(format!(
-                "CUDA i32 control mirror D2H failed: error {result}"
+                "CUDA i32 control mirror D2H failed: error {result}; producer cleanup={cleanup:?}"
             )));
         }
-        let copied = cu(self.control_stream.record_event(None))?;
-        cu(copied.synchronize())?;
-        self.counters.add_device_to_host(bytes as u64);
+        let copied = match self.control_stream.record_event(None) {
+            Ok(event) => Arc::new(event),
+            Err(error) => {
+                let cleanup = cu(self.control_stream.synchronize());
+                return Err(Error::Internal(format!(
+                    "CUDA i32 control mirror completion event failed ({error:?}); control-stream cleanup={cleanup:?}"
+                )));
+            }
+        };
+        mirror.active_download = Some(copied.clone());
+        Ok(CudaI32HostDownload {
+            copied,
+            bytes: bytes as u64,
+        })
+    }
+
+    pub fn poll_i32_host_mirror_download(
+        &self,
+        mirror: &mut CudaI32HostMirror,
+        download: &CudaI32HostDownload,
+    ) -> Result<Option<Vec<i32>>> {
+        let active = mirror.active_download.as_ref().ok_or_else(|| {
+            Error::Internal("CUDA i32 host mirror has no active D2H download".into())
+        })?;
+        if !Arc::ptr_eq(active, &download.copied) {
+            return Err(Error::Internal(
+                "CUDA i32 host mirror was polled with a foreign D2H download".into(),
+            ));
+        }
+        if !cu(download.copied.query())? {
+            return Ok(None);
+        }
+        mirror.active_download = None;
+        self.counters.add_device_to_host(download.bytes);
         mirror.host.clear();
-        mirror.host.extend_from_slice(staging);
-        Ok(mirror.host.clone())
+        mirror.host.extend_from_slice(mirror.staging.as_slice());
+        Ok(Some(mirror.host.clone()))
     }
 
     pub fn update_i32_host_mirror(
@@ -3061,6 +3146,9 @@ impl CudaArtifactOperatorContext {
         }
         if values == mirror.host {
             return Ok(());
+        }
+        if let Some(download) = mirror.active_download.take() {
+            cu(download.synchronize())?;
         }
         cu(mirror.copy_event.synchronize())?;
         mirror.staging.as_mut_slice().copy_from_slice(values);
@@ -3372,6 +3460,60 @@ impl CudaArtifactOperatorContext {
         })
     }
 
+    pub fn resident_embedding_hc_bf16_into(
+        &self,
+        embedding: &CudaArtifactLinearHandle,
+        token_ids: &CudaI32Buffer,
+        rows: usize,
+        hc_mult: usize,
+        output: &mut CudaF32Buffer,
+    ) -> Result<()> {
+        embedding.validate_storage()?;
+        let CudaArtifactLinearShape::Bf16Bytes {
+            out_features: vocab,
+            in_features: hidden,
+        } = embedding.shape
+        else {
+            return Err(Error::Internal(format!(
+                "resident embedding gather requires BF16 storage, got {:?}",
+                embedding.shape
+            )));
+        };
+        if rows == 0 || hc_mult == 0 || token_ids.len != rows {
+            return Err(Error::Internal(format!(
+                "resident embedding gather shape mismatch: rows={rows} token_ids={} hc_mult={hc_mult} hidden={hidden} vocab={vocab}",
+                token_ids.len
+            )));
+        }
+        let expected = rows
+            .checked_mul(hc_mult)
+            .and_then(|values| values.checked_mul(hidden))
+            .ok_or_else(|| Error::Internal("resident embedding gather size overflow".into()))?;
+        if output.len != expected {
+            return Err(Error::Internal(format!(
+                "resident embedding gather output mismatch: output={} expected={expected}",
+                output.len
+            )));
+        }
+        self.launched(unsafe {
+            self.module.resident_embedding_hc_bf16(
+                &self.stream,
+                LaunchConfig::for_num_elems(checked_u32(
+                    expected,
+                    "resident_embedding_hc_bf16_into",
+                    "output values",
+                )?),
+                &embedding.weight,
+                &token_ids.buffer,
+                &mut output.buffer,
+                checked_u32(rows, "resident_embedding_hc_bf16_into", "rows")?,
+                checked_u32(vocab, "resident_embedding_hc_bf16_into", "vocab")?,
+                checked_u32(hc_mult, "resident_embedding_hc_bf16_into", "hc_mult")?,
+                checked_u32(hidden, "resident_embedding_hc_bf16_into", "hidden")?,
+            )
+        })
+    }
+
     pub fn dspark_embedding_hc_from_resident_bf16_into(
         &self,
         embedding: &CudaArtifactLinearHandle,
@@ -3623,10 +3765,10 @@ impl CudaArtifactOperatorContext {
     }
 
     #[cfg(feature = "cutlass")]
-    pub fn download_dspark_proposal_head_result(
+    pub fn begin_dspark_proposal_head_result_download(
         &self,
         workspace: &mut CudaDsparkProposalHeadWorkspace,
-    ) -> Result<Vec<i32>> {
+    ) -> Result<CudaI32HostDownload> {
         let rows = workspace.confidence.len;
         let result_values = 1usize
             .checked_add(rows.saturating_mul(2))
@@ -3644,18 +3786,42 @@ impl CudaArtifactOperatorContext {
                 &self.stream,
                 LaunchConfig::for_num_elems(checked_u32(
                     result_values,
-                    "download_dspark_proposal_head_result",
+                    "begin_dspark_proposal_head_result_download",
                     "result values",
                 )?),
                 &workspace.status.buffer,
                 &workspace.token_ids.device().buffer,
                 &workspace.confidence.buffer,
                 &mut workspace.result.device_mut_invalidate_host().buffer,
-                checked_u32(rows, "download_dspark_proposal_head_result", "rows")?,
+                checked_u32(rows, "begin_dspark_proposal_head_result_download", "rows")?,
             )
         })?;
         let produced = self.record_compute_event()?;
-        self.download_i32_host_mirror_after(&mut workspace.result, &produced)
+        self.begin_i32_host_mirror_download_after(&mut workspace.result, &produced)
+    }
+
+    #[cfg(feature = "cutlass")]
+    pub fn poll_dspark_proposal_head_result_download(
+        &self,
+        workspace: &mut CudaDsparkProposalHeadWorkspace,
+        download: &CudaI32HostDownload,
+    ) -> Result<Option<Vec<i32>>> {
+        self.poll_i32_host_mirror_download(&mut workspace.result, download)
+    }
+
+    #[cfg(feature = "cutlass")]
+    pub fn download_dspark_proposal_head_result(
+        &self,
+        workspace: &mut CudaDsparkProposalHeadWorkspace,
+    ) -> Result<Vec<i32>> {
+        let download = self.begin_dspark_proposal_head_result_download(workspace)?;
+        cu(download.copied.synchronize())?;
+        self.poll_dspark_proposal_head_result_download(workspace, &download)?
+            .ok_or_else(|| {
+                Error::Internal(
+                    "DSpark proposal result remained pending after synchronization".into(),
+                )
+            })
     }
 
     /// Compute a BF16-compressed two-projection bundle on device.
@@ -5802,18 +5968,24 @@ impl CudaArtifactOperatorContext {
         .map(|_| ())
     }
 
-    pub fn topk_vocab_rows_from_device_buffers_into(
+    pub fn topk_vocab_rows_from_device_into(
         &self,
         logits: &CudaF32Buffer,
         rows: usize,
         vocab: usize,
         top_k: usize,
-        indices: &mut CudaF32Buffer,
+        indices: &mut CudaI32Buffer,
         values: &mut CudaF32Buffer,
     ) -> Result<()> {
-        if rows == 0 || vocab == 0 || top_k == 0 || top_k > vocab || top_k > 40 {
+        if rows == 0
+            || vocab == 0
+            || vocab > i32::MAX as usize
+            || top_k == 0
+            || top_k > vocab
+            || top_k > 40
+        {
             return Err(Error::Internal(format!(
-                "CUDA vocab rows top-k requires rows>0 and k in 1..={}, got rows={rows} vocab={vocab} k={top_k}",
+                "CUDA vocab rows top-k requires rows>0, vocab<=i32::MAX, and k in 1..={}, got rows={rows} vocab={vocab} k={top_k}",
                 vocab.min(40)
             )));
         }
@@ -5846,80 +6018,6 @@ impl CudaArtifactOperatorContext {
             )
         })
         .map(|_| ())
-    }
-
-    pub fn merge_topk_rows_in_place(
-        &self,
-        chunk_indices: &CudaF32Buffer,
-        chunk_values: &CudaF32Buffer,
-        global_indices: &mut CudaF32Buffer,
-        global_values: &mut CudaF32Buffer,
-        rows: usize,
-        global_k: usize,
-        chunk_k: usize,
-        token_offset: usize,
-        has_existing: bool,
-    ) -> Result<()> {
-        if rows == 0 || global_k == 0 || global_k > 40 || chunk_k == 0 || chunk_k > global_k {
-            return Err(Error::Internal(format!(
-                "CUDA row top-k merge invalid shape: rows={rows} global_k={global_k} chunk_k={chunk_k}"
-            )));
-        }
-        let chunk_len = rows
-            .checked_mul(chunk_k)
-            .ok_or_else(|| Error::Internal("CUDA chunk top-k merge size overflow".into()))?;
-        let global_len = rows
-            .checked_mul(global_k)
-            .ok_or_else(|| Error::Internal("CUDA global top-k merge size overflow".into()))?;
-        if chunk_indices.len < chunk_len
-            || chunk_values.len < chunk_len
-            || global_indices.len < global_len
-            || global_values.len < global_len
-        {
-            return Err(Error::Internal(format!(
-                "CUDA row top-k merge workspace mismatch: chunk_indices={} chunk_values={} global_indices={} global_values={} required_chunk={chunk_len} required_global={global_len}",
-                chunk_indices.len, chunk_values.len, global_indices.len, global_values.len
-            )));
-        }
-        self.launched(unsafe {
-            self.module.merge_topk_rows_in_place(
-                &self.stream,
-                LaunchConfig {
-                    grid_dim: (checked_u32(rows, "merge_topk_rows", "rows")?, 1, 1),
-                    block_dim: (32, 1, 1),
-                    shared_mem_bytes: 0,
-                },
-                &chunk_indices.buffer,
-                &chunk_values.buffer,
-                &mut global_indices.buffer,
-                &mut global_values.buffer,
-                checked_u32(rows, "merge_topk_rows", "rows")?,
-                checked_u32(global_k, "merge_topk_rows", "global_k")?,
-                checked_u32(chunk_k, "merge_topk_rows", "chunk_k")?,
-                checked_u32(token_offset, "merge_topk_rows", "token_offset")?,
-                u32::from(has_existing),
-            )
-        })
-        .map(|_| ())
-    }
-
-    pub fn topk_vocab_rows_from_device_into(
-        &self,
-        logits: &CudaF32Buffer,
-        rows: usize,
-        vocab: usize,
-        top_k: usize,
-        indices: &mut CudaF32Buffer,
-        values: &mut CudaF32Buffer,
-    ) -> Result<(Vec<f32>, Vec<f32>)> {
-        self.topk_vocab_rows_from_device_buffers_into(logits, rows, vocab, top_k, indices, values)?;
-        let output_len = rows
-            .checked_mul(top_k)
-            .ok_or_else(|| Error::Internal("CUDA vocab rows top-k output size overflow".into()))?;
-        Ok((
-            self.download_f32(&indices.buffer, output_len)?,
-            self.download_f32(&values.buffer, output_len)?,
-        ))
     }
 
     pub fn artifact_linear_topk_from_device(
@@ -9461,38 +9559,6 @@ impl CudaArtifactOperatorContext {
                 checked_u32(tap_count, "hc_mean_scatter", "tap_count")?,
             )
         })
-    }
-
-    /// Device-resident `hc_head`: state and weights are already on device,
-    /// output stays on device. This is the HC terminal projection applied
-    /// after all transformer layers.
-    #[allow(clippy::too_many_arguments)]
-    pub fn hc_head_from_device(
-        &self,
-        state: &CudaF32Buffer,
-        function: &CudaF32Buffer,
-        scale: &CudaF32Buffer,
-        base: &CudaF32Buffer,
-        tokens: usize,
-        hc_mult: usize,
-        hidden_size: usize,
-        eps: f32,
-        norm_eps: f32,
-    ) -> Result<CudaF32Buffer> {
-        let mut hidden = self.zero_f32_buffer(tokens * hidden_size)?;
-        self.hc_head_from_device_into(
-            state,
-            function,
-            scale,
-            base,
-            tokens,
-            hc_mult,
-            hidden_size,
-            eps,
-            norm_eps,
-            &mut hidden,
-        )?;
-        Ok(hidden)
     }
 
     #[allow(clippy::too_many_arguments)]

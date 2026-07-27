@@ -9,6 +9,7 @@ pub mod actions;
 pub(crate) mod batch;
 pub mod expert_io;
 pub mod resident;
+pub mod resources;
 pub mod session;
 pub mod slot_pool;
 
@@ -23,6 +24,12 @@ pub use expert_io::{
     ExpertIoPhase, ExpertIoQueueClass, ExpertIoRejection, ZeroExpertIoAdvisor,
 };
 pub use resident::{CancelRequestResult, ResidentScheduler, ResidentSchedulerConfig};
+pub(crate) use resources::{BrokerExpertIoResourceControl, ExpertIoResourceBrokerHandle};
+pub use resources::{
+    ResourceBroker, ResourceBrokerBuilder, ResourceBrokerStats, ResourceClaim, ResourceClass,
+    ResourceGrantId, ResourceId, ResourceRejection, ResourceRequest, ResourceSnapshot,
+    ResourceUnit,
+};
 pub use session::{
     GenerateRequest, RequestId, SequenceFinishReason, SequenceState, SequenceStatus, SessionId,
 };

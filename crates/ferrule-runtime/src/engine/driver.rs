@@ -1,35 +1,45 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
 use std::time::Instant;
 
-use ferrule_common::execution::{ExecutionOutput, KvBindingMode, KvReservation, StateSlot};
+use ferrule_common::execution::{
+    ExecutionOutput, ExecutionTransactionId, KvBindingMode, KvReservationView, StateSlot,
+};
 use ferrule_common::{Error, Result};
 use ferrule_model::{
-    DsparkProposalRunner, DsparkProposalSource, ExpertIoModelRunner, MultiSessionRunner,
+    BatchContinuationCancelOutcome, MultiSessionRunner, NativeProposal, NativeProposalProgress,
+    NativeProposalSource, PendingModelProgress, ResidentModelRunner,
 };
 use tracing;
 
-use crate::cache::{KvPageManager, PreemptedKvState};
+use crate::cache::{
+    KvPageManager, KvReservation, KvReservationCommit, KvRetirement, PreemptedKvState,
+    PreparedKvCommit,
+};
 use crate::scheduling::resident::{SuspendedSequenceSchedule, greedy_candidate};
 use crate::scheduling::{
-    CancelRequestResult, DecodeAction, ExpertIoAdvisor, ExpertIoBudget, ExpertIoDecisionTrace,
-    ExpertIoPhase, GenerateRequest, ModelExpertIoAdvisor, RequestId, ResidentScheduler,
-    ResidentSchedulerConfig, ScheduledBatch, SchedulerAction, SequenceFinishReason,
-    SequenceSlotPool, SequenceState, SessionId, ZeroExpertIoAdvisor,
+    BrokerExpertIoResourceControl, CancelRequestResult, DecodeAction, ExpertIoBudget,
+    GenerateRequest, ModelExpertIoAdvisor, RequestId, ResidentScheduler, ResidentSchedulerConfig,
+    ScheduledBatch, SchedulerAction, SequenceFinishReason, SequenceSlotPool, SequenceState,
+    SessionId,
 };
 use crate::speculation::{
-    DSparkCycleResult, DSparkMetrics, DSparkVerificationItem, SpeculativeCycleAccounting,
-    TargetFrontier, run_dspark_verification_cohort,
+    PendingSpeculativeVerificationCohort, SpeculativeCohortProgress, SpeculativeCycleResult,
+    SpeculativeMetrics, SpeculativeVerificationItem, TargetFrontier,
+    begin_resumable_speculative_verification_cohort,
+    cancel_resumable_speculative_verification_cohort,
+    resume_resumable_speculative_verification_cohort,
 };
 
-use super::NativeMultiSessionExecutor;
+use super::observability::{ResidentDriverObservability, ResidentTopKDriverStats};
+use super::{NativeBatchExecutionProgress, NativeMultiSessionExecutor};
 
 fn matched_stop(text: &str, stop: &[String]) -> bool {
     stop.iter()
         .any(|candidate| !candidate.is_empty() && text.ends_with(candidate))
 }
 
-fn dspark_confidence_probability(logit: f32) -> f32 {
+fn proposal_confidence_probability(logit: f32) -> f32 {
     if logit >= 0.0 {
         1.0 / (1.0 + (-logit).exp())
     } else {
@@ -38,10 +48,10 @@ fn dspark_confidence_probability(logit: f32) -> f32 {
     }
 }
 
-fn confident_dspark_prefix_length(logits: &[f32], threshold: f32) -> Result<usize> {
+fn confident_proposal_prefix_length(logits: &[f32], threshold: f32) -> Result<usize> {
     if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
         return Err(Error::Execution(format!(
-            "DSpark confidence threshold must be finite and within [0, 1], got {threshold}"
+            "proposal confidence threshold must be finite and within [0, 1], got {threshold}"
         )));
     }
     if threshold == 0.0 {
@@ -49,7 +59,7 @@ fn confident_dspark_prefix_length(logits: &[f32], threshold: f32) -> Result<usiz
     }
     Ok(logits
         .iter()
-        .position(|logit| dspark_confidence_probability(*logit) < threshold)
+        .position(|logit| proposal_confidence_probability(*logit) < threshold)
         .unwrap_or(logits.len()))
 }
 
@@ -57,12 +67,9 @@ fn confident_dspark_prefix_length(logits: &[f32], threshold: f32) -> Result<usiz
 pub struct ResidentTopKDriverConfig {
     pub ctx_size: usize,
     pub stop_at_eos: bool,
-    pub append_eos_to_session: bool,
     /// Static per-position confidence threshold used until the calibrated,
     /// batch-wide hardware scheduler is available. Zero disables truncation.
-    pub dspark_confidence_threshold: f32,
-    /// Safety valve for `run_until_blocked` so an unhealthy backend cannot spin forever.
-    pub max_steps_per_run: usize,
+    pub proposal_confidence_threshold: f32,
 }
 
 impl Default for ResidentTopKDriverConfig {
@@ -70,67 +77,8 @@ impl Default for ResidentTopKDriverConfig {
         Self {
             ctx_size: 4096,
             stop_at_eos: true,
-            append_eos_to_session: true,
-            dspark_confidence_threshold: 0.2,
-            max_steps_per_run: 16_384,
+            proposal_confidence_threshold: 0.2,
         }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ResidentTopKDriverStats {
-    pub actions: usize,
-    pub prefill_chunks: usize,
-    pub prefill_tokens: usize,
-    pub decode_steps: usize,
-    pub emitted_tokens: usize,
-    pub staged_tokens: usize,
-    pub finished_sequences: usize,
-    pub dropped_dspark_cycle_traces: usize,
-    pub dspark: DSparkMetrics,
-}
-
-/// One completed production DSpark cycle with stable request/session/attempt identity.
-///
-/// Consumers should drain these records after each driver step. The values keep
-/// speculative transaction accounting distinct from externally emitted tokens
-/// so profiling artifacts can prove, rather than assume, token reconciliation.
-#[derive(Debug, Clone, PartialEq)]
-pub struct DSparkCycleTrace {
-    pub request_id: RequestId,
-    pub session_id: SessionId,
-    pub cycle_attempt: u64,
-    pub position: usize,
-    pub anchor_token: u32,
-    pub proposal_source: DsparkProposalSource,
-    pub proposal_executed: bool,
-    pub native_proposed_tokens: Vec<u32>,
-    pub native_confidence_logits: Vec<f32>,
-    pub proposed_tokens: Vec<u32>,
-    pub confidence_logits: Vec<f32>,
-    pub capacity_truncated_tokens: usize,
-    pub output_boundary_truncated_tokens: usize,
-    pub confidence_truncated_tokens: usize,
-    pub scheduler_expert_io: Vec<ExpertIoDecisionTrace>,
-    pub accepted_tokens: Vec<u32>,
-    pub rejected_token: Option<u32>,
-    pub target_correction_token: Option<u32>,
-    pub target_next_token: Option<u32>,
-    pub target_row_top1: Vec<ferrule_common::execution::TokenLogit>,
-    pub accounting: SpeculativeCycleAccounting,
-    /// Runtime token callback invocations. Worker/SSE delivery is reconciled at
-    /// the serving boundary and is intentionally not claimed here.
-    pub runtime_emitted_tokens: usize,
-    pub proposal_time_us: u64,
-    pub verify_time_us: u64,
-    pub transaction_time_us: u64,
-    pub complete_cycle_time_us: u64,
-    pub finish_reason: Option<SequenceFinishReason>,
-}
-
-impl DSparkCycleTrace {
-    pub fn runtime_tokens_reconcile(&self) -> bool {
-        self.accounting.externally_committed_tokens == self.runtime_emitted_tokens
     }
 }
 
@@ -150,6 +98,8 @@ pub enum ResidentDriverStep {
     Idle,
     /// Work exists but no action could be produced, usually because KV admission is blocked.
     Blocked,
+    /// Model work is suspended on one or more owned asynchronous continuations.
+    WaitingForModelProgress(Vec<PendingModelProgress>),
     /// One scheduler action was executed and committed.
     Executed {
         action_kind: ResidentActionKind,
@@ -185,6 +135,115 @@ struct SuspendedDriverSequence<S> {
     schedule: SuspendedSequenceSchedule,
 }
 
+enum PendingResidentKv {
+    Reserved(Vec<KvReservation>),
+    Prepared(PreparedKvCommit),
+}
+
+enum PendingKvRetirement {
+    BackendRelease(KvRetirement),
+    LogicalConfirmation(KvRetirement),
+}
+
+enum PendingSequenceCleanup<S> {
+    Deferred,
+    Owned {
+        retirement: Option<PendingKvRetirement>,
+        model_state: Option<S>,
+    },
+}
+
+struct PendingResidentBatch<S> {
+    transaction: ExecutionTransactionId,
+    action: SchedulerAction,
+    scheduled: ScheduledBatch,
+    kv: PendingResidentKv,
+    states: Vec<S>,
+    schedules: Vec<SuspendedSequenceSchedule>,
+    pending_progress: Option<PendingModelProgress>,
+    cancelling: Option<RequestId>,
+}
+
+enum PendingSpeculativeDriverCohort<S> {
+    Proposing(PendingNativeProposalCohort<S>),
+    Verifying(Box<PendingSpeculativeVerificationDriverCohort<S>>),
+}
+
+impl<S> PendingSpeculativeDriverCohort<S> {
+    fn actions(&self) -> &[DecodeAction] {
+        match self {
+            Self::Proposing(pending) => &pending.actions,
+            Self::Verifying(pending) => &pending.actions,
+        }
+    }
+
+    fn has_pending_progress(&self) -> bool {
+        match self {
+            Self::Proposing(pending) => pending
+                .slots
+                .iter()
+                .any(|slot| matches!(&slot.status, NativeProposalSlotStatus::Waiting(_))),
+            Self::Verifying(_) => true,
+        }
+    }
+
+    fn extend_pending_progress(&self, output: &mut Vec<PendingModelProgress>) {
+        match self {
+            Self::Proposing(pending) => {
+                output.extend(pending.slots.iter().filter_map(|slot| match &slot.status {
+                    NativeProposalSlotStatus::Waiting(progress) => Some(progress.clone()),
+                    NativeProposalSlotStatus::NotStarted
+                    | NativeProposalSlotStatus::Complete { .. } => None,
+                }));
+            }
+            Self::Verifying(pending) => {
+                output.push(pending.verification.pending_progress().clone());
+            }
+        }
+    }
+}
+
+struct PendingNativeProposalCohort<S> {
+    transaction: ExecutionTransactionId,
+    cohort_start: Instant,
+    actions: Vec<DecodeAction>,
+    proposal_source: NativeProposalSource,
+    source_states: Vec<S>,
+    schedules: Vec<SuspendedSequenceSchedule>,
+    slots: Vec<PendingNativeProposalSlot>,
+    cancellation_request: Option<RequestId>,
+    cancellation_error: Option<String>,
+}
+
+struct PendingSpeculativeVerificationDriverCohort<S> {
+    transaction: ExecutionTransactionId,
+    cohort_start: Instant,
+    actions: Vec<DecodeAction>,
+    prepared: Vec<PreparedSpeculativeAction>,
+    source_states: Vec<S>,
+    schedules: Vec<SuspendedSequenceSchedule>,
+    verification: PendingSpeculativeVerificationCohort<S>,
+    cancellation_request: Option<RequestId>,
+}
+
+struct PendingNativeProposalSlot {
+    sequence: SequenceState,
+    page_slot: StateSlot,
+    max_drafts: usize,
+    proposal_start: Option<Instant>,
+    status: NativeProposalSlotStatus,
+}
+
+enum NativeProposalSlotStatus {
+    NotStarted,
+    Waiting(PendingModelProgress),
+    Complete {
+        proposal: NativeProposal,
+        proposal_time_us: u64,
+        prepared: Box<Option<PreparedSpeculativeAction>>,
+    },
+}
+
 pub struct ResidentTopKDriver<R, C>
 where
     R: MultiSessionRunner,
@@ -205,9 +264,16 @@ where
     suspended_sequences: HashMap<SessionId, SuspendedDriverSequence<R::SequenceState>>,
     next_page_slot: u32,
     config: ResidentTopKDriverConfig,
-    stats: ResidentTopKDriverStats,
-    next_dspark_cycle_attempt: u64,
-    dspark_cycle_traces: VecDeque<DSparkCycleTrace>,
+    observability: ResidentDriverObservability,
+    next_transaction_id: u64,
+    resident_transactions: HashMap<ExecutionTransactionId, PendingResidentBatch<R::SequenceState>>,
+    speculative_transactions:
+        HashMap<ExecutionTransactionId, PendingSpeculativeDriverCohort<R::SequenceState>>,
+    session_owner: HashMap<SessionId, ExecutionTransactionId>,
+    ready_transactions: VecDeque<ExecutionTransactionId>,
+    pending_kv_retirements: VecDeque<PendingKvRetirement>,
+    pending_sequence_cleanups: HashMap<SessionId, PendingSequenceCleanup<R::SequenceState>>,
+    committed_token_outbox: VecDeque<ResidentTokenEvent>,
 }
 
 impl<R, C> ResidentTopKDriver<R, C>
@@ -215,11 +281,15 @@ where
     R: MultiSessionRunner,
     C: SequenceSlotPool,
 {
-    pub fn new(runner: R, slot_pool: C) -> Self {
+    pub fn new(runner: R, slot_pool: C) -> Self
+    where
+        R: ResidentModelRunner,
+    {
         Self::with_parts(
             ResidentScheduler::default(),
             slot_pool,
-            NativeMultiSessionExecutor::new(runner),
+            Self::executor_with_expert_io_resources(runner)
+                .expect("resident model reported an invalid expert-I/O resource topology"),
             default_top_k(),
             ResidentTopKDriverConfig::default(),
         )
@@ -231,14 +301,29 @@ where
         scheduler_config: ResidentSchedulerConfig,
         top_k: NonZeroU32,
         driver_config: ResidentTopKDriverConfig,
-    ) -> Self {
+    ) -> Self
+    where
+        R: ResidentModelRunner,
+    {
         Self::with_parts(
             ResidentScheduler::new(scheduler_config),
             slot_pool,
-            NativeMultiSessionExecutor::new(runner),
+            Self::executor_with_expert_io_resources(runner)
+                .expect("resident model reported an invalid expert-I/O resource topology"),
             top_k,
             driver_config,
         )
+    }
+
+    fn executor_with_expert_io_resources(mut runner: R) -> Result<NativeMultiSessionExecutor<R>>
+    where
+        R: ResidentModelRunner,
+    {
+        let limits = runner.expert_io_resource_limits()?.validate()?;
+        let (control, handle) =
+            BrokerExpertIoResourceControl::new(limits, runner.completion_hub())?;
+        runner.install_expert_io_resource_control(Box::new(control))?;
+        Ok(NativeMultiSessionExecutor::new(runner).with_expert_io_resources(handle))
     }
 
     fn with_parts(
@@ -260,9 +345,15 @@ where
             suspended_sequences: HashMap::new(),
             next_page_slot: 0,
             config,
-            stats: ResidentTopKDriverStats::default(),
-            next_dspark_cycle_attempt: 1,
-            dspark_cycle_traces: VecDeque::new(),
+            observability: ResidentDriverObservability::default(),
+            next_transaction_id: 1,
+            resident_transactions: HashMap::new(),
+            speculative_transactions: HashMap::new(),
+            session_owner: HashMap::new(),
+            ready_transactions: VecDeque::new(),
+            pending_kv_retirements: VecDeque::new(),
+            pending_sequence_cleanups: HashMap::new(),
+            committed_token_outbox: VecDeque::new(),
         }
     }
 
@@ -274,12 +365,58 @@ where
         &self.slot_pool
     }
 
-    pub fn executor(&self) -> &NativeMultiSessionExecutor<R> {
+    #[cfg(test)]
+    pub(crate) fn executor(&self) -> &NativeMultiSessionExecutor<R> {
         &self.executor
     }
 
-    pub fn executor_mut(&mut self) -> &mut NativeMultiSessionExecutor<R> {
+    #[cfg(test)]
+    pub(crate) fn executor_mut(&mut self) -> &mut NativeMultiSessionExecutor<R> {
         &mut self.executor
+    }
+
+    pub fn model_info(&self) -> ferrule_model::ModelInfo {
+        self.executor.runner().model_info()
+    }
+
+    pub fn encode(&self, text: &str) -> Result<Vec<u32>> {
+        self.executor.runner().encode(text)
+    }
+
+    pub fn bound_layer_count(&self) -> Option<usize> {
+        self.executor.runner().bound_layer_count()
+    }
+
+    pub fn expert_report(&self) -> Option<String> {
+        self.executor.runner().expert_report()
+    }
+
+    pub fn model_observability_snapshot(&self) -> R::ObservabilitySnapshot
+    where
+        R: ResidentModelRunner,
+    {
+        self.executor.runner().observability_snapshot()
+    }
+
+    pub(crate) fn completion_hub(&self) -> ferrule_common::CompletionHub
+    where
+        R: ResidentModelRunner,
+    {
+        self.executor.runner().completion_hub()
+    }
+
+    pub(crate) fn take_completion_reactors(&mut self) -> Vec<ferrule_model::ModelCompletionReactor>
+    where
+        R: ResidentModelRunner,
+    {
+        self.executor.runner_mut().take_completion_reactors()
+    }
+
+    pub fn has_pending_async_work(&self) -> bool {
+        !self.resident_transactions.is_empty()
+            || !self.speculative_transactions.is_empty()
+            || !self.pending_kv_retirements.is_empty()
+            || !self.pending_sequence_cleanups.is_empty()
     }
 
     pub fn with_page_manager(mut self, page_manager: KvPageManager) -> Self {
@@ -309,9 +446,44 @@ where
         self.suspended_sequences.len()
     }
 
+    fn ensure_no_suspended_execution(&self, operation: &str) -> Result<()> {
+        if self.has_pending_async_work() || self.executor.has_transactions() {
+            return Err(Error::Execution(format!(
+                "cannot {operation} while execution transactions are live"
+            )));
+        }
+        Ok(())
+    }
+
+    fn take_transaction_id(&mut self) -> Result<ExecutionTransactionId> {
+        let value = self.next_transaction_id;
+        self.next_transaction_id = value.checked_add(1).ok_or_else(|| {
+            Error::Execution("resident execution transaction ID space is exhausted".into())
+        })?;
+        ExecutionTransactionId::new(value)
+    }
+
+    fn executor_has_transaction(&self, transaction: ExecutionTransactionId) -> bool {
+        self.executor
+            .transaction_ids()
+            .any(|active| active == transaction)
+    }
+
+    fn enqueue_transaction(&mut self, transaction: ExecutionTransactionId) {
+        if !self.ready_transactions.contains(&transaction) {
+            self.ready_transactions.push_back(transaction);
+        }
+    }
+
+    fn remove_transaction_from_queue(&mut self, transaction: ExecutionTransactionId) {
+        self.ready_transactions
+            .retain(|queued| *queued != transaction);
+    }
+
     /// Suspend one active session and move its exclusively owned physical pages
     /// out of backend device residency.
     pub fn preempt_session(&mut self, session_id: SessionId) -> Result<()> {
+        self.ensure_no_suspended_execution("preempt a session")?;
         if self.suspended_sequences.contains_key(&session_id) {
             return Err(Error::Execution(format!(
                 "session {session_id:?} is already suspended"
@@ -374,6 +546,7 @@ where
 
     /// Restore a previously suspended session and its exact physical page contents.
     pub fn restore_session(&mut self, session_id: SessionId) -> Result<()> {
+        self.ensure_no_suspended_execution("restore a session")?;
         let suspended = self
             .suspended_sequences
             .remove(&session_id)
@@ -422,17 +595,52 @@ where
         Ok(())
     }
 
-    pub fn into_runner(self) -> Result<R> {
+    pub fn try_into_runner(mut self) -> std::result::Result<R, Box<(Error, Self)>>
+    where
+        R: ResidentModelRunner,
+    {
+        if self.has_pending_async_work()
+            || !self.session_owner.is_empty()
+            || !self.committed_token_outbox.is_empty()
+        {
+            return Err(Box::new((
+                Error::Execution(
+                    "cannot extract resident runner with live execution transactions or undelivered committed events"
+                        .into(),
+                ),
+                self,
+            )));
+        }
         if !self.scheduler.is_idle()
             || !self.suspended_sequences.is_empty()
             || !self.sequence_states.is_empty()
         {
-            return Err(Error::Execution(
-                "cannot extract resident runner while session state is still retained or active"
-                    .into(),
-            ));
+            return Err(Box::new((
+                Error::Execution(
+                    "cannot extract resident runner while session state is still retained or active"
+                        .into(),
+                ),
+                self,
+            )));
         }
-        self.executor.into_runner()
+        if let Some(error) = self.executor.runner_extraction_error() {
+            return Err(Box::new((error, self)));
+        }
+        if let Err(error) = self
+            .executor
+            .runner_mut()
+            .uninstall_expert_io_resource_control()
+        {
+            return Err(Box::new((error, self)));
+        }
+        match self.executor.try_into_runner() {
+            Ok(runner) => Ok(runner),
+            Err(failure) => {
+                let (error, executor) = *failure;
+                self.executor = executor;
+                Err(Box::new((error, self)))
+            }
+        }
     }
 
     /// Keep a session's model and KV state resident after each request finishes.
@@ -455,13 +663,14 @@ where
 
     /// Release an idle retained session and all model/KV state owned by it.
     pub fn release_session(&mut self, session_id: SessionId) -> Result<()> {
+        self.ensure_no_suspended_execution("release a session")?;
         if !self.scheduler.is_idle() || self.suspended_sequences.contains_key(&session_id) {
             return Err(Error::Execution(format!(
                 "cannot release session {session_id:?} while scheduler work is active or suspended"
             )));
         }
+        self.release_sequence_state(session_id)?;
         self.retained_sessions.remove(&session_id);
-        self.release_sequence_state(session_id);
         Ok(())
     }
 
@@ -479,25 +688,7 @@ where
     }
 
     pub fn stats(&self) -> &ResidentTopKDriverStats {
-        &self.stats
-    }
-
-    /// Drain completed production DSpark cycle records in execution order while
-    /// retaining the queue allocation for the next driver step.
-    pub fn drain_dspark_cycle_traces(
-        &mut self,
-    ) -> std::collections::vec_deque::Drain<'_, DSparkCycleTrace> {
-        self.dspark_cycle_traces.drain(..)
-    }
-
-    fn record_dspark_cycle_trace(&mut self, trace: DSparkCycleTrace) {
-        const MAX_PENDING_DSPARK_CYCLE_TRACES: usize = 1024;
-        if self.dspark_cycle_traces.len() == MAX_PENDING_DSPARK_CYCLE_TRACES {
-            self.dspark_cycle_traces.pop_front();
-            self.stats.dropped_dspark_cycle_traces =
-                self.stats.dropped_dspark_cycle_traces.saturating_add(1);
-        }
-        self.dspark_cycle_traces.push_back(trace);
+        self.observability.stats()
     }
 
     /// Validate scheduler policy against the truthful capabilities of the native
@@ -547,12 +738,18 @@ where
         self.scheduler.submit_at_position(request, position_start);
     }
 
-    /// Cancel a waiting or active request without executing another model step.
-    ///
-    /// Active cancellation releases the scheduler slot, model sequence state,
-    /// authoritative paged KV metadata, and physical KV pages. Cleanup failures
-    /// are returned but do not poison the executor.
-    pub fn cancel_request(&mut self, request_id: RequestId) -> Result<CancelRequestResult> {
+    /// Cancel a waiting or active request without disturbing unrelated transactions.
+    pub fn cancel_request(&mut self, request_id: RequestId) -> Result<CancelRequestResult>
+    where
+        R: ResidentModelRunner,
+    {
+        if let Some(transaction) = self.transaction_for_request(request_id) {
+            self.cancel_transaction(transaction, request_id)?;
+        }
+        self.cancel_scheduled_request(request_id)
+    }
+
+    fn cancel_scheduled_request(&mut self, request_id: RequestId) -> Result<CancelRequestResult> {
         let result = self
             .scheduler
             .cancel_request(request_id, &mut self.slot_pool)?;
@@ -560,9 +757,343 @@ where
             if let Some(position) = self.retained_sessions.get_mut(&session_id) {
                 *position = 0;
             }
-            self.try_release_sequence_state(session_id)?;
+            self.release_sequence_state(session_id)?;
         }
         Ok(result)
+    }
+
+    pub(crate) fn request_has_pending_model_progress(&self, request_id: RequestId) -> bool {
+        let Some(transaction) = self.transaction_for_request(request_id) else {
+            return false;
+        };
+        self.resident_transactions
+            .get(&transaction)
+            .is_some_and(|pending| pending.pending_progress.is_some())
+            || self
+                .speculative_transactions
+                .get(&transaction)
+                .is_some_and(PendingSpeculativeDriverCohort::has_pending_progress)
+    }
+
+    fn transaction_for_request(&self, request_id: RequestId) -> Option<ExecutionTransactionId> {
+        self.resident_transactions
+            .iter()
+            .find_map(|(transaction, pending)| {
+                action_contains_request(&pending.action, request_id).then_some(*transaction)
+            })
+            .or_else(|| {
+                self.speculative_transactions
+                    .iter()
+                    .find_map(|(transaction, pending)| {
+                        pending
+                            .actions()
+                            .iter()
+                            .any(|action| action.request_id == Some(request_id))
+                            .then_some(*transaction)
+                    })
+            })
+    }
+
+    fn cancel_transaction(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        request_id: RequestId,
+    ) -> Result<()>
+    where
+        R: ResidentModelRunner,
+    {
+        self.remove_transaction_from_queue(transaction);
+        if let Some(pending) = self.resident_transactions.remove(&transaction) {
+            return self.cancel_resident_transaction(pending, request_id);
+        }
+        let pending = self
+            .speculative_transactions
+            .remove(&transaction)
+            .ok_or_else(|| {
+                Error::Internal(format!(
+                    "transaction {transaction:?} has no driver ownership"
+                ))
+            })?;
+        match pending {
+            PendingSpeculativeDriverCohort::Proposing(pending) => {
+                self.cancel_native_proposal_cohort(pending, Some(request_id), None)
+            }
+            PendingSpeculativeDriverCohort::Verifying(pending) => {
+                self.cancel_speculative_verification_cohort(*pending, request_id)
+            }
+        }
+    }
+
+    fn cancel_resident_transaction(
+        &mut self,
+        mut pending: PendingResidentBatch<R::SequenceState>,
+        request_id: RequestId,
+    ) -> Result<()> {
+        let transaction = pending.transaction;
+        pending.cancelling = Some(request_id);
+        let cancellation = match pending.pending_progress.as_ref() {
+            Some(progress) => self.executor.cancel_resumable_batch(
+                transaction,
+                &mut pending.states,
+                progress.continuation(),
+            ),
+            None if self.executor_has_transaction(transaction) => self
+                .executor
+                .rollback_prepared_batch(transaction, &mut pending.states),
+            None => Ok(()),
+        };
+        if let Err(error) = cancellation {
+            if let Some(progress) = self.executor.pending_model_progress(transaction).cloned() {
+                pending.pending_progress = Some(progress);
+                self.resident_transactions.insert(transaction, pending);
+                self.enqueue_transaction(transaction);
+                return Err(error);
+            }
+            if self.executor_has_transaction(transaction) {
+                pending.pending_progress = None;
+                self.resident_transactions.insert(transaction, pending);
+                self.enqueue_transaction(transaction);
+                return Err(error);
+            }
+            let cleanup = self.finish_resident_rollback(pending);
+            return match cleanup {
+                Ok(()) => Err(error),
+                Err(cleanup) => Err(Error::Internal(format!(
+                    "transaction {transaction:?} cancellation failed ({error}); cleanup also failed ({cleanup})"
+                ))),
+            };
+        }
+        self.finish_resident_rollback(pending)
+    }
+
+    fn cancel_native_proposal_cohort(
+        &mut self,
+        mut pending: PendingNativeProposalCohort<R::SequenceState>,
+        request_id: Option<RequestId>,
+        failure: Option<Error>,
+    ) -> Result<()>
+    where
+        R: ResidentModelRunner,
+    {
+        if let Some(request_id) = request_id {
+            pending.cancellation_request = Some(request_id);
+        }
+        if let Some(failure) = failure {
+            let failure = failure.to_string();
+            pending.cancellation_error = Some(match pending.cancellation_error.take() {
+                Some(previous) => format!("{previous}; {failure}"),
+                None => failure,
+            });
+        }
+
+        let mut still_active = Vec::new();
+        for slot_index in 0..pending.slots.len() {
+            let continuation = match &pending.slots[slot_index].status {
+                NativeProposalSlotStatus::Waiting(progress) => progress.continuation(),
+                NativeProposalSlotStatus::NotStarted
+                | NativeProposalSlotStatus::Complete { .. } => continue,
+            };
+            let transaction = pending.transaction;
+            let cancellation = self
+                .executor
+                .with_sequence_state(&mut pending.source_states[slot_index], |runner| {
+                    Ok(runner.cancel_native_proposal(transaction, continuation))
+                });
+            match cancellation {
+                Ok(BatchContinuationCancelOutcome::Cancelled) => {
+                    pending.slots[slot_index].status = NativeProposalSlotStatus::NotStarted;
+                }
+                Ok(BatchContinuationCancelOutcome::Quiesced(error)) => {
+                    pending.slots[slot_index].status = NativeProposalSlotStatus::NotStarted;
+                    let error = error.to_string();
+                    pending.cancellation_error = Some(match pending.cancellation_error.take() {
+                        Some(previous) => format!("{previous}; {error}"),
+                        None => error,
+                    });
+                }
+                Ok(BatchContinuationCancelOutcome::StillActive(error)) | Err(error) => {
+                    still_active.push(error.to_string());
+                }
+            }
+        }
+
+        if !still_active.is_empty() {
+            let error = Error::Execution(format!(
+                "speculative proposal cancellation left active continuations: {}",
+                still_active.join("; ")
+            ));
+            let transaction = pending.transaction;
+            self.speculative_transactions.insert(
+                transaction,
+                PendingSpeculativeDriverCohort::Proposing(pending),
+            );
+            self.enqueue_transaction(transaction);
+            return Err(error);
+        }
+
+        let actions = pending.actions;
+        self.restore_transaction_sessions(pending.schedules, pending.source_states)?;
+        let requeue = self.scheduler.requeue_decode_actions_front(&actions);
+        match (pending.cancellation_error, requeue) {
+            (None, Ok(())) => Ok(()),
+            (Some(error), Ok(())) => Err(Error::Execution(error)),
+            (None, Err(error)) => Err(error),
+            (Some(error), Err(requeue)) => Err(Error::Internal(format!(
+                "speculative proposal cancellation failed ({error}); restoring scheduler actions also failed ({requeue})"
+            ))),
+        }
+    }
+
+    fn cancel_speculative_verification_cohort(
+        &mut self,
+        pending: PendingSpeculativeVerificationDriverCohort<R::SequenceState>,
+        request_id: RequestId,
+    ) -> Result<()> {
+        let PendingSpeculativeVerificationDriverCohort {
+            transaction,
+            cohort_start,
+            actions,
+            prepared,
+            source_states,
+            schedules,
+            verification,
+            cancellation_request: _,
+        } = pending;
+        let page_manager = match self.page_manager.as_mut() {
+            Some(page_manager) => page_manager,
+            None => {
+                self.speculative_transactions.insert(
+                    transaction,
+                    PendingSpeculativeDriverCohort::Verifying(Box::new(
+                        PendingSpeculativeVerificationDriverCohort {
+                            transaction,
+                            cohort_start,
+                            actions,
+                            prepared,
+                            source_states,
+                            schedules,
+                            verification,
+                            cancellation_request: Some(request_id),
+                        },
+                    )),
+                );
+                self.enqueue_transaction(transaction);
+                return Err(Error::Internal(
+                    "authoritative KvPageManager disappeared while cancelling a suspended speculative cohort"
+                        .into(),
+                ));
+            }
+        };
+        let cancellation = cancel_resumable_speculative_verification_cohort(
+            &mut self.executor,
+            page_manager,
+            verification,
+        );
+        match cancellation {
+            Ok(()) => {
+                self.restore_transaction_sessions(schedules, source_states)?;
+                self.scheduler.requeue_decode_actions_front(&actions)
+            }
+            Err(error) => {
+                let (error, verification) = error.into_parts();
+                if let Some(verification) = verification {
+                    self.speculative_transactions.insert(
+                        transaction,
+                        PendingSpeculativeDriverCohort::Verifying(Box::new(
+                            PendingSpeculativeVerificationDriverCohort {
+                                transaction,
+                                cohort_start,
+                                actions,
+                                prepared,
+                                source_states,
+                                schedules,
+                                verification: *verification,
+                                cancellation_request: Some(request_id),
+                            },
+                        )),
+                    );
+                    self.enqueue_transaction(transaction);
+                    Err(error)
+                } else {
+                    self.restore_transaction_sessions(schedules, source_states)?;
+                    match self.scheduler.requeue_decode_actions_front(&actions) {
+                        Ok(()) => Err(error),
+                        Err(requeue) => Err(Error::Internal(format!(
+                            "speculative cancellation cleanup failed ({error}); restoring scheduler actions also failed ({requeue})"
+                        ))),
+                    }
+                }
+            }
+        }
+    }
+
+    fn claim_transaction_sessions(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        session_ids: &[SessionId],
+    ) -> Result<(Vec<SuspendedSequenceSchedule>, Vec<R::SequenceState>)> {
+        let mut unique = HashSet::with_capacity(session_ids.len());
+        for session_id in session_ids {
+            if !unique.insert(*session_id) {
+                return Err(Error::Internal(format!(
+                    "transaction {transaction:?} contains duplicate session {session_id:?}"
+                )));
+            }
+            if let Some(owner) = self.session_owner.get(session_id) {
+                return Err(Error::Execution(format!(
+                    "session {session_id:?} is already owned by transaction {owner:?}"
+                )));
+            }
+        }
+
+        let mut schedules = Vec::with_capacity(session_ids.len());
+        let mut states = Vec::with_capacity(session_ids.len());
+        for session_id in session_ids {
+            let schedule = match self.scheduler.suspend_sequence(*session_id) {
+                Ok(schedule) => schedule,
+                Err(error) => {
+                    self.restore_transaction_sessions(schedules, states)?;
+                    return Err(error);
+                }
+            };
+            let Some(state) = self.sequence_states.remove(session_id) else {
+                self.scheduler.restore_suspended(schedule)?;
+                self.restore_transaction_sessions(schedules, states)?;
+                return Err(Error::Internal(format!(
+                    "session {session_id:?} has no model sequence state"
+                )));
+            };
+            self.session_owner.insert(*session_id, transaction);
+            schedules.push(schedule);
+            states.push(state);
+        }
+        Ok((schedules, states))
+    }
+
+    fn restore_transaction_sessions(
+        &mut self,
+        schedules: Vec<SuspendedSequenceSchedule>,
+        states: Vec<R::SequenceState>,
+    ) -> Result<()> {
+        if schedules.len() != states.len() {
+            return Err(Error::Internal(format!(
+                "transaction schedule/state mismatch: schedules={} states={}",
+                schedules.len(),
+                states.len()
+            )));
+        }
+        for (schedule, state) in schedules.into_iter().zip(states) {
+            let session_id = schedule.session_id();
+            self.session_owner.remove(&session_id);
+            let previous = self.sequence_states.insert(session_id, state);
+            if previous.is_some() {
+                return Err(Error::Internal(format!(
+                    "session {session_id:?} model state was already published"
+                )));
+            }
+            self.scheduler.restore_suspended(schedule)?;
+        }
+        Ok(())
     }
 
     /// Fork an active session from exactly its currently committed paged prefix.
@@ -577,6 +1108,7 @@ where
         target_request: GenerateRequest,
         expected_committed_position: usize,
     ) -> Result<SessionId> {
+        self.ensure_no_suspended_execution("fork a session")?;
         if self.executor.is_poisoned() {
             return Err(Error::Execution(
                 "cannot fork a session while the native executor is poisoned".into(),
@@ -743,62 +1275,150 @@ where
 
     /// Preserve a retained session at its committed position, or release a
     /// normal one immediately after the request turn finishes.
-    fn finalize_sequence_state(&mut self, session_id: SessionId, position: usize) {
+    fn finalize_sequence_state(&mut self, session_id: SessionId, position: usize) -> Result<()> {
         if let Some(retained_position) = self.retained_sessions.get_mut(&session_id) {
             *retained_position = position;
-        } else {
-            self.release_sequence_state(session_id);
-        }
-    }
-
-    /// Release the sequence state for a finished or cancelled session.
-    fn release_sequence_state(&mut self, session_id: SessionId) {
-        if let Err(error) = self.try_release_sequence_state(session_id) {
-            tracing::warn!("failed to release state for session {session_id:?}: {error}");
-        }
-    }
-
-    /// Attempt every resource release and report cleanup errors without changing
-    /// executor poison state. This is used directly by explicit cancellation.
-    fn try_release_sequence_state(&mut self, session_id: SessionId) -> Result<()> {
-        let mut errors = Vec::new();
-        if let Some(slot) = self.page_slots.remove(&session_id) {
-            match self.page_manager.as_mut() {
-                Some(manager) => match manager.free_sequence_pages(slot) {
-                    Ok(pages) => {
-                        if let Err(error) = self.executor.release_kv_pages(&pages) {
-                            errors.push(format!("physical KV release failed: {error}"));
-                        }
-                    }
-                    Err(error) => errors.push(format!("paged KV release failed: {error}")),
-                },
-                None => errors.push("authoritative page manager is missing".into()),
-            }
-        }
-        if let Some(state) = self.sequence_states.remove(&session_id)
-            && let Err(error) = self.executor.release_sequence_state(state)
-        {
-            errors.push(format!("model sequence-state release failed: {error}"));
-        }
-        if errors.is_empty() {
             Ok(())
         } else {
-            Err(Error::Internal(format!(
-                "failed to release cancelled session {session_id:?}: {}",
-                errors.join("; ")
-            )))
+            self.release_sequence_state(session_id)
         }
     }
 
-    fn feed_session_token(&mut self, session_id: SessionId, token_id: u32) -> Result<()> {
-        let mut state = self.sequence_states.remove(&session_id).ok_or_else(|| {
-            Error::Internal(format!(
-                "cannot feed token for session {session_id:?} without sequence state"
-            ))
-        })?;
-        let result = self.executor.feed_sequence_token(&mut state, token_id);
-        self.sequence_states.insert(session_id, state);
-        result
+    /// Release sequence/KV ownership now, or retain it in a driver-owned cleanup
+    /// record until every packed backend transaction is quiescent.
+    fn release_sequence_state(&mut self, session_id: SessionId) -> Result<()> {
+        self.pending_sequence_cleanups
+            .entry(session_id)
+            .or_insert(PendingSequenceCleanup::Deferred);
+        if self.executor.has_transactions() {
+            return Ok(());
+        }
+        self.progress_sequence_cleanup(session_id)
+    }
+
+    fn progress_pending_cleanups(&mut self) -> Result<()> {
+        if self.executor.has_transactions() {
+            return Ok(());
+        }
+        while let Some(retirement) = self.pending_kv_retirements.pop_front() {
+            if let Err((error, retirement)) = self.progress_kv_retirement(retirement) {
+                self.pending_kv_retirements.push_front(retirement);
+                return Err(error);
+            }
+        }
+        let sessions = self
+            .pending_sequence_cleanups
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for session_id in sessions {
+            self.progress_sequence_cleanup(session_id)?;
+        }
+        Ok(())
+    }
+
+    fn progress_sequence_cleanup(&mut self, session_id: SessionId) -> Result<()> {
+        if self.executor.has_transactions() {
+            return Ok(());
+        }
+        let Some(cleanup) = self.pending_sequence_cleanups.remove(&session_id) else {
+            return Ok(());
+        };
+        let cleanup = match cleanup {
+            PendingSequenceCleanup::Deferred => {
+                let retirement = match self.page_slots.get(&session_id).copied() {
+                    Some(slot) => {
+                        let Some(manager) = self.page_manager.as_mut() else {
+                            self.pending_sequence_cleanups
+                                .insert(session_id, PendingSequenceCleanup::Deferred);
+                            return Err(Error::Internal(format!(
+                                "session {session_id:?} has a page slot without an authoritative page manager"
+                            )));
+                        };
+                        let retirement = match manager.free_sequence_pages(slot) {
+                            Ok(retirement) => retirement,
+                            Err(error) => {
+                                self.pending_sequence_cleanups
+                                    .insert(session_id, PendingSequenceCleanup::Deferred);
+                                return Err(error);
+                            }
+                        };
+                        self.page_slots.remove(&session_id);
+                        Some(PendingKvRetirement::BackendRelease(retirement))
+                    }
+                    None => None,
+                };
+                PendingSequenceCleanup::Owned {
+                    retirement,
+                    model_state: self.sequence_states.remove(&session_id),
+                }
+            }
+            cleanup @ PendingSequenceCleanup::Owned { .. } => cleanup,
+        };
+        let PendingSequenceCleanup::Owned {
+            retirement,
+            model_state,
+        } = cleanup
+        else {
+            unreachable!("deferred sequence cleanup was converted to owned state")
+        };
+        if let Some(retirement) = retirement
+            && let Err((error, retirement)) = self.progress_kv_retirement(retirement)
+        {
+            self.pending_sequence_cleanups.insert(
+                session_id,
+                PendingSequenceCleanup::Owned {
+                    retirement: Some(retirement),
+                    model_state,
+                },
+            );
+            return Err(error);
+        }
+        if let Some(state) = model_state {
+            self.executor.release_sequence_state(state)?;
+        }
+        Ok(())
+    }
+
+    fn progress_kv_retirement(
+        &mut self,
+        retirement: PendingKvRetirement,
+    ) -> std::result::Result<(), (Error, PendingKvRetirement)> {
+        if self.executor.has_transactions() {
+            return Err((
+                Error::Execution(
+                    "cannot progress KV retirement while packed transactions are live".into(),
+                ),
+                retirement,
+            ));
+        }
+        let retirement = match retirement {
+            PendingKvRetirement::BackendRelease(retirement) => {
+                if !retirement.is_empty()
+                    && let Err(error) = self
+                        .executor
+                        .runner_mut()
+                        .release_kv_pages(retirement.pages())
+                {
+                    return Err((error, PendingKvRetirement::BackendRelease(retirement)));
+                }
+                retirement
+            }
+            PendingKvRetirement::LogicalConfirmation(retirement) => retirement,
+        };
+        let Some(manager) = self.page_manager.as_mut() else {
+            return Err((
+                Error::Internal("retiring KV pages have no authoritative page manager".into()),
+                PendingKvRetirement::LogicalConfirmation(retirement),
+            ));
+        };
+        match manager.confirm_page_retirement(retirement) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let (error, retirement) = error.into_parts();
+                Err((error, PendingKvRetirement::LogicalConfirmation(retirement)))
+            }
+        }
     }
 
     fn reserve_batch_pages(&mut self, batch: &ScheduledBatch) -> Result<Vec<KvReservation>> {
@@ -818,10 +1438,20 @@ where
             match manager.reserve(slot, 0, token_count) {
                 Ok(reservation) => reservations.push(reservation),
                 Err(error) => {
-                    for reservation in reservations.drain(..) {
-                        let _ = manager.rollback(reservation);
-                    }
-                    return Err(error);
+                    let cleanup = manager
+                        .abort_reservations(reservations)
+                        .map_err(|abort| abort.into_parts().0)
+                        .and_then(|retirement| {
+                            manager
+                                .confirm_page_retirement(retirement)
+                                .map_err(|confirm| confirm.into_parts().0)
+                        });
+                    return match cleanup {
+                        Ok(()) => Err(error),
+                        Err(cleanup) => Err(Error::Internal(format!(
+                            "KV reserve failed ({error}); reservation cleanup also failed ({cleanup})"
+                        ))),
+                    };
                 }
             }
         }
@@ -839,64 +1469,47 @@ where
         let manager = self.page_manager.as_ref().ok_or_else(|| {
             Error::Execution("paged executor requires a runtime KvPageManager".into())
         })?;
-        let bindings = reservations
+        let views = manager.reservation_views(reservations)?;
+        let bindings = views
             .iter()
             .map(|reservation| manager.reservation_bindings(reservation))
             .collect::<Result<Vec<_>>>()?;
         batch.bind_paged_kv(&bindings)
     }
 
-    fn rollback_page_reservations(&mut self, reservations: Vec<KvReservation>) {
-        if let Some(manager) = &mut self.page_manager {
-            for reservation in reservations {
-                if let Err(error) = manager.rollback(reservation) {
-                    tracing::warn!("failed to rollback KV reservation: {error}");
+    fn abort_quiesced_resident_kv(&mut self, kv: PendingResidentKv) -> Result<()> {
+        let Some(manager) = &mut self.page_manager else {
+            return match kv {
+                PendingResidentKv::Reserved(reservations) if reservations.is_empty() => Ok(()),
+                PendingResidentKv::Reserved(_) | PendingResidentKv::Prepared(_) => {
+                    Err(Error::Internal(
+                        "KV transaction exists without an authoritative page manager".into(),
+                    ))
                 }
+            };
+        };
+        let retirement = match kv {
+            PendingResidentKv::Reserved(reservations) => manager
+                .abort_reservations(reservations)
+                .map_err(|error| error.into_parts().0)?,
+            PendingResidentKv::Prepared(prepared) => manager.abort_prepared_commit(prepared),
+        };
+        self.release_and_confirm_retirement(retirement)
+    }
+
+    fn release_and_confirm_retirement(&mut self, retirement: KvRetirement) -> Result<()> {
+        let retirement = PendingKvRetirement::BackendRelease(retirement);
+        if self.executor.has_transactions() {
+            self.pending_kv_retirements.push_back(retirement);
+            return Ok(());
+        }
+        match self.progress_kv_retirement(retirement) {
+            Ok(()) => Ok(()),
+            Err((error, retirement)) => {
+                self.pending_kv_retirements.push_back(retirement);
+                Err(error)
             }
         }
-    }
-
-    fn commit_page_reservations(
-        &mut self,
-        reservations: Vec<KvReservation>,
-    ) -> Result<Vec<ferrule_common::execution::KvPageId>> {
-        match &mut self.page_manager {
-            Some(manager) => manager.commit_batch_with_freed(reservations),
-            None => Ok(Vec::new()),
-        }
-    }
-
-    pub fn step<F>(&mut self, on_token: &mut F) -> Result<ResidentDriverStep>
-    where
-        F: FnMut(&ResidentTokenEvent) -> Result<()>,
-    {
-        self.step_with_expert_io(
-            on_token,
-            &mut ZeroExpertIoAdvisor,
-            ExpertIoBudget::unbounded(),
-        )
-    }
-
-    pub fn step_with_expert_io<F, A>(
-        &mut self,
-        on_token: &mut F,
-        advisor: &mut A,
-        expert_budget: ExpertIoBudget,
-    ) -> Result<ResidentDriverStep>
-    where
-        F: FnMut(&ResidentTokenEvent) -> Result<()>,
-        A: ExpertIoAdvisor,
-    {
-        self.prepare_step()?;
-        let Some(action) = self.scheduler.next_action_with_expert_io(
-            &mut self.slot_pool,
-            advisor,
-            expert_budget,
-        )?
-        else {
-            return Ok(self.no_action_step());
-        };
-        self.execute_planned_action(action, on_token)
     }
 
     fn prepare_step(&mut self) -> Result<()> {
@@ -925,217 +1538,394 @@ where
     where
         F: FnMut(&ResidentTokenEvent) -> Result<()>,
     {
-        let action_kind = action_kind(&action);
-        let rows = action_rows(&action);
-        let mut scheduled = match ScheduledBatch::from_action(&mut action, self.top_k) {
-            Ok(scheduled) => scheduled,
-            Err(error) => return Err(self.abort_action(&action, error, false, "batch lowering")),
+        let Some(mut scheduled) = ScheduledBatch::from_action(&mut action, self.top_k)
+            .map_err(|error| self.abort_action(&action, error, false, "batch lowering"))?
+        else {
+            self.scheduler.commit_action(&action)?;
+            return Ok(ResidentDriverStep::Executed {
+                action_kind: action_kind(&action),
+                rows: 0,
+                staged: 0,
+                finished: 0,
+            });
         };
 
-        let mut page_reservations = match scheduled.as_ref() {
-            Some(batch) => match self.reserve_batch_pages(batch) {
-                Ok(reservations) => reservations,
-                Err(error) => {
-                    return Err(self.abort_action(&action, error, false, "KV reserve"));
-                }
-            },
-            None => Vec::new(),
+        let transaction = self.take_transaction_id()?;
+        let session_ids = scheduled
+            .sequences
+            .iter()
+            .map(|sequence| sequence.session_id)
+            .collect::<Vec<_>>();
+        let (schedules, mut states) = self
+            .claim_transaction_sessions(transaction, &session_ids)
+            .map_err(|error| self.abort_action(&action, error, false, "session claim"))?;
+
+        let mut page_reservations = match self.reserve_batch_pages(&scheduled) {
+            Ok(reservations) => reservations,
+            Err(error) => {
+                self.restore_transaction_sessions(schedules, states)?;
+                return Err(self.abort_action(&action, error, false, "KV reserve"));
+            }
         };
-        if let Some(batch) = scheduled.as_mut()
-            && let Err(error) = self.bind_reserved_pages(batch, &page_reservations)
-        {
-            self.rollback_page_reservations(std::mem::take(&mut page_reservations));
-            return Err(self.abort_action(&action, error, false, "KV binding"));
+        if let Err(error) = self.bind_reserved_pages(&mut scheduled, &page_reservations) {
+            let rollback = self.abort_quiesced_resident_kv(PendingResidentKv::Reserved(
+                std::mem::take(&mut page_reservations),
+            ));
+            self.restore_transaction_sessions(schedules, states)?;
+            return Err(match rollback {
+                Ok(_) => self.abort_action(&action, error, false, "KV binding"),
+                Err(cleanup) => Error::Internal(format!(
+                    "KV binding failed ({error}); logical rollback also failed ({cleanup})"
+                )),
+            });
+        }
+        let reservation_views = match &self.page_manager {
+            Some(manager) => manager.reservation_views(&page_reservations),
+            None if page_reservations.is_empty() => Ok(Vec::<KvReservationView>::new()),
+            None => Err(Error::Internal(
+                "KV reservations exist without an authoritative page manager".into(),
+            )),
+        };
+        let reservation_views = match reservation_views {
+            Ok(views) => views,
+            Err(error) => {
+                let cleanup =
+                    self.abort_quiesced_resident_kv(PendingResidentKv::Reserved(page_reservations));
+                self.restore_transaction_sessions(schedules, states)?;
+                let error = self.abort_action(&action, error, false, "KV reservation view");
+                return Err(match cleanup {
+                    Ok(()) => error,
+                    Err(cleanup) => Error::Internal(format!(
+                        "KV reservation view failed ({error}); KV cleanup also failed ({cleanup})"
+                    )),
+                });
+            }
+        };
+
+        let progress = self.executor.begin_resumable_batch_with_kv(
+            transaction,
+            &mut states,
+            scheduled.execution(),
+            &reservation_views,
+        );
+        let mut pending = PendingResidentBatch {
+            transaction,
+            action,
+            scheduled,
+            kv: PendingResidentKv::Reserved(page_reservations),
+            states,
+            schedules,
+            pending_progress: None,
+            cancelling: None,
+        };
+        match progress {
+            Ok(NativeBatchExecutionProgress::Complete(output)) => {
+                self.finish_resident_transaction(pending, output, on_token)
+            }
+            Ok(NativeBatchExecutionProgress::Waiting(progress)) => {
+                pending.pending_progress = Some(progress);
+                self.resident_transactions.insert(transaction, pending);
+                self.enqueue_transaction(transaction);
+                Ok(ResidentDriverStep::WaitingForModelProgress(
+                    self.pending_model_progresses(),
+                ))
+            }
+            Err(error) => {
+                if let Some(progress) = self.executor.pending_model_progress(transaction).cloned() {
+                    pending.pending_progress = Some(progress);
+                    self.resident_transactions.insert(transaction, pending);
+                    self.enqueue_transaction(transaction);
+                    return Err(error);
+                }
+                if self.executor_has_transaction(transaction) {
+                    self.resident_transactions.insert(transaction, pending);
+                    return Err(error);
+                }
+                let cleanup = self.abort_quiesced_resident_kv(pending.kv);
+                self.restore_transaction_sessions(pending.schedules, pending.states)?;
+                let error = self.abort_action(&pending.action, error, false, "model execution");
+                Err(match cleanup {
+                    Ok(()) => error,
+                    Err(cleanup) => Error::Internal(format!(
+                        "model execution failed ({error}); KV cleanup also failed ({cleanup})"
+                    )),
+                })
+            }
+        }
+    }
+
+    fn resume_resident_transaction<F>(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        on_token: &mut F,
+    ) -> Result<Option<ResidentDriverStep>>
+    where
+        F: FnMut(&ResidentTokenEvent) -> Result<()>,
+    {
+        let mut pending = self
+            .resident_transactions
+            .remove(&transaction)
+            .ok_or_else(|| {
+                Error::Internal(format!("resident transaction {transaction:?} disappeared"))
+            })?;
+        if let Some(request_id) = pending.cancelling {
+            return match self.cancel_resident_transaction(pending, request_id) {
+                Ok(()) => {
+                    self.cancel_scheduled_request(request_id)?;
+                    Ok(Some(ResidentDriverStep::Executed {
+                        action_kind: ResidentActionKind::Cancel,
+                        rows: 0,
+                        staged: 0,
+                        finished: 0,
+                    }))
+                }
+                Err(_) if self.resident_transactions.contains_key(&transaction) => Ok(None),
+                Err(error) => Err(error),
+            };
+        }
+        let continuation = match pending.pending_progress.as_ref() {
+            Some(progress) => progress.continuation(),
+            None => {
+                self.resident_transactions.insert(transaction, pending);
+                return Err(Error::Execution(format!(
+                    "resident transaction {transaction:?} is quarantined"
+                )));
+            }
+        };
+        match self.executor.resume_resumable_batch(
+            transaction,
+            &mut pending.states,
+            pending.scheduled.execution(),
+            continuation,
+        ) {
+            Ok(NativeBatchExecutionProgress::Complete(output)) => {
+                pending.pending_progress = None;
+                self.finish_resident_transaction(pending, output, on_token)
+                    .map(Some)
+            }
+            Ok(NativeBatchExecutionProgress::Waiting(progress)) => {
+                pending.pending_progress = Some(progress);
+                self.resident_transactions.insert(transaction, pending);
+                self.enqueue_transaction(transaction);
+                Ok(None)
+            }
+            Err(error) => {
+                if let Some(progress) = self.executor.pending_model_progress(transaction).cloned() {
+                    pending.pending_progress = Some(progress);
+                    self.resident_transactions.insert(transaction, pending);
+                    self.enqueue_transaction(transaction);
+                    return Err(error);
+                }
+                if self.executor_has_transaction(transaction) {
+                    pending.pending_progress = None;
+                    self.resident_transactions.insert(transaction, pending);
+                    return Err(error);
+                }
+                let cleanup = self.abort_quiesced_resident_kv(pending.kv);
+                self.restore_transaction_sessions(pending.schedules, pending.states)?;
+                let error =
+                    self.abort_action(&pending.action, error, false, "resumable model execution");
+                Err(match cleanup {
+                    Ok(()) => error,
+                    Err(cleanup) => Error::Internal(format!(
+                        "resumable model execution failed ({error}); KV cleanup also failed ({cleanup})"
+                    )),
+                })
+            }
+        }
+    }
+
+    fn finish_resident_transaction<F>(
+        &mut self,
+        mut pending: PendingResidentBatch<R::SequenceState>,
+        output: ExecutionOutput,
+        on_token: &mut F,
+    ) -> Result<ResidentDriverStep>
+    where
+        F: FnMut(&ResidentTokenEvent) -> Result<()>,
+    {
+        let transaction = pending.transaction;
+        if let Err(error) = pending.scheduled.validate_output(&output) {
+            return Err(self.rollback_and_fail_resident(pending, error, "model output contract"));
         }
 
-        // Collect the sequence states referenced by this batch into a dense
-        // slice ordered by state slot index. The executor uses state_slot to
-        // index into this slice.
-        let output = match scheduled.as_ref() {
-            Some(batch) => {
-                let state_count = batch.sequences.len();
-                // Collect the sequence states referenced by this batch into a
-                // dense slice ordered by state slot index. The executor uses
-                // state_slot to index into this slice.
-                let mut states_flat: Vec<R::SequenceState> = Vec::with_capacity(state_count);
-                let mut missing_session = None;
-                for scheduled_seq in &batch.sequences {
-                    match self.sequence_states.remove(&scheduled_seq.session_id) {
-                        Some(state) => states_flat.push(state),
-                        None => {
-                            missing_session = Some(scheduled_seq.session_id);
-                            break;
-                        }
-                    }
-                }
-                if let Some(session_id) = missing_session {
-                    for (scheduled_seq, state) in batch.sequences.iter().zip(states_flat) {
-                        self.sequence_states.insert(scheduled_seq.session_id, state);
-                    }
-                    self.rollback_page_reservations(std::mem::take(&mut page_reservations));
-                    let error = Error::Internal(format!(
-                        "sequence state disappeared for session {session_id:?}"
-                    ));
-                    return Err(self.abort_action(
-                        &action,
-                        error,
-                        false,
-                        "sequence state collection",
-                    ));
-                }
-
-                let exec_result = self.executor.execute_batch_with_kv(
-                    &mut states_flat,
-                    batch.execution(),
-                    &page_reservations,
-                );
-
-                // Move every state back in linear time, including after execution failure.
-                debug_assert_eq!(batch.sequences.len(), states_flat.len());
-                for (scheduled_seq, state) in batch.sequences.iter().zip(states_flat) {
-                    self.sequence_states.insert(scheduled_seq.session_id, state);
-                }
-
-                match exec_result {
-                    Ok(output) => Some(output),
-                    Err(execution_error) => {
-                        self.rollback_page_reservations(std::mem::take(&mut page_reservations));
-                        let poisoned = self.executor.is_poisoned();
-                        return Err(self.abort_action(
-                            &action,
-                            execution_error,
-                            poisoned,
-                            "model execution",
+        let reserved = match std::mem::replace(
+            &mut pending.kv,
+            PendingResidentKv::Reserved(Vec::new()),
+        ) {
+            PendingResidentKv::Reserved(reservations) => reservations,
+            PendingResidentKv::Prepared(prepared) => {
+                pending.kv = PendingResidentKv::Prepared(prepared);
+                self.resident_transactions.insert(transaction, pending);
+                return Err(Error::Internal(format!(
+                    "transaction {transaction:?} reached model completion with an existing prepared logical commit"
+                )));
+            }
+        };
+        let prepared = match self.page_manager.as_mut() {
+            Some(manager) => {
+                let commits = reserved
+                    .into_iter()
+                    .map(|reservation| {
+                        let rows = reservation.view().positions.len();
+                        KvReservationCommit::new(reservation, rows)
+                    })
+                    .collect();
+                match manager.prepare_commit(commits) {
+                    Ok(prepared) => Some(prepared),
+                    Err(error) => {
+                        let (error, commits) = error.into_parts();
+                        pending.kv = PendingResidentKv::Reserved(
+                            commits
+                                .into_iter()
+                                .map(|commit| commit.reservation)
+                                .collect(),
+                        );
+                        return Err(self.rollback_and_fail_resident(
+                            pending,
+                            error,
+                            "logical KV prepare",
                         ));
                     }
                 }
             }
-            None => None,
-        };
-
-        if let (Some(batch), Some(output)) = (scheduled.as_ref(), output.as_ref()) {
-            if let Err(contract_error) = batch.validate_output(output) {
-                self.rollback_page_reservations(std::mem::take(&mut page_reservations));
-                let _ = self.executor.rollback_prepared_batch();
-                return Err(self.abort_action(
-                    &action,
-                    contract_error,
-                    true,
-                    "model output contract",
+            None if reserved.is_empty() => None,
+            None => {
+                pending.kv = PendingResidentKv::Reserved(reserved);
+                return Err(self.rollback_and_fail_resident(
+                    pending,
+                    Error::Internal(
+                        "KV reservations exist without an authoritative page manager".into(),
+                    ),
+                    "logical KV prepare",
                 ));
             }
-        } else if scheduled.is_some() != output.is_some() {
-            self.rollback_page_reservations(std::mem::take(&mut page_reservations));
-            let _ = self.executor.rollback_prepared_batch();
-            let error =
-                Error::Internal("scheduled execution and model output presence diverged".into());
-            return Err(self.abort_action(&action, error, true, "model output presence"));
+        };
+        if let Some(prepared) = prepared {
+            pending.kv = PendingResidentKv::Prepared(prepared);
         }
 
-        let freed_pages = match self
-            .commit_page_reservations(std::mem::take(&mut page_reservations))
+        if let Err(error) = self
+            .executor
+            .commit_prepared_batch(transaction, &mut pending.states)
         {
-            Ok(pages) => pages,
-            Err(error) => {
-                let rollback_error = self.executor.rollback_prepared_batch().err();
-                let error = match rollback_error {
-                    Some(rollback) => Error::Internal(format!(
-                        "runtime KV commit failed ({error}); backend rollback also failed ({rollback})"
-                    )),
-                    None => error,
-                };
-                self.executor.poison("KV commit", &error);
-                return Err(self.abort_action(&action, error, true, "KV commit"));
-            }
-        };
-        if let Err(error) = self.executor.commit_prepared_batch() {
-            return Err(self.abort_action(&action, error, true, "backend KV commit"));
+            return Err(self.rollback_and_fail_resident(pending, error, "backend KV commit"));
         }
-        if let Err(error) = self.executor.release_kv_pages(&freed_pages) {
-            return Err(self.abort_action(&action, error, true, "backend KV release"));
+        let retirement =
+            match std::mem::replace(&mut pending.kv, PendingResidentKv::Reserved(Vec::new())) {
+                PendingResidentKv::Prepared(prepared) => Some(
+                    self.page_manager
+                        .as_mut()
+                        .expect("prepared logical commit requires a page manager")
+                        .publish_commit(prepared),
+                ),
+                PendingResidentKv::Reserved(reservations) if reservations.is_empty() => None,
+                PendingResidentKv::Reserved(_) => {
+                    unreachable!("backend committed while logical reservations remained unprepared")
+                }
+            };
+        if let Some(retirement) = retirement {
+            self.release_and_confirm_retirement(retirement)?;
         }
 
-        let terminal_action = match &action {
-            SchedulerAction::Finish { session_id, .. } => self
-                .scheduler
-                .active_sequence(*session_id)
-                .map(|sequence| (*session_id, sequence.position, true)),
-            SchedulerAction::Cancel { session_id, .. } => self
-                .scheduler
-                .active_sequence(*session_id)
-                .map(|sequence| (*session_id, sequence.position, false)),
-            _ => None,
-        };
-        if let Err(commit_error) = self.scheduler.commit_action(&action) {
-            return Err(self.abort_action(&action, commit_error, true, "runtime commit"));
+        let action_kind = action_kind(&pending.action);
+        let rows = action_rows(&pending.action);
+        self.restore_transaction_sessions(pending.schedules, pending.states)?;
+        if let Err(error) = self.scheduler.commit_action(&pending.action) {
+            return Err(self.abort_action(&pending.action, error, false, "scheduler publish"));
         }
-        if let Some((session_id, position, retain_on_finish)) = terminal_action {
-            if retain_on_finish {
-                self.finalize_sequence_state(session_id, position);
-            } else {
-                self.release_sequence_state(session_id);
-            }
-        }
-        self.stats.actions += 1;
-        match &action {
+        self.observability.stats.actions += 1;
+        match &pending.action {
             SchedulerAction::Execute { prefills, decodes } => {
-                self.stats.prefill_chunks += prefills.len();
-                self.stats.prefill_tokens += prefills
+                self.observability.stats.prefill_chunks += prefills.len();
+                self.observability.stats.prefill_tokens += prefills
                     .iter()
                     .map(|action| action.token_range.len())
                     .sum::<usize>();
-                self.stats.decode_steps += decodes.len();
-                if let Err(error) = self.emit_committed_decode_tokens(decodes, on_token) {
-                    return Err(self.abort_action(&action, error, true, "token emission"));
-                }
+                self.observability.stats.decode_steps += decodes.len();
+                self.enqueue_committed_decode_tokens(decodes)?;
             }
             SchedulerAction::PrefillChunk(prefill) => {
-                self.stats.prefill_chunks += 1;
-                self.stats.prefill_tokens += prefill.token_range.len();
+                self.observability.stats.prefill_chunks += 1;
+                self.observability.stats.prefill_tokens += prefill.token_range.len();
             }
             SchedulerAction::DecodeBatch(actions) => {
-                self.stats.decode_steps += actions.len();
-                if let Err(error) = self.emit_committed_decode_tokens(actions, on_token) {
-                    return Err(self.abort_action(&action, error, true, "token emission"));
-                }
+                self.observability.stats.decode_steps += actions.len();
+                self.enqueue_committed_decode_tokens(actions)?;
             }
             SchedulerAction::Finish { .. } | SchedulerAction::Cancel { .. } => {}
         }
 
-        let action_finish = match self.finish_after_decode_action(&action) {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                return Err(self.abort_action(&action, error, true, "sequence finish"));
-            }
-        };
+        let action_finish = self.finish_after_decode_action(&pending.action)?;
         let mut finished = action_finish.finished;
-        let staged = match (scheduled.as_ref(), output.as_ref()) {
-            (Some(batch), Some(output)) => {
-                let outcome =
-                    match self.apply_execution_output(batch, output, &action_finish.session_ids) {
-                        Ok(outcome) => outcome,
-                        Err(error) => {
-                            return Err(self.abort_action(
-                                &action,
-                                error,
-                                true,
-                                "output application",
-                            ));
-                        }
-                    };
-                finished += outcome.finished;
-                outcome.staged
-            }
-            (None, None) => 0,
-            _ => unreachable!("scheduled/output presence was validated before commit"),
-        };
-
+        let output_outcome =
+            self.apply_execution_output(&pending.scheduled, &output, &action_finish.session_ids)?;
+        finished += output_outcome.finished;
+        self.flush_committed_token_outbox(on_token)?;
         Ok(ResidentDriverStep::Executed {
             action_kind,
             rows,
-            staged,
+            staged: output_outcome.staged,
             finished,
         })
+    }
+
+    fn rollback_and_fail_resident(
+        &mut self,
+        mut pending: PendingResidentBatch<R::SequenceState>,
+        error: Error,
+        stage: &'static str,
+    ) -> Error {
+        let transaction = pending.transaction;
+        let rollback = self
+            .executor
+            .rollback_prepared_batch(transaction, &mut pending.states);
+        if let Err(rollback_error) = rollback {
+            pending.pending_progress = None;
+            self.resident_transactions.insert(transaction, pending);
+            return Error::Internal(format!(
+                "{stage} failed ({error}); backend rollback also failed ({rollback_error})"
+            ));
+        }
+        let logical = self.abort_quiesced_resident_kv(pending.kv);
+        let restore = self.restore_transaction_sessions(pending.schedules, pending.states);
+        match (logical, restore) {
+            (Ok(()), Ok(())) => self.abort_action(&pending.action, error, false, stage),
+            (logical, restore) => Error::Internal(format!(
+                "{stage} failed ({error}); logical cleanup={:?}; session restore={:?}",
+                logical.err(),
+                restore.err()
+            )),
+        }
+    }
+
+    fn finish_resident_rollback(
+        &mut self,
+        pending: PendingResidentBatch<R::SequenceState>,
+    ) -> Result<()> {
+        self.abort_quiesced_resident_kv(pending.kv)?;
+        let action = pending.action;
+        self.restore_transaction_sessions(pending.schedules, pending.states)?;
+        self.scheduler
+            .requeue_decode_actions_front(action_decode_actions(&action))
+    }
+
+    fn pending_model_progresses(&self) -> Vec<PendingModelProgress> {
+        let mut progresses = Vec::new();
+        let mut visited = HashSet::new();
+        for transaction in &self.ready_transactions {
+            if !visited.insert(*transaction) {
+                continue;
+            }
+            if let Some(pending) = self.resident_transactions.get(transaction) {
+                if let Some(progress) = &pending.pending_progress {
+                    progresses.push(progress.clone());
+                }
+            } else if let Some(pending) = self.speculative_transactions.get(transaction) {
+                pending.extend_pending_progress(&mut progresses);
+            }
+        }
+        progresses
     }
 
     fn abort_action(
@@ -1148,61 +1938,39 @@ where
         if poison_executor && !self.executor.is_poisoned() {
             self.executor.poison(stage, &error);
         }
-        // Collect session IDs from the action before failing.
-        let session_ids: Vec<SessionId> = match action {
-            SchedulerAction::Execute { prefills, decodes } => prefills
-                .iter()
-                .map(|action| action.session_id)
-                .chain(decodes.iter().map(|action| action.session_id))
-                .collect(),
-            SchedulerAction::PrefillChunk(prefill) => vec![prefill.session_id],
-            SchedulerAction::DecodeBatch(actions) => actions.iter().map(|a| a.session_id).collect(),
-            SchedulerAction::Finish { .. } | SchedulerAction::Cancel { .. } => Vec::new(),
-        };
-        match self.scheduler.fail_action(action, &mut self.slot_pool) {
-            Ok(_) => {
-                for session_id in &session_ids {
-                    self.release_sequence_state(*session_id);
-                }
-                error
+        let session_ids = action_session_ids(action);
+        let scheduler_cleanup = self
+            .scheduler
+            .fail_action(action, &mut self.slot_pool)
+            .err();
+        let mut state_cleanup = Vec::new();
+        for session_id in &session_ids {
+            if let Err(cleanup) = self.release_sequence_state(*session_id) {
+                state_cleanup.push(format!("session {session_id:?}: {cleanup}"));
             }
-            Err(cleanup_error) => {
-                for session_id in &session_ids {
-                    self.release_sequence_state(*session_id);
-                }
-                Error::Internal(format!(
-                    "{stage} failed ({error}); error-state cleanup also failed ({cleanup_error})"
-                ))
-            }
+        }
+        match (scheduler_cleanup, state_cleanup.is_empty()) {
+            (None, true) => error,
+            (scheduler_cleanup, state_clean) => Error::Internal(format!(
+                "{stage} failed ({error}); scheduler cleanup={scheduler_cleanup:?}; state cleanup={:?}",
+                (!state_clean).then_some(state_cleanup)
+            )),
         }
     }
 
-    pub fn run_until_blocked<F>(&mut self, mut on_token: F) -> Result<ResidentTopKDriverStats>
+    fn flush_committed_token_outbox<F>(&mut self, on_token: &mut F) -> Result<()>
     where
         F: FnMut(&ResidentTokenEvent) -> Result<()>,
     {
-        for _ in 0..self.config.max_steps_per_run {
-            match self.step(&mut on_token)? {
-                ResidentDriverStep::Executed { .. } => {}
-                ResidentDriverStep::Idle | ResidentDriverStep::Blocked => {
-                    return Ok(self.stats.clone());
-                }
-            }
+        while let Some(event) = self.committed_token_outbox.front() {
+            on_token(event)?;
+            self.committed_token_outbox.pop_front();
+            self.observability.stats.emitted_tokens += 1;
         }
-        Err(Error::Internal(format!(
-            "resident top-k driver exceeded max_steps_per_run={} without becoming idle or blocked",
-            self.config.max_steps_per_run
-        )))
+        Ok(())
     }
 
-    fn emit_committed_decode_tokens<F>(
-        &mut self,
-        actions: &[DecodeAction],
-        on_token: &mut F,
-    ) -> Result<()>
-    where
-        F: FnMut(&ResidentTokenEvent) -> Result<()>,
-    {
+    fn enqueue_committed_decode_tokens(&mut self, actions: &[DecodeAction]) -> Result<()> {
         for action in actions {
             let runner = self.executor.runner();
             let sequence = self
@@ -1227,8 +1995,7 @@ where
                 logit: action.logit,
                 text,
             };
-            self.stats.emitted_tokens += 1;
-            on_token(&event)?;
+            self.committed_token_outbox.push_back(event);
         }
         Ok(())
     }
@@ -1259,8 +2026,8 @@ where
                 let position = sequence.position;
                 self.scheduler
                     .finish_sequence(action.session_id, reason, &mut self.slot_pool)?;
-                self.finalize_sequence_state(action.session_id, position);
-                self.stats.finished_sequences += 1;
+                self.finalize_sequence_state(action.session_id, position)?;
+                self.observability.stats.finished_sequences += 1;
                 outcome.finished += 1;
                 outcome.session_ids.push(action.session_id);
             }
@@ -1334,8 +2101,8 @@ where
                     SequenceFinishReason::MaxTokens,
                     &mut self.slot_pool,
                 )?;
-                self.finalize_sequence_state(session_id, position);
-                self.stats.finished_sequences += 1;
+                self.finalize_sequence_state(session_id, position)?;
+                self.observability.stats.finished_sequences += 1;
                 outcome.finished += 1;
                 continue;
             }
@@ -1346,8 +2113,8 @@ where
                     SequenceFinishReason::Context,
                     &mut self.slot_pool,
                 )?;
-                self.finalize_sequence_state(session_id, position);
-                self.stats.finished_sequences += 1;
+                self.finalize_sequence_state(session_id, position)?;
+                self.observability.stats.finished_sequences += 1;
                 outcome.finished += 1;
                 continue;
             }
@@ -1359,8 +2126,8 @@ where
                     SequenceFinishReason::NoCandidate,
                     &mut self.slot_pool,
                 )?;
-                self.finalize_sequence_state(session_id, position);
-                self.stats.finished_sequences += 1;
+                self.finalize_sequence_state(session_id, position)?;
+                self.observability.stats.finished_sequences += 1;
                 outcome.finished += 1;
                 continue;
             };
@@ -1369,24 +2136,6 @@ where
                 && !sequence.ignore_eos
                 && self.executor.runner().eos_token_id() == Some(candidate.token_id)
             {
-                if self.config.append_eos_to_session {
-                    if let Err(execution_error) =
-                        self.feed_session_token(session_id, candidate.token_id)
-                    {
-                        if let Err(cleanup_error) = self
-                            .scheduler
-                            .fail_sequence(session_id, &mut self.slot_pool)
-                        {
-                            return Err(Error::Internal(format!(
-                                "EOS state update failed ({execution_error}); error-state cleanup also failed ({cleanup_error})"
-                            )));
-                        }
-                        return Err(execution_error);
-                    }
-                    if let Some(sequence) = self.scheduler.active_sequence_mut(session_id) {
-                        sequence.advance_position(1);
-                    }
-                }
                 let position = self
                     .scheduler
                     .active_sequence(session_id)
@@ -1396,8 +2145,8 @@ where
                     SequenceFinishReason::Eos,
                     &mut self.slot_pool,
                 )?;
-                self.finalize_sequence_state(session_id, position);
-                self.stats.finished_sequences += 1;
+                self.finalize_sequence_state(session_id, position)?;
+                self.observability.stats.finished_sequences += 1;
                 outcome.finished += 1;
                 continue;
             }
@@ -1407,7 +2156,7 @@ where
                 candidate.token_id,
                 Some(candidate.logit),
             )?;
-            self.stats.staged_tokens += 1;
+            self.observability.stats.staged_tokens += 1;
             outcome.staged += 1;
         }
         Ok(outcome)
@@ -1416,15 +2165,15 @@ where
 
 impl<R, C> ResidentTopKDriver<R, C>
 where
-    R: ExpertIoModelRunner + DsparkProposalRunner,
+    R: ResidentModelRunner,
     C: SequenceSlotPool,
 {
-    /// Execute the single production DSpark serving path.
+    /// Execute the resident model path selected by model capabilities.
     ///
-    /// Prefill continues through the native packed executor. Decode actions never
-    /// use ordinary one-token target decode: every ready sequence executes its
-    /// checkpoint-native proposal followed by one exact variable-width transaction.
-    pub fn step_with_dspark_model_expert_io<F>(
+    /// All models use the same packed target executor. A model that reports a
+    /// checkpoint-native proposal capability may add proposal + verification for
+    /// decode; models without it continue through target-only packed decode.
+    pub fn step_with_model_expert_io<F>(
         &mut self,
         on_token: &mut F,
         expert_budget: ExpertIoBudget,
@@ -1432,49 +2181,85 @@ where
     where
         F: FnMut(&ResidentTokenEvent) -> Result<()>,
     {
-        if self.scheduler.config().allow_mixed_batches {
+        self.flush_committed_token_outbox(on_token)?;
+        self.progress_pending_cleanups()?;
+        let proposal_enabled = self.executor.runner().native_proposal_source()?.is_some();
+
+        let requires_page_manager = proposal_enabled
+            || self.executor.capabilities().kv_binding_mode == KvBindingMode::Paged;
+        if requires_page_manager && self.page_manager.is_none() {
             return Err(Error::Execution(
-                "production DSpark serving requires separate prefill and decode dispatch".into(),
+                "paged or proposal-enabled resident execution requires an authoritative KvPageManager"
+                    .into(),
             ));
         }
-        if self.config.append_eos_to_session {
-            return Err(Error::Execution(
-                "production DSpark serving requires append_eos_to_session=false".into(),
-            ));
-        }
-        if self.page_manager.is_none() {
-            return Err(Error::Execution(
-                "production DSpark serving requires an authoritative KvPageManager".into(),
-            ));
+        let resumable = self.ready_transactions.len();
+        for _ in 0..resumable {
+            let Some(transaction) = self.ready_transactions.pop_front() else {
+                break;
+            };
+            if self.resident_transactions.contains_key(&transaction) {
+                if let Some(step) = self.resume_resident_transaction(transaction, on_token)? {
+                    return Ok(step);
+                }
+            } else if self.speculative_transactions.contains_key(&transaction)
+                && let Some(step) = self.resume_speculative_transaction(transaction, on_token)?
+            {
+                return Ok(step);
+            }
+            if proposal_enabled {
+                let pending = self.pending_model_progresses();
+                if !pending.is_empty() {
+                    return Ok(ResidentDriverStep::WaitingForModelProgress(pending));
+                }
+            }
         }
 
         self.prepare_step()?;
-        let mut advisor = ModelExpertIoAdvisor::new(self.executor.runner(), &self.sequence_states);
-        let action = self.scheduler.next_action_with_expert_io(
-            &mut self.slot_pool,
-            &mut advisor,
-            expert_budget,
-        )?;
-        drop(advisor);
-        let Some(action) = action else {
-            return Ok(self.no_action_step());
-        };
-        let expert_io_trace = self.scheduler.expert_io_trace().to_vec();
-        match action {
-            SchedulerAction::DecodeBatch(actions) => {
-                self.execute_dspark_decode_batch(actions, &expert_io_trace, on_token)
+        let allow_mixed_batches = !proposal_enabled && self.scheduler.config().allow_mixed_batches;
+        loop {
+            let mut advisor =
+                ModelExpertIoAdvisor::new(self.executor.runner(), &self.sequence_states);
+            let action = self.scheduler.next_action_with_expert_io_policy(
+                &mut self.slot_pool,
+                &mut advisor,
+                expert_budget,
+                allow_mixed_batches,
+            )?;
+            drop(advisor);
+            let Some(action) = action else {
+                let pending = self.pending_model_progresses();
+                return if pending.is_empty() {
+                    Ok(self.no_action_step())
+                } else {
+                    Ok(ResidentDriverStep::WaitingForModelProgress(pending))
+                };
+            };
+            let step = match action {
+                SchedulerAction::DecodeBatch(actions) if proposal_enabled => {
+                    self.execute_speculative_decode_batch(actions, on_token)?
+                }
+                SchedulerAction::Execute { .. } if proposal_enabled => {
+                    return Err(Error::Internal(
+                        "proposal-enabled scheduler produced a mixed action while mixed dispatch is disabled"
+                            .into(),
+                    ));
+                }
+                action => self.execute_planned_action(action, on_token)?,
+            };
+            if matches!(step, ResidentDriverStep::WaitingForModelProgress(_)) {
+                if proposal_enabled {
+                    return Ok(step);
+                }
+                continue;
             }
-            SchedulerAction::Execute { .. } => Err(Error::Internal(
-                "DSpark scheduler produced a mixed action while mixed dispatch is disabled".into(),
-            )),
-            action => self.execute_planned_action(action, on_token),
+            return Ok(step);
         }
     }
 
-    fn execute_dspark_decode_batch<F>(
+    fn execute_speculative_decode_batch<F>(
         &mut self,
         actions: Vec<DecodeAction>,
-        expert_io_trace: &[ExpertIoDecisionTrace],
         on_token: &mut F,
     ) -> Result<ResidentDriverStep>
     where
@@ -1482,17 +2267,17 @@ where
     {
         if actions.is_empty() {
             return Err(Error::Internal(
-                "production DSpark decode batch cannot be empty".into(),
+                "production speculative decode batch cannot be empty".into(),
             ));
         }
 
-        match self.try_execute_dspark_decode_batch(&actions, expert_io_trace, on_token) {
+        match self.try_execute_speculative_decode_batch(&actions, on_token) {
             Ok(step) => Ok(step),
             Err(error) => {
                 let first = &actions[0];
                 tracing::error!(
-                    target: "ferrule_dspark_cycle",
-                    event = "dspark_cohort_failed",
+                    target: "ferrule_speculative_cycle",
+                    event = "speculative_cohort_failed",
                     request_id = first.request_id.map_or(0, |request_id| request_id.0),
                     has_request_id = first.request_id.is_some(),
                     session_id = first.session_id.0,
@@ -1500,46 +2285,244 @@ where
                     anchor_token = first.token_id,
                     cohort_size = actions.len(),
                     error = %error,
-                    "production DSpark cohort failed"
+                    "production speculative cohort failed"
                 );
-                Err(self.abort_dspark_decode_batch(&actions, error, "production DSpark decode"))
+                Err(error)
             }
         }
     }
 
-    fn try_execute_dspark_decode_batch<F>(
+    fn try_execute_speculative_decode_batch<F>(
         &mut self,
         actions: &[DecodeAction],
-        expert_io_trace: &[ExpertIoDecisionTrace],
         on_token: &mut F,
     ) -> Result<ResidentDriverStep>
     where
         F: FnMut(&ResidentTokenEvent) -> Result<()>,
     {
+        let transaction = self.take_transaction_id()?;
         let cohort_start = Instant::now();
-        let cycle_attempts = self.allocate_dspark_cycle_attempts(actions.len())?;
-        let proposal_source = self.executor.runner().dspark_proposal_source()?;
-        proposal_source.validate()?;
-
-        let mut model_states = self.take_dspark_sequence_states(actions)?;
-        let prepared = match self.prepare_dspark_actions(
-            actions,
-            &cycle_attempts,
-            expert_io_trace,
-            proposal_source,
-            &mut model_states,
-        ) {
-            Ok(prepared) => prepared,
+        let proposal_source = match self.executor.runner().native_proposal_source() {
+            Ok(Some(proposal_source)) => proposal_source,
+            Ok(None) => {
+                return Err(self.abort_speculative_decode_batch(
+                    actions,
+                    Error::Execution(
+                        "resident decode entered proposal verification without model capability"
+                            .into(),
+                    ),
+                    "production speculative initialization",
+                ));
+            }
             Err(error) => {
-                self.restore_dspark_sequence_states(actions, model_states);
-                return Err(error);
+                return Err(self.abort_speculative_decode_batch(
+                    actions,
+                    error,
+                    "production speculative initialization",
+                ));
             }
         };
+        if let Err(error) = proposal_source.validate() {
+            return Err(self.abort_speculative_decode_batch(
+                actions,
+                error,
+                "production speculative initialization",
+            ));
+        }
 
+        let slots = match self.prepare_native_proposal_slots(actions) {
+            Ok(slots) => slots,
+            Err(error) => {
+                return Err(self.abort_speculative_decode_batch(
+                    actions,
+                    error,
+                    "production speculative proposal preparation",
+                ));
+            }
+        };
+        let session_ids = actions
+            .iter()
+            .map(|action| action.session_id)
+            .collect::<Vec<_>>();
+        let (schedules, source_states) =
+            match self.claim_transaction_sessions(transaction, &session_ids) {
+                Ok(ownership) => ownership,
+                Err(error) => {
+                    return Err(self.abort_speculative_decode_batch(
+                        actions,
+                        error,
+                        "production speculative state collection",
+                    ));
+                }
+            };
+        self.advance_native_proposal_cohort(
+            PendingNativeProposalCohort {
+                transaction,
+                cohort_start,
+                actions: actions.to_vec(),
+                proposal_source,
+                source_states,
+                schedules,
+                slots,
+                cancellation_request: None,
+                cancellation_error: None,
+            },
+            on_token,
+        )
+    }
+
+    fn advance_native_proposal_cohort<F>(
+        &mut self,
+        mut pending: PendingNativeProposalCohort<R::SequenceState>,
+        on_token: &mut F,
+    ) -> Result<ResidentDriverStep>
+    where
+        F: FnMut(&ResidentTokenEvent) -> Result<()>,
+    {
+        debug_assert_eq!(pending.actions.len(), pending.source_states.len());
+        debug_assert_eq!(pending.actions.len(), pending.slots.len());
+        let mut first_error = None;
+        for slot_index in 0..pending.slots.len() {
+            if matches!(
+                &pending.slots[slot_index].status,
+                NativeProposalSlotStatus::NotStarted
+            ) {
+                pending.slots[slot_index].proposal_start = Some(Instant::now());
+            }
+            let progress =
+                match &pending.slots[slot_index].status {
+                    NativeProposalSlotStatus::NotStarted => {
+                        let anchor_token = pending.actions[slot_index].token_id;
+                        Some(self.executor.with_sequence_state(
+                            &mut pending.source_states[slot_index],
+                            |runner| {
+                                runner.begin_native_proposal(pending.transaction, anchor_token)
+                            },
+                        ))
+                    }
+                    NativeProposalSlotStatus::Waiting(waiting) => {
+                        let continuation = waiting.continuation();
+                        Some(self.executor.with_sequence_state(
+                            &mut pending.source_states[slot_index],
+                            |runner| {
+                                runner.resume_native_proposal(pending.transaction, continuation)
+                            },
+                        ))
+                    }
+                    NativeProposalSlotStatus::Complete { .. } => None,
+                };
+            if let Some(progress) = progress {
+                match progress {
+                    Ok(NativeProposalProgress::Complete(proposal)) => {
+                        pending.slots[slot_index].status = NativeProposalSlotStatus::Complete {
+                            proposal,
+                            proposal_time_us: pending.slots[slot_index]
+                                .proposal_start
+                                .as_ref()
+                                .expect("a completed native proposal was started")
+                                .elapsed()
+                                .as_micros() as u64,
+                            prepared: Box::new(None),
+                        };
+                    }
+                    Ok(NativeProposalProgress::Waiting(waiting)) => {
+                        pending.slots[slot_index].status =
+                            NativeProposalSlotStatus::Waiting(waiting);
+                    }
+                    Err(error) => {
+                        if first_error.is_none() {
+                            first_error = Some(error);
+                        }
+                    }
+                }
+            }
+            if let Err(error) = self.prepare_completed_native_proposal_slot(
+                &mut pending.slots[slot_index],
+                pending.proposal_source,
+            ) && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+
+        if let Some(error) = first_error {
+            return match self.cancel_native_proposal_cohort(pending, None, Some(error)) {
+                Ok(()) => Err(Error::Internal(
+                    "speculative proposal failure was lost during cancellation".into(),
+                )),
+                Err(error) => Err(error),
+            };
+        }
+
+        let waiting = pending
+            .slots
+            .iter()
+            .filter_map(|slot| match &slot.status {
+                NativeProposalSlotStatus::Waiting(waiting) => Some(waiting.clone()),
+                NativeProposalSlotStatus::NotStarted
+                | NativeProposalSlotStatus::Complete { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        if !waiting.is_empty() {
+            let transaction = pending.transaction;
+            self.speculative_transactions.insert(
+                transaction,
+                PendingSpeculativeDriverCohort::Proposing(pending),
+            );
+            self.enqueue_transaction(transaction);
+            return Ok(ResidentDriverStep::WaitingForModelProgress(
+                self.pending_model_progresses(),
+            ));
+        }
+
+        let PendingNativeProposalCohort {
+            transaction,
+            cohort_start,
+            actions,
+            source_states,
+            schedules,
+            slots,
+            ..
+        } = pending;
+        let prepared = match Self::take_prepared_speculative_actions(slots) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.restore_transaction_sessions(schedules, source_states)?;
+                return Err(self.abort_speculative_decode_batch(
+                    &actions,
+                    error,
+                    "production speculative proposal completion",
+                ));
+            }
+        };
+        self.begin_speculative_verification_cohort(
+            transaction,
+            cohort_start,
+            actions,
+            prepared,
+            source_states,
+            schedules,
+            on_token,
+        )
+    }
+
+    fn begin_speculative_verification_cohort<F>(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        cohort_start: Instant,
+        actions: Vec<DecodeAction>,
+        prepared: Vec<PreparedSpeculativeAction>,
+        mut source_states: Vec<R::SequenceState>,
+        schedules: Vec<SuspendedSequenceSchedule>,
+        on_token: &mut F,
+    ) -> Result<ResidentDriverStep>
+    where
+        F: FnMut(&ResidentTokenEvent) -> Result<()>,
+    {
         let verification_items = actions
             .iter()
             .zip(&prepared)
-            .map(|(action, prepared)| DSparkVerificationItem {
+            .map(|(action, prepared)| SpeculativeVerificationItem {
                 state_slot: prepared.page_slot,
                 generation: 0,
                 proposal: &prepared.proposal,
@@ -1552,24 +2535,305 @@ where
                 },
             })
             .collect::<Vec<_>>();
-        let cohort_result = match self.page_manager.as_mut() {
-            Some(page_manager) => run_dspark_verification_cohort(
+        let progress = match self.page_manager.as_mut() {
+            Some(page_manager) => begin_resumable_speculative_verification_cohort(
                 &mut self.executor,
                 page_manager,
-                &mut model_states,
+                transaction,
+                &mut source_states,
                 &verification_items,
                 self.top_k,
             ),
-            None => Err(Error::Internal(
-                "authoritative KvPageManager disappeared during DSpark cohort".into(),
-            )),
+            None => {
+                drop(verification_items);
+                self.restore_transaction_sessions(schedules, source_states)?;
+                return Err(self.abort_speculative_decode_batch(
+                    &actions,
+                    Error::Internal(
+                        "authoritative KvPageManager disappeared during speculative cohort".into(),
+                    ),
+                    "production speculative verification",
+                ));
+            }
         };
         drop(verification_items);
-        self.restore_dspark_sequence_states(actions, model_states);
-        let cohort = cohort_result?;
+
+        match progress {
+            Ok(SpeculativeCohortProgress::Complete(cohort)) => {
+                self.restore_transaction_sessions(schedules, source_states)?;
+                let publication_actions = actions.clone();
+                match self.publish_speculative_decode_cohort(
+                    cohort_start,
+                    actions,
+                    prepared,
+                    cohort,
+                    on_token,
+                ) {
+                    Ok(step) => Ok(step),
+                    Err(error) => Err(self.abort_speculative_decode_batch(
+                        &publication_actions,
+                        error,
+                        "production speculative publication",
+                    )),
+                }
+            }
+            Ok(SpeculativeCohortProgress::Waiting(verification)) => {
+                self.speculative_transactions.insert(
+                    transaction,
+                    PendingSpeculativeDriverCohort::Verifying(Box::new(
+                        PendingSpeculativeVerificationDriverCohort {
+                            transaction,
+                            cohort_start,
+                            actions,
+                            prepared,
+                            source_states,
+                            schedules,
+                            verification: *verification,
+                            cancellation_request: None,
+                        },
+                    )),
+                );
+                self.enqueue_transaction(transaction);
+                Ok(ResidentDriverStep::WaitingForModelProgress(
+                    self.pending_model_progresses(),
+                ))
+            }
+            Err(error) => {
+                let (error, verification) = error.into_parts();
+                if let Some(verification) = verification {
+                    self.speculative_transactions.insert(
+                        transaction,
+                        PendingSpeculativeDriverCohort::Verifying(Box::new(
+                            PendingSpeculativeVerificationDriverCohort {
+                                transaction,
+                                cohort_start,
+                                actions,
+                                prepared,
+                                source_states,
+                                schedules,
+                                verification: *verification,
+                                cancellation_request: None,
+                            },
+                        )),
+                    );
+                    self.enqueue_transaction(transaction);
+                    Err(error)
+                } else {
+                    self.restore_transaction_sessions(schedules, source_states)?;
+                    Err(self.abort_speculative_decode_batch(
+                        &actions,
+                        error,
+                        "production speculative verification",
+                    ))
+                }
+            }
+        }
+    }
+
+    fn resume_speculative_transaction<F>(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        on_token: &mut F,
+    ) -> Result<Option<ResidentDriverStep>>
+    where
+        F: FnMut(&ResidentTokenEvent) -> Result<()>,
+    {
+        let pending = self
+            .speculative_transactions
+            .remove(&transaction)
+            .ok_or_else(|| {
+                Error::Internal(format!(
+                    "speculative transaction {transaction:?} disappeared"
+                ))
+            })?;
+        match pending {
+            PendingSpeculativeDriverCohort::Proposing(pending)
+                if pending.cancellation_request.is_some()
+                    || pending.cancellation_error.is_some() =>
+            {
+                let cancellation_request = pending.cancellation_request;
+                match self.cancel_native_proposal_cohort(pending, None, None) {
+                    Ok(()) => {
+                        if let Some(request_id) = cancellation_request {
+                            self.cancel_scheduled_request(request_id)?;
+                        }
+                        Ok(Some(ResidentDriverStep::Executed {
+                            action_kind: ResidentActionKind::Cancel,
+                            rows: 0,
+                            staged: 0,
+                            finished: 0,
+                        }))
+                    }
+                    Err(_) if self.speculative_transactions.contains_key(&transaction) => Ok(None),
+                    Err(error) => Err(error),
+                }
+            }
+            PendingSpeculativeDriverCohort::Proposing(pending) => {
+                let step = self.advance_native_proposal_cohort(pending, on_token)?;
+                Ok(
+                    (!matches!(step, ResidentDriverStep::WaitingForModelProgress(_)))
+                        .then_some(step),
+                )
+            }
+            PendingSpeculativeDriverCohort::Verifying(pending)
+                if pending.cancellation_request.is_some() =>
+            {
+                let request_id = pending
+                    .cancellation_request
+                    .expect("guarded speculative cancellation request");
+                match self.cancel_speculative_verification_cohort(*pending, request_id) {
+                    Ok(()) => {
+                        self.cancel_scheduled_request(request_id)?;
+                        Ok(Some(ResidentDriverStep::Executed {
+                            action_kind: ResidentActionKind::Cancel,
+                            rows: 0,
+                            staged: 0,
+                            finished: 0,
+                        }))
+                    }
+                    Err(_) if self.speculative_transactions.contains_key(&transaction) => Ok(None),
+                    Err(error) => Err(error),
+                }
+            }
+            PendingSpeculativeDriverCohort::Verifying(pending) => {
+                self.resume_speculative_verification_transaction(*pending, on_token)
+            }
+        }
+    }
+
+    fn resume_speculative_verification_transaction<F>(
+        &mut self,
+        pending: PendingSpeculativeVerificationDriverCohort<R::SequenceState>,
+        on_token: &mut F,
+    ) -> Result<Option<ResidentDriverStep>>
+    where
+        F: FnMut(&ResidentTokenEvent) -> Result<()>,
+    {
+        let PendingSpeculativeVerificationDriverCohort {
+            transaction,
+            cohort_start,
+            actions,
+            prepared,
+            mut source_states,
+            schedules,
+            verification,
+            cancellation_request,
+        } = pending;
+        let progress = match self.page_manager.as_mut() {
+            Some(page_manager) => resume_resumable_speculative_verification_cohort(
+                &mut self.executor,
+                page_manager,
+                &mut source_states,
+                verification,
+            ),
+            None => {
+                self.speculative_transactions.insert(
+                    transaction,
+                    PendingSpeculativeDriverCohort::Verifying(Box::new(
+                        PendingSpeculativeVerificationDriverCohort {
+                            transaction,
+                            cohort_start,
+                            actions,
+                            prepared,
+                            source_states,
+                            schedules,
+                            verification,
+                            cancellation_request,
+                        },
+                    )),
+                );
+                self.enqueue_transaction(transaction);
+                return Err(Error::Internal(
+                    "authoritative KvPageManager disappeared while speculative verification was suspended"
+                        .into(),
+                ));
+            }
+        };
+
+        match progress {
+            Ok(SpeculativeCohortProgress::Complete(cohort)) => {
+                self.restore_transaction_sessions(schedules, source_states)?;
+                let publication_actions = actions.clone();
+                match self.publish_speculative_decode_cohort(
+                    cohort_start,
+                    actions,
+                    prepared,
+                    cohort,
+                    on_token,
+                ) {
+                    Ok(step) => Ok(Some(step)),
+                    Err(error) => Err(self.abort_speculative_decode_batch(
+                        &publication_actions,
+                        error,
+                        "production speculative resume publication",
+                    )),
+                }
+            }
+            Ok(SpeculativeCohortProgress::Waiting(verification)) => {
+                self.speculative_transactions.insert(
+                    transaction,
+                    PendingSpeculativeDriverCohort::Verifying(Box::new(
+                        PendingSpeculativeVerificationDriverCohort {
+                            transaction,
+                            cohort_start,
+                            actions,
+                            prepared,
+                            source_states,
+                            schedules,
+                            verification: *verification,
+                            cancellation_request,
+                        },
+                    )),
+                );
+                self.enqueue_transaction(transaction);
+                Ok(None)
+            }
+            Err(error) => {
+                let (error, verification) = error.into_parts();
+                if let Some(verification) = verification {
+                    self.speculative_transactions.insert(
+                        transaction,
+                        PendingSpeculativeDriverCohort::Verifying(Box::new(
+                            PendingSpeculativeVerificationDriverCohort {
+                                transaction,
+                                cohort_start,
+                                actions,
+                                prepared,
+                                source_states,
+                                schedules,
+                                verification: *verification,
+                                cancellation_request,
+                            },
+                        )),
+                    );
+                    self.enqueue_transaction(transaction);
+                    Err(error)
+                } else {
+                    self.restore_transaction_sessions(schedules, source_states)?;
+                    Err(self.abort_speculative_decode_batch(
+                        &actions,
+                        error,
+                        "production speculative resume",
+                    ))
+                }
+            }
+        }
+    }
+
+    fn publish_speculative_decode_cohort<F>(
+        &mut self,
+        cohort_start: Instant,
+        actions: Vec<DecodeAction>,
+        prepared: Vec<PreparedSpeculativeAction>,
+        cohort: crate::speculation::SpeculativeCohortResult,
+        on_token: &mut F,
+    ) -> Result<ResidentDriverStep>
+    where
+        F: FnMut(&ResidentTokenEvent) -> Result<()>,
+    {
         if cohort.results.len() != actions.len() {
             return Err(Error::Internal(format!(
-                "DSpark cohort returned {} results for {} actions",
+                "speculative cohort returned {} results for {} actions",
                 cohort.results.len(),
                 actions.len()
             )));
@@ -1583,13 +2847,12 @@ where
         let mut finished = 0usize;
 
         for ((action, prepared), result) in actions.iter().zip(prepared).zip(cohort.results) {
-            let externally_committed =
-                result.accepted.len().checked_add(1).ok_or_else(|| {
-                    Error::Internal("DSpark external token count overflow".into())
-                })?;
+            let externally_committed = result.accepted.len().checked_add(1).ok_or_else(|| {
+                Error::Internal("speculative external token count overflow".into())
+            })?;
             if result.accounting.externally_committed_tokens != externally_committed {
                 return Err(Error::Internal(format!(
-                    "DSpark transaction committed {} rows but returned {} external tokens",
+                    "speculative transaction committed {} rows but returned {} external tokens",
                     result.accounting.externally_committed_tokens, externally_committed
                 )));
             }
@@ -1599,16 +2862,16 @@ where
                 .active_sequence_mut(action.session_id)
                 .ok_or_else(|| {
                     Error::Internal(format!(
-                        "DSpark session {:?} disappeared after anchor commit",
+                        "speculative session {:?} disappeared after anchor commit",
                         action.session_id
                     ))
                 })?
                 .extend_generated(&result.accepted);
             let runtime_emitted_tokens =
-                self.emit_dspark_committed_tokens(action, &result.accepted, on_token)?;
+                self.enqueue_speculative_committed_tokens(action, &result.accepted)?;
             if result.accounting.externally_committed_tokens != runtime_emitted_tokens {
                 return Err(Error::Internal(format!(
-                    "DSpark transaction committed {} tokens but invoked {runtime_emitted_tokens} runtime token callbacks",
+                    "speculative transaction committed {} tokens but invoked {runtime_emitted_tokens} runtime token callbacks",
                     result.accounting.externally_committed_tokens
                 )));
             }
@@ -1619,7 +2882,7 @@ where
                     .active_sequence(action.session_id)
                     .ok_or_else(|| {
                         Error::Internal(format!(
-                            "DSpark session {:?} disappeared before frontier staging",
+                            "speculative session {:?} disappeared before frontier staging",
                             action.session_id
                         ))
                     })?;
@@ -1651,7 +2914,7 @@ where
                             next.token_id,
                             Some(next.logit),
                         )?;
-                        self.stats.staged_tokens += 1;
+                        self.observability.stats.staged_tokens += 1;
                         action_staged = 1;
                         None
                     }
@@ -1666,8 +2929,8 @@ where
                 );
                 self.scheduler
                     .finish_sequence(action.session_id, reason, &mut self.slot_pool)?;
-                self.finalize_sequence_state(action.session_id, position);
-                self.stats.finished_sequences += 1;
+                self.finalize_sequence_state(action.session_id, position)?;
+                self.observability.stats.finished_sequences += 1;
                 action_finished = 1;
             }
 
@@ -1675,58 +2938,25 @@ where
             rows = rows.saturating_add(verified_rows);
             staged += action_staged;
             finished += action_finished;
-            record_dspark_cohort_sequence_metrics(
-                &mut self.stats.dspark,
+            record_speculative_sequence_metrics(
+                &mut self.observability.stats.speculative,
                 &result,
                 prepared.proposal_time_us,
                 runtime_emitted_tokens,
             );
-
-            let complete_cycle_time_us = prepared.cycle_start.elapsed().as_micros() as u64;
-            let trace = DSparkCycleTrace {
-                request_id: prepared.request_id,
-                session_id: action.session_id,
-                cycle_attempt: prepared.cycle_attempt,
-                position: action.position,
-                anchor_token: action.token_id,
-                proposal_source,
-                proposal_executed: prepared.proposal_executed,
-                native_proposed_tokens: prepared.native_proposed_tokens,
-                native_confidence_logits: prepared.native_confidence_logits,
-                proposed_tokens: prepared.proposal,
-                confidence_logits: prepared.confidence_logits,
-                capacity_truncated_tokens: prepared.capacity_truncated_tokens,
-                output_boundary_truncated_tokens: prepared.output_boundary_truncated_tokens,
-                confidence_truncated_tokens: prepared.confidence_truncated_tokens,
-                scheduler_expert_io: prepared.scheduler_expert_io,
-                accepted_tokens: result.accepted,
-                rejected_token: result.rejected,
-                target_correction_token: result.target_correction,
-                target_next_token: result.target_next.map(|token| token.token_id),
-                target_row_top1: result.target_row_top1,
-                accounting: result.accounting,
-                runtime_emitted_tokens,
-                proposal_time_us: prepared.proposal_time_us,
-                verify_time_us: result.verify_time_us,
-                transaction_time_us: result.transaction_time_us,
-                complete_cycle_time_us,
-                finish_reason,
-            };
-            debug_assert!(trace.runtime_tokens_reconcile());
-            self.record_dspark_cycle_trace(trace);
         }
 
         let complete_cohort_time_us = cohort_start.elapsed().as_micros() as u64;
-        record_dspark_cohort_shared_metrics(
-            &mut self.stats.dspark,
+        record_speculative_cohort_metrics(
+            &mut self.observability.stats.speculative,
             cohort_transaction_time_us,
             cohort_verify_time_us,
             complete_cohort_time_us,
         );
-        self.stats.actions += 1;
-        self.stats.decode_steps += actions.len();
+        self.observability.stats.actions += 1;
+        self.observability.stats.decode_steps += actions.len();
 
-        let metrics = &self.stats.dspark;
+        let metrics = &self.observability.stats.speculative;
         if metrics.cycles <= actions.len() || metrics.cycles.is_multiple_of(64) {
             tracing::info!(
                 cycles = metrics.cycles,
@@ -1739,10 +2969,11 @@ where
                 verify_us = cohort_verify_time_us,
                 transaction_us = cohort_transaction_time_us,
                 cohort_us = complete_cohort_time_us,
-                "production DSpark cohort"
+                "production speculative cohort"
             );
         }
 
+        self.flush_committed_token_outbox(on_token)?;
         Ok(ResidentDriverStep::Executed {
             action_kind: ResidentActionKind::Decode,
             rows,
@@ -1751,77 +2982,20 @@ where
         })
     }
 
-    fn allocate_dspark_cycle_attempts(&mut self, count: usize) -> Result<Vec<u64>> {
-        let mut attempts = Vec::with_capacity(count);
-        for _ in 0..count {
-            let cycle_attempt = self.next_dspark_cycle_attempt;
-            self.next_dspark_cycle_attempt = self
-                .next_dspark_cycle_attempt
-                .checked_add(1)
-                .ok_or_else(|| Error::Internal("DSpark cycle-attempt identity overflow".into()))?;
-            attempts.push(cycle_attempt);
-        }
-        Ok(attempts)
-    }
-
-    fn take_dspark_sequence_states(
-        &mut self,
+    fn prepare_native_proposal_slots(
+        &self,
         actions: &[DecodeAction],
-    ) -> Result<Vec<R::SequenceState>> {
-        let mut states = Vec::with_capacity(actions.len());
+    ) -> Result<Vec<PendingNativeProposalSlot>> {
+        let mut slots = Vec::with_capacity(actions.len());
+
         for action in actions {
-            match self.sequence_states.remove(&action.session_id) {
-                Some(state) => states.push(state),
-                None => {
-                    let collected = states.len();
-                    self.restore_dspark_sequence_states(&actions[..collected], states);
-                    return Err(Error::Internal(format!(
-                        "DSpark session {:?} has no model sequence state",
-                        action.session_id
-                    )));
-                }
-            }
-        }
-        Ok(states)
-    }
-
-    fn restore_dspark_sequence_states(
-        &mut self,
-        actions: &[DecodeAction],
-        states: Vec<R::SequenceState>,
-    ) {
-        debug_assert_eq!(actions.len(), states.len());
-        for (action, state) in actions.iter().zip(states) {
-            let previous = self.sequence_states.insert(action.session_id, state);
-            debug_assert!(previous.is_none());
-        }
-    }
-
-    fn prepare_dspark_actions(
-        &mut self,
-        actions: &[DecodeAction],
-        cycle_attempts: &[u64],
-        expert_io_trace: &[ExpertIoDecisionTrace],
-        proposal_source: DsparkProposalSource,
-        model_states: &mut [R::SequenceState],
-    ) -> Result<Vec<PreparedDsparkAction>> {
-        debug_assert_eq!(actions.len(), cycle_attempts.len());
-        debug_assert_eq!(actions.len(), model_states.len());
-        let mut prepared_actions = Vec::with_capacity(actions.len());
-
-        for ((action, &cycle_attempt), model_state) in actions
-            .iter()
-            .zip(cycle_attempts)
-            .zip(model_states.iter_mut())
-        {
-            let cycle_start = Instant::now();
             let sequence = self
                 .scheduler
                 .active_sequence(action.session_id)
                 .cloned()
                 .ok_or_else(|| {
                     Error::Internal(format!(
-                        "cannot execute DSpark for inactive session {:?}",
+                        "cannot execute speculative for inactive session {:?}",
                         action.session_id
                     ))
                 })?;
@@ -1831,7 +3005,7 @@ where
                 || sequence.next_decode_token != Some(action.token_id)
             {
                 return Err(Error::Internal(format!(
-                    "DSpark action no longer matches session {:?}: action(request={:?}, kv={:?}, position={}, token={}), sequence(request={:?}, kv={:?}, position={}, token={:?})",
+                    "speculative action no longer matches session {:?}: action(request={:?}, kv={:?}, position={}, token={}), sequence(request={:?}, kv={:?}, position={}, token={:?})",
                     action.session_id,
                     action.request_id,
                     action.kv_handle,
@@ -1843,100 +3017,127 @@ where
                     sequence.next_decode_token,
                 )));
             }
-            let request_id = action.request_id.ok_or_else(|| {
-                Error::Internal(format!(
-                    "production DSpark action for session {:?} has no request identity",
-                    action.session_id
-                ))
-            })?;
+
             let remaining_output = sequence.max_new_tokens.saturating_sub(sequence.generated);
             let remaining_context = self.config.ctx_size.saturating_sub(sequence.position);
             let commit_capacity = remaining_output.min(remaining_context);
             if commit_capacity == 0 {
                 return Err(Error::Internal(format!(
-                    "DSpark decode action for session {:?} has no output/context capacity",
+                    "speculative decode action for session {:?} has no output/context capacity",
                     action.session_id
                 )));
             }
             let max_drafts = commit_capacity.saturating_sub(1);
             let page_slot = *self.page_slots.get(&action.session_id).ok_or_else(|| {
                 Error::Internal(format!(
-                    "DSpark session {:?} has no authoritative page slot",
+                    "speculative session {:?} has no authoritative page slot",
                     action.session_id
                 ))
             })?;
 
-            let proposal_start = Instant::now();
-            let (native_proposed_tokens, native_confidence_logits, proposal_executed) =
-                if max_drafts == 0 {
-                    (Vec::new(), Vec::new(), false)
-                } else {
-                    self.executor.with_sequence_state(model_state, |runner| {
-                        let proposal = runner.propose_dspark(action.token_id)?;
-                        proposal.validate()?;
-                        if proposal.token_ids.len() != proposal_source.native_width {
-                            return Err(Error::Model(format!(
-                                "DSpark proposal source {}:{} declares native width {} but returned {} tokens",
-                                proposal_source.implementation,
-                                proposal_source.prepared_plan_id,
-                                proposal_source.native_width,
-                                proposal.token_ids.len()
-                            )));
-                        }
-                        Ok((proposal.token_ids, proposal.confidence_logits, true))
-                    })?
-                };
-            let proposal_time_us = proposal_start.elapsed().as_micros() as u64;
-            let capacity_width = native_proposed_tokens.len().min(max_drafts);
-            let capacity_truncated_tokens = native_proposed_tokens.len() - capacity_width;
-            let mut proposal = native_proposed_tokens[..capacity_width].to_vec();
-            let mut confidence_logits = native_confidence_logits[..capacity_width].to_vec();
-            let before_output_boundary = proposal.len();
-            proposal = self.truncate_dspark_proposal_at_output_boundary(
-                &sequence,
-                action.token_id,
-                proposal,
-            )?;
-            let output_boundary_truncated_tokens = before_output_boundary - proposal.len();
-            confidence_logits.truncate(proposal.len());
-            let confidence_width = confident_dspark_prefix_length(
-                &confidence_logits,
-                self.config.dspark_confidence_threshold,
-            )?;
-            let confidence_truncated_tokens = proposal.len().saturating_sub(confidence_width);
-            proposal.truncate(confidence_width);
-            confidence_logits.truncate(confidence_width);
-            let scheduler_expert_io = expert_io_trace
-                .iter()
-                .filter(|trace| {
-                    trace.session_id == action.session_id && trace.phase == ExpertIoPhase::Decode
-                })
-                .copied()
-                .collect();
-
-            prepared_actions.push(PreparedDsparkAction {
+            let status = if max_drafts == 0 {
+                NativeProposalSlotStatus::Complete {
+                    proposal: NativeProposal {
+                        token_ids: Vec::new(),
+                        confidence_logits: Vec::new(),
+                    },
+                    proposal_time_us: 0,
+                    prepared: Box::new(None),
+                }
+            } else {
+                NativeProposalSlotStatus::NotStarted
+            };
+            slots.push(PendingNativeProposalSlot {
                 sequence,
-                request_id,
                 page_slot,
-                cycle_attempt,
-                cycle_start,
-                proposal_executed,
-                native_proposed_tokens,
-                native_confidence_logits,
-                proposal,
-                confidence_logits,
-                capacity_truncated_tokens,
-                output_boundary_truncated_tokens,
-                confidence_truncated_tokens,
-                scheduler_expert_io,
-                proposal_time_us,
+                max_drafts,
+                proposal_start: None,
+                status,
             });
         }
 
+        Ok(slots)
+    }
+
+    fn prepare_completed_native_proposal_slot(
+        &self,
+        slot: &mut PendingNativeProposalSlot,
+        proposal_source: NativeProposalSource,
+    ) -> Result<()> {
+        let NativeProposalSlotStatus::Complete {
+            proposal,
+            proposal_time_us,
+            prepared,
+        } = &mut slot.status
+        else {
+            return Ok(());
+        };
+        let prepared = prepared.as_mut();
+        if prepared.is_some() {
+            return Ok(());
+        }
+
+        if slot.max_drafts != 0 {
+            proposal.validate_for_source(proposal_source)?;
+        } else {
+            proposal.validate()?;
+        }
+        let anchor_token_id = slot.sequence.next_decode_token.ok_or_else(|| {
+            Error::Internal(format!(
+                "speculative sequence {:?} lost its validated anchor token",
+                slot.sequence.session_id
+            ))
+        })?;
+        let mut proposal_tokens = std::mem::take(&mut proposal.token_ids);
+        let mut confidence_logits = std::mem::take(&mut proposal.confidence_logits);
+        let capacity_width = proposal_tokens.len().min(slot.max_drafts);
+        proposal_tokens.truncate(capacity_width);
+        confidence_logits.truncate(capacity_width);
+        proposal_tokens = self.truncate_native_proposal_at_output_boundary(
+            &slot.sequence,
+            anchor_token_id,
+            proposal_tokens,
+        )?;
+        confidence_logits.truncate(proposal_tokens.len());
+        let confidence_width = confident_proposal_prefix_length(
+            &confidence_logits,
+            self.config.proposal_confidence_threshold,
+        )?;
+        proposal_tokens.truncate(confidence_width);
+        *prepared = Some(PreparedSpeculativeAction {
+            sequence: slot.sequence.clone(),
+            page_slot: slot.page_slot,
+            proposal: proposal_tokens,
+            proposal_time_us: *proposal_time_us,
+        });
+        Ok(())
+    }
+
+    fn take_prepared_speculative_actions(
+        slots: Vec<PendingNativeProposalSlot>,
+    ) -> Result<Vec<PreparedSpeculativeAction>> {
+        let mut prepared_actions = Vec::with_capacity(slots.len());
+        for slot in slots {
+            match slot.status {
+                NativeProposalSlotStatus::Complete { prepared, .. } => match *prepared {
+                    Some(prepared) => prepared_actions.push(prepared),
+                    None => {
+                        return Err(Error::Internal(
+                            "speculative proposal cohort completed with an unfinished slot".into(),
+                        ));
+                    }
+                },
+                NativeProposalSlotStatus::NotStarted | NativeProposalSlotStatus::Waiting(_) => {
+                    return Err(Error::Internal(
+                        "speculative proposal cohort completed with an unfinished slot".into(),
+                    ));
+                }
+            }
+        }
         Ok(prepared_actions)
     }
 
-    fn truncate_dspark_proposal_at_output_boundary(
+    fn truncate_native_proposal_at_output_boundary(
         &self,
         sequence: &SequenceState,
         anchor_token_id: u32,
@@ -1946,7 +3147,7 @@ where
         if self.config.stop_at_eos && !sequence.ignore_eos && eos_token_id == Some(anchor_token_id)
         {
             return Err(Error::Internal(
-                "an EOS token must not be staged as a DSpark anchor".into(),
+                "an EOS token must not be staged as a speculative anchor".into(),
             ));
         }
 
@@ -1981,15 +3182,11 @@ where
         Ok(admitted)
     }
 
-    fn emit_dspark_committed_tokens<F>(
+    fn enqueue_speculative_committed_tokens(
         &mut self,
         action: &DecodeAction,
         accepted: &[u32],
-        on_token: &mut F,
-    ) -> Result<usize>
-    where
-        F: FnMut(&ResidentTokenEvent) -> Result<()>,
-    {
+    ) -> Result<usize> {
         let mut tokens = Vec::with_capacity(accepted.len() + 1);
         tokens.push((action.token_id, action.logit));
         tokens.extend(accepted.iter().copied().map(|token| (token, None)));
@@ -2000,7 +3197,7 @@ where
             .active_sequence_mut(action.session_id)
             .ok_or_else(|| {
                 Error::Internal(format!(
-                    "cannot emit DSpark block for inactive session {:?}",
+                    "cannot emit speculative block for inactive session {:?}",
                     action.session_id
                 ))
             })?;
@@ -2008,7 +3205,9 @@ where
             .generated
             .checked_sub(tokens.len())
             .ok_or_else(|| {
-                Error::Internal("DSpark emitted block exceeds committed generation count".into())
+                Error::Internal(
+                    "speculative emitted block exceeds committed generation count".into(),
+                )
             })?;
         for (offset, (token, logit)) in tokens.into_iter().enumerate() {
             let text = runner
@@ -2023,21 +3222,17 @@ where
                 logit,
                 text,
             };
-            self.stats.emitted_tokens += 1;
-            on_token(&event)?;
+            self.committed_token_outbox.push_back(event);
         }
         Ok(emitted_tokens)
     }
 
-    fn abort_dspark_decode_batch(
+    fn abort_speculative_decode_batch(
         &mut self,
         actions: &[DecodeAction],
         error: Error,
         stage: &'static str,
     ) -> Error {
-        if !self.executor.is_poisoned() {
-            self.executor.poison(stage, &error);
-        }
         let mut cleanup_errors = Vec::new();
         for action in actions {
             if self.scheduler.active_sequence(action.session_id).is_some() {
@@ -2050,7 +3245,7 @@ where
                         action.session_id
                     ));
                 }
-                if let Err(cleanup) = self.try_release_sequence_state(action.session_id) {
+                if let Err(cleanup) = self.release_sequence_state(action.session_id) {
                     cleanup_errors.push(format!(
                         "session {:?} state cleanup failed: {cleanup}",
                         action.session_id
@@ -2069,70 +3264,57 @@ where
     }
 }
 
-impl<R, C> ResidentTopKDriver<R, C>
-where
-    R: ExpertIoModelRunner,
-    C: SequenceSlotPool,
-{
-    pub fn step_with_model_expert_io<F>(
-        &mut self,
-        on_token: &mut F,
-        expert_budget: ExpertIoBudget,
-    ) -> Result<ResidentDriverStep>
-    where
-        F: FnMut(&ResidentTokenEvent) -> Result<()>,
-    {
-        self.prepare_step()?;
-        let mut advisor = ModelExpertIoAdvisor::new(self.executor.runner(), &self.sequence_states);
-        let action = self.scheduler.next_action_with_expert_io(
-            &mut self.slot_pool,
-            &mut advisor,
-            expert_budget,
-        )?;
-        drop(advisor);
-        let Some(action) = action else {
-            return Ok(self.no_action_step());
-        };
-        self.execute_planned_action(action, on_token)
-    }
-}
-
-struct PreparedDsparkAction {
+struct PreparedSpeculativeAction {
     sequence: SequenceState,
-    request_id: RequestId,
     page_slot: StateSlot,
-    cycle_attempt: u64,
-    cycle_start: Instant,
-    proposal_executed: bool,
-    native_proposed_tokens: Vec<u32>,
-    native_confidence_logits: Vec<f32>,
     proposal: Vec<u32>,
-    confidence_logits: Vec<f32>,
-    capacity_truncated_tokens: usize,
-    output_boundary_truncated_tokens: usize,
-    confidence_truncated_tokens: usize,
-    scheduler_expert_io: Vec<ExpertIoDecisionTrace>,
     proposal_time_us: u64,
 }
 
-fn record_dspark_cohort_sequence_metrics(
-    metrics: &mut DSparkMetrics,
-    result: &DSparkCycleResult,
+fn record_speculative_sequence_metrics(
+    metrics: &mut SpeculativeMetrics,
+    result: &SpeculativeCycleResult,
     proposal_time_us: u64,
     runtime_emitted_tokens: usize,
 ) {
-    let mut accounting_only = result.clone();
-    accounting_only.transaction_time_us = 0;
-    accounting_only.verify_time_us = 0;
-    metrics.record(&accounting_only);
+    let accounting = result.accounting;
+    metrics.cycles = metrics.cycles.saturating_add(1);
+    metrics.proposed_tokens = metrics
+        .proposed_tokens
+        .saturating_add(accounting.proposed_tokens);
+    metrics.verified_rows = metrics
+        .verified_rows
+        .saturating_add(accounting.verified_rows);
+    metrics.accepted_draft_tokens = metrics
+        .accepted_draft_tokens
+        .saturating_add(accounting.accepted_draft_tokens);
+    metrics.correction_tokens = metrics
+        .correction_tokens
+        .saturating_add(accounting.correction_tokens);
+    metrics.externally_committed_tokens = metrics
+        .externally_committed_tokens
+        .saturating_add(accounting.externally_committed_tokens);
+    metrics.rolled_back_rows = metrics
+        .rolled_back_rows
+        .saturating_add(accounting.rolled_back_rows);
+    metrics.rejected_tokens = metrics
+        .rejected_tokens
+        .saturating_add(result.rejected.is_some() as usize);
+    if metrics.accepted_prefix_histogram.len() <= accounting.accepted_draft_tokens {
+        metrics
+            .accepted_prefix_histogram
+            .resize(accounting.accepted_draft_tokens + 1, 0);
+    }
+    metrics.accepted_prefix_histogram[accounting.accepted_draft_tokens] =
+        metrics.accepted_prefix_histogram[accounting.accepted_draft_tokens].saturating_add(1);
     metrics.total_proposal_time_us = metrics
         .total_proposal_time_us
         .saturating_add(proposal_time_us);
     metrics.record_runtime_emitted_tokens(runtime_emitted_tokens);
 }
 
-fn record_dspark_cohort_shared_metrics(
-    metrics: &mut DSparkMetrics,
+fn record_speculative_cohort_metrics(
+    metrics: &mut SpeculativeMetrics,
     transaction_time_us: u64,
     verify_time_us: u64,
     complete_cohort_time_us: u64,
@@ -2160,6 +3342,58 @@ struct OutputOutcome {
 
 fn default_top_k() -> NonZeroU32 {
     NonZeroU32::new(1).expect("1 is non-zero")
+}
+
+fn action_session_ids(action: &SchedulerAction) -> Vec<SessionId> {
+    let mut sessions = match action {
+        SchedulerAction::Execute { prefills, decodes } => prefills
+            .iter()
+            .map(|action| action.session_id)
+            .chain(decodes.iter().map(|action| action.session_id))
+            .collect::<Vec<_>>(),
+        SchedulerAction::PrefillChunk(prefill) => vec![prefill.session_id],
+        SchedulerAction::DecodeBatch(actions) => {
+            actions.iter().map(|action| action.session_id).collect()
+        }
+        SchedulerAction::Finish { session_id, .. } | SchedulerAction::Cancel { session_id, .. } => {
+            vec![*session_id]
+        }
+    };
+    sessions.sort_unstable_by_key(|session| session.0);
+    sessions.dedup();
+    sessions
+}
+
+fn action_contains_request(action: &SchedulerAction, request_id: RequestId) -> bool {
+    match action {
+        SchedulerAction::Execute { prefills, decodes } => {
+            prefills
+                .iter()
+                .any(|action| action.request_id == Some(request_id))
+                || decodes
+                    .iter()
+                    .any(|action| action.request_id == Some(request_id))
+        }
+        SchedulerAction::PrefillChunk(prefill) => prefill.request_id == Some(request_id),
+        SchedulerAction::DecodeBatch(actions) => actions
+            .iter()
+            .any(|action| action.request_id == Some(request_id)),
+        SchedulerAction::Finish {
+            request_id: owner, ..
+        }
+        | SchedulerAction::Cancel {
+            request_id: owner, ..
+        } => *owner == Some(request_id),
+    }
+}
+
+fn action_decode_actions(action: &SchedulerAction) -> &[DecodeAction] {
+    match action {
+        SchedulerAction::Execute { decodes, .. } | SchedulerAction::DecodeBatch(decodes) => decodes,
+        SchedulerAction::PrefillChunk(_)
+        | SchedulerAction::Finish { .. }
+        | SchedulerAction::Cancel { .. } => &[],
+    }
 }
 
 fn action_kind(action: &SchedulerAction) -> ResidentActionKind {
@@ -2194,21 +3428,53 @@ fn action_rows(action: &SchedulerAction) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
+    use std::collections::{HashMap, VecDeque};
 
     use ferrule_common::execution::{
-        ExecutionIntent, KvLayoutSchema, KvPlaneDescriptor, LogitsOutput, LogitsRequest, LogitsRow,
+        ExecutionIntent, ForwardPhase, KvLayoutSchema, KvPlaneDescriptor, LogitsOutput,
+        LogitsRequest, LogitsRow,
     };
     use ferrule_common::{Error, Result};
     use ferrule_model::{
-        DsparkProposal, DsparkProposalRunner, DsparkProposalSource, ExpertIoModelRunner, ModelInfo,
-        ModelRunner, MultiSessionRunner, PrefillMode, TokenLogit, TopKModelRunner,
+        BatchContinuationCancelOutcome, BatchContinuationId, ExpertIoModelRunner, ModelInfo,
+        ModelRunner, MultiSessionBatchProgress, MultiSessionRunner, NativeProposal,
+        NativeProposalProgress, NativeProposalSource, PendingExpertLoad, PendingModelProgress,
+        ResidentModelRunner, TokenLogit,
     };
 
     use crate::scheduling::FixedSequenceSlotPool;
     use crate::scheduling::{RequestId, SequenceStatus};
 
     use super::*;
+
+    impl<R, C> ResidentTopKDriver<R, C>
+    where
+        R: ResidentModelRunner,
+        C: SequenceSlotPool,
+    {
+        fn drive_ready_test_work<F>(&mut self, mut on_token: F) -> Result<ResidentTopKDriverStats>
+        where
+            F: FnMut(&ResidentTokenEvent) -> Result<()>,
+        {
+            loop {
+                match self.step_with_model_expert_io(&mut on_token, ExpertIoBudget::unbounded())? {
+                    ResidentDriverStep::Idle => return Ok(self.stats().clone()),
+                    ResidentDriverStep::Executed { .. } => {}
+                    ResidentDriverStep::Blocked => {
+                        return Err(Error::Execution(
+                            "test driver blocked without asynchronous progress".into(),
+                        ));
+                    }
+                    ResidentDriverStep::WaitingForModelProgress(progress) => {
+                        return Err(Error::Execution(format!(
+                            "test driver requires completion owner for {} pending operation(s)",
+                            progress.len()
+                        )));
+                    }
+                }
+            }
+        }
+    }
 
     #[derive(Debug)]
     struct DriverTestKvSchema;
@@ -2234,7 +3500,14 @@ mod tests {
     }
 
     #[derive(Debug)]
+    struct MockPendingProposal {
+        proposal: NativeProposal,
+        waits_remaining: usize,
+    }
+
+    #[derive(Debug)]
     struct MockTopKRunner {
+        completion_hub: ferrule_common::CompletionHub,
         position: usize,
         eos: Option<u32>,
         outputs: VecDeque<Vec<TokenLogit>>,
@@ -2244,15 +3517,41 @@ mod tests {
         mutation_calls: usize,
         released_sequence_states: usize,
         released_kv_pages: Vec<ferrule_common::execution::KvPageId>,
-        dspark_proposals: VecDeque<DsparkProposal>,
+        native_proposals: VecDeque<NativeProposal>,
+        native_proposal_enabled: bool,
         packed_predictions: VecDeque<Vec<TokenLogit>>,
+        packed_committed_calls: usize,
         packed_verification_calls: usize,
+        proposal_waits: VecDeque<usize>,
+        active_native_proposals: HashMap<BatchContinuationId, MockPendingProposal>,
+        next_native_proposal_continuation: u64,
+        native_proposal_begin_calls: usize,
+        native_proposal_resume_calls: usize,
+        native_proposal_cancel_calls: usize,
+        native_proposal_resume_errors_remaining: usize,
+        native_proposal_cancel_still_active_remaining: usize,
+        cancelled_native_proposals: Vec<BatchContinuationId>,
+        committed_resumable_armed: bool,
+        resumable_wait_scripts: VecDeque<usize>,
+        active_resumable_waits: HashMap<ExecutionTransactionId, usize>,
+        resume_errors_remaining: usize,
+        active_resumable_predictions: HashMap<ExecutionTransactionId, Vec<TokenLogit>>,
+        resumable_cancel_still_active_remaining: usize,
+        cancelled_continuations: Vec<BatchContinuationId>,
+        reject_topology_mutation_while_packed: bool,
+        topology_mutation_attempts_while_packed: usize,
+        sequence_state_fork_calls: usize,
+        prepared_batches: usize,
+        committed_batches: usize,
+        rolled_back_batches: usize,
         paged: bool,
+        expert_io_resource_control_installed: bool,
     }
 
     impl MockTopKRunner {
         fn new(outputs: Vec<Vec<TokenLogit>>) -> Self {
             Self {
+                completion_hub: ferrule_common::CompletionHub::new(),
                 position: 0,
                 eos: None,
                 outputs: outputs.into(),
@@ -2262,30 +3561,117 @@ mod tests {
                 mutation_calls: 0,
                 released_sequence_states: 0,
                 released_kv_pages: Vec::new(),
-                dspark_proposals: VecDeque::new(),
+                native_proposals: VecDeque::new(),
+                native_proposal_enabled: false,
                 packed_predictions: VecDeque::new(),
+                packed_committed_calls: 0,
                 packed_verification_calls: 0,
+                proposal_waits: VecDeque::new(),
+                active_native_proposals: HashMap::new(),
+                next_native_proposal_continuation: 100,
+                native_proposal_begin_calls: 0,
+                native_proposal_resume_calls: 0,
+                native_proposal_cancel_calls: 0,
+                native_proposal_resume_errors_remaining: 0,
+                native_proposal_cancel_still_active_remaining: 0,
+                cancelled_native_proposals: Vec::new(),
+                committed_resumable_armed: false,
+                resumable_wait_scripts: VecDeque::new(),
+                active_resumable_waits: HashMap::new(),
+                resume_errors_remaining: 0,
+                active_resumable_predictions: HashMap::new(),
+                resumable_cancel_still_active_remaining: 0,
+                cancelled_continuations: Vec::new(),
+                reject_topology_mutation_while_packed: false,
+                topology_mutation_attempts_while_packed: 0,
+                sequence_state_fork_calls: 0,
+                prepared_batches: 0,
+                committed_batches: 0,
+                rolled_back_batches: 0,
                 paged: false,
+                expert_io_resource_control_installed: false,
             }
         }
 
-        fn with_dspark_cycle(
+        fn with_speculative_cycle(
             self,
-            proposal: DsparkProposal,
+            proposal: NativeProposal,
             target_row_top1: Vec<TokenLogit>,
         ) -> Self {
-            self.with_dspark_cohort(vec![proposal], target_row_top1)
+            self.with_speculative_cohort(vec![proposal], target_row_top1)
         }
 
-        fn with_dspark_cohort(
+        fn with_speculative_cohort(
             mut self,
-            proposals: Vec<DsparkProposal>,
+            proposals: Vec<NativeProposal>,
             target_row_top1: Vec<TokenLogit>,
         ) -> Self {
-            self.dspark_proposals.extend(proposals);
+            self.native_proposals.extend(proposals);
+            self.native_proposal_enabled = true;
             self.packed_predictions.push_back(target_row_top1);
             self.paged = true;
             self
+        }
+
+        fn with_resumable_wait_scripts(mut self, waits: impl IntoIterator<Item = usize>) -> Self {
+            self.committed_resumable_armed = true;
+            self.resumable_wait_scripts.extend(waits);
+            self
+        }
+
+        fn with_resumable_cancel_still_active(mut self, attempts: usize) -> Self {
+            self.resumable_cancel_still_active_remaining = attempts;
+            self
+        }
+
+        fn with_proposal_waits(mut self, waits: Vec<usize>) -> Self {
+            self.proposal_waits = waits.into();
+            self
+        }
+
+        fn with_proposal_resume_errors(mut self, errors: usize) -> Self {
+            self.native_proposal_resume_errors_remaining = errors;
+            self
+        }
+
+        fn with_proposal_cancel_still_active(mut self, attempts: usize) -> Self {
+            self.native_proposal_cancel_still_active_remaining = attempts;
+            self
+        }
+
+        fn with_committed_resumable_batch(
+            mut self,
+            waits: usize,
+            predictions: Vec<TokenLogit>,
+        ) -> Self {
+            assert!(waits > 0);
+            self.committed_resumable_armed = true;
+            self.resumable_wait_scripts.push_back(waits);
+            self.packed_predictions.push_back(predictions);
+            self.paged = true;
+            self
+        }
+
+        fn with_resume_errors(mut self, errors: usize) -> Self {
+            self.resume_errors_remaining = errors;
+            self
+        }
+
+        fn with_packed_topology_guard(mut self) -> Self {
+            self.reject_topology_mutation_while_packed = true;
+            self
+        }
+
+        fn ensure_packed_topology_quiescent(&mut self, operation: &str) -> Result<()> {
+            if self.reject_topology_mutation_while_packed
+                && !self.active_resumable_predictions.is_empty()
+            {
+                self.topology_mutation_attempts_while_packed += 1;
+                return Err(Error::Execution(format!(
+                    "cannot {operation} while a mock packed transaction is outstanding"
+                )));
+            }
+            Ok(())
         }
 
         fn failing_next_mutation(mut self) -> Self {
@@ -2293,24 +3679,66 @@ mod tests {
             self
         }
 
-        fn complete_mutation<T>(&mut self, value: T) -> Result<T> {
-            self.mutation_calls += 1;
-            if std::mem::take(&mut self.fail_next_mutation) {
-                Err(Error::Model(
-                    "simulated failure after partial runner mutation".into(),
-                ))
-            } else {
-                Ok(value)
-            }
-        }
-
         fn with_eos(mut self, eos: u32) -> Self {
             self.eos = Some(eos);
             self
         }
 
-        fn next_output(&mut self) -> Vec<TokenLogit> {
-            self.outputs.pop_front().unwrap_or_default()
+        fn pending_resumable_progress(transaction: ExecutionTransactionId) -> PendingModelProgress {
+            let continuation = BatchContinuationId::new(transaction.get()).unwrap();
+            PendingModelProgress::new(
+                transaction,
+                continuation,
+                vec![PendingExpertLoad::new(transaction.get(), 0, 0).unwrap()],
+            )
+            .unwrap()
+        }
+
+        fn pending_native_proposal(
+            transaction: ExecutionTransactionId,
+            continuation: BatchContinuationId,
+        ) -> PendingModelProgress {
+            PendingModelProgress::new(transaction, continuation, Vec::new()).unwrap()
+        }
+
+        fn complete_packed_batch(
+            &mut self,
+            states: &mut [MockSequenceState],
+            batch: &ferrule_common::execution::ExecutionBatch,
+            predictions: Vec<TokenLogit>,
+        ) -> Result<ExecutionOutput> {
+            if states.len() != batch.sequences().len() {
+                return Err(Error::Internal(format!(
+                    "mock packed batch state/sequence mismatch: states={} sequences={}",
+                    states.len(),
+                    batch.sequences().len()
+                )));
+            }
+            if predictions.len() != batch.token_ids().len() {
+                return Err(Error::Model(format!(
+                    "mock packed predictions {} do not match {} input rows",
+                    predictions.len(),
+                    batch.token_ids().len()
+                )));
+            }
+            for (state, sequence) in states.iter_mut().zip(batch.sequences()) {
+                let query_start = sequence.query.start as usize;
+                let query_end = sequence.query.end as usize;
+                state.position = state
+                    .position
+                    .checked_add(query_end - query_start)
+                    .ok_or_else(|| Error::Internal("mock packed position overflow".into()))?;
+                state
+                    .fed
+                    .extend_from_slice(&batch.token_ids()[query_start..query_end]);
+            }
+            let logits = predictions
+                .into_iter()
+                .enumerate()
+                .filter(|(row, _)| matches!(batch.logits()[*row], LogitsRequest::TopK(_)))
+                .map(|(row, top1)| LogitsRow::new(row as u32, LogitsOutput::TopK(vec![top1])))
+                .collect();
+            Ok(ExecutionOutput::new(logits))
         }
     }
 
@@ -2341,17 +3769,6 @@ mod tests {
                 .collect())
         }
 
-        fn prefill(&mut self, tokens: &[u32]) -> Result<Vec<f32>> {
-            self.position += tokens.len();
-            Ok(vec![0.0])
-        }
-
-        fn decode_token(&mut self, token: u32) -> Result<Vec<f32>> {
-            self.fed.push(token);
-            self.position += 1;
-            Ok(vec![0.0])
-        }
-
         fn reset_session(&mut self) -> Result<()> {
             self.position = 0;
             self.fed.clear();
@@ -2364,54 +3781,144 @@ mod tests {
         }
     }
 
-    impl TopKModelRunner for MockTopKRunner {
-        fn position(&self) -> usize {
-            self.position
+    impl ResidentModelRunner for MockTopKRunner {
+        type ObservabilitySnapshot = ();
+
+        fn observability_snapshot(&self) -> Self::ObservabilitySnapshot {}
+
+        fn completion_hub(&self) -> ferrule_common::CompletionHub {
+            self.completion_hub.clone()
         }
 
-        fn feed_token(&mut self, token_id: u32) -> Result<()> {
-            self.fed.push(token_id);
-            self.position += 1;
-            self.complete_mutation(())
+        fn take_completion_reactors(&mut self) -> Vec<ferrule_model::ModelCompletionReactor> {
+            Vec::new()
         }
 
-        fn prefill_topk(
+        fn native_proposal_source(&self) -> Result<Option<NativeProposalSource>> {
+            Ok(self
+                .native_proposal_enabled
+                .then_some(NativeProposalSource {
+                    implementation: "mock-speculative-v1",
+                    prepared_plan_id: 0xfeed,
+                    native_width: 2,
+                }))
+        }
+
+        fn begin_native_proposal(
             &mut self,
-            token_ids: &[u32],
-            _top_k: usize,
-            _mode: PrefillMode,
-        ) -> Result<Vec<TokenLogit>> {
-            self.prefills.push(token_ids.to_vec());
-            self.position += token_ids.len();
-            let output = self.next_output();
-            self.complete_mutation(output)
-        }
-
-        fn decode_topk(&mut self, token_id: u32, _top_k: usize) -> Result<Vec<TokenLogit>> {
-            self.feed_token(token_id)?;
-            Ok(self.next_output())
-        }
-    }
-
-    impl DsparkProposalRunner for MockTopKRunner {
-        fn dspark_proposal_source(&self) -> Result<DsparkProposalSource> {
-            Ok(DsparkProposalSource {
-                implementation: "mock-dspark-v1",
-                prepared_plan_id: 0xfeed,
-                native_width: 2,
-            })
-        }
-
-        fn propose_dspark(&mut self, _anchor_token_id: u32) -> Result<DsparkProposal> {
-            self.dspark_proposals
+            transaction: ExecutionTransactionId,
+            _anchor_token_id: u32,
+        ) -> Result<NativeProposalProgress> {
+            self.native_proposal_begin_calls += 1;
+            let proposal = self
+                .native_proposals
                 .pop_front()
-                .ok_or_else(|| Error::Model("mock DSpark proposal queue is empty".into()))
+                .ok_or_else(|| Error::Model("mock speculative proposal queue is empty".into()))?;
+            let waits = self.proposal_waits.pop_front().unwrap_or(0);
+            if waits == 0 {
+                return Ok(NativeProposalProgress::Complete(proposal));
+            }
+            let continuation = BatchContinuationId::new(self.next_native_proposal_continuation)?;
+            self.next_native_proposal_continuation = self
+                .next_native_proposal_continuation
+                .checked_add(1)
+                .ok_or_else(|| Error::Internal("mock proposal continuation overflow".into()))?;
+            let replaced = self.active_native_proposals.insert(
+                continuation,
+                MockPendingProposal {
+                    proposal,
+                    waits_remaining: waits - 1,
+                },
+            );
+            debug_assert!(replaced.is_none());
+            Ok(NativeProposalProgress::Waiting(
+                Self::pending_native_proposal(transaction, continuation),
+            ))
+        }
+
+        fn resume_native_proposal(
+            &mut self,
+            transaction: ExecutionTransactionId,
+            continuation: BatchContinuationId,
+        ) -> Result<NativeProposalProgress> {
+            self.native_proposal_resume_calls += 1;
+            if self.native_proposal_resume_errors_remaining > 0 {
+                self.native_proposal_resume_errors_remaining -= 1;
+                return Err(Error::Model(
+                    "simulated native proposal resume failure".into(),
+                ));
+            }
+            let mut pending = self
+                .active_native_proposals
+                .remove(&continuation)
+                .ok_or_else(|| {
+                    Error::Execution("mock received an unknown proposal continuation".into())
+                })?;
+            if pending.waits_remaining > 0 {
+                pending.waits_remaining -= 1;
+                self.active_native_proposals.insert(continuation, pending);
+                return Ok(NativeProposalProgress::Waiting(
+                    Self::pending_native_proposal(transaction, continuation),
+                ));
+            }
+            Ok(NativeProposalProgress::Complete(pending.proposal))
+        }
+
+        fn cancel_native_proposal(
+            &mut self,
+            _transaction: ExecutionTransactionId,
+            continuation: BatchContinuationId,
+        ) -> BatchContinuationCancelOutcome {
+            self.native_proposal_cancel_calls += 1;
+            if !self.active_native_proposals.contains_key(&continuation) {
+                return BatchContinuationCancelOutcome::StillActive(Error::Execution(
+                    "mock received an unknown proposal continuation".into(),
+                ));
+            }
+            if self.native_proposal_cancel_still_active_remaining > 0 {
+                self.native_proposal_cancel_still_active_remaining -= 1;
+                return BatchContinuationCancelOutcome::StillActive(Error::Model(
+                    "simulated active native proposal cancellation".into(),
+                ));
+            }
+            self.active_native_proposals.remove(&continuation);
+            self.cancelled_native_proposals.push(continuation);
+            BatchContinuationCancelOutcome::Cancelled
         }
     }
 
     impl ExpertIoModelRunner for MockTopKRunner {
         type ExpertIoBatchState = ();
         type ExpertIoAdmission = ();
+
+        fn expert_io_resource_limits(
+            &self,
+        ) -> Result<ferrule_common::expert_io::ExpertIoResourceLimits> {
+            Ok(ferrule_common::expert_io::ExpertIoResourceLimits::default())
+        }
+
+        fn install_expert_io_resource_control(
+            &mut self,
+            _control: Box<dyn ferrule_common::expert_io::ExpertIoResourceControl>,
+        ) -> Result<()> {
+            if self.expert_io_resource_control_installed {
+                return Err(Error::Execution(
+                    "mock expert-I/O resource control is already installed".into(),
+                ));
+            }
+            self.expert_io_resource_control_installed = true;
+            Ok(())
+        }
+
+        fn uninstall_expert_io_resource_control(&mut self) -> Result<()> {
+            if !self.expert_io_resource_control_installed {
+                return Err(Error::Execution(
+                    "mock expert-I/O resource control is not installed".into(),
+                ));
+            }
+            self.expert_io_resource_control_installed = false;
+            Ok(())
+        }
 
         fn begin_expert_io_batch(&self) -> Self::ExpertIoBatchState {}
 
@@ -2460,6 +3967,54 @@ mod tests {
         }
     }
 
+    fn complete_mock_committed_batch(
+        states: &mut [MockSequenceState],
+        batch: &ferrule_common::execution::ExecutionBatch,
+    ) -> Result<ExecutionOutput> {
+        let mut output_rows = Vec::new();
+        for sequence in batch.sequences() {
+            let state_index = sequence
+                .state_slot
+                .try_as_usize()
+                .map_err(|_| Error::Internal("mock packed state slot exceeds usize".into()))?;
+            let state = states.get_mut(state_index).ok_or_else(|| {
+                Error::Internal(format!(
+                    "mock packed state slot {state_index} is out of range"
+                ))
+            })?;
+            let query_start = usize::try_from(sequence.query.start)
+                .map_err(|_| Error::Internal("mock packed query start exceeds usize".into()))?;
+            let query_end = usize::try_from(sequence.query.end)
+                .map_err(|_| Error::Internal("mock packed query end exceeds usize".into()))?;
+            let token_ids = &batch.token_ids()[query_start..query_end];
+            state.position = state
+                .position
+                .checked_add(token_ids.len())
+                .ok_or_else(|| Error::Internal("mock packed position overflow".into()))?;
+            match sequence.phase {
+                ForwardPhase::Prefill => state.prefills.push(token_ids.to_vec()),
+                ForwardPhase::Decode => state.fed.extend_from_slice(token_ids),
+            }
+            state.mutation_calls += 1;
+            if std::mem::take(&mut state.fail_next_mutation) {
+                return Err(Error::Model(
+                    "simulated failure after partial runner mutation".into(),
+                ));
+            }
+            for row in query_start..query_end {
+                if matches!(batch.logits()[row], LogitsRequest::TopK(_)) {
+                    let logits = state.outputs.pop_front().unwrap_or_default();
+                    output_rows.push(LogitsRow::new(
+                        u32::try_from(row)
+                            .map_err(|_| Error::Internal("mock packed row exceeds u32".into()))?,
+                        LogitsOutput::TopK(logits),
+                    ));
+                }
+            }
+        }
+        Ok(ExecutionOutput::new(output_rows))
+    }
+
     impl MultiSessionRunner for MockTopKRunner {
         type SequenceState = MockSequenceState;
 
@@ -2501,7 +4056,15 @@ mod tests {
             result
         }
 
+        fn create_sequence_state(&mut self) -> Result<Self::SequenceState> {
+            let mut state = MockSequenceState::new(0, &self.outputs);
+            state.fail_next_mutation = self.fail_next_mutation;
+            Ok(state)
+        }
+
         fn fork_sequence_state(&mut self) -> Result<Self::SequenceState> {
+            self.ensure_packed_topology_quiescent("fork the active sequence")?;
+            self.sequence_state_fork_calls += 1;
             let mut state = MockSequenceState::new(0, &self.outputs);
             state.fail_next_mutation = self.fail_next_mutation;
             Ok(state)
@@ -2512,6 +4075,8 @@ mod tests {
             source: &Self::SequenceState,
             expected_position: usize,
         ) -> Result<Self::SequenceState> {
+            self.ensure_packed_topology_quiescent("fork explicit sequence state")?;
+            self.sequence_state_fork_calls += 1;
             if source.position != expected_position {
                 return Err(Error::Execution(format!(
                     "mock fork expected position {expected_position}, source is at {}",
@@ -2532,6 +4097,7 @@ mod tests {
         }
 
         fn reset_sequence_state(&mut self, state: &mut Self::SequenceState) -> Result<()> {
+            self.ensure_packed_topology_quiescent("reset sequence state")?;
             state.position = 0;
             state.fed.clear();
             state.prefills.clear();
@@ -2540,7 +4106,12 @@ mod tests {
         }
 
         fn release_sequence_state(&mut self, _state: Self::SequenceState) -> Result<()> {
+            self.ensure_packed_topology_quiescent("release sequence state")?;
             self.released_sequence_states += 1;
+            Ok(())
+        }
+
+        fn configure_kv_page_capacity(&mut self, _max_pages: usize) -> Result<()> {
             Ok(())
         }
 
@@ -2548,32 +4119,68 @@ mod tests {
             &mut self,
             pages: &[ferrule_common::execution::KvPageId],
         ) -> Result<()> {
+            self.ensure_packed_topology_quiescent("release KV pages")?;
             self.released_kv_pages.extend_from_slice(pages);
+            Ok(())
+        }
+
+        fn preempt_kv_pages(
+            &mut self,
+            _pages: &[ferrule_common::execution::KvPageId],
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn restore_kv_pages(
+            &mut self,
+            _pages: &[ferrule_common::execution::KvPageId],
+        ) -> Result<()> {
             Ok(())
         }
 
         fn prepare_multi_session_batch(
             &mut self,
+            _transaction: ExecutionTransactionId,
             _states: &mut [Self::SequenceState],
-            batch: &ferrule_common::execution::ExecutionBatch,
-            _kv_reservations: &[KvReservation],
-        ) -> Result<bool> {
-            Ok(batch.intent() == ExecutionIntent::ProvisionalVerification)
+            _batch: &ferrule_common::execution::ExecutionBatch,
+            _kv_reservations: &[KvReservationView],
+        ) -> Result<()> {
+            self.prepared_batches += 1;
+            Ok(())
+        }
+
+        fn commit_multi_session_batch(
+            &mut self,
+            _transaction: ExecutionTransactionId,
+            _states: &mut [Self::SequenceState],
+        ) -> Result<()> {
+            self.committed_batches += 1;
+            Ok(())
+        }
+
+        fn rollback_multi_session_batch(
+            &mut self,
+            _transaction: ExecutionTransactionId,
+            _states: &mut [Self::SequenceState],
+        ) -> Result<()> {
+            self.rolled_back_batches += 1;
+            Ok(())
         }
 
         fn retain_provisional_prefixes(
             &mut self,
+            _transaction: ExecutionTransactionId,
             sources: &[Self::SequenceState],
             branches: &mut [Self::SequenceState],
             executed_rows: &[usize],
             retained_rows: &[usize],
-        ) -> Result<bool> {
+        ) -> Result<()> {
             if sources.len() != branches.len()
                 || sources.len() != executed_rows.len()
                 || sources.len() != retained_rows.len()
             {
                 return Err(Error::Internal(
-                    "mock DSpark provisional prefix shape mismatch".into(),
+                    "mock speculative provisional prefix shape mismatch".into(),
                 ));
             }
             for (sequence, ((source, branch), (&executed, &retained))) in sources
@@ -2583,10 +4190,10 @@ mod tests {
                 .enumerate()
             {
                 let executed_position = source.position.checked_add(executed).ok_or_else(|| {
-                    Error::Internal("mock DSpark executed position overflow".into())
+                    Error::Internal("mock speculative executed position overflow".into())
                 })?;
                 let executed_fed = source.fed.len().checked_add(executed).ok_or_else(|| {
-                    Error::Internal("mock DSpark executed token count overflow".into())
+                    Error::Internal("mock speculative executed token count overflow".into())
                 })?;
                 if retained == 0
                     || retained > executed
@@ -2594,7 +4201,7 @@ mod tests {
                     || branch.fed.len() != executed_fed
                 {
                     return Err(Error::Internal(format!(
-                        "mock DSpark invalid provisional prefix for sequence {sequence}"
+                        "mock speculative invalid provisional prefix for sequence {sequence}"
                     )));
                 }
             }
@@ -2604,53 +4211,105 @@ mod tests {
                 branch.position = source.position + retained;
                 branch.fed.truncate(source.fed.len() + retained);
             }
-            Ok(true)
+            Ok(())
         }
 
-        fn execute_multi_session_batch(
+        fn execute_multi_session_batch_progress(
             &mut self,
+            transaction: ExecutionTransactionId,
             states: &mut [Self::SequenceState],
             batch: &ferrule_common::execution::ExecutionBatch,
-        ) -> Result<Option<ExecutionOutput>> {
-            if batch.intent() != ExecutionIntent::ProvisionalVerification {
-                return Ok(None);
+        ) -> Result<MultiSessionBatchProgress> {
+            if batch.intent() == ExecutionIntent::Committed {
+                self.packed_committed_calls += 1;
             }
-            self.packed_verification_calls += 1;
-            if states.len() != batch.sequences().len() {
-                return Err(Error::Internal(format!(
-                    "mock DSpark packed verification state/sequence mismatch: states={} sequences={}",
-                    states.len(),
-                    batch.sequences().len()
-                )));
+            let resumable = batch.intent() == ExecutionIntent::ProvisionalVerification
+                || self.committed_resumable_armed;
+            let waits = self
+                .active_resumable_waits
+                .entry(transaction)
+                .or_insert_with(|| self.resumable_wait_scripts.pop_front().unwrap_or(0));
+            if resumable && *waits > 0 {
+                self.packed_verification_calls += 1;
+                if let Some(predictions) = self.packed_predictions.pop_front() {
+                    self.active_resumable_predictions
+                        .insert(transaction, predictions);
+                }
+                *waits -= 1;
+                return Ok(MultiSessionBatchProgress::Waiting(
+                    Self::pending_resumable_progress(transaction),
+                ));
             }
-            let predictions = self.packed_predictions.pop_front().ok_or_else(|| {
-                Error::Model("mock DSpark packed prediction queue is empty".into())
-            })?;
-            if predictions.len() != batch.token_ids().len() {
-                return Err(Error::Model(format!(
-                    "mock DSpark packed predictions {} do not match {} input rows",
-                    predictions.len(),
-                    batch.token_ids().len()
-                )));
+            if batch.intent() == ExecutionIntent::ProvisionalVerification {
+                self.packed_verification_calls += 1;
+                let predictions = self
+                    .packed_predictions
+                    .pop_front()
+                    .ok_or_else(|| Error::Model("mock packed prediction queue is empty".into()))?;
+                return self
+                    .complete_packed_batch(states, batch, predictions)
+                    .map(MultiSessionBatchProgress::Complete);
             }
-            for (state, sequence) in states.iter_mut().zip(batch.sequences()) {
-                let query_start = sequence.query.start as usize;
-                let query_end = sequence.query.end as usize;
-                state.position = state
-                    .position
-                    .checked_add(query_end - query_start)
-                    .ok_or_else(|| Error::Internal("mock DSpark position overflow".into()))?;
-                state
-                    .fed
-                    .extend_from_slice(&batch.token_ids()[query_start..query_end]);
+            complete_mock_committed_batch(states, batch).map(MultiSessionBatchProgress::Complete)
+        }
+
+        fn resume_multi_session_batch(
+            &mut self,
+            transaction: ExecutionTransactionId,
+            states: &mut [Self::SequenceState],
+            batch: &ferrule_common::execution::ExecutionBatch,
+            continuation: BatchContinuationId,
+        ) -> Result<MultiSessionBatchProgress> {
+            if continuation != Self::pending_resumable_progress(transaction).continuation() {
+                return Err(Error::Execution(
+                    "mock received an unknown batch continuation".into(),
+                ));
             }
-            let logits = predictions
-                .into_iter()
-                .enumerate()
-                .filter(|(row, _)| matches!(batch.logits()[*row], LogitsRequest::TopK(_)))
-                .map(|(row, top1)| LogitsRow::new(row as u32, LogitsOutput::TopK(vec![top1])))
-                .collect();
-            Ok(Some(ExecutionOutput::new(logits)))
+            if self.resume_errors_remaining > 0 {
+                self.resume_errors_remaining -= 1;
+                return Err(Error::Model("simulated resumable batch failure".into()));
+            }
+            let waits = self
+                .active_resumable_waits
+                .get_mut(&transaction)
+                .ok_or_else(|| Error::Execution("mock has no active batch continuation".into()))?;
+            if *waits > 0 {
+                *waits -= 1;
+                return Ok(MultiSessionBatchProgress::Waiting(
+                    Self::pending_resumable_progress(transaction),
+                ));
+            }
+            self.active_resumable_waits.remove(&transaction);
+            let output = match self.active_resumable_predictions.remove(&transaction) {
+                Some(predictions) => self.complete_packed_batch(states, batch, predictions)?,
+                None => complete_mock_committed_batch(states, batch)?,
+            };
+            self.committed_resumable_armed = !self.resumable_wait_scripts.is_empty();
+            Ok(MultiSessionBatchProgress::Complete(output))
+        }
+
+        fn cancel_multi_session_batch(
+            &mut self,
+            transaction: ExecutionTransactionId,
+            _states: &mut [Self::SequenceState],
+            continuation: BatchContinuationId,
+        ) -> BatchContinuationCancelOutcome {
+            if continuation != Self::pending_resumable_progress(transaction).continuation() {
+                return BatchContinuationCancelOutcome::StillActive(Error::Execution(
+                    "mock received an unknown batch continuation".into(),
+                ));
+            }
+            if self.resumable_cancel_still_active_remaining > 0 {
+                self.resumable_cancel_still_active_remaining -= 1;
+                return BatchContinuationCancelOutcome::StillActive(Error::Model(
+                    "simulated active packed cancellation".into(),
+                ));
+            }
+            self.active_resumable_predictions.remove(&transaction);
+            self.active_resumable_waits.remove(&transaction);
+            self.committed_resumable_armed = !self.resumable_wait_scripts.is_empty();
+            self.cancelled_continuations.push(continuation);
+            BatchContinuationCancelOutcome::Cancelled
         }
 
         fn multi_session_capabilities(&self) -> ferrule_common::execution::ExecutionCapabilities {
@@ -2717,9 +4376,7 @@ mod tests {
             ResidentTopKDriverConfig {
                 ctx_size: 16,
                 stop_at_eos: true,
-                append_eos_to_session: true,
-                dspark_confidence_threshold: 0.2,
-                max_steps_per_run: 64,
+                proposal_confidence_threshold: 0.2,
             },
         )
     }
@@ -2749,109 +4406,183 @@ mod tests {
         )
     }
 
-    fn dspark_cycle_trace(
-        cycle_attempt: u64,
-        committed_tokens: usize,
-        emitted_tokens: usize,
-    ) -> DSparkCycleTrace {
-        DSparkCycleTrace {
-            request_id: RequestId(7),
-            session_id: SessionId(7),
-            cycle_attempt,
-            position: 12,
-            anchor_token: 41,
-            proposal_source: DsparkProposalSource {
-                implementation: "test-dspark-v1",
-                prepared_plan_id: 0x1234,
-                native_width: 2,
+    fn concurrent_transaction_driver(
+        runner: MockTopKRunner,
+    ) -> ResidentTopKDriver<MockTopKRunner, FixedSequenceSlotPool> {
+        ResidentTopKDriver::with_configs(
+            runner,
+            FixedSequenceSlotPool::new(2),
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 1,
+                max_active_sequences: 2,
+                max_decode_batch: 1,
+                max_batch_tokens: 1,
+                allow_mixed_batches: false,
+                ..Default::default()
             },
-            proposal_executed: true,
-            native_proposed_tokens: vec![42, 43],
-            native_confidence_logits: vec![0.5, -0.25],
-            proposed_tokens: vec![42, 43],
-            confidence_logits: vec![0.5, -0.25],
-            capacity_truncated_tokens: 0,
-            output_boundary_truncated_tokens: 0,
-            confidence_truncated_tokens: 0,
-            scheduler_expert_io: Vec::new(),
-            accepted_tokens: vec![42],
-            rejected_token: Some(43),
-            target_correction_token: Some(44),
-            target_next_token: Some(44),
-            target_row_top1: vec![
-                ferrule_common::execution::TokenLogit::new(42, 1.0),
-                ferrule_common::execution::TokenLogit::new(44, 0.5),
-            ],
-            accounting: SpeculativeCycleAccounting {
-                proposed_tokens: 2,
-                verified_rows: 3,
-                accepted_draft_tokens: 1,
-                correction_tokens: 1,
-                externally_committed_tokens: committed_tokens,
-                rolled_back_rows: 3,
+            NonZeroU32::new(1).unwrap(),
+            ResidentTopKDriverConfig::default(),
+        )
+        .with_page_manager(KvPageManager::new(Box::new(DriverTestKvSchema), 16))
+    }
+
+    fn speculative_driver_from_runner(
+        runner: MockTopKRunner,
+        capacity: usize,
+    ) -> ResidentTopKDriver<MockTopKRunner, FixedSequenceSlotPool> {
+        ResidentTopKDriver::with_configs(
+            runner,
+            FixedSequenceSlotPool::new(capacity),
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 8,
+                max_active_sequences: capacity,
+                max_decode_batch: capacity,
+                max_batch_tokens: 16,
+                allow_mixed_batches: false,
+                ..Default::default()
             },
-            runtime_emitted_tokens: emitted_tokens,
-            proposal_time_us: 10,
-            verify_time_us: 20,
-            transaction_time_us: 30,
-            complete_cycle_time_us: 40,
-            finish_reason: None,
+            NonZeroU32::new(1).unwrap(),
+            ResidentTopKDriverConfig {
+                ctx_size: 16,
+                stop_at_eos: true,
+                proposal_confidence_threshold: 0.2,
+            },
+        )
+        .with_page_manager(KvPageManager::new(Box::new(DriverTestKvSchema), 16))
+    }
+
+    fn ready_speculative_decode_actions(
+        driver: &mut ResidentTopKDriver<MockTopKRunner, FixedSequenceSlotPool>,
+        request_ids: &[u64],
+    ) -> Vec<DecodeAction> {
+        for &id in request_ids {
+            let mut submitted = request(id, &[id as u32], 4, Vec::new());
+            submitted.session_id = Some(SessionId(id));
+            driver.submit(submitted);
         }
-    }
-
-    #[test]
-    fn dspark_confidence_threshold_selects_a_causal_prefix() {
-        let logits = [2.0, 0.0, -2.0, 4.0];
-        assert_eq!(confident_dspark_prefix_length(&logits, 0.0).unwrap(), 4);
-        assert_eq!(confident_dspark_prefix_length(&logits, 0.2).unwrap(), 2);
-        assert_eq!(confident_dspark_prefix_length(&logits, 0.6).unwrap(), 1);
-        assert!(confident_dspark_prefix_length(&logits, f32::NAN).is_err());
-    }
-
-    #[test]
-    fn dspark_cycle_trace_reconciles_committed_and_runtime_callbacks() {
-        assert!(dspark_cycle_trace(1, 2, 2).runtime_tokens_reconcile());
-        assert!(!dspark_cycle_trace(2, 2, 1).runtime_tokens_reconcile());
-    }
-
-    #[test]
-    fn driver_drains_dspark_cycle_traces_once_in_execution_order() {
-        let mut driver = driver_from_runner(MockTopKRunner::new(Vec::new()));
-        driver.record_dspark_cycle_trace(dspark_cycle_trace(1, 2, 2));
-        driver.record_dspark_cycle_trace(dspark_cycle_trace(2, 1, 1));
-
-        let traces = driver.drain_dspark_cycle_traces().collect::<Vec<_>>();
-        assert_eq!(
-            traces
-                .iter()
-                .map(|trace| trace.cycle_attempt)
-                .collect::<Vec<_>>(),
-            vec![1, 2]
-        );
-        assert_eq!(driver.drain_dspark_cycle_traces().count(), 0);
-    }
-
-    #[test]
-    fn driver_bounds_undrained_dspark_cycle_traces_and_reports_drops() {
-        let mut driver = driver_from_runner(MockTopKRunner::new(Vec::new()));
-        for attempt in 1..=1025 {
-            driver.record_dspark_cycle_trace(dspark_cycle_trace(attempt, 1, 1));
-        }
-        assert_eq!(driver.dspark_cycle_traces.len(), 1024);
-        assert_eq!(driver.stats().dropped_dspark_cycle_traces, 1);
-        assert_eq!(
+        driver.prepare_step().unwrap();
+        for _ in request_ids {
+            let action = driver
+                .scheduler
+                .next_prefill_action(&mut driver.slot_pool)
+                .unwrap()
+                .unwrap();
             driver
-                .dspark_cycle_traces
-                .front()
-                .map(|trace| trace.cycle_attempt),
-            Some(2)
+                .execute_planned_action(action, &mut |_| Ok(()))
+                .unwrap();
+        }
+        let SchedulerAction::DecodeBatch(actions) =
+            driver.scheduler.next_decode_action().unwrap().unwrap()
+        else {
+            panic!("expected speculative decode batch");
+        };
+        actions
+    }
+
+    #[test]
+    fn proposal_confidence_threshold_selects_a_causal_prefix() {
+        let logits = [2.0, 0.0, -2.0, 4.0];
+        assert_eq!(confident_proposal_prefix_length(&logits, 0.0).unwrap(), 4);
+        assert_eq!(confident_proposal_prefix_length(&logits, 0.2).unwrap(), 2);
+        assert_eq!(confident_proposal_prefix_length(&logits, 0.6).unwrap(), 1);
+        assert!(confident_proposal_prefix_length(&logits, f32::NAN).is_err());
+    }
+
+    #[test]
+    fn model_without_native_proposal_resumes_only_packed_target_execution() {
+        let runner = MockTopKRunner::new(vec![top(10)]).with_resumable_wait_scripts([1, 1]);
+        let mut driver = ResidentTopKDriver::with_configs(
+            runner,
+            FixedSequenceSlotPool::new(1),
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 8,
+                max_active_sequences: 1,
+                max_decode_batch: 1,
+                allow_mixed_batches: false,
+                ..Default::default()
+            },
+            NonZeroU32::new(1).unwrap(),
+            ResidentTopKDriverConfig {
+                ctx_size: 16,
+                stop_at_eos: true,
+                proposal_confidence_threshold: 0.2,
+            },
+        )
+        .with_page_manager(KvPageManager::new(Box::new(DriverTestKvSchema), 16));
+        let mut request = request(76, &[1], 1, Vec::new());
+        request.session_id = Some(SessionId(76));
+        driver.submit(request);
+        let mut events = Vec::new();
+
+        let step = |driver: &mut ResidentTopKDriver<MockTopKRunner, FixedSequenceSlotPool>,
+                    events: &mut Vec<ResidentTokenEvent>| {
+            driver.step_with_model_expert_io(
+                &mut |event| {
+                    events.push(event.clone());
+                    Ok(())
+                },
+                ExpertIoBudget::unbounded(),
+            )
+        };
+
+        assert!(matches!(
+            step(&mut driver, &mut events).unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(ref pending) if pending.len() == 1
+        ));
+        assert!(events.is_empty());
+        assert_eq!(driver.executor().runner().native_proposal_begin_calls, 0);
+
+        assert!(matches!(
+            step(&mut driver, &mut events).unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                rows: 1,
+                ..
+            }
+        ));
+        assert!(events.is_empty());
+
+        assert!(matches!(
+            step(&mut driver, &mut events).unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(ref pending) if pending.len() == 1
+        ));
+        assert!(events.is_empty());
+        assert_eq!(driver.executor().runner().native_proposal_begin_calls, 0);
+
+        assert!(matches!(
+            step(&mut driver, &mut events).unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Decode,
+                rows: 1,
+                staged: 0,
+                finished: 1,
+            }
+        ));
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].token, 10);
+        assert_eq!(events[0].session_id, SessionId(76));
+        assert_eq!(driver.executor().runner().packed_committed_calls, 2);
+        assert_eq!(driver.executor().runner().prepared_batches, 2);
+        assert_eq!(driver.executor().runner().committed_batches, 2);
+        assert_eq!(driver.executor().runner().rolled_back_batches, 0);
+        assert_eq!(driver.executor().runner().native_proposal_begin_calls, 0);
+        assert_eq!(driver.stats().speculative.cycles, 0);
+        assert_eq!(driver.page_manager().unwrap().allocated_pages(), 0);
+        let finished = driver.drain_finished();
+        assert_eq!(finished.len(), 1);
+        assert_eq!(finished[0].position, 2);
+        assert_eq!(finished[0].generated, 1);
+        assert_eq!(
+            finished[0].finish_reason,
+            Some(SequenceFinishReason::MaxTokens)
         );
     }
 
     #[test]
-    fn production_dspark_zero_accept_trace_reconciles_proposal_scheduler_and_target() {
-        let runner = MockTopKRunner::new(vec![top(10)]).with_dspark_cycle(
-            DsparkProposal {
+    fn production_speculative_zero_accept_commits_correction_frontier_and_metrics() {
+        let runner = MockTopKRunner::new(vec![top(10)]).with_speculative_cycle(
+            NativeProposal {
                 token_ids: vec![11, 12],
                 confidence_logits: vec![0.75, -0.5],
             },
@@ -2868,16 +4599,14 @@ mod tests {
                 prefill_chunk_size: 8,
                 max_active_sequences: 1,
                 max_decode_batch: 1,
-                allow_mixed_batches: false,
+                allow_mixed_batches: true,
                 ..Default::default()
             },
             NonZeroU32::new(1).unwrap(),
             ResidentTopKDriverConfig {
                 ctx_size: 16,
                 stop_at_eos: true,
-                append_eos_to_session: false,
-                dspark_confidence_threshold: 0.2,
-                max_steps_per_run: 16,
+                proposal_confidence_threshold: 0.2,
             },
         )
         .with_page_manager(KvPageManager::new(Box::new(DriverTestKvSchema), 16));
@@ -2887,7 +4616,7 @@ mod tests {
         let mut events = Vec::new();
 
         let prefill = driver
-            .step_with_dspark_model_expert_io(
+            .step_with_model_expert_io(
                 &mut |event| {
                     events.push(event.clone());
                     Ok(())
@@ -2904,7 +4633,7 @@ mod tests {
         ));
 
         let decode = driver
-            .step_with_dspark_model_expert_io(
+            .step_with_model_expert_io(
                 &mut |event| {
                     events.push(event.clone());
                     Ok(())
@@ -2921,51 +4650,739 @@ mod tests {
             }
         ));
         assert_eq!(driver.executor().runner().packed_verification_calls, 1);
+        assert_eq!(driver.executor().runner().prepared_batches, 2);
+        assert_eq!(driver.executor().runner().committed_batches, 2);
+        assert_eq!(driver.executor().runner().rolled_back_batches, 0);
 
-        let traces = driver.drain_dspark_cycle_traces().collect::<Vec<_>>();
-        assert_eq!(traces.len(), 1);
-        let trace = &traces[0];
-        assert_eq!(trace.request_id, RequestId(77));
-        assert_eq!(trace.session_id, SessionId(77));
-        assert_eq!(trace.cycle_attempt, 1);
-        assert_eq!(trace.proposal_source.implementation, "mock-dspark-v1");
-        assert_eq!(trace.native_proposed_tokens, vec![11, 12]);
-        assert_eq!(trace.native_confidence_logits, vec![0.75, -0.5]);
-        assert_eq!(trace.proposed_tokens, vec![11, 12]);
-        assert_eq!(trace.confidence_logits, vec![0.75, -0.5]);
-        assert_eq!(trace.accounting.accepted_draft_tokens, 0);
-        assert_eq!(trace.accounting.verified_rows, 3);
-        assert_eq!(trace.accounting.rolled_back_rows, 2);
-        assert_eq!(trace.rejected_token, Some(11));
-        assert_eq!(trace.target_correction_token, Some(99));
         assert_eq!(
-            trace
-                .target_row_top1
+            events
                 .iter()
-                .map(|token| token.token_id)
+                .map(|event| (event.session_id, event.token))
                 .collect::<Vec<_>>(),
-            vec![99, 98, 97]
+            vec![(SessionId(77), 10)]
         );
-        assert_eq!(trace.scheduler_expert_io.len(), 1);
-        assert!(trace.scheduler_expert_io[0].admitted);
+        let sequence = driver
+            .scheduler()
+            .active_sequence(SessionId(77))
+            .expect("speculative sequence should remain active");
+        assert_eq!(sequence.position, 2);
+        assert_eq!(sequence.generated, 1);
+        assert_eq!(sequence.next_decode_token, Some(99));
         assert_eq!(
-            trace.scheduler_expert_io[0].queue,
-            crate::scheduling::ExpertIoQueueClass::ResidentReady
+            driver
+                .page_manager()
+                .unwrap()
+                .block_table(StateSlot::new(0))
+                .unwrap()
+                .committed_tokens(),
+            2
         );
-        assert!(trace.runtime_tokens_reconcile());
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].token, 10);
+
+        let metrics = &driver.stats().speculative;
+        assert_eq!(metrics.cycles, 1);
+        assert_eq!(metrics.proposed_tokens, 2);
+        assert_eq!(metrics.verified_rows, 3);
+        assert_eq!(metrics.accepted_draft_tokens, 0);
+        assert_eq!(metrics.correction_tokens, 1);
+        assert_eq!(metrics.externally_committed_tokens, 1);
+        assert_eq!(metrics.runtime_emitted_tokens, 1);
+        assert_eq!(metrics.rolled_back_rows, 2);
+        assert_eq!(metrics.rejected_tokens, 1);
+        assert_eq!(metrics.accepted_prefix_histogram, vec![1]);
     }
 
     #[test]
-    fn production_dspark_batches_two_ragged_sessions_in_one_provisional_execution() {
-        let runner = MockTopKRunner::new(vec![top(10)]).with_dspark_cohort(
-            vec![
-                DsparkProposal {
+    fn proposal_wait_does_not_block_later_slot_and_reports_empty_head_progress() {
+        let runner = MockTopKRunner::new(vec![top(10)])
+            .with_speculative_cohort(
+                vec![
+                    NativeProposal {
+                        token_ids: vec![11, 12],
+                        confidence_logits: vec![1.0, 1.0],
+                    },
+                    NativeProposal {
+                        token_ids: vec![21, 22],
+                        confidence_logits: vec![1.0, 1.0],
+                    },
+                ],
+                vec![
+                    TokenLogit::new(11, 9.0),
+                    TokenLogit::new(99, 8.0),
+                    TokenLogit::new(98, 7.0),
+                    TokenLogit::new(21, 6.0),
+                    TokenLogit::new(97, 5.0),
+                    TokenLogit::new(96, 4.0),
+                ],
+            )
+            .with_proposal_waits(vec![1, 0]);
+        let mut driver = speculative_driver_from_runner(runner, 2);
+        let actions = ready_speculative_decode_actions(&mut driver, &[1, 2]);
+
+        let first = driver
+            .execute_speculative_decode_batch(actions, &mut |_| Ok(()))
+            .unwrap();
+        let ResidentDriverStep::WaitingForModelProgress(waiting) = first else {
+            panic!("expected native proposal wait");
+        };
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(
+            waiting[0].continuation(),
+            BatchContinuationId::new(100).unwrap()
+        );
+        assert!(waiting[0].expert_loads().is_empty());
+        assert_eq!(driver.executor().runner().native_proposal_begin_calls, 2);
+        assert_eq!(driver.executor().runner().native_proposal_resume_calls, 0);
+        assert_eq!(driver.executor().runner().active_native_proposals.len(), 1);
+        assert_eq!(driver.executor().runner().packed_verification_calls, 0);
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Decode,
+                ..
+            }
+        ));
+        assert_eq!(driver.executor().runner().native_proposal_begin_calls, 2);
+        assert_eq!(driver.executor().runner().native_proposal_resume_calls, 1);
+        assert_eq!(driver.executor().runner().packed_verification_calls, 1);
+        assert!(
+            driver
+                .executor()
+                .runner()
+                .active_native_proposals
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn repeated_proposal_wakes_resume_once_without_reproposal_and_verify_once() {
+        let runner = MockTopKRunner::new(vec![top(10)])
+            .with_speculative_cycle(
+                NativeProposal {
                     token_ids: vec![11, 12],
                     confidence_logits: vec![1.0, 1.0],
                 },
-                DsparkProposal {
+                vec![
+                    TokenLogit::new(11, 9.0),
+                    TokenLogit::new(99, 8.0),
+                    TokenLogit::new(98, 7.0),
+                ],
+            )
+            .with_proposal_waits(vec![3]);
+        let mut driver = speculative_driver_from_runner(runner, 1);
+        let actions = ready_speculative_decode_actions(&mut driver, &[1]);
+        assert!(matches!(
+            driver
+                .execute_speculative_decode_batch(actions, &mut |_| Ok(()))
+                .unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(_)
+        ));
+        let Some(PendingSpeculativeDriverCohort::Proposing(pending)) =
+            driver.speculative_transactions.values_mut().next()
+        else {
+            panic!("expected pending proposal cohort");
+        };
+        pending.slots[0].proposal_start =
+            Instant::now().checked_sub(std::time::Duration::from_millis(10));
+
+        for expected_resumes in [1, 2] {
+            assert!(matches!(
+                driver
+                    .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                    .unwrap(),
+                ResidentDriverStep::WaitingForModelProgress(_)
+            ));
+            assert_eq!(driver.executor().runner().native_proposal_begin_calls, 1);
+            assert_eq!(
+                driver.executor().runner().native_proposal_resume_calls,
+                expected_resumes
+            );
+            assert_eq!(driver.executor().runner().packed_verification_calls, 0);
+        }
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Decode,
+                ..
+            }
+        ));
+        assert_eq!(driver.executor().runner().native_proposal_begin_calls, 1);
+        assert_eq!(driver.executor().runner().native_proposal_resume_calls, 3);
+        assert_eq!(driver.executor().runner().packed_verification_calls, 1);
+        assert_eq!(driver.stats().speculative.cycles, 1);
+        assert!(driver.stats().speculative.total_proposal_time_us >= 10_000);
+    }
+
+    #[test]
+    fn zero_draft_capacity_completes_empty_without_beginning_a_proposal() {
+        let runner = MockTopKRunner::new(vec![top(10)]).with_speculative_cycle(
+            NativeProposal {
+                token_ids: vec![11, 12],
+                confidence_logits: vec![1.0, 1.0],
+            },
+            vec![TokenLogit::new(99, 9.0)],
+        );
+        let mut driver = speculative_driver_from_runner(runner, 1);
+        let mut submitted = request(1, &[1], 1, Vec::new());
+        submitted.session_id = Some(SessionId(1));
+        driver.submit(submitted);
+        driver.prepare_step().unwrap();
+        let prefill = driver
+            .scheduler
+            .next_prefill_action(&mut driver.slot_pool)
+            .unwrap()
+            .unwrap();
+        driver
+            .execute_planned_action(prefill, &mut |_| Ok(()))
+            .unwrap();
+        let SchedulerAction::DecodeBatch(actions) =
+            driver.scheduler.next_decode_action().unwrap().unwrap()
+        else {
+            panic!("expected zero-draft decode batch");
+        };
+
+        assert!(matches!(
+            driver
+                .execute_speculative_decode_batch(actions, &mut |_| Ok(()))
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Decode,
+                rows: 1,
+                ..
+            }
+        ));
+        assert_eq!(driver.executor().runner().native_proposal_begin_calls, 0);
+        assert_eq!(driver.executor().runner().native_proposal_resume_calls, 0);
+        assert_eq!(driver.executor().runner().native_proposals.len(), 1);
+        assert_eq!(driver.executor().runner().packed_verification_calls, 1);
+    }
+
+    #[test]
+    fn proposal_cancel_still_active_retains_cohort_and_sequence_ownership() {
+        let runner = MockTopKRunner::new(vec![top(10)])
+            .with_speculative_cycle(
+                NativeProposal {
+                    token_ids: vec![11, 12],
+                    confidence_logits: vec![1.0, 1.0],
+                },
+                vec![
+                    TokenLogit::new(11, 9.0),
+                    TokenLogit::new(99, 8.0),
+                    TokenLogit::new(98, 7.0),
+                ],
+            )
+            .with_proposal_waits(vec![1])
+            .with_proposal_cancel_still_active(1);
+        let mut driver = speculative_driver_from_runner(runner, 1);
+        let actions = ready_speculative_decode_actions(&mut driver, &[1]);
+        assert!(matches!(
+            driver
+                .execute_speculative_decode_batch(actions, &mut |_| Ok(()))
+                .unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(_)
+        ));
+
+        let error = driver.cancel_request(RequestId(1)).unwrap_err();
+        assert!(error.to_string().contains("active continuations"));
+        let Some(PendingSpeculativeDriverCohort::Proposing(pending)) =
+            driver.speculative_transactions.values().next()
+        else {
+            panic!("StillActive must retain the proposing cohort");
+        };
+        assert_eq!(pending.cancellation_request, Some(RequestId(1)));
+        assert_eq!(pending.source_states.len(), 1);
+        assert!(matches!(
+            &pending.slots[0].status,
+            NativeProposalSlotStatus::Waiting(_)
+        ));
+        assert!(!driver.sequence_states.contains_key(&SessionId(1)));
+        assert_eq!(driver.executor().runner().active_native_proposals.len(), 1);
+        assert_eq!(driver.executor().runner().native_proposal_cancel_calls, 1);
+
+        assert_eq!(
+            driver.cancel_request(RequestId(1)).unwrap(),
+            CancelRequestResult::Active {
+                request_id: RequestId(1),
+                session_id: SessionId(1),
+            }
+        );
+        assert!(driver.speculative_transactions.is_empty());
+        assert!(
+            driver
+                .executor()
+                .runner()
+                .active_native_proposals
+                .is_empty()
+        );
+        assert_eq!(driver.executor().runner().native_proposal_cancel_calls, 2);
+        assert_eq!(
+            driver.executor().runner().cancelled_native_proposals.len(),
+            1
+        );
+        assert!(!driver.sequence_states.contains_key(&SessionId(1)));
+    }
+
+    #[test]
+    fn proposal_resume_error_cancels_before_releasing_owned_state() {
+        let runner = MockTopKRunner::new(vec![top(10)])
+            .with_speculative_cycle(
+                NativeProposal {
+                    token_ids: vec![11, 12],
+                    confidence_logits: vec![1.0, 1.0],
+                },
+                vec![
+                    TokenLogit::new(11, 9.0),
+                    TokenLogit::new(99, 8.0),
+                    TokenLogit::new(98, 7.0),
+                ],
+            )
+            .with_proposal_waits(vec![1])
+            .with_proposal_resume_errors(1)
+            .with_proposal_cancel_still_active(1);
+        let mut driver = speculative_driver_from_runner(runner, 1);
+        let actions = ready_speculative_decode_actions(&mut driver, &[1]);
+        assert!(matches!(
+            driver
+                .execute_speculative_decode_batch(actions, &mut |_| Ok(()))
+                .unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(_)
+        ));
+
+        assert!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .is_err()
+        );
+        assert!(matches!(
+            driver.speculative_transactions.values().next(),
+            Some(PendingSpeculativeDriverCohort::Proposing(_))
+        ));
+        assert_eq!(driver.executor().runner().native_proposal_resume_calls, 1);
+        assert_eq!(driver.executor().runner().native_proposal_cancel_calls, 1);
+        assert_eq!(driver.executor().runner().active_native_proposals.len(), 1);
+        assert!(!driver.sequence_states.contains_key(&SessionId(1)));
+
+        assert!(driver.cancel_request(RequestId(1)).is_err());
+        assert!(driver.speculative_transactions.is_empty());
+        assert!(
+            driver
+                .executor()
+                .runner()
+                .active_native_proposals
+                .is_empty()
+        );
+        assert_eq!(driver.executor().runner().native_proposal_cancel_calls, 2);
+        assert!(driver.sequence_states.contains_key(&SessionId(1)));
+        assert_eq!(
+            driver.cancel_request(RequestId(1)).unwrap(),
+            CancelRequestResult::Active {
+                request_id: RequestId(1),
+                session_id: SessionId(1),
+            }
+        );
+    }
+
+    #[test]
+    fn production_speculative_waits_and_resumes_without_reproposal_or_early_publication() {
+        let runner = MockTopKRunner::new(vec![top(10)])
+            .with_speculative_cycle(
+                NativeProposal {
+                    token_ids: vec![11, 12],
+                    confidence_logits: vec![1.0, 1.0],
+                },
+                vec![
+                    TokenLogit::new(11, 9.0),
+                    TokenLogit::new(99, 8.0),
+                    TokenLogit::new(98, 7.0),
+                ],
+            )
+            .with_resumable_wait_scripts([0, 2]);
+        let mut driver = ResidentTopKDriver::with_configs(
+            runner,
+            FixedSequenceSlotPool::new(1),
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 8,
+                max_active_sequences: 1,
+                max_decode_batch: 1,
+                allow_mixed_batches: false,
+                ..Default::default()
+            },
+            NonZeroU32::new(1).unwrap(),
+            ResidentTopKDriverConfig {
+                ctx_size: 16,
+                stop_at_eos: true,
+                proposal_confidence_threshold: 0.2,
+            },
+        )
+        .with_page_manager(KvPageManager::new(Box::new(DriverTestKvSchema), 16));
+        let mut request = request(77, &[1], 4, Vec::new());
+        request.session_id = Some(SessionId(77));
+        driver.submit(request);
+        let events = std::cell::RefCell::new(Vec::new());
+        let mut emit = |event: &ResidentTokenEvent| {
+            events.borrow_mut().push(event.clone());
+            Ok(())
+        };
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut emit, ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                ..
+            }
+        ));
+        let first_wait = driver
+            .step_with_model_expert_io(&mut emit, ExpertIoBudget::unbounded())
+            .unwrap();
+        assert!(matches!(
+            first_wait,
+            ResidentDriverStep::WaitingForModelProgress(_)
+        ));
+        assert!(!driver.speculative_transactions.is_empty());
+        assert!(!driver.sequence_states.contains_key(&SessionId(77)));
+        assert!(events.borrow().is_empty());
+        assert_eq!(driver.stats().speculative.cycles, 0);
+        assert_eq!(driver.executor().runner().native_proposal_begin_calls, 1);
+        assert_eq!(driver.executor().runner().packed_verification_calls, 1);
+
+        let second_wait = driver
+            .step_with_model_expert_io(&mut emit, ExpertIoBudget::unbounded())
+            .unwrap();
+        assert!(matches!(
+            second_wait,
+            ResidentDriverStep::WaitingForModelProgress(_)
+        ));
+        assert!(events.borrow().is_empty());
+        assert_eq!(driver.executor().runner().native_proposal_begin_calls, 1);
+        assert_eq!(driver.executor().runner().packed_verification_calls, 1);
+
+        let completed = driver
+            .step_with_model_expert_io(&mut emit, ExpertIoBudget::unbounded())
+            .unwrap();
+        assert!(matches!(
+            completed,
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Decode,
+                rows: 3,
+                ..
+            }
+        ));
+        assert!(driver.speculative_transactions.is_empty());
+        assert!(driver.sequence_states.contains_key(&SessionId(77)));
+        assert_eq!(
+            events
+                .borrow()
+                .iter()
+                .map(|event| event.token)
+                .collect::<Vec<_>>(),
+            vec![10, 11]
+        );
+        assert_eq!(driver.stats().speculative.cycles, 1);
+        assert_eq!(
+            driver.stats().speculative.externally_committed_tokens,
+            events.borrow().len()
+        );
+        assert_eq!(
+            driver.stats().speculative.runtime_emitted_tokens,
+            events.borrow().len()
+        );
+        assert_eq!(
+            driver
+                .page_manager()
+                .unwrap()
+                .block_table(StateSlot::new(0))
+                .unwrap()
+                .committed_tokens(),
+            3
+        );
+        assert_eq!(driver.executor().runner().native_proposal_begin_calls, 1);
+        assert_eq!(driver.executor().runner().packed_verification_calls, 1);
+    }
+
+    #[test]
+    fn c2_suspended_packed_verification_preserves_sequence_and_kv_ownership() {
+        let runner = MockTopKRunner::new(vec![top(10)])
+            .with_speculative_cycle(
+                NativeProposal {
+                    token_ids: vec![11, 12],
+                    confidence_logits: vec![1.0, 1.0],
+                },
+                vec![
+                    TokenLogit::new(11, 9.0),
+                    TokenLogit::new(99, 8.0),
+                    TokenLogit::new(98, 7.0),
+                ],
+            )
+            .with_speculative_cycle(
+                NativeProposal {
+                    token_ids: vec![21, 22],
+                    confidence_logits: vec![1.0, 1.0],
+                },
+                vec![
+                    TokenLogit::new(21, 6.0),
+                    TokenLogit::new(97, 5.0),
+                    TokenLogit::new(96, 4.0),
+                ],
+            )
+            .with_resumable_wait_scripts([0, 0, 2, 0])
+            .with_packed_topology_guard();
+        let mut driver = ResidentTopKDriver::with_configs(
+            runner,
+            FixedSequenceSlotPool::new(2),
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 8,
+                max_active_sequences: 2,
+                max_decode_batch: 1,
+                max_batch_tokens: 1,
+                allow_mixed_batches: false,
+                ..Default::default()
+            },
+            NonZeroU32::new(1).unwrap(),
+            ResidentTopKDriverConfig {
+                ctx_size: 16,
+                stop_at_eos: true,
+                proposal_confidence_threshold: 0.2,
+            },
+        )
+        .with_page_manager(KvPageManager::new(Box::new(DriverTestKvSchema), 16));
+        for id in [1, 2] {
+            let mut submitted = request(id, &[id as u32], 4, Vec::new());
+            submitted.session_id = Some(SessionId(id));
+            driver.submit(submitted);
+        }
+
+        driver.prepare_step().unwrap();
+        for _ in 0..2 {
+            let prefill = driver
+                .scheduler
+                .next_prefill_action(&mut driver.slot_pool)
+                .unwrap()
+                .expect("both c2 sessions should require prefill");
+            assert!(matches!(
+                driver
+                    .execute_planned_action(prefill, &mut |_| Ok(()))
+                    .unwrap(),
+                ResidentDriverStep::Executed {
+                    action_kind: ResidentActionKind::Prefill,
+                    ..
+                }
+            ));
+        }
+        let page_tables_before = [SessionId(1), SessionId(2)].map(|session_id| {
+            let slot = driver.page_slots[&session_id];
+            driver
+                .page_manager()
+                .unwrap()
+                .block_table(slot)
+                .unwrap()
+                .pages()
+                .to_vec()
+        });
+        let allocated_pages_before = driver.page_manager().unwrap().allocated_pages();
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(ref pending) if pending.len() == 1
+        ));
+        assert_eq!(driver.speculative_transactions.len(), 1);
+        assert_eq!(driver.session_owner.len(), 1);
+        let owned_session = *driver.session_owner.keys().next().unwrap();
+        let runnable_session = if owned_session == SessionId(1) {
+            SessionId(2)
+        } else {
+            SessionId(1)
+        };
+        assert!(!driver.sequence_states.contains_key(&owned_session));
+        assert!(driver.sequence_states.contains_key(&runnable_session));
+        assert_eq!(driver.executor().runner().sequence_state_fork_calls, 1);
+        assert_eq!(
+            driver
+                .executor()
+                .runner()
+                .topology_mutation_attempts_while_packed,
+            0
+        );
+        assert_eq!(driver.executor().runner().released_sequence_states, 0);
+        assert!(driver.executor().runner().released_kv_pages.is_empty());
+        assert_eq!(
+            [SessionId(1), SessionId(2)].map(|session_id| {
+                let slot = driver.page_slots[&session_id];
+                driver
+                    .page_manager()
+                    .unwrap()
+                    .block_table(slot)
+                    .unwrap()
+                    .pages()
+                    .to_vec()
+            }),
+            page_tables_before
+        );
+        assert_eq!(
+            driver.page_manager().unwrap().allocated_pages(),
+            allocated_pages_before
+        );
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(_)
+        ));
+        assert_eq!(driver.speculative_transactions.len(), 1);
+        assert_eq!(driver.executor().runner().sequence_state_fork_calls, 1);
+        assert_eq!(
+            driver
+                .executor()
+                .runner()
+                .topology_mutation_attempts_while_packed,
+            0
+        );
+        assert_eq!(driver.executor().runner().released_sequence_states, 0);
+        assert!(driver.executor().runner().released_kv_pages.is_empty());
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Decode,
+                ..
+            }
+        ));
+        assert!(driver.speculative_transactions.is_empty());
+        assert!(driver.session_owner.is_empty());
+        assert!(driver.sequence_states.contains_key(&owned_session));
+        assert!(driver.sequence_states.contains_key(&runnable_session));
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Decode,
+                ..
+            }
+        ));
+        assert_eq!(driver.executor().runner().sequence_state_fork_calls, 2);
+        assert_eq!(
+            driver
+                .executor()
+                .runner()
+                .topology_mutation_attempts_while_packed,
+            0
+        );
+        assert_eq!(driver.executor().runner().packed_verification_calls, 2);
+    }
+
+    #[test]
+    fn cancelling_pending_speculative_cohort_restores_surviving_decode_order() {
+        let runner = MockTopKRunner::new(vec![top(10)])
+            .with_speculative_cohort(
+                vec![
+                    NativeProposal {
+                        token_ids: vec![11, 12],
+                        confidence_logits: vec![1.0, 1.0],
+                    },
+                    NativeProposal {
+                        token_ids: vec![21, 22],
+                        confidence_logits: vec![1.0, 1.0],
+                    },
+                ],
+                vec![
+                    TokenLogit::new(11, 9.0),
+                    TokenLogit::new(99, 8.0),
+                    TokenLogit::new(98, 7.0),
+                    TokenLogit::new(21, 6.0),
+                    TokenLogit::new(22, 5.0),
+                    TokenLogit::new(23, 4.0),
+                ],
+            )
+            .with_resumable_wait_scripts([0, 0, 1]);
+        let mut driver = ResidentTopKDriver::with_configs(
+            runner,
+            FixedSequenceSlotPool::new(2),
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 8,
+                max_active_sequences: 2,
+                max_decode_batch: 2,
+                max_batch_tokens: 16,
+                allow_mixed_batches: false,
+                ..Default::default()
+            },
+            NonZeroU32::new(1).unwrap(),
+            ResidentTopKDriverConfig {
+                ctx_size: 16,
+                stop_at_eos: true,
+                proposal_confidence_threshold: 0.2,
+            },
+        )
+        .with_page_manager(KvPageManager::new(Box::new(DriverTestKvSchema), 16));
+        for id in [1, 2] {
+            let mut request = request(id, &[id as u32], 4, Vec::new());
+            request.session_id = Some(SessionId(id));
+            driver.submit(request);
+        }
+        driver.prepare_step().unwrap();
+        for _ in 0..2 {
+            let action = driver
+                .scheduler
+                .next_prefill_action(&mut driver.slot_pool)
+                .unwrap()
+                .unwrap();
+            driver
+                .execute_planned_action(action, &mut |_| Ok(()))
+                .unwrap();
+        }
+        let SchedulerAction::DecodeBatch(actions) =
+            driver.scheduler.next_decode_action().unwrap().unwrap()
+        else {
+            panic!("expected decode batch");
+        };
+        assert!(matches!(
+            driver
+                .execute_speculative_decode_batch(actions.clone(), &mut |_| Ok(()))
+                .unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(_)
+        ));
+
+        let cancelled = driver.cancel_request(RequestId(1)).unwrap();
+        assert_eq!(
+            cancelled,
+            CancelRequestResult::Active {
+                request_id: RequestId(1),
+                session_id: SessionId(1),
+            }
+        );
+        assert!(driver.speculative_transactions.is_empty());
+        assert_eq!(driver.executor().runner().cancelled_continuations.len(), 1);
+        assert!(!driver.sequence_states.contains_key(&SessionId(1)));
+        assert!(driver.sequence_states.contains_key(&SessionId(2)));
+        let SchedulerAction::DecodeBatch(restored) =
+            driver.scheduler.next_decode_action().unwrap().unwrap()
+        else {
+            panic!("expected surviving decode action");
+        };
+        assert_eq!(restored, vec![actions[1]]);
+    }
+
+    #[test]
+    fn production_speculative_batches_two_ragged_sessions_in_one_provisional_execution() {
+        let runner = MockTopKRunner::new(vec![top(10)]).with_speculative_cohort(
+            vec![
+                NativeProposal {
+                    token_ids: vec![11, 12],
+                    confidence_logits: vec![1.0, 1.0],
+                },
+                NativeProposal {
                     token_ids: vec![21, 22],
                     confidence_logits: vec![1.0, -2.0],
                 },
@@ -2993,12 +5410,11 @@ mod tests {
             ResidentTopKDriverConfig {
                 ctx_size: 16,
                 stop_at_eos: true,
-                append_eos_to_session: false,
-                dspark_confidence_threshold: 0.2,
-                max_steps_per_run: 16,
+                proposal_confidence_threshold: 0.2,
             },
         )
         .with_page_manager(KvPageManager::new(Box::new(DriverTestKvSchema), 16));
+
         for id in [1, 2] {
             let mut request = request(id, &[id as u32], 4, Vec::new());
             request.session_id = Some(SessionId(id));
@@ -3028,9 +5444,15 @@ mod tests {
             panic!("expected a decode batch");
         };
         assert_eq!(actions.len(), 2);
+        let expected_events = vec![
+            (actions[0].session_id, actions[0].token_id),
+            (actions[0].session_id, 11),
+            (actions[1].session_id, actions[1].token_id),
+            (actions[1].session_id, 21),
+        ];
 
         let decode = driver
-            .execute_dspark_decode_batch(actions, &[], &mut |event| {
+            .execute_speculative_decode_batch(actions, &mut |event| {
                 events.push(event.clone());
                 Ok(())
             })
@@ -3045,28 +5467,775 @@ mod tests {
             }
         );
         assert_eq!(driver.executor().runner().packed_verification_calls, 1);
-        let traces = driver.drain_dspark_cycle_traces().collect::<Vec<_>>();
-        assert_eq!(traces.len(), 2);
+        assert_eq!(driver.executor().runner().prepared_batches, 3);
+        assert_eq!(driver.executor().runner().committed_batches, 3);
+        assert_eq!(driver.executor().runner().rolled_back_batches, 0);
         assert_eq!(
-            traces
+            events
                 .iter()
-                .map(|trace| (trace.session_id, trace.cycle_attempt))
+                .map(|event| (event.session_id, event.token))
                 .collect::<Vec<_>>(),
-            vec![(SessionId(1), 1), (SessionId(2), 2)]
+            expected_events
         );
-        assert_eq!(traces[0].proposed_tokens, vec![11, 12]);
-        assert_eq!(traces[1].proposed_tokens, vec![21]);
-        assert_eq!(traces[1].confidence_truncated_tokens, 1);
-        assert_eq!(driver.stats().dspark.verified_rows, 5);
+
+        let metrics = &driver.stats().speculative;
+        assert_eq!(metrics.cycles, 2);
+        assert_eq!(metrics.proposed_tokens, 3);
+        assert_eq!(metrics.verified_rows, 5);
+        assert_eq!(metrics.accepted_draft_tokens, 2);
+        assert_eq!(metrics.correction_tokens, 1);
+        assert_eq!(metrics.externally_committed_tokens, 4);
+        assert_eq!(metrics.runtime_emitted_tokens, 4);
+        assert_eq!(metrics.rolled_back_rows, 1);
+        assert_eq!(metrics.rejected_tokens, 1);
+        assert_eq!(metrics.accepted_prefix_histogram, vec![0, 2]);
+        assert!(metrics.total_verify_time_us <= metrics.total_transaction_time_us);
+        assert!(metrics.total_transaction_time_us <= metrics.total_cycle_time_us);
+        for slot in [0, 1] {
+            assert_eq!(
+                driver
+                    .page_manager()
+                    .unwrap()
+                    .block_table(StateSlot::new(slot))
+                    .unwrap()
+                    .committed_tokens(),
+                3
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_resumable_prefill_waits_resumes_and_commits_once() {
+        let runner = MockTopKRunner::new(Vec::new()).with_committed_resumable_batch(
+            2,
+            vec![TokenLogit::new(7, 1.0), TokenLogit::new(8, 2.0)],
+        );
+        let mut driver = ResidentTopKDriver::with_configs(
+            runner,
+            FixedSequenceSlotPool::new(1),
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 8,
+                max_active_sequences: 1,
+                max_decode_batch: 1,
+                max_batch_tokens: 8,
+                allow_mixed_batches: false,
+                ..Default::default()
+            },
+            NonZeroU32::new(1).unwrap(),
+            ResidentTopKDriverConfig::default(),
+        )
+        .with_page_manager(KvPageManager::new(Box::new(DriverTestKvSchema), 16));
+        let mut submitted = request(1, &[1, 2], 2, Vec::new());
+        submitted.session_id = Some(SessionId(1));
+        driver.submit(submitted);
+        let mut events = Vec::new();
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(
+                    &mut |event| {
+                        events.push(event.clone());
+                        Ok(())
+                    },
+                    ExpertIoBudget::unbounded()
+                )
+                .unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(_)
+        ));
+        assert!(!driver.resident_transactions.is_empty());
+        assert!(driver.speculative_transactions.is_empty());
+        assert!(!driver.sequence_states.contains_key(&SessionId(1)));
+        assert!(driver.executor().has_transactions());
         assert_eq!(
-            driver.stats().dspark.total_verify_time_us,
-            traces[0].verify_time_us
+            driver
+                .page_manager()
+                .unwrap()
+                .block_table(StateSlot::new(0))
+                .unwrap()
+                .committed_tokens(),
+            0
+        );
+        assert_eq!(driver.executor().runner().prepared_batches, 1);
+        assert_eq!(driver.executor().runner().committed_batches, 0);
+        assert_eq!(driver.executor().runner().rolled_back_batches, 0);
+        assert_eq!(driver.executor().runner().packed_verification_calls, 1);
+        assert!(events.is_empty());
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(_)
+        ));
+        assert_eq!(driver.executor().runner().prepared_batches, 1);
+        assert_eq!(driver.executor().runner().committed_batches, 0);
+        assert_eq!(driver.executor().runner().packed_verification_calls, 1);
+        assert_eq!(
+            driver
+                .page_manager()
+                .unwrap()
+                .block_table(StateSlot::new(0))
+                .unwrap()
+                .committed_tokens(),
+            0
+        );
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                rows: 2,
+                ..
+            }
+        ));
+        assert!(driver.resident_transactions.is_empty());
+        assert_eq!(driver.sequence_states[&SessionId(1)].position, 2);
+        assert_eq!(
+            driver
+                .scheduler()
+                .active_sequence(SessionId(1))
+                .unwrap()
+                .position,
+            2
         );
         assert_eq!(
-            driver.stats().dspark.total_transaction_time_us,
-            traces[0].transaction_time_us
+            driver
+                .page_manager()
+                .unwrap()
+                .block_table(StateSlot::new(0))
+                .unwrap()
+                .committed_tokens(),
+            2
         );
-        assert_eq!(events.len(), 4);
+        assert_eq!(driver.executor().runner().prepared_batches, 1);
+        assert_eq!(driver.executor().runner().committed_batches, 1);
+        assert_eq!(driver.executor().runner().rolled_back_batches, 0);
+        assert_eq!(driver.executor().runner().packed_verification_calls, 1);
+    }
+
+    #[test]
+    fn ordinary_resumable_resume_error_retains_pending_ownership() {
+        let runner = MockTopKRunner::new(Vec::new())
+            .with_committed_resumable_batch(1, vec![TokenLogit::new(7, 1.0)])
+            .with_resume_errors(1);
+        let mut driver = ResidentTopKDriver::with_configs(
+            runner,
+            FixedSequenceSlotPool::new(1),
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 8,
+                max_active_sequences: 1,
+                max_decode_batch: 1,
+                allow_mixed_batches: false,
+                ..Default::default()
+            },
+            NonZeroU32::new(1).unwrap(),
+            ResidentTopKDriverConfig::default(),
+        )
+        .with_page_manager(KvPageManager::new(Box::new(DriverTestKvSchema), 16));
+        let mut submitted = request(1, &[1], 2, Vec::new());
+        submitted.session_id = Some(SessionId(1));
+        driver.submit(submitted);
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(_)
+        ));
+        assert!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .is_err()
+        );
+        assert!(!driver.resident_transactions.is_empty());
+        assert!(driver.executor().has_transactions());
+        assert!(!driver.sequence_states.contains_key(&SessionId(1)));
+        assert_eq!(driver.executor().runner().committed_batches, 0);
+        assert_eq!(driver.executor().runner().rolled_back_batches, 0);
+        assert!(!driver.executor().is_poisoned());
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                rows: 1,
+                ..
+            }
+        ));
+        assert!(driver.resident_transactions.is_empty());
+        assert_eq!(driver.executor().runner().prepared_batches, 1);
+        assert_eq!(driver.executor().runner().committed_batches, 1);
+        assert_eq!(driver.executor().runner().rolled_back_batches, 0);
+    }
+
+    #[test]
+    fn cancelling_unrelated_request_does_not_quiesce_pending_transaction() {
+        let runner = MockTopKRunner::new(vec![top(9)]).with_resumable_wait_scripts([1, 0]);
+        let mut driver = ResidentTopKDriver::with_configs(
+            runner,
+            FixedSequenceSlotPool::new(2),
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 1,
+                max_active_sequences: 2,
+                max_decode_batch: 1,
+                max_batch_tokens: 1,
+                allow_mixed_batches: false,
+                ..Default::default()
+            },
+            NonZeroU32::new(1).unwrap(),
+            ResidentTopKDriverConfig::default(),
+        )
+        .with_page_manager(KvPageManager::new(Box::new(DriverTestKvSchema), 16));
+        for id in [1, 2] {
+            let mut submitted = request(id, &[id as u32], 2, Vec::new());
+            submitted.session_id = Some(SessionId(id));
+            driver.submit(submitted);
+        }
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                rows: 1,
+                ..
+            }
+        ));
+        assert_eq!(driver.resident_transactions.len(), 1);
+        assert!(driver.executor().has_transactions());
+        assert!(!driver.sequence_states.contains_key(&SessionId(1)));
+        assert!(driver.sequence_states.contains_key(&SessionId(2)));
+
+        let cancelled = driver.cancel_request(RequestId(2)).unwrap();
+        assert_eq!(
+            cancelled,
+            CancelRequestResult::Active {
+                request_id: RequestId(2),
+                session_id: SessionId(2),
+            }
+        );
+        assert_eq!(driver.resident_transactions.len(), 1);
+        assert!(driver.executor().has_transactions());
+        assert!(
+            driver
+                .executor()
+                .runner()
+                .cancelled_continuations
+                .is_empty()
+        );
+        assert_eq!(driver.executor().runner().committed_batches, 1);
+        assert_eq!(driver.executor().runner().rolled_back_batches, 0);
+        assert!(!driver.sequence_states.contains_key(&SessionId(1)));
+        assert!(driver.sequence_states.contains_key(&SessionId(2)));
+        assert!(driver.pending_sequence_cleanups.contains_key(&SessionId(2)));
+        assert!(driver.scheduler().active_sequence(SessionId(1)).is_none());
+        assert!(driver.scheduler().active_sequence(SessionId(2)).is_none());
+        assert!(driver.session_owner.contains_key(&SessionId(1)));
+        assert!(!driver.session_owner.contains_key(&SessionId(2)));
+        assert_eq!(driver.slot_pool().active_count(), 1);
+        assert_eq!(driver.page_manager().unwrap().active_sequences(), 2);
+        assert!(!driver.executor().is_poisoned());
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                rows: 1,
+                ..
+            }
+        ));
+        assert!(driver.resident_transactions.is_empty());
+        assert!(!driver.executor().has_transactions());
+        assert_eq!(driver.executor().runner().committed_batches, 2);
+        assert!(driver.pending_sequence_cleanups.contains_key(&SessionId(2)));
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Decode,
+                ..
+            }
+        ));
+        assert!(!driver.pending_sequence_cleanups.contains_key(&SessionId(2)));
+        assert!(!driver.sequence_states.contains_key(&SessionId(2)));
+        assert!(!driver.page_slots.contains_key(&SessionId(2)));
+        assert_eq!(
+            driver.page_manager().unwrap().active_sequences(),
+            usize::from(driver.page_slots.contains_key(&SessionId(1)))
+        );
+    }
+
+    #[test]
+    fn concurrent_transactions_wait_and_complete_in_reverse_order() {
+        let runner = MockTopKRunner::new(vec![top(9)]).with_resumable_wait_scripts([2, 1]);
+        let mut driver = concurrent_transaction_driver(runner);
+        for id in [1, 2] {
+            let mut submitted = request(id, &[id as u32], 2, Vec::new());
+            submitted.session_id = Some(SessionId(id));
+            driver.submit(submitted);
+        }
+
+        let ResidentDriverStep::WaitingForModelProgress(progress) = driver
+            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+            .unwrap()
+        else {
+            panic!("both transactions must suspend");
+        };
+        assert_eq!(progress.len(), 2);
+        let transaction_a = driver.session_owner[&SessionId(1)];
+        let transaction_b = driver.session_owner[&SessionId(2)];
+        assert_ne!(transaction_a, transaction_b);
+        assert!(
+            progress
+                .iter()
+                .any(|wait| wait.transaction() == transaction_a)
+        );
+        assert!(
+            progress
+                .iter()
+                .any(|wait| wait.transaction() == transaction_b)
+        );
+        assert_eq!(driver.resident_transactions.len(), 2);
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                ..
+            }
+        ));
+        assert!(driver.resident_transactions.contains_key(&transaction_a));
+        assert!(!driver.resident_transactions.contains_key(&transaction_b));
+        assert!(!driver.sequence_states.contains_key(&SessionId(1)));
+        assert!(driver.sequence_states.contains_key(&SessionId(2)));
+        assert_eq!(driver.executor().runner().committed_batches, 1);
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                ..
+            }
+        ));
+        assert!(driver.resident_transactions.is_empty());
+        assert!(driver.session_owner.is_empty());
+        assert!(driver.sequence_states.contains_key(&SessionId(1)));
+        assert_eq!(driver.executor().runner().committed_batches, 2);
+        assert_eq!(driver.executor().runner().rolled_back_batches, 0);
+    }
+
+    #[test]
+    fn c4_sibling_cancellation_defers_topology_cleanup_until_packed_owner_completes() {
+        let runner = MockTopKRunner::new(vec![top(9)])
+            .with_committed_resumable_batch(1, vec![TokenLogit::new(7, 1.0)])
+            .with_resumable_wait_scripts([0])
+            .with_packed_topology_guard();
+        let mut driver = ResidentTopKDriver::with_configs(
+            runner,
+            FixedSequenceSlotPool::new(4),
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 1,
+                max_active_sequences: 4,
+                max_decode_batch: 1,
+                max_batch_tokens: 1,
+                allow_mixed_batches: false,
+                ..Default::default()
+            },
+            NonZeroU32::new(1).unwrap(),
+            ResidentTopKDriverConfig::default(),
+        )
+        .with_page_manager(KvPageManager::new(Box::new(DriverTestKvSchema), 16));
+        for id in 1..=4 {
+            let mut submitted = request(id, &[id as u32], 2, Vec::new());
+            submitted.session_id = Some(SessionId(id));
+            driver.submit(submitted);
+        }
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                ..
+            }
+        ));
+        assert_eq!(driver.resident_transactions.len(), 1);
+        let packed_owner = *driver.session_owner.keys().next().unwrap();
+        let siblings = (1..=4)
+            .map(SessionId)
+            .filter(|session_id| *session_id != packed_owner)
+            .collect::<Vec<_>>();
+        let sibling_pages = siblings
+            .iter()
+            .flat_map(|session_id| {
+                let slot = driver.page_slots[session_id];
+                driver
+                    .page_manager()
+                    .unwrap()
+                    .block_table(slot)
+                    .unwrap()
+                    .pages()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+
+        for session_id in &siblings {
+            let request_id = RequestId(session_id.0);
+            assert_eq!(
+                driver.cancel_request(request_id).unwrap(),
+                CancelRequestResult::Active {
+                    request_id,
+                    session_id: *session_id,
+                }
+            );
+        }
+        assert_eq!(driver.pending_sequence_cleanups.len(), 3);
+        assert_eq!(driver.page_manager().unwrap().active_sequences(), 4);
+        for session_id in &siblings {
+            assert!(driver.page_slots.contains_key(session_id));
+            assert!(driver.sequence_states.contains_key(session_id));
+        }
+        assert_eq!(
+            driver
+                .executor()
+                .runner()
+                .topology_mutation_attempts_while_packed,
+            0
+        );
+        assert_eq!(driver.executor().runner().released_sequence_states, 0);
+        assert!(driver.executor().runner().released_kv_pages.is_empty());
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                ..
+            }
+        ));
+        assert!(driver.resident_transactions.is_empty());
+        assert_eq!(driver.pending_sequence_cleanups.len(), 3);
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Decode,
+                ..
+            }
+        ));
+        assert!(driver.pending_sequence_cleanups.is_empty());
+        assert!(driver.pending_kv_retirements.is_empty());
+        assert_eq!(driver.page_manager().unwrap().active_sequences(), 1);
+        for session_id in &siblings {
+            assert!(!driver.page_slots.contains_key(session_id));
+            assert!(!driver.sequence_states.contains_key(session_id));
+        }
+        assert_eq!(driver.executor().runner().released_sequence_states, 3);
+        assert_eq!(driver.executor().runner().released_kv_pages, sibling_pages);
+        assert_eq!(
+            driver
+                .executor()
+                .runner()
+                .topology_mutation_attempts_while_packed,
+            0
+        );
+    }
+
+    #[test]
+    fn target_only_concurrent_completion_defers_cleanup_until_all_transactions_quiesce() {
+        let runner = MockTopKRunner::new(Vec::new())
+            .with_committed_resumable_batch(2, vec![TokenLogit::new(7, 1.0)])
+            .with_committed_resumable_batch(1, vec![TokenLogit::new(8, 2.0)])
+            .with_packed_topology_guard();
+        let mut driver = concurrent_transaction_driver(runner);
+        for id in [1, 2] {
+            let mut submitted = request(id, &[id as u32], 0, Vec::new());
+            submitted.session_id = Some(SessionId(id));
+            driver.submit(submitted);
+        }
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(ref pending) if pending.len() == 2
+        ));
+        assert_eq!(driver.resident_transactions.len(), 2);
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                finished: 1,
+                ..
+            }
+        ));
+        assert_eq!(driver.resident_transactions.len(), 1);
+        assert_eq!(driver.pending_kv_retirements.len(), 1);
+        assert_eq!(driver.pending_sequence_cleanups.len(), 1);
+        assert_eq!(driver.page_manager().unwrap().active_sequences(), 2);
+        assert_eq!(driver.executor().runner().released_sequence_states, 0);
+        assert!(driver.executor().runner().released_kv_pages.is_empty());
+        assert_eq!(
+            driver
+                .executor()
+                .runner()
+                .topology_mutation_attempts_while_packed,
+            0
+        );
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                finished: 1,
+                ..
+            }
+        ));
+        assert!(driver.resident_transactions.is_empty());
+        assert_eq!(driver.pending_sequence_cleanups.len(), 1);
+        assert_eq!(driver.executor().runner().released_sequence_states, 1);
+
+        assert_eq!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Idle
+        );
+        assert!(driver.pending_kv_retirements.is_empty());
+        assert!(driver.pending_sequence_cleanups.is_empty());
+        assert!(driver.sequence_states.is_empty());
+        assert!(driver.page_slots.is_empty());
+        assert_eq!(driver.page_manager().unwrap().active_sequences(), 0);
+        assert_eq!(driver.executor().runner().released_sequence_states, 2);
+        assert_eq!(
+            driver
+                .executor()
+                .runner()
+                .topology_mutation_attempts_while_packed,
+            0
+        );
+    }
+
+    #[test]
+    fn cancelling_one_waiting_transaction_does_not_disturb_the_other() {
+        let runner = MockTopKRunner::new(Vec::new())
+            .with_committed_resumable_batch(2, vec![TokenLogit::new(7, 1.0)])
+            .with_committed_resumable_batch(2, vec![TokenLogit::new(8, 2.0)])
+            .with_packed_topology_guard();
+        let mut driver = concurrent_transaction_driver(runner);
+        for id in [1, 2] {
+            let mut submitted = request(id, &[id as u32], 2, Vec::new());
+            submitted.session_id = Some(SessionId(id));
+            driver.submit(submitted);
+        }
+        assert!(matches!(
+            driver.step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded()).unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(progress) if progress.len() == 2
+        ));
+        let transaction_b = driver.session_owner[&SessionId(2)];
+
+        assert_eq!(
+            driver.cancel_request(RequestId(1)).unwrap(),
+            CancelRequestResult::Active {
+                request_id: RequestId(1),
+                session_id: SessionId(1),
+            }
+        );
+        assert_eq!(driver.resident_transactions.len(), 1);
+        assert!(driver.resident_transactions.contains_key(&transaction_b));
+        assert_eq!(driver.executor().runner().cancelled_continuations.len(), 1);
+        assert_eq!(driver.executor().runner().rolled_back_batches, 1);
+        assert_eq!(driver.executor().runner().committed_batches, 0);
+        assert!(!driver.session_owner.contains_key(&SessionId(1)));
+        assert_eq!(driver.session_owner[&SessionId(2)], transaction_b);
+        assert_eq!(driver.pending_kv_retirements.len(), 1);
+        assert!(driver.pending_sequence_cleanups.contains_key(&SessionId(1)));
+        assert!(driver.sequence_states.contains_key(&SessionId(1)));
+        assert_eq!(driver.page_manager().unwrap().active_sequences(), 2);
+        assert_eq!(
+            driver
+                .executor()
+                .runner()
+                .topology_mutation_attempts_while_packed,
+            0
+        );
+        assert_eq!(driver.executor().runner().released_sequence_states, 0);
+        assert!(driver.executor().runner().released_kv_pages.is_empty());
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(_)
+        ));
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                ..
+            }
+        ));
+        assert!(driver.resident_transactions.is_empty());
+        assert_eq!(driver.executor().runner().rolled_back_batches, 1);
+        assert_eq!(driver.executor().runner().committed_batches, 1);
+        assert!(driver.pending_sequence_cleanups.contains_key(&SessionId(1)));
+
+        let _ = driver
+            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+            .unwrap();
+        assert!(driver.pending_kv_retirements.is_empty());
+        assert!(!driver.pending_sequence_cleanups.contains_key(&SessionId(1)));
+        assert!(!driver.sequence_states.contains_key(&SessionId(1)));
+        assert!(!driver.page_slots.contains_key(&SessionId(1)));
+        assert_eq!(
+            driver
+                .executor()
+                .runner()
+                .topology_mutation_attempts_while_packed,
+            0
+        );
+    }
+
+    #[test]
+    fn still_active_cancellation_keeps_ownership_while_another_transaction_commits() {
+        let runner = MockTopKRunner::new(vec![top(9)])
+            .with_resumable_wait_scripts([1, 1])
+            .with_resumable_cancel_still_active(1);
+        let mut driver = concurrent_transaction_driver(runner);
+        for id in [1, 2] {
+            let mut submitted = request(id, &[id as u32], 2, Vec::new());
+            submitted.session_id = Some(SessionId(id));
+            driver.submit(submitted);
+        }
+        driver
+            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+            .unwrap();
+        let transaction_a = driver.session_owner[&SessionId(1)];
+        let transaction_b = driver.session_owner[&SessionId(2)];
+
+        let error = driver.cancel_request(RequestId(1)).unwrap_err();
+        assert!(error.to_string().contains("did not confirm quiescence"));
+        assert_eq!(
+            driver.resident_transactions[&transaction_a].cancelling,
+            Some(RequestId(1))
+        );
+        assert!(driver.resident_transactions.contains_key(&transaction_b));
+        assert_eq!(driver.executor().runner().rolled_back_batches, 0);
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                ..
+            }
+        ));
+        assert!(driver.resident_transactions.contains_key(&transaction_a));
+        assert!(!driver.resident_transactions.contains_key(&transaction_b));
+        assert_eq!(driver.executor().runner().committed_batches, 1);
+        assert_eq!(driver.executor().runner().rolled_back_batches, 0);
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Cancel,
+                ..
+            }
+        ));
+        assert!(!driver.resident_transactions.contains_key(&transaction_a));
+        assert_eq!(driver.executor().runner().committed_batches, 1);
+        assert_eq!(driver.executor().runner().rolled_back_batches, 1);
+        assert_eq!(driver.executor().runner().cancelled_continuations.len(), 1);
+        assert!(driver.scheduler().active_sequence(SessionId(1)).is_none());
+        assert!(driver.scheduler().active_sequence(SessionId(2)).is_some());
+    }
+
+    #[test]
+    fn ordinary_pending_batch_blocks_session_topology_mutation_and_runner_extraction() {
+        let runner = MockTopKRunner::new(Vec::new())
+            .with_committed_resumable_batch(1, vec![TokenLogit::new(7, 1.0)]);
+        let mut driver = ResidentTopKDriver::with_configs(
+            runner,
+            FixedSequenceSlotPool::new(2),
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 8,
+                max_active_sequences: 1,
+                max_decode_batch: 1,
+                allow_mixed_batches: false,
+                ..Default::default()
+            },
+            NonZeroU32::new(1).unwrap(),
+            ResidentTopKDriverConfig::default(),
+        )
+        .with_page_manager(KvPageManager::new(Box::new(DriverTestKvSchema), 16));
+        driver.retain_session(SessionId(1)).unwrap();
+        let mut submitted = request(1, &[1], 2, Vec::new());
+        submitted.session_id = Some(SessionId(1));
+        driver.submit(submitted);
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(_)
+        ));
+
+        let release = driver.release_session(SessionId(1)).unwrap_err();
+        assert!(
+            release
+                .to_string()
+                .contains("execution transactions are live")
+        );
+        assert_eq!(driver.retained_session_position(SessionId(1)), Some(0));
+        let preempt = driver.preempt_session(SessionId(1)).unwrap_err();
+        assert!(
+            preempt
+                .to_string()
+                .contains("execution transactions are live")
+        );
+        let mut fork_target = request(2, &[2], 1, Vec::new());
+        fork_target.session_id = Some(SessionId(2));
+        let fork = driver
+            .fork_session_exact(SessionId(1), fork_target, 0)
+            .unwrap_err();
+        assert!(fork.to_string().contains("execution transactions are live"));
+        assert_eq!(driver.slot_pool().active_count(), 1);
+        assert_eq!(driver.page_manager().unwrap().active_sequences(), 1);
+
+        let Err(failure) = driver.try_into_runner() else {
+            panic!("runner extraction must reject a suspended resident batch");
+        };
+        let (error, mut driver) = *failure;
+        assert!(error.to_string().contains("live execution transactions"));
+        assert!(!driver.resident_transactions.is_empty());
+        driver.cancel_request(RequestId(1)).unwrap();
+        assert!(driver.resident_transactions.is_empty());
     }
 
     #[test]
@@ -3075,7 +6244,7 @@ mod tests {
         driver.submit(request(1, &[1, 2], 2, Vec::new()));
         let mut events = Vec::new();
         let stats = driver
-            .run_until_blocked(|event| {
+            .drive_ready_test_work(|event| {
                 events.push(event.clone());
                 Ok(())
             })
@@ -3118,7 +6287,7 @@ mod tests {
         let mut first = request(10, &[1], 1, Vec::new());
         first.session_id = Some(session_id);
         driver.submit(first);
-        driver.run_until_blocked(|_| Ok(())).unwrap();
+        driver.drive_ready_test_work(|_| Ok(())).unwrap();
         assert_eq!(driver.retained_session_position(session_id), Some(2));
         let _ = driver.drain_finished();
 
@@ -3127,7 +6296,7 @@ mod tests {
         driver.submit(second);
         let mut events = Vec::new();
         driver
-            .run_until_blocked(|event| {
+            .drive_ready_test_work(|event| {
                 events.push(event.token);
                 Ok(())
             })
@@ -3151,7 +6320,7 @@ mod tests {
         driver.submit(request(2, &[9], 8, vec!["ab".into()]));
         let mut text = String::new();
         driver
-            .run_until_blocked(|event| {
+            .drive_ready_test_work(|event| {
                 text.push_str(&event.text);
                 Ok(())
             })
@@ -3167,7 +6336,7 @@ mod tests {
     }
 
     #[test]
-    fn driver_finishes_on_eos_without_emitting_token() {
+    fn driver_finishes_on_eos_without_appending_or_emitting_candidate() {
         let runner = MockTopKRunner::new(vec![top(2)]).with_eos(2);
         let mut driver = ResidentTopKDriver::with_configs(
             runner,
@@ -3179,19 +6348,16 @@ mod tests {
         driver.submit(request(3, &[1], 4, Vec::new()));
         let mut events = Vec::new();
         driver
-            .run_until_blocked(|event| {
+            .drive_ready_test_work(|event| {
                 events.push(event.clone());
                 Ok(())
             })
             .unwrap();
 
         assert!(events.is_empty());
-        assert!(
-            driver.executor().runner().fed.is_empty(),
-            "EOS must be applied to the explicit session state, not the runner default"
-        );
+        assert!(driver.executor().runner().fed.is_empty());
         let finished = driver.drain_finished();
-        assert_eq!(finished[0].position, 2);
+        assert_eq!(finished[0].position, 1);
         assert_eq!(finished[0].finish_reason, Some(SequenceFinishReason::Eos));
         assert_eq!(finished[0].tokens, vec![1]);
     }
@@ -3221,7 +6387,7 @@ mod tests {
 
         let mut events = Vec::new();
         driver
-            .run_until_blocked(|event| {
+            .drive_ready_test_work(|event| {
                 events.push((event.request_id, event.token));
                 Ok(())
             })
@@ -3249,7 +6415,7 @@ mod tests {
     fn final_decode_skips_next_logits() {
         let mut driver = driver_with_outputs(vec![top(b'a' as u32)]);
         driver.submit(request(4, &[1], 1, Vec::new()));
-        driver.run_until_blocked(|_| Ok(())).unwrap();
+        driver.drive_ready_test_work(|_| Ok(())).unwrap();
 
         let finished = driver.drain_finished();
         assert_eq!(finished.len(), 1);
@@ -3264,7 +6430,7 @@ mod tests {
     fn max_new_zero_finishes_after_prefill() {
         let mut driver = driver_with_outputs(vec![top(b'a' as u32)]);
         driver.submit(request(5, &[1], 0, Vec::new()));
-        driver.run_until_blocked(|_| Ok(())).unwrap();
+        driver.drive_ready_test_work(|_| Ok(())).unwrap();
 
         let finished = driver.drain_finished();
         assert_eq!(finished.len(), 1);
@@ -3279,12 +6445,12 @@ mod tests {
     fn submit_submits_fresh_sessions_and_finishes() {
         let mut driver = driver_with_outputs(vec![top(b'a' as u32), top(b'b' as u32)]);
         driver.submit(request(7, &[1], 1, Vec::new()));
-        driver.run_until_blocked(|_| Ok(())).unwrap();
+        driver.drive_ready_test_work(|_| Ok(())).unwrap();
         let first = driver.drain_finished();
         assert_eq!(first[0].position, 2);
 
         driver.submit(request(8, &[2], 1, Vec::new()));
-        driver.run_until_blocked(|_| Ok(())).unwrap();
+        driver.drive_ready_test_work(|_| Ok(())).unwrap();
         let second = driver.drain_finished();
         assert_eq!(second[0].prompt_tokens_for_range(0..1).unwrap(), &[2]);
         assert_eq!(second[0].position, 2);
@@ -3294,14 +6460,24 @@ mod tests {
     fn into_runner_allows_clean_driver_rebuild_after_warmup() {
         let mut driver = driver_with_outputs(vec![top(b'w' as u32), top(b'm' as u32)]);
         driver.submit(request(9, &[1], 1, Vec::new()));
-        driver.run_until_blocked(|_| Ok(())).unwrap();
+        driver.drive_ready_test_work(|_| Ok(())).unwrap();
         let warmup = driver.drain_finished();
         assert_eq!(warmup[0].position, 2);
 
-        let runner = driver.into_runner().unwrap();
+        let runner = driver
+            .try_into_runner()
+            .map_err(|failure| failure.0)
+            .unwrap();
+        assert!(!runner.expert_io_resource_control_installed);
         let mut driver = driver_from_runner(runner);
+        assert!(
+            driver
+                .executor()
+                .runner()
+                .expert_io_resource_control_installed
+        );
         driver.submit(request(10, &[2], 1, Vec::new()));
-        driver.run_until_blocked(|_| Ok(())).unwrap();
+        driver.drive_ready_test_work(|_| Ok(())).unwrap();
         let measured = driver.drain_finished();
 
         assert_eq!(measured[0].prompt_tokens_for_range(0..1).unwrap(), &[2]);
@@ -3314,9 +6490,13 @@ mod tests {
         let mut driver = driver_from_runner(runner);
         driver.submit(request(11, &[1, 2], 1, Vec::new()));
 
-        let error = driver.step(&mut |_| Ok(())).unwrap_err();
+        let error = driver
+            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+            .unwrap_err();
         assert!(format!("{error}").contains("simulated failure"));
-        assert!(driver.executor().is_poisoned());
+        assert!(!driver.executor().is_poisoned());
+        assert!(driver.resident_transactions.is_empty());
+        assert!(driver.session_owner.is_empty());
         assert_eq!(driver.scheduler().active_len(), 0);
         assert_eq!(driver.scheduler().failed_len(), 1);
         assert_eq!(driver.slot_pool().active_count(), 0);
@@ -3327,11 +6507,17 @@ mod tests {
         assert_eq!(failed[0].position, 0, "runtime metadata was not committed");
         assert_eq!(failed[0].kv_handle, None);
 
+        driver.executor_mut().runner_mut().fail_next_mutation = false;
         driver.submit(request(12, &[3], 1, Vec::new()));
-        let error = driver.step(&mut |_| Ok(())).unwrap_err();
-        assert!(format!("{error}").contains("native executor is poisoned"));
-        // The second request was never admitted because the executor is poisoned.
-        assert_eq!(driver.scheduler().waiting_len(), 1);
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -3340,7 +6526,9 @@ mod tests {
         driver.submit(request(50, &[1], 2, Vec::new()));
         driver.submit(request(51, &[2], 2, Vec::new()));
 
-        let step = driver.step(&mut |_| Ok(())).unwrap();
+        let step = driver
+            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+            .unwrap();
         assert!(matches!(step, ResidentDriverStep::Executed { rows: 2, .. }));
         assert_eq!(driver.sequence_states.len(), 2);
         assert_eq!(driver.sequence_states[&SessionId(1)].position, 1);
@@ -3354,7 +6542,9 @@ mod tests {
         driver.submit(request(52, &[1], 2, Vec::new()));
         driver.submit(request(53, &[2], 2, Vec::new()));
 
-        let error = driver.step(&mut |_| Ok(())).unwrap_err();
+        let error = driver
+            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+            .unwrap_err();
         assert!(format!("{error}").contains("simulated failure"));
         assert_eq!(driver.scheduler().failed_len(), 2);
         assert!(driver.sequence_states.is_empty());
@@ -3370,7 +6560,9 @@ mod tests {
         // Submit at the overflow position to trigger a lowering failure.
         driver.submit_at_position(request(13, &[1], 1, Vec::new()), u32::MAX as usize + 1);
 
-        let error = driver.step(&mut |_| Ok(())).unwrap_err();
+        let error = driver
+            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+            .unwrap_err();
         assert!(format!("{error}").contains("neutral u32 ABI"));
         assert!(!driver.executor().is_poisoned());
         assert_eq!(driver.scheduler().active_len(), 0);
@@ -3380,19 +6572,36 @@ mod tests {
     }
 
     #[test]
-    fn callback_failure_poison_fails_committed_sequence_and_blocks_runner_extraction() {
+    fn callback_failure_retains_committed_event_without_poisoning_execution() {
         let mut driver = driver_with_outputs(vec![top(b'a' as u32), top(b'b' as u32)]);
         driver.submit(request(14, &[1], 3, Vec::new()));
 
         let error = driver
-            .run_until_blocked(|_| Err(Error::Internal("simulated callback failure".into())))
+            .drive_ready_test_work(|_| Err(Error::Internal("simulated callback failure".into())))
             .unwrap_err();
         assert!(format!("{error}").contains("callback failure"));
-        assert!(driver.executor().is_poisoned());
-        assert_eq!(driver.scheduler().active_len(), 0);
-        assert_eq!(driver.scheduler().failed_len(), 1);
-        assert_eq!(driver.slot_pool().active_count(), 0);
-        assert!(driver.into_runner().is_err());
+        assert!(!driver.executor().is_poisoned());
+        assert!(!driver.executor().has_transactions());
+        assert_eq!(driver.scheduler().active_len(), 1);
+        assert_eq!(driver.scheduler().failed_len(), 0);
+        assert_eq!(driver.slot_pool().active_count(), 1);
+        assert_eq!(driver.committed_token_outbox.len(), 1);
+
+        let mut delivered = Vec::new();
+        driver
+            .flush_committed_token_outbox(&mut |event| {
+                delivered.push(event.clone());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].token, b'a' as u32);
+        assert!(driver.committed_token_outbox.is_empty());
+        assert_eq!(driver.stats().emitted_tokens, 1);
+
+        driver.cancel_request(RequestId(14)).unwrap();
+        driver.drain_cancelled();
+        assert!(driver.try_into_runner().is_ok());
     }
 
     #[test]
@@ -3413,7 +6622,9 @@ mod tests {
         );
         driver.submit(request(13, &[1, 2], 1, Vec::new()));
 
-        let error = driver.step(&mut |_| Ok(())).unwrap_err();
+        let error = driver
+            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+            .unwrap_err();
         assert!(format!("{error}").contains("allows 5 active sequences"));
         assert_eq!(driver.scheduler().waiting_len(), 1);
         assert_eq!(driver.scheduler().active_len(), 0);
@@ -3451,7 +6662,9 @@ mod tests {
         let mut driver = driver_with_outputs(vec![top(b'a' as u32), top(b'b' as u32)])
             .with_page_manager(manager);
         driver.submit(request(19, &[1, 2, 3], 2, Vec::new()));
-        driver.step(&mut |_| Ok(())).unwrap();
+        driver
+            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+            .unwrap();
 
         assert_eq!(driver.scheduler().active_len(), 1);
         assert_eq!(driver.slot_pool().active_count(), 1);
@@ -3484,7 +6697,7 @@ mod tests {
         driver.submit(request(20, &[9], 1, Vec::new()));
         let mut events = Vec::new();
         driver
-            .run_until_blocked(|event| {
+            .drive_ready_test_work(|event| {
                 events.push(event.token);
                 Ok(())
             })
@@ -3503,7 +6716,7 @@ mod tests {
         let manager = KvPageManager::new(Box::new(DriverTestKvSchema), 16);
         let mut driver = driver_with_outputs(vec![top(b'a' as u32)]).with_page_manager(manager);
         driver.submit(request(20, &[1, 2, 3], 1, Vec::new()));
-        driver.run_until_blocked(|_| Ok(())).unwrap();
+        driver.drive_ready_test_work(|_| Ok(())).unwrap();
         let finished = driver.drain_finished();
         assert_eq!(finished.len(), 1);
         let manager = driver.page_manager().unwrap();
@@ -3518,7 +6731,9 @@ mod tests {
             .with_page_manager(manager);
         driver.submit(request(21, &[1, 2], 2, Vec::new()));
 
-        let first = driver.step(&mut |_| Ok(())).unwrap();
+        let first = driver
+            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+            .unwrap();
         assert!(matches!(first, ResidentDriverStep::Executed { .. }));
         let session_id = SessionId(1);
         let before = driver
@@ -3546,7 +6761,7 @@ mod tests {
 
         let mut emitted = Vec::new();
         driver
-            .run_until_blocked(|event| {
+            .drive_ready_test_work(|event| {
                 emitted.push(event.token);
                 Ok(())
             })
@@ -3580,7 +6795,9 @@ mod tests {
     fn exact_fork_executes_only_suffix_and_clears_source_candidate() {
         let mut driver = fork_driver();
         driver.submit(request(30, &[1, 2, 3], 4, Vec::new()));
-        driver.step(&mut |_| Ok(())).unwrap();
+        driver
+            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+            .unwrap();
         let source = SessionId(1);
         assert_eq!(
             driver
@@ -3624,7 +6841,9 @@ mod tests {
             source_page
         );
 
-        driver.step(&mut |_| Ok(())).unwrap();
+        driver
+            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+            .unwrap();
         let target_model = driver.sequence_states.get(&target).unwrap();
         assert_eq!(target_model.prefills, vec![vec![9, 10]]);
         assert_eq!(target_model.position, 5);
@@ -3653,7 +6872,9 @@ mod tests {
     fn exact_fork_prepare_failure_leaves_source_and_target_unchanged() {
         let mut driver = fork_driver();
         driver.submit(request(32, &[1, 2, 3], 4, Vec::new()));
-        driver.step(&mut |_| Ok(())).unwrap();
+        driver
+            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+            .unwrap();
         let source = SessionId(1);
         let source_candidate = driver
             .scheduler()
@@ -3707,7 +6928,9 @@ mod tests {
     fn exact_fork_model_prepare_failure_rolls_back_all_provisional_state() {
         let mut driver = fork_driver();
         driver.submit(request(34, &[1, 2, 3], 4, Vec::new()));
-        driver.step(&mut |_| Ok(())).unwrap();
+        driver
+            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+            .unwrap();
         let source = SessionId(1);
         driver
             .sequence_states
@@ -3758,7 +6981,9 @@ mod tests {
             ResidentTopKDriverConfig::default(),
         );
         driver.submit(request(6, &[1], 1, Vec::new()));
-        let step = driver.step(&mut |_| Ok(())).unwrap();
+        let step = driver
+            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+            .unwrap();
         assert_eq!(step, ResidentDriverStep::Blocked);
         assert_eq!(driver.scheduler().waiting_len(), 1);
     }

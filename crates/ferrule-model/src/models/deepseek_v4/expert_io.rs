@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use ferrule_common::expert_io::{ExpertIoEstimate, ExpertIoPhase};
+use ferrule_common::expert_io::{
+    ExpertIoEstimate, ExpertIoPhase, ExpertIoResourceControl, ExpertIoResourceLimits,
+};
 use ferrule_common::{Error, Result};
 
 use crate::moe::prediction::{ExpertAccessPhase, ExpertPredictContext, ExpertResidency};
@@ -212,6 +214,21 @@ impl ExpertIoModelRunner for DeepSeekV4Runner {
     type ExpertIoBatchState = DeepSeekV4ExpertIoBatchState;
     type ExpertIoAdmission = DeepSeekV4ExpertIoAdmission;
 
+    fn expert_io_resource_limits(&self) -> Result<ExpertIoResourceLimits> {
+        self.physical_expert_io_resource_limits()
+    }
+
+    fn install_expert_io_resource_control(
+        &mut self,
+        control: Box<dyn ExpertIoResourceControl>,
+    ) -> Result<()> {
+        self.install_physical_expert_io_resource_control(control)
+    }
+
+    fn uninstall_expert_io_resource_control(&mut self) -> Result<()> {
+        self.uninstall_physical_expert_io_resource_control()
+    }
+
     fn begin_expert_io_batch(&self) -> Self::ExpertIoBatchState {
         DeepSeekV4ExpertIoBatchState::new(self.expert_io_snapshot())
     }
@@ -260,21 +277,35 @@ fn account_unknown_demand(
 
 fn account_residency(estimate: &mut ExpertIoEstimate, residency: ExpertResidency, bytes: u64) {
     match residency {
-        ExpertResidency::GpuReady => {}
+        ExpertResidency::GpuReady => {
+            estimate.resident_union_bytes = estimate.resident_union_bytes.saturating_add(bytes);
+        }
         ExpertResidency::Materializing => {
             estimate.inflight_reusable_bytes =
                 estimate.inflight_reusable_bytes.saturating_add(bytes);
         }
-        ExpertResidency::HostStaged => {
-            estimate.incremental_unique_bytes =
-                estimate.incremental_unique_bytes.saturating_add(bytes);
-        }
+        ExpertResidency::HostStaged => account_host_to_device(estimate, bytes),
         ExpertResidency::Cold => {
-            estimate.incremental_unique_bytes =
-                estimate.incremental_unique_bytes.saturating_add(bytes);
+            account_host_to_device(estimate, bytes);
             estimate.predicted_cold_bytes = estimate.predicted_cold_bytes.saturating_add(bytes);
+            estimate.storage_read_bytes = estimate.storage_read_bytes.saturating_add(bytes);
+            estimate.read_ops = estimate.read_ops.saturating_add(1);
+            estimate.inflight_reads = estimate.inflight_reads.saturating_add(1);
+            // The snapshot does not expose the reader's pageable landing-buffer
+            // footprint. Conservatively reserve one source-sized host staging
+            // buffer for every cold storage read.
+            estimate.pageable_host_bytes = estimate.pageable_host_bytes.saturating_add(bytes);
         }
     }
+}
+
+fn account_host_to_device(estimate: &mut ExpertIoEstimate, bytes: u64) {
+    estimate.incremental_unique_bytes = estimate.incremental_unique_bytes.saturating_add(bytes);
+    estimate.pinned_slab_bytes = estimate.pinned_slab_bytes.saturating_add(bytes);
+    estimate.pinned_host_bytes = estimate.pinned_host_bytes.saturating_add(bytes);
+    estimate.h2d_bytes = estimate.h2d_bytes.saturating_add(bytes);
+    estimate.upload_slots = estimate.upload_slots.saturating_add(1);
+    estimate.device_install_bytes = estimate.device_install_bytes.saturating_add(bytes);
 }
 
 #[cfg(test)]
@@ -282,19 +313,69 @@ mod tests {
     use super::*;
 
     #[test]
-    fn residency_accounting_uses_only_truthful_transfer_classes() {
+    fn gpu_ready_accounts_only_resident_union() {
         let mut estimate = ExpertIoEstimate::default();
         account_residency(&mut estimate, ExpertResidency::GpuReady, 10);
-        account_residency(&mut estimate, ExpertResidency::Materializing, 20);
-        account_residency(&mut estimate, ExpertResidency::HostStaged, 30);
-        account_residency(&mut estimate, ExpertResidency::Cold, 40);
 
-        assert_eq!(estimate.incremental_unique_bytes, 70);
-        assert_eq!(estimate.predicted_cold_bytes, 40);
+        assert_eq!(estimate.resident_union_bytes, 10);
+        assert_eq!(estimate.incremental_unique_bytes, 0);
+        assert_eq!(estimate.storage_read_bytes, 0);
+        assert_eq!(estimate.pinned_host_bytes, 0);
+        assert_eq!(estimate.h2d_bytes, 0);
+        assert_eq!(estimate.device_install_bytes, 0);
+        assert_eq!(estimate.read_ops, 0);
+        assert_eq!(estimate.upload_slots, 0);
+    }
+
+    #[test]
+    fn materializing_accounts_only_reusable_inflight_bytes() {
+        let mut estimate = ExpertIoEstimate::default();
+        account_residency(&mut estimate, ExpertResidency::Materializing, 20);
+
         assert_eq!(estimate.inflight_reusable_bytes, 20);
         assert_eq!(estimate.resident_union_bytes, 0);
-        assert_eq!(estimate.inflight_reads, 0);
+        assert_eq!(estimate.incremental_unique_bytes, 0);
+        assert_eq!(estimate.storage_read_bytes, 0);
+        assert_eq!(estimate.pinned_host_bytes, 0);
+        assert_eq!(estimate.h2d_bytes, 0);
+        assert_eq!(estimate.device_install_bytes, 0);
+        assert_eq!(estimate.read_ops, 0);
         assert_eq!(estimate.upload_slots, 0);
+    }
+
+    #[test]
+    fn host_staged_accounts_install_without_storage_read() {
+        let mut estimate = ExpertIoEstimate::default();
+        account_residency(&mut estimate, ExpertResidency::HostStaged, 30);
+
+        assert_eq!(estimate.incremental_unique_bytes, 30);
+        assert_eq!(estimate.pinned_slab_bytes, 30);
+        assert_eq!(estimate.pinned_host_bytes, 30);
+        assert_eq!(estimate.h2d_bytes, 30);
+        assert_eq!(estimate.device_install_bytes, 30);
+        assert_eq!(estimate.upload_slots, 1);
+        assert_eq!(estimate.storage_read_bytes, 0);
+        assert_eq!(estimate.pageable_host_bytes, 0);
+        assert_eq!(estimate.read_ops, 0);
+        assert_eq!(estimate.inflight_reads, 0);
+    }
+
+    #[test]
+    fn cold_accounts_storage_host_upload_and_install() {
+        let mut estimate = ExpertIoEstimate::default();
+        account_residency(&mut estimate, ExpertResidency::Cold, 40);
+
+        assert_eq!(estimate.incremental_unique_bytes, 40);
+        assert_eq!(estimate.predicted_cold_bytes, 40);
+        assert_eq!(estimate.storage_read_bytes, 40);
+        assert_eq!(estimate.pageable_host_bytes, 40);
+        assert_eq!(estimate.pinned_slab_bytes, 40);
+        assert_eq!(estimate.pinned_host_bytes, 40);
+        assert_eq!(estimate.h2d_bytes, 40);
+        assert_eq!(estimate.device_install_bytes, 40);
+        assert_eq!(estimate.read_ops, 1);
+        assert_eq!(estimate.inflight_reads, 1);
+        assert_eq!(estimate.upload_slots, 1);
     }
 
     #[test]
@@ -312,6 +393,13 @@ mod tests {
             .unwrap();
         assert_eq!(estimate.incremental_unique_bytes, 70);
         assert_eq!(estimate.predicted_cold_bytes, 70);
+        assert_eq!(estimate.storage_read_bytes, 70);
+        assert_eq!(estimate.pageable_host_bytes, 70);
+        assert_eq!(estimate.pinned_host_bytes, 70);
+        assert_eq!(estimate.h2d_bytes, 70);
+        assert_eq!(estimate.device_install_bytes, 70);
+        assert_eq!(estimate.read_ops, 2);
+        assert_eq!(estimate.upload_slots, 2);
         assert_eq!(estimate.confidence, 0.0);
 
         batch.admit(admission);
