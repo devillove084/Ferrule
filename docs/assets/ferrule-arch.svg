@@ -59,7 +59,7 @@
     <linearGradient id="ld-err" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#991B1B"/><stop offset="1" stop-color="#7F1D1D"/></linearGradient>
   </defs>
 
-  <rect width="960" height="800" fill="url(#bg)"/>
+  <rect width="960" height="800" fill="#020617"/>
 
   <!-- Ownership boundary -->
   <g>
