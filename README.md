@@ -60,34 +60,15 @@ for the difference between targets, roofline models, and measured results.
 
 ## Architecture
 
-```text
-OpenAI HTTP/SSE or CLI
-          │
-          ▼
-Continuous batching and sequence ownership
-          │
-          ▼
-Execution transactions ───── Paged KV transactions
-          │                           │
-          ├──── exact dependencies ───┤
-          ▼                           ▼
-Runtime LoadRegistry          Arena/KV hard credits
-          │
-          ├── fair scheduling and targeted wake
-          ├── read → pinned → upload → CUDA event → publish
-          └── cancel/failure/stale/shutdown retirement
-          │
-          ▼
-Model runner and semantic kernel plan
-          │
-          ▼
-CUDA/CUTLASS kernel provider
-```
+<p align="center">
+  <img src="docs/assets/ferrule-arch.svg" alt="Ferrule target architecture" width="100%" />
+</p>
 
-The runtime owns logical scheduling and completion validation. Model code owns exact artifact,
-router, and residency semantics. Providers own hardware-specific allocation and launch details.
-No layer may publish readiness without the identities and resource custody required by the layer
-above it.
+The runtime owns scheduling, transactions, global expert loading, hard credits, waiter indices,
+and retirement. Model code owns exact artifact, router, and residency semantics behind a
+model-neutral execution boundary. Providers own hardware-specific allocation and launch details
+solely through versioned POD command/completion. No layer may publish readiness without the
+identities and resource custody required by the layer above it.
 
 For the full ownership model, see [Architecture](docs/ARCHITECTURE.md). Provider contracts are
 specified in [Kernel Provider ABI](docs/KERNEL_PROVIDER_ABI.md) and [CUTLASS integration](docs/CUTLASS.md).
