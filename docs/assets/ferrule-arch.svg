@@ -1,636 +1,372 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="860" viewBox="0 0 960 860" role="img" aria-labelledby="ferrule-arch-title" focusable="false">
-  <title id="ferrule-arch-title">Ferrule target architecture — Rust-owned exact MoE runtime with explicit ownership, load, credit, and provider boundaries</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="800" viewBox="0 0 960 800" role="img" aria-labelledby="ferrule-arch-title" focusable="false">
+  <title id="ferrule-arch-title">Ferrule target architecture — Rust-owned exact MoE runtime</title>
 
   <defs>
-    <!-- Background -->
-    <radialGradient id="bg" cx="480" cy="400" r="600" gradientUnits="userSpaceOnUse">
+    <radialGradient id="bg" cx="480" cy="400" r="580" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#0F172A"/>
       <stop offset="0.5" stop-color="#020617"/>
       <stop offset="1" stop-color="#000000"/>
     </radialGradient>
 
-    <!-- Accent gradient — cyan (serving / I/O) -->
-    <linearGradient id="accent-cyan" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#0891B2"/>
-      <stop offset="0.5" stop-color="#22D3EE"/>
-      <stop offset="1" stop-color="#0891B2"/>
+    <linearGradient id="a-cyan" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0891B2"/><stop offset="0.5" stop-color="#22D3EE"/><stop offset="1" stop-color="#0891B2"/>
+    </linearGradient>
+    <linearGradient id="a-blue" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#1D4ED8"/><stop offset="0.5" stop-color="#3B82F6"/><stop offset="1" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <linearGradient id="a-purple" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6D28D9"/><stop offset="0.5" stop-color="#8B5CF6"/><stop offset="1" stop-color="#6D28D9"/>
+    </linearGradient>
+    <linearGradient id="a-amber" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#B45309"/><stop offset="0.5" stop-color="#D97706"/><stop offset="1" stop-color="#B45309"/>
+    </linearGradient>
+    <linearGradient id="a-emerald" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#047857"/><stop offset="0.5" stop-color="#10B981"/><stop offset="1" stop-color="#047857"/>
     </linearGradient>
 
-    <!-- Accent gradient — blue (model / execution) -->
-    <linearGradient id="accent-blue" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#1D4ED8"/>
-      <stop offset="0.5" stop-color="#3B82F6"/>
-      <stop offset="1" stop-color="#1D4ED8"/>
-    </linearGradient>
-
-    <!-- Accent gradient — purple (transaction) -->
-    <linearGradient id="accent-purple" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#6D28D9"/>
-      <stop offset="0.5" stop-color="#8B5CF6"/>
-      <stop offset="1" stop-color="#6D28D9"/>
-    </linearGradient>
-
-    <!-- Accent gradient — amber (credits) -->
-    <linearGradient id="accent-amber" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#B45309"/>
-      <stop offset="0.5" stop-color="#D97706"/>
-      <stop offset="1" stop-color="#B45309"/>
-    </linearGradient>
-
-    <!-- Accent gradient — emerald (provider/retired) -->
-    <linearGradient id="accent-emerald" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#047857"/>
-      <stop offset="0.5" stop-color="#10B981"/>
-      <stop offset="1" stop-color="#047857"/>
-    </linearGradient>
-
-    <!-- Dark card fills -->
-    <linearGradient id="fill-dark" x1="0" y1="0" x2="0" y2="1">
+    <linearGradient id="fill-card" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#1E293B" stop-opacity="0.92"/>
       <stop offset="1" stop-color="#0F172A" stop-opacity="0.88"/>
     </linearGradient>
-
-    <linearGradient id="fill-deeper" x1="0" y1="0" x2="0" y2="1">
+    <linearGradient id="fill-deep" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#0C1421" stop-opacity="0.94"/>
       <stop offset="1" stop-color="#060910" stop-opacity="0.92"/>
     </linearGradient>
 
-    <!-- Shadow filter -->
     <filter id="shadow" x="-4%" y="-6%" width="108%" height="118%">
-      <feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#000" flood-opacity="0.55"/>
+      <feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#000" flood-opacity="0.5"/>
     </filter>
-
     <filter id="shadow-sm" x="-4%" y="-8%" width="108%" height="124%">
-      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#000" flood-opacity="0.45"/>
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#000" flood-opacity="0.4"/>
     </filter>
 
-    <!-- Glow filters -->
-    <filter id="glow-cyan" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="4" result="blur"/>
-      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-    </filter>
+    <marker id="ma-cyan"    markerWidth="7" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L7 3L0 6Z" fill="#22D3EE"/></marker>
+    <marker id="ma-blue"    markerWidth="7" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L7 3L0 6Z" fill="#3B82F6"/></marker>
+    <marker id="ma-purple"  markerWidth="7" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L7 3L0 6Z" fill="#8B5CF6"/></marker>
+    <marker id="ma-slate"   markerWidth="7" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L7 3L0 6Z" fill="#64748B"/></marker>
+    <marker id="ma-amber"   markerWidth="7" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L7 3L0 6Z" fill="#D97706"/></marker>
+    <marker id="ma-emerald" markerWidth="7" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L7 3L0 6Z" fill="#10B981"/></marker>
+    <marker id="ma-red"     markerWidth="7" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L7 3L0 6Z" fill="#DC2626"/></marker>
 
-    <filter id="glow-purple" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="3.5" result="blur"/>
-      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-    </filter>
+    <linearGradient id="st-n" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#334155"/><stop offset="1" stop-color="#1E293B"/></linearGradient>
+    <linearGradient id="st-r" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1D4ED8"/><stop offset="1" stop-color="#153586"/></linearGradient>
+    <linearGradient id="st-w" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7C3AED"/><stop offset="1" stop-color="#5B21B6"/></linearGradient>
+    <linearGradient id="st-c" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#047857"/><stop offset="1" stop-color="#065F46"/></linearGradient>
+    <linearGradient id="st-x" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#991B1B"/><stop offset="1" stop-color="#7F1D1D"/></linearGradient>
+    <linearGradient id="st-t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1E293B"/><stop offset="1" stop-color="#0F172A"/></linearGradient>
 
-    <filter id="glow-blue" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="3" result="blur"/>
-      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-    </filter>
-
-    <!-- Arrow markers -->
-    <marker id="arrow-cyan" markerWidth="7" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-      <path d="M0 0L7 3L0 6Z" fill="#22D3EE"/>
-    </marker>
-    <marker id="arrow-blue" markerWidth="7" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-      <path d="M0 0L7 3L0 6Z" fill="#3B82F6"/>
-    </marker>
-    <marker id="arrow-purple" markerWidth="7" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-      <path d="M0 0L7 3L0 6Z" fill="#8B5CF6"/>
-    </marker>
-    <marker id="arrow-slate" markerWidth="7" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-      <path d="M0 0L7 3L0 6Z" fill="#64748B"/>
-    </marker>
-    <marker id="arrow-amber" markerWidth="7" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-      <path d="M0 0L7 3L0 6Z" fill="#D97706"/>
-    </marker>
-    <marker id="arrow-emerald" markerWidth="7" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-      <path d="M0 0L7 3L0 6Z" fill="#10B981"/>
-    </marker>
-
-    <!-- Ownership dash pattern -->
-    <pattern id="own-dash" width="16" height="1" patternUnits="userSpaceOnUse">
-      <rect x="0" y="0" width="10" height="1" fill="#475569" fill-opacity="0.35"/>
-    </pattern>
-
-    <!-- Transaction state pill gradient -->
-    <linearGradient id="tx-admitted" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#334155"/>
-      <stop offset="1" stop-color="#1E293B"/>
-    </linearGradient>
-
-    <linearGradient id="tx-running" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1D4ED8"/>
-      <stop offset="1" stop-color="#153586"/>
-    </linearGradient>
-
-    <linearGradient id="tx-waiting" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#7C3AED"/>
-      <stop offset="1" stop-color="#5B21B6"/>
-    </linearGradient>
-
-    <linearGradient id="tx-commit" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#047857"/>
-      <stop offset="1" stop-color="#065F46"/>
-    </linearGradient>
-
-    <linearGradient id="tx-cancel" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#991B1B"/>
-      <stop offset="1" stop-color="#7F1D1D"/>
-    </linearGradient>
-
-    <linearGradient id="tx-retired" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1E293B"/>
-      <stop offset="1" stop-color="#0F172A"/>
-    </linearGradient>
-
-    <!-- LoadOp state pill gradient -->
-    <linearGradient id="load-resident" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#047857"/>
-      <stop offset="1" stop-color="#065F46"/>
-    </linearGradient>
-    <linearGradient id="load-stale" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#991B1B"/>
-      <stop offset="1" stop-color="#7F1D1D"/>
-    </linearGradient>
+    <linearGradient id="ld-ok" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#047857"/><stop offset="1" stop-color="#065F46"/></linearGradient>
+    <linearGradient id="ld-err" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#991B1B"/><stop offset="1" stop-color="#7F1D1D"/></linearGradient>
   </defs>
 
-  <!-- Background -->
-  <rect width="960" height="860" fill="url(#bg)"/>
+  <rect width="960" height="800" fill="url(#bg)"/>
 
-  <!-- Subtle structural grid -->
-  <g stroke="#1E293B" stroke-width="0.4" stroke-opacity="0.35">
-    <line x1="0" y1="140" x2="960" y2="140"/>
-    <line x1="0" y1="370" x2="960" y2="370"/>
-    <line x1="0" y1="620" x2="960" y2="620"/>
-    <line x1="160" y1="0" x2="160" y2="860"/>
-    <line x1="480" y1="0" x2="480" y2="860"/>
-    <line x1="800" y1="0" x2="800" y2="860"/>
+  <!-- Ownership boundary -->
+  <g>
+    <line x1="36" y1="370" x2="924" y2="370" stroke="#475569" stroke-width="1.2" stroke-dasharray="8 6" stroke-opacity="0.35"/>
+    <rect x="380" y="362" width="200" height="18" rx="6" fill="#020617" stroke="#475569" stroke-width="0.8" stroke-opacity="0.35"/>
+    <text x="480" y="375" text-anchor="middle" fill="#64748B" font-family="system-ui, sans-serif" font-size="9" font-weight="600">Rust-owned  ───  Provider-owned</text>
   </g>
 
-  <!-- ================================================================== -->
-  <!-- TOP ROW: Serving/API (spanning full width)                         -->
-  <!-- ================================================================== -->
+  <!-- ============================================================ -->
+  <!-- L1: SERVING                                                  -->
+  <!-- ============================================================ -->
   <g>
-    <rect x="40" y="18" width="880" height="48" rx="10" fill="url(#fill-dark)" stroke="url(#accent-cyan)" stroke-width="1.2" filter="url(#shadow)" stroke-opacity="0.45"/>
-
-    <!-- Layer label -->
-    <rect x="56" y="27" width="88" height="18" rx="9" fill="#164E63" fill-opacity="0.55"/>
-    <text x="100" y="40" text-anchor="middle" fill="#22D3EE" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">SERVING</text>
-
-    <text x="156" y="39" fill="#CBD5E1" font-family="system-ui, sans-serif" font-size="12.5" font-weight="600">OpenAI HTTP · SSE streaming · CLI · official vLLM benchmark</text>
-
-    <!-- Badges -->
-    <rect x="710" y="26" width="80" height="20" rx="5" fill="#1E293B" stroke="#475569" stroke-width="0.7" stroke-opacity="0.4"/>
-    <text x="750" y="40" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="9.5" font-weight="600">POST /v1</text>
-
-    <rect x="798" y="26" width="108" height="20" rx="5" fill="#1E293B" stroke="#22D3EE" stroke-width="0.7" stroke-opacity="0.4"/>
-    <text x="852" y="40" text-anchor="middle" fill="#22D3EE" font-family="Consolas, monospace" font-size="9.5" font-weight="600">HTTP/SSE stream</text>
+    <rect x="40" y="18" width="880" height="40" rx="9" fill="url(#fill-card)" stroke="url(#a-cyan)" stroke-width="1" filter="url(#shadow)" stroke-opacity="0.4"/>
+    <rect x="56" y="26" width="72" height="18" rx="9" fill="#164E63" fill-opacity="0.55"/>
+    <text x="92" y="39" text-anchor="middle" fill="#22D3EE" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">SERVING</text>
+    <text x="140" y="38" fill="#CBD5E1" font-family="system-ui, sans-serif" font-size="12.5" font-weight="600">OpenAI HTTP · SSE streaming · CLI · vLLM benchmark</text>
   </g>
 
-  <!-- Arrow: Serving → Transaction Owner -->
-  <line x1="480" y1="66" x2="480" y2="82" stroke="#22D3EE" stroke-width="1.6" marker-end="url(#arrow-cyan)" stroke-opacity="0.55"/>
+  <!-- Serving forks to left (tx owner) and right (expert loading) -->
+  <line x1="480" y1="58" x2="480" y2="72" stroke="#22D3EE" stroke-width="1.2" stroke-opacity="0.35"/>
+  <line x1="480" y1="68" x2="250" y2="84" stroke="#22D3EE" stroke-width="1.3" marker-end="url(#ma-cyan)" stroke-opacity="0.45"/>
+  <line x1="480" y1="68" x2="704" y2="84" stroke="#22D3EE" stroke-width="1.3" marker-end="url(#ma-cyan)" stroke-opacity="0.45"/>
 
-  <!-- ================================================================== -->
-  <!-- OWNERSHIP BOUNDARY LINE (Rust-owned | Provider-owned)              -->
-  <!-- ================================================================== -->
+  <!-- ============================================================ -->
+  <!-- LEFT: RUST TRANSACTION OWNER & SCHEDULER                      -->
+  <!-- ============================================================ -->
+  <text x="48" y="96" fill="#94A3B8" font-family="system-ui, sans-serif" font-size="10.5" font-weight="700" letter-spacing="1">RUST TRANSACTION OWNER &amp; SCHEDULER</text>
+
+  <!-- --- Transaction state machine --- -->
   <g>
-    <!-- Dashed boundary line across full width -->
-    <line x1="35" y1="364" x2="925" y2="364" stroke="#475569" stroke-width="1.2" stroke-dasharray="8 5" stroke-opacity="0.4"/>
+    <rect x="44" y="108" width="410" height="154" rx="10" fill="url(#fill-deep)" stroke="url(#a-purple)" stroke-width="1.2" filter="url(#shadow)" stroke-opacity="0.4"/>
 
-    <!-- Boundary labels -->
-    <rect x="676" y="356" width="214" height="20" rx="6" fill="#020617" stroke="#475569" stroke-width="0.8" stroke-opacity="0.4"/>
-    <text x="783" y="370" text-anchor="middle" fill="#64748B" font-family="system-ui, sans-serif" font-size="9.5" font-weight="600">Rust-owned  ───  Provider-owned</text>
-  </g>
+    <rect x="56" y="116" width="134" height="18" rx="9" fill="#4C1D95" fill-opacity="0.5"/>
+    <text x="123" y="129" text-anchor="middle" fill="#C4B5FD" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">EXECUTION TRANSACTION</text>
 
-  <!-- ================================================================== -->
-  <!-- LEFT COLUMN: Rust Transaction Owner & Scheduler                    -->
-  <!-- ================================================================== -->
-
-  <!-- Section header -->
-  <text x="48" y="106" fill="#94A3B8" font-family="system-ui, sans-serif" font-size="11" font-weight="700" letter-spacing="1">RUST TRANSACTION OWNER &amp; SCHEDULER</text>
-  <line x1="48" y1="112" x2="400" y2="112" stroke="#334155" stroke-width="1"/>
-
-  <!-- ===== 2A: Transaction State Machine (left top) ===== -->
-  <g>
-    <rect x="44" y="124" width="410" height="170" rx="10" fill="url(#fill-deeper)" stroke="url(#accent-purple)" stroke-width="1.2" filter="url(#shadow)" stroke-opacity="0.4"/>
-
-    <!-- Section label -->
-    <rect x="56" y="133" width="134" height="18" rx="9" fill="#4C1D95" fill-opacity="0.5"/>
-    <text x="123" y="146" text-anchor="middle" fill="#C4B5FD" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">EXECUTION TRANSACTION</text>
-
-    <!-- Transaction state machine — 9 states in a flow -->
-    <!-- Row 1: Admitted → Runnable → Running -->
-    <rect x="56" y="158" width="64" height="22" rx="6" fill="url(#tx-admitted)" stroke="#64748B" stroke-width="0.7" filter="url(#shadow-sm)"/>
-    <text x="88" y="173" text-anchor="middle" fill="#94A3B8" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">Admitted</text>
-
-    <line x1="122" y1="169" x2="140" y2="169" stroke="#8B5CF6" stroke-width="1.2" marker-end="url(#arrow-purple)" stroke-opacity="0.5"/>
-
-    <rect x="144" y="158" width="64" height="22" rx="6" fill="url(#tx-admitted)" stroke="#64748B" stroke-width="0.7" filter="url(#shadow-sm)"/>
-    <text x="176" y="173" text-anchor="middle" fill="#94A3B8" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">Runnable</text>
-
-    <line x1="210" y1="169" x2="228" y2="169" stroke="#8B5CF6" stroke-width="1.2" marker-end="url(#arrow-purple)" stroke-opacity="0.5"/>
-
-    <rect x="232" y="158" width="64" height="22" rx="6" fill="url(#tx-running)" stroke="#3B82F6" stroke-width="0.7" filter="url(#shadow-sm)"/>
-    <text x="264" y="173" text-anchor="middle" fill="#93C5FD" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">Running</text>
-
-    <!-- Row 2: Waiting (center, below Running) + Commit / Rollback -->
-    <!-- Down from Running to Waiting -->
-    <line x1="264" y1="180" x2="264" y2="196" stroke="#3B82F6" stroke-width="1" marker-end="url(#arrow-blue)" stroke-opacity="0.5"/>
-
-    <rect x="232" y="200" width="64" height="22" rx="6" fill="url(#tx-waiting)" stroke="#A78BFA" stroke-width="0.7" filter="url(#shadow-sm)"/>
-    <text x="264" y="215" text-anchor="middle" fill="#DDD6FE" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">Waiting</text>
-
-    <!-- Waiting → Runnable (return) -->
-    <path d="M232 211L144 211L144 169" fill="none" stroke="#A78BFA" stroke-width="1" marker-end="url(#arrow-purple)" stroke-opacity="0.4" stroke-dasharray="4 3"/>
-
-    <!-- Running → Commit -->
-    <line x1="296" y1="168" x2="340" y2="168" stroke="#3B82F6" stroke-width="1" marker-end="url(#arrow-blue)" stroke-opacity="0.5"/>
-
-    <rect x="344" y="158" width="64" height="22" rx="6" fill="url(#tx-commit)" stroke="#10B981" stroke-width="0.7" filter="url(#shadow-sm)"/>
-    <text x="376" y="173" text-anchor="middle" fill="#A7F3D0" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">Commit</text>
-
-    <!-- Commit → Quiescing -->
-    <line x1="376" y1="180" x2="376" y2="200" stroke="#10B981" stroke-width="1" marker-end="url(#arrow-emerald)" stroke-opacity="0.5"/>
-
-    <!-- Rollback / Cancelling / Quiescing / Retired — bottom row -->
-    <rect x="56" y="232" width="64" height="22" rx="6" fill="url(#tx-cancel)" stroke="#DC2626" stroke-width="0.7" filter="url(#shadow-sm)"/>
-    <text x="88" y="247" text-anchor="middle" fill="#FECACA" font-family="system-ui, sans-serif" font-size="8" font-weight="700">Rollback</text>
-
-    <line x1="122" y1="243" x2="140" y2="243" stroke="#DC2626" stroke-width="1.2" marker-end="url(#arrow-slate)" stroke-opacity="0.45"/>
-
-    <rect x="144" y="232" width="64" height="22" rx="6" fill="url(#tx-cancel)" stroke="#DC2626" stroke-width="0.7" filter="url(#shadow-sm)"/>
-    <text x="176" y="247" text-anchor="middle" fill="#FECACA" font-family="system-ui, sans-serif" font-size="7.8" font-weight="700">Cancel'ing</text>
-
-    <line x1="210" y1="243" x2="228" y2="243" stroke="#DC2626" stroke-width="1.2" marker-end="url(#arrow-slate)" stroke-opacity="0.45"/>
-
-    <rect x="232" y="200" width="64" height="22" rx="6" fill="url(#tx-cancel)" stroke="#DC2626" stroke-width="0.7" filter="url(#shadow-sm)"/>
-    <text x="264" y="215" text-anchor="middle" fill="#FECACA" font-family="system-ui, sans-serif" font-size="8" font-weight="700">Quiescing</text>
-
-    <!-- Quiescing → Retired -->
-    <line x1="264" y1="222" x2="340" y2="242" stroke="#DC2626" stroke-width="1" marker-end="url(#arrow-slate)" stroke-opacity="0.4"/>
-
-    <rect x="344" y="232" width="64" height="22" rx="6" fill="url(#tx-retired)" stroke="#64748B" stroke-width="0.7" filter="url(#shadow-sm)"/>
-    <text x="376" y="247" text-anchor="middle" fill="#94A3B8" font-family="system-ui, sans-serif" font-size="8" font-weight="700">Retired ✕</text>
-
-    <!-- Admitted/Runnable/Running all have edge to Rollback/Cancelling (implied by text) -->
-
-    <!-- YieldRecord annotation -->
-    <rect x="56" y="264" width="388" height="22" rx="5" fill="#0F172A" stroke="#8B5CF6" stroke-width="0.6" stroke-opacity="0.3"/>
-    <text x="250" y="279" text-anchor="middle" fill="#64748B" font-family="Consolas, monospace" font-size="8.5" font-weight="500">Yield　·　transaction　·　checkpoint　·　DependencySet　·　CreditGrant　·　ExpertLeaseSet　·　wake_epoch</text>
-  </g>
-
-  <!-- Arrow: Transaction → LoadRegistry -->
-  <path d="M480 260L680 260L680 136" fill="none" stroke="#8B5CF6" stroke-width="1.4" marker-end="url(#arrow-purple)" stroke-opacity="0.4" stroke-dasharray="6 4"/>
-
-  <!-- ===== 2B: KV Transactions (left middle) ===== -->
-  <g>
-    <rect x="44" y="306" width="410" height="52" rx="10" fill="url(#fill-dark)" stroke="url(#accent-blue)" stroke-width="1" filter="url(#shadow)" stroke-opacity="0.35"/>
-
-    <rect x="56" y="316" width="96" height="18" rx="9" fill="#1E3A5F" fill-opacity="0.5"/>
-    <text x="104" y="329" text-anchor="middle" fill="#93C5FD" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">KV CACHE</text>
-
-    <text x="164" y="328" fill="#BFDBFE" font-family="system-ui, sans-serif" font-size="11" font-weight="600">Paged KV transactions</text>
-    <text x="164" y="346" fill="#64748B" font-family="Consolas, monospace" font-size="9.5" font-weight="500">reserve → COW fork → prefix commit → rollback → retirement quarantine → page reclaim</text>
-  </g>
-
-  <!-- ================================================================== -->
-  <!-- MIDDLE ZONE: Model-Neutral Execution Boundary                       -->
-  <!-- ================================================================== -->
-  <g>
-    <!-- Progress trait card -->
-    <rect x="44" y="380" width="410" height="75" rx="10" fill="url(#fill-dark)" stroke="#334155" stroke-width="1" filter="url(#shadow)"/>
-
-    <rect x="56" y="390" width="108" height="18" rx="9" fill="#334155" fill-opacity="0.5"/>
-    <text x="110" y="403" text-anchor="middle" fill="#94A3B8" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">MODEL-NEUTRAL</text>
-
-    <!-- Progress enum -->
-    <rect x="56" y="416" width="74" height="28" rx="5" fill="#1E293B" stroke="#475569" stroke-width="0.6"/>
-    <text x="93" y="427" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="8.5" font-weight="700">enum</text>
-    <text x="93" y="439" text-anchor="middle" fill="#22D3EE" font-family="Consolas, monospace" font-size="8.5" font-weight="700">Progress</text>
-
-    <!-- Three variants -->
-    <rect x="138" y="416" width="64" height="14" rx="4" fill="url(#tx-running)" opacity="0.7"/>
-    <text x="170" y="427" text-anchor="middle" fill="#93C5FD" font-family="Consolas, monospace" font-size="8.5" font-weight="600">Runnable</text>
-
-    <rect x="210" y="416" width="64" height="14" rx="4" fill="url(#tx-waiting)" opacity="0.7"/>
-    <text x="242" y="427" text-anchor="middle" fill="#DDD6FE" font-family="Consolas, monospace" font-size="8.5" font-weight="600">Waiting</text>
-
-    <rect x="282" y="416" width="64" height="14" rx="4" fill="url(#tx-commit)" opacity="0.7"/>
-    <text x="314" y="427" text-anchor="middle" fill="#A7F3D0" font-family="Consolas, monospace" font-size="8.5" font-weight="600">Complete</text>
-
-    <!-- ExpertLeaseSet -->
-    <rect x="138" y="436" width="68" height="14" rx="4" fill="#1E293B" stroke="#A78BFA" stroke-width="0.5"/>
-    <text x="172" y="447" text-anchor="middle" fill="#A78BFA" font-family="Consolas, monospace" font-size="8" font-weight="700">ExpertLeaseSet</text>
-
-    <rect x="210" y="436" width="68" height="14" rx="4" fill="#1E293B" stroke="#A78BFA" stroke-width="0.5"/>
-    <text x="244" y="447" text-anchor="middle" fill="#A78BFA" font-family="Consolas, monospace" font-size="8" font-weight="700">DepSet</text>
-
-    <text x="324" y="448" fill="#64748B" font-family="system-ui, sans-serif" font-size="8" font-style="italic">typed, model-neutral</text>
-  </g>
-
-  <!-- ================================================================== -->
-  <!-- RIGHT COLUMN: Global LoadRegistry                                  -->
-  <!-- ================================================================== -->
-  <text x="492" y="106" fill="#94A3B8" font-family="system-ui, sans-serif" font-size="11" font-weight="700" letter-spacing="1">GLOBAL EXPERT LOADING</text>
-  <line x1="492" y1="112" x2="920" y2="112" stroke="#334155" stroke-width="1"/>
-
-  <!-- ===== LoadKey card ===== -->
-  <g>
-    <rect x="488" y="124" width="432" height="130" rx="10" fill="url(#fill-deeper)" stroke="url(#accent-cyan)" stroke-width="1" filter="url(#shadow)" stroke-opacity="0.35"/>
-
-    <rect x="500" y="133" width="88" height="18" rx="9" fill="#164E63" fill-opacity="0.5"/>
-    <text x="544" y="146" text-anchor="middle" fill="#22D3EE" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">LOAD KEY</text>
-
-    <!-- LoadKey fields as a compact 3x3 grid -->
-    <rect x="500" y="157" width="128" height="18" rx="4" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
-    <text x="564" y="170" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="8.5">model</text>
-
-    <rect x="634" y="157" width="128" height="18" rx="4" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
-    <text x="698" y="170" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="8.5">source</text>
-
-    <rect x="768" y="157" width="128" height="18" rx="4" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
-    <text x="832" y="170" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="8.5">source_hash</text>
-
-    <rect x="500" y="180" width="128" height="18" rx="4" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
-    <text x="564" y="193" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="8.5">layer</text>
-
-    <rect x="634" y="180" width="128" height="18" rx="4" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
-    <text x="698" y="193" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="8.5">expert</text>
-
-    <rect x="768" y="180" width="128" height="18" rx="4" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
-    <text x="832" y="193" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="8.5">format</text>
-
-    <rect x="500" y="203" width="128" height="18" rx="4" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
-    <text x="564" y="216" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="8.5">target_backend</text>
-
-    <rect x="634" y="203" width="128" height="18" rx="4" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
-    <text x="698" y="216" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="8.5">target_device</text>
-
-    <rect x="768" y="203" width="128" height="18" rx="4" fill="#1E293B" stroke="#22D3EE" stroke-width="0.6" stroke-opacity="0.5"/>
-    <text x="832" y="216" text-anchor="middle" fill="#22D3EE" font-family="Consolas, monospace" font-size="8.5" font-weight="600">dst_generation</text>
-
-    <!-- Disclaimer line -->
-    <text x="716" y="244" text-anchor="middle" fill="#475569" font-family="system-ui, sans-serif" font-size="8">one physical load per key · keys differing in any field are never coalesced</text>
-  </g>
-
-  <!-- ===== LoadOp state machine ===== -->
-  <g>
-    <rect x="488" y="266" width="432" height="84" rx="10" fill="url(#fill-deeper)" stroke="url(#accent-cyan)" stroke-width="1" filter="url(#shadow)" stroke-opacity="0.35"/>
-
-    <rect x="500" y="275" width="80" height="18" rx="9" fill="#164E63" fill-opacity="0.5"/>
-    <text x="540" y="288" text-anchor="middle" fill="#67E8F9" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">LOAD OP</text>
-
-    <!-- State pills in a pipeline -->
-    <rect x="500" y="301" width="64" height="18" rx="5" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
-    <text x="532" y="313" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Reserved</text>
-
-    <line x1="566" y1="310" x2="578" y2="310" stroke="#475569" stroke-width="0.8" marker-end="url(#arrow-slate)" stroke-opacity="0.4"/>
-
-    <rect x="580" y="301" width="64" height="18" rx="5" fill="#1D4ED8" stroke="#3B82F6" stroke-width="0.5"/>
-    <text x="612" y="313" text-anchor="middle" fill="#BFDBFE" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Read</text>
-
-    <line x1="646" y1="310" x2="658" y2="310" stroke="#475569" stroke-width="0.8" marker-end="url(#arrow-slate)" stroke-opacity="0.4"/>
-
-    <rect x="660" y="301" width="64" height="18" rx="5" fill="#1D4ED8" stroke="#3B82F6" stroke-width="0.5"/>
-    <text x="692" y="313" text-anchor="middle" fill="#BFDBFE" font-family="Consolas, monospace" font-size="7.5" font-weight="700">HostReady</text>
-
-    <line x1="726" y1="310" x2="738" y2="310" stroke="#475569" stroke-width="0.8" marker-end="url(#arrow-slate)" stroke-opacity="0.4"/>
-
-    <rect x="740" y="301" width="64" height="18" rx="5" fill="#6D28D9" stroke="#8B5CF6" stroke-width="0.5"/>
-    <text x="772" y="313" text-anchor="middle" fill="#DDD6FE" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Upload</text>
-
-    <line x1="806" y1="310" x2="818" y2="310" stroke="#475569" stroke-width="0.8" marker-end="url(#arrow-slate)" stroke-opacity="0.4"/>
-
-    <rect x="820" y="301" width="64" height="18" rx="5" fill="#6D28D9" stroke="#8B5CF6" stroke-width="0.5"/>
-    <text x="852" y="313" text-anchor="middle" fill="#DDD6FE" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Installing</text>
-
-    <!-- Row 2: Resident, Failed, Stale, Draining, Retired -->
-    <line x1="852" y1="319" x2="852" y2="330" stroke="#8B5CF6" stroke-width="0.8" marker-end="url(#arrow-purple)" stroke-opacity="0.35"/>
-
-    <rect x="500" y="335" width="64" height="18" rx="5" fill="url(#load-resident)" stroke="#10B981" stroke-width="0.5"/>
-    <text x="532" y="347" text-anchor="middle" fill="#A7F3D0" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Resident ✓</text>
-
-    <rect x="572" y="335" width="46" height="18" rx="5" fill="url(#load-stale)" stroke="#DC2626" stroke-width="0.5"/>
-    <text x="595" y="347" text-anchor="middle" fill="#FECACA" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Failed</text>
-
-    <rect x="626" y="335" width="46" height="18" rx="5" fill="url(#load-stale)" stroke="#DC2626" stroke-width="0.5"/>
-    <text x="649" y="347" text-anchor="middle" fill="#FECACA" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Stale</text>
-
-    <rect x="680" y="335" width="54" height="18" rx="5" fill="url(#load-stale)" stroke="#DC2626" stroke-width="0.5"/>
-    <text x="707" y="347" text-anchor="middle" fill="#FECACA" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Draining</text>
-
-    <rect x="742" y="335" width="64" height="18" rx="5" fill="url(#tx-retired)" stroke="#64748B" stroke-width="0.5"/>
-    <text x="774" y="347" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Retired ✕</text>
-
-    <text x="852" y="347" fill="#475569" font-family="system-ui, sans-serif" font-size="7.5">exactly once</text>
-  </g>
-
-  <!-- ===== Waiter indices card ===== -->
-  <g>
-    <rect x="488" y="360" width="432" height="52" rx="10" fill="url(#fill-dark)" stroke="url(#accent-blue)" stroke-width="1" filter="url(#shadow)" stroke-opacity="0.35"/>
-
-    <text x="504" y="382" fill="#93C5FD" font-family="system-ui, sans-serif" font-size="10" font-weight="600">Waiter indices (atomic, bidirectional)</text>
-
-    <rect x="504" y="391" width="190" height="14" rx="4" fill="#1E293B" stroke="#3B82F6" stroke-width="0.5"/>
-    <text x="599" y="402" text-anchor="middle" fill="#93C5FD" font-family="Consolas, monospace" font-size="8.5">load_to_waiters : LoadId → Set⟨WaiterId⟩</text>
-
-    <rect x="706" y="391" width="200" height="14" rx="4" fill="#1E293B" stroke="#3B82F6" stroke-width="0.5"/>
-    <text x="806" y="402" text-anchor="middle" fill="#93C5FD" font-family="Consolas, monospace" font-size="8.5">waiter_to_loads : WaiterId → Set⟨LoadId⟩</text>
-  </g>
-
-  <!-- Arrow: Waiter → Transaction (targeted wake) -->
-  <path d="M488 386L424 386L424 240" fill="none" stroke="#3B82F6" stroke-width="1.2" marker-end="url(#arrow-blue)" stroke-opacity="0.45" stroke-dasharray="5 4"/>
-
-  <!-- ================================================================== -->
-  <!-- BOTTOM ZONE (below ownership line): Model Adapter + Providers        -->
-  <!-- ================================================================== -->
-
-  <!-- Section header -->
-  <text x="48" y="406" fill="#22D3EE" font-family="system-ui, sans-serif" font-size="10" font-weight="700" letter-spacing="1">MODEL ADAPTER</text>
-  <line x1="48" y1="412" x2="200" y2="412" stroke="#164E63" stroke-width="1"/>
-
-  <text x="492" y="406" fill="#22D3EE" font-family="system-ui, sans-serif" font-size="10" font-weight="700" letter-spacing="1">PROVIDER BOUNDARY</text>
-  <line x1="492" y1="412" x2="920" y2="412" stroke="#164E63" stroke-width="1"/>
-
-  <!-- Arrow from Progress to Model Adapter -->
-  <line x1="250" y1="455" x2="250" y2="472" stroke="#94A3B8" stroke-width="1.4" marker-end="url(#arrow-slate)" stroke-opacity="0.45"/>
-
-  <!-- ===== Model adapter card ===== -->
-  <g>
-    <rect x="44" y="476" width="410" height="62" rx="10" fill="url(#fill-dark)" stroke="url(#accent-blue)" stroke-width="1" filter="url(#shadow)" stroke-opacity="0.35"/>
-
-    <rect x="56" y="486" width="88" height="18" rx="9" fill="#1E3A5F" fill-opacity="0.5"/>
-    <text x="100" y="499" text-anchor="middle" fill="#93C5FD" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">MODEL</text>
-
-    <text x="156" y="498" fill="#BFDBFE" font-family="system-ui, sans-serif" font-size="12" font-weight="600">Model adapter &amp; immutable prepared plan</text>
-    <text x="156" y="520" fill="#64748B" font-family="Consolas, monospace" font-size="9.5" font-weight="500">DeepSeek-V4 adapter · MoE materialization · continuation arena · safe yield boundaries</text>
-  </g>
-
-  <!-- Arrow: Model → Providers -->
-  <line x1="250" y1="538" x2="250" y2="556" stroke="#94A3B8" stroke-width="1.4" marker-end="url(#arrow-slate)" stroke-opacity="0.45"/>
-
-  <!-- ===== Hard Credits (left, below model) ===== -->
-  <g>
-    <rect x="44" y="560" width="410" height="116" rx="10" fill="url(#fill-deeper)" stroke="url(#accent-amber)" stroke-width="1" filter="url(#shadow)" stroke-opacity="0.35"/>
-
-    <rect x="56" y="569" width="80" height="18" rx="9" fill="#78350F" fill-opacity="0.5"/>
-    <text x="96" y="582" text-anchor="middle" fill="#FBBF24" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">HARD CREDITS</text>
-
-    <text x="148" y="582" fill="#D97706" font-family="system-ui, sans-serif" font-size="10" font-weight="600">owner-written ledger · atomic admission · staged release</text>
-
-    <!-- 10 credit pills: 2 rows of 5 -->
     <!-- Row 1 -->
-    <rect x="56" y="596" width="70" height="17" rx="4" fill="#1E293B" stroke="#D97706" stroke-width="0.5" stroke-opacity="0.4"/>
-    <text x="91" y="608" text-anchor="middle" fill="#D97706" font-family="Consolas, monospace" font-size="8.5" font-weight="700">SQE</text>
+    <rect x="56" y="142" width="62" height="22" rx="6" fill="url(#st-n)" stroke="#475569" stroke-width="0.7" filter="url(#shadow-sm)"/>
+    <text x="87" y="157" text-anchor="middle" fill="#94A3B8" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">Admitted</text>
+    <line x1="120" y1="153" x2="136" y2="153" stroke="#8B5CF6" stroke-width="1.2" marker-end="url(#ma-purple)" stroke-opacity="0.45"/>
 
-    <rect x="132" y="596" width="70" height="17" rx="4" fill="#1E293B" stroke="#D97706" stroke-width="0.5" stroke-opacity="0.4"/>
-    <text x="167" y="608" text-anchor="middle" fill="#D97706" font-family="Consolas, monospace" font-size="8.5" font-weight="700">slab</text>
+    <rect x="140" y="142" width="62" height="22" rx="6" fill="url(#st-n)" stroke="#475569" stroke-width="0.7" filter="url(#shadow-sm)"/>
+    <text x="171" y="157" text-anchor="middle" fill="#94A3B8" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">Runnable</text>
+    <line x1="204" y1="153" x2="220" y2="153" stroke="#8B5CF6" stroke-width="1.2" marker-end="url(#ma-purple)" stroke-opacity="0.45"/>
 
-    <rect x="208" y="596" width="70" height="17" rx="4" fill="#1E293B" stroke="#D97706" stroke-width="0.5" stroke-opacity="0.4"/>
-    <text x="243" y="608" text-anchor="middle" fill="#D97706" font-family="Consolas, monospace" font-size="8.5" font-weight="700">read bytes</text>
+    <rect x="224" y="142" width="62" height="22" rx="6" fill="url(#st-r)" stroke="#3B82F6" stroke-width="0.7" filter="url(#shadow-sm)"/>
+    <text x="255" y="157" text-anchor="middle" fill="#BFDBFE" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">Running</text>
+    <line x1="288" y1="153" x2="304" y2="153" stroke="#10B981" stroke-width="1.2" marker-end="url(#ma-emerald)" stroke-opacity="0.45"/>
 
-    <rect x="284" y="596" width="70" height="17" rx="4" fill="#1E293B" stroke="#D97706" stroke-width="0.5" stroke-opacity="0.4"/>
-    <text x="319" y="608" text-anchor="middle" fill="#D97706" font-family="Consolas, monospace" font-size="8.5" font-weight="700">upload</text>
+    <rect x="308" y="142" width="62" height="22" rx="6" fill="url(#st-c)" stroke="#10B981" stroke-width="0.7" filter="url(#shadow-sm)"/>
+    <text x="339" y="157" text-anchor="middle" fill="#A7F3D0" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">Commit</text>
 
-    <rect x="360" y="596" width="70" height="17" rx="4" fill="#1E293B" stroke="#D97706" stroke-width="0.5" stroke-opacity="0.4"/>
-    <text x="395" y="608" text-anchor="middle" fill="#D97706" font-family="Consolas, monospace" font-size="8.5" font-weight="700">frame</text>
+    <!-- Row 2: Waiting -->
+    <line x1="255" y1="164" x2="255" y2="180" stroke="#3B82F6" stroke-width="1" marker-end="url(#ma-blue)" stroke-opacity="0.4"/>
 
-    <!-- Row 2 -->
-    <rect x="56" y="619" width="70" height="17" rx="4" fill="#1E293B" stroke="#D97706" stroke-width="0.5" stroke-opacity="0.4"/>
-    <text x="91" y="631" text-anchor="middle" fill="#D97706" font-family="Consolas, monospace" font-size="8.5" font-weight="700">lease</text>
+    <rect x="224" y="184" width="62" height="22" rx="6" fill="url(#st-w)" stroke="#A78BFA" stroke-width="0.7" filter="url(#shadow-sm)"/>
+    <text x="255" y="199" text-anchor="middle" fill="#DDD6FE" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">Waiting</text>
 
-    <rect x="132" y="619" width="70" height="17" rx="4" fill="#1E293B" stroke="#D97706" stroke-width="0.5" stroke-opacity="0.4"/>
-    <text x="167" y="631" text-anchor="middle" fill="#D97706" font-family="Consolas, monospace" font-size="8.5" font-weight="700">arena</text>
+    <!-- Waiting → Runnable return -->
+    <path d="M224 195L120 195L120 153" fill="none" stroke="#A78BFA" stroke-width="1" marker-end="url(#ma-purple)" stroke-opacity="0.3" stroke-dasharray="4 3"/>
 
-    <rect x="208" y="619" width="70" height="17" rx="4" fill="#1E293B" stroke="#D97706" stroke-width="0.5" stroke-opacity="0.4"/>
-    <text x="243" y="631" text-anchor="middle" fill="#D97706" font-family="Consolas, monospace" font-size="8.5" font-weight="700">KV</text>
+    <!-- Down edges to terminal row -->
+    <line x1="255" y1="164" x2="87" y2="222" stroke="#DC2626" stroke-width="0.9" marker-end="url(#ma-red)" stroke-opacity="0.28"/>
+    <line x1="255" y1="164" x2="171" y2="222" stroke="#DC2626" stroke-width="0.9" marker-end="url(#ma-red)" stroke-opacity="0.28"/>
+    <line x1="308" y1="164" x2="255" y2="222" stroke="#DC2626" stroke-width="0.9" marker-end="url(#ma-red)" stroke-opacity="0.28"/>
 
-    <rect x="284" y="619" width="70" height="17" rx="4" fill="#1E293B" stroke="#D97706" stroke-width="0.5" stroke-opacity="0.4"/>
-    <text x="319" y="631" text-anchor="middle" fill="#D97706" font-family="Consolas, monospace" font-size="8.5" font-weight="700">continuation</text>
+    <!-- Bottom row -->
+    <rect x="56" y="226" width="62" height="22" rx="6" fill="url(#st-x)" stroke="#DC2626" stroke-width="0.7" filter="url(#shadow-sm)"/>
+    <text x="87" y="241" text-anchor="middle" fill="#FECACA" font-family="system-ui, sans-serif" font-size="8" font-weight="700">Rollback</text>
 
-    <rect x="360" y="619" width="70" height="17" rx="4" fill="#1E293B" stroke="#D97706" stroke-width="0.5" stroke-opacity="0.4"/>
-    <text x="395" y="631" text-anchor="middle" fill="#D97706" font-family="Consolas, monospace" font-size="8.5" font-weight="700">ready cohort</text>
+    <rect x="140" y="226" width="62" height="22" rx="6" fill="url(#st-x)" stroke="#DC2626" stroke-width="0.7" filter="url(#shadow-sm)"/>
+    <text x="171" y="241" text-anchor="middle" fill="#FECACA" font-family="system-ui, sans-serif" font-size="8" font-weight="700">Cancelling</text>
 
-    <!-- Decode reserve annotation -->
-    <text x="56" y="664" fill="#64748B" font-family="system-ui, sans-serif" font-size="8.5" font-style="italic">decode reserve protects continuation, cohort, arena/KV, and exact-demand I/O · prefetch has no hard entitlement · no soft overflow</text>
+    <rect x="224" y="226" width="62" height="22" rx="6" fill="url(#st-x)" stroke="#DC2626" stroke-width="0.7" filter="url(#shadow-sm)"/>
+    <text x="255" y="241" text-anchor="middle" fill="#FECACA" font-family="system-ui, sans-serif" font-size="8" font-weight="700">Quiescing</text>
+
+    <line x1="288" y1="237" x2="304" y2="237" stroke="#64748B" stroke-width="1" marker-end="url(#ma-slate)" stroke-opacity="0.3"/>
+
+    <rect x="308" y="226" width="62" height="22" rx="6" fill="url(#st-t)" stroke="#475569" stroke-width="0.7" filter="url(#shadow-sm)"/>
+    <text x="339" y="241" text-anchor="middle" fill="#94A3B8" font-family="system-ui, sans-serif" font-size="8" font-weight="700">Retired</text>
+
+    <!-- Inter-row links -->
+    <line x1="120" y1="237" x2="222" y2="237" stroke="#DC2626" stroke-width="0.9" marker-end="url(#ma-red)" stroke-opacity="0.28"/>
+    <line x1="204" y1="237" x2="222" y2="237" stroke="#DC2626" stroke-width="0.9" marker-end="url(#ma-red)" stroke-opacity="0.28"/>
   </g>
 
-  <!-- ===== Scheduler Policy (left, below credits) ===== -->
+  <!-- --- KV cache --- -->
   <g>
-    <rect x="44" y="686" width="410" height="58" rx="10" fill="url(#fill-dark)" stroke="#334155" stroke-width="1" filter="url(#shadow)"/>
-
-    <rect x="56" y="696" width="88" height="18" rx="9" fill="#334155" fill-opacity="0.5"/>
-    <text x="100" y="709" text-anchor="middle" fill="#94A3B8" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">SCHEDULER</text>
-
-    <text x="156" y="708" fill="#CBD5E1" font-family="system-ui, sans-serif" font-size="11" font-weight="600">Fair scheduling with bounded aging + deficit round-robin</text>
-    <text x="156" y="726" fill="#64748B" font-family="Consolas, monospace" font-size="9" font-weight="500">lexicographic: feasibility · cancellation · runnable · fairness · marginal cost · phase · tie-break</text>
-    <text x="156" y="740" fill="#475569" font-family="system-ui, sans-serif" font-size="8.5">DAG telemetry for covered vs uncovered wait</text>
+    <rect x="44" y="274" width="410" height="40" rx="10" fill="url(#fill-card)" stroke="url(#a-blue)" stroke-width="1" filter="url(#shadow)" stroke-opacity="0.35"/>
+    <rect x="56" y="282" width="80" height="18" rx="9" fill="#1E3A5F" fill-opacity="0.5"/>
+    <text x="96" y="295" text-anchor="middle" fill="#93C5FD" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">KV CACHE</text>
+    <text x="148" y="294" fill="#BFDBFE" font-family="system-ui, sans-serif" font-size="11" font-weight="600">Paged KV transactions</text>
+    <text x="148" y="308" fill="#64748B" font-family="Consolas, monospace" font-size="9">reserve · COW fork · prefix commit · rollback · retirement quarantine</text>
   </g>
 
-  <!-- ===== Provider Boundary (right side, below ownership line) ===== -->
-
-  <!-- Provider ABI contract -->
+  <!-- --- Model-neutral Progress --- -->
   <g>
-    <rect x="488" y="476" width="432" height="78" rx="10" fill="url(#fill-deeper)" stroke="url(#accent-emerald)" stroke-width="1" filter="url(#shadow)" stroke-opacity="0.35"/>
-
-    <rect x="500" y="485" width="104" height="18" rx="9" fill="#064E3B" fill-opacity="0.5"/>
-    <text x="552" y="498" text-anchor="middle" fill="#34D399" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">PROVIDER ABI</text>
-
-    <!-- Cmd/Completion pattern -->
-    <text x="504" y="522" fill="#CBD5E1" font-family="system-ui, sans-serif" font-size="10" font-weight="600">Owner → Provider:　Command ⟨operation_id, grant_ids, immutable POD descriptors⟩</text>
-    <text x="504" y="542" fill="#CBD5E1" font-family="system-ui, sans-serif" font-size="10" font-weight="600">Provider → Owner:　Completion ⟨operation_id, stage, result⟩</text>
+    <rect x="44" y="326" width="410" height="32" rx="8" fill="url(#fill-card)" stroke="#334155" stroke-width="1" filter="url(#shadow-sm)"/>
+    <rect x="56" y="333" width="98" height="16" rx="8" fill="#334155" fill-opacity="0.5"/>
+    <text x="105" y="344" text-anchor="middle" fill="#94A3B8" font-family="system-ui, sans-serif" font-size="8" font-weight="700">MODEL-NEUTRAL</text>
+    <text x="164" y="344" fill="#CBD5E1" font-family="Consolas, monospace" font-size="10" font-weight="600">enum Progress ⟨Runnable | Waiting(DependencySet) | Complete⟩</text>
   </g>
 
-  <!-- Arrow: Provider ABI → Providers -->
-  <line x1="704" y1="554" x2="704" y2="572" stroke="#10B981" stroke-width="1.4" marker-end="url(#arrow-emerald)" stroke-opacity="0.45"/>
+  <!-- ============================================================ -->
+  <!-- RIGHT: GLOBAL EXPERT LOADING                                  -->
+  <!-- ============================================================ -->
+  <text x="492" y="96" fill="#94A3B8" font-family="system-ui, sans-serif" font-size="10.5" font-weight="700" letter-spacing="1">GLOBAL EXPERT LOADING</text>
 
-  <!-- ===== Three Provider cards ===== -->
-  <!-- Storage -->
+  <!-- --- LoadKey --- -->
   <g>
-    <rect x="488" y="576" width="132" height="48" rx="8" fill="url(#fill-dark)" stroke="url(#accent-cyan)" stroke-width="1" filter="url(#shadow-sm)"/>
-    <text x="554" y="596" text-anchor="middle" fill="#22D3EE" font-family="system-ui, sans-serif" font-size="10" font-weight="700">Storage</text>
-    <text x="554" y="614" text-anchor="middle" fill="#64748B" font-family="Consolas, monospace" font-size="8">submit_read · CQE</text>
+    <rect x="488" y="108" width="432" height="114" rx="10" fill="url(#fill-deep)" stroke="url(#a-cyan)" stroke-width="1.2" filter="url(#shadow)" stroke-opacity="0.4"/>
+
+    <rect x="500" y="116" width="80" height="18" rx="9" fill="#164E63" fill-opacity="0.5"/>
+    <text x="540" y="129" text-anchor="middle" fill="#22D3EE" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">LOAD KEY</text>
+
+    <rect x="500" y="140" width="132" height="19" rx="5" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
+    <text x="566" y="153" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="9">model</text>
+    <rect x="638" y="140" width="132" height="19" rx="5" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
+    <text x="704" y="153" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="9">source</text>
+    <rect x="776" y="140" width="132" height="19" rx="5" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
+    <text x="842" y="153" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="9">source_hash</text>
+
+    <rect x="500" y="165" width="132" height="19" rx="5" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
+    <text x="566" y="178" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="9">layer</text>
+    <rect x="638" y="165" width="132" height="19" rx="5" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
+    <text x="704" y="178" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="9">expert</text>
+    <rect x="776" y="165" width="132" height="19" rx="5" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
+    <text x="842" y="178" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="9">format</text>
+
+    <rect x="500" y="190" width="132" height="19" rx="5" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
+    <text x="566" y="203" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="9">target_backend</text>
+    <rect x="638" y="190" width="132" height="19" rx="5" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
+    <text x="704" y="203" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="9">target_device</text>
+    <rect x="776" y="190" width="132" height="19" rx="5" fill="#1E293B" stroke="#22D3EE" stroke-width="0.7" stroke-opacity="0.5"/>
+    <text x="842" y="203" text-anchor="middle" fill="#22D3EE" font-family="Consolas, monospace" font-size="9" font-weight="600">dst_generation</text>
   </g>
 
-  <!-- Device -->
+  <!-- --- LoadOp + Waiter indices --- -->
   <g>
-    <rect x="634" y="576" width="132" height="48" rx="8" fill="url(#fill-dark)" stroke="url(#accent-purple)" stroke-width="1" filter="url(#shadow-sm)"/>
-    <text x="700" y="596" text-anchor="middle" fill="#8B5CF6" font-family="system-ui, sans-serif" font-size="10" font-weight="700">Device</text>
-    <text x="700" y="614" text-anchor="middle" fill="#64748B" font-family="Consolas, monospace" font-size="8">upload · event fence</text>
+    <rect x="488" y="236" width="432" height="124" rx="10" fill="url(#fill-deep)" stroke="url(#a-cyan)" stroke-width="1.2" filter="url(#shadow)" stroke-opacity="0.4"/>
+
+    <rect x="500" y="244" width="72" height="18" rx="9" fill="#164E63" fill-opacity="0.5"/>
+    <text x="536" y="257" text-anchor="middle" fill="#67E8F9" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">LOAD OP</text>
+
+    <!-- Pipeline row -->
+    <rect x="500" y="270" width="64" height="18" rx="5" fill="#1E293B" stroke="#475569" stroke-width="0.5"/>
+    <text x="532" y="282" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Reserved</text>
+    <line x1="566" y1="279" x2="578" y2="279" stroke="#475569" stroke-width="0.8" marker-end="url(#ma-slate)" stroke-opacity="0.3"/>
+
+    <rect x="580" y="270" width="64" height="18" rx="5" fill="#1D4ED8" stroke="#3B82F6" stroke-width="0.5"/>
+    <text x="612" y="282" text-anchor="middle" fill="#BFDBFE" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Read</text>
+    <line x1="646" y1="279" x2="658" y2="279" stroke="#475569" stroke-width="0.8" marker-end="url(#ma-slate)" stroke-opacity="0.3"/>
+
+    <rect x="660" y="270" width="64" height="18" rx="5" fill="#1D4ED8" stroke="#3B82F6" stroke-width="0.5"/>
+    <text x="692" y="282" text-anchor="middle" fill="#BFDBFE" font-family="Consolas, monospace" font-size="7.5" font-weight="700">HostReady</text>
+    <line x1="726" y1="279" x2="738" y2="279" stroke="#475569" stroke-width="0.8" marker-end="url(#ma-slate)" stroke-opacity="0.3"/>
+
+    <rect x="740" y="270" width="64" height="18" rx="5" fill="#6D28D9" stroke="#8B5CF6" stroke-width="0.5"/>
+    <text x="772" y="282" text-anchor="middle" fill="#DDD6FE" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Upload</text>
+    <line x1="806" y1="279" x2="818" y2="279" stroke="#475569" stroke-width="0.8" marker-end="url(#ma-slate)" stroke-opacity="0.3"/>
+
+    <rect x="820" y="270" width="64" height="18" rx="5" fill="#6D28D9" stroke="#8B5CF6" stroke-width="0.5"/>
+    <text x="852" y="282" text-anchor="middle" fill="#DDD6FE" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Installing</text>
+
+    <line x1="852" y1="288" x2="852" y2="298" stroke="#8B5CF6" stroke-width="0.8" marker-end="url(#ma-purple)" stroke-opacity="0.25"/>
+
+    <!-- Terminal row -->
+    <rect x="500" y="302" width="64" height="18" rx="5" fill="url(#ld-ok)" stroke="#10B981" stroke-width="0.5"/>
+    <text x="532" y="314" text-anchor="middle" fill="#A7F3D0" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Resident</text>
+    <rect x="572" y="302" width="44" height="18" rx="5" fill="url(#ld-err)" stroke="#DC2626" stroke-width="0.5"/>
+    <text x="594" y="314" text-anchor="middle" fill="#FECACA" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Failed</text>
+    <rect x="624" y="302" width="44" height="18" rx="5" fill="url(#ld-err)" stroke="#DC2626" stroke-width="0.5"/>
+    <text x="646" y="314" text-anchor="middle" fill="#FECACA" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Stale</text>
+    <rect x="676" y="302" width="52" height="18" rx="5" fill="url(#ld-err)" stroke="#DC2626" stroke-width="0.5"/>
+    <text x="702" y="314" text-anchor="middle" fill="#FECACA" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Draining</text>
+    <rect x="736" y="302" width="64" height="18" rx="5" fill="url(#st-t)" stroke="#475569" stroke-width="0.5"/>
+    <text x="768" y="314" text-anchor="middle" fill="#94A3B8" font-family="Consolas, monospace" font-size="7.5" font-weight="700">Retired</text>
+
+    <!-- Waiter indices -->
+    <rect x="500" y="330" width="196" height="19" rx="5" fill="#1E293B" stroke="#3B82F6" stroke-width="0.6"/>
+    <text x="598" y="343" text-anchor="middle" fill="#93C5FD" font-family="Consolas, monospace" font-size="8.5" font-weight="600">load_to_waiters : LoadId → ⟨WaiterId⟩</text>
+
+    <rect x="706" y="330" width="200" height="19" rx="5" fill="#1E293B" stroke="#3B82F6" stroke-width="0.6"/>
+    <text x="806" y="343" text-anchor="middle" fill="#93C5FD" font-family="Consolas, monospace" font-size="8.5" font-weight="600">waiter_to_loads : WaiterId → ⟨LoadId⟩</text>
   </g>
 
-  <!-- Kernel -->
+  <!-- ============================================================ -->
+  <!-- BELOW OWNERSHIP LINE: Model adapter (left)                    -->
+  <!-- ============================================================ -->
+  <text x="48" y="396" fill="#94A3B8" font-family="system-ui, sans-serif" font-size="10.5" font-weight="700" letter-spacing="1">MODEL ADAPTER</text>
+
   <g>
-    <rect x="780" y="576" width="140" height="48" rx="8" fill="url(#fill-dark)" stroke="url(#accent-blue)" stroke-width="1" filter="url(#shadow-sm)"/>
-    <text x="850" y="596" text-anchor="middle" fill="#3B82F6" font-family="system-ui, sans-serif" font-size="10" font-weight="700">Kernel</text>
-    <text x="850" y="614" text-anchor="middle" fill="#64748B" font-family="Consolas, monospace" font-size="8">plan + buffers + lease</text>
+    <rect x="44" y="406" width="410" height="42" rx="10" fill="url(#fill-card)" stroke="url(#a-blue)" stroke-width="1" filter="url(#shadow)" stroke-opacity="0.35"/>
+    <rect x="56" y="414" width="72" height="18" rx="9" fill="#1E3A5F" fill-opacity="0.5"/>
+    <text x="92" y="427" text-anchor="middle" fill="#93C5FD" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">MODEL</text>
+    <text x="140" y="426" fill="#BFDBFE" font-family="system-ui, sans-serif" font-size="12" font-weight="600">Model adapter &amp; immutable prepared plan</text>
+    <text x="140" y="442" fill="#64748B" font-family="Consolas, monospace" font-size="9">DeepSeek-V4 · MoE materialization · continuation arena</text>
   </g>
 
-  <!-- ===== Hardware Profile ===== -->
+  <!-- --- Hard Credits --- -->
   <g>
-    <rect x="488" y="636" width="432" height="40" rx="8" fill="url(#fill-dark)" stroke="url(#accent-cyan)" stroke-width="0.8" filter="url(#shadow-sm)"/>
+    <rect x="44" y="460" width="410" height="104" rx="10" fill="url(#fill-deep)" stroke="url(#a-amber)" stroke-width="1.2" filter="url(#shadow)" stroke-opacity="0.4"/>
 
-    <text x="504" y="660" fill="#22D3EE" font-family="system-ui, sans-serif" font-size="11" font-weight="700">Hardware profile — DGX Spark · GB10 · sm_121a</text>
-    <text x="800" y="660" fill="#64748B" font-family="system-ui, sans-serif" font-size="9">O_DIRECT / io_uring</text>
+    <rect x="56" y="468" width="96" height="18" rx="9" fill="#78350F" fill-opacity="0.5"/>
+    <text x="104" y="481" text-anchor="middle" fill="#FBBF24" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">HARD CREDITS</text>
+    <text x="164" y="481" fill="#D97706" font-family="system-ui, sans-serif" font-size="10" font-weight="600">owner-managed ledger · atomic admission · staged release</text>
+
+    <rect x="56" y="494" width="76" height="19" rx="5" fill="#1E293B" stroke="#D97706" stroke-width="0.6" stroke-opacity="0.4"/>
+    <text x="94" y="507" text-anchor="middle" fill="#FBBF24" font-family="Consolas, monospace" font-size="9" font-weight="700">SQE</text>
+    <rect x="138" y="494" width="76" height="19" rx="5" fill="#1E293B" stroke="#D97706" stroke-width="0.6" stroke-opacity="0.4"/>
+    <text x="176" y="507" text-anchor="middle" fill="#FBBF24" font-family="Consolas, monospace" font-size="9" font-weight="700">slab</text>
+    <rect x="220" y="494" width="76" height="19" rx="5" fill="#1E293B" stroke="#D97706" stroke-width="0.6" stroke-opacity="0.4"/>
+    <text x="258" y="507" text-anchor="middle" fill="#FBBF24" font-family="Consolas, monospace" font-size="9" font-weight="700">read bytes</text>
+    <rect x="302" y="494" width="76" height="19" rx="5" fill="#1E293B" stroke="#D97706" stroke-width="0.6" stroke-opacity="0.4"/>
+    <text x="340" y="507" text-anchor="middle" fill="#FBBF24" font-family="Consolas, monospace" font-size="9" font-weight="700">upload</text>
+    <rect x="384" y="494" width="56" height="19" rx="5" fill="#1E293B" stroke="#D97706" stroke-width="0.6" stroke-opacity="0.4"/>
+    <text x="412" y="507" text-anchor="middle" fill="#FBBF24" font-family="Consolas, monospace" font-size="9" font-weight="700">frame</text>
+
+    <rect x="56" y="519" width="76" height="19" rx="5" fill="#1E293B" stroke="#D97706" stroke-width="0.6" stroke-opacity="0.4"/>
+    <text x="94" y="532" text-anchor="middle" fill="#FBBF24" font-family="Consolas, monospace" font-size="9" font-weight="700">lease</text>
+    <rect x="138" y="519" width="76" height="19" rx="5" fill="#1E293B" stroke="#D97706" stroke-width="0.6" stroke-opacity="0.4"/>
+    <text x="176" y="532" text-anchor="middle" fill="#FBBF24" font-family="Consolas, monospace" font-size="9" font-weight="700">arena</text>
+    <rect x="220" y="519" width="76" height="19" rx="5" fill="#1E293B" stroke="#D97706" stroke-width="0.6" stroke-opacity="0.4"/>
+    <text x="258" y="532" text-anchor="middle" fill="#FBBF24" font-family="Consolas, monospace" font-size="9" font-weight="700">KV</text>
+    <rect x="302" y="519" width="80" height="19" rx="5" fill="#1E293B" stroke="#D97706" stroke-width="0.6" stroke-opacity="0.4"/>
+    <text x="342" y="532" text-anchor="middle" fill="#FBBF24" font-family="Consolas, monospace" font-size="8.5" font-weight="700">continuation</text>
+    <rect x="388" y="519" width="52" height="19" rx="5" fill="#1E293B" stroke="#D97706" stroke-width="0.6" stroke-opacity="0.4"/>
+    <text x="414" y="532" text-anchor="middle" fill="#FBBF24" font-family="Consolas, monospace" font-size="9" font-weight="700">cohort</text>
+
+    <text x="56" y="556" fill="#475569" font-family="system-ui, sans-serif" font-size="8">aggregate host/device bytes as additional hard envelope · prefetch suppressed first · no soft overflow</text>
   </g>
 
-  <!-- ================================================================== -->
-  <!-- Cross-cutting lines: arrows between left and right major sections  -->
-  <!-- ================================================================== -->
-
-  <!-- Transaction → LoadRegistry: expert miss cascades to LoadRegistry -->
-  <path d="M454 200L488 230" fill="none" stroke="#8B5CF6" stroke-width="1.2" marker-end="url(#arrow-purple)" stroke-opacity="0.35" stroke-dasharray="5 4"/>
-
-  <!-- LoadRegistry → Scheduler: credits/leases flow back -->
-  <path d="M488 380L440 380L440 320" fill="none" stroke="#D97706" stroke-width="1.2" marker-end="url(#arrow-amber)" stroke-opacity="0.35" stroke-dasharray="5 4"/>
-
-  <!-- Credits → Providers -->
-  <path d="M454 630L488 630" fill="none" stroke="#D97706" stroke-width="1.2" marker-end="url(#arrow-amber)" stroke-opacity="0.35"/>
-
-  <!-- ===== Migration phase indicator (bottom) ===== -->
+  <!-- --- Scheduler --- -->
   <g>
-    <rect x="44" y="754" width="876" height="38" rx="8" fill="#0F172A" stroke="#1E293B" stroke-width="0.8" stroke-opacity="0.6"/>
-    <text x="76" y="776" fill="#475569" font-family="system-ui, sans-serif" font-size="9.5" font-weight="600">MIGRATION PLAN</text>
-
-    <rect x="200" y="762" width="42" height="20" rx="5" fill="#1D4ED8" fill-opacity="0.35" stroke="#3B82F6" stroke-width="0.5" stroke-opacity="0.4"/>
-    <text x="221" y="776" text-anchor="middle" fill="#60A5FA" font-family="Consolas, monospace" font-size="9" font-weight="700">A0</text>
-
-    <line x1="244" y1="772" x2="258" y2="772" stroke="#3B82F6" stroke-width="0.8" stroke-opacity="0.3"/>
-
-    <rect x="260" y="762" width="42" height="20" rx="5" fill="#1D4ED8" fill-opacity="0.35" stroke="#3B82F6" stroke-width="0.5" stroke-opacity="0.4"/>
-    <text x="281" y="776" text-anchor="middle" fill="#60A5FA" font-family="Consolas, monospace" font-size="9" font-weight="700">A1</text>
-
-    <line x1="304" y1="772" x2="318" y2="772" stroke="#3B82F6" stroke-width="0.8" stroke-opacity="0.3"/>
-
-    <rect x="320" y="762" width="42" height="20" rx="5" fill="#1D4ED8" fill-opacity="0.35" stroke="#3B82F6" stroke-width="0.5" stroke-opacity="0.4"/>
-    <text x="341" y="776" text-anchor="middle" fill="#60A5FA" font-family="Consolas, monospace" font-size="9" font-weight="700">A2</text>
-
-    <line x1="364" y1="772" x2="378" y2="772" stroke="#3B82F6" stroke-width="0.8" stroke-opacity="0.3"/>
-
-    <rect x="380" y="762" width="42" height="20" rx="5" fill="#7C3AED" fill-opacity="0.35" stroke="#8B5CF6" stroke-width="0.5" stroke-opacity="0.4"/>
-    <text x="401" y="776" text-anchor="middle" fill="#A78BFA" font-family="Consolas, monospace" font-size="9" font-weight="700">A3</text>
-
-    <line x1="424" y1="772" x2="438" y2="772" stroke="#8B5CF6" stroke-width="0.8" stroke-opacity="0.3"/>
-
-    <rect x="440" y="762" width="42" height="20" rx="5" fill="#7C3AED" fill-opacity="0.35" stroke="#8B5CF6" stroke-width="0.5" stroke-opacity="0.4"/>
-    <text x="461" y="776" text-anchor="middle" fill="#A78BFA" font-family="Consolas, monospace" font-size="9" font-weight="700">A4</text>
-
-    <line x1="484" y1="772" x2="498" y2="772" stroke="#8B5CF6" stroke-width="0.8" stroke-opacity="0.3"/>
-
-    <rect x="500" y="762" width="42" height="20" rx="5" fill="#D97706" fill-opacity="0.35" stroke="#FBBF24" stroke-width="0.5" stroke-opacity="0.4"/>
-    <text x="521" y="776" text-anchor="middle" fill="#FBBF24" font-family="Consolas, monospace" font-size="9" font-weight="700">A5</text>
-
-    <line x1="544" y1="772" x2="558" y2="772" stroke="#FBBF24" stroke-width="0.8" stroke-opacity="0.3"/>
-
-    <rect x="560" y="762" width="48" height="20" rx="5" fill="#10B981" fill-opacity="0.35" stroke="#34D399" stroke-width="0.5" stroke-opacity="0.4"/>
-    <text x="584" y="776" text-anchor="middle" fill="#34D399" font-family="Consolas, monospace" font-size="9" font-weight="700">A6 ⚑</text>
-
-    <text x="635" y="776" fill="#475569" font-family="system-ui, sans-serif" font-size="8.5">multi-outstanding · final gate</text>
+    <rect x="44" y="578" width="410" height="50" rx="10" fill="url(#fill-card)" stroke="#334155" stroke-width="1" filter="url(#shadow)"/>
+    <rect x="56" y="586" width="80" height="18" rx="9" fill="#334155" fill-opacity="0.5"/>
+    <text x="96" y="599" text-anchor="middle" fill="#94A3B8" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">SCHEDULER</text>
+    <text x="148" y="598" fill="#CBD5E1" font-family="system-ui, sans-serif" font-size="11" font-weight="600">Work-conserving · bounded aging · deficit round-robin</text>
+    <text x="148" y="618" fill="#64748B" font-family="system-ui, sans-serif" font-size="9.5">lexicographic: feasibility → cancellation → runnable → fairness → marginal cost → phase</text>
   </g>
 
-  <!-- ===== Decorative elements ===== -->
-  <!-- Ownership boundary label (left side) -->
-  <rect x="6" y="520" width="16" height="4" rx="2" fill="#475569" fill-opacity="0.4"/>
-  <text x="14" y="588" fill="#475569" font-family="system-ui, sans-serif" font-size="8" font-weight="600" transform="rotate(-90 14 588)">RUST-OWNED</text>
+  <!-- ============================================================ -->
+  <!-- BELOW OWNERSHIP LINE: Provider boundary (right)               -->
+  <!-- ============================================================ -->
+  <text x="492" y="396" fill="#22D3EE" font-family="system-ui, sans-serif" font-size="10.5" font-weight="700" letter-spacing="1">PROVIDER BOUNDARY</text>
 
-  <!-- Ownership boundary label (right side) -->
-  <text x="944" y="540" fill="#334155" font-family="system-ui, sans-serif" font-size="8" font-weight="600" transform="rotate(90 944 540)">PROVIDER-OWNED</text>
-  <rect x="936" y="520" width="16" height="4" rx="2" fill="#334155" fill-opacity="0.3"/>
+  <!-- --- Provider ABI --- -->
+  <g>
+    <rect x="488" y="406" width="432" height="60" rx="10" fill="url(#fill-deep)" stroke="url(#a-emerald)" stroke-width="1" filter="url(#shadow)" stroke-opacity="0.35"/>
+    <rect x="500" y="414" width="96" height="18" rx="9" fill="#064E3B" fill-opacity="0.5"/>
+    <text x="548" y="427" text-anchor="middle" fill="#34D399" font-family="system-ui, sans-serif" font-size="8.5" font-weight="700">PROVIDER ABI</text>
+    <text x="504" y="448" fill="#CBD5E1" font-family="system-ui, sans-serif" font-size="10.5" font-weight="600">Owner → Provider:　Command ⟨operation_id, grant_ids, POD descriptors⟩</text>
+    <text x="504" y="462" fill="#CBD5E1" font-family="system-ui, sans-serif" font-size="10.5" font-weight="600">Provider → Owner:　Completion ⟨operation_id, stage, result⟩</text>
+  </g>
 
-  <!-- Watermark -->
-  <text x="952" y="852" text-anchor="end" fill="#1E293B" font-family="Consolas, monospace" font-size="10" font-weight="600">ferrule target architecture</text>
+  <!-- Vertical: LoadOp → Provider ABI -->
+  <line x1="704" y1="360" x2="704" y2="404" stroke="#22D3EE" stroke-width="1.4" marker-end="url(#ma-cyan)" stroke-opacity="0.4"/>
 
+  <!-- --- Three providers --- -->
+  <g>
+    <rect x="488" y="480" width="132" height="50" rx="8" fill="url(#fill-card)" stroke="url(#a-cyan)" stroke-width="1" filter="url(#shadow-sm)"/>
+    <text x="554" y="504" text-anchor="middle" fill="#22D3EE" font-family="system-ui, sans-serif" font-size="11" font-weight="700">Storage</text>
+    <text x="554" y="522" text-anchor="middle" fill="#64748B" font-family="Consolas, monospace" font-size="8.5">submit_read · CQE</text>
+  </g>
+  <g>
+    <rect x="634" y="480" width="132" height="50" rx="8" fill="url(#fill-card)" stroke="url(#a-purple)" stroke-width="1" filter="url(#shadow-sm)"/>
+    <text x="700" y="504" text-anchor="middle" fill="#8B5CF6" font-family="system-ui, sans-serif" font-size="11" font-weight="700">Device</text>
+    <text x="700" y="522" text-anchor="middle" fill="#64748B" font-family="Consolas, monospace" font-size="8.5">upload · event fence</text>
+  </g>
+  <g>
+    <rect x="780" y="480" width="140" height="50" rx="8" fill="url(#fill-card)" stroke="url(#a-blue)" stroke-width="1" filter="url(#shadow-sm)"/>
+    <text x="850" y="504" text-anchor="middle" fill="#3B82F6" font-family="system-ui, sans-serif" font-size="11" font-weight="700">Kernel</text>
+    <text x="850" y="522" text-anchor="middle" fill="#64748B" font-family="Consolas, monospace" font-size="8.5">plan + buffers + lease</text>
+  </g>
+
+  <!-- Vertical: Provider ABI → Providers -->
+  <line x1="704" y1="466" x2="704" y2="478" stroke="#10B981" stroke-width="1.3" marker-end="url(#ma-emerald)" stroke-opacity="0.4"/>
+
+  <!-- --- Hardware profile --- -->
+  <g>
+    <rect x="488" y="544" width="432" height="36" rx="8" fill="url(#fill-card)" stroke="url(#a-cyan)" stroke-width="0.8" filter="url(#shadow-sm)"/>
+    <text x="504" y="567" fill="#22D3EE" font-family="system-ui, sans-serif" font-size="10" font-weight="700">Hardware profile — DGX Spark · GB10 · sm_121a · O_DIRECT / io_uring</text>
+  </g>
+
+  <line x1="704" y1="530" x2="704" y2="542" stroke="#22D3EE" stroke-width="1.3" marker-end="url(#ma-cyan)" stroke-opacity="0.4"/>
+
+  <!-- ============================================================ -->
+  <!-- VERTICAL ARROWS (left column)                                 -->
+  <!-- ============================================================ -->
+  <line x1="250" y1="314" x2="250" y2="324" stroke="#94A3B8" stroke-width="1.3" marker-end="url(#ma-slate)" stroke-opacity="0.35"/>
+  <line x1="250" y1="358" x2="250" y2="380" stroke="#94A3B8" stroke-width="1.3" marker-end="url(#ma-slate)" stroke-opacity="0.3"/>
+  <line x1="250" y1="440" x2="250" y2="458" stroke="#94A3B8" stroke-width="1.3" marker-end="url(#ma-slate)" stroke-opacity="0.35"/>
+  <line x1="250" y1="556" x2="250" y2="576" stroke="#94A3B8" stroke-width="1.3" marker-end="url(#ma-slate)" stroke-opacity="0.35"/>
+
+  <!-- ============================================================ -->
+  <!-- CROSS-COLUMN: only the two semantically clear edges           -->
+  <!-- ============================================================ -->
+
+  <!-- Expert miss: Running → LoadKey (at row height y=153 between cols) -->
+  <path d="M454 153L488 153" fill="none" stroke="#8B5CF6" stroke-width="1.3" marker-end="url(#ma-purple)" stroke-opacity="0.3" stroke-dasharray="5 4"/>
+
+  <!-- Targeted wake: waiter indices → Waiting pill (right edge x=286) -->
+  <path d="M488 340L440 340L440 205L288 205" fill="none" stroke="#3B82F6" stroke-width="1.3" marker-end="url(#ma-blue)" stroke-opacity="0.28" stroke-dasharray="5 4"/>
+
+  <!-- ============================================================ -->
+  <!-- DECORATIVE                                                     -->
+  <!-- ============================================================ -->
+  <text x="16" y="500" fill="#475569" font-family="system-ui, sans-serif" font-size="8.5" font-weight="600" transform="rotate(-90 16 500)">RUST-OWNED</text>
+  <text x="944" y="520" fill="#334155" font-family="system-ui, sans-serif" font-size="8.5" font-weight="600" transform="rotate(90 944 520)">PROVIDER-OWNED</text>
+  <text x="952" y="794" text-anchor="end" fill="#1E293B" font-family="Consolas, monospace" font-size="9.5" font-weight="600">ferrule architecture</text>
 </svg>
