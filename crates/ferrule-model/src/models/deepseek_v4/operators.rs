@@ -3,10 +3,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-#[cfg(feature = "cuda")]
-use ferrule_common::ExpertResidencyControl;
-
-use ferrule_common::{CompletionHub, Error, ExpertResidencyStats, MemoryPoolStats, Result};
+use ferrule_common::{CompletionHub, Error, ExpertResidencyStats, Result};
 
 use crate::artifact::binding::RouterArtifactPayload;
 use crate::artifact::linear::ArtifactLinearPayload;
@@ -25,13 +22,13 @@ use crate::moe::routed::{
     RoutedMoeStepOutput, execute_routed_moe_with_artifact_router_reference_with_handles,
 };
 use crate::moe::routing::ExpertRouterPolicy;
-#[cfg(feature = "cuda")]
-use crate::moe::streaming::ExpertSourceCatalog;
 use crate::moe::streaming::{ExpertMemoryPolicy, ExpertStreamingPlanner, ExpertStreamingReader};
 
 use super::config::DeepSeekV4AttentionConfig;
 #[cfg(feature = "cuda")]
 use super::cuda_cache::DeepSeekV4CudaOperatorCache;
+#[cfg(feature = "cuda")]
+use super::expert_materializer::DeepSeekV4SharedExpertSubsystem;
 use super::helpers::{grouped_output_a, rms_norm, rms_norm_heads_in_place};
 use super::prepared::DeepSeekV4ExecutionPolicy;
 #[cfg(feature = "cuda")]
@@ -160,52 +157,6 @@ pub struct DeepSeekV4OperatorRuntimeCounters {
     pub moe_router_us: u64,
     pub moe_routing_us: u64,
     pub moe_plan_us: u64,
-    pub moe_predicted_experts: u64,
-    pub moe_prefetch_loads: u64,
-    pub moe_prefetch_enqueued: u64,
-    pub moe_prefetch_skipped_cached_or_inflight: u64,
-    pub moe_prefetch_resident: u64,
-    pub moe_prefetch_materializing: u64,
-    pub moe_prefetch_host_staged: u64,
-    pub moe_prefetch_in_flight: u64,
-    pub moe_prefetch_cold: u64,
-    pub expert_selected_resident_hits: u64,
-    pub expert_selected_upload_hits: u64,
-    pub expert_selected_host_staged_hits: u64,
-    pub expert_selected_host_staging_waits: u64,
-    pub expert_selected_host_staging_hits: u64,
-    pub expert_selected_host_staging_wait_us: u64,
-    pub expert_selected_cold_misses: u64,
-    pub expert_upload_prefetch_submitted: u64,
-    pub expert_upload_prefetch_completed: u64,
-    pub expert_upload_prefetch_in_flight: usize,
-    pub expert_prefetch_outstanding: usize,
-    pub expert_prefetch_slot_reservations: usize,
-    pub expert_prefetch_host_queued: usize,
-    pub expert_abandoned_uploads: usize,
-    pub expert_frame_reuses: u64,
-    pub expert_frame_waits: u64,
-    pub expert_free_frames: usize,
-    pub expert_io_submitted_extents: u64,
-    pub expert_io_completed_extents: u64,
-    pub expert_io_failed_extents: u64,
-    pub expert_io_requested_bytes: u64,
-    pub expert_io_aligned_bytes: u64,
-    pub expert_io_coalesced_slices: u64,
-    pub expert_io_fixed_file_registrations: u64,
-    pub expert_io_slab_exhaustions: u64,
-    pub expert_io_peak_queue_depth: usize,
-    pub expert_io_read_us: u64,
-    pub expert_selected_upload_waits: u64,
-    pub expert_selected_upload_wait_us: u64,
-    pub expert_async_upload_bytes: u64,
-    pub expert_lookahead_prefetch_calls: u64,
-    pub expert_lookahead_prefetch_experts: u64,
-    pub expert_lookahead_prefetch_enqueued: u64,
-    pub expert_lookahead_prefetch_us: u64,
-    pub moe_cache_lookup_us: u64,
-    pub moe_expert_read_us: u64,
-    pub moe_expert_upload_us: u64,
     pub moe_shared_us: u64,
     pub moe_workspace_us: u64,
     pub moe_compute_submit_us: u64,
@@ -218,18 +169,16 @@ pub struct DeepSeekV4OperatorRuntimeCounters {
     /// Sum of unique experts within each MoE layer invocation.
     pub expert_unique_selected: u64,
     pub expert_selected_load_requests: u64,
-    pub expert_loads: u64,
-    pub expert_load_bytes: u64,
-    pub expert_evictions: u64,
-    pub expert_host_cache: MemoryPoolStats,
-    pub expert_pinned_cache: MemoryPoolStats,
-    pub expert_cuda_resident_entries: usize,
-    pub expert_cuda_resident_bytes: u64,
-    pub expert_async_prefetch_submitted: u64,
-    pub expert_async_prefetch_completed: u64,
-    pub expert_async_prefetch_failed: u64,
-    pub expert_async_prefetch_skipped: u64,
-    pub expert_async_prefetch_in_flight: usize,
+    pub expert_io_submitted_extents: u64,
+    pub expert_io_completed_extents: u64,
+    pub expert_io_failed_extents: u64,
+    pub expert_io_requested_bytes: u64,
+    pub expert_io_aligned_bytes: u64,
+    pub expert_io_coalesced_slices: u64,
+    pub expert_io_fixed_file_registrations: u64,
+    pub expert_io_slab_exhaustions: u64,
+    pub expert_io_peak_queue_depth: usize,
+    pub expert_io_read_us: u64,
     pub arena_hits: u64,
     pub arena_misses: u64,
     pub arena_grows: u64,
@@ -750,77 +699,22 @@ impl DeepSeekV4OperatorContext {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn configure_expert_frame_pool(
+    pub(super) fn configure_expert_subsystem(
         &mut self,
-        expert_capacity: usize,
-        layer_slot_capacities: &[(usize, usize)],
-        hidden_size: usize,
-        intermediate_size: usize,
+        subsystem: DeepSeekV4SharedExpertSubsystem,
     ) -> Result<()> {
         if self.backend != ModelExecutionBackend::Cuda {
-            return Ok(());
+            return Err(Error::Execution(
+                "DeepSeek-V4 shared expert subsystem requires the CUDA backend".into(),
+            ));
         }
-        self.cuda_mut()?.configure_expert_frame_pool(
-            expert_capacity,
-            layer_slot_capacities,
-            hidden_size,
-            intermediate_size,
-        )
+        self.cuda_mut()?.configure_expert_subsystem(subsystem)
     }
 
-    #[cfg(feature = "cuda")]
-    pub(crate) fn prefetch_predicted_experts(
-        &mut self,
-        layer: usize,
-        predicted_experts: &[usize],
-        residency: &mut dyn ExpertResidencyControl,
-        source_catalog: &ExpertSourceCatalog,
-        prefetch_capacity: usize,
-        reader: &ExpertStreamingReader,
-    ) -> Result<usize> {
-        if self.backend != ModelExecutionBackend::Cuda {
-            return Ok(0);
-        }
-        self.cuda_mut()?.prefetch_predicted_experts(
-            layer,
-            predicted_experts,
-            residency,
-            source_catalog,
-            prefetch_capacity,
-            reader,
-        )
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(crate) fn prewarm_experts(
-        &mut self,
-        layer: usize,
-        experts: &[usize],
-        residency: &mut dyn ExpertResidencyControl,
-        source_catalog: &ExpertSourceCatalog,
-        prefetch_capacity: usize,
-        reader: &ExpertStreamingReader,
-    ) -> Result<usize> {
-        if self.backend != ModelExecutionBackend::Cuda {
-            return Ok(0);
-        }
-        self.cuda_mut()?.prefetch_predicted_experts(
-            layer,
-            experts,
-            residency,
-            source_catalog,
-            prefetch_capacity,
-            reader,
-        )
-    }
-
-    pub(crate) fn shutdown(
-        &mut self,
-        #[cfg(feature = "cuda")] residency: Option<&mut (dyn ExpertResidencyControl + '_)>,
-    ) -> Result<()> {
+    pub(crate) fn shutdown(&mut self) -> Result<()> {
         #[cfg(feature = "cuda")]
         if self.backend == ModelExecutionBackend::Cuda {
-            self.cuda_mut()?.shutdown(residency)?;
+            self.cuda_mut()?.shutdown()?;
         }
         Ok(())
     }

@@ -11,6 +11,7 @@ pub struct ResidentTopKDriverStats {
     pub emitted_tokens: usize,
     pub staged_tokens: usize,
     pub finished_sequences: usize,
+    pub hard_resource_high_water: Vec<(crate::scheduling::ResourceKind, u64)>,
     pub speculative: SpeculativeMetrics,
 }
 

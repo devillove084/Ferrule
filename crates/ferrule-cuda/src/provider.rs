@@ -22,7 +22,7 @@ pub struct CudaProviderCatalog {
 impl CudaProviderCatalog {
     /// Discover compiled providers once during prepare/compile.
     pub fn discover() -> Result<Self> {
-        let mut registry = ProviderRegistry::with_cuda_oxide();
+        let mut registry = ProviderRegistry::with_cuda_native();
         let cutlass = crate::cutlass::discover_provider()?;
         registry.register(cutlass.execution_manifest()?);
         Ok(Self { registry, cutlass })
@@ -64,7 +64,7 @@ impl CudaProviderCatalog {
 }
 
 fn set_provider_operation(plan: &mut LayerKernelPlan, operation: KernelOperation) {
-    let kernel = KernelId::new(KernelProviderId::CutlassCubin, operation);
+    let kernel = KernelId::new(KernelProviderId::ExternalProvider, operation);
     let descriptor = LaunchDescriptor::new(kernel, (0, 0, 0), (0, 0, 0))
         .provider_managed()
         .capture_safe();

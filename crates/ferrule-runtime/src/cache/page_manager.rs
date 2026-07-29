@@ -523,6 +523,71 @@ impl KvPageManager {
         Ok(())
     }
 
+    pub fn sequence_generation(&self, state_slot: StateSlot) -> Result<u64> {
+        self.sequences
+            .get(&state_slot.get())
+            .map(|sequence| sequence.generation)
+            .ok_or_else(|| {
+                Error::Internal(format!(
+                    "page manager: state slot {} is not allocated",
+                    state_slot.get()
+                ))
+            })
+    }
+
+    /// Return the exact number of new physical pages (including a COW tail)
+    /// required by a reservation without mutating manager state.
+    pub fn required_physical_pages(
+        &self,
+        state_slot: StateSlot,
+        generation: u64,
+        token_count: usize,
+    ) -> Result<usize> {
+        let slot = state_slot.get();
+        if self.reservation_owners.contains_key(&slot) {
+            return Err(Error::Execution(format!(
+                "page manager: state slot {slot} already owns a live reservation"
+            )));
+        }
+        let sequence = self.sequences.get(&slot).ok_or_else(|| {
+            Error::Internal(format!(
+                "page manager: cannot size reservation for unallocated state slot {slot}"
+            ))
+        })?;
+        if sequence.generation != generation {
+            return Err(Error::Execution(format!(
+                "page manager: stale generation {generation} for state slot {slot} (expected {})",
+                sequence.generation
+            )));
+        }
+        let end = sequence
+            .block_table
+            .committed_tokens
+            .checked_add(token_count)
+            .ok_or_else(|| Error::Execution("page manager: sequence length overflow".into()))?;
+        if end > self.schema.max_sequence_len() {
+            return Err(Error::Execution(format!(
+                "page manager: sequence length {end} exceeds schema maximum {}",
+                self.schema.max_sequence_len()
+            )));
+        }
+        let pages_needed = self
+            .schema
+            .pages_for_tokens(end)
+            .saturating_sub(sequence.block_table.pages.len());
+        let shared_tail = token_count > 0
+            && !sequence
+                .block_table
+                .committed_tokens
+                .is_multiple_of(self.schema.page_size())
+            && sequence
+                .block_table
+                .pages
+                .last()
+                .is_some_and(|page| self.page_refcounts.get(page).copied().unwrap_or(0) > 1);
+        Ok(pages_needed + usize::from(shared_tail))
+    }
+
     /// Reserve pages for appending `token_count` tokens to a sequence.
     ///
     /// Returns a reservation containing the newly allocated page IDs. The
@@ -599,9 +664,11 @@ impl KvPageManager {
 
         let view = KvReservationView {
             state_slot,
+            execution_state_slot: state_slot,
             positions,
             newly_allocated: reserved_pages,
             generation,
+            execution_generation: generation,
             cow_replacement,
         };
         let id = self.take_reservation_id()?;
@@ -1027,6 +1094,34 @@ impl KvPageManager {
 
     pub fn page_refcount(&self, page: KvPageId) -> u32 {
         self.page_refcounts.get(&page).copied().unwrap_or(0)
+    }
+
+    pub fn bind_reservation_execution(
+        &mut self,
+        reservation: &mut KvReservation,
+        execution_state_slot: StateSlot,
+        execution_generation: u64,
+    ) -> Result<()> {
+        let stored = self
+            .pending_reservations
+            .get_mut(&reservation.id)
+            .ok_or_else(|| {
+                Error::Execution(format!(
+                    "page manager: reservation {} is not live",
+                    reservation.id.get()
+                ))
+            })?;
+        if stored != &reservation.view {
+            return Err(Error::Internal(format!(
+                "page manager: reservation {} view changed before execution binding",
+                reservation.id.get()
+            )));
+        }
+        stored.execution_state_slot = execution_state_slot;
+        stored.execution_generation = execution_generation;
+        reservation.view.execution_state_slot = execution_state_slot;
+        reservation.view.execution_generation = execution_generation;
+        Ok(())
     }
 
     pub fn reservation_view(&self, reservation: &KvReservation) -> Result<KvReservationView> {
@@ -1810,6 +1905,21 @@ mod tests {
         let after = mgr.block_table(slot(0)).unwrap();
         assert_eq!(after.pages(), before.pages());
         assert_eq!(after.committed_tokens(), before.committed_tokens());
+    }
+
+    #[test]
+    fn execution_binding_is_independent_from_page_owner_identity() {
+        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 4);
+        mgr.alloc_sequence(slot(7), 3).unwrap();
+        let mut reservation = mgr.reserve(slot(7), 3, 1).unwrap();
+
+        mgr.bind_reservation_execution(&mut reservation, slot(0), 9)
+            .unwrap();
+        let view = mgr.reservation_view(&reservation).unwrap();
+        assert_eq!(view.state_slot, slot(7));
+        assert_eq!(view.generation, 3);
+        assert_eq!(view.execution_state_slot, slot(0));
+        assert_eq!(view.execution_generation, 9);
     }
 
     #[test]

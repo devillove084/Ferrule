@@ -1,9 +1,10 @@
 //! Expert residency controller and backend materialization boundary.
 pub use ferrule_common::expert_residency::{
-    ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertInstallReason, ExpertKey, ExpertLease,
-    ExpertResidencyControl, ExpertResidencyCoordinator, ExpertResidencyCoordinatorStats,
-    ExpertResidencyGrant, ExpertResidencyRequirements, ExpertResidencyStats, ExpertSlotBinding,
-    ExpertSlotGeneration, ExpertSlotId, PreparedExpertInstall,
+    ExpertInstallActivationOutcome, ExpertInstallIntent, ExpertInstallPrepareOutcome,
+    ExpertInstallReason, ExpertKey, ExpertLease, ExpertResidencyControl,
+    ExpertResidencyCoordinator, ExpertResidencyCoordinatorStats, ExpertResidencyGrant,
+    ExpertResidencyRequirements, ExpertResidencyStats, ExpertSlotBinding, ExpertSlotGeneration,
+    ExpertSlotId, PreparedExpertInstall,
 };
 use ferrule_common::{Error, Result};
 
@@ -170,6 +171,14 @@ impl ExpertResidencyControl for ExpertResidencyController {
                 intent.key
             ))),
         }
+    }
+
+    fn activate_install(
+        &mut self,
+        prepared: PreparedExpertInstall,
+    ) -> Result<ExpertInstallActivationOutcome> {
+        let layer = self.layer_index(prepared.binding().key)?;
+        self.layers[layer].activate_install(prepared)
     }
 
     fn publish_install(&mut self, prepared: PreparedExpertInstall) -> Result<ExpertResidencyGrant> {
@@ -370,17 +379,21 @@ mod tests {
         key: u32,
     ) -> ExpertSlotBinding<u32> {
         let prepared = coordinator.prepare_install(key).unwrap();
+        assert_eq!(
+            coordinator.activate_install(prepared).unwrap(),
+            ExpertInstallActivationOutcome::Activated
+        );
         coordinator.publish_install(prepared).unwrap()
     }
 
     #[test]
     fn coordinator_install_is_failure_atomic_until_publish() {
         let mut coordinator = ExpertResidencyCoordinator::new(1).unwrap();
-        let first = install(&mut coordinator, 7);
+        let _first = install(&mut coordinator, 7);
         let prepared = coordinator.prepare_install(9).unwrap();
 
         assert_eq!(prepared.evicted_key(), Some(7));
-        assert_eq!(coordinator.binding(7), Some(first));
+        assert!(coordinator.binding(7).is_some());
         assert_eq!(coordinator.binding(9), None);
         assert_eq!(coordinator.stats().resident, 1);
         assert_eq!(coordinator.stats().evictions, 0);
@@ -412,17 +425,25 @@ mod tests {
     }
 
     #[test]
-    fn coordinator_rejects_stale_prepared_publication() {
+    fn coordinator_activation_waits_for_late_lease_then_cancel_restores_old_generation() {
         let mut coordinator = ExpertResidencyCoordinator::new(1).unwrap();
-        install(&mut coordinator, 7);
+        let old = install(&mut coordinator, 7);
         let prepared = coordinator.prepare_install(9).unwrap();
-        let lease = coordinator.acquire(7).unwrap().unwrap();
 
-        let error = coordinator.publish_install(prepared).unwrap_err();
-        assert!(error.to_string().contains("became stale"));
-        assert!(coordinator.binding(7).is_some());
-        assert!(coordinator.binding(9).is_none());
+        assert_eq!(coordinator.binding(7), Some(old));
+        let lease = coordinator.acquire(7).unwrap().unwrap();
+        assert_eq!(
+            coordinator.activate_install(prepared).unwrap(),
+            ExpertInstallActivationOutcome::BlockedByLeases
+        );
         coordinator.release(lease).unwrap();
+        assert_eq!(
+            coordinator.activate_install(prepared).unwrap(),
+            ExpertInstallActivationOutcome::Activated
+        );
+        assert!(coordinator.binding(7).is_none());
+        coordinator.cancel_install(prepared).unwrap();
+        assert_eq!(coordinator.binding(7), Some(old));
     }
 
     #[test]
@@ -454,6 +475,10 @@ mod tests {
     ) -> ExpertResidencyGrant {
         let prepared = prepared(controller.prepare_install(intent).unwrap());
         let expected = prepared.binding();
+        assert_eq!(
+            controller.activate_install(prepared).unwrap(),
+            ExpertInstallActivationOutcome::Activated
+        );
         let grant = controller.publish_install(prepared).unwrap();
         assert_eq!(grant.binding(), expected);
         grant
@@ -471,6 +496,10 @@ mod tests {
             control
                 .prepare_install(ExpertInstallIntent::prefetch(first_key))
                 .unwrap(),
+        );
+        assert_eq!(
+            control.activate_install(first_prepared).unwrap(),
+            ExpertInstallActivationOutcome::Activated
         );
         let first_binding = control.publish_install(first_prepared).unwrap().binding();
         let second_binding =
@@ -533,6 +562,11 @@ mod tests {
         assert_eq!(failed.evicted_key(), Some(old_key));
         assert_eq!(controller.binding(old_key).unwrap(), Some(old.binding()));
         assert_eq!(controller.binding(new_key).unwrap(), None);
+        assert_eq!(
+            controller.activate_install(failed).unwrap(),
+            ExpertInstallActivationOutcome::Activated
+        );
+        assert_eq!(controller.binding(old_key).unwrap(), None);
         controller.cancel_install(failed).unwrap();
         assert_eq!(controller.binding(old_key).unwrap(), Some(old.binding()));
         assert_eq!(controller.stats().evictions, 0);
@@ -551,6 +585,10 @@ mod tests {
                 .unwrap(),
         );
         let exact = retry.binding();
+        assert_eq!(
+            controller.activate_install(retry).unwrap(),
+            ExpertInstallActivationOutcome::Activated
+        );
         let published = controller.publish_install(retry).unwrap();
         assert_eq!(published.binding(), exact);
         assert_eq!(exact.slot, old.binding().slot);

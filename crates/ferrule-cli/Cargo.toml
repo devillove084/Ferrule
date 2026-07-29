@@ -31,8 +31,12 @@ tokio = { version = "1", features = ["net", "rt-multi-thread", "signal"] }
 
 [features]
 default = []
-cuda = ["ferrule-cuda", "ferrule-runtime/cuda", "ferrule-model/cuda"]
-cutlass = ["cuda", "ferrule-cuda/cutlass", "ferrule-runtime/cutlass", "ferrule-model/cutlass"]
+cuda = [
+    "dep:ferrule-cuda",
+    "ferrule-cuda/cuda",
+    "ferrule-runtime/cuda",
+    "ferrule-model/cuda",
+]
 
 [lints]
 workspace = true

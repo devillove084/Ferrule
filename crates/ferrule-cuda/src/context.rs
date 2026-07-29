@@ -905,22 +905,22 @@ pub struct CudaArtifactLinearWorkspace {
 /// status needed by the semantic CUTLASS bundle.
 pub struct CudaDsparkHybridAttentionWorkspace {
     #[cfg_attr(
-        not(feature = "cutlass"),
+        not(feature = "cuda"),
         allow(dead_code, reason = "keeps native CUTLASS query scratch alive")
     )]
     query_bf16: DeviceBuffer<u16>,
     #[cfg_attr(
-        not(feature = "cutlass"),
+        not(feature = "cuda"),
         allow(dead_code, reason = "keeps native CUTLASS KV scratch alive")
     )]
     gathered_kv_bf16: DeviceBuffer<u16>,
     #[cfg_attr(
-        not(feature = "cutlass"),
+        not(feature = "cuda"),
         allow(dead_code, reason = "keeps native CUTLASS score scratch alive")
     )]
     scores: CudaF32Buffer,
     #[cfg_attr(
-        not(feature = "cutlass"),
+        not(feature = "cuda"),
         allow(dead_code, reason = "keeps native CUTLASS probability scratch alive")
     )]
     probabilities_bf16: DeviceBuffer<u16>,
@@ -937,27 +937,27 @@ impl CudaDsparkHybridAttentionWorkspace {
 /// HC/LM/Markov/confidence semantic bundle.
 pub struct CudaDsparkProposalHeadWorkspace {
     #[cfg_attr(
-        not(feature = "cutlass"),
+        not(feature = "cuda"),
         allow(dead_code, reason = "keeps native CUTLASS hidden scratch alive")
     )]
     hidden: CudaF32Buffer,
     #[cfg_attr(
-        not(feature = "cutlass"),
+        not(feature = "cuda"),
         allow(dead_code, reason = "keeps native CUTLASS normalization scratch alive")
     )]
     normalized: CudaF32Buffer,
     #[cfg_attr(
-        not(feature = "cutlass"),
+        not(feature = "cuda"),
         allow(dead_code, reason = "keeps native CUTLASS logits scratch alive")
     )]
     base_logits: CudaF32Buffer,
     #[cfg_attr(
-        not(feature = "cutlass"),
+        not(feature = "cuda"),
         allow(dead_code, reason = "keeps native CUTLASS reduction values alive")
     )]
     partial_values: CudaF32Buffer,
     #[cfg_attr(
-        not(feature = "cutlass"),
+        not(feature = "cuda"),
         allow(dead_code, reason = "keeps native CUTLASS reduction indices alive")
     )]
     partial_indices: CudaI32Buffer,
@@ -965,7 +965,7 @@ pub struct CudaDsparkProposalHeadWorkspace {
     confidence: CudaF32Buffer,
     status: CudaI32Buffer,
     #[cfg_attr(
-        not(feature = "cutlass"),
+        not(feature = "cuda"),
         allow(dead_code, reason = "keeps the CUTLASS result mirror alive")
     )]
     result: CudaI32HostMirror,
@@ -1056,27 +1056,27 @@ pub struct CudaMoeSegmentWorkspace {
     x_packed: DeviceBuffer<u8>,
     x_scales: DeviceBuffer<u8>,
     #[cfg_attr(
-        not(feature = "cutlass"),
+        not(feature = "cuda"),
         allow(dead_code, reason = "keeps native CUTLASS segment state alive")
     )]
     segment_states: DeviceBuffer<i32>,
     #[cfg_attr(
-        not(feature = "cutlass"),
+        not(feature = "cuda"),
         allow(dead_code, reason = "keeps native CUTLASS segment bindings alive")
     )]
     segment_bindings: DeviceBuffer<u64>,
     #[cfg_attr(
-        not(feature = "cutlass"),
+        not(feature = "cuda"),
         allow(dead_code, reason = "keeps native CUTLASS hidden scratch alive")
     )]
     hidden_f32: DeviceBuffer<f32>,
     #[cfg_attr(
-        not(feature = "cutlass"),
+        not(feature = "cuda"),
         allow(dead_code, reason = "keeps native CUTLASS packed scratch alive")
     )]
     hidden_packed: DeviceBuffer<u8>,
     #[cfg_attr(
-        not(feature = "cutlass"),
+        not(feature = "cuda"),
         allow(dead_code, reason = "keeps native CUTLASS scale scratch alive")
     )]
     hidden_scales: DeviceBuffer<u8>,
@@ -3182,7 +3182,7 @@ impl CudaArtifactOperatorContext {
         })
     }
 
-    #[cfg(feature = "cutlass")]
+    #[cfg(feature = "cuda")]
     fn zero_i32_buffer_in_place(&self, buf: &mut CudaI32Buffer) -> Result<()> {
         let result = unsafe {
             cuda_bindings::cuMemsetD32Async(
@@ -3660,7 +3660,7 @@ impl CudaArtifactOperatorContext {
     }
 
     /// Run the checkpoint-native DSpark HC/LM/Markov/confidence proposal head.
-    #[cfg(feature = "cutlass")]
+    #[cfg(feature = "cuda")]
     #[allow(clippy::too_many_arguments)]
     pub fn artifact_dspark_proposal_head_cutlass_into(
         &self,
@@ -3752,7 +3752,7 @@ impl CudaArtifactOperatorContext {
 
     /// Download proposal-head numerical boundaries for diagnostic parity checks.
     /// This is intentionally separate from the compact production result path.
-    #[cfg(feature = "cutlass")]
+    #[cfg(feature = "cuda")]
     pub fn download_dspark_proposal_head_debug_snapshot(
         &self,
         workspace: &CudaDsparkProposalHeadWorkspace,
@@ -3764,7 +3764,7 @@ impl CudaArtifactOperatorContext {
         ))
     }
 
-    #[cfg(feature = "cutlass")]
+    #[cfg(feature = "cuda")]
     pub fn begin_dspark_proposal_head_result_download(
         &self,
         workspace: &mut CudaDsparkProposalHeadWorkspace,
@@ -3800,7 +3800,7 @@ impl CudaArtifactOperatorContext {
         self.begin_i32_host_mirror_download_after(&mut workspace.result, &produced)
     }
 
-    #[cfg(feature = "cutlass")]
+    #[cfg(feature = "cuda")]
     pub fn poll_dspark_proposal_head_result_download(
         &self,
         workspace: &mut CudaDsparkProposalHeadWorkspace,
@@ -3809,7 +3809,7 @@ impl CudaArtifactOperatorContext {
         self.poll_i32_host_mirror_download(&mut workspace.result, download)
     }
 
-    #[cfg(feature = "cutlass")]
+    #[cfg(feature = "cuda")]
     pub fn download_dspark_proposal_head_result(
         &self,
         workspace: &mut CudaDsparkProposalHeadWorkspace,
@@ -3827,7 +3827,7 @@ impl CudaArtifactOperatorContext {
     /// Compute a BF16-compressed two-projection bundle on device.
     /// Run checkpoint-native DSpark attention over committed paged context and
     /// one read-only five-row proposal block. All scratch remains caller-owned.
-    #[cfg(feature = "cutlass")]
+    #[cfg(feature = "cuda")]
     #[allow(clippy::too_many_arguments)]
     pub fn dspark_hybrid_mla_attention_into(
         &self,
@@ -4737,7 +4737,7 @@ impl CudaArtifactOperatorContext {
         self.artifact_linear_rows_device(handle, &scratch.cloned.buffer, rows, &mut output.buffer)
     }
 
-    #[cfg(feature = "cutlass")]
+    #[cfg(feature = "cuda")]
     pub fn artifact_fp8_projection_cutlass_rows_from_device_into_with_scratch(
         &self,
         handle: &CudaArtifactLinearHandle,
@@ -4889,7 +4889,7 @@ impl CudaArtifactOperatorContext {
         split_comb: &mut CudaF32Buffer,
         packed_output: &'a mut CudaFp8ActivationPack,
     ) -> Result<CudaPreparedFp8Activation<'a>> {
-        #[cfg(not(feature = "cutlass"))]
+        #[cfg(not(feature = "cuda"))]
         {
             let _ = (
                 state,
@@ -4915,7 +4915,7 @@ impl CudaArtifactOperatorContext {
                 "GB10 HC producer execution requires the `cutlass` feature".into(),
             ))
         }
-        #[cfg(feature = "cutlass")]
+        #[cfg(feature = "cuda")]
         {
             crate::cutlass::hc_producer(
                 &self.stream,
@@ -4945,7 +4945,7 @@ impl CudaArtifactOperatorContext {
     }
 
     /// Execute the required SM121 one-launch BF16 compressor dual projection.
-    #[cfg(feature = "cutlass")]
+    #[cfg(feature = "cuda")]
     pub fn artifact_bf16_compressor_cutlass_into(
         &self,
         projection1: &CudaArtifactLinearHandle,
@@ -5004,7 +5004,7 @@ impl CudaArtifactOperatorContext {
 
     /// Execute the checkpoint-native DSpark stage-zero target-tap projection and
     /// RMSNorm in one cooperative SM121 semantic launch.
-    #[cfg(feature = "cutlass")]
+    #[cfg(feature = "cuda")]
     #[allow(clippy::too_many_arguments)]
     pub fn artifact_dspark_main_project_norm_cutlass_into(
         &self,
@@ -5091,7 +5091,7 @@ impl CudaArtifactOperatorContext {
 
     /// Execute the required SM121 one-launch QueryA+KV FP8 projection bundle.
     /// Any shape, binding, or native-provider mismatch is fatal.
-    #[cfg(feature = "cutlass")]
+    #[cfg(feature = "cuda")]
     pub fn artifact_fp8_query_a_kv_cutlass_into(
         &self,
         query_a: &CudaArtifactLinearHandle,
@@ -5462,7 +5462,7 @@ impl CudaArtifactOperatorContext {
 
     /// Grouped output-A -> BF16 latent -> output-B MLA transaction. Single-row
     /// execution uses three ordered kernels; wider inputs use one cooperative kernel.
-    #[cfg(feature = "cutlass")]
+    #[cfg(feature = "cuda")]
     #[allow(clippy::too_many_arguments)]
     pub fn artifact_mla_output_into(
         &self,
@@ -7546,7 +7546,7 @@ impl CudaArtifactOperatorContext {
             .scale
             .as_ref()
             .ok_or_else(|| Error::Internal("SM121 shared down scales are missing".into()))?;
-        #[cfg(not(feature = "cutlass"))]
+        #[cfg(not(feature = "cuda"))]
         {
             let _ = (
                 gate_scales,
@@ -7566,7 +7566,7 @@ impl CudaArtifactOperatorContext {
                 "GB10 shared FFN execution requires the `cutlass` feature".into(),
             ))
         }
-        #[cfg(feature = "cutlass")]
+        #[cfg(feature = "cuda")]
         {
             crate::cutlass::shared_ffn(
                 &self.stream,
@@ -8109,13 +8109,13 @@ impl CudaArtifactOperatorContext {
             )));
         }
         self.counters.add_moe_call(CudaMoeExecutionPath::TensorCore);
-        #[cfg(not(feature = "cutlass"))]
+        #[cfg(not(feature = "cuda"))]
         {
             Err(Error::Internal(
                 "GB10 stable-frame FP4 MoE execution requires the `cutlass` feature".into(),
             ))
         }
-        #[cfg(feature = "cutlass")]
+        #[cfg(feature = "cuda")]
         {
             crate::cutlass::stable_frame_fp4_moe(
                 &self.stream,

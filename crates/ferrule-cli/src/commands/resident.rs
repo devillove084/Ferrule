@@ -1,3 +1,4 @@
+#[cfg(feature = "cuda")]
 use std::future::Future;
 use std::num::NonZeroU32;
 
@@ -12,6 +13,7 @@ use ferrule_runtime::{
 ///
 /// CUDA context creation, completion reactors, stream callbacks, and every model
 /// step therefore remain attached to one owner thread.
+#[cfg(feature = "cuda")]
 pub(crate) fn block_on_local_inference<F, T>(future: F) -> anyhow::Result<T>
 where
     F: Future<Output = anyhow::Result<T>>,
@@ -23,6 +25,7 @@ where
     local.block_on(&runtime, future)
 }
 
+#[cfg(feature = "cuda")]
 pub(crate) fn build_resident_topk_driver<R>(
     runner: R,
     schema: Box<dyn KvLayoutSchema>,

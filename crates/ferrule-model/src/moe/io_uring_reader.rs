@@ -8,11 +8,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-#[cfg(any(feature = "cuda", test))]
-use ferrule_common::expert_io::{
-    ExpertIoResourceDemand, ExpertIoResourceGrant, ExpertIoResourceStage,
-};
+#[cfg(feature = "cuda")]
+use ferrule_common::expert_io::ExpertIoResourceDemand;
 use ferrule_common::{CompletionHub, Error, Result};
+#[cfg(feature = "cuda")]
+use ferrule_common::{
+    LoadKey, OperationId, RegisteredPinnedAlignedSlabLeaseDescriptor, RegistrationId, SlabId,
+};
 #[cfg(feature = "cuda")]
 use ferrule_cuda::context::{CudaPinnedHostAllocator, CudaPinnedU8HostBuffer};
 use io_uring::{IoUring, opcode, types};
@@ -40,17 +42,16 @@ pub(crate) struct PinnedExpertReadTicket {
 }
 
 #[cfg(feature = "cuda")]
-impl PinnedExpertReadTicket {
-    pub(crate) const fn operation_id(self) -> u64 {
-        self.operation_id
-    }
-}
-
-#[cfg(feature = "cuda")]
 pub(crate) struct PinnedExpertReadPlan {
     extents: Vec<DirectReadExtent>,
     payload_count: usize,
     demand: ExpertIoResourceDemand,
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) struct ReservedPinnedExpertRead {
+    pub(crate) ticket: PinnedExpertReadTicket,
+    pub(crate) slabs: Box<[RegisteredPinnedAlignedSlabLeaseDescriptor]>,
 }
 
 #[cfg(feature = "cuda")]
@@ -63,7 +64,6 @@ impl PinnedExpertReadPlan {
 #[cfg(feature = "cuda")]
 pub(crate) struct PinnedExpertReadResult {
     pub(crate) payloads: Vec<PinnedExpertTensorPayload>,
-    pub(crate) resource_grant: Option<ExpertIoResourceGrant>,
 }
 
 #[cfg(feature = "cuda")]
@@ -210,10 +210,9 @@ struct PinnedReadOperation<T> {
     extent_buffers: Vec<Option<usize>>,
     outstanding: usize,
     next_extent: usize,
+    submission_authorized: bool,
     error: Option<Error>,
     cancelled: bool,
-    #[cfg(any(feature = "cuda", test))]
-    resource_grant: Option<ExpertIoResourceGrant>,
     #[cfg(feature = "cuda")]
     started: Instant,
     #[cfg(feature = "cuda")]
@@ -224,27 +223,17 @@ struct PinnedReadOperation<T> {
 impl<T> PinnedReadOperation<T> {
     #[cfg(test)]
     fn new(extents: Vec<DirectReadExtent>, payload_count: usize) -> Self {
-        Self::new_inner(
-            extents,
-            payload_count,
-            #[cfg(any(feature = "cuda", test))]
-            None,
-        )
+        Self::new_inner(extents, payload_count, true)
     }
 
-    #[cfg(any(feature = "cuda", test))]
-    fn with_resource_grant(
-        extents: Vec<DirectReadExtent>,
-        payload_count: usize,
-        resource_grant: ExpertIoResourceGrant,
-    ) -> Self {
-        Self::new_inner(extents, payload_count, Some(resource_grant))
+    fn physical(extents: Vec<DirectReadExtent>, payload_count: usize) -> Self {
+        Self::new_inner(extents, payload_count, false)
     }
 
     fn new_inner(
         extents: Vec<DirectReadExtent>,
         payload_count: usize,
-        #[cfg(any(feature = "cuda", test))] resource_grant: Option<ExpertIoResourceGrant>,
+        submission_authorized: bool,
     ) -> Self {
         let completed_extents = vec![false; extents.len()];
         let extent_buffers = vec![None; extents.len()];
@@ -255,10 +244,9 @@ impl<T> PinnedReadOperation<T> {
             extent_buffers,
             outstanding: 0,
             next_extent: 0,
+            submission_authorized,
             error: None,
             cancelled: false,
-            #[cfg(any(feature = "cuda", test))]
-            resource_grant,
             #[cfg(feature = "cuda")]
             started: Instant::now(),
             #[cfg(feature = "cuda")]
@@ -267,7 +255,25 @@ impl<T> PinnedReadOperation<T> {
     }
 
     fn can_submit(&self) -> bool {
-        !self.cancelled && self.error.is_none() && self.next_extent < self.extents.len()
+        self.submission_authorized
+            && !self.cancelled
+            && self.error.is_none()
+            && self.next_extent < self.extents.len()
+    }
+
+    fn authorize_submission(&mut self) -> Result<()> {
+        if self.submission_authorized {
+            return Err(Error::Internal(
+                "pinned expert read was submitted more than once".into(),
+            ));
+        }
+        if self.cancelled || self.error.is_some() || self.is_terminal() {
+            return Err(Error::Internal(
+                "terminal pinned expert read cannot be submitted".into(),
+            ));
+        }
+        self.submission_authorized = true;
+        Ok(())
     }
 
     fn has_no_reservations(&self) -> bool {
@@ -973,35 +979,133 @@ impl IoUringDirectState {
     }
 
     #[cfg(feature = "cuda")]
-    fn submit_slices_pinned(
+    fn reserve_slices_pinned(
         &mut self,
         plan: PinnedExpertReadPlan,
-        resource_grant: ExpertIoResourceGrant,
-    ) -> Result<PinnedExpertReadTicket> {
-        if resource_grant.demand() != plan.demand {
-            return Err(Error::Internal(format!(
-                "pinned expert read grant demand mismatch: planned={:?} granted={:?}",
-                plan.demand,
-                resource_grant.demand()
-            )));
+        protocol_operation: OperationId,
+        key: LoadKey,
+    ) -> Result<ReservedPinnedExpertRead> {
+        if protocol_operation.is_zero() {
+            return Err(Error::Model(
+                "physical pinned read requires a non-zero registry operation".into(),
+            ));
+        }
+        if plan.extents.is_empty() {
+            return Err(Error::Model(
+                "physical pinned read requires at least one storage extent".into(),
+            ));
         }
         let operation_id = allocate_durable_id(
             &mut self.next_pinned_operation_id,
             "pinned expert read operation",
         )?;
-
-        let operation = PinnedReadOperation::with_resource_grant(
-            plan.extents,
-            plan.payload_count,
-            resource_grant,
-        );
-        let has_extents = !operation.extents.is_empty();
+        let operation = PinnedReadOperation::physical(plan.extents, plan.payload_count);
         self.pinned_operations.insert(operation_id, operation);
-        if has_extents {
-            self.pinned_operation_order.push_back(operation_id);
+        match self.reserve_pinned_operation_buffers(operation_id) {
+            Ok(true) => {}
+            Ok(false) => {
+                self.pinned_operations.remove(&operation_id);
+                return Err(Error::Execution(
+                    "registered pinned expert slabs are temporarily exhausted".into(),
+                ));
+            }
+            Err(error) => {
+                let Some(mut operation) = self.pinned_operations.remove(&operation_id) else {
+                    return Err(Error::Internal(format!(
+                        "physical pinned slab reservation failed ({error}) after its operation disappeared"
+                    )));
+                };
+                let released = operation.release_unqueued_reservations();
+                if let Err(release_error) = self.release_pinned_buffer_reservations(released) {
+                    return Err(Error::Internal(format!(
+                        "physical pinned slab reservation failed ({error}); reservation cleanup also failed ({release_error})"
+                    )));
+                }
+                return Err(error);
+            }
         }
+
+        let descriptor_result = (|| {
+            let operation = self.pinned_operations.get(&operation_id).ok_or_else(|| {
+                Error::Internal(
+                    "physical pinned operation disappeared while describing its slabs".into(),
+                )
+            })?;
+            operation
+                .extents
+                .iter()
+                .enumerate()
+                .map(|(extent_index, extent)| {
+                    let buffer_index = operation.reserved_buffer(extent_index)?;
+                    let buffer = self.buffers.get_mut(buffer_index).ok_or_else(|| {
+                        Error::Internal(format!(
+                            "physical pinned operation reserved missing slab {buffer_index}"
+                        ))
+                    })?;
+                    let identity = u64::try_from(buffer_index)
+                        .ok()
+                        .and_then(|value| value.checked_add(1))
+                        .ok_or_else(|| Error::Internal("pinned slab identity overflow".into()))?;
+                    RegisteredPinnedAlignedSlabLeaseDescriptor::new(
+                        protocol_operation,
+                        SlabId::new(identity),
+                        RegistrationId::new(identity),
+                        buffer.as_mut_ptr()? as usize,
+                        u64::try_from(buffer.len).map_err(|_| {
+                            Error::Model("registered pinned slab length exceeds u64".into())
+                        })?,
+                        0,
+                        u64::try_from(extent.aligned_len).map_err(|_| {
+                            Error::Model("registered pinned extent length exceeds u64".into())
+                        })?,
+                        DIRECT_IO_ALIGNMENT,
+                        key.source_generation(),
+                        key.destination_generation(),
+                    )
+                    .map_err(Into::into)
+                })
+                .collect::<Result<Vec<_>>>()
+        })();
+        let slabs = match descriptor_result {
+            Ok(slabs) => slabs,
+            Err(error) => {
+                let Some(mut operation) = self.pinned_operations.remove(&operation_id) else {
+                    return Err(Error::Internal(format!(
+                        "physical pinned slab description failed ({error}) after its operation disappeared"
+                    )));
+                };
+                let released = operation.release_unqueued_reservations();
+                if let Err(release_error) = self.release_pinned_buffer_reservations(released) {
+                    return Err(Error::Internal(format!(
+                        "physical pinned slab description failed ({error}); reservation cleanup also failed ({release_error})"
+                    )));
+                }
+                return Err(error);
+            }
+        };
         self.account_pinned_operation_timing(operation_id);
-        Ok(PinnedExpertReadTicket { operation_id })
+        Ok(ReservedPinnedExpertRead {
+            ticket: PinnedExpertReadTicket { operation_id },
+            slabs: slabs.into_boxed_slice(),
+        })
+    }
+
+    #[cfg(feature = "cuda")]
+    fn submit_reserved_slices_pinned(&mut self, ticket: PinnedExpertReadTicket) -> Result<()> {
+        let operation = self
+            .pinned_operations
+            .get_mut(&ticket.operation_id)
+            .ok_or_else(|| {
+                Error::Model(format!(
+                    "unknown or already consumed pinned expert read operation {}",
+                    ticket.operation_id
+                ))
+            })?;
+        operation.authorize_submission()?;
+        self.pinned_operation_order.push_back(ticket.operation_id);
+        self.schedule_pinned_reads()?;
+        self.submit_queued_pinned_reads()?;
+        self.detect_stuck_pinned_operation(ticket.operation_id)
     }
 
     #[cfg(feature = "cuda")]
@@ -1612,62 +1716,12 @@ impl IoUringDirectState {
         if let Some(error) = operation.error.take() {
             return Ok(PinnedExpertReadPoll::Failed(error));
         }
-        let mut resource_grant = operation.resource_grant.take();
-        if let Some(grant) = resource_grant.as_mut()
-            && let Err(error) = grant.release_stage(ExpertIoResourceStage::Read)
-        {
-            return Ok(PinnedExpertReadPoll::Failed(error));
-        }
         match collect_payloads(operation.payloads) {
             Ok(payloads) => Ok(PinnedExpertReadPoll::Ready(PinnedExpertReadResult {
                 payloads,
-                resource_grant,
             })),
             Err(error) => Ok(PinnedExpertReadPoll::Failed(error)),
         }
-    }
-
-    #[cfg(feature = "cuda")]
-    fn wait_for_pinned_completion(&mut self, ticket: PinnedExpertReadTicket) -> Result<()> {
-        if !self.pinned_operations.contains_key(&ticket.operation_id) {
-            return Err(Error::Model(format!(
-                "unknown or already consumed pinned expert read operation {}",
-                ticket.operation_id
-            )));
-        }
-        if self.pinned_operations[&ticket.operation_id].is_terminal() {
-            return Ok(());
-        }
-
-        self.schedule_pinned_reads()?;
-        self.submit_queued_pinned_reads()?;
-        self.detect_stuck_pinned_operation(ticket.operation_id)?;
-        if self.pinned_operations[&ticket.operation_id].is_terminal() {
-            return Ok(());
-        }
-        if self.pinned_submissions.is_empty() {
-            self.stats.slab_exhaustions = self.stats.slab_exhaustions.saturating_add(1);
-            let available = self
-                .buffers
-                .iter()
-                .enumerate()
-                .filter(|(index, buffer)| !self.pinned_buffer_busy[*index] && buffer.is_available())
-                .count();
-            let required = self.pinned_operations[&ticket.operation_id].extents.len();
-            self.fail_pinned_operation(
-                ticket.operation_id,
-                Error::Model(format!(
-                    "expert io_uring pinned slab pool cannot reserve the operation atomically: available={available} required={required}"
-                )),
-            )?;
-            return Ok(());
-        }
-
-        let accepted = self
-            .ring
-            .submit_and_wait(1)
-            .map_err(|error| Error::Model(format!("submit/wait expert io_uring reads: {error}")))?;
-        self.confirm_queued_pinned_submissions(accepted)
     }
 
     fn execute_wave(
@@ -1963,27 +2017,38 @@ impl IoUringExpertReader {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn submit_slices_pinned(
+    pub(crate) fn reserve_slices_pinned(
         &self,
         plan: PinnedExpertReadPlan,
-        resource_grant: ExpertIoResourceGrant,
-    ) -> Result<PinnedExpertReadTicket> {
-        let (ticket, terminal) = {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| Error::Model("expert io_uring state lock poisoned".into()))?;
-            let ticket = state.submit_slices_pinned(plan, resource_grant)?;
-            let terminal = state
-                .pinned_operations
-                .get(&ticket.operation_id)
-                .is_some_and(PinnedReadOperation::is_terminal);
-            (ticket, terminal)
-        };
-        if terminal {
-            self.completion_hub.notify();
-        }
-        Ok(ticket)
+        operation: OperationId,
+        key: LoadKey,
+    ) -> Result<ReservedPinnedExpertRead> {
+        self.state
+            .lock()
+            .map_err(|_| Error::Model("expert io_uring state lock poisoned".into()))?
+            .reserve_slices_pinned(plan, operation, key)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn submit_reserved_slices_pinned(
+        &self,
+        ticket: PinnedExpertReadTicket,
+    ) -> Result<()> {
+        self.state
+            .lock()
+            .map_err(|_| Error::Model("expert io_uring state lock poisoned".into()))?
+            .submit_reserved_slices_pinned(ticket)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cancel_slices_pinned(&self, ticket: PinnedExpertReadTicket) -> Result<bool> {
+        let result = self
+            .state
+            .lock()
+            .map_err(|_| Error::Model("expert io_uring state lock poisoned".into()))?
+            .cancel_slices_pinned(ticket);
+        self.completion_hub.notify();
+        result
     }
 
     #[cfg(feature = "cuda")]
@@ -2012,59 +2077,6 @@ impl IoUringExpertReader {
             .detach_slices_pinned(ticket);
         self.completion_hub.notify();
         result
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(crate) fn read_slices_pinned(
-        &self,
-        plan: PinnedExpertReadPlan,
-        resource_grant: ExpertIoResourceGrant,
-    ) -> Result<PinnedExpertReadResult> {
-        let ticket = self.submit_slices_pinned(plan, resource_grant)?;
-        let result = (|| {
-            loop {
-                let poll_budget = self
-                    .state
-                    .lock()
-                    .map_err(|_| Error::Model("expert io_uring state lock poisoned".into()))?
-                    .queue_depth
-                    .max(1);
-                match self.poll_slices_pinned(ticket, poll_budget)? {
-                    PinnedExpertReadPoll::Pending => {
-                        self.state
-                            .lock()
-                            .map_err(|_| {
-                                Error::Model("expert io_uring state lock poisoned".into())
-                            })?
-                            .wait_for_pinned_completion(ticket)?;
-                    }
-                    PinnedExpertReadPoll::Ready(result) => return Ok(result),
-                    PinnedExpertReadPoll::Failed(error) => return Err(error),
-                    PinnedExpertReadPoll::Cancelled => {
-                        return Err(Error::Model(format!(
-                            "pinned expert read operation {} was cancelled",
-                            ticket.operation_id()
-                        )));
-                    }
-                }
-            }
-        })();
-        match result {
-            Ok(result) => Ok(result),
-            Err(error) => {
-                let cleanup = self
-                    .state
-                    .lock()
-                    .map_err(|_| Error::Model("expert io_uring state lock poisoned".into()))?
-                    .detach_slices_pinned(ticket);
-                match cleanup {
-                    Ok(()) => Err(error),
-                    Err(cleanup_error) => Err(Error::Model(format!(
-                        "pinned expert read failed ({error}); retaining cancelled operation also failed ({cleanup_error})"
-                    ))),
-                }
-            }
-        }
     }
 
     #[cfg(feature = "cuda")]
@@ -2164,39 +2176,8 @@ fn align_up(value: usize, alignment: usize) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use ferrule_common::expert_io::{ExpertIoResourceClass, ExpertIoResourcePermit};
 
     use super::*;
-
-    struct TestResourcePermit {
-        releases: Arc<AtomicUsize>,
-    }
-
-    impl ExpertIoResourcePermit for TestResourcePermit {
-        fn promote(&mut self, _class: ExpertIoResourceClass) -> Result<()> {
-            Ok(())
-        }
-
-        fn release_stage(&mut self, _stage: ExpertIoResourceStage) -> Result<()> {
-            Ok(())
-        }
-
-        fn release(self: Box<Self>) -> Result<()> {
-            self.releases.fetch_add(1, Ordering::Relaxed);
-            Ok(())
-        }
-    }
-
-    fn test_resource_grant(releases: Arc<AtomicUsize>) -> ExpertIoResourceGrant {
-        ExpertIoResourceGrant::new(
-            1,
-            ExpertIoResourceDemand::default(),
-            Box::new(TestResourcePermit { releases }),
-        )
-        .unwrap()
-    }
 
     fn synthetic_extents(count: usize) -> Vec<DirectReadExtent> {
         (0..count)
@@ -2335,6 +2316,39 @@ mod tests {
     }
 
     #[test]
+    fn physical_reservation_cannot_submit_before_explicit_authorization() {
+        let mut operation = PinnedReadOperation::<()>::physical(synthetic_extents(2), 0);
+        let mut busy = vec![false; 2];
+        assert!(reserve_test_operation(
+            &mut operation,
+            &mut busy,
+            &[true; 2]
+        ));
+        assert!(!operation.can_submit());
+        assert!(operation.authorize_submission().is_ok());
+        assert!(operation.can_submit());
+        assert!(operation.authorize_submission().is_err());
+    }
+
+    #[test]
+    fn cancelling_unsubmitted_physical_reservation_releases_every_slab() {
+        let mut operation = PinnedReadOperation::<()>::physical(synthetic_extents(2), 0);
+        let mut busy = vec![false; 2];
+        assert!(reserve_test_operation(
+            &mut operation,
+            &mut busy,
+            &[true; 2]
+        ));
+        let released = operation.cancel().unwrap();
+        assert_eq!(released, vec![0, 1]);
+        for index in released {
+            busy[index] = false;
+        }
+        assert_eq!(busy, vec![false, false]);
+        assert!(operation.is_terminal());
+    }
+
+    #[test]
     fn whole_operation_reservation_is_all_or_none_across_two_operations() {
         let mut first = PinnedReadOperation::<()>::new(synthetic_extents(3), 0);
         let mut second = PinnedReadOperation::<()>::new(synthetic_extents(2), 0);
@@ -2418,30 +2432,6 @@ mod tests {
         busy[0] = false;
         assert_eq!(busy, vec![false, false, false]);
         assert!(operation.is_terminal());
-    }
-
-    #[test]
-    fn cancelled_submitted_read_retains_resource_grant_until_terminal_owner_drops() {
-        let releases = Arc::new(AtomicUsize::new(0));
-        let mut operation = PinnedReadOperation::<()>::with_resource_grant(
-            synthetic_extents(1),
-            0,
-            test_resource_grant(releases.clone()),
-        );
-        let mut busy = vec![false; 1];
-        assert!(reserve_test_operation(&mut operation, &mut busy, &[true]));
-        operation.record_submission(0).unwrap();
-        assert!(operation.resource_grant.is_some());
-
-        assert!(operation.cancel().unwrap().is_empty());
-        assert_eq!(releases.load(Ordering::Relaxed), 0);
-        assert!(!operation.is_terminal());
-
-        operation.record_completion(0).unwrap();
-        assert!(operation.is_terminal());
-        assert_eq!(releases.load(Ordering::Relaxed), 0);
-        drop(operation);
-        assert_eq!(releases.load(Ordering::Relaxed), 1);
     }
 
     #[test]

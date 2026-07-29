@@ -19,14 +19,12 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum KernelProviderId {
-    /// cuda-oxide compiled Rust kernels (`#[cuda_module]`).  Provider zero.
-    /// Used for routing, metadata, recurrent compressor logic, paged control,
-    /// custom HC glue, and eager correctness paths.
-    CudaOxide = 0,
-    /// Fixed-shape production cubins loaded through the CUDA Driver API.
+    /// In-process CUDA kernels owned by Ferrule. Provider zero.
+    CudaNative = 0,
+    /// Fixed-shape production binaries loaded through a device driver API.
     EmbeddedCubin = 1,
-    /// CUTLASS/CuTe-generated cubins where they win.
-    CutlassCubin = 2,
+    /// Versioned out-of-tree or generated provider selected during prepare.
+    ExternalProvider = 2,
 }
 
 /// Identifies a specific kernel phase within a layer execution.
@@ -250,7 +248,7 @@ impl LaunchDescriptor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum WeightLayout {
-    /// Original row-major layout (cuda-oxide default).
+    /// Original provider-neutral row-major layout.
     RowMajor = 0,
     /// Transposed for device HC accumulation order.
     TransposedRowMajor = 1,
@@ -477,10 +475,10 @@ pub struct ProviderManifest {
 }
 
 impl ProviderManifest {
-    pub const fn cuda_oxide() -> Self {
+    pub const fn cuda_native() -> Self {
         Self {
-            id: KernelProviderId::CudaOxide,
-            name: "cuda-oxide",
+            id: KernelProviderId::CudaNative,
+            name: "cuda-native",
             abi_version: LaunchDescriptor::ABI_VERSION,
             kernel_count: 0,
         }
@@ -495,13 +493,12 @@ impl ProviderManifest {
         }
     }
 
-    /// Manifest for a CUTLASS-generated cubin/native provider. The provider's
-    /// own POD ABI version is recorded independently from the execution-plan
-    /// launch descriptor version.
-    pub const fn cutlass_cubin(abi_version: u16, kernel_count: usize) -> Self {
+    /// Manifest for a versioned external provider. The provider's POD ABI
+    /// version is recorded independently from the execution-plan descriptor.
+    pub const fn external(name: &'static str, abi_version: u16, kernel_count: usize) -> Self {
         Self {
-            id: KernelProviderId::CutlassCubin,
-            name: "cutlass-cubin",
+            id: KernelProviderId::ExternalProvider,
+            name,
             abi_version,
             kernel_count,
         }
@@ -522,10 +519,10 @@ impl ProviderRegistry {
         Self::default()
     }
 
-    /// Registers the cuda-oxide provider as provider zero.
-    pub fn with_cuda_oxide() -> Self {
+    /// Registers Ferrule's in-process CUDA provider as provider zero.
+    pub fn with_cuda_native() -> Self {
         let mut registry = Self::new();
-        registry.register(ProviderManifest::cuda_oxide());
+        registry.register(ProviderManifest::cuda_native());
         registry
     }
 
@@ -548,8 +545,11 @@ mod tests {
 
     #[test]
     fn kernel_id_construction() {
-        let id = KernelId::new(KernelProviderId::CudaOxide, KernelOperation::AttentionHcPre);
-        assert_eq!(id.provider, KernelProviderId::CudaOxide);
+        let id = KernelId::new(
+            KernelProviderId::CudaNative,
+            KernelOperation::AttentionHcPre,
+        );
+        assert_eq!(id.provider, KernelProviderId::CudaNative);
         assert_eq!(id.operation, KernelOperation::AttentionHcPre);
         assert_eq!(id.phase(), KernelPhase::HcPre);
         assert_eq!(id.variant, 0);
@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn launch_descriptor_versioning() {
-        let id = KernelId::new(KernelProviderId::CudaOxide, KernelOperation::Embed);
+        let id = KernelId::new(KernelProviderId::CudaNative, KernelOperation::Embed);
         let desc = LaunchDescriptor::new(id, (1, 1, 1), (256, 1, 1));
         assert_eq!(desc.version, LaunchDescriptor::ABI_VERSION);
         assert!(!desc.is_capture_safe());
@@ -585,10 +585,12 @@ mod tests {
     #[test]
     fn layer_kernel_plan_binds_operations_not_phases() {
         let mut plan = LayerKernelPlan::new();
-        let attention_id =
-            KernelId::new(KernelProviderId::CudaOxide, KernelOperation::AttentionHcPre);
+        let attention_id = KernelId::new(
+            KernelProviderId::CudaNative,
+            KernelOperation::AttentionHcPre,
+        );
         let feed_forward_id = KernelId::new(
-            KernelProviderId::CudaOxide,
+            KernelProviderId::CudaNative,
             KernelOperation::FeedForwardHcPre,
         );
         plan.set_operation(LaunchDescriptor::new(attention_id, (1, 1, 1), (128, 1, 1)));
@@ -631,7 +633,7 @@ mod tests {
         assert!(plan.layer(43).is_none());
 
         let launch = LaunchDescriptor::new(
-            KernelId::new(KernelProviderId::CudaOxide, KernelOperation::Embed),
+            KernelId::new(KernelProviderId::CudaNative, KernelOperation::Embed),
             (1, 1, 1),
             (128, 1, 1),
         );
@@ -641,18 +643,18 @@ mod tests {
     }
 
     #[test]
-    fn provider_registry_cuda_oxide() {
-        let registry = ProviderRegistry::with_cuda_oxide();
-        assert!(registry.is_available(KernelProviderId::CudaOxide));
+    fn provider_registry_cuda_native() {
+        let registry = ProviderRegistry::with_cuda_native();
+        assert!(registry.is_available(KernelProviderId::CudaNative));
         assert!(!registry.is_available(KernelProviderId::EmbeddedCubin));
         assert_eq!(registry.manifests().len(), 1);
-        assert_eq!(registry.manifests()[0].name, "cuda-oxide");
+        assert_eq!(registry.manifests()[0].name, "cuda-native");
     }
 
     #[test]
-    fn cutlass_manifest_keeps_provider_abi_and_catalog_size() {
-        let manifest = ProviderManifest::cutlass_cubin(3, 2);
-        assert_eq!(manifest.id, KernelProviderId::CutlassCubin);
+    fn external_manifest_keeps_provider_abi_and_catalog_size() {
+        let manifest = ProviderManifest::external("generated-native", 3, 2);
+        assert_eq!(manifest.id, KernelProviderId::ExternalProvider);
         assert_eq!(manifest.abi_version, 3);
         assert_eq!(manifest.kernel_count, 2);
     }

@@ -23,6 +23,8 @@ pub mod config;
 #[cfg(feature = "cuda")]
 pub mod cuda_cache;
 pub mod expert_io;
+#[cfg(feature = "cuda")]
+pub(crate) mod expert_materializer;
 pub mod helpers;
 pub mod layer;
 pub mod mtp;

@@ -1,4 +1,4 @@
-#![cfg(feature = "cutlass")]
+#![cfg(feature = "cuda")]
 
 use cuda_core::{CudaContext, DeviceBuffer};
 use ferrule_cuda::cutlass::{self, CutlassKernelId};
@@ -57,21 +57,24 @@ fn sm121_plan_selects_only_published_semantic_bundles() {
     let launch = plan.layers[0]
         .operation(KernelOperation::MlaQueryAKv)
         .expect("SM121 QueryA+KV launch");
-    assert_eq!(launch.kernel.provider, KernelProviderId::CutlassCubin);
+    assert_eq!(launch.kernel.provider, KernelProviderId::ExternalProvider);
     assert_eq!(launch.kernel.variant, 0);
     assert!(launch.is_capture_safe());
 
     let query_b = plan.layers[0]
         .operation(KernelOperation::MlaQueryB)
         .expect("SM121 QueryB launch");
-    assert_eq!(query_b.kernel.provider, KernelProviderId::CutlassCubin);
+    assert_eq!(query_b.kernel.provider, KernelProviderId::ExternalProvider);
     assert_eq!(query_b.kernel.variant, 0);
     assert!(query_b.is_capture_safe());
 
     let compressor = plan.layers[0]
         .operation(KernelOperation::MainCompressorProjection)
         .expect("SM121 BF16 compressor launch");
-    assert_eq!(compressor.kernel.provider, KernelProviderId::CutlassCubin);
+    assert_eq!(
+        compressor.kernel.provider,
+        KernelProviderId::ExternalProvider
+    );
     assert_eq!(compressor.kernel.variant, 0);
     for operation in [
         KernelOperation::AttentionHcPre,
@@ -86,7 +89,7 @@ fn sm121_plan_selects_only_published_semantic_bundles() {
         let launch = plan.layers[0]
             .operation(operation)
             .expect("required semantic launch");
-        assert_eq!(launch.kernel.provider, KernelProviderId::CutlassCubin);
+        assert_eq!(launch.kernel.provider, KernelProviderId::ExternalProvider);
         assert_eq!(launch.kernel.operation, operation);
         assert_eq!(launch.kernel.variant, 0);
         assert!(launch.is_provider_managed());

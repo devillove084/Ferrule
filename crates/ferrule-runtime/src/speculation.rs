@@ -32,7 +32,8 @@ use ferrule_common::{Error, Result};
 use ferrule_model::{MultiSessionRunner, PendingModelProgress};
 
 use crate::cache::{
-    KvPageManager, KvReservation, KvReservationBindings, KvReservationCommit, PreparedKvCommit,
+    KvPageManager, KvReservation, KvReservationBindings, KvReservationCommit, KvRetirement,
+    PreparedKvCommit,
 };
 use crate::engine::{NativeBatchExecutionProgress, NativeMultiSessionExecutor};
 
@@ -269,7 +270,9 @@ pub(crate) fn begin_resumable_speculative_verification_cohort<R>(
     transaction_id: ExecutionTransactionId,
     source_states: &mut [R::SequenceState],
     items: &[SpeculativeVerificationItem<'_>],
+    reservations: Vec<KvReservation>,
     top_k: NonZeroU32,
+    retirements: &mut Vec<KvRetirement>,
 ) -> std::result::Result<
     SpeculativeCohortProgress<R::SequenceState>,
     SpeculativeCohortExecutionError<R::SequenceState>,
@@ -283,7 +286,9 @@ where
         transaction_id,
         source_states,
         items,
+        reservations,
         top_k,
+        retirements,
     )
     .map_err(|error| SpeculativeCohortExecutionError {
         error,
@@ -299,6 +304,7 @@ where
                     transaction,
                     false,
                     error,
+                    retirements,
                 ),
                 pending: None,
             });
@@ -317,6 +323,7 @@ where
                 source_states,
                 transaction,
                 output,
+                retirements,
             )
             .map(SpeculativeCohortProgress::Complete)
             .map_err(|error| SpeculativeCohortExecutionError {
@@ -335,6 +342,7 @@ where
             page_manager,
             transaction,
             error,
+            retirements,
         )),
     }
 }
@@ -345,6 +353,8 @@ pub(crate) fn resume_resumable_speculative_verification_cohort<R>(
     page_manager: &mut KvPageManager,
     source_states: &mut [R::SequenceState],
     mut pending: PendingSpeculativeVerificationCohort<R::SequenceState>,
+    leases: ferrule_common::ExpertLeaseSet,
+    retirements: &mut Vec<KvRetirement>,
 ) -> std::result::Result<
     SpeculativeCohortProgress<R::SequenceState>,
     SpeculativeCohortExecutionError<R::SequenceState>,
@@ -359,6 +369,7 @@ where
         &mut pending.transaction.verification_branches,
         &pending.transaction.verification_batch,
         continuation,
+        leases,
     ) {
         Ok(NativeBatchExecutionProgress::Complete(output)) => {
             finish_speculative_cohort_transaction(
@@ -367,6 +378,7 @@ where
                 source_states,
                 pending.transaction,
                 output,
+                retirements,
             )
             .map(SpeculativeCohortProgress::Complete)
             .map_err(|error| SpeculativeCohortExecutionError {
@@ -392,6 +404,7 @@ where
                     pending.transaction,
                     true,
                     error,
+                    retirements,
                 );
                 Err(SpeculativeCohortExecutionError {
                     error,
@@ -408,6 +421,7 @@ pub(crate) fn cancel_resumable_speculative_verification_cohort<R>(
     executor: &mut NativeMultiSessionExecutor<R>,
     page_manager: &mut KvPageManager,
     mut pending: PendingSpeculativeVerificationCohort<R::SequenceState>,
+    retirements: &mut Vec<KvRetirement>,
 ) -> std::result::Result<(), SpeculativeCohortExecutionError<R::SequenceState>>
 where
     R: MultiSessionRunner,
@@ -433,6 +447,7 @@ where
         transaction.prepared_commit,
         transaction.verification_branches,
         false,
+        retirements,
     ) {
         None => Ok(()),
         Some(error) => Err(SpeculativeCohortExecutionError {
@@ -447,6 +462,7 @@ fn reconcile_speculative_execution_error<R: MultiSessionRunner>(
     page_manager: &mut KvPageManager,
     transaction: SpeculativeCohortTransaction<R::SequenceState>,
     error: Error,
+    retirements: &mut Vec<KvRetirement>,
 ) -> SpeculativeCohortExecutionError<R::SequenceState> {
     match executor.pending_model_progress(transaction.id).cloned() {
         Some(pending_progress) => SpeculativeCohortExecutionError {
@@ -463,6 +479,7 @@ fn reconcile_speculative_execution_error<R: MultiSessionRunner>(
                 transaction,
                 true,
                 error,
+                retirements,
             ),
             pending: None,
         },
@@ -475,7 +492,9 @@ fn prepare_speculative_cohort_transaction<R: MultiSessionRunner>(
     transaction_id: ExecutionTransactionId,
     source_states: &[R::SequenceState],
     items: &[SpeculativeVerificationItem<'_>],
+    mut reservations: Vec<KvReservation>,
     top_k: NonZeroU32,
+    retirements: &mut Vec<KvRetirement>,
 ) -> Result<SpeculativeCohortTransaction<R::SequenceState>> {
     let transaction_start = Instant::now();
     if items.is_empty() {
@@ -500,24 +519,47 @@ fn prepare_speculative_cohort_transaction<R: MultiSessionRunner>(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let mut reservations = Vec::with_capacity(items.len());
-    for (sequence, (item, &rows)) in items.iter().zip(&executed_rows).enumerate() {
-        let reservation = match page_manager.reserve(item.state_slot, item.generation, rows) {
-            Ok(reservation) => reservation,
-            Err(error) => {
-                return Err(discard_speculative_cohort(
-                    executor,
-                    page_manager,
-                    reservations,
-                    Vec::new(),
-                    false,
-                    error,
-                ));
-            }
-        };
-        reservations.push(reservation);
-        if reservations[sequence].positions.start != item.frontier.position {
-            let actual = reservations[sequence].positions.start;
+    if reservations.len() != items.len() {
+        let error = Error::Execution(format!(
+            "Speculative verification cohort reservation/item mismatch: reservations={} items={}",
+            reservations.len(),
+            items.len()
+        ));
+        return Err(discard_speculative_cohort(
+            executor,
+            page_manager,
+            reservations,
+            Vec::new(),
+            false,
+            error,
+            retirements,
+        ));
+    }
+    for (sequence, ((item, &rows), reservation)) in items
+        .iter()
+        .zip(&executed_rows)
+        .zip(&reservations)
+        .enumerate()
+    {
+        if reservation.state_slot != item.state_slot
+            || reservation.generation != item.generation
+            || reservation.positions.len() != rows
+        {
+            let error = Error::Execution(format!(
+                "Speculative cohort sequence {sequence} reservation does not match its exact state/generation/row request"
+            ));
+            return Err(discard_speculative_cohort(
+                executor,
+                page_manager,
+                reservations,
+                Vec::new(),
+                false,
+                error,
+                retirements,
+            ));
+        }
+        if reservation.positions.start != item.frontier.position {
+            let actual = reservation.positions.start;
             let error = Error::Execution(format!(
                 "Speculative cohort sequence {sequence} frontier position {} does not match committed KV position {actual}",
                 item.frontier.position
@@ -529,6 +571,7 @@ fn prepare_speculative_cohort_transaction<R: MultiSessionRunner>(
                 Vec::new(),
                 false,
                 error,
+                retirements,
             ));
         }
     }
@@ -545,6 +588,7 @@ fn prepare_speculative_cohort_transaction<R: MultiSessionRunner>(
                     Vec::new(),
                     false,
                     error,
+                    retirements,
                 ));
             }
         }
@@ -560,6 +604,7 @@ fn prepare_speculative_cohort_transaction<R: MultiSessionRunner>(
                     Vec::new(),
                     false,
                     error,
+                    retirements,
                 ));
             }
         };
@@ -576,8 +621,29 @@ fn prepare_speculative_cohort_transaction<R: MultiSessionRunner>(
                     verification_branches,
                     false,
                     error,
+                    retirements,
                 ));
             }
+        }
+    }
+    for index in 0..reservations.len() {
+        let execution_generation = executor
+            .runner()
+            .sequence_generation(&verification_branches[index]);
+        if let Err(error) = page_manager.bind_reservation_execution(
+            &mut reservations[index],
+            verification_batch.sequences()[index].state_slot,
+            execution_generation,
+        ) {
+            return Err(discard_speculative_cohort(
+                executor,
+                page_manager,
+                reservations,
+                verification_branches,
+                false,
+                error,
+                retirements,
+            ));
         }
     }
 
@@ -601,6 +667,7 @@ fn finish_speculative_cohort_transaction<R: MultiSessionRunner>(
     source_states: &mut [R::SequenceState],
     mut transaction: SpeculativeCohortTransaction<R::SequenceState>,
     output: ExecutionOutput,
+    retirements: &mut Vec<KvRetirement>,
 ) -> Result<SpeculativeCohortResult> {
     let verify_time_us = transaction.verify_start.elapsed().as_micros() as u64;
     let global_row_top1 =
@@ -613,6 +680,7 @@ fn finish_speculative_cohort_transaction<R: MultiSessionRunner>(
                     transaction,
                     true,
                     error,
+                    retirements,
                 ));
             }
         };
@@ -637,6 +705,7 @@ fn finish_speculative_cohort_transaction<R: MultiSessionRunner>(
                     transaction,
                     true,
                     error,
+                    retirements,
                 ));
             }
         };
@@ -649,6 +718,7 @@ fn finish_speculative_cohort_transaction<R: MultiSessionRunner>(
                     transaction,
                     true,
                     error,
+                    retirements,
                 ));
             }
         }
@@ -671,6 +741,7 @@ fn finish_speculative_cohort_transaction<R: MultiSessionRunner>(
             transaction,
             true,
             error,
+            retirements,
         ));
     }
 
@@ -693,6 +764,7 @@ fn finish_speculative_cohort_transaction<R: MultiSessionRunner>(
                 transaction,
                 true,
                 error,
+                retirements,
             ));
         }
     };
@@ -706,6 +778,7 @@ fn finish_speculative_cohort_transaction<R: MultiSessionRunner>(
             transaction,
             true,
             error,
+            retirements,
         ));
     }
     let retirement = page_manager.publish_commit(
@@ -720,20 +793,8 @@ fn finish_speculative_cohort_transaction<R: MultiSessionRunner>(
         std::mem::take(&mut transaction.verification_branches),
     )
     .err();
-    let page_release_error = executor.release_kv_pages(retirement.pages()).err();
-    let retirement_publish_error = if page_release_error.is_none() {
-        page_manager
-            .confirm_page_retirement(retirement)
-            .err()
-            .map(|error| error.into_parts().0)
-    } else {
-        None
-    };
-    finish_speculative_cohort_publication(
-        None,
-        state_promotion_error,
-        page_release_error.or(retirement_publish_error),
-    )?;
+    retirements.push(retirement);
+    finish_speculative_cohort_publication(None, state_promotion_error, None)?;
 
     let transaction_time_us = transaction.transaction_start.elapsed().as_micros() as u64;
     let results = transaction
@@ -777,6 +838,7 @@ fn discard_speculative_transaction<R: MultiSessionRunner>(
     transaction: SpeculativeCohortTransaction<R::SequenceState>,
     rollback_backend: bool,
     cause: Error,
+    retirements: &mut Vec<KvRetirement>,
 ) -> Error {
     match cleanup_speculative_cohort(
         executor,
@@ -786,6 +848,7 @@ fn discard_speculative_transaction<R: MultiSessionRunner>(
         transaction.prepared_commit,
         transaction.verification_branches,
         rollback_backend,
+        retirements,
     ) {
         None => cause,
         Some(cleanup) => Error::Execution(format!(
@@ -902,6 +965,7 @@ fn discard_speculative_cohort<R: MultiSessionRunner>(
     branches: Vec<R::SequenceState>,
     rollback_backend: bool,
     cause: Error,
+    retirements: &mut Vec<KvRetirement>,
 ) -> Error {
     match cleanup_speculative_cohort(
         executor,
@@ -911,6 +975,7 @@ fn discard_speculative_cohort<R: MultiSessionRunner>(
         None,
         branches,
         rollback_backend,
+        retirements,
     ) {
         None => cause,
         Some(cleanup) => Error::Execution(format!(
@@ -927,6 +992,7 @@ fn cleanup_speculative_cohort<R: MultiSessionRunner>(
     prepared_commit: Option<PreparedKvCommit>,
     mut branches: Vec<R::SequenceState>,
     rollback_backend: bool,
+    retirements: &mut Vec<KvRetirement>,
 ) -> Option<Error> {
     let mut cleanup_errors = Vec::new();
     let backend_quiesced = if rollback_backend {
@@ -958,11 +1024,7 @@ fn cleanup_speculative_cohort<R: MultiSessionRunner>(
                 .map_err(|error| error.into_parts().0),
         };
         match retirement {
-            Ok(retirement) => {
-                if let Err(error) = page_manager.confirm_page_retirement(retirement) {
-                    cleanup_errors.push(format!("logical page retirement: {error}"));
-                }
-            }
+            Ok(retirement) => retirements.push(retirement),
             Err(error) => cleanup_errors.push(format!("logical KV abort: {error}")),
         }
         for (sequence, branch) in branches.into_iter().enumerate() {

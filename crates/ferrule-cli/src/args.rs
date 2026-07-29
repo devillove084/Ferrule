@@ -49,7 +49,7 @@ pub(crate) enum Command {
     },
     /// Serve an OpenAI-compatible asynchronous HTTP API.
     Serve(ServeArgs),
-    /// Benchmark multi-turn interactive chat latency.
+    /// Benchmark multi-turn chat latency and runtime-owned materialization critical paths.
     #[command(name = "bench-interactive")]
     BenchInteractive {
         model: String,
@@ -75,16 +75,16 @@ pub(crate) enum Command {
         /// lm_head chunk size in rows for full-vocabulary top-1 scans.
         #[arg(long = "output-head-chunk-rows", default_value_t = 4096)]
         output_head_chunk_rows: usize,
-        /// Number of routed experts per layer to prefetch during the benchmark.
+        /// Maximum routed-expert lookahead candidates per layer (0 disables lookahead).
         #[arg(long = "moe-prefetch-experts", default_value_t = 0)]
         moe_prefetch_experts: usize,
-        /// Bound resident routed experts per layer (0 = managed default).
+        /// Maximum runtime residency slots per layer (0 = runtime default).
         #[arg(long = "moe-hotset-experts", default_value_t = 48)]
         moe_hotset_experts: usize,
         /// Path to a golden interactive trace JSON for correctness comparison.
         #[arg(long = "golden")]
         golden: Option<String>,
-        /// JSON output for machine consumption.
+        /// Emit the versioned interactive benchmark JSON schema (currently v2).
         #[arg(long)]
         json: bool,
     },
@@ -134,16 +134,16 @@ pub(crate) enum Command {
         /// Wrap --prompt with the official DeepSeek-V4 chat encoding.
         #[arg(long)]
         chat: bool,
-        /// Emit machine-readable benchmark counters instead of streamed text.
+        /// Emit the versioned runtime materialization report schema (currently v2).
         #[arg(long)]
         json: bool,
         /// Number of warmup decode tokens before timing.
         #[arg(long, default_value_t = 0)]
         warmup_tokens: usize,
-        /// Number of routed experts per layer to predictively prefetch.
+        /// Maximum routed-expert lookahead candidates per layer (0 disables lookahead).
         #[arg(long, default_value_t = 32)]
         moe_prefetch_experts: usize,
-        /// Bound resident routed experts per layer (0 = managed default).
+        /// Maximum runtime residency slots per layer (0 = runtime default).
         #[arg(long, default_value_t = 48)]
         moe_hotset_experts: usize,
     },

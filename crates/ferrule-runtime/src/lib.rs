@@ -8,6 +8,7 @@
 
 // ── Sub-directory modules ─────────────────────────────────────────────────
 pub mod cache;
+pub mod io;
 pub mod scheduling;
 
 // ── Top-level modules ─────────────────────────────────────────────────────
@@ -26,8 +27,8 @@ pub use cache::{
 pub use engine::{
     InferenceCancelProgress, InferenceCompletionOwner, InferenceCompletionReactor, InferenceEngine,
     LocalResidentInferenceEngine, NativeMultiSessionExecutor, ResidentActionKind,
-    ResidentDriverStep, ResidentInferenceEngine, ResidentTokenEvent, ResidentTopKDriver,
-    ResidentTopKDriverConfig, ResidentTopKDriverStats,
+    ResidentDriverShutdownReport, ResidentDriverStep, ResidentInferenceEngine, ResidentTokenEvent,
+    ResidentTopKDriver, ResidentTopKDriverConfig, ResidentTopKDriverStats,
 };
 pub use expert_residency::{
     ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertInstallReason, ExpertKey, ExpertLease,
@@ -41,9 +42,11 @@ pub use profiler::{KernelProfiler, Profiler, TimedRegion};
 pub use scheduling::{
     CancelRequestResult, DecodeAction, ExpertIoAdvisor, ExpertIoBudget, ExpertIoCandidate,
     ExpertIoDecisionTrace, ExpertIoEstimate, ExpertIoPhase, ExpertIoQueueClass, ExpertIoRejection,
-    FixedSequenceSlotPool, KvHandle, LogitsSelection, PrefillChunkAction, ResidentScheduler,
-    ResidentSchedulerConfig, ResourceBroker, ResourceBrokerBuilder, ResourceBrokerStats,
-    ResourceClaim, ResourceClass, ResourceGrantId, ResourceId, ResourceRejection, ResourceRequest,
+    FixedSequenceSlotPool, HardResourceBroker, HardResourceClaim, HardResourceError,
+    HardResourceGrant, HardResourceGrantId, HardResourceLimit, HardResourceSnapshot, KvHandle,
+    LogitsSelection, PrefillChunkAction, ResidentScheduler, ResidentSchedulerConfig,
+    ResourceBroker, ResourceBrokerBuilder, ResourceBrokerStats, ResourceClaim, ResourceClass,
+    ResourceGrantId, ResourceId, ResourceKind, ResourceRejection, ResourceRequest,
     ResourceSnapshot, ResourceUnit, SchedulerAction, SequenceSlotPool, ZeroExpertIoAdvisor,
     plan_prefill_chunk,
 };

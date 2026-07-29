@@ -25,6 +25,7 @@ pub mod descriptor;
 pub mod execution;
 pub mod ffn;
 pub mod hyper_connection;
+pub mod materialization;
 pub mod precision;
 pub mod runner;
 pub mod semantic;
@@ -125,12 +126,28 @@ pub use moe::{
     reference_linear,
 };
 
+// ── Re-exports: materialization ───────────────────────────────────────────
+pub use materialization::{
+    ContinuationDependencyState, ExpertArtifactIdentity, ExpertDependencyResolution,
+    ExpertMaterializationAdapter, ExpertMaterializationCancelOutcome,
+    ExpertMaterializationPlacement, ExpertMaterializationProgress, ExpertMaterializationRequest,
+    ExpertMaterializationSubmission, PhysicalExpertMaterializationBackend,
+    PhysicalExpertOperationReservation, PhysicalExpertReservation,
+    PhysicalExpertReservationDescriptor, PhysicalExpertResourceTopology,
+};
+
+// Stable protocol identities and lease/dependency contracts used by model APIs.
+pub use ferrule_common::{
+    ContinuationId, DependencySet, ExpertLeaseSet, LoadKey, LogicalDependency,
+    ValidatedResidencyBinding,
+};
+
 // ── Re-exports: runner ────────────────────────────────────────────────────
 pub use runner::{
     BatchContinuationCancelOutcome, BatchContinuationId, ExpertIoModelRunner,
     ModelCompletionReactor, ModelInfo, ModelRunner, MultiSessionBatchProgress, MultiSessionRunner,
-    NativeProposal, NativeProposalProgress, NativeProposalSource, PendingExpertLoad,
-    PendingModelProgress, ResidentModelRunner, TokenLogit,
+    NativeProposal, NativeProposalProgress, NativeProposalSource, PendingModelProgress,
+    ResidentModelRunner, TokenLogit,
 };
 
 // ── Re-exports: attention_backend ─────────────────────────────────────────

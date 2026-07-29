@@ -162,6 +162,17 @@ impl<K: Copy> PreparedExpertInstall<K> {
         self.previous_key
     }
 
+    pub const fn evicted_binding(self) -> Option<ExpertSlotBinding<K>> {
+        match self.previous_key {
+            Some(key) => Some(ExpertSlotBinding {
+                key,
+                slot: self.slot,
+                generation: self.previous_generation,
+            }),
+            None => None,
+        }
+    }
+
     pub const fn reason(self) -> ExpertInstallReason {
         self.reason
     }
@@ -176,6 +187,15 @@ pub enum ExpertInstallPrepareOutcome {
     Prepared(PreparedExpertInstall),
     /// No unleased, unreserved slot was available for this prefetch.
     CapacityAllLeased,
+}
+
+/// Result of activating a prepared install immediately before physical mutation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpertInstallActivationOutcome {
+    /// The old mapping is hidden and the provider exclusively owns slot mutation.
+    Activated,
+    /// New selected work leased the old mapping while transfer was in flight.
+    BlockedByLeases,
 }
 
 /// Model namespace and independent capacity of each layer.
@@ -240,6 +260,14 @@ pub trait ExpertResidencyControl: Send {
         intent: ExpertInstallIntent,
     ) -> Result<ExpertInstallPrepareOutcome>;
 
+    /// Hide the old mapping and acquire exclusive slot mutation authority.
+    /// Providers call this only after transfer completes and before touching the
+    /// physical slot. A lease conflict is retryable and leaves the old mapping live.
+    fn activate_install(
+        &mut self,
+        prepared: PreparedExpertInstall,
+    ) -> Result<ExpertInstallActivationOutcome>;
+
     /// Publish the exact prepared slot/generation after backend installation succeeds.
     fn publish_install(&mut self, prepared: PreparedExpertInstall) -> Result<ExpertResidencyGrant>;
 
@@ -256,6 +284,7 @@ struct ExpertSlot<K> {
     leases: u32,
     last_used: u64,
     pending_transaction: Option<u64>,
+    install_activated: bool,
 }
 
 /// Stable slot/generation/lease primitive used by residency controllers.
@@ -292,6 +321,7 @@ where
                     leases: 0,
                     last_used: 0,
                     pending_transaction: None,
+                    install_activated: false,
                 })
                 .collect(),
             by_key: HashMap::with_capacity(capacity),
@@ -409,18 +439,66 @@ where
             .checked_add(1)
             .filter(|next| *next != 0)
             .ok_or_else(|| Error::Execution("expert install transaction IDs exhausted".into()))?;
+        let slot = ExpertSlotId(index as u32);
+        let previous_key = entry.key;
         let prepared = PreparedExpertInstall {
             transaction,
             key,
             reason,
-            slot: ExpertSlotId(index as u32),
-            previous_key: entry.key,
+            slot,
+            previous_key,
             previous_generation: entry.generation,
             next_generation: ExpertSlotGeneration(next),
         };
         self.slots[index].pending_transaction = Some(transaction);
+        self.slots[index].install_activated = false;
         self.pending.insert(transaction, prepared);
         Ok(Some(prepared))
+    }
+
+    pub fn activate_install(
+        &mut self,
+        prepared: PreparedExpertInstall<K>,
+    ) -> Result<ExpertInstallActivationOutcome> {
+        if self.pending.get(&prepared.transaction) != Some(&prepared) {
+            return Err(Error::Execution(
+                "prepared expert install is unknown, canceled, or already published".into(),
+            ));
+        }
+        let entry = self
+            .slots
+            .get(prepared.slot.index())
+            .ok_or_else(|| Error::Internal("prepared expert slot is missing".into()))?;
+        if entry.key != prepared.previous_key
+            || entry.generation != prepared.previous_generation
+            || entry.pending_transaction != Some(prepared.transaction)
+        {
+            return Err(Error::Execution(
+                "prepared expert install became stale before activation".into(),
+            ));
+        }
+        if entry.install_activated {
+            return Ok(ExpertInstallActivationOutcome::Activated);
+        }
+        if entry.leases != 0 {
+            return Ok(ExpertInstallActivationOutcome::BlockedByLeases);
+        }
+        if self.by_key.contains_key(&prepared.key) {
+            return Err(Error::Execution(format!(
+                "expert {:?} became resident before install activation",
+                prepared.key
+            )));
+        }
+        if let Some(previous) = prepared.previous_key {
+            if self.by_key.get(&previous) != Some(&prepared.slot) {
+                return Err(Error::Execution(
+                    "prepared eviction lost its published source mapping".into(),
+                ));
+            }
+            self.by_key.remove(&previous);
+        }
+        self.slots[prepared.slot.index()].install_activated = true;
+        Ok(ExpertInstallActivationOutcome::Activated)
     }
 
     pub fn publish_install(
@@ -466,6 +544,7 @@ where
             || entry.generation != prepared.previous_generation
             || entry.leases != 0
             || entry.pending_transaction != Some(prepared.transaction)
+            || !entry.install_activated
         {
             return Err(Error::Execution(
                 "prepared expert install became stale before publication".into(),
@@ -476,8 +555,7 @@ where
         }
 
         let entry = &mut self.slots[prepared.slot.index()];
-        if let Some(previous) = entry.key {
-            self.by_key.remove(&previous);
+        if entry.key.is_some() {
             self.stats.evictions = self.stats.evictions.saturating_add(1);
         }
         self.clock = self.clock.saturating_add(1);
@@ -485,11 +563,12 @@ where
         entry.generation = prepared.next_generation;
         entry.last_used = self.clock;
         entry.pending_transaction = None;
+        entry.install_activated = false;
         entry.leases = u32::from(acquire_lease);
         self.pending.remove(&prepared.transaction);
         self.by_key.insert(prepared.key, prepared.slot);
         self.stats.installs = self.stats.installs.saturating_add(1);
-        self.stats.resident = self.by_key.len();
+        self.stats.resident = self.slots.iter().filter(|slot| slot.key.is_some()).count();
         if acquire_lease {
             self.stats.active_leases += 1;
         }
@@ -506,14 +585,32 @@ where
         }
         let entry = self
             .slots
-            .get_mut(prepared.slot.index())
+            .get(prepared.slot.index())
             .ok_or_else(|| Error::Internal("prepared expert slot is missing".into()))?;
-        if entry.pending_transaction != Some(prepared.transaction) {
+        if entry.key != prepared.previous_key
+            || entry.generation != prepared.previous_generation
+            || entry.pending_transaction != Some(prepared.transaction)
+        {
             return Err(Error::Execution(
                 "prepared expert install reservation became stale".into(),
             ));
         }
+        if let Some(previous) = prepared.previous_key {
+            match (entry.install_activated, self.by_key.get(&previous)) {
+                (false, Some(slot)) if *slot == prepared.slot => {}
+                (true, None) => {
+                    self.by_key.insert(previous, prepared.slot);
+                }
+                _ => {
+                    return Err(Error::Execution(
+                        "prepared install cancellation found divergent source mapping".into(),
+                    ));
+                }
+            }
+        }
+        let entry = &mut self.slots[prepared.slot.index()];
         entry.pending_transaction = None;
+        entry.install_activated = false;
         self.pending.remove(&prepared.transaction);
         self.stats.prepare_cancellations = self.stats.prepare_cancellations.saturating_add(1);
         Ok(())
@@ -543,7 +640,7 @@ where
         entry.last_used = 0;
         self.by_key.remove(&key);
         self.stats.evictions = self.stats.evictions.saturating_add(1);
-        self.stats.resident = self.by_key.len();
+        self.stats.resident = self.slots.iter().filter(|slot| slot.key.is_some()).count();
         Ok(Some(binding))
     }
 
@@ -577,6 +674,10 @@ mod tests {
     ) -> ExpertSlotBinding<u32> {
         let prepared = coordinator.prepare_install(key).unwrap();
         let expected = prepared.binding();
+        assert_eq!(
+            coordinator.activate_install(prepared).unwrap(),
+            ExpertInstallActivationOutcome::Activated
+        );
         assert_eq!(coordinator.publish_install(prepared).unwrap(), expected);
         expected
     }
@@ -588,17 +689,57 @@ mod tests {
         let failed = coordinator.prepare_install(2).unwrap();
 
         assert_eq!(failed.evicted_key(), Some(1));
+        assert_eq!(failed.evicted_binding(), Some(old));
         assert_eq!(coordinator.binding(1), Some(old));
         assert_eq!(coordinator.binding(2), None);
+        assert_eq!(
+            coordinator.activate_install(failed).unwrap(),
+            ExpertInstallActivationOutcome::Activated
+        );
+        assert_eq!(coordinator.binding(1), None);
         coordinator.cancel_install(failed).unwrap();
         assert_eq!(coordinator.binding(1), Some(old));
         assert!(coordinator.publish_install(failed).is_err());
 
         let retry = coordinator.prepare_install(2).unwrap();
         let expected = retry.binding();
+        assert_eq!(
+            coordinator.activate_install(retry).unwrap(),
+            ExpertInstallActivationOutcome::Activated
+        );
         assert_eq!(coordinator.publish_install(retry).unwrap(), expected);
         assert_eq!(expected.slot, old.slot);
         assert!(expected.generation.get() > old.generation.get());
+    }
+
+    #[test]
+    fn prepared_eviction_remains_leasable_until_activation_then_hides_atomically() {
+        let mut coordinator = ExpertResidencyCoordinator::new(2).unwrap();
+        let first = install(&mut coordinator, 1);
+        let second = install(&mut coordinator, 2);
+        let replacement = coordinator.prepare_install(3).unwrap();
+        assert_eq!(replacement.evicted_key(), Some(1));
+        assert_eq!(replacement.evicted_binding(), Some(first));
+        assert_eq!(coordinator.binding(1), Some(first));
+
+        let lease = coordinator.acquire(1).unwrap().unwrap();
+        assert_eq!(
+            coordinator.activate_install(replacement).unwrap(),
+            ExpertInstallActivationOutcome::BlockedByLeases
+        );
+        assert_eq!(coordinator.binding(1), Some(first));
+
+        coordinator.release(lease).unwrap();
+        assert_eq!(
+            coordinator.activate_install(replacement).unwrap(),
+            ExpertInstallActivationOutcome::Activated
+        );
+        assert_eq!(coordinator.binding(1), None);
+        assert!(coordinator.acquire(1).unwrap().is_none());
+
+        coordinator.cancel_install(replacement).unwrap();
+        assert_eq!(coordinator.binding(1), Some(first));
+        assert_eq!(coordinator.binding(2), Some(second));
     }
 
     #[test]

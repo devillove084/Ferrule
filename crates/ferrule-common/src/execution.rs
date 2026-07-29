@@ -1002,7 +1002,7 @@ pub trait KvLayoutSchema: std::fmt::Debug + Send + Sync {
 }
 
 /// A logical KV page identifier within one plane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct KvPageId(pub u32);
 
 /// One delayed copy-on-write replacement of a shared tail page.
@@ -1020,15 +1020,20 @@ pub struct KvCowReplacement {
 /// non-cloneable reservation token for those transitions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KvReservationView {
-    /// State slot this reservation belongs to.
+    /// Page-manager state slot that owns this reservation.
     pub state_slot: StateSlot,
+    /// Packed model-state slot bound for this execution.
+    pub execution_state_slot: StateSlot,
     /// Position range covered by this reservation.
     pub positions: std::ops::Range<usize>,
     /// Newly allocated page IDs that will be committed on success or rolled
     /// back on failure.
     pub newly_allocated: Vec<KvPageId>,
-    /// Generation of the sequence state when the reservation was made.
+    /// Generation of the page-manager sequence that owns this reservation.
     pub generation: u64,
+    /// Generation of the model execution state bound to this reservation.
+    /// This differs from `generation` for isolated speculative branches.
+    pub execution_generation: u64,
     /// Delayed COW replacement for a partially filled shared tail page.
     pub cow_replacement: Option<KvCowReplacement>,
 }

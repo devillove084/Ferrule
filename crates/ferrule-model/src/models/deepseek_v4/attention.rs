@@ -14,7 +14,7 @@ use ferrule_common::execution::ForwardPhase;
 use ferrule_common::{Error, Result};
 
 use super::config::{DeepSeekV4AttentionConfig, DeepSeekV4RopeParams};
-#[cfg(all(feature = "cuda", feature = "cutlass"))]
+#[cfg(feature = "cuda")]
 use super::cuda_cache::DeepSeekV4DsparkAttentionBuffers;
 #[cfg(feature = "cuda")]
 use super::cuda_cache::{
@@ -2110,7 +2110,7 @@ impl DeepSeekV4Attention {
     /// DSpark proposal attention is deliberately separate from ordinary packed
     /// target attention: all five rows see the complete ephemeral block, and the
     /// block KV is never appended to the committed page table.
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     pub(crate) fn dspark_proposal_block_from_device_into(
         &self,
         stage: usize,

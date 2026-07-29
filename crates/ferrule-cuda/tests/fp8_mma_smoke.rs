@@ -373,7 +373,7 @@ fn fp8_mma_rows_match_allocation_free_matvec() {
         .download_f32_buffer(&rows_output)
         .expect("rows download");
 
-    #[cfg(feature = "cutlass")]
+    #[cfg(feature = "cuda")]
     {
         let mut native_output = ops.zero_f32_buffer(ROWS * OUT).expect("native output");
         let mut workspace = ops

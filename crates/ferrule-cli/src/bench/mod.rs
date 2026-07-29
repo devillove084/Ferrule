@@ -5,8 +5,8 @@
 
 #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 pub mod interactive_trace;
-pub mod summary;
+#[cfg(test)]
+mod summary;
 
 #[cfg(feature = "cuda")]
 pub use interactive_trace::{GoldenTurn, InteractiveTrace, compare_interactive_trace};
-pub use summary::{RuntimeBenchSummary, RuntimeCounters};

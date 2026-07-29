@@ -12,7 +12,7 @@ categories = ["science", "machine-learning"]
 
 [features]
 default = []
-cutlass = []
+cuda = []
 
 [dependencies]
 ferrule-common = { version = "0.2.0", path = "../ferrule-common" }

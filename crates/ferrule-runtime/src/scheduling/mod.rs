@@ -26,9 +26,10 @@ pub use expert_io::{
 pub use resident::{CancelRequestResult, ResidentScheduler, ResidentSchedulerConfig};
 pub(crate) use resources::{BrokerExpertIoResourceControl, ExpertIoResourceBrokerHandle};
 pub use resources::{
-    ResourceBroker, ResourceBrokerBuilder, ResourceBrokerStats, ResourceClaim, ResourceClass,
-    ResourceGrantId, ResourceId, ResourceRejection, ResourceRequest, ResourceSnapshot,
-    ResourceUnit,
+    HardResourceBroker, HardResourceClaim, HardResourceError, HardResourceGrant,
+    HardResourceGrantId, HardResourceLimit, HardResourceSnapshot, ResourceBroker,
+    ResourceBrokerBuilder, ResourceBrokerStats, ResourceClaim, ResourceClass, ResourceGrantId,
+    ResourceId, ResourceKind, ResourceRejection, ResourceRequest, ResourceSnapshot, ResourceUnit,
 };
 pub use session::{
     GenerateRequest, RequestId, SequenceFinishReason, SequenceState, SequenceStatus, SessionId,

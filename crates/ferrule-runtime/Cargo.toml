@@ -11,8 +11,7 @@ categories = ["science", "machine-learning"]
 
 [features]
 default = []
-cuda = ["dep:ferrule-cuda"]
-cutlass = ["cuda", "ferrule-cuda/cutlass", "ferrule-model/cutlass"]
+cuda = ["dep:ferrule-cuda", "ferrule-cuda/cuda", "ferrule-model/cuda"]
 
 [dependencies]
 ferrule-common = { version = "0.2.0", path = "../ferrule-common" }

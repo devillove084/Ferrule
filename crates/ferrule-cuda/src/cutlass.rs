@@ -5,14 +5,14 @@
 //! for complete semantic bundles; no C++ object or generic GEMM fallback
 //! crosses the FFI.
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 use cuda_core::{DeviceBuffer, stream::CudaStream};
 use ferrule_common::{Error, Result};
 
 pub const CUTLASS_ABI_VERSION: u32 = 9;
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 const PINNED_CUTLASS_VERSION: u32 = 461;
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 const GB10_SM: u32 = 121;
 
 pub const DSPARK_PROPOSAL_ROWS: usize = 5;
@@ -74,26 +74,25 @@ impl CutlassProvider {
     }
 
     pub fn execution_manifest(self) -> Result<ferrule_common::kernel_plan::ProviderManifest> {
-        Ok(
-            ferrule_common::kernel_plan::ProviderManifest::cutlass_cubin(
-                u16::try_from(self.manifest.abi_version)
-                    .map_err(|_| Error::Internal("CUTLASS ABI version exceeds u16".into()))?,
-                self.manifest.kernel_count as usize,
-            ),
-        )
+        Ok(ferrule_common::kernel_plan::ProviderManifest::external(
+            "cutlass-sm121a",
+            u16::try_from(self.manifest.abi_version)
+                .map_err(|_| Error::Internal("CUTLASS ABI version exceeds u16".into()))?,
+            self.manifest.kernel_count as usize,
+        ))
     }
 }
 
 /// Discover the required GB10 provider. Absence or any target/ABI mismatch is
 /// fatal; Ferrule does not route production execution to another architecture.
 pub fn discover_provider() -> Result<CutlassProvider> {
-    #[cfg(not(feature = "cutlass"))]
+    #[cfg(not(feature = "cuda"))]
     {
         Err(Error::Internal(
             "GB10 execution requires the `cutlass` feature and SM121a provider".into(),
         ))
     }
-    #[cfg(feature = "cutlass")]
+    #[cfg(feature = "cuda")]
     {
         let manifest = unsafe { ffi::ferrule_cutlass_provider_manifest() };
         if manifest.abi_version != CUTLASS_ABI_VERSION {
@@ -131,7 +130,7 @@ pub fn discover_provider() -> Result<CutlassProvider> {
     }
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassBf16CompressorArgs {
@@ -149,7 +148,7 @@ struct CutlassBf16CompressorArgs {
     stream: u64,
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassFp8QueryAKvArgs {
@@ -170,7 +169,7 @@ struct CutlassFp8QueryAKvArgs {
     stream: u64,
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassDsparkMainProjectNormArgs {
@@ -193,7 +192,7 @@ struct CutlassDsparkMainProjectNormArgs {
     stream: u64,
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassDsparkHybridMlaAttentionArgs {
@@ -226,7 +225,7 @@ struct CutlassDsparkHybridMlaAttentionArgs {
     stream: u64,
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassDsparkProposalHeadArgs {
@@ -284,7 +283,7 @@ pub struct DsparkHybridMlaAttentionLayout {
     pub softmax_scale: f32,
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassHcProducerArgs {
@@ -313,7 +312,7 @@ struct CutlassHcProducerArgs {
     stream: u64,
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassSharedFfnArgs {
@@ -346,7 +345,7 @@ struct CutlassSharedFfnArgs {
     stream: u64,
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassMlaOutputArgs {
@@ -372,7 +371,7 @@ struct CutlassMlaOutputArgs {
     stream: u64,
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct CutlassStableFrameFp4MoeArgs {
@@ -411,7 +410,7 @@ struct CutlassStableFrameFp4MoeArgs {
     stream: u64,
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 impl CutlassBf16CompressorArgs {
     #[allow(clippy::too_many_arguments)]
     fn from_buffers(
@@ -454,7 +453,7 @@ impl CutlassBf16CompressorArgs {
     }
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 impl CutlassFp8QueryAKvArgs {
     #[allow(clippy::too_many_arguments)]
     fn from_buffers(
@@ -548,7 +547,7 @@ impl CutlassFp8QueryAKvArgs {
     }
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 impl CutlassDsparkMainProjectNormArgs {
     #[allow(clippy::too_many_arguments)]
     fn from_buffers(
@@ -602,7 +601,7 @@ impl CutlassDsparkMainProjectNormArgs {
     }
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 impl CutlassDsparkHybridMlaAttentionArgs {
     #[allow(clippy::too_many_arguments)]
     fn from_buffers(
@@ -671,7 +670,7 @@ impl CutlassDsparkHybridMlaAttentionArgs {
     }
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 impl CutlassDsparkProposalHeadArgs {
     #[allow(clippy::too_many_arguments)]
     fn from_buffers(
@@ -818,7 +817,7 @@ impl CutlassDsparkProposalHeadArgs {
     }
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 fn validate_dspark_hybrid_mla_attention_problem(
     query: &DeviceBuffer<f32>,
@@ -914,7 +913,7 @@ fn validate_dspark_hybrid_mla_attention_problem(
     Ok(())
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 fn validate_dspark_main_project_norm_problem(
     input: &DeviceBuffer<f32>,
@@ -991,7 +990,7 @@ fn validate_dspark_main_project_norm_problem(
     Ok(())
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 fn validate_bf16_problem(
     activation: &DeviceBuffer<f32>,
@@ -1054,7 +1053,7 @@ fn validate_bf16_problem(
     Ok(())
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 fn validate_fp8_problem(
     activation: &DeviceBuffer<u8>,
@@ -1128,7 +1127,7 @@ fn validate_fp8_problem(
     Ok(())
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 fn validate_fp8_projection_problem(
     activation: &DeviceBuffer<u8>,
@@ -1178,20 +1177,20 @@ fn validate_fp8_projection_problem(
     Ok(())
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 fn checked_mul(lhs: usize, rhs: usize, name: &str) -> Result<usize> {
     lhs.checked_mul(rhs)
         .ok_or_else(|| Error::Internal(format!("SM121 FP8 {name} size overflow")))
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 fn checked_u32(value: usize, name: &str) -> Result<u32> {
     u32::try_from(value).map_err(|_| Error::Internal(format!("SM121 FP8 {name} exceeds u32")))
 }
 
 /// Launch one semantic BF16 compressor bundle. The native GB10 provider owns
 /// small-M versus tiled schedule selection.
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn bf16_compressor(
     stream: &CudaStream,
@@ -1234,7 +1233,7 @@ pub fn bf16_compressor(
 
 /// Launch one semantic FP8 QueryA+KV bundle. The executable plan does not bind
 /// an M bucket or expose a native schedule variant.
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn fp8_query_a_kv(
     stream: &CudaStream,
@@ -1279,7 +1278,7 @@ pub fn fp8_query_a_kv(
 }
 
 /// Launch one small-M FP8 projection through the native SM121 pipeline.
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn fp8_projection(
     stream: &CudaStream,
@@ -1317,7 +1316,7 @@ pub fn fp8_projection(
 
 /// Launch the checkpoint-native DSpark stage-zero target-tap projection and
 /// RMSNorm as one cooperative semantic operation.
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn dspark_main_project_norm(
     stream: &CudaStream,
@@ -1370,7 +1369,7 @@ pub fn dspark_main_project_norm(
 
 /// Launch checkpoint-native DSpark attention over committed paged context plus
 /// the complete read-only five-row proposal block.
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn dspark_hybrid_mla_attention(
     stream: &CudaStream,
@@ -1422,7 +1421,7 @@ pub fn dspark_hybrid_mla_attention(
 }
 
 /// Launch the checkpoint-native DSpark HC/LM/Markov/confidence proposal head.
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn dspark_proposal_head(
     stream: &CudaStream,
@@ -1482,7 +1481,7 @@ pub fn dspark_proposal_head(
 }
 
 /// Launch the complete HC-pre + layer RMSNorm + FP8 producer bundle.
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn hc_producer(
     stream: &CudaStream,
@@ -1612,7 +1611,7 @@ pub fn hc_producer(
 }
 
 /// Launch the complete shared gate/up -> SwiGLU -> down bundle.
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn shared_ffn(
     stream: &CudaStream,
@@ -1765,7 +1764,7 @@ pub fn shared_ffn(
 }
 
 /// Launch grouped output-A -> BF16 boundary -> FP8 pack -> output-B as one MLA bundle.
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn mla_output(
     stream: &CudaStream,
@@ -1891,7 +1890,7 @@ pub fn mla_output(
 }
 
 /// Launch the complete stable-frame routed MXFP4 expert bundle.
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn stable_frame_fp4_moe(
     stream: &CudaStream,
@@ -2072,7 +2071,7 @@ pub fn stable_frame_fp4_moe(
     }
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 fn validate_lengths(scope: &str, required: &[(&str, usize, usize)]) -> Result<()> {
     for &(name, actual, expected) in required {
         if actual != expected {
@@ -2084,7 +2083,7 @@ fn validate_lengths(scope: &str, required: &[(&str, usize, usize)]) -> Result<()
     Ok(())
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 fn native_error(operation: &str, code: i32) -> Error {
     let reason = match code {
         status::INVALID_ABI => "ABI mismatch",
@@ -2095,7 +2094,7 @@ fn native_error(operation: &str, code: i32) -> Error {
     Error::Internal(format!("CUTLASS {operation} failed: {reason} ({code})"))
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 mod status {
     pub const SUCCESS: i32 = 0;
     pub const INVALID_ABI: i32 = 1;
@@ -2103,7 +2102,7 @@ mod status {
     pub const LAUNCH_FAILED: i32 = 3;
 }
 
-#[cfg(feature = "cutlass")]
+#[cfg(feature = "cuda")]
 mod ffi {
     use super::{
         CutlassBf16CompressorArgs, CutlassDsparkHybridMlaAttentionArgs,
@@ -2169,7 +2168,7 @@ mod tests {
     #[test]
     fn pod_layout_matches_native_contract() {
         assert_eq!(std::mem::size_of::<CutlassProviderManifest>(), 24);
-        #[cfg(feature = "cutlass")]
+        #[cfg(feature = "cuda")]
         {
             assert_eq!(std::mem::size_of::<CutlassFp8QueryAKvArgs>(), 96);
             assert_eq!(std::mem::size_of::<CutlassBf16CompressorArgs>(), 72);
@@ -2186,7 +2185,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "cutlass")]
+    #[cfg(feature = "cuda")]
     #[test]
     fn native_provider_is_exactly_the_sm121_bundle_catalog() {
         let provider = discover_provider().expect("SM121 provider");

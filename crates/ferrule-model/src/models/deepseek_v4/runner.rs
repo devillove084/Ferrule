@@ -3,9 +3,7 @@
 #[cfg(feature = "cuda")]
 use std::collections::BTreeMap;
 #[cfg(any(feature = "cuda", test))]
-use std::collections::BTreeSet;
-#[cfg(feature = "cuda")]
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 #[cfg(any(feature = "cuda", test))]
 use std::num::NonZeroU64;
@@ -20,11 +18,21 @@ use std::time::Duration;
 #[cfg(feature = "cuda")]
 use crate::execution::ExecutionShapeKey;
 use crate::execution::ModelExecutionBackend;
+#[cfg(any(feature = "cuda", test))]
+use crate::execution::SequenceStepBinding;
 #[cfg(feature = "cuda")]
-use crate::execution::{OwnedArenaCheckout, PersistentArenaPool, SequenceStepBinding};
+use crate::execution::{OwnedArenaCheckout, PersistentArenaPool};
+#[cfg(any(feature = "cuda", test))]
+use crate::materialization::ContinuationDependencyState;
+#[cfg(feature = "cuda")]
+use crate::materialization::{
+    ExpertDependencyResolution, ExpertMaterializationPlacement, ExpertMaterializationRequest,
+    expert_dependency_set,
+};
+use crate::materialization::{ExpertMaterializationAdapter, PhysicalExpertMaterializationBackend};
 use crate::moe::prediction::ExpertHotsetPredictor;
 use crate::moe::streaming::ExpertStreamingReader;
-#[cfg(all(feature = "cuda", feature = "cutlass"))]
+#[cfg(feature = "cuda")]
 use crate::runner::NativeProposal;
 use crate::runner::{
     BatchContinuationCancelOutcome, BatchContinuationId, ModelCompletionReactor, ModelInfo,
@@ -32,7 +40,7 @@ use crate::runner::{
     NativeProposalSource, ResidentModelRunner,
 };
 #[cfg(feature = "cuda")]
-use crate::runner::{PendingExpertLoad, PendingModelProgress, TokenLogit};
+use crate::runner::{PendingModelProgress, TokenLogit};
 use ferrule_common::execution::{ExecutionBatch, ExecutionTransactionId};
 #[cfg(feature = "cuda")]
 use ferrule_common::execution::{
@@ -40,10 +48,20 @@ use ferrule_common::execution::{
     TokenLogit as ExecutionTokenLogit,
 };
 #[cfg(any(feature = "cuda", test))]
-use ferrule_common::execution::{ForwardMode, ForwardPhase};
+use ferrule_common::execution::{ForwardMode, ForwardPhase, KvPageId};
 
+#[cfg(any(feature = "cuda", test))]
+use ferrule_common::DependencySet;
+#[cfg(any(feature = "cuda", test))]
+use ferrule_common::LogicalDependency;
+#[cfg(feature = "cuda")]
+use ferrule_common::ModelInstanceId;
 use ferrule_common::expert_residency::{ExpertResidencyControl, ExpertResidencyRequirements};
-use ferrule_common::{CompletionHub, Error, Result};
+#[cfg(any(feature = "cuda", test))]
+use ferrule_common::{
+    BackendId, DeviceId, DispatchFenceContract, FenceId, MappingEpoch, OperationId,
+};
+use ferrule_common::{CompletionHub, Error, ExpertLeaseSet, Result};
 
 use super::artifact::DeepSeekV4ArtifactModel;
 
@@ -51,13 +69,15 @@ use super::artifact::DeepSeekV4ArtifactModel;
 use super::cuda_cache::{
     DeepSeekV4CudaComputeQuiescence, DeepSeekV4DecodeBuffers, DeepSeekV4OutputHeadTopKDownload,
 };
-#[cfg(all(feature = "cuda", feature = "cutlass"))]
+#[cfg(feature = "cuda")]
 use super::cuda_cache::{
     DeepSeekV4DsparkAttentionBuffers, DeepSeekV4DsparkMainBuffers,
     DeepSeekV4DsparkProposalHeadBuffers,
 };
 use super::expert_io::{DeepSeekV4ExpertIoLayerSnapshot, DeepSeekV4ExpertIoSnapshot};
-#[cfg(all(feature = "cuda", feature = "cutlass"))]
+#[cfg(feature = "cuda")]
+use super::expert_materializer::DeepSeekV4SharedExpertSubsystemOwner;
+#[cfg(feature = "cuda")]
 use super::layer::{
     DeepSeekV4DsparkLayerContinuation, DeepSeekV4DsparkLayerProgress, DeepSeekV4LayerArena,
 };
@@ -66,7 +86,7 @@ use super::layer::{
     DeepSeekV4LayerArenaVariants, DeepSeekV4PackedLayerContinuation, DeepSeekV4PackedLayerProgress,
 };
 use super::layer::{DeepSeekV4LayerExpertRuntime, DeepSeekV4LayerState};
-#[cfg(all(feature = "cuda", feature = "cutlass"))]
+#[cfg(feature = "cuda")]
 use super::mtp::DeepSeekV4DsparkProtocol;
 use super::mtp::DeepSeekV4MtpModel;
 use super::operators::{
@@ -80,6 +100,8 @@ use super::prepared::{
     DeepSeekV4ExecutionPolicy, DeepSeekV4PreparedLayerExperts, DeepSeekV4PreparedModelPlan, prepare,
 };
 use super::sequence::DeepSeekV4SequenceExecutionState;
+#[cfg(any(feature = "cuda", test))]
+use super::sequence::DeepSeekV4SequenceTopologyId;
 #[cfg(feature = "cuda")]
 use super::sequence::{DeepSeekV4PagedKvBinding, DeepSeekV4SequenceMoeAccessEvent};
 
@@ -145,6 +167,282 @@ impl DeepSeekV4LayerArenaPoolKey {
     }
 }
 
+#[cfg(any(feature = "cuda", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct DeepSeekV4PackedSequenceOwner {
+    state_index: usize,
+    topology_id: DeepSeekV4SequenceTopologyId,
+    binding: SequenceStepBinding,
+}
+
+#[cfg(any(feature = "cuda", test))]
+impl DeepSeekV4PackedSequenceOwner {
+    pub(super) fn capture(
+        state_index: usize,
+        state: &DeepSeekV4SequenceExecutionState,
+    ) -> Result<Self> {
+        Ok(Self {
+            state_index,
+            topology_id: state.topology_id(),
+            binding: state.begin_step()?,
+        })
+    }
+}
+
+#[cfg(any(feature = "cuda", test))]
+struct DeepSeekV4PackedTransactionSlot<T> {
+    owners: Vec<DeepSeekV4PackedSequenceOwner>,
+    protected_pages: BTreeSet<KvPageId>,
+    payload: Option<T>,
+}
+
+/// Host-side ownership index for packed transaction topology.
+///
+/// Payloads may be taken temporarily while one transaction is progressed, but
+/// sequence/page ownership remains registered until an exactly-once terminal
+/// `finish`. No mutex or runner-wide execution lease is used.
+#[cfg(any(feature = "cuda", test))]
+pub(super) struct DeepSeekV4PackedTransactionRegistry<T> {
+    transactions: HashMap<ExecutionTransactionId, DeepSeekV4PackedTransactionSlot<T>>,
+    sequence_owners: HashMap<DeepSeekV4SequenceTopologyId, ExecutionTransactionId>,
+    page_readers: HashMap<KvPageId, BTreeSet<ExecutionTransactionId>>,
+}
+
+#[cfg(any(feature = "cuda", test))]
+impl<T> Default for DeepSeekV4PackedTransactionRegistry<T> {
+    fn default() -> Self {
+        Self {
+            transactions: HashMap::new(),
+            sequence_owners: HashMap::new(),
+            page_readers: HashMap::new(),
+        }
+    }
+}
+
+#[cfg(any(feature = "cuda", test))]
+impl<T> DeepSeekV4PackedTransactionRegistry<T> {
+    fn validate_insert(
+        &self,
+        transaction: ExecutionTransactionId,
+        owners: &[DeepSeekV4PackedSequenceOwner],
+    ) -> Result<()> {
+        if self.transactions.contains_key(&transaction) {
+            return Err(Error::Execution(format!(
+                "DeepSeek-V4 transaction {} is already registered",
+                transaction.get()
+            )));
+        }
+        let mut unique = BTreeSet::new();
+        for owner in owners {
+            if !unique.insert(owner.topology_id.get()) {
+                return Err(Error::Execution(format!(
+                    "DeepSeek-V4 transaction {} references sequence topology {} more than once",
+                    transaction.get(),
+                    owner.topology_id.get()
+                )));
+            }
+            if let Some(active) = self.sequence_owners.get(&owner.topology_id) {
+                return Err(Error::Execution(format!(
+                    "DeepSeek-V4 sequence topology {} is already owned by transaction {}; transaction {} conflicts",
+                    owner.topology_id.get(),
+                    active.get(),
+                    transaction.get()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn insert(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        owners: Vec<DeepSeekV4PackedSequenceOwner>,
+        protected_pages: impl IntoIterator<Item = KvPageId>,
+        payload: T,
+    ) -> Result<()> {
+        self.validate_insert(transaction, &owners)?;
+        let protected_pages = protected_pages.into_iter().collect::<BTreeSet<_>>();
+        for owner in &owners {
+            self.sequence_owners.insert(owner.topology_id, transaction);
+        }
+        for page in &protected_pages {
+            self.page_readers
+                .entry(*page)
+                .or_default()
+                .insert(transaction);
+        }
+        self.transactions.insert(
+            transaction,
+            DeepSeekV4PackedTransactionSlot {
+                owners,
+                protected_pages,
+                payload: Some(payload),
+            },
+        );
+        Ok(())
+    }
+
+    fn take_payload(&mut self, transaction: ExecutionTransactionId) -> Result<T> {
+        self.transactions
+            .get_mut(&transaction)
+            .ok_or_else(|| {
+                Error::Execution(format!(
+                    "DeepSeek-V4 transaction {} is not registered",
+                    transaction.get()
+                ))
+            })?
+            .payload
+            .take()
+            .ok_or_else(|| {
+                Error::Internal(format!(
+                    "DeepSeek-V4 transaction {} topology is already being progressed",
+                    transaction.get()
+                ))
+            })
+    }
+
+    fn put_payload(&mut self, transaction: ExecutionTransactionId, payload: T) -> Result<()> {
+        let slot = self.transactions.get_mut(&transaction).ok_or_else(|| {
+            Error::Internal(format!(
+                "DeepSeek-V4 transaction {} lost its ownership slot",
+                transaction.get()
+            ))
+        })?;
+        if slot.payload.is_some() {
+            return Err(Error::Internal(format!(
+                "DeepSeek-V4 transaction {} topology was restored more than once",
+                transaction.get()
+            )));
+        }
+        slot.payload = Some(payload);
+        Ok(())
+    }
+
+    fn validate_states(
+        &self,
+        transaction: ExecutionTransactionId,
+        states: &[DeepSeekV4SequenceExecutionState],
+    ) -> Result<()> {
+        let slot = self.transactions.get(&transaction).ok_or_else(|| {
+            Error::Execution(format!(
+                "DeepSeek-V4 transaction {} is not registered",
+                transaction.get()
+            ))
+        })?;
+        for owner in &slot.owners {
+            let state = states.get(owner.state_index).ok_or_else(|| {
+                Error::Execution(format!(
+                    "DeepSeek-V4 transaction {} state slot {} no longer exists",
+                    transaction.get(),
+                    owner.state_index
+                ))
+            })?;
+            if state.topology_id() != owner.topology_id {
+                return Err(Error::Execution(format!(
+                    "DeepSeek-V4 transaction {} state slot {} changed topology identity from {} to {}",
+                    transaction.get(),
+                    owner.state_index,
+                    owner.topology_id.get(),
+                    state.topology_id().get()
+                )));
+            }
+            let current = state.begin_step()?;
+            if current != owner.binding {
+                return Err(Error::Execution(format!(
+                    "DeepSeek-V4 transaction {} has a stale sequence generation/position at state slot {}: expected {}/{}, got {}/{}",
+                    transaction.get(),
+                    owner.state_index,
+                    owner.binding.generation(),
+                    owner.binding.committed_position(),
+                    current.generation(),
+                    current.committed_position()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_sequence_available(
+        &self,
+        state: &DeepSeekV4SequenceExecutionState,
+        operation: &str,
+    ) -> Result<()> {
+        if let Some(transaction) = self.sequence_owners.get(&state.topology_id()) {
+            return Err(Error::Execution(format!(
+                "cannot {operation}: DeepSeek-V4 sequence topology {} is owned by transaction {}",
+                state.topology_id().get(),
+                transaction.get()
+            )));
+        }
+        Ok(())
+    }
+
+    fn ensure_pages_available(&self, pages: &[KvPageId], operation: &str) -> Result<()> {
+        if let Some((page, readers)) = pages.iter().find_map(|page| {
+            self.page_readers
+                .get(page)
+                .filter(|readers| !readers.is_empty())
+                .map(|readers| (*page, readers))
+        }) {
+            return Err(Error::Execution(format!(
+                "cannot {operation} DeepSeek-V4 KV page {} while transaction(s) {:?} reference it",
+                page.0, readers
+            )));
+        }
+        Ok(())
+    }
+
+    fn finalize_checkout(&mut self, transaction: ExecutionTransactionId) {
+        let slot = self
+            .transactions
+            .remove(&transaction)
+            .expect("checked-out packed transaction lost its registry slot");
+        debug_assert!(slot.payload.is_none());
+        self.release_ownership(transaction, &slot);
+    }
+
+    fn release_ownership(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        slot: &DeepSeekV4PackedTransactionSlot<T>,
+    ) {
+        for owner in &slot.owners {
+            if self.sequence_owners.get(&owner.topology_id) == Some(&transaction) {
+                self.sequence_owners.remove(&owner.topology_id);
+            }
+        }
+        for page in &slot.protected_pages {
+            if let Some(readers) = self.page_readers.get_mut(page) {
+                readers.remove(&transaction);
+                if readers.is_empty() {
+                    self.page_readers.remove(page);
+                }
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.transactions.is_empty()
+    }
+
+    fn contains(&self, transaction: ExecutionTransactionId) -> bool {
+        self.transactions.contains_key(&transaction)
+    }
+
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.transactions.len()
+    }
+
+    #[cfg(test)]
+    pub(super) fn owner_of(
+        &self,
+        state: &DeepSeekV4SequenceExecutionState,
+    ) -> Option<ExecutionTransactionId> {
+        self.sequence_owners.get(&state.topology_id()).copied()
+    }
+}
+
 #[cfg(feature = "cuda")]
 enum DeepSeekV4PackedOutputHeadState {
     NotStarted,
@@ -166,23 +464,60 @@ struct DeepSeekV4PackedCudaContinuation {
     arena_checkout:
         Option<OwnedArenaCheckout<DeepSeekV4LayerArenaPoolKey, DeepSeekV4LayerArenaVariants>>,
     decode_buffers: Option<DeepSeekV4DecodeBuffers>,
-    #[cfg(feature = "cutlass")]
+    #[cfg(feature = "cuda")]
     dspark_main_buffers: Option<DeepSeekV4DsparkMainBuffers>,
     initialized: bool,
     next_layer_index: usize,
     current_layer: Option<DeepSeekV4PackedLayerContinuation>,
     output_head: DeepSeekV4PackedOutputHeadState,
     cancel_quiescence: Option<DeepSeekV4CudaComputeQuiescence>,
+    dependencies: Option<ContinuationDependencyState>,
     moe_access_events: Vec<DeepSeekV4SequenceMoeAccessEvent>,
+    expert_leases: Vec<ExpertLeaseSet>,
     paged_bindings_active: bool,
     provisional_checkpoints: bool,
     failed: bool,
 }
 
 #[cfg(feature = "cuda")]
+enum DeepSeekV4PackedTransactionExecution {
+    Prepared,
+    Waiting(DeepSeekV4PackedCudaContinuation),
+    Complete(Vec<ExpertLeaseSet>),
+    Cancelled(BatchContinuationId),
+    CleanupPending {
+        continuation: DeepSeekV4PackedCudaContinuation,
+        quiesced: bool,
+    },
+}
+
+#[cfg(feature = "cuda")]
+enum DeepSeekV4PackedBackendState {
+    Prepared,
+    FinalizedAfterCommitFailure,
+    RolledBack,
+}
+
+#[cfg(feature = "cuda")]
+struct DeepSeekV4PackedTransactionTopology {
+    batch: ExecutionBatch,
+    metadata: PackedBatchMetadata,
+    committed_state_indices: Vec<usize>,
+    working_states: Vec<DeepSeekV4SequenceExecutionState>,
+    execution: DeepSeekV4PackedTransactionExecution,
+    backend: DeepSeekV4PackedBackendState,
+}
+
+#[cfg(feature = "cuda")]
+enum DeepSeekV4PackedCudaCancelProgress {
+    StillActive(DeepSeekV4PackedCudaContinuation, Error),
+    Quiesced(DeepSeekV4PackedCudaContinuation, Result<()>),
+}
+
+#[cfg(feature = "cuda")]
 enum DeepSeekV4PackedCudaProgress {
     Waiting(DeepSeekV4PackedCudaContinuation, PendingModelProgress),
-    Complete(ExecutionOutput),
+    Complete(ExecutionOutput, Vec<ExpertLeaseSet>),
 }
 
 #[cfg(feature = "cuda")]
@@ -209,23 +544,23 @@ pub struct DeepSeekV4Runner {
     /// CPU/reference planner and handle stores. CUDA consumes immutable prepared
     /// catalogs while runtime owns logical slots, generations, leases, and policy.
     cpu_expert_runtimes: Option<Box<[DeepSeekV4LayerExpertRuntime]>>,
+    expert_materialization: Option<Box<dyn ExpertMaterializationAdapter>>,
     #[cfg(feature = "cuda")]
     model_instance: u64,
     #[cfg(feature = "cuda")]
-    expert_residency: Option<Box<dyn ExpertResidencyControl>>,
+    expert_subsystem_owner: Option<DeepSeekV4SharedExpertSubsystemOwner>,
+    #[cfg(feature = "cuda")]
+    expert_materialization_backend_taken: bool,
     #[cfg(feature = "cuda")]
     layer_arena_pool:
         PersistentArenaPool<DeepSeekV4LayerArenaPoolKey, DeepSeekV4LayerArenaVariants>,
     #[cfg(feature = "cuda")]
-    packed_cuda_continuations: HashMap<ExecutionTransactionId, DeepSeekV4PackedCudaContinuation>,
-    #[cfg(feature = "cuda")]
-    prepared_paged_bindings:
-        HashMap<ExecutionTransactionId, Vec<(usize, Option<DeepSeekV4PagedKvBinding>)>>,
+    packed_transactions: DeepSeekV4PackedTransactionRegistry<DeepSeekV4PackedTransactionTopology>,
     #[cfg(feature = "cuda")]
     next_packed_cuda_continuation_id: NonZeroU64,
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     dspark_proposal_arena_pool: Vec<DeepSeekV4DsparkProposalArena>,
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     dspark_proposal_continuations:
         HashMap<BatchContinuationId, DeepSeekV4DsparkProposalContinuation>,
     dspark_proposal_source: Option<NativeProposalSource>,
@@ -237,7 +572,7 @@ pub struct DeepSeekV4Runner {
     shutdown: bool,
 }
 
-#[cfg(all(feature = "cuda", feature = "cutlass"))]
+#[cfg(feature = "cuda")]
 struct DeepSeekV4DsparkProposalArena {
     stages: Box<[DeepSeekV4LayerArena]>,
     attention: DeepSeekV4DsparkAttentionBuffers,
@@ -245,7 +580,7 @@ struct DeepSeekV4DsparkProposalArena {
     hc_state: ferrule_cuda::context::CudaF32Buffer,
 }
 
-#[cfg(all(feature = "cuda", feature = "cutlass"))]
+#[cfg(feature = "cuda")]
 struct DeepSeekV4DsparkProposalContinuation {
     transaction: ExecutionTransactionId,
     id: BatchContinuationId,
@@ -258,13 +593,16 @@ struct DeepSeekV4DsparkProposalContinuation {
     stage: usize,
     current_layer: Option<DeepSeekV4DsparkLayerContinuation>,
     moe_access_events: Vec<DeepSeekV4SequenceMoeAccessEvent>,
+    expert_leases: Vec<ExpertLeaseSet>,
     head_download: Option<ferrule_cuda::context::CudaI32HostDownload>,
+    cancel_quiescence: Option<DeepSeekV4CudaComputeQuiescence>,
     paged_binding_active: bool,
     callback_armed: bool,
+    dependencies: Option<ContinuationDependencyState>,
     failed: Option<String>,
 }
 
-#[cfg(all(feature = "cuda", feature = "cutlass"))]
+#[cfg(feature = "cuda")]
 enum DeepSeekV4DsparkProposalStep {
     Waiting(PendingModelProgress),
     Complete(NativeProposal),
@@ -289,7 +627,7 @@ fn expert_residency_layer_capacities(resources: &DeepSeekV4PreparedResources) ->
     capacities
 }
 
-#[cfg(all(feature = "cuda", feature = "cutlass"))]
+#[cfg(feature = "cuda")]
 const DSPARK_PROPOSAL_IMPLEMENTATION: &str = "deepseek-v4-dspark-cuda-cutlass-v1";
 
 fn prepared_dspark_proposal_source(
@@ -305,7 +643,7 @@ fn prepared_dspark_proposal_source(
                 .into(),
         ));
     }
-    #[cfg(not(all(feature = "cuda", feature = "cutlass")))]
+    #[cfg(not(feature = "cuda"))]
     {
         let _ = mtp;
         Err(Error::Model(
@@ -313,7 +651,7 @@ fn prepared_dspark_proposal_source(
                 .into(),
         ))
     }
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     {
         if mtp.prediction_heads.is_none() {
             return Err(Error::Model(
@@ -389,9 +727,66 @@ fn take_packed_cuda_continuation_id(next: &mut NonZeroU64) -> Result<BatchContin
         .ok_or_else(|| {
             Error::Execution("DeepSeek-V4 packed continuation ID space is exhausted".into())
         })?;
-    let id = BatchContinuationId::new(value)?;
+    let id = BatchContinuationId::new(value);
     *next = following;
     Ok(id)
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn empty_expert_lease_set(continuation: BatchContinuationId) -> Result<ExpertLeaseSet> {
+    ExpertLeaseSet::new(
+        [],
+        [],
+        MappingEpoch::new(continuation.get()),
+        DispatchFenceContract::new(
+            OperationId::new(continuation.get()),
+            FenceId::new(continuation.get()),
+            BackendId::new(0),
+            DeviceId::new(0),
+        ),
+    )
+    .map_err(|error| {
+        Error::Internal(format!(
+            "failed to construct an empty DeepSeek-V4 route-poll lease set: {error}"
+        ))
+    })
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn take_cuda_backend_once<T, B>(
+    backend: ModelExecutionBackend,
+    owner: Option<&mut T>,
+    take: impl FnOnce(&mut T) -> Option<B>,
+) -> Option<B> {
+    if backend == ModelExecutionBackend::Cuda {
+        owner.and_then(take)
+    } else {
+        None
+    }
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn record_continuation_dependencies(
+    state: &mut Option<ContinuationDependencyState>,
+    continuation: BatchContinuationId,
+    dependencies: DependencySet,
+) -> Result<()> {
+    match state {
+        Some(state) => state.replace_unresolved(dependencies),
+        None => {
+            *state = Some(ContinuationDependencyState::new(
+                continuation,
+                dependencies,
+            )?);
+            Ok(())
+        }
+    }
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn internal_continuation_dependency(continuation: BatchContinuationId) -> Result<DependencySet> {
+    let dependency = LogicalDependency::operation_retired(OperationId::new(continuation.get()))?;
+    Ok(DependencySet::new([dependency])?)
 }
 
 #[cfg(any(feature = "cuda", test))]
@@ -686,41 +1081,6 @@ impl DeepSeekV4Runner {
             options.expert_memory_policy,
             completion_hub.clone(),
         )?;
-        #[cfg(feature = "cuda")]
-        if operator_backend == ModelExecutionBackend::Cuda {
-            let resources = plan.resources();
-            let mut layer_slot_capacities = resources
-                .layer_experts()
-                .iter()
-                .enumerate()
-                .map(|(layer, experts)| (layer, experts.resident_capacity()))
-                .collect::<Vec<_>>();
-            if let Some(mtp) = resources.mtp() {
-                if mtp.layers.len() != resources.mtp_layer_experts().len() {
-                    return Err(Error::Model(format!(
-                        "DeepSeek-V4 DSpark stage/expert capacity mismatch: stages={} capacities={}",
-                        mtp.layers.len(),
-                        resources.mtp_layer_experts().len()
-                    )));
-                }
-                layer_slot_capacities.extend(
-                    mtp.layers
-                        .iter()
-                        .zip(resources.mtp_layer_experts())
-                        .map(|(stage, experts)| {
-                            (stage.execution_layer, experts.resident_capacity())
-                        }),
-                );
-            }
-            operators.configure_expert_frame_pool(
-                model.config.num_routed_experts,
-                &layer_slot_capacities,
-                model.config.hidden_size,
-                model.config.moe_intermediate_size,
-            )?;
-            operators.compile_cuda_execution_image(plan.generation(), plan.resources())?;
-        }
-
         let mut layer_states = Vec::with_capacity(options.max_layers);
         for layer_idx in 0..options.max_layers {
             let state_start = operators.profile_start();
@@ -785,25 +1145,28 @@ impl DeepSeekV4Runner {
             completion_hub.clone(),
         )?;
 
-        Ok(Self {
+        #[cfg(feature = "cuda")]
+        let model_instance = NEXT_DSV4_MODEL_INSTANCE.fetch_add(1, Ordering::Relaxed);
+        let runner = Self {
             plan,
             operators,
             cpu_expert_runtimes,
+            expert_materialization: None,
             #[cfg(feature = "cuda")]
-            model_instance: NEXT_DSV4_MODEL_INSTANCE.fetch_add(1, Ordering::Relaxed),
+            model_instance,
             #[cfg(feature = "cuda")]
-            expert_residency: None,
+            expert_subsystem_owner: None,
+            #[cfg(feature = "cuda")]
+            expert_materialization_backend_taken: false,
             #[cfg(feature = "cuda")]
             layer_arena_pool: PersistentArenaPool::new(),
             #[cfg(feature = "cuda")]
-            packed_cuda_continuations: HashMap::new(),
-            #[cfg(feature = "cuda")]
-            prepared_paged_bindings: HashMap::new(),
+            packed_transactions: DeepSeekV4PackedTransactionRegistry::default(),
             #[cfg(feature = "cuda")]
             next_packed_cuda_continuation_id: NonZeroU64::new(1).expect("one is non-zero"),
-            #[cfg(all(feature = "cuda", feature = "cutlass"))]
+            #[cfg(feature = "cuda")]
             dspark_proposal_arena_pool: Vec::new(),
-            #[cfg(all(feature = "cuda", feature = "cutlass"))]
+            #[cfg(feature = "cuda")]
             dspark_proposal_continuations: HashMap::new(),
             dspark_proposal_source,
             sequence,
@@ -811,7 +1174,74 @@ impl DeepSeekV4Runner {
             completion_hub,
             expert_reader,
             shutdown: false,
-        })
+        };
+        #[cfg(feature = "cuda")]
+        let mut runner = runner;
+
+        #[cfg(feature = "cuda")]
+        if operator_backend == ModelExecutionBackend::Cuda {
+            let resources = runner.plan.resources();
+            let mut layer_slot_capacities = resources
+                .layer_experts()
+                .iter()
+                .enumerate()
+                .map(|(layer, experts)| (layer, experts.resident_capacity()))
+                .collect::<Vec<_>>();
+            let mut catalogs = resources
+                .layer_experts()
+                .iter()
+                .enumerate()
+                .map(|(layer, experts)| (layer, std::sync::Arc::clone(experts.source_catalog())))
+                .collect::<Vec<_>>();
+            if let Some(mtp) = resources.mtp() {
+                if mtp.layers.len() != resources.mtp_layer_experts().len() {
+                    return Err(Error::Model(format!(
+                        "DeepSeek-V4 DSpark stage/expert capacity mismatch: stages={} capacities={}",
+                        mtp.layers.len(),
+                        resources.mtp_layer_experts().len()
+                    )));
+                }
+                layer_slot_capacities.extend(
+                    mtp.layers
+                        .iter()
+                        .zip(resources.mtp_layer_experts())
+                        .map(|(stage, experts)| {
+                            (stage.execution_layer, experts.resident_capacity())
+                        }),
+                );
+                catalogs.extend(mtp.layers.iter().zip(resources.mtp_layer_experts()).map(
+                    |(stage, experts)| {
+                        (
+                            stage.execution_layer,
+                            std::sync::Arc::clone(experts.source_catalog()),
+                        )
+                    },
+                ));
+            }
+            let limits = runner.physical_expert_io_resource_limits()?;
+            let placement = ExpertMaterializationPlacement::new(
+                ModelInstanceId::new(model_instance),
+                BackendId::new(1),
+                DeviceId::new(0),
+            )?;
+            let owner = DeepSeekV4SharedExpertSubsystemOwner::create(
+                placement,
+                limits,
+                catalogs,
+                runner.expert_reader.clone(),
+                resources.model().config.num_routed_experts,
+                &layer_slot_capacities,
+            )?;
+            runner
+                .operators
+                .configure_expert_subsystem(owner.handle())?;
+            runner
+                .operators
+                .compile_cuda_execution_image(runner.plan.generation(), runner.plan.resources())?;
+            runner.expert_subsystem_owner = Some(owner);
+        }
+
+        Ok(runner)
     }
 
     pub fn load_hf_with_options(
@@ -847,7 +1277,7 @@ impl DeepSeekV4Runner {
         self.plan.resources().mtp()
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     fn build_dspark_proposal_arena(&mut self) -> Result<DeepSeekV4DsparkProposalArena> {
         let resources = self.plan.resources();
         let mtp = resources
@@ -884,7 +1314,7 @@ impl DeepSeekV4Runner {
         })
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     fn begin_dspark_proposal_continuation(
         &mut self,
         transaction: ExecutionTransactionId,
@@ -895,7 +1325,11 @@ impl DeepSeekV4Runner {
                 "DeepSeek-V4 DSpark production proposal requires CUDA".into(),
             ));
         }
-        if self.expert_residency.is_none() {
+        if !self
+            .expert_subsystem_owner
+            .as_ref()
+            .is_some_and(DeepSeekV4SharedExpertSubsystemOwner::residency_control_installed)
+        {
             return Err(Error::Execution(
                 "runtime expert residency controller is not installed".into(),
             ));
@@ -945,14 +1379,17 @@ impl DeepSeekV4Runner {
             stage: 0,
             current_layer: None,
             moe_access_events: Vec::with_capacity(stage_count),
+            expert_leases: Vec::new(),
             head_download: None,
+            cancel_quiescence: None,
             paged_binding_active: false,
             callback_armed: false,
+            dependencies: None,
             failed: None,
         })
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     fn activate_dspark_proposal_binding(
         &mut self,
         continuation: &mut DeepSeekV4DsparkProposalContinuation,
@@ -965,7 +1402,7 @@ impl DeepSeekV4Runner {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     fn deactivate_dspark_proposal_binding(
         &mut self,
         continuation: &mut DeepSeekV4DsparkProposalContinuation,
@@ -979,36 +1416,82 @@ impl DeepSeekV4Runner {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     fn pending_dspark_proposal_progress(
-        continuation: &DeepSeekV4DsparkProposalContinuation,
+        &mut self,
+        continuation: &mut DeepSeekV4DsparkProposalContinuation,
     ) -> Result<PendingModelProgress> {
-        let operations = continuation
+        let pending = continuation
             .current_layer
             .as_ref()
-            .map(DeepSeekV4DsparkLayerContinuation::pending_operations)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|operation| {
-                let layer = u32::try_from(operation.layer).map_err(|_| {
-                    Error::Execution(format!(
-                        "DeepSeek-V4 pending expert layer {} exceeds u32 ABI",
-                        operation.layer
+            .map(DeepSeekV4DsparkLayerContinuation::pending_experts)
+            .unwrap_or_default();
+        let dependencies = if pending.is_empty() {
+            internal_continuation_dependency(continuation.id)?
+        } else {
+            let prepared = self
+                .plan
+                .resources()
+                .mtp_layer_experts()
+                .get(continuation.stage)
+                .ok_or_else(|| {
+                    Error::Internal(format!(
+                        "DeepSeek-V4 DSpark stage {} has no prepared expert catalog",
+                        continuation.stage
                     ))
                 })?;
-                let expert = u32::try_from(operation.expert).map_err(|_| {
-                    Error::Execution(format!(
-                        "DeepSeek-V4 pending expert {} exceeds u32 ABI",
-                        operation.expert
-                    ))
-                })?;
-                PendingExpertLoad::new(operation.operation_id, layer, expert)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        PendingModelProgress::new(continuation.transaction, continuation.id, operations)
+            let requests = pending
+                .into_iter()
+                .map(|operation| {
+                    let layer = u32::try_from(operation.layer).map_err(|_| {
+                        Error::Execution(format!(
+                            "DeepSeek-V4 pending expert layer {} exceeds u32 ABI",
+                            operation.layer
+                        ))
+                    })?;
+                    let expert = u32::try_from(operation.expert).map_err(|_| {
+                        Error::Execution(format!(
+                            "DeepSeek-V4 pending expert {} exceeds u32 ABI",
+                            operation.expert
+                        ))
+                    })?;
+                    let artifact = prepared.source_catalog().require_identity(
+                        crate::moe::streaming::ExpertId::new(operation.layer, operation.expert),
+                    )?;
+                    Ok((artifact, layer, expert))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let adapter = self.expert_materialization.as_deref_mut().ok_or_else(|| {
+                Error::Execution(
+                    "DeepSeek-V4 exact expert wait requires an installed materialization adapter"
+                        .into(),
+                )
+            })?;
+            let placement = adapter.placement();
+            let mut keys = Vec::with_capacity(requests.len());
+            for (artifact, layer, expert) in requests {
+                let request = ExpertMaterializationRequest::for_placement(
+                    placement,
+                    artifact,
+                    ferrule_common::LayerId::new(layer),
+                    ferrule_common::ExpertId::new(expert),
+                )?;
+                match adapter.resolve(request)? {
+                    ExpertDependencyResolution::Waiting(key) => keys.push(key),
+                    ExpertDependencyResolution::Resident(binding) => keys.push(binding.key()),
+                }
+            }
+            expert_dependency_set(keys)?
+        };
+        record_continuation_dependencies(
+            &mut continuation.dependencies,
+            continuation.id,
+            dependencies.clone(),
+        )?;
+        PendingModelProgress::new(continuation.transaction, continuation.id, dependencies)
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     fn poll_dspark_route_cancel_ready(
         &mut self,
         continuation: &mut DeepSeekV4DsparkProposalContinuation,
@@ -1032,7 +1515,7 @@ impl DeepSeekV4Runner {
             .poll_dspark_proposal_cancel_ready(layer_continuation, &mut self.operators)
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     fn arm_dspark_proposal_completion(
         &mut self,
         continuation: &mut DeepSeekV4DsparkProposalContinuation,
@@ -1048,10 +1531,11 @@ impl DeepSeekV4Runner {
         }
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     fn progress_dspark_proposal(
         &mut self,
         continuation: &mut DeepSeekV4DsparkProposalContinuation,
+        resume_leases: Option<ExpertLeaseSet>,
     ) -> Result<DeepSeekV4DsparkProposalStep> {
         if let Some(failed) = continuation.failed.as_deref() {
             return Err(Error::Execution(format!(
@@ -1079,19 +1563,23 @@ impl DeepSeekV4Runner {
             continuation.initialized = true;
         }
 
+        let mut resume_leases = resume_leases;
         while continuation.stage < stage_count {
             let stage = continuation.stage;
-            if continuation.current_layer.is_none() {
+            let leases = if continuation.current_layer.is_some() {
+                resume_leases.take().ok_or_else(|| {
+                    Error::Execution(format!(
+                        "DeepSeek-V4 DSpark continuation {} has no lease set for its current layer",
+                        continuation.id.get()
+                    ))
+                })?
+            } else {
                 let mtp = self
                     .plan
                     .resources()
                     .mtp()
                     .expect("validated DSpark attachment above");
                 let layer = &mtp.layers[stage].transformer;
-                let prepared = &self.plan.resources().mtp_layer_experts()[stage];
-                let residency = self.expert_residency.as_deref_mut().ok_or_else(|| {
-                    Error::Execution("runtime expert residency controller is not installed".into())
-                })?;
                 let arena = continuation.arena.as_mut().ok_or_else(|| {
                     Error::Internal("DeepSeek-V4 DSpark proposal arena is unavailable".into())
                 })?;
@@ -1100,22 +1588,36 @@ impl DeepSeekV4Runner {
                         "DeepSeek-V4 DSpark stage arena {stage} is unavailable"
                     ))
                 })?;
-                continuation.current_layer =
-                    Some(layer.begin_dspark_proposal_block_device_hc_device(
-                        stage,
-                        continuation.sequence_tokens,
-                        residency,
-                        prepared.source_catalog().as_ref(),
-                        prepared.prefetch_capacity(),
-                        stage_arena,
-                        &mut arena.hc_state,
-                        &continuation.token_ids,
-                        &[],
-                        &self.expert_reader,
-                        &mut self.operators,
-                        &mut arena.attention,
-                    )?);
-            }
+                match layer.begin_dspark_proposal_block_device_hc_device(
+                    stage,
+                    continuation.sequence_tokens,
+                    stage_arena,
+                    &mut arena.hc_state,
+                    &continuation.token_ids,
+                    &mut self.operators,
+                    &mut arena.attention,
+                )? {
+                    DeepSeekV4DsparkLayerProgress::Waiting(next) => {
+                        continuation.current_layer = Some(next);
+                        if continuation
+                            .current_layer
+                            .as_ref()
+                            .is_some_and(|current| !current.pending_experts().is_empty())
+                        {
+                            return Ok(DeepSeekV4DsparkProposalStep::Waiting(
+                                self.pending_dspark_proposal_progress(continuation)?,
+                            ));
+                        }
+                        empty_expert_lease_set(continuation.id)?
+                    }
+                    DeepSeekV4DsparkLayerProgress::Complete { events, leases } => {
+                        continuation.moe_access_events.extend(events);
+                        continuation.expert_leases.extend(leases);
+                        continuation.stage += 1;
+                        continue;
+                    }
+                }
+            };
 
             let mtp = self
                 .plan
@@ -1123,10 +1625,6 @@ impl DeepSeekV4Runner {
                 .mtp()
                 .expect("validated DSpark attachment above");
             let layer = &mtp.layers[stage].transformer;
-            let prepared = &self.plan.resources().mtp_layer_experts()[stage];
-            let residency = self.expert_residency.as_deref_mut().ok_or_else(|| {
-                Error::Execution("runtime expert residency controller is not installed".into())
-            })?;
             let arena = continuation.arena.as_mut().ok_or_else(|| {
                 Error::Internal("DeepSeek-V4 DSpark proposal arena is unavailable".into())
             })?;
@@ -1141,23 +1639,30 @@ impl DeepSeekV4Runner {
                 .expect("DSpark layer continuation was created above");
             match layer.resume_dspark_proposal_block_device_hc_device(
                 layer_continuation,
-                residency,
-                prepared.source_catalog().as_ref(),
+                leases,
                 stage_arena,
                 &mut arena.hc_state,
-                &self.expert_reader,
                 &mut self.operators,
             )? {
                 DeepSeekV4DsparkLayerProgress::Waiting(next) => {
                     continuation.current_layer = Some(next);
                     return Ok(DeepSeekV4DsparkProposalStep::Waiting(
-                        Self::pending_dspark_proposal_progress(continuation)?,
+                        self.pending_dspark_proposal_progress(continuation)?,
                     ));
                 }
-                DeepSeekV4DsparkLayerProgress::Complete(events) => {
+                DeepSeekV4DsparkLayerProgress::Complete { events, leases } => {
                     continuation.moe_access_events.extend(events);
+                    continuation.expert_leases.extend(leases);
                     continuation.stage += 1;
                 }
+            }
+        }
+        if let Some(unused) = resume_leases {
+            if !unused.is_empty() {
+                return Err(Error::Execution(format!(
+                    "DeepSeek-V4 DSpark continuation {} received expert leases without a current layer",
+                    continuation.id.get()
+                )));
             }
         }
 
@@ -1178,8 +1683,14 @@ impl DeepSeekV4Runner {
                     .begin_dspark_proposal_head_result_download(&mut arena.head)?,
             );
             self.arm_dspark_proposal_completion(continuation);
+            let dependencies = internal_continuation_dependency(continuation.id)?;
+            record_continuation_dependencies(
+                &mut continuation.dependencies,
+                continuation.id,
+                dependencies.clone(),
+            )?;
             return Ok(DeepSeekV4DsparkProposalStep::Waiting(
-                PendingModelProgress::new(continuation.transaction, continuation.id, Vec::new())?,
+                PendingModelProgress::new(continuation.transaction, continuation.id, dependencies)?,
             ));
         }
 
@@ -1199,8 +1710,14 @@ impl DeepSeekV4Runner {
             if !continuation.callback_armed {
                 self.arm_dspark_proposal_completion(continuation);
             }
+            let dependencies = internal_continuation_dependency(continuation.id)?;
+            record_continuation_dependencies(
+                &mut continuation.dependencies,
+                continuation.id,
+                dependencies.clone(),
+            )?;
             return Ok(DeepSeekV4DsparkProposalStep::Waiting(
-                PendingModelProgress::new(continuation.transaction, continuation.id, Vec::new())?,
+                PendingModelProgress::new(continuation.transaction, continuation.id, dependencies)?,
             ));
         };
         continuation.head_download = None;
@@ -1220,7 +1737,7 @@ impl DeepSeekV4Runner {
         Ok(DeepSeekV4DsparkProposalStep::Complete(proposal))
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     fn release_dspark_proposal_arena(
         &mut self,
         continuation: &mut DeepSeekV4DsparkProposalContinuation,
@@ -1232,7 +1749,7 @@ impl DeepSeekV4Runner {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     fn cleanup_unpublished_dspark_proposal(
         &mut self,
         continuation: &mut DeepSeekV4DsparkProposalContinuation,
@@ -1241,31 +1758,26 @@ impl DeepSeekV4Runner {
         let mut cleanup_errors = Vec::new();
         if let Some(layer_continuation) = continuation.current_layer.take() {
             let stage = continuation.stage;
-            match (
-                self.plan
-                    .resources()
-                    .mtp()
-                    .and_then(|mtp| mtp.layers.get(stage)),
-                self.expert_residency.as_deref_mut(),
-            ) {
-                (Some(layer), Some(residency)) => {
+            match self
+                .plan
+                .resources()
+                .mtp()
+                .and_then(|mtp| mtp.layers.get(stage))
+            {
+                Some(layer) => {
                     if let Err(cancel_error) = layer
                         .transformer
                         .cancel_dspark_proposal_block_device_hc_device(
                             layer_continuation,
-                            residency,
                             &mut self.operators,
                         )
                     {
                         cleanup_errors.push(format!("stage {stage} MoE cancel: {cancel_error}"));
                     }
                 }
-                (None, _) => cleanup_errors.push(format!(
+                None => cleanup_errors.push(format!(
                     "current DSpark stage {stage} is outside the prepared attachment"
                 )),
-                (_, None) => cleanup_errors.push(
-                    "runtime expert residency controller is unavailable during cancellation".into(),
-                ),
             }
         }
         if let Err(deactivate_error) = self.deactivate_dspark_proposal_binding(continuation) {
@@ -1344,19 +1856,31 @@ impl DeepSeekV4Runner {
         self.operators.backend()
     }
 
-    fn ensure_no_packed_cuda_continuation(&self, operation: &str) -> Result<()> {
+    fn ensure_sequence_topology_available(
+        &self,
+        state: &DeepSeekV4SequenceExecutionState,
+        operation: &str,
+    ) -> Result<()> {
         #[cfg(feature = "cuda")]
-        if !self.packed_cuda_continuations.is_empty() {
-            return Err(Error::Execution(format!(
-                "cannot {operation} while {} DeepSeek-V4 packed transaction(s) are outstanding",
-                self.packed_cuda_continuations.len()
-            )));
-        }
-        let _ = operation;
+        self.packed_transactions
+            .ensure_sequence_available(state, operation)?;
+        let _ = (state, operation);
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    fn ensure_kv_pages_available(
+        &self,
+        pages: &[ferrule_common::execution::KvPageId],
+        operation: &str,
+    ) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        self.packed_transactions
+            .ensure_pages_available(pages, operation)?;
+        let _ = (pages, operation);
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
     fn ensure_no_dspark_proposal_continuations(&self, operation: &str) -> Result<()> {
         if !self.dspark_proposal_continuations.is_empty() {
             return Err(Error::Execution(format!(
@@ -1375,8 +1899,8 @@ impl DeepSeekV4Runner {
     pub fn operator_runtime_counters(&self) -> DeepSeekV4OperatorRuntimeCounters {
         let mut counters = self.operators.runtime_counters();
         #[cfg(feature = "cuda")]
-        if let Some(residency) = self.expert_residency.as_ref() {
-            counters.expert_residency_stats = residency.stats();
+        if let Some(owner) = self.expert_subsystem_owner.as_ref() {
+            counters.expert_residency_stats = owner.residency_stats();
         }
         let io = self.expert_reader.io_stats();
         counters.expert_io_submitted_extents = io.submitted_extents;
@@ -1445,7 +1969,7 @@ impl DeepSeekV4Runner {
 
     /// Fork the default runner sequence as a runtime-shared paged prefix.
     pub fn fork_sequence_state(&mut self) -> Result<DeepSeekV4SequenceExecutionState> {
-        self.ensure_no_packed_cuda_continuation("fork the active sequence")?;
+        self.ensure_sequence_topology_available(&self.sequence, "fork the active sequence")?;
         let position = self.sequence.position();
         Self::fork_sequence_state_from_explicit(&self.sequence, position, &self.operators)
     }
@@ -1479,12 +2003,40 @@ impl DeepSeekV4Runner {
             .map(|stage| stage.fork_paged_prefix_metadata(operators))
             .collect::<Result<Vec<_>>>()?;
         Ok(DeepSeekV4SequenceExecutionState {
+            #[cfg(any(feature = "cuda", test))]
+            topology_id: DeepSeekV4SequenceTopologyId::take(),
             core: source.core.forked()?,
             layers,
             dspark_stages,
             predictor: source.predictor.clone(),
             #[cfg(feature = "cuda")]
             paged_kv_binding: None,
+        })
+    }
+
+    #[cfg(feature = "cuda")]
+    fn checkout_transaction_sequence_topology(
+        source: &DeepSeekV4SequenceExecutionState,
+        operators: &DeepSeekV4OperatorContext,
+    ) -> Result<DeepSeekV4SequenceExecutionState> {
+        source.begin_step()?;
+        let layers = source
+            .layers
+            .iter()
+            .map(|layer| layer.fork_paged_prefix_metadata(operators))
+            .collect::<Result<Vec<_>>>()?;
+        let dspark_stages = source
+            .dspark_stages
+            .iter()
+            .map(|stage| stage.fork_paged_prefix_metadata(operators))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(DeepSeekV4SequenceExecutionState {
+            topology_id: source.topology_id(),
+            core: source.core.clone(),
+            layers,
+            dspark_stages,
+            predictor: source.predictor.clone(),
+            paged_kv_binding: source.paged_kv_binding.clone(),
         })
     }
 
@@ -1513,6 +2065,7 @@ impl DeepSeekV4Runner {
                 self.sequence.dspark_stage_count()
             )));
         }
+        self.ensure_sequence_topology_available(state, "execute serial sequence work")?;
         state.begin_step()?;
         self.discard_pending_moe_access_events();
         std::mem::swap(&mut self.sequence, state);
@@ -1532,6 +2085,7 @@ impl DeepSeekV4Runner {
         &mut self,
         mut state: DeepSeekV4SequenceExecutionState,
     ) -> Result<()> {
+        self.ensure_sequence_topology_available(&state, "release sequence state")?;
         state.release_capacity();
         Ok(())
     }
@@ -1541,33 +2095,66 @@ impl DeepSeekV4Runner {
         &mut self,
         state: &mut DeepSeekV4SequenceExecutionState,
     ) -> Result<()> {
-        self.ensure_no_packed_cuda_continuation("reset sequence state")?;
+        self.ensure_sequence_topology_available(state, "reset sequence state")?;
         state.reset_for_reuse();
         Ok(())
     }
 
     pub fn shutdown(&mut self) -> Result<()> {
-        self.ensure_no_packed_cuda_continuation("shut down the runner")?;
-        #[cfg(all(feature = "cuda", feature = "cutlass"))]
+        #[cfg(feature = "cuda")]
+        if !self.packed_transactions.is_empty() {
+            return Err(Error::Execution(
+                "cannot shut down the DeepSeek-V4 runner before packed transactions are quiesced"
+                    .into(),
+            ));
+        }
+        #[cfg(feature = "cuda")]
         self.ensure_no_dspark_proposal_continuations("shut down the runner")?;
         if self.shutdown {
             return Ok(());
         }
+        #[cfg(feature = "cuda")]
+        if self.operators.backend() == ModelExecutionBackend::Cuda {
+            if self.expert_subsystem_owner.is_none() {
+                return Err(Error::Internal(
+                    "DeepSeek-V4 CUDA runner lost its shared expert subsystem owner".into(),
+                ));
+            }
+            if !self.expert_materialization_backend_taken {
+                return Err(Error::Execution(
+                    "cannot shut down the DeepSeek-V4 CUDA runner before its expert materialization backend is transferred"
+                        .into(),
+                ));
+            }
+        }
+
         self.sequence.release_capacity();
         self.cpu_expert_runtimes = None;
         #[cfg(feature = "cuda")]
         {
             self.layer_arena_pool.clear();
-            #[cfg(feature = "cutlass")]
+            #[cfg(feature = "cuda")]
             {
                 self.dspark_proposal_arena_pool.clear();
                 self.dspark_proposal_continuations.clear();
             }
-            self.operators
-                .shutdown(self.expert_residency.as_deref_mut())?;
         }
-        #[cfg(not(feature = "cuda"))]
         self.operators.shutdown()?;
+        #[cfg(feature = "cuda")]
+        if self.operators.backend() == ModelExecutionBackend::Cuda {
+            let mut owner = self.expert_subsystem_owner.take().ok_or_else(|| {
+                Error::Internal(
+                    "DeepSeek-V4 CUDA runner lost its shared expert subsystem owner during shutdown"
+                        .into(),
+                )
+            })?;
+            if owner.take_materializer().is_some() {
+                return Err(Error::Internal(
+                    "DeepSeek-V4 CUDA expert materializer remained in its owner after an acknowledged transfer"
+                        .into(),
+                ));
+            }
+        }
         self.shutdown = true;
         Ok(())
     }
@@ -1576,7 +2163,7 @@ impl DeepSeekV4Runner {
         if self.shutdown {
             return Err(Error::Model("DeepSeek-V4 runner is shut down".into()));
         }
-        self.ensure_no_packed_cuda_continuation("reset the runner sequence")?;
+        self.ensure_sequence_topology_available(&self.sequence, "reset the runner sequence")?;
         self.sequence.reset_for_reuse();
         Ok(())
     }
@@ -1589,48 +2176,6 @@ impl DeepSeekV4Runner {
 
     fn discard_pending_moe_access_events(&mut self) {
         self.operators.drain_moe_access_events();
-    }
-
-    #[cfg(feature = "cuda")]
-    pub fn prewarm_predicted_experts(&mut self) -> Result<usize> {
-        self.ensure_no_packed_cuda_continuation("prewarm predicted experts")?;
-        if self.operators.backend() != ModelExecutionBackend::Cuda {
-            return Ok(0);
-        }
-        let count = self
-            .plan
-            .resources()
-            .prepare_options()
-            .moe_prefetch_experts
-            .max(self.plan.resources().prepare_options().moe_hotset_experts)
-            .min(self.plan.resources().model().config.num_routed_experts);
-        if count == 0 {
-            return Ok(0);
-        }
-        let mut warmed = 0usize;
-        let residency = self.expert_residency.as_deref_mut().ok_or_else(|| {
-            Error::Execution("runtime expert residency controller is not installed".into())
-        })?;
-        for (layer_idx, prepared) in self.plan.resources().layer_experts().iter().enumerate() {
-            let predicted = prepared
-                .source_catalog()
-                .iter()
-                .map(|(expert, _)| expert.expert)
-                .take(count)
-                .collect::<Vec<_>>();
-            if predicted.is_empty() {
-                continue;
-            }
-            warmed = warmed.saturating_add(self.operators.prewarm_experts(
-                layer_idx,
-                &predicted,
-                residency,
-                prepared.source_catalog().as_ref(),
-                prepared.prefetch_capacity(),
-                &self.expert_reader,
-            )?);
-        }
-        Ok(warmed)
     }
 
     pub fn bound_layer_count(&self) -> usize {
@@ -1762,6 +2307,7 @@ impl DeepSeekV4Runner {
                     }
                     if disable_provisional_checkpoints {
                         cuda.discard_provisional_prefix_checkpoints(continuation.transaction);
+                        continuation.provisional_checkpoints = false;
                     }
                 }
                 None => errors.push("provisional checkpoint cache is unavailable".into()),
@@ -1789,7 +2335,7 @@ impl DeepSeekV4Runner {
             if let Some(decode_buffers) = continuation.decode_buffers.take() {
                 self.restore_cuda_decode_buffers(decode_buffers);
             }
-            #[cfg(feature = "cutlass")]
+            #[cfg(feature = "cuda")]
             if let Some(dspark) = continuation.dspark_main_buffers.take() {
                 self.operators
                     .cuda
@@ -1801,13 +2347,34 @@ impl DeepSeekV4Runner {
             if continuation.decode_buffers.is_some() {
                 errors.push("decode buffer cache is unavailable".into());
             }
-            #[cfg(feature = "cutlass")]
+            #[cfg(feature = "cuda")]
             if continuation.dspark_main_buffers.is_some() {
                 errors.push("DSpark main buffer cache is unavailable".into());
             }
         }
 
         Self::packed_cuda_cleanup_result("DeepSeek-V4 packed CUDA resource", errors)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn detach_continuation_dependencies(
+        &mut self,
+        state: &mut Option<ContinuationDependencyState>,
+    ) -> Result<()> {
+        let Some(state) = state.as_mut() else {
+            return Ok(());
+        };
+        if state.has_expert_dependencies() {
+            let adapter = self.expert_materialization.as_deref_mut().ok_or_else(|| {
+                Error::Execution(
+                    "cannot detach DeepSeek-V4 expert dependencies without the installed materialization adapter"
+                        .into(),
+                )
+            })?;
+            state.detach_logical_dependencies(adapter)
+        } else {
+            state.clear_non_expert_dependencies()
+        }
     }
 
     #[cfg(feature = "cuda")]
@@ -1863,55 +2430,26 @@ impl DeepSeekV4Runner {
     }
 
     #[cfg(feature = "cuda")]
-    fn cancel_packed_cuda_continuation_owned(
+    fn finish_packed_cuda_cancellation(
         &mut self,
         states: &mut [DeepSeekV4SequenceExecutionState],
         mut continuation: DeepSeekV4PackedCudaContinuation,
-    ) -> Result<()> {
-        match self.poll_packed_cuda_cancel_ready(&mut continuation) {
-            Ok(true) => {}
-            Ok(false) => {
-                let transaction = continuation.transaction;
-                let continuation_id = continuation.id;
-                self.packed_cuda_continuations
-                    .insert(transaction, continuation);
-                return Err(Error::Execution(format!(
-                    "DeepSeek-V4 packed continuation {} GPU work is still active",
-                    continuation_id.get()
-                )));
-            }
-            Err(error) => {
-                let transaction = continuation.transaction;
-                self.packed_cuda_continuations
-                    .insert(transaction, continuation);
-                self.completion_hub.notify();
-                return Err(error);
-            }
-        }
-
+    ) -> (DeepSeekV4PackedCudaContinuation, Result<()>) {
         let mut errors = Vec::new();
         if let Some(layer_continuation) = continuation.current_layer.take() {
             let layer_index = continuation.next_layer_index;
-            match (
-                self.plan.resources().layers().get(layer_index),
-                self.expert_residency.as_deref_mut(),
-            ) {
-                (Some(layer), Some(residency)) => {
+            match self.plan.resources().layers().get(layer_index) {
+                Some(layer) => {
                     if let Err(error) = layer.cancel_packed_rows_device_hc_device(
                         layer_continuation,
-                        residency,
                         &mut self.operators,
                     ) {
                         errors.push(format!("layer {layer_index} continuation: {error}"));
                     }
                 }
-                (None, _) => errors.push(format!(
+                None => errors.push(format!(
                     "current packed layer {layer_index} is outside the prepared layer set"
                 )),
-                (_, None) => errors.push(
-                    "runtime expert residency controller is not installed during cancellation"
-                        .into(),
-                ),
             }
         }
 
@@ -1919,6 +2457,7 @@ impl DeepSeekV4Runner {
             errors.push(error.to_string());
         }
         continuation.moe_access_events.clear();
+        continuation.expert_leases.clear();
         self.discard_pending_moe_access_events();
         if continuation
             .metadata
@@ -1947,7 +2486,38 @@ impl DeepSeekV4Runner {
                 }
             }
         }
-        Self::packed_cuda_cleanup_result("DeepSeek-V4 packed CUDA cancellation", errors)
+        let result =
+            Self::packed_cuda_cleanup_result("DeepSeek-V4 packed CUDA cancellation", errors);
+        (continuation, result)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cancel_packed_cuda_continuation_owned(
+        &mut self,
+        states: &mut [DeepSeekV4SequenceExecutionState],
+        mut continuation: DeepSeekV4PackedCudaContinuation,
+    ) -> DeepSeekV4PackedCudaCancelProgress {
+        if let Err(error) = self.detach_continuation_dependencies(&mut continuation.dependencies) {
+            return DeepSeekV4PackedCudaCancelProgress::StillActive(continuation, error);
+        }
+        match self.poll_packed_cuda_cancel_ready(&mut continuation) {
+            Ok(true) => {
+                let (continuation, cleanup) =
+                    self.finish_packed_cuda_cancellation(states, continuation);
+                DeepSeekV4PackedCudaCancelProgress::Quiesced(continuation, cleanup)
+            }
+            Ok(false) => {
+                let error = Error::Execution(format!(
+                    "DeepSeek-V4 packed continuation {} GPU work is still active",
+                    continuation.id.get()
+                ));
+                DeepSeekV4PackedCudaCancelProgress::StillActive(continuation, error)
+            }
+            Err(error) => {
+                self.completion_hub.notify();
+                DeepSeekV4PackedCudaCancelProgress::StillActive(continuation, error)
+            }
+        }
     }
 
     #[cfg(feature = "cuda")]
@@ -1983,7 +2553,11 @@ impl DeepSeekV4Runner {
                 )));
             }
         }
-        if self.expert_residency.is_none() {
+        if !self
+            .expert_subsystem_owner
+            .as_ref()
+            .is_some_and(DeepSeekV4SharedExpertSubsystemOwner::residency_control_installed)
+        {
             return Err(Error::Execution(
                 "runtime expert residency controller is not installed".into(),
             ));
@@ -2116,16 +2690,18 @@ impl DeepSeekV4Runner {
             max_top_k,
             arena_checkout: Some(arena_checkout),
             decode_buffers: None,
-            #[cfg(feature = "cutlass")]
+            #[cfg(feature = "cuda")]
             dspark_main_buffers: None,
             initialized: false,
             next_layer_index: 0,
             current_layer: None,
             output_head: DeepSeekV4PackedOutputHeadState::NotStarted,
             cancel_quiescence: None,
+            dependencies: None,
             moe_access_events: Vec::with_capacity(
                 max_layers.saturating_mul(batch.sequences().len()),
             ),
+            expert_leases: Vec::new(),
             paged_bindings_active: false,
             provisional_checkpoints: batch.intent() == ExecutionIntent::ProvisionalVerification,
             failed: false,
@@ -2147,7 +2723,7 @@ impl DeepSeekV4Runner {
             }
         };
 
-        #[cfg(feature = "cutlass")]
+        #[cfg(feature = "cuda")]
         {
             let capture = self.plan.resources().mtp().is_some_and(|mtp| {
                 !mtp.config.target_layer_ids.is_empty()
@@ -2204,9 +2780,10 @@ impl DeepSeekV4Runner {
 
     #[cfg(feature = "cuda")]
     fn pending_model_progress_for_packed_cuda(
-        continuation: &DeepSeekV4PackedCudaContinuation,
+        &mut self,
+        continuation: &mut DeepSeekV4PackedCudaContinuation,
     ) -> Result<PendingModelProgress> {
-        if matches!(
+        let dependencies = if matches!(
             continuation.output_head,
             DeepSeekV4PackedOutputHeadState::Downloading(_)
         ) {
@@ -2216,37 +2793,82 @@ impl DeepSeekV4Runner {
                         .into(),
                 ));
             }
-            return PendingModelProgress::new(
-                continuation.transaction,
-                continuation.id,
-                Vec::new(),
-            );
-        }
-        let layer_continuation = continuation.current_layer.as_ref().ok_or_else(|| {
-            Error::Internal(
-                "DeepSeek-V4 waiting packed continuation has no current layer continuation".into(),
-            )
-        })?;
-        let operations = layer_continuation
-            .pending_operations()
-            .into_iter()
-            .map(|operation| {
-                let layer = u32::try_from(operation.layer).map_err(|_| {
-                    Error::Execution(format!(
-                        "DeepSeek-V4 pending expert layer {} exceeds u32 ABI",
-                        operation.layer
-                    ))
+            internal_continuation_dependency(continuation.id)?
+        } else {
+            let layer_continuation = continuation.current_layer.as_ref().ok_or_else(|| {
+                Error::Internal(
+                    "DeepSeek-V4 waiting packed continuation has no current layer continuation"
+                        .into(),
+                )
+            })?;
+            let pending = layer_continuation.pending_experts();
+            if pending.is_empty() {
+                internal_continuation_dependency(continuation.id)?
+            } else {
+                let requests = pending
+                    .into_iter()
+                    .map(|operation| {
+                        let layer = u32::try_from(operation.layer).map_err(|_| {
+                            Error::Execution(format!(
+                                "DeepSeek-V4 pending expert layer {} exceeds u32 ABI",
+                                operation.layer
+                            ))
+                        })?;
+                        let expert = u32::try_from(operation.expert).map_err(|_| {
+                            Error::Execution(format!(
+                                "DeepSeek-V4 pending expert {} exceeds u32 ABI",
+                                operation.expert
+                            ))
+                        })?;
+                        let prepared = self
+                            .plan
+                            .resources()
+                            .layer_experts()
+                            .get(operation.layer)
+                            .ok_or_else(|| {
+                                Error::Internal(format!(
+                                    "DeepSeek-V4 pending expert layer {} has no prepared source catalog",
+                                    operation.layer
+                                ))
+                            })?;
+                        let artifact = prepared.source_catalog().require_identity(
+                            crate::moe::streaming::ExpertId::new(
+                                operation.layer,
+                                operation.expert,
+                            ),
+                        )?;
+                        Ok((artifact, layer, expert))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let adapter = self.expert_materialization.as_deref_mut().ok_or_else(|| {
+                    Error::Execution(
+                        "DeepSeek-V4 exact expert wait requires an installed materialization adapter"
+                            .into(),
+                    )
                 })?;
-                let expert = u32::try_from(operation.expert).map_err(|_| {
-                    Error::Execution(format!(
-                        "DeepSeek-V4 pending expert {} exceeds u32 ABI",
-                        operation.expert
-                    ))
-                })?;
-                PendingExpertLoad::new(operation.operation_id, layer, expert)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        PendingModelProgress::new(continuation.transaction, continuation.id, operations)
+                let placement = adapter.placement();
+                let mut keys = Vec::with_capacity(requests.len());
+                for (artifact, layer, expert) in requests {
+                    let request = ExpertMaterializationRequest::for_placement(
+                        placement,
+                        artifact,
+                        ferrule_common::LayerId::new(layer),
+                        ferrule_common::ExpertId::new(expert),
+                    )?;
+                    match adapter.resolve(request)? {
+                        ExpertDependencyResolution::Waiting(key) => keys.push(key),
+                        ExpertDependencyResolution::Resident(binding) => keys.push(binding.key()),
+                    }
+                }
+                expert_dependency_set(keys)?
+            }
+        };
+        record_continuation_dependencies(
+            &mut continuation.dependencies,
+            continuation.id,
+            dependencies.clone(),
+        )?;
+        PendingModelProgress::new(continuation.transaction, continuation.id, dependencies)
     }
 
     #[cfg(feature = "cuda")]
@@ -2254,6 +2876,7 @@ impl DeepSeekV4Runner {
         &mut self,
         states: &mut [DeepSeekV4SequenceExecutionState],
         mut continuation: DeepSeekV4PackedCudaContinuation,
+        resume_leases: Option<ExpertLeaseSet>,
     ) -> std::result::Result<DeepSeekV4PackedCudaProgress, (Error, DeepSeekV4PackedCudaContinuation)>
     {
         if continuation.provisional_checkpoints {
@@ -2279,7 +2902,8 @@ impl DeepSeekV4Runner {
             continuation.paged_bindings_active = true;
         }
 
-        let progress = self.progress_cuda_packed_batch_inner(states, &mut continuation);
+        let progress =
+            self.progress_cuda_packed_batch_inner(states, &mut continuation, resume_leases);
         match progress {
             Ok(DeepSeekV4PackedCudaStep::Waiting(pending)) => {
                 if let Err(error) = self
@@ -2302,7 +2926,11 @@ impl DeepSeekV4Runner {
                 Ok(DeepSeekV4PackedCudaProgress::Waiting(continuation, pending))
             }
             Ok(DeepSeekV4PackedCudaStep::Complete(output)) => {
-                Ok(DeepSeekV4PackedCudaProgress::Complete(output))
+                let expert_leases = std::mem::take(&mut continuation.expert_leases);
+                Ok(DeepSeekV4PackedCudaProgress::Complete(
+                    output,
+                    expert_leases,
+                ))
             }
             Err(error) => {
                 let deactivate = if continuation.paged_bindings_active {
@@ -2332,6 +2960,7 @@ impl DeepSeekV4Runner {
         &mut self,
         states: &mut [DeepSeekV4SequenceExecutionState],
         continuation: &mut DeepSeekV4PackedCudaContinuation,
+        resume_leases: Option<ExpertLeaseSet>,
     ) -> Result<DeepSeekV4PackedCudaStep> {
         if continuation.failed {
             return Err(Error::Execution(format!(
@@ -2347,7 +2976,7 @@ impl DeepSeekV4Runner {
                 continuation.batch.token_ids(),
                 &mut decode_buffers.hc_input,
             )?;
-            #[cfg(feature = "cutlass")]
+            #[cfg(feature = "cuda")]
             if let Some(dspark) = continuation.dspark_main_buffers.as_mut() {
                 let positions_i32 = continuation
                     .positions
@@ -2366,9 +2995,41 @@ impl DeepSeekV4Runner {
             continuation.initialized = true;
         }
         let max_layers = self.plan.resources().prepare_options().max_layers;
+        let mut resume_leases = resume_leases;
         while continuation.next_layer_index < max_layers {
             let layer_idx = continuation.next_layer_index;
-            if continuation.current_layer.is_none() {
+            let layer_progress = if let Some(layer_continuation) = continuation.current_layer.take()
+            {
+                let leases = resume_leases.take().ok_or_else(|| {
+                    Error::Execution(format!(
+                        "DeepSeek-V4 packed continuation {} has no lease set for its current layer",
+                        continuation.id.get()
+                    ))
+                })?;
+                let arena = continuation
+                    .arena_checkout
+                    .as_mut()
+                    .and_then(|checkout| checkout.get_mut().get_for_layer_mut(layer_idx))
+                    .ok_or_else(|| {
+                        Error::Internal(format!(
+                            "DeepSeek-V4 packed layer arena {layer_idx} is unavailable"
+                        ))
+                    })?;
+                let hc_state = &mut continuation
+                    .decode_buffers
+                    .as_mut()
+                    .ok_or_else(|| {
+                        Error::Internal("DeepSeek-V4 packed decode buffers are unavailable".into())
+                    })?
+                    .hc_input;
+                self.plan.resources().layers()[layer_idx].resume_packed_rows_device_hc_device(
+                    layer_continuation,
+                    leases,
+                    arena,
+                    hc_state,
+                    &mut self.operators,
+                )?
+            } else {
                 let requested_states = continuation
                     .metadata
                     .sequences
@@ -2412,71 +3073,55 @@ impl DeepSeekV4Runner {
                         Error::Internal("DeepSeek-V4 packed decode buffers are unavailable".into())
                     })?
                     .hc_input;
-                let residency = self.expert_residency.as_deref_mut().ok_or_else(|| {
-                    Error::Execution("runtime expert residency controller is not installed".into())
-                })?;
-                let prepared = &self.plan.resources().layer_experts()[layer_idx];
-                continuation.current_layer = Some(
-                    self.plan.resources().layers()[layer_idx].begin_packed_rows_device_hc_device(
-                        &mut layer_states,
-                        &continuation.metadata.row_to_sequence,
-                        &continuation.metadata.sequence_major_rows,
-                        &continuation.sequence_phases,
-                        &continuation.paged_bindings,
-                        residency,
-                        prepared.source_catalog().as_ref(),
-                        prepared.prefetch_capacity(),
-                        arena,
-                        hc_state,
-                        continuation.batch.token_ids(),
-                        &continuation.positions,
-                        &[],
-                        &self.expert_reader,
-                        &mut self.operators,
-                    )?,
-                );
-            }
+                match self.plan.resources().layers()[layer_idx].begin_packed_rows_device_hc_device(
+                    &mut layer_states,
+                    &continuation.metadata.row_to_sequence,
+                    &continuation.metadata.sequence_major_rows,
+                    &continuation.sequence_phases,
+                    &continuation.paged_bindings,
+                    arena,
+                    hc_state,
+                    continuation.batch.token_ids(),
+                    &continuation.positions,
+                    &mut self.operators,
+                )? {
+                    DeepSeekV4PackedLayerProgress::Waiting(next)
+                        if !next.pending_experts().is_empty() =>
+                    {
+                        continuation.current_layer = Some(next);
+                        let pending = self.pending_model_progress_for_packed_cuda(continuation)?;
+                        return Ok(DeepSeekV4PackedCudaStep::Waiting(pending));
+                    }
+                    DeepSeekV4PackedLayerProgress::Waiting(next) => self.plan.resources().layers()
+                        [layer_idx]
+                        .resume_packed_rows_device_hc_device(
+                            next,
+                            empty_expert_lease_set(continuation.id)?,
+                            arena,
+                            hc_state,
+                            &mut self.operators,
+                        )?,
+                    complete @ DeepSeekV4PackedLayerProgress::Complete { .. } => complete,
+                }
+            };
 
-            let arena = continuation
-                .arena_checkout
-                .as_mut()
-                .and_then(|checkout| checkout.get_mut().get_for_layer_mut(layer_idx))
-                .ok_or_else(|| {
-                    Error::Internal(format!(
-                        "DeepSeek-V4 packed layer arena {layer_idx} is unavailable"
-                    ))
-                })?;
-            let hc_state = &mut continuation
-                .decode_buffers
-                .as_mut()
-                .ok_or_else(|| {
-                    Error::Internal("DeepSeek-V4 packed decode buffers are unavailable".into())
-                })?
-                .hc_input;
-            let residency = self.expert_residency.as_deref_mut().ok_or_else(|| {
-                Error::Execution("runtime expert residency controller is not installed".into())
-            })?;
-            let prepared = &self.plan.resources().layer_experts()[layer_idx];
-            let layer_continuation = continuation
-                .current_layer
-                .take()
-                .expect("packed layer continuation was created above");
-            match self.plan.resources().layers()[layer_idx].resume_packed_rows_device_hc_device(
-                layer_continuation,
-                residency,
-                prepared.source_catalog().as_ref(),
-                arena,
-                hc_state,
-                &self.expert_reader,
-                &mut self.operators,
-            )? {
+            match layer_progress {
                 DeepSeekV4PackedLayerProgress::Waiting(next) => {
                     continuation.current_layer = Some(next);
-                    let pending = Self::pending_model_progress_for_packed_cuda(continuation)?;
+                    let pending = self.pending_model_progress_for_packed_cuda(continuation)?;
                     return Ok(DeepSeekV4PackedCudaStep::Waiting(pending));
                 }
-                DeepSeekV4PackedLayerProgress::Complete(layer_events) => {
-                    #[cfg(feature = "cutlass")]
+                DeepSeekV4PackedLayerProgress::Complete { events, leases } => {
+                    let hc_state = &continuation
+                        .decode_buffers
+                        .as_ref()
+                        .ok_or_else(|| {
+                            Error::Internal(
+                                "DeepSeek-V4 packed decode buffers are unavailable".into(),
+                            )
+                        })?
+                        .hc_input;
+                    #[cfg(feature = "cuda")]
                     if let Some(dspark) = continuation.dspark_main_buffers.as_mut() {
                         self.operators
                             .cuda_mut()?
@@ -2487,14 +3132,23 @@ impl DeepSeekV4Runner {
                                 &mut dspark.target_taps,
                             )?;
                     }
-                    continuation.moe_access_events.extend(layer_events);
+                    continuation.moe_access_events.extend(events);
+                    continuation.expert_leases.extend(leases);
                     continuation.next_layer_index += 1;
                 }
             }
         }
+        if let Some(unused) = resume_leases {
+            if !unused.is_empty() {
+                return Err(Error::Execution(format!(
+                    "DeepSeek-V4 packed continuation {} received expert leases without a current layer",
+                    continuation.id.get()
+                )));
+            }
+        }
 
         if !self.progress_cuda_packed_output_head(states, continuation)? {
-            let pending = Self::pending_model_progress_for_packed_cuda(continuation)?;
+            let pending = self.pending_model_progress_for_packed_cuda(continuation)?;
             return Ok(DeepSeekV4PackedCudaStep::Waiting(pending));
         }
         let output = self.complete_cuda_packed_batch(states, continuation)?;
@@ -2507,14 +3161,14 @@ impl DeepSeekV4Runner {
         states: &[DeepSeekV4SequenceExecutionState],
         continuation: &mut DeepSeekV4PackedCudaContinuation,
     ) -> Result<bool> {
-        #[cfg(not(feature = "cutlass"))]
+        #[cfg(not(feature = "cuda"))]
         let _ = states;
         if matches!(
             continuation.output_head,
             DeepSeekV4PackedOutputHeadState::NotStarted
         ) {
             let rows = continuation.batch.len();
-            #[cfg(feature = "cutlass")]
+            #[cfg(feature = "cuda")]
             if let Some(dspark) = continuation.dspark_main_buffers.as_mut() {
                 self.operators
                     .cuda_mut()?
@@ -2665,7 +3319,7 @@ impl DeepSeekV4Runner {
                 "DeepSeek-V4 packed MoE event references an unknown sequence".into(),
             ));
         }
-        #[cfg(feature = "cutlass")]
+        #[cfg(feature = "cuda")]
         let dspark_stage_count = if continuation.dspark_main_buffers.is_some() {
             Some(
                 self.plan
@@ -2686,7 +3340,7 @@ impl DeepSeekV4Runner {
             &continuation.metadata,
             continuation.sequence_step_bindings.clone(),
         )?;
-        #[cfg(feature = "cutlass")]
+        #[cfg(feature = "cuda")]
         if let Some(stage_count) = dspark_stage_count {
             for sequence in &continuation.metadata.sequences {
                 let state = &mut states[sequence.state_index];
@@ -2826,7 +3480,7 @@ impl ResidentModelRunner for DeepSeekV4Runner {
         let source = self.dspark_proposal_source.ok_or_else(|| {
             Error::Model("DeepSeek-V4 has no checkpoint-native proposal capability".into())
         })?;
-        #[cfg(all(feature = "cuda", feature = "cutlass"))]
+        #[cfg(feature = "cuda")]
         {
             source.validate()?;
             let mut continuation =
@@ -2834,7 +3488,7 @@ impl ResidentModelRunner for DeepSeekV4Runner {
             if let Err(error) = self.activate_dspark_proposal_binding(&mut continuation) {
                 return Err(self.cleanup_unpublished_dspark_proposal(&mut continuation, error));
             }
-            let progress = self.progress_dspark_proposal(&mut continuation);
+            let progress = self.progress_dspark_proposal(&mut continuation, None);
             match progress {
                 Ok(DeepSeekV4DsparkProposalStep::Waiting(pending)) => {
                     if let Err(error) = self.deactivate_dspark_proposal_binding(&mut continuation) {
@@ -2863,7 +3517,7 @@ impl ResidentModelRunner for DeepSeekV4Runner {
                 }
             }
         }
-        #[cfg(not(all(feature = "cuda", feature = "cutlass")))]
+        #[cfg(not(feature = "cuda"))]
         {
             let _ = (transaction, anchor_token_id, source);
             Err(Error::Model(
@@ -2876,8 +3530,9 @@ impl ResidentModelRunner for DeepSeekV4Runner {
         &mut self,
         transaction: ExecutionTransactionId,
         continuation_id: BatchContinuationId,
+        leases: ExpertLeaseSet,
     ) -> Result<NativeProposalProgress> {
-        #[cfg(all(feature = "cuda", feature = "cutlass"))]
+        #[cfg(feature = "cuda")]
         {
             let mut continuation = self
                 .dspark_proposal_continuations
@@ -2908,12 +3563,29 @@ impl ResidentModelRunner for DeepSeekV4Runner {
                     .insert(continuation_id, continuation);
                 return Err(error);
             }
+            let resume_validation = continuation
+                .dependencies
+                .as_mut()
+                .ok_or_else(|| {
+                    Error::Execution(format!(
+                        "DeepSeek-V4 native proposal continuation {} has no declared dependency set",
+                        continuation_id.get()
+                    ))
+                })
+                .and_then(|dependencies| {
+                    dependencies.validate_resume(continuation_id, &leases)
+                });
+            if let Err(error) = resume_validation {
+                self.dspark_proposal_continuations
+                    .insert(continuation_id, continuation);
+                return Err(error);
+            }
             if let Err(error) = self.activate_dspark_proposal_binding(&mut continuation) {
                 self.dspark_proposal_continuations
                     .insert(continuation_id, continuation);
                 return Err(error);
             }
-            let progress = self.progress_dspark_proposal(&mut continuation);
+            let progress = self.progress_dspark_proposal(&mut continuation, Some(leases));
             let deactivate = self.deactivate_dspark_proposal_binding(&mut continuation);
             match (progress, deactivate) {
                 (Ok(DeepSeekV4DsparkProposalStep::Waiting(pending)), Ok(())) => {
@@ -2949,9 +3621,9 @@ impl ResidentModelRunner for DeepSeekV4Runner {
                 }
             }
         }
-        #[cfg(not(all(feature = "cuda", feature = "cutlass")))]
+        #[cfg(not(feature = "cuda"))]
         {
-            let _ = (transaction, continuation_id);
+            let _ = (transaction, continuation_id, leases);
             Err(Error::Execution(
                 "DeepSeek-V4 was built without CUDA + CUTLASS native proposal continuations".into(),
             ))
@@ -2963,7 +3635,7 @@ impl ResidentModelRunner for DeepSeekV4Runner {
         transaction: ExecutionTransactionId,
         continuation_id: BatchContinuationId,
     ) -> BatchContinuationCancelOutcome {
-        #[cfg(all(feature = "cuda", feature = "cutlass"))]
+        #[cfg(feature = "cuda")]
         {
             let Some(owner) = self
                 .dspark_proposal_continuations
@@ -2987,6 +3659,13 @@ impl ResidentModelRunner for DeepSeekV4Runner {
                 .dspark_proposal_continuations
                 .remove(&continuation_id)
                 .expect("validated native proposal continuation owner");
+            if let Err(error) =
+                self.detach_continuation_dependencies(&mut continuation.dependencies)
+            {
+                self.dspark_proposal_continuations
+                    .insert(continuation_id, continuation);
+                return BatchContinuationCancelOutcome::StillActive(error);
+            }
 
             match self.poll_dspark_route_cancel_ready(&mut continuation) {
                 Ok(true) => {}
@@ -3043,6 +3722,51 @@ impl ResidentModelRunner for DeepSeekV4Runner {
                 }
             }
 
+            if continuation.cancel_quiescence.is_none() {
+                match self
+                    .operators
+                    .cuda_mut()
+                    .and_then(|cuda| cuda.begin_compute_quiescence())
+                {
+                    Ok(quiescence) => continuation.cancel_quiescence = Some(quiescence),
+                    Err(error) => {
+                        self.dspark_proposal_continuations
+                            .insert(continuation_id, continuation);
+                        return BatchContinuationCancelOutcome::StillActive(error);
+                    }
+                }
+                self.dspark_proposal_continuations
+                    .insert(continuation_id, continuation);
+                return BatchContinuationCancelOutcome::StillActive(Error::Execution(format!(
+                    "DeepSeek-V4 native proposal continuation {} compute is still active",
+                    continuation_id.get()
+                )));
+            }
+            let quiesced = self.operators.cuda_mut().and_then(|cuda| {
+                cuda.poll_compute_quiescence(
+                    continuation
+                        .cancel_quiescence
+                        .as_mut()
+                        .expect("DSpark cancellation quiescence initialized above"),
+                )
+            });
+            match quiesced {
+                Ok(true) => continuation.cancel_quiescence = None,
+                Ok(false) => {
+                    self.dspark_proposal_continuations
+                        .insert(continuation_id, continuation);
+                    return BatchContinuationCancelOutcome::StillActive(Error::Execution(format!(
+                        "DeepSeek-V4 native proposal continuation {} compute is still active",
+                        continuation_id.get()
+                    )));
+                }
+                Err(error) => {
+                    self.dspark_proposal_continuations
+                        .insert(continuation_id, continuation);
+                    return BatchContinuationCancelOutcome::StillActive(error);
+                }
+            }
+
             let mut errors = Vec::new();
             if continuation.current_layer.is_some() {
                 let stage = continuation.stage;
@@ -3059,15 +3783,6 @@ impl ResidentModelRunner for DeepSeekV4Runner {
                         .insert(continuation_id, continuation);
                     return BatchContinuationCancelOutcome::StillActive(error);
                 };
-                let Some(residency) = self.expert_residency.as_deref_mut() else {
-                    let error = Error::Execution(
-                        "runtime expert residency controller is unavailable during cancellation"
-                            .into(),
-                    );
-                    self.dspark_proposal_continuations
-                        .insert(continuation_id, continuation);
-                    return BatchContinuationCancelOutcome::StillActive(error);
-                };
                 let layer_continuation = continuation
                     .current_layer
                     .take()
@@ -3076,7 +3791,6 @@ impl ResidentModelRunner for DeepSeekV4Runner {
                     .transformer
                     .cancel_dspark_proposal_block_device_hc_device(
                         layer_continuation,
-                        residency,
                         &mut self.operators,
                     )
                 {
@@ -3092,6 +3806,7 @@ impl ResidentModelRunner for DeepSeekV4Runner {
                 return BatchContinuationCancelOutcome::StillActive(error);
             }
             continuation.moe_access_events.clear();
+            continuation.expert_leases.clear();
             if let Err(error) = self.release_dspark_proposal_arena(&mut continuation) {
                 errors.push(format!("arena release: {error}"));
             }
@@ -3104,7 +3819,7 @@ impl ResidentModelRunner for DeepSeekV4Runner {
                 )))
             }
         }
-        #[cfg(not(all(feature = "cuda", feature = "cutlass")))]
+        #[cfg(not(feature = "cuda"))]
         {
             let _ = (transaction, continuation_id);
             BatchContinuationCancelOutcome::Quiesced(Error::Execution(
@@ -3116,6 +3831,10 @@ impl ResidentModelRunner for DeepSeekV4Runner {
 
 impl MultiSessionRunner for DeepSeekV4Runner {
     type SequenceState = DeepSeekV4SequenceExecutionState;
+
+    fn sequence_generation(&self, state: &Self::SequenceState) -> u64 {
+        state.generation()
+    }
 
     fn expert_residency_requirements(&self) -> Option<ExpertResidencyRequirements> {
         #[cfg(feature = "cuda")]
@@ -3131,7 +3850,10 @@ impl MultiSessionRunner for DeepSeekV4Runner {
     fn expert_residency_control_installed(&self) -> bool {
         #[cfg(feature = "cuda")]
         {
-            return self.expert_residency.is_some();
+            return self
+                .expert_subsystem_owner
+                .as_ref()
+                .is_some_and(DeepSeekV4SharedExpertSubsystemOwner::residency_control_installed);
         }
         #[cfg(not(feature = "cuda"))]
         false
@@ -3141,9 +3863,14 @@ impl MultiSessionRunner for DeepSeekV4Runner {
         &mut self,
         control: Box<dyn ExpertResidencyControl>,
     ) -> Result<()> {
-        self.ensure_no_packed_cuda_continuation("install expert residency control")?;
         #[cfg(feature = "cuda")]
         {
+            if !self.packed_transactions.is_empty() {
+                return Err(Error::Execution(
+                    "cannot replace DeepSeek-V4 expert residency control while packed transactions own expert work"
+                        .into(),
+                ));
+            }
             let expected = self.expert_residency_requirements().ok_or_else(|| {
                 Error::Execution(
                     "DeepSeek-V4 CPU runner does not accept an expert residency controller".into(),
@@ -3156,12 +3883,10 @@ impl MultiSessionRunner for DeepSeekV4Runner {
                     control.requirements()
                 )));
             }
-            if self.expert_residency.is_some() {
-                return Err(Error::Execution(
-                    "DeepSeek-V4 expert residency controller is already installed".into(),
-                ));
-            }
-            self.expert_residency = Some(control);
+            let owner = self.expert_subsystem_owner.as_ref().ok_or_else(|| {
+                Error::Internal("DeepSeek-V4 CUDA expert subsystem owner is unavailable".into())
+            })?;
+            owner.install_residency_control(control)?;
             return Ok(());
         }
         #[cfg(not(feature = "cuda"))]
@@ -3173,8 +3898,69 @@ impl MultiSessionRunner for DeepSeekV4Runner {
         }
     }
 
+    fn take_expert_materialization_backend(
+        &mut self,
+    ) -> Option<Box<dyn PhysicalExpertMaterializationBackend>> {
+        #[cfg(feature = "cuda")]
+        {
+            let execution_backend = self.operators.backend();
+            let physical = take_cuda_backend_once(
+                execution_backend,
+                self.expert_subsystem_owner.as_mut(),
+                DeepSeekV4SharedExpertSubsystemOwner::take_materializer,
+            );
+            if physical.is_some() {
+                self.expert_materialization_backend_taken = true;
+            }
+            return physical;
+        }
+        #[cfg(not(feature = "cuda"))]
+        None
+    }
+
+    fn expert_materialization_adapter_installed(&self) -> bool {
+        self.expert_materialization.is_some()
+    }
+
+    fn install_expert_materialization_adapter(
+        &mut self,
+        adapter: Box<dyn ExpertMaterializationAdapter>,
+    ) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        if !self.packed_transactions.is_empty() {
+            return Err(Error::Execution(
+                "cannot replace the DeepSeek-V4 materialization adapter while packed transactions are outstanding"
+                    .into(),
+            ));
+        }
+        if self.expert_materialization.is_some() {
+            return Err(Error::Execution(
+                "DeepSeek-V4 expert materialization adapter is already installed".into(),
+            ));
+        }
+        self.expert_materialization = Some(adapter);
+        Ok(())
+    }
+
+    fn expert_materialization_adapter(
+        &mut self,
+    ) -> Result<&mut (dyn ExpertMaterializationAdapter + '_)> {
+        match self.expert_materialization.as_mut() {
+            Some(adapter) => Ok(adapter.as_mut()),
+            None => Err(Error::Execution(
+                "DeepSeek-V4 expert materialization adapter is not installed".into(),
+            )),
+        }
+    }
+
     fn configure_kv_page_capacity(&mut self, max_pages: usize) -> Result<()> {
-        self.ensure_no_packed_cuda_continuation("configure KV page capacity")?;
+        #[cfg(feature = "cuda")]
+        if !self.packed_transactions.is_empty() {
+            return Err(Error::Execution(
+                "cannot reconfigure DeepSeek-V4 KV capacity while packed transactions own reservations"
+                    .into(),
+            ));
+        }
         #[cfg(feature = "cuda")]
         if self.operators.backend() == ModelExecutionBackend::Cuda {
             let schema = self.plan.resources().kv_layout().clone();
@@ -3188,7 +3974,7 @@ impl MultiSessionRunner for DeepSeekV4Runner {
     }
 
     fn release_kv_pages(&mut self, pages: &[ferrule_common::execution::KvPageId]) -> Result<()> {
-        self.ensure_no_packed_cuda_continuation("release KV pages")?;
+        self.ensure_kv_pages_available(pages, "release")?;
         #[cfg(feature = "cuda")]
         if self.operators.cuda.is_some() {
             self.operators.cuda_mut()?.release_kv_pages(pages)?;
@@ -3199,7 +3985,7 @@ impl MultiSessionRunner for DeepSeekV4Runner {
     }
 
     fn preempt_kv_pages(&mut self, pages: &[ferrule_common::execution::KvPageId]) -> Result<()> {
-        self.ensure_no_packed_cuda_continuation("preempt KV pages")?;
+        self.ensure_kv_pages_available(pages, "preempt")?;
         #[cfg(feature = "cuda")]
         if self.operators.cuda.is_some() {
             self.operators.cuda_mut()?.preempt_kv_pages(pages)?;
@@ -3210,7 +3996,7 @@ impl MultiSessionRunner for DeepSeekV4Runner {
     }
 
     fn restore_kv_pages(&mut self, pages: &[ferrule_common::execution::KvPageId]) -> Result<()> {
-        self.ensure_no_packed_cuda_continuation("restore KV pages")?;
+        self.ensure_kv_pages_available(pages, "restore")?;
         #[cfg(feature = "cuda")]
         if self.operators.cuda.is_some() {
             self.operators.cuda_mut()?.restore_kv_pages(pages)?;
@@ -3229,12 +4015,6 @@ impl MultiSessionRunner for DeepSeekV4Runner {
     ) -> Result<()> {
         #[cfg(feature = "cuda")]
         {
-            if self.packed_cuda_continuations.contains_key(&transaction) {
-                return Err(Error::Execution(format!(
-                    "DeepSeek-V4 transaction {} already owns a packed continuation",
-                    transaction.get()
-                )));
-            }
             if self.operators.backend() != ModelExecutionBackend::Cuda {
                 return Err(Error::Execution(
                     "DeepSeek-V4 multi-session prepare requires the CUDA packed backend".into(),
@@ -3258,6 +4038,67 @@ impl MultiSessionRunner for DeepSeekV4Runner {
                     kv_reservations.len()
                 )));
             }
+
+            let metadata = PackedBatchMetadata::lower(batch, states.len())?;
+            for ((sequence, lowered), reservation) in batch
+                .sequences()
+                .iter()
+                .zip(&metadata.sequences)
+                .zip(kv_reservations)
+            {
+                if reservation.execution_state_slot != sequence.state_slot {
+                    return Err(Error::Execution(format!(
+                        "DeepSeek-V4 transaction {} KV reservation is bound to execution state slot {}, not {} (page owner slot {})",
+                        transaction.get(),
+                        reservation.execution_state_slot.get(),
+                        sequence.state_slot.get(),
+                        reservation.state_slot.get()
+                    )));
+                }
+                let generation = states[lowered.state_index].generation();
+                if reservation.execution_generation != generation {
+                    return Err(Error::Execution(format!(
+                        "DeepSeek-V4 transaction {} has stale KV reservation generation {} for state slot {}; current generation is {}",
+                        transaction.get(),
+                        reservation.execution_generation,
+                        lowered.state_index,
+                        generation
+                    )));
+                }
+            }
+
+            let owners = metadata
+                .sequences
+                .iter()
+                .map(|sequence| {
+                    DeepSeekV4PackedSequenceOwner::capture(
+                        sequence.state_index,
+                        &states[sequence.state_index],
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            self.packed_transactions
+                .validate_insert(transaction, &owners)?;
+
+            let committed_state_indices = metadata
+                .sequences
+                .iter()
+                .map(|sequence| sequence.state_index)
+                .collect::<Vec<_>>();
+            let mut working_states = committed_state_indices
+                .iter()
+                .map(|state_index| {
+                    Self::checkout_transaction_sequence_topology(
+                        &states[*state_index],
+                        &self.operators,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut working_metadata = metadata;
+            for (working_index, sequence) in working_metadata.sequences.iter_mut().enumerate() {
+                sequence.state_index = working_index;
+            }
+
             let physical = kv_reservations
                 .iter()
                 .map(|reservation| {
@@ -3270,55 +4111,73 @@ impl MultiSessionRunner for DeepSeekV4Runner {
             self.operators
                 .cuda_mut()?
                 .prepare_kv_pages(transaction, &physical)?;
-            let lowered = (|| -> Result<Vec<_>> {
-                batch
-                    .sequences()
-                    .iter()
-                    .map(|sequence| {
-                        let state_index = sequence.state_slot.try_as_usize().map_err(|_| {
-                            Error::Model("DeepSeek-V4 state slot exceeds usize".into())
-                        })?;
-                        if state_index >= states.len() {
-                            return Err(Error::Model(format!(
-                                "DeepSeek-V4 state slot {state_index} is missing during paged prepare"
-                            )));
-                        }
-                        let block_start = usize::try_from(sequence.block_table.start)
-                            .map_err(|_| Error::Model("KV block range exceeds usize".into()))?;
-                        let block_end = usize::try_from(sequence.block_table.end)
-                            .map_err(|_| Error::Model("KV block range exceeds usize".into()))?;
-                        let binding = self.operators.cuda_mut()?.lower_paged_binding(
-                            transaction,
-                            &batch.kv_block_ids()[block_start..block_end],
-                            sequence.sequence_len as usize,
-                        )?;
-                        Ok((state_index, binding))
-                    })
-                    .collect()
-            })();
+
+            let lowered = batch
+                .sequences()
+                .iter()
+                .map(|sequence| {
+                    let block_start = usize::try_from(sequence.block_table.start)
+                        .map_err(|_| Error::Model("KV block range exceeds usize".into()))?;
+                    let block_end = usize::try_from(sequence.block_table.end)
+                        .map_err(|_| Error::Model("KV block range exceeds usize".into()))?;
+                    self.operators.cuda_mut()?.lower_paged_binding(
+                        transaction,
+                        &batch.kv_block_ids()[block_start..block_end],
+                        sequence.sequence_len as usize,
+                    )
+                })
+                .collect::<Result<Vec<_>>>();
             let lowered = match lowered {
                 Ok(lowered) => lowered,
                 Err(error) => {
-                    let _ = self.operators.cuda_mut()?.rollback_kv_pages(transaction);
-                    return Err(error);
+                    let cleanup = self
+                        .operators
+                        .cuda_mut()
+                        .and_then(|cuda| cuda.rollback_kv_pages(transaction));
+                    return Err(Self::packed_cuda_error_with_cleanup(
+                        "DeepSeek-V4 paged binding lowering",
+                        error,
+                        cleanup,
+                    ));
                 }
             };
-            let previous = lowered
-                .iter()
-                .map(|(state_index, _)| {
-                    (*state_index, states[*state_index].paged_kv_binding.clone())
-                })
-                .collect::<Vec<_>>();
-            for (state_index, binding) in lowered {
-                states[state_index].paged_kv_binding = Some(binding);
+            for (state, binding) in working_states.iter_mut().zip(lowered) {
+                state.paged_kv_binding = Some(binding);
             }
-            let replaced = self.prepared_paged_bindings.insert(transaction, previous);
-            if replaced.is_some() {
-                let _ = self.operators.cuda_mut()?.rollback_kv_pages(transaction);
-                return Err(Error::Execution(format!(
-                    "DeepSeek-V4 transaction {} replaced prepared paged bindings",
-                    transaction.get()
-                )));
+
+            let mut protected_pages = batch
+                .kv_block_ids()
+                .iter()
+                .map(|block| KvPageId(block.get()))
+                .collect::<BTreeSet<_>>();
+            for reservation in kv_reservations {
+                protected_pages.extend(reservation.newly_allocated.iter().copied());
+                if let Some(cow) = reservation.cow_replacement {
+                    protected_pages.insert(cow.source);
+                    protected_pages.insert(cow.replacement);
+                }
+            }
+            let topology = DeepSeekV4PackedTransactionTopology {
+                batch: batch.clone(),
+                metadata: working_metadata,
+                committed_state_indices,
+                working_states,
+                execution: DeepSeekV4PackedTransactionExecution::Prepared,
+                backend: DeepSeekV4PackedBackendState::Prepared,
+            };
+            if let Err(error) =
+                self.packed_transactions
+                    .insert(transaction, owners, protected_pages, topology)
+            {
+                let cleanup = self
+                    .operators
+                    .cuda_mut()
+                    .and_then(|cuda| cuda.rollback_kv_pages(transaction));
+                return Err(Self::packed_cuda_error_with_cleanup(
+                    "DeepSeek-V4 packed transaction registration",
+                    error,
+                    cleanup,
+                ));
             }
             Ok(())
         }
@@ -3338,32 +4197,55 @@ impl MultiSessionRunner for DeepSeekV4Runner {
     ) -> Result<()> {
         #[cfg(feature = "cuda")]
         {
-            if self.packed_cuda_continuations.contains_key(&transaction) {
-                return Err(Error::Execution(format!(
-                    "cannot commit DeepSeek-V4 transaction {} with a live packed continuation",
-                    transaction.get()
-                )));
-            }
-            let prepared = self
-                .prepared_paged_bindings
-                .get(&transaction)
-                .ok_or_else(|| {
-                    Error::Internal(format!(
-                        "DeepSeek-V4 transaction {} has no prepared paged bindings",
-                        transaction.get()
-                    ))
-                })?;
-            if prepared
-                .iter()
-                .any(|(state_index, _)| *state_index >= states.len())
+            self.packed_transactions
+                .validate_states(transaction, states)?;
+            let mut topology = self.packed_transactions.take_payload(transaction)?;
+            if let DeepSeekV4PackedTransactionExecution::Complete(expert_leases) =
+                &topology.execution
             {
-                return Err(Error::Internal(format!(
-                    "DeepSeek-V4 transaction {} commit state slice changed",
+                let _retained_expert_lease_count = expert_leases.len();
+            } else {
+                let error = Error::Execution(format!(
+                    "cannot commit DeepSeek-V4 transaction {} before packed execution completes",
                     transaction.get()
-                )));
+                ));
+                self.packed_transactions
+                    .put_payload(transaction, topology)?;
+                return Err(error);
             }
-            self.operators.cuda_mut()?.commit_kv_pages(transaction)?;
-            self.prepared_paged_bindings.remove(&transaction);
+            if !matches!(&topology.backend, DeepSeekV4PackedBackendState::Prepared) {
+                let error = Error::Execution(format!(
+                    "DeepSeek-V4 transaction {} backend is no longer commit-ready",
+                    transaction.get()
+                ));
+                self.packed_transactions
+                    .put_payload(transaction, topology)?;
+                return Err(error);
+            }
+
+            let backend = match self.operators.cuda_mut() {
+                Ok(cuda) => cuda.commit_kv_pages(transaction),
+                Err(error) => {
+                    self.packed_transactions
+                        .put_payload(transaction, topology)?;
+                    return Err(error);
+                }
+            };
+            if let Err(error) = backend {
+                topology.backend = DeepSeekV4PackedBackendState::FinalizedAfterCommitFailure;
+                self.packed_transactions
+                    .put_payload(transaction, topology)?;
+                return Err(error);
+            }
+            for (state_index, working_state) in topology
+                .committed_state_indices
+                .iter()
+                .copied()
+                .zip(topology.working_states.drain(..))
+            {
+                states[state_index] = working_state;
+            }
+            self.packed_transactions.finalize_checkout(transaction);
             Ok(())
         }
         #[cfg(not(feature = "cuda"))]
@@ -3382,37 +4264,104 @@ impl MultiSessionRunner for DeepSeekV4Runner {
     ) -> Result<()> {
         #[cfg(feature = "cuda")]
         {
-            if self.packed_cuda_continuations.contains_key(&transaction) {
-                return Err(Error::Execution(format!(
-                    "cannot roll back DeepSeek-V4 transaction {} with a live packed continuation",
-                    transaction.get()
-                )));
+            self.packed_transactions
+                .validate_states(transaction, states)?;
+            let mut topology = self.packed_transactions.take_payload(transaction)?;
+
+            let execution = std::mem::replace(
+                &mut topology.execution,
+                DeepSeekV4PackedTransactionExecution::Prepared,
+            );
+            let cleanup = match execution {
+                DeepSeekV4PackedTransactionExecution::Waiting(continuation) => self
+                    .cancel_packed_cuda_continuation_owned(
+                        &mut topology.working_states,
+                        continuation,
+                    ),
+                DeepSeekV4PackedTransactionExecution::CleanupPending {
+                    continuation,
+                    quiesced: false,
+                } => self.cancel_packed_cuda_continuation_owned(
+                    &mut topology.working_states,
+                    continuation,
+                ),
+                DeepSeekV4PackedTransactionExecution::CleanupPending {
+                    continuation,
+                    quiesced: true,
+                } => {
+                    let (continuation, cleanup) = self.finish_packed_cuda_cancellation(
+                        &mut topology.working_states,
+                        continuation,
+                    );
+                    DeepSeekV4PackedCudaCancelProgress::Quiesced(continuation, cleanup)
+                }
+                execution @ (DeepSeekV4PackedTransactionExecution::Prepared
+                | DeepSeekV4PackedTransactionExecution::Complete(_)
+                | DeepSeekV4PackedTransactionExecution::Cancelled(_)) => {
+                    topology.execution = execution;
+                    if matches!(&topology.backend, DeepSeekV4PackedBackendState::Prepared) {
+                        let backend = match self.operators.cuda_mut() {
+                            Ok(cuda) => cuda.rollback_kv_pages(transaction),
+                            Err(error) => {
+                                self.packed_transactions
+                                    .put_payload(transaction, topology)?;
+                                return Err(error);
+                            }
+                        };
+                        topology.backend = DeepSeekV4PackedBackendState::RolledBack;
+                        if let Err(error) = backend {
+                            self.packed_transactions
+                                .put_payload(transaction, topology)?;
+                            return Err(error);
+                        }
+                    }
+                    self.packed_transactions.finalize_checkout(transaction);
+                    return Ok(());
+                }
+            };
+
+            match cleanup {
+                DeepSeekV4PackedCudaCancelProgress::StillActive(continuation, error) => {
+                    topology.execution = DeepSeekV4PackedTransactionExecution::CleanupPending {
+                        continuation,
+                        quiesced: false,
+                    };
+                    self.packed_transactions
+                        .put_payload(transaction, topology)?;
+                    Err(error)
+                }
+                DeepSeekV4PackedCudaCancelProgress::Quiesced(continuation, Err(error)) => {
+                    topology.execution = DeepSeekV4PackedTransactionExecution::CleanupPending {
+                        continuation,
+                        quiesced: true,
+                    };
+                    self.packed_transactions
+                        .put_payload(transaction, topology)?;
+                    Err(error)
+                }
+                DeepSeekV4PackedCudaCancelProgress::Quiesced(continuation, Ok(())) => {
+                    topology.execution =
+                        DeepSeekV4PackedTransactionExecution::Cancelled(continuation.id);
+                    if matches!(&topology.backend, DeepSeekV4PackedBackendState::Prepared) {
+                        let backend = match self.operators.cuda_mut() {
+                            Ok(cuda) => cuda.rollback_kv_pages(transaction),
+                            Err(error) => {
+                                self.packed_transactions
+                                    .put_payload(transaction, topology)?;
+                                return Err(error);
+                            }
+                        };
+                        topology.backend = DeepSeekV4PackedBackendState::RolledBack;
+                        if let Err(error) = backend {
+                            self.packed_transactions
+                                .put_payload(transaction, topology)?;
+                            return Err(error);
+                        }
+                    }
+                    self.packed_transactions.finalize_checkout(transaction);
+                    Ok(())
+                }
             }
-            let previous = self
-                .prepared_paged_bindings
-                .remove(&transaction)
-                .ok_or_else(|| {
-                    Error::Internal(format!(
-                        "DeepSeek-V4 transaction {} has no prepared paged bindings",
-                        transaction.get()
-                    ))
-                })?;
-            if previous
-                .iter()
-                .any(|(state_index, _)| *state_index >= states.len())
-            {
-                self.prepared_paged_bindings.insert(transaction, previous);
-                return Err(Error::Internal(format!(
-                    "DeepSeek-V4 transaction {} rollback state slice changed",
-                    transaction.get()
-                )));
-            }
-            let backend = self.operators.cuda_mut()?.rollback_kv_pages(transaction);
-            for (state_index, binding) in previous {
-                states[state_index].paged_kv_binding = binding;
-            }
-            backend?;
-            Ok(())
         }
         #[cfg(not(feature = "cuda"))]
         {
@@ -3431,13 +4380,6 @@ impl MultiSessionRunner for DeepSeekV4Runner {
         executed_rows: &[usize],
         retained_rows: &[usize],
     ) -> Result<()> {
-        #[cfg(feature = "cuda")]
-        if self.packed_cuda_continuations.contains_key(&transaction) {
-            return Err(Error::Execution(format!(
-                "cannot retain a provisional prefix for transaction {} with a live packed continuation",
-                transaction.get()
-            )));
-        }
         #[cfg(not(feature = "cuda"))]
         {
             let _ = (transaction, sources, branches, executed_rows, retained_rows);
@@ -3468,109 +4410,139 @@ impl MultiSessionRunner for DeepSeekV4Runner {
                     retained_rows.len()
                 )));
             }
-
-            for sequence_index in 0..sequence_count {
-                let source = &sources[sequence_index];
-                let branch = &branches[sequence_index];
-                let executed = executed_rows[sequence_index];
-                let retained = retained_rows[sequence_index];
-                if executed == 0 || retained == 0 || retained > executed {
-                    return Err(Error::Model(format!(
-                        "invalid DeepSeek-V4 retained prefix for sequence {sequence_index}: retained={retained} executed={executed}"
-                    )));
-                }
-                let expected_branch_position = source
-                    .position()
-                    .checked_add(executed)
-                    .ok_or_else(|| Error::Model("DeepSeek-V4 branch position overflow".into()))?;
-                if branch.position() != expected_branch_position
-                    || source.layers.len() != branch.layers.len()
-                    || source.dspark_stages.len() != branch.dspark_stages.len()
-                    || branch.paged_kv_binding.is_none()
-                {
-                    return Err(Error::Model(format!(
-                        "DeepSeek-V4 provisional branch mismatch for sequence {sequence_index}: source_position={} branch_position={} expected={} source_layers={} branch_layers={} source_stages={} branch_stages={} paged_binding={}",
-                        source.position(),
-                        branch.position(),
-                        expected_branch_position,
-                        source.layers.len(),
-                        branch.layers.len(),
-                        source.dspark_stages.len(),
-                        branch.dspark_stages.len(),
-                        branch.paged_kv_binding.is_some()
-                    )));
-                }
-                if retained < executed
-                    && !self.operators.cuda.as_ref().is_some_and(|cuda| {
-                        cuda.provisional_prefix_matches(
-                            transaction,
-                            sequence_index,
-                            source.position(),
-                            executed,
-                            branch.layers.len(),
-                        )
-                    })
-                {
+            self.packed_transactions
+                .validate_states(transaction, branches)?;
+            let mut topology = self.packed_transactions.take_payload(transaction)?;
+            let result = (|| -> Result<()> {
+                if !matches!(
+                    &topology.execution,
+                    DeepSeekV4PackedTransactionExecution::Complete(_)
+                ) {
                     return Err(Error::Execution(format!(
-                        "DeepSeek-V4 provisional checkpoints do not cover sequence {sequence_index} for transaction {}",
+                        "cannot retain a DeepSeek-V4 provisional prefix before transaction {} completes execution",
                         transaction.get()
                     )));
                 }
-            }
-
-            for sequence_index in 0..sequence_count {
-                let source = &sources[sequence_index];
-                let branch = &mut branches[sequence_index];
-                let executed = executed_rows[sequence_index];
-                let retained = retained_rows[sequence_index];
-                if retained == executed {
-                    continue;
+                if topology.working_states.len() != sequence_count {
+                    return Err(Error::Internal(format!(
+                        "DeepSeek-V4 transaction {} working topology has {} sequences, expected {}",
+                        transaction.get(),
+                        topology.working_states.len(),
+                        sequence_count
+                    )));
                 }
 
-                for (layer, (source_state, state)) in
-                    source.layers.iter().zip(&mut branch.layers).enumerate()
-                {
-                    let metadata = self
-                        .operators
-                        .cuda_mut()?
-                        .restore_provisional_prefix_checkpoint(
-                            transaction,
-                            sequence_index,
-                            layer,
-                            retained,
-                            state.kv.window.cuda_state_mut(),
-                        )?;
-                    if let Some(metadata) = metadata {
-                        state.kv.restore_provisional_prefix_metadata(metadata)?;
-                    } else {
-                        state
-                            .kv
-                            .restore_uncompressed_prefix_from(&source_state.kv, retained)?;
+                for sequence_index in 0..sequence_count {
+                    let source = &sources[sequence_index];
+                    let branch = &topology.working_states[sequence_index];
+                    let executed = executed_rows[sequence_index];
+                    let retained = retained_rows[sequence_index];
+                    if executed == 0 || retained == 0 || retained > executed {
+                        return Err(Error::Model(format!(
+                            "invalid DeepSeek-V4 retained prefix for sequence {sequence_index}: retained={retained} executed={executed}"
+                        )));
+                    }
+                    let expected_branch_position =
+                        source.position().checked_add(executed).ok_or_else(|| {
+                            Error::Model("DeepSeek-V4 branch position overflow".into())
+                        })?;
+                    if branch.position() != expected_branch_position
+                        || source.layers.len() != branch.layers.len()
+                        || source.dspark_stages.len() != branch.dspark_stages.len()
+                        || branch.paged_kv_binding.is_none()
+                    {
+                        return Err(Error::Model(format!(
+                            "DeepSeek-V4 provisional branch mismatch for sequence {sequence_index}: source_position={} branch_position={} expected={} source_layers={} branch_layers={} source_stages={} branch_stages={} paged_binding={}",
+                            source.position(),
+                            branch.position(),
+                            expected_branch_position,
+                            source.layers.len(),
+                            branch.layers.len(),
+                            source.dspark_stages.len(),
+                            branch.dspark_stages.len(),
+                            branch.paged_kv_binding.is_some()
+                        )));
+                    }
+                    if retained < executed
+                        && !self.operators.cuda.as_ref().is_some_and(|cuda| {
+                            cuda.provisional_prefix_matches(
+                                transaction,
+                                sequence_index,
+                                source.position(),
+                                executed,
+                                branch.layers.len(),
+                            )
+                        })
+                    {
+                        return Err(Error::Execution(format!(
+                            "DeepSeek-V4 provisional checkpoints do not cover sequence {sequence_index} for transaction {}",
+                            transaction.get()
+                        )));
                     }
                 }
-                for (source_stage, branch_stage) in
-                    source.dspark_stages.iter().zip(&mut branch.dspark_stages)
-                {
-                    branch_stage
-                        .kv
-                        .restore_uncompressed_prefix_from(&source_stage.kv, retained)?;
-                }
 
-                let final_position = source
-                    .position()
-                    .checked_add(retained)
-                    .ok_or_else(|| Error::Model("DeepSeek-V4 retained position overflow".into()))?;
-                branch
-                    .paged_kv_binding
-                    .as_mut()
-                    .expect("validated provisional paged binding")
-                    .retain_sequence_len(final_position)?;
-                branch.predictor = source.predictor.clone();
-                branch.core.restore_from(&source.core);
-                let binding = branch.core.begin_step()?;
-                branch.core.commit_step(binding, retained)?;
+                for sequence_index in 0..sequence_count {
+                    let source = &sources[sequence_index];
+                    let branch = &mut topology.working_states[sequence_index];
+                    let executed = executed_rows[sequence_index];
+                    let retained = retained_rows[sequence_index];
+                    if retained == executed {
+                        continue;
+                    }
+
+                    for (layer, (source_state, state)) in
+                        source.layers.iter().zip(&mut branch.layers).enumerate()
+                    {
+                        let metadata = self
+                            .operators
+                            .cuda_mut()?
+                            .restore_provisional_prefix_checkpoint(
+                                transaction,
+                                sequence_index,
+                                layer,
+                                retained,
+                                state.kv.window.cuda_state_mut(),
+                            )?;
+                        if let Some(metadata) = metadata {
+                            state.kv.restore_provisional_prefix_metadata(metadata)?;
+                        } else {
+                            state
+                                .kv
+                                .restore_uncompressed_prefix_from(&source_state.kv, retained)?;
+                        }
+                    }
+                    for (source_stage, branch_stage) in
+                        source.dspark_stages.iter().zip(&mut branch.dspark_stages)
+                    {
+                        branch_stage
+                            .kv
+                            .restore_uncompressed_prefix_from(&source_stage.kv, retained)?;
+                    }
+
+                    let final_position =
+                        source.position().checked_add(retained).ok_or_else(|| {
+                            Error::Model("DeepSeek-V4 retained position overflow".into())
+                        })?;
+                    branch
+                        .paged_kv_binding
+                        .as_mut()
+                        .expect("validated provisional paged binding")
+                        .retain_sequence_len(final_position)?;
+                    branch.predictor = source.predictor.clone();
+                    branch.core.restore_from(&source.core);
+                    let binding = branch.core.begin_step()?;
+                    branch.core.commit_step(binding, retained)?;
+                }
+                Ok(())
+            })();
+            let restore = self.packed_transactions.put_payload(transaction, topology);
+            match (result, restore) {
+                (result, Ok(())) => result,
+                (Ok(()), Err(error)) => Err(error),
+                (Err(error), Err(restore_error)) => Err(Error::Internal(format!(
+                    "DeepSeek-V4 provisional prefix retention failed ({error}); registry restore also failed ({restore_error})"
+                ))),
             }
-            Ok(())
         }
     }
 
@@ -3580,13 +4552,6 @@ impl MultiSessionRunner for DeepSeekV4Runner {
         states: &mut [Self::SequenceState],
         batch: &ExecutionBatch,
     ) -> Result<MultiSessionBatchProgress> {
-        #[cfg(feature = "cuda")]
-        if self.packed_cuda_continuations.contains_key(&transaction) {
-            return Err(Error::Execution(format!(
-                "DeepSeek-V4 transaction {} already has a packed continuation",
-                transaction.get()
-            )));
-        }
         #[cfg(feature = "cuda")]
         {
             if self.operators.backend() != ModelExecutionBackend::Cuda {
@@ -3614,42 +4579,76 @@ impl MultiSessionRunner for DeepSeekV4Runner {
                     "DeepSeek-V4 packed execution does not support full-vocabulary logits".into(),
                 ));
             }
-            let metadata = PackedBatchMetadata::lower(batch, states.len())?;
-            if !metadata.supports_native_cuda() {
+
+            self.packed_transactions
+                .validate_states(transaction, states)?;
+            let mut topology = self.packed_transactions.take_payload(transaction)?;
+            if topology.batch != *batch {
+                self.packed_transactions
+                    .put_payload(transaction, topology)?;
+                return Err(Error::Execution(format!(
+                    "DeepSeek-V4 transaction {} execution batch does not match its prepared topology",
+                    transaction.get()
+                )));
+            }
+            if !topology.metadata.supports_native_cuda() {
+                self.packed_transactions
+                    .put_payload(transaction, topology)?;
                 return Err(Error::Execution(
                     "DeepSeek-V4 batch shape is not supported by the CUDA packed executor".into(),
                 ));
             }
-            let continuation =
-                self.begin_cuda_packed_batch_continuation(transaction, states, batch, metadata)?;
-            return match self.progress_cuda_packed_batch(states, continuation) {
+            if !matches!(
+                &topology.execution,
+                DeepSeekV4PackedTransactionExecution::Prepared
+            ) {
+                self.packed_transactions
+                    .put_payload(transaction, topology)?;
+                return Err(Error::Execution(format!(
+                    "DeepSeek-V4 transaction {} packed execution has already started",
+                    transaction.get()
+                )));
+            }
+
+            let continuation = match self.begin_cuda_packed_batch_continuation(
+                transaction,
+                &mut topology.working_states,
+                batch,
+                topology.metadata.clone(),
+            ) {
+                Ok(continuation) => continuation,
+                Err(error) => {
+                    self.packed_transactions
+                        .put_payload(transaction, topology)?;
+                    return Err(error);
+                }
+            };
+            let progress = match self.progress_cuda_packed_batch(
+                &mut topology.working_states,
+                continuation,
+                None,
+            ) {
                 Ok(DeepSeekV4PackedCudaProgress::Waiting(continuation, pending)) => {
-                    let replaced = self
-                        .packed_cuda_continuations
-                        .insert(transaction, continuation);
-                    debug_assert!(replaced.is_none(), "packed transaction ID reused");
+                    topology.execution =
+                        DeepSeekV4PackedTransactionExecution::Waiting(continuation);
                     Ok(MultiSessionBatchProgress::Waiting(pending))
                 }
-                Ok(DeepSeekV4PackedCudaProgress::Complete(output)) => {
+                Ok(DeepSeekV4PackedCudaProgress::Complete(output, expert_leases)) => {
+                    topology.execution =
+                        DeepSeekV4PackedTransactionExecution::Complete(expert_leases);
                     Ok(MultiSessionBatchProgress::Complete(output))
                 }
                 Err((error, continuation)) => {
-                    let continuation_id = continuation.id;
-                    let cleanup = self.cancel_packed_cuda_continuation_owned(states, continuation);
-                    if self.packed_cuda_continuations.contains_key(&transaction) {
-                        self.completion_hub.notify();
-                        Ok(MultiSessionBatchProgress::Waiting(
-                            PendingModelProgress::new(transaction, continuation_id, Vec::new())?,
-                        ))
-                    } else {
-                        Err(Self::packed_cuda_error_with_cleanup(
-                            "DeepSeek-V4 resumable packed CUDA begin",
-                            error,
-                            cleanup,
-                        ))
-                    }
+                    topology.execution = DeepSeekV4PackedTransactionExecution::CleanupPending {
+                        continuation,
+                        quiesced: false,
+                    };
+                    Err(error)
                 }
             };
+            self.packed_transactions
+                .put_payload(transaction, topology)?;
+            progress
         }
         #[cfg(not(feature = "cuda"))]
         {
@@ -3666,53 +4665,99 @@ impl MultiSessionRunner for DeepSeekV4Runner {
         states: &mut [Self::SequenceState],
         batch: &ExecutionBatch,
         continuation_id: BatchContinuationId,
+        leases: ExpertLeaseSet,
     ) -> Result<MultiSessionBatchProgress> {
         #[cfg(feature = "cuda")]
         {
-            let continuation = self
-                .packed_cuda_continuations
-                .remove(&transaction)
-                .ok_or_else(|| {
-                    Error::Execution(format!(
-                        "DeepSeek-V4 transaction {} has no outstanding packed continuation {}",
-                        transaction.get(),
-                        continuation_id.get()
-                    ))
-                })?;
+            self.packed_transactions
+                .validate_states(transaction, states)?;
+            let mut topology = self.packed_transactions.take_payload(transaction)?;
+            if topology.batch != *batch {
+                self.packed_transactions
+                    .put_payload(transaction, topology)?;
+                return Err(Error::Execution(format!(
+                    "DeepSeek-V4 transaction {} resume batch does not match its prepared topology",
+                    transaction.get()
+                )));
+            }
+            let execution = std::mem::replace(
+                &mut topology.execution,
+                DeepSeekV4PackedTransactionExecution::Prepared,
+            );
+            let DeepSeekV4PackedTransactionExecution::Waiting(mut continuation) = execution else {
+                topology.execution = execution;
+                self.packed_transactions
+                    .put_payload(transaction, topology)?;
+                return Err(Error::Execution(format!(
+                    "DeepSeek-V4 transaction {} has no resumable packed continuation {}",
+                    transaction.get(),
+                    continuation_id.get()
+                )));
+            };
             if let Err(error) = validate_packed_cuda_resume_identity(
                 continuation.id,
                 &continuation.batch,
                 continuation_id,
                 batch,
             ) {
-                self.packed_cuda_continuations
-                    .insert(transaction, continuation);
+                topology.execution = DeepSeekV4PackedTransactionExecution::Waiting(continuation);
+                self.packed_transactions
+                    .put_payload(transaction, topology)?;
                 return Err(error);
             }
-            if let Err(error) = Self::validate_packed_cuda_resume_states(states, &continuation) {
-                self.packed_cuda_continuations
-                    .insert(transaction, continuation);
+            if let Err(error) =
+                Self::validate_packed_cuda_resume_states(&topology.working_states, &continuation)
+            {
+                topology.execution = DeepSeekV4PackedTransactionExecution::Waiting(continuation);
+                self.packed_transactions
+                    .put_payload(transaction, topology)?;
                 return Err(error);
             }
-            return match self.progress_cuda_packed_batch(states, continuation) {
+            let resume_validation = continuation
+                .dependencies
+                .as_mut()
+                .ok_or_else(|| {
+                    Error::Execution(format!(
+                        "DeepSeek-V4 packed continuation {} has no declared dependency set",
+                        continuation_id.get()
+                    ))
+                })
+                .and_then(|dependencies| dependencies.validate_resume(continuation_id, &leases));
+            if let Err(error) = resume_validation {
+                topology.execution = DeepSeekV4PackedTransactionExecution::Waiting(continuation);
+                self.packed_transactions
+                    .put_payload(transaction, topology)?;
+                return Err(error);
+            }
+
+            let progress = match self.progress_cuda_packed_batch(
+                &mut topology.working_states,
+                continuation,
+                Some(leases),
+            ) {
                 Ok(DeepSeekV4PackedCudaProgress::Waiting(continuation, pending)) => {
-                    self.packed_cuda_continuations
-                        .insert(transaction, continuation);
+                    topology.execution =
+                        DeepSeekV4PackedTransactionExecution::Waiting(continuation);
                     Ok(MultiSessionBatchProgress::Waiting(pending))
                 }
-                Ok(DeepSeekV4PackedCudaProgress::Complete(output)) => {
+                Ok(DeepSeekV4PackedCudaProgress::Complete(output, expert_leases)) => {
+                    topology.execution =
+                        DeepSeekV4PackedTransactionExecution::Complete(expert_leases);
                     Ok(MultiSessionBatchProgress::Complete(output))
                 }
                 Err((error, continuation)) => {
-                    self.packed_cuda_continuations
-                        .insert(transaction, continuation);
+                    topology.execution =
+                        DeepSeekV4PackedTransactionExecution::Waiting(continuation);
                     Err(error)
                 }
             };
+            self.packed_transactions
+                .put_payload(transaction, topology)?;
+            progress
         }
         #[cfg(not(feature = "cuda"))]
         {
-            let _ = (transaction, states, batch, continuation_id);
+            let _ = (transaction, states, batch, continuation_id, leases);
             Err(Error::Execution(
                 "DeepSeek-V4 was built without CUDA packed continuation support".into(),
             ))
@@ -3727,36 +4772,119 @@ impl MultiSessionRunner for DeepSeekV4Runner {
     ) -> BatchContinuationCancelOutcome {
         #[cfg(feature = "cuda")]
         {
-            let Some(expected) = self
-                .packed_cuda_continuations
-                .get(&transaction)
-                .map(|continuation| continuation.id)
-            else {
-                return BatchContinuationCancelOutcome::Quiesced(Error::Execution(format!(
-                    "DeepSeek-V4 transaction {} has no outstanding packed continuation {}",
-                    transaction.get(),
-                    continuation_id.get()
-                )));
+            if let Err(error) = self
+                .packed_transactions
+                .validate_states(transaction, states)
+            {
+                return if self.packed_transactions.contains(transaction) {
+                    BatchContinuationCancelOutcome::StillActive(error)
+                } else {
+                    BatchContinuationCancelOutcome::Quiesced(error)
+                };
+            }
+            let mut topology = match self.packed_transactions.take_payload(transaction) {
+                Ok(topology) => topology,
+                Err(error) => return BatchContinuationCancelOutcome::Quiesced(error),
             };
-            if expected != continuation_id {
-                return BatchContinuationCancelOutcome::StillActive(Error::Execution(format!(
+            let execution = std::mem::replace(
+                &mut topology.execution,
+                DeepSeekV4PackedTransactionExecution::Prepared,
+            );
+            let (continuation, quiesced) = match execution {
+                DeepSeekV4PackedTransactionExecution::Waiting(continuation) => {
+                    (continuation, false)
+                }
+                DeepSeekV4PackedTransactionExecution::CleanupPending {
+                    continuation,
+                    quiesced,
+                } => (continuation, quiesced),
+                DeepSeekV4PackedTransactionExecution::Cancelled(expected)
+                    if expected == continuation_id =>
+                {
+                    topology.execution = DeepSeekV4PackedTransactionExecution::Cancelled(expected);
+                    return match self.packed_transactions.put_payload(transaction, topology) {
+                        Ok(()) => BatchContinuationCancelOutcome::Cancelled,
+                        Err(error) => BatchContinuationCancelOutcome::Quiesced(error),
+                    };
+                }
+                execution => {
+                    topology.execution = execution;
+                    let error = Error::Execution(format!(
+                        "DeepSeek-V4 transaction {} has no outstanding packed continuation {}",
+                        transaction.get(),
+                        continuation_id.get()
+                    ));
+                    return match self.packed_transactions.put_payload(transaction, topology) {
+                        Ok(()) => BatchContinuationCancelOutcome::Quiesced(error),
+                        Err(restore_error) => {
+                            BatchContinuationCancelOutcome::Quiesced(Error::Execution(format!(
+                                "{error}; registry restore also failed ({restore_error})"
+                            )))
+                        }
+                    };
+                }
+            };
+            if continuation.id != continuation_id {
+                let expected = continuation.id;
+                topology.execution = if quiesced {
+                    DeepSeekV4PackedTransactionExecution::CleanupPending {
+                        continuation,
+                        quiesced: true,
+                    }
+                } else {
+                    DeepSeekV4PackedTransactionExecution::Waiting(continuation)
+                };
+                let error = Error::Execution(format!(
                     "DeepSeek-V4 transaction {} continuation mismatch: expected {}, got {}",
                     transaction.get(),
                     expected.get(),
                     continuation_id.get()
-                )));
+                ));
+                return match self.packed_transactions.put_payload(transaction, topology) {
+                    Ok(()) => BatchContinuationCancelOutcome::StillActive(error),
+                    Err(restore_error) => {
+                        BatchContinuationCancelOutcome::StillActive(Error::Execution(format!(
+                            "{error}; registry restore also failed ({restore_error})"
+                        )))
+                    }
+                };
             }
-            let continuation = self
-                .packed_cuda_continuations
-                .remove(&transaction)
-                .expect("validated outstanding packed transaction");
-            return match self.cancel_packed_cuda_continuation_owned(states, continuation) {
-                Ok(()) => BatchContinuationCancelOutcome::Cancelled,
-                Err(error) if self.packed_cuda_continuations.contains_key(&transaction) => {
+
+            let cleanup = if quiesced {
+                let (continuation, cleanup) = self
+                    .finish_packed_cuda_cancellation(&mut topology.working_states, continuation);
+                DeepSeekV4PackedCudaCancelProgress::Quiesced(continuation, cleanup)
+            } else {
+                self.cancel_packed_cuda_continuation_owned(
+                    &mut topology.working_states,
+                    continuation,
+                )
+            };
+            let outcome = match cleanup {
+                DeepSeekV4PackedCudaCancelProgress::StillActive(continuation, error) => {
+                    topology.execution = DeepSeekV4PackedTransactionExecution::CleanupPending {
+                        continuation,
+                        quiesced: false,
+                    };
                     BatchContinuationCancelOutcome::StillActive(error)
                 }
-                Err(error) => BatchContinuationCancelOutcome::Quiesced(error),
+                DeepSeekV4PackedCudaCancelProgress::Quiesced(continuation, Ok(())) => {
+                    topology.execution =
+                        DeepSeekV4PackedTransactionExecution::Cancelled(continuation.id);
+                    BatchContinuationCancelOutcome::Cancelled
+                }
+                DeepSeekV4PackedCudaCancelProgress::Quiesced(continuation, Err(error)) => {
+                    topology.execution = DeepSeekV4PackedTransactionExecution::CleanupPending {
+                        continuation,
+                        quiesced: true,
+                    };
+                    BatchContinuationCancelOutcome::Quiesced(error)
+                }
             };
+            match self.packed_transactions.put_payload(transaction, topology) {
+                Ok(()) => outcome,
+                Err(error) => BatchContinuationCancelOutcome::Quiesced(error),
+            }
         }
         #[cfg(not(feature = "cuda"))]
         {
@@ -3788,7 +4916,7 @@ impl MultiSessionRunner for DeepSeekV4Runner {
         source: &Self::SequenceState,
         expected_position: usize,
     ) -> Result<Self::SequenceState> {
-        self.ensure_no_packed_cuda_continuation("fork explicit sequence state")?;
+        self.ensure_sequence_topology_available(source, "fork explicit sequence state")?;
         Self::fork_sequence_state_from_explicit(source, expected_position, &self.operators)
     }
 
@@ -3839,6 +4967,11 @@ impl MultiSessionRunner for DeepSeekV4Runner {
 
 #[cfg(test)]
 mod packed_continuation_tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering as AtomicOrdering},
+    };
+
     use ferrule_common::execution::{
         ExecutionSequence, ForwardMode, ForwardPhase, LogitsRequest, StateSlot,
     };
@@ -3880,15 +5013,72 @@ mod packed_continuation_tests {
     }
 
     #[test]
+    fn cuda_moe_materialization_backend_can_only_be_taken_once() {
+        let mut owner = Some("physical-backend");
+        assert_eq!(
+            take_cuda_backend_once(ModelExecutionBackend::Cuda, Some(&mut owner), Option::take,),
+            Some("physical-backend")
+        );
+        assert_eq!(
+            take_cuda_backend_once(ModelExecutionBackend::Cuda, Some(&mut owner), Option::take,),
+            None
+        );
+    }
+
+    #[test]
+    fn cuda_moe_materialization_backend_is_none_when_owner_is_missing() {
+        let missing: Option<&mut Option<&'static str>> = None;
+        assert_eq!(
+            take_cuda_backend_once(ModelExecutionBackend::Cuda, missing, Option::take),
+            None
+        );
+    }
+
+    #[test]
+    fn cpu_runner_never_transfers_a_materialization_backend() {
+        let mut owner = Some("physical-backend");
+        assert_eq!(
+            take_cuda_backend_once(ModelExecutionBackend::Cpu, Some(&mut owner), Option::take),
+            None
+        );
+        assert_eq!(owner, Some("physical-backend"));
+    }
+
+    #[test]
+    fn route_download_resume_edge_cannot_be_replayed() {
+        let continuation = BatchContinuationId::new(19);
+        let mut state = None;
+        record_continuation_dependencies(
+            &mut state,
+            continuation,
+            internal_continuation_dependency(continuation).unwrap(),
+        )
+        .unwrap();
+        state
+            .as_mut()
+            .unwrap()
+            .validate_resume(continuation, &empty_expert_lease_set(continuation).unwrap())
+            .unwrap();
+
+        let error = state
+            .as_mut()
+            .unwrap()
+            .validate_resume(continuation, &empty_expert_lease_set(continuation).unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no unresolved dependency set; refusing resume replay"));
+    }
+
+    #[test]
     fn packed_resume_identity_requires_the_exact_id_and_batch() {
-        let expected_id = BatchContinuationId::new(7).unwrap();
+        let expected_id = BatchContinuationId::new(7);
         let batch = one_row_batch(11, 0);
         validate_packed_cuda_resume_identity(expected_id, &batch, expected_id, &batch).unwrap();
 
         let wrong_id = validate_packed_cuda_resume_identity(
             expected_id,
             &batch,
-            BatchContinuationId::new(8).unwrap(),
+            BatchContinuationId::new(8),
             &batch,
         )
         .unwrap_err()
@@ -3914,6 +5104,278 @@ mod packed_continuation_tests {
         .unwrap_err()
         .to_string();
         assert!(wrong_slot.contains("does not exactly match"));
+    }
+
+    fn transaction(value: u64) -> ExecutionTransactionId {
+        ExecutionTransactionId::new(value).unwrap()
+    }
+
+    fn sequence_state() -> DeepSeekV4SequenceExecutionState {
+        DeepSeekV4SequenceExecutionState::new(Vec::new(), Vec::new(), 8)
+    }
+
+    fn owner(
+        state_index: usize,
+        state: &DeepSeekV4SequenceExecutionState,
+    ) -> DeepSeekV4PackedSequenceOwner {
+        DeepSeekV4PackedSequenceOwner::capture(state_index, state).unwrap()
+    }
+
+    struct TransactionLeasePayload {
+        leases: Vec<ExpertLeaseSet>,
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl Drop for TransactionLeasePayload {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, AtomicOrdering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn transaction_retains_expert_leases_through_terminal_checkout() {
+        let states = [sequence_state()];
+        let active = transaction(91);
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut registry = DeepSeekV4PackedTransactionRegistry::default();
+        registry
+            .insert(
+                active,
+                vec![owner(0, &states[0])],
+                [],
+                TransactionLeasePayload {
+                    leases: vec![empty_expert_lease_set(BatchContinuationId::new(91)).unwrap()],
+                    drops: Arc::clone(&drops),
+                },
+            )
+            .unwrap();
+
+        let payload = registry.take_payload(active).unwrap();
+        assert_eq!(payload.leases.len(), 1);
+        assert_eq!(drops.load(AtomicOrdering::Relaxed), 0);
+        registry.put_payload(active, payload).unwrap();
+        assert_eq!(drops.load(AtomicOrdering::Relaxed), 0);
+
+        let payload = registry.take_payload(active).unwrap();
+        registry.finalize_checkout(active);
+        assert_eq!(payload.leases.len(), 1);
+        assert_eq!(drops.load(AtomicOrdering::Relaxed), 0);
+        drop(payload);
+        assert_eq!(drops.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    #[test]
+    fn c2_packed_transactions_complete_in_reverse_order_without_cross_release() {
+        let states = [sequence_state(), sequence_state()];
+        let first = transaction(101);
+        let second = transaction(102);
+        let mut registry = DeepSeekV4PackedTransactionRegistry::default();
+        registry
+            .insert(first, vec![owner(0, &states[0])], [KvPageId(1)], "first")
+            .unwrap();
+        registry
+            .insert(second, vec![owner(1, &states[1])], [KvPageId(2)], "second")
+            .unwrap();
+
+        let suspended = registry.take_payload(first).unwrap();
+        registry.put_payload(first, suspended).unwrap();
+        let second_payload = registry.take_payload(second).unwrap();
+        registry.finalize_checkout(second);
+        assert_eq!(second_payload, "second");
+        assert_eq!(registry.owner_of(&states[0]), Some(first));
+        let first_payload = registry.take_payload(first).unwrap();
+        registry.finalize_checkout(first);
+        assert_eq!(first_payload, "first");
+        assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn packed_transactions_reject_the_same_sequence() {
+        let states = [sequence_state()];
+        let first = transaction(201);
+        let second = transaction(202);
+        let mut registry = DeepSeekV4PackedTransactionRegistry::default();
+        registry
+            .insert(first, vec![owner(0, &states[0])], [], ())
+            .unwrap();
+
+        let error = registry
+            .insert(second, vec![owner(0, &states[0])], [], ())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("already owned by transaction 201"));
+        assert_eq!(registry.len(), 1);
+        registry.take_payload(first).unwrap();
+        registry.finalize_checkout(first);
+    }
+
+    #[test]
+    fn unrelated_topology_mutation_is_not_globally_blocked() {
+        let states = [sequence_state(), sequence_state()];
+        let active = transaction(301);
+        let mut registry = DeepSeekV4PackedTransactionRegistry::default();
+        registry
+            .insert(active, vec![owner(0, &states[0])], [KvPageId(11)], ())
+            .unwrap();
+
+        assert!(
+            registry
+                .ensure_sequence_available(&states[0], "reset")
+                .is_err()
+        );
+        registry
+            .ensure_sequence_available(&states[1], "reset")
+            .unwrap();
+        assert!(
+            registry
+                .ensure_pages_available(&[KvPageId(11)], "release")
+                .is_err()
+        );
+        registry
+            .ensure_pages_available(&[KvPageId(12)], "release")
+            .unwrap();
+        registry.take_payload(active).unwrap();
+        registry.finalize_checkout(active);
+    }
+
+    #[test]
+    fn c4_sibling_cancellation_releases_only_the_packed_owner() {
+        let states = [
+            sequence_state(),
+            sequence_state(),
+            sequence_state(),
+            sequence_state(),
+        ];
+        let packed_owner = transaction(401);
+        let mut registry = DeepSeekV4PackedTransactionRegistry::default();
+        registry
+            .insert(
+                packed_owner,
+                vec![owner(0, &states[0])],
+                [KvPageId(21)],
+                "cancelled",
+            )
+            .unwrap();
+
+        for sibling in &states[1..] {
+            registry
+                .ensure_sequence_available(sibling, "release sibling")
+                .unwrap();
+        }
+        let cancelled = registry.take_payload(packed_owner).unwrap();
+        registry.finalize_checkout(packed_owner);
+        assert_eq!(cancelled, "cancelled");
+        assert!(
+            states
+                .iter()
+                .all(|state| registry.owner_of(state).is_none())
+        );
+    }
+
+    #[test]
+    fn packed_transaction_rejects_stale_identity_and_generation() {
+        let mut states = [sequence_state()];
+        let active = transaction(501);
+        let mut registry = DeepSeekV4PackedTransactionRegistry::default();
+        registry
+            .insert(active, vec![owner(0, &states[0])], [], ())
+            .unwrap();
+
+        let original = std::mem::replace(&mut states[0], sequence_state());
+        let identity_error = registry
+            .validate_states(active, &states)
+            .unwrap_err()
+            .to_string();
+        assert!(identity_error.contains("changed topology identity"));
+
+        states[0] = original;
+        states[0].reset_for_reuse();
+        let generation_error = registry
+            .validate_states(active, &states)
+            .unwrap_err()
+            .to_string();
+        assert!(generation_error.contains("stale sequence generation/position"));
+        registry.take_payload(active).unwrap();
+        registry.finalize_checkout(active);
+    }
+
+    #[test]
+    fn packed_transaction_failure_restores_payload_for_retry() {
+        let states = [sequence_state()];
+        let active = transaction(601);
+        let mut registry = DeepSeekV4PackedTransactionRegistry::default();
+        registry
+            .insert(
+                active,
+                vec![owner(0, &states[0])],
+                [KvPageId(31)],
+                String::from("model-and-kv-owned"),
+            )
+            .unwrap();
+
+        let payload = registry.take_payload(active).unwrap();
+        assert_eq!(payload, "model-and-kv-owned");
+        assert_eq!(registry.owner_of(&states[0]), Some(active));
+        assert!(
+            registry
+                .ensure_pages_available(&[KvPageId(31)], "release")
+                .is_err()
+        );
+        registry.put_payload(active, payload).unwrap();
+
+        let retried = registry.take_payload(active).unwrap();
+        assert_eq!(retried, "model-and-kv-owned");
+        drop(retried);
+        registry.finalize_checkout(active);
+    }
+
+    #[test]
+    fn packed_transaction_quiescence_releases_all_indexes_without_leaks() {
+        let states = [sequence_state(), sequence_state()];
+        let first = transaction(701);
+        let second = transaction(702);
+        let shared_page = KvPageId(41);
+        let mut registry = DeepSeekV4PackedTransactionRegistry::default();
+        registry
+            .insert(
+                first,
+                vec![owner(0, &states[0])],
+                [shared_page],
+                String::from("first"),
+            )
+            .unwrap();
+        registry
+            .insert(
+                second,
+                vec![owner(1, &states[1])],
+                [shared_page],
+                String::from("second"),
+            )
+            .unwrap();
+
+        let first_payload = registry.take_payload(first).unwrap();
+        drop(first_payload);
+        registry.finalize_checkout(first);
+        assert!(registry.contains(second));
+        assert!(
+            registry
+                .ensure_pages_available(&[shared_page], "release")
+                .is_err()
+        );
+        let payload = registry.take_payload(second).unwrap();
+        assert_eq!(payload, "second");
+        drop(payload);
+        registry.finalize_checkout(second);
+
+        assert!(registry.is_empty());
+        assert!(
+            states
+                .iter()
+                .all(|state| registry.owner_of(state).is_none())
+        );
+        registry
+            .ensure_pages_available(&[shared_page], "release")
+            .unwrap();
     }
 }
 

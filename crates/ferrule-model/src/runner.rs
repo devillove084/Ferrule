@@ -6,9 +6,13 @@ use ferrule_common::execution::{
     KvReservationView,
 };
 
+use crate::materialization::{
+    ExpertMaterializationAdapter, PhysicalExpertMaterializationBackend, validate_continuation_id,
+};
 use crate::{IncrementalDecodeState, ModelDescriptor};
+pub use ferrule_common::ContinuationId;
 pub use ferrule_common::execution::TokenLogit;
-use ferrule_common::{CompletionHub, Error, Result};
+use ferrule_common::{CompletionHub, DependencySet, Error, ExpertLeaseSet, Result};
 
 /// Owned model-side completion reactor.
 ///
@@ -89,108 +93,36 @@ pub trait ModelRunner {
     }
 }
 
-/// Opaque identity for one resumable packed-batch continuation.
+/// Compatibility name for the stable protocol continuation identity.
 ///
-/// IDs are scoped to the runner that created them. Callers must pass the same ID
-/// back to that runner when resuming or cancelling a waiting batch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct BatchContinuationId(std::num::NonZeroU64);
+/// New APIs use [`ContinuationId`] directly. Zero is rejected whenever an ID is
+/// attached to a pending model continuation.
+pub type BatchContinuationId = ContinuationId;
 
-impl BatchContinuationId {
-    /// Construct a continuation ID, rejecting zero because it is reserved as an
-    /// invalid or absent identity.
-    pub fn new(value: u64) -> Result<Self> {
-        std::num::NonZeroU64::new(value)
-            .map(Self)
-            .ok_or_else(|| Error::Execution("batch continuation ID must be non-zero".into()))
-    }
-
-    /// Return the validated non-zero numeric identity.
-    pub const fn get(self) -> u64 {
-        self.0.get()
-    }
-}
-
-/// One model-neutral expert load operation blocking a resumable batch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PendingExpertLoad {
-    operation_id: u64,
-    layer: u32,
-    expert: u32,
-}
-
-impl PendingExpertLoad {
-    /// Construct a pending expert load.
-    ///
-    /// `operation_id` identifies the durable load operation owned by the runner
-    /// and must be non-zero. Layer and expert numbers are model-relative indices.
-    pub fn new(operation_id: u64, layer: u32, expert: u32) -> Result<Self> {
-        if operation_id == 0 {
-            return Err(Error::Execution(
-                "pending expert load operation ID must be non-zero".into(),
-            ));
-        }
-        Ok(Self {
-            operation_id,
-            layer,
-            expert,
-        })
-    }
-
-    /// Return the validated non-zero load operation identity.
-    pub const fn operation_id(self) -> u64 {
-        self.operation_id
-    }
-
-    /// Return the model-relative layer index.
-    pub const fn layer(self) -> u32 {
-        self.layer
-    }
-
-    /// Return the model-relative expert index within the layer.
-    pub const fn expert(self) -> u32 {
-        self.expert
-    }
-}
-
-/// Model-owned wait state for an asynchronous operation.
+/// Model wait state exposed at the runtime boundary.
 ///
-/// An empty expert list means the continuation is waiting on non-expert model
-/// work, such as a device-to-host result transfer. Expert operation IDs must be
-/// non-zero and unique within the continuation.
+/// Only unresolved, canonical logical dependencies are visible. Physical
+/// operation IDs, pointers, provider tickets, and per-continuation load state are
+/// deliberately absent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingModelProgress {
     transaction: ExecutionTransactionId,
-    continuation: BatchContinuationId,
-    expert_loads: Vec<PendingExpertLoad>,
+    continuation: ContinuationId,
+    dependencies: DependencySet,
 }
 
 impl PendingModelProgress {
-    /// Construct a validated model wait state. `expert_loads` may be empty when
-    /// progress depends on another model-owned completion source.
     pub fn new(
         transaction: ExecutionTransactionId,
-        continuation: BatchContinuationId,
-        expert_loads: Vec<PendingExpertLoad>,
+        continuation: ContinuationId,
+        dependencies: DependencySet,
     ) -> Result<Self> {
-        let mut operation_ids = std::collections::HashSet::with_capacity(expert_loads.len());
-        for operation in &expert_loads {
-            if operation.operation_id == 0 {
-                return Err(Error::Execution(
-                    "pending expert load operation ID must be non-zero".into(),
-                ));
-            }
-            if !operation_ids.insert(operation.operation_id) {
-                return Err(Error::Execution(format!(
-                    "pending expert load operation ID {} is duplicated",
-                    operation.operation_id
-                )));
-            }
-        }
+        validate_continuation_id(continuation)?;
+        dependencies.validate()?;
         Ok(Self {
             transaction,
             continuation,
-            expert_loads,
+            dependencies,
         })
     }
 
@@ -199,15 +131,18 @@ impl PendingModelProgress {
         self.transaction
     }
 
-    /// Return the continuation to pass to the corresponding resume or cancel API.
-    pub const fn continuation(&self) -> BatchContinuationId {
+    /// Return the stable continuation identity for resume, detach, or cancel.
+    pub const fn continuation(&self) -> ContinuationId {
         self.continuation
     }
 
-    /// Return expert loads currently blocking progress. This may be empty when
-    /// the model is waiting on another asynchronous completion source.
-    pub fn expert_loads(&self) -> &[PendingExpertLoad] {
-        &self.expert_loads
+    /// Return only the exact unresolved dependencies blocking progress.
+    pub const fn unresolved_dependencies(&self) -> &DependencySet {
+        &self.dependencies
+    }
+
+    pub const fn dependencies(&self) -> &DependencySet {
+        &self.dependencies
     }
 }
 
@@ -257,6 +192,10 @@ pub trait MultiSessionRunner: ModelRunner {
     /// Per-sequence execution state (position, KV, predictor, etc.).
     type SequenceState;
 
+    /// Exact generation identity of a model execution state. Runtime KV
+    /// reservations bind this separately from page-manager ownership generation.
+    fn sequence_generation(&self, state: &Self::SequenceState) -> u64;
+
     /// Describe model-owned expert residency capacity, when this runner uses MoE
     /// expert residency managed by the runtime.
     fn expert_residency_requirements(
@@ -288,6 +227,46 @@ pub trait MultiSessionRunner: ModelRunner {
             ));
         }
         Ok(())
+    }
+
+    /// Transfer the model-owned physical expert backend exactly once.
+    ///
+    /// Dense runners return `None`. A runner reporting expert residency
+    /// requirements must return `Some` during runtime preparation; returning
+    /// `None` is a prepare-time configuration error rather than a deferred
+    /// `DeviceUnavailable` failure.
+    fn take_expert_materialization_backend(
+        &mut self,
+    ) -> Option<Box<dyn PhysicalExpertMaterializationBackend>> {
+        None
+    }
+
+    /// Whether the runner-level bridge to the runtime materialization registry is
+    /// installed. Dense runners leave this false.
+    fn expert_materialization_adapter_installed(&self) -> bool {
+        false
+    }
+
+    /// Install the model-neutral adapter used to resolve exact post-router misses
+    /// and expose keyed physical materialization hooks to the runtime driver.
+    fn install_expert_materialization_adapter(
+        &mut self,
+        _adapter: Box<dyn ExpertMaterializationAdapter>,
+    ) -> Result<()> {
+        Err(Error::Execution(
+            "runner does not support expert materialization adapters".into(),
+        ))
+    }
+
+    /// Borrow the installed runner-level materialization adapter. Runtime code may
+    /// call its `submit`, `progress`, `publish`, and `cancel` hooks by full `LoadKey`;
+    /// model cancellation paths use only `detach`.
+    fn expert_materialization_adapter(
+        &mut self,
+    ) -> Result<&mut (dyn ExpertMaterializationAdapter + '_)> {
+        Err(Error::Execution(
+            "runner has no expert materialization adapter".into(),
+        ))
     }
 
     /// Execute a closure against an explicit sequence state instead of the
@@ -414,7 +393,8 @@ pub trait MultiSessionRunner: ModelRunner {
         transaction: ExecutionTransactionId,
         states: &mut [Self::SequenceState],
         batch: &ExecutionBatch,
-        continuation: BatchContinuationId,
+        continuation: ContinuationId,
+        leases: ExpertLeaseSet,
     ) -> Result<MultiSessionBatchProgress>;
 
     /// Cancel a batch continuation previously created by this runner.
@@ -426,7 +406,7 @@ pub trait MultiSessionRunner: ModelRunner {
         &mut self,
         transaction: ExecutionTransactionId,
         states: &mut [Self::SequenceState],
-        continuation: BatchContinuationId,
+        continuation: ContinuationId,
     ) -> BatchContinuationCancelOutcome;
 
     /// Truthful capabilities for multi-session execution. This should report
@@ -587,14 +567,15 @@ pub trait ResidentModelRunner: ExpertIoModelRunner {
     fn resume_native_proposal(
         &mut self,
         transaction: ExecutionTransactionId,
-        continuation: BatchContinuationId,
+        continuation: ContinuationId,
+        leases: ExpertLeaseSet,
     ) -> Result<NativeProposalProgress>;
 
     /// Cancel a retained native proposal continuation.
     fn cancel_native_proposal(
         &mut self,
         transaction: ExecutionTransactionId,
-        continuation: BatchContinuationId,
+        continuation: ContinuationId,
     ) -> BatchContinuationCancelOutcome;
 }
 
@@ -610,60 +591,41 @@ mod tests {
         }
     }
 
+    fn load_key(expert: u32) -> ferrule_common::LoadKey {
+        ferrule_common::LoadKey::new(
+            ferrule_common::ModelInstanceId::new(1),
+            ferrule_common::SourceIdentityHash::new([2; 32]),
+            ferrule_common::ContentHash::new([3; 32]),
+            ferrule_common::LayerId::new(7),
+            ferrule_common::ExpertId::new(expert),
+            ferrule_common::ArtifactFormat::new(1),
+            ferrule_common::BackendId::new(4),
+            ferrule_common::DeviceId::new(5),
+            ferrule_common::SourceGeneration::new(6),
+            ferrule_common::DestinationGeneration::new(8),
+        )
+        .unwrap()
+    }
+
     #[test]
-    fn batch_continuation_id_rejects_zero_and_round_trips_non_zero_values() {
-        let error = BatchContinuationId::new(0).unwrap_err().to_string();
+    fn pending_progress_rejects_zero_continuation_and_exposes_canonical_dependencies() {
+        let transaction = ExecutionTransactionId::new(7).unwrap();
+        let dependencies =
+            crate::materialization::expert_dependency_set([load_key(8), load_key(1), load_key(8)])
+                .unwrap();
+        let error =
+            PendingModelProgress::new(transaction, ContinuationId::new(0), dependencies.clone())
+                .unwrap_err()
+                .to_string();
         assert!(error.contains("continuation ID must be non-zero"));
 
-        let continuation = BatchContinuationId::new(42).unwrap();
-        assert_eq!(continuation.get(), 42);
-    }
-
-    #[test]
-    fn pending_expert_load_validates_operation_id_and_exposes_coordinates() {
-        let error = PendingExpertLoad::new(0, 3, 7).unwrap_err().to_string();
-        assert!(error.contains("operation ID must be non-zero"));
-
-        let operation = PendingExpertLoad::new(11, 3, 7).unwrap();
-        assert_eq!(operation.operation_id(), 11);
-        assert_eq!(operation.layer(), 3);
-        assert_eq!(operation.expert(), 7);
-    }
-
-    #[test]
-    fn pending_model_progress_allows_empty_work_and_rejects_duplicate_operations() {
-        let transaction = ExecutionTransactionId::new(7).unwrap();
-        let continuation = BatchContinuationId::new(23).unwrap();
-        let empty = PendingModelProgress::new(transaction, continuation, Vec::new()).unwrap();
-        assert_eq!(empty.transaction(), transaction);
-        assert_eq!(empty.continuation(), continuation);
-        assert!(empty.expert_loads().is_empty());
-
-        let duplicate = PendingModelProgress::new(
-            transaction,
-            continuation,
-            vec![
-                PendingExpertLoad::new(31, 2, 4).unwrap(),
-                PendingExpertLoad::new(31, 3, 5).unwrap(),
-            ],
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(duplicate.contains("operation ID 31 is duplicated"));
-    }
-
-    #[test]
-    fn pending_model_progress_preserves_expert_load_order() {
-        let transaction = ExecutionTransactionId::new(11).unwrap();
-        let continuation = BatchContinuationId::new(29).unwrap();
-        let expert_loads = vec![
-            PendingExpertLoad::new(41, 7, 1).unwrap(),
-            PendingExpertLoad::new(42, 7, 8).unwrap(),
-        ];
+        let continuation = ContinuationId::new(29);
         let pending =
-            PendingModelProgress::new(transaction, continuation, expert_loads.clone()).unwrap();
+            PendingModelProgress::new(transaction, continuation, dependencies.clone()).unwrap();
         assert_eq!(pending.transaction(), transaction);
-        assert_eq!(pending.expert_loads(), expert_loads.as_slice());
+        assert_eq!(pending.continuation(), continuation);
+        assert_eq!(pending.unresolved_dependencies(), &dependencies);
+        assert_eq!(pending.dependencies().len(), 2);
         assert_eq!(
             NativeProposalProgress::Waiting(pending.clone()),
             NativeProposalProgress::Waiting(pending)

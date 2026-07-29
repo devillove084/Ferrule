@@ -3,12 +3,17 @@ use std::num::NonZeroU32;
 use std::time::Instant;
 
 use ferrule_common::execution::{
-    ExecutionOutput, ExecutionTransactionId, KvBindingMode, KvReservationView, StateSlot,
+    ExecutionOutput, ExecutionTransactionId, KvBindingMode, KvPageId, KvReservationView, StateSlot,
+};
+use ferrule_common::io_protocol::{
+    BackendId, CancellationReason, ContinuationId, DependencySetEpoch, DeviceId, ModelInstanceId,
+    RequestGeneration, WaiterId,
 };
 use ferrule_common::{Error, Result};
 use ferrule_model::{
-    BatchContinuationCancelOutcome, MultiSessionRunner, NativeProposal, NativeProposalProgress,
-    NativeProposalSource, PendingModelProgress, ResidentModelRunner,
+    BatchContinuationCancelOutcome, ExpertMaterializationPlacement, MultiSessionRunner,
+    NativeProposal, NativeProposalProgress, NativeProposalSource, PendingModelProgress,
+    PhysicalExpertResourceTopology, ResidentModelRunner,
 };
 use tracing;
 
@@ -16,10 +21,17 @@ use crate::cache::{
     KvPageManager, KvReservation, KvReservationCommit, KvRetirement, PreemptedKvState,
     PreparedKvCommit,
 };
+#[cfg(test)]
+use crate::io::RuntimeMaterializationAdapter;
+use crate::io::{
+    FairQueue, FairQueueConfig, LoadRegistry, MaterializationBackend, OutputTokenId,
+    RunnerMaterializationBackend, RuntimeMaterializationControl, UnavailableBackend,
+};
 use crate::scheduling::resident::{SuspendedSequenceSchedule, greedy_candidate};
 use crate::scheduling::{
     BrokerExpertIoResourceControl, CancelRequestResult, DecodeAction, ExpertIoBudget,
-    GenerateRequest, ModelExpertIoAdvisor, RequestId, ResidentScheduler, ResidentSchedulerConfig,
+    GenerateRequest, HardResourceBroker, HardResourceClaim, HardResourceGrant, HardResourceLimit,
+    ModelExpertIoAdvisor, RequestId, ResidentScheduler, ResidentSchedulerConfig, ResourceKind,
     ScheduledBatch, SchedulerAction, SequenceFinishReason, SequenceSlotPool, SequenceState,
     SessionId,
 };
@@ -82,6 +94,53 @@ impl Default for ResidentTopKDriverConfig {
     }
 }
 
+/// Runtime-owned limits that are not reported by the physical expert backend.
+/// KV capacity starts at zero and is replaced by the exact page-manager capacity
+/// when `try_with_page_manager` installs that owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResidentRuntimeResourceLimits {
+    pub arena_slots: u64,
+    pub kv_pages: u64,
+    pub continuations: u64,
+    pub waiters: u64,
+    pub load_operations: u64,
+    pub ready_cohorts: u64,
+}
+
+impl ResidentRuntimeResourceLimits {
+    pub fn for_scheduler(config: ResidentSchedulerConfig) -> Result<Self> {
+        let active = u64::try_from(config.max_active_sequences.max(1)).map_err(|_| {
+            Error::Execution("resident scheduler concurrency exceeds runtime resource range".into())
+        })?;
+        Ok(Self {
+            arena_slots: active,
+            kv_pages: 0,
+            continuations: active,
+            waiters: active,
+            // The physical stage capacities remain the effective default bound.
+            load_operations: u64::MAX,
+            ready_cohorts: active,
+        })
+    }
+
+    fn validate(self) -> Result<Self> {
+        for (name, value) in [
+            ("arena slots", self.arena_slots),
+            ("continuations", self.continuations),
+            ("waiters", self.waiters),
+            ("load operations", self.load_operations),
+            ("ready cohorts", self.ready_cohorts),
+        ] {
+            if value == 0 {
+                return Err(Error::Execution(format!(
+                    "resident runtime {name} limit must be non-zero"
+                )));
+            }
+        }
+        Ok(self)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResidentTokenEvent {
     pub session_id: SessionId,
@@ -118,6 +177,15 @@ pub enum ResidentActionKind {
     Cancel,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResidentDriverShutdownReport {
+    pub registry: crate::io::ShutdownReport,
+    pub executor_transactions: usize,
+    pub expert_io_grants: usize,
+    pub kv_page_grants: usize,
+    pub pending_kv_retirements: usize,
+}
+
 /// Synchronous resident driver over scheduler + KV + native multi-session executor.
 ///
 /// This is the end-to-end serving-shaped loop in runtime. It remains concrete
@@ -151,6 +219,82 @@ enum PendingSequenceCleanup<S> {
         retirement: Option<PendingKvRetirement>,
         model_state: Option<S>,
     },
+}
+
+struct RegisteredModelContinuation {
+    transaction: ExecutionTransactionId,
+    dependencies: ferrule_common::DependencySet,
+}
+
+struct ResidentRuntimeParts<R: MultiSessionRunner> {
+    executor: NativeMultiSessionExecutor<R>,
+    completion_hub: ferrule_common::CompletionHub,
+    registry: LoadRegistry<Box<dyn MaterializationBackend>>,
+    materialization: RuntimeMaterializationControl,
+    #[cfg(test)]
+    uninstalled_adapter: Option<RuntimeMaterializationAdapter>,
+}
+
+fn physical_materialization_resources(
+    topology: PhysicalExpertResourceTopology,
+    runtime: ResidentRuntimeResourceLimits,
+) -> Result<HardResourceBroker> {
+    let limits = topology.stage_limits().validate()?;
+    let runtime = runtime.validate()?;
+    let capacity = limits.capacity;
+    let reserve = limits.demand_reserve;
+    let lease_capacity = topology
+        .execution_lease_slots_per_continuation()
+        .checked_mul(runtime.continuations)
+        .ok_or_else(|| Error::Execution("execution lease capacity overflow".into()))?;
+    let physical_load_capacity = capacity
+        .read_slots
+        .max(capacity.upload_slots)
+        .max(capacity.install_slots);
+    let physical_load_reserve = reserve
+        .read_slots
+        .max(reserve.upload_slots)
+        .max(reserve.install_slots);
+    let resources = [
+        HardResourceLimit::new(ResourceKind::Sqe, capacity.read_slots, reserve.read_slots),
+        HardResourceLimit::new(
+            ResourceKind::PinnedSlab,
+            capacity.pinned_host_bytes,
+            reserve.pinned_host_bytes,
+        ),
+        HardResourceLimit::new(
+            ResourceKind::ReadBytes,
+            capacity.storage_read_bytes,
+            reserve.storage_read_bytes,
+        ),
+        HardResourceLimit::new(
+            ResourceKind::UploadSlot,
+            capacity.upload_slots,
+            reserve.upload_slots,
+        ),
+        HardResourceLimit::new(
+            ResourceKind::UploadBytes,
+            capacity.h2d_bytes,
+            reserve.h2d_bytes,
+        ),
+        HardResourceLimit::new(
+            ResourceKind::ExpertFrame,
+            topology.device_frame_bytes(),
+            reserve.device_install_bytes,
+        ),
+        HardResourceLimit::new(ResourceKind::Lease, lease_capacity, 0),
+        HardResourceLimit::new(ResourceKind::Arena, runtime.arena_slots, 0),
+        HardResourceLimit::new(ResourceKind::KvPage, runtime.kv_pages, 0),
+        HardResourceLimit::new(ResourceKind::Continuation, runtime.continuations, 0),
+        HardResourceLimit::new(ResourceKind::Waiter, runtime.waiters, 0),
+        HardResourceLimit::new(
+            ResourceKind::LoadOperation,
+            physical_load_capacity.min(runtime.load_operations),
+            physical_load_reserve.min(runtime.load_operations),
+        ),
+        HardResourceLimit::new(ResourceKind::ReadyCohort, runtime.ready_cohorts, 0),
+    ];
+    HardResourceBroker::new(resources).map_err(|error| Error::Execution(error.to_string()))
 }
 
 struct PendingResidentBatch<S> {
@@ -260,6 +404,7 @@ where
     /// Default top-k used for batch lowering.
     top_k: NonZeroU32,
     page_manager: Option<KvPageManager>,
+    kv_page_grants: HashMap<KvPageId, HardResourceGrant>,
     page_slots: HashMap<SessionId, StateSlot>,
     suspended_sequences: HashMap<SessionId, SuspendedDriverSequence<R::SequenceState>>,
     next_page_slot: u32,
@@ -270,10 +415,24 @@ where
     speculative_transactions:
         HashMap<ExecutionTransactionId, PendingSpeculativeDriverCohort<R::SequenceState>>,
     session_owner: HashMap<SessionId, ExecutionTransactionId>,
-    ready_transactions: VecDeque<ExecutionTransactionId>,
+    completion_hub: ferrule_common::CompletionHub,
+    load_registry: LoadRegistry<Box<dyn MaterializationBackend>>,
+    materialization: RuntimeMaterializationControl,
+    #[cfg(test)]
+    uninstalled_materialization_adapter: Option<RuntimeMaterializationAdapter>,
+    continuations: HashMap<ContinuationId, RegisteredModelContinuation>,
+    transaction_continuations: HashMap<ExecutionTransactionId, HashSet<ContinuationId>>,
+    ready_transactions: FairQueue<ExecutionTransactionId>,
+    queued_transactions: HashSet<ExecutionTransactionId>,
+    ready_continuations: HashSet<ContinuationId>,
+    next_dependency_epoch: u64,
+    runtime_clock: Instant,
+    runtime_tick: u64,
+    next_output_token_id: u64,
     pending_kv_retirements: VecDeque<PendingKvRetirement>,
     pending_sequence_cleanups: HashMap<SessionId, PendingSequenceCleanup<R::SequenceState>>,
     committed_token_outbox: VecDeque<ResidentTokenEvent>,
+    shutting_down: bool,
 }
 
 impl<R, C> ResidentTopKDriver<R, C>
@@ -285,11 +444,18 @@ where
     where
         R: ResidentModelRunner,
     {
-        Self::with_parts(
-            ResidentScheduler::default(),
+        Self::try_new(runner, slot_pool)
+            .expect("resident model reported an invalid runtime resource topology")
+    }
+
+    pub fn try_new(runner: R, slot_pool: C) -> Result<Self>
+    where
+        R: ResidentModelRunner,
+    {
+        Self::try_with_configs(
+            runner,
             slot_pool,
-            Self::executor_with_expert_io_resources(runner)
-                .expect("resident model reported an invalid expert-I/O resource topology"),
+            ResidentSchedulerConfig::default(),
             default_top_k(),
             ResidentTopKDriverConfig::default(),
         )
@@ -305,34 +471,183 @@ where
     where
         R: ResidentModelRunner,
     {
-        Self::with_parts(
-            ResidentScheduler::new(scheduler_config),
-            slot_pool,
-            Self::executor_with_expert_io_resources(runner)
-                .expect("resident model reported an invalid expert-I/O resource topology"),
-            top_k,
-            driver_config,
-        )
+        Self::try_with_configs(runner, slot_pool, scheduler_config, top_k, driver_config)
+            .expect("resident model reported an invalid runtime resource topology")
     }
 
-    fn executor_with_expert_io_resources(mut runner: R) -> Result<NativeMultiSessionExecutor<R>>
+    pub fn try_with_configs(
+        runner: R,
+        slot_pool: C,
+        scheduler_config: ResidentSchedulerConfig,
+        top_k: NonZeroU32,
+        driver_config: ResidentTopKDriverConfig,
+    ) -> Result<Self>
     where
         R: ResidentModelRunner,
     {
-        let limits = runner.expert_io_resource_limits()?.validate()?;
+        let runtime_limits = ResidentRuntimeResourceLimits::for_scheduler(scheduler_config)?;
+        Self::try_with_configs_and_runtime_limits(
+            runner,
+            slot_pool,
+            scheduler_config,
+            top_k,
+            driver_config,
+            runtime_limits,
+        )
+    }
+
+    pub fn try_with_configs_and_runtime_limits(
+        runner: R,
+        slot_pool: C,
+        scheduler_config: ResidentSchedulerConfig,
+        top_k: NonZeroU32,
+        driver_config: ResidentTopKDriverConfig,
+        runtime_limits: ResidentRuntimeResourceLimits,
+    ) -> Result<Self>
+    where
+        R: ResidentModelRunner,
+    {
+        Ok(Self::with_parts(
+            ResidentScheduler::new(scheduler_config),
+            slot_pool,
+            Self::runtime_parts(runner, runtime_limits)?,
+            top_k,
+            driver_config,
+        ))
+    }
+
+    fn runtime_parts(
+        mut runner: R,
+        runtime_limits: ResidentRuntimeResourceLimits,
+    ) -> Result<ResidentRuntimeParts<R>>
+    where
+        R: ResidentModelRunner,
+    {
+        let advisor_limits = runner.expert_io_resource_limits()?.validate()?;
+        let completion_hub = runner.completion_hub();
         let (control, handle) =
-            BrokerExpertIoResourceControl::new(limits, runner.completion_hub())?;
+            BrokerExpertIoResourceControl::new(advisor_limits, completion_hub.clone())?;
         runner.install_expert_io_resource_control(Box::new(control))?;
-        Ok(NativeMultiSessionExecutor::new(runner).with_expert_io_resources(handle))
+
+        let requirements = runner.expert_residency_requirements();
+        if let Some(requirements) = requirements.as_ref()
+            && !runner.expert_residency_control_installed()
+        {
+            let control = crate::expert_residency::ExpertResidencyController::with_requirements(
+                requirements.clone(),
+            )?;
+            runner.install_expert_residency_control(Box::new(control))?;
+        }
+
+        let physical = runner.take_expert_materialization_backend();
+        let (placement, registry_backend, resources, fairness, installed_physical) = match (
+            requirements.as_ref(),
+            physical,
+        ) {
+            (Some(requirements), Some(physical)) => {
+                let backend = RunnerMaterializationBackend::new(physical);
+                let placement = backend.placement();
+                if placement.model().get() != requirements.model_instance {
+                    return Err(Error::Execution(format!(
+                        "physical expert backend model namespace {} does not match runner residency namespace {}",
+                        placement.model().get(),
+                        requirements.model_instance
+                    )));
+                }
+                let topology = backend.resource_topology()?;
+                let physical_limits = topology.stage_limits().validate()?;
+                let fairness = FairQueueConfig::for_production(physical_limits)
+                    .map_err(|error| Error::Execution(error.to_string()))?;
+                let resources = physical_materialization_resources(topology, runtime_limits)?;
+                (
+                    placement,
+                    Box::new(backend.clone()) as Box<dyn MaterializationBackend>,
+                    resources,
+                    fairness,
+                    Some(backend),
+                )
+            }
+            (Some(_), None) => {
+                return Err(Error::Execution(
+                        "runner reports expert residency requirements but provides no physical expert materialization backend"
+                            .into(),
+                    ));
+            }
+            (None, Some(_)) => {
+                return Err(Error::Execution(
+                    "dense runner unexpectedly provided a physical expert materialization backend"
+                        .into(),
+                ));
+            }
+            (None, None) => {
+                let placement = ExpertMaterializationPlacement::new(
+                    ModelInstanceId::new(1),
+                    BackendId::new(1),
+                    DeviceId::new(0),
+                )?;
+                (
+                    placement,
+                    Box::new(UnavailableBackend) as Box<dyn MaterializationBackend>,
+                    physical_materialization_resources(
+                        PhysicalExpertResourceTopology::new(
+                            ferrule_common::expert_io::ExpertIoResourceLimits::default(),
+                            0,
+                            0,
+                        )?,
+                        runtime_limits,
+                    )?,
+                    FairQueueConfig::default(),
+                    None,
+                )
+            }
+        };
+
+        let (adapter, materialization) = RuntimeMaterializationControl::new(
+            placement,
+            installed_physical,
+            completion_hub.clone(),
+        );
+        let uninstalled_adapter = if requirements.is_some() {
+            if runner.expert_materialization_adapter_installed() {
+                return Err(Error::Execution(
+                    "runner already owns a materialization adapter outside the runtime registry"
+                        .into(),
+                ));
+            }
+            runner.install_expert_materialization_adapter(Box::new(adapter))?;
+            None
+        } else {
+            Some(adapter)
+        };
+        #[cfg(not(test))]
+        drop(uninstalled_adapter);
+        let registry = LoadRegistry::new(registry_backend, resources, fairness)
+            .map_err(|error| Error::Execution(error.to_string()))?;
+        Ok(ResidentRuntimeParts {
+            executor: NativeMultiSessionExecutor::new(runner).with_expert_io_resources(handle),
+            completion_hub,
+            registry,
+            materialization,
+            #[cfg(test)]
+            uninstalled_adapter,
+        })
     }
 
     fn with_parts(
         scheduler: ResidentScheduler,
         slot_pool: C,
-        executor: NativeMultiSessionExecutor<R>,
+        runtime: ResidentRuntimeParts<R>,
         top_k: NonZeroU32,
         config: ResidentTopKDriverConfig,
     ) -> Self {
+        let ResidentRuntimeParts {
+            executor,
+            completion_hub,
+            registry,
+            materialization,
+            #[cfg(test)]
+            uninstalled_adapter,
+        } = runtime;
         Self {
             scheduler,
             slot_pool,
@@ -341,6 +656,7 @@ where
             retained_sessions: HashMap::new(),
             top_k,
             page_manager: None,
+            kv_page_grants: HashMap::new(),
             page_slots: HashMap::new(),
             suspended_sequences: HashMap::new(),
             next_page_slot: 0,
@@ -350,10 +666,25 @@ where
             resident_transactions: HashMap::new(),
             speculative_transactions: HashMap::new(),
             session_owner: HashMap::new(),
-            ready_transactions: VecDeque::new(),
+            completion_hub,
+            load_registry: registry,
+            materialization,
+            #[cfg(test)]
+            uninstalled_materialization_adapter: uninstalled_adapter,
+            continuations: HashMap::new(),
+            transaction_continuations: HashMap::new(),
+            ready_transactions: FairQueue::new(FairQueueConfig::default())
+                .expect("default ready-transaction fairness is valid"),
+            queued_transactions: HashSet::new(),
+            ready_continuations: HashSet::new(),
+            next_dependency_epoch: 1,
+            runtime_clock: Instant::now(),
+            runtime_tick: 0,
+            next_output_token_id: 1,
             pending_kv_retirements: VecDeque::new(),
             pending_sequence_cleanups: HashMap::new(),
             committed_token_outbox: VecDeque::new(),
+            shutting_down: false,
         }
     }
 
@@ -398,11 +729,8 @@ where
         self.executor.runner().observability_snapshot()
     }
 
-    pub(crate) fn completion_hub(&self) -> ferrule_common::CompletionHub
-    where
-        R: ResidentModelRunner,
-    {
-        self.executor.runner().completion_hub()
+    pub(crate) fn completion_hub(&self) -> ferrule_common::CompletionHub {
+        self.completion_hub.clone()
     }
 
     pub(crate) fn take_completion_reactors(&mut self) -> Vec<ferrule_model::ModelCompletionReactor>
@@ -415,11 +743,78 @@ where
     pub fn has_pending_async_work(&self) -> bool {
         !self.resident_transactions.is_empty()
             || !self.speculative_transactions.is_empty()
+            || !self.continuations.is_empty()
+            || self.load_registry.active_operations() != 0
             || !self.pending_kv_retirements.is_empty()
             || !self.pending_sequence_cleanups.is_empty()
     }
 
+    pub const fn is_shutting_down(&self) -> bool {
+        self.shutting_down
+    }
+
+    #[cfg(test)]
+    pub fn try_with_materialization_backend<B>(
+        mut self,
+        backend: B,
+        resources: crate::scheduling::HardResourceBroker,
+        fairness: FairQueueConfig,
+    ) -> Result<Self>
+    where
+        B: MaterializationBackend + 'static,
+    {
+        self.ensure_no_suspended_execution("replace the materialization backend")?;
+        if let Some(adapter) = self.uninstalled_materialization_adapter.take() {
+            self.executor
+                .runner_mut()
+                .install_expert_materialization_adapter(Box::new(adapter))?;
+        }
+        self.load_registry = LoadRegistry::new(
+            Box::new(backend) as Box<dyn MaterializationBackend>,
+            resources,
+            fairness,
+        )
+        .map_err(|error| Error::Execution(error.to_string()))?;
+        Ok(self)
+    }
+
+    #[cfg(test)]
+    pub fn with_materialization_backend<B>(self, backend: B) -> Result<Self>
+    where
+        B: MaterializationBackend + 'static,
+    {
+        self.try_with_materialization_backend(
+            backend,
+            crate::scheduling::HardResourceBroker::testing_default(),
+            FairQueueConfig::default(),
+        )
+    }
+
+    pub fn load_registry(&self) -> &LoadRegistry<Box<dyn MaterializationBackend>> {
+        &self.load_registry
+    }
+
+    pub fn materialization_adapter_stats(&self) -> crate::io::RuntimeMaterializationAdapterStats {
+        self.materialization.stats()
+    }
+
+    #[cfg(test)]
     pub fn with_page_manager(mut self, page_manager: KvPageManager) -> Self {
+        let explicit_kv_limit = self
+            .load_registry
+            .resources()
+            .snapshots()
+            .find(|snapshot| snapshot.kind == ResourceKind::KvPage)
+            .expect("hard resource catalog contains KV pages")
+            .capacity;
+        if explicit_kv_limit == 0 {
+            return self
+                .try_with_page_manager(page_manager)
+                .expect("test page-manager topology must be valid");
+        }
+        self.executor
+            .configure_kv_page_capacity(page_manager.max_pages())
+            .expect("test backend accepts page-manager capacity");
         self.page_manager = Some(page_manager);
         self
     }
@@ -433,7 +828,18 @@ where
                 "a physical KV backend requires a bounded non-zero page capacity".into(),
             ));
         }
+        self.ensure_no_suspended_execution("install a page manager")?;
         self.executor.configure_kv_page_capacity(max_pages)?;
+        self.load_registry
+            .resources_mut()
+            .reconfigure_limit(
+                ResourceKind::KvPage,
+                u64::try_from(max_pages).map_err(|_| {
+                    Error::Execution("KV page capacity exceeds runtime resource range".into())
+                })?,
+                0,
+            )
+            .map_err(|error| Error::Execution(error.to_string()))?;
         self.page_manager = Some(page_manager);
         Ok(self)
     }
@@ -469,15 +875,447 @@ where
             .any(|active| active == transaction)
     }
 
-    fn enqueue_transaction(&mut self, transaction: ExecutionTransactionId) {
-        if !self.ready_transactions.contains(&transaction) {
-            self.ready_transactions.push_back(transaction);
+    fn runtime_now_ns(&self) -> u64 {
+        self.runtime_clock
+            .elapsed()
+            .as_nanos()
+            .min(u128::from(u64::MAX)) as u64
+    }
+
+    fn transaction_is_cancelling(&self, transaction: ExecutionTransactionId) -> bool {
+        self.resident_transactions
+            .get(&transaction)
+            .is_some_and(|pending| pending.cancelling.is_some())
+            || self.speculative_transactions.get(&transaction).is_some_and(
+                |pending| match pending {
+                    PendingSpeculativeDriverCohort::Proposing(pending) => {
+                        pending.cancellation_request.is_some()
+                            || pending.cancellation_error.is_some()
+                    }
+                    PendingSpeculativeDriverCohort::Verifying(pending) => {
+                        pending.cancellation_request.is_some()
+                    }
+                },
+            )
+    }
+
+    fn transaction_resource_class(
+        &self,
+        transaction: ExecutionTransactionId,
+    ) -> crate::scheduling::ResourceClass {
+        if let Some(pending) = self.resident_transactions.get(&transaction) {
+            return match &pending.action {
+                SchedulerAction::PrefillChunk(_) => crate::scheduling::ResourceClass::Prefill,
+                SchedulerAction::DecodeBatch(_) => crate::scheduling::ResourceClass::Decode,
+                SchedulerAction::Execute { prefills, decodes } => {
+                    if !decodes.is_empty() {
+                        crate::scheduling::ResourceClass::Decode
+                    } else if !prefills.is_empty() {
+                        crate::scheduling::ResourceClass::Prefill
+                    } else {
+                        crate::scheduling::ResourceClass::Decode
+                    }
+                }
+                SchedulerAction::Finish { .. } | SchedulerAction::Cancel { .. } => {
+                    crate::scheduling::ResourceClass::Decode
+                }
+            };
         }
+        if self.speculative_transactions.contains_key(&transaction) {
+            crate::scheduling::ResourceClass::Verification
+        } else {
+            crate::scheduling::ResourceClass::Decode
+        }
+    }
+
+    fn enqueue_transaction(&mut self, transaction: ExecutionTransactionId) {
+        if self.queued_transactions.insert(transaction) {
+            let class = self.transaction_resource_class(transaction);
+            self.ready_transactions
+                .push(transaction, class, 1, self.runtime_tick)
+                .expect("unit ready transaction fits the configured fairness queue");
+        }
+    }
+
+    fn pop_ready_transaction(&mut self) -> Option<ExecutionTransactionId> {
+        let transaction = self
+            .ready_transactions
+            .pop_next(self.runtime_tick, |_| true)?;
+        self.queued_transactions.remove(&transaction);
+        Some(transaction)
     }
 
     fn remove_transaction_from_queue(&mut self, transaction: ExecutionTransactionId) {
         self.ready_transactions
             .retain(|queued| *queued != transaction);
+        self.queued_transactions.remove(&transaction);
+    }
+
+    fn ready_continuation_for(
+        &self,
+        transaction: ExecutionTransactionId,
+    ) -> Option<ContinuationId> {
+        self.transaction_continuations
+            .get(&transaction)
+            .into_iter()
+            .flatten()
+            .filter(|continuation| self.ready_continuations.contains(continuation))
+            .copied()
+            .min_by_key(|continuation| continuation.get())
+    }
+
+    fn register_pending_progress(
+        &mut self,
+        progress: &PendingModelProgress,
+        class: crate::scheduling::ResourceClass,
+    ) -> Result<()> {
+        progress.dependencies().validate()?;
+        let continuation = progress.continuation();
+        let transaction = progress.transaction();
+        if self.continuations.contains_key(&continuation) {
+            return Err(Error::Execution(format!(
+                "model continuation {} is already registered",
+                continuation.get()
+            )));
+        }
+        let epoch = DependencySetEpoch::new(self.next_dependency_epoch);
+        self.next_dependency_epoch = self
+            .next_dependency_epoch
+            .checked_add(1)
+            .ok_or_else(|| Error::Execution("dependency-set epoch space is exhausted".into()))?;
+        let waiter = WaiterId::new(transaction, RequestGeneration::new(1), epoch, continuation)?;
+        let keys = progress
+            .dependencies()
+            .iter()
+            .filter_map(|dependency| dependency.load_key())
+            .collect::<Vec<_>>();
+        if let Some(key) = keys
+            .iter()
+            .find(|key| !self.materialization.is_resolved(**key))
+        {
+            return Err(Error::Execution(format!(
+                "continuation {} contains expert key {key:?} that was not fixed by physical resolve/reserve",
+                continuation.get()
+            )));
+        }
+        let requests = keys
+            .iter()
+            .map(|key| self.load_registry.load_request(*key, class))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|error| Error::Execution(error.to_string()))?;
+        self.load_registry
+            .attach_waiter(waiter, requests, self.runtime_now_ns())
+            .map_err(|error| Error::Execution(error.to_string()))?;
+
+        if !keys.is_empty() {
+            let adapter = self
+                .executor
+                .runner_mut()
+                .expert_materialization_adapter()?;
+            for key in &keys {
+                if let Err(error) = adapter.submit(*key) {
+                    let _ = self.load_registry.detach_continuation(
+                        continuation,
+                        CancellationReason::Superseded,
+                        self.runtime_now_ns(),
+                    );
+                    return Err(error);
+                }
+            }
+        }
+        self.continuations.insert(
+            continuation,
+            RegisteredModelContinuation {
+                transaction,
+                dependencies: progress.dependencies().clone(),
+            },
+        );
+        self.transaction_continuations
+            .entry(transaction)
+            .or_default()
+            .insert(continuation);
+        if !keys.is_empty() {
+            // The completion listener is armed before model execution. Newly
+            // attached registry work is owner-local and has no provider event yet,
+            // so explicitly schedule the next owner step that submits it.
+            self.completion_hub.notify();
+        }
+        Ok(())
+    }
+
+    fn sync_materialization_adapter(&mut self) -> Result<()> {
+        for key in self.materialization.keys() {
+            if let Some(binding) = self.load_registry.residency_binding(key) {
+                self.materialization.record_resident(key, binding)?;
+            } else if let Some(operation) = self.load_registry.operation_for_key(key)
+                && let Some(operation) = self.load_registry.operation(operation)
+            {
+                self.materialization.record_stage(key, operation.stage())?;
+            }
+        }
+        for evicted in self.materialization.take_evicted() {
+            self.load_registry
+                .evict(evicted)
+                .map_err(|error| Error::Execution(error.to_string()))?;
+            self.materialization.forget(evicted);
+        }
+        Ok(())
+    }
+
+    fn snapshot_transaction_outputs(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        externally_committed_tokens: usize,
+    ) -> Result<()> {
+        let token_count = u64::try_from(externally_committed_tokens)
+            .map_err(|_| Error::Execution("externally committed token count exceeds u64".into()))?;
+        let next = self
+            .next_output_token_id
+            .checked_add(token_count)
+            .ok_or_else(|| Error::Execution("output token identity space is exhausted".into()))?;
+        let captured_at_ns = self.runtime_now_ns();
+        for token in self.next_output_token_id..next {
+            self.load_registry
+                .snapshot_transaction_output(
+                    transaction,
+                    OutputTokenId::new(token),
+                    externally_committed_tokens,
+                    captured_at_ns,
+                )
+                .map_err(|error| Error::Execution(error.to_string()))?;
+        }
+        self.next_output_token_id = next;
+        Ok(())
+    }
+
+    fn update_hard_resource_observability(&mut self) {
+        self.observability.stats.hard_resource_high_water = self
+            .load_registry
+            .resources()
+            .snapshots()
+            .map(|snapshot| (snapshot.kind, snapshot.high_water))
+            .collect();
+    }
+
+    fn progress_materialization(&mut self) -> Result<()> {
+        const TRANSITION_BUDGET: usize = 256;
+
+        let now_ns = self.runtime_now_ns();
+        let progressed = self
+            .load_registry
+            .drive(now_ns, TRANSITION_BUDGET)
+            .map_err(|error| Error::Execution(error.to_string()))?;
+        // The inference owner arms its listener before entering this method. If
+        // owner-side work consumes the whole slice, publish a local wake so a
+        // runnable transition left at the budget boundary cannot wait forever
+        // for a provider completion that may never be needed.
+        if progressed == TRANSITION_BUDGET {
+            self.completion_hub.notify();
+        }
+        if std::env::var_os("FERRULE_IO_TRACE").is_some() {
+            let stages = self.load_registry.stage_counts().collect::<Vec<_>>();
+            let resources = self
+                .load_registry
+                .resources()
+                .snapshots()
+                .filter(|snapshot| {
+                    matches!(
+                        snapshot.kind,
+                        ResourceKind::Sqe
+                            | ResourceKind::PinnedSlab
+                            | ResourceKind::ReadBytes
+                            | ResourceKind::UploadSlot
+                            | ResourceKind::UploadBytes
+                            | ResourceKind::ExpertFrame
+                            | ResourceKind::Lease
+                            | ResourceKind::LoadOperation
+                    )
+                })
+                .map(|snapshot| (snapshot.kind, snapshot.in_use, snapshot.capacity))
+                .collect::<Vec<_>>();
+            eprintln!(
+                "[ferrule-io] tick={} progressed={} active={} physical={} runnable={} completions={} resident={} stages={stages:?} resources={resources:?}",
+                self.runtime_tick,
+                progressed,
+                self.load_registry.active_operations(),
+                self.load_registry.pending_physical_operations(),
+                self.load_registry.runnable_actions(),
+                self.load_registry.pending_completions(),
+                self.load_registry.resident_entries(),
+            );
+        }
+        self.sync_materialization_adapter()?;
+        let pending_keys = self
+            .continuations
+            .values()
+            .flat_map(|registered| {
+                registered
+                    .dependencies
+                    .iter()
+                    .filter_map(|dependency| dependency.load_key())
+            })
+            .collect::<HashSet<_>>();
+        if !pending_keys.is_empty() {
+            let adapter = self
+                .executor
+                .runner_mut()
+                .expert_materialization_adapter()?;
+            for key in pending_keys {
+                let _ = adapter.progress(key)?;
+            }
+        }
+
+        if let Some(failed) = self.load_registry.pop_failed() {
+            let transaction = self
+                .continuations
+                .get(&failed.continuation)
+                .map(|registered| registered.transaction);
+            self.unregister_continuation(failed.continuation);
+            return Err(Error::Execution(format!(
+                "materialization for continuation {} failed ({:?}); transaction={transaction:?}",
+                failed.continuation.get(),
+                failed.failure
+            )));
+        }
+        let mut newly_ready = Vec::new();
+        while let Some(continuation) = self
+            .load_registry
+            .pop_ready(now_ns)
+            .map_err(|error| Error::Execution(error.to_string()))?
+        {
+            let transaction = self
+                .continuations
+                .get(&continuation)
+                .ok_or_else(|| {
+                    Error::Internal(format!(
+                        "ready continuation {} has no transaction registration",
+                        continuation.get()
+                    ))
+                })?
+                .transaction;
+            self.ready_continuations.insert(continuation);
+            newly_ready.push((continuation, transaction));
+        }
+        newly_ready.sort_unstable_by_key(|(continuation, transaction)| {
+            (
+                self.transaction_is_cancelling(*transaction),
+                transaction.get(),
+                continuation.get(),
+            )
+        });
+        for (_, transaction) in newly_ready {
+            self.enqueue_transaction(transaction);
+        }
+        Ok(())
+    }
+
+    fn prepare_resume_lease(
+        &mut self,
+        continuation: ContinuationId,
+    ) -> Result<crate::io::ResumeLease> {
+        let dependencies = self
+            .continuations
+            .get(&continuation)
+            .ok_or_else(|| {
+                Error::Execution(format!(
+                    "continuation {} is not registered for resume",
+                    continuation.get()
+                ))
+            })?
+            .dependencies
+            .clone();
+        let keys = dependencies
+            .iter()
+            .filter_map(|dependency| dependency.load_key())
+            .collect::<Vec<_>>();
+        if !keys.is_empty() {
+            let adapter = self
+                .executor
+                .runner_mut()
+                .expert_materialization_adapter()?;
+            for key in &keys {
+                let published = adapter.publish(*key)?;
+                let authoritative =
+                    self.load_registry.residency_binding(*key).ok_or_else(|| {
+                        Error::Execution(format!(
+                            "adapter published key {key:?} without registry residency"
+                        ))
+                    })?;
+                if published.binding() != authoritative || published.key() != *key {
+                    return Err(Error::Execution(format!(
+                        "adapter published a stale or mismatched lease for key {key:?}"
+                    )));
+                }
+            }
+        }
+        self.load_registry
+            .prepare_resume(continuation, &dependencies)
+            .map_err(|error| Error::Execution(error.to_string()))
+    }
+
+    fn finish_resume_lease(
+        &mut self,
+        continuation: ContinuationId,
+        lease: crate::io::ResumeLease,
+        started_ns: u64,
+    ) -> Result<()> {
+        let keys = self
+            .continuations
+            .get(&continuation)
+            .map(|registered| {
+                registered
+                    .dependencies
+                    .iter()
+                    .filter_map(|dependency| dependency.load_key())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !keys.is_empty() {
+            let adapter = self
+                .executor
+                .runner_mut()
+                .expert_materialization_adapter()?;
+            for key in keys {
+                adapter.detach(continuation, key)?;
+            }
+        }
+        self.load_registry
+            .finish_resume(continuation, lease, started_ns, self.runtime_now_ns())
+            .map_err(|error| Error::Execution(error.to_string()))?;
+        self.unregister_continuation(continuation);
+        Ok(())
+    }
+
+    fn detach_registered_continuation(
+        &mut self,
+        continuation: ContinuationId,
+        reason: CancellationReason,
+    ) -> Result<()> {
+        if !self.continuations.contains_key(&continuation) {
+            return Ok(());
+        }
+        self.load_registry
+            .detach_continuation(continuation, reason, self.runtime_now_ns())
+            .map_err(|error| Error::Execution(error.to_string()))?;
+        self.unregister_continuation(continuation);
+        Ok(())
+    }
+
+    fn unregister_continuation(&mut self, continuation: ContinuationId) {
+        self.ready_continuations.remove(&continuation);
+        let Some(registered) = self.continuations.remove(&continuation) else {
+            return;
+        };
+        if let Some(continuations) = self
+            .transaction_continuations
+            .get_mut(&registered.transaction)
+        {
+            continuations.remove(&continuation);
+            if continuations.is_empty() {
+                self.transaction_continuations
+                    .remove(&registered.transaction);
+            }
+        }
     }
 
     /// Suspend one active session and move its exclusively owned physical pages
@@ -720,7 +1558,12 @@ where
         Ok(())
     }
 
-    pub fn submit(&mut self, request: GenerateRequest) {
+    pub fn try_submit(&mut self, request: GenerateRequest) -> Result<()> {
+        if self.shutting_down {
+            return Err(Error::Execution(
+                "resident driver admission is closed during shutdown".into(),
+            ));
+        }
         let retained_position = request
             .session_id
             .and_then(|session_id| self.retained_sessions.get(&session_id).copied());
@@ -729,13 +1572,36 @@ where
         } else {
             self.scheduler.submit(request);
         }
+        Ok(())
+    }
+
+    pub fn submit(&mut self, request: GenerateRequest) {
+        if let Err(error) = self.try_submit(request) {
+            tracing::warn!(error = %error, "resident request rejected");
+        }
     }
 
     /// Submit a request at a specific position. This is used for testing and
     /// for single-runner backends where the caller knows the runner's current
     /// position.
-    pub fn submit_at_position(&mut self, request: GenerateRequest, position_start: usize) {
+    pub fn try_submit_at_position(
+        &mut self,
+        request: GenerateRequest,
+        position_start: usize,
+    ) -> Result<()> {
+        if self.shutting_down {
+            return Err(Error::Execution(
+                "resident driver admission is closed during shutdown".into(),
+            ));
+        }
         self.scheduler.submit_at_position(request, position_start);
+        Ok(())
+    }
+
+    pub fn submit_at_position(&mut self, request: GenerateRequest, position_start: usize) {
+        if let Err(error) = self.try_submit_at_position(request, position_start) {
+            tracing::warn!(error = %error, "resident positioned request rejected");
+        }
     }
 
     /// Cancel a waiting or active request without disturbing unrelated transactions.
@@ -794,6 +1660,22 @@ where
             })
     }
 
+    fn request_for_transaction(&self, transaction: ExecutionTransactionId) -> Option<RequestId> {
+        self.resident_transactions
+            .get(&transaction)
+            .and_then(|pending| action_request_id(&pending.action))
+            .or_else(|| {
+                self.speculative_transactions
+                    .get(&transaction)
+                    .and_then(|pending| {
+                        pending
+                            .actions()
+                            .iter()
+                            .find_map(|action| action.request_id)
+                    })
+            })
+    }
+
     fn cancel_transaction(
         &mut self,
         transaction: ExecutionTransactionId,
@@ -831,6 +1713,10 @@ where
     ) -> Result<()> {
         let transaction = pending.transaction;
         pending.cancelling = Some(request_id);
+        let owned_continuation = pending
+            .pending_progress
+            .as_ref()
+            .map(PendingModelProgress::continuation);
         let cancellation = match pending.pending_progress.as_ref() {
             Some(progress) => self.executor.cancel_resumable_batch(
                 transaction,
@@ -846,7 +1732,6 @@ where
             if let Some(progress) = self.executor.pending_model_progress(transaction).cloned() {
                 pending.pending_progress = Some(progress);
                 self.resident_transactions.insert(transaction, pending);
-                self.enqueue_transaction(transaction);
                 return Err(error);
             }
             if self.executor_has_transaction(transaction) {
@@ -855,6 +1740,12 @@ where
                 self.enqueue_transaction(transaction);
                 return Err(error);
             }
+            if let Some(continuation) = owned_continuation {
+                self.detach_registered_continuation(
+                    continuation,
+                    CancellationReason::ExternalRequest,
+                )?;
+            }
             let cleanup = self.finish_resident_rollback(pending);
             return match cleanup {
                 Ok(()) => Err(error),
@@ -862,6 +1753,9 @@ where
                     "transaction {transaction:?} cancellation failed ({error}); cleanup also failed ({cleanup})"
                 ))),
             };
+        }
+        if let Some(continuation) = owned_continuation {
+            self.detach_registered_continuation(continuation, CancellationReason::ExternalRequest)?;
         }
         self.finish_resident_rollback(pending)
     }
@@ -901,9 +1795,17 @@ where
                 });
             match cancellation {
                 Ok(BatchContinuationCancelOutcome::Cancelled) => {
+                    self.detach_registered_continuation(
+                        continuation,
+                        CancellationReason::ExternalRequest,
+                    )?;
                     pending.slots[slot_index].status = NativeProposalSlotStatus::NotStarted;
                 }
                 Ok(BatchContinuationCancelOutcome::Quiesced(error)) => {
+                    self.detach_registered_continuation(
+                        continuation,
+                        CancellationReason::ExternalRequest,
+                    )?;
                     pending.slots[slot_index].status = NativeProposalSlotStatus::NotStarted;
                     let error = error.to_string();
                     pending.cancellation_error = Some(match pending.cancellation_error.take() {
@@ -984,18 +1886,32 @@ where
                 ));
             }
         };
+        let continuation = verification.pending_progress().continuation();
+        let mut retirements = Vec::new();
         let cancellation = cancel_resumable_speculative_verification_cohort(
             &mut self.executor,
             page_manager,
             verification,
+            &mut retirements,
         );
+        let retirement = self.progress_speculative_retirements(retirements);
         match cancellation {
             Ok(()) => {
+                retirement?;
+                self.detach_registered_continuation(
+                    continuation,
+                    CancellationReason::ExternalRequest,
+                )?;
                 self.restore_transaction_sessions(schedules, source_states)?;
                 self.scheduler.requeue_decode_actions_front(&actions)
             }
             Err(error) => {
-                let (error, verification) = error.into_parts();
+                let (mut error, verification) = error.into_parts();
+                if let Err(retirement) = retirement {
+                    error = Error::Internal(format!(
+                        "speculative cancellation failed ({error}); KV retirement also failed ({retirement})"
+                    ));
+                }
                 if let Some(verification) = verification {
                     self.speculative_transactions.insert(
                         transaction,
@@ -1015,6 +1931,10 @@ where
                     self.enqueue_transaction(transaction);
                     Err(error)
                 } else {
+                    self.detach_registered_continuation(
+                        continuation,
+                        CancellationReason::ExternalRequest,
+                    )?;
                     self.restore_transaction_sessions(schedules, source_states)?;
                     match self.scheduler.requeue_decode_actions_front(&actions) {
                         Ok(()) => Err(error),
@@ -1239,8 +2159,8 @@ where
     /// Admit waiting sequences from the scheduler, creating a forked sequence
     /// state for each newly admitted session.
     fn admit_new_sequences(&mut self) -> Result<()> {
-        // Don't admit new sequences if the executor is poisoned.
-        if self.executor.is_poisoned() {
+        // Don't admit new sequences if the executor is poisoned or admission is closed.
+        if self.executor.is_poisoned() || self.shutting_down {
             return Ok(());
         }
         let old_active = self.scheduler.active_len();
@@ -1412,8 +2332,32 @@ where
                 PendingKvRetirement::LogicalConfirmation(retirement),
             ));
         };
+        let retired_pages = retirement.pages().to_vec();
+        if let Some(untracked) = retired_pages
+            .iter()
+            .find(|page| !self.kv_page_grants.contains_key(page))
+        {
+            return Err((
+                Error::Internal(format!(
+                    "retiring KV page {} has no exact hard-credit grant",
+                    untracked.0
+                )),
+                PendingKvRetirement::LogicalConfirmation(retirement),
+            ));
+        }
         match manager.confirm_page_retirement(retirement) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                for page in retired_pages {
+                    let mut grant = self
+                        .kv_page_grants
+                        .remove(&page)
+                        .expect("retirement hard-credit ownership was preflighted");
+                    self.load_registry
+                        .release_hard_resources(&mut grant)
+                        .expect("KV page hard grant matches its registry broker");
+                }
+                Ok(())
+            }
             Err(error) => {
                 let (error, retirement) = error.into_parts();
                 Err((error, PendingKvRetirement::LogicalConfirmation(retirement)))
@@ -1421,12 +2365,70 @@ where
         }
     }
 
-    fn reserve_batch_pages(&mut self, batch: &ScheduledBatch) -> Result<Vec<KvReservation>> {
-        let Some(manager) = &mut self.page_manager else {
+    fn release_unbound_kv_page_grants(&mut self, grants: Vec<HardResourceGrant>) {
+        for mut grant in grants {
+            self.load_registry
+                .release_hard_resources(&mut grant)
+                .expect("unbound KV page hard grant matches its registry broker");
+        }
+    }
+
+    fn track_kv_page_grants(
+        &mut self,
+        physical_pages: Vec<KvPageId>,
+        grants: Vec<HardResourceGrant>,
+    ) -> Result<()> {
+        if physical_pages.len() != grants.len() {
+            let page_count = physical_pages.len();
+            let grant_count = grants.len();
+            self.release_unbound_kv_page_grants(grants);
+            return Err(Error::Internal(format!(
+                "cannot track {grant_count} KV page hard grants for {page_count} physical pages"
+            )));
+        }
+        let mut unique = HashSet::with_capacity(physical_pages.len());
+        if let Some(duplicate) = physical_pages
+            .iter()
+            .copied()
+            .find(|page| !unique.insert(*page) || self.kv_page_grants.contains_key(page))
+        {
+            self.release_unbound_kv_page_grants(grants);
+            return Err(Error::Internal(format!(
+                "KV page {} acquired hard credit more than once",
+                duplicate.0
+            )));
+        }
+        for (page, grant) in physical_pages.into_iter().zip(grants) {
+            let previous = self.kv_page_grants.insert(page, grant);
+            debug_assert!(previous.is_none(), "KV grant preflight rejected duplicates");
+        }
+        Ok(())
+    }
+
+    fn reserve_batch_pages(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        class: crate::scheduling::ResourceClass,
+        batch: &ScheduledBatch,
+        execution_generations: &[u64],
+    ) -> Result<Vec<KvReservation>> {
+        if self.page_manager.is_none() {
             return Ok(Vec::new());
-        };
+        }
+        if execution_generations.len() != batch.sequences.len() {
+            return Err(Error::Internal(format!(
+                "KV execution generation count {} does not match scheduled sequence count {}",
+                execution_generations.len(),
+                batch.sequences.len()
+            )));
+        }
         let mut reservations = Vec::with_capacity(batch.sequences.len());
-        for (scheduled, execution) in batch.sequences.iter().zip(batch.execution().sequences()) {
+        for ((scheduled, execution), execution_generation) in batch
+            .sequences
+            .iter()
+            .zip(batch.execution().sequences())
+            .zip(execution_generations)
+        {
             let slot = *self.page_slots.get(&scheduled.session_id).ok_or_else(|| {
                 Error::Internal(format!(
                     "no page slot for active session {:?}",
@@ -1435,17 +2437,57 @@ where
             })?;
             let token_count = usize::try_from(execution.query.end - execution.query.start)
                 .map_err(|_| Error::Execution("query length exceeds usize".into()))?;
-            match manager.reserve(slot, 0, token_count) {
-                Ok(reservation) => reservations.push(reservation),
+            let page_generation = self
+                .page_manager
+                .as_ref()
+                .expect("page manager presence checked above")
+                .sequence_generation(slot)?;
+            let required = self
+                .page_manager
+                .as_ref()
+                .expect("page manager presence checked above")
+                .required_physical_pages(slot, page_generation, token_count)?;
+            let mut grants = Vec::with_capacity(required);
+            for _ in 0..required {
+                match self.load_registry.acquire_hard_resources(
+                    transaction.get(),
+                    class,
+                    [HardResourceClaim::new(ResourceKind::KvPage, 1)],
+                ) {
+                    Ok(grant) => grants.push(grant),
+                    Err(error) => {
+                        for mut grant in grants {
+                            self.load_registry
+                                .release_hard_resources(&mut grant)
+                                .expect("unsubmitted KV page grant is releasable");
+                        }
+                        let cleanup = self
+                            .abort_quiesced_resident_kv(PendingResidentKv::Reserved(reservations));
+                        return match cleanup {
+                            Ok(()) => Err(Error::Execution(error.to_string())),
+                            Err(cleanup) => Err(Error::Internal(format!(
+                                "KV hard admission failed ({error}); reservation cleanup also failed ({cleanup})"
+                            ))),
+                        };
+                    }
+                }
+            }
+
+            let mut reservation = match self
+                .page_manager
+                .as_mut()
+                .expect("page manager presence checked above")
+                .reserve(slot, page_generation, token_count)
+            {
+                Ok(reservation) => reservation,
                 Err(error) => {
-                    let cleanup = manager
-                        .abort_reservations(reservations)
-                        .map_err(|abort| abort.into_parts().0)
-                        .and_then(|retirement| {
-                            manager
-                                .confirm_page_retirement(retirement)
-                                .map_err(|confirm| confirm.into_parts().0)
-                        });
+                    for mut grant in grants {
+                        self.load_registry
+                            .release_hard_resources(&mut grant)
+                            .expect("unsubmitted KV page grant is releasable");
+                    }
+                    let cleanup =
+                        self.abort_quiesced_resident_kv(PendingResidentKv::Reserved(reservations));
                     return match cleanup {
                         Ok(()) => Err(error),
                         Err(cleanup) => Err(Error::Internal(format!(
@@ -1453,9 +2495,163 @@ where
                         ))),
                     };
                 }
+            };
+            if let Err(error) = self
+                .page_manager
+                .as_mut()
+                .expect("page manager presence checked above")
+                .bind_reservation_execution(
+                    &mut reservation,
+                    execution.state_slot,
+                    *execution_generation,
+                )
+            {
+                for mut grant in grants {
+                    self.load_registry
+                        .release_hard_resources(&mut grant)
+                        .expect("unsubmitted KV page grant is releasable");
+                }
+                let mut cleanup_reservations = reservations;
+                cleanup_reservations.push(reservation);
+                let cleanup = self
+                    .abort_quiesced_resident_kv(PendingResidentKv::Reserved(cleanup_reservations));
+                return match cleanup {
+                    Ok(()) => Err(error),
+                    Err(cleanup) => Err(Error::Internal(format!(
+                        "KV execution-generation binding failed ({error}); reservation cleanup also failed ({cleanup})"
+                    ))),
+                };
             }
+            let mut physical_pages = reservation.view().newly_allocated.clone();
+            if let Some(cow) = reservation.view().cow_replacement {
+                physical_pages.push(cow.replacement);
+            }
+            if physical_pages.len() != grants.len() {
+                for mut grant in grants {
+                    self.load_registry
+                        .release_hard_resources(&mut grant)
+                        .expect("unsubmitted KV page grant is releasable");
+                }
+                let mut cleanup_reservations = reservations;
+                cleanup_reservations.push(reservation);
+                self.abort_quiesced_resident_kv(PendingResidentKv::Reserved(cleanup_reservations))?;
+                return Err(Error::Internal(format!(
+                    "KV page manager reserved {} physical pages after exact hard admission for {}",
+                    physical_pages.len(),
+                    required
+                )));
+            }
+            if let Err(error) = self.track_kv_page_grants(physical_pages, grants) {
+                let mut cleanup_reservations = reservations;
+                cleanup_reservations.push(reservation);
+                let cleanup = self
+                    .abort_quiesced_resident_kv(PendingResidentKv::Reserved(cleanup_reservations));
+                return match cleanup {
+                    Ok(()) => Err(error),
+                    Err(cleanup) => Err(Error::Internal(format!(
+                        "KV hard-credit tracking failed ({error}); reservation cleanup also failed ({cleanup})"
+                    ))),
+                };
+            }
+            reservations.push(reservation);
         }
         Ok(reservations)
+    }
+
+    fn reserve_speculative_pages(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        items: &[SpeculativeVerificationItem<'_>],
+    ) -> Result<Vec<KvReservation>> {
+        let mut reservations = Vec::with_capacity(items.len());
+        for item in items {
+            let token_count = item.proposal.len().checked_add(1).ok_or_else(|| {
+                Error::Execution("speculative verification row count overflow".into())
+            })?;
+            let required = self
+                .page_manager
+                .as_ref()
+                .ok_or_else(|| {
+                    Error::Execution(
+                        "speculative KV reservation requires an authoritative page manager".into(),
+                    )
+                })?
+                .required_physical_pages(item.state_slot, item.generation, token_count)?;
+            let mut grants = Vec::with_capacity(required);
+            for _ in 0..required {
+                match self.load_registry.acquire_hard_resources(
+                    transaction.get(),
+                    crate::scheduling::ResourceClass::Verification,
+                    [HardResourceClaim::new(ResourceKind::KvPage, 1)],
+                ) {
+                    Ok(grant) => grants.push(grant),
+                    Err(error) => {
+                        for mut grant in grants {
+                            self.load_registry
+                                .release_hard_resources(&mut grant)
+                                .expect("unsubmitted speculative KV page grant is releasable");
+                        }
+                        self.abort_quiesced_resident_kv(PendingResidentKv::Reserved(reservations))?;
+                        return Err(Error::Execution(error.to_string()));
+                    }
+                }
+            }
+
+            let reservation = match self
+                .page_manager
+                .as_mut()
+                .expect("page manager presence checked above")
+                .reserve(item.state_slot, item.generation, token_count)
+            {
+                Ok(reservation) => reservation,
+                Err(error) => {
+                    for mut grant in grants {
+                        self.load_registry
+                            .release_hard_resources(&mut grant)
+                            .expect("unsubmitted speculative KV page grant is releasable");
+                    }
+                    self.abort_quiesced_resident_kv(PendingResidentKv::Reserved(reservations))?;
+                    return Err(error);
+                }
+            };
+            let mut physical_pages = reservation.view().newly_allocated.clone();
+            if let Some(cow) = reservation.view().cow_replacement {
+                physical_pages.push(cow.replacement);
+            }
+            if physical_pages.len() != grants.len() {
+                for mut grant in grants {
+                    self.load_registry
+                        .release_hard_resources(&mut grant)
+                        .expect("unsubmitted speculative KV page grant is releasable");
+                }
+                reservations.push(reservation);
+                self.abort_quiesced_resident_kv(PendingResidentKv::Reserved(reservations))?;
+                return Err(Error::Internal(format!(
+                    "speculative KV manager reserved {} physical pages after exact hard admission for {required}",
+                    physical_pages.len()
+                )));
+            }
+            if let Err(error) = self.track_kv_page_grants(physical_pages, grants) {
+                reservations.push(reservation);
+                let cleanup =
+                    self.abort_quiesced_resident_kv(PendingResidentKv::Reserved(reservations));
+                return match cleanup {
+                    Ok(()) => Err(error),
+                    Err(cleanup) => Err(Error::Internal(format!(
+                        "speculative KV hard-credit tracking failed ({error}); reservation cleanup also failed ({cleanup})"
+                    ))),
+                };
+            }
+            reservations.push(reservation);
+        }
+        Ok(reservations)
+    }
+
+    fn progress_speculative_retirements(&mut self, retirements: Vec<KvRetirement>) -> Result<()> {
+        for retirement in retirements {
+            self.release_and_confirm_retirement(retirement)?;
+        }
+        Ok(())
     }
 
     fn bind_reserved_pages(
@@ -1560,7 +2756,27 @@ where
             .claim_transaction_sessions(transaction, &session_ids)
             .map_err(|error| self.abort_action(&action, error, false, "session claim"))?;
 
-        let mut page_reservations = match self.reserve_batch_pages(&scheduled) {
+        let resource_class = match &action {
+            SchedulerAction::PrefillChunk(_) => crate::scheduling::ResourceClass::Prefill,
+            SchedulerAction::DecodeBatch(_) => crate::scheduling::ResourceClass::Decode,
+            SchedulerAction::Execute { decodes, .. } if !decodes.is_empty() => {
+                crate::scheduling::ResourceClass::Decode
+            }
+            SchedulerAction::Execute { .. } => crate::scheduling::ResourceClass::Prefill,
+            SchedulerAction::Finish { .. } | SchedulerAction::Cancel { .. } => {
+                crate::scheduling::ResourceClass::Decode
+            }
+        };
+        let execution_generations = states
+            .iter()
+            .map(|state| self.executor.runner().sequence_generation(state))
+            .collect::<Vec<_>>();
+        let mut page_reservations = match self.reserve_batch_pages(
+            transaction,
+            resource_class,
+            &scheduled,
+            &execution_generations,
+        ) {
             Ok(reservations) => reservations,
             Err(error) => {
                 self.restore_transaction_sessions(schedules, states)?;
@@ -1623,18 +2839,34 @@ where
                 self.finish_resident_transaction(pending, output, on_token)
             }
             Ok(NativeBatchExecutionProgress::Waiting(progress)) => {
+                let class = match &pending.action {
+                    SchedulerAction::PrefillChunk(_) => crate::scheduling::ResourceClass::Prefill,
+                    SchedulerAction::DecodeBatch(_) => crate::scheduling::ResourceClass::Decode,
+                    SchedulerAction::Execute { decodes, .. } if !decodes.is_empty() => {
+                        crate::scheduling::ResourceClass::Decode
+                    }
+                    SchedulerAction::Execute { .. } => crate::scheduling::ResourceClass::Prefill,
+                    SchedulerAction::Finish { .. } | SchedulerAction::Cancel { .. } => {
+                        crate::scheduling::ResourceClass::Decode
+                    }
+                };
+                self.register_pending_progress(&progress, class)?;
                 pending.pending_progress = Some(progress);
                 self.resident_transactions.insert(transaction, pending);
-                self.enqueue_transaction(transaction);
                 Ok(ResidentDriverStep::WaitingForModelProgress(
                     self.pending_model_progresses(),
                 ))
             }
             Err(error) => {
                 if let Some(progress) = self.executor.pending_model_progress(transaction).cloned() {
+                    if !self.continuations.contains_key(&progress.continuation()) {
+                        self.register_pending_progress(
+                            &progress,
+                            crate::scheduling::ResourceClass::Decode,
+                        )?;
+                    }
                     pending.pending_progress = Some(progress);
                     self.resident_transactions.insert(transaction, pending);
-                    self.enqueue_transaction(transaction);
                     return Err(error);
                 }
                 if self.executor_has_transaction(transaction) {
@@ -1657,6 +2889,7 @@ where
     fn resume_resident_transaction<F>(
         &mut self,
         transaction: ExecutionTransactionId,
+        ready_continuation: ContinuationId,
         on_token: &mut F,
     ) -> Result<Option<ResidentDriverStep>>
     where
@@ -1683,8 +2916,21 @@ where
                 Err(error) => Err(error),
             };
         }
-        let continuation = match pending.pending_progress.as_ref() {
-            Some(progress) => progress.continuation(),
+        let owned_continuation = pending
+            .pending_progress
+            .as_ref()
+            .map(PendingModelProgress::continuation);
+        let continuation = match owned_continuation {
+            Some(continuation) if continuation == ready_continuation => continuation,
+            Some(continuation) => {
+                let error = Error::Execution(format!(
+                    "resident transaction {transaction:?} owns continuation {}, not ready continuation {}",
+                    continuation.get(),
+                    ready_continuation.get()
+                ));
+                self.resident_transactions.insert(transaction, pending);
+                return Err(error);
+            }
             None => {
                 self.resident_transactions.insert(transaction, pending);
                 return Err(Error::Execution(format!(
@@ -1692,28 +2938,38 @@ where
                 )));
             }
         };
-        match self.executor.resume_resumable_batch(
+        let mut resume_lease = self.prepare_resume_lease(continuation)?;
+        let leases = resume_lease
+            .take()
+            .map_err(|error| Error::Execution(error.to_string()))?;
+        let resume_started = self.runtime_now_ns();
+        let progress = self.executor.resume_resumable_batch(
             transaction,
             &mut pending.states,
             pending.scheduled.execution(),
             continuation,
-        ) {
+            leases,
+        );
+        self.finish_resume_lease(continuation, resume_lease, resume_started)?;
+        match progress {
             Ok(NativeBatchExecutionProgress::Complete(output)) => {
                 pending.pending_progress = None;
                 self.finish_resident_transaction(pending, output, on_token)
                     .map(Some)
             }
             Ok(NativeBatchExecutionProgress::Waiting(progress)) => {
+                self.register_pending_progress(
+                    &progress,
+                    crate::scheduling::ResourceClass::Decode,
+                )?;
                 pending.pending_progress = Some(progress);
                 self.resident_transactions.insert(transaction, pending);
-                self.enqueue_transaction(transaction);
                 Ok(None)
             }
             Err(error) => {
                 if let Some(progress) = self.executor.pending_model_progress(transaction).cloned() {
                     pending.pending_progress = Some(progress);
                     self.resident_transactions.insert(transaction, pending);
-                    self.enqueue_transaction(transaction);
                     return Err(error);
                 }
                 if self.executor_has_transaction(transaction) {
@@ -1805,12 +3061,16 @@ where
             pending.kv = PendingResidentKv::Prepared(prepared);
         }
 
+        let commit_started = self.runtime_now_ns();
         if let Err(error) = self
             .executor
             .commit_prepared_batch(transaction, &mut pending.states)
         {
             return Err(self.rollback_and_fail_resident(pending, error, "backend KV commit"));
         }
+        self.load_registry
+            .record_commit(transaction, commit_started, self.runtime_now_ns())
+            .map_err(|error| Error::Execution(error.to_string()))?;
         let retirement =
             match std::mem::replace(&mut pending.kv, PendingResidentKv::Reserved(Vec::new())) {
                 PendingResidentKv::Prepared(prepared) => Some(
@@ -1835,7 +3095,7 @@ where
             return Err(self.abort_action(&pending.action, error, false, "scheduler publish"));
         }
         self.observability.stats.actions += 1;
-        match &pending.action {
+        let externally_committed_tokens = match &pending.action {
             SchedulerAction::Execute { prefills, decodes } => {
                 self.observability.stats.prefill_chunks += prefills.len();
                 self.observability.stats.prefill_tokens += prefills
@@ -1843,18 +3103,26 @@ where
                     .map(|action| action.token_range.len())
                     .sum::<usize>();
                 self.observability.stats.decode_steps += decodes.len();
-                self.enqueue_committed_decode_tokens(decodes)?;
+                self.enqueue_committed_decode_tokens(decodes)?
             }
             SchedulerAction::PrefillChunk(prefill) => {
                 self.observability.stats.prefill_chunks += 1;
                 self.observability.stats.prefill_tokens += prefill.token_range.len();
+                0
             }
             SchedulerAction::DecodeBatch(actions) => {
                 self.observability.stats.decode_steps += actions.len();
-                self.enqueue_committed_decode_tokens(actions)?;
+                self.enqueue_committed_decode_tokens(actions)?
             }
-            SchedulerAction::Finish { .. } | SchedulerAction::Cancel { .. } => {}
+            SchedulerAction::Finish { .. } | SchedulerAction::Cancel { .. } => 0,
+        };
+        let expected_external = action_decode_actions(&pending.action).len();
+        if externally_committed_tokens != expected_external {
+            return Err(Error::Internal(format!(
+                "resident transaction committed {expected_external} external tokens but queued {externally_committed_tokens}"
+            )));
         }
+        self.snapshot_transaction_outputs(transaction, externally_committed_tokens)?;
 
         let action_finish = self.finish_after_decode_action(&pending.action)?;
         let mut finished = action_finish.finished;
@@ -1911,20 +3179,18 @@ where
     }
 
     fn pending_model_progresses(&self) -> Vec<PendingModelProgress> {
-        let mut progresses = Vec::new();
-        let mut visited = HashSet::new();
-        for transaction in &self.ready_transactions {
-            if !visited.insert(*transaction) {
-                continue;
-            }
-            if let Some(pending) = self.resident_transactions.get(transaction) {
-                if let Some(progress) = &pending.pending_progress {
-                    progresses.push(progress.clone());
-                }
-            } else if let Some(pending) = self.speculative_transactions.get(transaction) {
-                pending.extend_pending_progress(&mut progresses);
-            }
+        let mut progresses = self
+            .resident_transactions
+            .values()
+            .filter_map(|pending| pending.pending_progress.clone())
+            .collect::<Vec<_>>();
+        for pending in self.speculative_transactions.values() {
+            pending.extend_pending_progress(&mut progresses);
         }
+        progresses.sort_unstable_by_key(|progress| {
+            (progress.transaction().get(), progress.continuation().get())
+        });
+        progresses.dedup_by_key(|progress| progress.continuation());
         progresses
     }
 
@@ -1970,7 +3236,7 @@ where
         Ok(())
     }
 
-    fn enqueue_committed_decode_tokens(&mut self, actions: &[DecodeAction]) -> Result<()> {
+    fn enqueue_committed_decode_tokens(&mut self, actions: &[DecodeAction]) -> Result<usize> {
         for action in actions {
             let runner = self.executor.runner();
             let sequence = self
@@ -1997,7 +3263,7 @@ where
             };
             self.committed_token_outbox.push_back(event);
         }
-        Ok(())
+        Ok(actions.len())
     }
 
     fn finish_after_decode_action(
@@ -2168,6 +3434,136 @@ where
     R: ResidentModelRunner,
     C: SequenceSlotPool,
 {
+    /// Stop admission, quiesce model transactions, release all session/KV
+    /// ownership, and drain provider completions. An error retains any ownership
+    /// that could not yet be proven quiescent so the caller may retry.
+    pub fn shutdown<F>(
+        &mut self,
+        on_token: &mut F,
+        maximum_completions: usize,
+    ) -> Result<ResidentDriverShutdownReport>
+    where
+        F: FnMut(&ResidentTokenEvent) -> Result<()>,
+    {
+        self.shutting_down = true;
+        self.flush_committed_token_outbox(on_token)?;
+
+        let mut transactions = self
+            .resident_transactions
+            .keys()
+            .chain(self.speculative_transactions.keys())
+            .copied()
+            .collect::<Vec<_>>();
+        transactions.sort_unstable();
+        transactions.dedup();
+        for transaction in transactions {
+            let request_id = self.request_for_transaction(transaction).ok_or_else(|| {
+                Error::Execution(format!(
+                    "cannot quiesce transaction {transaction:?} without a request owner"
+                ))
+            })?;
+            self.cancel_transaction(transaction, request_id)?;
+        }
+        if !self.resident_transactions.is_empty()
+            || !self.speculative_transactions.is_empty()
+            || self.executor.has_transactions()
+        {
+            return Err(Error::Execution(
+                "driver shutdown could not quiesce every execution transaction".into(),
+            ));
+        }
+
+        for request_id in self.scheduler.request_ids() {
+            self.cancel_scheduled_request(request_id)?;
+        }
+
+        let suspended = self.suspended_sequences.keys().copied().collect::<Vec<_>>();
+        for session_id in suspended {
+            let SuspendedDriverSequence {
+                model_state,
+                page_slot: _,
+                kv_state,
+                schedule,
+            } = self
+                .suspended_sequences
+                .remove(&session_id)
+                .expect("suspended session identity was collected above");
+            self.scheduler.restore_suspended(schedule)?;
+            self.scheduler
+                .cancel_sequence(session_id, &mut self.slot_pool)?;
+            let retirement = self
+                .page_manager
+                .as_mut()
+                .ok_or_else(|| {
+                    Error::Internal("suspended KV state has no authoritative page manager".into())
+                })?
+                .release_preempted_pages(kv_state)?;
+            self.release_and_confirm_retirement(retirement)?;
+            self.executor.release_sequence_state(model_state)?;
+        }
+
+        for session_id in self.scheduler.active_session_ids() {
+            self.scheduler
+                .cancel_sequence(session_id, &mut self.slot_pool)?;
+            self.release_sequence_state(session_id)?;
+        }
+        let retained = self.sequence_states.keys().copied().collect::<Vec<_>>();
+        for session_id in retained {
+            self.release_sequence_state(session_id)?;
+        }
+        self.retained_sessions.clear();
+        self.progress_pending_cleanups()?;
+
+        let registry = self
+            .load_registry
+            .shutdown(self.runtime_now_ns(), maximum_completions)
+            .map_err(|error| Error::Execution(error.to_string()))?;
+        for key in self.materialization.keys() {
+            self.materialization.forget(key);
+        }
+        self.progress_pending_cleanups()?;
+        self.update_hard_resource_observability();
+
+        let executor_transactions = self.executor.transaction_ids().count();
+        let expert_io_grants = self.executor.active_expert_io_grants()?;
+        let report = ResidentDriverShutdownReport {
+            registry,
+            executor_transactions,
+            expert_io_grants,
+            kv_page_grants: self.kv_page_grants.len(),
+            pending_kv_retirements: self.pending_kv_retirements.len(),
+        };
+        let retiring_pages = self
+            .page_manager
+            .as_ref()
+            .map_or(0, |manager| manager.stats().retiring_pages);
+        if report.executor_transactions != 0
+            || report.expert_io_grants != 0
+            || report.kv_page_grants != 0
+            || report.pending_kv_retirements != 0
+            || retiring_pages != 0
+            || !self.continuations.is_empty()
+            || !self.transaction_continuations.is_empty()
+            || !self.session_owner.is_empty()
+            || !self.pending_sequence_cleanups.is_empty()
+            || !self.sequence_states.is_empty()
+            || !self.suspended_sequences.is_empty()
+            || !self.scheduler.is_idle()
+        {
+            return Err(Error::Internal(format!(
+                "driver shutdown retained ownership: {report:?}, retiring_pages={retiring_pages}, continuations={}, transaction_continuations={}, session_owners={}, cleanups={}, sequence_states={}, suspended={}, scheduler_idle={}",
+                self.continuations.len(),
+                self.transaction_continuations.len(),
+                self.session_owner.len(),
+                self.pending_sequence_cleanups.len(),
+                self.sequence_states.len(),
+                self.suspended_sequences.len(),
+                self.scheduler.is_idle(),
+            )));
+        }
+        Ok(report)
+    }
+
     /// Execute the resident model path selected by model capabilities.
     ///
     /// All models use the same packed target executor. A model that reports a
@@ -2181,8 +3577,16 @@ where
     where
         F: FnMut(&ResidentTokenEvent) -> Result<()>,
     {
+        if self.shutting_down {
+            return Err(Error::Execution(
+                "resident driver is shutting down; use shutdown() to drain ownership".into(),
+            ));
+        }
+        self.runtime_tick = self.runtime_tick.saturating_add(1);
         self.flush_committed_token_outbox(on_token)?;
         self.progress_pending_cleanups()?;
+        self.progress_materialization()?;
+        self.update_hard_resource_observability();
         let proposal_enabled = self.executor.runner().native_proposal_source()?.is_some();
 
         let requires_page_manager = proposal_enabled
@@ -2195,28 +3599,34 @@ where
         }
         let resumable = self.ready_transactions.len();
         for _ in 0..resumable {
-            let Some(transaction) = self.ready_transactions.pop_front() else {
+            let Some(transaction) = self.pop_ready_transaction() else {
                 break;
             };
-            if self.resident_transactions.contains_key(&transaction) {
-                if let Some(step) = self.resume_resident_transaction(transaction, on_token)? {
-                    return Ok(step);
-                }
-            } else if self.speculative_transactions.contains_key(&transaction)
-                && let Some(step) = self.resume_speculative_transaction(transaction, on_token)?
-            {
-                return Ok(step);
+            let ready_continuation = self.ready_continuation_for(transaction).or_else(|| {
+                self.transaction_continuations
+                    .get(&transaction)
+                    .and_then(|continuations| continuations.iter().copied().next())
+            });
+            let Some(ready_continuation) = ready_continuation else {
+                continue;
+            };
+            let completed = if self.resident_transactions.contains_key(&transaction) {
+                self.resume_resident_transaction(transaction, ready_continuation, on_token)?
+            } else if self.speculative_transactions.contains_key(&transaction) {
+                self.resume_speculative_transaction(transaction, ready_continuation, on_token)?
+            } else {
+                None
+            };
+            if self.ready_continuation_for(transaction).is_some() {
+                self.enqueue_transaction(transaction);
             }
-            if proposal_enabled {
-                let pending = self.pending_model_progresses();
-                if !pending.is_empty() {
-                    return Ok(ResidentDriverStep::WaitingForModelProgress(pending));
-                }
+            if let Some(step) = completed {
+                return Ok(step);
             }
         }
 
         self.prepare_step()?;
-        let allow_mixed_batches = !proposal_enabled && self.scheduler.config().allow_mixed_batches;
+        let allow_mixed_batches = self.scheduler.config().allow_mixed_batches;
         loop {
             let mut advisor =
                 ModelExpertIoAdvisor::new(self.executor.runner(), &self.sequence_states);
@@ -2239,18 +3649,14 @@ where
                 SchedulerAction::DecodeBatch(actions) if proposal_enabled => {
                     self.execute_speculative_decode_batch(actions, on_token)?
                 }
-                SchedulerAction::Execute { .. } if proposal_enabled => {
-                    return Err(Error::Internal(
-                        "proposal-enabled scheduler produced a mixed action while mixed dispatch is disabled"
-                            .into(),
-                    ));
+                SchedulerAction::Execute { prefills, decodes }
+                    if proposal_enabled && prefills.is_empty() =>
+                {
+                    self.execute_speculative_decode_batch(decodes, on_token)?
                 }
                 action => self.execute_planned_action(action, on_token)?,
             };
             if matches!(step, ResidentDriverStep::WaitingForModelProgress(_)) {
-                if proposal_enabled {
-                    return Ok(step);
-                }
                 continue;
             }
             return Ok(step);
@@ -2368,6 +3774,7 @@ where
                 cancellation_error: None,
             },
             on_token,
+            None,
         )
     }
 
@@ -2375,6 +3782,7 @@ where
         &mut self,
         mut pending: PendingNativeProposalCohort<R::SequenceState>,
         on_token: &mut F,
+        mut resume: Option<(ContinuationId, crate::io::ResumeLease)>,
     ) -> Result<ResidentDriverStep>
     where
         F: FnMut(&ResidentTokenEvent) -> Result<()>,
@@ -2402,12 +3810,32 @@ where
                     }
                     NativeProposalSlotStatus::Waiting(waiting) => {
                         let continuation = waiting.continuation();
-                        Some(self.executor.with_sequence_state(
-                            &mut pending.source_states[slot_index],
-                            |runner| {
-                                runner.resume_native_proposal(pending.transaction, continuation)
-                            },
-                        ))
+                        if resume
+                            .as_ref()
+                            .is_none_or(|(ready, _)| *ready != continuation)
+                        {
+                            None
+                        } else {
+                            let (_, mut resume_lease) = resume
+                                .take()
+                                .expect("matching proposal resume lease exists");
+                            let leases = resume_lease
+                                .take()
+                                .map_err(|error| Error::Execution(error.to_string()))?;
+                            let resume_started = self.runtime_now_ns();
+                            let progress = self.executor.with_sequence_state(
+                                &mut pending.source_states[slot_index],
+                                |runner| {
+                                    runner.resume_native_proposal(
+                                        pending.transaction,
+                                        continuation,
+                                        leases,
+                                    )
+                                },
+                            );
+                            self.finish_resume_lease(continuation, resume_lease, resume_started)?;
+                            Some(progress)
+                        }
                     }
                     NativeProposalSlotStatus::Complete { .. } => None,
                 };
@@ -2426,6 +3854,10 @@ where
                         };
                     }
                     Ok(NativeProposalProgress::Waiting(waiting)) => {
+                        self.register_pending_progress(
+                            &waiting,
+                            crate::scheduling::ResourceClass::Decode,
+                        )?;
                         pending.slots[slot_index].status =
                             NativeProposalSlotStatus::Waiting(waiting);
                     }
@@ -2469,7 +3901,6 @@ where
                 transaction,
                 PendingSpeculativeDriverCohort::Proposing(pending),
             );
-            self.enqueue_transaction(transaction);
             return Ok(ResidentDriverStep::WaitingForModelProgress(
                 self.pending_model_progresses(),
             ));
@@ -2519,22 +3950,54 @@ where
     where
         F: FnMut(&ResidentTokenEvent) -> Result<()>,
     {
-        let verification_items = actions
-            .iter()
-            .zip(&prepared)
-            .map(|(action, prepared)| SpeculativeVerificationItem {
-                state_slot: prepared.page_slot,
-                generation: 0,
-                proposal: &prepared.proposal,
-                frontier: TargetFrontier {
-                    position: action.position,
-                    top1: ferrule_common::execution::TokenLogit::new(
-                        action.token_id,
-                        action.logit.unwrap_or(0.0),
-                    ),
-                },
-            })
-            .collect::<Vec<_>>();
+        let verification_items = {
+            let page_manager = self
+                .page_manager
+                .as_ref()
+                .expect("speculative verification requires a page manager");
+            actions
+                .iter()
+                .zip(&prepared)
+                .map(|(action, prepared)| {
+                    Ok(SpeculativeVerificationItem {
+                        state_slot: prepared.page_slot,
+                        generation: page_manager.sequence_generation(prepared.page_slot)?,
+                        proposal: &prepared.proposal,
+                        frontier: TargetFrontier {
+                            position: action.position,
+                            top1: ferrule_common::execution::TokenLogit::new(
+                                action.token_id,
+                                action.logit.unwrap_or(0.0),
+                            ),
+                        },
+                    })
+                })
+                .collect::<Result<Vec<_>>>()
+        };
+        let verification_items = match verification_items {
+            Ok(items) => items,
+            Err(error) => {
+                self.restore_transaction_sessions(schedules, source_states)?;
+                return Err(self.abort_speculative_decode_batch(
+                    &actions,
+                    error,
+                    "production speculative KV generation",
+                ));
+            }
+        };
+        let reservations = match self.reserve_speculative_pages(transaction, &verification_items) {
+            Ok(reservations) => reservations,
+            Err(error) => {
+                drop(verification_items);
+                self.restore_transaction_sessions(schedules, source_states)?;
+                return Err(self.abort_speculative_decode_batch(
+                    &actions,
+                    error,
+                    "production speculative KV reserve",
+                ));
+            }
+        };
+        let mut retirements = Vec::new();
         let progress = match self.page_manager.as_mut() {
             Some(page_manager) => begin_resumable_speculative_verification_cohort(
                 &mut self.executor,
@@ -2542,27 +4005,28 @@ where
                 transaction,
                 &mut source_states,
                 &verification_items,
+                reservations,
                 self.top_k,
+                &mut retirements,
             ),
-            None => {
-                drop(verification_items);
-                self.restore_transaction_sessions(schedules, source_states)?;
-                return Err(self.abort_speculative_decode_batch(
-                    &actions,
-                    Error::Internal(
-                        "authoritative KvPageManager disappeared during speculative cohort".into(),
-                    ),
-                    "production speculative verification",
-                ));
-            }
+            None => unreachable!("speculative page reservations require a page manager"),
         };
         drop(verification_items);
+        if let Err(error) = self.progress_speculative_retirements(retirements) {
+            self.restore_transaction_sessions(schedules, source_states)?;
+            return Err(self.abort_speculative_decode_batch(
+                &actions,
+                error,
+                "production speculative KV retirement",
+            ));
+        }
 
         match progress {
             Ok(SpeculativeCohortProgress::Complete(cohort)) => {
                 self.restore_transaction_sessions(schedules, source_states)?;
                 let publication_actions = actions.clone();
                 match self.publish_speculative_decode_cohort(
+                    transaction,
                     cohort_start,
                     actions,
                     prepared,
@@ -2578,6 +4042,10 @@ where
                 }
             }
             Ok(SpeculativeCohortProgress::Waiting(verification)) => {
+                self.register_pending_progress(
+                    verification.pending_progress(),
+                    crate::scheduling::ResourceClass::Verification,
+                )?;
                 self.speculative_transactions.insert(
                     transaction,
                     PendingSpeculativeDriverCohort::Verifying(Box::new(
@@ -2593,7 +4061,6 @@ where
                         },
                     )),
                 );
-                self.enqueue_transaction(transaction);
                 Ok(ResidentDriverStep::WaitingForModelProgress(
                     self.pending_model_progresses(),
                 ))
@@ -2601,6 +4068,15 @@ where
             Err(error) => {
                 let (error, verification) = error.into_parts();
                 if let Some(verification) = verification {
+                    if !self
+                        .continuations
+                        .contains_key(&verification.pending_progress().continuation())
+                    {
+                        self.register_pending_progress(
+                            verification.pending_progress(),
+                            crate::scheduling::ResourceClass::Verification,
+                        )?;
+                    }
                     self.speculative_transactions.insert(
                         transaction,
                         PendingSpeculativeDriverCohort::Verifying(Box::new(
@@ -2616,7 +4092,6 @@ where
                             },
                         )),
                     );
-                    self.enqueue_transaction(transaction);
                     Err(error)
                 } else {
                     self.restore_transaction_sessions(schedules, source_states)?;
@@ -2633,6 +4108,7 @@ where
     fn resume_speculative_transaction<F>(
         &mut self,
         transaction: ExecutionTransactionId,
+        ready_continuation: ContinuationId,
         on_token: &mut F,
     ) -> Result<Option<ResidentDriverStep>>
     where
@@ -2669,7 +4145,12 @@ where
                 }
             }
             PendingSpeculativeDriverCohort::Proposing(pending) => {
-                let step = self.advance_native_proposal_cohort(pending, on_token)?;
+                let lease = self.prepare_resume_lease(ready_continuation)?;
+                let step = self.advance_native_proposal_cohort(
+                    pending,
+                    on_token,
+                    Some((ready_continuation, lease)),
+                )?;
                 Ok(
                     (!matches!(step, ResidentDriverStep::WaitingForModelProgress(_)))
                         .then_some(step),
@@ -2695,15 +4176,19 @@ where
                     Err(error) => Err(error),
                 }
             }
-            PendingSpeculativeDriverCohort::Verifying(pending) => {
-                self.resume_speculative_verification_transaction(*pending, on_token)
-            }
+            PendingSpeculativeDriverCohort::Verifying(pending) => self
+                .resume_speculative_verification_transaction(
+                    *pending,
+                    ready_continuation,
+                    on_token,
+                ),
         }
     }
 
     fn resume_speculative_verification_transaction<F>(
         &mut self,
         pending: PendingSpeculativeVerificationDriverCohort<R::SequenceState>,
+        ready_continuation: ContinuationId,
         on_token: &mut F,
     ) -> Result<Option<ResidentDriverStep>>
     where
@@ -2719,42 +4204,91 @@ where
             verification,
             cancellation_request,
         } = pending;
-        let progress = match self.page_manager.as_mut() {
-            Some(page_manager) => resume_resumable_speculative_verification_cohort(
-                &mut self.executor,
-                page_manager,
-                &mut source_states,
-                verification,
-            ),
-            None => {
-                self.speculative_transactions.insert(
-                    transaction,
-                    PendingSpeculativeDriverCohort::Verifying(Box::new(
-                        PendingSpeculativeVerificationDriverCohort {
-                            transaction,
-                            cohort_start,
-                            actions,
-                            prepared,
-                            source_states,
-                            schedules,
-                            verification,
-                            cancellation_request,
-                        },
-                    )),
-                );
-                self.enqueue_transaction(transaction);
-                return Err(Error::Internal(
-                    "authoritative KvPageManager disappeared while speculative verification was suspended"
-                        .into(),
-                ));
-            }
-        };
+        if self.page_manager.is_none() {
+            self.speculative_transactions.insert(
+                transaction,
+                PendingSpeculativeDriverCohort::Verifying(Box::new(
+                    PendingSpeculativeVerificationDriverCohort {
+                        transaction,
+                        cohort_start,
+                        actions,
+                        prepared,
+                        source_states,
+                        schedules,
+                        verification,
+                        cancellation_request,
+                    },
+                )),
+            );
+            self.enqueue_transaction(transaction);
+            return Err(Error::Internal(
+                "authoritative KvPageManager disappeared while speculative verification was suspended"
+                    .into(),
+            ));
+        }
+        if verification.pending_progress().continuation() != ready_continuation {
+            self.speculative_transactions.insert(
+                transaction,
+                PendingSpeculativeDriverCohort::Verifying(Box::new(
+                    PendingSpeculativeVerificationDriverCohort {
+                        transaction,
+                        cohort_start,
+                        actions,
+                        prepared,
+                        source_states,
+                        schedules,
+                        verification,
+                        cancellation_request,
+                    },
+                )),
+            );
+            return Err(Error::Execution(format!(
+                "speculative verification transaction {} owns continuation {}, not ready continuation {}",
+                transaction.get(),
+                self.speculative_transactions
+                    .get(&transaction)
+                    .and_then(|pending| match pending {
+                        PendingSpeculativeDriverCohort::Verifying(pending) => {
+                            Some(pending.verification.pending_progress().continuation().get())
+                        }
+                        PendingSpeculativeDriverCohort::Proposing(_) => None,
+                    })
+                    .unwrap_or_default(),
+                ready_continuation.get()
+            )));
+        }
+        let mut resume_lease = self.prepare_resume_lease(ready_continuation)?;
+        let leases = resume_lease
+            .take()
+            .map_err(|error| Error::Execution(error.to_string()))?;
+        let resume_started = self.runtime_now_ns();
+        let mut retirements = Vec::new();
+        let progress = resume_resumable_speculative_verification_cohort(
+            &mut self.executor,
+            self.page_manager
+                .as_mut()
+                .expect("page manager was checked above"),
+            &mut source_states,
+            verification,
+            leases,
+            &mut retirements,
+        );
+        self.finish_resume_lease(ready_continuation, resume_lease, resume_started)?;
+        if let Err(error) = self.progress_speculative_retirements(retirements) {
+            self.restore_transaction_sessions(schedules, source_states)?;
+            return Err(self.abort_speculative_decode_batch(
+                &actions,
+                error,
+                "production speculative resume KV retirement",
+            ));
+        }
 
         match progress {
             Ok(SpeculativeCohortProgress::Complete(cohort)) => {
                 self.restore_transaction_sessions(schedules, source_states)?;
                 let publication_actions = actions.clone();
                 match self.publish_speculative_decode_cohort(
+                    transaction,
                     cohort_start,
                     actions,
                     prepared,
@@ -2770,6 +4304,10 @@ where
                 }
             }
             Ok(SpeculativeCohortProgress::Waiting(verification)) => {
+                self.register_pending_progress(
+                    verification.pending_progress(),
+                    crate::scheduling::ResourceClass::Verification,
+                )?;
                 self.speculative_transactions.insert(
                     transaction,
                     PendingSpeculativeDriverCohort::Verifying(Box::new(
@@ -2785,12 +4323,20 @@ where
                         },
                     )),
                 );
-                self.enqueue_transaction(transaction);
                 Ok(None)
             }
             Err(error) => {
                 let (error, verification) = error.into_parts();
                 if let Some(verification) = verification {
+                    if !self
+                        .continuations
+                        .contains_key(&verification.pending_progress().continuation())
+                    {
+                        self.register_pending_progress(
+                            verification.pending_progress(),
+                            crate::scheduling::ResourceClass::Verification,
+                        )?;
+                    }
                     self.speculative_transactions.insert(
                         transaction,
                         PendingSpeculativeDriverCohort::Verifying(Box::new(
@@ -2806,7 +4352,6 @@ where
                             },
                         )),
                     );
-                    self.enqueue_transaction(transaction);
                     Err(error)
                 } else {
                     self.restore_transaction_sessions(schedules, source_states)?;
@@ -2822,6 +4367,7 @@ where
 
     fn publish_speculative_decode_cohort<F>(
         &mut self,
+        transaction: ExecutionTransactionId,
         cohort_start: Instant,
         actions: Vec<DecodeAction>,
         prepared: Vec<PreparedSpeculativeAction>,
@@ -2842,9 +4388,14 @@ where
         let cohort_transaction_time_us = cohort.transaction_time_us;
         let cohort_verify_time_us = cohort.verify_time_us;
         let eos_token_id = self.executor.runner().eos_token_id();
+        let commit_timestamp = self.runtime_now_ns();
+        self.load_registry
+            .record_commit(transaction, commit_timestamp, commit_timestamp)
+            .map_err(|error| Error::Execution(error.to_string()))?;
         let mut rows = 0usize;
         let mut staged = 0usize;
         let mut finished = 0usize;
+        let mut externally_committed_tokens = 0usize;
 
         for ((action, prepared), result) in actions.iter().zip(prepared).zip(cohort.results) {
             let externally_committed = result.accepted.len().checked_add(1).ok_or_else(|| {
@@ -2875,6 +4426,11 @@ where
                     result.accounting.externally_committed_tokens
                 )));
             }
+            externally_committed_tokens = externally_committed_tokens
+                .checked_add(runtime_emitted_tokens)
+                .ok_or_else(|| {
+                    Error::Internal("speculative external token count overflow".into())
+                })?;
 
             let mut finish_reason = {
                 let sequence = self
@@ -2953,6 +4509,7 @@ where
             cohort_verify_time_us,
             complete_cohort_time_us,
         );
+        self.snapshot_transaction_outputs(transaction, externally_committed_tokens)?;
         self.observability.stats.actions += 1;
         self.observability.stats.decode_steps += actions.len();
 
@@ -3364,6 +4921,22 @@ fn action_session_ids(action: &SchedulerAction) -> Vec<SessionId> {
     sessions
 }
 
+fn action_request_id(action: &SchedulerAction) -> Option<RequestId> {
+    match action {
+        SchedulerAction::Execute { prefills, decodes } => prefills
+            .iter()
+            .find_map(|action| action.request_id)
+            .or_else(|| decodes.iter().find_map(|action| action.request_id)),
+        SchedulerAction::PrefillChunk(prefill) => prefill.request_id,
+        SchedulerAction::DecodeBatch(actions) => {
+            actions.iter().find_map(|action| action.request_id)
+        }
+        SchedulerAction::Finish { request_id, .. } | SchedulerAction::Cancel { request_id, .. } => {
+            *request_id
+        }
+    }
+}
+
 fn action_contains_request(action: &SchedulerAction, request_id: RequestId) -> bool {
     match action {
         SchedulerAction::Execute { prefills, decodes } => {
@@ -3434,16 +5007,24 @@ mod tests {
         ExecutionIntent, ForwardPhase, KvLayoutSchema, KvPlaneDescriptor, LogitsOutput,
         LogitsRequest, LogitsRow,
     };
-    use ferrule_common::{Error, Result};
+    use ferrule_common::{
+        ArtifactFormat, ContentHash, DependencySet, Error, ExpertId, ExpertLeaseSet, LayerId,
+        LogicalDependency, OperationId, Result, SourceGeneration, SourceIdentityHash,
+    };
     use ferrule_model::{
-        BatchContinuationCancelOutcome, BatchContinuationId, ExpertIoModelRunner, ModelInfo,
-        ModelRunner, MultiSessionBatchProgress, MultiSessionRunner, NativeProposal,
-        NativeProposalProgress, NativeProposalSource, PendingExpertLoad, PendingModelProgress,
-        ResidentModelRunner, TokenLogit,
+        BatchContinuationCancelOutcome, ContinuationId, ExpertArtifactIdentity,
+        ExpertDependencyResolution, ExpertIoModelRunner, ExpertMaterializationAdapter,
+        ExpertMaterializationRequest, ModelInfo, ModelRunner, MultiSessionBatchProgress,
+        MultiSessionRunner, NativeProposal, NativeProposalProgress, NativeProposalSource,
+        PendingModelProgress, PhysicalExpertMaterializationBackend, ResidentModelRunner,
+        TokenLogit,
     };
 
-    use crate::scheduling::FixedSequenceSlotPool;
-    use crate::scheduling::{RequestId, SequenceStatus};
+    use crate::io::physical_tests::MockPhysicalBackend;
+    use crate::io::{CohortId, FairQueueConfig, FakeBackend};
+    use crate::scheduling::{
+        FixedSequenceSlotPool, HardResourceBroker, HardResourceLimit, RequestId, SequenceStatus,
+    };
 
     use super::*;
 
@@ -3505,7 +5086,6 @@ mod tests {
         waits_remaining: usize,
     }
 
-    #[derive(Debug)]
     struct MockTopKRunner {
         completion_hub: ferrule_common::CompletionHub,
         position: usize,
@@ -3523,21 +5103,21 @@ mod tests {
         packed_committed_calls: usize,
         packed_verification_calls: usize,
         proposal_waits: VecDeque<usize>,
-        active_native_proposals: HashMap<BatchContinuationId, MockPendingProposal>,
+        active_native_proposals: HashMap<ContinuationId, MockPendingProposal>,
         next_native_proposal_continuation: u64,
         native_proposal_begin_calls: usize,
         native_proposal_resume_calls: usize,
         native_proposal_cancel_calls: usize,
         native_proposal_resume_errors_remaining: usize,
         native_proposal_cancel_still_active_remaining: usize,
-        cancelled_native_proposals: Vec<BatchContinuationId>,
+        cancelled_native_proposals: Vec<ContinuationId>,
         committed_resumable_armed: bool,
         resumable_wait_scripts: VecDeque<usize>,
         active_resumable_waits: HashMap<ExecutionTransactionId, usize>,
         resume_errors_remaining: usize,
         active_resumable_predictions: HashMap<ExecutionTransactionId, Vec<TokenLogit>>,
         resumable_cancel_still_active_remaining: usize,
-        cancelled_continuations: Vec<BatchContinuationId>,
+        cancelled_continuations: Vec<ContinuationId>,
         reject_topology_mutation_while_packed: bool,
         topology_mutation_attempts_while_packed: usize,
         sequence_state_fork_calls: usize,
@@ -3546,6 +5126,32 @@ mod tests {
         rolled_back_batches: usize,
         paged: bool,
         expert_io_resource_control_installed: bool,
+        expert_residency_requirements:
+            Option<ferrule_common::expert_residency::ExpertResidencyRequirements>,
+        expert_residency_control_installed: bool,
+        physical_expert_backend: Option<Box<dyn PhysicalExpertMaterializationBackend>>,
+        expert_materialization: Option<Box<dyn ExpertMaterializationAdapter>>,
+        materialization_request: Option<ExpertMaterializationRequest>,
+    }
+
+    impl std::fmt::Debug for MockTopKRunner {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("MockTopKRunner")
+                .field("position", &self.position)
+                .field("prepared_batches", &self.prepared_batches)
+                .field("committed_batches", &self.committed_batches)
+                .field("rolled_back_batches", &self.rolled_back_batches)
+                .field(
+                    "expert_materialization_installed",
+                    &self.expert_materialization.is_some(),
+                )
+                .field(
+                    "physical_expert_backend",
+                    &self.physical_expert_backend.is_some(),
+                )
+                .finish_non_exhaustive()
+        }
     }
 
     impl MockTopKRunner {
@@ -3590,6 +5196,11 @@ mod tests {
                 rolled_back_batches: 0,
                 paged: false,
                 expert_io_resource_control_installed: false,
+                expert_residency_requirements: None,
+                expert_residency_control_installed: false,
+                physical_expert_backend: None,
+                expert_materialization: None,
+                materialization_request: None,
             }
         }
 
@@ -3616,6 +5227,27 @@ mod tests {
         fn with_resumable_wait_scripts(mut self, waits: impl IntoIterator<Item = usize>) -> Self {
             self.committed_resumable_armed = true;
             self.resumable_wait_scripts.extend(waits);
+            self
+        }
+
+        fn with_materialization_request(mut self, request: ExpertMaterializationRequest) -> Self {
+            self.materialization_request = Some(request);
+            self
+        }
+
+        fn with_expert_requirements(mut self) -> Self {
+            self.expert_residency_requirements = Some(
+                ferrule_common::expert_residency::ExpertResidencyRequirements::new(17, vec![1]),
+            );
+            self
+        }
+
+        fn with_physical_expert_backend(
+            mut self,
+            backend: Box<dyn PhysicalExpertMaterializationBackend>,
+        ) -> Self {
+            self = self.with_expert_requirements();
+            self.physical_expert_backend = Some(backend);
             self
         }
 
@@ -3684,21 +5316,45 @@ mod tests {
             self
         }
 
-        fn pending_resumable_progress(transaction: ExecutionTransactionId) -> PendingModelProgress {
-            let continuation = BatchContinuationId::new(transaction.get()).unwrap();
-            PendingModelProgress::new(
-                transaction,
-                continuation,
-                vec![PendingExpertLoad::new(transaction.get(), 0, 0).unwrap()],
-            )
+        fn pending_dependencies(continuation: ContinuationId) -> DependencySet {
+            DependencySet::new([LogicalDependency::operation_retired(OperationId::new(
+                continuation.get(),
+            ))
+            .unwrap()])
             .unwrap()
+        }
+
+        fn pending_resumable_progress(
+            &mut self,
+            transaction: ExecutionTransactionId,
+        ) -> Result<PendingModelProgress> {
+            let continuation = ContinuationId::new(transaction.get());
+            let dependencies = match self.materialization_request {
+                Some(request) => {
+                    let resolution = self.expert_materialization_adapter()?.resolve(request)?;
+                    let key = match resolution {
+                        ferrule_model::ExpertDependencyResolution::Resident(binding) => {
+                            binding.key()
+                        }
+                        ferrule_model::ExpertDependencyResolution::Waiting(key) => key,
+                    };
+                    DependencySet::new([LogicalDependency::expert_resident(key)?])?
+                }
+                None => Self::pending_dependencies(continuation),
+            };
+            PendingModelProgress::new(transaction, continuation, dependencies)
         }
 
         fn pending_native_proposal(
             transaction: ExecutionTransactionId,
-            continuation: BatchContinuationId,
+            continuation: ContinuationId,
         ) -> PendingModelProgress {
-            PendingModelProgress::new(transaction, continuation, Vec::new()).unwrap()
+            PendingModelProgress::new(
+                transaction,
+                continuation,
+                Self::pending_dependencies(continuation),
+            )
+            .unwrap()
         }
 
         fn complete_packed_batch(
@@ -3818,7 +5474,7 @@ mod tests {
             if waits == 0 {
                 return Ok(NativeProposalProgress::Complete(proposal));
             }
-            let continuation = BatchContinuationId::new(self.next_native_proposal_continuation)?;
+            let continuation = ContinuationId::new(self.next_native_proposal_continuation);
             self.next_native_proposal_continuation = self
                 .next_native_proposal_continuation
                 .checked_add(1)
@@ -3839,7 +5495,8 @@ mod tests {
         fn resume_native_proposal(
             &mut self,
             transaction: ExecutionTransactionId,
-            continuation: BatchContinuationId,
+            continuation: ContinuationId,
+            _leases: ExpertLeaseSet,
         ) -> Result<NativeProposalProgress> {
             self.native_proposal_resume_calls += 1;
             if self.native_proposal_resume_errors_remaining > 0 {
@@ -3867,7 +5524,7 @@ mod tests {
         fn cancel_native_proposal(
             &mut self,
             _transaction: ExecutionTransactionId,
-            continuation: BatchContinuationId,
+            continuation: ContinuationId,
         ) -> BatchContinuationCancelOutcome {
             self.native_proposal_cancel_calls += 1;
             if !self.active_native_proposals.contains_key(&continuation) {
@@ -4017,6 +5674,66 @@ mod tests {
 
     impl MultiSessionRunner for MockTopKRunner {
         type SequenceState = MockSequenceState;
+
+        fn sequence_generation(&self, _state: &Self::SequenceState) -> u64 {
+            0
+        }
+
+        fn expert_residency_requirements(
+            &self,
+        ) -> Option<ferrule_common::expert_residency::ExpertResidencyRequirements> {
+            self.expert_residency_requirements.clone()
+        }
+
+        fn expert_residency_control_installed(&self) -> bool {
+            self.expert_residency_control_installed
+        }
+
+        fn install_expert_residency_control(
+            &mut self,
+            _control: Box<dyn ferrule_common::expert_residency::ExpertResidencyControl>,
+        ) -> Result<()> {
+            if self.expert_residency_control_installed {
+                return Err(Error::Execution(
+                    "mock expert residency control is already installed".into(),
+                ));
+            }
+            self.expert_residency_control_installed = true;
+            Ok(())
+        }
+
+        fn take_expert_materialization_backend(
+            &mut self,
+        ) -> Option<Box<dyn PhysicalExpertMaterializationBackend>> {
+            self.physical_expert_backend.take()
+        }
+
+        fn expert_materialization_adapter_installed(&self) -> bool {
+            self.expert_materialization.is_some()
+        }
+
+        fn install_expert_materialization_adapter(
+            &mut self,
+            adapter: Box<dyn ExpertMaterializationAdapter>,
+        ) -> Result<()> {
+            if self.expert_materialization.replace(adapter).is_some() {
+                return Err(Error::Execution(
+                    "mock materialization adapter is already installed".into(),
+                ));
+            }
+            Ok(())
+        }
+
+        fn expert_materialization_adapter(
+            &mut self,
+        ) -> Result<&mut (dyn ExpertMaterializationAdapter + '_)> {
+            match self.expert_materialization.as_mut() {
+                Some(adapter) => Ok(adapter.as_mut()),
+                None => Err(Error::Execution(
+                    "mock materialization adapter is not installed".into(),
+                )),
+            }
+        }
 
         fn with_sequence_state<T>(
             &mut self,
@@ -4236,9 +5953,8 @@ mod tests {
                         .insert(transaction, predictions);
                 }
                 *waits -= 1;
-                return Ok(MultiSessionBatchProgress::Waiting(
-                    Self::pending_resumable_progress(transaction),
-                ));
+                let pending = self.pending_resumable_progress(transaction)?;
+                return Ok(MultiSessionBatchProgress::Waiting(pending));
             }
             if batch.intent() == ExecutionIntent::ProvisionalVerification {
                 self.packed_verification_calls += 1;
@@ -4258,9 +5974,10 @@ mod tests {
             transaction: ExecutionTransactionId,
             states: &mut [Self::SequenceState],
             batch: &ferrule_common::execution::ExecutionBatch,
-            continuation: BatchContinuationId,
+            continuation: ContinuationId,
+            _leases: ExpertLeaseSet,
         ) -> Result<MultiSessionBatchProgress> {
-            if continuation != Self::pending_resumable_progress(transaction).continuation() {
+            if continuation != ContinuationId::new(transaction.get()) {
                 return Err(Error::Execution(
                     "mock received an unknown batch continuation".into(),
                 ));
@@ -4275,9 +5992,8 @@ mod tests {
                 .ok_or_else(|| Error::Execution("mock has no active batch continuation".into()))?;
             if *waits > 0 {
                 *waits -= 1;
-                return Ok(MultiSessionBatchProgress::Waiting(
-                    Self::pending_resumable_progress(transaction),
-                ));
+                let pending = self.pending_resumable_progress(transaction)?;
+                return Ok(MultiSessionBatchProgress::Waiting(pending));
             }
             self.active_resumable_waits.remove(&transaction);
             let output = match self.active_resumable_predictions.remove(&transaction) {
@@ -4292,9 +6008,9 @@ mod tests {
             &mut self,
             transaction: ExecutionTransactionId,
             _states: &mut [Self::SequenceState],
-            continuation: BatchContinuationId,
+            continuation: ContinuationId,
         ) -> BatchContinuationCancelOutcome {
-            if continuation != Self::pending_resumable_progress(transaction).continuation() {
+            if continuation != ContinuationId::new(transaction.get()) {
                 return BatchContinuationCancelOutcome::StillActive(Error::Execution(
                     "mock received an unknown batch continuation".into(),
                 ));
@@ -4335,6 +6051,25 @@ mod tests {
                 },
             }
         }
+    }
+
+    fn materialization_request(seed: u8) -> ExpertMaterializationRequest {
+        let artifact = ExpertArtifactIdentity::new(
+            SourceIdentityHash::new([seed.max(1); 32]),
+            ContentHash::new([seed.saturating_add(1).max(1); 32]),
+            ArtifactFormat::new(1),
+            SourceGeneration::new(1),
+        )
+        .unwrap();
+        ExpertMaterializationRequest::new(
+            ModelInstanceId::new(17),
+            artifact,
+            LayerId::new(u32::from(seed)),
+            ExpertId::new(u32::from(seed)),
+            BackendId::new(4),
+            DeviceId::new(2),
+        )
+        .unwrap()
     }
 
     fn top(token_id: u32) -> Vec<TokenLogit> {
@@ -4426,6 +6161,90 @@ mod tests {
         .with_page_manager(KvPageManager::new(Box::new(DriverTestKvSchema), 16))
     }
 
+    fn concurrent_fake_driver(
+        runner: MockTopKRunner,
+    ) -> ResidentTopKDriver<MockTopKRunner, FixedSequenceSlotPool> {
+        let (physical, _) = MockPhysicalBackend::automatic();
+        concurrent_transaction_driver(runner.with_physical_expert_backend(Box::new(physical)))
+    }
+
+    fn hard_resources_with_kv_capacity(capacity: u64) -> HardResourceBroker {
+        HardResourceBroker::new(ResourceKind::ALL.map(|kind| {
+            let kind_capacity = if kind == ResourceKind::KvPage {
+                capacity
+            } else if matches!(kind, ResourceKind::ReadBytes | ResourceKind::UploadBytes) {
+                1 << 40
+            } else {
+                1 << 20
+            };
+            HardResourceLimit::new(kind, kind_capacity, 0)
+        }))
+        .unwrap()
+    }
+
+    fn speculative_shared_tail_credit_driver(
+        kv_capacity: u64,
+    ) -> (
+        ResidentTopKDriver<MockTopKRunner, FixedSequenceSlotPool>,
+        StateSlot,
+        StateSlot,
+        KvPageId,
+    ) {
+        let mut manager = KvPageManager::new(Box::new(DriverTestKvSchema), 8);
+        let source = StateSlot::new(0);
+        let target = StateSlot::new(1);
+        manager.alloc_sequence(source, 0).unwrap();
+        let reservation = manager.reserve(source, 0, 3).unwrap();
+        let source_page = reservation.view().newly_allocated[0];
+        let prepared = manager
+            .prepare_commit(vec![KvReservationCommit::new(reservation, 3)])
+            .unwrap();
+        let empty_retirement = manager.publish_commit(prepared);
+        assert!(empty_retirement.is_empty());
+        manager.confirm_page_retirement(empty_retirement).unwrap();
+        let fork = manager
+            .prepare_fork_sequence_exact(source, target, 0, 3)
+            .unwrap();
+        manager.publish_fork_sequence_exact(fork).unwrap();
+
+        let mut driver = driver_from_runner(MockTopKRunner::new(Vec::new()))
+            .try_with_materialization_backend(
+                FakeBackend::new(),
+                hard_resources_with_kv_capacity(kv_capacity),
+                FairQueueConfig::default(),
+            )
+            .unwrap()
+            .with_page_manager(manager);
+        let source_grant = driver
+            .load_registry
+            .acquire_hard_resources(
+                1,
+                crate::scheduling::ResourceClass::Verification,
+                [HardResourceClaim::new(ResourceKind::KvPage, 1)],
+            )
+            .unwrap();
+        assert!(
+            driver
+                .kv_page_grants
+                .insert(source_page, source_grant)
+                .is_none()
+        );
+        (driver, source, target, source_page)
+    }
+
+    fn retire_test_sequence(
+        driver: &mut ResidentTopKDriver<MockTopKRunner, FixedSequenceSlotPool>,
+        slot: StateSlot,
+    ) {
+        let retirement = driver
+            .page_manager
+            .as_mut()
+            .unwrap()
+            .free_sequence_pages(slot)
+            .unwrap();
+        driver.release_and_confirm_retirement(retirement).unwrap();
+    }
+
     fn speculative_driver_from_runner(
         runner: MockTopKRunner,
         capacity: usize,
@@ -4477,6 +6296,504 @@ mod tests {
             panic!("expected speculative decode batch");
         };
         actions
+    }
+
+    #[test]
+    fn physical_bridge_driver_prepare_rejects_missing_backend() {
+        let runner = MockTopKRunner::new(Vec::new()).with_expert_requirements();
+        let error = match ResidentTopKDriver::try_new(runner, FixedSequenceSlotPool::new(1)) {
+            Ok(_) => panic!("MoE driver preparation unexpectedly accepted a missing backend"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("provides no physical expert materialization backend")
+        );
+    }
+
+    #[test]
+    fn physical_bridge_driver_defaults_to_runner_physical_backend() {
+        let (physical, handle) = MockPhysicalBackend::manual();
+        let runner =
+            MockTopKRunner::new(Vec::new()).with_physical_expert_backend(Box::new(physical));
+        let driver = match ResidentTopKDriver::try_new(runner, FixedSequenceSlotPool::new(1)) {
+            Ok(driver) => driver,
+            Err(error) => panic!("physical driver preparation failed: {error}"),
+        };
+        assert!(
+            driver
+                .executor()
+                .runner()
+                .expert_residency_control_installed
+        );
+        assert!(driver.executor().runner().expert_materialization.is_some());
+        let limits = handle.limits();
+        let capacity = |kind| {
+            driver
+                .load_registry()
+                .resources()
+                .snapshots()
+                .find(|snapshot| snapshot.kind == kind)
+                .unwrap()
+                .capacity
+        };
+        assert_eq!(capacity(ResourceKind::Sqe), limits.capacity.read_slots);
+        assert_eq!(
+            capacity(ResourceKind::PinnedSlab),
+            limits.capacity.pinned_host_bytes
+        );
+        assert_eq!(
+            capacity(ResourceKind::ExpertFrame),
+            limits.capacity.device_install_bytes
+        );
+    }
+
+    #[test]
+    fn physical_bridge_attach_accepts_large_expert_and_wakes_owner() {
+        const EXPERT_BYTES: u64 = 13_369_344;
+
+        let (physical, handle) = MockPhysicalBackend::manual();
+        let limits = ferrule_common::expert_io::ExpertIoResourceLimits {
+            capacity: ferrule_common::expert_io::ExpertIoResourceDemand {
+                read_slots: 1,
+                storage_read_bytes: EXPERT_BYTES,
+                pinned_host_bytes: EXPERT_BYTES,
+                upload_slots: 1,
+                h2d_bytes: EXPERT_BYTES,
+                install_slots: 1,
+                device_install_bytes: EXPERT_BYTES,
+            },
+            demand_reserve: ferrule_common::expert_io::ExpertIoResourceDemand::default(),
+        }
+        .validate()
+        .unwrap();
+        handle.set_bytes_and_limits(EXPERT_BYTES, limits);
+        let runner =
+            MockTopKRunner::new(Vec::new()).with_physical_expert_backend(Box::new(physical));
+        let mut driver =
+            ResidentTopKDriver::try_new(runner, FixedSequenceSlotPool::new(1)).unwrap();
+        let key = match driver
+            .executor
+            .runner_mut()
+            .expert_materialization_adapter()
+            .unwrap()
+            .resolve(materialization_request(1))
+            .unwrap()
+        {
+            ExpertDependencyResolution::Waiting(key) => key,
+            ExpertDependencyResolution::Resident(_) => panic!("expected a physical load"),
+        };
+        let progress = PendingModelProgress::new(
+            ExecutionTransactionId::new(1).unwrap(),
+            ContinuationId::new(1),
+            DependencySet::new([LogicalDependency::expert_resident(key).unwrap()]).unwrap(),
+        )
+        .unwrap();
+
+        let mut listener = driver.completion_hub().listen();
+        driver
+            .register_pending_progress(&progress, crate::scheduling::ResourceClass::Prefill)
+            .unwrap();
+        assert_eq!(driver.load_registry().stats().operations_created, 1);
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(matches!(
+            std::future::Future::poll(std::pin::Pin::new(&mut listener), &mut context),
+            std::task::Poll::Ready(ferrule_common::CompletionWake::Progress(_))
+        ));
+    }
+
+    #[test]
+    fn physical_bridge_dense_driver_defaults_to_unavailable_backend() {
+        let driver = match ResidentTopKDriver::try_new(
+            MockTopKRunner::new(Vec::new()),
+            FixedSequenceSlotPool::new(1),
+        ) {
+            Ok(driver) => driver,
+            Err(error) => panic!("dense driver preparation failed: {error}"),
+        };
+        assert!(matches!(
+            driver.load_registry().load_request(
+                materialization_request(1)
+                    .load_key(ferrule_common::DestinationGeneration::new(1))
+                    .unwrap(),
+                crate::scheduling::ResourceClass::Decode,
+            ),
+            Err(crate::io::RegistryError::Backend(
+                ferrule_common::FailureReason::DeviceUnavailable
+            ))
+        ));
+    }
+
+    #[test]
+    fn physical_bridge_real_and_runtime_limits_map_without_testing_defaults() {
+        let (_, handle) = MockPhysicalBackend::manual();
+        let physical = handle.limits();
+        let runtime = ResidentRuntimeResourceLimits {
+            arena_slots: 2,
+            kv_pages: 3,
+            continuations: 4,
+            waiters: 5,
+            load_operations: 3,
+            ready_cohorts: 6,
+        };
+        let topology = PhysicalExpertResourceTopology::new(
+            physical,
+            physical.capacity.device_install_bytes,
+            physical.capacity.install_slots,
+        )
+        .unwrap();
+        let broker = physical_materialization_resources(topology, runtime).unwrap();
+        let snapshot = |kind| {
+            broker
+                .snapshots()
+                .find(|snapshot| snapshot.kind == kind)
+                .unwrap()
+        };
+        assert_eq!(
+            snapshot(ResourceKind::Sqe).capacity,
+            physical.capacity.read_slots
+        );
+        assert_eq!(
+            snapshot(ResourceKind::PinnedSlab).capacity,
+            physical.capacity.pinned_host_bytes
+        );
+        assert_eq!(
+            snapshot(ResourceKind::ReadBytes).capacity,
+            physical.capacity.storage_read_bytes
+        );
+        assert_eq!(
+            snapshot(ResourceKind::UploadSlot).capacity,
+            physical.capacity.upload_slots
+        );
+        assert_eq!(
+            snapshot(ResourceKind::UploadBytes).capacity,
+            physical.capacity.h2d_bytes
+        );
+        assert_eq!(
+            snapshot(ResourceKind::ExpertFrame).capacity,
+            physical.capacity.device_install_bytes
+        );
+        assert_eq!(
+            snapshot(ResourceKind::Lease).capacity,
+            physical.capacity.install_slots * runtime.continuations
+        );
+        assert_eq!(snapshot(ResourceKind::Arena).capacity, 2);
+        assert_eq!(snapshot(ResourceKind::KvPage).capacity, 3);
+        assert_eq!(snapshot(ResourceKind::Continuation).capacity, 4);
+        assert_eq!(snapshot(ResourceKind::Waiter).capacity, 5);
+        assert_eq!(snapshot(ResourceKind::LoadOperation).capacity, 3);
+        assert_eq!(snapshot(ResourceKind::ReadyCohort).capacity, 6);
+    }
+
+    #[test]
+    fn physical_bridge_continuation_rejects_unresolved_synthesized_key() {
+        let mut driver = match ResidentTopKDriver::try_new(
+            MockTopKRunner::new(Vec::new()),
+            FixedSequenceSlotPool::new(1),
+        ) {
+            Ok(driver) => driver,
+            Err(error) => panic!("dense driver preparation failed: {error}"),
+        };
+        let transaction = ExecutionTransactionId::new(1).unwrap();
+        let continuation = ContinuationId::new(1);
+        let key = materialization_request(1)
+            .load_key(ferrule_common::DestinationGeneration::new(1))
+            .unwrap();
+        let progress = PendingModelProgress::new(
+            transaction,
+            continuation,
+            DependencySet::new([LogicalDependency::expert_resident(key).unwrap()]).unwrap(),
+        )
+        .unwrap();
+        let error = driver
+            .register_pending_progress(&progress, crate::scheduling::ResourceClass::Decode)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("was not fixed by physical resolve/reserve")
+        );
+        assert!(driver.continuations.is_empty());
+        assert_eq!(driver.load_registry().active_operations(), 0);
+    }
+
+    #[test]
+    fn driver_fake_backend_c2_waiting_a_does_not_block_b() {
+        let runner = MockTopKRunner::new(vec![top(10)])
+            .with_resumable_wait_scripts([1, 0])
+            .with_materialization_request(materialization_request(1));
+        let mut driver = concurrent_fake_driver(runner);
+        for id in [1, 2] {
+            let mut submitted = request(id, &[id as u32], 2, Vec::new());
+            submitted.session_id = Some(SessionId(id));
+            driver.submit(submitted);
+        }
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                ..
+            }
+        ));
+        assert_eq!(driver.resident_transactions.len(), 1);
+        assert!(driver.session_owner.contains_key(&SessionId(1)));
+        assert!(driver.sequence_states.contains_key(&SessionId(2)));
+        assert_eq!(driver.executor().runner().committed_batches, 1);
+        assert_eq!(driver.load_registry().stats().operations_created, 1);
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                ..
+            }
+        ));
+        assert!(driver.resident_transactions.is_empty());
+        assert_eq!(driver.executor().runner().committed_batches, 2);
+    }
+
+    #[test]
+    fn driver_fake_backend_c4_same_key_single_flight_and_shutdown_no_leak() {
+        let runner = MockTopKRunner::new(vec![top(10)])
+            .with_resumable_wait_scripts([1, 1])
+            .with_materialization_request(materialization_request(2));
+        let mut driver = concurrent_fake_driver(runner);
+        for id in [1, 2] {
+            let mut submitted = request(id, &[id as u32], 2, Vec::new());
+            submitted.session_id = Some(SessionId(id));
+            driver.submit(submitted);
+        }
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(ref pending) if pending.len() == 2
+        ));
+        assert_eq!(driver.load_registry().stats().operations_created, 1);
+        assert_eq!(driver.load_registry().stats().single_flight_joins, 1);
+        assert_eq!(
+            driver.materialization_adapter_stats().physical_submissions,
+            1
+        );
+        assert_eq!(
+            driver.materialization_adapter_stats().single_flight_joins,
+            1
+        );
+
+        for _ in 0..2 {
+            assert!(matches!(
+                driver
+                    .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                    .unwrap(),
+                ResidentDriverStep::Executed {
+                    action_kind: ResidentActionKind::Prefill,
+                    ..
+                }
+            ));
+        }
+        let report = driver.shutdown(&mut |_| Ok(()), 32).unwrap();
+        assert!(report.registry.drained);
+        assert_eq!(report.registry.active_grants, 0);
+        assert_eq!(report.executor_transactions, 0);
+        assert_eq!(report.expert_io_grants, 0);
+        assert_eq!(report.kv_page_grants, 0);
+        assert_eq!(report.pending_kv_retirements, 0);
+        assert!(driver.try_submit(request(3, &[3], 1, Vec::new())).is_err());
+    }
+
+    #[test]
+    fn driver_shutdown_cancels_waiters_drains_submitted_ops_and_releases_all_ownership() {
+        let runner = MockTopKRunner::new(Vec::new())
+            .with_resumable_wait_scripts([2])
+            .with_materialization_request(materialization_request(3));
+        let (physical, handle) = MockPhysicalBackend::automatic();
+        handle.lose_next(ferrule_common::io_protocol::LoadStage::ReadSubmitted);
+        let runner = runner.with_physical_expert_backend(Box::new(physical));
+        let mut driver = concurrent_transaction_driver(runner);
+        let mut submitted = request(1, &[1], 2, Vec::new());
+        submitted.session_id = Some(SessionId(1));
+        driver.submit(submitted);
+
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(_)
+        ));
+        assert!(matches!(
+            driver
+                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(_)
+        ));
+        assert_eq!(driver.load_registry().pending_physical_operations(), 1);
+
+        let report = driver.shutdown(&mut |_| Ok(()), 32).unwrap();
+        assert!(report.registry.drained);
+        assert_eq!(report.registry.active_grants, 0);
+        assert_eq!(report.executor_transactions, 0);
+        assert_eq!(report.expert_io_grants, 0);
+        assert_eq!(report.kv_page_grants, 0);
+        assert_eq!(report.pending_kv_retirements, 0);
+        assert_eq!(driver.load_registry().stats().cancellations_requested, 1);
+        assert!(driver.load_registry().waiters().is_empty());
+        assert!(driver.continuations.is_empty());
+        assert!(driver.transaction_continuations.is_empty());
+        assert!(driver.session_owner.is_empty());
+        assert!(driver.pending_sequence_cleanups.is_empty());
+        assert!(driver.scheduler().is_idle());
+    }
+
+    #[test]
+    fn speculative_kv_cow_reservation_and_retirement_release_exact_hard_credit() {
+        let (mut driver, source, target, source_page) = speculative_shared_tail_credit_driver(2);
+        assert_eq!(
+            driver
+                .load_registry()
+                .resources()
+                .in_use(ResourceKind::KvPage),
+            1
+        );
+
+        let proposal = [];
+        let item = SpeculativeVerificationItem {
+            state_slot: target,
+            generation: 0,
+            proposal: &proposal,
+            frontier: TargetFrontier {
+                position: 3,
+                top1: TokenLogit::new(9, 1.0),
+            },
+        };
+        let reservations = driver
+            .reserve_speculative_pages(ExecutionTransactionId::new(90).unwrap(), &[item])
+            .unwrap();
+        let cow = reservations[0]
+            .view()
+            .cow_replacement
+            .expect("shared partial tail must reserve a COW replacement");
+        assert_eq!(cow.source, source_page);
+        assert_ne!(cow.replacement, source_page);
+        assert_eq!(driver.kv_page_grants.len(), 2);
+        assert_eq!(
+            driver
+                .load_registry()
+                .resources()
+                .in_use(ResourceKind::KvPage),
+            2
+        );
+
+        driver
+            .abort_quiesced_resident_kv(PendingResidentKv::Reserved(reservations))
+            .unwrap();
+        assert!(driver.kv_page_grants.contains_key(&source_page));
+        assert!(!driver.kv_page_grants.contains_key(&cow.replacement));
+        assert_eq!(driver.kv_page_grants.len(), 1);
+        assert_eq!(
+            driver
+                .load_registry()
+                .resources()
+                .in_use(ResourceKind::KvPage),
+            1
+        );
+        assert_eq!(driver.page_manager().unwrap().stats().retiring_pages, 0);
+
+        retire_test_sequence(&mut driver, target);
+        assert_eq!(driver.kv_page_grants.len(), 1);
+        retire_test_sequence(&mut driver, source);
+        assert!(driver.kv_page_grants.is_empty());
+        assert_eq!(
+            driver
+                .load_registry()
+                .resources()
+                .in_use(ResourceKind::KvPage),
+            0
+        );
+        assert_eq!(driver.page_manager().unwrap().allocated_pages(), 0);
+    }
+
+    #[test]
+    fn speculative_kv_credit_exhaustion_is_failure_atomic_and_leak_free() {
+        let (mut driver, source, target, source_page) = speculative_shared_tail_credit_driver(1);
+        let proposal = [];
+        let item = SpeculativeVerificationItem {
+            state_slot: target,
+            generation: 0,
+            proposal: &proposal,
+            frontier: TargetFrontier {
+                position: 3,
+                top1: TokenLogit::new(9, 1.0),
+            },
+        };
+
+        let error = driver
+            .reserve_speculative_pages(ExecutionTransactionId::new(91).unwrap(), &[item])
+            .unwrap_err();
+        assert!(error.to_string().contains("KvPage"));
+        assert_eq!(driver.kv_page_grants.len(), 1);
+        assert!(driver.kv_page_grants.contains_key(&source_page));
+        assert_eq!(
+            driver
+                .page_manager()
+                .unwrap()
+                .required_physical_pages(target, 0, 1)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            driver
+                .load_registry()
+                .resources()
+                .in_use(ResourceKind::KvPage),
+            1
+        );
+        assert_eq!(driver.page_manager().unwrap().allocated_pages(), 1);
+
+        retire_test_sequence(&mut driver, target);
+        retire_test_sequence(&mut driver, source);
+        assert!(driver.kv_page_grants.is_empty());
+        assert_eq!(
+            driver
+                .load_registry()
+                .resources()
+                .in_use(ResourceKind::KvPage),
+            0
+        );
+    }
+
+    #[test]
+    fn resident_external_commit_creates_one_snapshot_per_output_token() {
+        let mut driver = driver_with_outputs(vec![top(65)]);
+        driver.submit(request(1, &[1], 1, Vec::new()));
+        let mut events = Vec::new();
+        driver
+            .drive_ready_test_work(|event| {
+                events.push(event.clone());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        let snapshot = driver
+            .load_registry()
+            .ledger()
+            .output(OutputTokenId::new(1))
+            .unwrap();
+        assert!(snapshot.cohort_phases.contains_key(&CohortId::new(2)));
+        assert_eq!(snapshot.externally_committed_tokens, 1);
+        assert!(
+            driver
+                .load_registry()
+                .ledger()
+                .output(OutputTokenId::new(2))
+                .is_none()
+        );
     }
 
     #[test]
@@ -4689,6 +7006,37 @@ mod tests {
         assert_eq!(metrics.rolled_back_rows, 2);
         assert_eq!(metrics.rejected_tokens, 1);
         assert_eq!(metrics.accepted_prefix_histogram, vec![1]);
+        let snapshot = driver
+            .load_registry()
+            .ledger()
+            .output(OutputTokenId::new(1))
+            .unwrap();
+        assert!(snapshot.cohort_phases.contains_key(&CohortId::new(2)));
+        assert_eq!(snapshot.externally_committed_tokens, 1);
+        assert!(
+            driver
+                .load_registry()
+                .ledger()
+                .output(OutputTokenId::new(2))
+                .is_none()
+        );
+        assert_eq!(
+            driver
+                .load_registry()
+                .resources()
+                .in_use(ResourceKind::KvPage),
+            driver.page_manager().unwrap().allocated_pages() as u64
+        );
+        assert!(
+            driver
+                .load_registry()
+                .resources()
+                .in_use(ResourceKind::KvPage)
+                > 0
+        );
+        let report = driver.shutdown(&mut |_| Ok(()), 0).unwrap();
+        assert_eq!(report.kv_page_grants, 0);
+        assert_eq!(report.registry.active_grants, 0);
     }
 
     #[test]
@@ -4725,11 +7073,8 @@ mod tests {
             panic!("expected native proposal wait");
         };
         assert_eq!(waiting.len(), 1);
-        assert_eq!(
-            waiting[0].continuation(),
-            BatchContinuationId::new(100).unwrap()
-        );
-        assert!(waiting[0].expert_loads().is_empty());
+        assert_eq!(waiting[0].continuation(), ContinuationId::new(100));
+        assert_eq!(waiting[0].dependencies().len(), 1);
         assert_eq!(driver.executor().runner().native_proposal_begin_calls, 2);
         assert_eq!(driver.executor().runner().native_proposal_resume_calls, 0);
         assert_eq!(driver.executor().runner().active_native_proposals.len(), 1);
@@ -5125,14 +7470,9 @@ mod tests {
                     token_ids: vec![21, 22],
                     confidence_logits: vec![1.0, 1.0],
                 },
-                vec![
-                    TokenLogit::new(21, 6.0),
-                    TokenLogit::new(97, 5.0),
-                    TokenLogit::new(96, 4.0),
-                ],
+                vec![TokenLogit::new(21, 6.0)],
             )
-            .with_resumable_wait_scripts([0, 0, 2, 0])
-            .with_packed_topology_guard();
+            .with_resumable_wait_scripts([0, 0, 2, 0]);
         let mut driver = ResidentTopKDriver::with_configs(
             runner,
             FixedSequenceSlotPool::new(2),
@@ -5153,7 +7493,8 @@ mod tests {
         )
         .with_page_manager(KvPageManager::new(Box::new(DriverTestKvSchema), 16));
         for id in [1, 2] {
-            let mut submitted = request(id, &[id as u32], 4, Vec::new());
+            let max_new_tokens = if id == 1 { 4 } else { 1 };
+            let mut submitted = request(id, &[id as u32], max_new_tokens, Vec::new());
             submitted.session_id = Some(SessionId(id));
             driver.submit(submitted);
         }
@@ -5191,8 +7532,12 @@ mod tests {
             driver
                 .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
                 .unwrap(),
-            ResidentDriverStep::WaitingForModelProgress(ref pending) if pending.len() == 1
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Decode,
+                ..
+            }
         ));
+        assert_eq!(driver.pending_model_progresses().len(), 1);
         assert_eq!(driver.speculative_transactions.len(), 1);
         assert_eq!(driver.session_owner.len(), 1);
         let owned_session = *driver.session_owner.keys().next().unwrap();
@@ -5203,7 +7548,7 @@ mod tests {
         };
         assert!(!driver.sequence_states.contains_key(&owned_session));
         assert!(driver.sequence_states.contains_key(&runnable_session));
-        assert_eq!(driver.executor().runner().sequence_state_fork_calls, 1);
+        assert_eq!(driver.executor().runner().sequence_state_fork_calls, 2);
         assert_eq!(
             driver
                 .executor()
@@ -5211,20 +7556,17 @@ mod tests {
                 .topology_mutation_attempts_while_packed,
             0
         );
-        assert_eq!(driver.executor().runner().released_sequence_states, 0);
-        assert!(driver.executor().runner().released_kv_pages.is_empty());
+        assert_eq!(driver.executor().runner().released_sequence_states, 1);
+        let owned_index = usize::from(owned_session == SessionId(2));
+        let owned_slot = driver.page_slots[&owned_session];
         assert_eq!(
-            [SessionId(1), SessionId(2)].map(|session_id| {
-                let slot = driver.page_slots[&session_id];
-                driver
-                    .page_manager()
-                    .unwrap()
-                    .block_table(slot)
-                    .unwrap()
-                    .pages()
-                    .to_vec()
-            }),
-            page_tables_before
+            driver
+                .page_manager()
+                .unwrap()
+                .block_table(owned_slot)
+                .unwrap()
+                .pages(),
+            page_tables_before[owned_index]
         );
         assert_eq!(
             driver.page_manager().unwrap().allocated_pages(),
@@ -5238,7 +7580,7 @@ mod tests {
             ResidentDriverStep::WaitingForModelProgress(_)
         ));
         assert_eq!(driver.speculative_transactions.len(), 1);
-        assert_eq!(driver.executor().runner().sequence_state_fork_calls, 1);
+        assert_eq!(driver.executor().runner().sequence_state_fork_calls, 2);
         assert_eq!(
             driver
                 .executor()
@@ -5246,8 +7588,7 @@ mod tests {
                 .topology_mutation_attempts_while_packed,
             0
         );
-        assert_eq!(driver.executor().runner().released_sequence_states, 0);
-        assert!(driver.executor().runner().released_kv_pages.is_empty());
+        assert_eq!(driver.executor().runner().released_sequence_states, 1);
 
         assert!(matches!(
             driver
@@ -5262,16 +7603,6 @@ mod tests {
         assert!(driver.session_owner.is_empty());
         assert!(driver.sequence_states.contains_key(&owned_session));
         assert!(driver.sequence_states.contains_key(&runnable_session));
-
-        assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
-            ResidentDriverStep::Executed {
-                action_kind: ResidentActionKind::Decode,
-                ..
-            }
-        ));
         assert_eq!(driver.executor().runner().sequence_state_fork_calls, 2);
         assert_eq!(
             driver
@@ -5486,6 +7817,21 @@ mod tests {
         assert_eq!(metrics.correction_tokens, 1);
         assert_eq!(metrics.externally_committed_tokens, 4);
         assert_eq!(metrics.runtime_emitted_tokens, 4);
+        for token in 1..=4 {
+            let snapshot = driver
+                .load_registry()
+                .ledger()
+                .output(OutputTokenId::new(token))
+                .unwrap();
+            assert_eq!(snapshot.externally_committed_tokens, 4);
+        }
+        assert!(
+            driver
+                .load_registry()
+                .ledger()
+                .output(OutputTokenId::new(5))
+                .is_none()
+        );
         assert_eq!(metrics.rolled_back_rows, 1);
         assert_eq!(metrics.rejected_tokens, 1);
         assert_eq!(metrics.accepted_prefix_histogram, vec![0, 2]);
@@ -5656,20 +8002,17 @@ mod tests {
         assert_eq!(driver.executor().runner().rolled_back_batches, 0);
         assert!(!driver.executor().is_poisoned());
 
-        assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
-            ResidentDriverStep::Executed {
-                action_kind: ResidentActionKind::Prefill,
-                rows: 1,
-                ..
+        assert_eq!(
+            driver.cancel_request(RequestId(1)).unwrap(),
+            CancelRequestResult::Active {
+                request_id: RequestId(1),
+                session_id: SessionId(1),
             }
-        ));
+        );
         assert!(driver.resident_transactions.is_empty());
         assert_eq!(driver.executor().runner().prepared_batches, 1);
-        assert_eq!(driver.executor().runner().committed_batches, 1);
-        assert_eq!(driver.executor().runner().rolled_back_batches, 0);
+        assert_eq!(driver.executor().runner().committed_batches, 0);
+        assert_eq!(driver.executor().runner().rolled_back_batches, 1);
     }
 
     #[test]

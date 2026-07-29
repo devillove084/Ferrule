@@ -1,23 +1,38 @@
-use std::io::Write;
-use std::path::Path;
-use std::time::{Duration, Instant};
+#[cfg(feature = "cuda")]
+use std::{
+    io::Write,
+    path::Path,
+    time::{Duration, Instant},
+};
 
-use crate::bench::{RuntimeBenchSummary, RuntimeCounters};
+#[cfg(feature = "cuda")]
+use crate::commands::bench_interactive::{
+    CLI_RUNTIME_SCHEMA_VERSION, RuntimeMaterializationStats, dsv4_operator_counters_delta,
+    dsv4_operator_counters_json, print_hard_resource_high_water,
+    print_runtime_materialization_summary, resident_driver_stats_delta, resident_driver_stats_json,
+    resident_driver_stats_snapshot, runtime_materialization_snapshot,
+    runtime_materialization_stats_delta, runtime_materialization_stats_json,
+};
+#[cfg(feature = "cuda")]
 use ferrule_model::{
     ChatTemplate, ModelExecutionBackend,
     models::deepseek_v4::{DeepSeekV4PrepareOptions, DeepSeekV4Runner},
 };
+#[cfg(feature = "cuda")]
 use ferrule_runtime::{
     ExpertIoBudget, GenerateRequest, LocalResidentInferenceEngine, RequestId, ResidentActionKind,
     ResidentDriverStep, ResidentSchedulerConfig, ResidentTopKDriverConfig, SessionId,
 };
 
+#[cfg(feature = "cuda")]
 use crate::commands::resident::{block_on_local_inference, build_resident_topk_driver};
 
+#[cfg(feature = "cuda")]
 use super::stats::print_deepseek_v4_runtime_stats;
 
 // ── deepseek-v4-probe / generate ─────────────────────────────────────────────
 
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_deepseek_v4_generate(
     model_dir: &str,
@@ -53,6 +68,7 @@ pub fn cmd_deepseek_v4_generate(
     ))
 }
 
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 async fn cmd_deepseek_v4_generate_async(
     model_dir: &str,
@@ -110,8 +126,7 @@ async fn cmd_deepseek_v4_generate_async(
         println!("max_new:   {max_new_tokens}");
         println!("max_layers: {max_layers}");
         println!("warmup:    {warmup_tokens}");
-        println!("prefetch:  {moe_prefetch_experts} hot experts/layer");
-        println!("hotset:    {moe_hotset_experts} resident experts/layer (0 = managed default)");
+
         println!("load:       {:.3} ms", load_elapsed.as_secs_f64() * 1000.0);
         println!("--- output ---");
     }
@@ -177,13 +192,14 @@ async fn cmd_deepseek_v4_generate_async(
         }
     }
 
+    let measured_observability_baseline = driver.model_observability_snapshot();
+    let measured_driver_stats_baseline = resident_driver_stats_snapshot(&driver);
+    let measured_materialization_baseline =
+        runtime_materialization_snapshot(&driver, measured_observability_baseline.operator)?;
     let mut generated = Vec::new();
-    let mut final_position = driver.model_observability_snapshot().position;
+    let mut final_position = measured_observability_baseline.position;
     let mut prefill_elapsed = Duration::ZERO;
     let mut decode_elapsed = Duration::ZERO;
-    let mut decode_counters_baseline: Option<
-        ferrule_model::models::deepseek_v4::DeepSeekV4OperatorRuntimeCounters,
-    > = None;
 
     if max_new_tokens > 0 {
         driver.submit(GenerateRequest {
@@ -220,8 +236,6 @@ async fn cmd_deepseek_v4_generate_async(
                 ResidentDriverStep::Executed { action_kind, .. } => match action_kind {
                     ResidentActionKind::Prefill | ResidentActionKind::Mixed => {
                         prefill_elapsed += step_elapsed;
-                        decode_counters_baseline =
-                            Some(driver.model_observability_snapshot().operator);
                     }
                     ResidentActionKind::Decode => decode_elapsed += step_elapsed,
                     ResidentActionKind::Finish | ResidentActionKind::Cancel => {}
@@ -245,13 +259,23 @@ async fn cmd_deepseek_v4_generate_async(
     let model_info = driver.model_info();
     let bound_layer_count = driver.bound_layer_count().unwrap_or_default();
     let observability = driver.model_observability_snapshot();
+    let operator_counters = dsv4_operator_counters_delta(
+        measured_observability_baseline.operator,
+        observability.operator,
+    );
+    let runtime_driver_stats = resident_driver_stats_delta(
+        measured_driver_stats_baseline,
+        resident_driver_stats_snapshot(&driver),
+    );
+    let runtime_materialization_after =
+        runtime_materialization_snapshot(&driver, observability.operator)?;
+    let runtime_materialization = runtime_materialization_stats_delta(
+        measured_materialization_baseline,
+        runtime_materialization_after,
+        runtime_driver_stats.emitted_tokens,
+    );
     if json {
         let layer_stats = observability.layer_runtime;
-        let resident_experts = layer_stats.iter().map(|stat| stat.resident_experts).sum();
-        let resident_bytes = layer_stats
-            .iter()
-            .map(|stat| stat.resident_expert_bytes)
-            .sum();
         let layers = layer_stats
             .iter()
             .map(|stat| {
@@ -265,186 +289,30 @@ async fn cmd_deepseek_v4_generate_async(
                 })
             })
             .collect::<Vec<_>>();
-        let op_counters = observability.operator;
-        // If warmup ran, subtract warmup baseline so counters reflect
-        // only the timed decode phase.
-        let (expert_loads, expert_load_bytes, expert_evictions, expert_selected) =
-            match &decode_counters_baseline {
-                Some(base) => (
-                    op_counters.expert_loads.saturating_sub(base.expert_loads),
-                    op_counters
-                        .expert_load_bytes
-                        .saturating_sub(base.expert_load_bytes),
-                    op_counters
-                        .expert_evictions
-                        .saturating_sub(base.expert_evictions),
-                    op_counters
-                        .expert_selected
-                        .saturating_sub(base.expert_selected),
-                ),
-                None => (
-                    op_counters.expert_loads,
-                    op_counters.expert_load_bytes,
-                    op_counters.expert_evictions,
-                    op_counters.expert_selected,
-                ),
-            };
-        let (kernel_launches, h2d_copies, h2d_bytes, d2h_copies, d2h_bytes, uploads, upload_bytes) =
-            match &decode_counters_baseline {
-                Some(base) => (
-                    op_counters
-                        .kernel_launches
-                        .saturating_sub(base.kernel_launches),
-                    op_counters
-                        .host_to_device_copies
-                        .saturating_sub(base.host_to_device_copies),
-                    op_counters
-                        .host_to_device_bytes
-                        .saturating_sub(base.host_to_device_bytes),
-                    op_counters
-                        .device_to_host_copies
-                        .saturating_sub(base.device_to_host_copies),
-                    op_counters
-                        .device_to_host_bytes
-                        .saturating_sub(base.device_to_host_bytes),
-                    op_counters
-                        .artifact_uploads
-                        .saturating_sub(base.artifact_uploads),
-                    op_counters
-                        .artifact_upload_bytes
-                        .saturating_sub(base.artifact_upload_bytes),
-                ),
-                None => (
-                    op_counters.kernel_launches,
-                    op_counters.host_to_device_copies,
-                    op_counters.host_to_device_bytes,
-                    op_counters.device_to_host_copies,
-                    op_counters.device_to_host_bytes,
-                    op_counters.artifact_uploads,
-                    op_counters.artifact_upload_bytes,
-                ),
-            };
-        let (
-            moe_calls,
-            moe_tc_calls,
-            moe_scalar_calls,
-            moe_reduce_calls,
-            moe_total_us,
-            moe_input_prepare_us,
-            moe_gate_up_us,
-            moe_swiglu_us,
-            moe_hidden_pack_us,
-            moe_down_us,
-        ) = match &decode_counters_baseline {
-            Some(base) => (
-                op_counters.moe_calls.saturating_sub(base.moe_calls),
-                op_counters.moe_tc_calls.saturating_sub(base.moe_tc_calls),
-                op_counters
-                    .moe_scalar_calls
-                    .saturating_sub(base.moe_scalar_calls),
-                op_counters
-                    .moe_reduce_calls
-                    .saturating_sub(base.moe_reduce_calls),
-                op_counters.moe_total_us.saturating_sub(base.moe_total_us),
-                op_counters
-                    .moe_input_prepare_us
-                    .saturating_sub(base.moe_input_prepare_us),
-                op_counters
-                    .moe_gate_up_us
-                    .saturating_sub(base.moe_gate_up_us),
-                op_counters.moe_swiglu_us.saturating_sub(base.moe_swiglu_us),
-                op_counters
-                    .moe_hidden_pack_us
-                    .saturating_sub(base.moe_hidden_pack_us),
-                op_counters.moe_down_us.saturating_sub(base.moe_down_us),
-            ),
-            None => (
-                op_counters.moe_calls,
-                op_counters.moe_tc_calls,
-                op_counters.moe_scalar_calls,
-                op_counters.moe_reduce_calls,
-                op_counters.moe_total_us,
-                op_counters.moe_input_prepare_us,
-                op_counters.moe_gate_up_us,
-                op_counters.moe_swiglu_us,
-                op_counters.moe_hidden_pack_us,
-                op_counters.moe_down_us,
-            ),
-        };
-        let mut counters = RuntimeCounters::default();
-        counters.record_load(load_elapsed);
-        counters.record_prefill(prefill_elapsed);
-        counters.record_decode(decode_elapsed);
-        counters.timing.moe_calls = moe_calls;
-        counters.timing.moe_tc_calls = moe_tc_calls;
-        counters.timing.moe_scalar_calls = moe_scalar_calls;
-        counters.timing.moe_reduce_calls = moe_reduce_calls;
-        counters.timing.moe_total_us = moe_total_us;
-        counters.timing.moe_input_prepare_us = moe_input_prepare_us;
-        counters.timing.moe_gate_up_us = moe_gate_up_us;
-        counters.timing.moe_swiglu_us = moe_swiglu_us;
-        counters.timing.moe_hidden_pack_us = moe_hidden_pack_us;
-        counters.timing.moe_down_us = moe_down_us;
-        counters.record_kernel_launches(kernel_launches);
-        counters.transfers.host_to_device_copies = h2d_copies;
-        counters.transfers.host_to_device_bytes = h2d_bytes;
-        counters.transfers.device_to_host_copies = d2h_copies;
-        counters.transfers.device_to_host_bytes = d2h_bytes;
-        counters.record_artifact_uploads(uploads, upload_bytes);
-        counters.record_selected_experts(expert_selected);
-        counters.record_expert_loads(expert_loads, expert_load_bytes);
-        counters.record_expert_evictions(expert_evictions);
-        let (host_cache_hits, host_cache_misses, host_cache_evictions) =
-            match &decode_counters_baseline {
-                Some(base) => (
-                    op_counters
-                        .expert_host_cache
-                        .hits
-                        .saturating_sub(base.expert_host_cache.hits),
-                    op_counters
-                        .expert_host_cache
-                        .misses
-                        .saturating_sub(base.expert_host_cache.misses),
-                    op_counters
-                        .expert_host_cache
-                        .evictions
-                        .saturating_sub(base.expert_host_cache.evictions),
-                ),
-                None => (
-                    op_counters.expert_host_cache.hits,
-                    op_counters.expert_host_cache.misses,
-                    op_counters.expert_host_cache.evictions,
-                ),
-            };
-        counters.set_expert_host_cache(
-            host_cache_hits,
-            host_cache_misses,
-            host_cache_evictions,
-            op_counters.expert_host_cache.entries_used,
-            op_counters.expert_host_cache.bytes_used,
+        let mut out = generate_runtime_schema_json(
+            &runtime_driver_stats,
+            &runtime_materialization,
+            &operator_counters,
         );
-        counters.set_expert_residency(resident_experts, resident_bytes);
-        let summary = RuntimeBenchSummary::new(counters, prompt_tokens.len(), generated.len());
-        let out = serde_json::json!({
-            "model": model_dir,
-            "backend": model_info.backend,
-            "prompt": prompt,
-            "prompt_tokens": prompt_tokens.len(),
-            "prompt_token_ids": prompt_tokens,
-            "generated_tokens": generated.len(),
-            "generated_token_ids": generated,
-            "max_layers": max_layers,
-            "warmup_tokens": warmup_tokens,
-            "moe_prefetch_experts": moe_prefetch_experts,
-            "moe_hotset_experts": moe_hotset_experts,
-            "bound_layers": bound_layer_count,
-            "position": final_position,
-            "layers": layers,
+        out["model"] = serde_json::json!(model_dir);
+        out["backend"] = serde_json::json!(model_info.backend);
+        out["prompt"] = serde_json::json!(prompt);
+        out["prompt_tokens"] = serde_json::json!(prompt_tokens.len());
+        out["prompt_token_ids"] = serde_json::json!(prompt_tokens);
+        out["generated_tokens"] = serde_json::json!(generated.len());
+        out["generated_token_ids"] = serde_json::json!(generated);
+        out["max_layers"] = serde_json::json!(max_layers);
+        out["warmup_tokens"] = serde_json::json!(warmup_tokens);
+        out["bound_layers"] = serde_json::json!(bound_layer_count);
+        out["position"] = serde_json::json!(final_position);
+        out["layers"] = serde_json::json!(layers);
+        out["timing"] = serde_json::json!({
             "load_seconds": load_elapsed.as_secs_f64(),
             "prefill_seconds": prefill_elapsed.as_secs_f64(),
             "decode_seconds": decode_elapsed.as_secs_f64(),
             "total_seconds": elapsed.as_secs_f64(),
-            "summary": summary,
+            "prefill_tokens_per_second": duration_rate(prompt_tokens.len(), prefill_elapsed),
+            "decode_tokens_per_second": duration_rate(generated.len(), decode_elapsed),
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
@@ -454,7 +322,116 @@ async fn cmd_deepseek_v4_generate_async(
         println!("position:   {final_position}");
         println!("bound layers: {bound_layer_count}");
         print_deepseek_v4_runtime_stats(&observability.layer_runtime);
+        print_runtime_materialization_summary(&runtime_materialization);
+        print_hard_resource_high_water(&runtime_driver_stats.hard_resource_high_water);
         println!("run:        {:.3} ms", elapsed.as_secs_f64() * 1000.0);
     }
     Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn generate_runtime_schema_json(
+    runtime_driver_stats: &ferrule_runtime::ResidentTopKDriverStats,
+    runtime_materialization: &RuntimeMaterializationStats,
+    operator_counters: &ferrule_model::models::deepseek_v4::DeepSeekV4OperatorRuntimeCounters,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": CLI_RUNTIME_SCHEMA_VERSION,
+        "runtime_driver_stats": resident_driver_stats_json(runtime_driver_stats),
+        "runtime_materialization": runtime_materialization_stats_json(runtime_materialization),
+        "dsv4_operator_counters": dsv4_operator_counters_json(operator_counters),
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn duration_rate(tokens: usize, elapsed: Duration) -> f64 {
+    if elapsed.is_zero() {
+        0.0
+    } else {
+        tokens as f64 / elapsed.as_secs_f64()
+    }
+}
+
+#[cfg(all(test, feature = "cuda"))]
+mod tests {
+    use super::*;
+    use ferrule_runtime::ResourceKind;
+
+    #[test]
+    fn generate_v2_runtime_schema_matches_interactive_report_and_has_no_legacy_keys() {
+        let runtime_driver_stats = ferrule_runtime::ResidentTopKDriverStats {
+            hard_resource_high_water: ResourceKind::ALL
+                .into_iter()
+                .map(|kind| (kind, 1))
+                .collect(),
+            ..Default::default()
+        };
+        let json = generate_runtime_schema_json(
+            &runtime_driver_stats,
+            &RuntimeMaterializationStats::default(),
+            &ferrule_model::models::deepseek_v4::DeepSeekV4OperatorRuntimeCounters::default(),
+        );
+
+        assert_eq!(json["schema_version"], CLI_RUNTIME_SCHEMA_VERSION);
+        assert!(json["runtime_materialization"]["adapter"]["physical_submissions"].is_number());
+        assert!(json["runtime_materialization"]["critical_path"]["per_external_token"].is_array());
+        assert_eq!(
+            json["runtime_driver_stats"]["hard_resource_high_water"]
+                .as_object()
+                .unwrap()
+                .len(),
+            ResourceKind::ALL.len()
+        );
+
+        let encoded = serde_json::to_string(&json).unwrap();
+        for legacy in [
+            concat!("expert_", "loads"),
+            concat!("expert_", "load_bytes"),
+            concat!("expert_", "host_cache"),
+            concat!("expert_", "pinned_cache"),
+            concat!("expert_cuda_", "resident_entries"),
+            concat!("expert_async_", "prefetch"),
+            concat!("expert_upload_", "prefetch"),
+            concat!("moe_", "prefetch_"),
+            concat!("moe_expert_", "read"),
+            concat!("moe_expert_", "upload"),
+            concat!("expert_selected_", "upload_wait"),
+            concat!("operation_", "id"),
+        ] {
+            assert!(
+                !encoded.contains(legacy),
+                "legacy key fragment remained in generate v2 schema: {legacy}"
+            );
+        }
+    }
+
+    #[test]
+    fn duration_rate_handles_empty_and_measured_intervals() {
+        assert_eq!(duration_rate(4, Duration::ZERO), 0.0);
+        assert_eq!(duration_rate(4, Duration::from_secs(2)), 2.0);
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the non-CUDA stub mirrors the CUDA command interface"
+)]
+pub fn cmd_deepseek_v4_generate(
+    _model_dir: &str,
+    _prompt: &str,
+    _max_new_tokens: usize,
+    _max_layers: usize,
+    _output_head_chunk_rows: usize,
+    _max_tensor_mb: u64,
+    _expert_reader_max_slice_mb: u64,
+    _stop_at_eos: bool,
+    _verbose_tokens: bool,
+    _chat_prompt: bool,
+    _json: bool,
+    _warmup_tokens: usize,
+    _moe_prefetch_experts: usize,
+    _moe_hotset_experts: usize,
+) -> anyhow::Result<()> {
+    anyhow::bail!("deepseek-v4-generate requires --features cuda")
 }

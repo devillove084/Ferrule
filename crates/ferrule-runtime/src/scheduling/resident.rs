@@ -219,6 +219,22 @@ impl ResidentScheduler {
         self.active.len()
     }
 
+    pub(crate) fn request_ids(&self) -> Vec<RequestId> {
+        let mut requests = self
+            .waiting
+            .iter()
+            .map(|waiting| waiting.request.id)
+            .chain(
+                self.active
+                    .values()
+                    .filter_map(|sequence| sequence.request_id),
+            )
+            .collect::<Vec<_>>();
+        requests.sort_unstable_by_key(|request| request.0);
+        requests.dedup();
+        requests
+    }
+
     /// Restore exact decode actions removed for a suspended transaction.
     ///
     /// Validation is failure-atomic: no queue entry is published unless every

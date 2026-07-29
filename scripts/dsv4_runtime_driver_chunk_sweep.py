@@ -361,7 +361,7 @@ def build_cuda(arch: str) -> None:
         "oxide",
         "build",
         "--features",
-        "cuda,cutlass",
+        "cuda",
         "--arch",
         arch,
         "--",

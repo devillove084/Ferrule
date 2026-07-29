@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="240" viewBox="0 0 960 240" role="img" aria-labelledby="ferrule-logo-title ferrule-logo-desc" focusable="false">
+  <title id="ferrule-logo-title">Ferrule</title>
+  <desc id="ferrule-logo-desc">A continuous metallic Möbius data band beside the custom Ferrule wordmark.</desc>
+
+  <defs>
+    <linearGradient id="ferrule-band" x1="28" y1="58" x2="258" y2="182" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#CBD5E1"/>
+      <stop offset="0.18" stop-color="#475569"/>
+      <stop offset="0.34" stop-color="#F8FAFC"/>
+      <stop offset="0.50" stop-color="#22D3EE"/>
+      <stop offset="0.67" stop-color="#2563EB"/>
+      <stop offset="0.83" stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#E2E8F0"/>
+    </linearGradient>
+
+    <linearGradient id="ferrule-glint" x1="42" y1="70" x2="246" y2="170" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.78"/>
+      <stop offset="0.42" stop-color="#FFFFFF" stop-opacity="0.18"/>
+      <stop offset="0.62" stop-color="#CFFAFE" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.34"/>
+    </linearGradient>
+
+    <linearGradient id="ferrule-ink" x1="302" y1="74" x2="929" y2="166" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0F172A"/>
+      <stop offset="0.48" stop-color="#334155"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+
+    <path id="ferrule-loop" d="M32 120C60 61 97 61 143 120C188 179 225 179 254 120C225 61 188 61 143 120C97 179 60 179 32 120Z"/>
+    <path id="ferrule-overpass" d="M105 78C119 88 131 104 143 120C156 137 168 152 182 162"/>
+
+    <mask id="ferrule-weave-cut" x="0" y="0" width="286" height="240" maskUnits="userSpaceOnUse">
+      <rect width="286" height="240" fill="#FFFFFF"/>
+      <use href="#ferrule-overpass" fill="none" stroke="#000000" stroke-width="40" stroke-linecap="round"/>
+    </mask>
+
+    <path id="ferrule-wordmark" fill-rule="evenodd" d="
+      M302 74H368V93H326V113H363V132H326V166H302Z
+      M386 74H454V93H410V111H450V130H410V147H456V166H386Z
+      M475 166V74H516C542 74 558 88 558 109C558 124 550 135 537 141L563 166H531L510 143H499V166ZM499 93V124H514C527 124 534 119 534 108C534 98 527 93 514 93Z
+      M577 166V74H618C644 74 660 88 660 109C660 124 652 135 639 141L665 166H633L612 143H601V166ZM601 93V124H616C629 124 636 119 636 108C636 98 629 93 616 93Z
+      M675 74H699V132C699 143 705 149 716 149C727 149 733 143 733 132V74H757V133C757 155 742 169 716 169C690 169 675 155 675 133Z
+      M775 74H799V147H843V166H775Z
+      M859 74H927V93H883V111H923V130H883V147H929V166H859Z"/>
+  </defs>
+
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" mask="url(#ferrule-weave-cut)">
+    <use href="#ferrule-loop" stroke="#F8FAFC" stroke-width="38"/>
+    <use href="#ferrule-loop" stroke="#111827" stroke-width="34"/>
+    <use href="#ferrule-loop" stroke="url(#ferrule-band)" stroke-width="26"/>
+    <use href="#ferrule-loop" stroke="url(#ferrule-glint)" stroke-width="3"/>
+  </g>
+
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <use href="#ferrule-overpass" stroke="#F8FAFC" stroke-width="38"/>
+    <use href="#ferrule-overpass" stroke="#111827" stroke-width="34"/>
+    <use href="#ferrule-overpass" stroke="url(#ferrule-band)" stroke-width="26"/>
+    <use href="#ferrule-overpass" stroke="url(#ferrule-glint)" stroke-width="3"/>
+  </g>
+
+  <g stroke-linejoin="round">
+    <use href="#ferrule-wordmark" fill="#F8FAFC" stroke="#F8FAFC" stroke-width="8"/>
+    <use href="#ferrule-wordmark" fill="url(#ferrule-ink)" stroke="#111827" stroke-width="2"/>
+  </g>
+</svg>

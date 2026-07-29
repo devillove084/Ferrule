@@ -4,6 +4,11 @@
 //! [`crate::execution::SequenceStateCore`]. This object composes that core with
 //! DeepSeek-V4-specific layer and predictor state.
 
+#[cfg(any(feature = "cuda", test))]
+use std::num::NonZeroU64;
+#[cfg(any(feature = "cuda", test))]
+use std::sync::atomic::{AtomicU64, Ordering};
+
 #[cfg(feature = "cuda")]
 use ferrule_common::Error;
 use ferrule_common::Result;
@@ -14,6 +19,34 @@ use crate::moe::prediction::ExpertBatchAccessEvent;
 use crate::moe::prediction::ScoreBasedExpertPredictor;
 
 use super::layer::DeepSeekV4LayerState;
+
+#[cfg(any(feature = "cuda", test))]
+static NEXT_DSV4_SEQUENCE_TOPOLOGY_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Stable identity of one committed sequence topology.
+///
+/// The identity survives transaction-local working copies and reset generations,
+/// but an explicit fork receives a distinct identity so sibling sequences can be
+/// owned by independent packed transactions.
+#[cfg(any(feature = "cuda", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct DeepSeekV4SequenceTopologyId(NonZeroU64);
+
+#[cfg(any(feature = "cuda", test))]
+impl DeepSeekV4SequenceTopologyId {
+    pub(super) fn take() -> Self {
+        let value = NEXT_DSV4_SEQUENCE_TOPOLOGY_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .expect("DeepSeek-V4 sequence topology ID space is exhausted");
+        Self(NonZeroU64::new(value).expect("sequence topology IDs start at one"))
+    }
+
+    pub(super) const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
 
 #[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Default)]
@@ -60,6 +93,8 @@ pub(crate) struct DeepSeekV4SequenceMoeAccessEvent {
 /// diagnostics.
 #[derive(Debug)]
 pub struct DeepSeekV4SequenceExecutionState {
+    #[cfg(any(feature = "cuda", test))]
+    pub(super) topology_id: DeepSeekV4SequenceTopologyId,
     pub(crate) core: SequenceStateCore,
     /// Fully initialized target-layer attention/compressor/indexer/physical KV state.
     pub(crate) layers: Vec<DeepSeekV4LayerState>,
@@ -80,6 +115,8 @@ impl DeepSeekV4SequenceExecutionState {
     ) -> Self {
         let max_layers = layers.len();
         Self {
+            #[cfg(any(feature = "cuda", test))]
+            topology_id: DeepSeekV4SequenceTopologyId::take(),
             core: SequenceStateCore::new(),
             layers,
             dspark_stages,
@@ -99,6 +136,11 @@ impl DeepSeekV4SequenceExecutionState {
 
     pub fn generation(&self) -> u64 {
         self.core.generation()
+    }
+
+    #[cfg(any(feature = "cuda", test))]
+    pub(super) const fn topology_id(&self) -> DeepSeekV4SequenceTopologyId {
+        self.topology_id
     }
 
     pub fn position(&self) -> usize {

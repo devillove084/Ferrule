@@ -782,9 +782,9 @@ async fn cancel_all<E>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrule_common::CompletionHub;
     use ferrule_common::execution::ExecutionTransactionId;
-    use ferrule_model::{BatchContinuationId, PendingExpertLoad, PendingModelProgress};
+    use ferrule_common::{CompletionHub, DependencySet, LogicalDependency, OperationId};
+    use ferrule_model::{BatchContinuationId, PendingModelProgress};
     use ferrule_runtime::{CancelRequestResult, InferenceCompletionReactor, SequenceState};
     use std::sync::atomic::AtomicUsize;
 
@@ -922,12 +922,14 @@ mod tests {
                 return Ok(ResidentDriverStep::Idle);
             }
             if !self.ready.load(Ordering::Acquire) {
-                let continuation =
-                    BatchContinuationId::new(1).map_err(|error| error.to_string())?;
-                let load = PendingExpertLoad::new(1, 0, 0).map_err(|error| error.to_string())?;
+                let continuation = BatchContinuationId::new(1);
+                let dependency = LogicalDependency::operation_retired(OperationId::new(1))
+                    .map_err(|error| error.to_string())?;
+                let dependencies =
+                    DependencySet::new([dependency]).map_err(|error| error.to_string())?;
                 let transaction =
                     ExecutionTransactionId::new(1).map_err(|error| error.to_string())?;
-                let pending = PendingModelProgress::new(transaction, continuation, vec![load])
+                let pending = PendingModelProgress::new(transaction, continuation, dependencies)
                     .map_err(|error| error.to_string())?;
                 return Ok(ResidentDriverStep::WaitingForModelProgress(vec![pending]));
             }

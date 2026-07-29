@@ -4,6 +4,7 @@ pub mod async_wake;
 pub mod execution;
 pub mod expert_io;
 pub mod expert_residency;
+pub mod io_protocol;
 pub mod kernel_plan;
 pub mod memory;
 pub mod observability;
@@ -11,11 +12,13 @@ pub mod observability;
 pub use async_wake::{CompletionHub, CompletionListener, CompletionWake};
 pub use expert_io::{ExpertIoEstimate, ExpertIoPhase};
 pub use expert_residency::{
-    ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertInstallReason, ExpertKey, ExpertLease,
-    ExpertResidencyControl, ExpertResidencyCoordinator, ExpertResidencyCoordinatorStats,
-    ExpertResidencyGrant, ExpertResidencyRequirements, ExpertResidencyStats, ExpertSlotBinding,
-    ExpertSlotGeneration, ExpertSlotId, PreparedExpertInstall,
+    ExpertInstallActivationOutcome, ExpertInstallIntent, ExpertInstallPrepareOutcome,
+    ExpertInstallReason, ExpertKey, ExpertLease, ExpertResidencyControl,
+    ExpertResidencyCoordinator, ExpertResidencyCoordinatorStats, ExpertResidencyGrant,
+    ExpertResidencyRequirements, ExpertResidencyStats, ExpertSlotBinding, ExpertSlotGeneration,
+    ExpertSlotId, PreparedExpertInstall,
 };
+pub use io_protocol::*;
 pub use memory::{
     MemoryPoolKind, MemoryPoolLimits, MemoryPoolStats, MemoryTopology, OwnerMemoryLru,
 };
@@ -27,6 +30,9 @@ use thiserror::Error;
 pub enum Error {
     #[error("I/O: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("I/O protocol: {0}")]
+    IoProtocol(#[from] io_protocol::IoProtocolError),
 
     #[error("GGUF: {0}")]
     Gguf(String),

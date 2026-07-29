@@ -34,6 +34,93 @@ pub enum ResourceUnit {
     Slots,
 }
 
+/// Fixed hard-credit domains owned by the runtime I/O reactor.
+///
+/// Unlike advisor estimates, these credits are correctness limits. A submitted
+/// claim remains charged until the owner observes the matching completion and
+/// explicitly returns provider custody.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ResourceKind {
+    Sqe,
+    PinnedSlab,
+    ReadBytes,
+    UploadSlot,
+    UploadBytes,
+    ExpertFrame,
+    Lease,
+    Arena,
+    KvPage,
+    Continuation,
+    Waiter,
+    LoadOperation,
+    ReadyCohort,
+}
+
+impl ResourceKind {
+    pub const ALL: [Self; 13] = [
+        Self::Sqe,
+        Self::PinnedSlab,
+        Self::ReadBytes,
+        Self::UploadSlot,
+        Self::UploadBytes,
+        Self::ExpertFrame,
+        Self::Lease,
+        Self::Arena,
+        Self::KvPage,
+        Self::Continuation,
+        Self::Waiter,
+        Self::LoadOperation,
+        Self::ReadyCohort,
+    ];
+
+    pub const fn unit(self) -> ResourceUnit {
+        match self {
+            Self::PinnedSlab | Self::ReadBytes | Self::UploadBytes | Self::ExpertFrame => {
+                ResourceUnit::Bytes
+            }
+            Self::Sqe | Self::LoadOperation => ResourceUnit::Operations,
+            Self::UploadSlot
+            | Self::Lease
+            | Self::Arena
+            | Self::KvPage
+            | Self::Continuation
+            | Self::Waiter
+            | Self::ReadyCohort => ResourceUnit::Slots,
+        }
+    }
+}
+
+/// One amount in the fixed runtime hard-credit catalog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HardResourceClaim {
+    pub kind: ResourceKind,
+    pub amount: u64,
+}
+
+impl HardResourceClaim {
+    pub const fn new(kind: ResourceKind, amount: u64) -> Self {
+        Self { kind, amount }
+    }
+}
+
+/// Capacity and decode/verification reserve for one hard-credit domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HardResourceLimit {
+    pub kind: ResourceKind,
+    pub capacity: u64,
+    pub demand_reserve: u64,
+}
+
+impl HardResourceLimit {
+    pub const fn new(kind: ResourceKind, capacity: u64, demand_reserve: u64) -> Self {
+        Self {
+            kind,
+            capacity,
+            demand_reserve,
+        }
+    }
+}
+
 /// Priority class for a physical resource request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ResourceClass {
@@ -50,6 +137,549 @@ pub enum ResourceClass {
 impl ResourceClass {
     const fn is_demand(self) -> bool {
         !matches!(self, Self::Prefetch)
+    }
+
+    const fn may_use_hard_reserve(self) -> bool {
+        matches!(self, Self::Verification | Self::Decode)
+    }
+}
+
+/// Stable identity of one non-cloneable hard-credit ownership token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct HardResourceGrantId(u64);
+
+impl HardResourceGrantId {
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// Rejection or ownership violation in the hard-credit ledger.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HardResourceError {
+    DuplicateLimit(ResourceKind),
+    MissingLimit(ResourceKind),
+    ReserveExceedsCapacity {
+        kind: ResourceKind,
+        reserve: u64,
+        capacity: u64,
+    },
+    ClaimOverflow(ResourceKind),
+    ExceedsCapacity {
+        kind: ResourceKind,
+        requested: u64,
+        capacity: u64,
+    },
+    TemporarilyUnavailable {
+        kind: ResourceKind,
+        requested: u64,
+        available: u64,
+    },
+    DemandReserve {
+        kind: ResourceKind,
+        requested: u64,
+        base_available: u64,
+    },
+    UnknownGrant(HardResourceGrantId),
+    GrantOwnerMismatch(HardResourceGrantId),
+    MissingClaim {
+        grant: HardResourceGrantId,
+        kind: ResourceKind,
+    },
+    AlreadySubmitted {
+        grant: HardResourceGrantId,
+        kind: ResourceKind,
+    },
+    NotSubmitted {
+        grant: HardResourceGrantId,
+        kind: ResourceKind,
+    },
+    SubmittedClaimCannotBeRevoked {
+        grant: HardResourceGrantId,
+        kind: ResourceKind,
+    },
+    GrantIdExhausted,
+}
+
+impl std::fmt::Display for HardResourceError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "hard-resource violation: {self:?}")
+    }
+}
+
+impl std::error::Error for HardResourceError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HardClaimState {
+    amount: u64,
+    submitted: bool,
+}
+
+#[derive(Debug, Clone)]
+struct HardLimitState {
+    capacity: u64,
+    demand_reserve: u64,
+    in_use: u64,
+    high_water: u64,
+}
+
+#[derive(Debug, Clone)]
+struct HardGrantRecord {
+    owner: u64,
+    class: ResourceClass,
+    claims: BTreeMap<ResourceKind, HardClaimState>,
+}
+
+/// Non-cloneable RAII ownership token for a vector of hard credits.
+///
+/// The token deliberately cannot mutate the ledger from `Drop`: the registry is
+/// the sole writer and must explicitly release held claims or return submitted
+/// claims after a matching completion.
+#[derive(Debug)]
+#[must_use = "hard resource grants must be explicitly released by their owner"]
+pub struct HardResourceGrant {
+    id: Option<HardResourceGrantId>,
+    owner: u64,
+    claims: BTreeMap<ResourceKind, HardClaimState>,
+}
+
+impl HardResourceGrant {
+    pub const fn id(&self) -> Option<HardResourceGrantId> {
+        self.id
+    }
+
+    pub const fn owner(&self) -> u64 {
+        self.owner
+    }
+
+    pub fn is_released(&self) -> bool {
+        self.id.is_none()
+    }
+
+    pub fn contains(&self, kind: ResourceKind) -> bool {
+        self.claims.contains_key(&kind)
+    }
+
+    pub fn is_submitted(&self, kind: ResourceKind) -> bool {
+        self.claims.get(&kind).is_some_and(|claim| claim.submitted)
+    }
+
+    pub fn claims(&self) -> impl ExactSizeIterator<Item = HardResourceClaim> + '_ {
+        self.claims.iter().map(|(kind, state)| HardResourceClaim {
+            kind: *kind,
+            amount: state.amount,
+        })
+    }
+}
+
+/// Snapshot of one fixed hard-credit domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HardResourceSnapshot {
+    pub kind: ResourceKind,
+    pub unit: ResourceUnit,
+    pub capacity: u64,
+    pub demand_reserve: u64,
+    pub in_use: u64,
+    pub high_water: u64,
+}
+
+/// Owner-written hard-capacity ledger used by the runtime I/O registry.
+#[derive(Debug)]
+pub struct HardResourceBroker {
+    limits: BTreeMap<ResourceKind, HardLimitState>,
+    grants: BTreeMap<HardResourceGrantId, HardGrantRecord>,
+    next_grant: u64,
+}
+
+impl HardResourceBroker {
+    pub fn new(
+        limits: impl IntoIterator<Item = HardResourceLimit>,
+    ) -> std::result::Result<Self, HardResourceError> {
+        let mut states = BTreeMap::new();
+        for limit in limits {
+            if limit.demand_reserve > limit.capacity {
+                return Err(HardResourceError::ReserveExceedsCapacity {
+                    kind: limit.kind,
+                    reserve: limit.demand_reserve,
+                    capacity: limit.capacity,
+                });
+            }
+            if states
+                .insert(
+                    limit.kind,
+                    HardLimitState {
+                        capacity: limit.capacity,
+                        demand_reserve: limit.demand_reserve,
+                        in_use: 0,
+                        high_water: 0,
+                    },
+                )
+                .is_some()
+            {
+                return Err(HardResourceError::DuplicateLimit(limit.kind));
+            }
+        }
+        for kind in ResourceKind::ALL {
+            if !states.contains_key(&kind) {
+                return Err(HardResourceError::MissingLimit(kind));
+            }
+        }
+        Ok(Self {
+            limits: states,
+            grants: BTreeMap::new(),
+            next_grant: 1,
+        })
+    }
+
+    /// A generous finite catalog useful for CPU tests and embedders that have not
+    /// yet supplied a hardware profile.
+    pub fn testing_default() -> Self {
+        Self::new(ResourceKind::ALL.map(|kind| {
+            let capacity = match kind {
+                ResourceKind::PinnedSlab
+                | ResourceKind::ReadBytes
+                | ResourceKind::UploadBytes
+                | ResourceKind::ExpertFrame => 1 << 40,
+                _ => 1 << 20,
+            };
+            HardResourceLimit::new(kind, capacity, 0)
+        }))
+        .expect("the built-in hard resource catalog is valid")
+    }
+
+    /// Replace one runtime-owned limit before that resource has live ownership.
+    /// This is used when an exact hardware/runtime topology (for example the KV
+    /// page manager) becomes available after the base broker is constructed.
+    pub fn reconfigure_limit(
+        &mut self,
+        kind: ResourceKind,
+        capacity: u64,
+        demand_reserve: u64,
+    ) -> std::result::Result<(), HardResourceError> {
+        if demand_reserve > capacity {
+            return Err(HardResourceError::ReserveExceedsCapacity {
+                kind,
+                reserve: demand_reserve,
+                capacity,
+            });
+        }
+        let state = self
+            .limits
+            .get_mut(&kind)
+            .ok_or(HardResourceError::MissingLimit(kind))?;
+        if state.in_use > capacity {
+            return Err(HardResourceError::ExceedsCapacity {
+                kind,
+                requested: state.in_use,
+                capacity,
+            });
+        }
+        state.capacity = capacity;
+        state.demand_reserve = demand_reserve;
+        Ok(())
+    }
+
+    pub fn snapshots(&self) -> impl ExactSizeIterator<Item = HardResourceSnapshot> + '_ {
+        self.limits
+            .iter()
+            .map(|(kind, state)| HardResourceSnapshot {
+                kind: *kind,
+                unit: kind.unit(),
+                capacity: state.capacity,
+                demand_reserve: state.demand_reserve,
+                in_use: state.in_use,
+                high_water: state.high_water,
+            })
+    }
+
+    pub fn in_use(&self, kind: ResourceKind) -> u64 {
+        self.limits.get(&kind).map_or(0, |state| state.in_use)
+    }
+
+    pub fn active_grants(&self) -> usize {
+        self.grants.len()
+    }
+
+    pub fn can_acquire(
+        &self,
+        class: ResourceClass,
+        claims: impl IntoIterator<Item = HardResourceClaim>,
+    ) -> std::result::Result<(), HardResourceError> {
+        let claims = Self::canonical_claims(claims)?;
+        self.validate_available(class, &claims)
+    }
+
+    pub fn acquire(
+        &mut self,
+        owner: u64,
+        class: ResourceClass,
+        claims: impl IntoIterator<Item = HardResourceClaim>,
+    ) -> std::result::Result<HardResourceGrant, HardResourceError> {
+        let claims = Self::canonical_claims(claims)?;
+        self.validate_available(class, &claims)?;
+        let id = HardResourceGrantId(self.next_grant);
+        self.next_grant = self
+            .next_grant
+            .checked_add(1)
+            .ok_or(HardResourceError::GrantIdExhausted)?;
+        let claims: BTreeMap<_, _> = claims
+            .into_iter()
+            .map(|claim| {
+                (
+                    claim.kind,
+                    HardClaimState {
+                        amount: claim.amount,
+                        submitted: false,
+                    },
+                )
+            })
+            .collect();
+        for (kind, claim) in &claims {
+            let state = self
+                .limits
+                .get_mut(kind)
+                .expect("claims were validated against the complete catalog");
+            state.in_use += claim.amount;
+            state.high_water = state.high_water.max(state.in_use);
+        }
+        self.grants.insert(
+            id,
+            HardGrantRecord {
+                owner,
+                class,
+                claims: claims.clone(),
+            },
+        );
+        Ok(HardResourceGrant {
+            id: Some(id),
+            owner,
+            claims,
+        })
+    }
+
+    pub fn promote(
+        &mut self,
+        grant: &HardResourceGrant,
+        class: ResourceClass,
+    ) -> std::result::Result<(), HardResourceError> {
+        let (id, record) = self.record_for(grant)?;
+        if class > record.class {
+            self.grants
+                .get_mut(&id)
+                .expect("validated grant remains present")
+                .class = class;
+        }
+        Ok(())
+    }
+
+    /// Transfers the named held claims into provider custody. A submitted claim
+    /// cannot be revoked or dropped until `mark_returned` observes its completion.
+    pub fn mark_submitted(
+        &mut self,
+        grant: &mut HardResourceGrant,
+        kinds: &[ResourceKind],
+    ) -> std::result::Result<(), HardResourceError> {
+        let (id, _) = self.record_for(grant)?;
+        for kind in kinds {
+            let claim = grant
+                .claims
+                .get(kind)
+                .ok_or(HardResourceError::MissingClaim {
+                    grant: id,
+                    kind: *kind,
+                })?;
+            if claim.submitted {
+                return Err(HardResourceError::AlreadySubmitted {
+                    grant: id,
+                    kind: *kind,
+                });
+            }
+        }
+        for kind in kinds {
+            grant
+                .claims
+                .get_mut(kind)
+                .expect("claim presence was validated")
+                .submitted = true;
+            self.grants
+                .get_mut(&id)
+                .expect("validated grant remains present")
+                .claims
+                .get_mut(kind)
+                .expect("token and ledger claims remain identical")
+                .submitted = true;
+        }
+        Ok(())
+    }
+
+    /// Returns provider custody after the exact completion was validated. Credits
+    /// remain owned until a separate explicit release or ownership transfer.
+    pub fn mark_returned(
+        &mut self,
+        grant: &mut HardResourceGrant,
+        kinds: &[ResourceKind],
+    ) -> std::result::Result<(), HardResourceError> {
+        let (id, _) = self.record_for(grant)?;
+        for kind in kinds {
+            let claim = grant
+                .claims
+                .get(kind)
+                .ok_or(HardResourceError::MissingClaim {
+                    grant: id,
+                    kind: *kind,
+                })?;
+            if !claim.submitted {
+                return Err(HardResourceError::NotSubmitted {
+                    grant: id,
+                    kind: *kind,
+                });
+            }
+        }
+        for kind in kinds {
+            grant
+                .claims
+                .get_mut(kind)
+                .expect("claim presence was validated")
+                .submitted = false;
+            self.grants
+                .get_mut(&id)
+                .expect("validated grant remains present")
+                .claims
+                .get_mut(kind)
+                .expect("token and ledger claims remain identical")
+                .submitted = false;
+        }
+        Ok(())
+    }
+
+    pub fn release_held(
+        &mut self,
+        grant: &mut HardResourceGrant,
+        kinds: &[ResourceKind],
+    ) -> std::result::Result<(), HardResourceError> {
+        let (id, _) = self.record_for(grant)?;
+        for kind in kinds {
+            let claim = grant
+                .claims
+                .get(kind)
+                .ok_or(HardResourceError::MissingClaim {
+                    grant: id,
+                    kind: *kind,
+                })?;
+            if claim.submitted {
+                return Err(HardResourceError::SubmittedClaimCannotBeRevoked {
+                    grant: id,
+                    kind: *kind,
+                });
+            }
+        }
+        for kind in kinds {
+            let claim = grant
+                .claims
+                .remove(kind)
+                .expect("claim presence was validated");
+            let state = self
+                .limits
+                .get_mut(kind)
+                .expect("active claim references a configured limit");
+            state.in_use -= claim.amount;
+            self.grants
+                .get_mut(&id)
+                .expect("validated grant remains present")
+                .claims
+                .remove(kind);
+        }
+        if grant.claims.is_empty() {
+            self.grants.remove(&id);
+            grant.id = None;
+        }
+        Ok(())
+    }
+
+    pub fn release_all_held(
+        &mut self,
+        grant: &mut HardResourceGrant,
+    ) -> std::result::Result<(), HardResourceError> {
+        let kinds: Vec<_> = grant.claims.keys().copied().collect();
+        self.release_held(grant, &kinds)
+    }
+
+    fn canonical_claims(
+        claims: impl IntoIterator<Item = HardResourceClaim>,
+    ) -> std::result::Result<Vec<HardResourceClaim>, HardResourceError> {
+        let mut merged = BTreeMap::<ResourceKind, u64>::new();
+        for claim in claims {
+            if claim.amount == 0 {
+                continue;
+            }
+            let amount = merged.entry(claim.kind).or_default();
+            *amount = amount
+                .checked_add(claim.amount)
+                .ok_or(HardResourceError::ClaimOverflow(claim.kind))?;
+        }
+        Ok(merged
+            .into_iter()
+            .map(|(kind, amount)| HardResourceClaim { kind, amount })
+            .collect())
+    }
+
+    fn validate_available(
+        &self,
+        class: ResourceClass,
+        claims: &[HardResourceClaim],
+    ) -> std::result::Result<(), HardResourceError> {
+        for claim in claims {
+            let state = self
+                .limits
+                .get(&claim.kind)
+                .ok_or(HardResourceError::MissingLimit(claim.kind))?;
+            if claim.amount > state.capacity {
+                return Err(HardResourceError::ExceedsCapacity {
+                    kind: claim.kind,
+                    requested: claim.amount,
+                    capacity: state.capacity,
+                });
+            }
+            let available = state.capacity.saturating_sub(state.in_use);
+            if claim.amount > available {
+                return Err(HardResourceError::TemporarilyUnavailable {
+                    kind: claim.kind,
+                    requested: claim.amount,
+                    available,
+                });
+            }
+            if !class.may_use_hard_reserve() {
+                let base_limit = state.capacity.saturating_sub(state.demand_reserve);
+                let base_available = base_limit.saturating_sub(state.in_use);
+                if claim.amount > base_available {
+                    return Err(HardResourceError::DemandReserve {
+                        kind: claim.kind,
+                        requested: claim.amount,
+                        base_available,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn record_for(
+        &self,
+        grant: &HardResourceGrant,
+    ) -> std::result::Result<(HardResourceGrantId, &HardGrantRecord), HardResourceError> {
+        let id = grant
+            .id
+            .ok_or(HardResourceError::GrantOwnerMismatch(HardResourceGrantId(
+                0,
+            )))?;
+        let record = self
+            .grants
+            .get(&id)
+            .ok_or(HardResourceError::UnknownGrant(id))?;
+        if record.owner != grant.owner || record.claims != grant.claims {
+            return Err(HardResourceError::GrantOwnerMismatch(id));
+        }
+        Ok((id, record))
     }
 }
 

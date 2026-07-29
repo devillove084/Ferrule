@@ -60,8 +60,8 @@ fn local_deepseek_v4_expert_streaming_reads_one_selected_expert_if_present() {
         .iter()
         .find(|load| load.expert == ExpertId::new(0, 0))
         .expect("layer 0 expert 0 should be selected");
-    let ExpertLoadSource::LocalTensorSet { tensors } = &load.load_source else {
-        panic!("expected LocalTensorSet for HF expert artifact");
+    let ExpertLoadSource::HfLocalTensorSet { tensors, .. } = &load.load_source else {
+        panic!("expected snapshot-backed HF tensor set for expert artifact");
     };
     assert_eq!(tensors.len(), 6);
     assert!(tensors.iter().all(|tensor| tensor.path.exists()));

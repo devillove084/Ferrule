@@ -1,5 +1,8 @@
-//! Model-neutral expert-I/O prediction and physical admission contracts shared by
-//! model and runtime.
+//! Legacy expert-I/O prediction and broker-permit adapters shared by model and runtime.
+//!
+//! New physical lifecycle, completion, dependency, slab, residency, and retirement
+//! code must use [`crate::io_protocol`]. These adapters remain temporarily so the
+//! current CPU-default call sites can migrate without duplicating physical work.
 
 use std::fmt;
 

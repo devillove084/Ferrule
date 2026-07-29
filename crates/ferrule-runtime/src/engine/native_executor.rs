@@ -10,10 +10,10 @@ use ferrule_common::execution::{
     ExecutionBatch, ExecutionCapabilities, ExecutionOutput, ExecutionTransactionId,
     KvReservationView,
 };
-use ferrule_common::{Error, Result};
+use ferrule_common::{ContinuationId, Error, ExpertLeaseSet, Result};
 use ferrule_model::{
-    BatchContinuationCancelOutcome, BatchContinuationId, MultiSessionBatchProgress,
-    MultiSessionRunner, PendingModelProgress,
+    BatchContinuationCancelOutcome, MultiSessionBatchProgress, MultiSessionRunner,
+    PendingModelProgress,
 };
 
 use crate::expert_residency::ExpertResidencyController;
@@ -246,7 +246,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         &mut self,
         pages: &[ferrule_common::execution::KvPageId],
     ) -> Result<()> {
-        self.ensure_registry_empty("release KV pages")?;
+        self.ensure_ready()?;
         self.runner.release_kv_pages(pages)
     }
 
@@ -385,7 +385,8 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         transaction: ExecutionTransactionId,
         states: &mut [R::SequenceState],
         batch: &ExecutionBatch,
-        continuation: BatchContinuationId,
+        continuation: ContinuationId,
+        leases: ExpertLeaseSet,
     ) -> Result<NativeBatchExecutionProgress> {
         self.ensure_ready()?;
         self.ensure_continuation_owner(transaction, continuation)?;
@@ -401,9 +402,13 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         }
         batch.validate(states.len(), &self.capabilities)?;
 
-        let progress =
-            self.runner
-                .resume_multi_session_batch(transaction, states, batch, continuation)?;
+        let progress = self.runner.resume_multi_session_batch(
+            transaction,
+            states,
+            batch,
+            continuation,
+            leases,
+        )?;
         self.handle_progress(transaction, states, batch, Some(continuation), progress)
     }
 
@@ -412,7 +417,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         &mut self,
         transaction: ExecutionTransactionId,
         states: &mut [R::SequenceState],
-        continuation: BatchContinuationId,
+        continuation: ContinuationId,
     ) -> Result<()> {
         self.ensure_continuation_owner(transaction, continuation)?;
         let model_cleanup_error = match self.runner.cancel_multi_session_batch(
@@ -450,7 +455,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         transaction: ExecutionTransactionId,
         states: &mut [R::SequenceState],
         batch: &ExecutionBatch,
-        previous_continuation: Option<BatchContinuationId>,
+        previous_continuation: Option<ContinuationId>,
         progress: MultiSessionBatchProgress,
     ) -> Result<NativeBatchExecutionProgress> {
         match progress {
@@ -487,7 +492,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
     fn transition_to_waiting(
         &mut self,
         transaction: ExecutionTransactionId,
-        previous_continuation: Option<BatchContinuationId>,
+        previous_continuation: Option<ContinuationId>,
         pending: &PendingModelProgress,
     ) -> Result<()> {
         let current_continuation = self
@@ -544,9 +549,9 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
                 let corrected = PendingModelProgress::new(
                     transaction,
                     continuation,
-                    pending.expert_loads().to_vec(),
+                    pending.dependencies().clone(),
                 )
-                .expect("validated pending expert loads remain valid under corrected ownership");
+                .expect("validated pending dependencies remain valid under corrected ownership");
                 self.transactions
                     .get_mut(&transaction)
                     .expect("invalid progress must still belong to a registered transaction")
@@ -601,7 +606,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
     fn clear_continuation(
         &mut self,
         transaction: ExecutionTransactionId,
-        continuation: BatchContinuationId,
+        continuation: ContinuationId,
     ) {
         if let Some(transaction_state) = self.transactions.get_mut(&transaction)
             && transaction_state
@@ -616,7 +621,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
     fn ensure_continuation_owner(
         &self,
         transaction: ExecutionTransactionId,
-        continuation: BatchContinuationId,
+        continuation: ContinuationId,
     ) -> Result<()> {
         let pending = self
             .transactions
@@ -727,7 +732,11 @@ mod tests {
         ExecutionSequence, ForwardMode, ForwardPhase, LogitsOutput, LogitsRequest, LogitsRow,
         StateSlot, TokenLogit,
     };
-    use ferrule_model::{ModelInfo, ModelRunner, PendingExpertLoad};
+    use ferrule_common::{
+        BackendId, DependencySet, DeviceId, DispatchFenceContract, FenceId, LogicalDependency,
+        MappingEpoch, OperationId,
+    };
+    use ferrule_model::{ModelInfo, ModelRunner};
 
     #[derive(Debug, Default)]
     struct MockSequenceState {
@@ -749,8 +758,8 @@ mod tests {
         fail_rollbacks: HashSet<ExecutionTransactionId>,
         prepares: Vec<ExecutionTransactionId>,
         executes: Vec<ExecutionTransactionId>,
-        resumes: Vec<(ExecutionTransactionId, BatchContinuationId)>,
-        cancels: Vec<(ExecutionTransactionId, BatchContinuationId)>,
+        resumes: Vec<(ExecutionTransactionId, ContinuationId)>,
+        cancels: Vec<(ExecutionTransactionId, ContinuationId)>,
         commits: Vec<ExecutionTransactionId>,
         rollbacks: Vec<ExecutionTransactionId>,
         sequences_created: usize,
@@ -834,6 +843,10 @@ mod tests {
 
     impl MultiSessionRunner for MockMultiSessionRunner {
         type SequenceState = MockSequenceState;
+
+        fn sequence_generation(&self, _state: &Self::SequenceState) -> u64 {
+            0
+        }
 
         fn with_sequence_state<T>(
             &mut self,
@@ -942,7 +955,8 @@ mod tests {
             transaction: ExecutionTransactionId,
             _states: &mut [Self::SequenceState],
             _batch: &ExecutionBatch,
-            continuation: BatchContinuationId,
+            continuation: ContinuationId,
+            _leases: ExpertLeaseSet,
         ) -> Result<MultiSessionBatchProgress> {
             self.resumes.push((transaction, continuation));
             self.next_progress(transaction)
@@ -952,7 +966,7 @@ mod tests {
             &mut self,
             transaction: ExecutionTransactionId,
             _states: &mut [Self::SequenceState],
-            continuation: BatchContinuationId,
+            continuation: ContinuationId,
         ) -> BatchContinuationCancelOutcome {
             self.cancels.push((transaction, continuation));
             match self
@@ -1014,21 +1028,40 @@ mod tests {
         ExecutionTransactionId::new(value).unwrap()
     }
 
-    fn continuation(value: u64) -> BatchContinuationId {
-        BatchContinuationId::new(value).unwrap()
+    fn continuation(value: u64) -> ContinuationId {
+        ContinuationId::new(value)
+    }
+
+    fn dependencies(continuation: ContinuationId) -> DependencySet {
+        DependencySet::new([LogicalDependency::operation_retired(OperationId::new(
+            continuation.get(),
+        ))
+        .unwrap()])
+        .unwrap()
+    }
+
+    fn leases(continuation: ContinuationId) -> ExpertLeaseSet {
+        ExpertLeaseSet::new(
+            [],
+            [],
+            MappingEpoch::new(continuation.get()),
+            DispatchFenceContract::new(
+                OperationId::new(continuation.get()),
+                FenceId::new(continuation.get()),
+                BackendId::new(0),
+                DeviceId::new(0),
+            ),
+        )
+        .unwrap()
     }
 
     fn waiting(
         transaction: ExecutionTransactionId,
-        continuation: BatchContinuationId,
+        continuation: ContinuationId,
     ) -> MultiSessionBatchProgress {
         MultiSessionBatchProgress::Waiting(
-            PendingModelProgress::new(
-                transaction,
-                continuation,
-                vec![PendingExpertLoad::new(continuation.get(), 0, 1).unwrap()],
-            )
-            .unwrap(),
+            PendingModelProgress::new(transaction, continuation, dependencies(continuation))
+                .unwrap(),
         )
     }
 
@@ -1096,7 +1129,13 @@ mod tests {
 
         assert!(matches!(
             executor
-                .resume_resumable_batch(transaction_b, &mut states_b, &batch_b, continuation_b,)
+                .resume_resumable_batch(
+                    transaction_b,
+                    &mut states_b,
+                    &batch_b,
+                    continuation_b,
+                    leases(continuation_b),
+                )
                 .unwrap(),
             NativeBatchExecutionProgress::Complete(_)
         ));
@@ -1112,7 +1151,13 @@ mod tests {
         );
 
         executor
-            .resume_resumable_batch(transaction_a, &mut states_a, &batch_a, continuation_a)
+            .resume_resumable_batch(
+                transaction_a,
+                &mut states_a,
+                &batch_a,
+                continuation_a,
+                leases(continuation_a),
+            )
             .unwrap();
         executor
             .commit_prepared_batch(transaction_a, &mut states_a)
@@ -1145,7 +1190,13 @@ mod tests {
 
         assert!(
             executor
-                .resume_resumable_batch(transaction_b, &mut states_b, &batch_b, continuation_a,)
+                .resume_resumable_batch(
+                    transaction_b,
+                    &mut states_b,
+                    &batch_b,
+                    continuation_a,
+                    leases(continuation_a),
+                )
                 .unwrap_err()
                 .to_string()
                 .contains("owns continuation")
@@ -1261,7 +1312,13 @@ mod tests {
         assert!(!executor.is_poisoned());
 
         executor
-            .resume_resumable_batch(transaction_b, &mut states_b, &batch_b, continuation_b)
+            .resume_resumable_batch(
+                transaction_b,
+                &mut states_b,
+                &batch_b,
+                continuation_b,
+                leases(continuation_b),
+            )
             .unwrap();
         executor
             .commit_prepared_batch(transaction_b, &mut states_b)

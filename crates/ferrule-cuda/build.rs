@@ -5,7 +5,7 @@ mod architecture_target;
 
 use architecture_target::{CudaArchitectureFamily, CudaTarget};
 
-const CUTLASS_FEATURE_ENV: &str = "CARGO_FEATURE_CUTLASS";
+const CUDA_FEATURE_ENV: &str = "CARGO_FEATURE_CUDA";
 const CUTLASS_DIR_ENV: &str = "FERRULE_CUTLASS_DIR";
 const CUTLASS_ARCH_ENV: &str = "FERRULE_CUTLASS_ARCH";
 
@@ -50,7 +50,7 @@ fn main() {
         }
     }
 
-    if env::var_os(CUTLASS_FEATURE_ENV).is_none() {
+    if env::var_os(CUDA_FEATURE_ENV).is_none() {
         return;
     }
 

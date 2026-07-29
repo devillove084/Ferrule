@@ -17,7 +17,7 @@ use crate::moe::streaming::{
     ExpertSourceCatalog, ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader,
 };
 #[cfg(feature = "cuda")]
-use ferrule_common::ExpertResidencyControl;
+use ferrule_common::ExpertLeaseSet;
 #[cfg(feature = "cuda")]
 use ferrule_common::execution::ForwardPhase;
 use ferrule_common::{Error, Result};
@@ -26,12 +26,12 @@ use super::attention::{DeepSeekV4Attention, DeepSeekV4AttentionCache};
 #[cfg(feature = "cuda")]
 use super::attention::{DeepSeekV4AttentionDecodeArena, DeepSeekV4AttentionRowsTransitionArena};
 use super::config::DeepSeekV4AttentionConfig;
-#[cfg(all(feature = "cuda", feature = "cutlass"))]
+#[cfg(feature = "cuda")]
 use super::cuda_cache::DeepSeekV4DsparkAttentionBuffers;
 #[cfg(feature = "cuda")]
 use super::cuda_cache::{
     DeepSeekV4CudaHcStage, DeepSeekV4CudaPackedMoeContinuation,
-    DeepSeekV4CudaPackedMoePendingOperation, DeepSeekV4CudaPackedMoeProgress,
+    DeepSeekV4CudaPackedMoePendingExpert, DeepSeekV4CudaPackedMoeProgress,
 };
 use super::helpers::rms_norm_rows_with_operators;
 use super::operators::{DeepSeekV4LayerProfileStage, DeepSeekV4OperatorContext};
@@ -59,8 +59,8 @@ pub(crate) struct DeepSeekV4PackedLayerContinuation {
 
 #[cfg(feature = "cuda")]
 impl DeepSeekV4PackedLayerContinuation {
-    pub(crate) fn pending_operations(&self) -> Vec<DeepSeekV4CudaPackedMoePendingOperation> {
-        self.moe.pending_operations()
+    pub(crate) fn pending_experts(&self) -> Vec<DeepSeekV4CudaPackedMoePendingExpert> {
+        self.moe.pending_experts()
     }
 }
 
@@ -68,27 +68,33 @@ impl DeepSeekV4PackedLayerContinuation {
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum DeepSeekV4PackedLayerProgress {
     Waiting(DeepSeekV4PackedLayerContinuation),
-    Complete(Vec<DeepSeekV4SequenceMoeAccessEvent>),
+    Complete {
+        events: Vec<DeepSeekV4SequenceMoeAccessEvent>,
+        leases: Vec<ExpertLeaseSet>,
+    },
 }
 
-#[cfg(all(feature = "cuda", feature = "cutlass"))]
+#[cfg(feature = "cuda")]
 pub(crate) struct DeepSeekV4DsparkLayerContinuation {
     rows: usize,
     moe: DeepSeekV4CudaPackedMoeContinuation,
 }
 
-#[cfg(all(feature = "cuda", feature = "cutlass"))]
+#[cfg(feature = "cuda")]
 impl DeepSeekV4DsparkLayerContinuation {
-    pub(crate) fn pending_operations(&self) -> Vec<DeepSeekV4CudaPackedMoePendingOperation> {
-        self.moe.pending_operations()
+    pub(crate) fn pending_experts(&self) -> Vec<DeepSeekV4CudaPackedMoePendingExpert> {
+        self.moe.pending_experts()
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "cutlass"))]
+#[cfg(feature = "cuda")]
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum DeepSeekV4DsparkLayerProgress {
     Waiting(DeepSeekV4DsparkLayerContinuation),
-    Complete(Vec<DeepSeekV4SequenceMoeAccessEvent>),
+    Complete {
+        events: Vec<DeepSeekV4SequenceMoeAccessEvent>,
+        leases: Vec<ExpertLeaseSet>,
+    },
 }
 
 /// Exact per-row dimensions of one compressor's CUDA scratch buffers.
@@ -419,17 +425,12 @@ impl DeepSeekV4Layer {
         sequence_major_rows: &[usize],
         sequence_phases: &[ForwardPhase],
         paged_bindings: &[DeepSeekV4PagedKvBinding],
-        residency: &mut dyn ExpertResidencyControl,
-        source_catalog: &ExpertSourceCatalog,
-        prefetch_capacity: usize,
         arena: &mut DeepSeekV4LayerArena,
         hc_state_dev: &mut ferrule_cuda::context::CudaF32Buffer,
         token_ids: &[u32],
         positions: &[usize],
-        predicted_experts: &[usize],
-        expert_reader: &ExpertStreamingReader,
         operators: &mut DeepSeekV4OperatorContext,
-    ) -> Result<DeepSeekV4PackedLayerContinuation> {
+    ) -> Result<DeepSeekV4PackedLayerProgress> {
         let rows = token_ids.len();
         if rows == 0
             || positions.len() != rows
@@ -505,16 +506,6 @@ impl DeepSeekV4Layer {
             &mut arena.hc_fp8_pack,
         )?;
 
-        if !predicted_experts.is_empty() {
-            operators.prefetch_predicted_experts(
-                self.layer,
-                predicted_experts,
-                residency,
-                source_catalog,
-                prefetch_capacity,
-                expert_reader,
-            )?;
-        }
         let moe = operators
             .cuda_mut()?
             .begin_routed_moe_prefill_batch_from_device_into(
@@ -527,8 +518,6 @@ impl DeepSeekV4Layer {
                 Some(row_to_sequence),
                 Some(sequence_phases),
                 &self.router,
-                predicted_experts,
-                prefetch_capacity,
                 &self.router_policy,
                 &self.shared_ffn,
                 &mut arena.router_logits,
@@ -537,7 +526,11 @@ impl DeepSeekV4Layer {
                 &mut arena.attention.linear_workspace,
                 &mut arena.moe_output,
             )?;
-        Ok(DeepSeekV4PackedLayerContinuation { rows, moe })
+        let mut continuation = DeepSeekV4PackedLayerContinuation { rows, moe };
+        operators
+            .cuda_mut()?
+            .prime_routed_moe_prefill_batch(&mut continuation.moe)?;
+        Ok(DeepSeekV4PackedLayerProgress::Waiting(continuation))
     }
 
     #[cfg(feature = "cuda")]
@@ -545,24 +538,20 @@ impl DeepSeekV4Layer {
     pub(crate) fn resume_packed_rows_device_hc_device(
         &self,
         continuation: DeepSeekV4PackedLayerContinuation,
-        residency: &mut dyn ExpertResidencyControl,
-        source_catalog: &ExpertSourceCatalog,
+        leases: ExpertLeaseSet,
         arena: &mut DeepSeekV4LayerArena,
         hc_state_dev: &mut ferrule_cuda::context::CudaF32Buffer,
-        expert_reader: &ExpertStreamingReader,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<DeepSeekV4PackedLayerProgress> {
         let DeepSeekV4PackedLayerContinuation { rows, moe } = continuation;
         match operators
             .cuda_mut()?
-            .progress_routed_moe_prefill_batch_from_device_into(
+            .resume_routed_moe_prefill_batch_from_device_into(
                 moe,
+                leases,
                 &arena.ffn_norm,
                 &arena.router_indices,
                 &arena.router_weights,
-                residency,
-                source_catalog,
-                expert_reader,
                 &mut arena.moe_segment_workspace,
                 &mut arena.moe_route_output,
                 &mut arena.moe_output,
@@ -572,7 +561,7 @@ impl DeepSeekV4Layer {
                     DeepSeekV4PackedLayerContinuation { rows, moe },
                 ))
             }
-            DeepSeekV4CudaPackedMoeProgress::Complete(events) => {
+            DeepSeekV4CudaPackedMoeProgress::Complete { events, leases } => {
                 operators.cuda_mut()?.hc_post_from_device_into(
                     &arena.moe_output,
                     &arena.after_attn,
@@ -584,7 +573,7 @@ impl DeepSeekV4Layer {
                 )?;
 
                 std::mem::swap(hc_state_dev, &mut arena.layer_output);
-                Ok(DeepSeekV4PackedLayerProgress::Complete(events))
+                Ok(DeepSeekV4PackedLayerProgress::Complete { events, leases })
             }
         }
     }
@@ -604,34 +593,28 @@ impl DeepSeekV4Layer {
     pub(crate) fn cancel_packed_rows_device_hc_device(
         &self,
         continuation: DeepSeekV4PackedLayerContinuation,
-        residency: &mut dyn ExpertResidencyControl,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<()> {
         operators
             .cuda_mut()?
-            .cancel_routed_moe_prefill_batch(continuation.moe, residency)
+            .cancel_routed_moe_prefill_batch(continuation.moe)
     }
 
     /// Begin one checkpoint-native DSpark transformer stage over the shared
     /// five-row proposal block. Attention keeps proposal KV ephemeral, while the
     /// routed-MoE continuation and all referenced scratch remain caller-owned.
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn begin_dspark_proposal_block_device_hc_device(
         &self,
         stage: usize,
         sequence_tokens: usize,
-        residency: &mut dyn ExpertResidencyControl,
-        source_catalog: &ExpertSourceCatalog,
-        prefetch_capacity: usize,
         arena: &mut DeepSeekV4LayerArena,
         hc_state_dev: &mut ferrule_cuda::context::CudaF32Buffer,
         token_ids: &[u32],
-        predicted_experts: &[usize],
-        expert_reader: &ExpertStreamingReader,
         operators: &mut DeepSeekV4OperatorContext,
         dspark_attention: &mut DeepSeekV4DsparkAttentionBuffers,
-    ) -> Result<DeepSeekV4DsparkLayerContinuation> {
+    ) -> Result<DeepSeekV4DsparkLayerProgress> {
         let rows = ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS;
         if token_ids.len() != rows
             || hc_state_dev.len() != rows.saturating_mul(self.hc_config.hc_hidden_size())
@@ -688,16 +671,6 @@ impl DeepSeekV4Layer {
             &mut arena.ffn_comb,
             &mut arena.hc_fp8_pack,
         )?;
-        if !predicted_experts.is_empty() {
-            operators.prefetch_predicted_experts(
-                self.layer,
-                predicted_experts,
-                residency,
-                source_catalog,
-                prefetch_capacity,
-                expert_reader,
-            )?;
-        }
         let row_to_sequence = [0usize; ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS];
         let sequence_phases = [ForwardPhase::Decode];
         let moe = operators
@@ -712,8 +685,6 @@ impl DeepSeekV4Layer {
                 Some(&row_to_sequence),
                 Some(&sequence_phases),
                 &self.router,
-                predicted_experts,
-                prefetch_capacity,
                 &self.router_policy,
                 &self.shared_ffn,
                 &mut arena.router_logits,
@@ -722,32 +693,32 @@ impl DeepSeekV4Layer {
                 &mut arena.attention.linear_workspace,
                 &mut arena.moe_output,
             )?;
-        Ok(DeepSeekV4DsparkLayerContinuation { rows, moe })
+        let mut continuation = DeepSeekV4DsparkLayerContinuation { rows, moe };
+        operators
+            .cuda_mut()?
+            .prime_routed_moe_prefill_batch(&mut continuation.moe)?;
+        Ok(DeepSeekV4DsparkLayerProgress::Waiting(continuation))
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn resume_dspark_proposal_block_device_hc_device(
         &self,
         continuation: DeepSeekV4DsparkLayerContinuation,
-        residency: &mut dyn ExpertResidencyControl,
-        source_catalog: &ExpertSourceCatalog,
+        leases: ExpertLeaseSet,
         arena: &mut DeepSeekV4LayerArena,
         hc_state_dev: &mut ferrule_cuda::context::CudaF32Buffer,
-        expert_reader: &ExpertStreamingReader,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<DeepSeekV4DsparkLayerProgress> {
         let DeepSeekV4DsparkLayerContinuation { rows, moe } = continuation;
         match operators
             .cuda_mut()?
-            .progress_routed_moe_prefill_batch_from_device_into(
+            .resume_routed_moe_prefill_batch_from_device_into(
                 moe,
+                leases,
                 &arena.ffn_norm,
                 &arena.router_indices,
                 &arena.router_weights,
-                residency,
-                source_catalog,
-                expert_reader,
                 &mut arena.moe_segment_workspace,
                 &mut arena.moe_route_output,
                 &mut arena.moe_output,
@@ -757,7 +728,7 @@ impl DeepSeekV4Layer {
                     DeepSeekV4DsparkLayerContinuation { rows, moe },
                 ))
             }
-            DeepSeekV4CudaPackedMoeProgress::Complete(events) => {
+            DeepSeekV4CudaPackedMoeProgress::Complete { events, leases } => {
                 operators.cuda_mut()?.hc_post_from_device_into(
                     &arena.moe_output,
                     &arena.after_attn,
@@ -768,12 +739,12 @@ impl DeepSeekV4Layer {
                     &mut arena.layer_output,
                 )?;
                 std::mem::swap(hc_state_dev, &mut arena.layer_output);
-                Ok(DeepSeekV4DsparkLayerProgress::Complete(events))
+                Ok(DeepSeekV4DsparkLayerProgress::Complete { events, leases })
             }
         }
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     pub(crate) fn poll_dspark_proposal_cancel_ready(
         &self,
         continuation: &mut DeepSeekV4DsparkLayerContinuation,
@@ -784,16 +755,15 @@ impl DeepSeekV4Layer {
             .poll_routed_moe_cancel_ready(&mut continuation.moe)
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutlass"))]
+    #[cfg(feature = "cuda")]
     pub(crate) fn cancel_dspark_proposal_block_device_hc_device(
         &self,
         continuation: DeepSeekV4DsparkLayerContinuation,
-        residency: &mut dyn ExpertResidencyControl,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<()> {
         operators
             .cuda_mut()?
-            .cancel_routed_moe_prefill_batch(continuation.moe, residency)
+            .cancel_routed_moe_prefill_batch(continuation.moe)
     }
 
     #[expect(

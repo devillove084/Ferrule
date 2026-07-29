@@ -1,3 +1,5 @@
+#![cfg(feature = "cuda")]
+
 use ferrule_model::models::deepseek_v4::DeepSeekV4LayerRuntimeStats;
 
 pub(super) fn print_deepseek_v4_runtime_stats(stats: &[DeepSeekV4LayerRuntimeStats]) {

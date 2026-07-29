@@ -24,6 +24,7 @@
 pub mod binding;
 pub mod format;
 pub mod group;
+pub(crate) mod hash;
 pub mod hf;
 pub mod identity;
 pub mod index;

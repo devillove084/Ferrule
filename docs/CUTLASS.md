@@ -1,6 +1,8 @@
-# GB10 CUTLASS/CuTe provider
+# Current GB10 SM121 CUTLASS/CuTe provider
 
-Ferrule's production CUDA provider is deliberately narrow:
+Ferrule's current production kernel implementation is deliberately narrow. It is the
+SM121 provider for the DeepSeek-V4/GB10 validation profile, not Ferrule's global hardware
+or core runtime contract:
 
 ```text
 NVIDIA GB10
@@ -23,11 +25,20 @@ Rust remains the unique owner of:
 - paged KV and sequence transactions;
 - expert residency, I/O, and scheduling.
 
-`crates/ferrule-cuda/native/cutlass/ferrule_cutlass.h` is a versioned C POD ABI. No C++ object crosses it. Every launch receives Ferrule-owned pointers and a Ferrule-owned stream. The provider allocates nothing and performs no host synchronization.
+This ownership boundary does not change when additional providers are introduced.
+`crates/ferrule-cuda/native/cutlass/ferrule_cutlass.h` is the current SM121 provider's
+versioned C POD ABI. No C++ object crosses it. Every launch receives Ferrule-owned pointers
+and a Ferrule-owned stream. The provider allocates nothing and performs no host
+synchronization.
+
+The future provider-neutral contract, compatibility rules, and adapter requirements are
+specified in [Kernel Provider ABI](KERNEL_PROVIDER_ABI.md). [Architecture](ARCHITECTURE.md)
+describes how providers fit beneath the Rust-owned runtime.
 
 ## Semantic ABI
 
-The production FFI unit is a semantic superkernel, not a generic GEMM. ABI version 7 publishes eight operations:
+The current SM121 FFI unit is a semantic superkernel, not a generic GEMM. The checked-in
+code ABI is **9** and publishes ten operations:
 
 | Operation | Fused boundary |
 |---|---|
@@ -39,14 +50,64 @@ The production FFI unit is a semantic superkernel, not a generic GEMM. ABI versi
 | MLA output | OutputA → BF16 latent boundary → FP8 pack → OutputB |
 | DSpark main projection/norm | target-tap FP8 projection → BF16 boundary → RMSNorm |
 | DSpark hybrid MLA attention | committed paged context + ephemeral full-block KV → sink-aware tensor-core QK/softmax/PV |
+| DSpark proposal head | HC head/final norm → BF16 LM projection → sequential Markov selection and confidence |
+| FP8 projection | one packed activation producer, one projection consumer |
 
 Model plans bind one operation per semantic role. Small-M and tiled schedules are provider-private; model plans do not contain M=1/2/4/8 kernel variants. The semantic entry supports cross-tile M and validates its real grid/resource range.
 
-CUTLASS 4.6.1 and CuTe provide MMA atoms, layouts, block-scaled types, and copy primitives. Ferrule implements the model-specific fused dataflow around those primitives.
+For this GB10 provider, CUTLASS 4.6.1 and CuTe provide MMA atoms, layouts, block-scaled
+types, and copy primitives. Ferrule implements the model-specific fused dataflow around
+those primitives. CUTLASS 4.6.1 is the pinned implementation dependency for the current
+GB10 profile; it is not a Ferrule-wide core or kernel-provider ABI contract.
+
+## Current hard coupling and adapter migration
+
+The current path is not yet a provider-neutral build/load adapter. SM121 details remain
+hard-coupled in:
+
+- `crates/ferrule-cuda/build.rs`, which validates `sm_121a` and directly compiles the
+  CUTLASS translation unit;
+- `crates/ferrule-cuda/native/cutlass/bridge.cu`, which includes the SM121 kernels,
+  constructs their manifest, and exports their launch functions;
+- the mirrored kernel IDs in `crates/ferrule-cuda/src/cutlass.rs` and
+  `crates/ferrule-cuda/native/cutlass/ferrule_cutlass.h`, plus the operation-to-ID mapping
+  in `crates/ferrule-cuda/src/provider.rs`;
+- `ferrule_cutlass.h` itself, which currently combines the C ABI structs with the SM121
+  kernel catalog.
+
+The gradual migration in the provider ABI specification **has not been implemented**. It
+first freezes and inventories the ABI9 direct functions, then introduces an SM121 adapter
+that maps the neutral manifest/prepare/launch contract to those functions. One operation
+will move through shadow comparison and a temporary observable fallback before the same
+process expands to the remaining operations and removes the direct exports. Provider-specific
+build and bridge selection can then be separated without changing Rust ownership.
+
+Until those stages land, the runtime continues to use the directly wired SM121 path. This
+document does not claim a generic plugin, portable adapter, or multi-provider implementation;
+additional hardware can be registered only after its own validation and performance
+contract passes.
+
+### Portable adapter migration exit gate
+
+Throughout migration—and before the portable adapter migration is considered complete or
+any ABI9 direct fallback or export is removed—all of the following must hold:
+
+- all ten published ABI9 operations retain direct-vs-adapter per-operation parity;
+- the complete 43-layer packed path retains its established parity;
+- the proposal path passes the near-tie and acceptance corpus without semantic drift;
+- `status_i32` and `route_error` preserve their existing status, ordering, and failure
+  semantics;
+- prepare, launch, capture, and replay introduce no implicit host/device allocation or
+  synchronization;
+- provider DSO, CUDA module, plan, and graph lifetimes and unload ordering follow
+  [Kernel Provider ABI](KERNEL_PROVIDER_ABI.md).
+
+These are migration gates, not claims about the current directly wired implementation or
+unfinished adapter.
 
 ## Reproducible dependency setup
 
-The integration pins:
+The current GB10 implementation pins:
 
 ```text
 repository  https://github.com/NVIDIA/cutlass.git

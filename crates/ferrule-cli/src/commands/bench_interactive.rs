@@ -6,11 +6,11 @@
 //! - time-to-REPL / artifact load latency
 //! - per-turn prefill and decode wall time
 //! - generated tokens per turn and aggregate decode tok/s
-//! - resident expert and host-cache counters
+//! - runtime-owned physical materialization and critical-path counters
 //! - optional golden-trace comparison
 
 #[cfg(feature = "cuda")]
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(feature = "cuda")]
 use std::path::Path;
@@ -22,7 +22,7 @@ use crate::GenerationConfig;
 #[cfg(feature = "cuda")]
 use crate::bench::{GoldenTurn, InteractiveTrace, compare_interactive_trace};
 #[cfg(feature = "cuda")]
-use ferrule_common::MemoryPoolStats;
+use ferrule_common::io_protocol::{LoadStage, OperationId, RetirementReason};
 #[cfg(feature = "cuda")]
 use ferrule_model::{
     ChatTemplate, ModelExecutionBackend,
@@ -34,14 +34,112 @@ use ferrule_model::{
     moe::ExpertPredictionStats,
 };
 #[cfg(feature = "cuda")]
+use ferrule_runtime::io::{OutputTokenId, RuntimeMaterializationAdapterStats};
+#[cfg(feature = "cuda")]
 use ferrule_runtime::{
-    ExpertIoBudget, GenerateRequest, LocalResidentInferenceEngine, RequestId, ResidentActionKind,
-    ResidentDriverStep, ResidentSchedulerConfig, ResidentTopKDriverConfig, ResidentTopKDriverStats,
-    SessionId, SpeculativeMetrics,
+    ExpertIoBudget, FixedSequenceSlotPool, GenerateRequest, LocalResidentInferenceEngine,
+    RequestId, ResidentActionKind, ResidentDriverStep, ResidentSchedulerConfig,
+    ResidentTopKDriverConfig, ResidentTopKDriverStats, SessionId, SpeculativeMetrics,
 };
+#[cfg(feature = "cuda")]
+use ferrule_runtime::{ResourceClass, ResourceKind};
 
 #[cfg(feature = "cuda")]
 use super::resident::{block_on_local_inference, build_resident_topk_driver};
+
+#[cfg(feature = "cuda")]
+pub(crate) const CLI_RUNTIME_SCHEMA_VERSION: u32 = 2;
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RuntimeDependencyStats {
+    selected: u64,
+    unique_selected: u64,
+    resident: usize,
+    waiting: usize,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RuntimeMaterializationStageStats {
+    read_stages: u64,
+    read_bytes: u64,
+    upload_stages: u64,
+    upload_bytes: u64,
+    install_stages: u64,
+    install_bytes: u64,
+    publish_stages: u64,
+    publish_bytes: u64,
+    failures: u64,
+    stale: u64,
+    cancellations: u64,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RuntimeLoadRegistryStats {
+    operations_created: u64,
+    active_operations: usize,
+    retired_operations: u64,
+    single_flight_joins: u64,
+    physical_completions: u64,
+    rejected_completions: u64,
+    publications: u64,
+    cancellations_requested: u64,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RuntimeExternalTokenSnapshot {
+    external_token_id: u64,
+    externally_committed_tokens: usize,
+    captured_at_ns: u64,
+    read_ns: u64,
+    upload_ns: u64,
+    publish_ns: u64,
+    wait_ns: u64,
+    covered_wait_ns: u64,
+    uncovered_wait_ns: u64,
+    resume_ns: u64,
+    commit_ns: u64,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RuntimeCriticalPathStats {
+    external_tokens: usize,
+    snapshot_groups: usize,
+    read_ns: u64,
+    upload_ns: u64,
+    publish_ns: u64,
+    wait_ns: u64,
+    covered_wait_ns: u64,
+    uncovered_wait_ns: u64,
+    resume_ns: u64,
+    commit_ns: u64,
+    per_external_token: Vec<RuntimeExternalTokenSnapshot>,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ExternalSnapshotReconciliation {
+    expected_external_tokens: usize,
+    snapshot_external_tokens: usize,
+    reconciled_external_tokens: usize,
+    snapshot_groups: usize,
+    consistent: bool,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RuntimeMaterializationStats {
+    dependencies: RuntimeDependencyStats,
+    adapter: RuntimeMaterializationAdapterStats,
+    stages: RuntimeMaterializationStageStats,
+    registry: RuntimeLoadRegistryStats,
+    critical_path: RuntimeCriticalPathStats,
+    external_snapshot_reconciliation: ExternalSnapshotReconciliation,
+}
 
 /// A single turn measurement captured by the interactive benchmark.
 #[cfg(feature = "cuda")]
@@ -73,6 +171,7 @@ struct InteractiveTurnMeasurement {
     stopped_by_eos: bool,
     stopped_by_string: Option<String>,
     runtime_driver_stats: ResidentTopKDriverStats,
+    runtime_materialization: RuntimeMaterializationStats,
     dsv4_operator_counters: DeepSeekV4OperatorRuntimeCounters,
     dsv4_layer_profile_stats: Vec<DeepSeekV4LayerProfileStats>,
     dsv4_attention_profile_stats: Vec<DeepSeekV4AttentionProfileStats>,
@@ -90,8 +189,6 @@ struct InteractiveBenchReport {
     max_layers: usize,
     prefill_chunk_size: usize,
     output_head_chunk_rows: usize,
-    moe_prefetch_experts: usize,
-    moe_hotset_experts: usize,
     runtime_path: String,
     dsv4_profile_sync: bool,
     /// Wall time from load start to runner ready.
@@ -102,16 +199,7 @@ struct InteractiveBenchReport {
     warmup_us: u64,
     /// Warmup tokens actually generated.
     warmup_generated_tokens: usize,
-    /// Whether routing-hotset expert prewarm is enabled after warmup reset.
-    expert_prewarm_enabled: bool,
-    /// Wall time spent prewarming predicted/hot experts after warmup reset.
-    expert_prewarm_us: u64,
-    /// Experts actually uploaded by the prewarm stage.
-    expert_prewarm_experts: usize,
-    /// Expert load counter delta attributed to prewarm.
-    expert_prewarm_loads: u64,
-    /// Expert load bytes attributed to prewarm.
-    expert_prewarm_load_bytes: u64,
+
     /// Wall time from measured prompt submission to first emitted token.
     time_to_first_token_us: u64,
     turns: Vec<InteractiveTurnMeasurement>,
@@ -129,6 +217,8 @@ struct InteractiveBenchReport {
     final_position: usize,
     /// Runtime-driver scheduler/executor counters for measured turns only.
     runtime_driver_stats: ResidentTopKDriverStats,
+    /// Runtime-owned physical materialization and critical-path counters.
+    runtime_materialization: RuntimeMaterializationStats,
     /// DSV4 CUDA/operator counters for measured turns only.
     dsv4_operator_counters: DeepSeekV4OperatorRuntimeCounters,
     /// DSV4 per-layer profile counters for measured turns only.
@@ -137,20 +227,6 @@ struct InteractiveBenchReport {
     dsv4_attention_profile_stats: Vec<DeepSeekV4AttentionProfileStats>,
     /// DSV4 final hidden/output-head profile counters for measured turns only.
     dsv4_output_profile_stats: DeepSeekV4OutputProfileStats,
-    /// Resident experts at end of run (sum across layers).
-    resident_experts: usize,
-    /// Resident expert bytes at end of run.
-    resident_expert_bytes: u64,
-    /// Expert loads during the timed run.
-    expert_loads: u64,
-    /// Expert load bytes.
-    expert_load_bytes: u64,
-    /// Expert evictions.
-    expert_evictions: u64,
-    /// Host cache entries at end of run.
-    host_cache_entries: usize,
-    /// Host cache bytes at end of run.
-    host_cache_bytes: u64,
 }
 
 #[cfg(feature = "cuda")]
@@ -212,13 +288,10 @@ pub fn cmd_bench_interactive(
         max_layers,
         prefill_chunk_size,
         output_head_chunk_rows,
-        moe_prefetch_experts,
-        moe_hotset_experts,
         runtime_path: "resident_topk_driver_speculative".into(),
         dsv4_profile_sync: runner.execution_policy().profile_sync(),
         artifact_load_us,
         warmup_tokens,
-        expert_prewarm_enabled: false,
         ..Default::default()
     };
 
@@ -234,50 +307,7 @@ pub fn cmd_bench_interactive(
 
     // ── Output ────────────────────────────────────────────────────────────
     if json {
-        let mut out = serde_json::json!({
-            "model": report.model_dir,
-            "chat_template": report.chat_template,
-            "runtime_path": report.runtime_path,
-            "dsv4_profile_sync": report.dsv4_profile_sync,
-            "max_new_tokens": report.max_new_tokens,
-            "max_layers": report.max_layers,
-            "prefill_chunk_size": report.prefill_chunk_size,
-            "artifact_load_s": report.artifact_load_us as f64 / 1_000_000.0,
-            "warmup_tokens": report.warmup_tokens,
-            "warmup_s": report.warmup_us as f64 / 1_000_000.0,
-            "warmup_generated_tokens": report.warmup_generated_tokens,
-            "expert_prewarm_enabled": report.expert_prewarm_enabled,
-            "expert_prewarm_s": report.expert_prewarm_us as f64 / 1_000_000.0,
-            "expert_prewarm_experts": report.expert_prewarm_experts,
-            "expert_prewarm_loads": report.expert_prewarm_loads,
-            "expert_prewarm_load_bytes": report.expert_prewarm_load_bytes,
-            "time_to_first_token_s": report.time_to_first_token_us as f64 / 1_000_000.0,
-            "total_turns": report.turns.len(),
-            "total_prompt_tokens": report.total_prompt_tokens,
-            "total_prefill_s": report.total_prefill_us as f64 / 1_000_000.0,
-            "total_generated": report.total_generated,
-            "final_position": report.final_position,
-            "aggregate_prefill_tok_per_s": report.aggregate_prefill_tok_per_s,
-            "aggregate_decode_tok_per_s": report.aggregate_decode_tok_per_s,
-            "runtime_driver_stats": resident_driver_stats_json(&report.runtime_driver_stats),
-            "dsv4_operator_counters": dsv4_operator_counters_json(&report.dsv4_operator_counters),
-            "dsv4_layer_profile_summary": dsv4_layer_profile_summary_json(&report.dsv4_layer_profile_stats),
-            "dsv4_layer_profile": dsv4_layer_profile_stats_json(&report.dsv4_layer_profile_stats),
-            "dsv4_attention_profile_summary": dsv4_attention_profile_summary_json(&report.dsv4_attention_profile_stats),
-            "dsv4_attention_profile": dsv4_attention_profile_stats_json(&report.dsv4_attention_profile_stats),
-            "dsv4_output_profile": dsv4_output_profile_stats_json(&report.dsv4_output_profile_stats),
-            "resident_experts": report.resident_experts,
-            "resident_expert_bytes": report.resident_expert_bytes,
-            "expert_loads": report.expert_loads,
-            "expert_load_bytes": report.expert_load_bytes,
-            "expert_evictions": report.expert_evictions,
-            "host_cache_entries": report.host_cache_entries,
-            "host_cache_bytes": report.host_cache_bytes,
-            "turns": report.turns.iter().map(interactive_turn_json).collect::<Vec<_>>(),
-        });
-        out["output_head_chunk_rows"] = serde_json::json!(report.output_head_chunk_rows);
-        out["moe_prefetch_experts"] = serde_json::json!(report.moe_prefetch_experts);
-        out["moe_hotset_experts"] = serde_json::json!(report.moe_hotset_experts);
+        let mut out = interactive_bench_report_json(&report);
 
         // ── Golden trace comparison ─────────────────────────────────────
         if let Some(golden_path) = golden_trace_path {
@@ -334,14 +364,7 @@ pub fn cmd_bench_interactive(
             report.warmup_generated_tokens,
             report.warmup_us as f64 / 1_000_000.0
         );
-        println!(
-            "expert_prewarm:   enabled={} experts={} loads={} bytes={} in {:.3}s",
-            report.expert_prewarm_enabled,
-            report.expert_prewarm_experts,
-            report.expert_prewarm_loads,
-            report.expert_prewarm_load_bytes,
-            report.expert_prewarm_us as f64 / 1_000_000.0
-        );
+
         println!(
             "time_to_first_token: {:.3}s",
             report.time_to_first_token_us as f64 / 1_000_000.0
@@ -380,6 +403,7 @@ pub fn cmd_bench_interactive(
                     turn.runtime_driver_stats.prefill_tokens,
                     turn.runtime_driver_stats.decode_steps
                 );
+                print_runtime_materialization_summary(&turn.runtime_materialization);
                 if let Some(slowest) = turn.runtime_steps.iter().max_by_key(|step| step.elapsed_us)
                 {
                     println!(
@@ -448,14 +472,8 @@ pub fn cmd_bench_interactive(
                 attention.main_compress_us as f64 / 1_000_000.0,
             );
         }
-        println!("resident_experts:          {}", report.resident_experts);
-        println!(
-            "resident_expert_bytes:     {}",
-            report.resident_expert_bytes
-        );
-        println!("expert_loads:              {}", report.expert_loads);
-        println!("expert_evictions:          {}", report.expert_evictions);
-        println!("host_cache_entries:        {}", report.host_cache_entries);
+        print_runtime_materialization_summary(&report.runtime_materialization);
+        print_hard_resource_high_water(&report.runtime_driver_stats.hard_resource_high_water);
     }
 
     Ok(())
@@ -541,7 +559,9 @@ async fn run_with_resident_driver_async(
     let observability_baseline: DeepSeekV4ObservabilitySnapshot =
         driver.model_observability_snapshot();
     let counters_baseline = observability_baseline.operator;
-    let driver_stats_baseline = driver.stats().clone();
+    let driver_stats_baseline = resident_driver_stats_snapshot(&driver);
+    let runtime_materialization_baseline =
+        runtime_materialization_snapshot(&driver, counters_baseline)?;
     let layer_profile_baseline = observability_baseline.layers;
     let attention_profile_baseline = observability_baseline.attention;
     let output_profile_baseline = observability_baseline.output;
@@ -573,9 +593,11 @@ async fn run_with_resident_driver_async(
             gen_cfg.max_new_tokens,
             &gen_cfg.stop,
         );
-        let turn_driver_stats_before = driver.stats().clone();
+        let turn_driver_stats_before = resident_driver_stats_snapshot(&driver);
         let turn_observability_before = driver.model_observability_snapshot();
         let turn_operator_counters_before = turn_observability_before.operator;
+        let turn_runtime_materialization_before =
+            runtime_materialization_snapshot(&driver, turn_operator_counters_before)?;
         let turn_layer_profile_before = turn_observability_before.layers;
         let turn_attention_profile_before = turn_observability_before.attention;
         let turn_output_profile_before = turn_observability_before.output;
@@ -705,12 +727,21 @@ async fn run_with_resident_driver_async(
         total_generated = total_generated.saturating_add(generated_tokens.len());
         report.final_position = sequence.position;
 
-        let turn_driver_stats =
-            resident_driver_stats_delta(turn_driver_stats_before, driver.stats().clone());
+        let turn_driver_stats = resident_driver_stats_delta(
+            turn_driver_stats_before,
+            resident_driver_stats_snapshot(&driver),
+        );
         let turn_observability_after = driver.model_observability_snapshot();
         let turn_operator_counters = dsv4_operator_counters_delta(
             turn_operator_counters_before,
             turn_observability_after.operator,
+        );
+        let turn_runtime_materialization_after =
+            runtime_materialization_snapshot(&driver, turn_observability_after.operator)?;
+        let turn_runtime_materialization = runtime_materialization_stats_delta(
+            turn_runtime_materialization_before,
+            turn_runtime_materialization_after,
+            turn_driver_stats.emitted_tokens,
         );
 
         let turn_layer_profile_stats = dsv4_layer_profile_stats_delta(
@@ -740,6 +771,7 @@ async fn run_with_resident_driver_async(
             stopped_by_eos,
             stopped_by_string,
             runtime_driver_stats: turn_driver_stats,
+            runtime_materialization: turn_runtime_materialization,
             dsv4_operator_counters: turn_operator_counters,
             dsv4_layer_profile_stats: turn_layer_profile_stats,
             dsv4_attention_profile_stats: turn_attention_profile_stats,
@@ -750,9 +782,17 @@ async fn run_with_resident_driver_async(
 
     let observability_now = driver.model_observability_snapshot();
     let counters_now = observability_now.operator;
-    report.runtime_driver_stats =
-        resident_driver_stats_delta(driver_stats_baseline, driver.stats().clone());
+    report.runtime_driver_stats = resident_driver_stats_delta(
+        driver_stats_baseline,
+        resident_driver_stats_snapshot(&driver),
+    );
     report.dsv4_operator_counters = dsv4_operator_counters_delta(counters_baseline, counters_now);
+    let runtime_materialization_now = runtime_materialization_snapshot(&driver, counters_now)?;
+    report.runtime_materialization = runtime_materialization_stats_delta(
+        runtime_materialization_baseline,
+        runtime_materialization_now,
+        report.runtime_driver_stats.emitted_tokens,
+    );
     report.dsv4_layer_profile_stats =
         dsv4_layer_profile_stats_delta(&layer_profile_baseline, &observability_now.layers);
     report.dsv4_attention_profile_stats = dsv4_attention_profile_stats_delta(
@@ -761,25 +801,359 @@ async fn run_with_resident_driver_async(
     );
     report.dsv4_output_profile_stats =
         dsv4_output_profile_stats_delta(output_profile_baseline, observability_now.output);
-    let layer_stats = observability_now.layer_runtime;
     finish_report_counters(
         report,
         total_prefill_us,
         total_decode_us,
         total_prompt_tokens,
         total_generated,
-        counters_baseline.expert_loads,
-        counters_baseline.expert_load_bytes,
-        counters_baseline.expert_evictions,
-        counters_now.expert_loads,
-        counters_now.expert_load_bytes,
-        counters_now.expert_evictions,
-        counters_now.expert_host_cache.entries_used,
-        counters_now.expert_host_cache.bytes_used,
-        layer_stats.iter().map(|s| s.resident_experts).sum(),
-        layer_stats.iter().map(|s| s.resident_expert_bytes).sum(),
     );
     Ok(())
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn runtime_materialization_snapshot(
+    driver: &LocalResidentInferenceEngine<DeepSeekV4Runner, FixedSequenceSlotPool>,
+    operator: DeepSeekV4OperatorRuntimeCounters,
+) -> anyhow::Result<RuntimeMaterializationStats> {
+    let registry = driver.driver().load_registry();
+    let registry_stats = registry.stats();
+    let waiting = registry
+        .waiters()
+        .active_waiters()
+        .try_fold(0usize, |total, waiter| {
+            let dependencies = registry
+                .waiters()
+                .loads_for(waiter)
+                .ok_or_else(|| anyhow::anyhow!("active runtime waiter has no dependency set"))?;
+            total
+                .checked_add(dependencies.len())
+                .ok_or_else(|| anyhow::anyhow!("runtime waiting dependency count overflow"))
+        })?;
+
+    let mut stages = RuntimeMaterializationStageStats::default();
+    for raw_operation in 1..=registry_stats.operations_created {
+        let operation = OperationId::new(raw_operation);
+        let history = registry.stage_history(operation).ok_or_else(|| {
+            anyhow::anyhow!(
+                "load registry omitted stage history for created physical operation {}",
+                raw_operation
+            )
+        })?;
+        let bytes = if let Some(active) = registry.operation(operation) {
+            active.bytes()
+        } else {
+            let key = registry.key_for_operation(operation).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "load registry omitted key for physical operation {}",
+                    raw_operation
+                )
+            })?;
+            registry.load_request(key, ResourceClass::Decode)?.bytes
+        };
+
+        for stage in history {
+            match stage {
+                LoadStage::ReadSubmitted => {
+                    stages.read_stages = stages.read_stages.saturating_add(1);
+                    stages.read_bytes = stages.read_bytes.saturating_add(bytes);
+                }
+                LoadStage::UploadSubmitted => {
+                    stages.upload_stages = stages.upload_stages.saturating_add(1);
+                    stages.upload_bytes = stages.upload_bytes.saturating_add(bytes);
+                }
+                LoadStage::Installing => {
+                    stages.install_stages = stages.install_stages.saturating_add(1);
+                    stages.install_bytes = stages.install_bytes.saturating_add(bytes);
+                }
+                LoadStage::Resident => {
+                    stages.publish_stages = stages.publish_stages.saturating_add(1);
+                    stages.publish_bytes = stages.publish_bytes.saturating_add(bytes);
+                }
+                LoadStage::Failed => stages.failures = stages.failures.saturating_add(1),
+                LoadStage::Stale => stages.stale = stages.stale.saturating_add(1),
+                LoadStage::Reserved
+                | LoadStage::HostReady
+                | LoadStage::Draining
+                | LoadStage::Retired => {}
+            }
+        }
+        if registry
+            .retirement(operation)
+            .is_some_and(|record| matches!(record.reason, RetirementReason::Cancelled(_)))
+        {
+            stages.cancellations = stages.cancellations.saturating_add(1);
+        }
+    }
+
+    let mut external_token_snapshots = Vec::new();
+    let mut external_token_id = 1u64;
+    while let Some(snapshot) = registry
+        .ledger()
+        .output(OutputTokenId::new(external_token_id))
+    {
+        external_token_snapshots.push(RuntimeExternalTokenSnapshot {
+            external_token_id,
+            externally_committed_tokens: snapshot.externally_committed_tokens,
+            captured_at_ns: snapshot.captured_at_ns,
+            read_ns: snapshot.read_ns,
+            upload_ns: snapshot.upload_ns,
+            publish_ns: snapshot.publish_ns,
+            wait_ns: snapshot.wait_ns,
+            covered_wait_ns: snapshot.covered_wait_ns,
+            uncovered_wait_ns: snapshot.uncovered_wait_ns,
+            resume_ns: snapshot.resume_ns,
+            commit_ns: snapshot.commit_ns,
+        });
+        external_token_id = external_token_id
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("external output-token identity space exhausted"))?;
+    }
+    let (critical_path, external_snapshot_reconciliation) =
+        critical_path_stats(external_token_snapshots, driver.stats().emitted_tokens);
+
+    Ok(RuntimeMaterializationStats {
+        dependencies: RuntimeDependencyStats {
+            selected: operator.expert_selected,
+            unique_selected: operator.expert_unique_selected,
+            resident: operator.expert_residency_stats.resident,
+            waiting,
+        },
+        adapter: driver.driver().materialization_adapter_stats(),
+        stages,
+        registry: RuntimeLoadRegistryStats {
+            operations_created: registry_stats.operations_created,
+            active_operations: registry.active_operations(),
+            retired_operations: registry_stats.retirements,
+            single_flight_joins: registry_stats.single_flight_joins,
+            physical_completions: registry_stats.physical_completions,
+            rejected_completions: registry_stats.rejected_completions,
+            publications: registry_stats.publications,
+            cancellations_requested: registry_stats.cancellations_requested,
+        },
+        critical_path,
+        external_snapshot_reconciliation,
+    })
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn runtime_materialization_stats_delta(
+    before: RuntimeMaterializationStats,
+    after: RuntimeMaterializationStats,
+    expected_external_tokens: usize,
+) -> RuntimeMaterializationStats {
+    let baseline_tokens: BTreeSet<_> = before
+        .critical_path
+        .per_external_token
+        .iter()
+        .map(|snapshot| snapshot.external_token_id)
+        .collect();
+    let per_external_token = after
+        .critical_path
+        .per_external_token
+        .into_iter()
+        .filter(|snapshot| !baseline_tokens.contains(&snapshot.external_token_id))
+        .collect();
+    let (critical_path, external_snapshot_reconciliation) =
+        critical_path_stats(per_external_token, expected_external_tokens);
+
+    RuntimeMaterializationStats {
+        dependencies: RuntimeDependencyStats {
+            selected: after
+                .dependencies
+                .selected
+                .saturating_sub(before.dependencies.selected),
+            unique_selected: after
+                .dependencies
+                .unique_selected
+                .saturating_sub(before.dependencies.unique_selected),
+            resident: after.dependencies.resident,
+            waiting: after.dependencies.waiting,
+        },
+        adapter: RuntimeMaterializationAdapterStats {
+            resolves: after
+                .adapter
+                .resolves
+                .saturating_sub(before.adapter.resolves),
+            physical_submissions: after
+                .adapter
+                .physical_submissions
+                .saturating_sub(before.adapter.physical_submissions),
+            single_flight_joins: after
+                .adapter
+                .single_flight_joins
+                .saturating_sub(before.adapter.single_flight_joins),
+            progress_polls: after
+                .adapter
+                .progress_polls
+                .saturating_sub(before.adapter.progress_polls),
+            publications: after
+                .adapter
+                .publications
+                .saturating_sub(before.adapter.publications),
+            logical_detaches: after
+                .adapter
+                .logical_detaches
+                .saturating_sub(before.adapter.logical_detaches),
+            cancellation_hooks: after
+                .adapter
+                .cancellation_hooks
+                .saturating_sub(before.adapter.cancellation_hooks),
+        },
+        stages: RuntimeMaterializationStageStats {
+            read_stages: after
+                .stages
+                .read_stages
+                .saturating_sub(before.stages.read_stages),
+            read_bytes: after
+                .stages
+                .read_bytes
+                .saturating_sub(before.stages.read_bytes),
+            upload_stages: after
+                .stages
+                .upload_stages
+                .saturating_sub(before.stages.upload_stages),
+            upload_bytes: after
+                .stages
+                .upload_bytes
+                .saturating_sub(before.stages.upload_bytes),
+            install_stages: after
+                .stages
+                .install_stages
+                .saturating_sub(before.stages.install_stages),
+            install_bytes: after
+                .stages
+                .install_bytes
+                .saturating_sub(before.stages.install_bytes),
+            publish_stages: after
+                .stages
+                .publish_stages
+                .saturating_sub(before.stages.publish_stages),
+            publish_bytes: after
+                .stages
+                .publish_bytes
+                .saturating_sub(before.stages.publish_bytes),
+            failures: after.stages.failures.saturating_sub(before.stages.failures),
+            stale: after.stages.stale.saturating_sub(before.stages.stale),
+            cancellations: after
+                .stages
+                .cancellations
+                .saturating_sub(before.stages.cancellations),
+        },
+        registry: RuntimeLoadRegistryStats {
+            operations_created: after
+                .registry
+                .operations_created
+                .saturating_sub(before.registry.operations_created),
+            active_operations: after.registry.active_operations,
+            retired_operations: after
+                .registry
+                .retired_operations
+                .saturating_sub(before.registry.retired_operations),
+            single_flight_joins: after
+                .registry
+                .single_flight_joins
+                .saturating_sub(before.registry.single_flight_joins),
+            physical_completions: after
+                .registry
+                .physical_completions
+                .saturating_sub(before.registry.physical_completions),
+            rejected_completions: after
+                .registry
+                .rejected_completions
+                .saturating_sub(before.registry.rejected_completions),
+            publications: after
+                .registry
+                .publications
+                .saturating_sub(before.registry.publications),
+            cancellations_requested: after
+                .registry
+                .cancellations_requested
+                .saturating_sub(before.registry.cancellations_requested),
+        },
+        critical_path,
+        external_snapshot_reconciliation,
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn critical_path_stats(
+    per_external_token: Vec<RuntimeExternalTokenSnapshot>,
+    expected_external_tokens: usize,
+) -> (RuntimeCriticalPathStats, ExternalSnapshotReconciliation) {
+    let mut summary = RuntimeCriticalPathStats {
+        external_tokens: per_external_token.len(),
+        per_external_token,
+        ..RuntimeCriticalPathStats::default()
+    };
+    let mut reconciled_external_tokens = 0usize;
+    let mut consistent = summary.external_tokens == expected_external_tokens;
+    let mut index = 0usize;
+    while index < summary.per_external_token.len() {
+        let representative = &summary.per_external_token[index];
+        let declared = representative.externally_committed_tokens;
+        let group_len = declared.max(1);
+        let Some(end) = index.checked_add(group_len) else {
+            consistent = false;
+            break;
+        };
+        if declared == 0 || end > summary.per_external_token.len() {
+            consistent = false;
+        }
+        let bounded_end = end.min(summary.per_external_token.len());
+        let group_is_exact = declared > 0
+            && bounded_end - index == declared
+            && summary.per_external_token[index..bounded_end]
+                .iter()
+                .all(|snapshot| same_external_snapshot_group(representative, snapshot));
+        if group_is_exact {
+            reconciled_external_tokens = reconciled_external_tokens.saturating_add(declared);
+        } else {
+            consistent = false;
+        }
+
+        summary.snapshot_groups = summary.snapshot_groups.saturating_add(1);
+        summary.read_ns = summary.read_ns.saturating_add(representative.read_ns);
+        summary.upload_ns = summary.upload_ns.saturating_add(representative.upload_ns);
+        summary.publish_ns = summary.publish_ns.saturating_add(representative.publish_ns);
+        summary.wait_ns = summary.wait_ns.saturating_add(representative.wait_ns);
+        summary.covered_wait_ns = summary
+            .covered_wait_ns
+            .saturating_add(representative.covered_wait_ns);
+        summary.uncovered_wait_ns = summary
+            .uncovered_wait_ns
+            .saturating_add(representative.uncovered_wait_ns);
+        summary.resume_ns = summary.resume_ns.saturating_add(representative.resume_ns);
+        summary.commit_ns = summary.commit_ns.saturating_add(representative.commit_ns);
+        index = bounded_end.max(index + 1);
+    }
+    consistent &= reconciled_external_tokens == summary.external_tokens;
+
+    let reconciliation = ExternalSnapshotReconciliation {
+        expected_external_tokens,
+        snapshot_external_tokens: summary.external_tokens,
+        reconciled_external_tokens,
+        snapshot_groups: summary.snapshot_groups,
+        consistent,
+    };
+    (summary, reconciliation)
+}
+
+#[cfg(feature = "cuda")]
+fn same_external_snapshot_group(
+    left: &RuntimeExternalTokenSnapshot,
+    right: &RuntimeExternalTokenSnapshot,
+) -> bool {
+    left.externally_committed_tokens == right.externally_committed_tokens
+        && left.captured_at_ns == right.captured_at_ns
+        && left.read_ns == right.read_ns
+        && left.upload_ns == right.upload_ns
+        && left.publish_ns == right.publish_ns
+        && left.wait_ns == right.wait_ns
+        && left.covered_wait_ns == right.covered_wait_ns
+        && left.uncovered_wait_ns == right.uncovered_wait_ns
+        && left.resume_ns == right.resume_ns
+        && left.commit_ns == right.commit_ns
 }
 
 #[cfg(feature = "cuda")]
@@ -801,23 +1175,12 @@ fn driver_request(
 }
 
 #[cfg(feature = "cuda")]
-#[allow(clippy::too_many_arguments)]
 fn finish_report_counters(
     report: &mut InteractiveBenchReport,
     total_prefill_us: u64,
     total_decode_us: u64,
     total_prompt_tokens: usize,
     total_generated: usize,
-    baseline_expert_loads: u64,
-    baseline_expert_load_bytes: u64,
-    baseline_expert_evictions: u64,
-    expert_loads: u64,
-    expert_load_bytes: u64,
-    expert_evictions: u64,
-    host_cache_entries: usize,
-    host_cache_bytes: u64,
-    resident_experts: usize,
-    resident_expert_bytes: u64,
 ) {
     report.aggregate_prefill_tok_per_s = if total_prefill_us > 0 {
         total_prompt_tokens as f64 / (total_prefill_us as f64 / 1_000_000.0)
@@ -832,13 +1195,6 @@ fn finish_report_counters(
     report.total_prompt_tokens = total_prompt_tokens;
     report.total_prefill_us = total_prefill_us;
     report.total_generated = total_generated;
-    report.resident_experts = resident_experts;
-    report.resident_expert_bytes = resident_expert_bytes;
-    report.expert_loads = expert_loads.saturating_sub(baseline_expert_loads);
-    report.expert_load_bytes = expert_load_bytes.saturating_sub(baseline_expert_load_bytes);
-    report.expert_evictions = expert_evictions.saturating_sub(baseline_expert_evictions);
-    report.host_cache_entries = host_cache_entries;
-    report.host_cache_bytes = host_cache_bytes;
 }
 
 #[cfg(feature = "cuda")]
@@ -860,7 +1216,22 @@ fn resident_action_kind_name(kind: ResidentActionKind) -> &'static str {
 }
 
 #[cfg(feature = "cuda")]
-fn resident_driver_stats_delta(
+pub(crate) fn resident_driver_stats_snapshot(
+    driver: &LocalResidentInferenceEngine<DeepSeekV4Runner, FixedSequenceSlotPool>,
+) -> ResidentTopKDriverStats {
+    let mut stats = driver.stats().clone();
+    stats.hard_resource_high_water = driver
+        .driver()
+        .load_registry()
+        .resources()
+        .snapshots()
+        .map(|snapshot| (snapshot.kind, snapshot.high_water))
+        .collect();
+    stats
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn resident_driver_stats_delta(
     before: ResidentTopKDriverStats,
     after: ResidentTopKDriverStats,
 ) -> ResidentTopKDriverStats {
@@ -874,6 +1245,7 @@ fn resident_driver_stats_delta(
         finished_sequences: after
             .finished_sequences
             .saturating_sub(before.finished_sequences),
+        hard_resource_high_water: after.hard_resource_high_water,
         speculative: speculative_metrics_delta(&before.speculative, &after.speculative),
     }
 }
@@ -940,22 +1312,7 @@ fn speculative_metrics_delta(
 }
 
 #[cfg(feature = "cuda")]
-fn memory_pool_stats_delta(before: MemoryPoolStats, after: MemoryPoolStats) -> MemoryPoolStats {
-    MemoryPoolStats {
-        limits: after.limits,
-        entries_used: after.entries_used,
-        bytes_used: after.bytes_used,
-        peak_bytes_used: after.peak_bytes_used,
-        hits: after.hits.saturating_sub(before.hits),
-        misses: after.misses.saturating_sub(before.misses),
-        admissions: after.admissions.saturating_sub(before.admissions),
-        evictions: after.evictions.saturating_sub(before.evictions),
-        rejections: after.rejections.saturating_sub(before.rejections),
-    }
-}
-
-#[cfg(feature = "cuda")]
-fn dsv4_operator_counters_delta(
+pub(crate) fn dsv4_operator_counters_delta(
     before: DeepSeekV4OperatorRuntimeCounters,
     after: DeepSeekV4OperatorRuntimeCounters,
 ) -> DeepSeekV4OperatorRuntimeCounters {
@@ -1018,72 +1375,30 @@ fn dsv4_operator_counters_delta(
         moe_router_us: after.moe_router_us.saturating_sub(before.moe_router_us),
         moe_routing_us: after.moe_routing_us.saturating_sub(before.moe_routing_us),
         moe_plan_us: after.moe_plan_us.saturating_sub(before.moe_plan_us),
-        moe_predicted_experts: after
-            .moe_predicted_experts
-            .saturating_sub(before.moe_predicted_experts),
-        moe_prefetch_loads: after
-            .moe_prefetch_loads
-            .saturating_sub(before.moe_prefetch_loads),
-        moe_prefetch_enqueued: after
-            .moe_prefetch_enqueued
-            .saturating_sub(before.moe_prefetch_enqueued),
-        moe_prefetch_skipped_cached_or_inflight: after
-            .moe_prefetch_skipped_cached_or_inflight
-            .saturating_sub(before.moe_prefetch_skipped_cached_or_inflight),
-        moe_prefetch_resident: after
-            .moe_prefetch_resident
-            .saturating_sub(before.moe_prefetch_resident),
-        moe_prefetch_materializing: after
-            .moe_prefetch_materializing
-            .saturating_sub(before.moe_prefetch_materializing),
-        moe_prefetch_host_staged: after
-            .moe_prefetch_host_staged
-            .saturating_sub(before.moe_prefetch_host_staged),
-        moe_prefetch_in_flight: after
-            .moe_prefetch_in_flight
-            .saturating_sub(before.moe_prefetch_in_flight),
-        moe_prefetch_cold: after
-            .moe_prefetch_cold
-            .saturating_sub(before.moe_prefetch_cold),
-        expert_selected_resident_hits: after
-            .expert_selected_resident_hits
-            .saturating_sub(before.expert_selected_resident_hits),
-        expert_selected_upload_hits: after
-            .expert_selected_upload_hits
-            .saturating_sub(before.expert_selected_upload_hits),
-        expert_selected_host_staged_hits: after
-            .expert_selected_host_staged_hits
-            .saturating_sub(before.expert_selected_host_staged_hits),
-        expert_selected_host_staging_waits: after
-            .expert_selected_host_staging_waits
-            .saturating_sub(before.expert_selected_host_staging_waits),
-        expert_selected_host_staging_hits: after
-            .expert_selected_host_staging_hits
-            .saturating_sub(before.expert_selected_host_staging_hits),
-        expert_selected_host_staging_wait_us: after
-            .expert_selected_host_staging_wait_us
-            .saturating_sub(before.expert_selected_host_staging_wait_us),
-        expert_selected_cold_misses: after
-            .expert_selected_cold_misses
-            .saturating_sub(before.expert_selected_cold_misses),
-        expert_upload_prefetch_submitted: after
-            .expert_upload_prefetch_submitted
-            .saturating_sub(before.expert_upload_prefetch_submitted),
-        expert_upload_prefetch_completed: after
-            .expert_upload_prefetch_completed
-            .saturating_sub(before.expert_upload_prefetch_completed),
-        expert_upload_prefetch_in_flight: after.expert_upload_prefetch_in_flight,
-        expert_prefetch_outstanding: after.expert_prefetch_outstanding,
-        expert_prefetch_slot_reservations: after.expert_prefetch_slot_reservations,
-        expert_prefetch_host_queued: after.expert_prefetch_host_queued,
-        expert_abandoned_uploads: after.expert_abandoned_uploads,
-        expert_frame_reuses: after
-            .expert_frame_reuses
-            .saturating_sub(before.expert_frame_reuses),
-        expert_frame_waits: after
-            .expert_frame_waits
-            .saturating_sub(before.expert_frame_waits),
-        expert_free_frames: after.expert_free_frames,
+        moe_shared_us: after.moe_shared_us.saturating_sub(before.moe_shared_us),
+        moe_workspace_us: after
+            .moe_workspace_us
+            .saturating_sub(before.moe_workspace_us),
+        moe_compute_submit_us: after
+            .moe_compute_submit_us
+            .saturating_sub(before.moe_compute_submit_us),
+        moe_commit_us: after.moe_commit_us.saturating_sub(before.moe_commit_us),
+        output_head_calls: after
+            .output_head_calls
+            .saturating_sub(before.output_head_calls),
+        output_head_rows: after
+            .output_head_rows
+            .saturating_sub(before.output_head_rows),
+        output_head_topk_us: after
+            .output_head_topk_us
+            .saturating_sub(before.output_head_topk_us),
+        expert_selected: after.expert_selected.saturating_sub(before.expert_selected),
+        expert_unique_selected: after
+            .expert_unique_selected
+            .saturating_sub(before.expert_unique_selected),
+        expert_selected_load_requests: after
+            .expert_selected_load_requests
+            .saturating_sub(before.expert_selected_load_requests),
         expert_io_submitted_extents: after
             .expert_io_submitted_extents
             .saturating_sub(before.expert_io_submitted_extents),
@@ -1112,91 +1427,6 @@ fn dsv4_operator_counters_delta(
         expert_io_read_us: after
             .expert_io_read_us
             .saturating_sub(before.expert_io_read_us),
-        expert_selected_upload_waits: after
-            .expert_selected_upload_waits
-            .saturating_sub(before.expert_selected_upload_waits),
-        expert_selected_upload_wait_us: after
-            .expert_selected_upload_wait_us
-            .saturating_sub(before.expert_selected_upload_wait_us),
-        expert_async_upload_bytes: after
-            .expert_async_upload_bytes
-            .saturating_sub(before.expert_async_upload_bytes),
-        expert_lookahead_prefetch_calls: after
-            .expert_lookahead_prefetch_calls
-            .saturating_sub(before.expert_lookahead_prefetch_calls),
-        expert_lookahead_prefetch_experts: after
-            .expert_lookahead_prefetch_experts
-            .saturating_sub(before.expert_lookahead_prefetch_experts),
-        expert_lookahead_prefetch_enqueued: after
-            .expert_lookahead_prefetch_enqueued
-            .saturating_sub(before.expert_lookahead_prefetch_enqueued),
-        expert_lookahead_prefetch_us: after
-            .expert_lookahead_prefetch_us
-            .saturating_sub(before.expert_lookahead_prefetch_us),
-
-        moe_cache_lookup_us: after
-            .moe_cache_lookup_us
-            .saturating_sub(before.moe_cache_lookup_us),
-        moe_expert_read_us: after
-            .moe_expert_read_us
-            .saturating_sub(before.moe_expert_read_us),
-        moe_expert_upload_us: after
-            .moe_expert_upload_us
-            .saturating_sub(before.moe_expert_upload_us),
-        moe_shared_us: after.moe_shared_us.saturating_sub(before.moe_shared_us),
-        moe_workspace_us: after
-            .moe_workspace_us
-            .saturating_sub(before.moe_workspace_us),
-        moe_compute_submit_us: after
-            .moe_compute_submit_us
-            .saturating_sub(before.moe_compute_submit_us),
-        moe_commit_us: after.moe_commit_us.saturating_sub(before.moe_commit_us),
-        output_head_calls: after
-            .output_head_calls
-            .saturating_sub(before.output_head_calls),
-        output_head_rows: after
-            .output_head_rows
-            .saturating_sub(before.output_head_rows),
-        output_head_topk_us: after
-            .output_head_topk_us
-            .saturating_sub(before.output_head_topk_us),
-        expert_selected: after.expert_selected.saturating_sub(before.expert_selected),
-        expert_unique_selected: after
-            .expert_unique_selected
-            .saturating_sub(before.expert_unique_selected),
-        expert_selected_load_requests: after
-            .expert_selected_load_requests
-            .saturating_sub(before.expert_selected_load_requests),
-        expert_loads: after.expert_loads.saturating_sub(before.expert_loads),
-        expert_load_bytes: after
-            .expert_load_bytes
-            .saturating_sub(before.expert_load_bytes),
-        expert_evictions: after
-            .expert_evictions
-            .saturating_sub(before.expert_evictions),
-        expert_host_cache: memory_pool_stats_delta(
-            before.expert_host_cache,
-            after.expert_host_cache,
-        ),
-        expert_pinned_cache: memory_pool_stats_delta(
-            before.expert_pinned_cache,
-            after.expert_pinned_cache,
-        ),
-        expert_cuda_resident_entries: after.expert_cuda_resident_entries,
-        expert_cuda_resident_bytes: after.expert_cuda_resident_bytes,
-        expert_async_prefetch_submitted: after
-            .expert_async_prefetch_submitted
-            .saturating_sub(before.expert_async_prefetch_submitted),
-        expert_async_prefetch_completed: after
-            .expert_async_prefetch_completed
-            .saturating_sub(before.expert_async_prefetch_completed),
-        expert_async_prefetch_failed: after
-            .expert_async_prefetch_failed
-            .saturating_sub(before.expert_async_prefetch_failed),
-        expert_async_prefetch_skipped: after
-            .expert_async_prefetch_skipped
-            .saturating_sub(before.expert_async_prefetch_skipped),
-        expert_async_prefetch_in_flight: after.expert_async_prefetch_in_flight,
         arena_hits: after.arena_hits.saturating_sub(before.arena_hits),
         arena_misses: after.arena_misses.saturating_sub(before.arena_misses),
         arena_grows: after.arena_grows.saturating_sub(before.arena_grows),
@@ -1467,6 +1697,42 @@ fn sum_attention_profile_stats(
 }
 
 #[cfg(feature = "cuda")]
+fn interactive_bench_report_json(report: &InteractiveBenchReport) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": CLI_RUNTIME_SCHEMA_VERSION,
+        "model": report.model_dir,
+        "chat_template": report.chat_template,
+        "runtime_path": report.runtime_path,
+        "dsv4_profile_sync": report.dsv4_profile_sync,
+        "max_new_tokens": report.max_new_tokens,
+        "max_layers": report.max_layers,
+        "prefill_chunk_size": report.prefill_chunk_size,
+        "output_head_chunk_rows": report.output_head_chunk_rows,
+        "artifact_load_s": report.artifact_load_us as f64 / 1_000_000.0,
+        "warmup_tokens": report.warmup_tokens,
+        "warmup_s": report.warmup_us as f64 / 1_000_000.0,
+        "warmup_generated_tokens": report.warmup_generated_tokens,
+        "time_to_first_token_s": report.time_to_first_token_us as f64 / 1_000_000.0,
+        "total_turns": report.turns.len(),
+        "total_prompt_tokens": report.total_prompt_tokens,
+        "total_prefill_s": report.total_prefill_us as f64 / 1_000_000.0,
+        "total_generated": report.total_generated,
+        "final_position": report.final_position,
+        "aggregate_prefill_tok_per_s": report.aggregate_prefill_tok_per_s,
+        "aggregate_decode_tok_per_s": report.aggregate_decode_tok_per_s,
+        "runtime_driver_stats": resident_driver_stats_json(&report.runtime_driver_stats),
+        "runtime_materialization": runtime_materialization_stats_json(&report.runtime_materialization),
+        "dsv4_operator_counters": dsv4_operator_counters_json(&report.dsv4_operator_counters),
+        "dsv4_layer_profile_summary": dsv4_layer_profile_summary_json(&report.dsv4_layer_profile_stats),
+        "dsv4_layer_profile": dsv4_layer_profile_stats_json(&report.dsv4_layer_profile_stats),
+        "dsv4_attention_profile_summary": dsv4_attention_profile_summary_json(&report.dsv4_attention_profile_stats),
+        "dsv4_attention_profile": dsv4_attention_profile_stats_json(&report.dsv4_attention_profile_stats),
+        "dsv4_output_profile": dsv4_output_profile_stats_json(&report.dsv4_output_profile_stats),
+        "turns": report.turns.iter().map(interactive_turn_json).collect::<Vec<_>>(),
+    })
+}
+
+#[cfg(feature = "cuda")]
 fn interactive_turn_json(turn: &InteractiveTurnMeasurement) -> serde_json::Value {
     serde_json::json!({
         "prompt": turn.prompt_text.as_str(),
@@ -1484,6 +1750,7 @@ fn interactive_turn_json(turn: &InteractiveTurnMeasurement) -> serde_json::Value
         "stopped_by_eos": turn.stopped_by_eos,
         "stopped_by_string": &turn.stopped_by_string,
         "runtime_driver_stats": resident_driver_stats_json(&turn.runtime_driver_stats),
+        "runtime_materialization": runtime_materialization_stats_json(&turn.runtime_materialization),
         "dsv4_operator_counters": dsv4_operator_counters_json(&turn.dsv4_operator_counters),
         "dsv4_layer_profile_summary": dsv4_layer_profile_summary_json(&turn.dsv4_layer_profile_stats),
         "dsv4_layer_profile": dsv4_layer_profile_stats_json(&turn.dsv4_layer_profile_stats),
@@ -1607,7 +1874,7 @@ fn dsv4_output_profile_stats_json(stats: &DeepSeekV4OutputProfileStats) -> serde
 }
 
 #[cfg(feature = "cuda")]
-fn resident_driver_stats_json(stats: &ResidentTopKDriverStats) -> serde_json::Value {
+pub(crate) fn resident_driver_stats_json(stats: &ResidentTopKDriverStats) -> serde_json::Value {
     serde_json::json!({
         "actions": stats.actions,
         "prefill_chunks": stats.prefill_chunks,
@@ -1616,8 +1883,198 @@ fn resident_driver_stats_json(stats: &ResidentTopKDriverStats) -> serde_json::Va
         "emitted_tokens": stats.emitted_tokens,
         "staged_tokens": stats.staged_tokens,
         "finished_sequences": stats.finished_sequences,
+        "hard_resource_high_water": hard_resource_high_water_json(&stats.hard_resource_high_water),
         "speculative": speculative_metrics_json(&stats.speculative),
     })
+}
+
+#[cfg(feature = "cuda")]
+fn hard_resource_high_water_json(high_water: &[(ResourceKind, u64)]) -> serde_json::Value {
+    serde_json::Value::Object(
+        ResourceKind::ALL
+            .into_iter()
+            .map(|kind| {
+                let value = high_water
+                    .iter()
+                    .find_map(|(candidate, value)| (*candidate == kind).then_some(*value))
+                    .expect("resident driver publishes every hard ResourceKind high-water mark");
+                (
+                    resource_kind_name(kind).into(),
+                    serde_json::Value::from(value),
+                )
+            })
+            .collect(),
+    )
+}
+
+#[cfg(feature = "cuda")]
+fn resource_kind_name(kind: ResourceKind) -> &'static str {
+    match kind {
+        ResourceKind::Sqe => "sqe",
+        ResourceKind::PinnedSlab => "pinned_slab",
+        ResourceKind::ReadBytes => "read_bytes",
+        ResourceKind::UploadSlot => "upload_slot",
+        ResourceKind::UploadBytes => "upload_bytes",
+        ResourceKind::ExpertFrame => "expert_frame",
+        ResourceKind::Lease => "lease",
+        ResourceKind::Arena => "arena",
+        ResourceKind::KvPage => "kv_page",
+        ResourceKind::Continuation => "continuation",
+        ResourceKind::Waiter => "waiter",
+        ResourceKind::LoadOperation => "load_operation",
+        ResourceKind::ReadyCohort => "ready_cohort",
+    }
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn runtime_materialization_stats_json(
+    stats: &RuntimeMaterializationStats,
+) -> serde_json::Value {
+    serde_json::json!({
+        "dependencies": {
+            "selected": stats.dependencies.selected,
+            "unique_selected": stats.dependencies.unique_selected,
+            "resident": stats.dependencies.resident,
+            "waiting": stats.dependencies.waiting,
+        },
+        "adapter": {
+            "resolves": stats.adapter.resolves,
+            "physical_submissions": stats.adapter.physical_submissions,
+            "single_flight_joins": stats.adapter.single_flight_joins,
+            "progress_polls": stats.adapter.progress_polls,
+            "publications": stats.adapter.publications,
+            "logical_detaches": stats.adapter.logical_detaches,
+            "cancellation_hooks": stats.adapter.cancellation_hooks,
+        },
+        "stages": {
+            "read": { "count": stats.stages.read_stages, "bytes": stats.stages.read_bytes },
+            "upload": { "count": stats.stages.upload_stages, "bytes": stats.stages.upload_bytes },
+            "install": { "count": stats.stages.install_stages, "bytes": stats.stages.install_bytes },
+            "publish": { "count": stats.stages.publish_stages, "bytes": stats.stages.publish_bytes },
+            "failures": stats.stages.failures,
+            "stale": stats.stages.stale,
+            "cancellations": stats.stages.cancellations,
+        },
+        "load_registry": {
+            "operations_created": stats.registry.operations_created,
+            "active_operations": stats.registry.active_operations,
+            "retired_operations": stats.registry.retired_operations,
+            "single_flight_joins": stats.registry.single_flight_joins,
+            "physical_completions": stats.registry.physical_completions,
+            "rejected_completions": stats.registry.rejected_completions,
+            "publications": stats.registry.publications,
+            "cancellations_requested": stats.registry.cancellations_requested,
+        },
+        "critical_path": {
+            "external_tokens": stats.critical_path.external_tokens,
+            "snapshot_groups": stats.critical_path.snapshot_groups,
+            "read_ns": stats.critical_path.read_ns,
+            "upload_ns": stats.critical_path.upload_ns,
+            "publish_ns": stats.critical_path.publish_ns,
+            "wait_ns": stats.critical_path.wait_ns,
+            "covered_wait_ns": stats.critical_path.covered_wait_ns,
+            "uncovered_wait_ns": stats.critical_path.uncovered_wait_ns,
+            "resume_ns": stats.critical_path.resume_ns,
+            "commit_ns": stats.critical_path.commit_ns,
+            "per_external_token": stats.critical_path.per_external_token.iter().map(|snapshot| serde_json::json!({
+                "external_token_id": snapshot.external_token_id,
+                "externally_committed_tokens": snapshot.externally_committed_tokens,
+                "captured_at_ns": snapshot.captured_at_ns,
+                "read_ns": snapshot.read_ns,
+                "upload_ns": snapshot.upload_ns,
+                "publish_ns": snapshot.publish_ns,
+                "wait_ns": snapshot.wait_ns,
+                "covered_wait_ns": snapshot.covered_wait_ns,
+                "uncovered_wait_ns": snapshot.uncovered_wait_ns,
+                "resume_ns": snapshot.resume_ns,
+                "commit_ns": snapshot.commit_ns,
+            })).collect::<Vec<_>>(),
+        },
+        "external_snapshot_reconciliation": {
+            "expected_external_tokens": stats.external_snapshot_reconciliation.expected_external_tokens,
+            "snapshot_external_tokens": stats.external_snapshot_reconciliation.snapshot_external_tokens,
+            "reconciled_external_tokens": stats.external_snapshot_reconciliation.reconciled_external_tokens,
+            "snapshot_groups": stats.external_snapshot_reconciliation.snapshot_groups,
+            "consistent": stats.external_snapshot_reconciliation.consistent,
+        },
+    })
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn print_runtime_materialization_summary(stats: &RuntimeMaterializationStats) {
+    println!(
+        "runtime_materialization: selected={} resident={} waiting={} physical_submissions={} joins={} publications={} detaches={} cancel_hooks={}",
+        stats.dependencies.selected,
+        stats.dependencies.resident,
+        stats.dependencies.waiting,
+        stats.adapter.physical_submissions,
+        stats.adapter.single_flight_joins,
+        stats.adapter.publications,
+        stats.adapter.logical_detaches,
+        stats.adapter.cancellation_hooks,
+    );
+    println!(
+        "materialization_stages:  read={}/{}B upload={}/{}B install={}/{}B publish={}/{}B failures={} stale={} cancelled={}",
+        stats.stages.read_stages,
+        stats.stages.read_bytes,
+        stats.stages.upload_stages,
+        stats.stages.upload_bytes,
+        stats.stages.install_stages,
+        stats.stages.install_bytes,
+        stats.stages.publish_stages,
+        stats.stages.publish_bytes,
+        stats.stages.failures,
+        stats.stages.stale,
+        stats.stages.cancellations,
+    );
+    println!(
+        "load_registry:          active={} retired={} joins={} created={} completions={}",
+        stats.registry.active_operations,
+        stats.registry.retired_operations,
+        stats.registry.single_flight_joins,
+        stats.registry.operations_created,
+        stats.registry.physical_completions,
+    );
+    println!(
+        "critical_path:          read={}ns upload={}ns publish={}ns wait={}ns resume={}ns uncovered={}ns external_tokens={}",
+        stats.critical_path.read_ns,
+        stats.critical_path.upload_ns,
+        stats.critical_path.publish_ns,
+        stats.critical_path.wait_ns,
+        stats.critical_path.resume_ns,
+        stats.critical_path.uncovered_wait_ns,
+        stats.critical_path.external_tokens,
+    );
+    println!(
+        "external_reconciliation: expected={} snapshots={} reconciled={} groups={} consistent={}",
+        stats
+            .external_snapshot_reconciliation
+            .expected_external_tokens,
+        stats
+            .external_snapshot_reconciliation
+            .snapshot_external_tokens,
+        stats
+            .external_snapshot_reconciliation
+            .reconciled_external_tokens,
+        stats.external_snapshot_reconciliation.snapshot_groups,
+        stats.external_snapshot_reconciliation.consistent,
+    );
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn print_hard_resource_high_water(high_water: &[(ResourceKind, u64)]) {
+    let values = ResourceKind::ALL
+        .into_iter()
+        .map(|kind| {
+            let value = high_water
+                .iter()
+                .find_map(|(candidate, value)| (*candidate == kind).then_some(*value))
+                .expect("resident driver publishes every hard ResourceKind high-water mark");
+            format!("{}={value}", resource_kind_name(kind))
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    println!("hard_resource_high_water:  {values}");
 }
 
 #[cfg(feature = "cuda")]
@@ -1643,350 +2100,277 @@ fn speculative_metrics_json(metrics: &SpeculativeMetrics) -> serde_json::Value {
 }
 
 #[cfg(feature = "cuda")]
-fn dsv4_operator_counters_json(stats: &DeepSeekV4OperatorRuntimeCounters) -> serde_json::Value {
-    let mut out = serde_json::Map::new();
-    {
-        let mut u64_field = |key: &str, value: u64| {
-            out.insert(key.into(), serde_json::Value::from(value));
+pub(crate) fn dsv4_operator_counters_json(
+    stats: &DeepSeekV4OperatorRuntimeCounters,
+) -> serde_json::Value {
+    serde_json::json!({
+        "cuda": {
+            "kernel_launches": stats.kernel_launches,
+            "host_to_device_copies": stats.host_to_device_copies,
+            "host_to_device_bytes": stats.host_to_device_bytes,
+            "device_to_host_copies": stats.device_to_host_copies,
+            "device_to_host_bytes": stats.device_to_host_bytes,
+            "artifact_uploads": stats.artifact_uploads,
+            "artifact_upload_bytes": stats.artifact_upload_bytes,
+            "device_allocation_attempts": stats.device_allocation_attempts,
+            "device_allocations": stats.device_allocations,
+            "device_allocation_failures": stats.device_allocation_failures,
+            "device_allocation_bytes": stats.device_allocation_bytes,
+            "stream_wide_syncs": stats.stream_wide_syncs,
+            "stream_wide_sync_failures": stats.stream_wide_sync_failures,
+        },
+        "moe_compute": {
+            "calls": stats.moe_calls,
+            "tensor_core_calls": stats.moe_tc_calls,
+            "scalar_calls": stats.moe_scalar_calls,
+            "reduce_calls": stats.moe_reduce_calls,
+            "total_us": stats.moe_total_us,
+            "input_prepare_us": stats.moe_input_prepare_us,
+            "gate_up_us": stats.moe_gate_up_us,
+            "swiglu_us": stats.moe_swiglu_us,
+            "hidden_pack_us": stats.moe_hidden_pack_us,
+            "down_us": stats.moe_down_us,
+            "router_us": stats.moe_router_us,
+            "routing_us": stats.moe_routing_us,
+            "plan_us": stats.moe_plan_us,
+            "shared_us": stats.moe_shared_us,
+            "workspace_us": stats.moe_workspace_us,
+            "compute_submit_us": stats.moe_compute_submit_us,
+            "commit_us": stats.moe_commit_us,
+        },
+        "output_head": {
+            "calls": stats.output_head_calls,
+            "rows": stats.output_head_rows,
+            "topk_us": stats.output_head_topk_us,
+        },
+        "expert_dependencies": {
+            "selected": stats.expert_selected,
+            "unique_selected": stats.expert_unique_selected,
+            "selected_load_requests": stats.expert_selected_load_requests,
+        },
+        "expert_io": {
+            "submitted_extents": stats.expert_io_submitted_extents,
+            "completed_extents": stats.expert_io_completed_extents,
+            "failed_extents": stats.expert_io_failed_extents,
+            "requested_bytes": stats.expert_io_requested_bytes,
+            "aligned_bytes": stats.expert_io_aligned_bytes,
+            "coalesced_slices": stats.expert_io_coalesced_slices,
+            "fixed_file_registrations": stats.expert_io_fixed_file_registrations,
+            "slab_exhaustions": stats.expert_io_slab_exhaustions,
+            "peak_queue_depth": stats.expert_io_peak_queue_depth,
+            "read_us": stats.expert_io_read_us,
+        },
+        "arena": {
+            "hits": stats.arena_hits,
+            "misses": stats.arena_misses,
+            "grows": stats.arena_grows,
+            "reuses": stats.arena_reuses,
+        },
+        "expert_residency": {
+            "resident": stats.expert_residency_stats.resident,
+            "active_leases": stats.expert_residency_stats.active_leases,
+            "installs": stats.expert_residency_stats.installs,
+            "evictions": stats.expert_residency_stats.evictions,
+            "resident_hits": stats.expert_residency_stats.resident_hits,
+            "stale_releases": stats.expert_residency_stats.stale_releases,
+            "prepare_cancellations": stats.expert_residency_stats.prepare_cancellations,
+            "prefetch_capacity_misses": stats.expert_residency_stats.prefetch_capacity_misses,
+        },
+        "expert_prediction": {
+            "predict_calls": stats.expert_predictor_stats.predict_calls,
+            "predicted_experts": stats.expert_predictor_stats.predicted_experts,
+            "observe_calls": stats.expert_predictor_stats.observe_calls,
+            "observed_experts": stats.expert_predictor_stats.observed_experts,
+            "cold_miss_observations": stats.expert_predictor_stats.cold_miss_observations,
+            "transition_observations": stats.expert_predictor_stats.transition_observations,
+            "transition_predictions": stats.expert_predictor_stats.transition_predictions,
+        },
+    })
+}
+
+#[cfg(all(test, feature = "cuda"))]
+mod tests {
+    use super::*;
+
+    fn external_snapshot(
+        external_token_id: u64,
+        externally_committed_tokens: usize,
+        captured_at_ns: u64,
+        read_ns: u64,
+    ) -> RuntimeExternalTokenSnapshot {
+        RuntimeExternalTokenSnapshot {
+            external_token_id,
+            externally_committed_tokens,
+            captured_at_ns,
+            read_ns,
+            upload_ns: 11,
+            publish_ns: 13,
+            wait_ns: 17,
+            covered_wait_ns: 5,
+            uncovered_wait_ns: 12,
+            resume_ns: 19,
+            commit_ns: 23,
+        }
+    }
+
+    #[test]
+    fn runtime_delta_saturates_monotonic_counters_and_keeps_after_gauges() {
+        let mut before = RuntimeMaterializationStats::default();
+        before.dependencies.selected = 10;
+        before.dependencies.unique_selected = 8;
+        before.dependencies.resident = 6;
+        before.dependencies.waiting = 4;
+        before.adapter.physical_submissions = 9;
+        before.stages.read_stages = 7;
+        before.stages.read_bytes = 700;
+        before.registry.active_operations = 5;
+        before.registry.retired_operations = 12;
+        before.critical_path.per_external_token = vec![external_snapshot(1, 1, 100, 3)];
+
+        let mut after = RuntimeMaterializationStats::default();
+        after.dependencies.selected = 6;
+        after.dependencies.unique_selected = 11;
+        after.dependencies.resident = 2;
+        after.dependencies.waiting = 3;
+        after.adapter.physical_submissions = 14;
+        after.stages.read_stages = 5;
+        after.stages.read_bytes = 900;
+        after.registry.active_operations = 1;
+        after.registry.retired_operations = 15;
+        after.critical_path.per_external_token = vec![
+            external_snapshot(1, 1, 100, 3),
+            external_snapshot(2, 2, 200, 7),
+            external_snapshot(3, 2, 200, 7),
+        ];
+
+        let delta = runtime_materialization_stats_delta(before, after, 2);
+        assert_eq!(delta.dependencies.selected, 0);
+        assert_eq!(delta.dependencies.unique_selected, 3);
+        assert_eq!(delta.dependencies.resident, 2);
+        assert_eq!(delta.dependencies.waiting, 3);
+        assert_eq!(delta.adapter.physical_submissions, 5);
+        assert_eq!(delta.stages.read_stages, 0);
+        assert_eq!(delta.stages.read_bytes, 200);
+        assert_eq!(delta.registry.active_operations, 1);
+        assert_eq!(delta.registry.retired_operations, 3);
+        assert_eq!(
+            delta
+                .critical_path
+                .per_external_token
+                .iter()
+                .map(|snapshot| snapshot.external_token_id)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert_eq!(delta.critical_path.read_ns, 7);
+        assert_eq!(delta.critical_path.snapshot_groups, 1);
+        assert_eq!(
+            delta
+                .external_snapshot_reconciliation
+                .reconciled_external_tokens,
+            2
+        );
+        assert!(delta.external_snapshot_reconciliation.consistent);
+    }
+
+    #[test]
+    fn operator_and_driver_delta_use_after_for_gauges_and_lists() {
+        let before_operator = DeepSeekV4OperatorRuntimeCounters {
+            kernel_launches: 10,
+            expert_io_peak_queue_depth: 9,
+            expert_residency_stats: ferrule_common::ExpertResidencyStats {
+                resident: 8,
+                active_leases: 7,
+                installs: 5,
+                ..Default::default()
+            },
+            ..Default::default()
         };
-        u64_field("kernel_launches", stats.kernel_launches);
-        u64_field("host_to_device_copies", stats.host_to_device_copies);
-        u64_field("host_to_device_bytes", stats.host_to_device_bytes);
-        u64_field("device_to_host_copies", stats.device_to_host_copies);
-        u64_field("device_to_host_bytes", stats.device_to_host_bytes);
-        u64_field("artifact_uploads", stats.artifact_uploads);
-        u64_field("artifact_upload_bytes", stats.artifact_upload_bytes);
-        u64_field(
-            "device_allocation_attempts",
-            stats.device_allocation_attempts,
-        );
-        u64_field("device_allocations", stats.device_allocations);
-        u64_field(
-            "device_allocation_failures",
-            stats.device_allocation_failures,
-        );
-        u64_field("device_allocation_bytes", stats.device_allocation_bytes);
-        u64_field("stream_wide_syncs", stats.stream_wide_syncs);
-        u64_field("stream_wide_sync_failures", stats.stream_wide_sync_failures);
-        u64_field("moe_calls", stats.moe_calls);
-        u64_field("moe_tc_calls", stats.moe_tc_calls);
-        u64_field("moe_scalar_calls", stats.moe_scalar_calls);
-        u64_field("moe_reduce_calls", stats.moe_reduce_calls);
-        u64_field("moe_predicted_experts", stats.moe_predicted_experts);
-        u64_field("moe_prefetch_loads", stats.moe_prefetch_loads);
-        u64_field("moe_prefetch_enqueued", stats.moe_prefetch_enqueued);
-        u64_field(
-            "moe_prefetch_skipped_cached_or_inflight",
-            stats.moe_prefetch_skipped_cached_or_inflight,
-        );
-        u64_field("moe_prefetch_resident", stats.moe_prefetch_resident);
-        u64_field(
-            "moe_prefetch_materializing",
-            stats.moe_prefetch_materializing,
-        );
-        u64_field("moe_prefetch_host_staged", stats.moe_prefetch_host_staged);
-        u64_field("moe_prefetch_in_flight", stats.moe_prefetch_in_flight);
-        u64_field("moe_prefetch_cold", stats.moe_prefetch_cold);
-        u64_field(
-            "expert_selected_resident_hits",
-            stats.expert_selected_resident_hits,
-        );
-        u64_field(
-            "expert_selected_upload_hits",
-            stats.expert_selected_upload_hits,
-        );
-        u64_field(
-            "expert_selected_host_staged_hits",
-            stats.expert_selected_host_staged_hits,
-        );
-        u64_field(
-            "expert_selected_host_staging_waits",
-            stats.expert_selected_host_staging_waits,
-        );
-        u64_field(
-            "expert_selected_host_staging_hits",
-            stats.expert_selected_host_staging_hits,
-        );
-        u64_field(
-            "expert_selected_host_staging_wait_us",
-            stats.expert_selected_host_staging_wait_us,
-        );
-        u64_field(
-            "expert_selected_cold_misses",
-            stats.expert_selected_cold_misses,
-        );
-        u64_field(
-            "expert_upload_prefetch_submitted",
-            stats.expert_upload_prefetch_submitted,
-        );
-        u64_field(
-            "expert_upload_prefetch_completed",
-            stats.expert_upload_prefetch_completed,
-        );
-        u64_field("expert_frame_reuses", stats.expert_frame_reuses);
-        u64_field("expert_frame_waits", stats.expert_frame_waits);
-        u64_field(
-            "expert_io_submitted_extents",
-            stats.expert_io_submitted_extents,
-        );
-        u64_field(
-            "expert_io_completed_extents",
-            stats.expert_io_completed_extents,
-        );
-        u64_field("expert_io_failed_extents", stats.expert_io_failed_extents);
-        u64_field("expert_io_requested_bytes", stats.expert_io_requested_bytes);
-        u64_field("expert_io_aligned_bytes", stats.expert_io_aligned_bytes);
-        u64_field(
-            "expert_io_coalesced_slices",
-            stats.expert_io_coalesced_slices,
-        );
-        u64_field(
-            "expert_io_fixed_file_registrations",
-            stats.expert_io_fixed_file_registrations,
-        );
-        u64_field(
-            "expert_io_slab_exhaustions",
-            stats.expert_io_slab_exhaustions,
-        );
-        u64_field("expert_io_read_us", stats.expert_io_read_us);
+        let after_operator = DeepSeekV4OperatorRuntimeCounters {
+            kernel_launches: 4,
+            expert_io_peak_queue_depth: 3,
+            expert_residency_stats: ferrule_common::ExpertResidencyStats {
+                resident: 2,
+                active_leases: 1,
+                installs: 9,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let operator_delta = dsv4_operator_counters_delta(before_operator, after_operator);
+        assert_eq!(operator_delta.kernel_launches, 0);
+        assert_eq!(operator_delta.expert_io_peak_queue_depth, 3);
+        assert_eq!(operator_delta.expert_residency_stats.resident, 2);
+        assert_eq!(operator_delta.expert_residency_stats.active_leases, 1);
+        assert_eq!(operator_delta.expert_residency_stats.installs, 4);
 
-        u64_field(
-            "expert_selected_upload_waits",
-            stats.expert_selected_upload_waits,
-        );
-        u64_field("expert_async_upload_bytes", stats.expert_async_upload_bytes);
-        u64_field(
-            "expert_lookahead_prefetch_calls",
-            stats.expert_lookahead_prefetch_calls,
-        );
-        u64_field(
-            "expert_lookahead_prefetch_experts",
-            stats.expert_lookahead_prefetch_experts,
-        );
-        u64_field(
-            "expert_lookahead_prefetch_enqueued",
-            stats.expert_lookahead_prefetch_enqueued,
-        );
-
-        u64_field("output_head_calls", stats.output_head_calls);
-        u64_field("output_head_rows", stats.output_head_rows);
-        u64_field("expert_selected", stats.expert_selected);
-        u64_field("expert_unique_selected", stats.expert_unique_selected);
-        u64_field(
-            "expert_selected_load_requests",
-            stats.expert_selected_load_requests,
-        );
-        u64_field("expert_loads", stats.expert_loads);
-        u64_field("expert_load_bytes", stats.expert_load_bytes);
-        u64_field("expert_evictions", stats.expert_evictions);
-        u64_field("expert_host_cache_hits", stats.expert_host_cache.hits);
-        u64_field("expert_host_cache_misses", stats.expert_host_cache.misses);
-        u64_field(
-            "expert_host_cache_evictions",
-            stats.expert_host_cache.evictions,
-        );
-        u64_field(
-            "expert_host_cache_rejections",
-            stats.expert_host_cache.rejections,
-        );
-        u64_field(
-            "expert_host_cache_bytes",
-            stats.expert_host_cache.bytes_used,
-        );
-        u64_field(
-            "expert_host_cache_lifetime_peak_bytes",
-            stats.expert_host_cache.peak_bytes_used,
-        );
-        u64_field("expert_pinned_cache_hits", stats.expert_pinned_cache.hits);
-        u64_field(
-            "expert_pinned_cache_misses",
-            stats.expert_pinned_cache.misses,
-        );
-        u64_field(
-            "expert_pinned_cache_evictions",
-            stats.expert_pinned_cache.evictions,
-        );
-        u64_field(
-            "expert_pinned_cache_rejections",
-            stats.expert_pinned_cache.rejections,
-        );
-        u64_field(
-            "expert_pinned_cache_bytes",
-            stats.expert_pinned_cache.bytes_used,
-        );
-        u64_field(
-            "expert_pinned_cache_lifetime_peak_bytes",
-            stats.expert_pinned_cache.peak_bytes_used,
-        );
-        u64_field(
-            "expert_cuda_resident_bytes",
-            stats.expert_cuda_resident_bytes,
-        );
-        u64_field(
-            "expert_async_prefetch_submitted",
-            stats.expert_async_prefetch_submitted,
-        );
-        u64_field(
-            "expert_async_prefetch_completed",
-            stats.expert_async_prefetch_completed,
-        );
-        u64_field(
-            "expert_async_prefetch_failed",
-            stats.expert_async_prefetch_failed,
-        );
-        u64_field(
-            "expert_async_prefetch_skipped",
-            stats.expert_async_prefetch_skipped,
-        );
-        u64_field("arena_hits", stats.arena_hits);
-        u64_field("arena_misses", stats.arena_misses);
-        u64_field("arena_grows", stats.arena_grows);
-        u64_field("arena_reuses", stats.arena_reuses);
-        u64_field(
-            "expert_residency_installs",
-            stats.expert_residency_stats.installs,
-        );
-        u64_field(
-            "expert_residency_evictions",
-            stats.expert_residency_stats.evictions,
-        );
-        u64_field(
-            "expert_residency_resident_hits",
-            stats.expert_residency_stats.resident_hits,
-        );
-        u64_field(
-            "expert_residency_stale_releases",
-            stats.expert_residency_stats.stale_releases,
-        );
-        u64_field(
-            "expert_residency_prepare_cancellations",
-            stats.expert_residency_stats.prepare_cancellations,
-        );
-        u64_field(
-            "expert_residency_prefetch_capacity_misses",
-            stats.expert_residency_stats.prefetch_capacity_misses,
-        );
-        u64_field(
-            "expert_predictor_predict_calls",
-            stats.expert_predictor_stats.predict_calls,
-        );
-        u64_field(
-            "expert_predictor_predicted_experts",
-            stats.expert_predictor_stats.predicted_experts,
-        );
-        u64_field(
-            "expert_predictor_observe_calls",
-            stats.expert_predictor_stats.observe_calls,
-        );
-        u64_field(
-            "expert_predictor_observed_experts",
-            stats.expert_predictor_stats.observed_experts,
-        );
-        u64_field(
-            "expert_predictor_cold_miss_observations",
-            stats.expert_predictor_stats.cold_miss_observations,
-        );
-        u64_field(
-            "expert_predictor_transition_observations",
-            stats.expert_predictor_stats.transition_observations,
-        );
-        u64_field(
-            "expert_predictor_transition_predictions",
-            stats.expert_predictor_stats.transition_predictions,
+        let before_driver = ResidentTopKDriverStats {
+            hard_resource_high_water: ResourceKind::ALL
+                .into_iter()
+                .map(|kind| (kind, 99))
+                .collect(),
+            ..Default::default()
+        };
+        let after_high_water = ResourceKind::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(index, kind)| (kind, index as u64 + 1))
+            .collect::<Vec<_>>();
+        let after_driver = ResidentTopKDriverStats {
+            hard_resource_high_water: after_high_water.clone(),
+            ..Default::default()
+        };
+        let driver_delta = resident_driver_stats_delta(before_driver, after_driver);
+        assert_eq!(driver_delta.hard_resource_high_water, after_high_water);
+        assert_eq!(
+            hard_resource_high_water_json(&driver_delta.hard_resource_high_water)
+                .as_object()
+                .unwrap()
+                .len(),
+            ResourceKind::ALL.len()
         );
     }
-    out.insert(
-        "expert_residency_resident".into(),
-        serde_json::Value::from(stats.expert_residency_stats.resident),
-    );
-    out.insert(
-        "expert_residency_active_leases".into(),
-        serde_json::Value::from(stats.expert_residency_stats.active_leases),
-    );
-    out.insert(
-        "expert_host_cache_entries".into(),
-        serde_json::Value::from(stats.expert_host_cache.entries_used),
-    );
-    out.insert(
-        "expert_pinned_cache_entries".into(),
-        serde_json::Value::from(stats.expert_pinned_cache.entries_used),
-    );
-    out.insert(
-        "expert_cuda_resident_entries".into(),
-        serde_json::Value::from(stats.expert_cuda_resident_entries),
-    );
-    out.insert(
-        "expert_async_prefetch_in_flight".into(),
-        serde_json::Value::from(stats.expert_async_prefetch_in_flight),
-    );
-    out.insert(
-        "expert_upload_prefetch_in_flight".into(),
-        serde_json::Value::from(stats.expert_upload_prefetch_in_flight),
-    );
-    out.insert(
-        "expert_prefetch_outstanding".into(),
-        serde_json::Value::from(stats.expert_prefetch_outstanding),
-    );
-    out.insert(
-        "expert_prefetch_slot_reservations".into(),
-        serde_json::Value::from(stats.expert_prefetch_slot_reservations),
-    );
-    out.insert(
-        "expert_prefetch_host_queued".into(),
-        serde_json::Value::from(stats.expert_prefetch_host_queued),
-    );
-    out.insert(
-        "expert_abandoned_uploads".into(),
-        serde_json::Value::from(stats.expert_abandoned_uploads),
-    );
-    out.insert(
-        "expert_free_frames".into(),
-        serde_json::Value::from(stats.expert_free_frames),
-    );
-    out.insert(
-        "expert_io_peak_queue_depth".into(),
-        serde_json::Value::from(stats.expert_io_peak_queue_depth),
-    );
 
-    {
-        let mut seconds_field = |key: &str, value: u64| {
-            out.insert(
-                key.into(),
-                serde_json::Value::from(value as f64 / 1_000_000.0),
+    #[test]
+    fn v2_schema_contains_runtime_authorities_and_no_legacy_counter_keys() {
+        let mut report = InteractiveBenchReport::default();
+        report.runtime_driver_stats.hard_resource_high_water = ResourceKind::ALL
+            .into_iter()
+            .map(|kind| (kind, 1))
+            .collect();
+        let json = interactive_bench_report_json(&report);
+        assert_eq!(json["schema_version"], CLI_RUNTIME_SCHEMA_VERSION);
+        assert!(json["runtime_materialization"]["adapter"]["physical_submissions"].is_number());
+        assert!(json["runtime_materialization"]["critical_path"]["per_external_token"].is_array());
+        assert_eq!(
+            json["runtime_driver_stats"]["hard_resource_high_water"]
+                .as_object()
+                .unwrap()
+                .len(),
+            ResourceKind::ALL.len()
+        );
+
+        let encoded = serde_json::to_string(&json).unwrap();
+        for legacy in [
+            concat!("expert_", "loads"),
+            concat!("expert_", "load_bytes"),
+            concat!("expert_", "host_cache"),
+            concat!("expert_", "pinned_cache"),
+            concat!("expert_cuda_", "resident_entries"),
+            concat!("expert_async_", "prefetch"),
+            concat!("expert_upload_", "prefetch"),
+            concat!("moe_", "prefetch_"),
+            concat!("moe_expert_", "read"),
+            concat!("moe_expert_", "upload"),
+            concat!("expert_selected_", "upload_wait"),
+            concat!("operation_", "id"),
+        ] {
+            assert!(
+                !encoded.contains(legacy),
+                "legacy key fragment remained in v2 schema: {legacy}"
             );
-        };
-        seconds_field("moe_total_s", stats.moe_total_us);
-        seconds_field("moe_input_prepare_s", stats.moe_input_prepare_us);
-        seconds_field("moe_gate_up_s", stats.moe_gate_up_us);
-        seconds_field("moe_swiglu_s", stats.moe_swiglu_us);
-        seconds_field("moe_hidden_pack_s", stats.moe_hidden_pack_us);
-        seconds_field("moe_down_s", stats.moe_down_us);
-        seconds_field("moe_router_s", stats.moe_router_us);
-        seconds_field("moe_routing_s", stats.moe_routing_us);
-        seconds_field("moe_plan_s", stats.moe_plan_us);
-        seconds_field(
-            "expert_lookahead_prefetch_s",
-            stats.expert_lookahead_prefetch_us,
-        );
-        seconds_field("moe_cache_lookup_s", stats.moe_cache_lookup_us);
-        seconds_field(
-            "expert_selected_upload_wait_s",
-            stats.expert_selected_upload_wait_us,
-        );
-        seconds_field(
-            "expert_selected_host_staging_wait_s",
-            stats.expert_selected_host_staging_wait_us,
-        );
-        seconds_field("moe_expert_read_s", stats.moe_expert_read_us);
-        seconds_field("moe_expert_upload_s", stats.moe_expert_upload_us);
-        seconds_field("moe_shared_s", stats.moe_shared_us);
-        seconds_field("moe_workspace_s", stats.moe_workspace_us);
-        seconds_field("moe_compute_submit_s", stats.moe_compute_submit_us);
-        seconds_field("moe_commit_s", stats.moe_commit_us);
-        seconds_field("output_head_topk_s", stats.output_head_topk_us);
+        }
     }
-
-    serde_json::Value::Object(out)
 }
 
 #[cfg(not(feature = "cuda"))]
@@ -2011,7 +2395,6 @@ pub fn cmd_bench_interactive(
     anyhow::bail!("bench-interactive requires --features cuda")
 }
 
-#[cfg(feature = "cuda")]
 #[cfg(feature = "cuda")]
 fn duration_us(d: Duration) -> u64 {
     d.as_micros().min(u128::from(u64::MAX)) as u64
