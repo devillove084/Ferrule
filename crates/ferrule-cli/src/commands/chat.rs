@@ -10,12 +10,14 @@ use ferrule_model::{
 };
 #[cfg(feature = "cuda")]
 use ferrule_runtime::{
-    ExpertIoBudget, GenerateRequest, LocalResidentInferenceEngine, RequestId, ResidentActionKind,
+    GenerateRequest, LocalResidentInferenceEngine, RequestId, ResidentActionKind,
     ResidentDriverStep, ResidentSchedulerConfig, ResidentTopKDriverConfig, SequenceFinishReason,
     SessionId,
 };
 #[cfg(feature = "cuda")]
 use std::io::Write;
+#[cfg(feature = "cuda")]
+use std::os::unix::io::AsRawFd;
 #[cfg(any(feature = "cuda", test))]
 use std::path::Path;
 #[cfg(feature = "cuda")]
@@ -95,10 +97,10 @@ pub fn cmd_chat(
 fn deepseek_v4_chat_options() -> DeepSeekV4PrepareOptions {
     DeepSeekV4PrepareOptions {
         output_head_chunk_rows: 4096,
-        // Match the ROADMAP interactive goal: keep a bounded per-layer GPU hotset
-        // and feed it with predictor-driven lookahead prefetches instead of the
-        // old unbounded managed expert cache.
-        moe_prefetch_experts: 32,
+        // Match the bench-interactive configuration: a bounded per-layer GPU hotset
+        // without speculative prefetch. The predictive advisor was removed; prefetch
+        // without prediction competes with selected experts for limited slots.
+        moe_prefetch_experts: 0,
         moe_hotset_experts: 48,
         ..DeepSeekV4PrepareOptions::default()
     }
@@ -153,7 +155,24 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
     sampling: &SamplingArgs,
 ) -> anyhow::Result<()> {
     use console::style;
+    use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
     use rustyline::error::ReadlineError;
+
+    // Redirect stderr (tracing INFO lines) to a tmp file for a clean terminal.
+    let log_path = std::env::temp_dir().join(format!("ferrule-chat-{}.log", std::process::id()));
+    let _log_guard;
+    if std::env::var_os("FERRULE_CHAT_KEEP_STDERR").is_none() {
+        let log_file = std::fs::File::create(&log_path)?;
+        let log_fd = log_file.as_raw_fd();
+        // SAFETY: dup2 replaces stderr fd before any multi-threaded work starts.
+        unsafe {
+            libc::dup2(log_fd, 2);
+        }
+        _log_guard = Some(log_file);
+    } else {
+        _log_guard = None;
+    }
+    eprintln!("[log] stderr -> {}", log_path.display());
 
     let session_id = SessionId(0);
     let driver_config = ResidentTopKDriverConfig {
@@ -172,13 +191,15 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
     let runner =
         DeepSeekV4Runner::new_with_operator_backend(model, options, ModelExecutionBackend::Cuda)?;
     let schema = runner.kv_layout_schema().clone();
-    let mut driver = LocalResidentInferenceEngine::new(
-        build_resident_topk_driver(runner, Box::new(schema), scheduler_config, driver_config)?,
-        ExpertIoBudget::unbounded(),
-    );
+    let mut driver = LocalResidentInferenceEngine::new(build_resident_topk_driver(
+        runner,
+        Box::new(schema),
+        scheduler_config,
+        driver_config,
+    )?);
     driver.retain_session(session_id)?;
     print_model_info(&driver.model_info());
-    eprintln!(
+    println!(
         "[load] DeepSeek-V4 artifact and CUDA owner initialized in {:.2}s",
         load_started.elapsed().as_secs_f64()
     );
@@ -260,8 +281,17 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
         let prompt_tokens = driver.encode(&prompt)?;
         first_turn = false;
 
-        print!("{} ", style("Ferrule>").cyan().bold());
-        std::io::stdout().flush()?;
+        // Spinner while waiting for the first token.
+        // Write to stdout so it appears in the terminal even when stderr is redirected.
+        let spinner = ProgressBar::with_draw_target(Some(80), ProgressDrawTarget::stdout());
+        spinner.set_style(
+            ProgressStyle::with_template("{spinner:.dim} {msg}")
+                .unwrap()
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+        );
+        spinner.set_message("thinking…");
+        spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+        let mut spinner_active = true;
 
         turns = turns.saturating_add(1);
         driver.submit(GenerateRequest {
@@ -281,6 +311,12 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
             let step_started = Instant::now();
             let step = driver
                 .step(&mut |event| {
+                    if spinner_active {
+                        spinner.finish_and_clear();
+                        spinner_active = false;
+                        print!("{} ", style("Ferrule>").cyan().bold());
+                        std::io::stdout().flush()?;
+                    }
                     first_token_time.get_or_insert_with(|| turn_start.elapsed());
                     if sampling.verbose_tokens() {
                         eprint!("[{}:{:.4}]", event.token, event.logit.unwrap_or(f32::NAN));
@@ -303,9 +339,15 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
                 ResidentDriverStep::WaitingForModelProgress(_) => decode_time += elapsed,
                 ResidentDriverStep::Idle => break,
                 ResidentDriverStep::Blocked => {
+                    if spinner_active {
+                        spinner.finish_and_clear();
+                    }
                     anyhow::bail!("resident chat driver blocked while running a turn")
                 }
             }
+        }
+        if spinner_active {
+            spinner.finish_and_clear();
         }
         println!();
         generated_tokens = generated_tokens.saturating_add(turn_tokens);
@@ -333,16 +375,25 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
         let ttft_ms = first_token_time
             .map(|duration| format!("{:.1}ms", duration.as_secs_f64() * 1000.0))
             .unwrap_or_else(|| "n/a".into());
-        println!(
-            "{} ttft={} prefill={:.1}ms ({:.2} tok/s) decode={:.1}ms ({:.2} tok/s) pos={}",
-            style("stats>").dim(),
+        let stats_line = format!(
+            "ttft={} prefill={:.1}ms ({:.2} tok/s) decode={:.1}ms ({:.2} tok/s) pos={}",
             ttft_ms,
             prefill_time.as_secs_f64() * 1000.0,
             prompt_tokens.len() as f64 / prefill_s,
             decode_time.as_secs_f64() * 1000.0,
             turn_tokens as f64 / decode_s,
-            turn.position
+            turn.position,
         );
+        // Write full stats to a tmp file; show a dim one-liner on stderr.
+        let stats_path =
+            std::env::temp_dir().join(format!("ferrule-chat-stats-{}.log", std::process::id()));
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&stats_path)
+            .and_then(|mut f| writeln!(f, "[turn {turns}] {stats_line}"))
+            .ok();
+        eprintln!("{} {}", style("stats>").dim(), style(&stats_line).dim());
     }
 
     Ok(())

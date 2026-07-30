@@ -1,6 +1,8 @@
 //! Bidirectional physical-operation waiter indices and targeted continuation wakeup.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+
+use ahash::RandomState;
 
 use ferrule_common::io_protocol::{ContinuationId, OperationId, WaiterId};
 
@@ -21,34 +23,34 @@ impl std::error::Error for WaiterIndexError {}
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct WaiterDetach {
     pub waiter: Option<WaiterId>,
-    pub operations_losing_last_waiter: BTreeSet<OperationId>,
+    pub operations_losing_last_waiter: HashSet<OperationId>,
     pub continuation_became_empty: Option<ContinuationId>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct OperationResolution {
     pub operation: Option<OperationId>,
-    pub completed_waiters: BTreeSet<WaiterId>,
-    pub ready_continuations: BTreeSet<ContinuationId>,
+    pub completed_waiters: HashSet<WaiterId>,
+    pub ready_continuations: HashSet<ContinuationId>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ContinuationDetach {
     pub continuation: Option<ContinuationId>,
-    pub removed_waiters: BTreeSet<WaiterId>,
-    pub operations_losing_last_waiter: BTreeSet<OperationId>,
+    pub removed_waiters: HashSet<WaiterId>,
+    pub operations_losing_last_waiter: HashSet<OperationId>,
 }
 
 /// Exact two-way operation/waiter graph plus continuation unresolved sets.
 #[derive(Debug, Default)]
 pub struct WaiterIndex {
-    load_to_waiters: BTreeMap<OperationId, BTreeSet<WaiterId>>,
-    waiter_to_loads: BTreeMap<WaiterId, BTreeSet<OperationId>>,
-    continuation_waiters: BTreeMap<ContinuationId, BTreeSet<WaiterId>>,
-    continuation_unresolved: BTreeMap<ContinuationId, BTreeSet<OperationId>>,
+    load_to_waiters: HashMap<OperationId, HashSet<WaiterId>, RandomState>,
+    waiter_to_loads: HashMap<WaiterId, HashSet<OperationId>, RandomState>,
+    continuation_waiters: HashMap<ContinuationId, HashSet<WaiterId>, RandomState>,
+    continuation_unresolved: HashMap<ContinuationId, HashSet<OperationId>, RandomState>,
     ready_queue: VecDeque<ContinuationId>,
-    ready_set: BTreeSet<ContinuationId>,
-    known_waiters: BTreeSet<WaiterId>,
+    ready_set: HashSet<ContinuationId, RandomState>,
+    known_waiters: HashSet<WaiterId, RandomState>,
 }
 
 impl WaiterIndex {
@@ -64,7 +66,7 @@ impl WaiterIndex {
         if !self.known_waiters.insert(waiter) {
             return Err(WaiterIndexError::DuplicateWaiter(waiter));
         }
-        let operations: BTreeSet<_> = operations.into_iter().collect();
+        let operations: HashSet<_> = operations.into_iter().collect();
         if operations.is_empty() {
             self.queue_ready(waiter.continuation());
             return Ok(true);
@@ -101,9 +103,7 @@ impl WaiterIndex {
     }
 
     pub fn waiter_count(&self, operation: OperationId) -> usize {
-        self.load_to_waiters
-            .get(&operation)
-            .map_or(0, BTreeSet::len)
+        self.load_to_waiters.get(&operation).map_or(0, HashSet::len)
     }
 
     pub fn waiters_for(&self, operation: OperationId) -> impl Iterator<Item = WaiterId> + '_ {
@@ -114,11 +114,11 @@ impl WaiterIndex {
             .copied()
     }
 
-    pub fn loads_for(&self, waiter: WaiterId) -> Option<&BTreeSet<OperationId>> {
+    pub fn loads_for(&self, waiter: WaiterId) -> Option<&HashSet<OperationId>> {
         self.waiter_to_loads.get(&waiter)
     }
 
-    pub fn unresolved_for(&self, continuation: ContinuationId) -> Option<&BTreeSet<OperationId>> {
+    pub fn unresolved_for(&self, continuation: ContinuationId) -> Option<&HashSet<OperationId>> {
         self.continuation_unresolved.get(&continuation)
     }
 
@@ -127,7 +127,7 @@ impl WaiterIndex {
             .waiter_to_loads
             .remove(&waiter)
             .ok_or(WaiterIndexError::UnknownWaiter(waiter))?;
-        let mut lost_last = BTreeSet::new();
+        let mut lost_last = HashSet::new();
         for operation in operations {
             let waiters = self
                 .load_to_waiters
@@ -165,8 +165,8 @@ impl WaiterIndex {
     /// unresolved union became empty.
     pub fn satisfy_operation(&mut self, operation: OperationId) -> OperationResolution {
         let waiters = self.load_to_waiters.remove(&operation).unwrap_or_default();
-        let mut completed_waiters = BTreeSet::new();
-        let mut affected = BTreeSet::new();
+        let mut completed_waiters = HashSet::new();
+        let mut affected = HashSet::new();
         for waiter in waiters {
             affected.insert(waiter.continuation());
             let loads = self
@@ -184,13 +184,13 @@ impl WaiterIndex {
                 completed_waiters.insert(waiter);
             }
         }
-        let mut ready = BTreeSet::new();
+        let mut ready = HashSet::new();
         for continuation in affected {
             self.rebuild_unresolved(continuation);
             if self
                 .continuation_unresolved
                 .get(&continuation)
-                .is_some_and(BTreeSet::is_empty)
+                .is_some_and(HashSet::is_empty)
             {
                 self.continuation_waiters.remove(&continuation);
                 self.continuation_unresolved.remove(&continuation);
@@ -228,7 +228,7 @@ impl WaiterIndex {
         result
     }
 
-    pub fn continuations_waiting_on(&self, operation: OperationId) -> BTreeSet<ContinuationId> {
+    pub fn continuations_waiting_on(&self, operation: OperationId) -> HashSet<ContinuationId> {
         self.load_to_waiters
             .get(&operation)
             .into_iter()
@@ -271,7 +271,7 @@ impl WaiterIndex {
     }
 
     fn rebuild_unresolved(&mut self, continuation: ContinuationId) {
-        let mut unresolved = BTreeSet::new();
+        let mut unresolved = HashSet::new();
         if let Some(waiters) = self.continuation_waiters.get(&continuation) {
             for waiter in waiters {
                 if let Some(loads) = self.waiter_to_loads.get(waiter) {

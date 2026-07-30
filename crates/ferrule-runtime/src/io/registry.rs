@@ -1,6 +1,8 @@
 //! Runtime-owned global single-flight materialization registry.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
+
+use ahash::RandomState;
 
 use ferrule_common::execution::ExecutionTransactionId;
 use ferrule_common::io_protocol::{
@@ -172,10 +174,17 @@ pub struct CompletionRejection {
 pub enum CompletionDisposition {
     Applied {
         operation: OperationId,
+        key: LoadKey,
         stage: LoadStage,
     },
     Rejected(CompletionRejectionReason),
     QueueEmpty,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RegistryDriveStep {
+    Idle,
+    Progressed { key: Option<LoadKey> },
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -294,32 +303,46 @@ impl ResumeLease {
     }
 }
 
+/// Per-continuation runtime state: resource grant, priority class, and ready admission.
+/// Consolidated from three parallel BTreeMaps.
+#[derive(Debug)]
+struct ContinuationState {
+    grant: HardResourceGrant,
+    class: ResourceClass,
+    ready_grant: Option<HardResourceGrant>,
+}
+
+/// Per-transaction tracking: operations and cohorts.
+/// Consolidated from two parallel BTreeMaps.
+#[derive(Debug, Default)]
+struct TransactionState {
+    operations: BTreeSet<OperationId>,
+    cohorts: BTreeSet<CohortId>,
+}
+
 /// Runtime-wide authoritative owner of materialization, waiters, credits,
 /// completion validation, publication, and retirement.
 #[derive(Debug)]
 pub struct LoadRegistry<B: MaterializationBackend> {
     backend: B,
     resources: HardResourceBroker,
-    key_to_operation: BTreeMap<LoadKey, OperationId>,
-    operation_to_key: BTreeMap<OperationId, LoadKey>,
-    operations: BTreeMap<OperationId, LoadOp>,
-    retirements: BTreeMap<OperationId, RetirementRecord>,
-    stage_history: BTreeMap<OperationId, Vec<LoadStage>>,
-    residencies: BTreeMap<LoadKey, ResidentEntry>,
+    key_to_operation: HashMap<LoadKey, OperationId, RandomState>,
+    operation_to_key: HashMap<OperationId, LoadKey, RandomState>,
+    operations: HashMap<OperationId, LoadOp, RandomState>,
+    retirements: HashMap<OperationId, RetirementRecord, RandomState>,
+    stage_history: HashMap<OperationId, Vec<LoadStage>, RandomState>,
+    residencies: HashMap<LoadKey, ResidentEntry, RandomState>,
     waiters: WaiterIndex,
-    waiter_grants: BTreeMap<WaiterId, HardResourceGrant>,
-    ready_waiters: BTreeMap<ContinuationId, BTreeSet<WaiterId>>,
-    continuation_grants: BTreeMap<ContinuationId, HardResourceGrant>,
-    continuation_classes: BTreeMap<ContinuationId, ResourceClass>,
-    ready_grants: BTreeMap<ContinuationId, HardResourceGrant>,
+    waiter_grants: HashMap<WaiterId, HardResourceGrant, RandomState>,
+    ready_waiters: HashMap<ContinuationId, BTreeSet<WaiterId>, RandomState>,
+    continuations: HashMap<ContinuationId, ContinuationState, RandomState>,
     failed_continuations: VecDeque<FailedContinuation>,
     failed_set: BTreeSet<ContinuationId>,
     runnable: FairQueue<LoadAction>,
     completions: VecDeque<CompletionEvent>,
     rejected_completions: Vec<CompletionRejection>,
-    wait_started: BTreeMap<(WaiterId, OperationId), u64>,
-    transaction_operations: BTreeMap<ExecutionTransactionId, BTreeSet<OperationId>>,
-    transaction_cohorts: BTreeMap<ExecutionTransactionId, BTreeSet<CohortId>>,
+    wait_started: HashMap<(WaiterId, OperationId), u64, RandomState>,
+    transactions: HashMap<ExecutionTransactionId, TransactionState, RandomState>,
     ledger: CriticalPathLedger,
     next_operation: u64,
     next_dispatch: u64,
@@ -336,26 +359,23 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         Ok(Self {
             backend,
             resources,
-            key_to_operation: BTreeMap::new(),
-            operation_to_key: BTreeMap::new(),
-            operations: BTreeMap::new(),
-            retirements: BTreeMap::new(),
-            stage_history: BTreeMap::new(),
-            residencies: BTreeMap::new(),
+            key_to_operation: HashMap::default(),
+            operation_to_key: HashMap::default(),
+            operations: HashMap::default(),
+            retirements: HashMap::default(),
+            stage_history: HashMap::default(),
+            residencies: HashMap::default(),
             waiters: WaiterIndex::new(),
-            waiter_grants: BTreeMap::new(),
-            ready_waiters: BTreeMap::new(),
-            continuation_grants: BTreeMap::new(),
-            continuation_classes: BTreeMap::new(),
-            ready_grants: BTreeMap::new(),
+            waiter_grants: HashMap::default(),
+            ready_waiters: HashMap::default(),
+            continuations: HashMap::default(),
             failed_continuations: VecDeque::new(),
             failed_set: BTreeSet::new(),
             runnable: FairQueue::new(fairness)?,
             completions: VecDeque::new(),
             rejected_completions: Vec::new(),
-            wait_started: BTreeMap::new(),
-            transaction_operations: BTreeMap::new(),
-            transaction_cohorts: BTreeMap::new(),
+            wait_started: HashMap::default(),
+            transactions: HashMap::default(),
             ledger: CriticalPathLedger::new(),
             next_operation: 1,
             next_dispatch: 1,
@@ -510,6 +530,54 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         Ok(LoadRequest::new(key, bytes, class))
     }
 
+    /// Adopt an exact binding already selected as resident by the shared physical
+    /// authority. This accounts the physical frame in the same registry used for
+    /// newly materialized publications, so resume leases never bypass hard limits.
+    pub fn adopt_residency(
+        &mut self,
+        request: LoadRequest,
+        binding: ferrule_common::io_protocol::ResidencyBinding,
+    ) -> Result<(), RegistryError> {
+        if self.shutting_down {
+            return Err(RegistryError::RegistryShuttingDown);
+        }
+        request.key.validate()?;
+        if request.bytes == 0 {
+            return Err(RegistryError::ZeroByteLoad(Box::new(request.key)));
+        }
+        let validated = ValidatedResidencyBinding::new(request.key, binding)?;
+        if let Some(existing) = self.residencies.get(&request.key) {
+            return if existing.binding == validated.binding() {
+                Ok(())
+            } else {
+                Err(RegistryError::PublishedResidencyConflict(Box::new(
+                    request.key,
+                )))
+            };
+        }
+        if self.key_to_operation.contains_key(&request.key) {
+            return Err(RegistryError::PublishedResidencyConflict(Box::new(
+                request.key,
+            )));
+        }
+        let grant = self.resources.acquire(
+            request.key.destination_generation().get(),
+            request.class,
+            [HardResourceClaim::new(
+                ResourceKind::ExpertFrame,
+                request.bytes,
+            )],
+        )?;
+        self.residencies.insert(
+            request.key,
+            ResidentEntry {
+                binding: validated.binding(),
+                grant,
+            },
+        );
+        Ok(())
+    }
+
     pub fn rejected_completions(&self) -> &[CompletionRejection] {
         &self.rejected_completions
     }
@@ -528,7 +596,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             return Err(WaiterIndexError::DuplicateWaiter(waiter).into());
         }
         let continuation = waiter.continuation();
-        if self.continuation_grants.contains_key(&continuation)
+        if self.continuations.contains_key(&continuation)
             && self.waiters.unresolved_for(continuation).is_none()
         {
             return Err(RegistryError::ContinuationAlreadyReady(continuation));
@@ -590,7 +658,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             }
         }
 
-        let continuation_is_new = !self.continuation_grants.contains_key(&continuation);
+        let continuation_is_new = !self.continuations.contains_key(&continuation);
         let mut preflight = vec![HardResourceClaim::new(ResourceKind::Waiter, 1)];
         if continuation_is_new {
             preflight.push(HardResourceClaim::new(ResourceKind::Continuation, 1));
@@ -635,21 +703,22 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                 class,
                 [HardResourceClaim::new(ResourceKind::Continuation, 1)],
             )?;
-            self.continuation_grants.insert(continuation, grant);
-            self.continuation_classes.insert(continuation, class);
-        } else {
-            let current = self
-                .continuation_classes
-                .get_mut(&continuation)
-                .expect("continuation grant and class are created together");
-            if class > *current {
-                self.resources.promote(
-                    self.continuation_grants
-                        .get(&continuation)
-                        .expect("continuation grant remains active"),
+            self.continuations.insert(
+                continuation,
+                ContinuationState {
+                    grant,
                     class,
-                )?;
-                *current = class;
+                    ready_grant: None,
+                },
+            );
+        } else {
+            let state = self
+                .continuations
+                .get_mut(&continuation)
+                .expect("continuation state is created together with grant");
+            if class > state.class {
+                self.resources.promote(&state.grant, class)?;
+                state.class = class;
             }
         }
         let waiter_grant = self.resources.acquire(
@@ -659,13 +728,15 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         )?;
 
         let operations: Vec<_> = joined.iter().chain(&created).copied().collect();
-        self.transaction_operations
+        self.transactions
             .entry(waiter.transaction())
             .or_default()
+            .operations
             .extend(operations.iter().copied());
-        self.transaction_cohorts
+        self.transactions
             .entry(waiter.transaction())
             .or_default()
+            .cohorts
             .insert(CohortId::new(continuation.get()));
         let continuation_ready = self.waiters.register(waiter, operations.clone())?;
         self.waiter_grants.insert(waiter, waiter_grant);
@@ -727,6 +798,10 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
     /// Schedules one hard-feasible owner transition. Stage claims are admitted
     /// only when their action reaches the head of the fair queue.
     pub fn schedule_one(&mut self, now_ns: u64) -> Result<bool, RegistryError> {
+        Ok(self.schedule_one_with_key(now_ns)?.is_some())
+    }
+
+    fn schedule_one_with_key(&mut self, now_ns: u64) -> Result<Option<LoadKey>, RegistryError> {
         let operations = &self.operations;
         self.runnable.retain(|action| {
             operations
@@ -753,12 +828,13 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                 LoadActionKind::SubmitRead | LoadActionKind::PollInstall => true,
             }
         }) else {
-            return Ok(false);
+            return Ok(None);
         };
         let mut operation = self
             .operations
             .remove(&action.operation)
             .expect("retained runnable action must reference an active operation");
+        let key = operation.key;
         let result = match action.kind {
             LoadActionKind::Reserve => self.reserve(&mut operation, now_ns),
             LoadActionKind::SubmitRead => self.submit_read(&mut operation, now_ns).map(|()| None),
@@ -784,7 +860,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                 return Err(error);
             }
         }
-        Ok(true)
+        Ok(Some(key))
     }
 
     pub fn enqueue_completion(&mut self, event: CompletionEvent) {
@@ -837,6 +913,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             .remove(&operation_id)
             .expect("completion was validated against an active operation");
         let completed_stage = operation.stage;
+        let completed_key = operation.key;
         let timestamp = event.timestamp.as_nanos();
         let post = match self.apply_completion(&mut operation, &event) {
             Ok(post) => post,
@@ -871,8 +948,24 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         }
         Ok(CompletionDisposition::Applied {
             operation: operation_id,
+            key: completed_key,
             stage: completed_stage,
         })
+    }
+
+    pub(crate) fn drive_one(&mut self, now_ns: u64) -> Result<RegistryDriveStep, RegistryError> {
+        if let Some(key) = self.schedule_one_with_key(now_ns)? {
+            return Ok(RegistryDriveStep::Progressed { key: Some(key) });
+        }
+        self.collect_backend_completions(1);
+        if self.completions.is_empty() {
+            return Ok(RegistryDriveStep::Idle);
+        }
+        let key = match self.process_one_completion()? {
+            CompletionDisposition::Applied { key, .. } => Some(key),
+            CompletionDisposition::Rejected(_) | CompletionDisposition::QueueEmpty => None,
+        };
+        Ok(RegistryDriveStep::Progressed { key })
     }
 
     /// Drives commands and completions deterministically until no immediate work
@@ -906,7 +999,11 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             return Ok(None);
         };
         self.try_admit_ready(continuation)?;
-        if !self.ready_grants.contains_key(&continuation) {
+        let has_ready = self
+            .continuations
+            .get(&continuation)
+            .is_some_and(|state| state.ready_grant.is_some());
+        if !has_ready {
             return Ok(None);
         }
         let popped = self
@@ -914,8 +1011,11 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             .pop_ready()
             .expect("ready front remains queued until admission");
         let mut ready = self
-            .ready_grants
-            .remove(&popped)
+            .continuations
+            .get_mut(&popped)
+            .expect("admitted ready continuation owns state")
+            .ready_grant
+            .take()
             .expect("admitted ready continuation owns a cohort grant");
         self.resources.release_all_held(&mut ready)?;
         self.failed_set.remove(&popped);
@@ -927,7 +1027,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         continuation: ContinuationId,
         dependencies: &DependencySet,
     ) -> Result<ResumeLease, RegistryError> {
-        if !self.continuation_grants.contains_key(&continuation) {
+        if !self.continuations.contains_key(&continuation) {
             return Err(RegistryError::UnknownContinuation(continuation));
         }
         let required = dependencies
@@ -971,9 +1071,9 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             ),
         )?;
         let class = self
-            .continuation_classes
+            .continuations
             .get(&continuation)
-            .copied()
+            .map(|state| state.class)
             .ok_or(RegistryError::UnknownContinuation(continuation))?;
         let grant = self.resources.acquire(
             continuation.get(),
@@ -1054,9 +1154,10 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         finished_ns: u64,
     ) -> Result<(), RegistryError> {
         let cohort = CohortId::new(transaction.get());
-        self.transaction_cohorts
+        self.transactions
             .entry(transaction)
             .or_default()
+            .cohorts
             .insert(cohort);
         self.ledger.record_cohort_phase(
             cohort,
@@ -1071,11 +1172,10 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         &self,
         transaction: ExecutionTransactionId,
     ) -> impl Iterator<Item = OperationId> + '_ {
-        self.transaction_operations
+        self.transactions
             .get(&transaction)
             .into_iter()
-            .flatten()
-            .copied()
+            .flat_map(|state| state.operations.iter().copied())
     }
 
     pub fn snapshot_transaction_output(
@@ -1086,14 +1186,14 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         captured_at_ns: u64,
     ) -> Result<&crate::io::OutputTokenSnapshot, RegistryError> {
         let operations = self
-            .transaction_operations
+            .transactions
             .get(&transaction)
-            .cloned()
+            .map(|state| state.operations.clone())
             .unwrap_or_default();
         let mut cohorts = self
-            .transaction_cohorts
+            .transactions
             .get(&transaction)
-            .cloned()
+            .map(|state| state.cohorts.clone())
             .unwrap_or_default();
         cohorts.insert(CohortId::new(transaction.get()));
         Ok(self.ledger.snapshot_output(
@@ -1131,7 +1231,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                 self.handle_last_waiter(operation, CancellationReason::OwnerShutdown, now_ns)?;
             }
         }
-        let continuations: Vec<_> = self.continuation_grants.keys().copied().collect();
+        let continuations: Vec<_> = self.continuations.keys().copied().collect();
         for continuation in continuations {
             self.detach_continuation(continuation, CancellationReason::OwnerShutdown, now_ns)?;
         }
@@ -1785,32 +1885,35 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
     }
 
     fn release_continuation(&mut self, continuation: ContinuationId) -> Result<(), RegistryError> {
-        if let Some(mut ready) = self.ready_grants.remove(&continuation) {
-            self.resources.release_all_held(&mut ready)?;
-        }
-        if let Some(mut grant) = self.continuation_grants.remove(&continuation) {
+        if let Some(state) = self.continuations.remove(&continuation) {
+            if let Some(mut ready) = state.ready_grant {
+                self.resources.release_all_held(&mut ready)?;
+            }
+            let mut grant = state.grant;
             self.resources.release_all_held(&mut grant)?;
         }
-        self.continuation_classes.remove(&continuation);
         Ok(())
     }
 
     fn try_admit_ready(&mut self, continuation: ContinuationId) -> Result<bool, RegistryError> {
-        if self.ready_grants.contains_key(&continuation) {
+        let state = self
+            .continuations
+            .get(&continuation)
+            .ok_or(RegistryError::UnknownContinuation(continuation))?;
+        if state.ready_grant.is_some() {
             return Ok(true);
         }
-        let class = self
-            .continuation_classes
-            .get(&continuation)
-            .copied()
-            .ok_or(RegistryError::UnknownContinuation(continuation))?;
+        let class = state.class;
         match self.resources.acquire(
             continuation.get(),
             class,
             [HardResourceClaim::new(ResourceKind::ReadyCohort, 1)],
         ) {
             Ok(grant) => {
-                self.ready_grants.insert(continuation, grant);
+                self.continuations
+                    .get_mut(&continuation)
+                    .expect("continuation state was just read")
+                    .ready_grant = Some(grant);
                 Ok(true)
             }
             Err(

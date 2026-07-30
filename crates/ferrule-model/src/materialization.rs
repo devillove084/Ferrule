@@ -419,8 +419,9 @@ pub trait PhysicalExpertMaterializationBackend: std::fmt::Debug + Send {
 
     fn materialization_bytes(&self, key: LoadKey) -> std::result::Result<u64, FailureReason>;
 
-    /// Release the selected residency lease retained when this key was resolved.
-    /// Calling this before a pending install publishes is a no-op.
+    /// Release the selected execution ownership retained by the runtime attachment.
+    /// Runtime attachments are the only logical owners. A release racing a pending
+    /// install must be remembered so later publication cannot leave an ownerless lease.
     fn release_selected(&mut self, key: LoadKey) -> std::result::Result<(), FailureReason>;
 
     fn reserve(
@@ -490,36 +491,11 @@ impl ExpertDependencyResolution {
     }
 }
 
-/// Result of asking the runtime registry to submit an exact physical load.
-#[derive(Debug, PartialEq, Eq)]
-pub enum ExpertMaterializationSubmission {
-    Submitted,
-    Joined,
-    Resident(ValidatedResidencyBinding),
-}
-
-/// Nonblocking progress of an exact physical materialization.
-#[derive(Debug, PartialEq, Eq)]
-pub enum ExpertMaterializationProgress {
-    Materializing,
-    ReadyToPublish,
-    Resident(ValidatedResidencyBinding),
-}
-
-/// Runtime registry decision after the physical cancellation hook is requested.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExpertMaterializationCancelOutcome {
-    CancelRequested,
-    RetainedForOtherWaiters,
-    AlreadyTerminal,
-}
-
-/// Runner-level bridge to a runtime-wide exact-key materialization registry.
+/// Model-facing edge of the runtime materialization owner.
 ///
-/// `resolve` must obtain the destination generation from a slot reservation before
-/// returning `Waiting`. `submit`, `progress`, `publish`, and `cancel` are keyed by
-/// the complete [`LoadKey`], allowing the registry to single-flight physical work.
-/// Model continuation cleanup calls only `detach`; it never calls `cancel`.
+/// `resolve` fixes the exact physical key and destination generation. The runtime
+/// registry exclusively owns submission, progress, publication, cancellation, and
+/// retirement; the model can only release an unresolved dependency with `detach`.
 pub trait ExpertMaterializationAdapter: Send {
     /// Stable runtime-assigned namespace used for every request resolved by this
     /// adapter instance.
@@ -530,30 +506,17 @@ pub trait ExpertMaterializationAdapter: Send {
         request: ExpertMaterializationRequest,
     ) -> Result<ExpertDependencyResolution>;
 
-    fn submit(&mut self, key: LoadKey) -> Result<ExpertMaterializationSubmission>;
-
-    fn progress(&mut self, key: LoadKey) -> Result<ExpertMaterializationProgress>;
-
-    fn publish(&mut self, key: LoadKey) -> Result<ValidatedResidencyBinding>;
-
     /// Detach one continuation's logical demand. This must not imply physical
     /// cancellation, even when the continuation is the adapter's last known waiter.
     fn detach(&mut self, continuation: ContinuationId, key: LoadKey) -> Result<()>;
-
-    /// Physical cancellation policy hook. Only the runtime registry owner decides
-    /// when this is legal after considering all waiters and provider custody.
-    fn cancel(
-        &mut self,
-        key: LoadKey,
-        reason: CancellationReason,
-    ) -> Result<ExpertMaterializationCancelOutcome>;
 }
 
-/// Logical expert wait retained by a model continuation.
+/// One unresolved dependency edge retained by a model continuation.
 ///
-/// This object owns no read, upload, slot reservation, provider ticket, or physical
-/// cancellation authority. Successful detach operations are removed incrementally,
-/// so cleanup can be retried without replaying already-detached dependencies.
+/// This object owns no resumed execution attachment, read, upload, slot reservation,
+/// provider ticket, or physical cancellation authority. Runtime owns the attachment
+/// and releases it when the resume edge finishes. Before resume, model cancellation
+/// may detach the still-unresolved edge; successful detaches remain retry-safe.
 #[derive(Debug)]
 pub struct ContinuationDependencyState {
     continuation: ContinuationId,
@@ -581,11 +544,14 @@ impl ContinuationDependencyState {
     }
 
     pub fn has_expert_dependencies(&self) -> bool {
-        self.unresolved.as_ref().is_some_and(|dependencies| {
-            dependencies
-                .iter()
-                .any(|dependency| dependency.load_key().is_some())
-        })
+        self.detach_remaining
+            .as_ref()
+            .is_some_and(|remaining| !remaining.is_empty())
+            || self.unresolved.as_ref().is_some_and(|dependencies| {
+                dependencies
+                    .iter()
+                    .any(|dependency| dependency.load_key().is_some())
+            })
     }
 
     pub fn clear_non_expert_dependencies(&mut self) -> Result<()> {
@@ -603,7 +569,7 @@ impl ContinuationDependencyState {
     pub fn replace_unresolved(&mut self, unresolved: DependencySet) -> Result<()> {
         if self.unresolved.is_some() || self.detach_remaining.is_some() {
             return Err(Error::Execution(format!(
-                "continuation {} still owns an unresolved dependency set",
+                "continuation {} still owns an unresolved dependency set or has detach cleanup in progress",
                 self.continuation.get()
             )));
         }
@@ -613,7 +579,8 @@ impl ContinuationDependencyState {
     }
 
     /// Validate and consume exactly one resume edge. The lease set must contain
-    /// every and only expert-residency dependency in the suspended set.
+    /// every and only expert-residency dependency in the suspended set. Runtime
+    /// retains and later releases the attachment for the consumed edge.
     pub fn validate_resume(
         &mut self,
         continuation: ContinuationId,
@@ -650,8 +617,9 @@ impl ContinuationDependencyState {
         Ok(())
     }
 
-    /// Detach logical expert dependencies only. A failed detach leaves the current
-    /// and remaining keys available for an exact retry.
+    /// Detach only the current unresolved expert edge during cancellation/failure.
+    /// A successfully resumed edge is no longer represented here and must be released
+    /// only by runtime. A failed detach keeps the remaining keys for an exact retry.
     pub fn detach_logical_dependencies(
         &mut self,
         adapter: &mut dyn ExpertMaterializationAdapter,
@@ -660,12 +628,15 @@ impl ContinuationDependencyState {
             let Some(unresolved) = self.unresolved.as_ref() else {
                 return Ok(());
             };
-            self.detach_remaining = Some(
-                unresolved
-                    .iter()
-                    .filter_map(|dependency| dependency.load_key())
-                    .collect(),
-            );
+            let remaining = unresolved
+                .iter()
+                .filter_map(|dependency| dependency.load_key())
+                .collect::<Vec<_>>();
+            if remaining.is_empty() {
+                self.unresolved = None;
+                return Ok(());
+            }
+            self.detach_remaining = Some(remaining);
         }
 
         let remaining = self
@@ -797,12 +768,50 @@ mod tests {
     #[derive(Default)]
     struct MockAdapter {
         reservations: BTreeMap<ExpertMaterializationRequest, LoadKey>,
-        submitted: BTreeSet<LoadKey>,
-        submit_calls: usize,
+        runtime_attachments: BTreeMap<LoadKey, usize>,
+        physical_releases: BTreeMap<LoadKey, usize>,
+        detached: BTreeSet<(ContinuationId, LoadKey)>,
         detach_attempts: Vec<(ContinuationId, LoadKey)>,
         fail_detach_once_for: Option<LoadKey>,
         detach_failed: bool,
-        cancel_calls: usize,
+    }
+
+    impl MockAdapter {
+        fn runtime_attach(&mut self, key: LoadKey) {
+            *self.runtime_attachments.entry(key).or_default() += 1;
+        }
+
+        fn runtime_attachment_count(&self, key: LoadKey) -> usize {
+            self.runtime_attachments.get(&key).copied().unwrap_or(0)
+        }
+
+        fn physical_release_count(&self, key: LoadKey) -> usize {
+            self.physical_releases.get(&key).copied().unwrap_or(0)
+        }
+
+        fn is_evictable(&self, key: LoadKey) -> bool {
+            self.runtime_attachment_count(key) == 0
+        }
+
+        fn runtime_finish_resume_lease(
+            &mut self,
+            continuation: ContinuationId,
+            key: LoadKey,
+        ) -> Result<()> {
+            ExpertMaterializationAdapter::detach(self, continuation, key)
+        }
+
+        fn runtime_detach_if_attached(
+            &mut self,
+            continuation: ContinuationId,
+            key: LoadKey,
+        ) -> Result<bool> {
+            if self.detached.contains(&(continuation, key)) {
+                return Ok(false);
+            }
+            ExpertMaterializationAdapter::detach(self, continuation, key)?;
+            Ok(true)
+        }
     }
 
     impl ExpertMaterializationAdapter for MockAdapter {
@@ -829,43 +838,26 @@ mod tests {
             ExpertDependencyResolution::waiting(request, key)
         }
 
-        fn submit(&mut self, key: LoadKey) -> Result<ExpertMaterializationSubmission> {
-            if self.submitted.insert(key) {
-                self.submit_calls += 1;
-                Ok(ExpertMaterializationSubmission::Submitted)
-            } else {
-                Ok(ExpertMaterializationSubmission::Joined)
-            }
-        }
-
-        fn progress(&mut self, key: LoadKey) -> Result<ExpertMaterializationProgress> {
-            if self.submitted.contains(&key) {
-                Ok(ExpertMaterializationProgress::ReadyToPublish)
-            } else {
-                Ok(ExpertMaterializationProgress::Materializing)
-            }
-        }
-
-        fn publish(&mut self, key: LoadKey) -> Result<ValidatedResidencyBinding> {
-            Ok(binding(key, 1))
-        }
-
         fn detach(&mut self, continuation: ContinuationId, key: LoadKey) -> Result<()> {
             self.detach_attempts.push((continuation, key));
             if self.fail_detach_once_for == Some(key) && !self.detach_failed {
                 self.detach_failed = true;
                 return Err(Error::Execution("injected detach failure".into()));
             }
+            if !self.detached.insert((continuation, key)) {
+                return Err(Error::Execution("duplicate logical detach".into()));
+            }
+            let attachments = self.runtime_attachments.get_mut(&key).ok_or_else(|| {
+                Error::Execution("logical detach has no runtime attachment".into())
+            })?;
+            *attachments = attachments
+                .checked_sub(1)
+                .ok_or_else(|| Error::Execution("runtime attachment count underflow".into()))?;
+            if *attachments == 0 {
+                self.runtime_attachments.remove(&key);
+                *self.physical_releases.entry(key).or_default() += 1;
+            }
             Ok(())
-        }
-
-        fn cancel(
-            &mut self,
-            _key: LoadKey,
-            _reason: CancellationReason,
-        ) -> Result<ExpertMaterializationCancelOutcome> {
-            self.cancel_calls += 1;
-            Ok(ExpertMaterializationCancelOutcome::CancelRequested)
         }
     }
 
@@ -1064,59 +1056,11 @@ mod tests {
             .validate_resume(continuation, &leases(&[second, first]))
             .unwrap();
         assert!(complete.unresolved().is_none());
+        assert!(!complete.has_expert_dependencies());
     }
 
     #[test]
-    fn same_key_joins_one_physical_submission_but_new_generation_does_not_join() {
-        let mut adapter = MockAdapter::default();
-        let first = match adapter.resolve(request()).unwrap() {
-            ExpertDependencyResolution::Waiting(key) => key,
-            ExpertDependencyResolution::Resident(_) => panic!("mock starts nonresident"),
-        };
-        let second = match adapter.resolve(request()).unwrap() {
-            ExpertDependencyResolution::Waiting(key) => key,
-            ExpertDependencyResolution::Resident(_) => panic!("mock starts nonresident"),
-        };
-        assert_eq!(first, second);
-        let dependencies = expert_dependency_set([first]).unwrap();
-        let first_wait = crate::runner::PendingModelProgress::new(
-            ExecutionTransactionId::new(101).unwrap(),
-            ContinuationId::new(102),
-            dependencies.clone(),
-        )
-        .unwrap();
-        let second_wait = crate::runner::PendingModelProgress::new(
-            ExecutionTransactionId::new(201).unwrap(),
-            ContinuationId::new(202),
-            dependencies,
-        )
-        .unwrap();
-        assert_ne!(first_wait.transaction(), second_wait.transaction());
-        assert_eq!(
-            first_wait.unresolved_dependencies(),
-            second_wait.unresolved_dependencies()
-        );
-        assert_eq!(
-            adapter.submit(first).unwrap(),
-            ExpertMaterializationSubmission::Submitted
-        );
-        assert_eq!(
-            adapter.submit(second).unwrap(),
-            ExpertMaterializationSubmission::Joined
-        );
-        assert_eq!(adapter.submit_calls, 1);
-
-        let recycled = request().load_key(DestinationGeneration::new(99)).unwrap();
-        assert_ne!(recycled, first);
-        assert_eq!(
-            adapter.submit(recycled).unwrap(),
-            ExpertMaterializationSubmission::Submitted
-        );
-        assert_eq!(adapter.submit_calls, 2);
-    }
-
-    #[test]
-    fn sibling_cancellation_detaches_logical_wait_only() {
+    fn sibling_wait_cancellation_preserves_other_runtime_attachment() {
         let key = key();
         let dependencies = expert_dependency_set([key]).unwrap();
         let mut first =
@@ -1125,31 +1069,141 @@ mod tests {
         let mut sibling =
             ContinuationDependencyState::new(ContinuationId::new(52), dependencies).unwrap();
         let mut adapter = MockAdapter::default();
-        adapter.submit(key).unwrap();
+        adapter.runtime_attach(key);
+        adapter.runtime_attach(key);
+        assert_eq!(adapter.runtime_attachment_count(key), 2);
 
         first.detach_logical_dependencies(&mut adapter).unwrap();
-        assert_eq!(adapter.cancel_calls, 0);
-        assert!(adapter.submitted.contains(&key));
+        assert_eq!(adapter.runtime_attachment_count(key), 1);
+        assert_eq!(adapter.physical_release_count(key), 0);
+        assert!(!adapter.is_evictable(key));
         assert!(sibling.unresolved().is_some());
+        assert!(
+            !adapter
+                .runtime_detach_if_attached(ContinuationId::new(51), key)
+                .unwrap()
+        );
 
         sibling.detach_logical_dependencies(&mut adapter).unwrap();
-        assert_eq!(adapter.cancel_calls, 0);
+        assert_eq!(adapter.runtime_attachment_count(key), 0);
+        assert_eq!(adapter.physical_release_count(key), 1);
+        assert!(adapter.is_evictable(key));
+        assert!(
+            !adapter
+                .runtime_detach_if_attached(ContinuationId::new(52), key)
+                .unwrap()
+        );
+        assert_eq!(adapter.physical_release_count(key), 1);
     }
 
     #[test]
-    fn successful_resume_is_not_replayable() {
+    fn successful_resume_consumes_model_edge_without_releasing_runtime_attachment() {
         let key = key();
         let continuation = ContinuationId::new(61);
         let mut state =
             ContinuationDependencyState::new(continuation, expert_dependency_set([key]).unwrap())
                 .unwrap();
         let leases = leases(&[key]);
+        let mut adapter = MockAdapter::default();
+        adapter.runtime_attach(key);
+
         state.validate_resume(continuation, &leases).unwrap();
+        assert!(state.unresolved().is_none());
+        assert!(!state.has_expert_dependencies());
+        state.detach_logical_dependencies(&mut adapter).unwrap();
+        assert!(adapter.detach_attempts.is_empty());
+        assert_eq!(adapter.runtime_attachment_count(key), 1);
+
+        adapter
+            .runtime_finish_resume_lease(continuation, key)
+            .unwrap();
+        assert_eq!(adapter.physical_release_count(key), 1);
         let replay = state
             .validate_resume(continuation, &leases)
             .unwrap_err()
             .to_string();
         assert!(replay.contains("refusing resume replay"));
+    }
+
+    #[test]
+    fn replace_unresolved_moves_to_next_edge_without_cross_edge_accumulation() {
+        let first = key_for_expert(1);
+        let second = key_for_expert(2);
+        let continuation = ContinuationId::new(64);
+        let mut state =
+            ContinuationDependencyState::new(continuation, expert_dependency_set([first]).unwrap())
+                .unwrap();
+        let mut adapter = MockAdapter::default();
+
+        adapter.runtime_attach(first);
+        state
+            .validate_resume(continuation, &leases(&[first]))
+            .unwrap();
+        adapter
+            .runtime_finish_resume_lease(continuation, first)
+            .unwrap();
+        state
+            .replace_unresolved(expert_dependency_set([second]).unwrap())
+            .unwrap();
+        assert_eq!(state.unresolved().unwrap().len(), 1);
+
+        adapter.runtime_attach(second);
+        state
+            .validate_resume(continuation, &leases(&[second]))
+            .unwrap();
+        adapter
+            .runtime_finish_resume_lease(continuation, second)
+            .unwrap();
+        state.detach_logical_dependencies(&mut adapter).unwrap();
+
+        assert_eq!(adapter.physical_release_count(first), 1);
+        assert_eq!(adapter.physical_release_count(second), 1);
+        assert_eq!(adapter.detach_attempts.len(), 2);
+        assert!(adapter.is_evictable(first));
+        assert!(adapter.is_evictable(second));
+    }
+
+    #[test]
+    fn resumed_failure_leaves_release_to_runtime_and_next_turn_can_evict() {
+        let key = key();
+        let mut adapter = MockAdapter::default();
+        let first_continuation = ContinuationId::new(62);
+        let mut first = ContinuationDependencyState::new(
+            first_continuation,
+            expert_dependency_set([key]).unwrap(),
+        )
+        .unwrap();
+        adapter.runtime_attach(key);
+        first
+            .validate_resume(first_continuation, &leases(&[key]))
+            .unwrap();
+
+        first.detach_logical_dependencies(&mut adapter).unwrap();
+        assert!(adapter.detach_attempts.is_empty());
+        assert_eq!(adapter.physical_release_count(key), 0);
+        adapter
+            .runtime_finish_resume_lease(first_continuation, key)
+            .unwrap();
+        assert_eq!(adapter.physical_release_count(key), 1);
+        assert!(adapter.is_evictable(key));
+
+        let second_continuation = ContinuationId::new(63);
+        let mut second = ContinuationDependencyState::new(
+            second_continuation,
+            expert_dependency_set([key]).unwrap(),
+        )
+        .unwrap();
+        adapter.runtime_attach(key);
+        second
+            .validate_resume(second_continuation, &leases(&[key]))
+            .unwrap();
+        assert!(!adapter.is_evictable(key));
+        adapter
+            .runtime_finish_resume_lease(second_continuation, key)
+            .unwrap();
+        second.detach_logical_dependencies(&mut adapter).unwrap();
+        assert_eq!(adapter.physical_release_count(key), 2);
+        assert!(adapter.is_evictable(key));
     }
 
     #[test]
@@ -1166,6 +1220,8 @@ mod tests {
             fail_detach_once_for: Some(second),
             ..MockAdapter::default()
         };
+        adapter.runtime_attach(first);
+        adapter.runtime_attach(second);
 
         assert!(state.detach_logical_dependencies(&mut adapter).is_err());
         assert!(state.unresolved().is_some());
@@ -1179,6 +1235,5 @@ mod tests {
                 (continuation, second)
             ]
         );
-        assert_eq!(adapter.cancel_calls, 0);
     }
 }

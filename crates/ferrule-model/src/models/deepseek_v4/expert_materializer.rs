@@ -88,27 +88,6 @@ impl DeepSeekV4SharedExpertSubsystem {
         Ok(())
     }
 
-    pub(super) fn residency_snapshot(
-        &self,
-        experts_per_layer: &[usize],
-    ) -> Vec<Box<[crate::moe::prediction::ExpertResidency]>> {
-        use crate::moe::prediction::ExpertResidency;
-        let state = self.lock();
-        let mut layers = experts_per_layer
-            .iter()
-            .map(|&count| vec![ExpertResidency::Cold; count].into_boxed_slice())
-            .collect::<Vec<_>>();
-        for expert in state.experts.keys() {
-            if let Some(value) = layers
-                .get_mut(expert.layer)
-                .and_then(|layer| layer.get_mut(expert.expert))
-            {
-                *value = ExpertResidency::GpuReady;
-            }
-        }
-        layers
-    }
-
     pub(super) fn resident_stats_for_layer(&self, layer: usize) -> (usize, u64) {
         let state = self.lock();
         state
@@ -118,6 +97,25 @@ impl DeepSeekV4SharedExpertSubsystem {
             .fold((0usize, 0u64), |(count, bytes), (_, frame)| {
                 (count.saturating_add(1), bytes.saturating_add(frame.bytes))
             })
+    }
+
+    pub(super) fn resident_experts_for_layer(&self, layer: usize) -> Result<BTreeSet<usize>> {
+        let state = self.lock();
+        if state.poisoned_layers.contains(&layer) {
+            return Err(Error::Execution(format!(
+                "DeepSeek-V4 published expert layer {layer} is poisoned"
+            )));
+        }
+        if !state.tables.contains_key(&layer) {
+            return Err(Error::Execution(format!(
+                "DeepSeek-V4 published expert table is missing layer {layer}"
+            )));
+        }
+        Ok(state
+            .experts
+            .keys()
+            .filter_map(|expert| (expert.layer == layer).then_some(expert.expert))
+            .collect())
     }
 
     pub(super) fn layer_slot_capacity(&self, layer: usize) -> Result<usize> {
@@ -267,6 +265,8 @@ fn validate_published_lease_window(
     Ok(())
 }
 
+type ResidentExpertKeyIndex = HashMap<ExpertKey, LoadKey>;
+
 struct DeepSeekV4ExpertSubsystemState {
     residency: Option<Box<dyn ExpertResidencyControl>>,
     tables: BTreeMap<usize, ferrule_cuda::context::CudaExpertSlotTable>,
@@ -275,7 +275,7 @@ struct DeepSeekV4ExpertSubsystemState {
     frame_capacity: usize,
     frames_allocated: usize,
     poisoned_layers: BTreeSet<usize>,
-    resident_keys: HashMap<ExpertKey, LoadKey>,
+    resident_keys: ResidentExpertKeyIndex,
 }
 
 pub(super) struct CudaExpertFrame {
@@ -305,6 +305,203 @@ struct MaterializationOperation {
     bytes: u64,
     pending_terminal: Option<CompletionOutcome>,
     state: Option<CudaMaterializationOperationState>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SelectedLeaseState {
+    Pending,
+    ReleaseRequested,
+    Active(ExpertLease),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SelectedLeaseOwnership {
+    operation: Option<OperationId>,
+    state: SelectedLeaseState,
+}
+
+#[derive(Debug, Default)]
+struct SelectedLeaseTracker {
+    ownership: HashMap<LoadKey, SelectedLeaseOwnership>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectedLeasePublication {
+    Retained,
+    ReleaseImmediately,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SelectedLeaseRelease {
+    None,
+    Deferred,
+    Active {
+        lease: ExpertLease,
+        operation: Option<OperationId>,
+    },
+}
+
+impl SelectedLeaseTracker {
+    fn begin_pending(&mut self, key: LoadKey) -> std::result::Result<(), FailureReason> {
+        if self.ownership.contains_key(&key) {
+            return Err(FailureReason::ProtocolViolation(
+                "selected expert already has physical execution ownership".into(),
+            ));
+        }
+        self.ownership.insert(
+            key,
+            SelectedLeaseOwnership {
+                operation: None,
+                state: SelectedLeaseState::Pending,
+            },
+        );
+        Ok(())
+    }
+
+    fn bind_operation(
+        &mut self,
+        key: LoadKey,
+        operation: OperationId,
+    ) -> std::result::Result<(), FailureReason> {
+        let ownership = self.ownership.get_mut(&key).ok_or_else(|| {
+            FailureReason::ProtocolViolation(
+                "prepared selected expert has no physical execution ownership".into(),
+            )
+        })?;
+        if ownership.operation.is_some() || matches!(ownership.state, SelectedLeaseState::Active(_))
+        {
+            return Err(FailureReason::ProtocolViolation(
+                "selected expert execution ownership already has an operation".into(),
+            ));
+        }
+        ownership.operation = Some(operation);
+        Ok(())
+    }
+
+    fn begin_active(
+        &mut self,
+        key: LoadKey,
+        lease: ExpertLease,
+    ) -> std::result::Result<(), FailureReason> {
+        if self.ownership.contains_key(&key) {
+            return Err(FailureReason::ProtocolViolation(
+                "selected resident expert already has physical execution ownership".into(),
+            ));
+        }
+        self.ownership.insert(
+            key,
+            SelectedLeaseOwnership {
+                operation: None,
+                state: SelectedLeaseState::Active(lease),
+            },
+        );
+        Ok(())
+    }
+
+    fn publish(
+        &mut self,
+        key: LoadKey,
+        operation: OperationId,
+        lease: ExpertLease,
+    ) -> std::result::Result<SelectedLeasePublication, FailureReason> {
+        let ownership = self.ownership.get_mut(&key).ok_or_else(|| {
+            FailureReason::ProtocolViolation(
+                "selected expert publication has no pending execution ownership".into(),
+            )
+        })?;
+        if ownership.operation != Some(operation) {
+            return Err(FailureReason::ProtocolViolation(
+                "selected expert publication operation is stale".into(),
+            ));
+        }
+        match ownership.state {
+            SelectedLeaseState::Pending => {
+                ownership.state = SelectedLeaseState::Active(lease);
+                Ok(SelectedLeasePublication::Retained)
+            }
+            SelectedLeaseState::ReleaseRequested => {
+                ownership.state = SelectedLeaseState::Active(lease);
+                Ok(SelectedLeasePublication::ReleaseImmediately)
+            }
+            SelectedLeaseState::Active(_) => Err(FailureReason::ProtocolViolation(
+                "selected expert publication replaced an active execution lease".into(),
+            )),
+        }
+    }
+
+    fn request_release(&mut self, key: LoadKey) -> SelectedLeaseRelease {
+        let Some(ownership) = self.ownership.get(&key).copied() else {
+            return SelectedLeaseRelease::None;
+        };
+        match ownership.state {
+            SelectedLeaseState::Pending => {
+                self.ownership
+                    .get_mut(&key)
+                    .expect("selected ownership was read above")
+                    .state = SelectedLeaseState::ReleaseRequested;
+                SelectedLeaseRelease::Deferred
+            }
+            SelectedLeaseState::ReleaseRequested => SelectedLeaseRelease::Deferred,
+            SelectedLeaseState::Active(lease) => {
+                self.ownership.remove(&key);
+                SelectedLeaseRelease::Active {
+                    lease,
+                    operation: ownership.operation,
+                }
+            }
+        }
+    }
+
+    fn restore_active(&mut self, key: LoadKey, lease: ExpertLease, operation: Option<OperationId>) {
+        let previous = self.ownership.insert(
+            key,
+            SelectedLeaseOwnership {
+                operation,
+                state: SelectedLeaseState::Active(lease),
+            },
+        );
+        debug_assert!(previous.is_none());
+    }
+
+    fn cancel_operation(&mut self, key: LoadKey, operation: OperationId) {
+        if self.ownership.get(&key).is_some_and(|ownership| {
+            ownership.operation == Some(operation)
+                && !matches!(ownership.state, SelectedLeaseState::Active(_))
+        }) {
+            self.ownership.remove(&key);
+        }
+    }
+
+    fn cancel_unbound(&mut self, key: LoadKey) {
+        if self.ownership.get(&key).is_some_and(|ownership| {
+            ownership.operation.is_none()
+                && !matches!(ownership.state, SelectedLeaseState::Active(_))
+        }) {
+            self.ownership.remove(&key);
+        }
+    }
+
+    fn active_owned_by(&self, key: LoadKey, operation: OperationId) -> bool {
+        self.ownership.get(&key).is_some_and(|ownership| {
+            ownership.operation == Some(operation)
+                && matches!(ownership.state, SelectedLeaseState::Active(_))
+        })
+    }
+
+    fn contains(&self, key: LoadKey) -> bool {
+        self.ownership.contains_key(&key)
+    }
+
+    fn active_count(&self) -> usize {
+        self.ownership
+            .values()
+            .filter(|ownership| matches!(ownership.state, SelectedLeaseState::Active(_)))
+            .count()
+    }
+
+    fn pending_count(&self) -> usize {
+        self.ownership.len().saturating_sub(self.active_count())
+    }
 }
 
 type CudaMaterializationOperationState = MaterializationOperationState<
@@ -369,9 +566,9 @@ struct PinnedExpertBundle {
 
 struct CudaExpertUploadTicket {
     frame: Option<CudaExpertFrame>,
-    _gate: Option<ferrule_cuda::context::CudaArtifactLinearAsyncOverwrite>,
-    _up: Option<ferrule_cuda::context::CudaArtifactLinearAsyncOverwrite>,
-    _down: Option<ferrule_cuda::context::CudaArtifactLinearAsyncOverwrite>,
+    gate: Option<ferrule_cuda::context::CudaArtifactLinearAsyncOverwrite>,
+    up: Option<ferrule_cuda::context::CudaArtifactLinearAsyncOverwrite>,
+    down: Option<ferrule_cuda::context::CudaArtifactLinearAsyncOverwrite>,
     event: ferrule_cuda::context::CudaUploadEvent,
 }
 
@@ -382,9 +579,9 @@ impl CudaExpertUploadTicket {
 
     fn drain_into_frame(mut self) -> Result<CudaExpertFrame> {
         self.event.synchronize()?;
-        self._gate.take();
-        self._up.take();
-        self._down.take();
+        self.gate.take();
+        self.up.take();
+        self.down.take();
         self.frame
             .take()
             .ok_or_else(|| Error::Internal("CUDA expert upload lost its frame".into()))
@@ -411,7 +608,7 @@ pub struct DeepSeekV4ExpertMaterializer {
     completion_hub: ferrule_common::CompletionHub,
     shared: DeepSeekV4SharedExpertSubsystem,
     request_keys: BTreeMap<ExpertMaterializationRequest, LoadKey>,
-    selected_leases: HashMap<LoadKey, ExpertLease>,
+    selected_lease_ownership: SelectedLeaseTracker,
     reservations: BTreeMap<LoadKey, SlotReservation>,
     operations: BTreeMap<OperationId, MaterializationOperation>,
     operation_order: VecDeque<OperationId>,
@@ -428,6 +625,14 @@ impl std::fmt::Debug for DeepSeekV4ExpertMaterializer {
             .field("placement", &self.placement)
             .field("catalog_layers", &self.catalogs.len())
             .field("reservations", &self.reservations.len())
+            .field(
+                "active_selected_leases",
+                &self.selected_lease_ownership.active_count(),
+            )
+            .field(
+                "pending_selected_ownership",
+                &self.selected_lease_ownership.pending_count(),
+            )
             .field("operations", &self.operations.len())
             .field("terminal_operations", &self.terminal_operations.len())
             .field("shared", &self.shared)
@@ -584,7 +789,7 @@ impl DeepSeekV4ExpertMaterializer {
             completion_hub,
             shared: DeepSeekV4SharedExpertSubsystem::new(tables, frame_capacity),
             request_keys: BTreeMap::new(),
-            selected_leases: HashMap::new(),
+            selected_lease_ownership: SelectedLeaseTracker::default(),
             reservations: BTreeMap::new(),
             operations: BTreeMap::new(),
             operation_order: VecDeque::new(),
@@ -727,6 +932,11 @@ impl DeepSeekV4ExpertMaterializer {
         self.completion_hub.notify();
     }
 
+    fn recycle_frame(&self, mut frame: CudaExpertFrame) {
+        frame.bytes = 0;
+        self.shared.lock().free_frames.push(frame);
+    }
+
     fn allocate_frame(&self, bundle: &PinnedExpertBundle) -> Result<CudaExpertFrame> {
         let mut shared = self.shared.lock();
         if let Some(mut frame) = shared.free_frames.pop() {
@@ -781,9 +991,9 @@ impl DeepSeekV4ExpertMaterializer {
         match submitted {
             Ok((gate, up, down, event)) => Ok(CudaExpertUploadTicket {
                 frame: Some(frame),
-                _gate: Some(gate),
-                _up: Some(up),
-                _down: Some(down),
+                gate: Some(gate),
+                up: Some(up),
+                down: Some(down),
                 event,
             }),
             Err(error) => {
@@ -792,7 +1002,7 @@ impl DeepSeekV4ExpertMaterializer {
                         "expert upload submission failed ({error}); upload drain also failed ({sync_error})"
                     )));
                 }
-                self.shared.lock().free_frames.push(frame);
+                self.recycle_frame(frame);
                 Err(error)
             }
         }
@@ -871,6 +1081,7 @@ impl DeepSeekV4ExpertMaterializer {
 
     fn install_frame(
         &mut self,
+        operation_id: OperationId,
         operation: &mut MaterializationOperation,
         frame: CudaExpertFrame,
     ) -> std::result::Result<ValidatedResidencyBinding, CompletionOutcome> {
@@ -883,6 +1094,15 @@ impl DeepSeekV4ExpertMaterializer {
             return Err(CompletionOutcome::Failed(
                 FailureReason::InstallationRejected,
             ));
+        };
+        let binding = match ValidatedResidencyBinding::new(operation.key, operation.binding) {
+            Ok(binding) => binding,
+            Err(error) => {
+                self.shared.lock().free_frames.push(frame);
+                return Err(CompletionOutcome::Failed(FailureReason::ProtocolViolation(
+                    error.to_string(),
+                )));
+            }
         };
         let expected = prepared.binding();
         let pointers = match self
@@ -1056,31 +1276,36 @@ impl DeepSeekV4ExpertMaterializer {
                     && physical.generation == i32::try_from(expected.generation.get()).unwrap_or(-1)
             });
         let lease = grant.lease();
+        let source_is_current = operation.source.validate_source_identity().is_ok();
         if grant.binding() != expected
             || grant.reason() != ExpertInstallReason::Selected
             || lease.is_none()
             || !controller_matches
             || !physical_matches
-            || operation.source.validate_source_identity().is_err()
+            || !source_is_current
         {
-            if let Some(lease) = lease {
-                let _ = shared
-                    .residency
-                    .as_mut()
-                    .expect("published grant came from residency control")
-                    .release(lease);
+            if let Some(lease) = lease
+                && let Some(residency) = shared.residency.as_mut()
+            {
+                let _ = residency.release(lease);
             }
             shared.poisoned_layers.insert(operation.expert.layer);
             shared.experts.insert(operation.expert, frame);
-            return Err(if operation.source.validate_source_identity().is_err() {
-                CompletionOutcome::Stale(StaleReason::SourceIdentityChanged)
-            } else {
+            return Err(if source_is_current {
                 CompletionOutcome::Failed(FailureReason::ProtocolViolation(
                     "physical/controller slot identity diverged after publication".into(),
                 ))
+            } else {
+                CompletionOutcome::Stale(StaleReason::SourceIdentityChanged)
             });
         }
-        let lease = lease.expect("selected grant lease presence was validated");
+        let Some(lease) = lease else {
+            shared.poisoned_layers.insert(operation.expert.layer);
+            shared.experts.insert(operation.expert, frame);
+            return Err(CompletionOutcome::Failed(
+                FailureReason::InstallationRejected,
+            ));
+        };
 
         if let Some((evicted, _, old_key)) = eviction {
             if let Some(old_frame) = shared.experts.remove(&evicted) {
@@ -1090,29 +1315,30 @@ impl DeepSeekV4ExpertMaterializer {
         }
         shared.experts.insert(operation.expert, frame);
         shared.resident_keys.insert(expected.key, operation.key);
-        let binding =
-            ValidatedResidencyBinding::new(operation.key, operation.binding).map_err(|error| {
-                CompletionOutcome::Failed(FailureReason::ProtocolViolation(error.to_string()))
-            })?;
         drop(shared);
-        if self.selected_leases.contains_key(&operation.key) {
-            let _ = self
-                .shared
-                .lock()
-                .residency
-                .as_mut()
-                .expect("selected lease came from residency control")
-                .release(lease);
-            return Err(CompletionOutcome::Failed(FailureReason::ProtocolViolation(
-                "published expert replaced an active selected lease".into(),
-            )));
+        let publication =
+            match self
+                .selected_lease_ownership
+                .publish(operation.key, operation_id, lease)
+            {
+                Ok(publication) => publication,
+                Err(reason) => {
+                    if let Some(residency) = self.shared.lock().residency.as_mut() {
+                        let _ = residency.release(lease);
+                    }
+                    return Err(CompletionOutcome::Failed(reason));
+                }
+            };
+        if publication == SelectedLeasePublication::ReleaseImmediately {
+            self.release_selected(operation.key)
+                .map_err(CompletionOutcome::Failed)?;
         }
-        self.selected_leases.insert(operation.key, lease);
         Ok(binding)
     }
 
     fn cleanup_operation(
         &mut self,
+        operation_id: OperationId,
         mut operation: MaterializationOperation,
         state: Option<CudaMaterializationOperationState>,
         reader_consumed: bool,
@@ -1135,19 +1361,35 @@ impl DeepSeekV4ExpertMaterializer {
             }
             Some(MaterializationOperationState::UploadSubmitted(ticket)) => {
                 match ticket.drain_into_frame() {
-                    Ok(frame) => self.shared.lock().free_frames.push(frame),
+                    Ok(frame) => self.recycle_frame(frame),
                     Err(error) => first_error = Some(error),
                 }
             }
             Some(MaterializationOperationState::UploadReady(frame))
             | Some(MaterializationOperationState::Installing(frame)) => {
-                self.shared.lock().free_frames.push(frame);
+                self.recycle_frame(frame);
             }
-            Some(MaterializationOperationState::HostReady(_)) | None => {}
+            Some(MaterializationOperationState::HostReady(bundle)) => drop(bundle),
+            None => {}
         }
         if let Some(prepared) = operation.prepared.take() {
             record_first_error(&mut first_error, self.cancel_prepared(prepared));
         }
+        if self
+            .selected_lease_ownership
+            .active_owned_by(operation.key, operation_id)
+        {
+            record_first_error(
+                &mut first_error,
+                self.release_selected(operation.key).map_err(|reason| {
+                    Error::Execution(format!(
+                        "terminal selected-expert lease release failed: {reason:?}"
+                    ))
+                }),
+            );
+        }
+        self.selected_lease_ownership
+            .cancel_operation(operation.key, operation_id);
         self.remove_request_key(operation.request, operation.key);
         first_error.map_or(Ok(()), Err)
     }
@@ -1163,7 +1405,7 @@ impl DeepSeekV4ExpertMaterializer {
         self.remove_operation_order(operation_id);
         let first_terminal = self.terminal_operations.insert(operation_id);
         let key = operation.key;
-        let cleanup = self.cleanup_operation(operation, state, reader_consumed);
+        let cleanup = self.cleanup_operation(operation_id, operation, state, reader_consumed);
         if first_terminal && let Some((stage, mut outcome, bytes)) = completion {
             if let Err(error) = &cleanup {
                 outcome = CompletionOutcome::Failed(protocol_failure(Error::Internal(format!(
@@ -1483,7 +1725,7 @@ impl DeepSeekV4ExpertMaterializer {
                         return;
                     }
                 }
-                match self.install_frame(&mut operation, frame) {
+                match self.install_frame(operation_id, &mut operation, frame) {
                     Ok(_) => self.finish_successful_install(operation_id, operation),
                     Err(outcome) => {
                         let _ = self.finish_terminal_operation(
@@ -1561,50 +1803,55 @@ impl PhysicalExpertMaterializationBackend for DeepSeekV4ExpertMaterializer {
                 request.layer().get(),
                 request.expert().get(),
             );
-            let already_leased = self.selected_leases.contains_key(&existing);
-            let resident = {
+            if self.selected_lease_ownership.contains(existing) {
+                return Err(FailureReason::ProtocolViolation(
+                    "selected expert resolution overlaps existing physical execution ownership"
+                        .into(),
+                ));
+            }
+            let (raw, lease) = {
                 let mut shared = self.shared.lock();
-                let acquired = if already_leased {
-                    shared
-                        .residency
-                        .as_ref()
-                        .and_then(|residency| residency.binding(expert_key).ok().flatten())
-                        .map(|binding| (binding, None))
-                } else {
-                    shared
-                        .residency
-                        .as_mut()
-                        .ok_or(FailureReason::InstallationRejected)?
-                        .acquire_selected(expert_key)
-                        .map_err(protocol_failure)?
-                        .map(|grant| (grant.binding(), grant.lease()))
-                };
-                let Some((binding, lease)) = acquired else {
+                let Some(grant) = shared
+                    .residency
+                    .as_mut()
+                    .ok_or(FailureReason::InstallationRejected)?
+                    .acquire_selected(expert_key)
+                    .map_err(protocol_failure)?
+                else {
                     drop(shared);
                     self.request_keys.remove(&request);
                     return self.resolve_or_reserve(request);
                 };
-                let raw = self.protocol_binding(request, binding)?;
+                let lease = grant.lease().ok_or_else(|| {
+                    FailureReason::ProtocolViolation(
+                        "selected resident expert did not return a lease".into(),
+                    )
+                })?;
+                let raw = match self.protocol_binding(request, grant.binding()) {
+                    Ok(raw) => raw,
+                    Err(reason) => {
+                        if let Some(residency) = shared.residency.as_mut() {
+                            let _ = residency.release(lease);
+                        }
+                        return Err(reason);
+                    }
+                };
                 let physical = shared
                     .tables
                     .get(&expert.layer)
                     .and_then(|table| table.host().binding(expert.expert));
-                let valid = source.validate_source_identity().is_ok()
+                let valid = grant.reason() == ExpertInstallReason::Selected
+                    && source.validate_source_identity().is_ok()
                     && shared.experts.contains_key(&expert)
                     && shared.resident_keys.get(&expert_key) == Some(&existing)
                     && physical.is_some_and(|physical| {
                         physical.slot == i32::try_from(raw.slot.get()).unwrap_or(-1)
                             && physical.generation
-                                == i32::try_from(binding.generation.get()).unwrap_or(-1)
-                    })
-                    && (already_leased || lease.is_some());
+                                == i32::try_from(grant.binding().generation.get()).unwrap_or(-1)
+                    });
                 if !valid {
-                    if let Some(lease) = lease {
-                        let _ = shared
-                            .residency
-                            .as_mut()
-                            .expect("selected lease came from residency control")
-                            .release(lease);
+                    if let Some(residency) = shared.residency.as_mut() {
+                        let _ = residency.release(lease);
                     }
                     return Err(FailureReason::ProtocolViolation(
                         "controller resident binding/source is not physically current".into(),
@@ -1612,25 +1859,22 @@ impl PhysicalExpertMaterializationBackend for DeepSeekV4ExpertMaterializer {
                 }
                 (raw, lease)
             };
-            if let Some(lease) = resident.1 {
-                if self.selected_leases.contains_key(&existing) {
-                    let _ = self
-                        .shared
-                        .lock()
-                        .residency
-                        .as_mut()
-                        .expect("selected lease came from residency control")
-                        .release(lease);
-                    return Err(FailureReason::ProtocolViolation(
-                        "selected expert acquired duplicate physical lease".into(),
-                    ));
+            let validated = match ValidatedResidencyBinding::new(existing, raw) {
+                Ok(validated) => validated,
+                Err(error) => {
+                    if let Some(residency) = self.shared.lock().residency.as_mut() {
+                        let _ = residency.release(lease);
+                    }
+                    return Err(FailureReason::ProtocolViolation(error.to_string()));
                 }
-                self.selected_leases.insert(existing, lease);
+            };
+            if let Err(reason) = self.selected_lease_ownership.begin_active(existing, lease) {
+                if let Some(residency) = self.shared.lock().residency.as_mut() {
+                    let _ = residency.release(lease);
+                }
+                return Err(reason);
             }
-            return Ok(PhysicalExpertReservation::Resident(
-                ValidatedResidencyBinding::new(existing, resident.0)
-                    .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))?,
-            ));
+            return Ok(PhysicalExpertReservation::Resident(validated));
         }
 
         let expert_key = ExpertKey::new(
@@ -1650,13 +1894,29 @@ impl PhysicalExpertMaterializationBackend for DeepSeekV4ExpertMaterializer {
             .map_err(protocol_failure)?;
         match outcome {
             ExpertInstallPrepareOutcome::Resident(grant) => {
-                let raw = self.protocol_binding(request, grant.binding())?;
-                let key = request.load_key(raw.generation).map_err(protocol_failure)?;
                 let lease = grant.lease().ok_or_else(|| {
                     FailureReason::ProtocolViolation(
                         "selected resident expert did not return a lease".into(),
                     )
                 })?;
+                let raw = match self.protocol_binding(request, grant.binding()) {
+                    Ok(raw) => raw,
+                    Err(reason) => {
+                        if let Some(residency) = shared.residency.as_mut() {
+                            let _ = residency.release(lease);
+                        }
+                        return Err(reason);
+                    }
+                };
+                let key = match request.load_key(raw.generation).map_err(protocol_failure) {
+                    Ok(key) => key,
+                    Err(reason) => {
+                        if let Some(residency) = shared.residency.as_mut() {
+                            let _ = residency.release(lease);
+                        }
+                        return Err(reason);
+                    }
+                };
                 let physical = shared
                     .tables
                     .get(&expert.layer)
@@ -1671,42 +1931,70 @@ impl PhysicalExpertMaterializationBackend for DeepSeekV4ExpertMaterializer {
                     })
                     || source.validate_source_identity().is_err()
                 {
-                    let _ = shared
-                        .residency
-                        .as_mut()
-                        .expect("resident grant came from residency control")
-                        .release(lease);
+                    if let Some(residency) = shared.residency.as_mut() {
+                        let _ = residency.release(lease);
+                    }
                     return Err(FailureReason::ProtocolViolation(
                         "controller resident binding/source is not physically current".into(),
                     ));
                 }
+                let validated = match ValidatedResidencyBinding::new(key, raw) {
+                    Ok(validated) => validated,
+                    Err(error) => {
+                        if let Some(residency) = shared.residency.as_mut() {
+                            let _ = residency.release(lease);
+                        }
+                        return Err(FailureReason::ProtocolViolation(error.to_string()));
+                    }
+                };
                 drop(shared);
-                if self.selected_leases.contains_key(&key) {
-                    let _ = self
-                        .shared
-                        .lock()
-                        .residency
-                        .as_mut()
-                        .expect("selected lease came from residency control")
-                        .release(lease);
-                    return Err(FailureReason::ProtocolViolation(
-                        "selected expert acquired duplicate physical lease".into(),
-                    ));
+                if let Err(reason) = self.selected_lease_ownership.begin_active(key, lease) {
+                    if let Some(residency) = self.shared.lock().residency.as_mut() {
+                        let _ = residency.release(lease);
+                    }
+                    return Err(reason);
                 }
-                self.selected_leases.insert(key, lease);
                 self.request_keys.insert(request, key);
-                Ok(PhysicalExpertReservation::Resident(
-                    ValidatedResidencyBinding::new(key, raw)
-                        .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))?,
-                ))
+                Ok(PhysicalExpertReservation::Resident(validated))
             }
             ExpertInstallPrepareOutcome::Prepared(prepared) => {
-                let raw = self.protocol_binding(request, prepared.binding())?;
-                let key = request.load_key(raw.generation).map_err(protocol_failure)?;
+                let raw = match self.protocol_binding(request, prepared.binding()) {
+                    Ok(raw) => raw,
+                    Err(reason) => {
+                        if let Some(residency) = shared.residency.as_mut() {
+                            let _ = residency.cancel_install(prepared);
+                        }
+                        return Err(reason);
+                    }
+                };
+                let key = match request.load_key(raw.generation).map_err(protocol_failure) {
+                    Ok(key) => key,
+                    Err(reason) => {
+                        if let Some(residency) = shared.residency.as_mut() {
+                            let _ = residency.cancel_install(prepared);
+                        }
+                        return Err(reason);
+                    }
+                };
                 let evicted = prepared
                     .evicted_key()
                     .and_then(|evicted| shared.resident_keys.get(&evicted).copied());
+                let descriptor = match PhysicalExpertReservationDescriptor::new(key, raw, evicted)
+                    .map_err(protocol_failure)
+                {
+                    Ok(descriptor) => descriptor,
+                    Err(reason) => {
+                        if let Some(residency) = shared.residency.as_mut() {
+                            let _ = residency.cancel_install(prepared);
+                        }
+                        return Err(reason);
+                    }
+                };
                 drop(shared);
+                if let Err(reason) = self.selected_lease_ownership.begin_pending(key) {
+                    let _ = self.cancel_prepared(prepared);
+                    return Err(reason);
+                }
                 self.request_keys.insert(request, key);
                 self.reservations.insert(
                     key,
@@ -1719,10 +2007,7 @@ impl PhysicalExpertMaterializationBackend for DeepSeekV4ExpertMaterializer {
                         evicted,
                     },
                 );
-                Ok(PhysicalExpertReservation::Reserved(
-                    PhysicalExpertReservationDescriptor::new(key, raw, evicted)
-                        .map_err(protocol_failure)?,
-                ))
+                Ok(PhysicalExpertReservation::Reserved(descriptor))
             }
             ExpertInstallPrepareOutcome::CapacityAllLeased => {
                 Err(FailureReason::InstallationRejected)
@@ -1743,7 +2028,9 @@ impl PhysicalExpertMaterializationBackend for DeepSeekV4ExpertMaterializer {
     }
 
     fn release_selected(&mut self, key: LoadKey) -> std::result::Result<(), FailureReason> {
-        let Some(lease) = self.selected_leases.remove(&key) else {
+        let SelectedLeaseRelease::Active { lease, operation } =
+            self.selected_lease_ownership.request_release(key)
+        else {
             return Ok(());
         };
         let release = self
@@ -1751,11 +2038,11 @@ impl PhysicalExpertMaterializationBackend for DeepSeekV4ExpertMaterializer {
             .lock()
             .residency
             .as_mut()
-            .ok_or(FailureReason::InstallationRejected)?
-            .release(lease)
-            .map_err(protocol_failure);
+            .ok_or(FailureReason::InstallationRejected)
+            .and_then(|residency| residency.release(lease).map_err(protocol_failure));
         if let Err(error) = release {
-            self.selected_leases.insert(key, lease);
+            self.selected_lease_ownership
+                .restore_active(key, lease, operation);
             return Err(error);
         }
         Ok(())
@@ -1814,9 +2101,21 @@ impl PhysicalExpertMaterializationBackend for DeepSeekV4ExpertMaterializer {
                 return Err(protocol_failure(error));
             }
         };
-        let reservation = self.reservations.remove(&key).ok_or_else(|| {
-            FailureReason::ProtocolViolation("prepared slot ownership disappeared".into())
-        })?;
+        if let Err(reason) = self.selected_lease_ownership.bind_operation(key, operation) {
+            let _ = self.reader.detach_load_source_pinned(read.ticket);
+            return Err(reason);
+        }
+        let reservation = match self.reservations.remove(&key) {
+            Some(reservation) => reservation,
+            None => {
+                self.selected_lease_ownership
+                    .cancel_operation(key, operation);
+                let _ = self.reader.detach_load_source_pinned(read.ticket);
+                return Err(FailureReason::ProtocolViolation(
+                    "prepared slot ownership disappeared".into(),
+                ));
+            }
+        };
         self.operations.insert(
             operation,
             MaterializationOperation {
@@ -1976,6 +2275,12 @@ impl PhysicalExpertMaterializationBackend for DeepSeekV4ExpertMaterializer {
         reason: CancellationReason,
     ) -> std::result::Result<(), FailureReason> {
         let Some(mut active) = self.operations.remove(&operation) else {
+            if self
+                .selected_lease_ownership
+                .active_owned_by(key, operation)
+            {
+                return self.release_selected(key);
+            }
             return Ok(());
         };
         let Some(state) = active.state.take() else {
@@ -2049,12 +2354,19 @@ impl PhysicalExpertMaterializationBackend for DeepSeekV4ExpertMaterializer {
                 self.operations.insert(operation, active);
                 Ok(())
             }
-            MaterializationOperationState::Installing(frame) => {
-                active.pending_terminal = Some(CompletionOutcome::Cancelled(reason));
-                active.state = Some(MaterializationOperationState::Installing(frame));
-                self.operations.insert(operation, active);
-                Ok(())
-            }
+            MaterializationOperationState::Installing(frame) => self
+                .finish_terminal_operation(
+                    operation,
+                    active,
+                    Some(MaterializationOperationState::Installing(frame)),
+                    Some((
+                        LoadStage::Installing,
+                        CompletionOutcome::Cancelled(reason),
+                        0,
+                    )),
+                    true,
+                )
+                .map_err(protocol_failure),
         }
     }
 
@@ -2065,16 +2377,69 @@ impl PhysicalExpertMaterializationBackend for DeepSeekV4ExpertMaterializer {
 
 impl Drop for DeepSeekV4ExpertMaterializer {
     fn drop(&mut self) {
-        if !self.operations.is_empty() || !self.reservations.is_empty() {
+        let operation_count = self.operations.len();
+        let reservation_count = self.reservations.len();
+        if operation_count != 0 || reservation_count != 0 {
             tracing::error!(
-                operations = self.operations.len(),
-                reservations = self.reservations.len(),
+                operations = operation_count,
+                reservations = reservation_count,
                 "DeepSeek-V4 physical expert backend dropped before runtime registry drain"
             );
         }
-        // Runtime shutdown must cancel and drain every submitted operation before
-        // relinquishing this backend. Drop deliberately performs no CUDA event or
-        // stream synchronization; lifecycle violations stay explicit.
+
+        let operations = std::mem::take(&mut self.operations);
+        for (operation_id, mut operation) in operations {
+            let state = operation.state.take();
+            if let Err(error) =
+                self.finish_terminal_operation(operation_id, operation, state, None, false)
+            {
+                tracing::error!(
+                    operation = operation_id.get(),
+                    error = %error,
+                    "failed to drain a DeepSeek-V4 physical operation during drop"
+                );
+            }
+        }
+        self.operation_order.clear();
+
+        let reservations = std::mem::take(&mut self.reservations);
+        for (key, reservation) in reservations {
+            self.remove_request_key(reservation.request, key);
+            self.selected_lease_ownership.cancel_unbound(key);
+            if let Err(error) = self.cancel_prepared(reservation.prepared) {
+                tracing::error!(
+                    error = %error,
+                    "failed to cancel a DeepSeek-V4 slot reservation during drop"
+                );
+            }
+        }
+
+        let selected_ownership = std::mem::take(&mut self.selected_lease_ownership.ownership);
+        if !selected_ownership.is_empty() {
+            let mut shared = self.shared.lock();
+            for (_, ownership) in selected_ownership {
+                let SelectedLeaseState::Active(lease) = ownership.state else {
+                    tracing::error!(
+                        operation = ?ownership.operation.map(OperationId::get),
+                        "DeepSeek-V4 pending selected ownership survived backend drain"
+                    );
+                    continue;
+                };
+                let release = shared
+                    .residency
+                    .as_mut()
+                    .ok_or_else(|| {
+                        Error::Execution("physical residency control is not installed".into())
+                    })
+                    .and_then(|residency| residency.release(lease));
+                if let Err(error) = release {
+                    tracing::error!(
+                        error = %error,
+                        "failed to release a DeepSeek-V4 selected lease during drop"
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -2353,6 +2718,90 @@ mod tests {
         assert!(error.contains("selected=2 leases=1"));
     }
 
+    #[test]
+    fn resident_expert_key_index_does_not_require_ord() {
+        let expert = ExpertKey::new(17, 3, 1);
+        let key = lease_key(1, 7);
+        let mut resident_keys = ResidentExpertKeyIndex::new();
+        resident_keys.insert(expert, key);
+        assert_eq!(resident_keys.get(&expert), Some(&key));
+    }
+
+    fn leased_resident(
+        expert: ExpertKey,
+    ) -> (ferrule_common::ExpertResidencyCoordinator, ExpertLease) {
+        let mut residency = ferrule_common::ExpertResidencyCoordinator::new(1).unwrap();
+        let prepared = residency
+            .try_prepare_install(expert, ExpertInstallReason::Selected)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            residency.activate_install(prepared).unwrap(),
+            ExpertInstallActivationOutcome::Activated
+        );
+        let (_, lease) = residency.publish_install_leased(prepared).unwrap();
+        (residency, lease)
+    }
+
+    #[test]
+    fn release_racing_publication_is_deferred_and_released_exactly_once() {
+        let key = lease_key(1, 7);
+        let expert = ExpertKey::new(17, 3, 1);
+        let operation = OperationId::new(41);
+        let (mut residency, lease) = leased_resident(expert);
+        let mut selected = SelectedLeaseTracker::default();
+        selected.begin_pending(key).unwrap();
+        selected.bind_operation(key, operation).unwrap();
+
+        assert!(matches!(
+            selected.request_release(key),
+            SelectedLeaseRelease::Deferred
+        ));
+        assert_eq!(
+            selected.publish(key, operation, lease).unwrap(),
+            SelectedLeasePublication::ReleaseImmediately
+        );
+        let SelectedLeaseRelease::Active { lease, .. } = selected.request_release(key) else {
+            panic!("published release request must expose the exact lease");
+        };
+        residency.release(lease).unwrap();
+        assert_eq!(residency.stats().active_leases, 0);
+        assert!(matches!(
+            selected.request_release(key),
+            SelectedLeaseRelease::None
+        ));
+
+        let replacement = ExpertKey::new(17, 3, 2);
+        assert!(
+            residency
+                .try_prepare_install(replacement, ExpertInstallReason::Selected)
+                .unwrap()
+                .is_some(),
+            "the second turn must be able to evict the released resident slot"
+        );
+    }
+
+    #[test]
+    fn stale_operation_cannot_publish_or_cancel_another_selected_owner() {
+        let key = lease_key(1, 7);
+        let expert = ExpertKey::new(17, 3, 1);
+        let owner = OperationId::new(51);
+        let stale = OperationId::new(52);
+        let (mut residency, lease) = leased_resident(expert);
+        let mut selected = SelectedLeaseTracker::default();
+        selected.begin_pending(key).unwrap();
+        selected.bind_operation(key, owner).unwrap();
+
+        assert!(selected.publish(key, stale, lease).is_err());
+        assert_eq!(selected.pending_count(), 1);
+        selected.cancel_operation(key, stale);
+        assert_eq!(selected.pending_count(), 1);
+        selected.cancel_operation(key, owner);
+        assert_eq!(selected.pending_count(), 0);
+        residency.release(lease).unwrap();
+        assert_eq!(residency.stats().active_leases, 0);
+    }
+
     type MockState = MaterializationOperationState<u64, u64, u64, u64>;
 
     struct MockOperation {
@@ -2450,9 +2899,13 @@ mod tests {
             let Some(mut active) = self.operations.remove(&operation) else {
                 return false;
             };
-            let Some(MockState::ReadSubmitted(ticket)) = active.state.take() else {
-                self.operations.insert(operation, active);
-                return false;
+            let ticket = match active.state.take() {
+                Some(MockState::ReadSubmitted(ticket)) => ticket,
+                state => {
+                    active.state = state;
+                    self.operations.insert(operation, active);
+                    return false;
+                }
             };
             self.resources.read_slabs -= 1;
             if let Some(outcome) = active.pending_terminal.take() {
@@ -2499,9 +2952,13 @@ mod tests {
             let Some(mut active) = self.operations.remove(&operation) else {
                 return false;
             };
-            let Some(MockState::HostReady(bundle)) = active.state.take() else {
-                self.operations.insert(operation, active);
-                return false;
+            let bundle = match active.state.take() {
+                Some(MockState::HostReady(bundle)) => bundle,
+                state => {
+                    active.state = state;
+                    self.operations.insert(operation, active);
+                    return false;
+                }
             };
             if self.source_identities.get(&active.key) != Some(&active.source_identity) {
                 self.finish(
@@ -2526,9 +2983,13 @@ mod tests {
             let Some(mut active) = self.operations.remove(&operation) else {
                 return false;
             };
-            let Some(MockState::UploadSubmitted(ticket)) = active.state.take() else {
-                self.operations.insert(operation, active);
-                return false;
+            let ticket = match active.state.take() {
+                Some(MockState::UploadSubmitted(ticket)) => ticket,
+                state => {
+                    active.state = state;
+                    self.operations.insert(operation, active);
+                    return false;
+                }
             };
             self.resources.upload_events -= 1;
             self.resources.host_bundles -= 1;
@@ -2569,9 +3030,13 @@ mod tests {
             let Some(mut active) = self.operations.remove(&operation) else {
                 return false;
             };
-            let Some(MockState::UploadReady(frame)) = active.state.take() else {
-                self.operations.insert(operation, active);
-                return false;
+            let frame = match active.state.take() {
+                Some(MockState::UploadReady(frame)) => frame,
+                state => {
+                    active.state = state;
+                    self.operations.insert(operation, active);
+                    return false;
+                }
             };
             let outcome =
                 if self.source_identities.get(&active.key) != Some(&active.source_identity) {
@@ -2596,12 +3061,25 @@ mod tests {
         }
 
         fn complete_install(&mut self, operation: u64, post_source_identity: Option<u64>) -> bool {
+            self.complete_install_after(operation, post_source_identity, None)
+        }
+
+        fn complete_install_after(
+            &mut self,
+            operation: u64,
+            post_source_identity: Option<u64>,
+            post_slot_generation: Option<u64>,
+        ) -> bool {
             let Some(mut active) = self.operations.remove(&operation) else {
                 return false;
             };
-            let Some(MockState::Installing(frame)) = active.state.take() else {
-                self.operations.insert(operation, active);
-                return false;
+            let frame = match active.state.take() {
+                Some(MockState::Installing(frame)) => frame,
+                state => {
+                    active.state = state;
+                    self.operations.insert(operation, active);
+                    return false;
+                }
             };
             if let Some(outcome) = active.pending_terminal.take() {
                 self.finish(
@@ -2641,6 +3119,9 @@ mod tests {
             if let Some(identity) = post_source_identity {
                 self.source_identities.insert(active.key, identity);
             }
+            if let Some(generation) = post_slot_generation {
+                self.slot_generations.insert(active.key, generation);
+            }
             let source_after = self.source_identities.get(&active.key).copied();
             let generation_after = self.slot_generations.get(&active.key).copied();
             if source_after != Some(active.source_identity)
@@ -2662,12 +3143,13 @@ mod tests {
             self.resources.frames -= 1;
             self.resources.prepared_slots -= 1;
             self.resources.resident_frames += 1;
-            self.terminal_operations.insert(operation);
-            self.completions.push((
-                operation,
-                LoadStage::Installing,
-                CompletionOutcome::Succeeded,
-            ));
+            if self.terminal_operations.insert(operation) {
+                self.completions.push((
+                    operation,
+                    LoadStage::Installing,
+                    CompletionOutcome::Succeeded,
+                ));
+            }
             true
         }
 
@@ -2675,9 +3157,13 @@ mod tests {
             let Some(mut active) = self.operations.remove(&operation) else {
                 return false;
             };
-            let Some(MockState::Installing(frame)) = active.state.take() else {
-                self.operations.insert(operation, active);
-                return false;
+            let frame = match active.state.take() {
+                Some(MockState::Installing(frame)) => frame,
+                state => {
+                    active.state = state;
+                    self.operations.insert(operation, active);
+                    return false;
+                }
             };
             self.finish(
                 operation,
@@ -2703,13 +3189,17 @@ mod tests {
                 MockState::Reserved(_) | MockState::HostReady(_) | MockState::UploadReady(_) => {
                     self.finish(operation, active, Some(state), None);
                 }
-                MockState::ReadSubmitted(_)
-                | MockState::UploadSubmitted(_)
-                | MockState::Installing(_) => {
+                MockState::ReadSubmitted(_) | MockState::UploadSubmitted(_) => {
                     active.pending_terminal = Some(CompletionOutcome::Cancelled(reason));
                     active.state = Some(state);
                     self.operations.insert(operation, active);
                 }
+                MockState::Installing(_) => self.finish(
+                    operation,
+                    active,
+                    Some(state),
+                    Some((LoadStage::Installing, CompletionOutcome::Cancelled(reason))),
+                ),
             }
             true
         }
@@ -2801,6 +3291,7 @@ mod tests {
         advance_to_frame(&mut mock, 1);
         assert!(mock.submit_install(1));
         assert!(mock.complete_install(1, None));
+        assert!(!mock.complete_install(1, None));
         let stages = mock
             .completions
             .iter()
@@ -2857,35 +3348,32 @@ mod tests {
         advance_to_frame(&mut mock, 6);
         assert!(mock.submit_install(6));
         assert!(mock.physical_cancel(6, CancellationReason::ExternalRequest));
-        assert_eq!(mock.resources.frames, 1);
-        assert!(mock.complete_install(6, None));
         assert!(mock.resources.transient_is_empty());
+        assert!(!mock.complete_install(6, None));
+        assert_eq!(mock.terminal_completion_count(6), 1);
         assert_eq!(mock.terminal_operations.len(), 6);
     }
 
     #[test]
-    fn host_mock_runtime_filters_one_waiter_cancel_and_only_sends_physical_cancel() {
+    fn host_mock_one_waiter_detach_keeps_owner_until_last_waiter_cancel() {
         let mut mock = HostMockMaterializer::default();
         assert!(mock.reserve(7, 70));
         assert!(mock.submit_read(7));
 
-        // A sibling waiter remains, so runtime does not call the physical backend.
+        let mut waiters = 2;
+        waiters -= 1;
+        assert_eq!(waiters, 1);
+        assert!(mock.operations.contains_key(&7));
+        assert_eq!(mock.resources.read_slabs, 1);
+
+        waiters -= 1;
+        assert_eq!(waiters, 0);
+        assert!(mock.physical_cancel(7, CancellationReason::LastWaiterDetached));
         assert_eq!(mock.resources.read_slabs, 1);
         assert!(mock.complete_read(7, false));
-        assert!(matches!(
-            mock.completions.last(),
-            Some((7, LoadStage::ReadSubmitted, CompletionOutcome::Succeeded))
-        ));
-        assert!(mock.physical_cancel(7, CancellationReason::Superseded));
-
-        assert!(mock.reserve(8, 80));
-        assert!(mock.submit_read(8));
-        assert!(mock.physical_cancel(8, CancellationReason::LastWaiterDetached));
-        assert_eq!(mock.resources.read_slabs, 1);
-        assert!(mock.complete_read(8, false));
-        assert!(!mock.complete_read(8, false));
+        assert!(!mock.complete_read(7, false));
         assert!(mock.resources.transient_is_empty());
-        assert_eq!(mock.terminal_completion_count(8), 1);
+        assert_eq!(mock.terminal_completion_count(7), 1);
     }
 
     #[test]
@@ -2945,6 +3433,24 @@ mod tests {
     }
 
     #[test]
+    fn host_mock_checks_slot_generation_before_and_after_install() {
+        let mut mock = HostMockMaterializer::default();
+        assert!(mock.reserve(12, 120));
+        advance_to_frame(&mut mock, 12);
+        assert!(mock.submit_install(12));
+        assert!(mock.complete_install_after(12, None, Some(2)));
+        assert!(matches!(
+            mock.completions.last(),
+            Some((
+                12,
+                LoadStage::Installing,
+                CompletionOutcome::Stale(StaleReason::DestinationReused)
+            ))
+        ));
+        assert!(mock.resources.transient_is_empty());
+    }
+
+    #[test]
     fn host_mock_duplicate_completion_is_ignored_after_exact_terminal() {
         let mut mock = HostMockMaterializer::default();
         assert!(mock.reserve(12, 120));
@@ -2977,6 +3483,11 @@ mod tests {
         assert!(mock.reserve(26, 206));
         advance_to_frame(&mut mock, 26);
         assert!(mock.submit_install(26));
+
+        mock.shutdown();
+        assert!(mock.operations.is_empty());
+        assert!(mock.resources.transient_is_empty());
+        assert_eq!(mock.terminal_operations.len(), 6);
 
         mock.shutdown();
         assert!(mock.operations.is_empty());
@@ -3040,15 +3551,14 @@ mod tests {
     }
 
     #[test]
-    fn host_mock_install_cancel_waits_for_install_progress() {
+    fn host_mock_install_cancel_drains_frame_and_slot_immediately() {
         let mut mock = HostMockMaterializer::default();
         assert!(mock.reserve(36, 306));
         advance_to_frame(&mut mock, 36);
         assert!(mock.submit_install(36));
         assert!(mock.physical_cancel(36, CancellationReason::OwnerShutdown));
-        assert_eq!(mock.resources.frames, 1);
-        assert!(mock.complete_install(36, None));
         assert!(mock.resources.transient_is_empty());
+        assert!(!mock.complete_install(36, None));
         assert_eq!(mock.terminal_completion_count(36), 1);
     }
 

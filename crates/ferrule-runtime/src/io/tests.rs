@@ -214,6 +214,27 @@ fn full_success_reaches_resident_and_targeted_ready() {
 }
 
 #[test]
+fn drive_one_reports_the_key_affected_by_each_transition() {
+    let mut registry = auto_registry();
+    let load_key = key(1, 1);
+    attach_one(&mut registry, waiter(1), load_key);
+
+    let mut progressed = 0;
+    loop {
+        match registry.drive_one(100).unwrap() {
+            RegistryDriveStep::Idle => break,
+            RegistryDriveStep::Progressed { key } => {
+                assert_eq!(key, Some(load_key));
+                progressed += 1;
+            }
+        }
+    }
+
+    assert!(progressed >= 6);
+    assert!(registry.residency_binding(load_key).is_some());
+}
+
+#[test]
 fn initial_stage_is_reserved_without_physical_claims_or_reservation() {
     let mut registry = manual_registry();
     let operation = attach_one(&mut registry, waiter(1), key(1, 1));

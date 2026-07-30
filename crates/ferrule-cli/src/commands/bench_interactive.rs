@@ -37,9 +37,9 @@ use ferrule_model::{
 use ferrule_runtime::io::{OutputTokenId, RuntimeMaterializationAdapterStats};
 #[cfg(feature = "cuda")]
 use ferrule_runtime::{
-    ExpertIoBudget, FixedSequenceSlotPool, GenerateRequest, LocalResidentInferenceEngine,
-    RequestId, ResidentActionKind, ResidentDriverStep, ResidentSchedulerConfig,
-    ResidentTopKDriverConfig, ResidentTopKDriverStats, SessionId, SpeculativeMetrics,
+    FixedSequenceSlotPool, GenerateRequest, LocalResidentInferenceEngine, RequestId,
+    ResidentActionKind, ResidentDriverStep, ResidentSchedulerConfig, ResidentTopKDriverConfig,
+    ResidentTopKDriverStats, SessionId, SpeculativeMetrics,
 };
 #[cfg(feature = "cuda")]
 use ferrule_runtime::{ResourceClass, ResourceKind};
@@ -48,7 +48,7 @@ use ferrule_runtime::{ResourceClass, ResourceKind};
 use super::resident::{block_on_local_inference, build_resident_topk_driver};
 
 #[cfg(feature = "cuda")]
-pub(crate) const CLI_RUNTIME_SCHEMA_VERSION: u32 = 2;
+pub(crate) const CLI_RUNTIME_SCHEMA_VERSION: u32 = 3;
 
 #[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -526,8 +526,7 @@ async fn run_with_resident_driver_async(
         let schema = runner.kv_layout_schema().clone();
         build_resident_topk_driver(runner, Box::new(schema), scheduler_config, driver_config)
     };
-    let mut driver =
-        LocalResidentInferenceEngine::new(build_driver(runner)?, ExpertIoBudget::unbounded());
+    let mut driver = LocalResidentInferenceEngine::new(build_driver(runner)?);
 
     if warmup_tokens > 0 {
         let warmup_prompt = chat_template.format_turn("warmup", true);
@@ -975,30 +974,10 @@ pub(crate) fn runtime_materialization_stats_delta(
                 .adapter
                 .resolves
                 .saturating_sub(before.adapter.resolves),
-            physical_submissions: after
-                .adapter
-                .physical_submissions
-                .saturating_sub(before.adapter.physical_submissions),
-            single_flight_joins: after
-                .adapter
-                .single_flight_joins
-                .saturating_sub(before.adapter.single_flight_joins),
-            progress_polls: after
-                .adapter
-                .progress_polls
-                .saturating_sub(before.adapter.progress_polls),
-            publications: after
-                .adapter
-                .publications
-                .saturating_sub(before.adapter.publications),
             logical_detaches: after
                 .adapter
                 .logical_detaches
                 .saturating_sub(before.adapter.logical_detaches),
-            cancellation_hooks: after
-                .adapter
-                .cancellation_hooks
-                .saturating_sub(before.adapter.cancellation_hooks),
         },
         stages: RuntimeMaterializationStageStats {
             read_stages: after
@@ -1939,12 +1918,7 @@ pub(crate) fn runtime_materialization_stats_json(
         },
         "adapter": {
             "resolves": stats.adapter.resolves,
-            "physical_submissions": stats.adapter.physical_submissions,
-            "single_flight_joins": stats.adapter.single_flight_joins,
-            "progress_polls": stats.adapter.progress_polls,
-            "publications": stats.adapter.publications,
             "logical_detaches": stats.adapter.logical_detaches,
-            "cancellation_hooks": stats.adapter.cancellation_hooks,
         },
         "stages": {
             "read": { "count": stats.stages.read_stages, "bytes": stats.stages.read_bytes },
@@ -2003,15 +1977,12 @@ pub(crate) fn runtime_materialization_stats_json(
 #[cfg(feature = "cuda")]
 pub(crate) fn print_runtime_materialization_summary(stats: &RuntimeMaterializationStats) {
     println!(
-        "runtime_materialization: selected={} resident={} waiting={} physical_submissions={} joins={} publications={} detaches={} cancel_hooks={}",
+        "runtime_materialization: selected={} resident={} waiting={} resolves={} detaches={}",
         stats.dependencies.selected,
         stats.dependencies.resident,
         stats.dependencies.waiting,
-        stats.adapter.physical_submissions,
-        stats.adapter.single_flight_joins,
-        stats.adapter.publications,
+        stats.adapter.resolves,
         stats.adapter.logical_detaches,
-        stats.adapter.cancellation_hooks,
     );
     println!(
         "materialization_stages:  read={}/{}B upload={}/{}B install={}/{}B publish={}/{}B failures={} stale={} cancelled={}",
@@ -2220,7 +2191,7 @@ mod tests {
         before.dependencies.unique_selected = 8;
         before.dependencies.resident = 6;
         before.dependencies.waiting = 4;
-        before.adapter.physical_submissions = 9;
+        before.adapter.resolves = 9;
         before.stages.read_stages = 7;
         before.stages.read_bytes = 700;
         before.registry.active_operations = 5;
@@ -2232,7 +2203,7 @@ mod tests {
         after.dependencies.unique_selected = 11;
         after.dependencies.resident = 2;
         after.dependencies.waiting = 3;
-        after.adapter.physical_submissions = 14;
+        after.adapter.resolves = 14;
         after.stages.read_stages = 5;
         after.stages.read_bytes = 900;
         after.registry.active_operations = 1;
@@ -2248,7 +2219,7 @@ mod tests {
         assert_eq!(delta.dependencies.unique_selected, 3);
         assert_eq!(delta.dependencies.resident, 2);
         assert_eq!(delta.dependencies.waiting, 3);
-        assert_eq!(delta.adapter.physical_submissions, 5);
+        assert_eq!(delta.adapter.resolves, 5);
         assert_eq!(delta.stages.read_stages, 0);
         assert_eq!(delta.stages.read_bytes, 200);
         assert_eq!(delta.registry.active_operations, 1);
@@ -2332,7 +2303,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_schema_contains_runtime_authorities_and_no_legacy_counter_keys() {
+    fn v3_schema_keeps_registry_as_the_physical_authority() {
         let mut report = InteractiveBenchReport::default();
         report.runtime_driver_stats.hard_resource_high_water = ResourceKind::ALL
             .into_iter()
@@ -2340,7 +2311,13 @@ mod tests {
             .collect();
         let json = interactive_bench_report_json(&report);
         assert_eq!(json["schema_version"], CLI_RUNTIME_SCHEMA_VERSION);
-        assert!(json["runtime_materialization"]["adapter"]["physical_submissions"].is_number());
+        assert!(json["runtime_materialization"]["adapter"]["resolves"].is_number());
+        assert!(
+            json["runtime_materialization"]["adapter"]
+                .get("physical_submissions")
+                .is_none()
+        );
+        assert!(json["runtime_materialization"]["load_registry"]["operations_created"].is_number());
         assert!(json["runtime_materialization"]["critical_path"]["per_external_token"].is_array());
         assert_eq!(
             json["runtime_driver_stats"]["hard_resource_high_water"]
@@ -2367,7 +2344,7 @@ mod tests {
         ] {
             assert!(
                 !encoded.contains(legacy),
-                "legacy key fragment remained in v2 schema: {legacy}"
+                "legacy key fragment remained in v3 schema: {legacy}"
             );
         }
     }

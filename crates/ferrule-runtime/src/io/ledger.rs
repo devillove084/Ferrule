@@ -1,6 +1,8 @@
 //! Timestamped critical-path and uncovered-wait accounting.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{HashMap, HashSet};
+
+use ahash::RandomState;
 
 use ferrule_common::io_protocol::OperationId;
 
@@ -105,8 +107,8 @@ pub struct OutputTokenSnapshot {
     /// that captured this immutable per-token snapshot.
     pub externally_committed_tokens: usize,
     pub captured_at_ns: u64,
-    pub operation_phases: BTreeMap<OperationId, PhaseDurations>,
-    pub cohort_phases: BTreeMap<CohortId, PhaseDurations>,
+    pub operation_phases: HashMap<OperationId, PhaseDurations, RandomState>,
+    pub cohort_phases: HashMap<CohortId, PhaseDurations, RandomState>,
     pub read_ns: u64,
     pub upload_ns: u64,
     pub publish_ns: u64,
@@ -128,11 +130,11 @@ struct SharedWait {
 /// unioned before accounting, so N waiters never multiply one physical stall.
 #[derive(Debug, Default)]
 pub struct CriticalPathLedger {
-    operation_phases: BTreeMap<(OperationId, CriticalPhase), Vec<TimeSpan>>,
-    cohort_phases: BTreeMap<(CohortId, CriticalPhase), Vec<TimeSpan>>,
+    operation_phases: HashMap<(OperationId, CriticalPhase), Vec<TimeSpan>, RandomState>,
+    cohort_phases: HashMap<(CohortId, CriticalPhase), Vec<TimeSpan>, RandomState>,
     shared_waits: Vec<SharedWait>,
     runnable_work: Vec<TimeSpan>,
-    snapshots: BTreeMap<OutputTokenId, OutputTokenSnapshot>,
+    snapshots: HashMap<OutputTokenId, OutputTokenSnapshot, RandomState>,
 }
 
 impl CriticalPathLedger {
@@ -211,16 +213,16 @@ impl CriticalPathLedger {
         if self.snapshots.contains_key(&token) {
             return Err(LedgerError::DuplicateOutputToken(token));
         }
-        let operations: BTreeSet<_> = operations.into_iter().collect();
-        let cohorts: BTreeSet<_> = cohorts.into_iter().collect();
-        let mut operation_phases = BTreeMap::new();
+        let operations: HashSet<_, RandomState> = operations.into_iter().collect();
+        let cohorts: HashSet<_, RandomState> = cohorts.into_iter().collect();
+        let mut operation_phases = HashMap::default();
         for operation in &operations {
             operation_phases.insert(
                 *operation,
                 self.operation_durations(*operation, captured_at_ns),
             );
         }
-        let mut cohort_phases = BTreeMap::new();
+        let mut cohort_phases = HashMap::default();
         for cohort in &cohorts {
             cohort_phases.insert(*cohort, self.cohort_durations(*cohort, captured_at_ns));
         }
@@ -342,7 +344,7 @@ impl CriticalPathLedger {
 
     fn selected_operation_spans(
         &self,
-        operations: &BTreeSet<OperationId>,
+        operations: &HashSet<OperationId, RandomState>,
         phase: CriticalPhase,
         captured_at_ns: u64,
     ) -> Vec<TimeSpan> {
@@ -360,7 +362,7 @@ impl CriticalPathLedger {
 
     fn selected_cohort_spans(
         &self,
-        cohorts: &BTreeSet<CohortId>,
+        cohorts: &HashSet<CohortId, RandomState>,
         phase: CriticalPhase,
         captured_at_ns: u64,
     ) -> Vec<TimeSpan> {

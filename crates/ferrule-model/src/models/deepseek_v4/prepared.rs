@@ -266,8 +266,6 @@ impl DeepSeekV4ExecutionPolicy {
 #[derive(Debug, Clone)]
 pub struct DeepSeekV4PreparedLayerExperts {
     source_catalog: Arc<ExpertSourceCatalog>,
-    source_bytes: Arc<[u64]>,
-    source_order: Arc<[usize]>,
     streaming_policy: ExpertStreamingPolicy,
     resident_capacity: usize,
     prefetch_capacity: usize,
@@ -278,35 +276,16 @@ impl DeepSeekV4PreparedLayerExperts {
         source_catalog: Arc<ExpertSourceCatalog>,
         streaming_policy: ExpertStreamingPolicy,
     ) -> Self {
-        let mut source_bytes = vec![0; source_catalog.count()];
-        for (expert, source) in source_catalog.iter() {
-            if let Some(bytes) = source_bytes.get_mut(expert.expert) {
-                *bytes = source.bytes();
-            }
-        }
-        let mut source_order = (0..source_bytes.len()).collect::<Vec<_>>();
-        source_order.sort_unstable_by_key(|&expert| std::cmp::Reverse(source_bytes[expert]));
-        let source_bytes = source_bytes.into();
         Self {
             resident_capacity: streaming_policy.gpu_slots_per_layer,
             prefetch_capacity: streaming_policy.prefetch_per_layer,
             source_catalog,
-            source_bytes,
-            source_order: source_order.into(),
             streaming_policy,
         }
     }
 
     pub fn source_catalog(&self) -> &Arc<ExpertSourceCatalog> {
         &self.source_catalog
-    }
-
-    pub(crate) fn source_bytes(&self) -> &Arc<[u64]> {
-        &self.source_bytes
-    }
-
-    pub(crate) fn source_order(&self) -> &Arc<[usize]> {
-        &self.source_order
     }
 
     pub const fn streaming_policy(&self) -> &ExpertStreamingPolicy {

@@ -24,16 +24,16 @@ use crate::cache::{
 #[cfg(test)]
 use crate::io::RuntimeMaterializationAdapter;
 use crate::io::{
-    FairQueue, FairQueueConfig, LoadRegistry, MaterializationBackend, OutputTokenId,
-    RunnerMaterializationBackend, RuntimeMaterializationControl, UnavailableBackend,
+    FailedContinuation, FairQueue, FairQueueConfig, LoadRegistry, MaterializationBackend,
+    OutputTokenId, RegistryDriveStep, RunnerMaterializationBackend, RuntimeMaterializationControl,
+    UnavailableBackend,
 };
 use crate::scheduling::resident::{SuspendedSequenceSchedule, greedy_candidate};
 use crate::scheduling::{
-    BrokerExpertIoResourceControl, CancelRequestResult, DecodeAction, ExpertIoBudget,
-    GenerateRequest, HardResourceBroker, HardResourceClaim, HardResourceGrant, HardResourceLimit,
-    ModelExpertIoAdvisor, RequestId, ResidentScheduler, ResidentSchedulerConfig, ResourceKind,
-    ScheduledBatch, SchedulerAction, SequenceFinishReason, SequenceSlotPool, SequenceState,
-    SessionId,
+    BrokerExpertIoResourceControl, CancelRequestResult, DecodeAction, GenerateRequest,
+    HardResourceBroker, HardResourceClaim, HardResourceGrant, HardResourceLimit, RequestId,
+    ResidentScheduler, ResidentSchedulerConfig, ResourceKind, ScheduledBatch, SchedulerAction,
+    SequenceFinishReason, SequenceSlotPool, SequenceState, SessionId,
 };
 use crate::speculation::{
     PendingSpeculativeVerificationCohort, SpeculativeCohortProgress, SpeculativeCycleResult,
@@ -224,6 +224,13 @@ enum PendingSequenceCleanup<S> {
 struct RegisteredModelContinuation {
     transaction: ExecutionTransactionId,
     dependencies: ferrule_common::DependencySet,
+}
+
+#[derive(Debug)]
+struct PendingMaterializationFailure {
+    failed: FailedContinuation,
+    transaction: Option<ExecutionTransactionId>,
+    cleanup_complete: bool,
 }
 
 struct ResidentRuntimeParts<R: MultiSessionRunner> {
@@ -425,6 +432,9 @@ where
     ready_transactions: FairQueue<ExecutionTransactionId>,
     queued_transactions: HashSet<ExecutionTransactionId>,
     ready_continuations: HashSet<ContinuationId>,
+    pending_materialization_failures: VecDeque<PendingMaterializationFailure>,
+    pending_attachment_cleanups: HashSet<ContinuationId>,
+    pending_registry_detaches: HashMap<ContinuationId, CancellationReason>,
     next_dependency_epoch: u64,
     runtime_clock: Instant,
     runtime_tick: u64,
@@ -523,27 +533,28 @@ where
     where
         R: ResidentModelRunner,
     {
-        let advisor_limits = runner.expert_io_resource_limits()?.validate()?;
-        let completion_hub = runner.completion_hub();
-        let (control, handle) =
-            BrokerExpertIoResourceControl::new(advisor_limits, completion_hub.clone())?;
-        runner.install_expert_io_resource_control(Box::new(control))?;
-
         let requirements = runner.expert_residency_requirements();
-        if let Some(requirements) = requirements.as_ref()
-            && !runner.expert_residency_control_installed()
-        {
-            let control = crate::expert_residency::ExpertResidencyController::with_requirements(
-                requirements.clone(),
-            )?;
-            runner.install_expert_residency_control(Box::new(control))?;
+        if let Some(requirements) = requirements.as_ref() {
+            if runner.expert_materialization_adapter_installed() {
+                return Err(Error::Execution(
+                    "runner already owns a materialization adapter outside the runtime registry"
+                        .into(),
+                ));
+            }
+            if !runner.expert_residency_control_installed() {
+                let control =
+                    crate::expert_residency::ExpertResidencyController::with_requirements(
+                        requirements.clone(),
+                    )?;
+                runner.install_expert_residency_control(Box::new(control))?;
+            }
         }
 
+        // The model-owned physical authority crosses the runtime boundary exactly
+        // once, after its unique residency controller is installed.
         let physical = runner.take_expert_materialization_backend();
-        let (placement, registry_backend, resources, fairness, installed_physical) = match (
-            requirements.as_ref(),
-            physical,
-        ) {
+        let completion_hub = runner.completion_hub();
+        let (placement, registry, installed_physical) = match (requirements.as_ref(), physical) {
             (Some(requirements), Some(physical)) => {
                 let backend = RunnerMaterializationBackend::new(physical);
                 let placement = backend.placement();
@@ -559,19 +570,19 @@ where
                 let fairness = FairQueueConfig::for_production(physical_limits)
                     .map_err(|error| Error::Execution(error.to_string()))?;
                 let resources = physical_materialization_resources(topology, runtime_limits)?;
-                (
-                    placement,
+                let registry = LoadRegistry::new(
                     Box::new(backend.clone()) as Box<dyn MaterializationBackend>,
                     resources,
                     fairness,
-                    Some(backend),
                 )
+                .map_err(|error| Error::Execution(error.to_string()))?;
+                (placement, registry, Some(backend))
             }
             (Some(_), None) => {
                 return Err(Error::Execution(
-                        "runner reports expert residency requirements but provides no physical expert materialization backend"
-                            .into(),
-                    ));
+                    "runner reports expert residency requirements but provides no physical expert materialization backend"
+                        .into(),
+                ));
             }
             (None, Some(_)) => {
                 return Err(Error::Execution(
@@ -585,35 +596,32 @@ where
                     BackendId::new(1),
                     DeviceId::new(0),
                 )?;
-                (
-                    placement,
-                    Box::new(UnavailableBackend) as Box<dyn MaterializationBackend>,
-                    physical_materialization_resources(
-                        PhysicalExpertResourceTopology::new(
-                            ferrule_common::expert_io::ExpertIoResourceLimits::default(),
-                            0,
-                            0,
-                        )?,
-                        runtime_limits,
+                let resources = physical_materialization_resources(
+                    PhysicalExpertResourceTopology::new(
+                        ferrule_common::expert_io::ExpertIoResourceLimits::default(),
+                        0,
+                        0,
                     )?,
+                    runtime_limits,
+                )?;
+                let registry = LoadRegistry::new(
+                    Box::new(UnavailableBackend) as Box<dyn MaterializationBackend>,
+                    resources,
                     FairQueueConfig::default(),
-                    None,
                 )
+                .map_err(|error| Error::Execution(error.to_string()))?;
+                (placement, registry, None)
             }
         };
 
+        // Build the model-facing adapter only after the registry owns the backend
+        // and hard-resource authority, then install it back into the runner.
         let (adapter, materialization) = RuntimeMaterializationControl::new(
             placement,
             installed_physical,
             completion_hub.clone(),
         );
         let uninstalled_adapter = if requirements.is_some() {
-            if runner.expert_materialization_adapter_installed() {
-                return Err(Error::Execution(
-                    "runner already owns a materialization adapter outside the runtime registry"
-                        .into(),
-                ));
-            }
             runner.install_expert_materialization_adapter(Box::new(adapter))?;
             None
         } else {
@@ -621,8 +629,12 @@ where
         };
         #[cfg(not(test))]
         drop(uninstalled_adapter);
-        let registry = LoadRegistry::new(registry_backend, resources, fairness)
-            .map_err(|error| Error::Execution(error.to_string()))?;
+
+        let advisor_limits = runner.expert_io_resource_limits()?.validate()?;
+        let (control, handle) =
+            BrokerExpertIoResourceControl::new(advisor_limits, completion_hub.clone())?;
+        runner.install_expert_io_resource_control(Box::new(control))?;
+
         Ok(ResidentRuntimeParts {
             executor: NativeMultiSessionExecutor::new(runner).with_expert_io_resources(handle),
             completion_hub,
@@ -677,6 +689,9 @@ where
                 .expect("default ready-transaction fairness is valid"),
             queued_transactions: HashSet::new(),
             ready_continuations: HashSet::new(),
+            pending_materialization_failures: VecDeque::new(),
+            pending_attachment_cleanups: HashSet::new(),
+            pending_registry_detaches: HashMap::new(),
             next_dependency_epoch: 1,
             runtime_clock: Instant::now(),
             runtime_tick: 0,
@@ -744,6 +759,9 @@ where
         !self.resident_transactions.is_empty()
             || !self.speculative_transactions.is_empty()
             || !self.continuations.is_empty()
+            || !self.pending_materialization_failures.is_empty()
+            || !self.pending_attachment_cleanups.is_empty()
+            || !self.pending_registry_detaches.is_empty()
             || self.load_registry.active_operations() != 0
             || !self.pending_kv_retirements.is_empty()
             || !self.pending_sequence_cleanups.is_empty()
@@ -1003,26 +1021,17 @@ where
             .map(|key| self.load_registry.load_request(*key, class))
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|error| Error::Execution(error.to_string()))?;
+        for request in &requests {
+            if let Some(binding) = self.materialization.resident_binding(request.key) {
+                self.load_registry
+                    .adopt_residency(*request, binding)
+                    .map_err(|error| Error::Execution(error.to_string()))?;
+            }
+        }
         self.load_registry
             .attach_waiter(waiter, requests, self.runtime_now_ns())
             .map_err(|error| Error::Execution(error.to_string()))?;
 
-        if !keys.is_empty() {
-            let adapter = self
-                .executor
-                .runner_mut()
-                .expert_materialization_adapter()?;
-            for key in &keys {
-                if let Err(error) = adapter.submit(*key) {
-                    let _ = self.load_registry.detach_continuation(
-                        continuation,
-                        CancellationReason::Superseded,
-                        self.runtime_now_ns(),
-                    );
-                    return Err(error);
-                }
-            }
-        }
         self.continuations.insert(
             continuation,
             RegisteredModelContinuation {
@@ -1034,6 +1043,53 @@ where
             .entry(transaction)
             .or_default()
             .insert(continuation);
+
+        let mut attached = Vec::with_capacity(keys.len());
+        let mut submission_error = None;
+        for key in &keys {
+            match self.materialization.attach(continuation, *key) {
+                Ok(_) => attached.push(*key),
+                Err(error) => {
+                    submission_error = Some(error);
+                    break;
+                }
+            }
+        }
+        if let Some(error) = submission_error {
+            let mut cleanup_errors = Vec::new();
+            if let Err(cleanup) = self.load_registry.detach_continuation(
+                continuation,
+                CancellationReason::Superseded,
+                self.runtime_now_ns(),
+            ) {
+                self.pending_registry_detaches
+                    .insert(continuation, CancellationReason::Superseded);
+                cleanup_errors.push(cleanup.to_string());
+            }
+            let mut attachment_cleanup_failed = false;
+            for key in attached {
+                if let Err(cleanup) = self.materialization.detach_if_attached(continuation, key) {
+                    attachment_cleanup_failed = true;
+                    cleanup_errors.push(cleanup.to_string());
+                }
+            }
+            if attachment_cleanup_failed {
+                self.pending_attachment_cleanups.insert(continuation);
+            }
+            if !self.pending_registry_detaches.contains_key(&continuation)
+                && !self.pending_attachment_cleanups.contains(&continuation)
+            {
+                self.unregister_continuation(continuation);
+            }
+            return if cleanup_errors.is_empty() {
+                Err(error)
+            } else {
+                Err(Error::Internal(format!(
+                    "materialization attachment failed ({error}); rollback remains pending: {}",
+                    cleanup_errors.join("; ")
+                )))
+            };
+        }
         if !keys.is_empty() {
             // The completion listener is armed before model execution. Newly
             // attached registry work is owner-local and has no provider event yet,
@@ -1043,23 +1099,35 @@ where
         Ok(())
     }
 
+    fn sync_materialization_key(&mut self, key: ferrule_common::LoadKey) -> Result<()> {
+        if let Some(binding) = self.load_registry.residency_binding(key) {
+            self.materialization.record_resident(key, binding)?;
+        } else if self.load_registry.operation_for_key(key).is_none() {
+            self.materialization.forget_if_idle(key)?;
+        }
+        self.sync_materialization_evictions()
+    }
+
+    fn sync_materialization_evictions(&mut self) -> Result<()> {
+        for evicted in self.materialization.pending_evictions() {
+            self.load_registry
+                .evict(evicted)
+                .map_err(|error| Error::Execution(error.to_string()))?;
+            self.materialization.forget(evicted)?;
+            self.materialization.confirm_eviction(evicted);
+        }
+        Ok(())
+    }
+
     fn sync_materialization_adapter(&mut self) -> Result<()> {
         for key in self.materialization.keys() {
             if let Some(binding) = self.load_registry.residency_binding(key) {
                 self.materialization.record_resident(key, binding)?;
-            } else if let Some(operation) = self.load_registry.operation_for_key(key)
-                && let Some(operation) = self.load_registry.operation(operation)
-            {
-                self.materialization.record_stage(key, operation.stage())?;
+            } else if self.load_registry.operation_for_key(key).is_none() {
+                self.materialization.forget_if_idle(key)?;
             }
         }
-        for evicted in self.materialization.take_evicted() {
-            self.load_registry
-                .evict(evicted)
-                .map_err(|error| Error::Execution(error.to_string()))?;
-            self.materialization.forget(evicted);
-        }
-        Ok(())
+        self.sync_materialization_evictions()
     }
 
     fn snapshot_transaction_outputs(
@@ -1097,14 +1165,172 @@ where
             .collect();
     }
 
+    fn registered_materialization_keys(
+        &self,
+        continuation: ContinuationId,
+    ) -> Vec<ferrule_common::LoadKey> {
+        self.continuations
+            .get(&continuation)
+            .map(|registered| {
+                registered
+                    .dependencies
+                    .iter()
+                    .filter_map(|dependency| dependency.load_key())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn detach_registered_materialization_attachments(
+        &self,
+        continuation: ContinuationId,
+    ) -> Result<()> {
+        let mut first_error = None;
+        for key in self.registered_materialization_keys(continuation) {
+            if let Err(error) = self.materialization.detach_if_attached(continuation, key)
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn retry_pending_continuation_cleanups(&mut self) -> Result<()> {
+        let mut continuations = self
+            .pending_registry_detaches
+            .keys()
+            .chain(self.pending_attachment_cleanups.iter())
+            .copied()
+            .collect::<Vec<_>>();
+        continuations.sort_unstable();
+        continuations.dedup();
+        let mut first_error = None;
+        for continuation in continuations {
+            if let Some(reason) = self.pending_registry_detaches.get(&continuation).cloned() {
+                match self.load_registry.detach_continuation(
+                    continuation,
+                    reason,
+                    self.runtime_now_ns(),
+                ) {
+                    Ok(()) => {
+                        self.pending_registry_detaches.remove(&continuation);
+                    }
+                    Err(error) => {
+                        if first_error.is_none() {
+                            first_error = Some(Error::Execution(error.to_string()));
+                        }
+                        continue;
+                    }
+                }
+            }
+            match self.detach_registered_materialization_attachments(continuation) {
+                Ok(()) => {
+                    self.pending_attachment_cleanups.remove(&continuation);
+                    self.unregister_continuation(continuation);
+                }
+                Err(error) => {
+                    self.pending_attachment_cleanups.insert(continuation);
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn collect_materialization_failures(&mut self) {
+        while let Some(failed) = self.load_registry.pop_failed() {
+            let transaction = self
+                .continuations
+                .get(&failed.continuation)
+                .map(|registered| registered.transaction);
+            self.pending_materialization_failures
+                .push_back(PendingMaterializationFailure {
+                    failed,
+                    transaction,
+                    cleanup_complete: false,
+                });
+        }
+    }
+
+    fn cleanup_materialization_failures(&mut self, report_business_error: bool) -> Result<()> {
+        self.collect_materialization_failures();
+        if self.pending_materialization_failures.is_empty() {
+            return Ok(());
+        }
+
+        let mut first_cleanup_error = None;
+        for index in 0..self.pending_materialization_failures.len() {
+            if self.pending_materialization_failures[index].cleanup_complete {
+                continue;
+            }
+            let continuation = self.pending_materialization_failures[index]
+                .failed
+                .continuation;
+            match self.detach_registered_materialization_attachments(continuation) {
+                Ok(()) => {
+                    self.unregister_continuation(continuation);
+                    self.pending_materialization_failures[index].cleanup_complete = true;
+                }
+                Err(error) => {
+                    if first_cleanup_error.is_none() {
+                        first_cleanup_error = Some(error);
+                    }
+                }
+            }
+        }
+        if let Err(error) = self.sync_materialization_adapter()
+            && first_cleanup_error.is_none()
+        {
+            first_cleanup_error = Some(error);
+        }
+        if let Some(error) = first_cleanup_error {
+            return Err(error);
+        }
+
+        if !report_business_error {
+            self.pending_materialization_failures.clear();
+            return Ok(());
+        }
+        let first = self
+            .pending_materialization_failures
+            .front()
+            .expect("non-empty failure queue has a first failure");
+        let message = format!(
+            "materialization for continuation {} failed ({:?}); transaction={:?}",
+            first.failed.continuation.get(),
+            first.failed.failure,
+            first.transaction
+        );
+        self.pending_materialization_failures.clear();
+        Err(Error::Execution(message))
+    }
+
     fn progress_materialization(&mut self) -> Result<()> {
         const TRANSITION_BUDGET: usize = 256;
 
+        self.retry_pending_continuation_cleanups()?;
+        self.cleanup_materialization_failures(true)?;
+
         let now_ns = self.runtime_now_ns();
-        let progressed = self
-            .load_registry
-            .drive(now_ns, TRANSITION_BUDGET)
-            .map_err(|error| Error::Execution(error.to_string()))?;
+        let mut progressed = 0;
+        while progressed < TRANSITION_BUDGET {
+            let step = self
+                .load_registry
+                .drive_one(now_ns)
+                .map_err(|error| Error::Execution(error.to_string()))?;
+            let RegistryDriveStep::Progressed { key } = step else {
+                break;
+            };
+            progressed += 1;
+            // Preserve publication/eviction ordering without rescanning every
+            // resident expert after every unrelated registry transition.
+            if let Some(key) = key {
+                self.sync_materialization_key(key)?;
+            }
+        }
         // The inference owner arms its listener before entering this method. If
         // owner-side work consumes the whole slice, publish a local wake so a
         // runnable transition left at the budget boundary cannot wait forever
@@ -1144,39 +1370,7 @@ where
                 self.load_registry.resident_entries(),
             );
         }
-        self.sync_materialization_adapter()?;
-        let pending_keys = self
-            .continuations
-            .values()
-            .flat_map(|registered| {
-                registered
-                    .dependencies
-                    .iter()
-                    .filter_map(|dependency| dependency.load_key())
-            })
-            .collect::<HashSet<_>>();
-        if !pending_keys.is_empty() {
-            let adapter = self
-                .executor
-                .runner_mut()
-                .expert_materialization_adapter()?;
-            for key in pending_keys {
-                let _ = adapter.progress(key)?;
-            }
-        }
-
-        if let Some(failed) = self.load_registry.pop_failed() {
-            let transaction = self
-                .continuations
-                .get(&failed.continuation)
-                .map(|registered| registered.transaction);
-            self.unregister_continuation(failed.continuation);
-            return Err(Error::Execution(format!(
-                "materialization for continuation {} failed ({:?}); transaction={transaction:?}",
-                failed.continuation.get(),
-                failed.failure
-            )));
-        }
+        self.cleanup_materialization_failures(true)?;
         let mut newly_ready = Vec::new();
         while let Some(continuation) = self
             .load_registry
@@ -1224,30 +1418,6 @@ where
             })?
             .dependencies
             .clone();
-        let keys = dependencies
-            .iter()
-            .filter_map(|dependency| dependency.load_key())
-            .collect::<Vec<_>>();
-        if !keys.is_empty() {
-            let adapter = self
-                .executor
-                .runner_mut()
-                .expert_materialization_adapter()?;
-            for key in &keys {
-                let published = adapter.publish(*key)?;
-                let authoritative =
-                    self.load_registry.residency_binding(*key).ok_or_else(|| {
-                        Error::Execution(format!(
-                            "adapter published key {key:?} without registry residency"
-                        ))
-                    })?;
-                if published.binding() != authoritative || published.key() != *key {
-                    return Err(Error::Execution(format!(
-                        "adapter published a stale or mismatched lease for key {key:?}"
-                    )));
-                }
-            }
-        }
         self.load_registry
             .prepare_resume(continuation, &dependencies)
             .map_err(|error| Error::Execution(error.to_string()))
@@ -1259,29 +1429,13 @@ where
         lease: crate::io::ResumeLease,
         started_ns: u64,
     ) -> Result<()> {
-        let keys = self
-            .continuations
-            .get(&continuation)
-            .map(|registered| {
-                registered
-                    .dependencies
-                    .iter()
-                    .filter_map(|dependency| dependency.load_key())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        if !keys.is_empty() {
-            let adapter = self
-                .executor
-                .runner_mut()
-                .expert_materialization_adapter()?;
-            for key in keys {
-                adapter.detach(continuation, key)?;
-            }
-        }
         self.load_registry
             .finish_resume(continuation, lease, started_ns, self.runtime_now_ns())
             .map_err(|error| Error::Execution(error.to_string()))?;
+        if let Err(error) = self.detach_registered_materialization_attachments(continuation) {
+            self.pending_attachment_cleanups.insert(continuation);
+            return Err(error);
+        }
         self.unregister_continuation(continuation);
         Ok(())
     }
@@ -1295,14 +1449,23 @@ where
             return Ok(());
         }
         self.load_registry
-            .detach_continuation(continuation, reason, self.runtime_now_ns())
+            .detach_continuation(continuation, reason.clone(), self.runtime_now_ns())
             .map_err(|error| Error::Execution(error.to_string()))?;
+        // Model cancellation normally detaches its logical dependencies. The
+        // runtime control closes any still-attached demand without replaying keys
+        // the model already handled.
+        if let Err(error) = self.detach_registered_materialization_attachments(continuation) {
+            self.pending_attachment_cleanups.insert(continuation);
+            return Err(error);
+        }
         self.unregister_continuation(continuation);
         Ok(())
     }
 
     fn unregister_continuation(&mut self, continuation: ContinuationId) {
         self.ready_continuations.remove(&continuation);
+        self.pending_attachment_cleanups.remove(&continuation);
+        self.pending_registry_detaches.remove(&continuation);
         let Some(registered) = self.continuations.remove(&continuation) else {
             return;
         };
@@ -1462,6 +1625,16 @@ where
             )));
         }
         if let Some(error) = self.executor.runner_extraction_error() {
+            return Err(Box::new((error, self)));
+        }
+        if let Err(error) = self
+            .load_registry
+            .shutdown(self.runtime_now_ns(), 0)
+            .map_err(|error| Error::Execution(error.to_string()))
+        {
+            return Err(Box::new((error, self)));
+        }
+        if let Err(error) = self.materialization.forget_all() {
             return Err(Box::new((error, self)));
         }
         if let Err(error) = self
@@ -3472,6 +3645,8 @@ where
                 "driver shutdown could not quiesce every execution transaction".into(),
             ));
         }
+        self.retry_pending_continuation_cleanups()?;
+        self.cleanup_materialization_failures(false)?;
 
         for request_id in self.scheduler.request_ids() {
             self.cancel_scheduled_request(request_id)?;
@@ -3518,9 +3693,7 @@ where
             .load_registry
             .shutdown(self.runtime_now_ns(), maximum_completions)
             .map_err(|error| Error::Execution(error.to_string()))?;
-        for key in self.materialization.keys() {
-            self.materialization.forget(key);
-        }
+        self.materialization.forget_all()?;
         self.progress_pending_cleanups()?;
         self.update_hard_resource_observability();
 
@@ -3544,6 +3717,9 @@ where
             || retiring_pages != 0
             || !self.continuations.is_empty()
             || !self.transaction_continuations.is_empty()
+            || !self.pending_materialization_failures.is_empty()
+            || !self.pending_attachment_cleanups.is_empty()
+            || !self.pending_registry_detaches.is_empty()
             || !self.session_owner.is_empty()
             || !self.pending_sequence_cleanups.is_empty()
             || !self.sequence_states.is_empty()
@@ -3569,11 +3745,7 @@ where
     /// All models use the same packed target executor. A model that reports a
     /// checkpoint-native proposal capability may add proposal + verification for
     /// decode; models without it continue through target-only packed decode.
-    pub fn step_with_model_expert_io<F>(
-        &mut self,
-        on_token: &mut F,
-        expert_budget: ExpertIoBudget,
-    ) -> Result<ResidentDriverStep>
+    pub fn step<F>(&mut self, on_token: &mut F) -> Result<ResidentDriverStep>
     where
         F: FnMut(&ResidentTokenEvent) -> Result<()>,
     {
@@ -3628,15 +3800,9 @@ where
         self.prepare_step()?;
         let allow_mixed_batches = self.scheduler.config().allow_mixed_batches;
         loop {
-            let mut advisor =
-                ModelExpertIoAdvisor::new(self.executor.runner(), &self.sequence_states);
-            let action = self.scheduler.next_action_with_expert_io_policy(
-                &mut self.slot_pool,
-                &mut advisor,
-                expert_budget,
-                allow_mixed_batches,
-            )?;
-            drop(advisor);
+            let action = self
+                .scheduler
+                .next_action_policy(&mut self.slot_pool, allow_mixed_batches)?;
             let Some(action) = action else {
                 let pending = self.pending_model_progresses();
                 return if pending.is_empty() {
@@ -5020,7 +5186,7 @@ mod tests {
         TokenLogit,
     };
 
-    use crate::io::physical_tests::MockPhysicalBackend;
+    use crate::io::physical_tests::{MockPhysicalBackend, MockPhysicalCommand};
     use crate::io::{CohortId, FairQueueConfig, FakeBackend};
     use crate::scheduling::{
         FixedSequenceSlotPool, HardResourceBroker, HardResourceLimit, RequestId, SequenceStatus,
@@ -5038,7 +5204,7 @@ mod tests {
             F: FnMut(&ResidentTokenEvent) -> Result<()>,
         {
             loop {
-                match self.step_with_model_expert_io(&mut on_token, ExpertIoBudget::unbounded())? {
+                match self.step(&mut on_token)? {
                     ResidentDriverStep::Idle => return Ok(self.stats().clone()),
                     ResidentDriverStep::Executed { .. } => {}
                     ResidentDriverStep::Blocked => {
@@ -5129,8 +5295,11 @@ mod tests {
         expert_residency_requirements:
             Option<ferrule_common::expert_residency::ExpertResidencyRequirements>,
         expert_residency_control_installed: bool,
+        expert_residency_control_install_calls: usize,
         physical_expert_backend: Option<Box<dyn PhysicalExpertMaterializationBackend>>,
+        physical_expert_backend_take_calls: usize,
         expert_materialization: Option<Box<dyn ExpertMaterializationAdapter>>,
+        expert_materialization_install_calls: usize,
         materialization_request: Option<ExpertMaterializationRequest>,
     }
 
@@ -5198,8 +5367,11 @@ mod tests {
                 expert_io_resource_control_installed: false,
                 expert_residency_requirements: None,
                 expert_residency_control_installed: false,
+                expert_residency_control_install_calls: 0,
                 physical_expert_backend: None,
+                physical_expert_backend_take_calls: 0,
                 expert_materialization: None,
+                expert_materialization_install_calls: 0,
                 materialization_request: None,
             }
         }
@@ -5545,9 +5717,6 @@ mod tests {
     }
 
     impl ExpertIoModelRunner for MockTopKRunner {
-        type ExpertIoBatchState = ();
-        type ExpertIoAdmission = ();
-
         fn expert_io_resource_limits(
             &self,
         ) -> Result<ferrule_common::expert_io::ExpertIoResourceLimits> {
@@ -5575,28 +5744,6 @@ mod tests {
             }
             self.expert_io_resource_control_installed = false;
             Ok(())
-        }
-
-        fn begin_expert_io_batch(&self) -> Self::ExpertIoBatchState {}
-
-        fn estimate_expert_io(
-            &self,
-            _batch: &mut Self::ExpertIoBatchState,
-            _sequence: &Self::SequenceState,
-            _phase: ferrule_common::expert_io::ExpertIoPhase,
-            _token_ids: &[u32],
-        ) -> Result<(
-            ferrule_common::expert_io::ExpertIoEstimate,
-            Self::ExpertIoAdmission,
-        )> {
-            Ok((ferrule_common::expert_io::ExpertIoEstimate::default(), ()))
-        }
-
-        fn admit_expert_io(
-            &self,
-            _batch: &mut Self::ExpertIoBatchState,
-            _admission: Self::ExpertIoAdmission,
-        ) {
         }
     }
 
@@ -5693,6 +5840,7 @@ mod tests {
             &mut self,
             _control: Box<dyn ferrule_common::expert_residency::ExpertResidencyControl>,
         ) -> Result<()> {
+            self.expert_residency_control_install_calls += 1;
             if self.expert_residency_control_installed {
                 return Err(Error::Execution(
                     "mock expert residency control is already installed".into(),
@@ -5705,6 +5853,7 @@ mod tests {
         fn take_expert_materialization_backend(
             &mut self,
         ) -> Option<Box<dyn PhysicalExpertMaterializationBackend>> {
+            self.physical_expert_backend_take_calls += 1;
             self.physical_expert_backend.take()
         }
 
@@ -5716,11 +5865,13 @@ mod tests {
             &mut self,
             adapter: Box<dyn ExpertMaterializationAdapter>,
         ) -> Result<()> {
-            if self.expert_materialization.replace(adapter).is_some() {
+            self.expert_materialization_install_calls += 1;
+            if self.expert_materialization.is_some() {
                 return Err(Error::Execution(
                     "mock materialization adapter is already installed".into(),
                 ));
             }
+            self.expert_materialization = Some(adapter);
             Ok(())
         }
 
@@ -6328,6 +6479,28 @@ mod tests {
                 .expert_residency_control_installed
         );
         assert!(driver.executor().runner().expert_materialization.is_some());
+        assert_eq!(
+            driver
+                .executor()
+                .runner()
+                .expert_residency_control_install_calls,
+            1
+        );
+        assert_eq!(
+            driver
+                .executor()
+                .runner()
+                .physical_expert_backend_take_calls,
+            1
+        );
+        assert_eq!(
+            driver
+                .executor()
+                .runner()
+                .expert_materialization_install_calls,
+            1
+        );
+        assert!(driver.executor().runner().physical_expert_backend.is_none());
         let limits = handle.limits();
         let capacity = |kind| {
             driver
@@ -6531,9 +6704,7 @@ mod tests {
         }
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Prefill,
                 ..
@@ -6546,9 +6717,7 @@ mod tests {
         assert_eq!(driver.load_registry().stats().operations_created, 1);
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Prefill,
                 ..
@@ -6563,7 +6732,9 @@ mod tests {
         let runner = MockTopKRunner::new(vec![top(10)])
             .with_resumable_wait_scripts([1, 1])
             .with_materialization_request(materialization_request(2));
-        let mut driver = concurrent_fake_driver(runner);
+        let (physical, handle) = MockPhysicalBackend::automatic();
+        let mut driver =
+            concurrent_transaction_driver(runner.with_physical_expert_backend(Box::new(physical)));
         for id in [1, 2] {
             let mut submitted = request(id, &[id as u32], 2, Vec::new());
             submitted.session_id = Some(SessionId(id));
@@ -6572,32 +6743,42 @@ mod tests {
 
         assert!(matches!(
             driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .step(&mut |_| Ok(()))
                 .unwrap(),
             ResidentDriverStep::WaitingForModelProgress(ref pending) if pending.len() == 2
         ));
         assert_eq!(driver.load_registry().stats().operations_created, 1);
         assert_eq!(driver.load_registry().stats().single_flight_joins, 1);
         assert_eq!(
-            driver.materialization_adapter_stats().physical_submissions,
-            1
-        );
-        assert_eq!(
-            driver.materialization_adapter_stats().single_flight_joins,
+            handle.command_count(|command| matches!(
+                command,
+                crate::io::physical_tests::MockPhysicalCommand::Resolve(_)
+            )),
             1
         );
 
         for _ in 0..2 {
             assert!(matches!(
-                driver
-                    .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                    .unwrap(),
+                driver.step(&mut |_| Ok(())).unwrap(),
                 ResidentDriverStep::Executed {
                     action_kind: ResidentActionKind::Prefill,
                     ..
                 }
             ));
         }
+        assert_eq!(
+            handle.command_count(|command| matches!(command, MockPhysicalCommand::SubmitRead(..))),
+            1
+        );
+        let keys = driver.materialization.keys();
+        assert_eq!(keys.len(), 1);
+        let binding = driver.load_registry().residency_binding(keys[0]).unwrap();
+        assert_eq!(binding, handle.binding(keys[0]));
+        assert_eq!(
+            driver.materialization.resident_binding(keys[0]),
+            Some(binding)
+        );
+
         let report = driver.shutdown(&mut |_| Ok(()), 32).unwrap();
         assert!(report.registry.drained);
         assert_eq!(report.registry.active_grants, 0);
@@ -6606,6 +6787,350 @@ mod tests {
         assert_eq!(report.kv_page_grants, 0);
         assert_eq!(report.pending_kv_retirements, 0);
         assert!(driver.try_submit(request(3, &[3], 1, Vec::new())).is_err());
+    }
+
+    #[test]
+    fn terminal_failed_stale_and_cancelled_continuations_release_resident_siblings() {
+        let outcomes = [
+            ferrule_common::CompletionOutcome::Failed(
+                ferrule_common::FailureReason::StorageUnavailable,
+            ),
+            ferrule_common::CompletionOutcome::Stale(
+                ferrule_common::StaleReason::SourceIdentityChanged,
+            ),
+            ferrule_common::CompletionOutcome::Cancelled(CancellationReason::ExternalRequest),
+        ];
+        for (index, outcome) in outcomes.into_iter().enumerate() {
+            let (physical, handle) = MockPhysicalBackend::automatic();
+            handle.set_resident(true);
+            let runner =
+                MockTopKRunner::new(Vec::new()).with_physical_expert_backend(Box::new(physical));
+            let mut driver = concurrent_transaction_driver(runner);
+            let resident_request = materialization_request(10 + index as u8);
+            let resident_key = match driver
+                .executor
+                .runner_mut()
+                .expert_materialization_adapter()
+                .unwrap()
+                .resolve(resident_request)
+                .unwrap()
+            {
+                ExpertDependencyResolution::Resident(binding) => binding.key(),
+                ExpertDependencyResolution::Waiting(_) => panic!("expected resident sibling"),
+            };
+            handle.set_resident(false);
+            let failing_request = materialization_request(20 + index as u8);
+            let failing_key = match driver
+                .executor
+                .runner_mut()
+                .expert_materialization_adapter()
+                .unwrap()
+                .resolve(failing_request)
+                .unwrap()
+            {
+                ExpertDependencyResolution::Waiting(key) => key,
+                ExpertDependencyResolution::Resident(_) => panic!("expected pending failure key"),
+            };
+            handle.script_outcome(ferrule_common::LoadStage::ReadSubmitted, outcome);
+            let continuations = [
+                ContinuationId::new(100 + (index as u64 * 2)),
+                ContinuationId::new(101 + (index as u64 * 2)),
+            ];
+            for continuation in continuations {
+                let transaction = ExecutionTransactionId::new(continuation.get()).unwrap();
+                let progress = PendingModelProgress::new(
+                    transaction,
+                    continuation,
+                    DependencySet::new([
+                        LogicalDependency::expert_resident(resident_key).unwrap(),
+                        LogicalDependency::expert_resident(failing_key).unwrap(),
+                    ])
+                    .unwrap(),
+                )
+                .unwrap();
+                driver
+                    .register_pending_progress(&progress, crate::scheduling::ResourceClass::Decode)
+                    .unwrap();
+            }
+
+            let error = driver.progress_materialization().unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("materialization for continuation")
+            );
+            assert!(
+                continuations
+                    .iter()
+                    .all(|continuation| !driver.continuations.contains_key(continuation))
+            );
+            assert!(driver.pending_materialization_failures.is_empty());
+            assert_eq!(
+                driver.materialization.active_attachment_count(resident_key),
+                0
+            );
+            assert_eq!(
+                driver.materialization.active_attachment_count(failing_key),
+                0
+            );
+            assert!(!driver.materialization.is_resolved(failing_key));
+            assert_eq!(
+                handle.command_count(|command| matches!(
+                    command,
+                    MockPhysicalCommand::ReleaseSelected(key) if *key == resident_key
+                )),
+                1
+            );
+            assert!(matches!(
+                driver
+                    .executor
+                    .runner_mut()
+                    .expert_materialization_adapter()
+                    .unwrap()
+                    .resolve(failing_request)
+                    .unwrap(),
+                ExpertDependencyResolution::Waiting(_)
+            ));
+            assert_eq!(
+                handle.command_count(|command| matches!(
+                    command,
+                    MockPhysicalCommand::Resolve(request) if *request == failing_request
+                )),
+                2
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_cleanup_release_failure_is_retained_and_retried_before_business_error() {
+        let (physical, handle) = MockPhysicalBackend::automatic();
+        handle.set_resident(true);
+        let runner =
+            MockTopKRunner::new(Vec::new()).with_physical_expert_backend(Box::new(physical));
+        let mut driver = concurrent_transaction_driver(runner);
+        let resident_key = match driver
+            .executor
+            .runner_mut()
+            .expert_materialization_adapter()
+            .unwrap()
+            .resolve(materialization_request(30))
+            .unwrap()
+        {
+            ExpertDependencyResolution::Resident(binding) => binding.key(),
+            ExpertDependencyResolution::Waiting(_) => panic!("expected resident sibling"),
+        };
+        handle.set_resident(false);
+        let failing_key = match driver
+            .executor
+            .runner_mut()
+            .expert_materialization_adapter()
+            .unwrap()
+            .resolve(materialization_request(31))
+            .unwrap()
+        {
+            ExpertDependencyResolution::Waiting(key) => key,
+            ExpertDependencyResolution::Resident(_) => panic!("expected pending failure key"),
+        };
+        handle.script_outcome(
+            ferrule_common::LoadStage::ReadSubmitted,
+            ferrule_common::CompletionOutcome::Failed(
+                ferrule_common::FailureReason::StorageUnavailable,
+            ),
+        );
+        handle.fail_next_release(ferrule_common::FailureReason::DeviceUnavailable);
+        let transaction = ExecutionTransactionId::new(200).unwrap();
+        let continuation = ContinuationId::new(200);
+        let progress = PendingModelProgress::new(
+            transaction,
+            continuation,
+            DependencySet::new([
+                LogicalDependency::expert_resident(resident_key).unwrap(),
+                LogicalDependency::expert_resident(failing_key).unwrap(),
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+        driver
+            .register_pending_progress(&progress, crate::scheduling::ResourceClass::Decode)
+            .unwrap();
+
+        let cleanup_error = driver.progress_materialization().unwrap_err();
+        assert!(cleanup_error.to_string().contains("lease release failed"));
+        assert!(driver.continuations.contains_key(&continuation));
+        assert_eq!(driver.pending_materialization_failures.len(), 1);
+        assert_eq!(
+            driver.materialization.active_attachment_count(resident_key),
+            1
+        );
+        assert_eq!(
+            driver.materialization.active_attachment_count(failing_key),
+            0
+        );
+
+        let business_error = driver.progress_materialization().unwrap_err();
+        assert!(
+            business_error
+                .to_string()
+                .contains("materialization for continuation")
+        );
+        assert!(!driver.continuations.contains_key(&continuation));
+        assert!(driver.pending_materialization_failures.is_empty());
+        assert_eq!(
+            driver.materialization.active_attachment_count(resident_key),
+            0
+        );
+        assert_eq!(
+            handle.command_count(|command| matches!(
+                command,
+                MockPhysicalCommand::ReleaseSelected(key) if *key == resident_key
+            )),
+            2
+        );
+    }
+
+    #[test]
+    fn registration_rollback_release_failure_keeps_exact_attachment_for_retry() {
+        let (physical, handle) = MockPhysicalBackend::automatic();
+        handle.set_resident(true);
+        let runner =
+            MockTopKRunner::new(Vec::new()).with_physical_expert_backend(Box::new(physical));
+        let mut driver = concurrent_transaction_driver(runner);
+        let mut keys = Vec::new();
+        for seed in [50, 51] {
+            let key = match driver
+                .executor
+                .runner_mut()
+                .expert_materialization_adapter()
+                .unwrap()
+                .resolve(materialization_request(seed))
+                .unwrap()
+            {
+                ExpertDependencyResolution::Resident(binding) => binding.key(),
+                ExpertDependencyResolution::Waiting(_) => panic!("expected resident key"),
+            };
+            keys.push(key);
+        }
+        let parked = ContinuationId::new(999);
+        driver.materialization.attach(parked, keys[1]).unwrap();
+        driver
+            .materialization
+            .detach_if_attached(parked, keys[1])
+            .unwrap();
+
+        handle.fail_next_release(ferrule_common::FailureReason::DeviceUnavailable);
+        let transaction = ExecutionTransactionId::new(400).unwrap();
+        let continuation = ContinuationId::new(400);
+        let progress = PendingModelProgress::new(
+            transaction,
+            continuation,
+            DependencySet::new(
+                keys.iter()
+                    .copied()
+                    .map(|key| LogicalDependency::expert_resident(key).unwrap()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let error = driver
+            .register_pending_progress(&progress, crate::scheduling::ResourceClass::Decode)
+            .unwrap_err();
+        assert!(error.to_string().contains("rollback remains pending"));
+        assert!(driver.pending_attachment_cleanups.contains(&continuation));
+        assert!(driver.continuations.contains_key(&continuation));
+        assert_eq!(driver.materialization.active_attachment_count(keys[0]), 1);
+        assert_eq!(driver.materialization.active_attachment_count(keys[1]), 0);
+
+        driver.progress_materialization().unwrap();
+        assert!(!driver.pending_attachment_cleanups.contains(&continuation));
+        assert!(!driver.continuations.contains_key(&continuation));
+        assert_eq!(driver.materialization.active_attachment_count(keys[0]), 0);
+        assert_eq!(
+            handle.command_count(|command| matches!(
+                command,
+                MockPhysicalCommand::ReleaseSelected(key) if *key == keys[0]
+            )),
+            2
+        );
+    }
+
+    #[test]
+    fn finish_resume_multi_key_release_failure_retries_without_replaying_detached_keys() {
+        let (physical, handle) = MockPhysicalBackend::automatic();
+        handle.set_resident(true);
+        let runner =
+            MockTopKRunner::new(Vec::new()).with_physical_expert_backend(Box::new(physical));
+        let mut driver = concurrent_transaction_driver(runner);
+        let mut keys = Vec::new();
+        for seed in [40, 41] {
+            let key = match driver
+                .executor
+                .runner_mut()
+                .expert_materialization_adapter()
+                .unwrap()
+                .resolve(materialization_request(seed))
+                .unwrap()
+            {
+                ExpertDependencyResolution::Resident(binding) => binding.key(),
+                ExpertDependencyResolution::Waiting(_) => panic!("expected resident key"),
+            };
+            keys.push(key);
+        }
+        let transaction = ExecutionTransactionId::new(300).unwrap();
+        let continuation = ContinuationId::new(300);
+        let progress = PendingModelProgress::new(
+            transaction,
+            continuation,
+            DependencySet::new(
+                keys.iter()
+                    .copied()
+                    .map(|key| LogicalDependency::expert_resident(key).unwrap()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        driver
+            .register_pending_progress(&progress, crate::scheduling::ResourceClass::Decode)
+            .unwrap();
+        driver.progress_materialization().unwrap();
+        assert!(driver.ready_continuations.contains(&continuation));
+        let mut lease = driver.prepare_resume_lease(continuation).unwrap();
+        let _leases = lease.take().unwrap();
+
+        handle.fail_next_release(ferrule_common::FailureReason::DeviceUnavailable);
+        let error = driver
+            .finish_resume_lease(continuation, lease, driver.runtime_now_ns())
+            .unwrap_err();
+        assert!(error.to_string().contains("lease release failed"));
+        assert!(driver.pending_attachment_cleanups.contains(&continuation));
+        assert!(driver.continuations.contains_key(&continuation));
+        assert_eq!(
+            keys.iter()
+                .map(|key| driver.materialization.active_attachment_count(*key))
+                .sum::<usize>(),
+            1
+        );
+        assert_eq!(
+            handle.command_count(|command| matches!(
+                command,
+                MockPhysicalCommand::ReleaseSelected(_)
+            )),
+            2
+        );
+
+        driver.progress_materialization().unwrap();
+        assert!(!driver.pending_attachment_cleanups.contains(&continuation));
+        assert!(!driver.continuations.contains_key(&continuation));
+        assert!(
+            keys.iter()
+                .all(|key| driver.materialization.active_attachment_count(*key) == 0)
+        );
+        assert_eq!(
+            handle.command_count(|command| matches!(
+                command,
+                MockPhysicalCommand::ReleaseSelected(_)
+            )),
+            3
+        );
     }
 
     #[test]
@@ -6622,15 +7147,11 @@ mod tests {
         driver.submit(submitted);
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::WaitingForModelProgress(_)
         ));
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::WaitingForModelProgress(_)
         ));
         assert_eq!(driver.load_registry().pending_physical_operations(), 1);
@@ -6649,6 +7170,31 @@ mod tests {
         assert!(driver.session_owner.is_empty());
         assert!(driver.pending_sequence_cleanups.is_empty());
         assert!(driver.scheduler().is_idle());
+        assert!(driver.materialization.keys().is_empty());
+        assert_eq!(
+            handle.command_count(|command| matches!(command, MockPhysicalCommand::PhysicalDropped)),
+            0
+        );
+
+        let runner = match driver.try_into_runner() {
+            Ok(runner) => runner,
+            Err(failure) => panic!("drained driver did not extract its runner: {}", failure.0),
+        };
+        assert_eq!(
+            handle.command_count(|command| matches!(command, MockPhysicalCommand::PhysicalDropped)),
+            0
+        );
+        drop(runner);
+        let commands = handle.commands();
+        let cancel = commands
+            .iter()
+            .position(|command| matches!(command, MockPhysicalCommand::Cancel(..)))
+            .expect("registry shutdown must cancel submitted physical work");
+        let dropped = commands
+            .iter()
+            .position(|command| matches!(command, MockPhysicalCommand::PhysicalDropped))
+            .expect("physical authority must be dropped with the extracted runner");
+        assert!(cancel < dropped);
     }
 
     #[test]
@@ -6833,13 +7379,10 @@ mod tests {
 
         let step = |driver: &mut ResidentTopKDriver<MockTopKRunner, FixedSequenceSlotPool>,
                     events: &mut Vec<ResidentTokenEvent>| {
-            driver.step_with_model_expert_io(
-                &mut |event| {
-                    events.push(event.clone());
-                    Ok(())
-                },
-                ExpertIoBudget::unbounded(),
-            )
+            driver.step(&mut |event| {
+                events.push(event.clone());
+                Ok(())
+            })
         };
 
         assert!(matches!(
@@ -6933,13 +7476,10 @@ mod tests {
         let mut events = Vec::new();
 
         let prefill = driver
-            .step_with_model_expert_io(
-                &mut |event| {
-                    events.push(event.clone());
-                    Ok(())
-                },
-                ExpertIoBudget::unbounded(),
-            )
+            .step(&mut |event| {
+                events.push(event.clone());
+                Ok(())
+            })
             .unwrap();
         assert!(matches!(
             prefill,
@@ -6950,13 +7490,10 @@ mod tests {
         ));
 
         let decode = driver
-            .step_with_model_expert_io(
-                &mut |event| {
-                    events.push(event.clone());
-                    Ok(())
-                },
-                ExpertIoBudget::unbounded(),
-            )
+            .step(&mut |event| {
+                events.push(event.clone());
+                Ok(())
+            })
             .unwrap();
         assert!(matches!(
             decode,
@@ -7081,9 +7618,7 @@ mod tests {
         assert_eq!(driver.executor().runner().packed_verification_calls, 0);
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Decode,
                 ..
@@ -7134,9 +7669,7 @@ mod tests {
 
         for expected_resumes in [1, 2] {
             assert!(matches!(
-                driver
-                    .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                    .unwrap(),
+                driver.step(&mut |_| Ok(())).unwrap(),
                 ResidentDriverStep::WaitingForModelProgress(_)
             ));
             assert_eq!(driver.executor().runner().native_proposal_begin_calls, 1);
@@ -7148,9 +7681,7 @@ mod tests {
         }
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Decode,
                 ..
@@ -7298,11 +7829,7 @@ mod tests {
             ResidentDriverStep::WaitingForModelProgress(_)
         ));
 
-        assert!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .is_err()
-        );
+        assert!(driver.step(&mut |_| Ok(())).is_err());
         assert!(matches!(
             driver.speculative_transactions.values().next(),
             Some(PendingSpeculativeDriverCohort::Proposing(_))
@@ -7375,17 +7902,13 @@ mod tests {
         };
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut emit, ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut emit).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Prefill,
                 ..
             }
         ));
-        let first_wait = driver
-            .step_with_model_expert_io(&mut emit, ExpertIoBudget::unbounded())
-            .unwrap();
+        let first_wait = driver.step(&mut emit).unwrap();
         assert!(matches!(
             first_wait,
             ResidentDriverStep::WaitingForModelProgress(_)
@@ -7397,9 +7920,7 @@ mod tests {
         assert_eq!(driver.executor().runner().native_proposal_begin_calls, 1);
         assert_eq!(driver.executor().runner().packed_verification_calls, 1);
 
-        let second_wait = driver
-            .step_with_model_expert_io(&mut emit, ExpertIoBudget::unbounded())
-            .unwrap();
+        let second_wait = driver.step(&mut emit).unwrap();
         assert!(matches!(
             second_wait,
             ResidentDriverStep::WaitingForModelProgress(_)
@@ -7408,9 +7929,7 @@ mod tests {
         assert_eq!(driver.executor().runner().native_proposal_begin_calls, 1);
         assert_eq!(driver.executor().runner().packed_verification_calls, 1);
 
-        let completed = driver
-            .step_with_model_expert_io(&mut emit, ExpertIoBudget::unbounded())
-            .unwrap();
+        let completed = driver.step(&mut emit).unwrap();
         assert!(matches!(
             completed,
             ResidentDriverStep::Executed {
@@ -7529,9 +8048,7 @@ mod tests {
         let allocated_pages_before = driver.page_manager().unwrap().allocated_pages();
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Decode,
                 ..
@@ -7574,9 +8091,7 @@ mod tests {
         );
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::WaitingForModelProgress(_)
         ));
         assert_eq!(driver.speculative_transactions.len(), 1);
@@ -7591,9 +8106,7 @@ mod tests {
         assert_eq!(driver.executor().runner().released_sequence_states, 1);
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Decode,
                 ..
@@ -7878,13 +8391,10 @@ mod tests {
 
         assert!(matches!(
             driver
-                .step_with_model_expert_io(
-                    &mut |event| {
-                        events.push(event.clone());
-                        Ok(())
-                    },
-                    ExpertIoBudget::unbounded()
-                )
+                .step(&mut |event| {
+                    events.push(event.clone());
+                    Ok(())
+                },)
                 .unwrap(),
             ResidentDriverStep::WaitingForModelProgress(_)
         ));
@@ -7908,9 +8418,7 @@ mod tests {
         assert!(events.is_empty());
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::WaitingForModelProgress(_)
         ));
         assert_eq!(driver.executor().runner().prepared_batches, 1);
@@ -7927,9 +8435,7 @@ mod tests {
         );
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Prefill,
                 rows: 2,
@@ -7985,16 +8491,10 @@ mod tests {
         driver.submit(submitted);
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::WaitingForModelProgress(_)
         ));
-        assert!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .is_err()
-        );
+        assert!(driver.step(&mut |_| Ok(())).is_err());
         assert!(!driver.resident_transactions.is_empty());
         assert!(driver.executor().has_transactions());
         assert!(!driver.sequence_states.contains_key(&SessionId(1)));
@@ -8040,9 +8540,7 @@ mod tests {
         }
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Prefill,
                 rows: 1,
@@ -8085,9 +8583,7 @@ mod tests {
         assert!(!driver.executor().is_poisoned());
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Prefill,
                 rows: 1,
@@ -8100,9 +8596,7 @@ mod tests {
         assert!(driver.pending_sequence_cleanups.contains_key(&SessionId(2)));
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Decode,
                 ..
@@ -8127,9 +8621,8 @@ mod tests {
             driver.submit(submitted);
         }
 
-        let ResidentDriverStep::WaitingForModelProgress(progress) = driver
-            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-            .unwrap()
+        let ResidentDriverStep::WaitingForModelProgress(progress) =
+            driver.step(&mut |_| Ok(())).unwrap()
         else {
             panic!("both transactions must suspend");
         };
@@ -8150,9 +8643,7 @@ mod tests {
         assert_eq!(driver.resident_transactions.len(), 2);
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Prefill,
                 ..
@@ -8165,9 +8656,7 @@ mod tests {
         assert_eq!(driver.executor().runner().committed_batches, 1);
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Prefill,
                 ..
@@ -8208,9 +8697,7 @@ mod tests {
         }
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Prefill,
                 ..
@@ -8263,9 +8750,7 @@ mod tests {
         assert!(driver.executor().runner().released_kv_pages.is_empty());
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Prefill,
                 ..
@@ -8275,9 +8760,7 @@ mod tests {
         assert_eq!(driver.pending_sequence_cleanups.len(), 3);
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Decode,
                 ..
@@ -8316,16 +8799,14 @@ mod tests {
 
         assert!(matches!(
             driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
+                .step(&mut |_| Ok(()))
                 .unwrap(),
             ResidentDriverStep::WaitingForModelProgress(ref pending) if pending.len() == 2
         ));
         assert_eq!(driver.resident_transactions.len(), 2);
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Prefill,
                 finished: 1,
@@ -8347,9 +8828,7 @@ mod tests {
         );
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Prefill,
                 finished: 1,
@@ -8361,9 +8840,7 @@ mod tests {
         assert_eq!(driver.executor().runner().released_sequence_states, 1);
 
         assert_eq!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Idle
         );
         assert!(driver.pending_kv_retirements.is_empty());
@@ -8394,7 +8871,7 @@ mod tests {
             driver.submit(submitted);
         }
         assert!(matches!(
-            driver.step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded()).unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::WaitingForModelProgress(progress) if progress.len() == 2
         ));
         let transaction_b = driver.session_owner[&SessionId(2)];
@@ -8428,15 +8905,11 @@ mod tests {
         assert!(driver.executor().runner().released_kv_pages.is_empty());
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::WaitingForModelProgress(_)
         ));
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Prefill,
                 ..
@@ -8447,9 +8920,7 @@ mod tests {
         assert_eq!(driver.executor().runner().committed_batches, 1);
         assert!(driver.pending_sequence_cleanups.contains_key(&SessionId(1)));
 
-        let _ = driver
-            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-            .unwrap();
+        let _ = driver.step(&mut |_| Ok(())).unwrap();
         assert!(driver.pending_kv_retirements.is_empty());
         assert!(!driver.pending_sequence_cleanups.contains_key(&SessionId(1)));
         assert!(!driver.sequence_states.contains_key(&SessionId(1)));
@@ -8474,9 +8945,7 @@ mod tests {
             submitted.session_id = Some(SessionId(id));
             driver.submit(submitted);
         }
-        driver
-            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-            .unwrap();
+        driver.step(&mut |_| Ok(())).unwrap();
         let transaction_a = driver.session_owner[&SessionId(1)];
         let transaction_b = driver.session_owner[&SessionId(2)];
 
@@ -8490,9 +8959,7 @@ mod tests {
         assert_eq!(driver.executor().runner().rolled_back_batches, 0);
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Prefill,
                 ..
@@ -8504,9 +8971,7 @@ mod tests {
         assert_eq!(driver.executor().runner().rolled_back_batches, 0);
 
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Cancel,
                 ..
@@ -8543,9 +9008,7 @@ mod tests {
         submitted.session_id = Some(SessionId(1));
         driver.submit(submitted);
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::WaitingForModelProgress(_)
         ));
 
@@ -8833,9 +9296,7 @@ mod tests {
         let mut driver = driver_from_runner(runner);
         driver.submit(request(11, &[1, 2], 1, Vec::new()));
 
-        let error = driver
-            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-            .unwrap_err();
+        let error = driver.step(&mut |_| Ok(())).unwrap_err();
         assert!(format!("{error}").contains("simulated failure"));
         assert!(!driver.executor().is_poisoned());
         assert!(driver.resident_transactions.is_empty());
@@ -8853,9 +9314,7 @@ mod tests {
         driver.executor_mut().runner_mut().fail_next_mutation = false;
         driver.submit(request(12, &[3], 1, Vec::new()));
         assert!(matches!(
-            driver
-                .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-                .unwrap(),
+            driver.step(&mut |_| Ok(())).unwrap(),
             ResidentDriverStep::Executed {
                 action_kind: ResidentActionKind::Prefill,
                 ..
@@ -8869,9 +9328,7 @@ mod tests {
         driver.submit(request(50, &[1], 2, Vec::new()));
         driver.submit(request(51, &[2], 2, Vec::new()));
 
-        let step = driver
-            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-            .unwrap();
+        let step = driver.step(&mut |_| Ok(())).unwrap();
         assert!(matches!(step, ResidentDriverStep::Executed { rows: 2, .. }));
         assert_eq!(driver.sequence_states.len(), 2);
         assert_eq!(driver.sequence_states[&SessionId(1)].position, 1);
@@ -8885,9 +9342,7 @@ mod tests {
         driver.submit(request(52, &[1], 2, Vec::new()));
         driver.submit(request(53, &[2], 2, Vec::new()));
 
-        let error = driver
-            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-            .unwrap_err();
+        let error = driver.step(&mut |_| Ok(())).unwrap_err();
         assert!(format!("{error}").contains("simulated failure"));
         assert_eq!(driver.scheduler().failed_len(), 2);
         assert!(driver.sequence_states.is_empty());
@@ -8903,9 +9358,7 @@ mod tests {
         // Submit at the overflow position to trigger a lowering failure.
         driver.submit_at_position(request(13, &[1], 1, Vec::new()), u32::MAX as usize + 1);
 
-        let error = driver
-            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-            .unwrap_err();
+        let error = driver.step(&mut |_| Ok(())).unwrap_err();
         assert!(format!("{error}").contains("neutral u32 ABI"));
         assert!(!driver.executor().is_poisoned());
         assert_eq!(driver.scheduler().active_len(), 0);
@@ -8965,9 +9418,7 @@ mod tests {
         );
         driver.submit(request(13, &[1, 2], 1, Vec::new()));
 
-        let error = driver
-            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-            .unwrap_err();
+        let error = driver.step(&mut |_| Ok(())).unwrap_err();
         assert!(format!("{error}").contains("allows 5 active sequences"));
         assert_eq!(driver.scheduler().waiting_len(), 1);
         assert_eq!(driver.scheduler().active_len(), 0);
@@ -9005,9 +9456,7 @@ mod tests {
         let mut driver = driver_with_outputs(vec![top(b'a' as u32), top(b'b' as u32)])
             .with_page_manager(manager);
         driver.submit(request(19, &[1, 2, 3], 2, Vec::new()));
-        driver
-            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-            .unwrap();
+        driver.step(&mut |_| Ok(())).unwrap();
 
         assert_eq!(driver.scheduler().active_len(), 1);
         assert_eq!(driver.slot_pool().active_count(), 1);
@@ -9074,9 +9523,7 @@ mod tests {
             .with_page_manager(manager);
         driver.submit(request(21, &[1, 2], 2, Vec::new()));
 
-        let first = driver
-            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-            .unwrap();
+        let first = driver.step(&mut |_| Ok(())).unwrap();
         assert!(matches!(first, ResidentDriverStep::Executed { .. }));
         let session_id = SessionId(1);
         let before = driver
@@ -9138,9 +9585,7 @@ mod tests {
     fn exact_fork_executes_only_suffix_and_clears_source_candidate() {
         let mut driver = fork_driver();
         driver.submit(request(30, &[1, 2, 3], 4, Vec::new()));
-        driver
-            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-            .unwrap();
+        driver.step(&mut |_| Ok(())).unwrap();
         let source = SessionId(1);
         assert_eq!(
             driver
@@ -9184,9 +9629,7 @@ mod tests {
             source_page
         );
 
-        driver
-            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-            .unwrap();
+        driver.step(&mut |_| Ok(())).unwrap();
         let target_model = driver.sequence_states.get(&target).unwrap();
         assert_eq!(target_model.prefills, vec![vec![9, 10]]);
         assert_eq!(target_model.position, 5);
@@ -9215,9 +9658,7 @@ mod tests {
     fn exact_fork_prepare_failure_leaves_source_and_target_unchanged() {
         let mut driver = fork_driver();
         driver.submit(request(32, &[1, 2, 3], 4, Vec::new()));
-        driver
-            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-            .unwrap();
+        driver.step(&mut |_| Ok(())).unwrap();
         let source = SessionId(1);
         let source_candidate = driver
             .scheduler()
@@ -9271,9 +9712,7 @@ mod tests {
     fn exact_fork_model_prepare_failure_rolls_back_all_provisional_state() {
         let mut driver = fork_driver();
         driver.submit(request(34, &[1, 2, 3], 4, Vec::new()));
-        driver
-            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-            .unwrap();
+        driver.step(&mut |_| Ok(())).unwrap();
         let source = SessionId(1);
         driver
             .sequence_states
@@ -9324,9 +9763,7 @@ mod tests {
             ResidentTopKDriverConfig::default(),
         );
         driver.submit(request(6, &[1], 1, Vec::new()));
-        let step = driver
-            .step_with_model_expert_io(&mut |_| Ok(()), ExpertIoBudget::unbounded())
-            .unwrap();
+        let step = driver.step(&mut |_| Ok(())).unwrap();
         assert_eq!(step, ResidentDriverStep::Blocked);
         assert_eq!(driver.scheduler().waiting_len(), 1);
     }

@@ -22,6 +22,7 @@ pub use ledger::{
     CohortId, CriticalPathLedger, CriticalPhase, LedgerError, OutputTokenId, OutputTokenSnapshot,
     PhaseDurations, TimeSpan,
 };
+pub(crate) use registry::RegistryDriveStep;
 pub use registry::{
     AttachReport, CompletionDisposition, CompletionRejection, CompletionRejectionReason,
     ContinuationFailure, FailedContinuation, LoadOp, LoadRegistry, LoadRequest, RegistryError,

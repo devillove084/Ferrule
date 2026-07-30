@@ -1,6 +1,8 @@
 //! Bounded aging and deficit-round-robin for runnable I/O transitions.
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
+
+use ahash::RandomState;
 
 use crate::scheduling::ResourceClass;
 
@@ -154,7 +156,7 @@ struct Entry<T> {
 pub struct FairQueue<T> {
     config: FairQueueConfig,
     entries: Vec<Entry<T>>,
-    deficit: BTreeMap<ResourceClass, i64>,
+    deficit: HashMap<ResourceClass, i64, RandomState>,
     next_sequence: u64,
 }
 
@@ -164,12 +166,14 @@ impl<T> FairQueue<T> {
         Ok(Self {
             config,
             entries: Vec::new(),
-            deficit: BTreeMap::from([
-                (ResourceClass::Prefetch, 0),
-                (ResourceClass::Prefill, 0),
-                (ResourceClass::Verification, 0),
-                (ResourceClass::Decode, 0),
-            ]),
+            deficit: {
+                let mut m = HashMap::with_hasher(RandomState::default());
+                m.insert(ResourceClass::Prefetch, 0i64);
+                m.insert(ResourceClass::Prefill, 0);
+                m.insert(ResourceClass::Verification, 0);
+                m.insert(ResourceClass::Decode, 0);
+                m
+            },
             next_sequence: 1,
         })
     }

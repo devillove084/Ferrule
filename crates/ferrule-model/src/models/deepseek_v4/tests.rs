@@ -395,7 +395,7 @@ fn packed_metadata_batch(mode: ForwardMode, sequences: Vec<ExecutionSequence>) -
 }
 
 #[test]
-fn packed_metadata_lowers_single_committed_row_for_serial_fallback() {
+fn packed_metadata_supports_single_committed_row_native_cuda() {
     let batch = packed_metadata_batch(
         ForwardMode::Decode,
         vec![ExecutionSequence::new(
@@ -413,7 +413,7 @@ fn packed_metadata_lowers_single_committed_row_for_serial_fallback() {
     assert_eq!(metadata.sequences.len(), 1);
     assert_eq!(metadata.row_to_sequence, vec![0]);
     #[cfg(feature = "cuda")]
-    assert!(!metadata.supports_native_cuda());
+    assert!(metadata.supports_native_cuda());
 }
 
 #[test]

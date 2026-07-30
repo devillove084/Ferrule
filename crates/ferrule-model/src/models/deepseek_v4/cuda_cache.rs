@@ -2348,24 +2348,6 @@ impl DeepSeekV4CudaOperatorCache {
         Ok(())
     }
 
-    pub(crate) fn expert_io_residency_snapshot(
-        &self,
-        experts_per_layer: &[usize],
-    ) -> Vec<Box<[crate::moe::prediction::ExpertResidency]>> {
-        self.expert_subsystem.as_ref().map_or_else(
-            || {
-                experts_per_layer
-                    .iter()
-                    .map(|&count| {
-                        vec![crate::moe::prediction::ExpertResidency::Cold; count]
-                            .into_boxed_slice()
-                    })
-                    .collect()
-            },
-            |subsystem| subsystem.residency_snapshot(experts_per_layer),
-        )
-    }
-
     pub(crate) fn resident_expert_stats_for_layer(&self, layer: usize) -> (usize, u64) {
         self.expert_subsystem.as_ref().map_or((0, 0), |subsystem| {
             subsystem.resident_stats_for_layer(layer)
@@ -4031,6 +4013,10 @@ impl DeepSeekV4CudaOperatorCache {
             let resident_slots = subsystem
                 .layer_slot_capacity(continuation.layer)?
                 .clamp(1, DSV4_EXPERT_TABLE_CAPACITY);
+            let resident_experts = subsystem.resident_experts_for_layer(continuation.layer)?;
+            continuation
+                .unique_experts
+                .sort_by_key(|expert| (!resident_experts.contains(expert), *expert));
             continuation.resident_slots = Some(resident_slots);
             continuation.segment_capacity = Some(fixed_eight_segment_capacity(
                 continuation.route_count,

@@ -6,8 +6,10 @@
 //! Model code addresses resources through IDs registered by the hardware adapter;
 //! the broker does not know model families or device vendors.
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+
+use ahash::RandomState;
 
 use ferrule_common::expert_io::{
     ExpertIoResourceAdmission, ExpertIoResourceClass, ExpertIoResourceControl,
@@ -227,7 +229,7 @@ struct HardLimitState {
 struct HardGrantRecord {
     owner: u64,
     class: ResourceClass,
-    claims: BTreeMap<ResourceKind, HardClaimState>,
+    claims: HashMap<ResourceKind, HardClaimState, RandomState>,
 }
 
 /// Non-cloneable RAII ownership token for a vector of hard credits.
@@ -240,7 +242,7 @@ struct HardGrantRecord {
 pub struct HardResourceGrant {
     id: Option<HardResourceGrantId>,
     owner: u64,
-    claims: BTreeMap<ResourceKind, HardClaimState>,
+    claims: HashMap<ResourceKind, HardClaimState, RandomState>,
 }
 
 impl HardResourceGrant {
@@ -286,8 +288,8 @@ pub struct HardResourceSnapshot {
 /// Owner-written hard-capacity ledger used by the runtime I/O registry.
 #[derive(Debug)]
 pub struct HardResourceBroker {
-    limits: BTreeMap<ResourceKind, HardLimitState>,
-    grants: BTreeMap<HardResourceGrantId, HardGrantRecord>,
+    limits: HashMap<ResourceKind, HardLimitState, RandomState>,
+    grants: HashMap<HardResourceGrantId, HardGrantRecord, RandomState>,
     next_grant: u64,
 }
 
@@ -295,7 +297,7 @@ impl HardResourceBroker {
     pub fn new(
         limits: impl IntoIterator<Item = HardResourceLimit>,
     ) -> std::result::Result<Self, HardResourceError> {
-        let mut states = BTreeMap::new();
+        let mut states = HashMap::default();
         for limit in limits {
             if limit.demand_reserve > limit.capacity {
                 return Err(HardResourceError::ReserveExceedsCapacity {
@@ -326,13 +328,13 @@ impl HardResourceBroker {
         }
         Ok(Self {
             limits: states,
-            grants: BTreeMap::new(),
+            grants: HashMap::default(),
             next_grant: 1,
         })
     }
 
-    /// A generous finite catalog useful for CPU tests and embedders that have not
-    /// yet supplied a hardware profile.
+    /// A generous finite catalog used only by deterministic CPU tests.
+    #[cfg(test)]
     pub fn testing_default() -> Self {
         Self::new(ResourceKind::ALL.map(|kind| {
             let capacity = match kind {
@@ -422,7 +424,7 @@ impl HardResourceBroker {
             .next_grant
             .checked_add(1)
             .ok_or(HardResourceError::GrantIdExhausted)?;
-        let claims: BTreeMap<_, _> = claims
+        let claims: HashMap<_, _, RandomState> = claims
             .into_iter()
             .map(|claim| {
                 (
@@ -607,7 +609,7 @@ impl HardResourceBroker {
     fn canonical_claims(
         claims: impl IntoIterator<Item = HardResourceClaim>,
     ) -> std::result::Result<Vec<HardResourceClaim>, HardResourceError> {
-        let mut merged = BTreeMap::<ResourceKind, u64>::new();
+        let mut merged = HashMap::<ResourceKind, u64, RandomState>::default();
         for claim in claims {
             if claim.amount == 0 {
                 continue;
@@ -704,7 +706,7 @@ pub struct ResourceRequest {
 
 impl ResourceRequest {
     pub fn new(claims: impl IntoIterator<Item = ResourceClaim>) -> Result<Self> {
-        let mut merged = BTreeMap::<ResourceId, u64>::new();
+        let mut merged = HashMap::<ResourceId, u64, RandomState>::default();
         for claim in claims {
             if claim.amount == 0 {
                 continue;
@@ -886,7 +888,7 @@ impl ResourceBrokerBuilder {
     pub fn build(self) -> ResourceBroker {
         ResourceBroker {
             resources: self.resources,
-            grants: BTreeMap::new(),
+            grants: HashMap::default(),
             next_grant: 1,
             stats: ResourceBrokerStats::default(),
         }
@@ -895,13 +897,12 @@ impl ResourceBrokerBuilder {
 
 /// Hard-capacity broker for physical resources held across execution ticks.
 ///
-/// The broker is deliberately separate from predictive [`ExpertIoBudget`](super::ExpertIoBudget):
-/// prediction may be wrong and may use forced progress, while a physical grant
-/// can never exceed capacity or the demand reserve.
+/// The broker is the sole admission authority: a physical grant can never
+/// exceed capacity or the demand reserve.
 #[derive(Debug)]
 pub struct ResourceBroker {
     resources: Vec<ResourceState>,
-    grants: BTreeMap<ResourceGrantId, GrantedResources>,
+    grants: HashMap<ResourceGrantId, GrantedResources, RandomState>,
     next_grant: u64,
     stats: ResourceBrokerStats,
 }

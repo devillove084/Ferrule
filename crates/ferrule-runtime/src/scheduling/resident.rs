@@ -8,16 +8,14 @@
 //! model and does not know concrete model families; it only decides which
 //! resident sequence should prefill/decode next and owns slot allocation lifecycle.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
+
+use ahash::RandomState;
 
 use ferrule_common::execution::{LogitsOutput, TokenLogit};
 use ferrule_common::{Error, Result};
 
 use super::actions::{DecodeAction, PrefillChunkAction, SchedulerAction, plan_prefill_chunk};
-use super::expert_io::{
-    ExpertIoAdvisor, ExpertIoBatchUsage, ExpertIoBudget, ExpertIoCandidate, ExpertIoDecisionTrace,
-    ExpertIoPhase, ExpertIoQueueClass, ExpertIoRejection, ZeroExpertIoAdvisor, classify_admitted,
-};
 use super::session::{GenerateRequest, RequestId, SequenceFinishReason, SequenceState, SessionId};
 use super::{KvHandle, SequenceSlotPool};
 
@@ -25,13 +23,6 @@ use super::{KvHandle, SequenceSlotPool};
 struct WaitingRequest {
     request: GenerateRequest,
     position_start: Option<usize>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExpertIoCandidateDecision {
-    Admitted,
-    Forced,
-    Blocked,
 }
 
 impl WaitingRequest {
@@ -121,7 +112,6 @@ pub struct SuspendedSequenceSchedule {
     sequence: SequenceState,
     was_prefill_ready: bool,
     was_decode_ready: bool,
-    expert_io_deferral_age: Option<usize>,
 }
 
 /// Scheduler half of an exact-prefix fork, validated but not yet visible.
@@ -147,16 +137,13 @@ impl SuspendedSequenceSchedule {
 pub struct ResidentScheduler {
     config: ResidentSchedulerConfig,
     waiting: VecDeque<WaitingRequest>,
-    active: BTreeMap<SessionId, SequenceState>,
+    active: HashMap<SessionId, SequenceState, RandomState>,
     prefill_queue: VecDeque<SessionId>,
     decode_ready: VecDeque<SessionId>,
     decode_cohort_deferrals: usize,
-    expert_io_deferrals: BTreeMap<SessionId, usize>,
     finished: Vec<SequenceState>,
     cancelled: Vec<SequenceState>,
     failed: Vec<SequenceState>,
-    expert_io_trace_enabled: bool,
-    expert_io_trace: Vec<ExpertIoDecisionTrace>,
     next_session_id: u64,
     total_submitted: u64,
 }
@@ -172,16 +159,13 @@ impl ResidentScheduler {
         Self {
             config: config.normalized(),
             waiting: VecDeque::new(),
-            active: BTreeMap::new(),
+            active: HashMap::default(),
             prefill_queue: VecDeque::new(),
             decode_ready: VecDeque::new(),
             decode_cohort_deferrals: 0,
-            expert_io_deferrals: BTreeMap::new(),
             finished: Vec::new(),
             cancelled: Vec::new(),
             failed: Vec::new(),
-            expert_io_trace_enabled: false,
-            expert_io_trace: Vec::new(),
             next_session_id: 1,
             total_submitted: 0,
         }
@@ -302,21 +286,6 @@ impl ResidentScheduler {
         self.failed.len()
     }
 
-    /// Enable detailed per-candidate decision tracing. Scheduling and fairness
-    /// accounting remain active when tracing is disabled.
-    pub fn set_expert_io_trace_enabled(&mut self, enabled: bool) {
-        self.expert_io_trace_enabled = enabled;
-        if !enabled {
-            self.expert_io_trace.clear();
-            self.expert_io_trace.shrink_to_fit();
-        }
-    }
-
-    /// Expert-I/O decisions made while constructing the most recent batch.
-    pub fn expert_io_trace(&self) -> &[ExpertIoDecisionTrace] {
-        &self.expert_io_trace
-    }
-
     pub fn active_sequence(&self, session_id: SessionId) -> Option<&SequenceState> {
         self.active.get(&session_id)
     }
@@ -384,7 +353,6 @@ impl ResidentScheduler {
             source.next_decode_token = None;
             source.next_decode_logit = None;
         }
-        self.expert_io_deferrals.remove(&prepared.source_session_id);
         self.remove_from_queue(prepared.source_session_id, QueueKind::Decode);
         let target_session_id = prepared.target.session_id;
         if !prepared.target.prompt_prefill_done() {
@@ -401,13 +369,11 @@ impl ResidentScheduler {
     pub fn suspend_sequence(&mut self, session_id: SessionId) -> Result<SuspendedSequenceSchedule> {
         let was_prefill_ready = self.prefill_queue.contains(&session_id);
         let was_decode_ready = self.decode_ready.contains(&session_id);
-        let expert_io_deferral_age = self.expert_io_deferrals.get(&session_id).copied();
         let sequence = self.remove_active_sequence(session_id)?;
         Ok(SuspendedSequenceSchedule {
             sequence,
             was_prefill_ready,
             was_decode_ready,
-            expert_io_deferral_age,
         })
     }
 
@@ -425,9 +391,7 @@ impl ResidentScheduler {
         if suspended.was_decode_ready {
             self.decode_ready.push_back(session_id);
         }
-        if let Some(age) = suspended.expert_io_deferral_age {
-            self.expert_io_deferrals.insert(session_id, age);
-        }
+
         self.active.insert(session_id, suspended.sequence);
         Ok(())
     }
@@ -556,9 +520,7 @@ impl ResidentScheduler {
                 continue;
             }
             let action = plan_prefill_chunk(sequence, self.config.prefill_chunk_size)?;
-            if action.is_some() {
-                self.expert_io_deferrals.remove(&session_id);
-            }
+
             return Ok(action);
         }
 
@@ -573,151 +535,16 @@ impl ResidentScheduler {
     where
         C: SequenceSlotPool,
     {
-        self.next_action_with_expert_io(
-            slot_pool,
-            &mut ZeroExpertIoAdvisor,
-            ExpertIoBudget::unbounded(),
-        )
+        self.next_action_policy(slot_pool, self.config.allow_mixed_batches)
     }
 
-    /// Build the next request-centric batch under both token and expert-I/O
-    /// budgets. The advisor is model-neutral; a zero-cost advisor exactly
-    /// preserves the ordinary scheduler policy.
-    pub fn next_action_with_expert_io<C, A>(
+    pub(crate) fn next_action_policy<C>(
         &mut self,
         slot_pool: &mut C,
-        advisor: &mut A,
-        expert_budget: ExpertIoBudget,
-    ) -> Result<Option<SchedulerAction>>
-    where
-        C: SequenceSlotPool,
-        A: ExpertIoAdvisor,
-    {
-        self.next_action_with_expert_io_policy(
-            slot_pool,
-            advisor,
-            expert_budget,
-            self.config.allow_mixed_batches,
-        )
-    }
-
-    pub(crate) fn next_action_with_expert_io_policy<C, A>(
-        &mut self,
-        slot_pool: &mut C,
-        advisor: &mut A,
-        expert_budget: ExpertIoBudget,
         allow_mixed_batches: bool,
     ) -> Result<Option<SchedulerAction>>
     where
         C: SequenceSlotPool,
-        A: ExpertIoAdvisor,
-    {
-        if !A::ENABLED {
-            self.expert_io_trace.clear();
-            return self.next_admitted_action(
-                slot_pool,
-                advisor,
-                expert_budget,
-                allow_mixed_batches,
-            );
-        }
-
-        self.admit_waiting(slot_pool)?;
-        let decode_ready = self.decode_ready.clone();
-        let prefill_queue = self.prefill_queue.clone();
-        let expert_io_deferrals = self.expert_io_deferrals.clone();
-        let expert_io_trace = self.expert_io_trace.clone();
-        self.expert_io_trace.clear();
-        advisor.begin_batch();
-        match self.next_admitted_action(slot_pool, advisor, expert_budget, allow_mixed_batches) {
-            Ok(action) => Ok(action),
-            Err(error) => {
-                self.decode_ready = decode_ready;
-                self.prefill_queue = prefill_queue;
-                self.expert_io_deferrals = expert_io_deferrals;
-                self.expert_io_trace = expert_io_trace;
-                Err(error)
-            }
-        }
-    }
-
-    fn admit_expert_io_candidate<A: ExpertIoAdvisor>(
-        &mut self,
-        advisor: &mut A,
-        budget: ExpertIoBudget,
-        usage: &mut ExpertIoBatchUsage,
-        forced_overflow: &mut bool,
-        candidate: ExpertIoCandidate<'_>,
-    ) -> Result<ExpertIoCandidateDecision> {
-        if !A::ENABLED {
-            self.expert_io_deferrals.remove(&candidate.session_id);
-            return Ok(ExpertIoCandidateDecision::Admitted);
-        }
-        let (estimate, admission) = advisor.estimate(candidate)?;
-        let rejection = usage.inspect(budget, estimate);
-        if rejection == Some(ExpertIoRejection::InvalidConfidence) {
-            return Err(Error::Execution(format!(
-                "expert-I/O advisor returned invalid confidence {} for session {:?}",
-                estimate.confidence, candidate.session_id
-            )));
-        }
-        let deferral_age = self
-            .expert_io_deferrals
-            .get(&candidate.session_id)
-            .copied()
-            .unwrap_or(0);
-        let forced = rejection.is_some()
-            && rejection != Some(ExpertIoRejection::InvalidConfidence)
-            && !*forced_overflow
-            && budget.allow_singleton_overflow
-            && budget.max_expert_io_deferrals != usize::MAX
-            && deferral_age >= budget.max_expert_io_deferrals;
-        let admitted = rejection.is_none() || forced;
-        if self.expert_io_trace_enabled {
-            self.expert_io_trace.push(ExpertIoDecisionTrace {
-                session_id: candidate.session_id,
-                phase: candidate.phase,
-                queue: if rejection.is_none() {
-                    classify_admitted(candidate.phase, estimate)
-                } else {
-                    ExpertIoQueueClass::MissBlocked
-                },
-                admitted,
-                forced_progress: forced,
-                estimate,
-                rejection,
-            });
-        }
-        if rejection.is_none() {
-            usage.admit(estimate);
-            advisor.admit(admission);
-            self.expert_io_deferrals.remove(&candidate.session_id);
-            Ok(ExpertIoCandidateDecision::Admitted)
-        } else if forced {
-            advisor.admit(admission);
-            self.expert_io_deferrals.remove(&candidate.session_id);
-            *forced_overflow = true;
-            Ok(ExpertIoCandidateDecision::Forced)
-        } else {
-            let age = self
-                .expert_io_deferrals
-                .entry(candidate.session_id)
-                .or_default();
-            *age = age.saturating_add(1);
-            Ok(ExpertIoCandidateDecision::Blocked)
-        }
-    }
-
-    fn next_admitted_action<C, A>(
-        &mut self,
-        slot_pool: &mut C,
-        advisor: &mut A,
-        expert_budget: ExpertIoBudget,
-        allow_mixed_batches: bool,
-    ) -> Result<Option<SchedulerAction>>
-    where
-        C: SequenceSlotPool,
-        A: ExpertIoAdvisor,
     {
         self.admit_waiting(slot_pool)?;
         let defer_decode = !allow_mixed_batches
@@ -731,8 +558,6 @@ impl ResidentScheduler {
             self.config.max_batch_tokens
         };
         let mut remaining = token_budget;
-        let mut expert_usage = ExpertIoBatchUsage::default();
-        let mut forced_overflow = false;
         let mut decodes = Vec::new();
         let decode_candidates = if defer_decode {
             0
@@ -752,29 +577,7 @@ impl ResidentScheduler {
             let Some(token_id) = sequence.next_decode_token else {
                 continue;
             };
-            let action = DecodeAction::from_sequence(sequence, token_id);
-            let decision = match self.admit_expert_io_candidate(
-                advisor,
-                expert_budget,
-                &mut expert_usage,
-                &mut forced_overflow,
-                ExpertIoCandidate {
-                    session_id,
-                    phase: ExpertIoPhase::Decode,
-                    token_ids: std::slice::from_ref(&token_id),
-                },
-            ) {
-                Ok(decision) => decision,
-                Err(error) => {
-                    self.decode_ready.push_front(session_id);
-                    return Err(error);
-                }
-            };
-            if decision == ExpertIoCandidateDecision::Blocked {
-                self.decode_ready.push_back(session_id);
-                continue;
-            }
-            decodes.push(action);
+            decodes.push(DecodeAction::from_sequence(sequence, token_id));
             remaining -= 1;
         }
 
@@ -798,27 +601,7 @@ impl ResidentScheduler {
                 let Some(action) = PrefillChunkAction::from_sequence(sequence, chunk)? else {
                     continue;
                 };
-                let decision = match self.admit_expert_io_candidate(
-                    advisor,
-                    expert_budget,
-                    &mut expert_usage,
-                    &mut forced_overflow,
-                    ExpertIoCandidate {
-                        session_id,
-                        phase: ExpertIoPhase::Prefill,
-                        token_ids: &action.tokens,
-                    },
-                ) {
-                    Ok(decision) => decision,
-                    Err(error) => {
-                        self.prefill_queue.push_front(session_id);
-                        return Err(error);
-                    }
-                };
                 self.prefill_queue.push_back(session_id);
-                if decision == ExpertIoCandidateDecision::Blocked {
-                    continue;
-                }
                 remaining -= action.tokens.len();
                 prefills.push(action);
                 if !allow_mixed_batches {
@@ -914,7 +697,6 @@ impl ResidentScheduler {
                 continue;
             };
             actions.push(DecodeAction::from_sequence(sequence, token_id));
-            self.expert_io_deferrals.remove(&session_id);
         }
 
         if actions.is_empty() {
@@ -1123,7 +905,6 @@ impl ResidentScheduler {
     fn remove_active_sequence(&mut self, session_id: SessionId) -> Result<SequenceState> {
         self.remove_from_queue(session_id, QueueKind::Prefill);
         self.remove_from_queue(session_id, QueueKind::Decode);
-        self.expert_io_deferrals.remove(&session_id);
         self.active.remove(&session_id).ok_or_else(|| {
             Error::Internal(format!(
                 "cannot remove inactive resident session {:?}",
@@ -1184,137 +965,6 @@ mod tests {
     }
 
     struct FailingFreeKvCache;
-
-    struct TokenCostAdvisor;
-    struct InvalidConfidenceAdvisor;
-
-    fn token_cost_estimate(token: Option<u32>) -> super::super::expert_io::ExpertIoEstimate {
-        let cold = token == Some(10);
-        super::super::expert_io::ExpertIoEstimate {
-            incremental_unique_bytes: if cold { 128 } else { 0 },
-            predicted_cold_bytes: if cold { 128 } else { 0 },
-            inflight_reads: usize::from(cold),
-            pinned_slab_bytes: if cold { 128 } else { 0 },
-            storage_read_bytes: if cold { 128 } else { 0 },
-            read_ops: usize::from(cold),
-            pageable_host_bytes: if cold { 128 } else { 0 },
-            pinned_host_bytes: if cold { 128 } else { 0 },
-            h2d_bytes: if cold { 128 } else { 0 },
-            upload_slots: usize::from(cold),
-            device_install_bytes: if cold { 128 } else { 0 },
-            ..Default::default()
-        }
-    }
-
-    #[derive(Default)]
-    struct FailSecondAdvisor {
-        calls: usize,
-    }
-
-    #[derive(Default)]
-    struct UnionAdvisor {
-        admitted_tokens: Vec<u32>,
-        begin_calls: usize,
-    }
-
-    impl ExpertIoAdvisor for UnionAdvisor {
-        type Admission = u32;
-
-        fn begin_batch(&mut self) {
-            self.begin_calls += 1;
-            self.admitted_tokens.clear();
-        }
-
-        fn estimate(
-            &mut self,
-            candidate: ExpertIoCandidate<'_>,
-        ) -> Result<(super::super::expert_io::ExpertIoEstimate, Self::Admission)> {
-            let token = candidate.token_ids[0];
-            let incremental = if self.admitted_tokens.contains(&token) {
-                0
-            } else {
-                64
-            };
-            Ok((
-                super::super::expert_io::ExpertIoEstimate {
-                    incremental_unique_bytes: incremental,
-                    predicted_cold_bytes: incremental,
-                    ..Default::default()
-                },
-                token,
-            ))
-        }
-
-        fn admit(&mut self, token: Self::Admission) {
-            if !self.admitted_tokens.contains(&token) {
-                self.admitted_tokens.push(token);
-            }
-        }
-    }
-
-    impl ExpertIoAdvisor for FailSecondAdvisor {
-        type Admission = ();
-
-        fn begin_batch(&mut self) {
-            self.calls = 0;
-        }
-
-        fn estimate(
-            &mut self,
-            candidate: ExpertIoCandidate<'_>,
-        ) -> Result<(super::super::expert_io::ExpertIoEstimate, Self::Admission)> {
-            self.calls += 1;
-            if self.calls == 2 {
-                Err(Error::Internal("simulated advisor failure".into()))
-            } else {
-                Ok((
-                    token_cost_estimate(candidate.token_ids.first().copied()),
-                    (),
-                ))
-            }
-        }
-
-        fn admit(&mut self, _admission: Self::Admission) {}
-    }
-
-    impl ExpertIoAdvisor for InvalidConfidenceAdvisor {
-        type Admission = ();
-
-        fn begin_batch(&mut self) {}
-
-        fn estimate(
-            &mut self,
-            _candidate: ExpertIoCandidate<'_>,
-        ) -> Result<(super::super::expert_io::ExpertIoEstimate, Self::Admission)> {
-            Ok((
-                super::super::expert_io::ExpertIoEstimate {
-                    confidence: f32::NAN,
-                    ..Default::default()
-                },
-                (),
-            ))
-        }
-
-        fn admit(&mut self, _admission: Self::Admission) {}
-    }
-
-    impl ExpertIoAdvisor for TokenCostAdvisor {
-        type Admission = ();
-
-        fn begin_batch(&mut self) {}
-
-        fn estimate(
-            &mut self,
-            candidate: ExpertIoCandidate<'_>,
-        ) -> Result<(super::super::expert_io::ExpertIoEstimate, Self::Admission)> {
-            Ok((
-                token_cost_estimate(candidate.token_ids.first().copied()),
-                (),
-            ))
-        }
-
-        fn admit(&mut self, _admission: Self::Admission) {}
-    }
 
     impl SequenceSlotPool for FailingFreeKvCache {
         fn alloc_slot(&mut self) -> Result<KvHandle> {
@@ -1638,369 +1288,6 @@ mod tests {
         assert_eq!(prefills.len(), 1);
         assert_eq!(prefills[0].tokens.len(), 2);
         assert_eq!(decodes.len() + prefills[0].tokens.len(), 3);
-        assert!(scheduler.expert_io_trace().is_empty());
-    }
-
-    #[test]
-    fn expert_io_budget_skips_blocked_decode_without_stalling_resident_work() {
-        let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
-            prefill_chunk_size: 4,
-            max_active_sequences: 2,
-            max_decode_batch: 2,
-            max_batch_tokens: 2,
-            allow_mixed_batches: true,
-            ..Default::default()
-        });
-        scheduler.set_expert_io_trace_enabled(true);
-        let mut kv = FixedSequenceSlotPool::new(2);
-        scheduler.submit(request(1, vec![1]));
-        scheduler.submit(request(2, vec![2]));
-        scheduler.admit_waiting(&mut kv).unwrap();
-        for _ in 0..2 {
-            let action = scheduler.next_prefill_action(&mut kv).unwrap().unwrap();
-            scheduler.commit_action(&action).unwrap();
-        }
-        scheduler.stage_decode_token(SessionId(1), 10).unwrap();
-        scheduler.stage_decode_token(SessionId(2), 20).unwrap();
-
-        let action = scheduler
-            .next_action_with_expert_io(
-                &mut kv,
-                &mut TokenCostAdvisor,
-                ExpertIoBudget {
-                    max_incremental_expert_bytes: 0,
-                    ..ExpertIoBudget::unbounded()
-                },
-            )
-            .unwrap()
-            .unwrap();
-        let SchedulerAction::Execute { decodes, prefills } = action else {
-            panic!("expected native execution action");
-        };
-        assert!(prefills.is_empty());
-        assert_eq!(decodes.len(), 1);
-        assert_eq!(decodes[0].token_id, 20);
-        assert_eq!(scheduler.expert_io_trace().len(), 2);
-        assert_eq!(
-            scheduler.expert_io_trace()[0].queue,
-            ExpertIoQueueClass::MissBlocked
-        );
-        assert_eq!(
-            scheduler.expert_io_trace()[1].queue,
-            ExpertIoQueueClass::ResidentReady
-        );
-        assert_eq!(scheduler.decode_ready_len(), 1);
-    }
-
-    #[test]
-    fn expert_io_advisor_error_is_queue_age_and_trace_failure_atomic() {
-        let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
-            prefill_chunk_size: 4,
-            max_active_sequences: 2,
-            max_decode_batch: 2,
-            max_batch_tokens: 2,
-            allow_mixed_batches: true,
-            ..Default::default()
-        });
-        let mut kv = FixedSequenceSlotPool::new(2);
-        scheduler.submit(request(1, vec![1]));
-        scheduler.submit(request(2, vec![2]));
-        scheduler.admit_waiting(&mut kv).unwrap();
-        for _ in 0..2 {
-            let action = scheduler.next_prefill_action(&mut kv).unwrap().unwrap();
-            scheduler.commit_action(&action).unwrap();
-        }
-        scheduler.stage_decode_token(SessionId(1), 10).unwrap();
-        scheduler.stage_decode_token(SessionId(2), 20).unwrap();
-        let budget = ExpertIoBudget {
-            max_storage_read_bytes: 0,
-            max_expert_io_deferrals: 2,
-            ..ExpertIoBudget::unbounded()
-        };
-
-        let resident = scheduler
-            .next_action_with_expert_io(&mut kv, &mut TokenCostAdvisor, budget)
-            .unwrap()
-            .unwrap();
-        scheduler.commit_action(&resident).unwrap();
-        scheduler.stage_decode_token(SessionId(2), 21).unwrap();
-        assert_eq!(scheduler.expert_io_deferrals.get(&SessionId(1)), Some(&1));
-
-        let decode_ready = scheduler.decode_ready.clone();
-        let expert_io_deferrals = scheduler.expert_io_deferrals.clone();
-        let expert_io_trace = scheduler.expert_io_trace.clone();
-        let error = scheduler
-            .next_action_with_expert_io(&mut kv, &mut FailSecondAdvisor::default(), budget)
-            .unwrap_err();
-        assert!(error.to_string().contains("simulated advisor failure"));
-        assert_eq!(scheduler.decode_ready, decode_ready);
-        assert_eq!(scheduler.expert_io_deferrals, expert_io_deferrals);
-        assert_eq!(scheduler.expert_io_trace, expert_io_trace);
-
-        let action = scheduler.next_action(&mut kv).unwrap().unwrap();
-        let SchedulerAction::Execute { decodes, .. } = action else {
-            panic!("expected restored decode batch");
-        };
-        assert_eq!(
-            decodes
-                .iter()
-                .map(|decode| decode.session_id)
-                .collect::<Vec<_>>(),
-            vec![SessionId(1), SessionId(2)]
-        );
-    }
-
-    #[test]
-    fn expert_io_advisor_commits_union_only_for_admitted_candidates() {
-        let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
-            prefill_chunk_size: 4,
-            max_active_sequences: 2,
-            max_decode_batch: 2,
-            max_batch_tokens: 2,
-            allow_mixed_batches: true,
-            ..Default::default()
-        });
-        scheduler.set_expert_io_trace_enabled(true);
-        let mut kv = FixedSequenceSlotPool::new(2);
-        scheduler.submit(request(1, vec![1]));
-        scheduler.submit(request(2, vec![2]));
-        scheduler.admit_waiting(&mut kv).unwrap();
-        for _ in 0..2 {
-            let action = scheduler.next_prefill_action(&mut kv).unwrap().unwrap();
-            scheduler.commit_action(&action).unwrap();
-        }
-        scheduler.stage_decode_token(SessionId(1), 10).unwrap();
-        scheduler.stage_decode_token(SessionId(2), 10).unwrap();
-
-        let mut advisor = UnionAdvisor::default();
-        let action = scheduler
-            .next_action_with_expert_io(
-                &mut kv,
-                &mut advisor,
-                ExpertIoBudget {
-                    max_incremental_expert_bytes: 64,
-                    allow_singleton_overflow: false,
-                    ..ExpertIoBudget::unbounded()
-                },
-            )
-            .unwrap()
-            .unwrap();
-        let SchedulerAction::Execute { decodes, .. } = action else {
-            panic!("expected native execution action");
-        };
-        assert_eq!(decodes.len(), 2);
-        assert_eq!(advisor.begin_calls, 1);
-        assert_eq!(advisor.admitted_tokens, vec![10]);
-        assert_eq!(
-            scheduler.expert_io_trace()[0]
-                .estimate
-                .incremental_unique_bytes,
-            64
-        );
-        assert_eq!(
-            scheduler.expert_io_trace()[1]
-                .estimate
-                .incremental_unique_bytes,
-            0
-        );
-    }
-
-    #[test]
-    fn cold_decode_makes_bounded_progress_alongside_continuous_resident_decode() {
-        let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
-            prefill_chunk_size: 4,
-            max_active_sequences: 2,
-            max_decode_batch: 2,
-            max_batch_tokens: 2,
-            allow_mixed_batches: true,
-            ..Default::default()
-        });
-        scheduler.set_expert_io_trace_enabled(true);
-        let mut kv = FixedSequenceSlotPool::new(2);
-        scheduler.submit(request(1, vec![1]));
-        scheduler.submit(request(2, vec![2]));
-        scheduler.admit_waiting(&mut kv).unwrap();
-        for _ in 0..2 {
-            let action = scheduler.next_prefill_action(&mut kv).unwrap().unwrap();
-            scheduler.commit_action(&action).unwrap();
-        }
-        scheduler.stage_decode_token(SessionId(1), 10).unwrap();
-        scheduler.stage_decode_token(SessionId(2), 20).unwrap();
-        let budget = ExpertIoBudget {
-            max_storage_read_bytes: 0,
-            max_expert_io_deferrals: 2,
-            ..ExpertIoBudget::unbounded()
-        };
-
-        for (round, resident_token) in [21, 22].into_iter().enumerate() {
-            let action = scheduler
-                .next_action_with_expert_io(&mut kv, &mut TokenCostAdvisor, budget)
-                .unwrap()
-                .unwrap();
-            let SchedulerAction::Execute { decodes, .. } = &action else {
-                panic!("expected resident decode progress");
-            };
-            assert_eq!(decodes.len(), 1);
-            assert_eq!(decodes[0].session_id, SessionId(2));
-            assert!(
-                !scheduler
-                    .expert_io_trace()
-                    .iter()
-                    .any(|trace| trace.forced_progress)
-            );
-            assert_eq!(
-                scheduler.expert_io_deferrals.get(&SessionId(1)).copied(),
-                Some(round + 1)
-            );
-            scheduler.commit_action(&action).unwrap();
-            scheduler
-                .stage_decode_token(SessionId(2), resident_token)
-                .unwrap();
-        }
-
-        let action = scheduler
-            .next_action_with_expert_io(&mut kv, &mut TokenCostAdvisor, budget)
-            .unwrap()
-            .unwrap();
-        let SchedulerAction::Execute { decodes, .. } = action else {
-            panic!("expected forced cold decode with resident work");
-        };
-        assert_eq!(
-            decodes
-                .iter()
-                .map(|decode| decode.session_id)
-                .collect::<Vec<_>>(),
-            vec![SessionId(1), SessionId(2)]
-        );
-        assert_eq!(
-            scheduler
-                .expert_io_trace()
-                .iter()
-                .filter(|trace| trace.forced_progress)
-                .map(|trace| trace.session_id)
-                .collect::<Vec<_>>(),
-            vec![SessionId(1)]
-        );
-        assert!(!scheduler.expert_io_deferrals.contains_key(&SessionId(1)));
-    }
-
-    #[test]
-    fn expert_io_overflow_is_fifo_and_limited_to_one_per_batch() {
-        let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
-            prefill_chunk_size: 4,
-            max_active_sequences: 3,
-            max_decode_batch: 3,
-            max_batch_tokens: 3,
-            allow_mixed_batches: true,
-            ..Default::default()
-        });
-        scheduler.set_expert_io_trace_enabled(true);
-        let mut kv = FixedSequenceSlotPool::new(3);
-        for id in 1..=3 {
-            scheduler.submit(request(id, vec![id as u32]));
-        }
-        scheduler.admit_waiting(&mut kv).unwrap();
-        for session_id in [SessionId(1), SessionId(2), SessionId(3)] {
-            let action = scheduler.next_prefill_action(&mut kv).unwrap().unwrap();
-            scheduler.commit_action(&action).unwrap();
-            scheduler.stage_decode_token(session_id, 10).unwrap();
-        }
-        let budget = ExpertIoBudget {
-            max_storage_read_bytes: 0,
-            max_expert_io_deferrals: 0,
-            ..ExpertIoBudget::unbounded()
-        };
-
-        for expected in [SessionId(1), SessionId(2)] {
-            let action = scheduler
-                .next_action_with_expert_io(&mut kv, &mut TokenCostAdvisor, budget)
-                .unwrap()
-                .unwrap();
-            let SchedulerAction::Execute { decodes, .. } = &action else {
-                panic!("expected one forced decode");
-            };
-            assert_eq!(decodes.len(), 1);
-            assert_eq!(decodes[0].session_id, expected);
-            assert_eq!(
-                scheduler
-                    .expert_io_trace()
-                    .iter()
-                    .filter(|trace| trace.forced_progress)
-                    .count(),
-                1
-            );
-            scheduler.commit_action(&action).unwrap();
-        }
-    }
-
-    #[test]
-    fn admitted_terminal_and_cancelled_sessions_clear_expert_io_age() {
-        let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
-            max_active_sequences: 2,
-            ..Default::default()
-        });
-        let mut kv = FixedSequenceSlotPool::new(2);
-        scheduler.submit(request(1, vec![1]));
-        scheduler.submit(request(2, vec![2]));
-        scheduler.admit_waiting(&mut kv).unwrap();
-        scheduler.expert_io_deferrals.insert(SessionId(1), 3);
-        scheduler.expert_io_deferrals.insert(SessionId(2), 4);
-
-        scheduler
-            .finish_sequence(SessionId(1), SequenceFinishReason::MaxTokens, &mut kv)
-            .unwrap();
-        scheduler.cancel_sequence(SessionId(2), &mut kv).unwrap();
-        assert!(scheduler.expert_io_deferrals.is_empty());
-    }
-
-    #[test]
-    fn invalid_expert_io_confidence_is_a_terminal_advisor_error_not_a_block() {
-        let mut scheduler = ResidentScheduler::default();
-        let mut kv = FixedSequenceSlotPool::new(1);
-        scheduler.submit(request(90, vec![10]));
-
-        let error = scheduler
-            .next_action_with_expert_io(
-                &mut kv,
-                &mut InvalidConfidenceAdvisor,
-                ExpertIoBudget::unbounded(),
-            )
-            .unwrap_err();
-
-        assert!(error.to_string().contains("invalid confidence"));
-        assert_eq!(scheduler.waiting_len(), 0);
-        assert_eq!(scheduler.active_len(), 1);
-    }
-
-    #[test]
-    fn expert_io_budget_forces_singleton_progress_when_all_work_is_blocked() {
-        let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
-            max_batch_tokens: 1,
-            ..Default::default()
-        });
-        scheduler.set_expert_io_trace_enabled(true);
-        let mut kv = FixedSequenceSlotPool::new(1);
-        scheduler.submit(request(1, vec![10]));
-
-        let action = scheduler
-            .next_action_with_expert_io(
-                &mut kv,
-                &mut TokenCostAdvisor,
-                ExpertIoBudget {
-                    max_incremental_expert_bytes: 0,
-                    max_expert_io_deferrals: 0,
-                    ..ExpertIoBudget::unbounded()
-                },
-            )
-            .unwrap();
-        assert!(action.is_some());
-        assert_eq!(scheduler.expert_io_trace().len(), 1);
-        assert!(scheduler.expert_io_trace()[0].admitted);
-        assert!(scheduler.expert_io_trace()[0].forced_progress);
-        assert_eq!(
-            scheduler.expert_io_trace()[0].queue,
-            ExpertIoQueueClass::MissBlocked
-        );
     }
 
     #[test]

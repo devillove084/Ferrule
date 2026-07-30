@@ -8,9 +8,7 @@ use ferrule_model::{
     ChatTemplate, ExpertMemoryPolicy, ModelDescriptor, ModelExecutionBackend, ModelFamily,
     models::deepseek_v4::{DeepSeekV4PrepareOptions, DeepSeekV4Runner},
 };
-use ferrule_runtime::{
-    ExpertIoBudget, ResidentInferenceEngine, ResidentSchedulerConfig, ResidentTopKDriverConfig,
-};
+use ferrule_runtime::{ResidentInferenceEngine, ResidentSchedulerConfig, ResidentTopKDriverConfig};
 use ferrule_server::{
     ModelRegistration, ServerState, WorkerConfig, serve_with_shutdown, spawn_model_worker_with,
 };
@@ -58,17 +56,6 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
     };
     let max_tensor_bytes = args.max_tensor_mb.saturating_mul(1024 * 1024);
     let kv_cache_bytes = required_mebibytes_to_bytes(args.kv_cache_mb, "kv-cache-mb")?;
-    let expert_io_budget = ExpertIoBudget {
-        max_incremental_expert_bytes: cache_byte_limit(
-            args.expert_io_batch_mb,
-            "expert-io-batch-mb",
-        )?,
-        // Serving cannot wait on a predictive budget: no physical completion
-        // exists until work is submitted. Force the oldest singleton immediately;
-        // hard admission belongs to the physical resource broker.
-        max_expert_io_deferrals: 0,
-        ..ExpertIoBudget::unbounded()
-    };
     let scheduler_config = ResidentSchedulerConfig {
         prefill_chunk_size: args.prefill_chunk_size,
         max_active_sequences: args.max_active_sequences,
@@ -131,7 +118,7 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
                 Some(page_limit),
             )
             .map_err(|error| error.to_string())?;
-            Ok(ResidentInferenceEngine::new(driver, expert_io_budget))
+            Ok(ResidentInferenceEngine::new(driver))
         },
         worker_config,
     )

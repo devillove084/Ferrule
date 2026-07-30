@@ -22,7 +22,7 @@ pub mod attention;
 pub mod config;
 #[cfg(feature = "cuda")]
 pub mod cuda_cache;
-pub mod expert_io;
+
 #[cfg(feature = "cuda")]
 pub(crate) mod expert_materializer;
 pub mod helpers;
@@ -44,7 +44,7 @@ pub use attention::{
     DeepSeekV4WindowKvCache,
 };
 pub use config::{DSparkConfig, DeepSeekV4AttentionConfig, DeepSeekV4Config, DeepSeekV4RopeParams};
-pub use expert_io::{DeepSeekV4ExpertIoLayerSnapshot, DeepSeekV4ExpertIoSnapshot};
+
 pub use layer::{
     DeepSeekV4Layer, DeepSeekV4LayerExpertRuntime, DeepSeekV4LayerState, DeepSeekV4LayerStepOutput,
 };

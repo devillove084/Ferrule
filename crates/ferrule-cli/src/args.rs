@@ -213,9 +213,6 @@ pub(crate) struct ServeArgs {
     /// Bound resident routed experts per layer (0 = managed default).
     #[arg(long, default_value_t = 96)]
     pub(crate) moe_hotset_experts: usize,
-    /// Predicted incremental expert source bytes admitted per scheduler batch in MiB (0 = unbounded).
-    #[arg(long = "expert-io-batch-mb", default_value_t = 2693)]
-    pub(crate) expert_io_batch_mb: u64,
     /// Maximum whole experts retained in pageable host memory (0 disables retention).
     #[arg(long = "expert-host-cache-entries", default_value_t = 64)]
     pub(crate) expert_host_cache_entries: usize,

@@ -42,6 +42,7 @@ pub(crate) enum MockPhysicalCommand {
     SubmitUpload(OperationId, LoadKey, u64),
     PollInstall(OperationId, LoadKey, u64),
     Cancel(OperationId, LoadKey, LoadStage, CancellationReason),
+    PhysicalDropped,
 }
 
 #[derive(Debug)]
@@ -55,6 +56,7 @@ struct MockPhysicalState {
     resident: bool,
     resolve_failure: Option<FailureReason>,
     reserve_failure: Option<FailureReason>,
+    release_failures: VecDeque<FailureReason>,
     reservation_key_override: Option<LoadKey>,
     reservation_operation_override: Option<OperationId>,
     reservation_slot_override: Option<DestinationSlotId>,
@@ -106,6 +108,7 @@ impl MockPhysicalState {
             resident: false,
             resolve_failure: None,
             reserve_failure: None,
+            release_failures: VecDeque::new(),
             reservation_key_override: None,
             reservation_operation_override: None,
             reservation_slot_override: None,
@@ -180,6 +183,14 @@ pub(crate) struct MockPhysicalHandle {
     state: Arc<Mutex<MockPhysicalState>>,
 }
 
+impl Drop for MockPhysicalBackend {
+    fn drop(&mut self) {
+        self.lock()
+            .commands
+            .push(MockPhysicalCommand::PhysicalDropped);
+    }
+}
+
 impl MockPhysicalBackend {
     pub(crate) fn automatic() -> (Self, MockPhysicalHandle) {
         Self::new(true)
@@ -227,7 +238,7 @@ impl MockPhysicalHandle {
         state.limits = limits;
     }
 
-    fn command_count(&self, predicate: impl Fn(&MockPhysicalCommand) -> bool) -> usize {
+    pub(crate) fn command_count(&self, predicate: impl Fn(&MockPhysicalCommand) -> bool) -> usize {
         self.lock()
             .commands
             .iter()
@@ -235,7 +246,15 @@ impl MockPhysicalHandle {
             .count()
     }
 
-    fn set_resident(&self, resident: bool) {
+    pub(crate) fn commands(&self) -> Vec<MockPhysicalCommand> {
+        self.lock().commands.clone()
+    }
+
+    pub(crate) fn binding(&self, key: LoadKey) -> ResidencyBinding {
+        self.lock().binding_for(key)
+    }
+
+    pub(crate) fn set_resident(&self, resident: bool) {
         self.lock().resident = resident;
     }
 
@@ -245,6 +264,10 @@ impl MockPhysicalHandle {
 
     fn fail_next_reserve(&self, failure: FailureReason) {
         self.lock().reserve_failure = Some(failure);
+    }
+
+    pub(crate) fn fail_next_release(&self, failure: FailureReason) {
+        self.lock().release_failures.push_back(failure);
     }
 
     fn override_reservation_key(&self, key: LoadKey) {
@@ -263,7 +286,7 @@ impl MockPhysicalHandle {
         *self.lock().lost_completions.entry(stage).or_default() += 1;
     }
 
-    fn script_outcome(&self, stage: LoadStage, outcome: CompletionOutcome) {
+    pub(crate) fn script_outcome(&self, stage: LoadStage, outcome: CompletionOutcome) {
         self.lock()
             .scripted_outcomes
             .entry(stage)
@@ -367,10 +390,15 @@ impl PhysicalExpertMaterializationBackend for MockPhysicalBackend {
     }
 
     fn release_selected(&mut self, key: LoadKey) -> Result<(), FailureReason> {
-        self.lock()
+        let mut state = self.lock();
+        state
             .commands
             .push(MockPhysicalCommand::ReleaseSelected(key));
-        Ok(())
+        if let Some(failure) = state.release_failures.pop_front() {
+            Err(failure)
+        } else {
+            Ok(())
+        }
     }
 
     fn reserve(
@@ -869,12 +897,45 @@ fn physical_bridge_adapter_preserves_resident_binding() {
 }
 
 #[test]
+fn physical_resident_resolution_is_adopted_without_a_second_read() {
+    let (physical, handle) = MockPhysicalBackend::manual();
+    handle.set_resident(true);
+    let backend = RunnerMaterializationBackend::new(Box::new(physical));
+    let (mut adapter, control) = RuntimeMaterializationControl::new(
+        handle.placement(),
+        Some(backend.clone()),
+        CompletionHub::new(),
+    );
+    let ExpertDependencyResolution::Resident(resident) = adapter.resolve(request(1)).unwrap()
+    else {
+        panic!("expected resident physical resolution");
+    };
+    let key = resident.key();
+    let load = LoadRequest::new(key, BYTES, ResourceClass::Decode);
+    let mut registry =
+        LoadRegistry::new(backend, physical_resources(), FairQueueConfig::default()).unwrap();
+    registry.adopt_residency(load, resident.binding()).unwrap();
+    let report = registry.attach_waiter(waiter(1, 1), [load], 1).unwrap();
+    assert_eq!(report.already_resident, 1);
+    assert!(report.created.is_empty());
+    assert_eq!(registry.residency_binding(key), Some(handle.binding(key)));
+    control.attach(ContinuationId::new(1), key).unwrap();
+    assert_eq!(
+        handle.command_count(|command| matches!(command, MockPhysicalCommand::SubmitRead(..))),
+        0
+    );
+    adapter.detach(ContinuationId::new(1), key).unwrap();
+    registry.shutdown(2, 0).unwrap();
+    control.forget_all().unwrap();
+}
+
+#[test]
 fn physical_selected_lease_releases_only_after_last_logical_demand_detaches() {
     let (physical, handle) = MockPhysicalBackend::manual();
     handle.set_resident(true);
     let backend = RunnerMaterializationBackend::new(Box::new(physical));
     let completion_hub = CompletionHub::new();
-    let (mut adapter, _) = RuntimeMaterializationControl::new(
+    let (mut adapter, control) = RuntimeMaterializationControl::new(
         handle.placement(),
         Some(backend),
         completion_hub.clone(),
@@ -883,8 +944,8 @@ fn physical_selected_lease_releases_only_after_last_logical_demand_detaches() {
         panic!("expected resident physical resolution");
     };
     let key = binding.key();
-    adapter.submit(key).unwrap();
-    adapter.submit(key).unwrap();
+    control.attach(ContinuationId::new(1), key).unwrap();
+    control.attach(ContinuationId::new(2), key).unwrap();
 
     let initial_epoch = completion_hub.epoch();
     adapter.detach(ContinuationId::new(1), key).unwrap();
@@ -899,6 +960,99 @@ fn physical_selected_lease_releases_only_after_last_logical_demand_detaches() {
         1
     );
     assert_eq!(completion_hub.epoch(), initial_epoch + 1);
+}
+
+#[test]
+fn physical_selected_lease_supports_same_continuation_key_on_a_second_edge() {
+    let (physical, handle) = MockPhysicalBackend::manual();
+    handle.set_resident(true);
+    let backend = RunnerMaterializationBackend::new(Box::new(physical));
+    let (mut adapter, control) =
+        RuntimeMaterializationControl::new(handle.placement(), Some(backend), CompletionHub::new());
+    let ExpertDependencyResolution::Resident(first) = adapter.resolve(request(1)).unwrap() else {
+        panic!("expected resident physical resolution");
+    };
+    let continuation = ContinuationId::new(7);
+    control.attach(continuation, first.key()).unwrap();
+    adapter.detach(continuation, first.key()).unwrap();
+
+    let ExpertDependencyResolution::Resident(second) = adapter.resolve(request(1)).unwrap() else {
+        panic!("expected resident physical resolution on the second edge");
+    };
+    assert_eq!(second.key(), first.key());
+    control.attach(continuation, second.key()).unwrap();
+    adapter.detach(continuation, second.key()).unwrap();
+
+    assert_eq!(
+        handle.command_count(|command| matches!(command, MockPhysicalCommand::ReleaseSelected(_))),
+        2
+    );
+    assert_eq!(control.active_attachment_count(first.key()), 0);
+}
+
+#[test]
+fn zero_demand_publish_releases_selected_and_retries_release_failure() {
+    let (physical, handle) = MockPhysicalBackend::manual();
+    let backend = RunnerMaterializationBackend::new(Box::new(physical));
+    let (mut adapter, control) =
+        RuntimeMaterializationControl::new(handle.placement(), Some(backend), CompletionHub::new());
+    let ExpertDependencyResolution::Waiting(key) = adapter.resolve(request(1)).unwrap() else {
+        panic!("expected pending physical reservation");
+    };
+    handle.fail_next_release(FailureReason::DeviceUnavailable);
+    assert!(control.record_resident(key, handle.binding(key)).is_err());
+    assert_eq!(control.resident_binding(key), Some(handle.binding(key)));
+    control.record_resident(key, handle.binding(key)).unwrap();
+    assert_eq!(
+        handle.command_count(|command| matches!(command, MockPhysicalCommand::ReleaseSelected(_))),
+        2
+    );
+}
+
+#[test]
+fn forget_release_failure_restores_exact_attachment_for_retry() {
+    let (physical, handle) = MockPhysicalBackend::manual();
+    handle.set_resident(true);
+    let backend = RunnerMaterializationBackend::new(Box::new(physical));
+    let (mut adapter, control) =
+        RuntimeMaterializationControl::new(handle.placement(), Some(backend), CompletionHub::new());
+    let ExpertDependencyResolution::Resident(binding) = adapter.resolve(request(1)).unwrap() else {
+        panic!("expected resident physical resolution");
+    };
+    let continuation = ContinuationId::new(9);
+    control.attach(continuation, binding.key()).unwrap();
+    handle.fail_next_release(FailureReason::DeviceUnavailable);
+    assert!(control.forget(binding.key()).is_err());
+    assert_eq!(control.active_attachment_count(binding.key()), 1);
+    adapter.detach(continuation, binding.key()).unwrap();
+    assert_eq!(control.active_attachment_count(binding.key()), 0);
+    assert_eq!(
+        handle.command_count(|command| matches!(command, MockPhysicalCommand::ReleaseSelected(_))),
+        2
+    );
+}
+
+#[test]
+fn terminal_idle_key_is_forgotten_before_request_retry() {
+    let (physical, handle) = MockPhysicalBackend::manual();
+    let backend = RunnerMaterializationBackend::new(Box::new(physical));
+    let (mut adapter, control) =
+        RuntimeMaterializationControl::new(handle.placement(), Some(backend), CompletionHub::new());
+    let ExpertDependencyResolution::Waiting(key) = adapter.resolve(request(1)).unwrap() else {
+        panic!("expected pending physical reservation");
+    };
+    let continuation = ContinuationId::new(11);
+    control.attach(continuation, key).unwrap();
+    adapter.detach(continuation, key).unwrap();
+    assert!(control.forget_if_idle(key).unwrap());
+    assert!(matches!(
+        adapter.resolve(request(1)).unwrap(),
+        ExpertDependencyResolution::Waiting(_)
+    ));
+    assert_eq!(
+        handle.command_count(|command| matches!(command, MockPhysicalCommand::Resolve(_))),
+        2
+    );
 }
 
 #[test]
@@ -1228,7 +1382,7 @@ fn physical_bridge_install_stale_never_publishes() {
 }
 
 #[test]
-fn physical_bridge_registry_and_adapter_publish_identical_binding() {
+fn physical_bridge_registry_and_adapter_retain_identical_binding() {
     let (physical, handle) = MockPhysicalBackend::automatic();
     let backend = RunnerMaterializationBackend::new(Box::new(physical));
     let (mut adapter, control) = RuntimeMaterializationControl::new(
@@ -1244,8 +1398,9 @@ fn physical_bridge_registry_and_adapter_publish_identical_binding() {
     attach(&mut registry, waiter(1, 1), key, 1);
     registry.drive(100, 32).unwrap();
     let binding = registry.residency_binding(key).unwrap();
+    assert_eq!(binding, handle.binding(key));
     control.record_resident(key, binding).unwrap();
-    assert_eq!(adapter.publish(key).unwrap().binding(), binding);
+    assert_eq!(control.resident_binding(key), Some(binding));
 }
 
 #[test]

@@ -1,15 +1,98 @@
 //! Model-neutral inference engine owned by runtime.
 
 use std::future::Future;
+use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
+use std::thread::{self, ThreadId};
 
 use ferrule_common::{CompletionHub, CompletionListener, CompletionWake};
 use ferrule_model::ResidentModelRunner;
 
 use crate::scheduling::{GenerateRequest, RequestId, SequenceSlotPool, SequenceState};
-use crate::{CancelRequestResult, ExpertIoBudget, ResidentDriverStep, ResidentTokenEvent};
+use crate::{CancelRequestResult, ResidentDriverStep, ResidentTokenEvent};
 
 use super::ResidentTopKDriver;
+
+/// Owner-affine storage for model state that may contain intentionally `!Send`
+/// completion reactors. The allocation never moves; only this guarded pointer may
+/// cross a thread boundary to satisfy the legacy prebuilt-engine worker API.
+struct OwnerLocal<T> {
+    owner: ThreadId,
+    value: Option<Box<T>>,
+}
+
+impl<T> OwnerLocal<T> {
+    fn new(value: T) -> Self {
+        Self {
+            owner: thread::current().id(),
+            value: Some(Box::new(value)),
+        }
+    }
+
+    fn assert_owner(&self) {
+        assert_eq!(
+            self.owner,
+            thread::current().id(),
+            "owner-local inference engine was accessed from a different thread"
+        );
+    }
+
+    fn get(&self) -> &T {
+        self.assert_owner();
+        self.value
+            .as_deref()
+            .expect("owner-local inference value is present")
+    }
+
+    fn get_mut(&mut self) -> &mut T {
+        self.assert_owner();
+        self.value
+            .as_deref_mut()
+            .expect("owner-local inference value is present")
+    }
+
+    fn into_inner(mut self) -> T {
+        self.assert_owner();
+        *self
+            .value
+            .take()
+            .expect("owner-local inference value is present")
+    }
+}
+
+impl<T> Deref for OwnerLocal<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.get()
+    }
+}
+
+impl<T> DerefMut for OwnerLocal<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.get_mut()
+    }
+}
+
+// SAFETY: `T` remains in its original allocation and can only be dereferenced on
+// `owner`. If the guard itself is transferred incorrectly, every accessor panics
+// before touching `T`, and `Drop` below deliberately leaves `T` allocated rather
+// than running an owner-affine destructor on the wrong thread.
+#[allow(
+    unsafe_code,
+    reason = "owner affinity prevents access or destruction of T after a guard transfer"
+)]
+unsafe impl<T> Send for OwnerLocal<T> {}
+
+impl<T> Drop for OwnerLocal<T> {
+    fn drop(&mut self) {
+        if self.owner != thread::current().id()
+            && let Some(value) = self.value.take()
+        {
+            std::mem::forget(value);
+        }
+    }
+}
 
 /// Completion reactors and wake coordination owned by one local inference task.
 ///
@@ -133,12 +216,12 @@ where
 
 impl<R, C> LocalResidentInferenceEngine<R, C>
 where
-    R: ResidentModelRunner + Send + 'static,
-    R::SequenceState: Send + 'static,
-    C: SequenceSlotPool + Send + 'static,
+    R: ResidentModelRunner + 'static,
+    R::SequenceState: 'static,
+    C: SequenceSlotPool + 'static,
 {
-    pub fn new(driver: ResidentTopKDriver<R, C>, expert_budget: ExpertIoBudget) -> Self {
-        let mut engine = ResidentInferenceEngine::new(driver, expert_budget);
+    pub fn new(driver: ResidentTopKDriver<R, C>) -> Self {
+        let mut engine = ResidentInferenceEngine::new(driver);
         let completion_owner = InferenceCompletionOwner::attach(&mut engine);
         Self {
             engine,
@@ -178,7 +261,7 @@ where
         &mut self,
         session_id: crate::scheduling::SessionId,
     ) -> ferrule_common::Result<()> {
-        self.engine.driver.retain_session(session_id)
+        self.engine.driver_mut().retain_session(session_id)
     }
 
     pub fn retained_session_position(
@@ -192,15 +275,15 @@ where
         &mut self,
         session_id: crate::scheduling::SessionId,
     ) -> ferrule_common::Result<()> {
-        self.engine.driver.reset_session(session_id)
+        self.engine.driver_mut().reset_session(session_id)
     }
 
     pub fn submit(&mut self, request: GenerateRequest) {
-        self.engine.driver.submit(request);
+        self.engine.driver_mut().submit(request);
     }
 
     pub fn drain_finished(&mut self) -> Vec<SequenceState> {
-        self.engine.driver.drain_finished()
+        self.engine.driver_mut().drain_finished()
     }
 
     pub async fn step<F>(&mut self, on_token: &mut F) -> ferrule_common::Result<ResidentDriverStep>
@@ -244,6 +327,10 @@ pub enum InferenceCancelProgress {
 
 /// Execution lifecycle consumed by serving frontends.
 ///
+/// Engines are owner-local in production: `spawn_model_worker_with` constructs
+/// them on the dedicated model thread, and completion reactors may intentionally
+/// be `!Send`. The `Send` bound remains for the legacy prebuilt-engine worker API;
+/// concrete runtime engines enforce owner-thread access internally.
 /// Protocol crates depend on this model-neutral boundary and never select model
 /// capabilities or scheduling algorithms themselves.
 pub trait InferenceEngine: Send + 'static {
@@ -280,8 +367,7 @@ where
     R: ResidentModelRunner,
     C: SequenceSlotPool,
 {
-    driver: ResidentTopKDriver<R, C>,
-    expert_budget: ExpertIoBudget,
+    driver: OwnerLocal<ResidentTopKDriver<R, C>>,
 }
 
 impl<R, C> ResidentInferenceEngine<R, C>
@@ -289,27 +375,30 @@ where
     R: ResidentModelRunner,
     C: SequenceSlotPool,
 {
-    pub fn new(driver: ResidentTopKDriver<R, C>, expert_budget: ExpertIoBudget) -> Self {
+    pub fn new(driver: ResidentTopKDriver<R, C>) -> Self {
         Self {
-            driver,
-            expert_budget,
+            driver: OwnerLocal::new(driver),
         }
     }
 
     pub fn driver(&self) -> &ResidentTopKDriver<R, C> {
-        &self.driver
+        self.driver.get()
+    }
+
+    fn driver_mut(&mut self) -> &mut ResidentTopKDriver<R, C> {
+        self.driver.get_mut()
     }
 
     pub fn into_driver(self) -> ResidentTopKDriver<R, C> {
-        self.driver
+        self.driver.into_inner()
     }
 }
 
 impl<R, C> InferenceEngine for ResidentInferenceEngine<R, C>
 where
-    R: ResidentModelRunner + Send + 'static,
-    R::SequenceState: Send + 'static,
-    C: SequenceSlotPool + Send + 'static,
+    R: ResidentModelRunner + 'static,
+    R::SequenceState: 'static,
+    C: SequenceSlotPool + 'static,
 {
     fn completion_hub(&self) -> CompletionHub {
         self.driver.completion_hub()
@@ -347,7 +436,7 @@ where
         let mut adapter =
             |event: &ResidentTokenEvent| on_token(event).map_err(ferrule_common::Error::Execution);
         self.driver
-            .step_with_model_expert_io(&mut adapter, self.expert_budget)
+            .step(&mut adapter)
             .map_err(|error| error.to_string())
     }
 

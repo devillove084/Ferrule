@@ -129,11 +129,9 @@ pub use moe::{
 // ── Re-exports: materialization ───────────────────────────────────────────
 pub use materialization::{
     ContinuationDependencyState, ExpertArtifactIdentity, ExpertDependencyResolution,
-    ExpertMaterializationAdapter, ExpertMaterializationCancelOutcome,
-    ExpertMaterializationPlacement, ExpertMaterializationProgress, ExpertMaterializationRequest,
-    ExpertMaterializationSubmission, PhysicalExpertMaterializationBackend,
-    PhysicalExpertOperationReservation, PhysicalExpertReservation,
-    PhysicalExpertReservationDescriptor, PhysicalExpertResourceTopology,
+    ExpertMaterializationAdapter, ExpertMaterializationPlacement, ExpertMaterializationRequest,
+    PhysicalExpertMaterializationBackend, PhysicalExpertOperationReservation,
+    PhysicalExpertReservation, PhysicalExpertReservationDescriptor, PhysicalExpertResourceTopology,
 };
 
 // Stable protocol identities and lease/dependency contracts used by model APIs.

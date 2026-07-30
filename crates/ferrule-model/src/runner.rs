@@ -487,13 +487,11 @@ impl NativeProposal {
     }
 }
 
-/// Optional model-owned expert-I/O oracle consumed by the generic runtime
-/// scheduler. Implementations keep route prediction and cache interpretation in
-/// the model crate while exposing only model-neutral cost estimates.
+/// Optional model-owned expert-I/O resource control consumed by the generic
+/// runtime scheduler. Implementations expose exact physical resource limits and
+/// hard-admission hooks while keeping all route prediction and cache
+/// interpretation internal to the model crate.
 pub trait ExpertIoModelRunner: MultiSessionRunner {
-    type ExpertIoBatchState;
-    type ExpertIoAdmission;
-
     /// Exact physical capacity of the hardware/model expert materialization path.
     fn expert_io_resource_limits(
         &self,
@@ -508,33 +506,14 @@ pub trait ExpertIoModelRunner: MultiSessionRunner {
     /// Remove the runtime-owned admission service before returning a quiescent
     /// runner to its caller. A later driver may then install a fresh service.
     fn uninstall_expert_io_resource_control(&mut self) -> Result<()>;
-
-    fn begin_expert_io_batch(&self) -> Self::ExpertIoBatchState;
-
-    fn estimate_expert_io(
-        &self,
-        batch: &mut Self::ExpertIoBatchState,
-        sequence: &Self::SequenceState,
-        phase: ferrule_common::expert_io::ExpertIoPhase,
-        token_ids: &[u32],
-    ) -> Result<(
-        ferrule_common::expert_io::ExpertIoEstimate,
-        Self::ExpertIoAdmission,
-    )>;
-
-    fn admit_expert_io(
-        &self,
-        batch: &mut Self::ExpertIoBatchState,
-        admission: Self::ExpertIoAdmission,
-    );
 }
 
 /// Model capability consumed by the resident inference scheduler.
 ///
-/// Expert-I/O estimation is mandatory for resident scheduling. Checkpoint-native
-/// speculative proposals are optional: models without that capability return
-/// `None` and execute the same packed target path without a serving-side special
-/// case.
+/// Expert-I/O resource control is mandatory for resident scheduling.
+/// Checkpoint-native speculative proposals are optional: models without that
+/// capability return `None` and execute the same packed target path without a
+/// serving-side special case.
 pub trait ResidentModelRunner: ExpertIoModelRunner {
     type ObservabilitySnapshot: Clone;
 

@@ -7,7 +7,7 @@
 
 pub mod actions;
 pub(crate) mod batch;
-pub mod expert_io;
+
 pub mod resident;
 pub mod resources;
 pub mod session;
@@ -18,11 +18,7 @@ pub use actions::{
     plan_prefill_chunk,
 };
 pub(crate) use batch::ScheduledBatch;
-pub(crate) use expert_io::ModelExpertIoAdvisor;
-pub use expert_io::{
-    ExpertIoAdvisor, ExpertIoBudget, ExpertIoCandidate, ExpertIoDecisionTrace, ExpertIoEstimate,
-    ExpertIoPhase, ExpertIoQueueClass, ExpertIoRejection, ZeroExpertIoAdvisor,
-};
+
 pub use resident::{CancelRequestResult, ResidentScheduler, ResidentSchedulerConfig};
 pub(crate) use resources::{BrokerExpertIoResourceControl, ExpertIoResourceBrokerHandle};
 pub use resources::{

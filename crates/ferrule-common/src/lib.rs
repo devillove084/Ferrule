@@ -10,7 +10,6 @@ pub mod memory;
 pub mod observability;
 
 pub use async_wake::{CompletionHub, CompletionListener, CompletionWake};
-pub use expert_io::{ExpertIoEstimate, ExpertIoPhase};
 pub use expert_residency::{
     ExpertInstallActivationOutcome, ExpertInstallIntent, ExpertInstallPrepareOutcome,
     ExpertInstallReason, ExpertKey, ExpertLease, ExpertResidencyControl,

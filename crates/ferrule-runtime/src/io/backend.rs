@@ -200,19 +200,24 @@ impl RunnerMaterializationBackend {
     ) -> Result<PhysicalExpertReservation, FailureReason> {
         let mut state = self.lock();
         let resolution = state.physical.resolve_or_reserve(request)?;
-        match &resolution {
-            PhysicalExpertReservation::Resident(binding) => {
-                state
-                    .canonical_bindings
-                    .insert(binding.key(), binding.binding());
-            }
+        let (key, binding) = match &resolution {
+            PhysicalExpertReservation::Resident(binding) => (binding.key(), binding.binding()),
             PhysicalExpertReservation::Reserved(reservation) => {
-                state
-                    .canonical_bindings
-                    .insert(reservation.key(), reservation.binding());
+                (reservation.key(), reservation.binding())
             }
-        }
+        };
+        request
+            .validate_key(key)
+            .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))?;
+        // The physical authority may legitimately change a binding after eviction
+        // and re-installation (e.g. between chat turns). Update the canonical cache
+        // to the new binding rather than rejecting it.
+        state.canonical_bindings.insert(key, binding);
         Ok(resolution)
+    }
+
+    pub fn canonical_binding(&self, key: LoadKey) -> Option<ResidencyBinding> {
+        self.lock().canonical_bindings.get(&key).copied()
     }
 
     pub fn release_selected(&self, key: LoadKey) -> Result<(), FailureReason> {

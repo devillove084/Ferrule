@@ -40,15 +40,13 @@ pub use expert_residency::{
 pub use profiler::{KernelProfiler, Profiler, TimedRegion};
 
 pub use scheduling::{
-    CancelRequestResult, DecodeAction, ExpertIoAdvisor, ExpertIoBudget, ExpertIoCandidate,
-    ExpertIoDecisionTrace, ExpertIoEstimate, ExpertIoPhase, ExpertIoQueueClass, ExpertIoRejection,
-    FixedSequenceSlotPool, HardResourceBroker, HardResourceClaim, HardResourceError,
-    HardResourceGrant, HardResourceGrantId, HardResourceLimit, HardResourceSnapshot, KvHandle,
-    LogitsSelection, PrefillChunkAction, ResidentScheduler, ResidentSchedulerConfig,
-    ResourceBroker, ResourceBrokerBuilder, ResourceBrokerStats, ResourceClaim, ResourceClass,
-    ResourceGrantId, ResourceId, ResourceKind, ResourceRejection, ResourceRequest,
-    ResourceSnapshot, ResourceUnit, SchedulerAction, SequenceSlotPool, ZeroExpertIoAdvisor,
-    plan_prefill_chunk,
+    CancelRequestResult, DecodeAction, FixedSequenceSlotPool, HardResourceBroker,
+    HardResourceClaim, HardResourceError, HardResourceGrant, HardResourceGrantId,
+    HardResourceLimit, HardResourceSnapshot, KvHandle, LogitsSelection, PrefillChunkAction,
+    ResidentScheduler, ResidentSchedulerConfig, ResourceBroker, ResourceBrokerBuilder,
+    ResourceBrokerStats, ResourceClaim, ResourceClass, ResourceGrantId, ResourceId, ResourceKind,
+    ResourceRejection, ResourceRequest, ResourceSnapshot, ResourceUnit, SchedulerAction,
+    SequenceSlotPool, plan_prefill_chunk,
 };
 pub use scheduling::{
     GenerateRequest, RequestId, SequenceFinishReason, SequenceState, SequenceStatus, SessionId,

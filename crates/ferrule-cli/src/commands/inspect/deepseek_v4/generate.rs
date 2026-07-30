@@ -20,7 +20,7 @@ use ferrule_model::{
 };
 #[cfg(feature = "cuda")]
 use ferrule_runtime::{
-    ExpertIoBudget, GenerateRequest, LocalResidentInferenceEngine, RequestId, ResidentActionKind,
+    GenerateRequest, LocalResidentInferenceEngine, RequestId, ResidentActionKind,
     ResidentDriverStep, ResidentSchedulerConfig, ResidentTopKDriverConfig, SessionId,
 };
 
@@ -159,10 +159,7 @@ async fn cmd_deepseek_v4_generate_async(
         .len()
         .saturating_add(max_new_tokens.max(warmup_tokens))
         .max(1);
-    let mut driver = LocalResidentInferenceEngine::new(
-        build_driver(runner, runtime_ctx)?,
-        ExpertIoBudget::unbounded(),
-    );
+    let mut driver = LocalResidentInferenceEngine::new(build_driver(runner, runtime_ctx)?);
     if max_new_tokens > 0 && warmup_tokens > 0 {
         driver.submit(GenerateRequest {
             id: RequestId(0),
@@ -358,7 +355,7 @@ mod tests {
     use ferrule_runtime::ResourceKind;
 
     #[test]
-    fn generate_v2_runtime_schema_matches_interactive_report_and_has_no_legacy_keys() {
+    fn generate_v3_runtime_schema_matches_interactive_report_and_has_no_legacy_keys() {
         let runtime_driver_stats = ferrule_runtime::ResidentTopKDriverStats {
             hard_resource_high_water: ResourceKind::ALL
                 .into_iter()
@@ -373,7 +370,13 @@ mod tests {
         );
 
         assert_eq!(json["schema_version"], CLI_RUNTIME_SCHEMA_VERSION);
-        assert!(json["runtime_materialization"]["adapter"]["physical_submissions"].is_number());
+        assert!(json["runtime_materialization"]["adapter"]["resolves"].is_number());
+        assert!(
+            json["runtime_materialization"]["adapter"]
+                .get("physical_submissions")
+                .is_none()
+        );
+        assert!(json["runtime_materialization"]["load_registry"]["operations_created"].is_number());
         assert!(json["runtime_materialization"]["critical_path"]["per_external_token"].is_array());
         assert_eq!(
             json["runtime_driver_stats"]["hard_resource_high_water"]
@@ -400,7 +403,7 @@ mod tests {
         ] {
             assert!(
                 !encoded.contains(legacy),
-                "legacy key fragment remained in generate v2 schema: {legacy}"
+                "legacy key fragment remained in generate v3 schema: {legacy}"
             );
         }
     }

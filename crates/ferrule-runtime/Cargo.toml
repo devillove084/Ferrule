@@ -20,6 +20,7 @@ ferrule-cuda = { version = "0.2.0", path = "../ferrule-cuda", optional = true }
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1"
 tokio = { version = "1", features = ["macros", "rt", "sync"] }
+ahash = "0.8"
 
 [lints]
 workspace = true
