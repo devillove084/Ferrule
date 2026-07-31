@@ -1,36 +1,37 @@
 //! Materialization-provider boundary and deterministic fake implementation.
 
-use std::collections::BTreeMap;
 #[cfg(test)]
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ferrule_common::io_protocol::{
-    CancellationReason, CompletionEvent, CompletionTimestamp, FailureReason, LoadKey, LoadStage,
-    OperationId, RegisteredPinnedAlignedSlabLease, ResidencyBinding, UploadFenceContract,
+    CancellationReason, CompletionEvent, CompletionTimestamp, FailureReason, LoadStage,
+    MaterializationKey, OperationId, RegisteredPinnedAlignedSlabLease, ResidencyBinding,
+    UploadFenceContract,
 };
 #[cfg(test)]
 use ferrule_common::io_protocol::{
     CompletionGeneration, CompletionOutcome, DestinationSlotId, FenceId,
     RegisteredPinnedAlignedSlabLeaseDescriptor, RegistrationId, SlabId,
 };
+use ferrule_common::materialization_io::MaterializationResourcePlan;
 use ferrule_model::{
-    ExpertMaterializationPlacement, ExpertMaterializationRequest,
-    PhysicalExpertMaterializationBackend, PhysicalExpertOperationReservation,
-    PhysicalExpertReservation, PhysicalExpertResourceTopology,
+    MaterializationPlacement, MaterializationPreparation, MaterializationProvider,
+    MaterializationRequest, PhysicalMaterializationOperationReservation,
+    PhysicalMaterializationTopology,
 };
 
 /// Owner-held physical reservation. Providers receive only immutable descriptors;
 /// the runtime retains and advances the owning pinned lease.
 #[derive(Debug)]
-pub struct MaterializationReservation {
+pub struct MaterializationOperationReservation {
     pub(crate) slabs: Box<[RegisteredPinnedAlignedSlabLease]>,
     binding: ResidencyBinding,
     upload_fence: UploadFenceContract,
-    physical: Option<PhysicalExpertOperationReservation>,
+    physical: Option<PhysicalMaterializationOperationReservation>,
 }
 
-impl MaterializationReservation {
+impl MaterializationOperationReservation {
     pub fn slabs(&self) -> &[RegisteredPinnedAlignedSlabLease] {
         &self.slabs
     }
@@ -43,7 +44,7 @@ impl MaterializationReservation {
         self.upload_fence
     }
 
-    fn physical(&self) -> Result<&PhysicalExpertOperationReservation, FailureReason> {
+    fn physical(&self) -> Result<&PhysicalMaterializationOperationReservation, FailureReason> {
         self.physical.as_ref().ok_or_else(|| {
             FailureReason::ProtocolViolation(
                 "runner materialization command received a non-physical reservation".into(),
@@ -101,45 +102,61 @@ impl MaterializationReservation {
 
 /// Runtime/provider command interface. Command acceptance never changes owner
 /// state by itself; physical progress is observed only through `CompletionEvent`.
-pub trait MaterializationBackend: std::fmt::Debug + Send {
-    /// Exact physical payload bytes charged to hard read/upload credits.
-    fn materialization_bytes(&self, key: LoadKey) -> Result<u64, FailureReason>;
+pub trait RuntimeMaterializationProvider: std::fmt::Debug + Send {
+    /// Exact provider-owned preparation fixed before registry admission.
+    fn preparation(
+        &self,
+        key: MaterializationKey,
+    ) -> Result<MaterializationPreparation, FailureReason>;
+
+    /// Roll back a preparation that never became registry-owned work.
+    fn discard_preparation(&mut self, key: MaterializationKey) -> Result<(), FailureReason>;
+
+    /// Release provider execution custody after the last registry logical owner.
+    fn release_execution_lease(&mut self, key: MaterializationKey) -> Result<(), FailureReason>;
+
+    /// Exact transient stage demand and persistent residency bytes fixed before
+    /// runtime hard admission.
+    fn materialization_plan(
+        &self,
+        key: MaterializationKey,
+    ) -> Result<MaterializationResourcePlan, FailureReason>;
 
     fn reserve(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        bytes: u64,
-    ) -> Result<MaterializationReservation, FailureReason>;
+        key: MaterializationKey,
+        plan: MaterializationResourcePlan,
+    ) -> Result<MaterializationOperationReservation, FailureReason>;
 
     fn submit_read(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        reservation: &MaterializationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        reservation: &MaterializationOperationReservation,
+        plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason>;
 
     fn submit_upload(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        reservation: &MaterializationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        reservation: &MaterializationOperationReservation,
+        plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason>;
 
     fn poll_install(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        reservation: &MaterializationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        reservation: &MaterializationOperationReservation,
+        plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason>;
 
     fn cancel(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
+        key: MaterializationKey,
         stage: LoadStage,
         reason: CancellationReason,
     ) -> Result<(), FailureReason>;
@@ -147,28 +164,27 @@ pub trait MaterializationBackend: std::fmt::Debug + Send {
     fn next_completion(&mut self) -> Option<CompletionEvent>;
 }
 
-/// Shared runtime handle around the physical backend transferred once from a
-/// model runner. Clones address the same model-owned slot/frame authority; they
-/// do not duplicate CUDA streams, pinned operations, tickets, or publication.
-pub struct RunnerMaterializationBackend {
-    state: Arc<Mutex<RunnerMaterializationState>>,
+/// Shared runtime handle around the physical provider transferred once from a
+/// model runner. Clones address the same model-owned residency authority; they
+/// do not duplicate provider streams, pinned operations, tickets, or publication.
+pub struct SharedMaterializationProvider {
+    state: Arc<Mutex<SharedMaterializationProviderState>>,
 }
 
-struct RunnerMaterializationState {
-    physical: Box<dyn PhysicalExpertMaterializationBackend>,
-    canonical_bindings: BTreeMap<LoadKey, ResidencyBinding>,
+struct SharedMaterializationProviderState {
+    provider: Box<dyn MaterializationProvider>,
 }
 
-impl std::fmt::Debug for RunnerMaterializationBackend {
+impl std::fmt::Debug for SharedMaterializationProvider {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("RunnerMaterializationBackend")
+            .debug_struct("SharedMaterializationProvider")
             .field("placement", &self.placement())
             .finish_non_exhaustive()
     }
 }
 
-impl Clone for RunnerMaterializationBackend {
+impl Clone for SharedMaterializationProvider {
     fn clone(&self) -> Self {
         Self {
             state: Arc::clone(&self.state),
@@ -176,98 +192,107 @@ impl Clone for RunnerMaterializationBackend {
     }
 }
 
-impl RunnerMaterializationBackend {
-    pub fn new(physical: Box<dyn PhysicalExpertMaterializationBackend>) -> Self {
+impl SharedMaterializationProvider {
+    pub fn new(provider: Box<dyn MaterializationProvider>) -> Self {
         Self {
-            state: Arc::new(Mutex::new(RunnerMaterializationState {
-                physical,
-                canonical_bindings: BTreeMap::new(),
-            })),
+            state: Arc::new(Mutex::new(SharedMaterializationProviderState { provider })),
         }
     }
 
-    pub fn placement(&self) -> ExpertMaterializationPlacement {
-        self.lock().physical.placement()
+    pub fn placement(&self) -> MaterializationPlacement {
+        self.lock().provider.placement()
     }
 
-    pub fn resource_topology(&self) -> ferrule_common::Result<PhysicalExpertResourceTopology> {
-        self.lock().physical.resource_topology()
+    pub fn resource_topology(&self) -> ferrule_common::Result<PhysicalMaterializationTopology> {
+        self.lock().provider.resource_topology()
     }
 
-    pub fn resolve_or_reserve(
+    pub fn prepare(
         &self,
-        request: ExpertMaterializationRequest,
-    ) -> Result<PhysicalExpertReservation, FailureReason> {
-        let mut state = self.lock();
-        let resolution = state.physical.resolve_or_reserve(request)?;
-        let (key, binding) = match &resolution {
-            PhysicalExpertReservation::Resident(binding) => (binding.key(), binding.binding()),
-            PhysicalExpertReservation::Reserved(reservation) => {
-                (reservation.key(), reservation.binding())
-            }
-        };
+        request: MaterializationRequest,
+    ) -> Result<MaterializationPreparation, FailureReason> {
+        let preparation = self.lock().provider.prepare(request)?;
         request
-            .validate_key(key)
+            .validate_key(preparation.key())
             .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))?;
-        // The physical authority may legitimately change a binding after eviction
-        // and re-installation (e.g. between chat turns). Update the canonical cache
-        // to the new binding rather than rejecting it.
-        state.canonical_bindings.insert(key, binding);
-        Ok(resolution)
+        Ok(preparation)
     }
 
-    pub fn canonical_binding(&self, key: LoadKey) -> Option<ResidencyBinding> {
-        self.lock().canonical_bindings.get(&key).copied()
+    pub fn prepared(
+        &self,
+        key: MaterializationKey,
+    ) -> Result<MaterializationPreparation, FailureReason> {
+        self.lock().provider.prepared(key)
     }
 
-    pub fn release_selected(&self, key: LoadKey) -> Result<(), FailureReason> {
-        self.lock().physical.release_selected(key)
+    pub fn discard_preparation(&self, key: MaterializationKey) -> Result<(), FailureReason> {
+        self.lock().provider.discard_preparation(key)
     }
 
-    fn lock(&self) -> MutexGuard<'_, RunnerMaterializationState> {
+    fn lock(&self) -> MutexGuard<'_, SharedMaterializationProviderState> {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
-impl MaterializationBackend for RunnerMaterializationBackend {
-    fn materialization_bytes(&self, key: LoadKey) -> Result<u64, FailureReason> {
-        self.lock().physical.materialization_bytes(key)
+impl RuntimeMaterializationProvider for SharedMaterializationProvider {
+    fn preparation(
+        &self,
+        key: MaterializationKey,
+    ) -> Result<MaterializationPreparation, FailureReason> {
+        self.prepared(key)
+    }
+
+    fn discard_preparation(&mut self, key: MaterializationKey) -> Result<(), FailureReason> {
+        SharedMaterializationProvider::discard_preparation(self, key)
+    }
+
+    fn release_execution_lease(&mut self, key: MaterializationKey) -> Result<(), FailureReason> {
+        self.lock().provider.release_execution_lease(key)
+    }
+
+    fn materialization_plan(
+        &self,
+        key: MaterializationKey,
+    ) -> Result<MaterializationResourcePlan, FailureReason> {
+        self.lock().provider.materialization_plan(key)
     }
 
     fn reserve(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        bytes: u64,
-    ) -> Result<MaterializationReservation, FailureReason> {
+        key: MaterializationKey,
+        plan: MaterializationResourcePlan,
+    ) -> Result<MaterializationOperationReservation, FailureReason> {
         let mut state = self.lock();
-        let expected_binding = state.canonical_bindings.get(&key).copied().ok_or_else(|| {
-            FailureReason::ProtocolViolation(
-                "physical operation reserve was not preceded by canonical resolve/reserve".into(),
-            )
-        })?;
-        let physical = state.physical.reserve(operation, key, bytes)?;
+        let expected = state.provider.prepared(key)?;
+        let expected_binding = expected.binding();
+        if !matches!(expected, MaterializationPreparation::Transfer(_)) {
+            return Err(FailureReason::ProtocolViolation(
+                "physical operation reserve requires a prepared transfer".into(),
+            ));
+        }
+        let physical = state.provider.reserve(operation, key, plan)?;
         let binding = physical.binding();
         let upload_fence = physical.upload_fence();
         let violation = if physical.key() != key {
-            Some("physical backend reserved a different load key")
+            Some("physical provider reserved a different load key")
         } else if binding != expected_binding {
-            Some("physical backend reserved a different residency binding")
+            Some("physical provider reserved a different residency binding")
         } else if upload_fence.operation != operation {
-            Some("physical backend returned an upload fence for a different operation")
+            Some("physical provider returned an upload fence for a different operation")
         } else if physical
             .slabs()
             .iter()
             .any(|slab| slab.operation() != operation)
         {
-            Some("physical backend returned a slab for a different operation")
+            Some("physical provider returned a slab for a different operation")
         } else {
             None
         };
         if let Some(violation) = violation {
-            let cleanup = state.physical.cancel(
+            let cleanup = state.provider.cancel(
                 operation,
                 key,
                 LoadStage::Reserved,
@@ -286,7 +311,7 @@ impl MaterializationBackend for RunnerMaterializationBackend {
             .map(RegisteredPinnedAlignedSlabLease::new)
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        Ok(MaterializationReservation {
+        Ok(MaterializationOperationReservation {
             slabs,
             binding,
             upload_fence,
@@ -297,57 +322,57 @@ impl MaterializationBackend for RunnerMaterializationBackend {
     fn submit_read(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        reservation: &MaterializationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        reservation: &MaterializationOperationReservation,
+        plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason> {
         self.lock()
-            .physical
-            .submit_read(operation, key, reservation.physical()?, bytes)
+            .provider
+            .submit_read(operation, key, reservation.physical()?, plan)
     }
 
     fn submit_upload(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        reservation: &MaterializationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        reservation: &MaterializationOperationReservation,
+        plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason> {
         self.lock()
-            .physical
-            .submit_upload(operation, key, reservation.physical()?, bytes)
+            .provider
+            .submit_upload(operation, key, reservation.physical()?, plan)
     }
 
     fn poll_install(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        reservation: &MaterializationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        reservation: &MaterializationOperationReservation,
+        plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason> {
         self.lock()
-            .physical
-            .poll_install(operation, key, reservation.physical()?, bytes)
+            .provider
+            .poll_install(operation, key, reservation.physical()?, plan)
     }
 
     fn cancel(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
+        key: MaterializationKey,
         stage: LoadStage,
         reason: CancellationReason,
     ) -> Result<(), FailureReason> {
-        self.lock().physical.cancel(operation, key, stage, reason)
+        self.lock().provider.cancel(operation, key, stage, reason)
     }
 
     fn next_completion(&mut self) -> Option<CompletionEvent> {
-        self.lock().physical.next_completion()
+        self.lock().provider.next_completion()
     }
 }
 
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FakeCommand {
+pub enum FakeMaterializationCommand {
     Reserve(OperationId),
     SubmitRead(OperationId),
     SubmitUpload(OperationId),
@@ -362,7 +387,7 @@ pub enum FakeCommand {
 pub struct FakeCompletionSpec {
     pub outcome: CompletionOutcome,
     pub operation: Option<OperationId>,
-    pub key: Option<LoadKey>,
+    pub key: Option<MaterializationKey>,
     pub stage: Option<LoadStage>,
     pub bytes: Option<u64>,
     pub generation: Option<CompletionGeneration>,
@@ -391,14 +416,14 @@ impl FakeCompletionSpec {
     }
 }
 
-/// Deterministic no-thread/no-sleep backend. Commands append scripted completion
+/// Deterministic no-thread/no-sleep provider. Commands append scripted completion
 /// events to a FIFO; tests may also inject arbitrary events directly.
 #[cfg(test)]
 #[derive(Debug)]
-pub struct FakeBackend {
+pub struct FakeMaterializationProvider {
     automatic: bool,
     clock_ns: u64,
-    commands: Vec<FakeCommand>,
+    commands: Vec<FakeMaterializationCommand>,
     completions: VecDeque<CompletionEvent>,
     scripts: BTreeMap<LoadStage, VecDeque<FakeCompletionSpec>>,
     lost: BTreeMap<LoadStage, usize>,
@@ -411,7 +436,7 @@ pub struct FakeBackend {
 }
 
 #[cfg(test)]
-impl Default for FakeBackend {
+impl Default for FakeMaterializationProvider {
     fn default() -> Self {
         Self {
             automatic: true,
@@ -431,7 +456,7 @@ impl Default for FakeBackend {
 }
 
 #[cfg(test)]
-impl FakeBackend {
+impl FakeMaterializationProvider {
     pub fn new() -> Self {
         Self::default()
     }
@@ -467,7 +492,7 @@ impl FakeBackend {
         self.completions.push_back(completion);
     }
 
-    pub fn commands(&self) -> &[FakeCommand] {
+    pub fn commands(&self) -> &[FakeMaterializationCommand] {
         &self.commands
     }
 
@@ -498,7 +523,13 @@ impl FakeBackend {
         }
     }
 
-    fn emit(&mut self, operation: OperationId, key: LoadKey, stage: LoadStage, bytes: u64) {
+    fn emit(
+        &mut self,
+        operation: OperationId,
+        key: MaterializationKey,
+        stage: LoadStage,
+        bytes: u64,
+    ) {
         if let Some(lost) = self.lost.get_mut(&stage)
             && *lost != 0
         {
@@ -532,18 +563,60 @@ impl FakeBackend {
 }
 
 #[cfg(test)]
-impl MaterializationBackend for FakeBackend {
-    fn materialization_bytes(&self, _key: LoadKey) -> Result<u64, FailureReason> {
-        Ok(4096)
+impl RuntimeMaterializationProvider for FakeMaterializationProvider {
+    fn preparation(
+        &self,
+        key: MaterializationKey,
+    ) -> Result<MaterializationPreparation, FailureReason> {
+        let binding = ResidencyBinding::new(
+            key.model(),
+            key.resource(),
+            key.backend(),
+            key.device(),
+            DestinationSlotId::new(1),
+            key.destination_generation(),
+        );
+        ferrule_model::MaterializationTransfer::new(key, binding, None)
+            .map(MaterializationPreparation::Transfer)
+            .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))
+    }
+
+    fn discard_preparation(&mut self, _key: MaterializationKey) -> Result<(), FailureReason> {
+        Ok(())
+    }
+
+    fn release_execution_lease(&mut self, _key: MaterializationKey) -> Result<(), FailureReason> {
+        Ok(())
+    }
+
+    fn materialization_plan(
+        &self,
+        _key: MaterializationKey,
+    ) -> Result<MaterializationResourcePlan, FailureReason> {
+        MaterializationResourcePlan::new(
+            ferrule_common::materialization_io::MaterializationResourceDemand {
+                read_slots: 1,
+                storage_read_bytes: 4096,
+                pinned_host_bytes: 4096,
+                upload_slots: 1,
+                h2d_bytes: 4096,
+                install_slots: 1,
+                device_install_bytes: 4096,
+            },
+            4096,
+        )
+        .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))
     }
 
     fn reserve(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        bytes: u64,
-    ) -> Result<MaterializationReservation, FailureReason> {
-        self.commands.push(FakeCommand::Reserve(operation));
+        key: MaterializationKey,
+        plan: MaterializationResourcePlan,
+    ) -> Result<MaterializationOperationReservation, FailureReason> {
+        self.commands
+            .push(FakeMaterializationCommand::Reserve(operation));
+        let bytes = plan.demand.pinned_host_bytes;
         if let Some(reason) = self.reserve_failures.pop_front() {
             return Err(reason);
         }
@@ -565,12 +638,11 @@ impl MaterializationBackend for FakeBackend {
         )
         .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))?;
         let slot = DestinationSlotId::new(identity.min(u32::MAX as u64) as u32);
-        Ok(MaterializationReservation {
+        Ok(MaterializationOperationReservation {
             slabs: vec![RegisteredPinnedAlignedSlabLease::new(descriptor)].into_boxed_slice(),
             binding: ResidencyBinding::new(
                 key.model(),
-                key.layer(),
-                key.expert(),
+                key.resource(),
                 key.backend(),
                 key.device(),
                 slot,
@@ -588,54 +660,73 @@ impl MaterializationBackend for FakeBackend {
     fn submit_read(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        _reservation: &MaterializationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        _reservation: &MaterializationOperationReservation,
+        plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason> {
         self.command_result(LoadStage::ReadSubmitted)?;
-        self.commands.push(FakeCommand::SubmitRead(operation));
+        self.commands
+            .push(FakeMaterializationCommand::SubmitRead(operation));
         self.reads += 1;
-        self.emit(operation, key, LoadStage::ReadSubmitted, bytes);
+        self.emit(
+            operation,
+            key,
+            LoadStage::ReadSubmitted,
+            plan.demand.storage_read_bytes,
+        );
         Ok(())
     }
 
     fn submit_upload(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        _reservation: &MaterializationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        _reservation: &MaterializationOperationReservation,
+        plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason> {
         self.command_result(LoadStage::UploadSubmitted)?;
-        self.commands.push(FakeCommand::SubmitUpload(operation));
+        self.commands
+            .push(FakeMaterializationCommand::SubmitUpload(operation));
         self.uploads += 1;
-        self.emit(operation, key, LoadStage::UploadSubmitted, bytes);
+        self.emit(
+            operation,
+            key,
+            LoadStage::UploadSubmitted,
+            plan.demand.h2d_bytes,
+        );
         Ok(())
     }
 
     fn poll_install(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        _reservation: &MaterializationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        _reservation: &MaterializationOperationReservation,
+        plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason> {
         self.command_result(LoadStage::Installing)?;
-        self.commands.push(FakeCommand::PollInstall(operation));
+        self.commands
+            .push(FakeMaterializationCommand::PollInstall(operation));
         self.installs += 1;
-        self.emit(operation, key, LoadStage::Installing, bytes);
+        self.emit(
+            operation,
+            key,
+            LoadStage::Installing,
+            plan.demand.device_install_bytes,
+        );
         Ok(())
     }
 
     fn cancel(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
+        key: MaterializationKey,
         stage: LoadStage,
         reason: CancellationReason,
     ) -> Result<(), FailureReason> {
         self.command_result(stage)?;
-        self.commands.push(FakeCommand::Cancel(operation, stage));
+        self.commands
+            .push(FakeMaterializationCommand::Cancel(operation, stage));
         self.cancellations += 1;
         self.completions
             .retain(|event| !(event.operation == operation && event.stage == stage));
@@ -660,57 +751,75 @@ impl MaterializationBackend for FakeBackend {
     }
 }
 
-impl<T> MaterializationBackend for Box<T>
+impl<T> RuntimeMaterializationProvider for Box<T>
 where
-    T: MaterializationBackend + ?Sized,
+    T: RuntimeMaterializationProvider + ?Sized,
 {
-    fn materialization_bytes(&self, key: LoadKey) -> Result<u64, FailureReason> {
-        (**self).materialization_bytes(key)
+    fn preparation(
+        &self,
+        key: MaterializationKey,
+    ) -> Result<MaterializationPreparation, FailureReason> {
+        (**self).preparation(key)
+    }
+
+    fn discard_preparation(&mut self, key: MaterializationKey) -> Result<(), FailureReason> {
+        (**self).discard_preparation(key)
+    }
+
+    fn release_execution_lease(&mut self, key: MaterializationKey) -> Result<(), FailureReason> {
+        (**self).release_execution_lease(key)
+    }
+
+    fn materialization_plan(
+        &self,
+        key: MaterializationKey,
+    ) -> Result<MaterializationResourcePlan, FailureReason> {
+        (**self).materialization_plan(key)
     }
 
     fn reserve(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        bytes: u64,
-    ) -> Result<MaterializationReservation, FailureReason> {
-        (**self).reserve(operation, key, bytes)
+        key: MaterializationKey,
+        plan: MaterializationResourcePlan,
+    ) -> Result<MaterializationOperationReservation, FailureReason> {
+        (**self).reserve(operation, key, plan)
     }
 
     fn submit_read(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        reservation: &MaterializationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        reservation: &MaterializationOperationReservation,
+        plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason> {
-        (**self).submit_read(operation, key, reservation, bytes)
+        (**self).submit_read(operation, key, reservation, plan)
     }
 
     fn submit_upload(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        reservation: &MaterializationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        reservation: &MaterializationOperationReservation,
+        plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason> {
-        (**self).submit_upload(operation, key, reservation, bytes)
+        (**self).submit_upload(operation, key, reservation, plan)
     }
 
     fn poll_install(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        reservation: &MaterializationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        reservation: &MaterializationOperationReservation,
+        plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason> {
-        (**self).poll_install(operation, key, reservation, bytes)
+        (**self).poll_install(operation, key, reservation, plan)
     }
 
     fn cancel(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
+        key: MaterializationKey,
         stage: LoadStage,
         reason: CancellationReason,
     ) -> Result<(), FailureReason> {
@@ -724,28 +833,46 @@ where
 
 /// Fail-closed placeholder used until a real physical provider is installed.
 #[derive(Debug, Default)]
-pub struct UnavailableBackend;
+pub struct UnavailableMaterializationProvider;
 
-impl MaterializationBackend for UnavailableBackend {
-    fn materialization_bytes(&self, _key: LoadKey) -> Result<u64, FailureReason> {
+impl RuntimeMaterializationProvider for UnavailableMaterializationProvider {
+    fn preparation(
+        &self,
+        _key: MaterializationKey,
+    ) -> Result<MaterializationPreparation, FailureReason> {
+        Err(FailureReason::DeviceUnavailable)
+    }
+
+    fn discard_preparation(&mut self, _key: MaterializationKey) -> Result<(), FailureReason> {
+        Ok(())
+    }
+
+    fn release_execution_lease(&mut self, _key: MaterializationKey) -> Result<(), FailureReason> {
+        Ok(())
+    }
+
+    fn materialization_plan(
+        &self,
+        _key: MaterializationKey,
+    ) -> Result<MaterializationResourcePlan, FailureReason> {
         Err(FailureReason::DeviceUnavailable)
     }
 
     fn reserve(
         &mut self,
         _operation: OperationId,
-        _key: LoadKey,
-        _bytes: u64,
-    ) -> Result<MaterializationReservation, FailureReason> {
+        _key: MaterializationKey,
+        _plan: MaterializationResourcePlan,
+    ) -> Result<MaterializationOperationReservation, FailureReason> {
         Err(FailureReason::DeviceUnavailable)
     }
 
     fn submit_read(
         &mut self,
         _operation: OperationId,
-        _key: LoadKey,
-        _reservation: &MaterializationReservation,
-        _bytes: u64,
+        _key: MaterializationKey,
+        _reservation: &MaterializationOperationReservation,
+        _plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason> {
         Err(FailureReason::DeviceUnavailable)
     }
@@ -753,9 +880,9 @@ impl MaterializationBackend for UnavailableBackend {
     fn submit_upload(
         &mut self,
         _operation: OperationId,
-        _key: LoadKey,
-        _reservation: &MaterializationReservation,
-        _bytes: u64,
+        _key: MaterializationKey,
+        _reservation: &MaterializationOperationReservation,
+        _plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason> {
         Err(FailureReason::DeviceUnavailable)
     }
@@ -763,9 +890,9 @@ impl MaterializationBackend for UnavailableBackend {
     fn poll_install(
         &mut self,
         _operation: OperationId,
-        _key: LoadKey,
-        _reservation: &MaterializationReservation,
-        _bytes: u64,
+        _key: MaterializationKey,
+        _reservation: &MaterializationOperationReservation,
+        _plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason> {
         Err(FailureReason::DeviceUnavailable)
     }
@@ -773,7 +900,7 @@ impl MaterializationBackend for UnavailableBackend {
     fn cancel(
         &mut self,
         _operation: OperationId,
-        _key: LoadKey,
+        _key: MaterializationKey,
         _stage: LoadStage,
         _reason: CancellationReason,
     ) -> Result<(), FailureReason> {

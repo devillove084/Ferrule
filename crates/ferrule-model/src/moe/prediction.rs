@@ -892,7 +892,7 @@ mod tests {
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
             gpu_slots_per_layer: 2,
             prefetch_per_layer: 0,
-            preserve_artifact_quantization: true,
+            preserve_source_encoding: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
         });

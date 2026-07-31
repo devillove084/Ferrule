@@ -1,15 +1,15 @@
-//! Artifact binding helpers for semantic HF inventory tensors.
+//! Checkpoint binding helpers for semantic HF inventory tensors.
 //!
 //! Concrete model names are parsed in `ferrule-model::families`. This module
 //! consumes the resulting semantic shared-expert/router descriptors and produces
-//! runtime payloads: `SwiGluFfnPayload` and `RouterArtifactPayload`.
+//! runtime payloads: `SwiGluFfnPayload` and `RouterWeights`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::semantic::{
-    ArtifactTensorPart, AttentionTensorKind, HyperConnectionStage, HyperConnectionTensorKind,
-    RoutedExpertMatrix, RoutedExpertTensorPart, RouterTensorKind,
+    AttentionTensorKind, HyperConnectionStage, HyperConnectionTensorKind, RoutedExpertMatrix,
+    RoutedExpertTensorPart, RouterTensorKind, TensorPayloadPart,
 };
 use crate::{
     HfAttentionTensorInfo, HfHyperConnectionTensorInfo, HfRouterTensorInfo,
@@ -17,360 +17,38 @@ use crate::{
 };
 use ferrule_common::{Error, Result};
 
-use crate::artifact::group::ArtifactGroupKind;
-use crate::artifact::group::ArtifactObjectGroup;
-use crate::artifact::linear::ArtifactLinearPayload;
-use crate::artifact::tensor::{
-    ArtifactDType, ArtifactTensorPayload, ArtifactTensorReader, ArtifactTensorSlice,
+use crate::checkpoint::tensor::{
+    CheckpointDType, CheckpointTensorPayload, CheckpointTensorReader, CheckpointTensorSlice,
 };
+use crate::checkpoint::weight::LinearWeight;
 use crate::ffn::SwiGluFfnPayload;
 use crate::hyper_connection::{
     HyperConnectionConfig, HyperConnectionHeadWeights, HyperConnectionWeights,
 };
+use crate::moe::routing::RouterWeights;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct MlaAttentionArtifactPayload {
+pub struct MlaAttentionWeights {
     pub layer: usize,
-    pub query_a: ArtifactLinearPayload,
-    pub query_b: ArtifactLinearPayload,
-    pub key_value: ArtifactLinearPayload,
-    pub output_a: ArtifactLinearPayload,
-    pub output_b: ArtifactLinearPayload,
+    pub query_a: LinearWeight,
+    pub query_b: LinearWeight,
+    pub key_value: LinearWeight,
+    pub output_a: LinearWeight,
+    pub output_b: LinearWeight,
     pub query_norm: Vec<f32>,
     pub key_value_norm: Vec<f32>,
     pub attention_sink: Vec<f32>,
     /// Optional compressor/indexer tensors for compressed sparse attention. These
-    /// remain as artifact slices until their execution path is wired; core MLA
+    /// remain as checkpoint slices until their execution path is wired; core MLA
     /// linears/norms are bound above.
-    pub auxiliary: Vec<ArtifactTensorSlice>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct LayerNormArtifactPayload {
-    pub layer: usize,
-    pub attention_norm: Option<Vec<f32>>,
-    pub feed_forward_norm: Option<Vec<f32>>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct RouterArtifactPayload {
-    pub layer: usize,
-    pub weight: ArtifactLinearPayload,
-    pub bias: Option<Vec<f32>>,
-    pub hash_table: Option<Vec<usize>>,
-    pub hash_rows: usize,
-    pub hash_cols: usize,
-}
-
-impl RouterArtifactPayload {
-    pub fn logits(&self, input: &[f32]) -> Result<Vec<f32>> {
-        self.weight.reference_matvec(input)
-    }
-
-    pub fn hash_experts_for_token(&self, token_id: u32) -> Result<Option<Vec<usize>>> {
-        let Some(table) = &self.hash_table else {
-            return Ok(None);
-        };
-        let row = token_id as usize;
-        if row >= self.hash_rows {
-            return Err(Error::Model(format!(
-                "router hash token id {row} exceeds table rows {} for layer {}",
-                self.hash_rows, self.layer
-            )));
-        }
-        let start = row * self.hash_cols;
-        Ok(Some(table[start..start + self.hash_cols].to_vec()))
-    }
-
-    pub fn hash_expert_union_for_tokens(
-        &self,
-        token_ids: &[u32],
-        per_token_limit: usize,
-        max_experts: usize,
-    ) -> Result<Option<Vec<usize>>> {
-        let Some(table) = &self.hash_table else {
-            return Ok(None);
-        };
-        if token_ids.is_empty() || per_token_limit == 0 || max_experts == 0 {
-            return Ok(Some(Vec::new()));
-        }
-
-        let per_token_limit = per_token_limit.min(self.hash_cols);
-        let mut seen = BTreeSet::new();
-        let mut experts = Vec::with_capacity(max_experts.min(token_ids.len() * per_token_limit));
-        for &token_id in token_ids {
-            let row = token_id as usize;
-            if row >= self.hash_rows {
-                return Err(Error::Model(format!(
-                    "router hash token id {row} exceeds table rows {} for layer {}",
-                    self.hash_rows, self.layer
-                )));
-            }
-            let start = row * self.hash_cols;
-            for &expert in table[start..start + self.hash_cols]
-                .iter()
-                .take(per_token_limit)
-            {
-                if seen.insert(expert) {
-                    experts.push(expert);
-                    if experts.len() >= max_experts {
-                        return Ok(Some(experts));
-                    }
-                }
-            }
-        }
-        Ok(Some(experts))
-    }
-}
-
-pub fn bind_shared_swiglu_ffn_from_artifact_group(
-    group: &ArtifactObjectGroup,
-    reader: &ArtifactTensorReader,
-    swiglu_limit: f32,
-) -> Result<SwiGluFfnPayload> {
-    let layer = require_artifact_group_layer(group, ArtifactGroupKind::SharedExpert)?;
-    let mut by_role = artifact_group_tensors_by_role(group);
-    Ok(SwiGluFfnPayload {
-        gate: bind_linear_from_artifact_slices(
-            layer,
-            "shared expert gate",
-            TensorRole::SharedExpertGate,
-            by_role.remove(&TensorRole::SharedExpertGate),
-            reader,
-        )?,
-        up: bind_linear_from_artifact_slices(
-            layer,
-            "shared expert up",
-            TensorRole::SharedExpertUp,
-            by_role.remove(&TensorRole::SharedExpertUp),
-            reader,
-        )?,
-        down: bind_linear_from_artifact_slices(
-            layer,
-            "shared expert down",
-            TensorRole::SharedExpertDown,
-            by_role.remove(&TensorRole::SharedExpertDown),
-            reader,
-        )?,
-        swiglu_limit,
-    })
-}
-
-pub fn bind_layer_norms_from_artifact_group(
-    group: &ArtifactObjectGroup,
-    reader: &ArtifactTensorReader,
-) -> Result<LayerNormArtifactPayload> {
-    let layer = require_artifact_group_layer(group, ArtifactGroupKind::LayerNorm)?;
-    let mut by_role = artifact_group_tensors_by_role(group);
-    Ok(LayerNormArtifactPayload {
-        layer,
-        attention_norm: bind_optional_vector_from_artifact_slices(
-            layer,
-            "attention norm",
-            by_role.remove(&TensorRole::AttentionNorm),
-            reader,
-        )?,
-        feed_forward_norm: bind_optional_vector_from_artifact_slices(
-            layer,
-            "feed-forward norm",
-            by_role.remove(&TensorRole::FeedForwardNorm),
-            reader,
-        )?,
-    })
-}
-
-pub fn bind_router_from_artifact_group(
-    group: &ArtifactObjectGroup,
-    reader: &ArtifactTensorReader,
-) -> Result<RouterArtifactPayload> {
-    let layer = require_artifact_group_layer(group, ArtifactGroupKind::Router)?;
-    let mut by_role = artifact_group_tensors_by_role(group);
-    let weight = bind_linear_from_artifact_slices(
-        layer,
-        "router weight",
-        TensorRole::RouterLogits,
-        by_role.remove(&TensorRole::RouterLogits),
-        reader,
-    )?;
-    let bias = bind_optional_vector_from_artifact_slices(
-        layer,
-        "router bias",
-        by_role.remove(&TensorRole::RouterBias),
-        reader,
-    )?;
-    let (hash_table, hash_rows, hash_cols) = bind_optional_indices_from_artifact_slices(
-        layer,
-        "router hash table",
-        by_role.remove(&TensorRole::HashRouterTable),
-        reader,
-    )?
-    .map(|(values, rows, cols)| (Some(values), rows, cols))
-    .unwrap_or((None, 0, 0));
-
-    Ok(RouterArtifactPayload {
-        layer,
-        weight,
-        bias,
-        hash_table,
-        hash_rows,
-        hash_cols,
-    })
-}
-
-pub fn bind_attention_from_artifact_group(
-    group: &ArtifactObjectGroup,
-    reader: &ArtifactTensorReader,
-) -> Result<MlaAttentionArtifactPayload> {
-    let layer = require_artifact_group_layer(group, ArtifactGroupKind::Attention)?;
-    let mut by_role = artifact_group_tensors_by_role(group);
-    let auxiliary = group
-        .tensors
-        .iter()
-        .filter(|tensor| is_attention_auxiliary_role(&tensor.role))
-        .cloned()
-        .collect();
-
-    Ok(MlaAttentionArtifactPayload {
-        layer,
-        query_a: bind_linear_from_artifact_slices(
-            layer,
-            "attention query A",
-            TensorRole::AttentionLatentQueryA,
-            by_role.remove(&TensorRole::AttentionLatentQueryA),
-            reader,
-        )?,
-        query_b: bind_linear_from_artifact_slices(
-            layer,
-            "attention query B",
-            TensorRole::AttentionLatentQueryB,
-            by_role.remove(&TensorRole::AttentionLatentQueryB),
-            reader,
-        )?,
-        key_value: bind_linear_from_artifact_slices(
-            layer,
-            "attention latent KV",
-            TensorRole::AttentionLatentKv,
-            by_role.remove(&TensorRole::AttentionLatentKv),
-            reader,
-        )?,
-        output_a: bind_linear_from_artifact_slices(
-            layer,
-            "attention output A",
-            TensorRole::AttentionLatentOutputA,
-            by_role.remove(&TensorRole::AttentionLatentOutputA),
-            reader,
-        )?,
-        output_b: bind_linear_from_artifact_slices(
-            layer,
-            "attention output B",
-            TensorRole::AttentionLatentOutputB,
-            by_role.remove(&TensorRole::AttentionLatentOutputB),
-            reader,
-        )?,
-        query_norm: bind_vector_from_artifact_slices(
-            layer,
-            "attention query norm",
-            by_role.remove(&TensorRole::AttentionQueryNorm),
-            reader,
-        )?,
-        key_value_norm: bind_vector_from_artifact_slices(
-            layer,
-            "attention key/value norm",
-            by_role.remove(&TensorRole::AttentionKeyValueNorm),
-            reader,
-        )?,
-        attention_sink: bind_vector_from_artifact_slices(
-            layer,
-            "attention sink",
-            by_role.remove(&TensorRole::AttentionSink),
-            reader,
-        )?,
-        auxiliary,
-    })
-}
-
-pub fn bind_hyper_connection_from_artifact_group(
-    group: &ArtifactObjectGroup,
-    reader: &ArtifactTensorReader,
-    config: HyperConnectionConfig,
-) -> Result<HyperConnectionWeights> {
-    let layer = require_layer_hyper_connection_group(group)?;
-    let weights = HyperConnectionWeights {
-        function: read_hyper_connection_component_from_group(
-            group,
-            layer,
-            "function",
-            config.mix_hc() * config.hc_hidden_size(),
-            Some(2),
-            reader,
-        )?,
-        scale: read_hyper_connection_component_from_group(
-            group,
-            layer,
-            "scale",
-            3,
-            Some(1),
-            reader,
-        )?,
-        base: read_hyper_connection_component_from_group(
-            group,
-            layer,
-            "base",
-            config.mix_hc(),
-            Some(1),
-            reader,
-        )?,
-    };
-    weights.validate(config)?;
-    Ok(weights)
-}
-
-pub fn bind_hyper_connection_head_from_artifact_group(
-    group: &ArtifactObjectGroup,
-    reader: &ArtifactTensorReader,
-    config: HyperConnectionConfig,
-) -> Result<HyperConnectionHeadWeights> {
-    if group.kind != ArtifactGroupKind::HyperConnectionHead {
-        return Err(Error::Model(format!(
-            "expected hyper-connection head artifact group, got {}",
-            group.kind.as_str()
-        )));
-    }
-    let weights = HyperConnectionHeadWeights {
-        function: read_hyper_connection_component_from_group(
-            group,
-            0,
-            "head function",
-            config.hc_mult * config.hc_hidden_size(),
-            Some(2),
-            reader,
-        )?,
-        scale: read_hyper_connection_component_from_group(
-            group,
-            0,
-            "head scale",
-            1,
-            Some(1),
-            reader,
-        )?,
-        base: read_hyper_connection_component_from_group(
-            group,
-            0,
-            "head base",
-            config.hc_mult,
-            Some(1),
-            reader,
-        )?,
-    };
-    weights.validate(config)?;
-    Ok(weights)
+    pub auxiliary: Vec<CheckpointTensorSlice>,
 }
 
 pub fn bind_shared_swiglu_ffn_from_hf(
     model_dir: &Path,
     layer: usize,
     tensors: &[HfSharedExpertTensorInfo],
-    reader: &ArtifactTensorReader,
+    reader: &CheckpointTensorReader,
     swiglu_limit: f32,
 ) -> Result<SwiGluFfnPayload> {
     let mut grouped = BTreeMap::<RoutedExpertMatrix, Vec<&HfSharedExpertTensorInfo>>::new();
@@ -416,8 +94,8 @@ pub fn bind_router_from_hf(
     model_dir: &Path,
     layer: usize,
     tensors: &[HfRouterTensorInfo],
-    reader: &ArtifactTensorReader,
-) -> Result<RouterArtifactPayload> {
+    reader: &CheckpointTensorReader,
+) -> Result<RouterWeights> {
     let mut weight = None;
     let mut bias = None;
     let mut hash = None;
@@ -434,20 +112,17 @@ pub fn bind_router_from_hf(
     }
     let weight = weight
         .ok_or_else(|| Error::Model(format!("missing router weight tensor for layer {layer}")))?;
-    let weight_payload = reader.read_slice(&artifact_slice_from_router_info(
+    let weight_payload = reader.read_slice(&checkpoint_slice_from_router_info(
         model_dir,
         weight,
         TensorRole::RouterLogits,
     ))?;
-    let weight = ArtifactLinearPayload::from_weight_and_scale(
-        TensorRole::RouterLogits,
-        weight_payload,
-        None,
-    )?;
+    let weight =
+        LinearWeight::from_weight_and_scale(TensorRole::RouterLogits, weight_payload, None)?;
 
     let bias = bias
         .map(|tensor| {
-            let payload = reader.read_slice(&artifact_slice_from_router_info(
+            let payload = reader.read_slice(&checkpoint_slice_from_router_info(
                 model_dir,
                 tensor,
                 TensorRole::RouterBias,
@@ -457,7 +132,7 @@ pub fn bind_router_from_hf(
         .transpose()?;
     let (hash_table, hash_rows, hash_cols) = hash
         .map(|tensor| {
-            let payload = reader.read_slice(&artifact_slice_from_router_info(
+            let payload = reader.read_slice(&checkpoint_slice_from_router_info(
                 model_dir,
                 tensor,
                 TensorRole::HashRouterTable,
@@ -469,7 +144,7 @@ pub fn bind_router_from_hf(
         .transpose()?
         .unwrap_or((None, 0, 0));
 
-    Ok(RouterArtifactPayload {
+    Ok(RouterWeights {
         layer,
         weight,
         bias,
@@ -483,8 +158,8 @@ pub fn bind_attention_from_hf(
     model_dir: &Path,
     layer: usize,
     tensors: &[HfAttentionTensorInfo],
-    reader: &ArtifactTensorReader,
-) -> Result<MlaAttentionArtifactPayload> {
+    reader: &CheckpointTensorReader,
+) -> Result<MlaAttentionWeights> {
     let mut grouped = BTreeMap::<AttentionTensorKind, Vec<&HfAttentionTensorInfo>>::new();
     let mut auxiliary = Vec::new();
     for tensor in tensors
@@ -493,7 +168,7 @@ pub fn bind_attention_from_hf(
     {
         match tensor.descriptor.kind {
             AttentionTensorKind::Compressor | AttentionTensorKind::Indexer => {
-                auxiliary.push(artifact_slice_from_attention_info(
+                auxiliary.push(checkpoint_slice_from_attention_info(
                     model_dir,
                     tensor,
                     attention_role_for_kind(tensor.descriptor.kind),
@@ -505,7 +180,7 @@ pub fn bind_attention_from_hf(
         }
     }
 
-    Ok(MlaAttentionArtifactPayload {
+    Ok(MlaAttentionWeights {
         layer,
         query_a: bind_attention_linear(
             model_dir,
@@ -580,7 +255,7 @@ pub fn bind_hyper_connection_from_hf(
     layer: usize,
     stage: HyperConnectionStage,
     tensors: &[HfHyperConnectionTensorInfo],
-    reader: &ArtifactTensorReader,
+    reader: &CheckpointTensorReader,
     config: HyperConnectionConfig,
 ) -> Result<HyperConnectionWeights> {
     if stage == HyperConnectionStage::Head {
@@ -639,7 +314,7 @@ pub fn bind_hyper_connection_from_hf(
 pub fn bind_hyper_connection_head_from_hf(
     model_dir: &Path,
     tensors: &[HfHyperConnectionTensorInfo],
-    reader: &ArtifactTensorReader,
+    reader: &CheckpointTensorReader,
     config: HyperConnectionConfig,
 ) -> Result<HyperConnectionHeadWeights> {
     let mut function = None;
@@ -687,193 +362,14 @@ pub fn bind_hyper_connection_head_from_hf(
     Ok(weights)
 }
 
-fn artifact_group_tensors_by_role(
-    group: &ArtifactObjectGroup,
-) -> BTreeMap<TensorRole, Vec<&ArtifactTensorSlice>> {
-    let mut by_role = BTreeMap::new();
-    for tensor in &group.tensors {
-        by_role
-            .entry(tensor.role.clone())
-            .or_insert_with(Vec::new)
-            .push(tensor);
-    }
-    by_role
-}
-
-fn require_artifact_group_layer(
-    group: &ArtifactObjectGroup,
-    expected: ArtifactGroupKind,
-) -> Result<usize> {
-    if group.kind != expected {
-        return Err(Error::Model(format!(
-            "expected {} artifact group, got {}",
-            expected.as_str(),
-            group.kind.as_str()
-        )));
-    }
-    group.layer.ok_or_else(|| {
-        Error::Model(format!(
-            "artifact group {} requires layer metadata",
-            expected.as_str()
-        ))
-    })
-}
-
-fn require_layer_hyper_connection_group(group: &ArtifactObjectGroup) -> Result<usize> {
-    if !matches!(
-        group.kind,
-        ArtifactGroupKind::HyperConnectionAttention | ArtifactGroupKind::HyperConnectionFeedForward
-    ) {
-        return Err(Error::Model(format!(
-            "expected layer hyper-connection artifact group, got {}",
-            group.kind.as_str()
-        )));
-    }
-    group.layer.ok_or_else(|| {
-        Error::Model(format!(
-            "artifact group {} requires layer metadata",
-            group.kind.as_str()
-        ))
-    })
-}
-
-fn bind_linear_from_artifact_slices(
-    layer: usize,
-    label: &str,
-    role: TensorRole,
-    tensors: Option<Vec<&ArtifactTensorSlice>>,
-    reader: &ArtifactTensorReader,
-) -> Result<ArtifactLinearPayload> {
-    let tensors = tensors.ok_or_else(|| {
-        Error::Model(format!(
-            "missing {label} artifact tensors for layer {layer}"
-        ))
-    })?;
-    let mut weight = None;
-    let mut scale = None;
-    for tensor in tensors {
-        if is_artifact_linear_scale(tensor) {
-            let scale_label = format!("{label} scale");
-            set_once(&mut scale, tensor, layer, &scale_label)?;
-        } else {
-            let weight_label = format!("{label} weight");
-            set_once(&mut weight, tensor, layer, &weight_label)?;
-        }
-    }
-    let weight = weight.ok_or_else(|| {
-        Error::Model(format!("missing {label} weight artifact for layer {layer}"))
-    })?;
-    let weight_payload = reader.read_slice(weight)?;
-    let scale_payload = scale.map(|scale| reader.read_slice(scale)).transpose()?;
-    ArtifactLinearPayload::from_weight_and_scale(role, weight_payload, scale_payload)
-}
-
-fn bind_vector_from_artifact_slices(
-    layer: usize,
-    label: &str,
-    tensors: Option<Vec<&ArtifactTensorSlice>>,
-    reader: &ArtifactTensorReader,
-) -> Result<Vec<f32>> {
-    let tensor = single_artifact_slice(layer, label, tensors)?;
-    let payload = reader.read_slice(tensor)?;
-    decode_vector_f32(&payload)
-}
-
-fn bind_optional_vector_from_artifact_slices(
-    layer: usize,
-    label: &str,
-    tensors: Option<Vec<&ArtifactTensorSlice>>,
-    reader: &ArtifactTensorReader,
-) -> Result<Option<Vec<f32>>> {
-    tensors
-        .map(|tensors| bind_vector_from_artifact_slices(layer, label, Some(tensors), reader))
-        .transpose()
-}
-
-fn bind_optional_indices_from_artifact_slices(
-    layer: usize,
-    label: &str,
-    tensors: Option<Vec<&ArtifactTensorSlice>>,
-    reader: &ArtifactTensorReader,
-) -> Result<Option<(Vec<usize>, usize, usize)>> {
-    let Some(tensors) = tensors else {
-        return Ok(None);
-    };
-    let tensor = single_artifact_slice(layer, label, Some(tensors))?;
-    let payload = reader.read_slice(tensor)?;
-    let (rows, cols) = two_dim_shape(&payload.slice, label)?;
-    let values = decode_indices_usize(&payload)?;
-    Ok(Some((values, rows, cols)))
-}
-
-fn single_artifact_slice<'a>(
-    layer: usize,
-    label: &str,
-    tensors: Option<Vec<&'a ArtifactTensorSlice>>,
-) -> Result<&'a ArtifactTensorSlice> {
-    let tensors = tensors.ok_or_else(|| {
-        Error::Model(format!("missing {label} artifact tensor for layer {layer}"))
-    })?;
-    match tensors.as_slice() {
-        [tensor] => Ok(*tensor),
-        [] => Err(Error::Model(format!(
-            "missing {label} artifact tensor for layer {layer}"
-        ))),
-        _ => Err(Error::Model(format!(
-            "duplicate {label} artifact tensors for layer {layer}"
-        ))),
-    }
-}
-
-fn read_hyper_connection_component_from_group(
-    group: &ArtifactObjectGroup,
-    layer: usize,
-    label: &str,
-    expected_elements: usize,
-    expected_rank: Option<usize>,
-    reader: &ArtifactTensorReader,
-) -> Result<Vec<f32>> {
-    let mut found = None;
-    for tensor in &group.tensors {
-        if tensor.element_count()? == expected_elements
-            && expected_rank.is_none_or(|rank| tensor.shape.len() == rank)
-        {
-            set_once(&mut found, tensor, layer, label)?;
-        }
-    }
-    let tensor = found.ok_or_else(|| {
-        Error::Model(format!(
-            "missing hyper-connection {label} artifact for layer {layer} group {}",
-            group.kind.as_str()
-        ))
-    })?;
-    let payload = reader.read_slice(tensor)?;
-    decode_tensor_f32(&payload)
-}
-
-fn is_artifact_linear_scale(tensor: &ArtifactTensorSlice) -> bool {
-    matches!(tensor.dtype, ArtifactDType::F8E8M0)
-}
-
-fn is_attention_auxiliary_role(role: &TensorRole) -> bool {
-    matches!(
-        role,
-        TensorRole::AttentionCompressor
-            | TensorRole::AuxIndexer
-            | TensorRole::AuxHiddenCompressor
-            | TensorRole::AuxOutputHiddenCompressor
-            | TensorRole::Auxiliary
-    )
-}
-
 fn bind_attention_linear(
     model_dir: &Path,
     layer: usize,
     kind: AttentionTensorKind,
     role: TensorRole,
     tensors: Option<Vec<&HfAttentionTensorInfo>>,
-    reader: &ArtifactTensorReader,
-) -> Result<ArtifactLinearPayload> {
+    reader: &CheckpointTensorReader,
+) -> Result<LinearWeight> {
     let tensors = tensors.ok_or_else(|| {
         Error::Model(format!(
             "missing attention {:?} tensors for layer {layer}",
@@ -884,9 +380,9 @@ fn bind_attention_linear(
     let mut scale = None;
     for tensor in tensors {
         match tensor.descriptor.part {
-            ArtifactTensorPart::Weight => set_once(&mut weight, tensor, layer, "attention weight")?,
-            ArtifactTensorPart::Scale => set_once(&mut scale, tensor, layer, "attention scale")?,
-            ArtifactTensorPart::Other => {}
+            TensorPayloadPart::Weight => set_once(&mut weight, tensor, layer, "attention weight")?,
+            TensorPayloadPart::Scale => set_once(&mut scale, tensor, layer, "attention scale")?,
+            TensorPayloadPart::Other => {}
         }
     }
     let weight = weight.ok_or_else(|| {
@@ -895,21 +391,21 @@ fn bind_attention_linear(
             kind
         ))
     })?;
-    let weight_payload = reader.read_slice(&artifact_slice_from_attention_info(
+    let weight_payload = reader.read_slice(&checkpoint_slice_from_attention_info(
         model_dir,
         weight,
         role.clone(),
     ))?;
     let scale_payload = scale
         .map(|scale| {
-            reader.read_slice(&artifact_slice_from_attention_info(
+            reader.read_slice(&checkpoint_slice_from_attention_info(
                 model_dir,
                 scale,
                 role.clone(),
             ))
         })
         .transpose()?;
-    ArtifactLinearPayload::from_weight_and_scale(role, weight_payload, scale_payload)
+    LinearWeight::from_weight_and_scale(role, weight_payload, scale_payload)
 }
 
 fn bind_attention_vector(
@@ -918,7 +414,7 @@ fn bind_attention_vector(
     kind: AttentionTensorKind,
     role: TensorRole,
     tensors: Option<Vec<&HfAttentionTensorInfo>>,
-    reader: &ArtifactTensorReader,
+    reader: &CheckpointTensorReader,
 ) -> Result<Vec<f32>> {
     let tensors = tensors.ok_or_else(|| {
         Error::Model(format!(
@@ -929,10 +425,10 @@ fn bind_attention_vector(
     let mut value = None;
     for tensor in tensors {
         match tensor.descriptor.part {
-            ArtifactTensorPart::Weight | ArtifactTensorPart::Other => {
+            TensorPayloadPart::Weight | TensorPayloadPart::Other => {
                 set_once(&mut value, tensor, layer, "attention vector")?
             }
-            ArtifactTensorPart::Scale => {}
+            TensorPayloadPart::Scale => {}
         }
     }
     let value = value.ok_or_else(|| {
@@ -941,7 +437,9 @@ fn bind_attention_vector(
             kind
         ))
     })?;
-    let payload = reader.read_slice(&artifact_slice_from_attention_info(model_dir, value, role))?;
+    let payload = reader.read_slice(&checkpoint_slice_from_attention_info(
+        model_dir, value, role,
+    ))?;
     decode_vector_f32(&payload)
 }
 
@@ -951,7 +449,7 @@ fn read_hyper_connection_tensor_f32(
     tensor: Option<&HfHyperConnectionTensorInfo>,
     stage: HyperConnectionStage,
     kind: HyperConnectionTensorKind,
-    reader: &ArtifactTensorReader,
+    reader: &CheckpointTensorReader,
 ) -> Result<Vec<f32>> {
     let tensor = tensor.ok_or_else(|| {
         let scope = if stage == HyperConnectionStage::Head {
@@ -964,7 +462,7 @@ fn read_hyper_connection_tensor_f32(
             stage, kind
         ))
     })?;
-    let payload = reader.read_slice(&artifact_slice_from_hyper_connection_info(
+    let payload = reader.read_slice(&checkpoint_slice_from_hyper_connection_info(
         model_dir,
         tensor,
         hyper_connection_role_for_stage(stage),
@@ -978,8 +476,8 @@ fn bind_shared_linear(
     matrix: RoutedExpertMatrix,
     role: TensorRole,
     tensors: Option<Vec<&HfSharedExpertTensorInfo>>,
-    reader: &ArtifactTensorReader,
-) -> Result<ArtifactLinearPayload> {
+    reader: &CheckpointTensorReader,
+) -> Result<LinearWeight> {
     let tensors = tensors.ok_or_else(|| {
         Error::Model(format!(
             "missing shared expert {:?} tensors for layer {layer}",
@@ -1003,21 +501,21 @@ fn bind_shared_linear(
             matrix
         ))
     })?;
-    let weight_payload = reader.read_slice(&artifact_slice_from_shared_info(
+    let weight_payload = reader.read_slice(&checkpoint_slice_from_shared_info(
         model_dir,
         weight,
         role.clone(),
     ))?;
     let scale_payload = scale
         .map(|scale| {
-            reader.read_slice(&artifact_slice_from_shared_info(
+            reader.read_slice(&checkpoint_slice_from_shared_info(
                 model_dir,
                 scale,
                 role.clone(),
             ))
         })
         .transpose()?;
-    ArtifactLinearPayload::from_weight_and_scale(role, weight_payload, scale_payload)
+    LinearWeight::from_weight_and_scale(role, weight_payload, scale_payload)
 }
 
 fn set_once<'a, T>(
@@ -1034,66 +532,66 @@ fn set_once<'a, T>(
     Ok(())
 }
 
-fn artifact_slice_from_shared_info(
+fn checkpoint_slice_from_shared_info(
     model_dir: &Path,
     info: &HfSharedExpertTensorInfo,
     role: TensorRole,
-) -> ArtifactTensorSlice {
-    ArtifactTensorSlice {
+) -> CheckpointTensorSlice {
+    CheckpointTensorSlice {
         name: info.name.clone(),
         role,
         path: model_dir.join(&info.shard),
         offset: info.file_offset,
         bytes: info.byte_size,
-        dtype: ArtifactDType::from_safetensors_dtype(&info.dtype),
+        dtype: CheckpointDType::from_safetensors_dtype(&info.dtype),
         shape: info.shape.clone(),
     }
 }
 
-fn artifact_slice_from_router_info(
+fn checkpoint_slice_from_router_info(
     model_dir: &Path,
     info: &HfRouterTensorInfo,
     role: TensorRole,
-) -> ArtifactTensorSlice {
-    ArtifactTensorSlice {
+) -> CheckpointTensorSlice {
+    CheckpointTensorSlice {
         name: info.name.clone(),
         role,
         path: model_dir.join(&info.shard),
         offset: info.file_offset,
         bytes: info.byte_size,
-        dtype: ArtifactDType::from_safetensors_dtype(&info.dtype),
+        dtype: CheckpointDType::from_safetensors_dtype(&info.dtype),
         shape: info.shape.clone(),
     }
 }
 
-fn artifact_slice_from_attention_info(
+fn checkpoint_slice_from_attention_info(
     model_dir: &Path,
     info: &HfAttentionTensorInfo,
     role: TensorRole,
-) -> ArtifactTensorSlice {
-    ArtifactTensorSlice {
+) -> CheckpointTensorSlice {
+    CheckpointTensorSlice {
         name: info.name.clone(),
         role,
         path: model_dir.join(&info.shard),
         offset: info.file_offset,
         bytes: info.byte_size,
-        dtype: ArtifactDType::from_safetensors_dtype(&info.dtype),
+        dtype: CheckpointDType::from_safetensors_dtype(&info.dtype),
         shape: info.shape.clone(),
     }
 }
 
-fn artifact_slice_from_hyper_connection_info(
+fn checkpoint_slice_from_hyper_connection_info(
     model_dir: &Path,
     info: &HfHyperConnectionTensorInfo,
     role: TensorRole,
-) -> ArtifactTensorSlice {
-    ArtifactTensorSlice {
+) -> CheckpointTensorSlice {
+    CheckpointTensorSlice {
         name: info.name.clone(),
         role,
         path: model_dir.join(&info.shard),
         offset: info.file_offset,
         bytes: info.byte_size,
-        dtype: ArtifactDType::from_safetensors_dtype(&info.dtype),
+        dtype: CheckpointDType::from_safetensors_dtype(&info.dtype),
         shape: info.shape.clone(),
     }
 }
@@ -1122,7 +620,7 @@ fn hyper_connection_role_for_stage(stage: HyperConnectionStage) -> TensorRole {
     }
 }
 
-fn two_dim_shape(slice: &ArtifactTensorSlice, label: &str) -> Result<(usize, usize)> {
+fn two_dim_shape(slice: &CheckpointTensorSlice, label: &str) -> Result<(usize, usize)> {
     match slice.shape.as_slice() {
         [rows, cols] => Ok((*rows, *cols)),
         _ => Err(Error::Model(format!(
@@ -1132,20 +630,20 @@ fn two_dim_shape(slice: &ArtifactTensorSlice, label: &str) -> Result<(usize, usi
     }
 }
 
-fn decode_vector_f32(payload: &ArtifactTensorPayload) -> Result<Vec<f32>> {
+fn decode_vector_f32(payload: &CheckpointTensorPayload) -> Result<Vec<f32>> {
     if payload.slice.shape.len() != 1 {
         return Err(Error::Model(format!(
-            "artifact vector '{}' expects 1D shape, got {:?}",
+            "checkpoint vector '{}' expects 1D shape, got {:?}",
             payload.slice.name, payload.slice.shape
         )));
     }
     decode_tensor_f32(payload)
 }
 
-fn decode_tensor_f32(payload: &ArtifactTensorPayload) -> Result<Vec<f32>> {
+fn decode_tensor_f32(payload: &CheckpointTensorPayload) -> Result<Vec<f32>> {
     let expected = payload.slice.element_count()?;
     match payload.slice.dtype {
-        ArtifactDType::F32 => {
+        CheckpointDType::F32 => {
             if payload.bytes.len() != expected * 4 {
                 return Err(Error::Model(format!(
                     "F32 tensor '{}' byte length mismatch",
@@ -1158,7 +656,7 @@ fn decode_tensor_f32(payload: &ArtifactTensorPayload) -> Result<Vec<f32>> {
                 .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
                 .collect())
         }
-        ArtifactDType::Bf16 => {
+        CheckpointDType::Bf16 => {
             if payload.bytes.len() != expected * 2 {
                 return Err(Error::Model(format!(
                     "BF16 tensor '{}' byte length mismatch",
@@ -1175,17 +673,17 @@ fn decode_tensor_f32(payload: &ArtifactTensorPayload) -> Result<Vec<f32>> {
                 .collect())
         }
         _ => Err(Error::Model(format!(
-            "artifact tensor '{}' has unsupported dtype {}",
+            "checkpoint tensor '{}' has unsupported dtype {}",
             payload.slice.name,
             payload.slice.dtype.as_str()
         ))),
     }
 }
 
-fn decode_indices_usize(payload: &ArtifactTensorPayload) -> Result<Vec<usize>> {
+fn decode_indices_usize(payload: &CheckpointTensorPayload) -> Result<Vec<usize>> {
     let expected = payload.slice.element_count()?;
     match payload.slice.dtype {
-        ArtifactDType::I32 => {
+        CheckpointDType::I32 => {
             if payload.bytes.len() != expected * 4 {
                 return Err(Error::Model(format!(
                     "I32 indices '{}' byte length mismatch",
@@ -1206,7 +704,7 @@ fn decode_indices_usize(payload: &ArtifactTensorPayload) -> Result<Vec<usize>> {
                 })
                 .collect()
         }
-        ArtifactDType::I64 => {
+        CheckpointDType::I64 => {
             if payload.bytes.len() != expected * 8 {
                 return Err(Error::Model(format!(
                     "I64 indices '{}' byte length mismatch",
@@ -1243,17 +741,16 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use crate::semantic::{
-        ArtifactTensorPart, AttentionTensorKind, AttentionTensorRef, HyperConnectionStage,
-        HyperConnectionTensorKind, HyperConnectionTensorRef, RouterTensorRef,
-        SharedExpertTensorRef,
+        AttentionTensorKind, AttentionTensorRef, HyperConnectionStage, HyperConnectionTensorKind,
+        HyperConnectionTensorRef, RouterTensorRef, SharedExpertTensorRef, TensorPayloadPart,
     };
 
     use super::*;
-    use crate::artifact::linear::ArtifactLinearFormat;
+    use crate::checkpoint::weight::LinearWeightFormat;
 
     #[test]
-    fn router_artifact_payload_returns_hash_row() {
-        let router = RouterArtifactPayload {
+    fn router_weights_return_hash_row() {
+        let router = RouterWeights {
             layer: 0,
             weight: synthetic_router_weight(),
             bias: None,
@@ -1266,7 +763,7 @@ mod tests {
 
     #[test]
     fn router_hash_expert_union_dedupes_in_prompt_order_and_caps() {
-        let router = RouterArtifactPayload {
+        let router = RouterWeights {
             layer: 0,
             weight: synthetic_router_weight(),
             bias: None,
@@ -1327,46 +824,24 @@ mod tests {
             &dir,
             0,
             &tensors,
-            &ArtifactTensorReader::new(1024),
+            &CheckpointTensorReader::new(1024),
             0.0,
         )
         .unwrap();
         assert_eq!(
             ffn.gate.format,
-            ArtifactLinearFormat::F32 {
+            LinearWeightFormat::F32 {
                 out_features: 1,
                 in_features: 2
             }
         );
         assert_eq!(
             ffn.down.format,
-            ArtifactLinearFormat::F32 {
+            LinearWeightFormat::F32 {
                 out_features: 2,
                 in_features: 1
             }
         );
-        let group = ArtifactObjectGroup {
-            kind: ArtifactGroupKind::SharedExpert,
-            layer: Some(0),
-            tensors: tensors
-                .iter()
-                .map(|tensor| {
-                    artifact_slice_from_shared_info(
-                        &dir,
-                        tensor,
-                        shared_role_for_matrix(tensor.descriptor.matrix),
-                    )
-                })
-                .collect(),
-        };
-        let from_group = bind_shared_swiglu_ffn_from_artifact_group(
-            &group,
-            &ArtifactTensorReader::new(1024),
-            0.0,
-        )
-        .unwrap();
-        assert_eq!(from_group.gate.format, ffn.gate.format);
-        assert_eq!(from_group.down.format, ffn.down.format);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1407,32 +882,10 @@ mod tests {
             ),
         ];
         let router =
-            bind_router_from_hf(&dir, 0, &tensors, &ArtifactTensorReader::new(1024)).unwrap();
+            bind_router_from_hf(&dir, 0, &tensors, &CheckpointTensorReader::new(1024)).unwrap();
         assert_eq!(router.logits(&[2.0, 3.0]).unwrap(), vec![2.0, 3.0]);
         assert_eq!(router.bias.as_deref(), Some(&[0.5, -0.5][..]));
         assert_eq!(router.hash_experts_for_token(0).unwrap(), Some(vec![1, 0]));
-        let group = ArtifactObjectGroup {
-            kind: ArtifactGroupKind::Router,
-            layer: Some(0),
-            tensors: tensors
-                .iter()
-                .map(|tensor| {
-                    artifact_slice_from_router_info(
-                        &dir,
-                        tensor,
-                        router_role_for_kind(tensor.descriptor.kind.clone()),
-                    )
-                })
-                .collect(),
-        };
-        let from_group =
-            bind_router_from_artifact_group(&group, &ArtifactTensorReader::new(1024)).unwrap();
-        assert_eq!(from_group.logits(&[2.0, 3.0]).unwrap(), vec![2.0, 3.0]);
-        assert_eq!(from_group.bias.as_deref(), router.bias.as_deref());
-        assert_eq!(
-            from_group.hash_experts_for_token(0).unwrap(),
-            Some(vec![1, 0])
-        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1454,7 +907,7 @@ mod tests {
                 "wq_a.weight",
                 "wq_a.bin",
                 AttentionTensorKind::QueryA,
-                ArtifactTensorPart::Weight,
+                TensorPayloadPart::Weight,
                 "F32",
                 vec![2, 2],
                 16,
@@ -1463,7 +916,7 @@ mod tests {
                 "wq_b.weight",
                 "wq_b.bin",
                 AttentionTensorKind::QueryB,
-                ArtifactTensorPart::Weight,
+                TensorPayloadPart::Weight,
                 "F32",
                 vec![2, 2],
                 16,
@@ -1472,7 +925,7 @@ mod tests {
                 "wkv.weight",
                 "wkv.bin",
                 AttentionTensorKind::KeyValue,
-                ArtifactTensorPart::Weight,
+                TensorPayloadPart::Weight,
                 "F32",
                 vec![2, 2],
                 16,
@@ -1481,7 +934,7 @@ mod tests {
                 "wo_a.weight",
                 "wo_a.bin",
                 AttentionTensorKind::OutputA,
-                ArtifactTensorPart::Weight,
+                TensorPayloadPart::Weight,
                 "F32",
                 vec![2, 2],
                 16,
@@ -1490,7 +943,7 @@ mod tests {
                 "wo_b.weight",
                 "wo_b.bin",
                 AttentionTensorKind::OutputB,
-                ArtifactTensorPart::Weight,
+                TensorPayloadPart::Weight,
                 "F32",
                 vec![2, 2],
                 16,
@@ -1499,7 +952,7 @@ mod tests {
                 "q_norm.weight",
                 "q_norm.bin",
                 AttentionTensorKind::QueryNorm,
-                ArtifactTensorPart::Weight,
+                TensorPayloadPart::Weight,
                 "F32",
                 vec![2],
                 8,
@@ -1508,7 +961,7 @@ mod tests {
                 "kv_norm.weight",
                 "kv_norm.bin",
                 AttentionTensorKind::KeyValueNorm,
-                ArtifactTensorPart::Weight,
+                TensorPayloadPart::Weight,
                 "F32",
                 vec![2],
                 8,
@@ -1517,7 +970,7 @@ mod tests {
                 "attn_sink",
                 "sink.bin",
                 AttentionTensorKind::AttentionSink,
-                ArtifactTensorPart::Other,
+                TensorPayloadPart::Other,
                 "F32",
                 vec![2],
                 8,
@@ -1526,7 +979,7 @@ mod tests {
                 "compressor.wkv.weight",
                 "aux.bin",
                 AttentionTensorKind::Compressor,
-                ArtifactTensorPart::Other,
+                TensorPayloadPart::Other,
                 "F32",
                 vec![1],
                 4,
@@ -1534,7 +987,7 @@ mod tests {
         ];
 
         let attention =
-            bind_attention_from_hf(&dir, 0, &tensors, &ArtifactTensorReader::new(1024)).unwrap();
+            bind_attention_from_hf(&dir, 0, &tensors, &CheckpointTensorReader::new(1024)).unwrap();
         assert_eq!(attention.layer, 0);
         assert_eq!(attention.query_a.format.in_features(), 2);
         assert_eq!(attention.output_b.format.out_features(), 2);
@@ -1543,23 +996,6 @@ mod tests {
         assert_eq!(attention.attention_sink, vec![0.1, 0.2]);
         assert_eq!(attention.auxiliary.len(), 1);
         assert_eq!(attention.auxiliary[0].role, TensorRole::AttentionCompressor);
-        let group = ArtifactObjectGroup {
-            kind: ArtifactGroupKind::Attention,
-            layer: Some(0),
-            tensors: tensors
-                .iter()
-                .map(|tensor| {
-                    artifact_slice_from_attention_info(
-                        &dir,
-                        tensor,
-                        attention_role_for_kind(tensor.descriptor.kind),
-                    )
-                })
-                .collect(),
-        };
-        let from_group =
-            bind_attention_from_artifact_group(&group, &ArtifactTensorReader::new(1024)).unwrap();
-        assert_eq!(from_group, attention);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1644,7 +1080,7 @@ mod tests {
             0,
             HyperConnectionStage::Attention,
             &tensors,
-            &ArtifactTensorReader::new(1024),
+            &CheckpointTensorReader::new(1024),
             config,
         )
         .unwrap();
@@ -1655,7 +1091,7 @@ mod tests {
         let head = bind_hyper_connection_head_from_hf(
             &dir,
             &tensors,
-            &ArtifactTensorReader::new(1024),
+            &CheckpointTensorReader::new(1024),
             config,
         )
         .unwrap();
@@ -1663,90 +1099,23 @@ mod tests {
         assert_eq!(head.scale, vec![1.0]);
         assert_eq!(head.base, vec![0.0, 1.0]);
 
-        let layer_group = ArtifactObjectGroup {
-            kind: ArtifactGroupKind::HyperConnectionAttention,
-            layer: Some(0),
-            tensors: tensors
-                .iter()
-                .filter(|tensor| tensor.descriptor.layer == Some(0))
-                .map(|tensor| {
-                    artifact_slice_from_hyper_connection_info(
-                        &dir,
-                        tensor,
-                        hyper_connection_role_for_stage(tensor.descriptor.stage),
-                    )
-                })
-                .collect(),
-        };
-        let from_group = bind_hyper_connection_from_artifact_group(
-            &layer_group,
-            &ArtifactTensorReader::new(1024),
-            config,
-        )
-        .unwrap();
-        assert_eq!(from_group.function, weights.function);
-        assert_eq!(from_group.scale, weights.scale);
-        assert_eq!(from_group.base, weights.base);
-
-        let head_group = ArtifactObjectGroup {
-            kind: ArtifactGroupKind::HyperConnectionHead,
-            layer: None,
-            tensors: tensors
-                .iter()
-                .filter(|tensor| tensor.descriptor.layer.is_none())
-                .map(|tensor| {
-                    artifact_slice_from_hyper_connection_info(
-                        &dir,
-                        tensor,
-                        hyper_connection_role_for_stage(tensor.descriptor.stage),
-                    )
-                })
-                .collect(),
-        };
-        let head_from_group = bind_hyper_connection_head_from_artifact_group(
-            &head_group,
-            &ArtifactTensorReader::new(1024),
-            config,
-        )
-        .unwrap();
-        assert_eq!(head_from_group.function, head.function);
-        assert_eq!(head_from_group.scale, head.scale);
-        assert_eq!(head_from_group.base, head.base);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn shared_role_for_matrix(matrix: RoutedExpertMatrix) -> TensorRole {
-        match matrix {
-            RoutedExpertMatrix::Gate => TensorRole::SharedExpertGate,
-            RoutedExpertMatrix::Up => TensorRole::SharedExpertUp,
-            RoutedExpertMatrix::Down => TensorRole::SharedExpertDown,
-        }
-    }
-
-    fn router_role_for_kind(kind: RouterTensorKind) -> TensorRole {
-        match kind {
-            RouterTensorKind::Weight => TensorRole::RouterLogits,
-            RouterTensorKind::Bias => TensorRole::RouterBias,
-            RouterTensorKind::HashTable => TensorRole::HashRouterTable,
-            RouterTensorKind::Other(_) => TensorRole::Unknown,
-        }
-    }
-
-    fn synthetic_router_weight() -> ArtifactLinearPayload {
-        let payload = ArtifactTensorPayload {
-            slice: ArtifactTensorSlice {
+    fn synthetic_router_weight() -> LinearWeight {
+        let payload = CheckpointTensorPayload {
+            slice: CheckpointTensorSlice {
                 name: "router.weight".into(),
                 role: TensorRole::RouterLogits,
                 path: PathBuf::from("synthetic"),
                 offset: 0,
                 bytes: 16,
-                dtype: ArtifactDType::F32,
+                dtype: CheckpointDType::F32,
                 shape: vec![2, 2],
             },
             bytes: f32_bytes(&[1.0, 0.0, 0.0, 1.0]),
         };
-        ArtifactLinearPayload::from_weight_and_scale(TensorRole::RouterLogits, payload, None)
-            .unwrap()
+        LinearWeight::from_weight_and_scale(TensorRole::RouterLogits, payload, None).unwrap()
     }
 
     fn write_linear_pair(dir: &Path, name: &str, value: f32) {
@@ -1807,7 +1176,7 @@ mod tests {
         name: &str,
         shard: &str,
         kind: AttentionTensorKind,
-        part: ArtifactTensorPart,
+        part: TensorPayloadPart,
         dtype: &str,
         shape: Vec<usize>,
         byte_size: u64,

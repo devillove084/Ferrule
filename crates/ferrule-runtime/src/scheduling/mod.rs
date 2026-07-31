@@ -20,12 +20,10 @@ pub use actions::{
 pub(crate) use batch::ScheduledBatch;
 
 pub use resident::{CancelRequestResult, ResidentScheduler, ResidentSchedulerConfig};
-pub(crate) use resources::{BrokerExpertIoResourceControl, ExpertIoResourceBrokerHandle};
 pub use resources::{
-    HardResourceBroker, HardResourceClaim, HardResourceError, HardResourceGrant,
-    HardResourceGrantId, HardResourceLimit, HardResourceSnapshot, ResourceBroker,
-    ResourceBrokerBuilder, ResourceBrokerStats, ResourceClaim, ResourceClass, ResourceGrantId,
-    ResourceId, ResourceKind, ResourceRejection, ResourceRequest, ResourceSnapshot, ResourceUnit,
+    PhysicalResourceBroker, PhysicalResourceClaim, PhysicalResourceError, PhysicalResourceGrant,
+    PhysicalResourceGrantId, PhysicalResourceLimit, PhysicalResourceSnapshot, ResourceClass,
+    ResourceKind, ResourceUnit,
 };
 pub use session::{
     GenerateRequest, RequestId, SequenceFinishReason, SequenceState, SequenceStatus, SessionId,

@@ -254,7 +254,7 @@ fn bf16_rows_cover_batch_and_channel_tails() {
     unsafe_code,
     reason = "validated smoke test buffers and launch geometry require raw kernel launches"
 )]
-fn artifact_format_kernels_produce_expected_tiny_outputs() {
+fn payload_encoding_kernels_produce_expected_tiny_outputs() {
     if !has_cuda() {
         eprintln!("SKIP: no CUDA");
         return;

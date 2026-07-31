@@ -8,7 +8,7 @@
 //! | Module | Responsibility |
 //! |---|---|
 //! | `config` | `DeepSeekV4Config`, `DeepSeekV4AttentionConfig`, `DeepSeekV4RopeParams` |
-//! | `artifact` | `DeepSeekV4ArtifactModel` — HF weight loading and tensor binding |
+//! | `checkpoint` | `DeepSeekV4Checkpoint` — HF weight loading and tensor binding |
 //! | `operators` | `DeepSeekV4OperatorContext` — CPU/CUDA operator dispatch |
 //! | `cuda_cache` | `DeepSeekV4CudaOperatorCache` — device-resident weight/KV cache |
 //! | `attention` | `DeepSeekV4Attention`, compressor, window KV, attention cache |
@@ -17,14 +17,15 @@
 //! | `runner` | `DeepSeekV4Runner` - `ModelRunner` implementation |
 //! | `helpers` | Free functions: RMSNorm, RoPE, YaRN, top-k, cache keys |
 
-pub mod artifact;
 pub mod attention;
+pub mod checkpoint;
+mod checkpoint_binding;
 pub mod config;
 #[cfg(feature = "cuda")]
 pub mod cuda_cache;
 
 #[cfg(feature = "cuda")]
-pub(crate) mod expert_materializer;
+pub(crate) mod cuda_materialization;
 pub mod helpers;
 pub mod layer;
 pub mod mtp;
@@ -34,15 +35,17 @@ pub mod runner;
 pub mod sequence;
 
 #[cfg(test)]
+mod local_checkpoint_tests;
+#[cfg(test)]
 mod tests;
 
 // Re-exports
-pub use artifact::DeepSeekV4ArtifactModel;
 pub use attention::{
     DeepSeekV4Attention, DeepSeekV4AttentionCache, DeepSeekV4CompressedAttentionPayload,
     DeepSeekV4CompressorPayload, DeepSeekV4CompressorState, DeepSeekV4IndexerPayload,
     DeepSeekV4WindowKvCache,
 };
+pub use checkpoint::DeepSeekV4Checkpoint;
 pub use config::{DSparkConfig, DeepSeekV4AttentionConfig, DeepSeekV4Config, DeepSeekV4RopeParams};
 
 pub use layer::{

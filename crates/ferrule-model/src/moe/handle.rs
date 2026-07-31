@@ -15,7 +15,7 @@ use crate::moe::streaming::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExpertResidentFormat {
+pub enum ResourceResidentFormat {
     /// Artifact-preserved packed FP4 expert payload.
     PackedFp4E2M1WithE8M0Scale,
     /// Exact artifact representation is preserved but not represented by a CPU bundle.
@@ -30,7 +30,7 @@ pub enum ExpertResidentFormat {
 pub struct ResidentExpertHandle {
     pub expert: ExpertId,
     pub tier: ExpertStorageTier,
-    pub format: ExpertResidentFormat,
+    pub format: ResourceResidentFormat,
     pub bytes: u64,
     pub slot: Option<usize>,
 }
@@ -39,7 +39,7 @@ impl ResidentExpertHandle {
     pub fn new(
         expert: ExpertId,
         tier: ExpertStorageTier,
-        format: ExpertResidentFormat,
+        format: ResourceResidentFormat,
         bytes: u64,
     ) -> Self {
         Self {
@@ -214,7 +214,7 @@ mod tests {
             .insert_resident_handle(ResidentExpertHandle::new(
                 expert,
                 ExpertStorageTier::Gpu,
-                ExpertResidentFormat::Opaque("cuda-slot".into()),
+                ResourceResidentFormat::Opaque("cuda-slot".into()),
                 4096,
             ))
             .unwrap();

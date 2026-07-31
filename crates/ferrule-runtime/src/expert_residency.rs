@@ -1,4 +1,4 @@
-//! Expert residency controller and backend materialization boundary.
+//! Expert residency controller.
 pub use ferrule_common::expert_residency::{
     ExpertInstallActivationOutcome, ExpertInstallIntent, ExpertInstallPrepareOutcome,
     ExpertInstallReason, ExpertKey, ExpertLease, ExpertResidencyControl,
@@ -7,10 +7,6 @@ pub use ferrule_common::expert_residency::{
     ExpertSlotId, PreparedExpertInstall,
 };
 use ferrule_common::{Error, Result};
-
-use ferrule_model::moe::streaming::{
-    ExpertId, ExpertLoadSource, ExpertStreamingReader, ExpertStreamingStep,
-};
 
 // ── Model-neutral per-layer residency controller ─────────────────────
 
@@ -232,147 +228,11 @@ impl ExpertResidencyControl for ExpertResidencyController {
     }
 }
 
-// ── ExpertResidencyBackend trait ──────────────────────────────────────
-
-/// Backend that can load, evict, and report on resident experts.
-///
-/// The planner produces an `ExpertStreamingStep`; the backend applies it.
-/// This replaces duplicated CPU/CUDA load-evict-install loops with a single
-/// model-agnostic residency boundary.
-///
-/// # Implementors
-///
-/// - CPU/reference stores that keep artifact payloads resident.
-/// - CUDA/device stores that upload to device buffers and retain opaque handles.
-/// - Host-staged caches that keep decoded bytes warm before device installation.
-pub trait ExpertResidencyBackend {
-    /// Remove an expert's backend handle (eviction).
-    fn evict(&mut self, expert: ExpertId) -> Result<()>;
-
-    /// Load bytes from source via the reader, install into the backend,
-    /// and return the number of bytes loaded.
-    ///
-    /// For CPU: stores the artifact payload.
-    /// For CUDA: uploads to device buffer and stores the handle.
-    fn load_and_install(
-        &mut self,
-        expert: ExpertId,
-        source: &ExpertLoadSource,
-        reader: &ExpertStreamingReader,
-    ) -> Result<u64>;
-
-    /// Check if expert is currently resident on this backend.
-    fn is_resident(&self, expert: ExpertId) -> bool;
-
-    /// Number of currently resident experts.
-    fn resident_count(&self) -> usize;
-
-    /// Total bytes of resident handles.
-    fn resident_bytes(&self) -> u64;
-}
-
-/// Apply a streaming step to a backend: evict first, then load.
-///
-/// This is the single runtime implementation of the backend load/evict loop.
-pub fn apply_streaming_step(
-    backend: &mut impl ExpertResidencyBackend,
-    step: &ExpertStreamingStep,
-    reader: &ExpertStreamingReader,
-) -> Result<()> {
-    // Evict first to free slots before loading.
-    for eviction in &step.evictions {
-        backend.evict(eviction.expert)?;
-    }
-    // Load only non-resident experts.
-    for load in &step.loads {
-        if !backend.is_resident(load.expert) {
-            backend.load_and_install(load.expert, &load.load_source, reader)?;
-        }
-    }
-    Ok(())
-}
-
-// ── Implementation for CpuExpertHandleStore ───────────────────────────
-
-use ferrule_model::moe::handle::{CpuExpertHandleStore, ExpertHandleStore};
-
-// Note: HostStagedExpertCache has been moved to ferrule-model::expert_streaming.
-// The runtime re-exports it via `ferrule_runtime::HostStagedExpertCache`.
-
-// ── CpuExpertHandleStore backend ─────────────────────────────────────
-
-impl ExpertResidencyBackend for CpuExpertHandleStore {
-    fn evict(&mut self, expert: ExpertId) -> Result<()> {
-        self.remove(expert);
-        Ok(())
-    }
-
-    fn load_and_install(
-        &mut self,
-        expert: ExpertId,
-        source: &ExpertLoadSource,
-        reader: &ExpertStreamingReader,
-    ) -> Result<u64> {
-        let payload = reader.read_load_source(expert, source)?;
-        let bytes = payload
-            .tensors
-            .iter()
-            .map(|t| t.bytes.len() as u64)
-            .sum::<u64>();
-        self.insert_artifact_payload(payload)?;
-        Ok(bytes)
-    }
-
-    fn is_resident(&self, expert: ExpertId) -> bool {
-        ExpertHandleStore::contains(self, expert)
-    }
-
-    fn resident_count(&self) -> usize {
-        self.len()
-    }
-
-    fn resident_bytes(&self) -> u64 {
-        self.total_bytes()
-    }
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrule_model::moe::handle::CpuExpertHandleStore;
-    use ferrule_model::moe::streaming::{
-        ExpertId, ExpertLoadSource, ExpertMatrixKind as RuntimeExpertMatrixKind, ExpertStorageTier,
-        ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertTensorComponent, ExpertTensorKey,
-        ExpertTensorSlice,
-    };
-    use std::path::PathBuf;
-
-    fn expert_id(layer: usize, expert: usize) -> ExpertId {
-        ExpertId::new(layer, expert)
-    }
-
-    fn make_slice(expert: ExpertId, bytes: u64) -> ExpertTensorSlice {
-        ExpertTensorSlice {
-            key: ExpertTensorKey {
-                expert,
-                matrix: RuntimeExpertMatrixKind::Gate,
-            },
-            component: ExpertTensorComponent::Weight,
-            path: PathBuf::from("/dev/null"),
-            offset: 0,
-            bytes,
-            dtype: "I8".into(),
-            shape: vec![1, bytes as usize],
-        }
-    }
-
-    fn make_local_tensor_set(expert: ExpertId, bytes: u64) -> ExpertLoadSource {
-        ExpertLoadSource::LocalTensorSet {
-            tensors: vec![make_slice(expert, bytes)],
-        }
-    }
 
     fn install(
         coordinator: &mut ExpertResidencyCoordinator<u32>,
@@ -660,126 +520,5 @@ mod tests {
         assert!(controller.binding(layer1_second).unwrap().is_some());
         assert_eq!(controller.layer_stats(0).unwrap().resident, 1);
         assert_eq!(controller.layer_stats(1).unwrap().resident, 2);
-    }
-
-    // ── CpuExpertHandleStore backend tests ──
-
-    #[test]
-    fn cpu_store_evict_removes_handle() {
-        let mut store = CpuExpertHandleStore::new();
-        let id = expert_id(0, 0);
-        store
-            .insert_bundle(ferrule_model::moe::streaming::ExpertComputeBundle {
-                expert: id,
-                gate: make_gate_payload(id),
-                up: make_gate_payload(id),
-                down: make_gate_payload(id),
-            })
-            .unwrap();
-        assert!(store.is_resident(id));
-
-        ExpertResidencyBackend::evict(&mut store, id).unwrap();
-        assert!(!store.is_resident(id));
-    }
-
-    #[test]
-    fn cpu_store_resident_count_and_bytes() {
-        let mut store = CpuExpertHandleStore::new();
-        assert_eq!(store.resident_count(), 0);
-        assert_eq!(store.resident_bytes(), 0);
-
-        // Insert a resident handle manually.
-        use ferrule_model::moe::handle::{
-            ExpertComputeHandle, ExpertResidentFormat, ResidentExpertHandle,
-        };
-        let id = expert_id(0, 0);
-        store
-            .insert(ExpertComputeHandle::Resident(ResidentExpertHandle::new(
-                id,
-                ExpertStorageTier::Gpu,
-                ExpertResidentFormat::Opaque("test".into()),
-                4096,
-            )))
-            .unwrap();
-
-        assert_eq!(store.resident_count(), 1);
-        assert_eq!(store.resident_bytes(), 4096);
-    }
-
-    // ── apply_streaming_step test ──
-
-    #[test]
-    fn apply_streaming_step_evicts_then_loads() {
-        // Set up a planner with 1 GPU slot — forces eviction when switching.
-        let policy = ExpertStreamingPolicy {
-            gpu_slots_per_layer: 1,
-            prefetch_per_layer: 0,
-            preserve_artifact_quantization: true,
-            allow_cpu_staging: false,
-            allow_remote_sources: false,
-        };
-        let mut planner = ExpertStreamingPlanner::new(policy);
-
-        // Register two experts.
-        let e0 = expert_id(0, 0);
-        let e1 = expert_id(0, 1);
-        planner.register_load_source(e0, make_local_tensor_set(e0, 8));
-        planner.register_load_source(e1, make_local_tensor_set(e1, 8));
-
-        // Step 1: select expert 0 — should produce a load.
-        let step1 = planner.plan_layer_step(0, &[0], &[]).unwrap();
-        assert!(!step1.loads.is_empty());
-
-        // We can't actually read from /dev/null with real bytes, so just
-        // verify the step structure is correct.
-        assert_eq!(step1.evictions.len(), 0);
-        assert_eq!(step1.selected.len(), 1);
-
-        // The load would fail with a real reader because /dev/null gives 0 bytes,
-        // but we can test the eviction path separately.
-        planner.commit_step(&step1).unwrap();
-
-        // Step 2: select expert 1 only — expert 0 should be evicted.
-        let step2 = planner.plan_layer_step(0, &[1], &[]).unwrap();
-        assert!(!step2.evictions.is_empty());
-        assert_eq!(step2.evictions[0].expert, e0);
-
-        // Verify apply_streaming_step would evict e0 first.
-        // (We test the logic without the reader by checking is_resident.)
-        let mut store = CpuExpertHandleStore::new();
-        // Manually mark e0 as resident.
-        use ferrule_model::moe::handle::{
-            ExpertComputeHandle, ExpertResidentFormat, ResidentExpertHandle,
-        };
-        store
-            .insert(ExpertComputeHandle::Resident(ResidentExpertHandle::new(
-                e0,
-                ExpertStorageTier::Gpu,
-                ExpertResidentFormat::Opaque("test".into()),
-                8,
-            )))
-            .unwrap();
-        assert!(store.is_resident(e0));
-
-        // Apply just the evictions part.
-        for ev in &step2.evictions {
-            ExpertResidencyBackend::evict(&mut store, ev.expert).unwrap();
-        }
-        assert!(!store.is_resident(e0));
-    }
-
-    fn make_gate_payload(expert: ExpertId) -> ferrule_model::moe::streaming::ExpertLinearPayload {
-        use ferrule_model::moe::streaming::{
-            ExpertLinearFormat, ExpertLinearPayload, ExpertTensorPayload,
-        };
-        ExpertLinearPayload {
-            matrix: RuntimeExpertMatrixKind::Gate,
-            weight: ExpertTensorPayload {
-                slice: make_slice(expert, 8),
-                bytes: vec![0u8; 8],
-            },
-            scale: None,
-            format: ExpertLinearFormat::Opaque,
-        }
     }
 }

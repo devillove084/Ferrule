@@ -1,4 +1,4 @@
-//! Artifact weight-format helpers for reference tests and tiny fixtures.
+//! Checkpoint weight-format helpers for reference tests and tiny fixtures.
 //!
 //! These routines are intentionally correctness/debug utilities, not the final
 //! high-throughput path. Production execution should consume packed FP4 + E8M0

@@ -1,4 +1,4 @@
-use crate::semantic::{ArtifactTensorPart, DenseLayerTensorKind, DenseLayerTensorRef};
+use crate::semantic::{DenseLayerTensorKind, DenseLayerTensorRef, TensorPayloadPart};
 use crate::tensor_policy::TensorClass;
 
 /// Common tensor-name policy for dense Transformer-style HF/GGUF names.
@@ -115,15 +115,15 @@ fn strip_hf_layer_prefix(name: &str) -> Option<(usize, &str)> {
     Some((layer.parse().ok()?, rest))
 }
 
-fn split_field_part(field: &str) -> Option<(&str, ArtifactTensorPart)> {
+fn split_field_part(field: &str) -> Option<(&str, TensorPayloadPart)> {
     let (field, part) = field.rsplit_once('.')?;
     Some((field, artifact_tensor_part(part)))
 }
 
-fn artifact_tensor_part(part: &str) -> ArtifactTensorPart {
+fn artifact_tensor_part(part: &str) -> TensorPayloadPart {
     match part {
-        "weight" => ArtifactTensorPart::Weight,
-        "scale" => ArtifactTensorPart::Scale,
-        _ => ArtifactTensorPart::Other,
+        "weight" => TensorPayloadPart::Weight,
+        "scale" => TensorPayloadPart::Scale,
+        _ => TensorPayloadPart::Other,
     }
 }

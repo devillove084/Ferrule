@@ -2,11 +2,11 @@
 
 use std::time::Instant;
 
-use crate::artifact::binding::MlaAttentionArtifactPayload;
-use crate::artifact::linear::ArtifactLinearPayload;
-use crate::artifact::tensor::{ArtifactTensorReader, ArtifactTensorSlice};
+use super::checkpoint_binding::MlaAttentionWeights;
 #[cfg(feature = "cuda")]
 use crate::attention_backend::SparseAttentionSpec;
+use crate::checkpoint::tensor::{CheckpointTensorReader, CheckpointTensorSlice};
+use crate::checkpoint::weight::LinearWeight;
 
 #[cfg(feature = "cuda")]
 use ferrule_common::execution::ForwardPhase;
@@ -43,15 +43,15 @@ pub struct DeepSeekV4CompressorPayload {
     pub ape_rows: usize,
     pub ape_cols: usize,
     pub norm: Vec<f32>,
-    pub wkv: ArtifactLinearPayload,
-    pub wgate: ArtifactLinearPayload,
+    pub wkv: LinearWeight,
+    pub wgate: LinearWeight,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeepSeekV4IndexerPayload {
     pub compressor: DeepSeekV4CompressorPayload,
-    pub wq_b: ArtifactLinearPayload,
-    pub weights_proj: ArtifactLinearPayload,
+    pub wq_b: LinearWeight,
+    pub weights_proj: LinearWeight,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -64,8 +64,8 @@ impl DeepSeekV4CompressedAttentionPayload {
     pub fn bind_optional(
         layer: usize,
         cfg: DeepSeekV4AttentionConfig,
-        auxiliary: &[ArtifactTensorSlice],
-        reader: &ArtifactTensorReader,
+        auxiliary: &[CheckpointTensorSlice],
+        reader: &CheckpointTensorReader,
     ) -> Result<Option<Self>> {
         if cfg.compress_ratio == 0 {
             if !auxiliary.is_empty() {
@@ -105,8 +105,8 @@ impl DeepSeekV4CompressorPayload {
     #[allow(clippy::too_many_arguments)]
     fn bind(
         layer: usize,
-        auxiliary: &[ArtifactTensorSlice],
-        reader: &ArtifactTensorReader,
+        auxiliary: &[CheckpointTensorSlice],
+        reader: &CheckpointTensorReader,
         prefix: &str,
         role: TensorRole,
         compress_ratio: usize,
@@ -173,8 +173,8 @@ impl DeepSeekV4IndexerPayload {
     fn bind(
         layer: usize,
         cfg: DeepSeekV4AttentionConfig,
-        auxiliary: &[ArtifactTensorSlice],
-        reader: &ArtifactTensorReader,
+        auxiliary: &[CheckpointTensorSlice],
+        reader: &CheckpointTensorReader,
     ) -> Result<Self> {
         let prefix = format!("layers.{layer}.attn.indexer");
         let compressor = DeepSeekV4CompressorPayload::bind(
@@ -228,7 +228,7 @@ impl DeepSeekV4IndexerPayload {
 pub struct DeepSeekV4Attention {
     pub layer: usize,
     pub config: DeepSeekV4AttentionConfig,
-    pub payload: MlaAttentionArtifactPayload,
+    pub payload: MlaAttentionWeights,
     pub compressed: Option<DeepSeekV4CompressedAttentionPayload>,
 }
 
@@ -418,7 +418,7 @@ impl DeepSeekV4Attention {
     pub fn new(
         layer: usize,
         config: DeepSeekV4AttentionConfig,
-        payload: MlaAttentionArtifactPayload,
+        payload: MlaAttentionWeights,
     ) -> Result<Self> {
         Self::new_with_compressed(layer, config, payload, None)
     }
@@ -426,7 +426,7 @@ impl DeepSeekV4Attention {
     pub fn new_with_compressed(
         layer: usize,
         config: DeepSeekV4AttentionConfig,
-        payload: MlaAttentionArtifactPayload,
+        payload: MlaAttentionWeights,
         compressed: Option<DeepSeekV4CompressedAttentionPayload>,
     ) -> Result<Self> {
         config.validate()?;

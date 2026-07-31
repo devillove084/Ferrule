@@ -40,10 +40,9 @@ pub const DSPARK_BLOCK_SIZE: usize = 5;
 
 use super::common;
 use crate::semantic::{
-    ArtifactTensorPart, AttentionTensorKind, AttentionTensorRef, HyperConnectionStage,
-    HyperConnectionTensorKind, HyperConnectionTensorRef, RoutedExpertMatrix,
-    RoutedExpertTensorPart, RoutedExpertTensorRef, RouterTensorKind, RouterTensorRef,
-    SharedExpertTensorRef,
+    AttentionTensorKind, AttentionTensorRef, HyperConnectionStage, HyperConnectionTensorKind,
+    HyperConnectionTensorRef, RoutedExpertMatrix, RoutedExpertTensorPart, RoutedExpertTensorRef,
+    RouterTensorKind, RouterTensorRef, SharedExpertTensorRef, TensorPayloadPart,
 };
 
 /// DeepSeek-V4 / DeepSeek-V4-Flash tensor-name policy.
@@ -191,7 +190,7 @@ pub fn parse_hf_attention_tensor(name: &str) -> Option<AttentionTensorRef> {
             return Some(AttentionTensorRef {
                 layer,
                 kind: AttentionTensorKind::Compressor,
-                part: ArtifactTensorPart::Other,
+                part: TensorPayloadPart::Other,
             });
         }
         ["layers", layer, "attn", "indexer", ..] => {
@@ -199,7 +198,7 @@ pub fn parse_hf_attention_tensor(name: &str) -> Option<AttentionTensorRef> {
             return Some(AttentionTensorRef {
                 layer,
                 kind: AttentionTensorKind::Indexer,
-                part: ArtifactTensorPart::Other,
+                part: TensorPayloadPart::Other,
             });
         }
         ["layers", layer, "attn", field, part] => (*layer, *field, Some(*part)),
@@ -219,9 +218,9 @@ pub fn parse_hf_attention_tensor(name: &str) -> Option<AttentionTensorRef> {
         _ => return None,
     };
     let part = match part {
-        Some("weight") => ArtifactTensorPart::Weight,
-        Some("scale") => ArtifactTensorPart::Scale,
-        Some(_) | None => ArtifactTensorPart::Other,
+        Some("weight") => TensorPayloadPart::Weight,
+        Some("scale") => TensorPayloadPart::Scale,
+        Some(_) | None => TensorPayloadPart::Other,
     };
     Some(AttentionTensorRef { layer, kind, part })
 }
@@ -603,7 +602,7 @@ mod tests {
             Some(AttentionTensorRef {
                 layer: 2,
                 kind: AttentionTensorKind::QueryA,
-                part: ArtifactTensorPart::Weight,
+                part: TensorPayloadPart::Weight,
             })
         );
         assert_eq!(
@@ -611,7 +610,7 @@ mod tests {
             Some(AttentionTensorRef {
                 layer: 2,
                 kind: AttentionTensorKind::QueryB,
-                part: ArtifactTensorPart::Scale,
+                part: TensorPayloadPart::Scale,
             })
         );
         assert_eq!(
@@ -619,7 +618,7 @@ mod tests {
             Some(AttentionTensorRef {
                 layer: 2,
                 kind: AttentionTensorKind::QueryNorm,
-                part: ArtifactTensorPart::Weight,
+                part: TensorPayloadPart::Weight,
             })
         );
         assert_eq!(
@@ -627,7 +626,7 @@ mod tests {
             Some(AttentionTensorRef {
                 layer: 2,
                 kind: AttentionTensorKind::AttentionSink,
-                part: ArtifactTensorPart::Other,
+                part: TensorPayloadPart::Other,
             })
         );
         assert_eq!(

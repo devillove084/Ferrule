@@ -6,13 +6,12 @@ use ferrule_model::{ChatTemplate, detect_chat_template};
 #[cfg(feature = "cuda")]
 use ferrule_model::{
     ModelDescriptor, ModelExecutionBackend, ModelFamily,
-    models::deepseek_v4::{DeepSeekV4ArtifactModel, DeepSeekV4PrepareOptions, DeepSeekV4Runner},
+    models::deepseek_v4::{DeepSeekV4Checkpoint, DeepSeekV4PrepareOptions, DeepSeekV4Runner},
 };
 #[cfg(feature = "cuda")]
 use ferrule_runtime::{
     GenerateRequest, LocalResidentInferenceEngine, RequestId, ResidentActionKind,
-    ResidentDriverStep, ResidentSchedulerConfig, ResidentTopKDriverConfig, SequenceFinishReason,
-    SessionId,
+    ResidentDriverStep, SequenceFinishReason, SessionId,
 };
 #[cfg(feature = "cuda")]
 use std::io::Write;
@@ -28,7 +27,10 @@ use std::time::Instant;
 #[cfg(feature = "cuda")]
 use super::info::print_model_info;
 #[cfg(feature = "cuda")]
-use super::resident::{block_on_local_inference, build_resident_topk_driver};
+use super::resident::{
+    block_on_local_inference, build_resident_topk_driver, resident_driver_config,
+    single_sequence_scheduler_config,
+};
 
 // ── resolve_template ─────────────────────────────────────────────────────────
 
@@ -175,19 +177,10 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
     eprintln!("[log] stderr -> {}", log_path.display());
 
     let session_id = SessionId(0);
-    let driver_config = ResidentTopKDriverConfig {
-        ctx_size: generation.ctx_size,
-        stop_at_eos: generation.stop_at_eos,
-        proposal_confidence_threshold: 0.2,
-    };
-    let scheduler_config = ResidentSchedulerConfig {
-        prefill_chunk_size: 4096,
-        max_active_sequences: 1,
-        max_decode_batch: 1,
-        ..Default::default()
-    };
+    let driver_config = resident_driver_config(generation.ctx_size, generation.stop_at_eos);
+    let scheduler_config = single_sequence_scheduler_config(4096);
     let load_started = Instant::now();
-    let model = DeepSeekV4ArtifactModel::load_hf_with_limit(&model_path, 128 * 1024 * 1024)?;
+    let model = DeepSeekV4Checkpoint::load_hf_with_limit(&model_path, 128 * 1024 * 1024)?;
     let runner =
         DeepSeekV4Runner::new_with_operator_backend(model, options, ModelExecutionBackend::Cuda)?;
     let schema = runner.kv_layout_schema().clone();

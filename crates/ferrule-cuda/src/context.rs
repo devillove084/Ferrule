@@ -11208,7 +11208,7 @@ mod tests {
     }
 
     #[test]
-    fn artifact_format_gpu_kernels_smoke() {
+    fn payload_encoding_gpu_kernels_smoke() {
         if CudaContext::new(0).is_err() {
             eprintln!("skipping artifact-format GPU kernel smoke: no CUDA device");
             return;

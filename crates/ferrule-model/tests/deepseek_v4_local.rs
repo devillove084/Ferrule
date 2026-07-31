@@ -1,7 +1,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use ferrule_model::models::deepseek_v4::DeepSeekV4ArtifactModel;
+use ferrule_model::models::deepseek_v4::DeepSeekV4Checkpoint;
 use ferrule_model::{
     AttentionKind, EnginePlanStatus, HfSafetensorsIndex, HfSafetensorsInventory, ModelDescriptor,
     ModelFamily, PolicyArea, RouterKind, SpeculationMode, TensorClass, TensorRole, WeightSource,
@@ -151,7 +151,7 @@ fn local_deepseek_v4_flash_dspark_descriptor_smoke_if_present() {
 #[ignore = "reads the local DSpark attachment payloads"]
 fn local_deepseek_v4_flash_dspark_mtp_attachment_loads() {
     let model_dir = local_deepseek_v4_dir().expect("local DeepSeek V4 checkpoint is required");
-    let model = DeepSeekV4ArtifactModel::load_hf_with_limit(&model_dir, 128 * 1024 * 1024)
+    let model = DeepSeekV4Checkpoint::load_hf_with_limit(&model_dir, 128 * 1024 * 1024)
         .expect("local DeepSeek V4 artifact should load");
     let mtp = model
         .load_mtp()

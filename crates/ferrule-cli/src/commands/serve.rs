@@ -8,14 +8,14 @@ use ferrule_model::{
     ChatTemplate, ExpertMemoryPolicy, ModelDescriptor, ModelExecutionBackend, ModelFamily,
     models::deepseek_v4::{DeepSeekV4PrepareOptions, DeepSeekV4Runner},
 };
-use ferrule_runtime::{ResidentInferenceEngine, ResidentSchedulerConfig, ResidentTopKDriverConfig};
+use ferrule_runtime::{ResidentInferenceEngine, ResidentSchedulerConfig};
 use ferrule_server::{
     ModelRegistration, ServerState, WorkerConfig, serve_with_shutdown, spawn_model_worker_with,
 };
 
 use crate::args::ServeArgs;
 
-use super::resident::build_resident_topk_driver_with_page_limit;
+use super::resident::{build_resident_topk_driver_with_page_limit, resident_driver_config};
 
 pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
     validate_args(&args)?;
@@ -65,11 +65,7 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
         max_batch_tokens: args.max_batch_tokens,
         ..ResidentSchedulerConfig::default()
     };
-    let driver_config = ResidentTopKDriverConfig {
-        ctx_size: args.ctx_size,
-        stop_at_eos: true,
-        proposal_confidence_threshold: 0.2,
-    };
+    let driver_config = resident_driver_config(args.ctx_size, true);
     let worker_config = WorkerConfig {
         command_queue_capacity: args.request_queue_capacity,
         event_queue_capacity: args.event_queue_capacity,

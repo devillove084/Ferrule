@@ -7,7 +7,7 @@
 
 use ferrule_common::{Error, Result};
 
-use crate::artifact::linear::ArtifactLinearPayload;
+use crate::checkpoint::weight::LinearWeight;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SwiGluFfn<L> {
@@ -18,9 +18,9 @@ pub struct SwiGluFfn<L> {
     pub swiglu_limit: f32,
 }
 
-pub type SwiGluFfnPayload = SwiGluFfn<ArtifactLinearPayload>;
+pub type SwiGluFfnPayload = SwiGluFfn<LinearWeight>;
 
-impl SwiGluFfn<ArtifactLinearPayload> {
+impl SwiGluFfn<LinearWeight> {
     pub fn reference_execute(&self, input: &[f32], output_scale: f32) -> Result<Vec<f32>> {
         let mut gate = self.gate.reference_matvec(input)?;
         let mut up = self.up.reference_matvec(input)?;
@@ -61,8 +61,10 @@ mod tests {
     use crate::TensorRole;
 
     use super::*;
-    use crate::artifact::linear::ArtifactLinearPayload;
-    use crate::artifact::tensor::{ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice};
+    use crate::checkpoint::tensor::{
+        CheckpointDType, CheckpointTensorPayload, CheckpointTensorSlice,
+    };
+    use crate::checkpoint::weight::LinearWeight;
 
     #[test]
     fn swiglu_ffn_is_generic_over_linear_representation() {
@@ -141,18 +143,18 @@ mod tests {
         out: usize,
         input: usize,
         values: &[f32],
-    ) -> ArtifactLinearPayload {
+    ) -> LinearWeight {
         assert_eq!(values.len(), out * input);
-        ArtifactLinearPayload::from_weight_and_scale(
+        LinearWeight::from_weight_and_scale(
             role,
-            ArtifactTensorPayload {
-                slice: ArtifactTensorSlice {
+            CheckpointTensorPayload {
+                slice: CheckpointTensorSlice {
                     name: format!("{name}.weight"),
                     role: TensorRole::Unknown,
                     path: PathBuf::from("synthetic.safetensors"),
                     offset: 0,
                     bytes: (values.len() * 4) as u64,
-                    dtype: ArtifactDType::F32,
+                    dtype: CheckpointDType::F32,
                     shape: vec![out, input],
                 },
                 bytes: values

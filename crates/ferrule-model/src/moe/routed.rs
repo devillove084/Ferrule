@@ -8,10 +8,10 @@
 
 use ferrule_common::{Error, Result};
 
-use crate::artifact::binding::RouterArtifactPayload;
 use crate::ffn::SwiGluFfnPayload;
 use crate::moe::executor::ExpertExecutor;
 use crate::moe::handle::{CpuExpertHandleStore, ExpertHandleStore};
+use crate::moe::routing::RouterWeights;
 use crate::moe::routing::{ExpertRoute, ExpertRouterPolicy};
 use crate::moe::streaming::{
     ExpertId, ExpertStreamingPlanner, ExpertStreamingReader, ExpertStreamingStep,
@@ -122,7 +122,7 @@ pub fn execute_routed_moe_with_artifact_router_reference(
     layer: usize,
     input: &[f32],
     token_id: u32,
-    router: &RouterArtifactPayload,
+    router: &RouterWeights,
     predicted_experts: &[usize],
     router_policy: &ExpertRouterPolicy,
     planner: &mut ExpertStreamingPlanner,
@@ -151,7 +151,7 @@ pub fn execute_routed_moe_with_artifact_router_reference_with_handles(
     layer: usize,
     input: &[f32],
     token_id: u32,
-    router: &RouterArtifactPayload,
+    router: &RouterWeights,
     predicted_experts: &[usize],
     router_policy: &ExpertRouterPolicy,
     planner: &mut ExpertStreamingPlanner,
@@ -203,8 +203,10 @@ mod tests {
     use crate::TensorRole;
 
     use super::*;
-    use crate::artifact::linear::ArtifactLinearPayload;
-    use crate::artifact::tensor::{ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice};
+    use crate::checkpoint::tensor::{
+        CheckpointDType, CheckpointTensorPayload, CheckpointTensorSlice,
+    };
+    use crate::checkpoint::weight::LinearWeight;
     use crate::ffn::SwiGluFfnPayload;
     use crate::moe::executor::CpuReferenceExpertExecutor;
     use crate::moe::handle::{CpuExpertHandleStore, ExpertHandleStore};
@@ -269,7 +271,7 @@ mod tests {
         register_tiny_expert(&dir, &mut planner, 0, 0, 0x42, 0x43, 0x22);
         register_tiny_expert(&dir, &mut planner, 0, 1, 0x52, 0x42, 0x22);
 
-        let router = RouterArtifactPayload {
+        let router = RouterWeights {
             layer: 0,
             weight: f32_linear(TensorRole::RouterLogits, "router", 2, 32, 0, 1.0),
             bias: None,
@@ -352,7 +354,7 @@ mod tests {
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
             gpu_slots_per_layer: 1,
             prefetch_per_layer: 0,
-            preserve_artifact_quantization: true,
+            preserve_source_encoding: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
         });
@@ -533,19 +535,19 @@ mod tests {
         input: usize,
         nonzero_col: usize,
         value: f32,
-    ) -> ArtifactLinearPayload {
+    ) -> LinearWeight {
         let mut values = vec![0.0f32; out * input];
         values[nonzero_col] = value;
-        ArtifactLinearPayload::from_weight_and_scale(
+        LinearWeight::from_weight_and_scale(
             role,
-            ArtifactTensorPayload {
-                slice: ArtifactTensorSlice {
+            CheckpointTensorPayload {
+                slice: CheckpointTensorSlice {
                     name: format!("{name}.weight"),
                     role: TensorRole::Unknown,
                     path: PathBuf::from("synthetic.safetensors"),
                     offset: 0,
                     bytes: (values.len() * 4) as u64,
-                    dtype: ArtifactDType::F32,
+                    dtype: CheckpointDType::F32,
                     shape: vec![out, input],
                 },
                 bytes: values

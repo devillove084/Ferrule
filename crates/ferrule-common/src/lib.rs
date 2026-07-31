@@ -2,10 +2,10 @@
 
 pub mod async_wake;
 pub mod execution;
-pub mod expert_io;
 pub mod expert_residency;
 pub mod io_protocol;
 pub mod kernel_plan;
+pub mod materialization_io;
 pub mod memory;
 pub mod observability;
 

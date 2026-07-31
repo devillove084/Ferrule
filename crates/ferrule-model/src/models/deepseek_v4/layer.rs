@@ -1,6 +1,6 @@
 //! DeepSeek-V4 transformer layer: HC + attention + MoE + shared FFN.
 
-use crate::artifact::binding::RouterArtifactPayload;
+use crate::moe::routing::RouterWeights;
 
 use crate::ffn::SwiGluFfnPayload;
 use crate::hyper_connection::{HyperConnectionConfig, HyperConnectionWeights};
@@ -17,7 +17,7 @@ use crate::moe::streaming::{
     ExpertSourceCatalog, ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader,
 };
 #[cfg(feature = "cuda")]
-use ferrule_common::ExpertLeaseSet;
+use ferrule_common::ResidencyLeaseSet;
 #[cfg(feature = "cuda")]
 use ferrule_common::execution::ForwardPhase;
 use ferrule_common::{Error, Result};
@@ -46,7 +46,7 @@ pub struct DeepSeekV4Layer {
     pub attention: DeepSeekV4Attention,
     pub hc_attention: HyperConnectionWeights,
     pub hc_feed_forward: HyperConnectionWeights,
-    pub router: RouterArtifactPayload,
+    pub router: RouterWeights,
     pub shared_ffn: SwiGluFfnPayload,
     pub router_policy: ExpertRouterPolicy,
 }
@@ -70,7 +70,7 @@ pub(crate) enum DeepSeekV4PackedLayerProgress {
     Waiting(DeepSeekV4PackedLayerContinuation),
     Complete {
         events: Vec<DeepSeekV4SequenceMoeAccessEvent>,
-        leases: Vec<ExpertLeaseSet>,
+        leases: Vec<ResidencyLeaseSet>,
     },
 }
 
@@ -93,7 +93,7 @@ pub(crate) enum DeepSeekV4DsparkLayerProgress {
     Waiting(DeepSeekV4DsparkLayerContinuation),
     Complete {
         events: Vec<DeepSeekV4SequenceMoeAccessEvent>,
-        leases: Vec<ExpertLeaseSet>,
+        leases: Vec<ResidencyLeaseSet>,
     },
 }
 
@@ -538,7 +538,7 @@ impl DeepSeekV4Layer {
     pub(crate) fn resume_packed_rows_device_hc_device(
         &self,
         continuation: DeepSeekV4PackedLayerContinuation,
-        leases: ExpertLeaseSet,
+        leases: ResidencyLeaseSet,
         arena: &mut DeepSeekV4LayerArena,
         hc_state_dev: &mut ferrule_cuda::context::CudaF32Buffer,
         operators: &mut DeepSeekV4OperatorContext,
@@ -705,7 +705,7 @@ impl DeepSeekV4Layer {
     pub(crate) fn resume_dspark_proposal_block_device_hc_device(
         &self,
         continuation: DeepSeekV4DsparkLayerContinuation,
-        leases: ExpertLeaseSet,
+        leases: ResidencyLeaseSet,
         arena: &mut DeepSeekV4LayerArena,
         hc_state_dev: &mut ferrule_cuda::context::CudaF32Buffer,
         operators: &mut DeepSeekV4OperatorContext,

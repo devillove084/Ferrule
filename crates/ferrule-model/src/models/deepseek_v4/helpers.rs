@@ -1,17 +1,42 @@
 //! Free helper functions: RMSNorm, RoPE, YaRN, top-k, cache keys.
+//!
+//! Family-neutral math, artifact loading, shape validation, and JSON keys live
+//! in [`crate::models::common`]; this module preserves DeepSeek-specific error
+//! context and keeps the MLA/indexer/compressor helpers local.
 
 use std::path::Path;
 
-use crate::artifact::format::{
+use crate::checkpoint::encoding::{
     normalized_hadamard_transform_rows_in_place, simulate_fp4_e2m1_e8m0_activation_quant_in_place,
     simulate_fp8_e4m3fn_e8m0_activation_quant_in_place,
 };
-use crate::artifact::linear::ArtifactLinearPayload;
-use crate::artifact::tensor::{
-    ArtifactDType, ArtifactTensorPayload, ArtifactTensorReader, ArtifactTensorSlice,
+use crate::checkpoint::tensor::{
+    CheckpointTensorPayload, CheckpointTensorReader, CheckpointTensorSlice,
 };
-use crate::{HfSafetensorsInventory, HfSafetensorsTensorInfo, TensorRole};
+use crate::checkpoint::weight::LinearWeight;
+use crate::{HfSafetensorsInventory, TensorRole};
 use ferrule_common::{Error, Result};
+
+pub(crate) use crate::models::common::config_json::{f32_key, usize_key};
+pub(crate) use crate::models::common::math::{dot, rms_norm};
+pub(crate) use crate::models::common::rope::apply_rotary_tail;
+
+/// DeepSeek wrapper preserving the layer-indexed error context.
+pub(crate) fn rms_norm_heads_in_place(
+    values: &mut [f32],
+    heads: usize,
+    head_dim: usize,
+    eps: f32,
+    layer: usize,
+) -> Result<()> {
+    crate::models::common::math::rms_norm_heads_in_place(
+        values,
+        heads,
+        head_dim,
+        eps,
+        &format!("DeepSeek-V4 layer {layer}"),
+    )
+}
 
 use super::attention::DeepSeekV4IndexerPayload;
 use super::config::{
@@ -20,25 +45,25 @@ use super::config::{
 use super::operators::DeepSeekV4OperatorContext;
 
 pub(crate) fn bind_aux_linear(
-    auxiliary: &[ArtifactTensorSlice],
-    reader: &ArtifactTensorReader,
+    auxiliary: &[CheckpointTensorSlice],
+    reader: &CheckpointTensorReader,
     role: TensorRole,
     weight_name: &str,
     scale_name: Option<&str>,
-) -> Result<ArtifactLinearPayload> {
+) -> Result<LinearWeight> {
     let weight = read_aux_tensor(auxiliary, reader, weight_name)?;
     let scale = scale_name
         .map(|name| read_aux_tensor(auxiliary, reader, name))
         .transpose()?;
-    ArtifactLinearPayload::from_weight_and_scale(role, weight, scale)
+    LinearWeight::from_weight_and_scale(role, weight, scale)
         .map(with_deepseek_v4_linear_execution_policy)
 }
 
 pub(crate) fn read_aux_tensor(
-    auxiliary: &[ArtifactTensorSlice],
-    reader: &ArtifactTensorReader,
+    auxiliary: &[CheckpointTensorSlice],
+    reader: &CheckpointTensorReader,
     name: &str,
-) -> Result<ArtifactTensorPayload> {
+) -> Result<CheckpointTensorPayload> {
     let slice = auxiliary
         .iter()
         .find(|slice| slice.name == name)
@@ -47,58 +72,45 @@ pub(crate) fn read_aux_tensor(
 }
 
 pub(crate) fn read_aux_tensor_f32(
-    auxiliary: &[ArtifactTensorSlice],
-    reader: &ArtifactTensorReader,
+    auxiliary: &[CheckpointTensorSlice],
+    reader: &CheckpointTensorReader,
     name: &str,
-) -> Result<ArtifactTensorPayload> {
+) -> Result<CheckpointTensorPayload> {
     let payload = read_aux_tensor(auxiliary, reader, name)?;
     let _ = decode_tensor_f32(&payload)?;
     Ok(payload)
 }
 
 pub(crate) fn two_dim_shape_from_payload(
-    payload: &ArtifactTensorPayload,
+    payload: &CheckpointTensorPayload,
     label: &str,
 ) -> Result<(usize, usize)> {
-    let [rows, cols]: [usize; 2] =
-        payload
-            .slice
-            .shape
-            .clone()
-            .try_into()
-            .map_err(|shape: Vec<usize>| {
-                Error::Model(format!(
-                    "DeepSeek-V4 {label} '{}' expects 2D shape, got {:?}",
-                    payload.slice.name, shape
-                ))
-            })?;
-    Ok((rows, cols))
+    crate::models::common::shape::two_dim_shape_from_payload(payload, label, "DeepSeek-V4")
 }
 
 pub(crate) fn check_linear(
     layer: usize,
     label: &str,
-    linear: &ArtifactLinearPayload,
+    linear: &LinearWeight,
     out: usize,
     input: usize,
 ) -> Result<()> {
-    if linear.format.out_features() != out || linear.format.in_features() != input {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 layer {layer} {label} shape mismatch: got [{}, {}], expected [{out}, {input}]",
-            linear.format.out_features(),
-            linear.format.in_features()
-        )));
-    }
-    Ok(())
+    crate::models::common::shape::check_linear(
+        linear,
+        out,
+        input,
+        label,
+        &format!("DeepSeek-V4 layer {layer}"),
+    )
 }
 
 pub(crate) fn check_len(layer: usize, label: &str, got: usize, expected: usize) -> Result<()> {
-    if got != expected {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 layer {layer} {label} length mismatch: got {got}, expected {expected}"
-        )));
-    }
-    Ok(())
+    crate::models::common::shape::check_len(
+        got,
+        expected,
+        label,
+        &format!("DeepSeek-V4 layer {layer}"),
+    )
 }
 
 pub(crate) fn rms_norm_rows_with_operators(
@@ -432,7 +444,7 @@ pub(crate) fn indexer_topk_indices(
 }
 
 pub(crate) fn grouped_output_a(
-    output_a: &ArtifactLinearPayload,
+    output_a: &LinearWeight,
     context: &[f32],
     cfg: DeepSeekV4AttentionConfig,
     layer: usize,
@@ -466,70 +478,6 @@ pub(crate) fn grouped_output_a(
     Ok(out)
 }
 
-pub(crate) fn rms_norm(input: &[f32], weight: &[f32], eps: f32, label: &str) -> Result<Vec<f32>> {
-    if input.len() != weight.len() || input.is_empty() {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 {label} RMS length mismatch: input={}, weight={}",
-            input.len(),
-            weight.len()
-        )));
-    }
-    let scale = (input.iter().map(|value| value * value).sum::<f32>() / input.len() as f32 + eps)
-        .sqrt()
-        .recip();
-    Ok(input
-        .iter()
-        .zip(weight)
-        .map(|(value, weight)| value * scale * weight)
-        .collect())
-}
-
-pub(crate) fn rms_norm_heads_in_place(
-    values: &mut [f32],
-    heads: usize,
-    head_dim: usize,
-    eps: f32,
-    layer: usize,
-) -> Result<()> {
-    if values.len() != heads * head_dim {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 layer {layer} query length mismatch: expected {}, got {}",
-            heads * head_dim,
-            values.len()
-        )));
-    }
-    for head in 0..heads {
-        let row = &mut values[head * head_dim..(head + 1) * head_dim];
-        let scale = (row.iter().map(|value| value * value).sum::<f32>() / head_dim as f32 + eps)
-            .sqrt()
-            .recip();
-        for value in row {
-            *value *= scale;
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn apply_rotary_tail(
-    values: &mut [f32],
-    heads: usize,
-    head_dim: usize,
-    rope_dim: usize,
-    position: usize,
-    theta: f32,
-    inverse: bool,
-) -> Result<()> {
-    apply_rotary_tail_scaled(
-        values,
-        heads,
-        head_dim,
-        rope_dim,
-        position,
-        DeepSeekV4RopeParams::plain(theta),
-        inverse,
-    )
-}
-
 pub(crate) fn apply_rotary_tail_scaled(
     values: &mut [f32],
     heads: usize,
@@ -539,193 +487,56 @@ pub(crate) fn apply_rotary_tail_scaled(
     rope: DeepSeekV4RopeParams,
     inverse: bool,
 ) -> Result<()> {
-    if rope_dim == 0 {
-        return Ok(());
-    }
-    if rope_dim > head_dim || !rope_dim.is_multiple_of(2) || values.len() != heads * head_dim {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 rotary shape mismatch: values={}, heads={heads}, head_dim={head_dim}, rope_dim={rope_dim}",
-            values.len()
-        )));
-    }
-    let tail_start = head_dim - rope_dim;
-    for head in 0..heads {
-        let base = head * head_dim + tail_start;
-        for pair in 0..rope_dim / 2 {
-            let freq = yarn_frequency(pair, rope_dim, rope);
-            let angle = position as f32 * freq;
-            let (sin, cos) = angle.sin_cos();
-            let sin = if inverse { -sin } else { sin };
-            let x0 = values[base + 2 * pair];
-            let x1 = values[base + 2 * pair + 1];
-            values[base + 2 * pair] = x0 * cos - x1 * sin;
-            values[base + 2 * pair + 1] = x0 * sin + x1 * cos;
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn yarn_frequency(pair: usize, rope_dim: usize, rope: DeepSeekV4RopeParams) -> f32 {
-    let base_freq = 1.0 / rope.theta.powf((2 * pair) as f32 / rope_dim as f32);
-    if rope.original_seq_len == 0 || rope.factor == 1.0 {
-        return base_freq;
-    }
-    let (low, high) = yarn_correction_range(
-        rope.beta_fast as f32,
-        rope.beta_slow as f32,
+    crate::models::common::rope::apply_rotary_tail_scaled(
+        values,
+        heads,
+        head_dim,
         rope_dim,
-        rope.theta,
-        rope.original_seq_len as f32,
-    );
-    let ramp = yarn_linear_ramp(pair as f32, low as f32, high as f32);
-    let smooth = 1.0 - ramp;
-    base_freq / rope.factor * (1.0 - smooth) + base_freq * smooth
-}
-
-pub(crate) fn yarn_correction_range(
-    low_rot: f32,
-    high_rot: f32,
-    dim: usize,
-    base: f32,
-    max_position: f32,
-) -> (usize, usize) {
-    let low = yarn_correction_dim(low_rot, dim, base, max_position).floor() as isize;
-    let high = yarn_correction_dim(high_rot, dim, base, max_position).ceil() as isize;
-    (
-        low.max(0) as usize,
-        high.min(dim as isize - 1).max(0) as usize,
+        position,
+        rope.into(),
+        inverse,
     )
 }
 
-pub(crate) fn yarn_correction_dim(
-    num_rotations: f32,
-    dim: usize,
-    base: f32,
-    max_position: f32,
-) -> f32 {
-    dim as f32 * (max_position / (num_rotations * 2.0 * std::f32::consts::PI)).ln()
-        / (2.0 * base.ln())
-}
-
-pub(crate) fn yarn_linear_ramp(value: f32, min: f32, mut max: f32) -> f32 {
-    if (min - max).abs() < f32::EPSILON {
-        max += 0.001;
-    }
-    ((value - min) / (max - min)).clamp(0.0, 1.0)
+#[cfg(feature = "cuda")]
+pub(crate) fn yarn_frequency(pair: usize, rope_dim: usize, rope: DeepSeekV4RopeParams) -> f32 {
+    crate::models::common::rope::yarn_frequency(pair, rope_dim, rope.into())
 }
 
 pub(crate) fn unique_top_level_slice(
     model_dir: &Path,
     inventory: &HfSafetensorsInventory,
     role: TensorRole,
-) -> Result<ArtifactTensorSlice> {
-    let tensors = inventory
-        .tensors
-        .iter()
-        .filter(|tensor| tensor.role == role)
-        .collect::<Vec<_>>();
-    match tensors.as_slice() {
-        [tensor] => Ok(ArtifactTensorSlice::from_hf_inventory(model_dir, tensor)),
-        [] => Err(Error::Model(format!(
-            "DeepSeek-V4 missing top-level tensor role {role}"
-        ))),
-        _ => Err(Error::Model(format!(
-            "DeepSeek-V4 expected exactly one top-level tensor role {role}, got {}",
-            tensors.len()
-        ))),
-    }
+) -> Result<CheckpointTensorSlice> {
+    crate::models::common::checkpoint::unique_top_level_slice(
+        model_dir,
+        inventory,
+        role,
+        "DeepSeek-V4",
+    )
 }
 
 pub(crate) fn read_named_vector_f32(
     model_dir: &Path,
     inventory: &HfSafetensorsInventory,
-    reader: &ArtifactTensorReader,
+    reader: &CheckpointTensorReader,
     name: &str,
     role: TensorRole,
 ) -> Result<Vec<f32>> {
-    let tensor = inventory_tensor(inventory, name)?;
-    let mut slice = ArtifactTensorSlice::from_hf_inventory(model_dir, tensor);
-    slice.role = role;
-    decode_vector_f32(&reader.read_slice(&slice)?)
+    crate::models::common::checkpoint::read_named_vector_f32(
+        model_dir,
+        inventory,
+        reader,
+        name,
+        role,
+        "DeepSeek-V4",
+    )
 }
 
-pub(crate) fn inventory_tensor<'a>(
-    inventory: &'a HfSafetensorsInventory,
-    name: &str,
-) -> Result<&'a HfSafetensorsTensorInfo> {
-    inventory
-        .tensors
-        .iter()
-        .find(|tensor| tensor.name == name)
-        .ok_or_else(|| Error::Model(format!("DeepSeek-V4 missing tensor '{name}'")))
+pub(crate) fn decode_vector_f32(payload: &CheckpointTensorPayload) -> Result<Vec<f32>> {
+    crate::models::common::checkpoint::decode_vector_f32(payload, "DeepSeek-V4")
 }
 
-pub(crate) fn decode_vector_f32(payload: &ArtifactTensorPayload) -> Result<Vec<f32>> {
-    if payload.slice.shape.len() != 1 {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 artifact vector '{}' expects 1D shape, got {:?}",
-            payload.slice.name, payload.slice.shape
-        )));
-    }
-    decode_tensor_f32(payload)
-}
-
-pub(crate) fn decode_tensor_f32(payload: &ArtifactTensorPayload) -> Result<Vec<f32>> {
-    let expected = payload.slice.element_count()?;
-    match payload.slice.dtype {
-        ArtifactDType::F32 => {
-            if payload.bytes.len() != expected * 4 {
-                return Err(Error::Model(format!(
-                    "DeepSeek-V4 F32 tensor '{}' byte length mismatch",
-                    payload.slice.name
-                )));
-            }
-            Ok(payload
-                .bytes
-                .chunks_exact(4)
-                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                .collect())
-        }
-        ArtifactDType::Bf16 => {
-            if payload.bytes.len() != expected * 2 {
-                return Err(Error::Model(format!(
-                    "DeepSeek-V4 BF16 tensor '{}' byte length mismatch",
-                    payload.slice.name
-                )));
-            }
-            Ok(payload
-                .bytes
-                .chunks_exact(2)
-                .map(|chunk| {
-                    let bits = u16::from_le_bytes([chunk[0], chunk[1]]) as u32;
-                    f32::from_bits(bits << 16)
-                })
-                .collect())
-        }
-        _ => Err(Error::Model(format!(
-            "DeepSeek-V4 artifact tensor '{}' has unsupported vector dtype {}",
-            payload.slice.name,
-            payload.slice.dtype.as_str()
-        ))),
-    }
-}
-
-pub(crate) fn usize_key(json: &serde_json::Value, keys: &[&str]) -> Option<usize> {
-    keys.iter().find_map(|key| {
-        json.get(*key)
-            .and_then(|value| value.as_u64())
-            .map(|value| value as usize)
-    })
-}
-
-pub(crate) fn f32_key(json: &serde_json::Value, keys: &[&str]) -> Option<f32> {
-    keys.iter().find_map(|key| {
-        json.get(*key)
-            .and_then(|value| value.as_f64())
-            .map(|value| value as f32)
-    })
-}
-
-pub(crate) fn dot(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(a, b)| a * b).sum()
+pub(crate) fn decode_tensor_f32(payload: &CheckpointTensorPayload) -> Result<Vec<f32>> {
+    crate::models::common::checkpoint::decode_tensor_f32(payload, "DeepSeek-V4")
 }

@@ -7,66 +7,81 @@ use ahash::RandomState;
 use ferrule_common::execution::ExecutionTransactionId;
 use ferrule_common::io_protocol::{
     BackendId, CancellationReason, CompletionEvent, CompletionExpectation, CompletionGeneration,
-    CompletionOutcome, CompletionTimestamp, ContinuationId, DependencySet, DeviceId,
-    DispatchFenceContract, ExpertLeaseSet, FailureReason, FenceId, IoProtocolError, LoadKey,
-    LoadStage, MappingEpoch, OperationId, RetirementReason, RetirementRecord, RetirementToken,
-    StaleReason, ValidatedResidencyBinding, WaiterId,
+    CompletionOutcome, CompletionTimestamp, ContinuationId, DependencySet, DestinationSlotId,
+    DeviceId, DispatchFenceContract, FailureReason, FenceId, IoProtocolError, LoadStage,
+    MappingEpoch, MaterializationKey, ModelInstanceId, OperationId, ResidencyBinding,
+    ResidencyLeaseSet, RetirementReason, RetirementRecord, RetirementToken, StaleReason,
+    ValidatedResidencyBinding, WaiterId,
 };
 
-use crate::io::backend::{MaterializationBackend, MaterializationReservation};
+use ferrule_common::materialization_io::MaterializationResourcePlan;
+use ferrule_model::MaterializationPreparation;
+
 use crate::io::fairness::{FairQueue, FairQueueConfig, FairQueueError};
-use crate::io::ledger::{CohortId, CriticalPathLedger, CriticalPhase, LedgerError};
+use crate::io::ledger::{CohortId, CriticalPathLedger, CriticalPhase, LedgerError, TimeSpan};
+use crate::io::provider::{MaterializationOperationReservation, RuntimeMaterializationProvider};
 use crate::io::waiters::{WaiterIndex, WaiterIndexError};
 use crate::scheduling::{
-    HardResourceBroker, HardResourceClaim, HardResourceError, HardResourceGrant, ResourceClass,
-    ResourceKind,
+    PhysicalResourceBroker, PhysicalResourceClaim, PhysicalResourceError, PhysicalResourceGrant,
+    ResourceClass, ResourceKind,
 };
 
 const READ_CUSTODY: &[ResourceKind] = &[
-    ResourceKind::Sqe,
-    ResourceKind::PinnedSlab,
-    ResourceKind::ReadBytes,
+    ResourceKind::ReadSlot,
+    ResourceKind::PinnedHostBytes,
+    ResourceKind::StorageReadBytes,
 ];
-const READ_RELEASE: &[ResourceKind] = &[ResourceKind::Sqe, ResourceKind::ReadBytes];
+const READ_RELEASE: &[ResourceKind] = &[ResourceKind::ReadSlot, ResourceKind::StorageReadBytes];
 const UPLOAD_CUSTODY: &[ResourceKind] = &[
     ResourceKind::UploadSlot,
     ResourceKind::UploadBytes,
-    ResourceKind::ExpertFrame,
+    ResourceKind::ResidentBytes,
 ];
 const UPLOAD_RELEASE: &[ResourceKind] = &[ResourceKind::UploadSlot, ResourceKind::UploadBytes];
-const INSTALL_CUSTODY: &[ResourceKind] = &[ResourceKind::ExpertFrame];
-const RESIDENCY_CLAIMS: &[ResourceKind] = &[ResourceKind::ExpertFrame];
+const INSTALL_DESTINATION_CUSTODY: &[ResourceKind] = &[ResourceKind::ResidentBytes];
+const INSTALL_CUSTODY: &[ResourceKind] =
+    &[ResourceKind::InstallSlot, ResourceKind::DeviceInstallBytes];
+const RESIDENCY_CLAIMS: &[ResourceKind] = &[ResourceKind::ResidentBytes];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LoadRequest {
-    pub key: LoadKey,
-    pub bytes: u64,
+    pub preparation: MaterializationPreparation,
+    pub key: MaterializationKey,
+    pub plan: MaterializationResourcePlan,
     pub class: ResourceClass,
 }
 
 impl LoadRequest {
-    pub const fn new(key: LoadKey, bytes: u64, class: ResourceClass) -> Self {
-        Self { key, bytes, class }
+    pub const fn new(
+        preparation: MaterializationPreparation,
+        plan: MaterializationResourcePlan,
+        class: ResourceClass,
+    ) -> Self {
+        Self {
+            key: preparation.key(),
+            preparation,
+            plan,
+            class,
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistryError {
     Protocol(Box<IoProtocolError>),
-    Resources(HardResourceError),
+    Resources(PhysicalResourceError),
     Fairness(FairQueueError),
     Waiters(WaiterIndexError),
     Ledger(LedgerError),
-    EmptyDependencySet,
-    ZeroByteLoad(Box<LoadKey>),
-    DuplicateDependency(Box<LoadKey>),
-    ByteExpectationMismatch {
-        key: Box<LoadKey>,
-        expected: u64,
-        requested: u64,
+    InvalidResourcePlan(Box<MaterializationKey>),
+    DuplicateDependency(Box<MaterializationKey>),
+    ResourcePlanMismatch {
+        key: Box<MaterializationKey>,
+        expected: MaterializationResourcePlan,
+        requested: MaterializationResourcePlan,
     },
     OperationIdExhausted,
-    Backend(FailureReason),
+    Provider(FailureReason),
     UnknownOperation(OperationId),
     UnknownContinuation(ContinuationId),
     ContinuationAlreadyReady(ContinuationId),
@@ -82,13 +97,9 @@ pub enum RegistryError {
         pending_operations: usize,
         active_grants: usize,
     },
-    PublishedResidencyConflict(Box<LoadKey>),
-    MissingResidency(Box<LoadKey>),
+    PublishedResidencyConflict(Box<MaterializationKey>),
+    MissingResidency(Box<MaterializationKey>),
     ResumeLeaseAlreadyTaken(ContinuationId),
-    ResumeContinuationMismatch {
-        expected: ContinuationId,
-        actual: ContinuationId,
-    },
 }
 
 impl std::fmt::Display for RegistryError {
@@ -105,8 +116,8 @@ impl From<IoProtocolError> for RegistryError {
     }
 }
 
-impl From<HardResourceError> for RegistryError {
-    fn from(value: HardResourceError) -> Self {
+impl From<PhysicalResourceError> for RegistryError {
+    fn from(value: PhysicalResourceError) -> Self {
         Self::Resources(value)
     }
 }
@@ -131,7 +142,7 @@ impl From<LedgerError> for RegistryError {
 
 impl From<FailureReason> for RegistryError {
     fn from(value: FailureReason) -> Self {
-        Self::Backend(value)
+        Self::Provider(value)
     }
 }
 
@@ -174,7 +185,7 @@ pub struct CompletionRejection {
 pub enum CompletionDisposition {
     Applied {
         operation: OperationId,
-        key: LoadKey,
+        key: MaterializationKey,
         stage: LoadStage,
     },
     Rejected(CompletionRejectionReason),
@@ -184,7 +195,7 @@ pub enum CompletionDisposition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RegistryDriveStep {
     Idle,
-    Progressed { key: Option<LoadKey> },
+    Progressed { key: Option<MaterializationKey> },
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -217,17 +228,19 @@ struct LoadAction {
 #[derive(Debug)]
 pub struct LoadOp {
     operation: OperationId,
-    key: LoadKey,
-    bytes: u64,
+    key: MaterializationKey,
+    plan: MaterializationResourcePlan,
     class: ResourceClass,
     stage: LoadStage,
-    reservation: Option<MaterializationReservation>,
-    logical_grant: Option<HardResourceGrant>,
-    read_grant: Option<HardResourceGrant>,
-    upload_grant: Option<HardResourceGrant>,
+    reservation: Option<MaterializationOperationReservation>,
+    logical_grant: Option<PhysicalResourceGrant>,
+    read_grant: Option<PhysicalResourceGrant>,
+    upload_grant: Option<PhysicalResourceGrant>,
+    install_grant: Option<PhysicalResourceGrant>,
     retirement: Option<RetirementToken>,
-    cancellation_reason: Option<CancellationReason>,
+    cancellation: Option<OperationCancellation>,
     install_submitted: bool,
+    replaced: Option<MaterializationKey>,
     stage_started_ns: u64,
 }
 
@@ -236,12 +249,12 @@ impl LoadOp {
         self.operation
     }
 
-    pub const fn key(&self) -> LoadKey {
+    pub const fn key(&self) -> MaterializationKey {
         self.key
     }
 
-    pub const fn bytes(&self) -> u64 {
-        self.bytes
+    pub const fn plan(&self) -> MaterializationResourcePlan {
+        self.plan
     }
 
     pub const fn class(&self) -> ResourceClass {
@@ -253,14 +266,66 @@ impl LoadOp {
     }
 
     pub const fn cancellation_requested(&self) -> bool {
-        self.cancellation_reason.is_some()
+        self.cancellation.is_some()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecutionLeaseState {
+    Held,
+    ReleasePending,
+    Released,
 }
 
 #[derive(Debug)]
 struct ResidentEntry {
-    binding: ferrule_common::io_protocol::ResidencyBinding,
-    grant: HardResourceGrant,
+    binding: ResidencyBinding,
+    grant: PhysicalResourceGrant,
+    lease: ExecutionLeaseState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ResidencyLocation {
+    model: ModelInstanceId,
+    backend: BackendId,
+    device: DeviceId,
+    slot: DestinationSlotId,
+}
+
+impl From<ResidencyBinding> for ResidencyLocation {
+    fn from(binding: ResidencyBinding) -> Self {
+        Self {
+            model: binding.model,
+            backend: binding.backend,
+            device: binding.device,
+            slot: binding.slot,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublicationPreflight {
+    Ready {
+        replaced: Option<MaterializationKey>,
+    },
+    Blocked,
+}
+
+#[derive(Debug, Clone)]
+enum OperationCancellation {
+    Pending(CancellationReason),
+    Submitted {
+        stage: LoadStage,
+        reason: CancellationReason,
+    },
+}
+
+impl OperationCancellation {
+    fn reason(&self) -> &CancellationReason {
+        match self {
+            Self::Pending(reason) | Self::Submitted { reason, .. } => reason,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -287,8 +352,8 @@ pub struct ShutdownReport {
 #[derive(Debug)]
 pub struct ResumeLease {
     continuation: ContinuationId,
-    leases: Option<ExpertLeaseSet>,
-    grant: Option<HardResourceGrant>,
+    leases: Option<ResidencyLeaseSet>,
+    grant: Option<PhysicalResourceGrant>,
 }
 
 impl ResumeLease {
@@ -296,7 +361,7 @@ impl ResumeLease {
         self.continuation
     }
 
-    pub fn take(&mut self) -> Result<ExpertLeaseSet, RegistryError> {
+    pub fn take(&mut self) -> Result<ResidencyLeaseSet, RegistryError> {
         self.leases
             .take()
             .ok_or(RegistryError::ResumeLeaseAlreadyTaken(self.continuation))
@@ -307,9 +372,10 @@ impl ResumeLease {
 /// Consolidated from three parallel BTreeMaps.
 #[derive(Debug)]
 struct ContinuationState {
-    grant: HardResourceGrant,
+    grant: PhysicalResourceGrant,
     class: ResourceClass,
-    ready_grant: Option<HardResourceGrant>,
+    ready_grant: Option<PhysicalResourceGrant>,
+    materializations: BTreeSet<MaterializationKey>,
 }
 
 /// Per-transaction tracking: operations and cohorts.
@@ -323,17 +389,18 @@ struct TransactionState {
 /// Runtime-wide authoritative owner of materialization, waiters, credits,
 /// completion validation, publication, and retirement.
 #[derive(Debug)]
-pub struct LoadRegistry<B: MaterializationBackend> {
-    backend: B,
-    resources: HardResourceBroker,
-    key_to_operation: HashMap<LoadKey, OperationId, RandomState>,
-    operation_to_key: HashMap<OperationId, LoadKey, RandomState>,
+pub struct LoadRegistry<P: RuntimeMaterializationProvider> {
+    provider: P,
+    resources: PhysicalResourceBroker,
+    key_to_operation: HashMap<MaterializationKey, OperationId, RandomState>,
+    operation_to_key: HashMap<OperationId, MaterializationKey, RandomState>,
     operations: HashMap<OperationId, LoadOp, RandomState>,
     retirements: HashMap<OperationId, RetirementRecord, RandomState>,
     stage_history: HashMap<OperationId, Vec<LoadStage>, RandomState>,
-    residencies: HashMap<LoadKey, ResidentEntry, RandomState>,
+    residencies: HashMap<MaterializationKey, ResidentEntry, RandomState>,
+    pending_lease_releases: BTreeSet<MaterializationKey>,
     waiters: WaiterIndex,
-    waiter_grants: HashMap<WaiterId, HardResourceGrant, RandomState>,
+    waiter_grants: HashMap<WaiterId, PhysicalResourceGrant, RandomState>,
     ready_waiters: HashMap<ContinuationId, BTreeSet<WaiterId>, RandomState>,
     continuations: HashMap<ContinuationId, ContinuationState, RandomState>,
     failed_continuations: VecDeque<FailedContinuation>,
@@ -350,14 +417,14 @@ pub struct LoadRegistry<B: MaterializationBackend> {
     shutting_down: bool,
 }
 
-impl<B: MaterializationBackend> LoadRegistry<B> {
+impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
     pub fn new(
-        backend: B,
-        resources: HardResourceBroker,
+        provider: P,
+        resources: PhysicalResourceBroker,
         fairness: FairQueueConfig,
     ) -> Result<Self, RegistryError> {
         Ok(Self {
-            backend,
+            provider,
             resources,
             key_to_operation: HashMap::default(),
             operation_to_key: HashMap::default(),
@@ -365,6 +432,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             retirements: HashMap::default(),
             stage_history: HashMap::default(),
             residencies: HashMap::default(),
+            pending_lease_releases: BTreeSet::new(),
             waiters: WaiterIndex::new(),
             waiter_grants: HashMap::default(),
             ready_waiters: HashMap::default(),
@@ -385,10 +453,10 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
     }
 
     #[cfg(test)]
-    pub fn with_testing_resources(backend: B) -> Result<Self, RegistryError> {
+    pub fn with_testing_resources(provider: P) -> Result<Self, RegistryError> {
         Self::new(
-            backend,
-            HardResourceBroker::testing_default(),
+            provider,
+            PhysicalResourceBroker::testing_default(),
             FairQueueConfig::default(),
         )
     }
@@ -397,19 +465,19 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         self.stats
     }
 
-    pub fn backend(&self) -> &B {
-        &self.backend
+    pub fn provider(&self) -> &P {
+        &self.provider
     }
 
-    pub fn backend_mut(&mut self) -> &mut B {
-        &mut self.backend
+    pub fn provider_mut(&mut self) -> &mut P {
+        &mut self.provider
     }
 
-    pub(crate) fn resources_mut(&mut self) -> &mut HardResourceBroker {
+    pub(crate) fn resources_mut(&mut self) -> &mut PhysicalResourceBroker {
         &mut self.resources
     }
 
-    pub fn resources(&self) -> &HardResourceBroker {
+    pub fn resources(&self) -> &PhysicalResourceBroker {
         &self.resources
     }
 
@@ -417,14 +485,14 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         &mut self,
         owner: u64,
         class: ResourceClass,
-        claims: impl IntoIterator<Item = HardResourceClaim>,
-    ) -> Result<HardResourceGrant, RegistryError> {
+        claims: impl IntoIterator<Item = PhysicalResourceClaim>,
+    ) -> Result<PhysicalResourceGrant, RegistryError> {
         Ok(self.resources.acquire(owner, class, claims)?)
     }
 
     pub fn release_hard_resources(
         &mut self,
-        grant: &mut HardResourceGrant,
+        grant: &mut PhysicalResourceGrant,
     ) -> Result<(), RegistryError> {
         Ok(self.resources.release_all_held(grant)?)
     }
@@ -484,11 +552,11 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             .count()
     }
 
-    pub fn operation_for_key(&self, key: LoadKey) -> Option<OperationId> {
+    pub fn operation_for_key(&self, key: MaterializationKey) -> Option<OperationId> {
         self.key_to_operation.get(&key).copied()
     }
 
-    pub fn key_for_operation(&self, operation: OperationId) -> Option<LoadKey> {
+    pub fn key_for_operation(&self, operation: OperationId) -> Option<MaterializationKey> {
         self.operation_to_key.get(&operation).copied()
     }
 
@@ -506,14 +574,14 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
 
     pub fn residency_binding(
         &self,
-        key: LoadKey,
+        key: MaterializationKey,
     ) -> Option<ferrule_common::io_protocol::ResidencyBinding> {
         self.residencies.get(&key).map(|entry| entry.binding)
     }
 
     pub fn validated_residency(
         &self,
-        key: LoadKey,
+        key: MaterializationKey,
     ) -> Result<ValidatedResidencyBinding, RegistryError> {
         let binding = self
             .residency_binding(key)
@@ -523,28 +591,30 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
 
     pub fn load_request(
         &self,
-        key: LoadKey,
+        key: MaterializationKey,
         class: ResourceClass,
     ) -> Result<LoadRequest, RegistryError> {
-        let bytes = self.backend.materialization_bytes(key)?;
-        Ok(LoadRequest::new(key, bytes, class))
+        let preparation = self.provider.preparation(key)?;
+        if preparation.key() != key {
+            return Err(RegistryError::Provider(FailureReason::ProtocolViolation(
+                "materialization provider returned a different prepared key".into(),
+            )));
+        }
+        let plan = self
+            .provider
+            .materialization_plan(key)?
+            .validate()
+            .map_err(|error| {
+                RegistryError::Provider(FailureReason::ProtocolViolation(error.to_string()))
+            })?;
+        Ok(LoadRequest::new(preparation, plan, class))
     }
 
-    /// Adopt an exact binding already selected as resident by the shared physical
-    /// authority. This accounts the physical frame in the same registry used for
-    /// newly materialized publications, so resume leases never bypass hard limits.
-    pub fn adopt_residency(
+    fn adopt_prepared_residency(
         &mut self,
         request: LoadRequest,
         binding: ferrule_common::io_protocol::ResidencyBinding,
     ) -> Result<(), RegistryError> {
-        if self.shutting_down {
-            return Err(RegistryError::RegistryShuttingDown);
-        }
-        request.key.validate()?;
-        if request.bytes == 0 {
-            return Err(RegistryError::ZeroByteLoad(Box::new(request.key)));
-        }
         let validated = ValidatedResidencyBinding::new(request.key, binding)?;
         if let Some(existing) = self.residencies.get(&request.key) {
             return if existing.binding == validated.binding() {
@@ -563,9 +633,9 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         let grant = self.resources.acquire(
             request.key.destination_generation().get(),
             request.class,
-            [HardResourceClaim::new(
-                ResourceKind::ExpertFrame,
-                request.bytes,
+            [PhysicalResourceClaim::new(
+                ResourceKind::ResidentBytes,
+                request.plan.resident_bytes,
             )],
         )?;
         self.residencies.insert(
@@ -573,8 +643,27 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             ResidentEntry {
                 binding: validated.binding(),
                 grant,
+                lease: ExecutionLeaseState::Held,
             },
         );
+        Ok(())
+    }
+
+    pub fn discard_preparations(
+        &mut self,
+        keys: impl IntoIterator<Item = MaterializationKey>,
+    ) -> Result<(), RegistryError> {
+        for key in keys {
+            if self.key_to_operation.contains_key(&key) {
+                continue;
+            }
+            if let Some(resident) = self.residencies.get(&key)
+                && resident.lease != ExecutionLeaseState::Released
+            {
+                continue;
+            }
+            self.provider.discard_preparation(key)?;
+        }
         Ok(())
     }
 
@@ -606,17 +695,19 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         requests.sort_unstable_by_key(|request| request.key);
         for request in &requests {
             request.key.validate()?;
-            if request.bytes == 0 {
-                return Err(RegistryError::ZeroByteLoad(Box::new(request.key)));
-            }
-            if request.bytes > self.runnable.config().max_transition_cost {
+            request
+                .plan
+                .validate()
+                .map_err(|_| RegistryError::InvalidResourcePlan(Box::new(request.key)))?;
+            let cost = request.plan.transition_cost();
+            if cost > self.runnable.config().max_transition_cost {
                 return Err(FairQueueError::TransitionTooLarge {
-                    cost: request.bytes,
+                    cost,
                     maximum: self.runnable.config().max_transition_cost,
                 }
                 .into());
             }
-            self.validate_operation_capacity(request.bytes)?;
+            self.validate_operation_capacity(request.plan)?;
         }
         if let Some(duplicate) = requests
             .windows(2)
@@ -630,13 +721,21 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             .iter()
             .map(|request| request.class)
             .max()
-            .unwrap_or(ResourceClass::Decode);
+            .unwrap_or(ResourceClass::Demand);
 
         let mut joined = Vec::new();
+        let mut resident_preparations = Vec::new();
         let mut new_requests = Vec::new();
         let mut already_resident = 0;
         for request in &requests {
-            if self.residencies.contains_key(&request.key) {
+            if let Some(resident) = self.residencies.get(&request.key) {
+                if resident.binding != request.preparation.binding()
+                    || !matches!(request.preparation, MaterializationPreparation::Resident(_))
+                {
+                    return Err(RegistryError::PublishedResidencyConflict(Box::new(
+                        request.key,
+                    )));
+                }
                 already_resident += 1;
                 continue;
             }
@@ -645,26 +744,63 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                     .operations
                     .get(&operation)
                     .expect("active key index must point to an operation");
-                if active.bytes != request.bytes {
-                    return Err(RegistryError::ByteExpectationMismatch {
+                if active.plan != request.plan {
+                    return Err(RegistryError::ResourcePlanMismatch {
                         key: Box::new(request.key),
-                        expected: active.bytes,
-                        requested: request.bytes,
+                        expected: active.plan,
+                        requested: request.plan,
                     });
+                }
+                if !matches!(request.preparation, MaterializationPreparation::Transfer(_)) {
+                    return Err(RegistryError::PublishedResidencyConflict(Box::new(
+                        request.key,
+                    )));
                 }
                 joined.push(operation);
             } else {
-                new_requests.push(*request);
+                match request.preparation {
+                    MaterializationPreparation::Resident(_) => {
+                        resident_preparations.push(*request);
+                        already_resident += 1;
+                    }
+                    MaterializationPreparation::Transfer(_) => new_requests.push(*request),
+                }
             }
         }
 
         let continuation_is_new = !self.continuations.contains_key(&continuation);
-        let mut preflight = vec![HardResourceClaim::new(ResourceKind::Waiter, 1)];
+        let mut preflight = vec![PhysicalResourceClaim::new(ResourceKind::Waiter, 1)];
         if continuation_is_new {
-            preflight.push(HardResourceClaim::new(ResourceKind::Continuation, 1));
+            preflight.push(PhysicalResourceClaim::new(ResourceKind::Continuation, 1));
+        }
+        if !resident_preparations.is_empty() {
+            let resident_bytes =
+                resident_preparations
+                    .iter()
+                    .try_fold(0_u64, |total, request| {
+                        total.checked_add(request.plan.resident_bytes).ok_or(
+                            PhysicalResourceError::ClaimOverflow(ResourceKind::ResidentBytes),
+                        )
+                    })?;
+            preflight.push(PhysicalResourceClaim::new(
+                ResourceKind::ResidentBytes,
+                resident_bytes,
+            ));
         }
         self.resources.can_acquire(class, preflight)?;
 
+        let mut adopted = Vec::new();
+        for request in &resident_preparations {
+            if let Err(error) =
+                self.adopt_prepared_residency(*request, request.preparation.binding())
+            {
+                for key in adopted.into_iter().rev() {
+                    self.rollback_adopted_residency(key)?;
+                }
+                return Err(error);
+            }
+            adopted.push(request.key);
+        }
         for operation in &joined {
             let active = self
                 .operations
@@ -680,6 +816,9 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                 if let Some(grant) = active.upload_grant.as_ref() {
                     self.resources.promote(grant, class)?;
                 }
+                if let Some(grant) = active.install_grant.as_ref() {
+                    self.resources.promote(grant, class)?;
+                }
                 active.class = class;
             }
         }
@@ -692,6 +831,9 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                     while let Some(operation) = created.pop() {
                         self.rollback_reserved_operation(operation, now_ns)?;
                     }
+                    for key in adopted.into_iter().rev() {
+                        self.rollback_adopted_residency(key)?;
+                    }
                     return Err(error);
                 }
             }
@@ -701,7 +843,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             let grant = self.resources.acquire(
                 continuation.get(),
                 class,
-                [HardResourceClaim::new(ResourceKind::Continuation, 1)],
+                [PhysicalResourceClaim::new(ResourceKind::Continuation, 1)],
             )?;
             self.continuations.insert(
                 continuation,
@@ -709,6 +851,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                     grant,
                     class,
                     ready_grant: None,
+                    materializations: requests.iter().map(|request| request.key).collect(),
                 },
             );
         } else {
@@ -720,11 +863,14 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                 self.resources.promote(&state.grant, class)?;
                 state.class = class;
             }
+            state
+                .materializations
+                .extend(requests.iter().map(|request| request.key));
         }
         let waiter_grant = self.resources.acquire(
             continuation.get(),
             class,
-            [HardResourceClaim::new(ResourceKind::Waiter, 1)],
+            [PhysicalResourceClaim::new(ResourceKind::Waiter, 1)],
         )?;
 
         let operations: Vec<_> = joined.iter().chain(&created).copied().collect();
@@ -745,7 +891,6 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                 .entry(continuation)
                 .or_default()
                 .insert(waiter);
-            self.try_admit_ready(continuation)?;
         } else {
             for operation in &operations {
                 self.wait_started.insert((waiter, *operation), now_ns);
@@ -760,6 +905,14 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             .stats
             .single_flight_joins
             .saturating_add(joined.len() as u64);
+        for request in &requests {
+            if let Some(resident) = self.residencies.get_mut(&request.key)
+                && matches!(request.preparation, MaterializationPreparation::Resident(_))
+            {
+                resident.lease = ExecutionLeaseState::Held;
+                self.pending_lease_releases.remove(&request.key);
+            }
+        }
         Ok(AttachReport {
             created,
             joined,
@@ -789,6 +942,10 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         if let Some(continuation) = detached.continuation_became_empty {
             self.release_continuation(continuation)?;
         }
+        self.mark_unowned_for_cleanup(
+            detached.operations_losing_last_waiter.iter().copied(),
+            &reason,
+        );
         for operation in detached.operations_losing_last_waiter {
             self.handle_last_waiter(operation, reason.clone(), now_ns)?;
         }
@@ -801,7 +958,10 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         Ok(self.schedule_one_with_key(now_ns)?.is_some())
     }
 
-    fn schedule_one_with_key(&mut self, now_ns: u64) -> Result<Option<LoadKey>, RegistryError> {
+    fn schedule_one_with_key(
+        &mut self,
+        now_ns: u64,
+    ) -> Result<Option<MaterializationKey>, RegistryError> {
         let operations = &self.operations;
         self.runnable.retain(|action| {
             operations
@@ -818,14 +978,17 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                 LoadActionKind::Reserve => resources
                     .can_acquire(
                         operation.class,
-                        std::iter::once(HardResourceClaim::new(ResourceKind::LoadOperation, 1))
-                            .chain(read_claims(operation.bytes)),
+                        std::iter::once(PhysicalResourceClaim::new(ResourceKind::LoadOperation, 1))
+                            .chain(read_claims(operation.plan)),
                     )
                     .is_ok(),
                 LoadActionKind::SubmitUpload => resources
-                    .can_acquire(operation.class, upload_claims(operation.bytes))
+                    .can_acquire(operation.class, upload_claims(operation.plan))
                     .is_ok(),
-                LoadActionKind::SubmitRead | LoadActionKind::PollInstall => true,
+                LoadActionKind::PollInstall => resources
+                    .can_acquire(operation.class, install_claims(operation.plan))
+                    .is_ok(),
+                LoadActionKind::SubmitRead => true,
             }
         }) else {
             return Ok(None);
@@ -845,12 +1008,20 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         };
         match result {
             Ok(Some(failure)) => {
+                let operation_id = operation.operation;
+                if let Err(error) = self.retire_owned(
+                    &mut operation,
+                    RetirementReason::Failed(failure.clone()),
+                    now_ns,
+                ) {
+                    self.operations.insert(operation_id, operation);
+                    return Err(error);
+                }
                 self.fail_operation_waiters(
-                    operation.operation,
-                    ContinuationFailure::Failed(failure.clone()),
+                    operation_id,
+                    ContinuationFailure::Failed(failure),
                     now_ns,
                 )?;
-                self.retire_owned(operation, RetirementReason::Failed(failure), now_ns)?;
             }
             Ok(None) => {
                 self.operations.insert(operation.operation, operation);
@@ -867,10 +1038,10 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         self.completions.push_back(event);
     }
 
-    pub fn collect_backend_completions(&mut self, maximum: usize) -> usize {
+    pub fn collect_provider_completions(&mut self, maximum: usize) -> usize {
         let mut collected = 0;
         while collected < maximum {
-            let Some(event) = self.backend.next_completion() else {
+            let Some(event) = self.provider.next_completion() else {
                 break;
             };
             self.completions.push_back(event);
@@ -880,6 +1051,20 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
     }
 
     pub fn process_one_completion(&mut self) -> Result<CompletionDisposition, RegistryError> {
+        self.process_one_completion_with_observation(None)
+    }
+
+    pub(crate) fn process_one_completion_at(
+        &mut self,
+        observed_ns: u64,
+    ) -> Result<CompletionDisposition, RegistryError> {
+        self.process_one_completion_with_observation(Some(observed_ns))
+    }
+
+    fn process_one_completion_with_observation(
+        &mut self,
+        observed_ns: Option<u64>,
+    ) -> Result<CompletionDisposition, RegistryError> {
         let Some(event) = self.completions.pop_front() else {
             return Ok(CompletionDisposition::QueueEmpty);
         };
@@ -900,8 +1085,17 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             self.reject_completion(event, reason.clone());
             return Ok(CompletionDisposition::Rejected(reason));
         }
-        let expectation =
-            CompletionExpectation::new(active.operation, active.key, active.stage, active.bytes)?;
+        let completion_bytes = active.plan.completion_bytes(active.stage).ok_or_else(|| {
+            RegistryError::Protocol(Box::new(IoProtocolError::InvalidCompletionStage {
+                stage: active.stage,
+            }))
+        })?;
+        let expectation = CompletionExpectation::new(
+            active.operation,
+            active.key,
+            active.stage,
+            completion_bytes,
+        )?;
         if let Err(error) = event.validate(&expectation) {
             let reason = CompletionRejectionReason::Protocol(error);
             self.reject_completion(event, reason.clone());
@@ -914,8 +1108,13 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             .expect("completion was validated against an active operation");
         let completed_stage = operation.stage;
         let completed_key = operation.key;
-        let timestamp = event.timestamp.as_nanos();
-        let post = match self.apply_completion(&mut operation, &event) {
+        // Provider timestamps belong to a foreign monotonic domain (the
+        // physical backend stamps a per-backend counter, not runtime
+        // nanoseconds). Ledger spans must close in the runtime clock domain,
+        // so the observation time of the drive step that collected this event
+        // is the lower bound for every downstream phase/wait span.
+        let timestamp = event.timestamp.as_nanos().max(observed_ns.unwrap_or(0));
+        let post = match self.apply_completion(&mut operation, &event, observed_ns) {
             Ok(post) => post,
             Err(error) => {
                 self.operations.insert(operation_id, operation);
@@ -926,7 +1125,13 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         match post {
             PostCompletion::Keep => {
                 let retry_cancellation = (self.waiters.waiter_count(operation_id) == 0)
-                    .then(|| operation.cancellation_reason.clone())
+                    .then(|| {
+                        operation
+                            .cancellation
+                            .as_ref()
+                            .map(OperationCancellation::reason)
+                            .cloned()
+                    })
                     .flatten();
                 self.operations.insert(operation_id, operation);
                 if let Some(reason) = retry_cancellation {
@@ -934,16 +1139,20 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                 }
             }
             PostCompletion::Publish => {
-                self.publish(operation, timestamp)?;
+                self.operations.insert(operation_id, operation);
+                self.publish(operation_id, timestamp)?;
             }
             PostCompletion::Terminal {
                 retirement,
                 failure,
             } => {
+                if let Err(error) = self.retire_owned(&mut operation, retirement, timestamp) {
+                    self.operations.insert(operation_id, operation);
+                    return Err(error);
+                }
                 if let Some(failure) = failure {
                     self.fail_operation_waiters(operation_id, failure, timestamp)?;
                 }
-                self.retire_owned(operation, retirement, timestamp)?;
             }
         }
         Ok(CompletionDisposition::Applied {
@@ -954,14 +1163,23 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
     }
 
     pub(crate) fn drive_one(&mut self, now_ns: u64) -> Result<RegistryDriveStep, RegistryError> {
+        if let Some(key) = self.retry_one_lease_release()? {
+            return Ok(RegistryDriveStep::Progressed { key: Some(key) });
+        }
+        if let Some(key) = self.publish_one_ready(now_ns)? {
+            return Ok(RegistryDriveStep::Progressed { key: Some(key) });
+        }
+        if let Some(key) = self.cleanup_one_unowned(now_ns)? {
+            return Ok(RegistryDriveStep::Progressed { key: Some(key) });
+        }
         if let Some(key) = self.schedule_one_with_key(now_ns)? {
             return Ok(RegistryDriveStep::Progressed { key: Some(key) });
         }
-        self.collect_backend_completions(1);
+        self.collect_provider_completions(1);
         if self.completions.is_empty() {
             return Ok(RegistryDriveStep::Idle);
         }
-        let key = match self.process_one_completion()? {
+        let key = match self.process_one_completion_at(now_ns)? {
             CompletionDisposition::Applied { key, .. } => Some(key),
             CompletionDisposition::Rejected(_) | CompletionDisposition::QueueEmpty => None,
         };
@@ -970,10 +1188,32 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
 
     /// Drives commands and completions deterministically until no immediate work
     /// remains or the transition budget is exhausted.
+    #[cfg(test)]
     pub fn drive(&mut self, now_ns: u64, maximum: usize) -> Result<usize, RegistryError> {
         let mut progressed = 0;
         while progressed < maximum {
             let mut made_progress = false;
+            if self.retry_one_lease_release()?.is_some() {
+                progressed += 1;
+                made_progress = true;
+                if progressed == maximum {
+                    break;
+                }
+            }
+            if self.publish_one_ready(now_ns)?.is_some() {
+                progressed += 1;
+                made_progress = true;
+                if progressed == maximum {
+                    break;
+                }
+            }
+            if self.cleanup_one_unowned(now_ns)?.is_some() {
+                progressed += 1;
+                made_progress = true;
+                if progressed == maximum {
+                    break;
+                }
+            }
             if self.schedule_one(now_ns)? {
                 progressed += 1;
                 made_progress = true;
@@ -981,9 +1221,9 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                     break;
                 }
             }
-            self.collect_backend_completions(maximum - progressed);
+            self.collect_provider_completions(maximum - progressed);
             if !self.completions.is_empty() {
-                let _ = self.process_one_completion()?;
+                let _ = self.process_one_completion_at(now_ns)?;
                 progressed += 1;
                 made_progress = true;
             }
@@ -1032,7 +1272,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         }
         let required = dependencies
             .iter()
-            .filter_map(|dependency| dependency.load_key())
+            .filter_map(|dependency| dependency.materialization_key())
             .collect::<Vec<_>>();
         let mut bindings = Vec::with_capacity(required.len());
         for key in &required {
@@ -1059,7 +1299,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         self.next_dispatch = dispatch
             .checked_add(1)
             .ok_or(RegistryError::OperationIdExhausted)?;
-        let leases = ExpertLeaseSet::new(
+        let leases = ResidencyLeaseSet::new(
             required.iter().copied(),
             bindings,
             MappingEpoch::new(dispatch),
@@ -1079,8 +1319,8 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             continuation.get(),
             class,
             [
-                HardResourceClaim::new(ResourceKind::Arena, 1),
-                HardResourceClaim::new(ResourceKind::Lease, required.len() as u64),
+                PhysicalResourceClaim::new(ResourceKind::Arena, 1),
+                PhysicalResourceClaim::new(ResourceKind::ResidencyLease, required.len() as u64),
             ],
         )?;
         Ok(ResumeLease {
@@ -1092,22 +1332,16 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
 
     pub fn finish_resume(
         &mut self,
-        continuation: ContinuationId,
-        mut lease: ResumeLease,
+        lease: &mut ResumeLease,
         started_ns: u64,
         finished_ns: u64,
     ) -> Result<(), RegistryError> {
-        if lease.continuation != continuation {
-            return Err(RegistryError::ResumeContinuationMismatch {
-                expected: lease.continuation,
-                actual: continuation,
-            });
-        }
+        let continuation = lease.continuation;
         if lease.leases.is_some() {
             return Err(RegistryError::ResumeLeaseAlreadyTaken(continuation));
         }
-        if let Some(mut grant) = lease.grant.take() {
-            self.resources.release_all_held(&mut grant)?;
+        if let Some(grant) = lease.grant.as_ref() {
+            self.resources.can_release_all_held(grant)?;
         }
         self.ledger.record_cohort_phase(
             CohortId::new(continuation.get()),
@@ -1115,6 +1349,10 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             started_ns,
             finished_ns.max(started_ns),
         )?;
+        if let Some(grant) = lease.grant.as_mut() {
+            self.resources.release_all_held(grant)?;
+        }
+        lease.grant = None;
         self.release_ready_waiters(continuation)?;
         self.release_continuation(continuation)
     }
@@ -1141,6 +1379,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             }
         }
         self.release_continuation(continuation)?;
+        self.mark_unowned_for_cleanup(lost_last.iter().copied(), &reason);
         for operation in std::mem::take(&mut lost_last) {
             self.handle_last_waiter(operation, reason.clone(), now_ns)?;
         }
@@ -1165,6 +1404,19 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             started_ns,
             finished_ns.max(started_ns),
         )?;
+        Ok(())
+    }
+
+    /// Records useful independent execution that legally covers dependency
+    /// wait. The scheduler-facing owner feeds synchronous compute spans here so
+    /// shared waits overlapping them are reported as covered, not uncovered.
+    pub fn record_runnable_work(
+        &mut self,
+        started_ns: u64,
+        finished_ns: u64,
+    ) -> Result<(), RegistryError> {
+        self.ledger
+            .record_runnable_work(started_ns, finished_ns.max(started_ns))?;
         Ok(())
     }
 
@@ -1211,12 +1463,24 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         Some(failed)
     }
 
-    pub fn evict(&mut self, key: LoadKey) -> Result<bool, RegistryError> {
-        let Some(mut resident) = self.residencies.remove(&key) else {
-            return Ok(false);
+    fn release_residency_accounting(
+        &mut self,
+        key: MaterializationKey,
+    ) -> Result<(), RegistryError> {
+        let Some(resident) = self.residencies.get(&key) else {
+            return Ok(());
         };
+        self.resources.can_release_all_held(&resident.grant)?;
+        if resident.lease != ExecutionLeaseState::Released {
+            self.provider.release_execution_lease(key)?;
+        }
+        let mut resident = self
+            .residencies
+            .remove(&key)
+            .expect("validated residency remains registered");
+        self.pending_lease_releases.remove(&key);
         self.resources.release_all_held(&mut resident.grant)?;
-        Ok(true)
+        Ok(())
     }
 
     pub fn begin_shutdown(&mut self, now_ns: u64) -> Result<(), RegistryError> {
@@ -1237,7 +1501,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         }
         let resident: Vec<_> = self.residencies.keys().copied().collect();
         for key in resident {
-            self.evict(key)?;
+            self.release_residency_accounting(key)?;
         }
         self.failed_continuations.clear();
         self.failed_set.clear();
@@ -1252,7 +1516,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         self.begin_shutdown(now_ns)?;
         let mut processed = 0;
         while processed < maximum_completions {
-            self.collect_backend_completions(maximum_completions - processed);
+            self.collect_provider_completions(maximum_completions - processed);
             if self.completions.is_empty() {
                 break;
             }
@@ -1297,8 +1561,15 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         })
     }
 
-    fn validate_operation_capacity(&self, bytes: u64) -> Result<(), RegistryError> {
-        for claim in read_claims(bytes).into_iter().chain(upload_claims(bytes)) {
+    fn validate_operation_capacity(
+        &self,
+        plan: MaterializationResourcePlan,
+    ) -> Result<(), RegistryError> {
+        for claim in read_claims(plan)
+            .into_iter()
+            .chain(upload_claims(plan))
+            .chain(install_claims(plan))
+        {
             let capacity = self
                 .resources
                 .snapshots()
@@ -1306,7 +1577,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                 .expect("hard resource catalog contains every resource kind")
                 .capacity;
             if claim.amount > capacity {
-                return Err(HardResourceError::ExceedsCapacity {
+                return Err(PhysicalResourceError::ExceedsCapacity {
                     kind: claim.kind,
                     requested: claim.amount,
                     capacity,
@@ -1340,16 +1611,21 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             LoadOp {
                 operation,
                 key: request.key,
-                bytes: request.bytes,
+                plan: request.plan,
                 class: request.class,
                 stage: LoadStage::Reserved,
                 reservation: None,
                 logical_grant: None,
                 read_grant: None,
                 upload_grant: None,
+                install_grant: None,
                 retirement: Some(retirement),
-                cancellation_reason: None,
+                cancellation: None,
                 install_submitted: false,
+                replaced: match request.preparation {
+                    MaterializationPreparation::Transfer(transfer) => transfer.evicted(),
+                    MaterializationPreparation::Resident(_) => None,
+                },
                 stage_started_ns: now_ns,
             },
         );
@@ -1359,10 +1635,27 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                 kind: LoadActionKind::Reserve,
             },
             request.class,
-            request.bytes,
+            1,
             now_ns,
         )?;
         Ok(operation)
+    }
+
+    fn rollback_adopted_residency(&mut self, key: MaterializationKey) -> Result<(), RegistryError> {
+        let Some(resident) = self.residencies.get(&key) else {
+            return Ok(());
+        };
+        self.resources.can_release_all_held(&resident.grant)?;
+        if resident.lease != ExecutionLeaseState::Released {
+            self.provider.release_execution_lease(key)?;
+        }
+        let mut resident = self
+            .residencies
+            .remove(&key)
+            .expect("validated adopted residency remains registered");
+        self.pending_lease_releases.remove(&key);
+        self.resources.release_all_held(&mut resident.grant)?;
+        Ok(())
     }
 
     fn rollback_reserved_operation(
@@ -1370,19 +1663,21 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         operation: OperationId,
         now_ns: u64,
     ) -> Result<(), RegistryError> {
-        let Some(operation) = self.operations.remove(&operation) else {
+        let Some(mut operation) = self.operations.remove(&operation) else {
             return Ok(());
         };
         if operation.reservation.is_some() {
-            self.backend.cancel(
+            self.provider.cancel(
                 operation.operation,
                 operation.key,
                 LoadStage::Reserved,
                 CancellationReason::Superseded,
             )?;
+        } else {
+            self.provider.discard_preparation(operation.key)?;
         }
         self.retire_owned(
-            operation,
+            &mut operation,
             RetirementReason::Cancelled(CancellationReason::Superseded),
             now_ns,
         )
@@ -1398,13 +1693,13 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         let logical_grant = self.resources.acquire(
             operation.operation.get(),
             operation.class,
-            [HardResourceClaim::new(ResourceKind::LoadOperation, 1)],
+            [PhysicalResourceClaim::new(ResourceKind::LoadOperation, 1)],
         )?;
         operation.logical_grant = Some(logical_grant);
         let mut grant = match self.resources.acquire(
             operation.operation.get(),
             operation.class,
-            read_claims(operation.bytes),
+            read_claims(operation.plan),
         ) {
             Ok(grant) => grant,
             Err(error) => {
@@ -1418,8 +1713,8 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         };
         let reservation =
             match self
-                .backend
-                .reserve(operation.operation, operation.key, operation.bytes)
+                .provider
+                .reserve(operation.operation, operation.key, operation.plan)
             {
                 Ok(reservation) => reservation,
                 Err(failure) => {
@@ -1436,7 +1731,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                 kind: LoadActionKind::SubmitRead,
             },
             operation.class,
-            operation.bytes,
+            operation.plan.demand.storage_read_bytes,
             now_ns,
         )?;
         Ok(None)
@@ -1445,7 +1740,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
     fn submit_read(&mut self, operation: &mut LoadOp, now_ns: u64) -> Result<(), RegistryError> {
         debug_assert_eq!(operation.stage, LoadStage::Reserved);
         let rejection = self
-            .backend
+            .provider
             .submit_read(
                 operation.operation,
                 operation.key,
@@ -1453,7 +1748,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                     .reservation
                     .as_ref()
                     .expect("submit-read action requires a physical reservation"),
-                operation.bytes,
+                operation.plan,
             )
             .err();
         operation
@@ -1481,11 +1776,11 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         let grant = self.resources.acquire(
             operation.operation.get(),
             operation.class,
-            upload_claims(operation.bytes),
+            upload_claims(operation.plan),
         )?;
         operation.upload_grant = Some(grant);
         let rejection = self
-            .backend
+            .provider
             .submit_upload(
                 operation.operation,
                 operation.key,
@@ -1493,7 +1788,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                     .reservation
                     .as_ref()
                     .expect("host-ready operation owns a physical reservation"),
-                operation.bytes,
+                operation.plan,
             )
             .err();
         operation
@@ -1505,8 +1800,8 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
             operation
                 .read_grant
                 .as_mut()
-                .expect("host-ready operation owns pinned-slab credit"),
-            &[ResourceKind::PinnedSlab],
+                .expect("host-ready operation owns pinned-host credit"),
+            &[ResourceKind::PinnedHostBytes],
         )?;
         self.resources.mark_submitted(
             operation
@@ -1526,8 +1821,14 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
     fn poll_install(&mut self, operation: &mut LoadOp, now_ns: u64) -> Result<(), RegistryError> {
         debug_assert_eq!(operation.stage, LoadStage::Installing);
         debug_assert!(!operation.install_submitted);
+        let grant = self.resources.acquire(
+            operation.operation.get(),
+            operation.class,
+            install_claims(operation.plan),
+        )?;
+        operation.install_grant = Some(grant);
         let rejection = self
-            .backend
+            .provider
             .poll_install(
                 operation.operation,
                 operation.key,
@@ -1535,7 +1836,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                     .reservation
                     .as_ref()
                     .expect("installing operation owns a physical reservation"),
-                operation.bytes,
+                operation.plan,
             )
             .err();
         self.resources.mark_submitted(
@@ -1543,6 +1844,13 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                 .upload_grant
                 .as_mut()
                 .expect("installing operation owns a destination grant"),
+            INSTALL_DESTINATION_CUSTODY,
+        )?;
+        self.resources.mark_submitted(
+            operation
+                .install_grant
+                .as_mut()
+                .expect("installing operation owns an install-slot grant"),
             INSTALL_CUSTODY,
         )?;
         operation.install_submitted = true;
@@ -1557,9 +1865,14 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         &mut self,
         operation: &mut LoadOp,
         event: &CompletionEvent,
+        observed_ns: Option<u64>,
     ) -> Result<PostCompletion, RegistryError> {
         let next = event.next_stage()?;
-        let timestamp = event.timestamp.as_nanos().max(operation.stage_started_ns);
+        let timestamp = event
+            .timestamp
+            .as_nanos()
+            .max(operation.stage_started_ns)
+            .max(observed_ns.unwrap_or(0));
         match event.stage {
             LoadStage::ReadSubmitted => {
                 match event.outcome {
@@ -1598,7 +1911,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                             kind: LoadActionKind::SubmitUpload,
                         },
                         operation.class,
-                        operation.bytes,
+                        operation.plan.demand.h2d_bytes,
                         timestamp,
                     )?;
                     Ok(PostCompletion::Keep)
@@ -1617,7 +1930,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                     .as_mut()
                     .expect("upload-submitted operation owns pinned-slab credit");
                 self.resources
-                    .mark_returned(read_grant, &[ResourceKind::PinnedSlab])?;
+                    .mark_returned(read_grant, &[ResourceKind::PinnedHostBytes])?;
                 self.resources.release_all_held(read_grant)?;
                 operation.read_grant = None;
                 let upload_grant = operation
@@ -1655,11 +1968,19 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                 }
             }
             LoadStage::Installing => {
-                let grant = operation
+                let destination_grant = operation
                     .upload_grant
                     .as_mut()
                     .expect("installing operation owns a destination grant");
-                self.resources.mark_returned(grant, INSTALL_CUSTODY)?;
+                self.resources
+                    .mark_returned(destination_grant, INSTALL_DESTINATION_CUSTODY)?;
+                let mut install_grant = operation
+                    .install_grant
+                    .take()
+                    .expect("installing operation owns an install-stage grant");
+                self.resources
+                    .mark_returned(&mut install_grant, INSTALL_CUSTODY)?;
+                self.resources.release_all_held(&mut install_grant)?;
                 operation.install_submitted = false;
                 self.ledger.record_operation_phase(
                     operation.operation,
@@ -1678,38 +1999,226 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         }
     }
 
-    fn publish(&mut self, mut operation: LoadOp, timestamp: u64) -> Result<(), RegistryError> {
+    fn publication_preflight(
+        &self,
+        operation: &LoadOp,
+    ) -> Result<PublicationPreflight, RegistryError> {
         let binding = operation
             .reservation
             .as_ref()
             .expect("resident operation owns a physical reservation")
             .binding();
-        let _validated =
-            ferrule_common::io_protocol::ValidatedResidencyBinding::new(operation.key, binding)?;
+        ValidatedResidencyBinding::new(operation.key, binding)?;
         if self.residencies.contains_key(&operation.key) {
             return Err(RegistryError::PublishedResidencyConflict(Box::new(
                 operation.key,
             )));
         }
+
+        let location = ResidencyLocation::from(binding);
+        let occupant = self.residencies.iter().find_map(|(key, resident)| {
+            (ResidencyLocation::from(resident.binding) == location).then_some(*key)
+        });
+        let Some(replaced) = occupant else {
+            if let Some(evicted) = operation.replaced {
+                if self.residencies.contains_key(&evicted)
+                    || evicted.model() != binding.model
+                    || evicted.backend() != binding.backend
+                    || evicted.device() != binding.device
+                    || evicted.destination_generation() >= binding.generation
+                {
+                    return Err(RegistryError::PublishedResidencyConflict(Box::new(evicted)));
+                }
+            }
+            return Ok(PublicationPreflight::Ready { replaced: None });
+        };
+        if operation.replaced != Some(replaced) {
+            return Err(RegistryError::PublishedResidencyConflict(Box::new(
+                replaced,
+            )));
+        }
+        let resident = self
+            .residencies
+            .get(&replaced)
+            .expect("located residency remains registered");
+        if resident.binding.generation >= binding.generation {
+            return Err(RegistryError::PublishedResidencyConflict(Box::new(
+                replaced,
+            )));
+        }
+        if resident.lease != ExecutionLeaseState::Released
+            || self
+                .continuations
+                .values()
+                .any(|state| state.materializations.contains(&replaced))
+        {
+            return Ok(PublicationPreflight::Blocked);
+        }
+        self.resources.can_release_all_held(&resident.grant)?;
+        Ok(PublicationPreflight::Ready {
+            replaced: Some(replaced),
+        })
+    }
+
+    fn publish_one_ready(
+        &mut self,
+        timestamp: u64,
+    ) -> Result<Option<MaterializationKey>, RegistryError> {
+        let mut operations = self
+            .operations
+            .values()
+            .filter(|operation| operation.stage == LoadStage::Resident)
+            .map(LoadOp::operation)
+            .collect::<Vec<_>>();
+        operations.sort_unstable();
+        for operation in operations {
+            let active = self
+                .operations
+                .get(&operation)
+                .expect("selected publication remains active");
+            if matches!(
+                self.publication_preflight(active)?,
+                PublicationPreflight::Blocked
+            ) {
+                continue;
+            }
+            let key = active.key;
+            self.publish(operation, timestamp)?;
+            return Ok(Some(key));
+        }
+        Ok(None)
+    }
+
+    fn preflight_retirement(&self, operation: &LoadOp) -> Result<(), RegistryError> {
+        operation.stage.validate_transition(LoadStage::Retired)?;
+        if operation
+            .retirement
+            .as_ref()
+            .expect("active operation owns retirement authority")
+            .is_consumed()
+        {
+            return Err(IoProtocolError::RetirementAlreadyConsumed.into());
+        }
+        for grant in [
+            &operation.read_grant,
+            &operation.upload_grant,
+            &operation.install_grant,
+            &operation.logical_grant,
+        ] {
+            if let Some(grant) = grant.as_ref() {
+                self.resources.can_release_all_held(grant)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn preflight_operation_waiters(
+        &self,
+        operation: OperationId,
+        now_ns: u64,
+    ) -> Result<(), RegistryError> {
+        for waiter in self.waiters.waiters_for(operation) {
+            if let Some(start_ns) = self.wait_started.get(&(waiter, operation)) {
+                TimeSpan::new(*start_ns, now_ns.max(*start_ns))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn publish(&mut self, operation_id: OperationId, timestamp: u64) -> Result<(), RegistryError> {
+        let preflight = {
+            let operation = self
+                .operations
+                .get(&operation_id)
+                .ok_or(RegistryError::UnknownOperation(operation_id))?;
+            let publication = self.publication_preflight(operation)?;
+            if matches!(publication, PublicationPreflight::Ready { .. }) {
+                self.preflight_retirement(operation)?;
+                self.preflight_operation_waiters(operation_id, timestamp)?;
+            }
+            publication
+        };
+        let PublicationPreflight::Ready { replaced } = preflight else {
+            return Ok(());
+        };
+        let operation = self
+            .operations
+            .get(&operation_id)
+            .expect("publication preflight retained active operation");
+        let release = operation
+            .upload_grant
+            .as_ref()
+            .expect("resident operation owns its destination grant")
+            .claims()
+            .map(|claim| claim.kind)
+            .filter(|kind| !RESIDENCY_CLAIMS.contains(kind))
+            .collect::<Vec<_>>();
+        self.resources.can_release_held(
+            operation
+                .upload_grant
+                .as_ref()
+                .expect("resident operation owns its destination grant"),
+            &release,
+        )?;
+        for grant in [
+            &operation.read_grant,
+            &operation.install_grant,
+            &operation.logical_grant,
+        ] {
+            if let Some(grant) = grant.as_ref() {
+                self.resources.can_release_all_held(grant)?;
+            }
+        }
+
+        let binding = operation
+            .reservation
+            .as_ref()
+            .expect("resident operation owns a physical reservation")
+            .binding();
+        if let Some(replaced) = replaced {
+            let mut resident = self
+                .residencies
+                .remove(&replaced)
+                .expect("publication preflight retained replaced residency");
+            self.pending_lease_releases.remove(&replaced);
+            self.resources.release_all_held(&mut resident.grant)?;
+        }
+
+        let mut operation = self
+            .operations
+            .remove(&operation_id)
+            .expect("publication preflight retained active operation");
         let mut grant = operation
             .upload_grant
             .take()
             .expect("resident operation owns its destination grant");
-        let release: Vec<_> = grant
-            .claims()
-            .map(|claim| claim.kind)
-            .filter(|kind| !RESIDENCY_CLAIMS.contains(kind))
-            .collect();
         self.resources.release_held(&mut grant, &release)?;
-        self.residencies
-            .insert(operation.key, ResidentEntry { binding, grant });
-        self.resolve_operation_waiters(operation.operation, timestamp)?;
-        self.stats.publications = self.stats.publications.saturating_add(1);
+        let has_logical_owner = self
+            .continuations
+            .values()
+            .any(|state| state.materializations.contains(&operation.key));
+        let lease = if has_logical_owner {
+            ExecutionLeaseState::Held
+        } else {
+            self.pending_lease_releases.insert(operation.key);
+            ExecutionLeaseState::ReleasePending
+        };
+        self.residencies.insert(
+            operation.key,
+            ResidentEntry {
+                binding,
+                grant,
+                lease,
+            },
+        );
         self.retire_owned(
-            operation,
+            &mut operation,
             RetirementReason::ResidentOwnershipTransferred,
             timestamp,
-        )
+        )?;
+        self.resolve_operation_waiters(operation_id, timestamp)?;
+        self.stats.publications = self.stats.publications.saturating_add(1);
+        Ok(())
     }
 
     fn resolve_operation_waiters(
@@ -1727,9 +2236,6 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                 .entry(waiter.continuation())
                 .or_default()
                 .insert(waiter);
-        }
-        for continuation in resolution.ready_continuations {
-            self.try_admit_ready(continuation)?;
         }
         Ok(())
     }
@@ -1759,11 +2265,88 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                 });
             }
         }
+        lost_last.remove(&operation);
+        self.mark_unowned_for_cleanup(lost_last.iter().copied(), &CancellationReason::Superseded);
         for other in lost_last {
-            if other != operation {
-                self.handle_last_waiter(other, CancellationReason::Superseded, now_ns)?;
+            self.handle_last_waiter(other, CancellationReason::Superseded, now_ns)?;
+        }
+        Ok(())
+    }
+
+    fn mark_unowned_for_cleanup(
+        &mut self,
+        operations: impl IntoIterator<Item = OperationId>,
+        reason: &CancellationReason,
+    ) {
+        for operation in operations {
+            if let Some(active) = self.operations.get_mut(&operation)
+                && active.cancellation.is_none()
+            {
+                active.cancellation = Some(OperationCancellation::Pending(reason.clone()));
             }
         }
+    }
+
+    fn cleanup_one_unowned(
+        &mut self,
+        now_ns: u64,
+    ) -> Result<Option<MaterializationKey>, RegistryError> {
+        let operation = self
+            .operations
+            .values()
+            .filter(|operation| {
+                self.waiters.waiter_count(operation.operation) == 0
+                    && matches!(
+                        operation.cancellation,
+                        Some(OperationCancellation::Pending(_))
+                    )
+            })
+            .map(LoadOp::operation)
+            .min();
+        let Some(operation) = operation else {
+            return Ok(None);
+        };
+        let key = self
+            .operations
+            .get(&operation)
+            .expect("selected cleanup remains active")
+            .key;
+        let reason = self
+            .operations
+            .get(&operation)
+            .and_then(|active| active.cancellation.as_ref())
+            .map(OperationCancellation::reason)
+            .cloned()
+            .expect("selected cleanup retains its reason");
+        self.handle_last_waiter(operation, reason, now_ns)?;
+        Ok(Some(key))
+    }
+
+    fn submit_operation_cancellation(
+        &mut self,
+        operation: &mut LoadOp,
+        reason: CancellationReason,
+    ) -> Result<(), RegistryError> {
+        if matches!(
+            operation.cancellation,
+            Some(OperationCancellation::Submitted { stage, .. }) if stage == operation.stage
+        ) {
+            return Ok(());
+        }
+        if let Err(error) = self.provider.cancel(
+            operation.operation,
+            operation.key,
+            operation.stage,
+            reason.clone(),
+        ) {
+            operation.cancellation = Some(OperationCancellation::Pending(reason));
+            return Err(RegistryError::Provider(error));
+        }
+        operation.cancellation = Some(OperationCancellation::Submitted {
+            stage: operation.stage,
+            reason,
+        });
+        self.stats.cancellations_requested = self.stats.cancellations_requested.saturating_add(1);
         Ok(())
     }
 
@@ -1774,92 +2357,92 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         now_ns: u64,
     ) -> Result<(), RegistryError> {
         if self.waiters.waiter_count(operation_id) != 0 {
+            if let Some(operation) = self.operations.get_mut(&operation_id) {
+                operation.cancellation = None;
+            }
             return Ok(());
+        }
+        if self
+            .operations
+            .get(&operation_id)
+            .is_some_and(|operation| operation.stage == LoadStage::Resident)
+        {
+            return self.publish(operation_id, now_ns);
         }
         let Some(mut operation) = self.operations.remove(&operation_id) else {
             return Ok(());
         };
-        match operation.stage {
+        let cleanup = (|| match operation.stage {
             LoadStage::Reserved => {
                 if operation.reservation.is_some() {
-                    self.backend.cancel(
-                        operation.operation,
-                        operation.key,
-                        LoadStage::Reserved,
-                        reason.clone(),
-                    )?;
+                    self.submit_operation_cancellation(&mut operation, reason.clone())?;
+                } else {
+                    self.provider.discard_preparation(operation.key)?;
                 }
-                self.retire_owned(operation, RetirementReason::Cancelled(reason), now_ns)
+                self.retire_owned(&mut operation, RetirementReason::Cancelled(reason), now_ns)?;
+                Ok(false)
             }
             LoadStage::HostReady => {
-                self.backend.cancel(
-                    operation.operation,
-                    operation.key,
-                    LoadStage::HostReady,
-                    reason.clone(),
-                )?;
+                self.submit_operation_cancellation(&mut operation, reason.clone())?;
                 operation
                     .reservation
                     .as_mut()
                     .expect("host-ready operation owns a physical reservation")
                     .retire_slabs()?;
                 self.transition(&mut operation, LoadStage::Stale)?;
-                self.retire_owned(operation, RetirementReason::Cancelled(reason), now_ns)
+                self.retire_owned(&mut operation, RetirementReason::Cancelled(reason), now_ns)?;
+                Ok(false)
             }
             LoadStage::Installing if !operation.install_submitted => {
-                self.backend.cancel(
-                    operation.operation,
-                    operation.key,
-                    LoadStage::Installing,
-                    reason.clone(),
-                )?;
+                self.submit_operation_cancellation(&mut operation, reason.clone())?;
                 self.transition(&mut operation, LoadStage::Stale)?;
-                self.retire_owned(operation, RetirementReason::Cancelled(reason), now_ns)
+                self.retire_owned(&mut operation, RetirementReason::Cancelled(reason), now_ns)?;
+                Ok(false)
             }
             LoadStage::ReadSubmitted | LoadStage::UploadSubmitted | LoadStage::Installing => {
-                if operation.cancellation_reason.is_none() {
-                    if let Err(error) = self.backend.cancel(
-                        operation.operation,
-                        operation.key,
-                        operation.stage,
-                        reason.clone(),
-                    ) {
-                        self.operations.insert(operation_id, operation);
-                        return Err(RegistryError::Backend(error));
-                    }
-                    operation.cancellation_reason = Some(reason);
-                    self.stats.cancellations_requested =
-                        self.stats.cancellations_requested.saturating_add(1);
-                }
-                self.operations.insert(operation_id, operation);
-                Ok(())
+                self.submit_operation_cancellation(&mut operation, reason)?;
+                Ok(true)
             }
             LoadStage::Failed | LoadStage::Stale | LoadStage::Draining => {
-                self.retire_owned(operation, RetirementReason::Cancelled(reason), now_ns)
+                self.retire_owned(&mut operation, RetirementReason::Cancelled(reason), now_ns)?;
+                Ok(false)
             }
-            LoadStage::Resident | LoadStage::Retired => {
-                self.operations.insert(operation_id, operation);
+            LoadStage::Retired => Ok(false),
+            LoadStage::Resident => unreachable!("resident operations publish in place"),
+        })();
+        match cleanup {
+            Ok(retain) => {
+                if retain {
+                    self.operations.insert(operation_id, operation);
+                }
                 Ok(())
+            }
+            Err(error) => {
+                self.operations.insert(operation_id, operation);
+                Err(error)
             }
         }
     }
 
     fn retire_owned(
         &mut self,
-        mut operation: LoadOp,
+        operation: &mut LoadOp,
         reason: RetirementReason,
         now_ns: u64,
     ) -> Result<(), RegistryError> {
+        self.preflight_retirement(operation)?;
         for grant in [
             &mut operation.read_grant,
             &mut operation.upload_grant,
+            &mut operation.install_grant,
             &mut operation.logical_grant,
         ] {
-            if let Some(mut grant) = grant.take() {
-                self.resources.release_all_held(&mut grant)?;
+            if let Some(grant) = grant.as_mut() {
+                self.resources.release_all_held(grant)?;
             }
+            *grant = None;
         }
-        self.transition(&mut operation, LoadStage::Retired)?;
+        self.transition(operation, LoadStage::Retired)?;
         let record = operation
             .retirement
             .as_mut()
@@ -1885,14 +2468,55 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
     }
 
     fn release_continuation(&mut self, continuation: ContinuationId) -> Result<(), RegistryError> {
-        if let Some(state) = self.continuations.remove(&continuation) {
-            if let Some(mut ready) = state.ready_grant {
-                self.resources.release_all_held(&mut ready)?;
+        let Some(mut state) = self.continuations.remove(&continuation) else {
+            return Ok(());
+        };
+        let keys = state.materializations.iter().copied().collect::<Vec<_>>();
+        for key in keys {
+            let still_owned = self
+                .continuations
+                .values()
+                .any(|other| other.materializations.contains(&key));
+            if still_owned {
+                state.materializations.remove(&key);
+                continue;
             }
-            let mut grant = state.grant;
-            self.resources.release_all_held(&mut grant)?;
+            if let Some(resident) = self.residencies.get_mut(&key)
+                && resident.lease == ExecutionLeaseState::Held
+            {
+                resident.lease = ExecutionLeaseState::ReleasePending;
+                self.pending_lease_releases.insert(key);
+            }
+            state.materializations.remove(&key);
         }
+        if let Some(mut ready) = state.ready_grant {
+            self.resources.release_all_held(&mut ready)?;
+        }
+        self.resources.release_all_held(&mut state.grant)?;
         Ok(())
+    }
+
+    pub(crate) fn finish_pending_lease_releases(&mut self) -> Result<(), RegistryError> {
+        while self.retry_one_lease_release()?.is_some() {}
+        Ok(())
+    }
+
+    fn retry_one_lease_release(&mut self) -> Result<Option<MaterializationKey>, RegistryError> {
+        let Some(key) = self.pending_lease_releases.first().copied() else {
+            return Ok(None);
+        };
+        let Some(resident) = self.residencies.get_mut(&key) else {
+            self.pending_lease_releases.remove(&key);
+            return Ok(Some(key));
+        };
+        if resident.lease != ExecutionLeaseState::ReleasePending {
+            self.pending_lease_releases.remove(&key);
+            return Ok(Some(key));
+        }
+        self.provider.release_execution_lease(key)?;
+        resident.lease = ExecutionLeaseState::Released;
+        self.pending_lease_releases.remove(&key);
+        Ok(Some(key))
     }
 
     fn try_admit_ready(&mut self, continuation: ContinuationId) -> Result<bool, RegistryError> {
@@ -1907,7 +2531,7 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
         match self.resources.acquire(
             continuation.get(),
             class,
-            [HardResourceClaim::new(ResourceKind::ReadyCohort, 1)],
+            [PhysicalResourceClaim::new(ResourceKind::ReadyCohort, 1)],
         ) {
             Ok(grant) => {
                 self.continuations
@@ -1917,9 +2541,9 @@ impl<B: MaterializationBackend> LoadRegistry<B> {
                 Ok(true)
             }
             Err(
-                HardResourceError::TemporarilyUnavailable { .. }
-                | HardResourceError::DemandReserve { .. }
-                | HardResourceError::ExceedsCapacity { .. },
+                PhysicalResourceError::TemporarilyUnavailable { .. }
+                | PhysicalResourceError::DemandReserve { .. }
+                | PhysicalResourceError::ExceedsCapacity { .. },
             ) => Ok(false),
             Err(error) => Err(error.into()),
         }
@@ -2009,19 +2633,32 @@ fn action_matches(operation: &LoadOp, action: LoadActionKind) -> bool {
     )
 }
 
-fn read_claims(bytes: u64) -> [HardResourceClaim; 3] {
+fn read_claims(plan: MaterializationResourcePlan) -> [PhysicalResourceClaim; 3] {
     [
-        HardResourceClaim::new(ResourceKind::Sqe, 1),
-        HardResourceClaim::new(ResourceKind::PinnedSlab, bytes),
-        HardResourceClaim::new(ResourceKind::ReadBytes, bytes),
+        PhysicalResourceClaim::new(ResourceKind::ReadSlot, plan.demand.read_slots),
+        PhysicalResourceClaim::new(ResourceKind::PinnedHostBytes, plan.demand.pinned_host_bytes),
+        PhysicalResourceClaim::new(
+            ResourceKind::StorageReadBytes,
+            plan.demand.storage_read_bytes,
+        ),
     ]
 }
 
-fn upload_claims(bytes: u64) -> [HardResourceClaim; 3] {
+fn upload_claims(plan: MaterializationResourcePlan) -> [PhysicalResourceClaim; 3] {
     [
-        HardResourceClaim::new(ResourceKind::UploadSlot, 1),
-        HardResourceClaim::new(ResourceKind::UploadBytes, bytes),
-        HardResourceClaim::new(ResourceKind::ExpertFrame, bytes),
+        PhysicalResourceClaim::new(ResourceKind::UploadSlot, plan.demand.upload_slots),
+        PhysicalResourceClaim::new(ResourceKind::UploadBytes, plan.demand.h2d_bytes),
+        PhysicalResourceClaim::new(ResourceKind::ResidentBytes, plan.resident_bytes),
+    ]
+}
+
+fn install_claims(plan: MaterializationResourcePlan) -> [PhysicalResourceClaim; 2] {
+    [
+        PhysicalResourceClaim::new(ResourceKind::InstallSlot, plan.demand.install_slots),
+        PhysicalResourceClaim::new(
+            ResourceKind::DeviceInstallBytes,
+            plan.demand.device_install_bytes,
+        ),
     ]
 }
 

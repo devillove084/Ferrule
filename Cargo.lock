@@ -664,7 +664,6 @@ version = "0.2.0"
 dependencies = [
  "ahash",
  "ferrule-common",
- "ferrule-cuda",
  "ferrule-model",
  "serde",
  "tokio",

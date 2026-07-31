@@ -11,12 +11,11 @@ categories = ["science", "machine-learning"]
 
 [features]
 default = []
-cuda = ["dep:ferrule-cuda", "ferrule-cuda/cuda", "ferrule-model/cuda"]
+cuda = ["ferrule-model/cuda"]
 
 [dependencies]
 ferrule-common = { version = "0.2.0", path = "../ferrule-common" }
 ferrule-model = { version = "0.2.0", path = "../ferrule-model" }
-ferrule-cuda = { version = "0.2.0", path = "../ferrule-cuda", optional = true }
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1"
 tokio = { version = "1", features = ["macros", "rt", "sync"] }

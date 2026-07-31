@@ -25,6 +25,39 @@ where
     local.block_on(&runtime, future)
 }
 
+/// Default per-position proposal confidence threshold used by every
+/// interactive/benchmark entry point until the calibrated batch-wide
+/// scheduler lands.
+pub(crate) const DEFAULT_PROPOSAL_CONFIDENCE_THRESHOLD: f32 = 0.2;
+
+/// Driver configuration shared by all resident-model entry points.
+pub(crate) fn resident_driver_config(
+    ctx_size: usize,
+    stop_at_eos: bool,
+) -> ResidentTopKDriverConfig {
+    ResidentTopKDriverConfig {
+        ctx_size,
+        stop_at_eos,
+        proposal_confidence_threshold: DEFAULT_PROPOSAL_CONFIDENCE_THRESHOLD,
+    }
+}
+
+/// Scheduler configuration for the single-sequence interactive/benchmark path.
+/// Mixed batching is disabled explicitly so the decision is not left to a
+/// default that may drift.
+#[cfg(feature = "cuda")]
+pub(crate) fn single_sequence_scheduler_config(
+    prefill_chunk_size: usize,
+) -> ResidentSchedulerConfig {
+    ResidentSchedulerConfig {
+        prefill_chunk_size: prefill_chunk_size.max(1),
+        max_active_sequences: 1,
+        max_decode_batch: 1,
+        allow_mixed_batches: false,
+        ..ResidentSchedulerConfig::default()
+    }
+}
+
 #[cfg(feature = "cuda")]
 pub(crate) fn build_resident_topk_driver<R>(
     runner: R,

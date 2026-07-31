@@ -27,28 +27,30 @@ use ferrule_common::io_protocol::{LoadStage, OperationId, RetirementReason};
 use ferrule_model::{
     ChatTemplate, ModelExecutionBackend,
     models::deepseek_v4::{
-        DeepSeekV4ArtifactModel, DeepSeekV4AttentionProfileStats, DeepSeekV4LayerProfileStats,
+        DeepSeekV4AttentionProfileStats, DeepSeekV4Checkpoint, DeepSeekV4LayerProfileStats,
         DeepSeekV4ObservabilitySnapshot, DeepSeekV4OperatorRuntimeCounters,
         DeepSeekV4OutputProfileStats, DeepSeekV4PrepareOptions, DeepSeekV4Runner,
     },
     moe::ExpertPredictionStats,
 };
 #[cfg(feature = "cuda")]
-use ferrule_runtime::io::{OutputTokenId, RuntimeMaterializationAdapterStats};
+use ferrule_runtime::io::{OutputTokenId, RuntimeMaterializationResolverStats};
 #[cfg(feature = "cuda")]
 use ferrule_runtime::{
     FixedSequenceSlotPool, GenerateRequest, LocalResidentInferenceEngine, RequestId,
-    ResidentActionKind, ResidentDriverStep, ResidentSchedulerConfig, ResidentTopKDriverConfig,
-    ResidentTopKDriverStats, SessionId, SpeculativeMetrics,
+    ResidentActionKind, ResidentDriverStep, ResidentTopKDriverStats, SessionId, SpeculativeMetrics,
 };
 #[cfg(feature = "cuda")]
 use ferrule_runtime::{ResourceClass, ResourceKind};
 
 #[cfg(feature = "cuda")]
-use super::resident::{block_on_local_inference, build_resident_topk_driver};
+use super::resident::{
+    block_on_local_inference, build_resident_topk_driver, resident_driver_config,
+    single_sequence_scheduler_config,
+};
 
 #[cfg(feature = "cuda")]
-pub(crate) const CLI_RUNTIME_SCHEMA_VERSION: u32 = 3;
+pub(crate) const CLI_RUNTIME_SCHEMA_VERSION: u32 = 4;
 
 #[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -134,7 +136,7 @@ struct ExternalSnapshotReconciliation {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RuntimeMaterializationStats {
     dependencies: RuntimeDependencyStats,
-    adapter: RuntimeMaterializationAdapterStats,
+    resolver: RuntimeMaterializationResolverStats,
     stages: RuntimeMaterializationStageStats,
     registry: RuntimeLoadRegistryStats,
     critical_path: RuntimeCriticalPathStats,
@@ -276,7 +278,7 @@ pub fn cmd_bench_interactive(
         .ok_or_else(|| anyhow::anyhow!("output-head chunk byte size overflow"))?;
     let max_tensor_bytes = output_head_chunk_bytes.max(128 * 1024 * 1024);
     let load_start = Instant::now();
-    let model = DeepSeekV4ArtifactModel::load_hf_with_limit(model_path, max_tensor_bytes)?;
+    let model = DeepSeekV4Checkpoint::load_hf_with_limit(model_path, max_tensor_bytes)?;
     let runner =
         DeepSeekV4Runner::new_with_operator_backend(model, options, ModelExecutionBackend::Cuda)?;
     let artifact_load_us = duration_us(load_start.elapsed());
@@ -510,18 +512,8 @@ async fn run_with_resident_driver_async(
     json: bool,
     report: &mut InteractiveBenchReport,
 ) -> anyhow::Result<()> {
-    let scheduler_config = ResidentSchedulerConfig {
-        prefill_chunk_size: report.prefill_chunk_size.max(1),
-        max_active_sequences: 1,
-        max_decode_batch: 1,
-        allow_mixed_batches: false,
-        ..Default::default()
-    };
-    let driver_config = ResidentTopKDriverConfig {
-        ctx_size: gen_cfg.ctx_size,
-        stop_at_eos: gen_cfg.stop_at_eos,
-        proposal_confidence_threshold: 0.2,
-    };
+    let scheduler_config = single_sequence_scheduler_config(report.prefill_chunk_size);
+    let driver_config = resident_driver_config(gen_cfg.ctx_size, gen_cfg.stop_at_eos);
     let build_driver = |runner: DeepSeekV4Runner| {
         let schema = runner.kv_layout_schema().clone();
         build_resident_topk_driver(runner, Box::new(schema), scheduler_config, driver_config)
@@ -839,8 +831,8 @@ pub(crate) fn runtime_materialization_snapshot(
                 raw_operation
             )
         })?;
-        let bytes = if let Some(active) = registry.operation(operation) {
-            active.bytes()
+        let plan = if let Some(active) = registry.operation(operation) {
+            active.plan()
         } else {
             let key = registry.key_for_operation(operation).ok_or_else(|| {
                 anyhow::anyhow!(
@@ -848,26 +840,30 @@ pub(crate) fn runtime_materialization_snapshot(
                     raw_operation
                 )
             })?;
-            registry.load_request(key, ResourceClass::Decode)?.bytes
+            registry.load_request(key, ResourceClass::Demand)?.plan
         };
 
         for stage in history {
             match stage {
                 LoadStage::ReadSubmitted => {
                     stages.read_stages = stages.read_stages.saturating_add(1);
-                    stages.read_bytes = stages.read_bytes.saturating_add(bytes);
+                    stages.read_bytes = stages
+                        .read_bytes
+                        .saturating_add(plan.demand.storage_read_bytes);
                 }
                 LoadStage::UploadSubmitted => {
                     stages.upload_stages = stages.upload_stages.saturating_add(1);
-                    stages.upload_bytes = stages.upload_bytes.saturating_add(bytes);
+                    stages.upload_bytes = stages.upload_bytes.saturating_add(plan.demand.h2d_bytes);
                 }
                 LoadStage::Installing => {
                     stages.install_stages = stages.install_stages.saturating_add(1);
-                    stages.install_bytes = stages.install_bytes.saturating_add(bytes);
+                    stages.install_bytes = stages
+                        .install_bytes
+                        .saturating_add(plan.demand.device_install_bytes);
                 }
                 LoadStage::Resident => {
                     stages.publish_stages = stages.publish_stages.saturating_add(1);
-                    stages.publish_bytes = stages.publish_bytes.saturating_add(bytes);
+                    stages.publish_bytes = stages.publish_bytes.saturating_add(plan.resident_bytes);
                 }
                 LoadStage::Failed => stages.failures = stages.failures.saturating_add(1),
                 LoadStage::Stale => stages.stale = stages.stale.saturating_add(1),
@@ -918,7 +914,7 @@ pub(crate) fn runtime_materialization_snapshot(
             resident: operator.expert_residency_stats.resident,
             waiting,
         },
-        adapter: driver.driver().materialization_adapter_stats(),
+        resolver: driver.driver().materialization_resolver_stats(),
         stages,
         registry: RuntimeLoadRegistryStats {
             operations_created: registry_stats.operations_created,
@@ -969,15 +965,11 @@ pub(crate) fn runtime_materialization_stats_delta(
             resident: after.dependencies.resident,
             waiting: after.dependencies.waiting,
         },
-        adapter: RuntimeMaterializationAdapterStats {
+        resolver: RuntimeMaterializationResolverStats {
             resolves: after
-                .adapter
+                .resolver
                 .resolves
-                .saturating_sub(before.adapter.resolves),
-            logical_detaches: after
-                .adapter
-                .logical_detaches
-                .saturating_sub(before.adapter.logical_detaches),
+                .saturating_sub(before.resolver.resolves),
         },
         stages: RuntimeMaterializationStageStats {
             read_stages: after
@@ -1889,13 +1881,15 @@ fn hard_resource_high_water_json(high_water: &[(ResourceKind, u64)]) -> serde_js
 #[cfg(feature = "cuda")]
 fn resource_kind_name(kind: ResourceKind) -> &'static str {
     match kind {
-        ResourceKind::Sqe => "sqe",
-        ResourceKind::PinnedSlab => "pinned_slab",
-        ResourceKind::ReadBytes => "read_bytes",
+        ResourceKind::ReadSlot => "read_slot",
+        ResourceKind::PinnedHostBytes => "pinned_host_bytes",
+        ResourceKind::StorageReadBytes => "storage_read_bytes",
         ResourceKind::UploadSlot => "upload_slot",
         ResourceKind::UploadBytes => "upload_bytes",
-        ResourceKind::ExpertFrame => "expert_frame",
-        ResourceKind::Lease => "lease",
+        ResourceKind::InstallSlot => "install_slot",
+        ResourceKind::DeviceInstallBytes => "device_install_bytes",
+        ResourceKind::ResidentBytes => "resident_bytes",
+        ResourceKind::ResidencyLease => "residency_lease",
         ResourceKind::Arena => "arena",
         ResourceKind::KvPage => "kv_page",
         ResourceKind::Continuation => "continuation",
@@ -1916,9 +1910,8 @@ pub(crate) fn runtime_materialization_stats_json(
             "resident": stats.dependencies.resident,
             "waiting": stats.dependencies.waiting,
         },
-        "adapter": {
-            "resolves": stats.adapter.resolves,
-            "logical_detaches": stats.adapter.logical_detaches,
+        "resolver": {
+            "resolves": stats.resolver.resolves,
         },
         "stages": {
             "read": { "count": stats.stages.read_stages, "bytes": stats.stages.read_bytes },
@@ -1977,12 +1970,11 @@ pub(crate) fn runtime_materialization_stats_json(
 #[cfg(feature = "cuda")]
 pub(crate) fn print_runtime_materialization_summary(stats: &RuntimeMaterializationStats) {
     println!(
-        "runtime_materialization: selected={} resident={} waiting={} resolves={} detaches={}",
+        "runtime_materialization: selected={} resident={} waiting={} resolves={}",
         stats.dependencies.selected,
         stats.dependencies.resident,
         stats.dependencies.waiting,
-        stats.adapter.resolves,
-        stats.adapter.logical_detaches,
+        stats.resolver.resolves,
     );
     println!(
         "materialization_stages:  read={}/{}B upload={}/{}B install={}/{}B publish={}/{}B failures={} stale={} cancelled={}",
@@ -2191,7 +2183,7 @@ mod tests {
         before.dependencies.unique_selected = 8;
         before.dependencies.resident = 6;
         before.dependencies.waiting = 4;
-        before.adapter.resolves = 9;
+        before.resolver.resolves = 9;
         before.stages.read_stages = 7;
         before.stages.read_bytes = 700;
         before.registry.active_operations = 5;
@@ -2203,7 +2195,7 @@ mod tests {
         after.dependencies.unique_selected = 11;
         after.dependencies.resident = 2;
         after.dependencies.waiting = 3;
-        after.adapter.resolves = 14;
+        after.resolver.resolves = 14;
         after.stages.read_stages = 5;
         after.stages.read_bytes = 900;
         after.registry.active_operations = 1;
@@ -2219,7 +2211,7 @@ mod tests {
         assert_eq!(delta.dependencies.unique_selected, 3);
         assert_eq!(delta.dependencies.resident, 2);
         assert_eq!(delta.dependencies.waiting, 3);
-        assert_eq!(delta.adapter.resolves, 5);
+        assert_eq!(delta.resolver.resolves, 5);
         assert_eq!(delta.stages.read_stages, 0);
         assert_eq!(delta.stages.read_bytes, 200);
         assert_eq!(delta.registry.active_operations, 1);
@@ -2303,7 +2295,7 @@ mod tests {
     }
 
     #[test]
-    fn v3_schema_keeps_registry_as_the_physical_authority() {
+    fn v4_schema_keeps_registry_as_the_physical_authority() {
         let mut report = InteractiveBenchReport::default();
         report.runtime_driver_stats.hard_resource_high_water = ResourceKind::ALL
             .into_iter()
@@ -2311,21 +2303,22 @@ mod tests {
             .collect();
         let json = interactive_bench_report_json(&report);
         assert_eq!(json["schema_version"], CLI_RUNTIME_SCHEMA_VERSION);
-        assert!(json["runtime_materialization"]["adapter"]["resolves"].is_number());
+        assert!(json["runtime_materialization"]["resolver"]["resolves"].is_number());
         assert!(
-            json["runtime_materialization"]["adapter"]
+            json["runtime_materialization"]["resolver"]
                 .get("physical_submissions")
                 .is_none()
         );
         assert!(json["runtime_materialization"]["load_registry"]["operations_created"].is_number());
         assert!(json["runtime_materialization"]["critical_path"]["per_external_token"].is_array());
-        assert_eq!(
-            json["runtime_driver_stats"]["hard_resource_high_water"]
-                .as_object()
-                .unwrap()
-                .len(),
-            ResourceKind::ALL.len()
-        );
+        let high_water = json["runtime_driver_stats"]["hard_resource_high_water"]
+            .as_object()
+            .unwrap();
+        assert_eq!(high_water.len(), ResourceKind::ALL.len());
+        assert_eq!(high_water["resident_bytes"], 1);
+        assert_eq!(high_water["residency_lease"], 1);
+        assert!(!high_water.contains_key("expert_frame"));
+        assert!(!high_water.contains_key("lease"));
 
         let encoded = serde_json::to_string(&json).unwrap();
         for legacy in [

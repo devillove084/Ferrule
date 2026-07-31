@@ -9,8 +9,8 @@
 
 use ferrule_common::{Error, Result};
 
-use crate::artifact::format::dequantize_fp4_e2m1_with_e8m0_scales;
-use crate::artifact::linear::ArtifactActivationQuantization;
+use crate::checkpoint::encoding::dequantize_fp4_e2m1_with_e8m0_scales;
+use crate::checkpoint::weight::ActivationQuantization;
 use crate::moe::streaming::{ExpertComputeBundle, ExpertLinearFormat, ExpertLinearPayload};
 
 /// Executes a single routed expert for one activation vector.
@@ -45,7 +45,7 @@ pub struct CpuReferenceExpertExecutor {
     /// Optional activation quantization to apply before quantized expert linears.
     /// This is disabled by default for tiny fixtures and enabled by model-family
     /// boundaries whose official artifact contract requires quantized activations.
-    pub activation_quantization: Option<ArtifactActivationQuantization>,
+    pub activation_quantization: Option<ActivationQuantization>,
 }
 
 impl CpuReferenceExpertExecutor {
@@ -58,7 +58,7 @@ impl CpuReferenceExpertExecutor {
 
     pub fn with_activation_quantization(
         mut self,
-        activation_quantization: ArtifactActivationQuantization,
+        activation_quantization: ActivationQuantization,
     ) -> Self {
         self.activation_quantization = Some(activation_quantization);
         self

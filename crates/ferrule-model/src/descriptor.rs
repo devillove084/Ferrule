@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::gguf::{GgufFile, GgufValue};
 use ferrule_common::{Error, Result};
 
-use crate::artifact::{HfSafetensorsIndex, HfSafetensorsInventory};
+use crate::checkpoint::{HfSafetensorsIndex, HfSafetensorsInventory};
 use crate::families;
 use crate::spec::{
     AttentionKind, ModelFamily, MoeSpec, QuantFormatCount, RouterKind, TransformerSemantics,

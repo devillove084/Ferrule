@@ -2,16 +2,20 @@ use std::collections::BTreeSet;
 use std::env;
 use std::path::{Path, PathBuf};
 
-use ferrule_model::{
-    ArtifactLinearFormat, ArtifactLinearPayload, ArtifactTensorReader, ArtifactTensorSlice,
-    ExpertComputeBundle, ExpertId, ExpertLinearFormat, ExpertLoadReason, ExpertLoadSource,
-    ExpertStorageTier, ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader,
-    HfSafetensorsInventory, HfSafetensorsTensorInfo, HyperConnectionConfig, ModelFamily,
-    TensorRole, TokenizerHandle, bind_attention_from_hf, bind_hyper_connection_from_hf,
-    bind_hyper_connection_head_from_hf, bind_router_from_hf, bind_shared_swiglu_ffn_from_hf,
+use crate::{
+    CheckpointTensorReader, CheckpointTensorSlice, ExpertComputeBundle, ExpertId,
+    ExpertLinearFormat, ExpertLoadReason, ExpertLoadSource, ExpertStorageTier,
+    ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader, HfSafetensorsInventory,
+    HfSafetensorsTensorInfo, HyperConnectionConfig, LinearWeight, LinearWeightFormat, ModelFamily,
+    TensorRole, TokenizerHandle,
     families::deepseek_v4,
-    models::deepseek_v4::DeepSeekV4ArtifactModel,
     semantic::{AttentionTensorKind, HyperConnectionStage, RouterTensorKind},
+};
+
+use super::DeepSeekV4Checkpoint;
+use super::checkpoint_binding::{
+    bind_attention_from_hf, bind_hyper_connection_from_hf, bind_hyper_connection_head_from_hf,
+    bind_router_from_hf, bind_shared_swiglu_ffn_from_hf,
 };
 
 #[test]
@@ -128,7 +132,7 @@ fn local_deepseek_v4_shared_expert_binds_real_layer0_if_present() {
         &model_dir,
         0,
         &shared,
-        &ArtifactTensorReader::new(64 * 1024 * 1024),
+        &CheckpointTensorReader::new(64 * 1024 * 1024),
         deepseek_v4::SWIGLU_LIMIT,
     )
     .expect("layer 0 shared expert should bind into artifact linears");
@@ -180,7 +184,7 @@ fn local_deepseek_v4_router_binds_hash_and_score_layers_if_present() {
         deepseek_v4::NUM_LAYERS - deepseek_v4::NUM_HASH_LAYERS
     );
 
-    let reader = ArtifactTensorReader::new(64 * 1024 * 1024);
+    let reader = CheckpointTensorReader::new(64 * 1024 * 1024);
     let hash_router = bind_router_from_hf(&model_dir, 0, &routers, &reader)
         .expect("layer 0 hash router should bind");
     assert_eq!(
@@ -232,22 +236,21 @@ fn local_deepseek_v4_artifact_linear_reads_attention_fp8_pair_if_present() {
     assert_eq!(weight.dtype, "F8_E4M3");
     assert_eq!(scale.dtype, "F8_E8M0");
 
-    let reader = ArtifactTensorReader::new(64 * 1024 * 1024);
+    let reader = CheckpointTensorReader::new(64 * 1024 * 1024);
     let weight = reader
-        .read_slice(&ArtifactTensorSlice::from_hf_inventory(&model_dir, weight))
+        .read_slice(&CheckpointTensorSlice::from_hf_inventory(
+            &model_dir, weight,
+        ))
         .expect("wq_a weight should be readable as a bounded artifact tensor");
     let scale = reader
-        .read_slice(&ArtifactTensorSlice::from_hf_inventory(&model_dir, scale))
+        .read_slice(&CheckpointTensorSlice::from_hf_inventory(&model_dir, scale))
         .expect("wq_a scale should be readable as a bounded artifact tensor");
-    let linear = ArtifactLinearPayload::from_weight_and_scale(
-        TensorRole::AttentionLatentQueryA,
-        weight,
-        Some(scale),
-    )
-    .expect("wq_a weight/scale should infer an FP8 artifact linear format");
+    let linear =
+        LinearWeight::from_weight_and_scale(TensorRole::AttentionLatentQueryA, weight, Some(scale))
+            .expect("wq_a weight/scale should infer an FP8 artifact linear format");
     assert_eq!(
         linear.format,
-        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+        LinearWeightFormat::Fp8E4M3WithE8M0Scale {
             out_features: deepseek_v4::Q_LORA_RANK,
             in_features: deepseek_v4::HIDDEN_SIZE,
             block_m: 128,
@@ -286,12 +289,12 @@ fn local_deepseek_v4_attention_and_hc_bind_real_artifacts_if_present() {
     assert_eq!(compressor, 164);
     assert_eq!(indexer, 147);
 
-    let reader = ArtifactTensorReader::new(64 * 1024 * 1024);
+    let reader = CheckpointTensorReader::new(64 * 1024 * 1024);
     let layer0 = bind_attention_from_hf(&model_dir, 0, &attention, &reader)
         .expect("layer 0 attention artifact payload should bind");
     assert_eq!(
         layer0.query_a.format,
-        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+        LinearWeightFormat::Fp8E4M3WithE8M0Scale {
             out_features: deepseek_v4::Q_LORA_RANK,
             in_features: deepseek_v4::HIDDEN_SIZE,
             block_m: 128,
@@ -300,7 +303,7 @@ fn local_deepseek_v4_attention_and_hc_bind_real_artifacts_if_present() {
     );
     assert_eq!(
         layer0.query_b.format,
-        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+        LinearWeightFormat::Fp8E4M3WithE8M0Scale {
             out_features: deepseek_v4::NUM_HEADS * deepseek_v4::HEAD_DIM,
             in_features: deepseek_v4::Q_LORA_RANK,
             block_m: 128,
@@ -309,7 +312,7 @@ fn local_deepseek_v4_attention_and_hc_bind_real_artifacts_if_present() {
     );
     assert_eq!(
         layer0.key_value.format,
-        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+        LinearWeightFormat::Fp8E4M3WithE8M0Scale {
             out_features: deepseek_v4::HEAD_DIM,
             in_features: deepseek_v4::HIDDEN_SIZE,
             block_m: 128,
@@ -382,7 +385,7 @@ fn local_deepseek_v4_model_binds_top_level_if_present() {
         return;
     };
 
-    let model = DeepSeekV4ArtifactModel::load_hf_with_limit(&model_dir, 64 * 1024 * 1024)
+    let model = DeepSeekV4Checkpoint::load_hf_with_limit(&model_dir, 64 * 1024 * 1024)
         .expect("local DeepSeek V4 top-level artifact model should bind real metadata/HC head");
     assert_eq!(model.embedding.rows, deepseek_v4::VOCAB_SIZE);
     assert_eq!(model.embedding.cols, deepseek_v4::HIDDEN_SIZE);
@@ -390,7 +393,7 @@ fn local_deepseek_v4_model_binds_top_level_if_present() {
     assert_eq!(model.output_head.rows, deepseek_v4::VOCAB_SIZE);
     assert_eq!(model.output_head.cols, deepseek_v4::HIDDEN_SIZE);
     assert_eq!(model.hc_head.scale.len(), 1);
-    assert_eq!(model.model_info().backend, "deepseek-v4-artifact");
+    assert_eq!(model.model_info().backend, "deepseek-v4-checkpoint");
 }
 
 #[test]
@@ -399,7 +402,7 @@ fn local_deepseek_v4_model_binds_layer0_with_official_shapes_if_present() {
         return;
     };
 
-    let model = DeepSeekV4ArtifactModel::load_hf_with_limit(&model_dir, 64 * 1024 * 1024)
+    let model = DeepSeekV4Checkpoint::load_hf_with_limit(&model_dir, 64 * 1024 * 1024)
         .expect("local DeepSeek V4 artifact model should bind top-level state");
     let layer = model
         .bind_layer(0)
@@ -431,7 +434,7 @@ fn local_deepseek_v4_compressed_attention_payloads_bind_official_shapes_if_prese
         return;
     };
 
-    let model = DeepSeekV4ArtifactModel::load_hf_with_limit(&model_dir, 64 * 1024 * 1024)
+    let model = DeepSeekV4Checkpoint::load_hf_with_limit(&model_dir, 64 * 1024 * 1024)
         .expect("local DeepSeek V4 artifact model should bind top-level state");
     let layer2 = model
         .bind_layer(2)
@@ -490,7 +493,7 @@ fn local_deepseek_v4_layer_state_registers_real_routed_expert_artifacts_if_prese
         return;
     };
 
-    let model = DeepSeekV4ArtifactModel::load_hf_with_limit(&model_dir, 64 * 1024 * 1024)
+    let model = DeepSeekV4Checkpoint::load_hf_with_limit(&model_dir, 64 * 1024 * 1024)
         .expect("local DeepSeek V4 artifact model should bind top-level state");
     let state = model
         .new_layer_sequence_state(0)

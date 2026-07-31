@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use ferrule_common::{CompletionHub, Error, ExpertResidencyStats, Result};
 
-use crate::artifact::binding::RouterArtifactPayload;
-use crate::artifact::linear::ArtifactLinearPayload;
+use crate::checkpoint::weight::LinearWeight;
+use crate::moe::routing::RouterWeights;
 
 use crate::attention_backend::{SparseAttentionSpec, sparse_attention_reference};
 use crate::execution::ModelExecutionBackend;
@@ -28,7 +28,7 @@ use super::config::DeepSeekV4AttentionConfig;
 #[cfg(feature = "cuda")]
 use super::cuda_cache::DeepSeekV4CudaOperatorCache;
 #[cfg(feature = "cuda")]
-use super::expert_materializer::DeepSeekV4SharedExpertSubsystem;
+use super::cuda_materialization::DeepSeekV4SharedExpertSubsystem;
 use super::helpers::{grouped_output_a, rms_norm, rms_norm_heads_in_place};
 use super::prepared::DeepSeekV4ExecutionPolicy;
 #[cfg(feature = "cuda")]
@@ -477,7 +477,7 @@ impl DeepSeekV4OperatorContext {
 
     pub(crate) fn linear_matvec(
         &mut self,
-        linear: &ArtifactLinearPayload,
+        linear: &LinearWeight,
         input: &[f32],
     ) -> Result<Vec<f32>> {
         linear.reference_matvec(input)
@@ -485,7 +485,7 @@ impl DeepSeekV4OperatorContext {
 
     pub(crate) fn linear_rows(
         &mut self,
-        linear: &ArtifactLinearPayload,
+        linear: &LinearWeight,
         input: &[f32],
         rows: usize,
     ) -> Result<Vec<f32>> {
@@ -526,7 +526,7 @@ impl DeepSeekV4OperatorContext {
 
     pub(crate) fn grouped_output_a(
         &mut self,
-        output_a: &ArtifactLinearPayload,
+        output_a: &LinearWeight,
         context: &[f32],
         cfg: DeepSeekV4AttentionConfig,
         layer: usize,
@@ -605,7 +605,7 @@ impl DeepSeekV4OperatorContext {
         layer: usize,
         input: &[f32],
         token_id: u32,
-        router: &RouterArtifactPayload,
+        router: &RouterWeights,
         predicted_experts: &[usize],
         router_policy: &ExpertRouterPolicy,
         planner: &mut ExpertStreamingPlanner,
@@ -635,7 +635,7 @@ impl DeepSeekV4OperatorContext {
         layer: usize,
         input: &[f32],
         token_ids: &[u32],
-        router: &RouterArtifactPayload,
+        router: &RouterWeights,
         predicted_experts: &[usize],
         router_policy: &ExpertRouterPolicy,
         planner: &mut ExpertStreamingPlanner,

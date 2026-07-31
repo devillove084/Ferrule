@@ -353,7 +353,7 @@ pub(crate) fn resume_resumable_speculative_verification_cohort<R>(
     page_manager: &mut KvPageManager,
     source_states: &mut [R::SequenceState],
     mut pending: PendingSpeculativeVerificationCohort<R::SequenceState>,
-    leases: ferrule_common::ExpertLeaseSet,
+    leases: ferrule_common::ResidencyLeaseSet,
     retirements: &mut Vec<KvRetirement>,
 ) -> std::result::Result<
     SpeculativeCohortProgress<R::SequenceState>,

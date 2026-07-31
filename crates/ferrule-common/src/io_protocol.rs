@@ -19,8 +19,8 @@ pub type IoProtocolResult<T> = std::result::Result<T, IoProtocolError>;
 /// A fail-closed violation of an I/O protocol invariant.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum IoProtocolError {
-    #[error("invalid load key: {0}")]
-    InvalidLoadKey(&'static str),
+    #[error("invalid materialization key: {0}")]
+    InvalidMaterializationKey(&'static str),
     #[error("invalid waiter identity: {0}")]
     InvalidWaiterId(&'static str),
     #[error("a dependency set must contain at least one dependency")]
@@ -76,12 +76,12 @@ pub enum IoProtocolError {
     #[error("completion fence identity must be non-zero")]
     InvalidFenceContract,
     #[error("duplicate residency binding for {0:?}")]
-    DuplicateResidencyBinding(Box<LoadKey>),
+    DuplicateResidencyBinding(Box<MaterializationKey>),
     #[error("missing residency binding for {0:?}")]
-    MissingResidencyBinding(Box<LoadKey>),
+    MissingResidencyBinding(Box<MaterializationKey>),
     #[error("unexpected residency binding for {0:?}")]
-    UnexpectedResidencyBinding(Box<LoadKey>),
-    #[error("dependency {0:?} is not an expert-residency dependency")]
+    UnexpectedResidencyBinding(Box<MaterializationKey>),
+    #[error("dependency {0:?} is not a residency dependency")]
     NonResidencyDependency(Box<LogicalDependency>),
 }
 
@@ -220,6 +220,68 @@ define_u32_id! {
     DestinationSlotId
 }
 
+/// Semantic class of a resource whose physical placement may change while an
+/// execution is suspended. The identity is backend-neutral: CUDA weights,
+/// Metal buffers, host-spilled activations, gradients, and optimizer shards all
+/// participate in the same materialization protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum MaterializedResourceKind {
+    Parameter = 0,
+    RoutedExpert = 1,
+    KvState = 2,
+    ActivationCheckpoint = 3,
+    Gradient = 4,
+    OptimizerState = 5,
+}
+
+/// Stable model-relative identity of one independently materializable resource.
+///
+/// `group` and `item` are semantic coordinates assigned by the prepared
+/// executable, not destination slots. For routed experts they encode
+/// `(layer, expert)`; dense parameter bundles and training state use the same
+/// shape without leaking model-specific names into the runtime protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct MaterializedResourceId {
+    kind: MaterializedResourceKind,
+    group: u32,
+    item: u32,
+}
+
+impl MaterializedResourceId {
+    pub const fn new(kind: MaterializedResourceKind, group: u32, item: u32) -> Self {
+        Self { kind, group, item }
+    }
+
+    pub const fn routed_expert(layer: LayerId, expert: ExpertId) -> Self {
+        Self::new(
+            MaterializedResourceKind::RoutedExpert,
+            layer.get(),
+            expert.get(),
+        )
+    }
+
+    pub const fn kind(self) -> MaterializedResourceKind {
+        self.kind
+    }
+
+    pub const fn group(self) -> u32 {
+        self.group
+    }
+
+    pub const fn item(self) -> u32 {
+        self.item
+    }
+
+    pub const fn routed_expert_coordinates(self) -> Option<(LayerId, ExpertId)> {
+        if matches!(self.kind, MaterializedResourceKind::RoutedExpert) {
+            Some((LayerId::new(self.group), ExpertId::new(self.item)))
+        } else {
+            None
+        }
+    }
+}
+
 /// Exact waiter identity used by both waiter indices.
 ///
 /// The transaction, request generation, dependency-set epoch, and continuation
@@ -334,9 +396,9 @@ impl ContentHash {
 /// Versioned semantic artifact format identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
-pub struct ArtifactFormat(u32);
+pub struct PayloadEncodingId(u32);
 
-impl ArtifactFormat {
+impl PayloadEncodingId {
     pub const fn new(value: u32) -> Self {
         Self(value)
     }
@@ -350,28 +412,26 @@ impl ArtifactFormat {
 ///
 /// Keys differing in any field are distinct operations and must never coalesce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct LoadKey {
+pub struct MaterializationKey {
     model: ModelInstanceId,
     source: SourceIdentityHash,
     source_hash: ContentHash,
-    layer: LayerId,
-    expert: ExpertId,
-    artifact_format: ArtifactFormat,
+    resource: MaterializedResourceId,
+    payload_encoding: PayloadEncodingId,
     backend: BackendId,
     device: DeviceId,
     source_generation: SourceGeneration,
     destination_generation: DestinationGeneration,
 }
 
-impl LoadKey {
+impl MaterializationKey {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         model: ModelInstanceId,
         source: SourceIdentityHash,
         source_hash: ContentHash,
-        layer: LayerId,
-        expert: ExpertId,
-        artifact_format: ArtifactFormat,
+        resource: MaterializedResourceId,
+        payload_encoding: PayloadEncodingId,
         backend: BackendId,
         device: DeviceId,
         source_generation: SourceGeneration,
@@ -381,9 +441,8 @@ impl LoadKey {
             model,
             source,
             source_hash,
-            layer,
-            expert,
-            artifact_format,
+            resource,
+            payload_encoding,
             backend,
             device,
             source_generation,
@@ -395,32 +454,32 @@ impl LoadKey {
 
     pub fn validate(&self) -> IoProtocolResult<()> {
         if self.model.is_zero() {
-            return Err(IoProtocolError::InvalidLoadKey(
+            return Err(IoProtocolError::InvalidMaterializationKey(
                 "model instance ID must be non-zero",
             ));
         }
         if self.source.is_zero() {
-            return Err(IoProtocolError::InvalidLoadKey(
+            return Err(IoProtocolError::InvalidMaterializationKey(
                 "source identity hash must be non-zero",
             ));
         }
         if self.source_hash.is_zero() {
-            return Err(IoProtocolError::InvalidLoadKey(
+            return Err(IoProtocolError::InvalidMaterializationKey(
                 "source content hash must be non-zero",
             ));
         }
-        if self.artifact_format.get() == 0 {
-            return Err(IoProtocolError::InvalidLoadKey(
+        if self.payload_encoding.get() == 0 {
+            return Err(IoProtocolError::InvalidMaterializationKey(
                 "artifact format must be non-zero",
             ));
         }
         if self.source_generation.is_zero() {
-            return Err(IoProtocolError::InvalidLoadKey(
+            return Err(IoProtocolError::InvalidMaterializationKey(
                 "source generation must be non-zero",
             ));
         }
         if self.destination_generation.is_zero() {
-            return Err(IoProtocolError::InvalidLoadKey(
+            return Err(IoProtocolError::InvalidMaterializationKey(
                 "destination generation must be non-zero",
             ));
         }
@@ -439,16 +498,12 @@ impl LoadKey {
         self.source_hash
     }
 
-    pub const fn layer(self) -> LayerId {
-        self.layer
+    pub const fn resource(self) -> MaterializedResourceId {
+        self.resource
     }
 
-    pub const fn expert(self) -> ExpertId {
-        self.expert
-    }
-
-    pub const fn artifact_format(self) -> ArtifactFormat {
-        self.artifact_format
+    pub const fn payload_encoding(self) -> PayloadEncodingId {
+        self.payload_encoding
     }
 
     pub const fn backend(self) -> BackendId {
@@ -471,21 +526,21 @@ impl LoadKey {
 /// One exact logical condition on which model progress may wait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LogicalDependency {
-    /// Exact expert bytes must be published at the key's destination generation.
-    ExpertResident(LoadKey),
+    /// Exact resource bytes must be published at the key's destination generation.
+    ResourceResident(MaterializationKey),
     /// An owner operation must be fully drained and retired.
     OperationRetired(OperationId),
 }
 
 impl LogicalDependency {
-    pub fn expert_resident(key: LoadKey) -> IoProtocolResult<Self> {
+    pub fn resource_resident(key: MaterializationKey) -> IoProtocolResult<Self> {
         key.validate()?;
-        Ok(Self::ExpertResident(key))
+        Ok(Self::ResourceResident(key))
     }
 
     pub fn operation_retired(operation: OperationId) -> IoProtocolResult<Self> {
         if operation.is_zero() {
-            return Err(IoProtocolError::InvalidLoadKey(
+            return Err(IoProtocolError::InvalidMaterializationKey(
                 "retirement dependency operation ID must be non-zero",
             ));
         }
@@ -494,9 +549,9 @@ impl LogicalDependency {
 
     pub fn validate(&self) -> IoProtocolResult<()> {
         match self {
-            Self::ExpertResident(key) => key.validate(),
+            Self::ResourceResident(key) => key.validate(),
             Self::OperationRetired(operation) if operation.is_zero() => {
-                Err(IoProtocolError::InvalidLoadKey(
+                Err(IoProtocolError::InvalidMaterializationKey(
                     "retirement dependency operation ID must be non-zero",
                 ))
             }
@@ -504,9 +559,9 @@ impl LogicalDependency {
         }
     }
 
-    pub const fn load_key(self) -> Option<LoadKey> {
+    pub const fn materialization_key(self) -> Option<MaterializationKey> {
         match self {
-            Self::ExpertResident(key) => Some(key),
+            Self::ResourceResident(key) => Some(key),
             Self::OperationRetired(_) => None,
         }
     }
@@ -724,7 +779,7 @@ impl CompletionGeneration {
         }
     }
 
-    pub const fn for_key(key: LoadKey) -> Self {
+    pub const fn for_key(key: MaterializationKey) -> Self {
         Self::new(key.source_generation(), key.destination_generation())
     }
 }
@@ -761,7 +816,7 @@ pub enum CompletionOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletionEvent {
     pub operation: OperationId,
-    pub key: LoadKey,
+    pub key: MaterializationKey,
     pub stage: LoadStage,
     pub outcome: CompletionOutcome,
     pub bytes: u64,
@@ -772,7 +827,7 @@ pub struct CompletionEvent {
 impl CompletionEvent {
     pub const fn new(
         operation: OperationId,
-        key: LoadKey,
+        key: MaterializationKey,
         stage: LoadStage,
         outcome: CompletionOutcome,
         bytes: u64,
@@ -858,7 +913,7 @@ impl CompletionEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompletionExpectation {
     pub operation: OperationId,
-    pub key: LoadKey,
+    pub key: MaterializationKey,
     pub stage: LoadStage,
     pub bytes: u64,
 }
@@ -866,7 +921,7 @@ pub struct CompletionExpectation {
 impl CompletionExpectation {
     pub fn new(
         operation: OperationId,
-        key: LoadKey,
+        key: MaterializationKey,
         stage: LoadStage,
         bytes: u64,
     ) -> IoProtocolResult<Self> {
@@ -890,7 +945,7 @@ impl CompletionExpectation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetirementRecord {
     pub operation: OperationId,
-    pub key: LoadKey,
+    pub key: MaterializationKey,
     pub reason: RetirementReason,
     pub timestamp: CompletionTimestamp,
 }
@@ -903,11 +958,11 @@ pub struct RetirementRecord {
 #[derive(Debug)]
 #[must_use = "retirement authority must be consumed or explicitly retained"]
 pub struct RetirementToken {
-    authority: Option<(OperationId, LoadKey)>,
+    authority: Option<(OperationId, MaterializationKey)>,
 }
 
 impl RetirementToken {
-    pub fn new(operation: OperationId, key: LoadKey) -> IoProtocolResult<Self> {
+    pub fn new(operation: OperationId, key: MaterializationKey) -> IoProtocolResult<Self> {
         if operation.is_zero() {
             return Err(IoProtocolError::CompletionMismatch { field: "operation" });
         }
@@ -997,7 +1052,7 @@ impl RegisteredPinnedAlignedSlabLeaseDescriptor {
         }
         for (field, value) in [("offset", offset), ("length", len)] {
             if value == 0 && field == "length" {
-                return Err(IoProtocolError::InvalidLoadKey(
+                return Err(IoProtocolError::InvalidMaterializationKey(
                     "slab lease length must be non-zero",
                 ));
             }
@@ -1270,8 +1325,7 @@ impl RegisteredPinnedAlignedSlabLease {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ResidencyBinding {
     pub model: ModelInstanceId,
-    pub layer: LayerId,
-    pub expert: ExpertId,
+    pub resource: MaterializedResourceId,
     pub backend: BackendId,
     pub device: DeviceId,
     pub slot: DestinationSlotId,
@@ -1282,8 +1336,7 @@ impl ResidencyBinding {
     #[allow(clippy::too_many_arguments)]
     pub const fn new(
         model: ModelInstanceId,
-        layer: LayerId,
-        expert: ExpertId,
+        resource: MaterializedResourceId,
         backend: BackendId,
         device: DeviceId,
         slot: DestinationSlotId,
@@ -1291,8 +1344,7 @@ impl ResidencyBinding {
     ) -> Self {
         Self {
             model,
-            layer,
-            expert,
+            resource,
             backend,
             device,
             slot,
@@ -1304,20 +1356,19 @@ impl ResidencyBinding {
 /// Residency mapping proven to match one complete load identity and generation.
 ///
 /// It intentionally does not implement `Clone`; dispatch authority is moved into
-/// one [`ExpertLeaseSet`].
+/// one [`ResidencyLeaseSet`].
 #[derive(Debug, PartialEq, Eq)]
 pub struct ValidatedResidencyBinding {
-    key: LoadKey,
+    key: MaterializationKey,
     binding: ResidencyBinding,
 }
 
 impl ValidatedResidencyBinding {
-    pub fn new(key: LoadKey, binding: ResidencyBinding) -> IoProtocolResult<Self> {
+    pub fn new(key: MaterializationKey, binding: ResidencyBinding) -> IoProtocolResult<Self> {
         key.validate()?;
         for (field, matches) in [
             ("model", binding.model == key.model()),
-            ("layer", binding.layer == key.layer()),
-            ("expert", binding.expert == key.expert()),
+            ("resource", binding.resource == key.resource()),
             ("backend", binding.backend == key.backend()),
             ("device", binding.device == key.device()),
             (
@@ -1332,7 +1383,7 @@ impl ValidatedResidencyBinding {
         Ok(Self { key, binding })
     }
 
-    pub const fn key(&self) -> LoadKey {
+    pub const fn key(&self) -> MaterializationKey {
         self.key
     }
 
@@ -1344,7 +1395,7 @@ impl ValidatedResidencyBinding {
 /// Architecture-document name for a validated residency binding.
 pub type GenerationValidatedBinding = ValidatedResidencyBinding;
 
-/// Completion fence that keeps a whole expert lease set immutable after dispatch.
+/// Completion fence that keeps a whole residency lease set immutable after dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DispatchFenceContract {
     pub operation: OperationId,
@@ -1377,21 +1428,21 @@ impl DispatchFenceContract {
     }
 }
 
-/// Atomic dispatch authority for the complete exact expert set of one segment.
+/// Atomic dispatch authority for the complete exact resident set of one stage.
 ///
-/// The set is non-cloneable and canonicalized by `LoadKey`. Construction fails on
+/// The set is non-cloneable and canonicalized by `MaterializationKey`. Construction fails on
 /// partial, duplicate, extra, stale-generation, backend, or device bindings.
 #[derive(Debug)]
-#[must_use = "expert leases must remain live through their dispatch completion fence"]
-pub struct ExpertLeaseSet {
+#[must_use = "residency leases must remain live through their dispatch completion fence"]
+pub struct ResidencyLeaseSet {
     bindings: Box<[ValidatedResidencyBinding]>,
     mapping_epoch: MappingEpoch,
     completion_contract: DispatchFenceContract,
 }
 
-impl ExpertLeaseSet {
+impl ResidencyLeaseSet {
     pub fn new(
-        required: impl IntoIterator<Item = LoadKey>,
+        required: impl IntoIterator<Item = MaterializationKey>,
         bindings: impl IntoIterator<Item = ValidatedResidencyBinding>,
         mapping_epoch: MappingEpoch,
         completion_contract: DispatchFenceContract,
@@ -1464,7 +1515,7 @@ impl ExpertLeaseSet {
         let mut required = Vec::with_capacity(dependencies.len());
         for dependency in dependencies.iter().copied() {
             match dependency {
-                LogicalDependency::ExpertResident(key) => required.push(key),
+                LogicalDependency::ResourceResident(key) => required.push(key),
                 other => {
                     return Err(IoProtocolError::NonResidencyDependency(Box::new(other)));
                 }
@@ -1493,7 +1544,7 @@ impl ExpertLeaseSet {
         self.bindings.is_empty()
     }
 
-    pub fn binding_for(&self, key: LoadKey) -> Option<&ValidatedResidencyBinding> {
+    pub fn binding_for(&self, key: MaterializationKey) -> Option<&ValidatedResidencyBinding> {
         self.bindings
             .binary_search_by_key(&key, ValidatedResidencyBinding::key)
             .ok()
@@ -1539,21 +1590,19 @@ mod tests {
         model: u64,
         source: u8,
         content: u8,
-        layer: u32,
-        expert: u32,
+        resource: MaterializedResourceId,
         format: u32,
         backend: u64,
         device: u64,
         source_generation: u64,
         destination_generation: u64,
-    ) -> LoadKey {
-        LoadKey::new(
+    ) -> MaterializationKey {
+        MaterializationKey::new(
             ModelInstanceId::new(model),
             SourceIdentityHash::new(hash(source)),
             ContentHash::new(hash(content)),
-            LayerId::new(layer),
-            ExpertId::new(expert),
-            ArtifactFormat::new(format),
+            resource,
+            PayloadEncodingId::new(format),
             BackendId::new(backend),
             DeviceId::new(device),
             SourceGeneration::new(source_generation),
@@ -1562,17 +1611,20 @@ mod tests {
         .unwrap()
     }
 
-    fn key(expert: u32) -> LoadKey {
-        key_with(1, 2, 3, 4, expert, 5, 6, 7, 8, 9)
+    fn expert_resource(layer: u32, expert: u32) -> MaterializedResourceId {
+        MaterializedResourceId::routed_expert(LayerId::new(layer), ExpertId::new(expert))
     }
 
-    fn binding_for(key: LoadKey, slot: u32) -> ValidatedResidencyBinding {
+    fn key(expert: u32) -> MaterializationKey {
+        key_with(1, 2, 3, expert_resource(4, expert), 5, 6, 7, 8, 9)
+    }
+
+    fn binding_for(key: MaterializationKey, slot: u32) -> ValidatedResidencyBinding {
         ValidatedResidencyBinding::new(
             key,
             ResidencyBinding::new(
                 key.model(),
-                key.layer(),
-                key.expert(),
+                key.resource(),
                 key.backend(),
                 key.device(),
                 DestinationSlotId::new(slot),
@@ -1626,34 +1678,34 @@ mod tests {
     }
 
     #[test]
-    fn every_load_key_identity_dimension_changes_equality_hash_and_order_identity() {
+    fn every_materialization_key_identity_dimension_changes_equality_hash_and_order_identity() {
+        let base = expert_resource(4, 5);
         let keys = [
-            key_with(1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
-            key_with(11, 2, 3, 4, 5, 6, 7, 8, 9, 10),
-            key_with(1, 12, 3, 4, 5, 6, 7, 8, 9, 10),
-            key_with(1, 2, 13, 4, 5, 6, 7, 8, 9, 10),
-            key_with(1, 2, 3, 14, 5, 6, 7, 8, 9, 10),
-            key_with(1, 2, 3, 4, 15, 6, 7, 8, 9, 10),
-            key_with(1, 2, 3, 4, 5, 16, 7, 8, 9, 10),
-            key_with(1, 2, 3, 4, 5, 6, 17, 8, 9, 10),
-            key_with(1, 2, 3, 4, 5, 6, 7, 18, 9, 10),
-            key_with(1, 2, 3, 4, 5, 6, 7, 8, 19, 10),
-            key_with(1, 2, 3, 4, 5, 6, 7, 8, 9, 20),
+            key_with(1, 2, 3, base, 6, 7, 8, 9, 10),
+            key_with(11, 2, 3, base, 6, 7, 8, 9, 10),
+            key_with(1, 12, 3, base, 6, 7, 8, 9, 10),
+            key_with(1, 2, 13, base, 6, 7, 8, 9, 10),
+            key_with(1, 2, 3, expert_resource(14, 5), 6, 7, 8, 9, 10),
+            key_with(1, 2, 3, expert_resource(4, 15), 6, 7, 8, 9, 10),
+            key_with(1, 2, 3, base, 16, 7, 8, 9, 10),
+            key_with(1, 2, 3, base, 6, 17, 8, 9, 10),
+            key_with(1, 2, 3, base, 6, 7, 18, 9, 10),
+            key_with(1, 2, 3, base, 6, 7, 8, 19, 10),
+            key_with(1, 2, 3, base, 6, 7, 8, 9, 20),
         ];
         let ordered: BTreeSet<_> = keys.into_iter().collect();
         assert_eq!(ordered.len(), keys.len());
     }
 
     #[test]
-    fn load_key_rejects_sentinel_identity_and_generation_values() {
+    fn materialization_key_rejects_sentinel_identity_and_generation_values() {
         assert!(
-            LoadKey::new(
+            MaterializationKey::new(
                 ModelInstanceId::new(0),
                 SourceIdentityHash::new(hash(2)),
                 ContentHash::new(hash(3)),
-                LayerId::new(0),
-                ExpertId::new(0),
-                ArtifactFormat::new(1),
+                expert_resource(0, 0),
+                PayloadEncodingId::new(1),
                 BackendId::new(0),
                 DeviceId::new(0),
                 SourceGeneration::new(1),
@@ -1662,13 +1714,12 @@ mod tests {
             .is_err()
         );
         assert!(
-            LoadKey::new(
+            MaterializationKey::new(
                 ModelInstanceId::new(1),
                 SourceIdentityHash::new([0; 32]),
                 ContentHash::new(hash(3)),
-                LayerId::new(0),
-                ExpertId::new(0),
-                ArtifactFormat::new(1),
+                expert_resource(0, 0),
+                PayloadEncodingId::new(1),
                 BackendId::new(0),
                 DeviceId::new(0),
                 SourceGeneration::new(1),
@@ -1679,9 +1730,49 @@ mod tests {
     }
 
     #[test]
+    fn materialization_identity_keeps_training_resource_kinds_distinct() {
+        let parameter = key_with(
+            1,
+            2,
+            3,
+            MaterializedResourceId::new(MaterializedResourceKind::Parameter, 7, 9),
+            5,
+            6,
+            7,
+            8,
+            9,
+        );
+        let gradient = key_with(
+            1,
+            2,
+            3,
+            MaterializedResourceId::new(MaterializedResourceKind::Gradient, 7, 9),
+            5,
+            6,
+            7,
+            8,
+            9,
+        );
+        let optimizer = key_with(
+            1,
+            2,
+            3,
+            MaterializedResourceId::new(MaterializedResourceKind::OptimizerState, 7, 9),
+            5,
+            6,
+            7,
+            8,
+            9,
+        );
+        assert_ne!(parameter, gradient);
+        assert_ne!(parameter, optimizer);
+        assert_ne!(gradient, optimizer);
+    }
+
+    #[test]
     fn dependency_set_sorts_deduplicates_and_validates_canonical_input() {
-        let first = LogicalDependency::expert_resident(key(1)).unwrap();
-        let second = LogicalDependency::expert_resident(key(2)).unwrap();
+        let first = LogicalDependency::resource_resident(key(1)).unwrap();
+        let second = LogicalDependency::resource_resident(key(2)).unwrap();
         let retired = LogicalDependency::operation_retired(OperationId::new(3)).unwrap();
         let set = DependencySet::new([second, first, second, retired]).unwrap();
 
@@ -1755,21 +1846,21 @@ mod tests {
 
     #[test]
     fn completion_validation_checks_identity_stage_bytes_generation_and_outcome() {
-        let load_key = key(1);
+        let materialization_key = key(1);
         let expectation = CompletionExpectation::new(
             OperationId::new(20),
-            load_key,
+            materialization_key,
             LoadStage::ReadSubmitted,
             4096,
         )
         .unwrap();
         let valid = CompletionEvent::new(
             expectation.operation,
-            load_key,
+            materialization_key,
             expectation.stage,
             CompletionOutcome::Succeeded,
             4096,
-            CompletionGeneration::for_key(load_key),
+            CompletionGeneration::for_key(materialization_key),
             CompletionTimestamp::from_nanos(100),
         );
         valid.validate(&expectation).unwrap();
@@ -1831,8 +1922,13 @@ mod tests {
         ));
 
         assert!(
-            CompletionExpectation::new(OperationId::new(20), load_key, LoadStage::HostReady, 4096,)
-                .is_err()
+            CompletionExpectation::new(
+                OperationId::new(20),
+                materialization_key,
+                LoadStage::HostReady,
+                4096,
+            )
+            .is_err()
         );
     }
 
@@ -2003,8 +2099,7 @@ mod tests {
         let key = key(1);
         let stale = ResidencyBinding::new(
             key.model(),
-            key.layer(),
-            key.expert(),
+            key.resource(),
             key.backend(),
             key.device(),
             DestinationSlotId::new(1),
@@ -2029,10 +2124,10 @@ mod tests {
     }
 
     #[test]
-    fn expert_lease_set_requires_complete_unique_exact_bindings() {
+    fn residency_lease_set_requires_complete_unique_exact_bindings() {
         let first = key(1);
         let second = key(2);
-        let set = ExpertLeaseSet::new(
+        let set = ResidencyLeaseSet::new(
             [second, first, first],
             [binding_for(second, 2), binding_for(first, 1)],
             MappingEpoch::new(1),
@@ -2044,7 +2139,7 @@ mod tests {
         assert!(set.binding_for(second).is_some());
 
         assert!(matches!(
-            ExpertLeaseSet::new(
+            ResidencyLeaseSet::new(
                 [first, second],
                 [binding_for(first, 1)],
                 MappingEpoch::new(1),
@@ -2053,7 +2148,7 @@ mod tests {
             Err(IoProtocolError::MissingResidencyBinding(missing)) if *missing == second
         ));
         assert!(matches!(
-            ExpertLeaseSet::new(
+            ResidencyLeaseSet::new(
                 [first],
                 [binding_for(first, 1), binding_for(second, 2)],
                 MappingEpoch::new(1),
@@ -2062,7 +2157,7 @@ mod tests {
             Err(IoProtocolError::UnexpectedResidencyBinding(extra)) if *extra == second
         ));
         assert!(matches!(
-            ExpertLeaseSet::new(
+            ResidencyLeaseSet::new(
                 [first],
                 [binding_for(first, 1), binding_for(first, 2)],
                 MappingEpoch::new(1),
@@ -2071,7 +2166,7 @@ mod tests {
             Err(IoProtocolError::DuplicateResidencyBinding(duplicate)) if *duplicate == first
         ));
         assert!(matches!(
-            ExpertLeaseSet::new(
+            ResidencyLeaseSet::new(
                 [first],
                 [binding_for(first, 1)],
                 MappingEpoch::new(0),
@@ -2084,12 +2179,12 @@ mod tests {
     #[test]
     fn lease_set_from_dependencies_rejects_non_residency_obligations() {
         let dependencies = DependencySet::new([
-            LogicalDependency::expert_resident(key(1)).unwrap(),
+            LogicalDependency::resource_resident(key(1)).unwrap(),
             LogicalDependency::operation_retired(OperationId::new(4)).unwrap(),
         ])
         .unwrap();
         assert!(matches!(
-            ExpertLeaseSet::for_dependencies(
+            ResidencyLeaseSet::for_dependencies(
                 &dependencies,
                 [binding_for(key(1), 1)],
                 MappingEpoch::new(1),
@@ -2103,7 +2198,7 @@ mod tests {
     #[test]
     fn model_progress_exposes_only_complete_or_validated_waiting() {
         let dependencies =
-            DependencySet::new([LogicalDependency::expert_resident(key(1)).unwrap()]).unwrap();
+            DependencySet::new([LogicalDependency::resource_resident(key(1)).unwrap()]).unwrap();
         let waiting: ModelProgress<u32> = ModelProgress::waiting(dependencies.clone()).unwrap();
         assert_eq!(waiting, ModelProgress::Waiting(dependencies));
         assert_eq!(

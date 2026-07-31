@@ -7,12 +7,12 @@ use ferrule_common::execution::{
 };
 
 use crate::materialization::{
-    ExpertMaterializationAdapter, PhysicalExpertMaterializationBackend, validate_continuation_id,
+    MaterializationProvider, MaterializationResolver, validate_continuation_id,
 };
 use crate::{IncrementalDecodeState, ModelDescriptor};
 pub use ferrule_common::ContinuationId;
 pub use ferrule_common::execution::TokenLogit;
-use ferrule_common::{CompletionHub, DependencySet, Error, ExpertLeaseSet, Result};
+use ferrule_common::{CompletionHub, DependencySet, Error, ResidencyLeaseSet, Result};
 
 /// Owned model-side completion reactor.
 ///
@@ -229,43 +229,35 @@ pub trait MultiSessionRunner: ModelRunner {
         Ok(())
     }
 
-    /// Transfer the model-owned physical expert backend exactly once.
+    /// Transfer the model-owned physical materialization provider exactly once.
     ///
-    /// Dense runners return `None`. A runner reporting expert residency
-    /// requirements must return `Some` during runtime preparation; returning
-    /// `None` is a prepare-time configuration error rather than a deferred
-    /// `DeviceUnavailable` failure.
-    fn take_expert_materialization_backend(
-        &mut self,
-    ) -> Option<Box<dyn PhysicalExpertMaterializationBackend>> {
+    /// Any runner with streamable parameters or mutable spilled state may return a
+    /// backend. A runner reporting expert residency requirements must return one;
+    /// dense fully resident runners may return `None`.
+    fn take_materialization_provider(&mut self) -> Option<Box<dyn MaterializationProvider>> {
         None
     }
 
-    /// Whether the runner-level bridge to the runtime materialization registry is
-    /// installed. Dense runners leave this false.
-    fn expert_materialization_adapter_installed(&self) -> bool {
+    /// Whether the runner-level exact-key resolver is installed.
+    fn materialization_resolver_installed(&self) -> bool {
         false
     }
 
-    /// Install the model-neutral adapter used to resolve exact post-router misses
-    /// and expose keyed physical materialization hooks to the runtime driver.
-    fn install_expert_materialization_adapter(
+    /// Install the model-neutral resolver used to prepare exact resource keys.
+    fn install_materialization_resolver(
         &mut self,
-        _adapter: Box<dyn ExpertMaterializationAdapter>,
+        _resolver: Box<dyn MaterializationResolver>,
     ) -> Result<()> {
         Err(Error::Execution(
-            "runner does not support expert materialization adapters".into(),
+            "runner does not support materialization resolvers".into(),
         ))
     }
 
-    /// Borrow the installed runner-level materialization adapter. Runtime code may
-    /// call its `submit`, `progress`, `publish`, and `cancel` hooks by full `LoadKey`;
-    /// model cancellation paths use only `detach`.
-    fn expert_materialization_adapter(
-        &mut self,
-    ) -> Result<&mut (dyn ExpertMaterializationAdapter + '_)> {
+    /// Borrow the installed exact-key resolver. It owns no logical demand,
+    /// publication, cancellation, residency, or eviction state.
+    fn materialization_resolver(&mut self) -> Result<&mut (dyn MaterializationResolver + '_)> {
         Err(Error::Execution(
-            "runner has no expert materialization adapter".into(),
+            "runner has no materialization resolver".into(),
         ))
     }
 
@@ -394,7 +386,7 @@ pub trait MultiSessionRunner: ModelRunner {
         states: &mut [Self::SequenceState],
         batch: &ExecutionBatch,
         continuation: ContinuationId,
-        leases: ExpertLeaseSet,
+        leases: ResidencyLeaseSet,
     ) -> Result<MultiSessionBatchProgress>;
 
     /// Cancel a batch continuation previously created by this runner.
@@ -487,34 +479,12 @@ impl NativeProposal {
     }
 }
 
-/// Optional model-owned expert-I/O resource control consumed by the generic
-/// runtime scheduler. Implementations expose exact physical resource limits and
-/// hard-admission hooks while keeping all route prediction and cache
-/// interpretation internal to the model crate.
-pub trait ExpertIoModelRunner: MultiSessionRunner {
-    /// Exact physical capacity of the hardware/model expert materialization path.
-    fn expert_io_resource_limits(
-        &self,
-    ) -> Result<ferrule_common::expert_io::ExpertIoResourceLimits>;
-
-    /// Install the unique runtime-owned hard-admission service before execution.
-    fn install_expert_io_resource_control(
-        &mut self,
-        control: Box<dyn ferrule_common::expert_io::ExpertIoResourceControl>,
-    ) -> Result<()>;
-
-    /// Remove the runtime-owned admission service before returning a quiescent
-    /// runner to its caller. A later driver may then install a fresh service.
-    fn uninstall_expert_io_resource_control(&mut self) -> Result<()>;
-}
-
 /// Model capability consumed by the resident inference scheduler.
 ///
-/// Expert-I/O resource control is mandatory for resident scheduling.
 /// Checkpoint-native speculative proposals are optional: models without that
 /// capability return `None` and execute the same packed target path without a
 /// serving-side special case.
-pub trait ResidentModelRunner: ExpertIoModelRunner {
+pub trait ResidentModelRunner: MultiSessionRunner {
     type ObservabilitySnapshot: Clone;
 
     /// Return one model-owned typed observability snapshot. Runtime transports the
@@ -547,7 +517,7 @@ pub trait ResidentModelRunner: ExpertIoModelRunner {
         &mut self,
         transaction: ExecutionTransactionId,
         continuation: ContinuationId,
-        leases: ExpertLeaseSet,
+        leases: ResidencyLeaseSet,
     ) -> Result<NativeProposalProgress>;
 
     /// Cancel a retained native proposal continuation.
@@ -570,14 +540,16 @@ mod tests {
         }
     }
 
-    fn load_key(expert: u32) -> ferrule_common::LoadKey {
-        ferrule_common::LoadKey::new(
+    fn materialization_key(expert: u32) -> ferrule_common::MaterializationKey {
+        ferrule_common::MaterializationKey::new(
             ferrule_common::ModelInstanceId::new(1),
             ferrule_common::SourceIdentityHash::new([2; 32]),
             ferrule_common::ContentHash::new([3; 32]),
-            ferrule_common::LayerId::new(7),
-            ferrule_common::ExpertId::new(expert),
-            ferrule_common::ArtifactFormat::new(1),
+            ferrule_common::MaterializedResourceId::routed_expert(
+                ferrule_common::LayerId::new(7),
+                ferrule_common::ExpertId::new(expert),
+            ),
+            ferrule_common::PayloadEncodingId::new(1),
             ferrule_common::BackendId::new(4),
             ferrule_common::DeviceId::new(5),
             ferrule_common::SourceGeneration::new(6),
@@ -589,9 +561,12 @@ mod tests {
     #[test]
     fn pending_progress_rejects_zero_continuation_and_exposes_canonical_dependencies() {
         let transaction = ExecutionTransactionId::new(7).unwrap();
-        let dependencies =
-            crate::materialization::expert_dependency_set([load_key(8), load_key(1), load_key(8)])
-                .unwrap();
+        let dependencies = crate::materialization::resource_dependency_set([
+            materialization_key(8),
+            materialization_key(1),
+            materialization_key(8),
+        ])
+        .unwrap();
         let error =
             PendingModelProgress::new(transaction, ContinuationId::new(0), dependencies.clone())
                 .unwrap_err()

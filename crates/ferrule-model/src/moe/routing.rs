@@ -5,8 +5,82 @@
 //! normalization, bias handling, and route scaling through this typed policy.
 
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 
 use ferrule_common::{Error, Result};
+
+use crate::checkpoint::weight::LinearWeight;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouterWeights {
+    pub layer: usize,
+    pub weight: LinearWeight,
+    pub bias: Option<Vec<f32>>,
+    pub hash_table: Option<Vec<usize>>,
+    pub hash_rows: usize,
+    pub hash_cols: usize,
+}
+
+impl RouterWeights {
+    pub fn logits(&self, input: &[f32]) -> Result<Vec<f32>> {
+        self.weight.reference_matvec(input)
+    }
+
+    pub fn hash_experts_for_token(&self, token_id: u32) -> Result<Option<Vec<usize>>> {
+        let Some(table) = &self.hash_table else {
+            return Ok(None);
+        };
+        let row = token_id as usize;
+        if row >= self.hash_rows {
+            return Err(Error::Model(format!(
+                "router hash token id {row} exceeds table rows {} for layer {}",
+                self.hash_rows, self.layer
+            )));
+        }
+        let start = row * self.hash_cols;
+        Ok(Some(table[start..start + self.hash_cols].to_vec()))
+    }
+
+    pub fn hash_expert_union_for_tokens(
+        &self,
+        token_ids: &[u32],
+        per_token_limit: usize,
+        max_experts: usize,
+    ) -> Result<Option<Vec<usize>>> {
+        let Some(table) = &self.hash_table else {
+            return Ok(None);
+        };
+        if token_ids.is_empty() || per_token_limit == 0 || max_experts == 0 {
+            return Ok(Some(Vec::new()));
+        }
+
+        let per_token_limit = per_token_limit.min(self.hash_cols);
+        let mut seen = BTreeSet::new();
+        let mut experts = Vec::with_capacity(max_experts.min(token_ids.len() * per_token_limit));
+        for &token_id in token_ids {
+            let row = token_id as usize;
+            if row >= self.hash_rows {
+                return Err(Error::Model(format!(
+                    "router hash token id {row} exceeds table rows {} for layer {}",
+                    self.hash_rows, self.layer
+                )));
+            }
+            let start = row * self.hash_cols;
+            for &expert in table[start..start + self.hash_cols]
+                .iter()
+                .take(per_token_limit)
+            {
+                if seen.insert(expert) {
+                    experts.push(expert);
+                    if experts.len() >= max_experts {
+                        return Ok(Some(experts));
+                    }
+                }
+            }
+        }
+        Ok(Some(experts))
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouterScoreFunction {

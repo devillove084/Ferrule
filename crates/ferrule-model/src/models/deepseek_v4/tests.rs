@@ -12,10 +12,11 @@ use super::sequence::DeepSeekV4SequenceExecutionState;
 
 use std::path::{Path, PathBuf};
 
+use super::checkpoint_binding::MlaAttentionWeights;
 use crate::TensorRole;
-use crate::artifact::binding::{MlaAttentionArtifactPayload, RouterArtifactPayload};
-use crate::artifact::linear::ArtifactLinearPayload;
-use crate::artifact::tensor::{ArtifactDType, ArtifactTensorPayload, ArtifactTensorSlice};
+use crate::checkpoint::tensor::{CheckpointDType, CheckpointTensorPayload, CheckpointTensorSlice};
+use crate::checkpoint::weight::LinearWeight;
+use crate::moe::routing::RouterWeights;
 
 use crate::families::deepseek_v4;
 use crate::ffn::SwiGluFfnPayload;
@@ -30,6 +31,42 @@ use crate::moe::streaming::{
 use ferrule_common::execution::{
     ExecutionBatch, ExecutionSequence, ForwardMode, ForwardPhase, LogitsRequest, StateSlot,
 };
+
+#[test]
+fn common_checkpoint_and_shape_helpers_preserve_deepseek_context() {
+    let vector = CheckpointTensorPayload {
+        slice: CheckpointTensorSlice {
+            name: "norm.weight".into(),
+            role: TensorRole::LayerNorm,
+            path: PathBuf::from("synthetic.safetensors"),
+            offset: 0,
+            bytes: 4,
+            dtype: CheckpointDType::F32,
+            shape: vec![1, 1],
+        },
+        bytes: 1.0f32.to_le_bytes().to_vec(),
+    };
+    assert_eq!(
+        decode_vector_f32(&vector).unwrap_err().to_string(),
+        "Model: DeepSeek-V4 checkpoint vector 'norm.weight' expects 1D shape, got [1, 1]"
+    );
+    assert_eq!(
+        two_dim_shape_from_payload(&vector, "compressor ape").unwrap(),
+        (1, 1)
+    );
+
+    let linear = f32_linear(TensorRole::AttentionQuery, "q_proj", 3, 4);
+    assert_eq!(
+        check_linear(2, "q_proj", &linear, 2, 4)
+            .unwrap_err()
+            .to_string(),
+        "Model: DeepSeek-V4 layer 2 q_proj shape mismatch: got [3, 4], expected [2, 4]"
+    );
+    assert_eq!(
+        check_len(2, "input_norm", 3, 4).unwrap_err().to_string(),
+        "Model: DeepSeek-V4 layer 2 input_norm length mismatch: got 3, expected 4"
+    );
+}
 
 #[test]
 fn attention_shape_contract_accepts_official_dimensions() {
@@ -190,7 +227,7 @@ fn dsv4_layer_decode_step_runs_hc_attention_moe_shared_hc() {
         .unwrap(),
         hc_attention: zero_hc_weights(hc_config),
         hc_feed_forward: zero_hc_weights(hc_config),
-        router: RouterArtifactPayload {
+        router: RouterWeights {
             layer: 0,
             weight: f32_linear(TensorRole::RouterLogits, "router", 1, 32),
             bias: None,
@@ -503,8 +540,8 @@ fn official_tiny_cfg() -> DeepSeekV4AttentionConfig {
     }
 }
 
-fn attention_payload_for_cfg(cfg: DeepSeekV4AttentionConfig) -> MlaAttentionArtifactPayload {
-    MlaAttentionArtifactPayload {
+fn attention_payload_for_cfg(cfg: DeepSeekV4AttentionConfig) -> MlaAttentionWeights {
+    MlaAttentionWeights {
         layer: 0,
         query_a: f32_linear(
             TensorRole::AttentionLatentQueryA,
@@ -543,8 +580,8 @@ fn attention_payload_for_cfg(cfg: DeepSeekV4AttentionConfig) -> MlaAttentionArti
     }
 }
 
-fn attention_payload_for_small_cfg(cfg: DeepSeekV4AttentionConfig) -> MlaAttentionArtifactPayload {
-    MlaAttentionArtifactPayload {
+fn attention_payload_for_small_cfg(cfg: DeepSeekV4AttentionConfig) -> MlaAttentionWeights {
+    MlaAttentionWeights {
         layer: 0,
         query_a: identity_linear(TensorRole::AttentionLatentQueryA, "wq_a", 4),
         query_b: identity_linear(TensorRole::AttentionLatentQueryB, "wq_b", 4),
@@ -564,10 +601,8 @@ fn attention_payload_for_small_cfg(cfg: DeepSeekV4AttentionConfig) -> MlaAttenti
     }
 }
 
-fn attention_payload_for_vertical_cfg(
-    cfg: DeepSeekV4AttentionConfig,
-) -> MlaAttentionArtifactPayload {
-    MlaAttentionArtifactPayload {
+fn attention_payload_for_vertical_cfg(cfg: DeepSeekV4AttentionConfig) -> MlaAttentionWeights {
+    MlaAttentionWeights {
         layer: 0,
         query_a: f32_linear_values(
             TensorRole::AttentionLatentQueryA,
@@ -621,7 +656,7 @@ fn attention_payload_for_vertical_cfg(
     }
 }
 
-fn identity_linear(role: TensorRole, name: &str, dim: usize) -> ArtifactLinearPayload {
+fn identity_linear(role: TensorRole, name: &str, dim: usize) -> LinearWeight {
     let mut values = vec![0.0; dim * dim];
     for i in 0..dim {
         values[i * dim + i] = 1.0;
@@ -629,7 +664,7 @@ fn identity_linear(role: TensorRole, name: &str, dim: usize) -> ArtifactLinearPa
     f32_linear_values(role, name, dim, dim, &values)
 }
 
-fn f32_linear(role: TensorRole, name: &str, out: usize, input: usize) -> ArtifactLinearPayload {
+fn f32_linear(role: TensorRole, name: &str, out: usize, input: usize) -> LinearWeight {
     f32_linear_values(role, name, out, input, &vec![0.0; out * input])
 }
 
@@ -639,18 +674,18 @@ fn f32_linear_values(
     out: usize,
     input: usize,
     values: &[f32],
-) -> ArtifactLinearPayload {
+) -> LinearWeight {
     assert_eq!(values.len(), out * input);
-    ArtifactLinearPayload::from_weight_and_scale(
+    LinearWeight::from_weight_and_scale(
         role,
-        ArtifactTensorPayload {
-            slice: ArtifactTensorSlice {
+        CheckpointTensorPayload {
+            slice: CheckpointTensorSlice {
                 name: format!("{name}.weight"),
                 role: TensorRole::Unknown,
                 path: PathBuf::from("synthetic.safetensors"),
                 offset: 0,
                 bytes: (values.len() * 4) as u64,
-                dtype: ArtifactDType::F32,
+                dtype: CheckpointDType::F32,
                 shape: vec![out, input],
             },
             bytes: values
@@ -763,7 +798,7 @@ fn arena_shape_test_layer(
         .unwrap(),
         hc_attention: zero_hc_weights(hc_config),
         hc_feed_forward: zero_hc_weights(hc_config),
-        router: RouterArtifactPayload {
+        router: RouterWeights {
             layer,
             weight: f32_linear(TensorRole::RouterLogits, "router", 256, cfg.hidden_size),
             bias: None,

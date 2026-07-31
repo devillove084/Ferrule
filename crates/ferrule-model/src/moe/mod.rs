@@ -26,8 +26,8 @@ pub mod telemetry;
 
 pub use executor::{CpuReferenceExpertExecutor, ExpertExecutor, reference_linear};
 pub use handle::{
-    CpuExpertHandleStore, ExpertComputeHandle, ExpertHandleStore, ExpertResidentFormat,
-    ResidentExpertHandle,
+    CpuExpertHandleStore, ExpertComputeHandle, ExpertHandleStore, ResidentExpertHandle,
+    ResourceResidentFormat,
 };
 pub use prediction::{
     ExpertAccessEvent, ExpertAccessPhase, ExpertBatchAccessEvent, ExpertBatchExpertEvent,

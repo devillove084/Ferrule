@@ -1,26 +1,22 @@
 //! Runtime-owned materialization, completion, waiter, fairness, and critical-path core.
 
-mod adapter;
-mod backend;
 mod fairness;
 mod ledger;
+mod provider;
 mod registry;
+mod resolver;
 mod waiters;
 
-pub use adapter::{
-    RuntimeMaterializationAdapter, RuntimeMaterializationAdapterStats,
-    RuntimeMaterializationControl,
-};
-#[cfg(test)]
-pub use backend::{FakeBackend, FakeCommand, FakeCompletionSpec};
-pub use backend::{
-    MaterializationBackend, MaterializationReservation, RunnerMaterializationBackend,
-    UnavailableBackend,
-};
 pub use fairness::{FairQueue, FairQueueConfig, FairQueueError};
 pub use ledger::{
     CohortId, CriticalPathLedger, CriticalPhase, LedgerError, OutputTokenId, OutputTokenSnapshot,
     PhaseDurations, TimeSpan,
+};
+#[cfg(test)]
+pub use provider::{FakeCompletionSpec, FakeMaterializationCommand, FakeMaterializationProvider};
+pub use provider::{
+    MaterializationOperationReservation, RuntimeMaterializationProvider,
+    SharedMaterializationProvider, UnavailableMaterializationProvider,
 };
 pub(crate) use registry::RegistryDriveStep;
 pub use registry::{
@@ -28,6 +24,7 @@ pub use registry::{
     ContinuationFailure, FailedContinuation, LoadOp, LoadRegistry, LoadRequest, RegistryError,
     RegistryStats, ResumeLease, ShutdownReport,
 };
+pub use resolver::{RuntimeMaterializationResolver, RuntimeMaterializationResolverStats};
 pub use waiters::{
     ContinuationDetach, OperationResolution, WaiterDetach, WaiterIndex, WaiterIndexError,
 };

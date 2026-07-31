@@ -5,4 +5,5 @@
 //! and scheduling infrastructure; this crate provides the concrete runners that
 //! implement those traits.
 
+pub mod common;
 pub mod deepseek_v4;

@@ -11,9 +11,9 @@ use crate::scheduling::ResourceClass;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FairQueueConfig {
     pub prefetch_quantum: u64,
-    pub prefill_quantum: u64,
-    pub verification_quantum: u64,
-    pub decode_quantum: u64,
+    pub throughput_quantum: u64,
+    pub demand_quantum: u64,
+    pub latency_critical_quantum: u64,
     pub max_surplus: u64,
     pub debt_limit: u64,
     pub starvation_ticks: u64,
@@ -24,9 +24,9 @@ impl Default for FairQueueConfig {
     fn default() -> Self {
         Self {
             prefetch_quantum: 1,
-            prefill_quantum: 4 * 1024,
-            verification_quantum: 8 * 1024,
-            decode_quantum: 8 * 1024,
+            throughput_quantum: 4 * 1024,
+            demand_quantum: 8 * 1024,
+            latency_critical_quantum: 8 * 1024,
             max_surplus: 64 * 1024,
             debt_limit: 64 * 1024,
             starvation_ticks: 8,
@@ -38,12 +38,12 @@ impl Default for FairQueueConfig {
 impl FairQueueConfig {
     /// Derives byte-scaled fairness for a physical production backend.
     ///
-    /// `limits` must already have passed `ExpertIoResourceLimits::validate`. Total
+    /// `limits` must already have passed `MaterializationResourceLimits::validate`. Total
     /// byte capacities are used directly instead of inferring a per-request size
-    /// from slot counts. Verification and decode receive the largest quantum and
-    /// are also the only classes allowed to consume the hard demand reserve.
+    /// from slot counts. Correctness demand and latency-critical work receive the
+    /// largest quantum and may consume the hard demand reserve.
     pub fn for_production(
-        limits: ferrule_common::expert_io::ExpertIoResourceLimits,
+        limits: ferrule_common::materialization_io::MaterializationResourceLimits,
     ) -> Result<Self, FairQueueError> {
         const STARVATION_TICKS: u64 = 8;
         const MAX_COUNTER: u64 = i64::MAX as u64;
@@ -80,9 +80,9 @@ impl FairQueueConfig {
 
         Self {
             prefetch_quantum: progress_quantum,
-            prefill_quantum: scaled_quantum(4),
-            verification_quantum: scaled_quantum(8),
-            decode_quantum: scaled_quantum(8),
+            throughput_quantum: scaled_quantum(4),
+            demand_quantum: scaled_quantum(8),
+            latency_critical_quantum: scaled_quantum(8),
             max_surplus: max_transition_cost.min(MAX_COUNTER),
             debt_limit: max_transition_cost.min(MAX_COUNTER),
             starvation_ticks: STARVATION_TICKS,
@@ -93,9 +93,9 @@ impl FairQueueConfig {
 
     pub fn validate(self) -> Result<Self, FairQueueError> {
         if self.prefetch_quantum == 0
-            || self.prefill_quantum == 0
-            || self.verification_quantum == 0
-            || self.decode_quantum == 0
+            || self.throughput_quantum == 0
+            || self.demand_quantum == 0
+            || self.latency_critical_quantum == 0
         {
             return Err(FairQueueError::ZeroQuantum);
         }
@@ -103,9 +103,9 @@ impl FairQueueConfig {
             return Err(FairQueueError::ZeroMaxTransitionCost);
         }
         if self.prefetch_quantum > i64::MAX as u64
-            || self.prefill_quantum > i64::MAX as u64
-            || self.verification_quantum > i64::MAX as u64
-            || self.decode_quantum > i64::MAX as u64
+            || self.throughput_quantum > i64::MAX as u64
+            || self.demand_quantum > i64::MAX as u64
+            || self.latency_critical_quantum > i64::MAX as u64
             || self.max_transition_cost > i64::MAX as u64
             || self.max_surplus > i64::MAX as u64
             || self.debt_limit > i64::MAX as u64
@@ -118,9 +118,9 @@ impl FairQueueConfig {
     pub const fn quantum(self, class: ResourceClass) -> u64 {
         match class {
             ResourceClass::Prefetch => self.prefetch_quantum,
-            ResourceClass::Prefill => self.prefill_quantum,
-            ResourceClass::Verification => self.verification_quantum,
-            ResourceClass::Decode => self.decode_quantum,
+            ResourceClass::Throughput => self.throughput_quantum,
+            ResourceClass::Demand => self.demand_quantum,
+            ResourceClass::LatencyCritical => self.latency_critical_quantum,
         }
     }
 }
@@ -169,9 +169,9 @@ impl<T> FairQueue<T> {
             deficit: {
                 let mut m = HashMap::with_hasher(RandomState::default());
                 m.insert(ResourceClass::Prefetch, 0i64);
-                m.insert(ResourceClass::Prefill, 0);
-                m.insert(ResourceClass::Verification, 0);
-                m.insert(ResourceClass::Decode, 0);
+                m.insert(ResourceClass::Throughput, 0);
+                m.insert(ResourceClass::Demand, 0);
+                m.insert(ResourceClass::LatencyCritical, 0);
                 m
             },
             next_sequence: 1,
@@ -275,9 +275,9 @@ impl<T> FairQueue<T> {
         let cap = self.config.max_surplus as i64;
         for class in [
             ResourceClass::Prefetch,
-            ResourceClass::Prefill,
-            ResourceClass::Verification,
-            ResourceClass::Decode,
+            ResourceClass::Throughput,
+            ResourceClass::Demand,
+            ResourceClass::LatencyCritical,
         ] {
             let quantum = self.config.quantum(class) as i64;
             let deficit = self
@@ -300,8 +300,8 @@ impl<T> FairQueue<T> {
 const fn class_priority(class: ResourceClass) -> u8 {
     match class {
         ResourceClass::Prefetch => 0,
-        ResourceClass::Prefill => 1,
-        ResourceClass::Verification => 2,
-        ResourceClass::Decode => 3,
+        ResourceClass::Throughput => 1,
+        ResourceClass::Demand => 2,
+        ResourceClass::LatencyCritical => 3,
     }
 }

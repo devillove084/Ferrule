@@ -243,23 +243,12 @@ impl WaiterIndex {
         Some(continuation)
     }
 
-    pub fn requeue_ready_front(&mut self, continuation: ContinuationId) {
-        if self.ready_set.insert(continuation) {
-            self.ready_queue.push_front(continuation);
-        }
-    }
-
     pub fn ready_len(&self) -> usize {
         self.ready_queue.len()
     }
 
     pub fn ready_front(&self) -> Option<ContinuationId> {
         self.ready_queue.front().copied()
-    }
-
-    pub fn drain_ready(&mut self) -> Vec<ContinuationId> {
-        self.ready_set.clear();
-        self.ready_queue.drain(..).collect()
     }
 
     pub fn is_empty(&self) -> bool {

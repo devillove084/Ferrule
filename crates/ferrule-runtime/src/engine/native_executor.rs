@@ -10,14 +10,13 @@ use ferrule_common::execution::{
     ExecutionBatch, ExecutionCapabilities, ExecutionOutput, ExecutionTransactionId,
     KvReservationView,
 };
-use ferrule_common::{ContinuationId, Error, ExpertLeaseSet, Result};
+use ferrule_common::{ContinuationId, Error, ResidencyLeaseSet, Result};
 use ferrule_model::{
     BatchContinuationCancelOutcome, MultiSessionBatchProgress, MultiSessionRunner,
     PendingModelProgress,
 };
 
 use crate::expert_residency::ExpertResidencyController;
-use crate::scheduling::{ExpertIoResourceBrokerHandle, ResourceBrokerStats, ResourceSnapshot};
 
 /// Progress from a resumable native multi-session batch.
 #[derive(Debug, Clone, PartialEq)]
@@ -38,7 +37,6 @@ pub struct NativeMultiSessionExecutor<R: MultiSessionRunner> {
     poison: Option<PoisonState>,
     transactions: HashMap<ExecutionTransactionId, NativeTransaction>,
     expert_residency_initialized: bool,
-    expert_io_resources: Option<ExpertIoResourceBrokerHandle>,
 }
 
 #[derive(Debug)]
@@ -63,35 +61,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
             poison: None,
             transactions: HashMap::new(),
             expert_residency_initialized: false,
-            expert_io_resources: None,
         }
-    }
-
-    pub(crate) fn with_expert_io_resources(
-        mut self,
-        resources: ExpertIoResourceBrokerHandle,
-    ) -> Self {
-        self.expert_io_resources = Some(resources);
-        self
-    }
-
-    pub fn expert_io_resource_snapshots(&self) -> Result<Vec<ResourceSnapshot>> {
-        self.expert_io_resources
-            .as_ref()
-            .map_or_else(|| Ok(Vec::new()), ExpertIoResourceBrokerHandle::snapshots)
-    }
-
-    pub fn expert_io_resource_stats(&self) -> Result<Option<ResourceBrokerStats>> {
-        self.expert_io_resources
-            .as_ref()
-            .map(ExpertIoResourceBrokerHandle::stats)
-            .transpose()
-    }
-
-    pub fn active_expert_io_grants(&self) -> Result<usize> {
-        self.expert_io_resources
-            .as_ref()
-            .map_or_else(|| Ok(0), ExpertIoResourceBrokerHandle::active_grants)
     }
 
     /// Returns the truthful capabilities of the native multi-session path.
@@ -386,7 +356,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         states: &mut [R::SequenceState],
         batch: &ExecutionBatch,
         continuation: ContinuationId,
-        leases: ExpertLeaseSet,
+        leases: ResidencyLeaseSet,
     ) -> Result<NativeBatchExecutionProgress> {
         self.ensure_ready()?;
         self.ensure_continuation_owner(transaction, continuation)?;
@@ -956,7 +926,7 @@ mod tests {
             _states: &mut [Self::SequenceState],
             _batch: &ExecutionBatch,
             continuation: ContinuationId,
-            _leases: ExpertLeaseSet,
+            _leases: ResidencyLeaseSet,
         ) -> Result<MultiSessionBatchProgress> {
             self.resumes.push((transaction, continuation));
             self.next_progress(transaction)
@@ -1040,8 +1010,8 @@ mod tests {
         .unwrap()
     }
 
-    fn leases(continuation: ContinuationId) -> ExpertLeaseSet {
-        ExpertLeaseSet::new(
+    fn leases(continuation: ContinuationId) -> ResidencyLeaseSet {
+        ResidencyLeaseSet::new(
             [],
             [],
             MappingEpoch::new(continuation.get()),

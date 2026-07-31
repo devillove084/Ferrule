@@ -1,4 +1,4 @@
-//! Minimal dependency-free hashing primitives used for artifact catalog identity.
+//! Minimal dependency-free hashing primitives used for checkpoint catalog identity.
 //!
 //! Catalog hashing consumes semantic tensor descriptors and filesystem metadata,
 //! never tensor payload bytes. Keeping this private avoids adding a crate dependency.
@@ -9,13 +9,13 @@ use std::io;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
-/// Filesystem identity captured when an artifact catalog is built.
+/// Filesystem identity captured when an checkpoint catalog is built.
 ///
 /// Length and modification time are the stable cross-platform fallback. Unix
 /// device/inode coordinates additionally distinguish replacements that preserve
 /// those fallback fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ArtifactFileIdentity {
+pub(crate) struct CheckpointFileIdentity {
     length: u64,
     modified_seconds: i64,
     modified_nanos: u32,
@@ -23,7 +23,7 @@ pub(crate) struct ArtifactFileIdentity {
     inode: Option<u64>,
 }
 
-impl ArtifactFileIdentity {
+impl CheckpointFileIdentity {
     pub(crate) fn from_metadata(metadata: &Metadata) -> io::Result<Self> {
         let (modified_seconds, modified_nanos) = modified_time_parts(metadata)?;
         #[cfg(unix)]
@@ -81,7 +81,7 @@ fn modified_time_parts(metadata: &Metadata) -> io::Result<(i64, u32)> {
     let nanos = u32::try_from(metadata.mtime_nsec()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            "artifact modification nanoseconds are outside the u32 domain",
+            "checkpoint modification nanoseconds are outside the u32 domain",
         )
     })?;
     Ok((metadata.mtime(), nanos))
@@ -96,7 +96,7 @@ fn modified_time_parts(metadata: &Metadata) -> io::Result<(i64, u32)> {
             let seconds = i64::try_from(duration.as_secs()).map_err(|_| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "artifact modification time exceeds the signed timestamp domain",
+                    "checkpoint modification time exceeds the signed timestamp domain",
                 )
             })?;
             Ok((seconds, duration.subsec_nanos()))
@@ -106,7 +106,7 @@ fn modified_time_parts(metadata: &Metadata) -> io::Result<(i64, u32)> {
             let seconds = i64::try_from(duration.as_secs()).map_err(|_| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "artifact modification time exceeds the signed timestamp domain",
+                    "checkpoint modification time exceeds the signed timestamp domain",
                 )
             })?;
             let nanos = duration.subsec_nanos();
@@ -119,7 +119,7 @@ fn modified_time_parts(metadata: &Metadata) -> io::Result<(i64, u32)> {
                     .ok_or_else(|| {
                         io::Error::new(
                             io::ErrorKind::InvalidData,
-                            "artifact modification time exceeds the signed timestamp domain",
+                            "checkpoint modification time exceeds the signed timestamp domain",
                         )
                     })?;
                 Ok((seconds, 1_000_000_000 - nanos))
@@ -159,7 +159,7 @@ impl Sha256 {
         self.total_len = self
             .total_len
             .checked_add(u64::try_from(bytes.len()).expect("slice length fits u64"))
-            .expect("artifact identity input exceeds SHA-256 length domain");
+            .expect("checkpoint identity input exceeds SHA-256 length domain");
 
         if self.buffer_len != 0 {
             let copied = (64 - self.buffer_len).min(bytes.len());
@@ -191,7 +191,7 @@ impl Sha256 {
         let bit_len = self
             .total_len
             .checked_mul(8)
-            .expect("artifact identity input exceeds SHA-256 bit length domain");
+            .expect("checkpoint identity input exceeds SHA-256 bit length domain");
         let padding_len = if self.buffer_len < 56 {
             56 - self.buffer_len
         } else {

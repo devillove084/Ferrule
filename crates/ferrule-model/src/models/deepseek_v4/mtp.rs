@@ -17,25 +17,25 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::TensorRole;
-use crate::artifact::binding::{
+use super::checkpoint_binding::{
     bind_attention_from_hf, bind_hyper_connection_from_hf, bind_hyper_connection_head_from_hf,
     bind_router_from_hf, bind_shared_swiglu_ffn_from_hf,
 };
-use crate::artifact::inventory::{
+use crate::TensorRole;
+use crate::checkpoint::inventory::{
     HfAttentionTensorInfo, HfHyperConnectionTensorInfo, HfRoutedExpertTensorInfo,
     HfRouterTensorInfo, HfSafetensorsTensorInfo, HfSharedExpertTensorInfo,
 };
-use crate::artifact::linear::ArtifactLinearPayload;
-use crate::artifact::tensor::{ArtifactTensorReader, ArtifactTensorSlice};
+use crate::checkpoint::tensor::{CheckpointTensorReader, CheckpointTensorSlice};
+use crate::checkpoint::weight::LinearWeight;
 
 use crate::hyper_connection::{HyperConnectionConfig, HyperConnectionHeadWeights};
 use crate::moe::routing::ExpertRouterPolicy;
 use crate::moe::streaming::ExpertSourceCatalog;
 use crate::semantic::{
-    ArtifactTensorPart, AttentionTensorKind, AttentionTensorRef, HyperConnectionStage,
-    HyperConnectionTensorKind, HyperConnectionTensorRef, RoutedExpertMatrix,
-    RoutedExpertTensorPart, RouterTensorKind, RouterTensorRef, SharedExpertTensorRef,
+    AttentionTensorKind, AttentionTensorRef, HyperConnectionStage, HyperConnectionTensorKind,
+    HyperConnectionTensorRef, RoutedExpertMatrix, RoutedExpertTensorPart, RouterTensorKind,
+    RouterTensorRef, SharedExpertTensorRef, TensorPayloadPart,
 };
 use ferrule_common::{Error, Result};
 
@@ -61,7 +61,7 @@ pub struct DeepSeekV4MtpLayer {
     /// The normal HC + attention + MoE body reused from the target model.
     pub transformer: DeepSeekV4Layer,
     /// DSpark's target-hidden projection exists only on stage zero.
-    pub main_proj: Option<ArtifactLinearPayload>,
+    pub main_proj: Option<LinearWeight>,
     /// Normalization paired with `main_proj`; also stage-zero only.
     pub main_norm: Option<Vec<f32>>,
     /// Immutable routed-expert source catalog for this MTP stage.
@@ -72,9 +72,9 @@ pub struct DeepSeekV4MtpLayer {
 pub struct DeepSeekV4MtpPredictionHeads {
     pub hc_head: HyperConnectionHeadWeights,
     pub norm: Vec<f32>,
-    pub markov_w1: ArtifactLinearPayload,
-    pub markov_w2: ArtifactLinearPayload,
-    pub confidence_proj: ArtifactLinearPayload,
+    pub markov_w1: LinearWeight,
+    pub markov_w2: LinearWeight,
+    pub confidence_proj: LinearWeight,
 }
 
 /// Complete DSpark attachment with all checkpoint `mtp.*` stages.
@@ -196,9 +196,9 @@ fn parse_mtp_attention_tensor(info: &HfSafetensorsTensorInfo) -> Option<HfAttent
         _ => return None,
     };
     let part = match part {
-        Some("weight") => ArtifactTensorPart::Weight,
-        Some("scale") => ArtifactTensorPart::Scale,
-        Some(_) | None => ArtifactTensorPart::Other,
+        Some("weight") => TensorPayloadPart::Weight,
+        Some("scale") => TensorPayloadPart::Scale,
+        Some(_) | None => TensorPayloadPart::Other,
     };
     Some(HfAttentionTensorInfo {
         descriptor: AttentionTensorRef { layer, kind, part },
@@ -385,13 +385,13 @@ fn mtp_tensor_slice<'a>(
 fn read_mtp_linear_payload(
     model_dir: &Path,
     tensors: &[HfSafetensorsTensorInfo],
-    reader: &ArtifactTensorReader,
+    reader: &CheckpointTensorReader,
     weight_name: &str,
     scale_name: &str,
     role: TensorRole,
-) -> Result<ArtifactLinearPayload> {
+) -> Result<LinearWeight> {
     let weight_info = mtp_tensor_slice(tensors, weight_name)?;
-    let mut weight_slice = ArtifactTensorSlice::from_hf_inventory(model_dir, weight_info);
+    let mut weight_slice = CheckpointTensorSlice::from_hf_inventory(model_dir, weight_info);
     weight_slice.role = role.clone();
     let weight_payload = reader.read_slice(&weight_slice)?;
 
@@ -399,13 +399,13 @@ fn read_mtp_linear_payload(
         .iter()
         .find(|tensor| tensor.name == scale_name)
         .map(|scale_info| {
-            let mut slice = ArtifactTensorSlice::from_hf_inventory(model_dir, scale_info);
+            let mut slice = CheckpointTensorSlice::from_hf_inventory(model_dir, scale_info);
             slice.role = role.clone();
             reader.read_slice(&slice)
         })
         .transpose()?;
 
-    ArtifactLinearPayload::from_weight_and_scale(role, weight_payload, scale_payload)
+    LinearWeight::from_weight_and_scale(role, weight_payload, scale_payload)
         .map(with_deepseek_v4_linear_execution_policy)
 }
 
@@ -413,19 +413,19 @@ fn read_mtp_linear_payload(
 fn read_mtp_norm_vector(
     model_dir: &Path,
     tensors: &[HfSafetensorsTensorInfo],
-    reader: &ArtifactTensorReader,
+    reader: &CheckpointTensorReader,
     name: &str,
     role: TensorRole,
 ) -> Result<Vec<f32>> {
     let info = mtp_tensor_slice(tensors, name)?;
-    let mut slice = ArtifactTensorSlice::from_hf_inventory(model_dir, info);
+    let mut slice = CheckpointTensorSlice::from_hf_inventory(model_dir, info);
     slice.role = role;
     decode_vector_f32(&reader.read_slice(&slice)?)
 }
 
 /// Loads one MTP layer from bound weights.
 ///
-/// This function is called by `DeepSeekV4ArtifactModel::load_mtp` and uses the
+/// This function is called by `DeepSeekV4Checkpoint::load_mtp` and uses the
 /// existing `bind_*_from_hf` functions by constructing typed tensor-info structs
 /// from the raw MTP safetensors entries.
 #[allow(clippy::too_many_arguments)]
@@ -434,7 +434,7 @@ pub fn load_mtp_layer(
     mtp_index: usize,
     execution_layer: usize,
     layer_tensors: &[HfSafetensorsTensorInfo],
-    reader: &ArtifactTensorReader,
+    reader: &CheckpointTensorReader,
     attention_config: DeepSeekV4AttentionConfig,
     hc_config: HyperConnectionConfig,
     swiglu_limit: f32,
@@ -586,7 +586,7 @@ pub fn load_mtp_prediction_heads(
     model_dir: &Path,
     mtp_index: usize,
     layer_tensors: &[HfSafetensorsTensorInfo],
-    reader: &ArtifactTensorReader,
+    reader: &CheckpointTensorReader,
     hc_tensors: &[HfHyperConnectionTensorInfo],
     hc_config: HyperConnectionConfig,
 ) -> Result<DeepSeekV4MtpPredictionHeads> {
@@ -734,13 +734,13 @@ mod tests {
         let parsed = parse_mtp_attention_tensor(&info).unwrap();
         assert_eq!(parsed.descriptor.layer, 0);
         assert_eq!(parsed.descriptor.kind, AttentionTensorKind::QueryA);
-        assert_eq!(parsed.descriptor.part, ArtifactTensorPart::Weight);
+        assert_eq!(parsed.descriptor.part, TensorPayloadPart::Weight);
 
         let info = fake_tensor("mtp.2.attn.wo_b.scale");
         let parsed = parse_mtp_attention_tensor(&info).unwrap();
         assert_eq!(parsed.descriptor.layer, 2);
         assert_eq!(parsed.descriptor.kind, AttentionTensorKind::OutputB);
-        assert_eq!(parsed.descriptor.part, ArtifactTensorPart::Scale);
+        assert_eq!(parsed.descriptor.part, TensorPayloadPart::Scale);
 
         let info = fake_tensor("mtp.1.attn.q_norm.weight");
         let parsed = parse_mtp_attention_tensor(&info).unwrap();

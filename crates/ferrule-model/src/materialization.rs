@@ -1,80 +1,87 @@
-//! Model-side expert dependency and materialization boundary.
+//! Model-side resource dependency and materialization boundary.
 //!
 //! Continuations retain only canonical logical dependencies. A runner-level
-//! adapter owns the bridge to the runtime-wide physical materialization registry;
-//! exact loads are identified exclusively by [`LoadKey`].
+//! resolver owns the bridge to the runtime-wide physical materialization registry;
+//! exact resources are identified exclusively by [`MaterializationKey`]. Routed
+//! experts, dense parameter bundles, activation checkpoints, gradients, and
+//! optimizer shards use this same protocol.
 
-#[cfg(any(feature = "cuda", test))]
+mod source;
+
+pub use source::{MaterializationSourceCatalog, MaterializationSourceEntry};
+
 use ferrule_common::LogicalDependency;
 use ferrule_common::{
-    ArtifactFormat, BackendId, CancellationReason, CompletionEvent, ContentHash, ContinuationId,
-    DependencySet, DestinationGeneration, DeviceId, Error, ExpertId, ExpertLeaseSet, FailureReason,
-    LayerId, LoadKey, LoadStage, ModelInstanceId, OperationId,
-    RegisteredPinnedAlignedSlabLeaseDescriptor, ResidencyBinding, Result, SourceGeneration,
-    SourceIdentityHash, UploadFenceContract, ValidatedResidencyBinding,
+    BackendId, CancellationReason, CompletionEvent, ContentHash, ContinuationId, DependencySet,
+    DestinationGeneration, DeviceId, Error, ExpertId, FailureReason, LayerId, LoadStage,
+    MaterializationKey, MaterializedResourceId, ModelInstanceId, OperationId, PayloadEncodingId,
+    RegisteredPinnedAlignedSlabLeaseDescriptor, ResidencyBinding, ResidencyLeaseSet, Result,
+    SourceGeneration, SourceIdentityHash, UploadFenceContract, ValidatedResidencyBinding,
 };
 
 /// Versioned protocol format for exact HF safetensors expert payloads.
-pub const HF_SAFETENSORS_EXPERT_FORMAT_V1: ArtifactFormat = ArtifactFormat::new(1);
+pub const HF_SAFETENSORS_ROUTED_EXPERT_V1: PayloadEncodingId = PayloadEncodingId::new(1);
+/// Versioned protocol format for ordered HF safetensors tensor bundles.
+pub const HF_SAFETENSORS_TENSOR_BUNDLE_V1: PayloadEncodingId = PayloadEncodingId::new(2);
 
-/// Immutable checkpoint/catalog identity for one expert payload.
+/// Immutable source identity for one materializable payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ExpertArtifactIdentity {
-    source: SourceIdentityHash,
+pub struct ResourceSource {
+    identity: SourceIdentityHash,
     content_hash: ContentHash,
-    format: ArtifactFormat,
-    source_generation: SourceGeneration,
+    encoding: PayloadEncodingId,
+    generation: SourceGeneration,
 }
 
-impl ExpertArtifactIdentity {
+impl ResourceSource {
     pub fn new(
-        source: SourceIdentityHash,
+        identity: SourceIdentityHash,
         content_hash: ContentHash,
-        format: ArtifactFormat,
-        source_generation: SourceGeneration,
+        encoding: PayloadEncodingId,
+        generation: SourceGeneration,
     ) -> Result<Self> {
-        if source.is_zero() {
+        if identity.is_zero() {
             return Err(Error::Model(
-                "expert artifact source identity hash must be non-zero".into(),
+                "resource source identity hash must be non-zero".into(),
             ));
         }
         if content_hash.is_zero() {
             return Err(Error::Model(
-                "expert artifact content hash must be non-zero".into(),
+                "resource source content hash must be non-zero".into(),
             ));
         }
-        if format.get() == 0 {
+        if encoding.get() == 0 {
             return Err(Error::Model(
-                "expert artifact format identity must be non-zero".into(),
+                "resource payload encoding must be non-zero".into(),
             ));
         }
-        if source_generation.is_zero() {
+        if generation.is_zero() {
             return Err(Error::Model(
-                "expert artifact source generation must be non-zero".into(),
+                "resource source generation must be non-zero".into(),
             ));
         }
         Ok(Self {
-            source,
+            identity,
             content_hash,
-            format,
-            source_generation,
+            encoding,
+            generation,
         })
     }
 
-    pub const fn source(self) -> SourceIdentityHash {
-        self.source
+    pub const fn identity(self) -> SourceIdentityHash {
+        self.identity
     }
 
     pub const fn content_hash(self) -> ContentHash {
         self.content_hash
     }
 
-    pub const fn format(self) -> ArtifactFormat {
-        self.format
+    pub const fn encoding(self) -> PayloadEncodingId {
+        self.encoding
     }
 
-    pub const fn source_generation(self) -> SourceGeneration {
-        self.source_generation
+    pub const fn generation(self) -> SourceGeneration {
+        self.generation
     }
 }
 
@@ -83,17 +90,17 @@ impl ExpertArtifactIdentity {
 /// These values come from the installed driver/registry, never from a model-local
 /// counter, object address, or transient operation ID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ExpertMaterializationPlacement {
+pub struct MaterializationPlacement {
     model: ModelInstanceId,
     backend: BackendId,
     device: DeviceId,
 }
 
-impl ExpertMaterializationPlacement {
+impl MaterializationPlacement {
     pub fn new(model: ModelInstanceId, backend: BackendId, device: DeviceId) -> Result<Self> {
         if model.is_zero() {
             return Err(Error::Model(
-                "expert materialization model instance must be non-zero".into(),
+                "materialization model instance must be non-zero".into(),
             ));
         }
         Ok(Self {
@@ -116,46 +123,58 @@ impl ExpertMaterializationPlacement {
     }
 }
 
-/// Exact model/catalog/backend coordinates resolved after routing and before a
-/// destination reservation is joined or created.
+/// Exact model/source/resource/backend coordinates resolved before a destination
+/// reservation is joined or created.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ExpertMaterializationRequest {
+pub struct MaterializationRequest {
     model: ModelInstanceId,
-    artifact: ExpertArtifactIdentity,
-    layer: LayerId,
-    expert: ExpertId,
+    source: ResourceSource,
+    resource: MaterializedResourceId,
     backend: BackendId,
     device: DeviceId,
 }
 
-impl ExpertMaterializationRequest {
+impl MaterializationRequest {
     pub fn new(
         model: ModelInstanceId,
-        artifact: ExpertArtifactIdentity,
+        source: ResourceSource,
+        resource: MaterializedResourceId,
+        backend: BackendId,
+        device: DeviceId,
+    ) -> Result<Self> {
+        Self::for_placement(
+            MaterializationPlacement::new(model, backend, device)?,
+            source,
+            resource,
+        )
+    }
+
+    pub fn routed_expert(
+        model: ModelInstanceId,
+        source: ResourceSource,
         layer: LayerId,
         expert: ExpertId,
         backend: BackendId,
         device: DeviceId,
     ) -> Result<Self> {
-        Self::for_placement(
-            ExpertMaterializationPlacement::new(model, backend, device)?,
-            artifact,
-            layer,
-            expert,
+        Self::new(
+            model,
+            source,
+            MaterializedResourceId::routed_expert(layer, expert),
+            backend,
+            device,
         )
     }
 
     pub fn for_placement(
-        placement: ExpertMaterializationPlacement,
-        artifact: ExpertArtifactIdentity,
-        layer: LayerId,
-        expert: ExpertId,
+        placement: MaterializationPlacement,
+        source: ResourceSource,
+        resource: MaterializedResourceId,
     ) -> Result<Self> {
         Ok(Self {
             model: placement.model,
-            artifact,
-            layer,
-            expert,
+            source,
+            resource,
             backend: placement.backend,
             device: placement.device,
         })
@@ -163,41 +182,42 @@ impl ExpertMaterializationRequest {
 
     /// Complete a load identity with the generation returned by the exact slot
     /// reservation. Callers must not synthesize this generation.
-    pub fn load_key(self, destination_generation: DestinationGeneration) -> Result<LoadKey> {
-        Ok(LoadKey::new(
+    pub fn materialization_key(
+        self,
+        destination_generation: DestinationGeneration,
+    ) -> Result<MaterializationKey> {
+        Ok(MaterializationKey::new(
             self.model,
-            self.artifact.source,
-            self.artifact.content_hash,
-            self.layer,
-            self.expert,
-            self.artifact.format,
+            self.source.identity,
+            self.source.content_hash,
+            self.resource,
+            self.source.encoding,
             self.backend,
             self.device,
-            self.artifact.source_generation,
+            self.source.generation,
             destination_generation,
         )?)
     }
 
-    pub fn validate_key(self, key: LoadKey) -> Result<()> {
+    pub fn validate_key(self, key: MaterializationKey) -> Result<()> {
         key.validate()?;
         let fields = [
             ("model instance", key.model() == self.model),
-            ("source identity", key.source() == self.artifact.source),
+            ("source identity", key.source() == self.source.identity),
             (
                 "source content hash",
-                key.source_hash() == self.artifact.content_hash,
+                key.source_hash() == self.source.content_hash,
             ),
-            ("layer", key.layer() == self.layer),
-            ("expert", key.expert() == self.expert),
+            ("resource", key.resource() == self.resource),
             (
-                "artifact format",
-                key.artifact_format() == self.artifact.format,
+                "payload encoding",
+                key.payload_encoding() == self.source.encoding,
             ),
             ("backend", key.backend() == self.backend),
             ("device", key.device() == self.device),
             (
                 "source generation",
-                key.source_generation() == self.artifact.source_generation,
+                key.source_generation() == self.source.generation,
             ),
         ];
         if let Some((field, _)) = fields.into_iter().find(|(_, matches)| !matches) {
@@ -212,16 +232,16 @@ impl ExpertMaterializationRequest {
         self.model
     }
 
-    pub const fn artifact(self) -> ExpertArtifactIdentity {
-        self.artifact
+    pub const fn source(self) -> ResourceSource {
+        self.source
     }
 
-    pub const fn layer(self) -> LayerId {
-        self.layer
+    pub const fn resource(self) -> MaterializedResourceId {
+        self.resource
     }
 
-    pub const fn expert(self) -> ExpertId {
-        self.expert
+    pub const fn routed_expert_coordinates(self) -> Option<(LayerId, ExpertId)> {
+        self.resource.routed_expert_coordinates()
     }
 
     pub const fn backend(self) -> BackendId {
@@ -233,26 +253,30 @@ impl ExpertMaterializationRequest {
     }
 }
 
-/// Slot reservation returned by the model-owned physical authority.
+/// Prepared physical transfer returned by a materialization provider.
 ///
-/// The destination generation is derived from the exact `ExpertSlotGeneration`
-/// returned by `prepare_install`; callers must use `key` verbatim. `evicted`
-/// identifies an older physical publication invalidated by the slot reservation.
+/// The destination generation is fixed by the exact physical reservation; callers
+/// must use `key` verbatim. `evicted` identifies an older physical publication
+/// invalidated by this preparation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PhysicalExpertReservationDescriptor {
-    key: LoadKey,
+pub struct MaterializationTransfer {
+    key: MaterializationKey,
     binding: ResidencyBinding,
-    evicted: Option<LoadKey>,
+    evicted: Option<MaterializationKey>,
 }
 
-impl PhysicalExpertReservationDescriptor {
-    pub fn new(key: LoadKey, binding: ResidencyBinding, evicted: Option<LoadKey>) -> Result<Self> {
+impl MaterializationTransfer {
+    pub fn new(
+        key: MaterializationKey,
+        binding: ResidencyBinding,
+        evicted: Option<MaterializationKey>,
+    ) -> Result<Self> {
         ValidatedResidencyBinding::new(key, binding)?;
         if let Some(evicted) = evicted {
             evicted.validate()?;
             if evicted == key {
                 return Err(Error::Execution(
-                    "physical expert reservation cannot evict its own load key".into(),
+                    "physical materialization reservation cannot evict its own key".into(),
                 ));
             }
         }
@@ -263,7 +287,7 @@ impl PhysicalExpertReservationDescriptor {
         })
     }
 
-    pub const fn key(self) -> LoadKey {
+    pub const fn key(self) -> MaterializationKey {
         self.key
     }
 
@@ -271,16 +295,57 @@ impl PhysicalExpertReservationDescriptor {
         self.binding
     }
 
-    pub const fn evicted(self) -> Option<LoadKey> {
+    pub const fn evicted(self) -> Option<MaterializationKey> {
         self.evicted
     }
 }
 
-/// Result of resolving a request against model-owned slot/frame authority.
-#[derive(Debug, PartialEq, Eq)]
-pub enum PhysicalExpertReservation {
-    Resident(ValidatedResidencyBinding),
-    Reserved(PhysicalExpertReservationDescriptor),
+/// Provider-owned resident metadata prepared for registry adoption.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaterializationResident {
+    key: MaterializationKey,
+    binding: ResidencyBinding,
+}
+
+impl MaterializationResident {
+    pub fn new(key: MaterializationKey, binding: ResidencyBinding) -> Result<Self> {
+        ValidatedResidencyBinding::new(key, binding)?;
+        Ok(Self { key, binding })
+    }
+
+    pub const fn key(self) -> MaterializationKey {
+        self.key
+    }
+
+    pub const fn binding(self) -> ResidencyBinding {
+        self.binding
+    }
+}
+
+/// Provider-owned physical state prepared for one exact request.
+///
+/// This is not logical residency publication. The runtime registry must adopt a
+/// resident preparation or drive a transfer before exposing a lease to execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaterializationPreparation {
+    Resident(MaterializationResident),
+    Transfer(MaterializationTransfer),
+}
+
+impl MaterializationPreparation {
+    pub const fn key(self) -> MaterializationKey {
+        match self {
+            Self::Resident(resident) => resident.key(),
+            Self::Transfer(transfer) => transfer.key(),
+        }
+    }
+
+    pub const fn binding(self) -> ResidencyBinding {
+        match self {
+            Self::Resident(resident) => resident.binding(),
+            Self::Transfer(transfer) => transfer.binding(),
+        }
+    }
 }
 
 /// Registered pinned storage and upload-fence contract for one registry operation.
@@ -289,16 +354,16 @@ pub enum PhysicalExpertReservation {
 /// actual registered allocations and provider tickets until cancellation or the
 /// matching read/upload completion has drained.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PhysicalExpertOperationReservation {
-    key: LoadKey,
+pub struct PhysicalMaterializationOperationReservation {
+    key: MaterializationKey,
     binding: ResidencyBinding,
     slabs: Box<[RegisteredPinnedAlignedSlabLeaseDescriptor]>,
     upload_fence: UploadFenceContract,
 }
 
-impl PhysicalExpertOperationReservation {
+impl PhysicalMaterializationOperationReservation {
     pub fn new(
-        key: LoadKey,
+        key: MaterializationKey,
         binding: ResidencyBinding,
         slabs: impl Into<Box<[RegisteredPinnedAlignedSlabLeaseDescriptor]>>,
         upload_fence: UploadFenceContract,
@@ -307,7 +372,8 @@ impl PhysicalExpertOperationReservation {
         let slabs = slabs.into();
         if slabs.is_empty() {
             return Err(Error::Execution(
-                "physical expert operation requires at least one registered pinned slab".into(),
+                "physical materialization operation requires at least one registered pinned slab"
+                    .into(),
             ));
         }
         for slab in &slabs {
@@ -316,7 +382,8 @@ impl PhysicalExpertOperationReservation {
                 || slab.destination_generation() != key.destination_generation()
             {
                 return Err(Error::Execution(
-                    "physical expert slab identity does not match its operation/load key".into(),
+                    "physical materialization slab identity does not match its operation or key"
+                        .into(),
                 ));
             }
         }
@@ -324,7 +391,7 @@ impl PhysicalExpertOperationReservation {
             || upload_fence.fence.is_zero()
         {
             return Err(Error::Execution(
-                "physical expert upload fence does not match its load key".into(),
+                "physical materialization upload fence does not match its key".into(),
             ));
         }
         Ok(Self {
@@ -335,7 +402,7 @@ impl PhysicalExpertOperationReservation {
         })
     }
 
-    pub const fn key(&self) -> LoadKey {
+    pub const fn key(&self) -> MaterializationKey {
         self.key
     }
 
@@ -354,111 +421,138 @@ impl PhysicalExpertOperationReservation {
 
 /// Exact physical capacities exposed by a materialization backend.
 ///
-/// Stage limits bound read/upload/install transitions. Device-frame bytes cover
-/// both published residency and replacement shadow frames. Execution leases are
-/// reported per continuation so the runtime can scale them by admitted concurrency.
+/// Stage limits bound materialization transitions. `resident_capacity_bytes`
+/// covers published residency and replacement shadow capacity. Residency lease
+/// slots are reported per continuation so the runtime can scale them by admitted
+/// concurrency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PhysicalExpertResourceTopology {
-    stage_limits: ferrule_common::expert_io::ExpertIoResourceLimits,
-    device_frame_bytes: u64,
-    execution_lease_slots_per_continuation: u64,
+pub struct PhysicalMaterializationTopology {
+    stage_limits: ferrule_common::materialization_io::MaterializationResourceLimits,
+    resident_capacity_bytes: u64,
+    residency_lease_slots_per_continuation: u64,
 }
 
-impl PhysicalExpertResourceTopology {
+impl PhysicalMaterializationTopology {
     pub fn new(
-        stage_limits: ferrule_common::expert_io::ExpertIoResourceLimits,
-        device_frame_bytes: u64,
-        execution_lease_slots_per_continuation: u64,
+        stage_limits: ferrule_common::materialization_io::MaterializationResourceLimits,
+        resident_capacity_bytes: u64,
+        residency_lease_slots_per_continuation: u64,
     ) -> Result<Self> {
         let stage_limits = stage_limits.validate()?;
         if !stage_limits.capacity.is_empty()
-            && (device_frame_bytes == 0 || execution_lease_slots_per_continuation == 0)
+            && (resident_capacity_bytes == 0 || residency_lease_slots_per_continuation == 0)
         {
             return Err(Error::Execution(
-                "physical expert topology requires non-zero frame and execution-lease capacity"
+                "physical materialization topology requires non-zero resident and residency-lease capacity"
                     .into(),
             ));
         }
         Ok(Self {
             stage_limits,
-            device_frame_bytes,
-            execution_lease_slots_per_continuation,
+            resident_capacity_bytes,
+            residency_lease_slots_per_continuation,
         })
     }
 
-    pub const fn stage_limits(self) -> ferrule_common::expert_io::ExpertIoResourceLimits {
+    pub const fn stage_limits(
+        self,
+    ) -> ferrule_common::materialization_io::MaterializationResourceLimits {
         self.stage_limits
     }
 
-    pub const fn device_frame_bytes(self) -> u64 {
-        self.device_frame_bytes
+    pub const fn resident_capacity_bytes(self) -> u64 {
+        self.resident_capacity_bytes
     }
 
-    pub const fn execution_lease_slots_per_continuation(self) -> u64 {
-        self.execution_lease_slots_per_continuation
+    pub const fn residency_lease_slots_per_continuation(self) -> u64 {
+        self.residency_lease_slots_per_continuation
     }
 }
 
-/// Model-owned physical expert materialization provider.
+/// Model/backend-owned physical materialization provider.
 ///
 /// The trait is object-safe and depends only on model/common protocol types. A
 /// runtime wrapper owns the box after `MultiSessionRunner` transfers it once.
-/// Slot/frame publication remains model authority; runtime code owns waiters,
+/// Residency publication remains model authority; runtime code owns waiters,
 /// credits, operation IDs, completion validation, and retirement.
-pub trait PhysicalExpertMaterializationBackend: std::fmt::Debug + Send {
-    fn placement(&self) -> ExpertMaterializationPlacement;
+pub trait MaterializationProvider: std::fmt::Debug + Send {
+    fn placement(&self) -> MaterializationPlacement;
 
-    fn resource_topology(&self) -> Result<PhysicalExpertResourceTopology>;
+    fn resource_topology(&self) -> Result<PhysicalMaterializationTopology>;
 
-    /// Resolve an exact source request, calling the real residency
-    /// `prepare_install` before constructing a destination generation and key.
-    fn resolve_or_reserve(
+    /// Prepare one exact source request, calling the real residency authority
+    /// before constructing a destination generation and key.
+    fn prepare(
         &mut self,
-        request: ExpertMaterializationRequest,
-    ) -> std::result::Result<PhysicalExpertReservation, FailureReason>;
+        request: MaterializationRequest,
+    ) -> std::result::Result<MaterializationPreparation, FailureReason>;
 
-    fn materialization_bytes(&self, key: LoadKey) -> std::result::Result<u64, FailureReason>;
+    /// Re-read provider-owned physical state for a key previously returned by
+    /// `prepare`. No runtime cache may synthesize this result.
+    fn prepared(
+        &self,
+        key: MaterializationKey,
+    ) -> std::result::Result<MaterializationPreparation, FailureReason>;
 
-    /// Release the selected execution ownership retained by the runtime attachment.
-    /// Runtime attachments are the only logical owners. A release racing a pending
-    /// install must be remembered so later publication cannot leave an ownerless lease.
-    fn release_selected(&mut self, key: LoadKey) -> std::result::Result<(), FailureReason>;
+    fn materialization_plan(
+        &self,
+        key: MaterializationKey,
+    ) -> std::result::Result<
+        ferrule_common::materialization_io::MaterializationResourcePlan,
+        FailureReason,
+    >;
+
+    /// Discard a provider preparation that was never claimed by the registry.
+    /// Implementations must cancel an unbound transfer reservation or release an
+    /// acquired resident execution lease. Claimed operations use `cancel` instead.
+    fn discard_preparation(
+        &mut self,
+        key: MaterializationKey,
+    ) -> std::result::Result<(), FailureReason>;
+
+    /// Release the execution residency lease retained for aggregate registry demand.
+    /// A release racing a pending install must be remembered so later publication
+    /// cannot leave an ownerless lease.
+    fn release_execution_lease(
+        &mut self,
+        key: MaterializationKey,
+    ) -> std::result::Result<(), FailureReason>;
 
     fn reserve(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        bytes: u64,
-    ) -> std::result::Result<PhysicalExpertOperationReservation, FailureReason>;
+        key: MaterializationKey,
+        plan: ferrule_common::materialization_io::MaterializationResourcePlan,
+    ) -> std::result::Result<PhysicalMaterializationOperationReservation, FailureReason>;
 
     fn submit_read(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        reservation: &PhysicalExpertOperationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        reservation: &PhysicalMaterializationOperationReservation,
+        plan: ferrule_common::materialization_io::MaterializationResourcePlan,
     ) -> std::result::Result<(), FailureReason>;
 
     fn submit_upload(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        reservation: &PhysicalExpertOperationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        reservation: &PhysicalMaterializationOperationReservation,
+        plan: ferrule_common::materialization_io::MaterializationResourcePlan,
     ) -> std::result::Result<(), FailureReason>;
 
     fn poll_install(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        reservation: &PhysicalExpertOperationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        reservation: &PhysicalMaterializationOperationReservation,
+        plan: ferrule_common::materialization_io::MaterializationResourcePlan,
     ) -> std::result::Result<(), FailureReason>;
 
     fn cancel(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
+        key: MaterializationKey,
         stage: LoadStage,
         reason: CancellationReason,
     ) -> std::result::Result<(), FailureReason>;
@@ -466,62 +560,28 @@ pub trait PhysicalExpertMaterializationBackend: std::fmt::Debug + Send {
     fn next_completion(&mut self) -> Option<CompletionEvent>;
 }
 
-/// Residency resolution for one exact post-router expert requirement.
-#[derive(Debug, PartialEq, Eq)]
-pub enum ExpertDependencyResolution {
-    /// The exact source/generation/backend/device binding is already resident.
-    Resident(ValidatedResidencyBinding),
-    /// The exact destination reservation is unresolved and may be single-flight
-    /// joined by any transaction carrying the same key.
-    Waiting(LoadKey),
-}
-
-impl ExpertDependencyResolution {
-    pub fn resident(
-        request: ExpertMaterializationRequest,
-        binding: ValidatedResidencyBinding,
-    ) -> Result<Self> {
-        request.validate_key(binding.key())?;
-        Ok(Self::Resident(binding))
-    }
-
-    pub fn waiting(request: ExpertMaterializationRequest, key: LoadKey) -> Result<Self> {
-        request.validate_key(key)?;
-        Ok(Self::Waiting(key))
-    }
-}
-
-/// Model-facing edge of the runtime materialization owner.
+/// Model-facing resolver for exact physical resource identities.
 ///
-/// `resolve` fixes the exact physical key and destination generation. The runtime
-/// registry exclusively owns submission, progress, publication, cancellation, and
-/// retirement; the model can only release an unresolved dependency with `detach`.
-pub trait ExpertMaterializationAdapter: Send {
+/// `resolve` prepares the provider-owned physical resolution and returns its exact
+/// generation-qualified key. The runtime registry is the only owner of logical
+/// demand, publication, residency accounting, cancellation, and eviction.
+pub trait MaterializationResolver: Send {
     /// Stable runtime-assigned namespace used for every request resolved by this
-    /// adapter instance.
-    fn placement(&self) -> ExpertMaterializationPlacement;
+    /// resolver instance.
+    fn placement(&self) -> MaterializationPlacement;
 
-    fn resolve(
-        &mut self,
-        request: ExpertMaterializationRequest,
-    ) -> Result<ExpertDependencyResolution>;
-
-    /// Detach one continuation's logical demand. This must not imply physical
-    /// cancellation, even when the continuation is the adapter's last known waiter.
-    fn detach(&mut self, continuation: ContinuationId, key: LoadKey) -> Result<()>;
+    fn resolve(&mut self, request: MaterializationRequest) -> Result<MaterializationKey>;
 }
 
-/// One unresolved dependency edge retained by a model continuation.
+/// One unresolved resource-dependency description retained by a model continuation.
 ///
-/// This object owns no resumed execution attachment, read, upload, slot reservation,
-/// provider ticket, or physical cancellation authority. Runtime owns the attachment
-/// and releases it when the resume edge finishes. Before resume, model cancellation
-/// may detach the still-unresolved edge; successful detaches remain retry-safe.
+/// This object owns no logical attachment, provider lease, operation, or cancellation
+/// authority. The runtime registry owns those lifetimes; model cancellation only
+/// discards the description that would otherwise be consumed by resume validation.
 #[derive(Debug)]
 pub struct ContinuationDependencyState {
     continuation: ContinuationId,
     unresolved: Option<DependencySet>,
-    detach_remaining: Option<Vec<LoadKey>>,
 }
 
 impl ContinuationDependencyState {
@@ -531,7 +591,6 @@ impl ContinuationDependencyState {
         Ok(Self {
             continuation,
             unresolved: Some(unresolved),
-            detach_remaining: None,
         })
     }
 
@@ -543,33 +602,22 @@ impl ContinuationDependencyState {
         self.unresolved.as_ref()
     }
 
-    pub fn has_expert_dependencies(&self) -> bool {
-        self.detach_remaining
-            .as_ref()
-            .is_some_and(|remaining| !remaining.is_empty())
-            || self.unresolved.as_ref().is_some_and(|dependencies| {
-                dependencies
-                    .iter()
-                    .any(|dependency| dependency.load_key().is_some())
-            })
+    pub fn has_materialization_dependencies(&self) -> bool {
+        self.unresolved.as_ref().is_some_and(|dependencies| {
+            dependencies
+                .iter()
+                .any(|dependency| dependency.materialization_key().is_some())
+        })
     }
 
-    pub fn clear_non_expert_dependencies(&mut self) -> Result<()> {
-        if self.has_expert_dependencies() {
-            return Err(Error::Execution(format!(
-                "continuation {} still has expert dependencies that must be detached through the materialization adapter",
-                self.continuation.get()
-            )));
-        }
+    pub fn discard_unresolved(&mut self) {
         self.unresolved = None;
-        self.detach_remaining = None;
-        Ok(())
     }
 
     pub fn replace_unresolved(&mut self, unresolved: DependencySet) -> Result<()> {
-        if self.unresolved.is_some() || self.detach_remaining.is_some() {
+        if self.unresolved.is_some() {
             return Err(Error::Execution(format!(
-                "continuation {} still owns an unresolved dependency set or has detach cleanup in progress",
+                "continuation {} still owns an unresolved dependency set",
                 self.continuation.get()
             )));
         }
@@ -579,12 +627,12 @@ impl ContinuationDependencyState {
     }
 
     /// Validate and consume exactly one resume edge. The lease set must contain
-    /// every and only expert-residency dependency in the suspended set. Runtime
+    /// every and only residency dependency in the suspended set. Runtime
     /// retains and later releases the attachment for the consumed edge.
     pub fn validate_resume(
         &mut self,
         continuation: ContinuationId,
-        leases: &ExpertLeaseSet,
+        leases: &ResidencyLeaseSet,
     ) -> Result<()> {
         if continuation != self.continuation {
             return Err(Error::Execution(format!(
@@ -601,7 +649,7 @@ impl ContinuationDependencyState {
         })?;
         let required = unresolved
             .iter()
-            .filter_map(|dependency| dependency.load_key())
+            .filter_map(|dependency| dependency.materialization_key())
             .collect::<Vec<_>>();
         if leases.len() != required.len()
             || required
@@ -609,45 +657,10 @@ impl ContinuationDependencyState {
                 .any(|key| leases.binding_for(*key).is_none())
         {
             return Err(Error::Execution(format!(
-                "continuation {} lease set does not exactly satisfy its unresolved expert dependencies",
+                "continuation {} lease set does not exactly satisfy its unresolved resource dependencies",
                 self.continuation.get()
             )));
         }
-        self.unresolved = None;
-        Ok(())
-    }
-
-    /// Detach only the current unresolved expert edge during cancellation/failure.
-    /// A successfully resumed edge is no longer represented here and must be released
-    /// only by runtime. A failed detach keeps the remaining keys for an exact retry.
-    pub fn detach_logical_dependencies(
-        &mut self,
-        adapter: &mut dyn ExpertMaterializationAdapter,
-    ) -> Result<()> {
-        if self.detach_remaining.is_none() {
-            let Some(unresolved) = self.unresolved.as_ref() else {
-                return Ok(());
-            };
-            let remaining = unresolved
-                .iter()
-                .filter_map(|dependency| dependency.load_key())
-                .collect::<Vec<_>>();
-            if remaining.is_empty() {
-                self.unresolved = None;
-                return Ok(());
-            }
-            self.detach_remaining = Some(remaining);
-        }
-
-        let remaining = self
-            .detach_remaining
-            .as_mut()
-            .expect("detach list initialized above");
-        while let Some(key) = remaining.first().copied() {
-            adapter.detach(self.continuation, key)?;
-            remaining.remove(0);
-        }
-        self.detach_remaining = None;
         self.unresolved = None;
         Ok(())
     }
@@ -663,25 +676,45 @@ pub(crate) fn validate_continuation_id(continuation: ContinuationId) -> Result<(
     }
 }
 
-#[cfg(any(feature = "cuda", test))]
-pub(crate) fn expert_dependency_set(
-    keys: impl IntoIterator<Item = LoadKey>,
+pub(crate) fn resource_dependency_set(
+    keys: impl IntoIterator<Item = MaterializationKey>,
 ) -> Result<DependencySet> {
     let dependencies = keys
         .into_iter()
-        .map(LogicalDependency::expert_resident)
+        .map(LogicalDependency::resource_resident)
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(DependencySet::new(dependencies)?)
+}
+
+/// Resolve every exact resource request for one stage through the global resolver
+/// boundary and return the canonical dependency set retained by its continuation.
+pub fn resolve_stage_dependencies<O>(
+    stage: &crate::execution::MaterializedStage<'_, O>,
+    resolver: &mut dyn MaterializationResolver,
+) -> Result<DependencySet> {
+    let mut keys = Vec::with_capacity(stage.resources().len());
+    for resource in stage.resources() {
+        let request = resource.request();
+        if request.model() != resolver.placement().model()
+            || request.backend() != resolver.placement().backend()
+            || request.device() != resolver.placement().device()
+        {
+            return Err(Error::Execution(
+                "materialized stage request does not match resolver placement".into(),
+            ));
+        }
+        keys.push(resolver.resolve(request)?);
+    }
+    resource_dependency_set(keys)
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use ferrule_common::execution::ExecutionTransactionId;
     use ferrule_common::{
-        DestinationSlotId, DispatchFenceContract, FenceId, MappingEpoch, OperationId,
-        ResidencyBinding,
+        DestinationSlotId, DispatchFenceContract, FenceId, MappingEpoch, MaterializedResourceKind,
+        OperationId, ResidencyBinding,
     };
 
     use super::*;
@@ -690,53 +723,56 @@ mod tests {
         [value; 32]
     }
 
-    fn artifact(source: u8, content: u8, format: u32, generation: u64) -> ExpertArtifactIdentity {
-        ExpertArtifactIdentity::new(
-            SourceIdentityHash::new(bytes(source)),
+    fn source(identity: u8, content: u8, encoding: u32, generation: u64) -> ResourceSource {
+        ResourceSource::new(
+            SourceIdentityHash::new(bytes(identity)),
             ContentHash::new(bytes(content)),
-            ArtifactFormat::new(format),
+            PayloadEncodingId::new(encoding),
             SourceGeneration::new(generation),
         )
         .unwrap()
     }
 
-    fn request() -> ExpertMaterializationRequest {
-        ExpertMaterializationRequest::new(
+    fn resource(kind: MaterializedResourceKind, group: u32, item: u32) -> MaterializedResourceId {
+        MaterializedResourceId::new(kind, group, item)
+    }
+
+    fn request() -> MaterializationRequest {
+        MaterializationRequest::new(
             ModelInstanceId::new(11),
-            artifact(12, 13, 14, 15),
-            LayerId::new(16),
-            ExpertId::new(17),
+            source(12, 13, 14, 15),
+            resource(MaterializedResourceKind::RoutedExpert, 16, 17),
             BackendId::new(18),
             DeviceId::new(19),
         )
         .unwrap()
     }
 
-    fn key() -> LoadKey {
-        request().load_key(DestinationGeneration::new(20)).unwrap()
+    fn key() -> MaterializationKey {
+        request()
+            .materialization_key(DestinationGeneration::new(20))
+            .unwrap()
     }
 
-    fn key_for_expert(expert: u32) -> LoadKey {
-        ExpertMaterializationRequest::new(
+    fn key_for_expert(expert: u32) -> MaterializationKey {
+        MaterializationRequest::new(
             request().model(),
-            request().artifact(),
-            request().layer(),
-            ExpertId::new(expert),
+            request().source(),
+            resource(MaterializedResourceKind::RoutedExpert, 16, expert),
             request().backend(),
             request().device(),
         )
         .unwrap()
-        .load_key(DestinationGeneration::new(20))
+        .materialization_key(DestinationGeneration::new(20))
         .unwrap()
     }
 
-    fn binding(key: LoadKey, slot: u32) -> ValidatedResidencyBinding {
+    fn binding(key: MaterializationKey, slot: u32) -> ValidatedResidencyBinding {
         ValidatedResidencyBinding::new(
             key,
             ResidencyBinding::new(
                 key.model(),
-                key.layer(),
-                key.expert(),
+                key.resource(),
                 key.backend(),
                 key.device(),
                 DestinationSlotId::new(slot),
@@ -746,9 +782,9 @@ mod tests {
         .unwrap()
     }
 
-    fn leases(keys: &[LoadKey]) -> ExpertLeaseSet {
+    fn leases(keys: &[MaterializationKey]) -> ResidencyLeaseSet {
         let placement = keys.first().copied().unwrap_or_else(key);
-        ExpertLeaseSet::new(
+        ResidencyLeaseSet::new(
             keys.iter().copied(),
             keys.iter()
                 .copied()
@@ -766,57 +802,13 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct MockAdapter {
-        reservations: BTreeMap<ExpertMaterializationRequest, LoadKey>,
-        runtime_attachments: BTreeMap<LoadKey, usize>,
-        physical_releases: BTreeMap<LoadKey, usize>,
-        detached: BTreeSet<(ContinuationId, LoadKey)>,
-        detach_attempts: Vec<(ContinuationId, LoadKey)>,
-        fail_detach_once_for: Option<LoadKey>,
-        detach_failed: bool,
+    struct MockResolver {
+        reservations: BTreeMap<MaterializationRequest, MaterializationKey>,
     }
 
-    impl MockAdapter {
-        fn runtime_attach(&mut self, key: LoadKey) {
-            *self.runtime_attachments.entry(key).or_default() += 1;
-        }
-
-        fn runtime_attachment_count(&self, key: LoadKey) -> usize {
-            self.runtime_attachments.get(&key).copied().unwrap_or(0)
-        }
-
-        fn physical_release_count(&self, key: LoadKey) -> usize {
-            self.physical_releases.get(&key).copied().unwrap_or(0)
-        }
-
-        fn is_evictable(&self, key: LoadKey) -> bool {
-            self.runtime_attachment_count(key) == 0
-        }
-
-        fn runtime_finish_resume_lease(
-            &mut self,
-            continuation: ContinuationId,
-            key: LoadKey,
-        ) -> Result<()> {
-            ExpertMaterializationAdapter::detach(self, continuation, key)
-        }
-
-        fn runtime_detach_if_attached(
-            &mut self,
-            continuation: ContinuationId,
-            key: LoadKey,
-        ) -> Result<bool> {
-            if self.detached.contains(&(continuation, key)) {
-                return Ok(false);
-            }
-            ExpertMaterializationAdapter::detach(self, continuation, key)?;
-            Ok(true)
-        }
-    }
-
-    impl ExpertMaterializationAdapter for MockAdapter {
-        fn placement(&self) -> ExpertMaterializationPlacement {
-            ExpertMaterializationPlacement::new(
+    impl MaterializationResolver for MockResolver {
+        fn placement(&self) -> MaterializationPlacement {
+            MaterializationPlacement::new(
                 request().model(),
                 request().backend(),
                 request().device(),
@@ -824,174 +816,244 @@ mod tests {
             .unwrap()
         }
 
-        fn resolve(
-            &mut self,
-            request: ExpertMaterializationRequest,
-        ) -> Result<ExpertDependencyResolution> {
+        fn resolve(&mut self, request: MaterializationRequest) -> Result<MaterializationKey> {
             let key = if let Some(key) = self.reservations.get(&request) {
                 *key
             } else {
-                let key = request.load_key(DestinationGeneration::new(20))?;
+                let key = request.materialization_key(DestinationGeneration::new(20))?;
                 self.reservations.insert(request, key);
                 key
             };
-            ExpertDependencyResolution::waiting(request, key)
-        }
-
-        fn detach(&mut self, continuation: ContinuationId, key: LoadKey) -> Result<()> {
-            self.detach_attempts.push((continuation, key));
-            if self.fail_detach_once_for == Some(key) && !self.detach_failed {
-                self.detach_failed = true;
-                return Err(Error::Execution("injected detach failure".into()));
-            }
-            if !self.detached.insert((continuation, key)) {
-                return Err(Error::Execution("duplicate logical detach".into()));
-            }
-            let attachments = self.runtime_attachments.get_mut(&key).ok_or_else(|| {
-                Error::Execution("logical detach has no runtime attachment".into())
-            })?;
-            *attachments = attachments
-                .checked_sub(1)
-                .ok_or_else(|| Error::Execution("runtime attachment count underflow".into()))?;
-            if *attachments == 0 {
-                self.runtime_attachments.remove(&key);
-                *self.physical_releases.entry(key).or_default() += 1;
-            }
-            Ok(())
+            Ok(key)
         }
     }
 
     #[test]
-    fn load_key_identity_includes_every_source_placement_and_generation_dimension() {
+    fn one_stage_resolves_parameter_kv_and_gradient_through_one_resolver() {
+        use std::path::PathBuf;
+
+        use crate::TensorRole;
+        use crate::checkpoint::{
+            CheckpointBundleSource, CheckpointDType, CheckpointSourceFileIdentity,
+            CheckpointTensorSlice,
+        };
+        use crate::execution::{
+            ExecutableStage, PreparedExecutable, ResourceAccess, ResourceLayout, ResourceManifest,
+            ResourceRetention, StageResourceUse, TransformerStage, WorkspaceClaim,
+        };
+
+        let parameter = resource(MaterializedResourceKind::Parameter, 3, 1);
+        let kv = resource(MaterializedResourceKind::KvState, 3, 0);
+        let gradient = resource(MaterializedResourceKind::Gradient, 3, 1);
+        let parameter_source = source(31, 32, 2, 33);
+        let parameter_manifest = ResourceManifest::checkpoint(
+            parameter,
+            CheckpointBundleSource::for_test(
+                parameter_source,
+                [CheckpointSourceFileIdentity::for_test(
+                    PathBuf::from("model.safetensors"),
+                    PathBuf::from("/test/model.safetensors"),
+                    16,
+                )],
+            ),
+            [CheckpointTensorSlice {
+                name: "q.weight".into(),
+                role: TensorRole::AttentionQuery,
+                path: PathBuf::from("model.safetensors"),
+                offset: 0,
+                bytes: 16,
+                dtype: CheckpointDType::Bf16,
+                shape: vec![2, 4],
+            }],
+            ResourceLayout::TensorBundle,
+        )
+        .unwrap();
+        let executable = PreparedExecutable::new(
+            [
+                parameter_manifest,
+                ResourceManifest::runtime_owned(kv, 4096, 256).unwrap(),
+                ResourceManifest::runtime_owned(gradient, 16, 16).unwrap(),
+            ],
+            [ExecutableStage::new(
+                TransformerStage::Attention { layer: 3 },
+                [
+                    StageResourceUse::read(parameter),
+                    StageResourceUse::new(
+                        kv,
+                        ResourceAccess::ReadWrite,
+                        ResourceRetention::ThroughTransaction,
+                    ),
+                    StageResourceUse::new(
+                        gradient,
+                        ResourceAccess::Write,
+                        ResourceRetention::ThroughTransaction,
+                    ),
+                ],
+                WorkspaceClaim::NONE,
+            )],
+        )
+        .unwrap();
+        let mut resolver = MockResolver::default();
+        let placement = resolver.placement();
+        let stage = executable
+            .materialize_stage(0, placement, |resource| {
+                Ok(match resource.kind() {
+                    MaterializedResourceKind::KvState => source(41, 42, 8, 43),
+                    MaterializedResourceKind::Gradient => source(51, 52, 9, 53),
+                    kind => panic!("unexpected runtime-owned resource kind {kind:?}"),
+                })
+            })
+            .unwrap();
+
+        let dependencies = resolve_stage_dependencies(&stage, &mut resolver).unwrap();
+        let resources = dependencies
+            .iter()
+            .map(|dependency| dependency.materialization_key().unwrap().resource())
+            .collect::<Vec<_>>();
+        assert_eq!(resources, vec![parameter, kv, gradient]);
+        assert_eq!(resolver.reservations.len(), 3);
+        assert_eq!(
+            resolver
+                .reservations
+                .keys()
+                .find(|request| request.resource() == parameter)
+                .unwrap()
+                .source(),
+            parameter_source
+        );
+    }
+
+    #[test]
+    fn materialization_key_identity_includes_every_source_resource_placement_and_generation_dimension()
+     {
         let base = key();
+        let base_request = request();
         let variants = [
-            ExpertMaterializationRequest::new(
+            MaterializationRequest::new(
                 ModelInstanceId::new(21),
-                request().artifact(),
-                request().layer(),
-                request().expert(),
-                request().backend(),
-                request().device(),
+                base_request.source(),
+                base_request.resource(),
+                base_request.backend(),
+                base_request.device(),
             )
             .unwrap()
-            .load_key(base.destination_generation())
+            .materialization_key(base.destination_generation())
             .unwrap(),
-            ExpertMaterializationRequest::new(
-                request().model(),
-                artifact(22, 13, 14, 15),
-                request().layer(),
-                request().expert(),
-                request().backend(),
-                request().device(),
+            MaterializationRequest::new(
+                base_request.model(),
+                source(22, 13, 14, 15),
+                base_request.resource(),
+                base_request.backend(),
+                base_request.device(),
             )
             .unwrap()
-            .load_key(base.destination_generation())
+            .materialization_key(base.destination_generation())
             .unwrap(),
-            ExpertMaterializationRequest::new(
-                request().model(),
-                artifact(12, 23, 14, 15),
-                request().layer(),
-                request().expert(),
-                request().backend(),
-                request().device(),
+            MaterializationRequest::new(
+                base_request.model(),
+                source(12, 23, 14, 15),
+                base_request.resource(),
+                base_request.backend(),
+                base_request.device(),
             )
             .unwrap()
-            .load_key(base.destination_generation())
+            .materialization_key(base.destination_generation())
             .unwrap(),
-            ExpertMaterializationRequest::new(
-                request().model(),
-                request().artifact(),
-                LayerId::new(24),
-                request().expert(),
-                request().backend(),
-                request().device(),
+            MaterializationRequest::new(
+                base_request.model(),
+                base_request.source(),
+                resource(MaterializedResourceKind::Parameter, 16, 17),
+                base_request.backend(),
+                base_request.device(),
             )
             .unwrap()
-            .load_key(base.destination_generation())
+            .materialization_key(base.destination_generation())
+            .unwrap(),
+            MaterializationRequest::new(
+                base_request.model(),
+                base_request.source(),
+                resource(MaterializedResourceKind::RoutedExpert, 24, 17),
+                base_request.backend(),
+                base_request.device(),
+            )
+            .unwrap()
+            .materialization_key(base.destination_generation())
             .unwrap(),
             key_for_expert(25),
-            ExpertMaterializationRequest::new(
-                request().model(),
-                artifact(12, 13, 26, 15),
-                request().layer(),
-                request().expert(),
-                request().backend(),
-                request().device(),
+            MaterializationRequest::new(
+                base_request.model(),
+                source(12, 13, 26, 15),
+                base_request.resource(),
+                base_request.backend(),
+                base_request.device(),
             )
             .unwrap()
-            .load_key(base.destination_generation())
+            .materialization_key(base.destination_generation())
             .unwrap(),
-            ExpertMaterializationRequest::new(
-                request().model(),
-                request().artifact(),
-                request().layer(),
-                request().expert(),
+            MaterializationRequest::new(
+                base_request.model(),
+                base_request.source(),
+                base_request.resource(),
                 BackendId::new(27),
-                request().device(),
+                base_request.device(),
             )
             .unwrap()
-            .load_key(base.destination_generation())
+            .materialization_key(base.destination_generation())
             .unwrap(),
-            ExpertMaterializationRequest::new(
-                request().model(),
-                request().artifact(),
-                request().layer(),
-                request().expert(),
-                request().backend(),
+            MaterializationRequest::new(
+                base_request.model(),
+                base_request.source(),
+                base_request.resource(),
+                base_request.backend(),
                 DeviceId::new(28),
             )
             .unwrap()
-            .load_key(base.destination_generation())
+            .materialization_key(base.destination_generation())
             .unwrap(),
-            ExpertMaterializationRequest::new(
-                request().model(),
-                artifact(12, 13, 14, 29),
-                request().layer(),
-                request().expert(),
-                request().backend(),
-                request().device(),
+            MaterializationRequest::new(
+                base_request.model(),
+                source(12, 13, 14, 29),
+                base_request.resource(),
+                base_request.backend(),
+                base_request.device(),
             )
             .unwrap()
-            .load_key(base.destination_generation())
+            .materialization_key(base.destination_generation())
             .unwrap(),
-            request().load_key(DestinationGeneration::new(30)).unwrap(),
+            base_request
+                .materialization_key(DestinationGeneration::new(30))
+                .unwrap(),
         ];
         assert!(variants.into_iter().all(|variant| variant != base));
-        assert_eq!(variants.into_iter().collect::<BTreeSet<_>>().len(), 10);
+        assert_eq!(variants.into_iter().collect::<BTreeSet<_>>().len(), 11);
     }
 
     #[test]
-    fn resolution_distinguishes_resident_binding_from_unresolved_wait() {
-        let request = request();
+    fn preparation_variants_preserve_exact_key_and_validate_binding() {
         let key = key();
-        assert!(matches!(
-            ExpertDependencyResolution::waiting(request, key).unwrap(),
-            ExpertDependencyResolution::Waiting(waiting) if waiting == key
-        ));
-        assert!(matches!(
-            ExpertDependencyResolution::resident(request, binding(key, 3)).unwrap(),
-            ExpertDependencyResolution::Resident(resident) if resident.key() == key
-        ));
+        let raw = binding(key, 3).binding();
+        let resident = MaterializationResident::new(key, raw).unwrap();
+        let transfer = MaterializationTransfer::new(key, raw, None).unwrap();
+        assert_eq!(MaterializationPreparation::Resident(resident).key(), key);
+        assert_eq!(MaterializationPreparation::Transfer(transfer).key(), key);
 
-        let wrong_source = ExpertMaterializationRequest::new(
-            request.model(),
-            artifact(31, 13, 14, 15),
-            request.layer(),
-            request.expert(),
-            request.backend(),
-            request.device(),
-        )
-        .unwrap()
-        .load_key(key.destination_generation())
-        .unwrap();
-        assert!(ExpertDependencyResolution::waiting(request, wrong_source).is_err());
+        let wrong = ResidencyBinding::new(
+            key.model(),
+            key.resource(),
+            key.backend(),
+            key.device(),
+            DestinationSlotId::new(3),
+            DestinationGeneration::new(key.destination_generation().get() + 1),
+        );
+        assert!(MaterializationResident::new(key, wrong).is_err());
+        assert!(MaterializationTransfer::new(key, wrong, None).is_err());
     }
 
     #[test]
     fn resume_requires_complete_exact_lease_set_and_rejects_wrong_identity_dimensions() {
         let first = key_for_expert(1);
         let second = key_for_expert(2);
-        let dependencies = expert_dependency_set([first, second]).unwrap();
+        let dependencies = resource_dependency_set([first, second]).unwrap();
         let continuation = ContinuationId::new(41);
 
         let mut incomplete =
@@ -1004,43 +1066,40 @@ mod tests {
         assert!(incomplete.unresolved().is_some());
 
         for wrong in [
-            ExpertMaterializationRequest::new(
+            MaterializationRequest::new(
                 first.model(),
-                artifact(42, 13, 14, 15),
-                first.layer(),
-                first.expert(),
+                source(42, 13, 14, 15),
+                first.resource(),
                 first.backend(),
                 first.device(),
             )
             .unwrap()
-            .load_key(first.destination_generation())
+            .materialization_key(first.destination_generation())
             .unwrap(),
-            ExpertMaterializationRequest::new(
+            MaterializationRequest::new(
                 first.model(),
-                request().artifact(),
-                first.layer(),
-                first.expert(),
+                request().source(),
+                first.resource(),
                 first.backend(),
                 first.device(),
             )
             .unwrap()
-            .load_key(DestinationGeneration::new(43))
+            .materialization_key(DestinationGeneration::new(43))
             .unwrap(),
-            ExpertMaterializationRequest::new(
+            MaterializationRequest::new(
                 first.model(),
-                request().artifact(),
-                first.layer(),
-                first.expert(),
+                request().source(),
+                first.resource(),
                 BackendId::new(44),
                 first.device(),
             )
             .unwrap()
-            .load_key(first.destination_generation())
+            .materialization_key(first.destination_generation())
             .unwrap(),
         ] {
             let mut state = ContinuationDependencyState::new(
                 continuation,
-                expert_dependency_set([first]).unwrap(),
+                resource_dependency_set([first]).unwrap(),
             )
             .unwrap();
             assert!(
@@ -1056,184 +1115,48 @@ mod tests {
             .validate_resume(continuation, &leases(&[second, first]))
             .unwrap();
         assert!(complete.unresolved().is_none());
-        assert!(!complete.has_expert_dependencies());
+        assert!(!complete.has_materialization_dependencies());
     }
 
     #[test]
-    fn sibling_wait_cancellation_preserves_other_runtime_attachment() {
-        let key = key();
-        let dependencies = expert_dependency_set([key]).unwrap();
-        let mut first =
-            ContinuationDependencyState::new(ContinuationId::new(51), dependencies.clone())
-                .unwrap();
-        let mut sibling =
-            ContinuationDependencyState::new(ContinuationId::new(52), dependencies).unwrap();
-        let mut adapter = MockAdapter::default();
-        adapter.runtime_attach(key);
-        adapter.runtime_attach(key);
-        assert_eq!(adapter.runtime_attachment_count(key), 2);
-
-        first.detach_logical_dependencies(&mut adapter).unwrap();
-        assert_eq!(adapter.runtime_attachment_count(key), 1);
-        assert_eq!(adapter.physical_release_count(key), 0);
-        assert!(!adapter.is_evictable(key));
-        assert!(sibling.unresolved().is_some());
-        assert!(
-            !adapter
-                .runtime_detach_if_attached(ContinuationId::new(51), key)
-                .unwrap()
-        );
-
-        sibling.detach_logical_dependencies(&mut adapter).unwrap();
-        assert_eq!(adapter.runtime_attachment_count(key), 0);
-        assert_eq!(adapter.physical_release_count(key), 1);
-        assert!(adapter.is_evictable(key));
-        assert!(
-            !adapter
-                .runtime_detach_if_attached(ContinuationId::new(52), key)
-                .unwrap()
-        );
-        assert_eq!(adapter.physical_release_count(key), 1);
-    }
-
-    #[test]
-    fn successful_resume_consumes_model_edge_without_releasing_runtime_attachment() {
-        let key = key();
-        let continuation = ContinuationId::new(61);
-        let mut state =
-            ContinuationDependencyState::new(continuation, expert_dependency_set([key]).unwrap())
-                .unwrap();
-        let leases = leases(&[key]);
-        let mut adapter = MockAdapter::default();
-        adapter.runtime_attach(key);
-
-        state.validate_resume(continuation, &leases).unwrap();
+    fn model_cancellation_discards_only_the_unresolved_description() {
+        let continuation = ContinuationId::new(51);
+        let mut state = ContinuationDependencyState::new(
+            continuation,
+            resource_dependency_set([key()]).unwrap(),
+        )
+        .unwrap();
+        assert!(state.has_materialization_dependencies());
+        state.discard_unresolved();
         assert!(state.unresolved().is_none());
-        assert!(!state.has_expert_dependencies());
-        state.detach_logical_dependencies(&mut adapter).unwrap();
-        assert!(adapter.detach_attempts.is_empty());
-        assert_eq!(adapter.runtime_attachment_count(key), 1);
-
-        adapter
-            .runtime_finish_resume_lease(continuation, key)
-            .unwrap();
-        assert_eq!(adapter.physical_release_count(key), 1);
-        let replay = state
-            .validate_resume(continuation, &leases)
-            .unwrap_err()
-            .to_string();
-        assert!(replay.contains("refusing resume replay"));
+        assert!(!state.has_materialization_dependencies());
+        assert!(
+            state
+                .validate_resume(continuation, &leases(&[key()]))
+                .is_err()
+        );
     }
 
     #[test]
-    fn replace_unresolved_moves_to_next_edge_without_cross_edge_accumulation() {
+    fn replace_unresolved_moves_to_next_edge_without_cross_edge_state() {
         let first = key_for_expert(1);
         let second = key_for_expert(2);
         let continuation = ContinuationId::new(64);
-        let mut state =
-            ContinuationDependencyState::new(continuation, expert_dependency_set([first]).unwrap())
-                .unwrap();
-        let mut adapter = MockAdapter::default();
-
-        adapter.runtime_attach(first);
+        let mut state = ContinuationDependencyState::new(
+            continuation,
+            resource_dependency_set([first]).unwrap(),
+        )
+        .unwrap();
         state
             .validate_resume(continuation, &leases(&[first]))
             .unwrap();
-        adapter
-            .runtime_finish_resume_lease(continuation, first)
-            .unwrap();
         state
-            .replace_unresolved(expert_dependency_set([second]).unwrap())
+            .replace_unresolved(resource_dependency_set([second]).unwrap())
             .unwrap();
         assert_eq!(state.unresolved().unwrap().len(), 1);
-
-        adapter.runtime_attach(second);
         state
             .validate_resume(continuation, &leases(&[second]))
             .unwrap();
-        adapter
-            .runtime_finish_resume_lease(continuation, second)
-            .unwrap();
-        state.detach_logical_dependencies(&mut adapter).unwrap();
-
-        assert_eq!(adapter.physical_release_count(first), 1);
-        assert_eq!(adapter.physical_release_count(second), 1);
-        assert_eq!(adapter.detach_attempts.len(), 2);
-        assert!(adapter.is_evictable(first));
-        assert!(adapter.is_evictable(second));
-    }
-
-    #[test]
-    fn resumed_failure_leaves_release_to_runtime_and_next_turn_can_evict() {
-        let key = key();
-        let mut adapter = MockAdapter::default();
-        let first_continuation = ContinuationId::new(62);
-        let mut first = ContinuationDependencyState::new(
-            first_continuation,
-            expert_dependency_set([key]).unwrap(),
-        )
-        .unwrap();
-        adapter.runtime_attach(key);
-        first
-            .validate_resume(first_continuation, &leases(&[key]))
-            .unwrap();
-
-        first.detach_logical_dependencies(&mut adapter).unwrap();
-        assert!(adapter.detach_attempts.is_empty());
-        assert_eq!(adapter.physical_release_count(key), 0);
-        adapter
-            .runtime_finish_resume_lease(first_continuation, key)
-            .unwrap();
-        assert_eq!(adapter.physical_release_count(key), 1);
-        assert!(adapter.is_evictable(key));
-
-        let second_continuation = ContinuationId::new(63);
-        let mut second = ContinuationDependencyState::new(
-            second_continuation,
-            expert_dependency_set([key]).unwrap(),
-        )
-        .unwrap();
-        adapter.runtime_attach(key);
-        second
-            .validate_resume(second_continuation, &leases(&[key]))
-            .unwrap();
-        assert!(!adapter.is_evictable(key));
-        adapter
-            .runtime_finish_resume_lease(second_continuation, key)
-            .unwrap();
-        second.detach_logical_dependencies(&mut adapter).unwrap();
-        assert_eq!(adapter.physical_release_count(key), 2);
-        assert!(adapter.is_evictable(key));
-    }
-
-    #[test]
-    fn logical_cleanup_retries_only_the_failed_and_remaining_detaches() {
-        let first = key_for_expert(1);
-        let second = key_for_expert(2);
-        let continuation = ContinuationId::new(71);
-        let mut state = ContinuationDependencyState::new(
-            continuation,
-            expert_dependency_set([second, first]).unwrap(),
-        )
-        .unwrap();
-        let mut adapter = MockAdapter {
-            fail_detach_once_for: Some(second),
-            ..MockAdapter::default()
-        };
-        adapter.runtime_attach(first);
-        adapter.runtime_attach(second);
-
-        assert!(state.detach_logical_dependencies(&mut adapter).is_err());
-        assert!(state.unresolved().is_some());
-        state.detach_logical_dependencies(&mut adapter).unwrap();
         assert!(state.unresolved().is_none());
-        assert_eq!(
-            adapter.detach_attempts,
-            vec![
-                (continuation, first),
-                (continuation, second),
-                (continuation, second)
-            ]
-        );
     }
 }

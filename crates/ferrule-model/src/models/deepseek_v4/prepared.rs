@@ -14,11 +14,20 @@ use ferrule_common::kernel_plan::{
 use ferrule_common::{Error, Result};
 
 #[cfg(feature = "cuda")]
-use crate::artifact::linear::{ArtifactLinearFormat, ArtifactLinearPayload};
-use crate::execution::PreparedModel;
-use crate::moe::streaming::{ExpertMemoryPolicy, ExpertSourceCatalog, ExpertStreamingPolicy};
+use crate::checkpoint::weight::{LinearWeight, LinearWeightFormat};
+use crate::checkpoint::{CheckpointSourceCatalog, CheckpointTensorSlice, HfSafetensorsInventory};
+use crate::execution::{
+    ExecutableStage, PreparedExecutable, PreparedModel, ResourceLayout, ResourceManifest,
+    StageResourceUse, TransformerResourceSlot, TransformerStage, WorkspaceClaim,
+};
+use crate::materialization::{
+    HF_SAFETENSORS_TENSOR_BUNDLE_V1, MaterializationSourceCatalog, MaterializationSourceEntry,
+};
+use crate::moe::streaming::{
+    ExpertLoadSource, ExpertMemoryPolicy, ExpertSourceCatalog, ExpertStreamingPolicy,
+};
 
-use super::artifact::DeepSeekV4ArtifactModel;
+use super::checkpoint::DeepSeekV4Checkpoint;
 use super::layer::DeepSeekV4Layer;
 use super::mtp::DeepSeekV4MtpModel;
 
@@ -301,8 +310,14 @@ impl DeepSeekV4PreparedLayerExperts {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DeepSeekV4InstallDescriptor {
+    StaticTensorBundle(Arc<ResourceManifest>),
+    RoutedExpert(ExpertLoadSource),
+}
+
 pub struct DeepSeekV4PreparedResources {
-    model: DeepSeekV4ArtifactModel,
+    model: DeepSeekV4Checkpoint,
     options: DeepSeekV4PrepareOptions,
     layers: Box<[DeepSeekV4Layer]>,
     layer_experts: Box<[DeepSeekV4PreparedLayerExperts]>,
@@ -310,6 +325,7 @@ pub struct DeepSeekV4PreparedResources {
     /// as the target model. CUDA image compilation is a subsequent R1 step.
     mtp: Option<DeepSeekV4MtpModel>,
     mtp_layer_experts: Box<[DeepSeekV4PreparedLayerExperts]>,
+    materialization_sources: Arc<MaterializationSourceCatalog<DeepSeekV4InstallDescriptor>>,
     kv_layout: DeepSeekV4KvLayoutSchema,
     policy: DeepSeekV4ExecutionPolicy,
     /// Required per-layer semantic superkernel plan. Missing operations are
@@ -321,7 +337,7 @@ pub struct DeepSeekV4PreparedResources {
 }
 
 impl DeepSeekV4PreparedResources {
-    pub const fn model(&self) -> &DeepSeekV4ArtifactModel {
+    pub const fn model(&self) -> &DeepSeekV4Checkpoint {
         &self.model
     }
 
@@ -343,6 +359,17 @@ impl DeepSeekV4PreparedResources {
 
     pub fn mtp_layer_experts(&self) -> &[DeepSeekV4PreparedLayerExperts] {
         &self.mtp_layer_experts
+    }
+
+    pub fn materialization_source_count(&self) -> usize {
+        self.materialization_sources.len()
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn materialization_sources(
+        &self,
+    ) -> &Arc<MaterializationSourceCatalog<DeepSeekV4InstallDescriptor>> {
+        &self.materialization_sources
     }
 
     pub fn layer_expert_source_catalog(&self, layer: usize) -> Option<&Arc<ExpertSourceCatalog>> {
@@ -381,11 +408,11 @@ impl DeepSeekV4PreparedResources {
     }
 }
 
-pub type DeepSeekV4PreparedModelPlan = PreparedModel<DeepSeekV4PreparedResources>;
+pub type DeepSeekV4PreparedModelPlan = PreparedModel<DeepSeekV4PreparedResources, TransformerStage>;
 
 /// Validates and atomically prepares all immutable DSV4 model-global resources.
 pub fn prepare(
-    model: DeepSeekV4ArtifactModel,
+    model: DeepSeekV4Checkpoint,
     options: DeepSeekV4PrepareOptions,
 ) -> Result<DeepSeekV4PreparedModelPlan> {
     validate_options(&model, options)?;
@@ -550,6 +577,13 @@ pub fn prepare(
     let mtp_transformer_kernel_plan = mtp
         .as_ref()
         .map(|mtp| ModelKernelPlan::new(mtp.layers.len()));
+    let executable = prepare_executable(&model, options.max_layers)?;
+    let materialization_sources = Arc::new(prepare_materialization_sources(
+        &executable,
+        &layer_experts,
+        mtp.as_ref(),
+        &mtp_layer_experts,
+    )?);
     let resources = DeepSeekV4PreparedResources {
         model,
         options,
@@ -557,13 +591,260 @@ pub fn prepare(
         layer_experts: layer_experts.into_boxed_slice(),
         mtp,
         mtp_layer_experts,
+        materialization_sources,
         kv_layout,
         policy,
         kernel_plan,
         mtp_transformer_kernel_plan,
     };
 
-    publish_prepared(Ok(resources))
+    publish_prepared(Ok((resources, executable)))
+}
+
+fn prepare_materialization_sources(
+    executable: &PreparedExecutable<TransformerStage>,
+    layer_experts: &[DeepSeekV4PreparedLayerExperts],
+    mtp: Option<&DeepSeekV4MtpModel>,
+    mtp_layer_experts: &[DeepSeekV4PreparedLayerExperts],
+) -> Result<MaterializationSourceCatalog<DeepSeekV4InstallDescriptor>> {
+    let static_entries =
+        MaterializationSourceCatalog::from_checkpoint_manifests(executable.resources())?
+            .iter()
+            .map(|entry| {
+                MaterializationSourceEntry::new(
+                    entry.resource(),
+                    entry.source(),
+                    entry.read_plan().clone(),
+                    DeepSeekV4InstallDescriptor::StaticTensorBundle(Arc::new(
+                        entry.descriptor().clone(),
+                    )),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+    let mut entries = static_entries;
+    for experts in layer_experts {
+        entries.extend(
+            experts
+                .source_catalog()
+                .materialization_sources()?
+                .iter()
+                .map(|entry| {
+                    MaterializationSourceEntry::new(
+                        entry.resource(),
+                        entry.source(),
+                        entry.read_plan().clone(),
+                        DeepSeekV4InstallDescriptor::RoutedExpert(entry.descriptor().clone()),
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?,
+        );
+    }
+    if let Some(mtp) = mtp {
+        if mtp.layers.len() != mtp_layer_experts.len() {
+            return Err(Error::Model(format!(
+                "DeepSeek-V4 DSpark stage/expert source mismatch: stages={} sources={}",
+                mtp.layers.len(),
+                mtp_layer_experts.len()
+            )));
+        }
+        for experts in mtp_layer_experts {
+            entries.extend(
+                experts
+                    .source_catalog()
+                    .materialization_sources()?
+                    .iter()
+                    .map(|entry| {
+                        MaterializationSourceEntry::new(
+                            entry.resource(),
+                            entry.source(),
+                            entry.read_plan().clone(),
+                            DeepSeekV4InstallDescriptor::RoutedExpert(entry.descriptor().clone()),
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            );
+        }
+    }
+    MaterializationSourceCatalog::new(entries)
+}
+
+fn prepare_executable(
+    model: &DeepSeekV4Checkpoint,
+    max_layers: usize,
+) -> Result<PreparedExecutable<TransformerStage>> {
+    prepare_executable_from_inventory(&model.descriptor.path, model.inventory(), max_layers)
+}
+
+fn prepare_executable_from_inventory(
+    model_dir: &std::path::Path,
+    inventory: &HfSafetensorsInventory,
+    max_layers: usize,
+) -> Result<PreparedExecutable<TransformerStage>> {
+    use crate::semantic::HyperConnectionStage;
+
+    struct StaticBundle {
+        slot: TransformerResourceSlot,
+        operation: TransformerStage,
+        tensors: Vec<CheckpointTensorSlice>,
+    }
+
+    let family = &inventory.family;
+    let mut bundles = Vec::new();
+
+    let top_level = |role: crate::TensorRole| {
+        inventory
+            .tensors
+            .iter()
+            .filter(|tensor| tensor.role == role)
+            .map(|tensor| CheckpointTensorSlice::from_hf_inventory(model_dir, tensor))
+            .collect::<Vec<_>>()
+    };
+    bundles.push(StaticBundle {
+        slot: TransformerResourceSlot::Embedding,
+        operation: TransformerStage::Embed,
+        tensors: top_level(crate::TensorRole::TokenEmbedding),
+    });
+
+    for layer in 0..max_layers {
+        let layer_id = u32::try_from(layer)
+            .map_err(|_| Error::Model("DeepSeek-V4 layer index exceeds u32".into()))?;
+        let layer_prefix = format!("layers.{layer}.");
+        let mut attention = Vec::new();
+        let mut router = Vec::new();
+        let mut feed_forward = Vec::new();
+        for tensor in &inventory.tensors {
+            if tensor.name.starts_with("mtp.") {
+                continue;
+            }
+            let target = if crate::families::parse_hf_attention_tensor(family, &tensor.name)
+                .is_some_and(|descriptor| descriptor.layer == layer)
+                || crate::families::parse_hf_hyper_connection_tensor(family, &tensor.name)
+                    .is_some_and(|descriptor| {
+                        descriptor.layer == Some(layer)
+                            && descriptor.stage == HyperConnectionStage::Attention
+                    })
+                || tensor.role == crate::TensorRole::AttentionNorm
+                    && tensor.name.starts_with(&layer_prefix)
+            {
+                Some(&mut attention)
+            } else if crate::families::parse_hf_router_tensor(family, &tensor.name)
+                .is_some_and(|descriptor| descriptor.layer == layer)
+            {
+                Some(&mut router)
+            } else if crate::families::parse_hf_shared_expert_tensor(family, &tensor.name)
+                .is_some_and(|descriptor| descriptor.layer == layer)
+                || crate::families::parse_hf_hyper_connection_tensor(family, &tensor.name)
+                    .is_some_and(|descriptor| {
+                        descriptor.layer == Some(layer)
+                            && descriptor.stage == HyperConnectionStage::FeedForward
+                    })
+                || tensor.role == crate::TensorRole::FeedForwardNorm
+                    && tensor.name.starts_with(&layer_prefix)
+            {
+                Some(&mut feed_forward)
+            } else {
+                None
+            };
+            if let Some(target) = target {
+                target.push(CheckpointTensorSlice::from_hf_inventory(model_dir, tensor));
+            }
+        }
+        bundles.extend([
+            StaticBundle {
+                slot: TransformerResourceSlot::Attention { layer: layer_id },
+                operation: TransformerStage::Attention { layer: layer_id },
+                tensors: attention,
+            },
+            StaticBundle {
+                slot: TransformerResourceSlot::Router { layer: layer_id },
+                operation: TransformerStage::Router { layer: layer_id },
+                tensors: router,
+            },
+            StaticBundle {
+                slot: TransformerResourceSlot::FeedForward { layer: layer_id },
+                operation: TransformerStage::FeedForward { layer: layer_id },
+                tensors: feed_forward,
+            },
+        ]);
+    }
+
+    let mut output = inventory
+        .tensors
+        .iter()
+        .filter(|tensor| {
+            !tensor.name.starts_with("mtp.")
+                && (matches!(
+                    tensor.role,
+                    crate::TensorRole::OutputNorm | crate::TensorRole::OutputHead
+                ) || crate::families::parse_hf_hyper_connection_tensor(family, &tensor.name)
+                    .is_some_and(|descriptor| {
+                        descriptor.layer.is_none() && descriptor.stage == HyperConnectionStage::Head
+                    }))
+        })
+        .map(|tensor| CheckpointTensorSlice::from_hf_inventory(model_dir, tensor))
+        .collect::<Vec<_>>();
+    output.sort_by(|left, right| left.name.cmp(&right.name));
+    bundles.push(StaticBundle {
+        slot: TransformerResourceSlot::Output,
+        operation: TransformerStage::Output,
+        tensors: output,
+    });
+
+    for (&attachment, tensors) in &inventory.mtp_layer_tensors() {
+        let attachment = u32::try_from(attachment)
+            .map_err(|_| Error::Model("DeepSeek-V4 attachment index exceeds u32".into()))?;
+        let tensors = tensors
+            .iter()
+            .filter(|tensor| !tensor.name.contains(".ffn.experts."))
+            .map(|tensor| CheckpointTensorSlice::from_hf_inventory(model_dir, tensor))
+            .collect::<Vec<_>>();
+        bundles.push(StaticBundle {
+            slot: TransformerResourceSlot::Attachment { index: attachment },
+            operation: TransformerStage::Attachment { index: attachment },
+            tensors,
+        });
+    }
+
+    if let Some(empty) = bundles.iter().find(|bundle| bundle.tensors.is_empty()) {
+        return Err(Error::Model(format!(
+            "DeepSeek-V4 prepared stage {:?} has no checkpoint-backed tensors",
+            empty.operation
+        )));
+    }
+    for bundle in &mut bundles {
+        bundle.tensors.sort_by(|left, right| {
+            left.role
+                .cmp(&right.role)
+                .then_with(|| left.name.cmp(&right.name))
+                .then_with(|| left.path.cmp(&right.path))
+                .then_with(|| left.offset.cmp(&right.offset))
+                .then_with(|| left.bytes.cmp(&right.bytes))
+        });
+    }
+    let sources =
+        CheckpointSourceCatalog::capture(bundles.iter().flat_map(|bundle| bundle.tensors.iter()))?;
+    let mut manifests = Vec::with_capacity(bundles.len());
+    let mut stages = Vec::with_capacity(bundles.len());
+    for bundle in bundles {
+        let resource = bundle.slot.parameter();
+        let bundle_source = sources.bundle_source(
+            b"deepseek-v4-static-stage-bundle-v1",
+            HF_SAFETENSORS_TENSOR_BUNDLE_V1,
+            &bundle.tensors,
+        )?;
+        manifests.push(ResourceManifest::checkpoint(
+            resource,
+            bundle_source,
+            bundle.tensors,
+            ResourceLayout::TensorBundle,
+        )?);
+        stages.push(ExecutableStage::new(
+            bundle.operation,
+            [StageResourceUse::read(resource)],
+            WorkspaceClaim::NONE,
+        ));
+    }
+    PreparedExecutable::new(manifests, stages).map_err(Into::into)
 }
 
 #[cfg(feature = "cuda")]
@@ -631,19 +912,19 @@ fn validate_shared_ffn_requirement(layer: &DeepSeekV4Layer) -> Result<()> {
         &layer.shared_ffn.down.format,
     );
     let (
-        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+        LinearWeightFormat::Fp8E4M3WithE8M0Scale {
             out_features: gate_out,
             in_features: gate_in,
             block_m: 128,
             block_k: 128,
         },
-        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+        LinearWeightFormat::Fp8E4M3WithE8M0Scale {
             out_features: up_out,
             in_features: up_in,
             block_m: 128,
             block_k: 128,
         },
-        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+        LinearWeightFormat::Fp8E4M3WithE8M0Scale {
             out_features: down_out,
             in_features: down_in,
             block_m: 128,
@@ -708,7 +989,7 @@ fn deepseek_v4_mtp_kernel_requirements(
         .main_norm
         .as_deref()
         .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark stage zero is missing main_norm".into()))?;
-    let ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+    let LinearWeightFormat::Fp8E4M3WithE8M0Scale {
         out_features,
         in_features,
         block_m: 128,
@@ -742,13 +1023,13 @@ fn validate_mla_output_requirement(layer: &DeepSeekV4Layer) -> Result<()> {
     let output_a = &layer.attention.payload.output_a.format;
     let output_b = &layer.attention.payload.output_b.format;
     let (
-        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+        LinearWeightFormat::Fp8E4M3WithE8M0Scale {
             out_features: output_a_out,
             in_features: output_a_in,
             block_m: 128,
             block_k: 128,
         },
-        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+        LinearWeightFormat::Fp8E4M3WithE8M0Scale {
             out_features: output_b_out,
             in_features: output_b_in,
             block_m: 128,
@@ -779,17 +1060,17 @@ fn validate_mla_output_requirement(layer: &DeepSeekV4Layer) -> Result<()> {
 #[cfg(feature = "cuda")]
 fn fp8_linear_bundle_requirement(
     operation: KernelOperation,
-    linears: [&ArtifactLinearPayload; 2],
+    linears: [&LinearWeight; 2],
 ) -> Result<LinearBundleRequirement> {
     let [first, second] = linears;
     let (
-        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+        LinearWeightFormat::Fp8E4M3WithE8M0Scale {
             out_features: first_out,
             in_features: first_in,
             block_m: first_block_m,
             block_k: first_block_k,
         },
-        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+        LinearWeightFormat::Fp8E4M3WithE8M0Scale {
             out_features: second_out,
             in_features: second_in,
             block_m: second_block_m,
@@ -822,9 +1103,9 @@ fn fp8_linear_bundle_requirement(
 #[cfg(feature = "cuda")]
 fn fp8_single_linear_requirement(
     operation: KernelOperation,
-    linear: &ArtifactLinearPayload,
+    linear: &LinearWeight,
 ) -> Result<LinearBundleRequirement> {
-    let ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+    let LinearWeightFormat::Fp8E4M3WithE8M0Scale {
         out_features,
         in_features,
         block_m: 128,
@@ -846,15 +1127,15 @@ fn fp8_single_linear_requirement(
 #[cfg(feature = "cuda")]
 fn bf16_linear_bundle_requirement(
     operation: KernelOperation,
-    linears: [&ArtifactLinearPayload; 2],
+    linears: [&LinearWeight; 2],
 ) -> Result<LinearBundleRequirement> {
     let [first, second] = linears;
     let (
-        ArtifactLinearFormat::Bf16 {
+        LinearWeightFormat::Bf16 {
             out_features: first_out,
             in_features: first_in,
         },
-        ArtifactLinearFormat::Bf16 {
+        LinearWeightFormat::Bf16 {
             out_features: second_out,
             in_features: second_in,
         },
@@ -878,7 +1159,7 @@ fn bf16_linear_bundle_requirement(
 }
 
 fn validate_mtp_attachment(
-    model: &DeepSeekV4ArtifactModel,
+    model: &DeepSeekV4Checkpoint,
     mtp: Option<&DeepSeekV4MtpModel>,
 ) -> Result<()> {
     let declares_attachment = model.config.num_mtp_layers > 0
@@ -967,10 +1248,7 @@ fn validate_mtp_attachment(
     Ok(())
 }
 
-fn validate_options(
-    model: &DeepSeekV4ArtifactModel,
-    options: DeepSeekV4PrepareOptions,
-) -> Result<()> {
+fn validate_options(model: &DeepSeekV4Checkpoint, options: DeepSeekV4PrepareOptions) -> Result<()> {
     if options.max_layers > model.config.num_layers {
         return Err(Error::Model(format!(
             "DeepSeek-V4 prepared plan max_layers {} exceeds model layers {}",
@@ -1002,17 +1280,19 @@ fn validate_options(
     Ok(())
 }
 
-fn publish_prepared<R>(prepared: Result<R>) -> Result<PreparedModel<R>> {
+fn publish_prepared<R, O>(
+    prepared: Result<(R, PreparedExecutable<O>)>,
+) -> Result<PreparedModel<R, O>> {
     publish_prepared_with_generation(&NEXT_PREPARED_GENERATION, prepared)
 }
 
-fn publish_prepared_with_generation<R>(
+fn publish_prepared_with_generation<R, O>(
     generations: &AtomicU64,
-    prepared: Result<R>,
-) -> Result<PreparedModel<R>> {
-    let resources = prepared?;
+    prepared: Result<(R, PreparedExecutable<O>)>,
+) -> Result<PreparedModel<R, O>> {
+    let (resources, executable) = prepared?;
     let generation = generations.fetch_add(1, Ordering::Relaxed);
-    Ok(PreparedModel::new(generation, resources))
+    Ok(PreparedModel::new(generation, resources, executable))
 }
 
 fn parse_env_bool(name: &str, value: Option<String>, default: bool) -> Result<bool> {
@@ -1042,10 +1322,238 @@ fn parse_env_usize(name: &str, value: Option<String>, default: usize) -> Result<
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    use ferrule_common::MaterializedResourceKind;
 
     use super::*;
+    use crate::checkpoint::{HfRoutedExpertTensorInfo, HfSafetensorsTensorInfo};
     use crate::execution::ModelExecutionBackend;
     use crate::models::deepseek_v4::operators::DeepSeekV4OperatorContext;
+    use crate::semantic::{RoutedExpertMatrix, RoutedExpertTensorPart, RoutedExpertTensorRef};
+    use crate::support::tensor_role_for_class;
+    use crate::tensor_policy::HfTensorPolicy;
+
+    #[test]
+    fn static_executable_classifies_exact_dense_stage_bundles() {
+        let dir = unique_temp_dir("ferrule-dsv4-static-executable");
+        std::fs::create_dir_all(&dir).unwrap();
+        let shard = "model.safetensors";
+        let shard_path = dir.join(shard);
+        let file = std::fs::File::create(&shard_path).unwrap();
+        file.set_len(4096).unwrap();
+
+        let names = [
+            "embed.weight",
+            "layers.0.attn.wq_a.weight",
+            "layers.0.attn_norm.weight",
+            "layers.0.hc_attn_fn",
+            "layers.0.ffn.gate.weight",
+            "layers.0.ffn.shared_experts.w1.weight",
+            "layers.0.ffn_norm.weight",
+            "layers.0.hc_ffn_scale",
+            "layers.0.ffn.experts.3.w1.weight",
+            "norm.weight",
+            "lm_head.weight",
+            "hc_head_base",
+        ];
+        let policy = HfTensorPolicy::for_family(crate::ModelFamily::DeepSeekV4);
+        let tensors = names
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| {
+                let class = policy.classify_name(name);
+                HfSafetensorsTensorInfo {
+                    name: name.into(),
+                    shard: shard.into(),
+                    dtype: "BF16".into(),
+                    shape: vec![2, 2],
+                    data_offset: (index * 8) as u64,
+                    file_offset: (index * 8) as u64,
+                    byte_size: 8,
+                    role: tensor_role_for_class(&class),
+                    class,
+                }
+            })
+            .collect::<Vec<_>>();
+        let inventory = HfSafetensorsInventory {
+            family: crate::ModelFamily::DeepSeekV4,
+            total_size: Some(4096),
+            shard_count: 1,
+            tensor_count: tensors.len(),
+            tensors,
+            dtype_counts: Vec::new(),
+            class_counts: Vec::new(),
+            role_counts: Vec::new(),
+            shard_summaries: Vec::new(),
+            index_only_tensors: Vec::new(),
+            header_only_tensors: Vec::new(),
+        };
+
+        let executable = prepare_executable_from_inventory(&dir, &inventory, 1).unwrap();
+        assert_eq!(
+            executable
+                .stages()
+                .iter()
+                .map(|stage| *stage.operation())
+                .collect::<Vec<_>>(),
+            vec![
+                TransformerStage::Embed,
+                TransformerStage::Attention { layer: 0 },
+                TransformerStage::Router { layer: 0 },
+                TransformerStage::FeedForward { layer: 0 },
+                TransformerStage::Output,
+            ]
+        );
+        assert_eq!(executable.resources().len(), executable.stages().len());
+        assert!(executable.resources().iter().all(|manifest| {
+            manifest.resource().kind() == MaterializedResourceKind::Parameter
+                && manifest.source().unwrap().generation().get() != 0
+                && manifest
+                    .checkpoint_bundle_source()
+                    .is_some_and(|source| source.validate_source_identity())
+        }));
+
+        let stage_names = |stage_index: usize| {
+            let resource = executable.stages()[stage_index].resources()[0].resource();
+            executable
+                .resource(resource)
+                .unwrap()
+                .checkpoint_tensors()
+                .iter()
+                .map(|tensor| tensor.name.as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(stage_names(0), vec!["embed.weight"]);
+        assert_eq!(
+            stage_names(1),
+            vec![
+                "layers.0.attn_norm.weight",
+                "layers.0.attn.wq_a.weight",
+                "layers.0.hc_attn_fn",
+            ]
+        );
+        assert_eq!(stage_names(2), vec!["layers.0.ffn.gate.weight"]);
+        assert_eq!(
+            stage_names(3),
+            vec![
+                "layers.0.ffn_norm.weight",
+                "layers.0.ffn.shared_experts.w1.weight",
+                "layers.0.hc_ffn_scale",
+            ]
+        );
+        assert_eq!(
+            stage_names(4),
+            vec!["norm.weight", "lm_head.weight", "hc_head_base"]
+        );
+        assert!(executable.resources().iter().all(|manifest| {
+            manifest
+                .checkpoint_tensors()
+                .iter()
+                .all(|tensor| !tensor.name.contains(".ffn.experts."))
+        }));
+        assert!(executable.resources().iter().all(|manifest| {
+            manifest.checkpoint_tensors().windows(2).all(|pair| {
+                (pair[0].role.clone(), pair[0].name.as_str())
+                    <= (pair[1].role.clone(), pair[1].name.as_str())
+            })
+        }));
+
+        let expert = crate::moe::streaming::ExpertId::new(0, 3);
+        let expert_catalog = Arc::new(
+            ExpertSourceCatalog::from_hf_routed_expert_tensor_sets(
+                &dir,
+                [HfRoutedExpertTensorInfo {
+                    descriptor: RoutedExpertTensorRef {
+                        layer: expert.layer,
+                        expert: expert.expert,
+                        matrix: RoutedExpertMatrix::Gate,
+                        part: RoutedExpertTensorPart::Weight,
+                    },
+                    name: "layers.0.ffn.experts.3.w1.weight".into(),
+                    shard: shard.into(),
+                    dtype: "BF16".into(),
+                    shape: vec![2, 2],
+                    data_offset: 64,
+                    file_offset: 64,
+                    byte_size: 8,
+                }],
+            )
+            .unwrap(),
+        );
+        let expert_source = expert_catalog.require_resource_source(expert).unwrap();
+        let prepared_experts = DeepSeekV4PreparedLayerExperts::new(
+            Arc::clone(&expert_catalog),
+            ExpertStreamingPolicy {
+                gpu_slots_per_layer: 1,
+                prefetch_per_layer: 0,
+                preserve_source_encoding: true,
+                allow_cpu_staging: false,
+                allow_remote_sources: false,
+            },
+        );
+        let sources = prepare_materialization_sources(
+            &executable,
+            std::slice::from_ref(&prepared_experts),
+            None,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(sources.len(), executable.resources().len() + 1);
+
+        for manifest in executable.resources() {
+            let entry = sources
+                .get(manifest.resource(), manifest.source().unwrap())
+                .unwrap();
+            assert_eq!(entry.source(), manifest.source().unwrap());
+            match entry.descriptor() {
+                DeepSeekV4InstallDescriptor::StaticTensorBundle(descriptor) => {
+                    assert_eq!(descriptor.as_ref(), manifest);
+                }
+                DeepSeekV4InstallDescriptor::RoutedExpert(_) => {
+                    panic!("static resource resolved to routed-expert install semantics")
+                }
+            }
+            assert_eq!(
+                entry.read_plan().extents().len(),
+                manifest.checkpoint_tensors().len()
+            );
+            for (extent, tensor) in entry
+                .read_plan()
+                .extents()
+                .iter()
+                .zip(manifest.checkpoint_tensors())
+            {
+                assert_eq!(extent.path(), tensor.path);
+                assert_eq!(extent.offset(), tensor.offset);
+                assert_eq!(extent.bytes(), tensor.bytes);
+            }
+        }
+
+        let routed_resource = ferrule_common::MaterializedResourceId::routed_expert(
+            ferrule_common::LayerId::new(0),
+            ferrule_common::ExpertId::new(3),
+        );
+        let routed_entry = sources.get(routed_resource, expert_source).unwrap();
+        assert_eq!(routed_entry.source(), expert_source);
+        assert_eq!(
+            routed_entry.descriptor(),
+            &DeepSeekV4InstallDescriptor::RoutedExpert(
+                expert_catalog.source(expert).unwrap().clone()
+            )
+        );
+        assert!(matches!(
+            prepare_materialization_sources(
+                &executable,
+                &[prepared_experts.clone(), prepared_experts],
+                None,
+                &[],
+            ),
+            Err(Error::Model(message)) if message.contains("duplicate exact materialization source")
+        ));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn prepared_layer_experts_retain_catalog_identity_and_resolved_capacities() {
@@ -1060,7 +1568,7 @@ mod tests {
         let policy = ExpertStreamingPolicy {
             gpu_slots_per_layer: 6,
             prefetch_per_layer: 2,
-            preserve_artifact_quantization: true,
+            preserve_source_encoding: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
         };
@@ -1120,7 +1628,7 @@ mod tests {
     #[test]
     fn failed_preparation_stage_does_not_publish_a_generation() {
         let generations = AtomicU64::new(41);
-        let failed = publish_prepared_with_generation::<()>(
+        let failed = publish_prepared_with_generation::<(), TransformerStage>(
             &generations,
             Err(Error::Model("bind failed".into())),
         );
@@ -1209,6 +1717,14 @@ mod tests {
         on.record_attention_call(3, 7);
         assert_eq!(on.layer_profile_stats()[0].prefill_calls, 1);
         assert_eq!(on.attention_profile_stats()[0].calls, 1);
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{}-{nonce}", std::process::id()))
     }
 
     #[test]

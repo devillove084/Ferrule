@@ -1,33 +1,56 @@
 use ferrule_common::execution::ExecutionTransactionId;
-use ferrule_common::expert_io::{ExpertIoResourceDemand, ExpertIoResourceLimits};
 use ferrule_common::io_protocol::{
-    ArtifactFormat, BackendId, CancellationReason, CompletionEvent, CompletionGeneration,
-    CompletionOutcome, CompletionTimestamp, ContentHash, ContinuationId, DependencySetEpoch,
-    DestinationGeneration, DeviceId, ExpertId, FailureReason, LayerId, LoadKey, LoadStage,
-    ModelInstanceId, OperationId, RequestGeneration, SourceGeneration, SourceIdentityHash,
-    StaleReason, WaiterId,
+    BackendId, CancellationReason, CompletionEvent, CompletionGeneration, CompletionOutcome,
+    CompletionTimestamp, ContentHash, ContinuationId, DependencySetEpoch, DestinationGeneration,
+    DeviceId, ExpertId, FailureReason, LayerId, LoadStage, MaterializationKey,
+    MaterializedResourceId, MaterializedResourceKind, ModelInstanceId, OperationId,
+    PayloadEncodingId, RequestGeneration, SourceGeneration, SourceIdentityHash, StaleReason,
+    WaiterId,
+};
+use ferrule_common::materialization_io::{
+    MaterializationResourceDemand, MaterializationResourceLimits, MaterializationResourcePlan,
 };
 
 use super::*;
 use crate::scheduling::{
-    HardResourceBroker, HardResourceClaim, HardResourceError, HardResourceLimit, ResourceClass,
-    ResourceKind,
+    PhysicalResourceBroker, PhysicalResourceClaim, PhysicalResourceError, PhysicalResourceLimit,
+    ResourceClass, ResourceKind,
 };
 
 const BYTES: u64 = 4096;
 
-fn key(seed: u8, destination: u64) -> LoadKey {
+fn key(seed: u8, destination: u64) -> MaterializationKey {
     key_with_source_generation(seed, 1, destination)
 }
 
-fn key_with_source_generation(seed: u8, source_generation: u64, destination: u64) -> LoadKey {
-    LoadKey::new(
+fn key_with_source_generation(
+    seed: u8,
+    source_generation: u64,
+    destination: u64,
+) -> MaterializationKey {
+    key_for_resource(
+        seed,
+        MaterializedResourceId::routed_expert(
+            LayerId::new(seed as u32),
+            ExpertId::new(seed as u32),
+        ),
+        source_generation,
+        destination,
+    )
+}
+
+fn key_for_resource(
+    seed: u8,
+    resource: MaterializedResourceId,
+    source_generation: u64,
+    destination: u64,
+) -> MaterializationKey {
+    MaterializationKey::new(
         ModelInstanceId::new(1),
         SourceIdentityHash::new([seed.max(1); 32]),
         ContentHash::new([seed.saturating_add(1).max(1); 32]),
-        LayerId::new(seed as u32),
-        ExpertId::new(seed as u32),
-        ArtifactFormat::new(1),
+        resource,
+        PayloadEncodingId::new(1),
         BackendId::new(1),
         DeviceId::new(1),
         SourceGeneration::new(source_generation),
@@ -50,32 +73,67 @@ fn waiter_for(id: u64, continuation: u64) -> WaiterId {
     .unwrap()
 }
 
-fn request(key: LoadKey) -> LoadRequest {
-    LoadRequest::new(key, BYTES, ResourceClass::Decode)
+fn uniform_plan(bytes: u64) -> MaterializationResourcePlan {
+    MaterializationResourcePlan::uniform_payload(bytes).unwrap()
 }
 
-fn auto_registry() -> LoadRegistry<FakeBackend> {
-    LoadRegistry::with_testing_resources(FakeBackend::new()).unwrap()
+fn preparation(key: MaterializationKey) -> ferrule_model::MaterializationPreparation {
+    let binding = ferrule_common::ResidencyBinding::new(
+        key.model(),
+        key.resource(),
+        key.backend(),
+        key.device(),
+        ferrule_common::DestinationSlotId::new(1),
+        key.destination_generation(),
+    );
+    ferrule_model::MaterializationTransfer::new(key, binding, None)
+        .map(ferrule_model::MaterializationPreparation::Transfer)
+        .unwrap()
 }
 
-fn manual_registry() -> LoadRegistry<FakeBackend> {
-    LoadRegistry::with_testing_resources(FakeBackend::manual()).unwrap()
+fn request(key: MaterializationKey) -> LoadRequest {
+    LoadRequest::new(preparation(key), uniform_plan(BYTES), ResourceClass::Demand)
+}
+
+fn resident_request(key: MaterializationKey) -> LoadRequest {
+    let binding = ferrule_common::ResidencyBinding::new(
+        key.model(),
+        key.resource(),
+        key.backend(),
+        key.device(),
+        ferrule_common::DestinationSlotId::new(1),
+        key.destination_generation(),
+    );
+    let resident = ferrule_model::MaterializationResident::new(key, binding).unwrap();
+    LoadRequest::new(
+        ferrule_model::MaterializationPreparation::Resident(resident),
+        uniform_plan(BYTES),
+        ResourceClass::Demand,
+    )
+}
+
+fn auto_registry() -> LoadRegistry<FakeMaterializationProvider> {
+    LoadRegistry::with_testing_resources(FakeMaterializationProvider::new()).unwrap()
+}
+
+fn manual_registry() -> LoadRegistry<FakeMaterializationProvider> {
+    LoadRegistry::with_testing_resources(FakeMaterializationProvider::manual()).unwrap()
 }
 
 fn attach_one(
-    registry: &mut LoadRegistry<FakeBackend>,
+    registry: &mut LoadRegistry<FakeMaterializationProvider>,
     waiter_id: WaiterId,
-    load_key: LoadKey,
+    materialization_key: MaterializationKey,
 ) -> OperationId {
     registry
-        .attach_waiter(waiter_id, [request(load_key)], 10)
+        .attach_waiter(waiter_id, [request(materialization_key)], 10)
         .unwrap()
         .created[0]
 }
 
 fn event(
     operation: OperationId,
-    load_key: LoadKey,
+    materialization_key: MaterializationKey,
     stage: LoadStage,
     outcome: CompletionOutcome,
     bytes: u64,
@@ -83,24 +141,24 @@ fn event(
 ) -> CompletionEvent {
     CompletionEvent::new(
         operation,
-        load_key,
+        materialization_key,
         stage,
         outcome,
         bytes,
-        CompletionGeneration::for_key(load_key),
+        CompletionGeneration::for_key(materialization_key),
         CompletionTimestamp::from_nanos(timestamp),
     )
 }
 
 fn success_event(
     operation: OperationId,
-    load_key: LoadKey,
+    materialization_key: MaterializationKey,
     stage: LoadStage,
     timestamp: u64,
 ) -> CompletionEvent {
     event(
         operation,
-        load_key,
+        materialization_key,
         stage,
         CompletionOutcome::Succeeded,
         BYTES,
@@ -108,24 +166,32 @@ fn success_event(
     )
 }
 
-fn manual_at_read() -> (LoadRegistry<FakeBackend>, LoadKey, OperationId) {
+fn manual_at_read() -> (
+    LoadRegistry<FakeMaterializationProvider>,
+    MaterializationKey,
+    OperationId,
+) {
     let mut registry = manual_registry();
-    let load_key = key(1, 1);
-    let operation = attach_one(&mut registry, waiter(1), load_key);
+    let materialization_key = key(1, 1);
+    let operation = attach_one(&mut registry, waiter(1), materialization_key);
     assert!(registry.schedule_one(19).unwrap());
     assert!(registry.schedule_one(20).unwrap());
     assert_eq!(
         registry.operation(operation).unwrap().stage(),
         LoadStage::ReadSubmitted
     );
-    (registry, load_key, operation)
+    (registry, materialization_key, operation)
 }
 
-fn manual_at_upload() -> (LoadRegistry<FakeBackend>, LoadKey, OperationId) {
-    let (mut registry, load_key, operation) = manual_at_read();
+fn manual_at_upload() -> (
+    LoadRegistry<FakeMaterializationProvider>,
+    MaterializationKey,
+    OperationId,
+) {
+    let (mut registry, materialization_key, operation) = manual_at_read();
     registry.enqueue_completion(success_event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::ReadSubmitted,
         30,
     ));
@@ -135,14 +201,18 @@ fn manual_at_upload() -> (LoadRegistry<FakeBackend>, LoadKey, OperationId) {
         registry.operation(operation).unwrap().stage(),
         LoadStage::UploadSubmitted
     );
-    (registry, load_key, operation)
+    (registry, materialization_key, operation)
 }
 
-fn manual_at_install() -> (LoadRegistry<FakeBackend>, LoadKey, OperationId) {
-    let (mut registry, load_key, operation) = manual_at_upload();
+fn manual_at_install() -> (
+    LoadRegistry<FakeMaterializationProvider>,
+    MaterializationKey,
+    OperationId,
+) {
+    let (mut registry, materialization_key, operation) = manual_at_upload();
     registry.enqueue_completion(success_event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::UploadSubmitted,
         50,
     ));
@@ -152,22 +222,23 @@ fn manual_at_install() -> (LoadRegistry<FakeBackend>, LoadKey, OperationId) {
         LoadStage::Installing
     );
     registry.schedule_one(60).unwrap();
-    (registry, load_key, operation)
+    (registry, materialization_key, operation)
 }
 
-fn hard_broker_with(changed: ResourceKind, capacity: u64, reserve: u64) -> HardResourceBroker {
-    HardResourceBroker::new(ResourceKind::ALL.map(|kind| {
+fn hard_broker_with(changed: ResourceKind, capacity: u64, reserve: u64) -> PhysicalResourceBroker {
+    PhysicalResourceBroker::new(ResourceKind::ALL.map(|kind| {
         if kind == changed {
-            HardResourceLimit::new(kind, capacity, reserve)
+            PhysicalResourceLimit::new(kind, capacity, reserve)
         } else {
             let default_capacity = match kind {
-                ResourceKind::PinnedSlab
-                | ResourceKind::ReadBytes
+                ResourceKind::PinnedHostBytes
+                | ResourceKind::StorageReadBytes
                 | ResourceKind::UploadBytes
-                | ResourceKind::ExpertFrame => 1 << 20,
+                | ResourceKind::DeviceInstallBytes
+                | ResourceKind::ResidentBytes => 1 << 20,
                 _ => 128,
             };
-            HardResourceLimit::new(kind, default_capacity, 0)
+            PhysicalResourceLimit::new(kind, default_capacity, 0)
         }
     }))
     .unwrap()
@@ -178,23 +249,23 @@ fn staged_broker(
     pinned_operations: u64,
     upload_slots: u64,
     load_operations: u64,
-) -> HardResourceBroker {
-    HardResourceBroker::new(ResourceKind::ALL.map(|kind| {
+) -> PhysicalResourceBroker {
+    PhysicalResourceBroker::new(ResourceKind::ALL.map(|kind| {
         let capacity = match kind {
-            ResourceKind::Sqe => sqe,
-            ResourceKind::PinnedSlab => BYTES * pinned_operations,
-            ResourceKind::ReadBytes => BYTES * sqe,
-            ResourceKind::UploadSlot => upload_slots,
-            ResourceKind::UploadBytes => BYTES * upload_slots,
-            ResourceKind::ExpertFrame => BYTES * load_operations,
-            ResourceKind::Lease | ResourceKind::LoadOperation => load_operations,
+            ResourceKind::ReadSlot => sqe,
+            ResourceKind::PinnedHostBytes => BYTES * pinned_operations,
+            ResourceKind::StorageReadBytes => BYTES * sqe,
+            ResourceKind::UploadSlot | ResourceKind::InstallSlot => upload_slots,
+            ResourceKind::UploadBytes | ResourceKind::DeviceInstallBytes => BYTES * upload_slots,
+            ResourceKind::ResidentBytes => BYTES * load_operations,
+            ResourceKind::ResidencyLease | ResourceKind::LoadOperation => load_operations,
             ResourceKind::Arena
             | ResourceKind::KvPage
             | ResourceKind::Continuation
             | ResourceKind::Waiter
             | ResourceKind::ReadyCohort => 128,
         };
-        HardResourceLimit::new(kind, capacity, 0)
+        PhysicalResourceLimit::new(kind, capacity, 0)
     }))
     .unwrap()
 }
@@ -202,10 +273,10 @@ fn staged_broker(
 #[test]
 fn full_success_reaches_resident_and_targeted_ready() {
     let mut registry = auto_registry();
-    let load_key = key(1, 1);
-    let operation = attach_one(&mut registry, waiter(1), load_key);
+    let materialization_key = key(1, 1);
+    let operation = attach_one(&mut registry, waiter(1), materialization_key);
     assert!(registry.drive(100, 32).unwrap() >= 6);
-    assert!(registry.residency_binding(load_key).is_some());
+    assert!(registry.residency_binding(materialization_key).is_some());
     assert_eq!(
         registry.pop_ready(101).unwrap(),
         Some(ContinuationId::new(1))
@@ -216,22 +287,22 @@ fn full_success_reaches_resident_and_targeted_ready() {
 #[test]
 fn drive_one_reports_the_key_affected_by_each_transition() {
     let mut registry = auto_registry();
-    let load_key = key(1, 1);
-    attach_one(&mut registry, waiter(1), load_key);
+    let materialization_key = key(1, 1);
+    attach_one(&mut registry, waiter(1), materialization_key);
 
     let mut progressed = 0;
     loop {
         match registry.drive_one(100).unwrap() {
             RegistryDriveStep::Idle => break,
             RegistryDriveStep::Progressed { key } => {
-                assert_eq!(key, Some(load_key));
+                assert_eq!(key, Some(materialization_key));
                 progressed += 1;
             }
         }
     }
 
     assert!(progressed >= 6);
-    assert!(registry.residency_binding(load_key).is_some());
+    assert!(registry.residency_binding(materialization_key).is_some());
 }
 
 #[test]
@@ -242,18 +313,21 @@ fn initial_stage_is_reserved_without_physical_claims_or_reservation() {
         registry.operation(operation).unwrap().stage(),
         LoadStage::Reserved
     );
-    assert!(registry.backend().commands().is_empty());
-    assert_eq!(registry.resources().in_use(ResourceKind::Sqe), 0);
-    assert_eq!(registry.resources().in_use(ResourceKind::PinnedSlab), 0);
+    assert!(registry.provider().commands().is_empty());
+    assert_eq!(registry.resources().in_use(ResourceKind::ReadSlot), 0);
+    assert_eq!(
+        registry.resources().in_use(ResourceKind::PinnedHostBytes),
+        0
+    );
     assert_eq!(registry.resources().in_use(ResourceKind::LoadOperation), 0);
 }
 
 #[test]
 fn read_completion_reaches_host_ready() {
-    let (mut registry, load_key, operation) = manual_at_read();
+    let (mut registry, materialization_key, operation) = manual_at_read();
     registry.enqueue_completion(success_event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::ReadSubmitted,
         30,
     ));
@@ -266,10 +340,10 @@ fn read_completion_reaches_host_ready() {
 
 #[test]
 fn upload_completion_reaches_installing() {
-    let (mut registry, load_key, operation) = manual_at_upload();
+    let (mut registry, materialization_key, operation) = manual_at_upload();
     registry.enqueue_completion(success_event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::UploadSubmitted,
         50,
     ));
@@ -312,11 +386,14 @@ fn success_stage_history_is_complete_and_exactly_once() {
 #[test]
 fn published_binding_has_exact_destination_generation() {
     let mut registry = auto_registry();
-    let load_key = key(1, 9);
-    attach_one(&mut registry, waiter(1), load_key);
+    let materialization_key = key(1, 9);
+    attach_one(&mut registry, waiter(1), materialization_key);
     registry.drive(100, 32).unwrap();
     assert_eq!(
-        registry.residency_binding(load_key).unwrap().generation,
+        registry
+            .residency_binding(materialization_key)
+            .unwrap()
+            .generation,
         DestinationGeneration::new(9)
     );
 }
@@ -324,26 +401,70 @@ fn published_binding_has_exact_destination_generation() {
 #[test]
 fn operation_to_key_is_durable_after_retirement() {
     let mut registry = auto_registry();
-    let load_key = key(1, 1);
-    let operation = attach_one(&mut registry, waiter(1), load_key);
+    let materialization_key = key(1, 1);
+    let operation = attach_one(&mut registry, waiter(1), materialization_key);
     registry.drive(100, 32).unwrap();
-    assert_eq!(registry.key_for_operation(operation), Some(load_key));
+    assert_eq!(
+        registry.key_for_operation(operation),
+        Some(materialization_key)
+    );
 }
 
 #[test]
 fn single_flight_n_waiters_issues_one_physical_read() {
     let mut registry = auto_registry();
-    let load_key = key(1, 1);
-    let first = attach_one(&mut registry, waiter(1), load_key);
+    let materialization_key = key(1, 1);
+    let first = attach_one(&mut registry, waiter(1), materialization_key);
     for id in 2..=16 {
         let report = registry
-            .attach_waiter(waiter(id), [request(load_key)], id)
+            .attach_waiter(waiter(id), [request(materialization_key)], id)
             .unwrap();
         assert_eq!(report.joined, vec![first]);
     }
     registry.drive(100, 64).unwrap();
-    assert_eq!(registry.backend().physical_reads(), 1);
+    assert_eq!(registry.provider().physical_reads(), 1);
     assert_eq!(registry.stats().single_flight_joins, 15);
+}
+
+#[test]
+fn one_registry_materializes_all_resource_kinds_without_cross_kind_joining() {
+    let mut registry = auto_registry();
+    let resources = [
+        MaterializedResourceKind::Parameter,
+        MaterializedResourceKind::RoutedExpert,
+        MaterializedResourceKind::Gradient,
+        MaterializedResourceKind::OptimizerState,
+    ]
+    .map(|kind| MaterializedResourceId::new(kind, 7, 9));
+    let keys = resources.map(|resource| key_for_resource(5, resource, 1, 1));
+
+    let mut operations = Vec::new();
+    for (index, key) in keys.into_iter().enumerate() {
+        let report = registry
+            .attach_waiter(waiter((index + 1) as u64), [request(key)], index as u64)
+            .unwrap();
+        assert_eq!(report.created.len(), 1);
+        assert!(report.joined.is_empty());
+        operations.push(report.created[0]);
+    }
+    let joined = registry
+        .attach_waiter(waiter(5), [request(keys[0])], 5)
+        .unwrap();
+    assert!(joined.created.is_empty());
+    assert_eq!(joined.joined, vec![operations[0]]);
+    assert_eq!(registry.active_operations(), 4);
+
+    registry.drive(100, 64).unwrap();
+    assert_eq!(registry.provider().physical_reads(), 4);
+    assert_eq!(registry.stats().single_flight_joins, 1);
+    assert!(
+        keys.into_iter()
+            .all(|key| registry.residency_binding(key).is_some())
+    );
+    assert_eq!(
+        registry.resources().in_use(ResourceKind::ResidentBytes),
+        BYTES * 4
+    );
 }
 
 #[test]
@@ -370,60 +491,72 @@ fn different_source_generation_never_joins() {
 }
 
 #[test]
-fn joined_byte_expectation_must_match() {
+fn joined_resource_plan_must_match() {
     let mut registry = manual_registry();
-    let load_key = key(1, 1);
-    attach_one(&mut registry, waiter(1), load_key);
+    let materialization_key = key(1, 1);
+    attach_one(&mut registry, waiter(1), materialization_key);
     let error = registry
         .attach_waiter(
             waiter(2),
-            [LoadRequest::new(load_key, BYTES * 2, ResourceClass::Decode)],
+            [LoadRequest::new(
+                preparation(materialization_key),
+                uniform_plan(BYTES * 2),
+                ResourceClass::Demand,
+            )],
             2,
         )
         .unwrap_err();
-    assert!(matches!(
-        error,
-        RegistryError::ByteExpectationMismatch { .. }
-    ));
+    assert!(matches!(error, RegistryError::ResourcePlanMismatch { .. }));
 }
 
 #[test]
 fn duplicate_dependency_is_rejected_before_side_effects() {
     let mut registry = manual_registry();
-    let load_key = key(1, 1);
+    let materialization_key = key(1, 1);
     let error = registry
-        .attach_waiter(waiter(1), [request(load_key), request(load_key)], 1)
+        .attach_waiter(
+            waiter(1),
+            [request(materialization_key), request(materialization_key)],
+            1,
+        )
         .unwrap_err();
     assert!(matches!(error, RegistryError::DuplicateDependency(_)));
     assert_eq!(registry.active_operations(), 0);
 }
 
 #[test]
-fn zero_byte_load_is_rejected() {
+fn invalid_resource_plan_is_rejected() {
     let mut registry = manual_registry();
-    let load_key = key(1, 1);
+    let materialization_key = key(1, 1);
     let error = registry
         .attach_waiter(
             waiter(1),
-            [LoadRequest::new(load_key, 0, ResourceClass::Decode)],
+            [LoadRequest::new(
+                preparation(materialization_key),
+                MaterializationResourcePlan {
+                    demand: MaterializationResourceDemand::default(),
+                    resident_bytes: 0,
+                },
+                ResourceClass::Demand,
+            )],
             1,
         )
         .unwrap_err();
-    assert!(matches!(error, RegistryError::ZeroByteLoad(_)));
+    assert!(matches!(error, RegistryError::InvalidResourcePlan(_)));
 }
 
 #[test]
 fn transition_larger_than_configured_max_is_rejected() {
     let mut registry = manual_registry();
-    let load_key = key(1, 1);
+    let materialization_key = key(1, 1);
     let maximum = FairQueueConfig::default().max_transition_cost;
     let error = registry
         .attach_waiter(
             waiter(1),
             [LoadRequest::new(
-                load_key,
-                maximum + 1,
-                ResourceClass::Decode,
+                preparation(materialization_key),
+                uniform_plan(maximum + 1),
+                ResourceClass::Demand,
             )],
             1,
         )
@@ -434,17 +567,17 @@ fn transition_larger_than_configured_max_is_rejected() {
 #[test]
 fn cancel_one_shared_waiter_keeps_demand_load() {
     let mut registry = auto_registry();
-    let load_key = key(1, 1);
-    let operation = attach_one(&mut registry, waiter(1), load_key);
+    let materialization_key = key(1, 1);
+    let operation = attach_one(&mut registry, waiter(1), materialization_key);
     registry
-        .attach_waiter(waiter(2), [request(load_key)], 2)
+        .attach_waiter(waiter(2), [request(materialization_key)], 2)
         .unwrap();
     registry.schedule_one(10).unwrap();
     registry
         .detach_waiter(waiter(1), CancellationReason::ExternalRequest, 20)
         .unwrap();
     assert_eq!(registry.waiters().waiter_count(operation), 1);
-    assert_eq!(registry.backend().cancellations(), 0);
+    assert_eq!(registry.provider().cancellations(), 0);
 }
 
 #[test]
@@ -469,8 +602,8 @@ fn cancel_last_submitted_waiter_waits_for_completion() {
         .detach_waiter(waiter(1), CancellationReason::ExternalRequest, 21)
         .unwrap();
     assert!(registry.operation(operation).is_some());
-    assert_eq!(registry.backend().cancellations(), 1);
-    registry.collect_backend_completions(8);
+    assert_eq!(registry.provider().cancellations(), 1);
+    registry.collect_provider_completions(8);
     registry.process_one_completion().unwrap();
     assert!(registry.operation(operation).is_none());
 }
@@ -482,7 +615,7 @@ fn queued_read_success_before_last_waiter_cancel_retries_cleanup_at_host_ready()
     registry.schedule_one(19).unwrap();
     registry.schedule_one(20).unwrap();
 
-    assert_eq!(registry.collect_backend_completions(1), 1);
+    assert_eq!(registry.collect_provider_completions(1), 1);
     registry
         .detach_waiter(waiter(1), CancellationReason::ExternalRequest, 21)
         .unwrap();
@@ -492,14 +625,14 @@ fn queued_read_success_before_last_waiter_cancel_retries_cleanup_at_host_ready()
             .unwrap()
             .cancellation_requested()
     );
-    assert_eq!(registry.backend().cancellations(), 1);
+    assert_eq!(registry.provider().cancellations(), 1);
 
     registry.process_one_completion().unwrap();
     assert!(registry.operation(operation).is_none());
-    assert_eq!(registry.backend().cancellations(), 2);
+    assert_eq!(registry.provider().cancellations(), 2);
     assert_eq!(registry.resources().active_grants(), 0);
 
-    assert_eq!(registry.collect_backend_completions(1), 1);
+    assert_eq!(registry.collect_provider_completions(1), 1);
     assert!(matches!(
         registry.process_one_completion().unwrap(),
         CompletionDisposition::Rejected(CompletionRejectionReason::RetiredOperation)
@@ -513,11 +646,11 @@ fn queued_upload_success_before_last_waiter_cancel_retries_cleanup_at_installing
     let operation = attach_one(&mut registry, waiter(1), key(1, 1));
     registry.schedule_one(19).unwrap();
     registry.schedule_one(20).unwrap();
-    assert_eq!(registry.collect_backend_completions(1), 1);
+    assert_eq!(registry.collect_provider_completions(1), 1);
     registry.process_one_completion().unwrap();
     registry.schedule_one(21).unwrap();
 
-    assert_eq!(registry.collect_backend_completions(1), 1);
+    assert_eq!(registry.collect_provider_completions(1), 1);
     registry
         .detach_waiter(waiter(1), CancellationReason::OwnerShutdown, 22)
         .unwrap();
@@ -527,14 +660,14 @@ fn queued_upload_success_before_last_waiter_cancel_retries_cleanup_at_installing
             .unwrap()
             .cancellation_requested()
     );
-    assert_eq!(registry.backend().cancellations(), 1);
+    assert_eq!(registry.provider().cancellations(), 1);
 
     registry.process_one_completion().unwrap();
     assert!(registry.operation(operation).is_none());
-    assert_eq!(registry.backend().cancellations(), 2);
+    assert_eq!(registry.provider().cancellations(), 2);
     assert_eq!(registry.resources().active_grants(), 0);
 
-    assert_eq!(registry.collect_backend_completions(1), 1);
+    assert_eq!(registry.collect_provider_completions(1), 1);
     assert!(matches!(
         registry.process_one_completion().unwrap(),
         CompletionDisposition::Rejected(CompletionRejectionReason::RetiredOperation)
@@ -545,14 +678,14 @@ fn queued_upload_success_before_last_waiter_cancel_retries_cleanup_at_installing
 #[test]
 fn draining_stage_history_is_exactly_once() {
     let mut registry = auto_registry();
-    let load_key = key(1, 1);
-    let operation = attach_one(&mut registry, waiter(1), load_key);
+    let materialization_key = key(1, 1);
+    let operation = attach_one(&mut registry, waiter(1), materialization_key);
     registry.schedule_one(9).unwrap();
     registry.schedule_one(10).unwrap();
     registry
         .detach_waiter(waiter(1), CancellationReason::ExternalRequest, 20)
         .unwrap();
-    registry.collect_backend_completions(1);
+    registry.collect_provider_completions(1);
     registry.process_one_completion().unwrap();
     assert_eq!(
         registry.stage_history(operation).unwrap(),
@@ -568,13 +701,13 @@ fn draining_stage_history_is_exactly_once() {
 #[test]
 fn cancel_all_shared_waiters_requests_one_physical_cancel() {
     let mut registry = auto_registry();
-    let load_key = key(1, 1);
-    attach_one(&mut registry, waiter(1), load_key);
+    let materialization_key = key(1, 1);
+    attach_one(&mut registry, waiter(1), materialization_key);
     registry
-        .attach_waiter(waiter(2), [request(load_key)], 2)
+        .attach_waiter(waiter(2), [request(materialization_key)], 2)
         .unwrap();
     registry
-        .attach_waiter(waiter(3), [request(load_key)], 3)
+        .attach_waiter(waiter(3), [request(materialization_key)], 3)
         .unwrap();
     registry.schedule_one(10).unwrap();
     for id in 1..=3 {
@@ -582,7 +715,7 @@ fn cancel_all_shared_waiters_requests_one_physical_cancel() {
             .detach_waiter(waiter(id), CancellationReason::ExternalRequest, 20 + id)
             .unwrap();
     }
-    assert_eq!(registry.backend().cancellations(), 1);
+    assert_eq!(registry.provider().cancellations(), 1);
 }
 
 #[test]
@@ -602,11 +735,11 @@ fn duplicate_detach_is_detected() {
 #[test]
 fn demand_load_is_not_cancelled_while_any_waiter_remains() {
     let mut registry = auto_registry();
-    let load_key = key(1, 1);
-    attach_one(&mut registry, waiter(1), load_key);
+    let materialization_key = key(1, 1);
+    attach_one(&mut registry, waiter(1), materialization_key);
     for id in 2..=8 {
         registry
-            .attach_waiter(waiter(id), [request(load_key)], id)
+            .attach_waiter(waiter(id), [request(materialization_key)], id)
             .unwrap();
     }
     registry.schedule_one(10).unwrap();
@@ -615,15 +748,15 @@ fn demand_load_is_not_cancelled_while_any_waiter_remains() {
             .detach_waiter(waiter(id), CancellationReason::ExternalRequest, 20 + id)
             .unwrap();
     }
-    assert_eq!(registry.backend().cancellations(), 0);
+    assert_eq!(registry.provider().cancellations(), 0);
 }
 
 #[test]
 fn read_failure_fails_waiter_and_retires() {
-    let (mut registry, load_key, operation) = manual_at_read();
+    let (mut registry, materialization_key, operation) = manual_at_read();
     registry.enqueue_completion(event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::ReadSubmitted,
         CompletionOutcome::Failed(FailureReason::StorageUnavailable),
         0,
@@ -638,11 +771,62 @@ fn read_failure_fails_waiter_and_retires() {
 }
 
 #[test]
+fn failed_completion_retires_despite_sibling_cancel_failure() {
+    let mut registry = manual_registry();
+    let first_key = key(1, 1);
+    let second_key = key(2, 1);
+    let report = registry
+        .attach_waiter(waiter(1), [request(first_key), request(second_key)], 10)
+        .unwrap();
+    let first = report.created[0];
+    let second = report.created[1];
+    for now_ns in 11..15 {
+        assert!(registry.schedule_one(now_ns).unwrap());
+    }
+    assert_eq!(
+        registry.operation(first).unwrap().stage(),
+        LoadStage::ReadSubmitted
+    );
+    assert_eq!(
+        registry.operation(second).unwrap().stage(),
+        LoadStage::ReadSubmitted
+    );
+    registry
+        .provider_mut()
+        .reject_next(LoadStage::ReadSubmitted, FailureReason::DeviceUnavailable);
+    registry.enqueue_completion(event(
+        first,
+        first_key,
+        LoadStage::ReadSubmitted,
+        CompletionOutcome::Failed(FailureReason::StorageUnavailable),
+        0,
+        30,
+    ));
+
+    assert!(matches!(
+        registry.process_one_completion(),
+        Err(RegistryError::Provider(FailureReason::DeviceUnavailable))
+    ));
+    assert!(registry.operation(first).is_none());
+    assert!(registry.retirement(first).is_some());
+    assert!(registry.operation(second).is_some());
+    assert_eq!(
+        registry.pop_failed().unwrap().continuation,
+        ContinuationId::new(1)
+    );
+
+    registry.drive(31, 1).unwrap();
+    assert!(registry.operation(second).unwrap().cancellation_requested());
+    assert_eq!(registry.provider().cancellations(), 1);
+    assert_eq!(registry.stats().physical_completions, 1);
+}
+
+#[test]
 fn failure_stage_history_is_exactly_once() {
-    let (mut registry, load_key, operation) = manual_at_read();
+    let (mut registry, materialization_key, operation) = manual_at_read();
     registry.enqueue_completion(event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::ReadSubmitted,
         CompletionOutcome::Failed(FailureReason::StorageUnavailable),
         0,
@@ -662,10 +846,10 @@ fn failure_stage_history_is_exactly_once() {
 
 #[test]
 fn upload_failure_fails_waiter_and_retires() {
-    let (mut registry, load_key, operation) = manual_at_upload();
+    let (mut registry, materialization_key, operation) = manual_at_upload();
     registry.enqueue_completion(event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::UploadSubmitted,
         CompletionOutcome::Failed(FailureReason::UploadRejected),
         0,
@@ -678,10 +862,10 @@ fn upload_failure_fails_waiter_and_retires() {
 
 #[test]
 fn install_failure_fails_waiter_and_retires() {
-    let (mut registry, load_key, operation) = manual_at_install();
+    let (mut registry, materialization_key, operation) = manual_at_install();
     registry.enqueue_completion(event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::Installing,
         CompletionOutcome::Failed(FailureReason::InstallationRejected),
         0,
@@ -694,18 +878,18 @@ fn install_failure_fails_waiter_and_retires() {
 
 #[test]
 fn stale_read_never_publishes() {
-    let (mut registry, load_key, operation) = manual_at_read();
+    let (mut registry, materialization_key, operation) = manual_at_read();
     let stale = StaleReason::DestinationReused;
     registry.enqueue_completion(event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::ReadSubmitted,
         CompletionOutcome::Stale(stale.clone()),
         0,
         30,
     ));
     registry.process_one_completion().unwrap();
-    assert!(registry.residency_binding(load_key).is_none());
+    assert!(registry.residency_binding(materialization_key).is_none());
     assert!(matches!(
         registry.pop_failed().unwrap().failure,
         ContinuationFailure::Stale(reason) if reason == stale
@@ -714,10 +898,10 @@ fn stale_read_never_publishes() {
 
 #[test]
 fn stale_stage_history_is_exactly_once() {
-    let (mut registry, load_key, operation) = manual_at_read();
+    let (mut registry, materialization_key, operation) = manual_at_read();
     registry.enqueue_completion(event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::ReadSubmitted,
         CompletionOutcome::Stale(StaleReason::DestinationReused),
         0,
@@ -737,38 +921,39 @@ fn stale_stage_history_is_exactly_once() {
 
 #[test]
 fn stale_upload_never_publishes() {
-    let (mut registry, load_key, operation) = manual_at_upload();
+    let (mut registry, materialization_key, operation) = manual_at_upload();
     registry.enqueue_completion(event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::UploadSubmitted,
         CompletionOutcome::Stale(StaleReason::SupersededOperation),
         0,
         50,
     ));
     registry.process_one_completion().unwrap();
-    assert!(registry.residency_binding(load_key).is_none());
+    assert!(registry.residency_binding(materialization_key).is_none());
 }
 
 #[test]
 fn stale_install_never_publishes() {
-    let (mut registry, load_key, operation) = manual_at_install();
+    let (mut registry, materialization_key, operation) = manual_at_install();
     registry.enqueue_completion(event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::Installing,
         CompletionOutcome::Stale(StaleReason::DestinationReused),
         0,
         70,
     ));
     registry.process_one_completion().unwrap();
-    assert!(registry.residency_binding(load_key).is_none());
+    assert!(registry.residency_binding(materialization_key).is_none());
 }
 
 #[test]
 fn wrong_generation_completion_is_fail_closed() {
-    let (mut registry, load_key, operation) = manual_at_read();
-    let mut completion = success_event(operation, load_key, LoadStage::ReadSubmitted, 30);
+    let (mut registry, materialization_key, operation) = manual_at_read();
+    let mut completion =
+        success_event(operation, materialization_key, LoadStage::ReadSubmitted, 30);
     completion.generation =
         CompletionGeneration::new(SourceGeneration::new(1), DestinationGeneration::new(999));
     registry.enqueue_completion(completion);
@@ -780,15 +965,15 @@ fn wrong_generation_completion_is_fail_closed() {
         registry.operation(operation).unwrap().stage(),
         LoadStage::ReadSubmitted
     );
-    assert!(registry.resources().in_use(ResourceKind::Sqe) > 0);
+    assert!(registry.resources().in_use(ResourceKind::ReadSlot) > 0);
 }
 
 #[test]
 fn wrong_operation_completion_is_fail_closed() {
-    let (mut registry, load_key, operation) = manual_at_read();
+    let (mut registry, materialization_key, operation) = manual_at_read();
     registry.enqueue_completion(success_event(
         OperationId::new(999),
-        load_key,
+        materialization_key,
         LoadStage::ReadSubmitted,
         30,
     ));
@@ -801,7 +986,7 @@ fn wrong_operation_completion_is_fail_closed() {
 
 #[test]
 fn wrong_key_completion_is_fail_closed() {
-    let (mut registry, _load_key, operation) = manual_at_read();
+    let (mut registry, _materialization_key, operation) = manual_at_read();
     registry.enqueue_completion(success_event(
         operation,
         key(2, 1),
@@ -817,10 +1002,10 @@ fn wrong_key_completion_is_fail_closed() {
 
 #[test]
 fn wrong_stage_completion_is_fail_closed() {
-    let (mut registry, load_key, operation) = manual_at_read();
+    let (mut registry, materialization_key, operation) = manual_at_read();
     registry.enqueue_completion(success_event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::UploadSubmitted,
         30,
     ));
@@ -833,10 +1018,10 @@ fn wrong_stage_completion_is_fail_closed() {
 
 #[test]
 fn short_success_completion_is_rejected() {
-    let (mut registry, load_key, operation) = manual_at_read();
+    let (mut registry, materialization_key, operation) = manual_at_read();
     registry.enqueue_completion(event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::ReadSubmitted,
         CompletionOutcome::Succeeded,
         BYTES - 1,
@@ -851,28 +1036,28 @@ fn short_success_completion_is_rejected() {
 
 #[test]
 fn duplicate_completion_is_diagnosed_without_double_release() {
-    let (mut registry, load_key, operation) = manual_at_read();
-    let completion = success_event(operation, load_key, LoadStage::ReadSubmitted, 30);
+    let (mut registry, materialization_key, operation) = manual_at_read();
+    let completion = success_event(operation, materialization_key, LoadStage::ReadSubmitted, 30);
     registry.enqueue_completion(completion.clone());
     registry.enqueue_completion(completion);
     registry.process_one_completion().unwrap();
-    let read_bytes = registry.resources().in_use(ResourceKind::ReadBytes);
+    let read_bytes = registry.resources().in_use(ResourceKind::StorageReadBytes);
     assert!(matches!(
         registry.process_one_completion().unwrap(),
         CompletionDisposition::Rejected(_)
     ));
     assert_eq!(
-        registry.resources().in_use(ResourceKind::ReadBytes),
+        registry.resources().in_use(ResourceKind::StorageReadBytes),
         read_bytes
     );
 }
 
 #[test]
 fn out_of_order_completion_does_not_advance_owner_stage() {
-    let (mut registry, load_key, operation) = manual_at_read();
+    let (mut registry, materialization_key, operation) = manual_at_read();
     registry.enqueue_completion(success_event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::Installing,
         30,
     ));
@@ -886,10 +1071,10 @@ fn out_of_order_completion_does_not_advance_owner_stage() {
 #[test]
 fn unknown_completion_is_retained_as_rejection() {
     let mut registry = manual_registry();
-    let load_key = key(1, 1);
+    let materialization_key = key(1, 1);
     registry.enqueue_completion(success_event(
         OperationId::new(99),
-        load_key,
+        materialization_key,
         LoadStage::ReadSubmitted,
         1,
     ));
@@ -899,31 +1084,31 @@ fn unknown_completion_is_retained_as_rejection() {
 
 #[test]
 fn lost_completion_keeps_submitted_credit_and_never_publishes() {
-    let mut backend = FakeBackend::new();
+    let mut backend = FakeMaterializationProvider::new();
     backend.lose_next(LoadStage::ReadSubmitted);
     let mut registry = LoadRegistry::with_testing_resources(backend).unwrap();
-    let load_key = key(1, 1);
-    let operation = attach_one(&mut registry, waiter(1), load_key);
+    let materialization_key = key(1, 1);
+    let operation = attach_one(&mut registry, waiter(1), materialization_key);
     registry.schedule_one(19).unwrap();
     registry.schedule_one(20).unwrap();
-    assert_eq!(registry.collect_backend_completions(8), 0);
+    assert_eq!(registry.collect_provider_completions(8), 0);
     assert_eq!(
         registry.operation(operation).unwrap().stage(),
         LoadStage::ReadSubmitted
     );
-    assert_eq!(registry.resources().in_use(ResourceKind::Sqe), 1);
-    assert!(registry.residency_binding(load_key).is_none());
+    assert_eq!(registry.resources().in_use(ResourceKind::ReadSlot), 1);
+    assert!(registry.residency_binding(materialization_key).is_none());
 }
 
 #[test]
 fn completion_fifo_rejects_bad_then_applies_good() {
-    let (mut registry, load_key, operation) = manual_at_read();
-    let mut bad = success_event(operation, load_key, LoadStage::ReadSubmitted, 30);
+    let (mut registry, materialization_key, operation) = manual_at_read();
+    let mut bad = success_event(operation, materialization_key, LoadStage::ReadSubmitted, 30);
     bad.generation.destination = DestinationGeneration::new(99);
     registry.enqueue_completion(bad);
     registry.enqueue_completion(success_event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::ReadSubmitted,
         31,
     ));
@@ -950,9 +1135,13 @@ fn every_illegal_load_stage_transition_is_rejected() {
 
 #[test]
 fn pinned_slab_exhaustion_requeues_without_failing_attach() {
-    let resources = hard_broker_with(ResourceKind::PinnedSlab, BYTES, 0);
-    let mut registry =
-        LoadRegistry::new(FakeBackend::manual(), resources, FairQueueConfig::default()).unwrap();
+    let resources = hard_broker_with(ResourceKind::PinnedHostBytes, BYTES, 0);
+    let mut registry = LoadRegistry::new(
+        FakeMaterializationProvider::manual(),
+        resources,
+        FairQueueConfig::default(),
+    )
+    .unwrap();
     let first = attach_one(&mut registry, waiter(1), key(1, 1));
     let second = attach_one(&mut registry, waiter(2), key(2, 1));
 
@@ -968,35 +1157,49 @@ fn pinned_slab_exhaustion_requeues_without_failing_attach() {
         registry.operation(second).unwrap().stage(),
         LoadStage::Reserved
     );
-    assert_eq!(registry.resources().in_use(ResourceKind::PinnedSlab), BYTES);
-    assert_eq!(registry.backend().physical_reads(), 1);
+    assert_eq!(
+        registry.resources().in_use(ResourceKind::PinnedHostBytes),
+        BYTES
+    );
+    assert_eq!(registry.provider().physical_reads(), 1);
     assert!(registry.pop_failed().is_none());
 }
 
 #[test]
-fn demand_reserve_requeues_prefetch_and_allows_decode_progress() {
+fn demand_reserve_requeues_prefetch_and_allows_demand_progress() {
     let mut resources = staged_broker(2, 2, 2, 2);
     resources
-        .reconfigure_limit(ResourceKind::PinnedSlab, BYTES * 2, BYTES)
+        .reconfigure_limit(ResourceKind::PinnedHostBytes, BYTES * 2, BYTES)
         .unwrap();
     let mut base = resources
         .acquire(
             99,
-            ResourceClass::Prefill,
-            [HardResourceClaim::new(ResourceKind::PinnedSlab, BYTES)],
+            ResourceClass::Throughput,
+            [PhysicalResourceClaim::new(
+                ResourceKind::PinnedHostBytes,
+                BYTES,
+            )],
         )
         .unwrap();
-    let mut registry =
-        LoadRegistry::new(FakeBackend::manual(), resources, FairQueueConfig::default()).unwrap();
+    let mut registry = LoadRegistry::new(
+        FakeMaterializationProvider::manual(),
+        resources,
+        FairQueueConfig::default(),
+    )
+    .unwrap();
     let prefetch = registry
         .attach_waiter(
             waiter(1),
-            [LoadRequest::new(key(1, 1), BYTES, ResourceClass::Prefetch)],
+            [LoadRequest::new(
+                preparation(key(1, 1)),
+                uniform_plan(BYTES),
+                ResourceClass::Prefetch,
+            )],
             1,
         )
         .unwrap()
         .created[0];
-    let decode = attach_one(&mut registry, waiter(2), key(2, 1));
+    let demand = attach_one(&mut registry, waiter(2), key(2, 1));
 
     assert!(registry.schedule_one(20).unwrap());
     assert!(registry.schedule_one(21).unwrap());
@@ -1005,17 +1208,17 @@ fn demand_reserve_requeues_prefetch_and_allows_decode_progress() {
         LoadStage::Reserved
     );
     assert_eq!(
-        registry.operation(decode).unwrap().stage(),
+        registry.operation(demand).unwrap().stage(),
         LoadStage::ReadSubmitted
     );
-    assert_eq!(registry.backend().physical_reads(), 1);
+    assert_eq!(registry.provider().physical_reads(), 1);
     assert!(registry.pop_failed().is_none());
 
     registry.release_hard_resources(&mut base).unwrap();
     registry.begin_shutdown(30).unwrap();
     registry.enqueue_completion(event(
-        decode,
-        registry.key_for_operation(decode).unwrap(),
+        demand,
+        registry.key_for_operation(demand).unwrap(),
         LoadStage::ReadSubmitted,
         CompletionOutcome::Cancelled(CancellationReason::OwnerShutdown),
         0,
@@ -1026,21 +1229,79 @@ fn demand_reserve_requeues_prefetch_and_allows_decode_progress() {
 }
 
 #[test]
+fn install_slot_capacity_prevents_concurrent_install_overcommit() {
+    let mut resources = staged_broker(2, 2, 2, 2);
+    resources
+        .reconfigure_limit(ResourceKind::InstallSlot, 1, 0)
+        .unwrap();
+    let mut registry = LoadRegistry::new(
+        FakeMaterializationProvider::manual(),
+        resources,
+        FairQueueConfig::default(),
+    )
+    .unwrap();
+    let first = attach_one(&mut registry, waiter(1), key(1, 1));
+    let second = attach_one(&mut registry, waiter(2), key(2, 1));
+
+    while registry.schedule_one(10).unwrap() {}
+    for (index, operation) in [first, second].into_iter().enumerate() {
+        registry.enqueue_completion(success_event(
+            operation,
+            registry.key_for_operation(operation).unwrap(),
+            LoadStage::ReadSubmitted,
+            20 + index as u64,
+        ));
+        registry.process_one_completion().unwrap();
+    }
+    while registry.schedule_one(30).unwrap() {}
+    for (index, operation) in [first, second].into_iter().enumerate() {
+        registry.enqueue_completion(success_event(
+            operation,
+            registry.key_for_operation(operation).unwrap(),
+            LoadStage::UploadSubmitted,
+            40 + index as u64,
+        ));
+        registry.process_one_completion().unwrap();
+    }
+
+    assert!(registry.schedule_one(50).unwrap());
+    assert!(!registry.schedule_one(51).unwrap());
+    assert_eq!(registry.provider().physical_installs(), 1);
+    assert_eq!(registry.resources().in_use(ResourceKind::InstallSlot), 1);
+
+    registry.enqueue_completion(success_event(
+        first,
+        registry.key_for_operation(first).unwrap(),
+        LoadStage::Installing,
+        60,
+    ));
+    registry.process_one_completion().unwrap();
+    assert_eq!(registry.resources().in_use(ResourceKind::InstallSlot), 0);
+    assert!(registry.schedule_one(61).unwrap());
+    assert_eq!(registry.provider().physical_installs(), 2);
+    assert_eq!(registry.resources().in_use(ResourceKind::InstallSlot), 1);
+}
+
+#[test]
 fn upload_backpressure_allows_reads_to_continue_to_pinned_capacity() {
     let resources = staged_broker(2, 4, 1, 4);
-    let mut registry =
-        LoadRegistry::new(FakeBackend::manual(), resources, FairQueueConfig::default()).unwrap();
+    let mut registry = LoadRegistry::new(
+        FakeMaterializationProvider::manual(),
+        resources,
+        FairQueueConfig::default(),
+    )
+    .unwrap();
     let operations = (1..=4)
         .map(|seed| attach_one(&mut registry, waiter(seed), key(seed as u8, 1)))
         .collect::<Vec<_>>();
 
     while registry.schedule_one(20).unwrap() {}
-    assert_eq!(registry.backend().physical_reads(), 2);
+    assert_eq!(registry.provider().physical_reads(), 2);
     for (index, operation) in operations[..2].iter().enumerate() {
-        let load_key = registry.key_for_operation(*operation).unwrap();
+        let materialization_key = registry.key_for_operation(*operation).unwrap();
         registry.enqueue_completion(success_event(
             *operation,
-            load_key,
+            materialization_key,
             LoadStage::ReadSubmitted,
             30 + index as u64,
         ));
@@ -1049,8 +1310,8 @@ fn upload_backpressure_allows_reads_to_continue_to_pinned_capacity() {
 
     while registry.schedule_one(40).unwrap() {}
 
-    assert_eq!(registry.backend().physical_uploads(), 1);
-    assert_eq!(registry.backend().physical_reads(), 4);
+    assert_eq!(registry.provider().physical_uploads(), 1);
+    assert_eq!(registry.provider().physical_reads(), 4);
     assert_eq!(
         operations
             .iter()
@@ -1060,7 +1321,7 @@ fn upload_backpressure_allows_reads_to_continue_to_pinned_capacity() {
         2
     );
     assert_eq!(
-        registry.resources().in_use(ResourceKind::PinnedSlab),
+        registry.resources().in_use(ResourceKind::PinnedHostBytes),
         BYTES * 4
     );
     assert!(registry.pop_failed().is_none());
@@ -1087,16 +1348,20 @@ fn upload_backpressure_allows_reads_to_continue_to_pinned_capacity() {
 
 #[test]
 fn single_operation_larger_than_physical_capacity_is_permanent_attach_error() {
-    let resources = hard_broker_with(ResourceKind::PinnedSlab, BYTES - 1, 0);
-    let mut registry =
-        LoadRegistry::new(FakeBackend::manual(), resources, FairQueueConfig::default()).unwrap();
+    let resources = hard_broker_with(ResourceKind::PinnedHostBytes, BYTES - 1, 0);
+    let mut registry = LoadRegistry::new(
+        FakeMaterializationProvider::manual(),
+        resources,
+        FairQueueConfig::default(),
+    )
+    .unwrap();
     let error = registry
         .attach_waiter(waiter(1), [request(key(1, 1))], 1)
         .unwrap_err();
     assert!(matches!(
         error,
-        RegistryError::Resources(HardResourceError::ExceedsCapacity {
-            kind: ResourceKind::PinnedSlab,
+        RegistryError::Resources(PhysicalResourceError::ExceedsCapacity {
+            kind: ResourceKind::PinnedHostBytes,
             requested: BYTES,
             capacity,
         }) if capacity == BYTES - 1
@@ -1107,14 +1372,21 @@ fn single_operation_larger_than_physical_capacity_is_permanent_attach_error() {
 
 #[test]
 fn cancelling_unsubmitted_load_releases_credit_for_next_load() {
-    let resources = hard_broker_with(ResourceKind::ReadBytes, BYTES, 0);
-    let mut registry =
-        LoadRegistry::new(FakeBackend::manual(), resources, FairQueueConfig::default()).unwrap();
+    let resources = hard_broker_with(ResourceKind::StorageReadBytes, BYTES, 0);
+    let mut registry = LoadRegistry::new(
+        FakeMaterializationProvider::manual(),
+        resources,
+        FairQueueConfig::default(),
+    )
+    .unwrap();
     attach_one(&mut registry, waiter(1), key(1, 1));
     registry
         .detach_waiter(waiter(1), CancellationReason::ExternalRequest, 2)
         .unwrap();
-    assert_eq!(registry.resources().in_use(ResourceKind::ReadBytes), 0);
+    assert_eq!(
+        registry.resources().in_use(ResourceKind::StorageReadBytes),
+        0
+    );
     assert!(
         registry
             .attach_waiter(waiter(2), [request(key(2, 1))], 3)
@@ -1124,43 +1396,43 @@ fn cancelling_unsubmitted_load_releases_credit_for_next_load() {
 
 #[test]
 fn submitted_hard_grant_cannot_be_revoked() {
-    let mut broker = HardResourceBroker::testing_default();
+    let mut broker = PhysicalResourceBroker::testing_default();
     let mut grant = broker
         .acquire(
             1,
-            ResourceClass::Decode,
-            [HardResourceClaim::new(ResourceKind::Sqe, 1)],
+            ResourceClass::Demand,
+            [PhysicalResourceClaim::new(ResourceKind::ReadSlot, 1)],
         )
         .unwrap();
     broker
-        .mark_submitted(&mut grant, &[ResourceKind::Sqe])
+        .mark_submitted(&mut grant, &[ResourceKind::ReadSlot])
         .unwrap();
     assert!(matches!(
         broker.release_all_held(&mut grant),
-        Err(HardResourceError::SubmittedClaimCannotBeRevoked { .. })
+        Err(PhysicalResourceError::SubmittedClaimCannotBeRevoked { .. })
     ));
-    assert_eq!(broker.in_use(ResourceKind::Sqe), 1);
+    assert_eq!(broker.in_use(ResourceKind::ReadSlot), 1);
 }
 
 #[test]
 fn hard_grant_return_requires_submitted_identity() {
-    let mut broker = HardResourceBroker::testing_default();
+    let mut broker = PhysicalResourceBroker::testing_default();
     let mut grant = broker
         .acquire(
             1,
-            ResourceClass::Decode,
-            [HardResourceClaim::new(ResourceKind::Sqe, 1)],
+            ResourceClass::Demand,
+            [PhysicalResourceClaim::new(ResourceKind::ReadSlot, 1)],
         )
         .unwrap();
     assert!(matches!(
-        broker.mark_returned(&mut grant, &[ResourceKind::Sqe]),
-        Err(HardResourceError::NotSubmitted { .. })
+        broker.mark_returned(&mut grant, &[ResourceKind::ReadSlot]),
+        Err(PhysicalResourceError::NotSubmitted { .. })
     ));
 }
 
 #[test]
 fn hard_catalog_contains_every_required_kind() {
-    let broker = HardResourceBroker::testing_default();
+    let broker = PhysicalResourceBroker::testing_default();
     let kinds: Vec<_> = broker.snapshots().map(|snapshot| snapshot.kind).collect();
     assert_eq!(kinds.len(), ResourceKind::ALL.len());
     for kind in ResourceKind::ALL {
@@ -1169,88 +1441,111 @@ fn hard_catalog_contains_every_required_kind() {
 }
 
 #[test]
-fn decode_can_use_hard_reserve() {
-    let mut broker = hard_broker_with(ResourceKind::Continuation, 2, 1);
-    let _base = broker
-        .acquire(
-            1,
-            ResourceClass::Prefill,
-            [HardResourceClaim::new(ResourceKind::Continuation, 1)],
-        )
-        .unwrap();
-    assert!(
-        broker
+fn demand_and_latency_critical_can_use_hard_reserve() {
+    for class in [ResourceClass::Demand, ResourceClass::LatencyCritical] {
+        let mut broker = hard_broker_with(ResourceKind::Continuation, 2, 1);
+        let _base = broker
             .acquire(
-                2,
-                ResourceClass::Decode,
-                [HardResourceClaim::new(ResourceKind::Continuation, 1)],
+                1,
+                ResourceClass::Throughput,
+                [PhysicalResourceClaim::new(ResourceKind::Continuation, 1)],
             )
-            .is_ok()
-    );
+            .unwrap();
+        assert!(
+            broker
+                .acquire(
+                    2,
+                    class,
+                    [PhysicalResourceClaim::new(ResourceKind::Continuation, 1)],
+                )
+                .is_ok(),
+            "{class:?} must be allowed to use the hard reserve"
+        );
+    }
 }
 
 #[test]
-fn prefill_cannot_consume_decode_verification_reserve() {
-    let mut broker = hard_broker_with(ResourceKind::Continuation, 2, 1);
-    let _base = broker
-        .acquire(
-            1,
-            ResourceClass::Prefill,
-            [HardResourceClaim::new(ResourceKind::Continuation, 1)],
-        )
-        .unwrap();
-    assert!(matches!(
-        broker.acquire(
-            2,
-            ResourceClass::Prefill,
-            [HardResourceClaim::new(ResourceKind::Continuation, 1)],
-        ),
-        Err(HardResourceError::DemandReserve { .. })
-    ));
+fn prefetch_and_throughput_cannot_consume_hard_reserve() {
+    for class in [ResourceClass::Prefetch, ResourceClass::Throughput] {
+        let mut broker = hard_broker_with(ResourceKind::Continuation, 2, 1);
+        let _base = broker
+            .acquire(
+                1,
+                ResourceClass::Throughput,
+                [PhysicalResourceClaim::new(ResourceKind::Continuation, 1)],
+            )
+            .unwrap();
+        assert!(
+            matches!(
+                broker.acquire(
+                    2,
+                    class,
+                    [PhysicalResourceClaim::new(ResourceKind::Continuation, 1)],
+                ),
+                Err(PhysicalResourceError::DemandReserve { .. })
+            ),
+            "{class:?} must not consume the hard reserve"
+        );
+    }
 }
 
 #[test]
 fn multi_claim_hard_admission_is_atomic() {
-    let mut broker = hard_broker_with(ResourceKind::Sqe, 1, 0);
+    let mut broker = hard_broker_with(ResourceKind::ReadSlot, 1, 0);
     let error = broker
         .acquire(
             1,
-            ResourceClass::Decode,
+            ResourceClass::Demand,
             [
-                HardResourceClaim::new(ResourceKind::Sqe, 2),
-                HardResourceClaim::new(ResourceKind::PinnedSlab, 1),
+                PhysicalResourceClaim::new(ResourceKind::ReadSlot, 2),
+                PhysicalResourceClaim::new(ResourceKind::PinnedHostBytes, 1),
             ],
         )
         .unwrap_err();
-    assert!(matches!(error, HardResourceError::ExceedsCapacity { .. }));
-    assert_eq!(broker.in_use(ResourceKind::PinnedSlab), 0);
+    assert!(matches!(
+        error,
+        PhysicalResourceError::ExceedsCapacity { .. }
+    ));
+    assert_eq!(broker.in_use(ResourceKind::PinnedHostBytes), 0);
 }
 
 #[test]
 fn hard_claims_release_at_exact_stage_boundaries() {
-    let (mut registry, load_key, operation) = manual_at_read();
-    assert_eq!(registry.resources().in_use(ResourceKind::ReadBytes), BYTES);
+    let (mut registry, materialization_key, operation) = manual_at_read();
+    assert_eq!(
+        registry.resources().in_use(ResourceKind::StorageReadBytes),
+        BYTES
+    );
     registry.enqueue_completion(success_event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::ReadSubmitted,
         30,
     ));
     registry.process_one_completion().unwrap();
-    assert_eq!(registry.resources().in_use(ResourceKind::ReadBytes), 0);
-    assert_eq!(registry.resources().in_use(ResourceKind::PinnedSlab), BYTES);
+    assert_eq!(
+        registry.resources().in_use(ResourceKind::StorageReadBytes),
+        0
+    );
+    assert_eq!(
+        registry.resources().in_use(ResourceKind::PinnedHostBytes),
+        BYTES
+    );
     registry.schedule_one(40).unwrap();
     registry.enqueue_completion(success_event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::UploadSubmitted,
         50,
     ));
     registry.process_one_completion().unwrap();
-    assert_eq!(registry.resources().in_use(ResourceKind::PinnedSlab), 0);
+    assert_eq!(
+        registry.resources().in_use(ResourceKind::PinnedHostBytes),
+        0
+    );
     assert_eq!(registry.resources().in_use(ResourceKind::UploadBytes), 0);
     assert_eq!(
-        registry.resources().in_use(ResourceKind::ExpertFrame),
+        registry.resources().in_use(ResourceKind::ResidentBytes),
         BYTES
     );
 }
@@ -1260,9 +1555,9 @@ fn production_fairness_limits(
     pinned_host_bytes: u64,
     h2d_bytes: u64,
     device_install_bytes: u64,
-) -> ExpertIoResourceLimits {
-    ExpertIoResourceLimits {
-        capacity: ExpertIoResourceDemand {
+) -> MaterializationResourceLimits {
+    MaterializationResourceLimits {
+        capacity: MaterializationResourceDemand {
             read_slots: 1,
             storage_read_bytes,
             pinned_host_bytes,
@@ -1271,33 +1566,33 @@ fn production_fairness_limits(
             install_slots: 1,
             device_install_bytes,
         },
-        demand_reserve: ExpertIoResourceDemand::default(),
+        demand_reserve: MaterializationResourceDemand::default(),
     }
     .validate()
     .unwrap()
 }
 
 #[test]
-fn production_fairness_accepts_large_expert_and_rejects_capacity_plus_one() {
-    const EXPERT_BYTES: u64 = 13_369_344;
+fn production_fairness_accepts_large_materialization_and_rejects_capacity_plus_one() {
+    const MATERIALIZATION_BYTES: u64 = 13_369_344;
 
     let config = FairQueueConfig::for_production(production_fairness_limits(
-        EXPERT_BYTES,
-        EXPERT_BYTES,
-        EXPERT_BYTES,
-        EXPERT_BYTES,
+        MATERIALIZATION_BYTES,
+        MATERIALIZATION_BYTES,
+        MATERIALIZATION_BYTES,
+        MATERIALIZATION_BYTES,
     ))
     .unwrap();
-    assert_eq!(config.max_transition_cost, EXPERT_BYTES);
+    assert_eq!(config.max_transition_cost, MATERIALIZATION_BYTES);
 
     let mut queue = FairQueue::new(config).unwrap();
     queue
-        .push('e', ResourceClass::Decode, EXPERT_BYTES, 0)
+        .push('m', ResourceClass::Demand, MATERIALIZATION_BYTES, 0)
         .unwrap();
     assert!(matches!(
-        queue.push('x', ResourceClass::Decode, EXPERT_BYTES + 1, 0),
+        queue.push('x', ResourceClass::Demand, MATERIALIZATION_BYTES + 1, 0),
         Err(FairQueueError::TransitionTooLarge { cost, maximum })
-            if cost == EXPERT_BYTES + 1 && maximum == EXPERT_BYTES
+            if cost == MATERIALIZATION_BYTES + 1 && maximum == MATERIALIZATION_BYTES
     ));
 }
 
@@ -1317,7 +1612,9 @@ fn production_fairness_uses_largest_physical_stage_byte_capacity() {
 #[test]
 fn production_fairness_rejects_zero_and_out_of_signed_range_capacity() {
     assert!(matches!(
-        FairQueueConfig::for_production(ExpertIoResourceLimits::default().validate().unwrap()),
+        FairQueueConfig::for_production(
+            MaterializationResourceLimits::default().validate().unwrap()
+        ),
         Err(FairQueueError::ZeroMaxTransitionCost)
     ));
 
@@ -1328,9 +1625,9 @@ fn production_fairness_rejects_zero_and_out_of_signed_range_capacity() {
     .unwrap();
     for value in [
         config.prefetch_quantum,
-        config.prefill_quantum,
-        config.verification_quantum,
-        config.decode_quantum,
+        config.throughput_quantum,
+        config.demand_quantum,
+        config.latency_critical_quantum,
         config.max_surplus,
         config.debt_limit,
         config.max_transition_cost,
@@ -1339,7 +1636,7 @@ fn production_fairness_rejects_zero_and_out_of_signed_range_capacity() {
     }
     let mut queue = FairQueue::new(config).unwrap();
     queue
-        .push('x', ResourceClass::Decode, signed_max, 0)
+        .push('x', ResourceClass::Demand, signed_max, 0)
         .unwrap();
     assert_eq!(queue.pop_next(0, |_| true), Some('x'));
 
@@ -1350,31 +1647,36 @@ fn production_fairness_rejects_zero_and_out_of_signed_range_capacity() {
 }
 
 #[test]
-fn production_fairness_keeps_prefill_progress_bounded_under_decode_pressure() {
-    const EXPERT_BYTES: u64 = 13_369_344;
+fn production_fairness_keeps_throughput_progress_bounded_under_latency_pressure() {
+    const MATERIALIZATION_BYTES: u64 = 13_369_344;
 
     let config = FairQueueConfig::for_production(production_fairness_limits(
-        EXPERT_BYTES,
-        EXPERT_BYTES,
-        EXPERT_BYTES,
-        EXPERT_BYTES,
+        MATERIALIZATION_BYTES,
+        MATERIALIZATION_BYTES,
+        MATERIALIZATION_BYTES,
+        MATERIALIZATION_BYTES,
     ))
     .unwrap();
-    assert_eq!(config.verification_quantum, EXPERT_BYTES);
-    assert_eq!(config.decode_quantum, EXPERT_BYTES);
-    assert!(config.prefill_quantum > config.prefetch_quantum);
-    assert!(config.prefill_quantum < config.decode_quantum);
+    assert_eq!(config.demand_quantum, MATERIALIZATION_BYTES);
+    assert_eq!(config.latency_critical_quantum, MATERIALIZATION_BYTES);
+    assert!(config.throughput_quantum > config.prefetch_quantum);
+    assert!(config.throughput_quantum < config.latency_critical_quantum);
 
     let mut queue = FairQueue::new(config).unwrap();
     queue
-        .push('p', ResourceClass::Prefill, EXPERT_BYTES, 0)
+        .push('t', ResourceClass::Throughput, MATERIALIZATION_BYTES, 0)
         .unwrap();
     let mut selected_at = None;
     for tick in 0..=config.starvation_ticks {
         queue
-            .push('d', ResourceClass::Decode, EXPERT_BYTES, tick)
+            .push(
+                'l',
+                ResourceClass::LatencyCritical,
+                MATERIALIZATION_BYTES,
+                tick,
+            )
             .unwrap();
-        if queue.pop_next(tick, |_| true) == Some('p') {
+        if queue.pop_next(tick, |_| true) == Some('t') {
             selected_at = Some(tick);
             break;
         }
@@ -1385,9 +1687,9 @@ fn production_fairness_keeps_prefill_progress_bounded_under_decode_pressure() {
 fn fairness_config() -> FairQueueConfig {
     FairQueueConfig {
         prefetch_quantum: 1,
-        prefill_quantum: 1,
-        verification_quantum: 1,
-        decode_quantum: 1,
+        throughput_quantum: 1,
+        demand_quantum: 1,
+        latency_critical_quantum: 1,
         max_surplus: 16,
         debt_limit: 8,
         starvation_ticks: 2,
@@ -1396,25 +1698,31 @@ fn fairness_config() -> FairQueueConfig {
 }
 
 #[test]
-fn fair_queue_prefers_decode_on_equal_age() {
+fn fair_queue_prefers_latency_critical_on_equal_age() {
     let mut queue = FairQueue::new(fairness_config()).unwrap();
-    queue.push('p', ResourceClass::Prefill, 1, 0).unwrap();
-    queue.push('d', ResourceClass::Decode, 1, 0).unwrap();
-    assert_eq!(queue.pop_next(0, |_| true), Some('d'));
+    queue.push('t', ResourceClass::Throughput, 1, 0).unwrap();
+    queue
+        .push('l', ResourceClass::LatencyCritical, 1, 0)
+        .unwrap();
+    assert_eq!(queue.pop_next(0, |_| true), Some('l'));
 }
 
 #[test]
-fn aged_prefill_forces_progress_under_decode_pressure() {
+fn aged_throughput_forces_progress_under_latency_pressure() {
     let mut config = fairness_config();
-    config.decode_quantum = 8;
+    config.latency_critical_quantum = 8;
     let mut queue = FairQueue::new(config).unwrap();
-    queue.push('p', ResourceClass::Prefill, 4, 0).unwrap();
+    queue.push('t', ResourceClass::Throughput, 4, 0).unwrap();
     for tick in 0..2 {
-        queue.push('d', ResourceClass::Decode, 1, tick).unwrap();
-        assert_eq!(queue.pop_next(tick, |_| true), Some('d'));
+        queue
+            .push('l', ResourceClass::LatencyCritical, 1, tick)
+            .unwrap();
+        assert_eq!(queue.pop_next(tick, |_| true), Some('l'));
     }
-    queue.push('d', ResourceClass::Decode, 1, 2).unwrap();
-    assert_eq!(queue.pop_next(2, |_| true), Some('p'));
+    queue
+        .push('l', ResourceClass::LatencyCritical, 1, 2)
+        .unwrap();
+    assert_eq!(queue.pop_next(2, |_| true), Some('t'));
 }
 
 #[test]
@@ -1427,15 +1735,15 @@ fn prefetch_has_no_aging_forced_progress() {
 #[test]
 fn fairness_never_bypasses_hard_feasibility() {
     let mut queue = FairQueue::new(fairness_config()).unwrap();
-    queue.push('x', ResourceClass::Decode, 1, 0).unwrap();
+    queue.push('x', ResourceClass::Demand, 1, 0).unwrap();
     assert_eq!(queue.pop_next(100, |_| false), None);
 }
 
 #[test]
 fn fairness_skips_infeasible_head_for_feasible_work() {
     let mut queue = FairQueue::new(fairness_config()).unwrap();
-    queue.push('x', ResourceClass::Decode, 1, 0).unwrap();
-    queue.push('y', ResourceClass::Prefill, 1, 0).unwrap();
+    queue.push('x', ResourceClass::Demand, 1, 0).unwrap();
+    queue.push('y', ResourceClass::Throughput, 1, 0).unwrap();
     assert_eq!(queue.pop_next(0, |item| *item == 'y'), Some('y'));
 }
 
@@ -1443,7 +1751,7 @@ fn fairness_skips_infeasible_head_for_feasible_work() {
 fn fair_queue_rejects_cost_over_max_transition() {
     let mut queue = FairQueue::new(fairness_config()).unwrap();
     assert!(matches!(
-        queue.push('x', ResourceClass::Decode, 9, 0),
+        queue.push('x', ResourceClass::Demand, 9, 0),
         Err(FairQueueError::TransitionTooLarge { .. })
     ));
 }
@@ -1451,19 +1759,19 @@ fn fair_queue_rejects_cost_over_max_transition() {
 #[test]
 fn forced_progress_debt_stays_bounded() {
     let mut config = fairness_config();
-    config.prefill_quantum = 1;
+    config.throughput_quantum = 1;
     config.starvation_ticks = 0;
     config.debt_limit = 3;
     let mut queue = FairQueue::new(config).unwrap();
-    queue.push('p', ResourceClass::Prefill, 4, 0).unwrap();
+    queue.push('p', ResourceClass::Throughput, 4, 0).unwrap();
     assert_eq!(queue.pop_next(0, |_| true), Some('p'));
-    assert_eq!(queue.deficit(ResourceClass::Prefill), -3);
+    assert_eq!(queue.deficit(ResourceClass::Throughput), -3);
 }
 
 #[test]
 fn fair_queue_rejects_zero_quantum_configuration() {
     let mut config = fairness_config();
-    config.decode_quantum = 0;
+    config.latency_critical_quantum = 0;
     assert!(matches!(
         FairQueue::<u8>::new(config),
         Err(FairQueueError::ZeroQuantum)
@@ -1509,7 +1817,7 @@ fn targeted_ready_does_not_wake_unrelated_continuation() {
 }
 
 #[test]
-fn fake_backend_reverse_completion_wakes_only_targeted_continuation() {
+fn fake_provider_reverse_completion_wakes_only_targeted_continuation() {
     let mut registry = manual_registry();
     let first_key = key(1, 1);
     let second_key = key(2, 1);
@@ -1631,6 +1939,31 @@ fn shared_wait_is_not_multiplied_by_waiter_count() {
 }
 
 #[test]
+fn registry_runnable_work_marks_overlapped_wait_as_covered() {
+    let mut registry = auto_registry();
+    let operation = attach_one(&mut registry, waiter(1), key(1, 1));
+    // Compute spans [10, 25) and [40, 50): the first overlaps the wait, the
+    // second starts exactly when the wait closes and must not count.
+    registry.record_runnable_work(10, 25).unwrap();
+    registry.record_runnable_work(40, 50).unwrap();
+    registry
+        .detach_waiter(waiter(1), CancellationReason::ExternalRequest, 40)
+        .unwrap();
+    let snapshot = registry
+        .snapshot_transaction_output(
+            ExecutionTransactionId::new(1).unwrap(),
+            OutputTokenId::new(1),
+            1,
+            60,
+        )
+        .unwrap();
+    assert!(snapshot.operation_phases.contains_key(&operation));
+    assert_eq!(snapshot.wait_ns, 30);
+    assert_eq!(snapshot.covered_wait_ns, 15);
+    assert_eq!(snapshot.uncovered_wait_ns, 15);
+}
+
+#[test]
 fn runnable_overlap_reduces_only_uncovered_wait() {
     let mut ledger = CriticalPathLedger::new();
     ledger
@@ -1737,8 +2070,12 @@ fn reversed_ledger_span_is_rejected() {
 #[test]
 fn ready_cohort_credit_exhaustion_delays_resume_without_false_wake() {
     let resources = hard_broker_with(ResourceKind::ReadyCohort, 0, 0);
-    let mut registry =
-        LoadRegistry::new(FakeBackend::new(), resources, FairQueueConfig::default()).unwrap();
+    let mut registry = LoadRegistry::new(
+        FakeMaterializationProvider::new(),
+        resources,
+        FairQueueConfig::default(),
+    )
+    .unwrap();
     attach_one(&mut registry, waiter(1), key(1, 1));
     registry.drive(100, 32).unwrap();
     assert_eq!(registry.pop_ready(101).unwrap(), None);
@@ -1759,8 +2096,12 @@ fn shutdown_drains_submitted_operation_without_leak() {
 #[test]
 fn shutdown_drains_mixed_queued_and_submitted_without_grant_leak() {
     let resources = staged_broker(1, 1, 1, 3);
-    let mut registry =
-        LoadRegistry::new(FakeBackend::new(), resources, FairQueueConfig::default()).unwrap();
+    let mut registry = LoadRegistry::new(
+        FakeMaterializationProvider::new(),
+        resources,
+        FairQueueConfig::default(),
+    )
+    .unwrap();
     for seed in 1..=3 {
         attach_one(&mut registry, waiter(seed), key(seed as u8, 1));
     }
@@ -1774,14 +2115,14 @@ fn shutdown_drains_mixed_queued_and_submitted_without_grant_leak() {
     assert_eq!(registry.resources().active_grants(), 0);
     assert_eq!(
         registry
-            .backend()
+            .provider()
             .commands()
             .iter()
-            .filter(|command| matches!(command, FakeCommand::Reserve(_)))
+            .filter(|command| matches!(command, FakeMaterializationCommand::Reserve(_)))
             .count(),
         1
     );
-    assert_eq!(registry.backend().cancellations(), 1);
+    assert_eq!(registry.provider().cancellations(), 1);
 }
 
 #[test]
@@ -1796,7 +2137,7 @@ fn shutdown_releases_residency_ready_and_continuation_grants() {
 
 #[test]
 fn shutdown_with_lost_manual_completion_is_explicit_and_retryable_without_leak() {
-    let (mut registry, load_key, operation) = manual_at_read();
+    let (mut registry, materialization_key, operation) = manual_at_read();
     let error = registry.shutdown(30, 4).unwrap_err();
     assert!(matches!(
         error,
@@ -1811,7 +2152,7 @@ fn shutdown_with_lost_manual_completion_is_explicit_and_retryable_without_leak()
 
     registry.enqueue_completion(event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::ReadSubmitted,
         CompletionOutcome::Cancelled(CancellationReason::OwnerShutdown),
         0,
@@ -1826,64 +2167,92 @@ fn shutdown_with_lost_manual_completion_is_explicit_and_retryable_without_leak()
 #[test]
 fn resident_attach_is_immediately_ready_without_second_read() {
     let mut registry = auto_registry();
-    let load_key = key(1, 1);
-    attach_one(&mut registry, waiter(1), load_key);
+    let materialization_key = key(1, 1);
+    attach_one(&mut registry, waiter(1), materialization_key);
     registry.drive(100, 32).unwrap();
     registry.pop_ready(101).unwrap();
     let report = registry
-        .attach_waiter(waiter(2), [request(load_key)], 102)
+        .attach_waiter(waiter(2), [resident_request(materialization_key)], 102)
         .unwrap();
     assert!(report.continuation_ready);
     assert_eq!(report.already_resident, 1);
-    assert_eq!(registry.backend().physical_reads(), 1);
+    assert_eq!(registry.provider().physical_reads(), 1);
 }
 
 #[test]
-fn eviction_releases_transferred_frame_without_holding_execution_lease() {
+fn shutdown_releases_resident_accounting_without_dispatch_lease() {
     let mut registry = auto_registry();
-    let load_key = key(1, 1);
-    attach_one(&mut registry, waiter(1), load_key);
+    let materialization_key = key(1, 1);
+    attach_one(&mut registry, waiter(1), materialization_key);
     registry.drive(100, 32).unwrap();
     assert_eq!(
-        registry.resources().in_use(ResourceKind::ExpertFrame),
+        registry.resources().in_use(ResourceKind::ResidentBytes),
         BYTES
     );
-    assert_eq!(registry.resources().in_use(ResourceKind::Lease), 0);
-    assert!(registry.evict(load_key).unwrap());
-    assert_eq!(registry.resources().in_use(ResourceKind::ExpertFrame), 0);
-    assert_eq!(registry.resources().in_use(ResourceKind::Lease), 0);
+    assert_eq!(registry.resources().in_use(ResourceKind::ResidencyLease), 0);
+    registry.begin_shutdown(101).unwrap();
+    assert_eq!(registry.resources().in_use(ResourceKind::ResidentBytes), 0);
+    assert_eq!(registry.resources().in_use(ResourceKind::ResidencyLease), 0);
 }
 
 #[test]
-fn execution_lease_is_held_only_from_prepare_through_finish_resume() {
+fn residency_lease_is_held_only_from_prepare_through_finish_resume() {
     let mut registry = auto_registry();
-    let load_key = key(1, 1);
+    let materialization_key = key(1, 1);
     let continuation = ContinuationId::new(1);
-    attach_one(&mut registry, waiter(1), load_key);
+    attach_one(&mut registry, waiter(1), materialization_key);
     registry.drive(100, 32).unwrap();
     assert_eq!(registry.pop_ready(101).unwrap(), Some(continuation));
-    assert_eq!(registry.resources().in_use(ResourceKind::Lease), 0);
+    assert_eq!(registry.resources().in_use(ResourceKind::ResidencyLease), 0);
 
     let dependencies = ferrule_common::io_protocol::DependencySet::new([
-        ferrule_common::io_protocol::LogicalDependency::expert_resident(load_key).unwrap(),
+        ferrule_common::io_protocol::LogicalDependency::resource_resident(materialization_key)
+            .unwrap(),
     ])
     .unwrap();
     let mut resume = registry
         .prepare_resume(continuation, &dependencies)
         .unwrap();
-    assert_eq!(registry.resources().in_use(ResourceKind::Lease), 1);
+    assert_eq!(registry.resources().in_use(ResourceKind::ResidencyLease), 1);
     assert_eq!(registry.resources().in_use(ResourceKind::Arena), 1);
     let _leases = resume.take().unwrap();
-    registry
-        .finish_resume(continuation, resume, 102, 103)
+    registry.finish_resume(&mut resume, 102, 103).unwrap();
+    assert_eq!(registry.resources().in_use(ResourceKind::ResidencyLease), 0);
+    assert_eq!(registry.resources().in_use(ResourceKind::Arena), 0);
+}
+
+#[test]
+fn finish_resume_precondition_error_preserves_guard_and_credits() {
+    let mut registry = auto_registry();
+    let materialization_key = key(1, 1);
+    let continuation = ContinuationId::new(1);
+    attach_one(&mut registry, waiter(1), materialization_key);
+    registry.drive(100, 32).unwrap();
+    assert_eq!(registry.pop_ready(101).unwrap(), Some(continuation));
+    let dependencies = ferrule_common::io_protocol::DependencySet::new([
+        ferrule_common::io_protocol::LogicalDependency::resource_resident(materialization_key)
+            .unwrap(),
+    ])
+    .unwrap();
+    let mut resume = registry
+        .prepare_resume(continuation, &dependencies)
         .unwrap();
-    assert_eq!(registry.resources().in_use(ResourceKind::Lease), 0);
+
+    assert!(matches!(
+        registry.finish_resume(&mut resume, 102, 103),
+        Err(RegistryError::ResumeLeaseAlreadyTaken(candidate)) if candidate == continuation
+    ));
+    assert_eq!(registry.resources().in_use(ResourceKind::ResidencyLease), 1);
+    assert_eq!(registry.resources().in_use(ResourceKind::Arena), 1);
+    let _leases = resume.take().unwrap();
+    registry.finish_resume(&mut resume, 104, 105).unwrap();
+    assert_eq!(registry.resources().in_use(ResourceKind::ResidencyLease), 0);
     assert_eq!(registry.resources().in_use(ResourceKind::Arena), 0);
 }
 
 #[test]
 fn read_command_rejection_fails_without_submitted_leak() {
-    let mut backend = FakeBackend::manual();
+    let mut backend = FakeMaterializationProvider::manual();
     backend.reject_next(LoadStage::ReadSubmitted, FailureReason::ReadRejected);
     let mut registry = LoadRegistry::with_testing_resources(backend).unwrap();
     let operation = attach_one(&mut registry, waiter(1), key(1, 1));
@@ -1891,52 +2260,55 @@ fn read_command_rejection_fails_without_submitted_leak() {
     registry.schedule_one(20).unwrap();
     registry.process_one_completion().unwrap();
     assert!(registry.operation(operation).is_none());
-    assert_eq!(registry.resources().in_use(ResourceKind::Sqe), 0);
+    assert_eq!(registry.resources().in_use(ResourceKind::ReadSlot), 0);
     assert!(registry.pop_failed().is_some());
 }
 
 #[test]
 fn upload_command_rejection_fails_and_releases_host_artifact() {
-    let (mut registry, _load_key, operation) = manual_at_read();
-    let load_key = registry.key_for_operation(operation).unwrap();
+    let (mut registry, _materialization_key, operation) = manual_at_read();
+    let materialization_key = registry.key_for_operation(operation).unwrap();
     registry.enqueue_completion(success_event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::ReadSubmitted,
         30,
     ));
     registry.process_one_completion().unwrap();
     registry
-        .backend_mut()
+        .provider_mut()
         .reject_next(LoadStage::UploadSubmitted, FailureReason::UploadRejected);
     registry.schedule_one(40).unwrap();
     registry.process_one_completion().unwrap();
     assert!(registry.operation(operation).is_none());
-    assert_eq!(registry.resources().in_use(ResourceKind::PinnedSlab), 0);
+    assert_eq!(
+        registry.resources().in_use(ResourceKind::PinnedHostBytes),
+        0
+    );
 }
 
 #[test]
 fn install_command_rejection_fails_and_releases_destination() {
-    let (mut registry, load_key, operation) = manual_at_upload();
+    let (mut registry, materialization_key, operation) = manual_at_upload();
     registry.enqueue_completion(success_event(
         operation,
-        load_key,
+        materialization_key,
         LoadStage::UploadSubmitted,
         50,
     ));
     registry.process_one_completion().unwrap();
     registry
-        .backend_mut()
+        .provider_mut()
         .reject_next(LoadStage::Installing, FailureReason::InstallationRejected);
     registry.schedule_one(60).unwrap();
     registry.process_one_completion().unwrap();
     assert!(registry.operation(operation).is_none());
-    assert_eq!(registry.resources().in_use(ResourceKind::ExpertFrame), 0);
+    assert_eq!(registry.resources().in_use(ResourceKind::ResidentBytes), 0);
 }
 
 #[test]
 fn reserve_failure_rolls_back_all_hard_claims() {
-    let mut backend = FakeBackend::manual();
+    let mut backend = FakeMaterializationProvider::manual();
     backend.fail_next_reserve(FailureReason::DeviceUnavailable);
     let mut registry = LoadRegistry::with_testing_resources(backend).unwrap();
     let report = registry
@@ -1954,10 +2326,10 @@ fn reserve_failure_rolls_back_all_hard_claims() {
 
 #[test]
 fn retry_after_failure_gets_new_operation_identity() {
-    let (mut registry, load_key, first) = manual_at_read();
+    let (mut registry, materialization_key, first) = manual_at_read();
     registry.enqueue_completion(event(
         first,
-        load_key,
+        materialization_key,
         LoadStage::ReadSubmitted,
         CompletionOutcome::Failed(FailureReason::StorageUnavailable),
         0,
@@ -1965,16 +2337,16 @@ fn retry_after_failure_gets_new_operation_identity() {
     ));
     registry.process_one_completion().unwrap();
     registry.pop_failed();
-    let second = attach_one(&mut registry, waiter(2), load_key);
+    let second = attach_one(&mut registry, waiter(2), materialization_key);
     assert_ne!(first, second);
 }
 
 #[test]
 fn duplicate_old_completion_cannot_affect_retry() {
-    let (mut registry, load_key, first) = manual_at_read();
+    let (mut registry, materialization_key, first) = manual_at_read();
     let failure = event(
         first,
-        load_key,
+        materialization_key,
         LoadStage::ReadSubmitted,
         CompletionOutcome::Failed(FailureReason::StorageUnavailable),
         0,
@@ -1982,7 +2354,7 @@ fn duplicate_old_completion_cannot_affect_retry() {
     );
     registry.enqueue_completion(failure.clone());
     registry.process_one_completion().unwrap();
-    let second = attach_one(&mut registry, waiter(2), load_key);
+    let second = attach_one(&mut registry, waiter(2), materialization_key);
     registry.schedule_one(39).unwrap();
     registry.schedule_one(40).unwrap();
     registry.enqueue_completion(failure);
@@ -1997,8 +2369,8 @@ fn duplicate_old_completion_cannot_affect_retry() {
 }
 
 #[test]
-fn fake_backend_script_can_inject_wrong_generation() {
-    let mut backend = FakeBackend::new();
+fn fake_provider_script_can_inject_wrong_generation() {
+    let mut backend = FakeMaterializationProvider::new();
     let mut spec = FakeCompletionSpec::success();
     spec.generation = Some(CompletionGeneration::new(
         SourceGeneration::new(1),
@@ -2009,7 +2381,7 @@ fn fake_backend_script_can_inject_wrong_generation() {
     let operation = attach_one(&mut registry, waiter(1), key(1, 1));
     registry.schedule_one(19).unwrap();
     registry.schedule_one(20).unwrap();
-    registry.collect_backend_completions(1);
+    registry.collect_provider_completions(1);
     registry.process_one_completion().unwrap();
     assert_eq!(
         registry.operation(operation).unwrap().stage(),

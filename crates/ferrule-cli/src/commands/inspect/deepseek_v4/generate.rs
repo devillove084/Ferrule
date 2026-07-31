@@ -21,11 +21,14 @@ use ferrule_model::{
 #[cfg(feature = "cuda")]
 use ferrule_runtime::{
     GenerateRequest, LocalResidentInferenceEngine, RequestId, ResidentActionKind,
-    ResidentDriverStep, ResidentSchedulerConfig, ResidentTopKDriverConfig, SessionId,
+    ResidentDriverStep, SessionId,
 };
 
 #[cfg(feature = "cuda")]
-use crate::commands::resident::{block_on_local_inference, build_resident_topk_driver};
+use crate::commands::resident::{
+    block_on_local_inference, build_resident_topk_driver, resident_driver_config,
+    single_sequence_scheduler_config,
+};
 
 #[cfg(feature = "cuda")]
 use super::stats::print_deepseek_v4_runtime_stats;
@@ -131,24 +134,15 @@ async fn cmd_deepseek_v4_generate_async(
         println!("--- output ---");
     }
 
-    let scheduler_config = ResidentSchedulerConfig {
-        prefill_chunk_size: prompt_tokens.len().max(1),
-        max_active_sequences: 1,
-        max_decode_batch: 1,
-        ..Default::default()
-    };
+    let scheduler_config = single_sequence_scheduler_config(prompt_tokens.len());
     let build_driver = |runner: DeepSeekV4Runner, ctx_size: usize| {
         let schema = runner.kv_layout_schema().clone();
         build_resident_topk_driver(
             runner,
             Box::new(schema),
             scheduler_config,
-            ResidentTopKDriverConfig {
-                ctx_size,
-                stop_at_eos,
-                // Preserve this command's historical EOS behavior.
-                proposal_confidence_threshold: 0.2,
-            },
+            // Preserve this command's historical EOS behavior.
+            resident_driver_config(ctx_size, stop_at_eos),
         )
     };
 
@@ -355,7 +349,7 @@ mod tests {
     use ferrule_runtime::ResourceKind;
 
     #[test]
-    fn generate_v3_runtime_schema_matches_interactive_report_and_has_no_legacy_keys() {
+    fn generate_v4_runtime_schema_matches_interactive_report_and_has_no_legacy_keys() {
         let runtime_driver_stats = ferrule_runtime::ResidentTopKDriverStats {
             hard_resource_high_water: ResourceKind::ALL
                 .into_iter()
@@ -370,21 +364,22 @@ mod tests {
         );
 
         assert_eq!(json["schema_version"], CLI_RUNTIME_SCHEMA_VERSION);
-        assert!(json["runtime_materialization"]["adapter"]["resolves"].is_number());
+        assert!(json["runtime_materialization"]["resolver"]["resolves"].is_number());
         assert!(
-            json["runtime_materialization"]["adapter"]
+            json["runtime_materialization"]["resolver"]
                 .get("physical_submissions")
                 .is_none()
         );
         assert!(json["runtime_materialization"]["load_registry"]["operations_created"].is_number());
         assert!(json["runtime_materialization"]["critical_path"]["per_external_token"].is_array());
-        assert_eq!(
-            json["runtime_driver_stats"]["hard_resource_high_water"]
-                .as_object()
-                .unwrap()
-                .len(),
-            ResourceKind::ALL.len()
-        );
+        let high_water = json["runtime_driver_stats"]["hard_resource_high_water"]
+            .as_object()
+            .unwrap();
+        assert_eq!(high_water.len(), ResourceKind::ALL.len());
+        assert_eq!(high_water["resident_bytes"], 1);
+        assert_eq!(high_water["residency_lease"], 1);
+        assert!(!high_water.contains_key("expert_frame"));
+        assert!(!high_water.contains_key("lease"));
 
         let encoded = serde_json::to_string(&json).unwrap();
         for legacy in [

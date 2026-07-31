@@ -1,29 +1,33 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use ferrule_common::CompletionHub;
 use ferrule_common::execution::ExecutionTransactionId;
-use ferrule_common::expert_io::{ExpertIoResourceDemand, ExpertIoResourceLimits};
 use ferrule_common::io_protocol::{
-    ArtifactFormat, BackendId, CancellationReason, CompletionEvent, CompletionGeneration,
-    CompletionOutcome, CompletionTimestamp, ContentHash, ContinuationId, DependencySetEpoch,
-    DestinationGeneration, DestinationSlotId, DeviceId, ExpertId, FailureReason, FenceId, LayerId,
-    LoadKey, LoadStage, ModelInstanceId, OperationId, RegisteredPinnedAlignedSlabLeaseDescriptor,
-    RegistrationId, RequestGeneration, ResidencyBinding, SlabId, SourceGeneration,
-    SourceIdentityHash, StaleReason, UploadFenceContract, ValidatedResidencyBinding, WaiterId,
+    BackendId, CancellationReason, CompletionEvent, CompletionGeneration, CompletionOutcome,
+    CompletionTimestamp, ContentHash, ContinuationId, DependencySetEpoch, DestinationGeneration,
+    DestinationSlotId, DeviceId, ExpertId, FailureReason, FenceId, LayerId, LoadStage,
+    MaterializationKey, MaterializedResourceId, ModelInstanceId, OperationId, PayloadEncodingId,
+    RegisteredPinnedAlignedSlabLeaseDescriptor, RegistrationId, RequestGeneration,
+    ResidencyBinding, SlabId, SourceGeneration, SourceIdentityHash, StaleReason,
+    UploadFenceContract, WaiterId,
+};
+use ferrule_common::materialization_io::{
+    MaterializationResourceDemand, MaterializationResourceLimits, MaterializationResourcePlan,
 };
 use ferrule_model::{
-    ExpertArtifactIdentity, ExpertDependencyResolution, ExpertMaterializationAdapter,
-    ExpertMaterializationPlacement, ExpertMaterializationRequest,
-    PhysicalExpertMaterializationBackend, PhysicalExpertOperationReservation,
-    PhysicalExpertReservation, PhysicalExpertReservationDescriptor, PhysicalExpertResourceTopology,
+    MaterializationPlacement, MaterializationPreparation, MaterializationProvider,
+    MaterializationRequest, MaterializationResident, MaterializationResolver,
+    MaterializationTransfer, PhysicalMaterializationOperationReservation,
+    PhysicalMaterializationTopology, ResourceSource,
 };
 
 use super::{
     CompletionDisposition, ContinuationFailure, FairQueueConfig, LoadRegistry, LoadRequest,
-    MaterializationBackend, RunnerMaterializationBackend, RuntimeMaterializationControl,
+    RuntimeMaterializationProvider, RuntimeMaterializationResolver, SharedMaterializationProvider,
 };
-use crate::scheduling::{HardResourceBroker, HardResourceLimit, ResourceClass, ResourceKind};
+use crate::scheduling::{
+    PhysicalResourceBroker, PhysicalResourceLimit, ResourceClass, ResourceKind,
+};
 
 const BYTES: u64 = 4096;
 const DESTINATION_GENERATION: u64 = 37;
@@ -32,35 +36,59 @@ const SLAB_ID_OFFSET: u64 = 1000;
 const REGISTRATION_ID_OFFSET: u64 = 2000;
 const FENCE_ID_OFFSET: u64 = 3000;
 
+fn uniform_plan() -> MaterializationResourcePlan {
+    MaterializationResourcePlan::uniform_payload(BYTES)
+        .expect("mock uniform materialization plan must be valid")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum MockPhysicalCommand {
-    Resolve(ExpertMaterializationRequest),
-    MaterializationBytes(LoadKey),
-    ReleaseSelected(LoadKey),
-    Reserve(OperationId, LoadKey, u64),
-    SubmitRead(OperationId, LoadKey, u64),
-    SubmitUpload(OperationId, LoadKey, u64),
-    PollInstall(OperationId, LoadKey, u64),
-    Cancel(OperationId, LoadKey, LoadStage, CancellationReason),
+    Prepare(MaterializationRequest),
+    Prepared(MaterializationKey),
+    DiscardPreparation(MaterializationKey),
+    MaterializationPlan(MaterializationKey),
+    ReleaseExecutionLease(MaterializationKey),
+    Reserve(OperationId, MaterializationKey, MaterializationResourcePlan),
+    SubmitRead(OperationId, MaterializationKey, MaterializationResourcePlan),
+    SubmitUpload(OperationId, MaterializationKey, MaterializationResourcePlan),
+    PollInstall(OperationId, MaterializationKey, MaterializationResourcePlan),
+    Cancel(
+        OperationId,
+        MaterializationKey,
+        LoadStage,
+        CancellationReason,
+    ),
     PhysicalDropped,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MockPreparation {
+    key: MaterializationKey,
+    binding: ResidencyBinding,
+    evicted: Option<MaterializationKey>,
 }
 
 #[derive(Debug)]
 struct MockPhysicalState {
-    placement: ExpertMaterializationPlacement,
-    limits: ExpertIoResourceLimits,
-    bytes: u64,
+    placement: MaterializationPlacement,
+    limits: MaterializationResourceLimits,
+    plan: MaterializationResourcePlan,
     generation: DestinationGeneration,
-    slot: DestinationSlotId,
     automatic: bool,
     resident: bool,
     resolve_failure: Option<FailureReason>,
     reserve_failure: Option<FailureReason>,
     release_failures: VecDeque<FailureReason>,
-    reservation_key_override: Option<LoadKey>,
+    reservation_key_override: Option<MaterializationKey>,
     reservation_operation_override: Option<OperationId>,
     reservation_slot_override: Option<DestinationSlotId>,
-    resolved: BTreeMap<ExpertMaterializationRequest, (LoadKey, ResidencyBinding)>,
+    next_preparation: Option<(
+        DestinationGeneration,
+        DestinationSlotId,
+        Option<MaterializationKey>,
+    )>,
+    resolved: BTreeMap<MaterializationRequest, MockPreparation>,
+    resident_keys: BTreeSet<MaterializationKey>,
     commands: Vec<MockPhysicalCommand>,
     completions: VecDeque<CompletionEvent>,
     scripted_outcomes: BTreeMap<LoadStage, VecDeque<CompletionOutcome>>,
@@ -70,7 +98,7 @@ struct MockPhysicalState {
 
 impl MockPhysicalState {
     fn new(automatic: bool) -> Self {
-        let placement = ExpertMaterializationPlacement::new(
+        let placement = MaterializationPlacement::new(
             ModelInstanceId::new(17),
             BackendId::new(4),
             DeviceId::new(2),
@@ -81,8 +109,8 @@ impl MockPhysicalState {
         let operation_reserve = 1;
         Self {
             placement,
-            limits: ExpertIoResourceLimits {
-                capacity: ExpertIoResourceDemand {
+            limits: MaterializationResourceLimits {
+                capacity: MaterializationResourceDemand {
                     read_slots: operation_capacity,
                     storage_read_bytes: byte_capacity,
                     pinned_host_bytes: byte_capacity,
@@ -91,7 +119,7 @@ impl MockPhysicalState {
                     install_slots: operation_capacity,
                     device_install_bytes: byte_capacity,
                 },
-                demand_reserve: ExpertIoResourceDemand {
+                demand_reserve: MaterializationResourceDemand {
                     read_slots: operation_reserve,
                     storage_read_bytes: BYTES,
                     pinned_host_bytes: BYTES,
@@ -101,9 +129,8 @@ impl MockPhysicalState {
                     device_install_bytes: BYTES,
                 },
             },
-            bytes: BYTES,
+            plan: uniform_plan(),
             generation: DestinationGeneration::new(DESTINATION_GENERATION),
-            slot: DestinationSlotId::new(SLOT),
             automatic,
             resident: false,
             resolve_failure: None,
@@ -112,7 +139,9 @@ impl MockPhysicalState {
             reservation_key_override: None,
             reservation_operation_override: None,
             reservation_slot_override: None,
+            next_preparation: None,
             resolved: BTreeMap::new(),
+            resident_keys: BTreeSet::new(),
             commands: Vec::new(),
             completions: VecDeque::new(),
             scripted_outcomes: BTreeMap::new(),
@@ -121,14 +150,19 @@ impl MockPhysicalState {
         }
     }
 
-    fn binding_for(&self, key: LoadKey) -> ResidencyBinding {
+    fn binding_for(&self, key: MaterializationKey) -> ResidencyBinding {
+        let resource = key.resource();
+        let slot = resource
+            .group()
+            .wrapping_mul(1024)
+            .wrapping_add(resource.item())
+            .wrapping_add(SLOT);
         ResidencyBinding::new(
             key.model(),
-            key.layer(),
-            key.expert(),
+            resource,
             key.backend(),
             key.device(),
-            self.slot,
+            DestinationSlotId::new(slot),
             key.destination_generation(),
         )
     }
@@ -136,8 +170,9 @@ impl MockPhysicalState {
     fn emit(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
+        key: MaterializationKey,
         stage: LoadStage,
+        plan: MaterializationResourcePlan,
         default_outcome: CompletionOutcome,
     ) {
         if let Some(remaining) = self.lost_completions.get_mut(&stage)
@@ -154,8 +189,20 @@ impl MockPhysicalState {
             return;
         }
         let outcome = scripted.unwrap_or(default_outcome);
+        if stage == LoadStage::Installing && matches!(outcome, CompletionOutcome::Succeeded) {
+            let evicted = self
+                .resolved
+                .values()
+                .find(|preparation| preparation.key == key)
+                .and_then(|preparation| preparation.evicted);
+            if let Some(evicted) = evicted {
+                self.resident_keys.remove(&evicted);
+            }
+            self.resident_keys.insert(key);
+        }
         let bytes = if matches!(outcome, CompletionOutcome::Succeeded) {
-            self.bytes
+            plan.completion_bytes(stage)
+                .expect("mock success completion requires a submitted stage")
         } else {
             0
         };
@@ -174,7 +221,7 @@ impl MockPhysicalState {
 }
 
 #[derive(Debug)]
-pub(crate) struct MockPhysicalBackend {
+pub(crate) struct MockPhysicalProvider {
     state: Arc<Mutex<MockPhysicalState>>,
 }
 
@@ -183,7 +230,7 @@ pub(crate) struct MockPhysicalHandle {
     state: Arc<Mutex<MockPhysicalState>>,
 }
 
-impl Drop for MockPhysicalBackend {
+impl Drop for MockPhysicalProvider {
     fn drop(&mut self) {
         self.lock()
             .commands
@@ -191,7 +238,7 @@ impl Drop for MockPhysicalBackend {
     }
 }
 
-impl MockPhysicalBackend {
+impl MockPhysicalProvider {
     pub(crate) fn automatic() -> (Self, MockPhysicalHandle) {
         Self::new(true)
     }
@@ -224,17 +271,29 @@ impl MockPhysicalHandle {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    pub(crate) fn placement(&self) -> ExpertMaterializationPlacement {
+    pub(crate) fn placement(&self) -> MaterializationPlacement {
         self.lock().placement
     }
 
-    pub(crate) fn limits(&self) -> ExpertIoResourceLimits {
+    pub(crate) fn limits(&self) -> MaterializationResourceLimits {
         self.lock().limits
     }
 
-    pub(crate) fn set_bytes_and_limits(&self, bytes: u64, limits: ExpertIoResourceLimits) {
+    pub(crate) fn set_bytes_and_limits(&self, bytes: u64, limits: MaterializationResourceLimits) {
+        self.set_plan_and_limits(
+            MaterializationResourcePlan::uniform_payload(bytes)
+                .expect("mock uniform materialization plan must be valid"),
+            limits,
+        );
+    }
+
+    fn set_plan_and_limits(
+        &self,
+        plan: MaterializationResourcePlan,
+        limits: MaterializationResourceLimits,
+    ) {
         let mut state = self.lock();
-        state.bytes = bytes;
+        state.plan = plan;
         state.limits = limits;
     }
 
@@ -250,8 +309,24 @@ impl MockPhysicalHandle {
         self.lock().commands.clone()
     }
 
-    pub(crate) fn binding(&self, key: LoadKey) -> ResidencyBinding {
-        self.lock().binding_for(key)
+    pub(crate) fn binding(&self, key: MaterializationKey) -> ResidencyBinding {
+        let state = self.lock();
+        state
+            .resolved
+            .values()
+            .find(|preparation| preparation.key == key)
+            .map(|preparation| preparation.binding)
+            .unwrap_or_else(|| state.binding_for(key))
+    }
+
+    fn configure_next_preparation(
+        &self,
+        generation: u64,
+        slot: DestinationSlotId,
+        evicted: Option<MaterializationKey>,
+    ) {
+        self.lock().next_preparation =
+            Some((DestinationGeneration::new(generation), slot, evicted));
     }
 
     pub(crate) fn set_resident(&self, resident: bool) {
@@ -270,7 +345,7 @@ impl MockPhysicalHandle {
         self.lock().release_failures.push_back(failure);
     }
 
-    fn override_reservation_key(&self, key: LoadKey) {
+    fn override_reservation_key(&self, key: MaterializationKey) {
         self.lock().reservation_key_override = Some(key);
     }
 
@@ -301,13 +376,16 @@ impl MockPhysicalHandle {
     fn push_outcome(
         &self,
         operation: OperationId,
-        key: LoadKey,
+        key: MaterializationKey,
         stage: LoadStage,
         outcome: CompletionOutcome,
     ) -> CompletionEvent {
         let mut state = self.lock();
         let bytes = if matches!(outcome, CompletionOutcome::Succeeded) {
-            state.bytes
+            state
+                .plan
+                .completion_bytes(stage)
+                .expect("mock success completion requires a submitted stage")
         } else {
             0
         };
@@ -326,26 +404,26 @@ impl MockPhysicalHandle {
     }
 }
 
-impl PhysicalExpertMaterializationBackend for MockPhysicalBackend {
-    fn placement(&self) -> ExpertMaterializationPlacement {
+impl MaterializationProvider for MockPhysicalProvider {
+    fn placement(&self) -> MaterializationPlacement {
         self.lock().placement
     }
 
-    fn resource_topology(&self) -> ferrule_common::Result<PhysicalExpertResourceTopology> {
+    fn resource_topology(&self) -> ferrule_common::Result<PhysicalMaterializationTopology> {
         let limits = self.lock().limits;
-        PhysicalExpertResourceTopology::new(
+        PhysicalMaterializationTopology::new(
             limits,
             limits.capacity.device_install_bytes,
             limits.capacity.install_slots,
         )
     }
 
-    fn resolve_or_reserve(
+    fn prepare(
         &mut self,
-        request: ExpertMaterializationRequest,
-    ) -> Result<PhysicalExpertReservation, FailureReason> {
+        request: MaterializationRequest,
+    ) -> Result<MaterializationPreparation, FailureReason> {
         let mut state = self.lock();
-        state.commands.push(MockPhysicalCommand::Resolve(request));
+        state.commands.push(MockPhysicalCommand::Prepare(request));
         if let Some(failure) = state.resolve_failure.take() {
             return Err(failure);
         }
@@ -357,43 +435,108 @@ impl PhysicalExpertMaterializationBackend for MockPhysicalBackend {
                 "mock request does not match physical placement".into(),
             ));
         }
-        let (key, binding) = match state.resolved.get(&request).copied() {
-            Some(resolved) => resolved,
+        let preparation = match state.resolved.get(&request).copied() {
+            Some(preparation) => preparation,
             None => {
+                let configured = state.next_preparation.take();
+                let generation = configured
+                    .map(|(generation, _, _)| generation)
+                    .unwrap_or(state.generation);
                 let key = request
-                    .load_key(state.generation)
+                    .materialization_key(generation)
                     .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))?;
-                let binding = state.binding_for(key);
-                state.resolved.insert(request, (key, binding));
-                (key, binding)
+                let default_binding = state.binding_for(key);
+                let binding = configured
+                    .map(|(_, slot, _)| {
+                        ResidencyBinding::new(
+                            key.model(),
+                            key.resource(),
+                            key.backend(),
+                            key.device(),
+                            slot,
+                            key.destination_generation(),
+                        )
+                    })
+                    .unwrap_or(default_binding);
+                let preparation = MockPreparation {
+                    key,
+                    binding,
+                    evicted: configured.and_then(|(_, _, evicted)| evicted),
+                };
+                state.resolved.insert(request, preparation);
+                preparation
             }
         };
         if state.resident {
-            Ok(PhysicalExpertReservation::Resident(
-                ValidatedResidencyBinding::new(key, binding)
-                    .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))?,
-            ))
+            state.resident_keys.insert(preparation.key);
+            MaterializationResident::new(preparation.key, preparation.binding)
+                .map(MaterializationPreparation::Resident)
+                .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))
         } else {
-            Ok(PhysicalExpertReservation::Reserved(
-                PhysicalExpertReservationDescriptor::new(key, binding, None)
-                    .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))?,
-            ))
+            MaterializationTransfer::new(preparation.key, preparation.binding, preparation.evicted)
+                .map(MaterializationPreparation::Transfer)
+                .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))
         }
     }
 
-    fn materialization_bytes(&self, key: LoadKey) -> Result<u64, FailureReason> {
+    fn prepared(
+        &self,
+        key: MaterializationKey,
+    ) -> Result<MaterializationPreparation, FailureReason> {
         let mut state = self.lock();
-        state
-            .commands
-            .push(MockPhysicalCommand::MaterializationBytes(key));
-        Ok(state.bytes)
+        state.commands.push(MockPhysicalCommand::Prepared(key));
+        let preparation = state
+            .resolved
+            .values()
+            .find(|preparation| preparation.key == key)
+            .copied()
+            .ok_or_else(|| {
+                FailureReason::ProtocolViolation("mock has no provider preparation".into())
+            })?;
+        if state.resident_keys.contains(&preparation.key) {
+            MaterializationResident::new(preparation.key, preparation.binding)
+                .map(MaterializationPreparation::Resident)
+                .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))
+        } else {
+            MaterializationTransfer::new(preparation.key, preparation.binding, preparation.evicted)
+                .map(MaterializationPreparation::Transfer)
+                .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))
+        }
     }
 
-    fn release_selected(&mut self, key: LoadKey) -> Result<(), FailureReason> {
+    fn discard_preparation(&mut self, key: MaterializationKey) -> Result<(), FailureReason> {
         let mut state = self.lock();
         state
             .commands
-            .push(MockPhysicalCommand::ReleaseSelected(key));
+            .push(MockPhysicalCommand::DiscardPreparation(key));
+        let request = state
+            .resolved
+            .iter()
+            .find_map(|(request, preparation)| (preparation.key == key).then_some(*request))
+            .ok_or_else(|| {
+                FailureReason::ProtocolViolation("mock cannot discard unknown preparation".into())
+            })?;
+        state.resolved.remove(&request);
+        state.resident_keys.remove(&key);
+        Ok(())
+    }
+
+    fn materialization_plan(
+        &self,
+        key: MaterializationKey,
+    ) -> Result<MaterializationResourcePlan, FailureReason> {
+        let mut state = self.lock();
+        state
+            .commands
+            .push(MockPhysicalCommand::MaterializationPlan(key));
+        Ok(state.plan)
+    }
+
+    fn release_execution_lease(&mut self, key: MaterializationKey) -> Result<(), FailureReason> {
+        let mut state = self.lock();
+        state
+            .commands
+            .push(MockPhysicalCommand::ReleaseExecutionLease(key));
         if let Some(failure) = state.release_failures.pop_front() {
             Err(failure)
         } else {
@@ -404,19 +547,19 @@ impl PhysicalExpertMaterializationBackend for MockPhysicalBackend {
     fn reserve(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        bytes: u64,
-    ) -> Result<PhysicalExpertOperationReservation, FailureReason> {
+        key: MaterializationKey,
+        plan: MaterializationResourcePlan,
+    ) -> Result<PhysicalMaterializationOperationReservation, FailureReason> {
         let mut state = self.lock();
         state
             .commands
-            .push(MockPhysicalCommand::Reserve(operation, key, bytes));
+            .push(MockPhysicalCommand::Reserve(operation, key, plan));
         if let Some(failure) = state.reserve_failure.take() {
             return Err(failure);
         }
-        if bytes != state.bytes {
+        if plan != state.plan {
             return Err(FailureReason::ProtocolViolation(
-                "mock physical byte expectation mismatch".into(),
+                "mock physical resource plan expectation mismatch".into(),
             ));
         }
         let reservation_key = state.reservation_key_override.take().unwrap_or(key);
@@ -427,14 +570,18 @@ impl PhysicalExpertMaterializationBackend for MockPhysicalBackend {
         let binding = match state.reservation_slot_override.take() {
             Some(slot) => ResidencyBinding::new(
                 reservation_key.model(),
-                reservation_key.layer(),
-                reservation_key.expert(),
+                reservation_key.resource(),
                 reservation_key.backend(),
                 reservation_key.device(),
                 slot,
                 reservation_key.destination_generation(),
             ),
-            None => state.binding_for(reservation_key),
+            None => state
+                .resolved
+                .values()
+                .find(|preparation| preparation.key == reservation_key)
+                .map(|preparation| preparation.binding)
+                .unwrap_or_else(|| state.binding_for(reservation_key)),
         };
         let identity = reservation_operation.get();
         let descriptor = RegisteredPinnedAlignedSlabLeaseDescriptor::new(
@@ -442,15 +589,15 @@ impl PhysicalExpertMaterializationBackend for MockPhysicalBackend {
             SlabId::new(identity.saturating_add(SLAB_ID_OFFSET)),
             RegistrationId::new(identity.saturating_add(REGISTRATION_ID_OFFSET)),
             0x10000,
-            bytes,
+            plan.demand.pinned_host_bytes,
             0,
-            bytes,
+            plan.demand.pinned_host_bytes,
             4096,
             reservation_key.source_generation(),
             reservation_key.destination_generation(),
         )
         .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))?;
-        PhysicalExpertOperationReservation::new(
+        PhysicalMaterializationOperationReservation::new(
             reservation_key,
             binding,
             [descriptor],
@@ -466,9 +613,9 @@ impl PhysicalExpertMaterializationBackend for MockPhysicalBackend {
     fn submit_read(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        reservation: &PhysicalExpertOperationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        reservation: &PhysicalMaterializationOperationReservation,
+        plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason> {
         if reservation.key() != key || reservation.upload_fence().operation != operation {
             return Err(FailureReason::ProtocolViolation(
@@ -478,11 +625,17 @@ impl PhysicalExpertMaterializationBackend for MockPhysicalBackend {
         let mut state = self.lock();
         state
             .commands
-            .push(MockPhysicalCommand::SubmitRead(operation, key, bytes));
+            .push(MockPhysicalCommand::SubmitRead(operation, key, plan));
+        if plan != state.plan {
+            return Err(FailureReason::ProtocolViolation(
+                "mock read resource plan expectation mismatch".into(),
+            ));
+        }
         state.emit(
             operation,
             key,
             LoadStage::ReadSubmitted,
+            plan,
             CompletionOutcome::Succeeded,
         );
         Ok(())
@@ -491,9 +644,9 @@ impl PhysicalExpertMaterializationBackend for MockPhysicalBackend {
     fn submit_upload(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        reservation: &PhysicalExpertOperationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        reservation: &PhysicalMaterializationOperationReservation,
+        plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason> {
         if reservation.key() != key || reservation.upload_fence().operation != operation {
             return Err(FailureReason::ProtocolViolation(
@@ -503,11 +656,17 @@ impl PhysicalExpertMaterializationBackend for MockPhysicalBackend {
         let mut state = self.lock();
         state
             .commands
-            .push(MockPhysicalCommand::SubmitUpload(operation, key, bytes));
+            .push(MockPhysicalCommand::SubmitUpload(operation, key, plan));
+        if plan != state.plan {
+            return Err(FailureReason::ProtocolViolation(
+                "mock upload resource plan expectation mismatch".into(),
+            ));
+        }
         state.emit(
             operation,
             key,
             LoadStage::UploadSubmitted,
+            plan,
             CompletionOutcome::Succeeded,
         );
         Ok(())
@@ -516,9 +675,9 @@ impl PhysicalExpertMaterializationBackend for MockPhysicalBackend {
     fn poll_install(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
-        reservation: &PhysicalExpertOperationReservation,
-        bytes: u64,
+        key: MaterializationKey,
+        reservation: &PhysicalMaterializationOperationReservation,
+        plan: MaterializationResourcePlan,
     ) -> Result<(), FailureReason> {
         if reservation.key() != key || reservation.binding() != state_binding(self, key) {
             return Err(FailureReason::ProtocolViolation(
@@ -528,11 +687,17 @@ impl PhysicalExpertMaterializationBackend for MockPhysicalBackend {
         let mut state = self.lock();
         state
             .commands
-            .push(MockPhysicalCommand::PollInstall(operation, key, bytes));
+            .push(MockPhysicalCommand::PollInstall(operation, key, plan));
+        if plan != state.plan {
+            return Err(FailureReason::ProtocolViolation(
+                "mock install resource plan expectation mismatch".into(),
+            ));
+        }
         state.emit(
             operation,
             key,
             LoadStage::Installing,
+            plan,
             CompletionOutcome::Succeeded,
         );
         Ok(())
@@ -541,7 +706,7 @@ impl PhysicalExpertMaterializationBackend for MockPhysicalBackend {
     fn cancel(
         &mut self,
         operation: OperationId,
-        key: LoadKey,
+        key: MaterializationKey,
         stage: LoadStage,
         reason: CancellationReason,
     ) -> Result<(), FailureReason> {
@@ -576,35 +741,43 @@ impl PhysicalExpertMaterializationBackend for MockPhysicalBackend {
     }
 }
 
-fn state_binding(backend: &MockPhysicalBackend, key: LoadKey) -> ResidencyBinding {
-    backend.lock().binding_for(key)
+fn state_binding(backend: &MockPhysicalProvider, key: MaterializationKey) -> ResidencyBinding {
+    let state = backend.lock();
+    state
+        .resolved
+        .values()
+        .find(|preparation| preparation.key == key)
+        .map(|preparation| preparation.binding)
+        .unwrap_or_else(|| state.binding_for(key))
 }
 
-fn request(seed: u8) -> ExpertMaterializationRequest {
-    let artifact = ExpertArtifactIdentity::new(
+fn request(seed: u8) -> MaterializationRequest {
+    let artifact = ResourceSource::new(
         SourceIdentityHash::new([seed.max(1); 32]),
         ContentHash::new([seed.saturating_add(1).max(1); 32]),
-        ArtifactFormat::new(1),
+        PayloadEncodingId::new(1),
         SourceGeneration::new(5),
     )
     .unwrap();
-    ExpertMaterializationRequest::for_placement(
-        ExpertMaterializationPlacement::new(
+    MaterializationRequest::for_placement(
+        MaterializationPlacement::new(
             ModelInstanceId::new(17),
             BackendId::new(4),
             DeviceId::new(2),
         )
         .unwrap(),
         artifact,
-        LayerId::new(u32::from(seed)),
-        ExpertId::new(u32::from(seed)),
+        MaterializedResourceId::routed_expert(
+            LayerId::new(u32::from(seed)),
+            ExpertId::new(u32::from(seed)),
+        ),
     )
     .unwrap()
 }
 
-fn key(seed: u8) -> LoadKey {
+fn key(seed: u8) -> MaterializationKey {
     request(seed)
-        .load_key(DestinationGeneration::new(DESTINATION_GENERATION))
+        .materialization_key(DestinationGeneration::new(DESTINATION_GENERATION))
         .unwrap()
 }
 
@@ -618,7 +791,7 @@ fn waiter(transaction: u64, continuation: u64) -> WaiterId {
     .unwrap()
 }
 
-fn physical_resources() -> HardResourceBroker {
+fn physical_resources() -> PhysicalResourceBroker {
     bounded_physical_resources(4, 4, 4, 4)
 }
 
@@ -627,52 +800,58 @@ fn bounded_physical_resources(
     sqe: u64,
     pinned_operations: u64,
     upload_slots: u64,
-) -> HardResourceBroker {
-    HardResourceBroker::new(ResourceKind::ALL.map(|kind| {
+) -> PhysicalResourceBroker {
+    PhysicalResourceBroker::new(ResourceKind::ALL.map(|kind| {
         let capacity = match kind {
-            ResourceKind::Sqe => sqe,
-            ResourceKind::PinnedSlab => BYTES * pinned_operations,
-            ResourceKind::ReadBytes => BYTES * sqe,
+            ResourceKind::ReadSlot => sqe,
+            ResourceKind::PinnedHostBytes => BYTES * pinned_operations,
+            ResourceKind::StorageReadBytes => BYTES * sqe,
             ResourceKind::UploadSlot => upload_slots,
             ResourceKind::UploadBytes => BYTES * upload_slots,
-            ResourceKind::ExpertFrame => BYTES * load_operations,
-            ResourceKind::Lease | ResourceKind::LoadOperation => load_operations,
+            ResourceKind::InstallSlot => upload_slots,
+            ResourceKind::DeviceInstallBytes => BYTES * upload_slots,
+            ResourceKind::ResidentBytes => BYTES * load_operations,
+            ResourceKind::ResidencyLease | ResourceKind::LoadOperation => load_operations,
             ResourceKind::Arena
             | ResourceKind::KvPage
             | ResourceKind::Continuation
             | ResourceKind::Waiter
             | ResourceKind::ReadyCohort => 64,
         };
-        HardResourceLimit::new(kind, capacity, 0)
+        PhysicalResourceLimit::new(kind, capacity, 0)
     }))
     .unwrap()
 }
 
-fn resolved_backend() -> (RunnerMaterializationBackend, MockPhysicalHandle, LoadKey) {
-    let (physical, handle) = MockPhysicalBackend::manual();
-    let backend = RunnerMaterializationBackend::new(Box::new(physical));
-    let PhysicalExpertReservation::Reserved(reservation) =
-        backend.resolve_or_reserve(request(1)).unwrap()
-    else {
-        panic!("mock physical backend must reserve a canonical key");
-    };
-    (backend, handle, reservation.key())
+fn resolved_provider() -> (
+    SharedMaterializationProvider,
+    MockPhysicalHandle,
+    MaterializationKey,
+) {
+    let (physical, handle) = MockPhysicalProvider::manual();
+    let backend = SharedMaterializationProvider::new(Box::new(physical));
+    let preparation = backend.prepare(request(1)).unwrap();
+    assert!(matches!(
+        preparation,
+        MaterializationPreparation::Transfer(_)
+    ));
+    (backend, handle, preparation.key())
 }
 
 fn registry(
     automatic: bool,
 ) -> (
-    LoadRegistry<RunnerMaterializationBackend>,
+    LoadRegistry<SharedMaterializationProvider>,
     MockPhysicalHandle,
 ) {
     let (physical, handle) = if automatic {
-        MockPhysicalBackend::automatic()
+        MockPhysicalProvider::automatic()
     } else {
-        MockPhysicalBackend::manual()
+        MockPhysicalProvider::manual()
     };
-    let backend = RunnerMaterializationBackend::new(Box::new(physical));
+    let backend = SharedMaterializationProvider::new(Box::new(physical));
     for seed in 1..=4 {
-        backend.resolve_or_reserve(request(seed)).unwrap();
+        backend.prepare(request(seed)).unwrap();
     }
     (
         LoadRegistry::new(backend, physical_resources(), FairQueueConfig::default()).unwrap(),
@@ -680,26 +859,32 @@ fn registry(
     )
 }
 
+fn load_request(
+    registry: &LoadRegistry<SharedMaterializationProvider>,
+    key: MaterializationKey,
+    plan: MaterializationResourcePlan,
+    class: ResourceClass,
+) -> LoadRequest {
+    LoadRequest::new(registry.provider().preparation(key).unwrap(), plan, class)
+}
+
 fn attach(
-    registry: &mut LoadRegistry<RunnerMaterializationBackend>,
+    registry: &mut LoadRegistry<SharedMaterializationProvider>,
     waiter: WaiterId,
-    key: LoadKey,
+    key: MaterializationKey,
     now_ns: u64,
 ) -> OperationId {
+    let request = load_request(registry, key, uniform_plan(), ResourceClass::Demand);
     registry
-        .attach_waiter(
-            waiter,
-            [LoadRequest::new(key, BYTES, ResourceClass::Decode)],
-            now_ns,
-        )
+        .attach_waiter(waiter, [request], now_ns)
         .unwrap()
         .created[0]
 }
 
 fn manual_at_read() -> (
-    LoadRegistry<RunnerMaterializationBackend>,
+    LoadRegistry<SharedMaterializationProvider>,
     MockPhysicalHandle,
-    LoadKey,
+    MaterializationKey,
     OperationId,
 ) {
     let (mut registry, handle) = registry(false);
@@ -711,17 +896,19 @@ fn manual_at_read() -> (
 }
 
 fn apply_physical(
-    registry: &mut LoadRegistry<RunnerMaterializationBackend>,
+    registry: &mut LoadRegistry<SharedMaterializationProvider>,
     maximum: usize,
 ) -> CompletionDisposition {
-    assert_eq!(registry.collect_backend_completions(maximum), 1);
+    assert_eq!(registry.collect_provider_completions(maximum), 1);
     registry.process_one_completion().unwrap()
 }
 
 #[test]
 fn physical_bridge_reservation_keeps_exact_key() {
-    let (mut backend, _, key) = resolved_backend();
-    let reservation = backend.reserve(OperationId::new(7), key, BYTES).unwrap();
+    let (mut backend, _, key) = resolved_provider();
+    let reservation = backend
+        .reserve(OperationId::new(7), key, uniform_plan())
+        .unwrap();
     assert_eq!(
         reservation.binding().generation,
         key.destination_generation()
@@ -730,16 +917,18 @@ fn physical_bridge_reservation_keeps_exact_key() {
 
 #[test]
 fn physical_bridge_reservation_keeps_exact_binding() {
-    let (mut backend, handle, key) = resolved_backend();
-    let reservation = backend.reserve(OperationId::new(7), key, BYTES).unwrap();
-    assert_eq!(reservation.binding(), handle.lock().binding_for(key));
+    let (mut backend, handle, key) = resolved_provider();
+    let reservation = backend
+        .reserve(OperationId::new(7), key, uniform_plan())
+        .unwrap();
+    assert_eq!(reservation.binding(), handle.binding(key));
 }
 
 #[test]
 fn physical_bridge_reservation_keeps_exact_slab_descriptor() {
-    let (mut backend, _, key) = resolved_backend();
+    let (mut backend, _, key) = resolved_provider();
     let operation = OperationId::new(7);
-    let reservation = backend.reserve(operation, key, BYTES).unwrap();
+    let reservation = backend.reserve(operation, key, uniform_plan()).unwrap();
     let descriptor = reservation.slabs()[0].descriptor();
     assert_eq!(descriptor.operation(), operation);
     assert_eq!(descriptor.slab(), SlabId::new(7 + SLAB_ID_OFFSET));
@@ -752,9 +941,9 @@ fn physical_bridge_reservation_keeps_exact_slab_descriptor() {
 
 #[test]
 fn physical_bridge_reservation_keeps_exact_upload_fence() {
-    let (mut backend, _, key) = resolved_backend();
+    let (mut backend, _, key) = resolved_provider();
     let operation = OperationId::new(7);
-    let reservation = backend.reserve(operation, key, BYTES).unwrap();
+    let reservation = backend.reserve(operation, key, uniform_plan()).unwrap();
     assert_eq!(reservation.upload_fence().operation, operation);
     assert_eq!(
         reservation.upload_fence().fence,
@@ -764,30 +953,30 @@ fn physical_bridge_reservation_keeps_exact_upload_fence() {
 
 #[test]
 fn physical_bridge_rejects_reservation_for_different_key() {
-    let (mut backend, handle, canonical_key) = resolved_backend();
+    let (mut backend, handle, canonical_key) = resolved_provider();
     handle.override_reservation_key(key(2));
     assert!(matches!(
-        backend.reserve(OperationId::new(7), canonical_key, BYTES),
+        backend.reserve(OperationId::new(7), canonical_key, uniform_plan()),
         Err(FailureReason::ProtocolViolation(_))
     ));
 }
 
 #[test]
 fn physical_bridge_rejects_reservation_for_different_operation() {
-    let (mut backend, handle, key) = resolved_backend();
+    let (mut backend, handle, key) = resolved_provider();
     handle.override_reservation_operation(OperationId::new(99));
     assert!(matches!(
-        backend.reserve(OperationId::new(7), key, BYTES),
+        backend.reserve(OperationId::new(7), key, uniform_plan()),
         Err(FailureReason::ProtocolViolation(_))
     ));
 }
 
 #[test]
 fn physical_bridge_rejects_binding_changed_after_resolve() {
-    let (mut backend, handle, key) = resolved_backend();
+    let (mut backend, handle, key) = resolved_provider();
     handle.override_reservation_slot(DestinationSlotId::new(SLOT + 1));
     assert!(matches!(
-        backend.reserve(OperationId::new(7), key, BYTES),
+        backend.reserve(OperationId::new(7), key, uniform_plan()),
         Err(FailureReason::ProtocolViolation(_))
     ));
     assert_eq!(
@@ -800,14 +989,18 @@ fn physical_bridge_rejects_binding_changed_after_resolve() {
 }
 
 #[test]
-fn physical_bridge_forwards_materialization_bytes() {
-    let (physical, handle) = MockPhysicalBackend::manual();
-    let backend = RunnerMaterializationBackend::new(Box::new(physical));
-    assert_eq!(backend.materialization_bytes(key(1)).unwrap(), BYTES);
+fn physical_bridge_forwards_materialization_plan() {
+    let (physical, handle) = MockPhysicalProvider::manual();
+    let backend = SharedMaterializationProvider::new(Box::new(physical));
+    backend.prepare(request(1)).unwrap();
+    assert_eq!(
+        backend.materialization_plan(key(1)).unwrap(),
+        uniform_plan()
+    );
     assert_eq!(
         handle.command_count(|command| matches!(
             command,
-            MockPhysicalCommand::MaterializationBytes(_)
+            MockPhysicalCommand::MaterializationPlan(_)
         )),
         1
     );
@@ -854,215 +1047,494 @@ fn physical_bridge_completion_enters_registry_unchanged() {
 }
 
 #[test]
-fn physical_bridge_adapter_uses_physical_destination_generation() {
-    let (physical, handle) = MockPhysicalBackend::manual();
-    let backend = RunnerMaterializationBackend::new(Box::new(physical));
-    let (mut adapter, _) =
-        RuntimeMaterializationControl::new(handle.placement(), Some(backend), CompletionHub::new());
-    let ExpertDependencyResolution::Waiting(key) = adapter.resolve(request(1)).unwrap() else {
-        panic!("expected physical reservation");
-    };
-    assert_eq!(
-        key.destination_generation(),
-        DestinationGeneration::new(DESTINATION_GENERATION)
-    );
-}
-
-#[test]
-fn physical_bridge_adapter_caches_canonical_resolution() {
-    let (physical, handle) = MockPhysicalBackend::manual();
-    let backend = RunnerMaterializationBackend::new(Box::new(physical));
-    let (mut adapter, _) =
-        RuntimeMaterializationControl::new(handle.placement(), Some(backend), CompletionHub::new());
-    let first = adapter.resolve(request(1)).unwrap();
-    let second = adapter.resolve(request(1)).unwrap();
+fn resolver_uses_provider_generation_without_logical_cache() {
+    let (physical, handle) = MockPhysicalProvider::manual();
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let mut resolver = RuntimeMaterializationResolver::new(handle.placement(), Some(provider));
+    let first = resolver.resolve(request(1)).unwrap();
+    let second = resolver.resolve(request(1)).unwrap();
     assert_eq!(first, second);
     assert_eq!(
-        handle.command_count(|command| matches!(command, MockPhysicalCommand::Resolve(_))),
-        1
+        first.destination_generation(),
+        DestinationGeneration::new(DESTINATION_GENERATION)
     );
+    assert_eq!(
+        handle.command_count(|command| matches!(command, MockPhysicalCommand::Prepare(_))),
+        2
+    );
+    assert_eq!(resolver.stats().resolves, 2);
 }
 
 #[test]
-fn physical_bridge_adapter_preserves_resident_binding() {
-    let (physical, handle) = MockPhysicalBackend::manual();
+fn registry_adopts_resident_preparation_without_a_read() {
+    let (physical, handle) = MockPhysicalProvider::manual();
     handle.set_resident(true);
-    let backend = RunnerMaterializationBackend::new(Box::new(physical));
-    let (mut adapter, _) =
-        RuntimeMaterializationControl::new(handle.placement(), Some(backend), CompletionHub::new());
-    let ExpertDependencyResolution::Resident(binding) = adapter.resolve(request(1)).unwrap() else {
-        panic!("expected resident physical resolution");
-    };
-    assert_eq!(binding.binding(), handle.lock().binding_for(binding.key()));
-}
-
-#[test]
-fn physical_resident_resolution_is_adopted_without_a_second_read() {
-    let (physical, handle) = MockPhysicalBackend::manual();
-    handle.set_resident(true);
-    let backend = RunnerMaterializationBackend::new(Box::new(physical));
-    let (mut adapter, control) = RuntimeMaterializationControl::new(
-        handle.placement(),
-        Some(backend.clone()),
-        CompletionHub::new(),
-    );
-    let ExpertDependencyResolution::Resident(resident) = adapter.resolve(request(1)).unwrap()
-    else {
-        panic!("expected resident physical resolution");
-    };
-    let key = resident.key();
-    let load = LoadRequest::new(key, BYTES, ResourceClass::Decode);
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let preparation = provider.prepare(request(1)).unwrap();
+    let key = preparation.key();
+    let load = LoadRequest::new(preparation, uniform_plan(), ResourceClass::Demand);
     let mut registry =
-        LoadRegistry::new(backend, physical_resources(), FairQueueConfig::default()).unwrap();
-    registry.adopt_residency(load, resident.binding()).unwrap();
+        LoadRegistry::new(provider, physical_resources(), FairQueueConfig::default()).unwrap();
     let report = registry.attach_waiter(waiter(1, 1), [load], 1).unwrap();
     assert_eq!(report.already_resident, 1);
     assert!(report.created.is_empty());
     assert_eq!(registry.residency_binding(key), Some(handle.binding(key)));
-    control.attach(ContinuationId::new(1), key).unwrap();
     assert_eq!(
         handle.command_count(|command| matches!(command, MockPhysicalCommand::SubmitRead(..))),
         0
     );
-    adapter.detach(ContinuationId::new(1), key).unwrap();
-    registry.shutdown(2, 0).unwrap();
-    control.forget_all().unwrap();
+    registry
+        .detach_continuation(ContinuationId::new(1), CancellationReason::Superseded, 2)
+        .unwrap();
+    registry.shutdown(3, 0).unwrap();
 }
 
 #[test]
-fn physical_selected_lease_releases_only_after_last_logical_demand_detaches() {
-    let (physical, handle) = MockPhysicalBackend::manual();
+fn registry_releases_provider_lease_after_last_continuation() {
+    let (physical, handle) = MockPhysicalProvider::manual();
     handle.set_resident(true);
-    let backend = RunnerMaterializationBackend::new(Box::new(physical));
-    let completion_hub = CompletionHub::new();
-    let (mut adapter, control) = RuntimeMaterializationControl::new(
-        handle.placement(),
-        Some(backend),
-        completion_hub.clone(),
-    );
-    let ExpertDependencyResolution::Resident(binding) = adapter.resolve(request(1)).unwrap() else {
-        panic!("expected resident physical resolution");
-    };
-    let key = binding.key();
-    control.attach(ContinuationId::new(1), key).unwrap();
-    control.attach(ContinuationId::new(2), key).unwrap();
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let first = provider.prepare(request(1)).unwrap();
+    let key = first.key();
+    let mut registry = LoadRegistry::new(
+        provider.clone(),
+        physical_resources(),
+        FairQueueConfig::default(),
+    )
+    .unwrap();
+    registry
+        .attach_waiter(
+            waiter(1, 1),
+            [LoadRequest::new(
+                first,
+                uniform_plan(),
+                ResourceClass::Demand,
+            )],
+            1,
+        )
+        .unwrap();
+    let second = provider.prepare(request(1)).unwrap();
+    registry
+        .attach_waiter(
+            waiter(2, 2),
+            [LoadRequest::new(
+                second,
+                uniform_plan(),
+                ResourceClass::Demand,
+            )],
+            2,
+        )
+        .unwrap();
 
-    let initial_epoch = completion_hub.epoch();
-    adapter.detach(ContinuationId::new(1), key).unwrap();
+    registry
+        .detach_continuation(ContinuationId::new(1), CancellationReason::Superseded, 3)
+        .unwrap();
     assert_eq!(
-        handle.command_count(|command| matches!(command, MockPhysicalCommand::ReleaseSelected(_))),
+        handle.command_count(|command| matches!(
+            command,
+            MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+        )),
         0
     );
-    assert_eq!(completion_hub.epoch(), initial_epoch);
-    adapter.detach(ContinuationId::new(2), key).unwrap();
+    registry
+        .detach_continuation(ContinuationId::new(2), CancellationReason::Superseded, 4)
+        .unwrap();
+    registry.drive(5, 1).unwrap();
     assert_eq!(
-        handle.command_count(|command| matches!(command, MockPhysicalCommand::ReleaseSelected(_))),
+        handle.command_count(|command| matches!(
+            command,
+            MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+        )),
         1
     );
-    assert_eq!(completion_hub.epoch(), initial_epoch + 1);
+    registry.shutdown(5, 0).unwrap();
 }
 
 #[test]
-fn physical_selected_lease_supports_same_continuation_key_on_a_second_edge() {
-    let (physical, handle) = MockPhysicalBackend::manual();
+fn new_attach_cancels_pending_provider_lease_release() {
+    let (physical, handle) = MockPhysicalProvider::manual();
     handle.set_resident(true);
-    let backend = RunnerMaterializationBackend::new(Box::new(physical));
-    let (mut adapter, control) =
-        RuntimeMaterializationControl::new(handle.placement(), Some(backend), CompletionHub::new());
-    let ExpertDependencyResolution::Resident(first) = adapter.resolve(request(1)).unwrap() else {
-        panic!("expected resident physical resolution");
-    };
-    let continuation = ContinuationId::new(7);
-    control.attach(continuation, first.key()).unwrap();
-    adapter.detach(continuation, first.key()).unwrap();
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let first = provider.prepare(request(1)).unwrap();
+    let key = first.key();
+    let mut registry = LoadRegistry::new(
+        provider.clone(),
+        physical_resources(),
+        FairQueueConfig::default(),
+    )
+    .unwrap();
+    registry
+        .attach_waiter(
+            waiter(1, 1),
+            [LoadRequest::new(
+                first,
+                uniform_plan(),
+                ResourceClass::Demand,
+            )],
+            1,
+        )
+        .unwrap();
+    registry
+        .detach_continuation(ContinuationId::new(1), CancellationReason::Superseded, 2)
+        .unwrap();
 
-    let ExpertDependencyResolution::Resident(second) = adapter.resolve(request(1)).unwrap() else {
-        panic!("expected resident physical resolution on the second edge");
-    };
-    assert_eq!(second.key(), first.key());
-    control.attach(continuation, second.key()).unwrap();
-    adapter.detach(continuation, second.key()).unwrap();
-
+    let second = provider.prepare(request(1)).unwrap();
+    registry
+        .attach_waiter(
+            waiter(2, 2),
+            [LoadRequest::new(
+                second,
+                uniform_plan(),
+                ResourceClass::Demand,
+            )],
+            3,
+        )
+        .unwrap();
+    registry.drive(4, 1).unwrap();
     assert_eq!(
-        handle.command_count(|command| matches!(command, MockPhysicalCommand::ReleaseSelected(_))),
-        2
+        handle.command_count(|command| matches!(
+            command,
+            MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+        )),
+        0
     );
-    assert_eq!(control.active_attachment_count(first.key()), 0);
+    registry
+        .detach_continuation(ContinuationId::new(2), CancellationReason::Superseded, 5)
+        .unwrap();
+    registry.drive(6, 1).unwrap();
+    assert_eq!(
+        handle.command_count(|command| matches!(
+            command,
+            MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+        )),
+        1
+    );
+    registry.shutdown(7, 0).unwrap();
 }
 
 #[test]
-fn zero_demand_publish_releases_selected_and_retries_release_failure() {
-    let (physical, handle) = MockPhysicalBackend::manual();
-    let backend = RunnerMaterializationBackend::new(Box::new(physical));
-    let (mut adapter, control) =
-        RuntimeMaterializationControl::new(handle.placement(), Some(backend), CompletionHub::new());
-    let ExpertDependencyResolution::Waiting(key) = adapter.resolve(request(1)).unwrap() else {
-        panic!("expected pending physical reservation");
-    };
-    handle.fail_next_release(FailureReason::DeviceUnavailable);
-    assert!(control.record_resident(key, handle.binding(key)).is_err());
-    assert_eq!(control.resident_binding(key), Some(handle.binding(key)));
-    control.record_resident(key, handle.binding(key)).unwrap();
-    assert_eq!(
-        handle.command_count(|command| matches!(command, MockPhysicalCommand::ReleaseSelected(_))),
-        2
-    );
-}
-
-#[test]
-fn forget_release_failure_restores_exact_attachment_for_retry() {
-    let (physical, handle) = MockPhysicalBackend::manual();
+fn registry_retries_failed_provider_lease_release_without_replay() {
+    let (physical, handle) = MockPhysicalProvider::manual();
     handle.set_resident(true);
-    let backend = RunnerMaterializationBackend::new(Box::new(physical));
-    let (mut adapter, control) =
-        RuntimeMaterializationControl::new(handle.placement(), Some(backend), CompletionHub::new());
-    let ExpertDependencyResolution::Resident(binding) = adapter.resolve(request(1)).unwrap() else {
-        panic!("expected resident physical resolution");
-    };
-    let continuation = ContinuationId::new(9);
-    control.attach(continuation, binding.key()).unwrap();
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let preparation = provider.prepare(request(1)).unwrap();
+    let key = preparation.key();
+    let mut registry =
+        LoadRegistry::new(provider, physical_resources(), FairQueueConfig::default()).unwrap();
+    registry
+        .attach_waiter(
+            waiter(9, 9),
+            [LoadRequest::new(
+                preparation,
+                uniform_plan(),
+                ResourceClass::Demand,
+            )],
+            1,
+        )
+        .unwrap();
     handle.fail_next_release(FailureReason::DeviceUnavailable);
-    assert!(control.forget(binding.key()).is_err());
-    assert_eq!(control.active_attachment_count(binding.key()), 1);
-    adapter.detach(continuation, binding.key()).unwrap();
-    assert_eq!(control.active_attachment_count(binding.key()), 0);
+    registry
+        .detach_continuation(ContinuationId::new(9), CancellationReason::Superseded, 2)
+        .unwrap();
+    assert!(registry.drive(3, 1).is_err());
+    assert_eq!(registry.residency_binding(key), Some(handle.binding(key)));
+    registry.drive(4, 1).unwrap();
     assert_eq!(
-        handle.command_count(|command| matches!(command, MockPhysicalCommand::ReleaseSelected(_))),
+        handle.command_count(|command| matches!(
+            command,
+            MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+        )),
         2
     );
+    registry.shutdown(4, 0).unwrap();
 }
 
 #[test]
-fn terminal_idle_key_is_forgotten_before_request_retry() {
-    let (physical, handle) = MockPhysicalBackend::manual();
-    let backend = RunnerMaterializationBackend::new(Box::new(physical));
-    let (mut adapter, control) =
-        RuntimeMaterializationControl::new(handle.placement(), Some(backend), CompletionHub::new());
-    let ExpertDependencyResolution::Waiting(key) = adapter.resolve(request(1)).unwrap() else {
-        panic!("expected pending physical reservation");
-    };
-    let continuation = ContinuationId::new(11);
-    control.attach(continuation, key).unwrap();
-    adapter.detach(continuation, key).unwrap();
-    assert!(control.forget_if_idle(key).unwrap());
+fn queued_install_success_after_last_detach_releases_lease_once() {
+    let (mut registry, handle) = registry(false);
+    let key = key(1);
+    let operation = attach(&mut registry, waiter(1, 1), key, 1);
+    registry.schedule_one(2).unwrap();
+    handle.script_outcome(LoadStage::ReadSubmitted, CompletionOutcome::Succeeded);
+    registry.schedule_one(3).unwrap();
+    apply_physical(&mut registry, 1);
+    handle.script_outcome(LoadStage::UploadSubmitted, CompletionOutcome::Succeeded);
+    registry.schedule_one(4).unwrap();
+    apply_physical(&mut registry, 1);
+    handle.script_outcome(LoadStage::Installing, CompletionOutcome::Succeeded);
+    registry.schedule_one(5).unwrap();
+    assert_eq!(registry.collect_provider_completions(1), 1);
+
+    registry
+        .detach_continuation(ContinuationId::new(1), CancellationReason::Superseded, 6)
+        .unwrap();
+    registry.process_one_completion_at(7).unwrap();
+    assert!(registry.operation(operation).is_none());
+    assert_eq!(registry.residency_binding(key), Some(handle.binding(key)));
+    assert_eq!(
+        handle.command_count(|command| matches!(
+            command,
+            MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+        )),
+        0
+    );
+    registry.drive(8, 1).unwrap();
+    assert_eq!(
+        handle.command_count(|command| matches!(
+            command,
+            MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+        )),
+        1
+    );
+    registry.drive(9, 1).unwrap();
+    assert_eq!(
+        handle.command_count(|command| matches!(
+            command,
+            MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+        )),
+        1
+    );
+    registry.shutdown(10, 0).unwrap();
+}
+
+#[test]
+fn replacement_commit_swaps_exact_slot_generation_and_bytes() {
+    let (physical, handle) = MockPhysicalProvider::automatic();
+    handle.set_resident(true);
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let old_preparation = provider.prepare(request(1)).unwrap();
+    let old_key = old_preparation.key();
+    let slot = old_preparation.binding().slot;
+    let mut registry = LoadRegistry::new(
+        provider.clone(),
+        physical_resources(),
+        FairQueueConfig::default(),
+    )
+    .unwrap();
+    registry
+        .attach_waiter(
+            waiter(1, 1),
+            [LoadRequest::new(
+                old_preparation,
+                uniform_plan(),
+                ResourceClass::Demand,
+            )],
+            1,
+        )
+        .unwrap();
+    registry
+        .detach_continuation(ContinuationId::new(1), CancellationReason::Superseded, 2)
+        .unwrap();
+    registry.drive(3, 1).unwrap();
+
+    handle.set_resident(false);
+    handle.configure_next_preparation(DESTINATION_GENERATION + 1, slot, Some(old_key));
+    let new_preparation = provider.prepare(request(2)).unwrap();
+    let new_key = new_preparation.key();
+    registry
+        .attach_waiter(
+            waiter(2, 2),
+            [LoadRequest::new(
+                new_preparation,
+                uniform_plan(),
+                ResourceClass::Demand,
+            )],
+            4,
+        )
+        .unwrap();
+    registry.drive(100, 32).unwrap();
+
+    assert!(registry.residency_binding(old_key).is_none());
+    assert_eq!(
+        registry.residency_binding(new_key),
+        Some(handle.binding(new_key))
+    );
+    assert_eq!(registry.resident_entries(), 1);
+    assert_eq!(
+        registry.resources().in_use(ResourceKind::ResidentBytes),
+        BYTES
+    );
+    assert_eq!(
+        registry.pop_ready(101).unwrap(),
+        Some(ContinuationId::new(2))
+    );
+    registry
+        .detach_continuation(ContinuationId::new(2), CancellationReason::Superseded, 102)
+        .unwrap();
+    registry.shutdown(103, 0).unwrap();
+}
+
+#[test]
+fn replacement_waits_for_old_logical_owner_without_losing_operation() {
+    let (physical, handle) = MockPhysicalProvider::automatic();
+    handle.set_resident(true);
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let old_preparation = provider.prepare(request(1)).unwrap();
+    let old_key = old_preparation.key();
+    let slot = old_preparation.binding().slot;
+    let mut registry = LoadRegistry::new(
+        provider.clone(),
+        physical_resources(),
+        FairQueueConfig::default(),
+    )
+    .unwrap();
+    registry
+        .attach_waiter(
+            waiter(1, 1),
+            [LoadRequest::new(
+                old_preparation,
+                uniform_plan(),
+                ResourceClass::Demand,
+            )],
+            1,
+        )
+        .unwrap();
+
+    handle.set_resident(false);
+    handle.configure_next_preparation(DESTINATION_GENERATION + 1, slot, Some(old_key));
+    let new_preparation = provider.prepare(request(2)).unwrap();
+    let new_key = new_preparation.key();
+    let operation = registry
+        .attach_waiter(
+            waiter(2, 2),
+            [LoadRequest::new(
+                new_preparation,
+                uniform_plan(),
+                ResourceClass::Demand,
+            )],
+            2,
+        )
+        .unwrap()
+        .created[0];
+    registry.drive(100, 32).unwrap();
+
+    assert_eq!(
+        registry.residency_binding(old_key),
+        Some(handle.binding(old_key))
+    );
+    assert!(registry.residency_binding(new_key).is_none());
+    assert_eq!(
+        registry
+            .operation(operation)
+            .map(|operation| operation.stage()),
+        Some(LoadStage::Resident)
+    );
+    assert!(registry.retirement(operation).is_none());
+    assert_eq!(
+        registry.pop_ready(101).unwrap(),
+        Some(ContinuationId::new(1))
+    );
+
+    registry
+        .detach_continuation(ContinuationId::new(1), CancellationReason::Superseded, 102)
+        .unwrap();
+    registry.drive(103, 8).unwrap();
+    assert!(registry.residency_binding(old_key).is_none());
+    assert_eq!(
+        registry.residency_binding(new_key),
+        Some(handle.binding(new_key))
+    );
+    assert!(registry.operation(operation).is_none());
+    assert!(registry.retirement(operation).is_some());
+    registry
+        .detach_continuation(ContinuationId::new(2), CancellationReason::Superseded, 104)
+        .unwrap();
+    registry.shutdown(105, 0).unwrap();
+}
+
+#[test]
+fn replacement_cannot_evict_key_from_another_slot() {
+    let (physical, handle) = MockPhysicalProvider::automatic();
+    handle.set_resident(true);
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let old_preparation = provider.prepare(request(1)).unwrap();
+    let old_key = old_preparation.key();
+    let wrong_slot = DestinationSlotId::new(old_preparation.binding().slot.get() + 1);
+    let mut registry = LoadRegistry::new(
+        provider.clone(),
+        physical_resources(),
+        FairQueueConfig::default(),
+    )
+    .unwrap();
+    registry
+        .attach_waiter(
+            waiter(1, 1),
+            [LoadRequest::new(
+                old_preparation,
+                uniform_plan(),
+                ResourceClass::Demand,
+            )],
+            1,
+        )
+        .unwrap();
+
+    handle.set_resident(false);
+    handle.configure_next_preparation(DESTINATION_GENERATION + 1, wrong_slot, Some(old_key));
+    let new_preparation = provider.prepare(request(2)).unwrap();
+    let new_key = new_preparation.key();
+    registry
+        .attach_waiter(
+            waiter(2, 2),
+            [LoadRequest::new(
+                new_preparation,
+                uniform_plan(),
+                ResourceClass::Demand,
+            )],
+            2,
+        )
+        .unwrap();
     assert!(matches!(
-        adapter.resolve(request(1)).unwrap(),
-        ExpertDependencyResolution::Waiting(_)
+        registry.drive(100, 32),
+        Err(super::RegistryError::PublishedResidencyConflict(_))
     ));
     assert_eq!(
-        handle.command_count(|command| matches!(command, MockPhysicalCommand::Resolve(_))),
-        2
+        registry.residency_binding(old_key),
+        Some(handle.binding(old_key))
+    );
+    assert!(registry.residency_binding(new_key).is_none());
+    assert_eq!(registry.resident_entries(), 1);
+}
+
+#[test]
+fn pre_reserve_cancellation_discards_provider_preparation() {
+    let (physical, handle) = MockPhysicalProvider::manual();
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let preparation = provider.prepare(request(1)).unwrap();
+    let key = preparation.key();
+    let mut registry =
+        LoadRegistry::new(provider, physical_resources(), FairQueueConfig::default()).unwrap();
+    registry
+        .attach_waiter(
+            waiter(11, 11),
+            [LoadRequest::new(
+                preparation,
+                uniform_plan(),
+                ResourceClass::Demand,
+            )],
+            1,
+        )
+        .unwrap();
+    registry
+        .detach_continuation(ContinuationId::new(11), CancellationReason::Superseded, 2)
+        .unwrap();
+    assert_eq!(registry.active_operations(), 0);
+    assert!(registry.provider().preparation(key).is_err());
+    assert_eq!(
+        handle.command_count(|command| matches!(
+            command,
+            MockPhysicalCommand::DiscardPreparation(candidate) if *candidate == key
+        )),
+        1
     );
 }
 
 #[test]
-fn physical_bridge_adapter_surfaces_resolve_failure() {
-    let (physical, handle) = MockPhysicalBackend::manual();
+fn resolver_surfaces_provider_prepare_failure() {
+    let (physical, handle) = MockPhysicalProvider::manual();
     handle.fail_next_resolve(FailureReason::StorageUnavailable);
-    let backend = RunnerMaterializationBackend::new(Box::new(physical));
-    let (mut adapter, _) =
-        RuntimeMaterializationControl::new(handle.placement(), Some(backend), CompletionHub::new());
-    assert!(adapter.resolve(request(1)).is_err());
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let mut resolver = RuntimeMaterializationResolver::new(handle.placement(), Some(provider));
+    assert!(resolver.resolve(request(1)).is_err());
 }
 
 #[test]
@@ -1072,7 +1544,12 @@ fn physical_bridge_registry_surfaces_reserve_failure_without_credit_leak() {
     let report = registry
         .attach_waiter(
             waiter(1, 1),
-            [LoadRequest::new(key(1), BYTES, ResourceClass::Decode)],
+            [load_request(
+                &registry,
+                key(1),
+                uniform_plan(),
+                ResourceClass::Demand,
+            )],
             1,
         )
         .unwrap();
@@ -1090,12 +1567,9 @@ fn physical_bridge_single_flight_issues_one_physical_read() {
     let (mut registry, handle) = registry(true);
     let key = key(1);
     let operation = attach(&mut registry, waiter(1, 1), key, 1);
+    let joined_request = load_request(&registry, key, uniform_plan(), ResourceClass::Demand);
     let joined = registry
-        .attach_waiter(
-            waiter(2, 2),
-            [LoadRequest::new(key, BYTES, ResourceClass::Decode)],
-            2,
-        )
+        .attach_waiter(waiter(2, 2), [joined_request], 2)
         .unwrap();
     assert_eq!(joined.joined, vec![operation]);
     registry.drive(100, 32).unwrap();
@@ -1154,12 +1628,9 @@ fn physical_bridge_cancel_one_waiter_retains_shared_operation() {
     let (mut registry, handle) = registry(false);
     let key = key(1);
     attach(&mut registry, waiter(1, 1), key, 1);
+    let joined_request = load_request(&registry, key, uniform_plan(), ResourceClass::Demand);
     registry
-        .attach_waiter(
-            waiter(2, 2),
-            [LoadRequest::new(key, BYTES, ResourceClass::Decode)],
-            2,
-        )
+        .attach_waiter(waiter(2, 2), [joined_request], 2)
         .unwrap();
     registry.schedule_one(3).unwrap();
     registry
@@ -1289,12 +1760,9 @@ fn physical_bridge_read_failure_fails_all_waiters() {
     );
     let key = key(1);
     attach(&mut registry, waiter(1, 1), key, 1);
+    let joined_request = load_request(&registry, key, uniform_plan(), ResourceClass::Demand);
     registry
-        .attach_waiter(
-            waiter(2, 2),
-            [LoadRequest::new(key, BYTES, ResourceClass::Decode)],
-            2,
-        )
+        .attach_waiter(waiter(2, 2), [joined_request], 2)
         .unwrap();
     registry.drive(100, 16).unwrap();
     let failures = [
@@ -1382,25 +1850,26 @@ fn physical_bridge_install_stale_never_publishes() {
 }
 
 #[test]
-fn physical_bridge_registry_and_adapter_retain_identical_binding() {
-    let (physical, handle) = MockPhysicalBackend::automatic();
-    let backend = RunnerMaterializationBackend::new(Box::new(physical));
-    let (mut adapter, control) = RuntimeMaterializationControl::new(
-        handle.placement(),
-        Some(backend.clone()),
-        CompletionHub::new(),
-    );
-    let ExpertDependencyResolution::Waiting(key) = adapter.resolve(request(1)).unwrap() else {
-        panic!("expected physical reservation");
-    };
+fn registry_publication_uses_provider_binding_without_reconciliation() {
+    let (physical, handle) = MockPhysicalProvider::automatic();
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let preparation = provider.prepare(request(1)).unwrap();
+    let key = preparation.key();
     let mut registry =
-        LoadRegistry::new(backend, physical_resources(), FairQueueConfig::default()).unwrap();
-    attach(&mut registry, waiter(1, 1), key, 1);
+        LoadRegistry::new(provider, physical_resources(), FairQueueConfig::default()).unwrap();
+    registry
+        .attach_waiter(
+            waiter(1, 1),
+            [LoadRequest::new(
+                preparation,
+                uniform_plan(),
+                ResourceClass::Demand,
+            )],
+            1,
+        )
+        .unwrap();
     registry.drive(100, 32).unwrap();
-    let binding = registry.residency_binding(key).unwrap();
-    assert_eq!(binding, handle.binding(key));
-    control.record_resident(key, binding).unwrap();
-    assert_eq!(control.resident_binding(key), Some(binding));
+    assert_eq!(registry.residency_binding(key), Some(handle.binding(key)));
 }
 
 #[test]
@@ -1423,18 +1892,19 @@ fn forty_dependencies_attach_and_complete_with_qd_two() {
     const DEPENDENCIES: u8 = 40;
     const QD: u64 = 2;
 
-    let (physical, handle) = MockPhysicalBackend::manual();
-    let backend = RunnerMaterializationBackend::new(Box::new(physical));
+    let (physical, handle) = MockPhysicalProvider::manual();
+    let backend = SharedMaterializationProvider::new(Box::new(physical));
     for seed in 1..=DEPENDENCIES {
-        backend.resolve_or_reserve(request(seed)).unwrap();
+        backend.prepare(request(seed)).unwrap();
     }
     let mut resources = bounded_physical_resources(u64::from(DEPENDENCIES), QD, QD, QD);
     resources
         .reconfigure_limit(ResourceKind::LoadOperation, QD, 0)
         .unwrap();
     let mut registry = LoadRegistry::new(backend, resources, FairQueueConfig::default()).unwrap();
-    let requests =
-        (1..=DEPENDENCIES).map(|seed| LoadRequest::new(key(seed), BYTES, ResourceClass::Decode));
+    let requests = (1..=DEPENDENCIES)
+        .map(|seed| load_request(&registry, key(seed), uniform_plan(), ResourceClass::Demand))
+        .collect::<Vec<_>>();
 
     let report = registry.attach_waiter(waiter(1, 1), requests, 1).unwrap();
     assert_eq!(report.created.len(), usize::from(DEPENDENCIES));
@@ -1442,7 +1912,7 @@ fn forty_dependencies_attach_and_complete_with_qd_two() {
         handle.command_count(|command| matches!(command, MockPhysicalCommand::Reserve(..))),
         0
     );
-    assert_eq!(registry.resources().in_use(ResourceKind::Sqe), 0);
+    assert_eq!(registry.resources().in_use(ResourceKind::ReadSlot), 0);
     assert_eq!(registry.resources().in_use(ResourceKind::LoadOperation), 0);
 
     registry.drive(10, 128).unwrap();
@@ -1485,7 +1955,7 @@ fn forty_dependencies_attach_and_complete_with_qd_two() {
     let sqe = registry
         .resources()
         .snapshots()
-        .find(|snapshot| snapshot.kind == ResourceKind::Sqe)
+        .find(|snapshot| snapshot.kind == ResourceKind::ReadSlot)
         .unwrap();
     assert_eq!(sqe.capacity, QD);
     assert_eq!(sqe.high_water, QD);
@@ -1518,10 +1988,171 @@ fn physical_bridge_resource_high_water_uses_real_bytes() {
             .unwrap()
             .high_water
     };
-    assert_eq!(high_water(ResourceKind::PinnedSlab), BYTES);
-    assert_eq!(high_water(ResourceKind::ReadBytes), BYTES);
+    assert_eq!(high_water(ResourceKind::PinnedHostBytes), BYTES);
+    assert_eq!(high_water(ResourceKind::StorageReadBytes), BYTES);
     assert_eq!(high_water(ResourceKind::UploadBytes), BYTES);
-    assert_eq!(high_water(ResourceKind::ExpertFrame), BYTES);
-    assert_eq!(high_water(ResourceKind::Sqe), 1);
+    assert_eq!(high_water(ResourceKind::DeviceInstallBytes), BYTES);
+    assert_eq!(high_water(ResourceKind::ResidentBytes), BYTES);
+    assert_eq!(high_water(ResourceKind::ReadSlot), 1);
+    assert_eq!(high_water(ResourceKind::InstallSlot), 1);
     assert_eq!(high_water(ResourceKind::LoadOperation), 1);
+}
+
+#[test]
+fn physical_bridge_preserves_nonuniform_resource_plan() {
+    let plan = MaterializationResourcePlan::new(
+        MaterializationResourceDemand {
+            read_slots: 2,
+            storage_read_bytes: 4096,
+            pinned_host_bytes: 8192,
+            upload_slots: 3,
+            h2d_bytes: 12_288,
+            install_slots: 4,
+            device_install_bytes: 16_384,
+        },
+        20_480,
+    )
+    .unwrap();
+    let limits = MaterializationResourceLimits {
+        capacity: MaterializationResourceDemand {
+            device_install_bytes: plan.resident_bytes,
+            ..plan.demand
+        },
+        demand_reserve: MaterializationResourceDemand::default(),
+    }
+    .validate()
+    .unwrap();
+    let (physical, handle) = MockPhysicalProvider::automatic();
+    handle.set_plan_and_limits(plan, limits);
+    let mut backend = SharedMaterializationProvider::new(Box::new(physical));
+    let resolved = backend.prepare(request(1)).unwrap();
+    assert!(matches!(resolved, MaterializationPreparation::Transfer(_)));
+    let key = resolved.key();
+    assert_eq!(backend.materialization_plan(key).unwrap(), plan);
+
+    let direct_operation = OperationId::new(77);
+    let reservation = backend.reserve(direct_operation, key, plan).unwrap();
+    assert_eq!(
+        reservation.slabs()[0].descriptor().len(),
+        plan.demand.pinned_host_bytes
+    );
+    backend
+        .submit_read(direct_operation, key, &reservation, plan)
+        .unwrap();
+    backend
+        .submit_upload(direct_operation, key, &reservation, plan)
+        .unwrap();
+    backend
+        .poll_install(direct_operation, key, &reservation, plan)
+        .unwrap();
+    let completions = [
+        backend.next_completion().unwrap(),
+        backend.next_completion().unwrap(),
+        backend.next_completion().unwrap(),
+    ];
+    assert_eq!(
+        completions.map(|event| (event.stage, event.bytes)),
+        [
+            (LoadStage::ReadSubmitted, plan.demand.storage_read_bytes),
+            (LoadStage::UploadSubmitted, plan.demand.h2d_bytes),
+            (LoadStage::Installing, plan.demand.device_install_bytes),
+        ]
+    );
+    let commands = handle.commands();
+    assert!(commands.contains(&MockPhysicalCommand::Reserve(direct_operation, key, plan,)));
+    assert!(commands.contains(&MockPhysicalCommand::SubmitRead(
+        direct_operation,
+        key,
+        plan,
+    )));
+    assert!(commands.contains(&MockPhysicalCommand::SubmitUpload(
+        direct_operation,
+        key,
+        plan,
+    )));
+    assert!(commands.contains(&MockPhysicalCommand::PollInstall(
+        direct_operation,
+        key,
+        plan,
+    )));
+    drop(reservation);
+
+    let (registry_physical, registry_handle) = MockPhysicalProvider::automatic();
+    registry_handle.set_plan_and_limits(plan, limits);
+    let registry_backend = SharedMaterializationProvider::new(Box::new(registry_physical));
+    let registry_resolved = registry_backend.prepare(request(1)).unwrap();
+    assert!(matches!(
+        registry_resolved,
+        MaterializationPreparation::Transfer(_)
+    ));
+    let registry_key = registry_resolved.key();
+    assert_eq!(registry_key, key);
+
+    let resources = PhysicalResourceBroker::new(ResourceKind::ALL.map(|kind| {
+        let capacity = match kind {
+            ResourceKind::ReadSlot => plan.demand.read_slots,
+            ResourceKind::PinnedHostBytes => plan.demand.pinned_host_bytes,
+            ResourceKind::StorageReadBytes => plan.demand.storage_read_bytes,
+            ResourceKind::UploadSlot => plan.demand.upload_slots,
+            ResourceKind::UploadBytes => plan.demand.h2d_bytes,
+            ResourceKind::InstallSlot => plan.demand.install_slots,
+            ResourceKind::DeviceInstallBytes => plan.demand.device_install_bytes,
+            ResourceKind::ResidentBytes => plan.resident_bytes,
+            ResourceKind::ResidencyLease | ResourceKind::LoadOperation => 1,
+            ResourceKind::Arena
+            | ResourceKind::KvPage
+            | ResourceKind::Continuation
+            | ResourceKind::Waiter
+            | ResourceKind::ReadyCohort => 64,
+        };
+        PhysicalResourceLimit::new(kind, capacity, 0)
+    }))
+    .unwrap();
+    let mut registry =
+        LoadRegistry::new(registry_backend, resources, FairQueueConfig::default()).unwrap();
+    registry
+        .attach_waiter(
+            waiter(1, 1),
+            [LoadRequest::new(
+                registry_resolved,
+                plan,
+                ResourceClass::Demand,
+            )],
+            1,
+        )
+        .unwrap();
+    registry.drive(100, 32).unwrap();
+    assert!(registry.residency_binding(registry_key).is_some());
+
+    let high_water = |kind| {
+        registry
+            .resources()
+            .snapshots()
+            .find(|snapshot| snapshot.kind == kind)
+            .unwrap()
+            .high_water
+    };
+    assert_eq!(
+        high_water(ResourceKind::StorageReadBytes),
+        plan.demand.storage_read_bytes
+    );
+    assert_eq!(
+        high_water(ResourceKind::PinnedHostBytes),
+        plan.demand.pinned_host_bytes
+    );
+    assert_eq!(high_water(ResourceKind::UploadBytes), plan.demand.h2d_bytes);
+    assert_eq!(
+        high_water(ResourceKind::DeviceInstallBytes),
+        plan.demand.device_install_bytes
+    );
+    assert_eq!(high_water(ResourceKind::ResidentBytes), plan.resident_bytes);
+    assert_eq!(high_water(ResourceKind::ReadSlot), plan.demand.read_slots);
+    assert_eq!(
+        high_water(ResourceKind::UploadSlot),
+        plan.demand.upload_slots
+    );
+    assert_eq!(
+        high_water(ResourceKind::InstallSlot),
+        plan.demand.install_slots
+    );
 }

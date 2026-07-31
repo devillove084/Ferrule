@@ -3,7 +3,7 @@
 #include "sm121_dspark_main_project_norm.cuh"
 #include "sm121_dspark_hybrid_attention.cuh"
 #include "sm121_dspark_proposal_head.cuh"
-#include "sm121_fp4_moe.cuh"},{
+#include "sm121_fp4_moe.cuh"
 #include "sm121_fp8_query_kv_prefill.cuh"
 #include "sm121_hc_producer.cuh"
 #include "sm121_mla_output.cuh"

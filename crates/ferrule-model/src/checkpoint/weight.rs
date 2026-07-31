@@ -1,6 +1,6 @@
-//! Generic artifact linear handles and CPU reference matvec.
+//! Generic checkpoint linear weights and CPU reference matvec.
 //!
-//! Artifact-bound model bring-up can exercise several formats: BF16/F32 metadata or
+//! Checkpoint-backed model bring-up can exercise several formats: BF16/F32 metadata or
 //! auxiliary tensors, FP8 E4M3 block-scaled linears, and FP4 packed routed experts.
 //! This module keeps those formats behind one typed linear payload so attention,
 //! router, shared expert, logits, and future CUDA dispatch all consume the same
@@ -11,14 +11,14 @@ use std::borrow::Cow;
 use crate::TensorRole;
 use ferrule_common::{Error, Result};
 
-use crate::artifact::format::{
+use crate::checkpoint::encoding::{
     dequantize_fp4_e2m1_with_e8m0_scales, dequantize_fp8_e4m3fn_with_e8m0_scales,
     simulate_fp8_e4m3fn_e8m0_activation_quant_in_place,
 };
-use crate::artifact::tensor::{ArtifactDType, ArtifactTensorPayload};
+use crate::checkpoint::tensor::{CheckpointDType, CheckpointTensorPayload};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ArtifactLinearFormat {
+pub enum LinearWeightFormat {
     F32 {
         out_features: usize,
         in_features: usize,
@@ -40,7 +40,7 @@ pub enum ArtifactLinearFormat {
     },
 }
 
-impl ArtifactLinearFormat {
+impl LinearWeightFormat {
     pub fn out_features(&self) -> usize {
         match self {
             Self::F32 { out_features, .. }
@@ -61,14 +61,14 @@ impl ArtifactLinearFormat {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArtifactActivationQuantization {
+pub enum ActivationQuantization {
     /// Simulate `act_quant(..., scale_dtype=float8_e8m0fnu)` before a quantized
-    /// artifact GEMM. The backend can later fuse this; the policy keeps the semantic
+    /// quantized GEMM. The backend can later fuse this; the policy keeps the semantic
     /// contract explicit and model-family agnostic.
     Fp8E4M3WithE8M0Scale { block_size: usize },
 }
 
-impl ArtifactActivationQuantization {
+impl ActivationQuantization {
     pub fn apply_in_place(&self, values: &mut [f32], row_width: usize) -> Result<()> {
         match *self {
             Self::Fp8E4M3WithE8M0Scale { block_size } => {
@@ -79,18 +79,18 @@ impl ArtifactActivationQuantization {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ArtifactLinearExecutionPolicy {
-    pub activation_quantization: Option<ArtifactActivationQuantization>,
+pub struct LinearExecutionPolicy {
+    pub activation_quantization: Option<ActivationQuantization>,
 }
 
-impl ArtifactLinearExecutionPolicy {
+impl LinearExecutionPolicy {
     pub const NONE: Self = Self {
         activation_quantization: None,
     };
 
     pub const fn fp8_e4m3_e8m0_activation(block_size: usize) -> Self {
         Self {
-            activation_quantization: Some(ArtifactActivationQuantization::Fp8E4M3WithE8M0Scale {
+            activation_quantization: Some(ActivationQuantization::Fp8E4M3WithE8M0Scale {
                 block_size,
             }),
         }
@@ -108,40 +108,40 @@ impl ArtifactLinearExecutionPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArtifactLinearPayload {
+pub struct LinearWeight {
     pub role: TensorRole,
-    pub weight: ArtifactTensorPayload,
-    pub scale: Option<ArtifactTensorPayload>,
-    pub format: ArtifactLinearFormat,
-    pub execution: ArtifactLinearExecutionPolicy,
+    pub weight: CheckpointTensorPayload,
+    pub scale: Option<CheckpointTensorPayload>,
+    pub format: LinearWeightFormat,
+    pub execution: LinearExecutionPolicy,
 }
 
-impl ArtifactLinearPayload {
+impl LinearWeight {
     pub fn from_weight_and_scale(
         role: TensorRole,
-        weight: ArtifactTensorPayload,
-        scale: Option<ArtifactTensorPayload>,
+        weight: CheckpointTensorPayload,
+        scale: Option<CheckpointTensorPayload>,
     ) -> Result<Self> {
-        let format = infer_artifact_linear_format(&weight, scale.as_ref())?;
+        let format = infer_linear_weight_format(&weight, scale.as_ref())?;
         Ok(Self {
             role,
             weight,
             scale,
             format,
-            execution: ArtifactLinearExecutionPolicy::NONE,
+            execution: LinearExecutionPolicy::NONE,
         })
     }
 
-    pub fn with_execution_policy(mut self, execution: ArtifactLinearExecutionPolicy) -> Self {
+    pub fn with_execution_policy(mut self, execution: LinearExecutionPolicy) -> Self {
         self.execution = execution;
         self
     }
 
     pub fn with_activation_quantization(
         self,
-        activation_quantization: ArtifactActivationQuantization,
+        activation_quantization: ActivationQuantization,
     ) -> Self {
-        self.with_execution_policy(ArtifactLinearExecutionPolicy {
+        self.with_execution_policy(LinearExecutionPolicy {
             activation_quantization: Some(activation_quantization),
         })
     }
@@ -154,7 +154,7 @@ impl ArtifactLinearPayload {
     pub fn reference_matvec(&self, input: &[f32]) -> Result<Vec<f32>> {
         if input.len() != self.format.in_features() {
             return Err(Error::Model(format!(
-                "artifact linear {:?} input length mismatch: expected {}, got {}",
+                "linear weight {:?} input length mismatch: expected {}, got {}",
                 self.role,
                 self.format.in_features(),
                 input.len()
@@ -172,15 +172,15 @@ impl ArtifactLinearPayload {
 
     pub fn reference_weights_f32(&self) -> Result<Vec<f32>> {
         match self.format {
-            ArtifactLinearFormat::F32 {
+            LinearWeightFormat::F32 {
                 out_features,
                 in_features,
             } => decode_f32_matrix(&self.weight, out_features, in_features),
-            ArtifactLinearFormat::Bf16 {
+            LinearWeightFormat::Bf16 {
                 out_features,
                 in_features,
             } => decode_bf16_matrix(&self.weight, out_features, in_features),
-            ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+            LinearWeightFormat::Fp8E4M3WithE8M0Scale {
                 out_features,
                 in_features,
                 block_m,
@@ -188,7 +188,7 @@ impl ArtifactLinearPayload {
             } => {
                 let scale = self.scale.as_ref().ok_or_else(|| {
                     Error::Model(format!(
-                        "artifact linear {:?} FP8 weight is missing E8M0 scale tensor",
+                        "linear weight {:?} FP8 weight is missing E8M0 scale tensor",
                         self.role
                     ))
                 })?;
@@ -201,14 +201,14 @@ impl ArtifactLinearPayload {
                     block_k,
                 )
             }
-            ArtifactLinearFormat::Fp4E2M1PackedWithE8M0Scale {
+            LinearWeightFormat::Fp4E2M1PackedWithE8M0Scale {
                 out_features,
                 in_features,
                 block_size,
             } => {
                 let scale = self.scale.as_ref().ok_or_else(|| {
                     Error::Model(format!(
-                        "artifact linear {:?} FP4 weight is missing E8M0 scale tensor",
+                        "linear weight {:?} FP4 weight is missing E8M0 scale tensor",
                         self.role
                     ))
                 })?;
@@ -224,45 +224,45 @@ impl ArtifactLinearPayload {
     }
 }
 
-fn infer_artifact_linear_format(
-    weight: &ArtifactTensorPayload,
-    scale: Option<&ArtifactTensorPayload>,
-) -> Result<ArtifactLinearFormat> {
+fn infer_linear_weight_format(
+    weight: &CheckpointTensorPayload,
+    scale: Option<&CheckpointTensorPayload>,
+) -> Result<LinearWeightFormat> {
     if weight.slice.shape.len() != 2 {
         return Err(Error::Model(format!(
-            "artifact linear '{}' expects 2D weight shape, got {:?}",
+            "linear weight '{}' expects 2D weight shape, got {:?}",
             weight.slice.name, weight.slice.shape
         )));
     }
     let out = weight.slice.shape[0];
     let width = weight.slice.shape[1];
     match weight.slice.dtype {
-        ArtifactDType::F32 => {
+        CheckpointDType::F32 => {
             ensure_no_scale(weight, scale)?;
             ensure_byte_len(weight, out, width, 4)?;
-            Ok(ArtifactLinearFormat::F32 {
+            Ok(LinearWeightFormat::F32 {
                 out_features: out,
                 in_features: width,
             })
         }
-        ArtifactDType::Bf16 => {
+        CheckpointDType::Bf16 => {
             ensure_no_scale(weight, scale)?;
             ensure_byte_len(weight, out, width, 2)?;
-            Ok(ArtifactLinearFormat::Bf16 {
+            Ok(LinearWeightFormat::Bf16 {
                 out_features: out,
                 in_features: width,
             })
         }
-        ArtifactDType::F8E4M3 => {
+        CheckpointDType::F8E4M3 => {
             let scale = scale.ok_or_else(|| {
                 Error::Model(format!(
-                    "FP8 artifact linear '{}' requires E8M0 scale tensor",
+                    "FP8 linear weight '{}' requires E8M0 scale tensor",
                     weight.slice.name
                 ))
             })?;
-            if scale.slice.dtype != ArtifactDType::F8E8M0 || scale.slice.shape.len() != 2 {
+            if scale.slice.dtype != CheckpointDType::F8E8M0 || scale.slice.shape.len() != 2 {
                 return Err(Error::Model(format!(
-                    "FP8 artifact linear '{}' expects 2D F8_E8M0 scale, got dtype={} shape={:?}",
+                    "FP8 linear weight '{}' expects 2D F8_E8M0 scale, got dtype={} shape={:?}",
                     weight.slice.name,
                     scale.slice.dtype.as_str(),
                     scale.slice.shape
@@ -273,23 +273,23 @@ fn infer_artifact_linear_format(
                 infer_fp8_block(out, scale.slice.shape[0], 128, "out", &weight.slice.name)?;
             let block_k =
                 infer_fp8_block(width, scale.slice.shape[1], 128, "in", &weight.slice.name)?;
-            Ok(ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+            Ok(LinearWeightFormat::Fp8E4M3WithE8M0Scale {
                 out_features: out,
                 in_features: width,
                 block_m,
                 block_k,
             })
         }
-        ArtifactDType::I8 => {
+        CheckpointDType::I8 => {
             let scale = scale.ok_or_else(|| {
                 Error::Model(format!(
-                    "I8 artifact linear '{}' requires a scale tensor to infer packed FP4",
+                    "I8 linear weight '{}' requires a scale tensor to infer packed FP4",
                     weight.slice.name
                 ))
             })?;
-            if scale.slice.dtype != ArtifactDType::F8E8M0 || scale.slice.shape.len() != 2 {
+            if scale.slice.dtype != CheckpointDType::F8E8M0 || scale.slice.shape.len() != 2 {
                 return Err(Error::Model(format!(
-                    "I8/FP4 artifact linear '{}' expects 2D F8_E8M0 scale, got dtype={} shape={:?}",
+                    "I8/FP4 linear weight '{}' expects 2D F8_E8M0 scale, got dtype={} shape={:?}",
                     weight.slice.name,
                     scale.slice.dtype.as_str(),
                     scale.slice.shape
@@ -298,26 +298,26 @@ fn infer_artifact_linear_format(
             ensure_byte_len(weight, out, width, 1)?;
             let in_features = width.checked_mul(2).ok_or_else(|| {
                 Error::Model(format!(
-                    "artifact linear '{}' FP4 logical input dimension overflow",
+                    "linear weight '{}' FP4 logical input dimension overflow",
                     weight.slice.name
                 ))
             })?;
             let scale_cols = scale.slice.shape[1];
             if scale.slice.shape[0] != out || scale_cols == 0 || in_features % scale_cols != 0 {
                 return Err(Error::Model(format!(
-                    "I8/FP4 artifact linear '{}' scale shape {:?} is incompatible with weight shape {:?}",
+                    "I8/FP4 linear weight '{}' scale shape {:?} is incompatible with weight shape {:?}",
                     weight.slice.name, scale.slice.shape, weight.slice.shape
                 )));
             }
             let block_size = in_features / scale_cols;
-            Ok(ArtifactLinearFormat::Fp4E2M1PackedWithE8M0Scale {
+            Ok(LinearWeightFormat::Fp4E2M1PackedWithE8M0Scale {
                 out_features: out,
                 in_features,
                 block_size,
             })
         }
         _ => Err(Error::Model(format!(
-            "artifact linear '{}' has unsupported dtype {}",
+            "linear weight '{}' has unsupported dtype {}",
             weight.slice.name,
             weight.slice.dtype.as_str()
         ))),
@@ -325,12 +325,12 @@ fn infer_artifact_linear_format(
 }
 
 fn ensure_no_scale(
-    weight: &ArtifactTensorPayload,
-    scale: Option<&ArtifactTensorPayload>,
+    weight: &CheckpointTensorPayload,
+    scale: Option<&CheckpointTensorPayload>,
 ) -> Result<()> {
     if let Some(scale) = scale {
         return Err(Error::Model(format!(
-            "artifact linear '{}' has unexpected scale tensor '{}' for dtype {}",
+            "linear weight '{}' has unexpected scale tensor '{}' for dtype {}",
             weight.slice.name,
             scale.slice.name,
             weight.slice.dtype.as_str()
@@ -340,7 +340,7 @@ fn ensure_no_scale(
 }
 
 fn ensure_byte_len(
-    tensor: &ArtifactTensorPayload,
+    tensor: &CheckpointTensorPayload,
     rows: usize,
     cols: usize,
     bytes_per_element: usize,
@@ -350,13 +350,13 @@ fn ensure_byte_len(
         .and_then(|elements| elements.checked_mul(bytes_per_element))
         .ok_or_else(|| {
             Error::Model(format!(
-                "artifact tensor '{}' size overflow",
+                "checkpoint tensor '{}' size overflow",
                 tensor.slice.name
             ))
         })?;
     if tensor.bytes.len() != expected || tensor.slice.bytes != expected as u64 {
         return Err(Error::Model(format!(
-            "artifact tensor '{}' byte length mismatch: expected {expected}, metadata={}, payload={}",
+            "checkpoint tensor '{}' byte length mismatch: expected {expected}, metadata={}, payload={}",
             tensor.slice.name,
             tensor.slice.bytes,
             tensor.bytes.len()
@@ -374,7 +374,7 @@ fn infer_fp8_block(
 ) -> Result<usize> {
     if scale_dim == 0 {
         return Err(Error::Model(format!(
-            "FP8 artifact linear '{name}' has zero scale {axis} dimension"
+            "FP8 linear weight '{name}' has zero scale {axis} dimension"
         )));
     }
     if dim.div_ceil(preferred) == scale_dim {
@@ -385,12 +385,12 @@ fn infer_fp8_block(
         return Ok(block);
     }
     Err(Error::Model(format!(
-        "FP8 artifact linear '{name}' cannot infer {axis} block size from dim={dim}, scale_dim={scale_dim}"
+        "FP8 linear weight '{name}' cannot infer {axis} block size from dim={dim}, scale_dim={scale_dim}"
     )))
 }
 
 fn decode_f32_matrix(
-    tensor: &ArtifactTensorPayload,
+    tensor: &CheckpointTensorPayload,
     out_features: usize,
     in_features: usize,
 ) -> Result<Vec<f32>> {
@@ -403,7 +403,7 @@ fn decode_f32_matrix(
 }
 
 fn decode_bf16_matrix(
-    tensor: &ArtifactTensorPayload,
+    tensor: &CheckpointTensorPayload,
     out_features: usize,
     in_features: usize,
 ) -> Result<Vec<f32>> {
@@ -436,15 +436,15 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::artifact::tensor::{ArtifactDType, ArtifactTensorSlice};
+    use crate::checkpoint::tensor::{CheckpointDType, CheckpointTensorSlice};
 
     #[test]
-    fn f32_artifact_linear_matvec() {
-        let linear = ArtifactLinearPayload::from_weight_and_scale(
+    fn f32_linear_weight_matvec() {
+        let linear = LinearWeight::from_weight_and_scale(
             TensorRole::AttentionOutput,
             payload(
                 "f32.weight",
-                ArtifactDType::F32,
+                CheckpointDType::F32,
                 vec![2, 3],
                 f32_bytes(&[1.0, 2.0, 3.0, -1.0, 0.5, 4.0]),
             ),
@@ -453,7 +453,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             linear.format,
-            ArtifactLinearFormat::F32 {
+            LinearWeightFormat::F32 {
                 out_features: 2,
                 in_features: 3,
             }
@@ -465,12 +465,12 @@ mod tests {
     }
 
     #[test]
-    fn bf16_artifact_linear_matvec() {
-        let linear = ArtifactLinearPayload::from_weight_and_scale(
+    fn bf16_linear_weight_matvec() {
+        let linear = LinearWeight::from_weight_and_scale(
             TensorRole::RouterLogits,
             payload(
                 "bf16.weight",
-                ArtifactDType::Bf16,
+                CheckpointDType::Bf16,
                 vec![1, 3],
                 bf16_bytes(&[1.0, -2.0, 0.5]),
             ),
@@ -484,18 +484,18 @@ mod tests {
     }
 
     #[test]
-    fn fp8_artifact_linear_matvec_uses_e8m0_scales() {
-        let linear = ArtifactLinearPayload::from_weight_and_scale(
+    fn fp8_linear_weight_matvec_uses_e8m0_scales() {
+        let linear = LinearWeight::from_weight_and_scale(
             TensorRole::AttentionQuery,
             payload(
                 "fp8.weight",
-                ArtifactDType::F8E4M3,
+                CheckpointDType::F8E4M3,
                 vec![2, 3],
                 vec![0x38, 0x40, 0xb8, 0x00, 0x38, 0x38],
             ),
             Some(payload(
                 "fp8.scale",
-                ArtifactDType::F8E8M0,
+                CheckpointDType::F8E8M0,
                 vec![2, 2],
                 vec![127, 128, 126, 127],
             )),
@@ -503,7 +503,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             linear.format,
-            ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+            LinearWeightFormat::Fp8E4M3WithE8M0Scale {
                 out_features: 2,
                 in_features: 3,
                 block_m: 1,
@@ -517,15 +517,15 @@ mod tests {
     }
 
     #[test]
-    fn fp4_artifact_linear_matvec_uses_packed_layout() {
+    fn fp4_linear_weight_matvec_uses_packed_layout() {
         let mut weight = vec![0u8; 16];
         weight[0] = 0x42; // row 0: 1.0, 2.0
-        let linear = ArtifactLinearPayload::from_weight_and_scale(
+        let linear = LinearWeight::from_weight_and_scale(
             TensorRole::RoutedExpertGate,
-            payload("fp4.weight", ArtifactDType::I8, vec![1, 16], weight),
+            payload("fp4.weight", CheckpointDType::I8, vec![1, 16], weight),
             Some(payload(
                 "fp4.scale",
-                ArtifactDType::F8E8M0,
+                CheckpointDType::F8E8M0,
                 vec![1, 1],
                 vec![127],
             )),
@@ -533,7 +533,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             linear.format,
-            ArtifactLinearFormat::Fp4E2M1PackedWithE8M0Scale {
+            LinearWeightFormat::Fp4E2M1PackedWithE8M0Scale {
                 out_features: 1,
                 in_features: 32,
                 block_size: 32,
@@ -549,20 +549,20 @@ mod tests {
     fn execution_policy_quantizes_activation_before_reference_matvec() {
         let mut weight = vec![0.0f32; 128];
         weight[0] = 1.0;
-        let linear = ArtifactLinearPayload::from_weight_and_scale(
+        let linear = LinearWeight::from_weight_and_scale(
             TensorRole::AttentionLatentQueryA,
             payload(
                 "selector.weight",
-                ArtifactDType::F32,
+                CheckpointDType::F32,
                 vec![1, 128],
                 f32_bytes(&weight),
             ),
             None,
         )
         .unwrap()
-        .with_activation_quantization(
-            ArtifactActivationQuantization::Fp8E4M3WithE8M0Scale { block_size: 128 },
-        );
+        .with_activation_quantization(ActivationQuantization::Fp8E4M3WithE8M0Scale {
+            block_size: 128,
+        });
         let mut input = vec![0.0f32; 128];
         input[0] = 1.1;
         let mut expected_input = input.clone();
@@ -576,10 +576,15 @@ mod tests {
     }
 
     #[test]
-    fn fp8_artifact_linear_requires_scale_tensor() {
-        let err = ArtifactLinearPayload::from_weight_and_scale(
+    fn fp8_linear_weight_requires_scale_tensor() {
+        let err = LinearWeight::from_weight_and_scale(
             TensorRole::AttentionQuery,
-            payload("fp8.weight", ArtifactDType::F8E4M3, vec![1, 1], vec![0x38]),
+            payload(
+                "fp8.weight",
+                CheckpointDType::F8E4M3,
+                vec![1, 1],
+                vec![0x38],
+            ),
             None,
         )
         .unwrap_err();
@@ -588,12 +593,12 @@ mod tests {
 
     fn payload(
         name: &str,
-        dtype: ArtifactDType,
+        dtype: CheckpointDType,
         shape: Vec<usize>,
         bytes: Vec<u8>,
-    ) -> ArtifactTensorPayload {
-        ArtifactTensorPayload {
-            slice: ArtifactTensorSlice {
+    ) -> CheckpointTensorPayload {
+        CheckpointTensorPayload {
+            slice: CheckpointTensorSlice {
                 name: name.into(),
                 role: TensorRole::Unknown,
                 path: PathBuf::from("synthetic.safetensors"),

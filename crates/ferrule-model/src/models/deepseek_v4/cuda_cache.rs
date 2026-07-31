@@ -13,21 +13,20 @@ use std::time::{Duration, Instant};
 use ferrule_common::execution::{
     ExecutionTransactionId, ForwardPhase, KvCowReplacement, KvLayoutSchema, KvPageId,
 };
-use ferrule_common::expert_io::ExpertIoResourceControl;
 use ferrule_common::kernel_plan::{KernelOperation, ModelKernelPlan};
 #[cfg(feature = "cuda")]
 use ferrule_common::kernel_plan::{KernelProviderId, LaunchDescriptor};
-use ferrule_common::{CompletionHub, Error, ExpertLeaseSet, Result};
+use ferrule_common::{CompletionHub, Error, ResidencyLeaseSet, Result};
 
-use crate::artifact::binding::RouterArtifactPayload;
-#[cfg(feature = "cuda")]
-use crate::artifact::linear::ArtifactActivationQuantization;
-use crate::artifact::linear::{ArtifactLinearFormat, ArtifactLinearPayload};
-#[cfg(feature = "cuda")]
-use crate::artifact::tensor::{ArtifactDType, ArtifactMatrixSlice};
 use crate::attention_backend::SparseAttentionSpec;
+#[cfg(feature = "cuda")]
+use crate::checkpoint::tensor::{CheckpointDType, CheckpointMatrixSlice};
+#[cfg(feature = "cuda")]
+use crate::checkpoint::weight::ActivationQuantization;
+use crate::checkpoint::weight::{LinearWeight, LinearWeightFormat};
 use crate::ffn::SwiGluFfnPayload;
 use crate::hyper_connection::{HyperConnectionConfig, HyperConnectionWeights};
+use crate::moe::routing::RouterWeights;
 
 use crate::moe::prediction::{ExpertAccessPhase, ExpertBatchAccessEvent};
 
@@ -39,7 +38,7 @@ use crate::runner::{TokenLogit, completion_notify_callback};
 
 use super::attention::DeepSeekV4CompressorPayload;
 use super::config::{DeepSeekV4AttentionConfig, DeepSeekV4RopeParams};
-use super::expert_materializer::DeepSeekV4SharedExpertSubsystem;
+use super::cuda_materialization::DeepSeekV4SharedExpertSubsystem;
 use super::helpers::yarn_frequency;
 use super::layer::DeepSeekV4Layer;
 
@@ -293,7 +292,6 @@ struct DeepSeekV4CudaMetrics {
 pub(crate) struct DeepSeekV4CudaOperatorCache {
     pub(crate) ops: ferrule_cuda::context::CudaArtifactOperatorContext,
     completion_hub: CompletionHub,
-    expert_io_resource_control: Option<Box<dyn ExpertIoResourceControl>>,
     profile: bool,
     metrics: DeepSeekV4CudaMetrics,
     managed_experts: bool,
@@ -421,7 +419,7 @@ struct HcDeviceWeights {
 struct DeepSeekV4CudaPreparedLinear {
     handle: ferrule_cuda::context::CudaArtifactLinearHandle,
     #[cfg(feature = "cuda")]
-    activation_quantization: Option<ArtifactActivationQuantization>,
+    activation_quantization: Option<ActivationQuantization>,
 }
 
 #[cfg(feature = "cuda")]
@@ -801,7 +799,7 @@ pub(crate) struct DeepSeekV4CudaPackedMoeContinuation {
     segment_capacity: Option<usize>,
     next_chunk_start: usize,
     current_chunk: Option<CudaPackedMoeChunk>,
-    retained_leases: Vec<ExpertLeaseSet>,
+    retained_leases: Vec<ResidencyLeaseSet>,
     input_prepared: bool,
     expected_intermediate: Option<usize>,
     streaming_steps: Vec<ExpertStreamingStep>,
@@ -833,7 +831,7 @@ pub(crate) enum DeepSeekV4CudaPackedMoeProgress {
     Waiting(DeepSeekV4CudaPackedMoeContinuation),
     Complete {
         events: Vec<DeepSeekV4SequenceMoeAccessEvent>,
-        leases: Vec<ExpertLeaseSet>,
+        leases: Vec<ResidencyLeaseSet>,
     },
 }
 
@@ -983,7 +981,6 @@ impl DeepSeekV4CudaOperatorCache {
         Ok(Self {
             ops: ferrule_cuda::context::CudaArtifactOperatorContext::new()?,
             completion_hub,
-            expert_io_resource_control: None,
             profile: policy.profile_enabled(),
             metrics: DeepSeekV4CudaMetrics::default(),
             managed_experts: policy.managed_experts(),
@@ -1014,26 +1011,6 @@ impl DeepSeekV4CudaOperatorCache {
             #[cfg(feature = "cuda")]
             output_head_values: HashMap::new(),
         })
-    }
-
-    pub(crate) fn install_expert_io_resource_control(
-        &mut self,
-        control: Box<dyn ExpertIoResourceControl>,
-    ) -> Result<()> {
-        if self.expert_io_resource_control.is_some() {
-            return Err(Error::Execution(
-                "DeepSeek-V4 expert-I/O resource control is already installed".into(),
-            ));
-        }
-        self.expert_io_resource_control = Some(control);
-        Ok(())
-    }
-
-    pub(crate) fn uninstall_expert_io_resource_control(&mut self) -> Result<()> {
-        self.expert_io_resource_control.take().ok_or_else(|| {
-            Error::Execution("DeepSeek-V4 expert-I/O resource control is not installed".into())
-        })?;
-        Ok(())
     }
 
     pub(crate) fn configure_kv_page_pool(
@@ -2527,10 +2504,10 @@ impl DeepSeekV4CudaOperatorCache {
     #[cfg(feature = "cuda")]
     fn upload_resident_bf16_matrix(
         &self,
-        matrix: &ArtifactMatrixSlice,
+        matrix: &CheckpointMatrixSlice,
     ) -> Result<ferrule_cuda::context::CudaArtifactLinearHandle> {
         const CHUNK_BYTES: usize = 16 * 1024 * 1024;
-        if matrix.slice.dtype != ArtifactDType::Bf16 {
+        if matrix.slice.dtype != CheckpointDType::Bf16 {
             return Err(Error::Model(format!(
                 "resident BF16 matrix '{}' has dtype {:?}",
                 matrix.slice.name, matrix.slice.dtype
@@ -2587,7 +2564,7 @@ impl DeepSeekV4CudaOperatorCache {
 
     fn upload_prepared_linear(
         &self,
-        linear: &ArtifactLinearPayload,
+        linear: &LinearWeight,
     ) -> Result<DeepSeekV4CudaPreparedLinear> {
         Ok(DeepSeekV4CudaPreparedLinear {
             handle: self.upload_linear(linear)?,
@@ -3230,7 +3207,7 @@ impl DeepSeekV4CudaOperatorCache {
         layer: usize,
         logits: &ferrule_cuda::context::CudaF32Buffer,
         token_ids: &[u32],
-        router: &RouterArtifactPayload,
+        router: &RouterWeights,
         router_policy: &ExpertRouterPolicy,
         indices_dev: &mut ferrule_cuda::context::CudaI32Buffer,
         weights_dev: &mut ferrule_cuda::context::CudaF32Buffer,
@@ -3623,22 +3600,22 @@ impl DeepSeekV4CudaOperatorCache {
 
     pub(crate) fn upload_linear(
         &self,
-        linear: &ArtifactLinearPayload,
+        linear: &LinearWeight,
     ) -> Result<ferrule_cuda::context::CudaArtifactLinearHandle> {
         match linear.format {
-            ArtifactLinearFormat::F32 {
+            LinearWeightFormat::F32 {
                 out_features,
                 in_features,
             } => self
                 .ops
                 .upload_f32_linear(&linear.weight.bytes, out_features, in_features),
-            ArtifactLinearFormat::Bf16 {
+            LinearWeightFormat::Bf16 {
                 out_features,
                 in_features,
             } => self
                 .ops
                 .upload_bf16_linear(&linear.weight.bytes, out_features, in_features),
-            ArtifactLinearFormat::Fp8E4M3WithE8M0Scale {
+            LinearWeightFormat::Fp8E4M3WithE8M0Scale {
                 out_features,
                 in_features,
                 block_m,
@@ -3659,7 +3636,7 @@ impl DeepSeekV4CudaOperatorCache {
                     block_k,
                 )
             }
-            ArtifactLinearFormat::Fp4E2M1PackedWithE8M0Scale {
+            LinearWeightFormat::Fp4E2M1PackedWithE8M0Scale {
                 out_features,
                 in_features,
                 block_size: 32,
@@ -3678,7 +3655,7 @@ impl DeepSeekV4CudaOperatorCache {
                     self.managed_experts,
                 )
             }
-            ArtifactLinearFormat::Fp4E2M1PackedWithE8M0Scale { block_size, .. } => {
+            LinearWeightFormat::Fp4E2M1PackedWithE8M0Scale { block_size, .. } => {
                 Err(Error::Model(format!(
                     "artifact linear {:?} CUDA FP4 block_size {block_size} is unsupported (expected 32)",
                     linear.role
@@ -3710,7 +3687,7 @@ impl DeepSeekV4CudaOperatorCache {
         token_ids: &[u32],
         row_to_sequence: Option<&[usize]>,
         sequence_phases: Option<&[ForwardPhase]>,
-        router: &RouterArtifactPayload,
+        router: &RouterWeights,
         router_policy: &ExpertRouterPolicy,
         shared_expert: &SwiGluFfnPayload,
         router_logits_dev: &mut ferrule_cuda::context::CudaF32Buffer,
@@ -3873,7 +3850,7 @@ impl DeepSeekV4CudaOperatorCache {
     pub(crate) fn resume_routed_moe_prefill_batch_from_device_into(
         &mut self,
         mut continuation: DeepSeekV4CudaPackedMoeContinuation,
-        leases: ExpertLeaseSet,
+        leases: ResidencyLeaseSet,
         input_dev: &ferrule_cuda::context::CudaF32Buffer,
         router_indices: &ferrule_cuda::context::CudaI32Buffer,
         router_weights: &ferrule_cuda::context::CudaF32Buffer,
@@ -4054,7 +4031,7 @@ impl DeepSeekV4CudaOperatorCache {
     fn resume_routed_moe_prefill_inner(
         &mut self,
         continuation: &mut DeepSeekV4CudaPackedMoeContinuation,
-        leases: ExpertLeaseSet,
+        leases: ResidencyLeaseSet,
         input_dev: &ferrule_cuda::context::CudaF32Buffer,
         router_indices: &ferrule_cuda::context::CudaI32Buffer,
         router_weights: &ferrule_cuda::context::CudaF32Buffer,
@@ -4138,7 +4115,7 @@ impl DeepSeekV4CudaOperatorCache {
         continuation: &mut DeepSeekV4CudaPackedMoeContinuation,
         chunk: &CudaPackedMoeChunk,
         table: &ferrule_cuda::context::CudaExpertSlotTable,
-        first_frame: &super::expert_materializer::CudaExpertFrame,
+        first_frame: &super::cuda_materialization::CudaExpertFrame,
         input_dev: &ferrule_cuda::context::CudaF32Buffer,
         router_indices: &ferrule_cuda::context::CudaI32Buffer,
         router_weights: &ferrule_cuda::context::CudaF32Buffer,

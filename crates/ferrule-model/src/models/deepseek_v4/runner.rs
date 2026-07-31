@@ -26,18 +26,17 @@ use crate::execution::{OwnedArenaCheckout, PersistentArenaPool};
 use crate::materialization::ContinuationDependencyState;
 #[cfg(feature = "cuda")]
 use crate::materialization::{
-    ExpertDependencyResolution, ExpertMaterializationPlacement, ExpertMaterializationRequest,
-    expert_dependency_set,
+    MaterializationPlacement, MaterializationRequest, resource_dependency_set,
 };
-use crate::materialization::{ExpertMaterializationAdapter, PhysicalExpertMaterializationBackend};
+use crate::materialization::{MaterializationProvider, MaterializationResolver};
 use crate::moe::prediction::ExpertHotsetPredictor;
 use crate::moe::streaming::ExpertStreamingReader;
 #[cfg(feature = "cuda")]
 use crate::runner::NativeProposal;
 use crate::runner::{
-    BatchContinuationCancelOutcome, BatchContinuationId, ExpertIoModelRunner,
-    ModelCompletionReactor, ModelInfo, ModelRunner, MultiSessionBatchProgress, MultiSessionRunner,
-    NativeProposalProgress, NativeProposalSource, ResidentModelRunner,
+    BatchContinuationCancelOutcome, BatchContinuationId, ModelCompletionReactor, ModelInfo,
+    ModelRunner, MultiSessionBatchProgress, MultiSessionRunner, NativeProposalProgress,
+    NativeProposalSource, ResidentModelRunner,
 };
 #[cfg(feature = "cuda")]
 use crate::runner::{PendingModelProgress, TokenLogit};
@@ -61,9 +60,9 @@ use ferrule_common::expert_residency::{ExpertResidencyControl, ExpertResidencyRe
 use ferrule_common::{
     BackendId, DeviceId, DispatchFenceContract, FenceId, MappingEpoch, OperationId,
 };
-use ferrule_common::{CompletionHub, Error, ExpertLeaseSet, Result};
+use ferrule_common::{CompletionHub, Error, ResidencyLeaseSet, Result};
 
-use super::artifact::DeepSeekV4ArtifactModel;
+use super::checkpoint::DeepSeekV4Checkpoint;
 
 #[cfg(feature = "cuda")]
 use super::cuda_cache::{
@@ -76,7 +75,7 @@ use super::cuda_cache::{
 };
 
 #[cfg(feature = "cuda")]
-use super::expert_materializer::DeepSeekV4SharedExpertSubsystemOwner;
+use super::cuda_materialization::DeepSeekV4CudaMaterializationOwner;
 #[cfg(feature = "cuda")]
 use super::layer::{
     DeepSeekV4DsparkLayerContinuation, DeepSeekV4DsparkLayerProgress, DeepSeekV4LayerArena,
@@ -473,7 +472,7 @@ struct DeepSeekV4PackedCudaContinuation {
     cancel_quiescence: Option<DeepSeekV4CudaComputeQuiescence>,
     dependencies: Option<ContinuationDependencyState>,
     moe_access_events: Vec<DeepSeekV4SequenceMoeAccessEvent>,
-    expert_leases: Vec<ExpertLeaseSet>,
+    expert_leases: Vec<ResidencyLeaseSet>,
     paged_bindings_active: bool,
     provisional_checkpoints: bool,
     failed: bool,
@@ -483,7 +482,7 @@ struct DeepSeekV4PackedCudaContinuation {
 enum DeepSeekV4PackedTransactionExecution {
     Prepared,
     Waiting(DeepSeekV4PackedCudaContinuation),
-    Complete(Vec<ExpertLeaseSet>),
+    Complete(Vec<ResidencyLeaseSet>),
     Cancelled(BatchContinuationId),
     CleanupPending {
         continuation: DeepSeekV4PackedCudaContinuation,
@@ -517,7 +516,7 @@ enum DeepSeekV4PackedCudaCancelProgress {
 #[cfg(feature = "cuda")]
 enum DeepSeekV4PackedCudaProgress {
     Waiting(DeepSeekV4PackedCudaContinuation, PendingModelProgress),
-    Complete(ExecutionOutput, Vec<ExpertLeaseSet>),
+    Complete(ExecutionOutput, Vec<ResidencyLeaseSet>),
 }
 
 #[cfg(feature = "cuda")]
@@ -544,13 +543,13 @@ pub struct DeepSeekV4Runner {
     /// CPU/reference planner and handle stores. CUDA consumes immutable prepared
     /// catalogs while runtime owns logical slots, generations, leases, and policy.
     cpu_expert_runtimes: Option<Box<[DeepSeekV4LayerExpertRuntime]>>,
-    expert_materialization: Option<Box<dyn ExpertMaterializationAdapter>>,
+    materialization_resolver: Option<Box<dyn MaterializationResolver>>,
     #[cfg(feature = "cuda")]
     model_instance: u64,
     #[cfg(feature = "cuda")]
-    expert_subsystem_owner: Option<DeepSeekV4SharedExpertSubsystemOwner>,
+    cuda_materialization_owner: Option<DeepSeekV4CudaMaterializationOwner>,
     #[cfg(feature = "cuda")]
-    expert_materialization_backend_taken: bool,
+    materialization_provider_transferred: bool,
     #[cfg(feature = "cuda")]
     layer_arena_pool:
         PersistentArenaPool<DeepSeekV4LayerArenaPoolKey, DeepSeekV4LayerArenaVariants>,
@@ -569,7 +568,8 @@ pub struct DeepSeekV4Runner {
     observability: DeepSeekV4RunnerObservability,
     completion_hub: CompletionHub,
     expert_completion_reactors: Vec<ModelCompletionReactor>,
-    expert_io_resource_limits: ferrule_common::expert_io::ExpertIoResourceLimits,
+    #[cfg(feature = "cuda")]
+    expert_io_resource_limits: ferrule_common::materialization_io::MaterializationResourceLimits,
     shutdown: bool,
 }
 
@@ -594,7 +594,7 @@ struct DeepSeekV4DsparkProposalContinuation {
     stage: usize,
     current_layer: Option<DeepSeekV4DsparkLayerContinuation>,
     moe_access_events: Vec<DeepSeekV4SequenceMoeAccessEvent>,
-    expert_leases: Vec<ExpertLeaseSet>,
+    expert_leases: Vec<ResidencyLeaseSet>,
     head_download: Option<ferrule_cuda::context::CudaI32HostDownload>,
     cancel_quiescence: Option<DeepSeekV4CudaComputeQuiescence>,
     paged_binding_active: bool,
@@ -725,8 +725,8 @@ fn take_packed_cuda_continuation_id(next: &mut NonZeroU64) -> Result<BatchContin
 }
 
 #[cfg(any(feature = "cuda", test))]
-fn empty_expert_lease_set(continuation: BatchContinuationId) -> Result<ExpertLeaseSet> {
-    ExpertLeaseSet::new(
+fn empty_expert_lease_set(continuation: BatchContinuationId) -> Result<ResidencyLeaseSet> {
+    ResidencyLeaseSet::new(
         [],
         [],
         MappingEpoch::new(continuation.get()),
@@ -797,8 +797,10 @@ fn validate_cuda_backend_shutdown_ownership(
 fn prepared_physical_expert_io_resource_limits(
     resources: &DeepSeekV4PreparedResources,
     reader: &ExpertStreamingReader,
-) -> Result<ferrule_common::expert_io::ExpertIoResourceLimits> {
-    use ferrule_common::expert_io::{ExpertIoResourceDemand, ExpertIoResourceLimits};
+) -> Result<ferrule_common::materialization_io::MaterializationResourceLimits> {
+    use ferrule_common::materialization_io::{
+        MaterializationResourceDemand, MaterializationResourceLimits,
+    };
 
     // The physical backend still carries exact per-plan demand for reservation
     // validation; startup capacity sizing intentionally uses conservative bounds.
@@ -834,14 +836,14 @@ fn prepared_physical_expert_io_resource_limits(
     let transfer_bytes = maximum_expert_bytes
         .checked_mul(upload_slots)
         .ok_or_else(|| Error::Model("expert transfer byte capacity overflow".into()))?;
-    let capacity = ExpertIoResourceDemand {
+    let capacity = MaterializationResourceDemand {
         upload_slots,
         h2d_bytes: transfer_bytes,
         install_slots: upload_slots,
         device_install_bytes: transfer_bytes,
         ..reader_capacity
     };
-    let demand_reserve = ExpertIoResourceDemand {
+    let demand_reserve = MaterializationResourceDemand {
         read_slots: 1,
         storage_read_bytes: reader_capacity.storage_read_bytes,
         pinned_host_bytes: reader_capacity.pinned_host_bytes,
@@ -850,7 +852,7 @@ fn prepared_physical_expert_io_resource_limits(
         install_slots: 1,
         device_install_bytes: maximum_expert_bytes,
     };
-    ExpertIoResourceLimits {
+    MaterializationResourceLimits {
         capacity,
         demand_reserve,
     }
@@ -1018,50 +1020,8 @@ pub(super) fn commit_packed_sequence_steps(
 }
 
 impl DeepSeekV4Runner {
-    pub(super) fn physical_expert_io_resource_limits(
-        &self,
-    ) -> Result<ferrule_common::expert_io::ExpertIoResourceLimits> {
-        Ok(self.expert_io_resource_limits)
-    }
-
-    pub(super) fn install_physical_expert_io_resource_control(
-        &mut self,
-        control: Box<dyn ferrule_common::expert_io::ExpertIoResourceControl>,
-    ) -> Result<()> {
-        #[cfg(feature = "cuda")]
-        {
-            return self
-                .operators
-                .cuda_mut()?
-                .install_expert_io_resource_control(control);
-        }
-        #[cfg(not(feature = "cuda"))]
-        {
-            let _ = control;
-            Err(Error::Model(
-                "DeepSeek-V4 expert-I/O resource control requires CUDA".into(),
-            ))
-        }
-    }
-
-    pub(super) fn uninstall_physical_expert_io_resource_control(&mut self) -> Result<()> {
-        #[cfg(feature = "cuda")]
-        {
-            return self
-                .operators
-                .cuda_mut()?
-                .uninstall_expert_io_resource_control();
-        }
-        #[cfg(not(feature = "cuda"))]
-        {
-            Err(Error::Model(
-                "DeepSeek-V4 expert-I/O resource control requires CUDA".into(),
-            ))
-        }
-    }
-
     pub fn new_with_operator_backend(
-        model: DeepSeekV4ArtifactModel,
+        model: DeepSeekV4Checkpoint,
         options: DeepSeekV4PrepareOptions,
         operator_backend: ModelExecutionBackend,
     ) -> Result<Self> {
@@ -1144,9 +1104,9 @@ impl DeepSeekV4Runner {
         #[cfg(all(feature = "cuda", target_os = "linux"))]
         let expert_io_resource_limits =
             prepared_physical_expert_io_resource_limits(plan.resources(), &expert_reader)?;
-        #[cfg(not(all(feature = "cuda", target_os = "linux")))]
+        #[cfg(all(feature = "cuda", not(target_os = "linux")))]
         let expert_io_resource_limits =
-            ferrule_common::expert_io::ExpertIoResourceLimits::default();
+            ferrule_common::materialization_io::MaterializationResourceLimits::default();
         #[cfg(feature = "cuda")]
         let expert_completion_reactors = expert_reader.take_completion_reactors();
         #[cfg(not(feature = "cuda"))]
@@ -1162,13 +1122,13 @@ impl DeepSeekV4Runner {
             plan,
             operators,
             cpu_expert_runtimes,
-            expert_materialization: None,
+            materialization_resolver: None,
             #[cfg(feature = "cuda")]
             model_instance,
             #[cfg(feature = "cuda")]
-            expert_subsystem_owner: None,
+            cuda_materialization_owner: None,
             #[cfg(feature = "cuda")]
-            expert_materialization_backend_taken: false,
+            materialization_provider_transferred: false,
             #[cfg(feature = "cuda")]
             layer_arena_pool: PersistentArenaPool::new(),
             #[cfg(feature = "cuda")]
@@ -1184,6 +1144,7 @@ impl DeepSeekV4Runner {
             observability: DeepSeekV4RunnerObservability::new(),
             completion_hub,
             expert_completion_reactors,
+            #[cfg(feature = "cuda")]
             expert_io_resource_limits,
             shutdown: false,
         };
@@ -1199,12 +1160,7 @@ impl DeepSeekV4Runner {
                 .enumerate()
                 .map(|(layer, experts)| (layer, experts.resident_capacity()))
                 .collect::<Vec<_>>();
-            let mut catalogs = resources
-                .layer_experts()
-                .iter()
-                .enumerate()
-                .map(|(layer, experts)| (layer, std::sync::Arc::clone(experts.source_catalog())))
-                .collect::<Vec<_>>();
+
             if let Some(mtp) = resources.mtp() {
                 if mtp.layers.len() != resources.mtp_layer_experts().len() {
                     return Err(Error::Model(format!(
@@ -1221,25 +1177,17 @@ impl DeepSeekV4Runner {
                             (stage.execution_layer, experts.resident_capacity())
                         }),
                 );
-                catalogs.extend(mtp.layers.iter().zip(resources.mtp_layer_experts()).map(
-                    |(stage, experts)| {
-                        (
-                            stage.execution_layer,
-                            std::sync::Arc::clone(experts.source_catalog()),
-                        )
-                    },
-                ));
             }
-            let limits = runner.physical_expert_io_resource_limits()?;
-            let placement = ExpertMaterializationPlacement::new(
+            let limits = runner.expert_io_resource_limits;
+            let placement = MaterializationPlacement::new(
                 ModelInstanceId::new(model_instance),
                 BackendId::new(1),
                 DeviceId::new(0),
             )?;
-            let owner = DeepSeekV4SharedExpertSubsystemOwner::create(
+            let owner = DeepSeekV4CudaMaterializationOwner::create(
                 placement,
                 limits,
-                catalogs,
+                std::sync::Arc::clone(resources.materialization_sources()),
                 expert_reader,
                 resources.model().config.num_routed_experts,
                 &layer_slot_capacities,
@@ -1247,10 +1195,13 @@ impl DeepSeekV4Runner {
             runner
                 .operators
                 .configure_expert_subsystem(owner.handle())?;
+            // Static bundle descriptors share the provider catalog now, but their
+            // generic pinned transport/install path is not connected yet. Keep image
+            // compilation eager until that single materialization path is complete.
             runner
                 .operators
                 .compile_cuda_execution_image(runner.plan.generation(), runner.plan.resources())?;
-            runner.expert_subsystem_owner = Some(owner);
+            runner.cuda_materialization_owner = Some(owner);
         }
 
         Ok(runner)
@@ -1262,7 +1213,7 @@ impl DeepSeekV4Runner {
         options: DeepSeekV4PrepareOptions,
     ) -> Result<Self> {
         Self::new_with_operator_backend(
-            DeepSeekV4ArtifactModel::load_hf_with_limit(model_dir, max_tensor_bytes)?,
+            DeepSeekV4Checkpoint::load_hf_with_limit(model_dir, max_tensor_bytes)?,
             options,
             ModelExecutionBackend::Cuda,
         )
@@ -1275,13 +1226,13 @@ impl DeepSeekV4Runner {
         operator_backend: ModelExecutionBackend,
     ) -> Result<Self> {
         Self::new_with_operator_backend(
-            DeepSeekV4ArtifactModel::load_hf_with_limit(model_dir, max_tensor_bytes)?,
+            DeepSeekV4Checkpoint::load_hf_with_limit(model_dir, max_tensor_bytes)?,
             options,
             operator_backend,
         )
     }
 
-    pub fn model(&self) -> &DeepSeekV4ArtifactModel {
+    pub fn model(&self) -> &DeepSeekV4Checkpoint {
         self.plan.resources().model()
     }
 
@@ -1338,9 +1289,9 @@ impl DeepSeekV4Runner {
             ));
         }
         if !self
-            .expert_subsystem_owner
+            .cuda_materialization_owner
             .as_ref()
-            .is_some_and(DeepSeekV4SharedExpertSubsystemOwner::residency_control_installed)
+            .is_some_and(DeepSeekV4CudaMaterializationOwner::residency_control_installed)
         {
             return Err(Error::Execution(
                 "runtime expert residency controller is not installed".into(),
@@ -1467,33 +1418,35 @@ impl DeepSeekV4Runner {
                             operation.expert
                         ))
                     })?;
-                    let artifact = prepared.source_catalog().require_identity(
+                    let resource_source = prepared.source_catalog().require_resource_source(
                         crate::moe::streaming::ExpertId::new(operation.layer, operation.expert),
                     )?;
-                    Ok((artifact, layer, expert))
+                    Ok((resource_source, layer, expert))
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let adapter = self.expert_materialization.as_deref_mut().ok_or_else(|| {
-                Error::Execution(
-                    "DeepSeek-V4 exact expert wait requires an installed materialization adapter"
+            let resolver = self
+                .materialization_resolver
+                .as_deref_mut()
+                .ok_or_else(|| {
+                    Error::Execution(
+                    "DeepSeek-V4 exact resource wait requires an installed materialization resolver"
                         .into(),
                 )
-            })?;
-            let placement = adapter.placement();
+                })?;
+            let placement = resolver.placement();
             let mut keys = Vec::with_capacity(requests.len());
-            for (artifact, layer, expert) in requests {
-                let request = ExpertMaterializationRequest::for_placement(
+            for (resource_source, layer, expert) in requests {
+                let request = MaterializationRequest::for_placement(
                     placement,
-                    artifact,
-                    ferrule_common::LayerId::new(layer),
-                    ferrule_common::ExpertId::new(expert),
+                    resource_source,
+                    ferrule_common::MaterializedResourceId::routed_expert(
+                        ferrule_common::LayerId::new(layer),
+                        ferrule_common::ExpertId::new(expert),
+                    ),
                 )?;
-                match adapter.resolve(request)? {
-                    ExpertDependencyResolution::Waiting(key) => keys.push(key),
-                    ExpertDependencyResolution::Resident(binding) => keys.push(binding.key()),
-                }
+                keys.push(resolver.resolve(request)?);
             }
-            expert_dependency_set(keys)?
+            resource_dependency_set(keys)?
         };
         record_continuation_dependencies(
             &mut continuation.dependencies,
@@ -1547,7 +1500,7 @@ impl DeepSeekV4Runner {
     fn progress_dspark_proposal(
         &mut self,
         continuation: &mut DeepSeekV4DsparkProposalContinuation,
-        resume_leases: Option<ExpertLeaseSet>,
+        resume_leases: Option<ResidencyLeaseSet>,
     ) -> Result<DeepSeekV4DsparkProposalStep> {
         if let Some(failed) = continuation.failed.as_deref() {
             return Err(Error::Execution(format!(
@@ -1795,11 +1748,7 @@ impl DeepSeekV4Runner {
         if let Err(deactivate_error) = self.deactivate_dspark_proposal_binding(continuation) {
             cleanup_errors.push(format!("paged binding deactivation: {deactivate_error}"));
         }
-        if let Err(detach_error) =
-            self.detach_continuation_dependencies(&mut continuation.dependencies)
-        {
-            cleanup_errors.push(format!("selected expert detach: {detach_error}"));
-        }
+        self.discard_continuation_dependencies(&mut continuation.dependencies);
         if let Some(arena) = continuation.arena.take() {
             self.dspark_proposal_arena_pool.push(arena);
         }
@@ -1880,7 +1829,7 @@ impl DeepSeekV4Runner {
     pub fn operator_runtime_counters(&self) -> DeepSeekV4OperatorRuntimeCounters {
         let mut counters = self.operators.runtime_counters();
         #[cfg(feature = "cuda")]
-        if let Some(owner) = self.expert_subsystem_owner.as_ref() {
+        if let Some(owner) = self.cuda_materialization_owner.as_ref() {
             counters.expert_residency_stats = owner.residency_stats();
         }
         counters.expert_predictor_stats = self.sequence.predictor.stats();
@@ -2086,9 +2035,9 @@ impl DeepSeekV4Runner {
         #[cfg(feature = "cuda")]
         validate_cuda_backend_shutdown_ownership(
             self.operators.backend(),
-            self.expert_subsystem_owner.is_some(),
-            self.expert_materialization_backend_taken,
-            self.expert_materialization.is_some(),
+            self.cuda_materialization_owner.is_some(),
+            self.materialization_provider_transferred,
+            self.materialization_resolver.is_some(),
         )?;
 
         self.sequence.release_capacity();
@@ -2103,16 +2052,16 @@ impl DeepSeekV4Runner {
             }
         }
         self.operators.shutdown()?;
-        self.expert_materialization = None;
+        self.materialization_resolver = None;
         #[cfg(feature = "cuda")]
         if self.operators.backend() == ModelExecutionBackend::Cuda {
-            let mut owner = self.expert_subsystem_owner.take().ok_or_else(|| {
+            let mut owner = self.cuda_materialization_owner.take().ok_or_else(|| {
                 Error::Internal(
                     "DeepSeek-V4 CUDA runner lost its shared expert subsystem owner during shutdown"
                         .into(),
                 )
             })?;
-            drop(owner.take_materializer());
+            drop(owner.take_provider());
         }
         self.shutdown = true;
         Ok(())
@@ -2316,23 +2265,12 @@ impl DeepSeekV4Runner {
     }
 
     #[cfg(feature = "cuda")]
-    fn detach_continuation_dependencies(
+    fn discard_continuation_dependencies(
         &mut self,
         state: &mut Option<ContinuationDependencyState>,
-    ) -> Result<()> {
-        let Some(state) = state.as_mut() else {
-            return Ok(());
-        };
-        if state.has_expert_dependencies() {
-            let adapter = self.expert_materialization.as_deref_mut().ok_or_else(|| {
-                Error::Execution(
-                    "cannot detach DeepSeek-V4 expert dependencies without the installed materialization adapter"
-                        .into(),
-                )
-            })?;
-            state.detach_logical_dependencies(adapter)
-        } else {
-            state.clear_non_expert_dependencies()
+    ) {
+        if let Some(state) = state.as_mut() {
+            state.discard_unresolved();
         }
     }
 
@@ -2456,9 +2394,7 @@ impl DeepSeekV4Runner {
         states: &mut [DeepSeekV4SequenceExecutionState],
         mut continuation: DeepSeekV4PackedCudaContinuation,
     ) -> DeepSeekV4PackedCudaCancelProgress {
-        if let Err(error) = self.detach_continuation_dependencies(&mut continuation.dependencies) {
-            return DeepSeekV4PackedCudaCancelProgress::StillActive(continuation, error);
-        }
+        self.discard_continuation_dependencies(&mut continuation.dependencies);
         match self.poll_packed_cuda_cancel_ready(&mut continuation) {
             Ok(true) => {
                 let (continuation, cleanup) =
@@ -2513,9 +2449,9 @@ impl DeepSeekV4Runner {
             }
         }
         if !self
-            .expert_subsystem_owner
+            .cuda_materialization_owner
             .as_ref()
-            .is_some_and(DeepSeekV4SharedExpertSubsystemOwner::residency_control_installed)
+            .is_some_and(DeepSeekV4CudaMaterializationOwner::residency_control_installed)
         {
             return Err(Error::Execution(
                 "runtime expert residency controller is not installed".into(),
@@ -2790,36 +2726,35 @@ impl DeepSeekV4Runner {
                                     operation.layer
                                 ))
                             })?;
-                        let artifact = prepared.source_catalog().require_identity(
+                        let resource_source = prepared.source_catalog().require_resource_source(
                             crate::moe::streaming::ExpertId::new(
                                 operation.layer,
                                 operation.expert,
                             ),
                         )?;
-                        Ok((artifact, layer, expert))
+                        Ok((resource_source, layer, expert))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let adapter = self.expert_materialization.as_deref_mut().ok_or_else(|| {
+                let resolver = self.materialization_resolver.as_deref_mut().ok_or_else(|| {
                     Error::Execution(
-                        "DeepSeek-V4 exact expert wait requires an installed materialization adapter"
+                        "DeepSeek-V4 exact resource wait requires an installed materialization resolver"
                             .into(),
                     )
                 })?;
-                let placement = adapter.placement();
+                let placement = resolver.placement();
                 let mut keys = Vec::with_capacity(requests.len());
-                for (artifact, layer, expert) in requests {
-                    let request = ExpertMaterializationRequest::for_placement(
+                for (resource_source, layer, expert) in requests {
+                    let request = MaterializationRequest::for_placement(
                         placement,
-                        artifact,
-                        ferrule_common::LayerId::new(layer),
-                        ferrule_common::ExpertId::new(expert),
+                        resource_source,
+                        ferrule_common::MaterializedResourceId::routed_expert(
+                            ferrule_common::LayerId::new(layer),
+                            ferrule_common::ExpertId::new(expert),
+                        ),
                     )?;
-                    match adapter.resolve(request)? {
-                        ExpertDependencyResolution::Waiting(key) => keys.push(key),
-                        ExpertDependencyResolution::Resident(binding) => keys.push(binding.key()),
-                    }
+                    keys.push(resolver.resolve(request)?);
                 }
-                expert_dependency_set(keys)?
+                resource_dependency_set(keys)?
             }
         };
         record_continuation_dependencies(
@@ -2835,7 +2770,7 @@ impl DeepSeekV4Runner {
         &mut self,
         states: &mut [DeepSeekV4SequenceExecutionState],
         mut continuation: DeepSeekV4PackedCudaContinuation,
-        resume_leases: Option<ExpertLeaseSet>,
+        resume_leases: Option<ResidencyLeaseSet>,
     ) -> std::result::Result<DeepSeekV4PackedCudaProgress, (Error, DeepSeekV4PackedCudaContinuation)>
     {
         if continuation.provisional_checkpoints {
@@ -2919,7 +2854,7 @@ impl DeepSeekV4Runner {
         &mut self,
         states: &mut [DeepSeekV4SequenceExecutionState],
         continuation: &mut DeepSeekV4PackedCudaContinuation,
-        resume_leases: Option<ExpertLeaseSet>,
+        resume_leases: Option<ResidencyLeaseSet>,
     ) -> Result<DeepSeekV4PackedCudaStep> {
         if continuation.failed {
             return Err(Error::Execution(format!(
@@ -3364,25 +3299,6 @@ fn duration_us(duration: Duration) -> u64 {
     duration.as_micros().min(u128::from(u64::MAX)) as u64
 }
 
-impl ExpertIoModelRunner for DeepSeekV4Runner {
-    fn expert_io_resource_limits(
-        &self,
-    ) -> Result<ferrule_common::expert_io::ExpertIoResourceLimits> {
-        self.physical_expert_io_resource_limits()
-    }
-
-    fn install_expert_io_resource_control(
-        &mut self,
-        control: Box<dyn ferrule_common::expert_io::ExpertIoResourceControl>,
-    ) -> Result<()> {
-        self.install_physical_expert_io_resource_control(control)
-    }
-
-    fn uninstall_expert_io_resource_control(&mut self) -> Result<()> {
-        self.uninstall_physical_expert_io_resource_control()
-    }
-}
-
 impl ModelRunner for DeepSeekV4Runner {
     fn model_info(&self) -> ModelInfo {
         let mut info = self.plan.resources().model().model_info();
@@ -3508,7 +3424,7 @@ impl ResidentModelRunner for DeepSeekV4Runner {
         &mut self,
         transaction: ExecutionTransactionId,
         continuation_id: BatchContinuationId,
-        leases: ExpertLeaseSet,
+        leases: ResidencyLeaseSet,
     ) -> Result<NativeProposalProgress> {
         #[cfg(feature = "cuda")]
         {
@@ -3637,13 +3553,7 @@ impl ResidentModelRunner for DeepSeekV4Runner {
                 .dspark_proposal_continuations
                 .remove(&continuation_id)
                 .expect("validated native proposal continuation owner");
-            if let Err(error) =
-                self.detach_continuation_dependencies(&mut continuation.dependencies)
-            {
-                self.dspark_proposal_continuations
-                    .insert(continuation_id, continuation);
-                return BatchContinuationCancelOutcome::StillActive(error);
-            }
+            self.discard_continuation_dependencies(&mut continuation.dependencies);
 
             match self.poll_dspark_route_cancel_ready(&mut continuation) {
                 Ok(true) => {}
@@ -3829,9 +3739,9 @@ impl MultiSessionRunner for DeepSeekV4Runner {
         #[cfg(feature = "cuda")]
         {
             return self
-                .expert_subsystem_owner
+                .cuda_materialization_owner
                 .as_ref()
-                .is_some_and(DeepSeekV4SharedExpertSubsystemOwner::residency_control_installed);
+                .is_some_and(DeepSeekV4CudaMaterializationOwner::residency_control_installed);
         }
         #[cfg(not(feature = "cuda"))]
         false
@@ -3862,9 +3772,9 @@ impl MultiSessionRunner for DeepSeekV4Runner {
                 )));
             }
             return install_residency_control_on_owner(
-                self.expert_subsystem_owner.as_ref(),
+                self.cuda_materialization_owner.as_ref(),
                 control,
-                DeepSeekV4SharedExpertSubsystemOwner::install_residency_control,
+                DeepSeekV4CudaMaterializationOwner::install_residency_control,
             );
         }
         #[cfg(not(feature = "cuda"))]
@@ -3876,19 +3786,17 @@ impl MultiSessionRunner for DeepSeekV4Runner {
         }
     }
 
-    fn take_expert_materialization_backend(
-        &mut self,
-    ) -> Option<Box<dyn PhysicalExpertMaterializationBackend>> {
+    fn take_materialization_provider(&mut self) -> Option<Box<dyn MaterializationProvider>> {
         #[cfg(feature = "cuda")]
         {
             let execution_backend = self.operators.backend();
             let physical = take_cuda_backend_once(
                 execution_backend,
-                self.expert_subsystem_owner.as_mut(),
-                DeepSeekV4SharedExpertSubsystemOwner::take_materializer,
+                self.cuda_materialization_owner.as_mut(),
+                DeepSeekV4CudaMaterializationOwner::take_provider,
             );
             if physical.is_some() {
-                self.expert_materialization_backend_taken = true;
+                self.materialization_provider_transferred = true;
             }
             return physical;
         }
@@ -3896,37 +3804,35 @@ impl MultiSessionRunner for DeepSeekV4Runner {
         None
     }
 
-    fn expert_materialization_adapter_installed(&self) -> bool {
-        self.expert_materialization.is_some()
+    fn materialization_resolver_installed(&self) -> bool {
+        self.materialization_resolver.is_some()
     }
 
-    fn install_expert_materialization_adapter(
+    fn install_materialization_resolver(
         &mut self,
-        adapter: Box<dyn ExpertMaterializationAdapter>,
+        resolver: Box<dyn MaterializationResolver>,
     ) -> Result<()> {
         #[cfg(feature = "cuda")]
         if !self.packed_transactions.is_empty() {
             return Err(Error::Execution(
-                "cannot replace the DeepSeek-V4 materialization adapter while packed transactions are outstanding"
+                "cannot replace the DeepSeek-V4 materialization resolver while packed transactions are outstanding"
                     .into(),
             ));
         }
-        if self.expert_materialization.is_some() {
+        if self.materialization_resolver.is_some() {
             return Err(Error::Execution(
-                "DeepSeek-V4 expert materialization adapter is already installed".into(),
+                "DeepSeek-V4 materialization resolver is already installed".into(),
             ));
         }
-        self.expert_materialization = Some(adapter);
+        self.materialization_resolver = Some(resolver);
         Ok(())
     }
 
-    fn expert_materialization_adapter(
-        &mut self,
-    ) -> Result<&mut (dyn ExpertMaterializationAdapter + '_)> {
-        match self.expert_materialization.as_mut() {
-            Some(adapter) => Ok(adapter.as_mut()),
+    fn materialization_resolver(&mut self) -> Result<&mut (dyn MaterializationResolver + '_)> {
+        match self.materialization_resolver.as_mut() {
+            Some(resolver) => Ok(resolver.as_mut()),
             None => Err(Error::Execution(
-                "DeepSeek-V4 expert materialization adapter is not installed".into(),
+                "DeepSeek-V4 materialization resolver is not installed".into(),
             )),
         }
     }
@@ -4643,7 +4549,7 @@ impl MultiSessionRunner for DeepSeekV4Runner {
         states: &mut [Self::SequenceState],
         batch: &ExecutionBatch,
         continuation_id: BatchContinuationId,
-        leases: ExpertLeaseSet,
+        leases: ResidencyLeaseSet,
     ) -> Result<MultiSessionBatchProgress> {
         #[cfg(feature = "cuda")]
         {
@@ -4954,9 +4860,9 @@ mod packed_continuation_tests {
         ExecutionSequence, ForwardMode, ForwardPhase, LogitsRequest, StateSlot,
     };
     use ferrule_common::{
-        ArtifactFormat, ContentHash, DestinationGeneration, DestinationSlotId,
-        ExpertId as ProtocolExpertId, LayerId, LoadKey, ModelInstanceId, ResidencyBinding,
-        SourceGeneration, SourceIdentityHash, ValidatedResidencyBinding,
+        ContentHash, DestinationGeneration, DestinationSlotId, ExpertId as ProtocolExpertId,
+        LayerId, MaterializationKey, MaterializedResourceId, ModelInstanceId, PayloadEncodingId,
+        ResidencyBinding, SourceGeneration, SourceIdentityHash, ValidatedResidencyBinding,
     };
 
     use super::*;
@@ -4980,14 +4886,13 @@ mod packed_continuation_tests {
         )
     }
 
-    fn shared_published_expert_lease(continuation: BatchContinuationId) -> ExpertLeaseSet {
-        let key = LoadKey::new(
+    fn shared_published_expert_lease(continuation: BatchContinuationId) -> ResidencyLeaseSet {
+        let key = MaterializationKey::new(
             ModelInstanceId::new(17),
             SourceIdentityHash::new([1; 32]),
             ContentHash::new([2; 32]),
-            LayerId::new(3),
-            ProtocolExpertId::new(5),
-            ArtifactFormat::new(1),
+            MaterializedResourceId::routed_expert(LayerId::new(3), ProtocolExpertId::new(5)),
+            PayloadEncodingId::new(1),
             BackendId::new(4),
             DeviceId::new(0),
             SourceGeneration::new(2),
@@ -4998,8 +4903,7 @@ mod packed_continuation_tests {
             key,
             ResidencyBinding::new(
                 key.model(),
-                key.layer(),
-                key.expert(),
+                key.resource(),
                 key.backend(),
                 key.device(),
                 DestinationSlotId::new(9),
@@ -5007,7 +4911,7 @@ mod packed_continuation_tests {
             ),
         )
         .unwrap();
-        ExpertLeaseSet::new(
+        ResidencyLeaseSet::new(
             [key],
             [binding],
             MappingEpoch::new(continuation.get()),
@@ -5207,7 +5111,7 @@ mod packed_continuation_tests {
     }
 
     struct TransactionLeasePayload {
-        leases: Vec<ExpertLeaseSet>,
+        leases: Vec<ResidencyLeaseSet>,
         drops: Arc<AtomicUsize>,
     }
 

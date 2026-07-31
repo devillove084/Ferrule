@@ -14,13 +14,19 @@ use std::sync::{Arc, mpsc};
 use std::sync::Mutex;
 
 use crate::HfRoutedExpertTensorInfo;
-use crate::artifact::hash::{ArtifactFileIdentity, Sha256};
-use crate::materialization::ExpertArtifactIdentity;
+use crate::checkpoint::{
+    CheckpointPositionedReader, CheckpointReadExtent, CheckpointReadPlan,
+    CheckpointSourceFileIdentity, CheckpointSourceTensor, checkpoint_resource_source,
+};
+use crate::materialization::{
+    HF_SAFETENSORS_ROUTED_EXPERT_V1, MaterializationSourceCatalog, MaterializationSourceEntry,
+    ResourceSource,
+};
 use crate::runner::ModelCompletionReactor;
 use crate::semantic::{RoutedExpertMatrix, RoutedExpertTensorPart, RoutedExpertTensorRef};
 use ferrule_common::{
-    ArtifactFormat as ProtocolArtifactFormat, CompletionHub, ContentHash, Error, MemoryPoolLimits,
-    MemoryPoolStats, OwnerMemoryLru, Result, SourceGeneration, SourceIdentityHash, StaleReason,
+    CompletionHub, Error, ExpertId as ProtocolExpertId, LayerId, MaterializedResourceId,
+    MemoryPoolLimits, MemoryPoolStats, OwnerMemoryLru, Result, StaleReason,
 };
 use rayon::prelude::*;
 
@@ -82,58 +88,6 @@ impl ExpertTensorSlice {
     }
 }
 
-/// Canonical shard path and filesystem identity captured during catalog discovery.
-///
-/// The snapshot deliberately contains metadata only. It is carried with HF catalog
-/// load sources so a backend can reject a stale source before reading payload bytes.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ExpertSourceFileIdentity {
-    catalog_path: PathBuf,
-    canonical_path: PathBuf,
-    file_identity: ArtifactFileIdentity,
-}
-
-impl ExpertSourceFileIdentity {
-    fn capture(catalog_path: &Path) -> Result<Self> {
-        let canonical_path = std::fs::canonicalize(catalog_path).map_err(|error| {
-            Error::Model(format!(
-                "canonicalize expert artifact '{}': {error}",
-                catalog_path.display()
-            ))
-        })?;
-        let metadata = std::fs::metadata(&canonical_path).map_err(|error| {
-            Error::Model(format!(
-                "read expert artifact metadata '{}': {error}",
-                canonical_path.display()
-            ))
-        })?;
-        let file_identity = ArtifactFileIdentity::from_metadata(&metadata).map_err(|error| {
-            Error::Model(format!(
-                "capture expert artifact identity '{}': {error}",
-                canonical_path.display()
-            ))
-        })?;
-        Ok(Self {
-            catalog_path: catalog_path.to_path_buf(),
-            canonical_path,
-            file_identity,
-        })
-    }
-
-    fn is_current(&self) -> bool {
-        Self::capture(&self.catalog_path).is_ok_and(|current| current == *self)
-    }
-
-    #[cfg(test)]
-    fn for_test(catalog_path: PathBuf, canonical_path: PathBuf, length: u64) -> Self {
-        Self {
-            catalog_path,
-            canonical_path,
-            file_identity: ArtifactFileIdentity::for_test(length, 1, 2, Some(3), Some(4)),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ExpertStorageTier {
     Gpu,
@@ -168,7 +122,7 @@ pub enum ExpertLoadSource {
     /// HF tensor set with catalog-time source metadata snapshots.
     HfLocalTensorSet {
         tensors: Vec<ExpertTensorSlice>,
-        source_files: Arc<[ExpertSourceFileIdentity]>,
+        source_files: Arc<[CheckpointSourceFileIdentity]>,
     },
     WeightPackChunk {
         path: PathBuf,
@@ -215,7 +169,7 @@ impl ExpertLoadSource {
         if self
             .source_files()
             .iter()
-            .all(ExpertSourceFileIdentity::is_current)
+            .all(CheckpointSourceFileIdentity::is_current)
         {
             Ok(())
         } else {
@@ -223,18 +177,10 @@ impl ExpertLoadSource {
         }
     }
 
-    fn source_files(&self) -> &[ExpertSourceFileIdentity] {
+    fn source_files(&self) -> &[CheckpointSourceFileIdentity] {
         match self {
             Self::HfLocalTensorSet { source_files, .. } => source_files,
             _ => &[],
-        }
-    }
-
-    #[cfg(all(target_os = "linux", feature = "cuda"))]
-    fn shared_source_files(&self) -> Arc<[ExpertSourceFileIdentity]> {
-        match self {
-            Self::HfLocalTensorSet { source_files, .. } => Arc::clone(source_files),
-            _ => Arc::from([]),
         }
     }
 }
@@ -254,7 +200,7 @@ pub struct ExpertSourceDenseLayout {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ExpertSourceCatalogEntry<S> {
     source: S,
-    identity: Option<ExpertArtifactIdentity>,
+    resource_source: Option<ResourceSource>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,23 +218,29 @@ impl<S> ExpertSourceCatalog<S> {
         )
     }
 
-    pub fn from_identified_sources(
-        sources: impl IntoIterator<Item = (ExpertId, S, ExpertArtifactIdentity)>,
+    pub fn from_resource_sources(
+        sources: impl IntoIterator<Item = (ExpertId, S, ResourceSource)>,
     ) -> Self {
         Self::from_entries(
             sources
                 .into_iter()
-                .map(|(expert, source, identity)| (expert, source, Some(identity))),
+                .map(|(expert, source, resource_source)| (expert, source, Some(resource_source))),
         )
     }
 
     fn from_entries(
-        sources: impl IntoIterator<Item = (ExpertId, S, Option<ExpertArtifactIdentity>)>,
+        sources: impl IntoIterator<Item = (ExpertId, S, Option<ResourceSource>)>,
     ) -> Self {
         let sources = sources
             .into_iter()
-            .map(|(expert, source, identity)| {
-                (expert, ExpertSourceCatalogEntry { source, identity })
+            .map(|(expert, source, resource_source)| {
+                (
+                    expert,
+                    ExpertSourceCatalogEntry {
+                        source,
+                        resource_source,
+                    },
+                )
             })
             .collect::<BTreeMap<_, _>>()
             .into_iter()
@@ -304,14 +256,14 @@ impl<S> ExpertSourceCatalog<S> {
         self.entry(expert).map(|entry| &entry.source)
     }
 
-    pub fn identity(&self, expert: ExpertId) -> Option<ExpertArtifactIdentity> {
-        self.entry(expert).and_then(|entry| entry.identity)
+    pub fn resource_source(&self, expert: ExpertId) -> Option<ResourceSource> {
+        self.entry(expert).and_then(|entry| entry.resource_source)
     }
 
-    pub fn require_identity(&self, expert: ExpertId) -> Result<ExpertArtifactIdentity> {
-        self.identity(expert).ok_or_else(|| {
+    pub fn require_resource_source(&self, expert: ExpertId) -> Result<ResourceSource> {
+        self.resource_source(expert).ok_or_else(|| {
             Error::Model(format!(
-                "expert source catalog has no immutable artifact identity for layer {} expert {}",
+                "expert source catalog has no materialization source for layer {} expert {}",
                 expert.layer, expert.expert
             ))
         })
@@ -343,10 +295,10 @@ impl<S> ExpertSourceCatalog<S> {
 
     fn iter_entries(
         &self,
-    ) -> impl ExactSizeIterator<Item = (&ExpertId, &S, Option<ExpertArtifactIdentity>)> {
+    ) -> impl ExactSizeIterator<Item = (&ExpertId, &S, Option<ResourceSource>)> {
         self.sources
             .iter()
-            .map(|(expert, entry)| (expert, &entry.source, entry.identity))
+            .map(|(expert, entry)| (expert, &entry.source, entry.resource_source))
     }
 
     pub fn count(&self) -> usize {
@@ -362,6 +314,48 @@ impl<S> ExpertSourceCatalog<S> {
     }
 }
 
+impl ExpertSourceCatalog<ExpertLoadSource> {
+    /// Convert expert-specific discovery output into the provider-neutral exact
+    /// source catalog consumed by physical materialization backends.
+    pub fn materialization_sources(
+        &self,
+    ) -> Result<MaterializationSourceCatalog<ExpertLoadSource>> {
+        let entries = self
+            .iter_entries()
+            .map(|(expert, source, resource_source)| {
+                let layer = u32::try_from(expert.layer).map_err(|_| {
+                    Error::Model(format!(
+                        "expert source layer {} exceeds materialization coordinates",
+                        expert.layer
+                    ))
+                })?;
+                let expert_index = u32::try_from(expert.expert).map_err(|_| {
+                    Error::Model(format!(
+                        "expert source index {} exceeds materialization coordinates",
+                        expert.expert
+                    ))
+                })?;
+                let resource_source = resource_source.ok_or_else(|| {
+                    Error::Model(format!(
+                        "expert source catalog has no materialization identity for layer {} expert {}",
+                        expert.layer, expert.expert
+                    ))
+                })?;
+                MaterializationSourceEntry::new(
+                    MaterializedResourceId::routed_expert(
+                        LayerId::new(layer),
+                        ProtocolExpertId::new(expert_index),
+                    ),
+                    resource_source,
+                    checkpoint_read_plan_for_expert_source(*expert, source)?,
+                    source.clone(),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        MaterializationSourceCatalog::new(entries)
+    }
+}
+
 impl<S> Default for ExpertSourceCatalog<S> {
     fn default() -> Self {
         Self {
@@ -369,6 +363,43 @@ impl<S> Default for ExpertSourceCatalog<S> {
             dense_layout: None,
         }
     }
+}
+
+fn checkpoint_read_plan_for_expert_source(
+    expert: ExpertId,
+    source: &ExpertLoadSource,
+) -> Result<CheckpointReadPlan> {
+    let (extents, source_files) = match source {
+        ExpertLoadSource::HfLocalTensorSet {
+            tensors,
+            source_files,
+        } => (
+            tensors
+                .iter()
+                .map(|tensor| {
+                    CheckpointReadExtent::new(tensor.path.clone(), tensor.offset, tensor.bytes)
+                })
+                .collect::<Result<Vec<_>>>()?,
+            Arc::clone(source_files),
+        ),
+        ExpertLoadSource::LocalTensorSet { .. }
+        | ExpertLoadSource::LocalShard { .. }
+        | ExpertLoadSource::WeightPackChunk { .. } => {
+            return Err(Error::Model(format!(
+                "expert source {}:{} has no catalog-time checkpoint snapshots",
+                expert.layer, expert.expert
+            )));
+        }
+        ExpertLoadSource::GpuResident
+        | ExpertLoadSource::CpuResident
+        | ExpertLoadSource::Remote { .. } => {
+            return Err(Error::Model(format!(
+                "expert source {}:{} is not a local checkpoint read plan",
+                expert.layer, expert.expert
+            )));
+        }
+    };
+    CheckpointReadPlan::new(extents, source_files)
 }
 
 fn detect_dense_source_layout<S>(
@@ -406,7 +437,7 @@ fn detect_dense_source_layout<S>(
 type HfCatalogTensor = (
     HfRoutedExpertTensorInfo,
     ExpertTensorSlice,
-    ExpertSourceFileIdentity,
+    CheckpointSourceFileIdentity,
 );
 
 impl ExpertSourceCatalog<ExpertLoadSource> {
@@ -417,7 +448,7 @@ impl ExpertSourceCatalog<ExpertLoadSource> {
         Self::from_hf_routed_expert_tensor_sets_with_source_identity(
             model_dir,
             tensors,
-            ExpertSourceFileIdentity::capture,
+            CheckpointSourceFileIdentity::capture,
         )
     }
 
@@ -427,10 +458,10 @@ impl ExpertSourceCatalog<ExpertLoadSource> {
         mut capture_source_identity: F,
     ) -> Result<Self>
     where
-        F: FnMut(&Path) -> Result<ExpertSourceFileIdentity>,
+        F: FnMut(&Path) -> Result<CheckpointSourceFileIdentity>,
     {
         let mut grouped = BTreeMap::<ExpertId, Vec<HfCatalogTensor>>::new();
-        let mut source_files = BTreeMap::<PathBuf, ExpertSourceFileIdentity>::new();
+        let mut source_files = BTreeMap::<PathBuf, CheckpointSourceFileIdentity>::new();
         for tensor in tensors {
             let expert = expert_id_from_ref(&tensor.descriptor);
             let path = model_dir.join(&tensor.shard);
@@ -460,12 +491,12 @@ impl ExpertSourceCatalog<ExpertLoadSource> {
                     expert.layer, expert.expert
                 ))
             })?;
-            if end_offset > source_file.file_identity.length() {
+            if end_offset > source_file.length() {
                 return Err(Error::Model(format!(
                     "expert tensor extent {}..{} exceeds shard metadata length {} for '{}'",
                     slice.offset,
                     end_offset,
-                    source_file.file_identity.length(),
+                    source_file.length(),
                     slice.path.display()
                 )));
             }
@@ -477,7 +508,7 @@ impl ExpertSourceCatalog<ExpertLoadSource> {
 
         let mut sources = Vec::new();
         for (expert, mut tensors) in grouped {
-            tensors.sort_by(|(_, a, a_source), (_, b, b_source)| {
+            tensors.sort_by(|(_, a, _), (_, b, _)| {
                 a.key
                     .matrix
                     .cmp(&b.key.matrix)
@@ -485,7 +516,7 @@ impl ExpertSourceCatalog<ExpertLoadSource> {
                     .then_with(|| a.dtype.cmp(&b.dtype))
                     .then_with(|| a.shape.cmp(&b.shape))
                     .then_with(|| a.bytes.cmp(&b.bytes))
-                    .then_with(|| a_source.canonical_path.cmp(&b_source.canonical_path))
+                    .then_with(|| a.path.cmp(&b.path))
                     .then_with(|| a.offset.cmp(&b.offset))
             });
             if tensors.is_empty() {
@@ -494,7 +525,7 @@ impl ExpertSourceCatalog<ExpertLoadSource> {
                     expert.layer, expert.expert
                 )));
             }
-            let identity = hf_expert_artifact_identity(&tensors)?;
+            let resource_source = hf_expert_resource_source(&tensors)?;
             let source_files = tensors
                 .iter()
                 .map(|(_, _, source_file)| source_file.clone())
@@ -508,100 +539,56 @@ impl ExpertSourceCatalog<ExpertLoadSource> {
                     tensors,
                     source_files: Arc::from(source_files),
                 },
-                identity,
+                resource_source,
             ));
         }
-        Ok(Self::from_identified_sources(sources))
+        Ok(Self::from_resource_sources(sources))
     }
 }
 
-fn hf_expert_artifact_identity(tensors: &[HfCatalogTensor]) -> Result<ExpertArtifactIdentity> {
-    let mut content = Sha256::new();
-    content.update(b"ferrule-hf-expert-semantic-content-v2");
-    update_hash_u64(&mut content, tensors.len() as u64);
-    for (order, (_, slice, _)) in tensors.iter().enumerate() {
-        update_tensor_semantic_descriptor(&mut content, order, slice);
-    }
-    let content_hash_bytes = content.finalize();
-
-    let mut source = Sha256::new();
-    source.update(b"ferrule-hf-expert-catalog-source-v2");
-    source.update(&content_hash_bytes);
-    update_hash_u64(&mut source, tensors.len() as u64);
-    for (order, (_, slice, source_file)) in tensors.iter().enumerate() {
-        update_hash_u64(&mut source, order as u64);
-        update_hash_path(&mut source, &source_file.canonical_path);
-        update_hash_u64(&mut source, slice.offset);
-        source_file.file_identity.update_hash(&mut source);
-    }
-    let source_hash_bytes = source.finalize();
-
-    let mut generation_hash = Sha256::new();
-    generation_hash.update(b"ferrule-hf-expert-source-generation-v2");
-    generation_hash.update(&source_hash_bytes);
-    let generation_hash = generation_hash.finalize();
-    let mut generation_bytes = [0u8; 8];
-    generation_bytes.copy_from_slice(&generation_hash[..8]);
-    let generation = u64::from_be_bytes(generation_bytes);
-    let generation = SourceGeneration::new(if generation == 0 { 1 } else { generation });
-
-    ExpertArtifactIdentity::new(
-        SourceIdentityHash::new(source_hash_bytes),
-        ContentHash::new(content_hash_bytes),
-        ProtocolArtifactFormat::new(1),
-        generation,
+fn hf_expert_resource_source(tensors: &[HfCatalogTensor]) -> Result<ResourceSource> {
+    let semantics = tensors
+        .iter()
+        .map(|(_, slice, _)| expert_tensor_semantic_descriptor(slice))
+        .collect::<Vec<_>>();
+    let descriptors = tensors
+        .iter()
+        .zip(&semantics)
+        .map(
+            |((_, slice, source_file), semantic)| CheckpointSourceTensor {
+                semantic,
+                path: &slice.path,
+                offset: slice.offset,
+                bytes: slice.bytes,
+                dtype: &slice.dtype,
+                shape: &slice.shape,
+                source_file,
+            },
+        )
+        .collect::<Vec<_>>();
+    checkpoint_resource_source(
+        b"hf-routed-expert-v3",
+        HF_SAFETENSORS_ROUTED_EXPERT_V1,
+        &descriptors,
     )
 }
 
-fn update_tensor_semantic_descriptor(hasher: &mut Sha256, order: usize, slice: &ExpertTensorSlice) {
-    update_hash_u64(hasher, order as u64);
-    hasher.update(&[match slice.key.matrix {
+fn expert_tensor_semantic_descriptor(slice: &ExpertTensorSlice) -> Vec<u8> {
+    let mut semantic = vec![match slice.key.matrix {
         ExpertMatrixKind::Gate => 0,
         ExpertMatrixKind::Up => 1,
         ExpertMatrixKind::Down => 2,
-    }]);
+    }];
     match &slice.component {
-        ExpertTensorComponent::Weight => hasher.update(&[0]),
-        ExpertTensorComponent::Scale => hasher.update(&[1]),
+        ExpertTensorComponent::Weight => semantic.push(0),
+        ExpertTensorComponent::Scale => semantic.push(1),
         ExpertTensorComponent::Other(component) => {
-            hasher.update(&[2]);
-            update_hash_bytes(hasher, component.as_bytes());
+            semantic.push(2);
+            semantic.extend_from_slice(&(component.len() as u64).to_be_bytes());
+            semantic.extend_from_slice(component.as_bytes());
         }
     }
-    update_hash_bytes(hasher, slice.dtype.as_bytes());
-    update_hash_u64(hasher, slice.shape.len() as u64);
-    for &dimension in &slice.shape {
-        update_hash_u64(hasher, dimension as u64);
-    }
-    update_hash_u64(hasher, slice.bytes);
-}
-
-fn update_hash_path(hasher: &mut Sha256, path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        update_hash_bytes(hasher, path.as_os_str().as_bytes());
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        let words = path.as_os_str().encode_wide().collect::<Vec<_>>();
-        update_hash_u64(hasher, words.len() as u64);
-        for word in words {
-            hasher.update(&word.to_be_bytes());
-        }
-    }
-    #[cfg(not(any(unix, windows)))]
-    update_hash_bytes(hasher, path.to_string_lossy().as_bytes());
-}
-
-fn update_hash_bytes(hasher: &mut Sha256, bytes: &[u8]) {
-    update_hash_u64(hasher, bytes.len() as u64);
-    hasher.update(bytes);
-}
-
-fn update_hash_u64(hasher: &mut Sha256, value: u64) {
-    hasher.update(&value.to_be_bytes());
+    semantic
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -632,8 +619,8 @@ pub struct ExpertStreamingPolicy {
     pub gpu_slots_per_layer: usize,
     /// Best-effort predicted experts to load after selected experts are covered.
     pub prefetch_per_layer: usize,
-    /// Keep the exact artifact payload/format; do not force a conversion policy here.
-    pub preserve_artifact_quantization: bool,
+    /// Keep the exact source payload encoding; do not force a conversion policy here.
+    pub preserve_source_encoding: bool,
     /// Whether CPU RAM staging is allowed. Disabling this models very constrained
     /// hosts where streaming should go directly from local/remote chunks.
     pub allow_cpu_staging: bool,
@@ -649,7 +636,7 @@ impl ExpertStreamingPolicy {
         Self {
             gpu_slots_per_layer,
             prefetch_per_layer: num_experts_per_tok,
-            preserve_artifact_quantization: true,
+            preserve_source_encoding: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
         }
@@ -769,14 +756,13 @@ impl ExpertStreamingPlanner {
         let mut sources = self
             .source_catalog
             .iter_entries()
-            .map(|(expert, source, identity)| (*expert, (source.clone(), identity)))
+            .map(|(expert, source, resource_source)| (*expert, (source.clone(), resource_source)))
             .collect::<BTreeMap<_, _>>();
         sources.insert(expert, (load_source, None));
-        self.source_catalog = Arc::new(ExpertSourceCatalog::from_entries(
-            sources
-                .into_iter()
-                .map(|(expert, (source, identity))| (expert, source, identity)),
-        ));
+        self.source_catalog =
+            Arc::new(ExpertSourceCatalog::from_entries(sources.into_iter().map(
+                |(expert, (source, resource_source))| (expert, source, resource_source),
+            )));
         self.experts.insert(
             expert,
             ExpertState {
@@ -797,10 +783,10 @@ impl ExpertStreamingPlanner {
         let mut sources = self
             .source_catalog
             .iter_entries()
-            .map(|(expert, source, identity)| (*expert, (source.clone(), identity)))
+            .map(|(expert, source, resource_source)| (*expert, (source.clone(), resource_source)))
             .collect::<BTreeMap<_, _>>();
-        for (expert, source, identity) in catalog.iter_entries() {
-            sources.insert(*expert, (source.clone(), identity));
+        for (expert, source, resource_source) in catalog.iter_entries() {
+            sources.insert(*expert, (source.clone(), resource_source));
             self.experts.insert(
                 *expert,
                 ExpertState {
@@ -810,11 +796,10 @@ impl ExpertStreamingPlanner {
                 },
             );
         }
-        self.source_catalog = Arc::new(ExpertSourceCatalog::from_entries(
-            sources
-                .into_iter()
-                .map(|(expert, (source, identity))| (expert, source, identity)),
-        ));
+        self.source_catalog =
+            Arc::new(ExpertSourceCatalog::from_entries(sources.into_iter().map(
+                |(expert, (source, resource_source))| (expert, source, resource_source),
+            )));
         Ok(count)
     }
 
@@ -1165,19 +1150,20 @@ pub struct ExpertIoStats {
 pub(crate) struct PinnedExpertArtifactPayload {
     pub(crate) expert: ExpertId,
     pub(crate) tensors: Vec<super::io_uring_reader::PinnedExpertTensorPayload>,
-    pub(crate) resource_grant: Option<ferrule_common::expert_io::ExpertIoResourceGrant>,
 }
 
 #[cfg(all(target_os = "linux", feature = "cuda"))]
 pub(crate) struct PinnedExpertLoadPlan {
     expert: ExpertId,
     reader: super::io_uring_reader::PinnedExpertReadPlan,
-    source_files: Arc<[ExpertSourceFileIdentity]>,
+    source_files: Arc<[CheckpointSourceFileIdentity]>,
 }
 
 #[cfg(all(target_os = "linux", feature = "cuda"))]
 impl PinnedExpertLoadPlan {
-    pub(crate) const fn demand(&self) -> ferrule_common::expert_io::ExpertIoResourceDemand {
+    pub(crate) const fn demand(
+        &self,
+    ) -> ferrule_common::materialization_io::MaterializationResourceDemand {
         self.reader.demand()
     }
 }
@@ -1211,7 +1197,7 @@ pub struct ExpertStreamingReader {
     io_uring: Option<Arc<super::io_uring_reader::IoUringExpertReader>>,
     #[cfg(all(target_os = "linux", feature = "cuda"))]
     pinned_source_files:
-        Arc<Mutex<HashMap<PinnedExpertReadTicket, Arc<[ExpertSourceFileIdentity]>>>>,
+        Arc<Mutex<HashMap<PinnedExpertReadTicket, Arc<[CheckpointSourceFileIdentity]>>>>,
 }
 
 impl std::fmt::Debug for ExpertStreamingReader {
@@ -1407,27 +1393,45 @@ impl ExpertStreamingReader {
     #[cfg(all(target_os = "linux", feature = "cuda"))]
     pub(crate) fn physical_resource_capacity(
         &self,
-    ) -> Result<Option<ferrule_common::expert_io::ExpertIoResourceDemand>> {
+    ) -> Result<Option<ferrule_common::materialization_io::MaterializationResourceDemand>> {
         self.io_uring
             .as_ref()
             .map_or(Ok(None), |reader| reader.physical_resource_capacity())
     }
 
     #[cfg(all(target_os = "linux", feature = "cuda"))]
-    pub(crate) fn plan_load_source_pinned(
+    pub(crate) fn plan_checkpoint_source_pinned(
         &self,
         expert: ExpertId,
-        load_source: &ExpertLoadSource,
+        read_plan: &CheckpointReadPlan,
+        install_source: &ExpertLoadSource,
     ) -> Result<Option<PinnedExpertLoadPlan>> {
         let Some(reader) = self.io_uring.as_ref() else {
             return Ok(None);
         };
-        self.require_current_source_identity(load_source)?;
-        let slices = self.bounded_slices_for_load_source(expert, load_source)?;
+        read_plan
+            .validate_source_identity()
+            .map_err(stale_source_identity_error)?;
+        let slices = self.bounded_slices_for_load_source(expert, install_source)?;
+        if slices.len() != read_plan.extents().len()
+            || slices
+                .iter()
+                .zip(read_plan.extents())
+                .any(|(slice, extent)| {
+                    slice.path != extent.path()
+                        || slice.offset != extent.offset()
+                        || slice.bytes != extent.bytes()
+                })
+        {
+            return Err(Error::Model(format!(
+                "expert install descriptor {}:{} does not match its checkpoint read plan",
+                expert.layer, expert.expert
+            )));
+        }
         Ok(Some(PinnedExpertLoadPlan {
             expert,
             reader: reader.plan_slices_pinned(&slices)?,
-            source_files: load_source.shared_source_files(),
+            source_files: Arc::from(read_plan.source_files()),
         }))
     }
 
@@ -1436,7 +1440,7 @@ impl ExpertStreamingReader {
         &self,
         plan: PinnedExpertLoadPlan,
         operation: ferrule_common::OperationId,
-        key: ferrule_common::LoadKey,
+        key: ferrule_common::MaterializationKey,
     ) -> Result<ReservedPinnedExpertLoad> {
         let reader = self.io_uring.as_ref().ok_or_else(|| {
             Error::Model("pinned expert read plan requires the io_uring backend".into())
@@ -1524,7 +1528,6 @@ impl ExpertStreamingReader {
                 Ok(PinnedExpertReadPoll::Ready(PinnedExpertArtifactPayload {
                     expert: ticket.expert,
                     tensors: result.payloads,
-                    resource_grant: None,
                 }))
             }
             super::io_uring_reader::PinnedExpertReadPoll::Failed(error) => {
@@ -1555,7 +1558,7 @@ impl ExpertStreamingReader {
     fn pinned_source_files_for_ticket(
         &self,
         ticket: PinnedExpertReadTicket,
-    ) -> Result<Arc<[ExpertSourceFileIdentity]>> {
+    ) -> Result<Arc<[CheckpointSourceFileIdentity]>> {
         self.pinned_source_files
             .lock()
             .map_err(|_| Error::Internal("pinned source identity registry is poisoned".into()))?
@@ -1601,10 +1604,42 @@ impl ExpertStreamingReader {
         expert: ExpertId,
         load_source: &ExpertLoadSource,
     ) -> Result<ExpertArtifactPayload> {
+        if matches!(load_source, ExpertLoadSource::HfLocalTensorSet { .. }) {
+            return self.read_checkpoint_load_source(expert, load_source);
+        }
         self.require_current_source_identity(load_source)?;
         let slices = Self::slices_for_load_source(expert, load_source)?;
         let tensors = self.read_slices_with_backend(&slices, false)?;
         self.require_current_source_identity(load_source)?;
+        Ok(ExpertArtifactPayload { expert, tensors })
+    }
+
+    fn read_checkpoint_load_source(
+        &self,
+        expert: ExpertId,
+        load_source: &ExpertLoadSource,
+    ) -> Result<ExpertArtifactPayload> {
+        let slices = Self::slices_for_load_source(expert, load_source)?;
+        self.validate_bounded_slices(&slices)?;
+        let plan = checkpoint_read_plan_for_expert_source(expert, load_source)?;
+        if slices.len() != plan.extents().len()
+            || slices.iter().zip(plan.extents()).any(|(slice, extent)| {
+                slice.path != extent.path()
+                    || slice.offset != extent.offset()
+                    || slice.bytes != extent.bytes()
+            })
+        {
+            return Err(Error::Model(format!(
+                "expert source {}:{} does not match its checkpoint read plan",
+                expert.layer, expert.expert
+            )));
+        }
+        let payloads = CheckpointPositionedReader::new(self.max_slice_bytes).read(&plan)?;
+        let tensors = slices
+            .into_iter()
+            .zip(payloads)
+            .map(|(slice, bytes)| ExpertTensorPayload { slice, bytes })
+            .collect();
         Ok(ExpertArtifactPayload { expert, tensors })
     }
 
@@ -1648,6 +1683,9 @@ impl ExpertStreamingReader {
         expert: ExpertId,
         load_source: &ExpertLoadSource,
     ) -> Result<ExpertArtifactPayload> {
+        if matches!(load_source, ExpertLoadSource::HfLocalTensorSet { .. }) {
+            return self.read_checkpoint_load_source(expert, load_source);
+        }
         self.require_current_source_identity(load_source)?;
         let slices = Self::slices_for_load_source(expert, load_source)?;
         let tensors = self.read_slices_with_backend(&slices, true)?;
@@ -1661,10 +1699,10 @@ impl ExpertStreamingReader {
     }
 
     #[cfg(all(target_os = "linux", feature = "cuda"))]
-    fn require_source_files_current(source_files: &[ExpertSourceFileIdentity]) -> Result<()> {
+    fn require_source_files_current(source_files: &[CheckpointSourceFileIdentity]) -> Result<()> {
         if source_files
             .iter()
-            .all(ExpertSourceFileIdentity::is_current)
+            .all(CheckpointSourceFileIdentity::is_current)
         {
             Ok(())
         } else {
@@ -2441,9 +2479,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn quality_first_policy_preserves_artifact_quantization() {
+    fn quality_first_policy_preserves_source_encoding() {
         let policy = ExpertStreamingPolicy::quality_first(6);
-        assert!(policy.preserve_artifact_quantization);
+        assert!(policy.preserve_source_encoding);
         assert_eq!(policy.gpu_slots_per_layer, 12);
         assert_eq!(policy.prefetch_per_layer, 6);
         assert!(!policy.allow_cpu_staging);
@@ -2689,10 +2727,18 @@ mod tests {
         let expert = ExpertId::new(0, 3);
         let source = catalog.source(expert).unwrap();
         assert_eq!(source.bytes(), 10);
-        let identity = catalog.require_identity(expert).unwrap();
-        assert!(!identity.source().is_zero());
-        assert!(!identity.content_hash().is_zero());
-        assert!(!identity.source_generation().is_zero());
+        let resource_source = catalog.require_resource_source(expert).unwrap();
+        assert!(!resource_source.identity().is_zero());
+        assert!(!resource_source.content_hash().is_zero());
+        assert!(!resource_source.generation().is_zero());
+        let materialization_sources = catalog.materialization_sources().unwrap();
+        let resource =
+            MaterializedResourceId::routed_expert(LayerId::new(0), ProtocolExpertId::new(3));
+        let exact = materialization_sources
+            .get(resource, resource_source)
+            .expect("expert source must be indexed by exact materialization identity");
+        assert_eq!(exact.storage_bytes(), 10);
+        assert_eq!(exact.descriptor(), source);
 
         let mut planner = ExpertStreamingPlanner::from_catalog(
             ExpertStreamingPolicy::quality_first(1),
@@ -2736,13 +2782,10 @@ mod tests {
             same_descriptor_different_source,
         )
         .unwrap();
-        let second_identity = second_catalog.require_identity(expert).unwrap();
-        assert_eq!(identity.content_hash(), second_identity.content_hash());
-        assert_ne!(identity.source(), second_identity.source());
-        assert_ne!(
-            identity.source_generation(),
-            second_identity.source_generation()
-        );
+        let second_source = second_catalog.require_resource_source(expert).unwrap();
+        assert_eq!(resource_source.content_hash(), second_source.content_hash());
+        assert_ne!(resource_source.identity(), second_source.identity());
+        assert_ne!(resource_source.generation(), second_source.generation());
 
         let mut enlarged_payload = bytes.clone();
         enlarged_payload.push(80);
@@ -2755,20 +2798,24 @@ mod tests {
         assert!(
             stale_error
                 .to_string()
-                .contains("Stale expert source identity")
+                .contains("stale checkpoint source identity")
         );
         let changed_generation_catalog =
             ExpertSourceCatalog::from_hf_routed_expert_tensor_sets(&dir, tensors.clone()).unwrap();
-        let changed_generation_identity =
-            changed_generation_catalog.require_identity(expert).unwrap();
+        let changed_generation_source = changed_generation_catalog
+            .require_resource_source(expert)
+            .unwrap();
         assert_eq!(
-            identity.content_hash(),
-            changed_generation_identity.content_hash()
+            resource_source.content_hash(),
+            changed_generation_source.content_hash()
         );
-        assert_ne!(identity.source(), changed_generation_identity.source());
         assert_ne!(
-            identity.source_generation(),
-            changed_generation_identity.source_generation()
+            resource_source.identity(),
+            changed_generation_source.identity()
+        );
+        assert_ne!(
+            resource_source.generation(),
+            changed_generation_source.generation()
         );
 
         let mut changed_descriptor = tensors;
@@ -2777,9 +2824,9 @@ mod tests {
             ExpertSourceCatalog::from_hf_routed_expert_tensor_sets(&dir, changed_descriptor)
                 .unwrap();
         assert_ne!(
-            identity.content_hash(),
+            resource_source.content_hash(),
             changed_descriptor_catalog
-                .require_identity(expert)
+                .require_resource_source(expert)
                 .unwrap()
                 .content_hash()
         );
@@ -2827,7 +2874,7 @@ mod tests {
             tensors,
             |catalog_path| {
                 metadata_snapshots += 1;
-                Ok(ExpertSourceFileIdentity::for_test(
+                Ok(CheckpointSourceFileIdentity::for_test(
                     catalog_path.to_path_buf(),
                     PathBuf::from("/canonical/synthetic-156g.safetensors"),
                     TOTAL_BYTES,
@@ -3104,7 +3151,7 @@ mod tests {
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
             gpu_slots_per_layer: 3,
             prefetch_per_layer: 2,
-            preserve_artifact_quantization: true,
+            preserve_source_encoding: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
         });
@@ -3133,7 +3180,7 @@ mod tests {
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
             gpu_slots_per_layer: 3,
             prefetch_per_layer: 2,
-            preserve_artifact_quantization: true,
+            preserve_source_encoding: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
         });
@@ -3172,7 +3219,7 @@ mod tests {
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
             gpu_slots_per_layer: 2,
             prefetch_per_layer: 0,
-            preserve_artifact_quantization: true,
+            preserve_source_encoding: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
         });
@@ -3205,7 +3252,7 @@ mod tests {
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
             gpu_slots_per_layer: 3,
             prefetch_per_layer: 0,
-            preserve_artifact_quantization: true,
+            preserve_source_encoding: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
         });
@@ -3234,7 +3281,7 @@ mod tests {
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
             gpu_slots_per_layer: 2,
             prefetch_per_layer: 0,
-            preserve_artifact_quantization: true,
+            preserve_source_encoding: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
         });
@@ -3265,7 +3312,7 @@ mod tests {
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
             gpu_slots_per_layer: 2,
             prefetch_per_layer: 0,
-            preserve_artifact_quantization: true,
+            preserve_source_encoding: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
         });
@@ -3338,7 +3385,7 @@ mod tests {
         let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy {
             gpu_slots_per_layer: 1,
             prefetch_per_layer: 0,
-            preserve_artifact_quantization: true,
+            preserve_source_encoding: true,
             allow_cpu_staging: false,
             allow_remote_sources: false,
         });

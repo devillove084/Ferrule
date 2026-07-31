@@ -2,12 +2,10 @@
 
 use std::path::Path;
 
+use super::checkpoint_binding::MlaAttentionWeights;
 use crate::TensorRole;
-use crate::artifact::binding::MlaAttentionArtifactPayload;
-use crate::artifact::linear::{
-    ArtifactLinearExecutionPolicy, ArtifactLinearFormat, ArtifactLinearPayload,
-};
 use crate::attention_backend::SparseAttentionSpec;
+use crate::checkpoint::weight::{LinearExecutionPolicy, LinearWeight, LinearWeightFormat};
 use crate::families::deepseek_v4;
 use crate::ffn::SwiGluFfnPayload;
 use crate::hyper_connection::HyperConnectionConfig;
@@ -17,13 +15,11 @@ use super::helpers::{f32_key, usize_key};
 
 const DSV4_LINEAR_ACTIVATION_QUANT_BLOCK_SIZE: usize = 128;
 
-fn deepseek_v4_quantized_linear_execution_policy() -> ArtifactLinearExecutionPolicy {
-    ArtifactLinearExecutionPolicy::fp8_e4m3_e8m0_activation(DSV4_LINEAR_ACTIVATION_QUANT_BLOCK_SIZE)
+fn deepseek_v4_quantized_linear_execution_policy() -> LinearExecutionPolicy {
+    LinearExecutionPolicy::fp8_e4m3_e8m0_activation(DSV4_LINEAR_ACTIVATION_QUANT_BLOCK_SIZE)
 }
 
-pub(crate) fn with_deepseek_v4_linear_execution_policy(
-    linear: ArtifactLinearPayload,
-) -> ArtifactLinearPayload {
+pub(crate) fn with_deepseek_v4_linear_execution_policy(linear: LinearWeight) -> LinearWeight {
     if deepseek_v4_role_uses_official_linear_activation_quantization(&linear.role)
         && artifact_linear_format_has_quantized_weight(&linear.format)
     {
@@ -34,8 +30,8 @@ pub(crate) fn with_deepseek_v4_linear_execution_policy(
 }
 
 pub(crate) fn with_deepseek_v4_attention_execution_policies(
-    mut payload: MlaAttentionArtifactPayload,
-) -> MlaAttentionArtifactPayload {
+    mut payload: MlaAttentionWeights,
+) -> MlaAttentionWeights {
     payload.query_a = with_deepseek_v4_linear_execution_policy(payload.query_a);
     payload.query_b = with_deepseek_v4_linear_execution_policy(payload.query_b);
     payload.key_value = with_deepseek_v4_linear_execution_policy(payload.key_value);
@@ -69,11 +65,11 @@ fn deepseek_v4_role_uses_official_linear_activation_quantization(role: &TensorRo
     )
 }
 
-fn artifact_linear_format_has_quantized_weight(format: &ArtifactLinearFormat) -> bool {
+fn artifact_linear_format_has_quantized_weight(format: &LinearWeightFormat) -> bool {
     matches!(
         format,
-        ArtifactLinearFormat::Fp8E4M3WithE8M0Scale { .. }
-            | ArtifactLinearFormat::Fp4E2M1PackedWithE8M0Scale { .. }
+        LinearWeightFormat::Fp8E4M3WithE8M0Scale { .. }
+            | LinearWeightFormat::Fp4E2M1PackedWithE8M0Scale { .. }
     )
 }
 
@@ -435,6 +431,18 @@ impl DeepSeekV4RopeParams {
             factor: 1.0,
             beta_fast: 32,
             beta_slow: 1,
+        }
+    }
+}
+
+impl From<DeepSeekV4RopeParams> for crate::models::common::rope::RopeParams {
+    fn from(rope: DeepSeekV4RopeParams) -> Self {
+        Self {
+            theta: rope.theta,
+            original_seq_len: rope.original_seq_len,
+            factor: rope.factor,
+            beta_fast: rope.beta_fast,
+            beta_slow: rope.beta_slow,
         }
     }
 }

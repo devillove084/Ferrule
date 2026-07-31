@@ -1,14 +1,14 @@
-//! DeepSeek-V4 artifact model: HF weight loading and tensor binding.
+//! DeepSeek-V4 checkpoint: HF weight loading and tensor binding.
 
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::artifact::binding::{
+use super::checkpoint_binding::{
     bind_attention_from_hf, bind_hyper_connection_from_hf, bind_hyper_connection_head_from_hf,
     bind_router_from_hf, bind_shared_swiglu_ffn_from_hf,
 };
 
-use crate::artifact::tensor::{ArtifactMatrixSlice, ArtifactTensorReader};
+use crate::checkpoint::tensor::{CheckpointMatrixSlice, CheckpointTensorReader};
 use crate::hyper_connection::HyperConnectionHeadWeights;
 
 use crate::moe::routing::ExpertRouterPolicy;
@@ -28,31 +28,31 @@ use super::helpers::{decode_vector_f32, read_named_vector_f32, unique_top_level_
 use super::layer::{DeepSeekV4Layer, DeepSeekV4LayerExpertRuntime, DeepSeekV4LayerState};
 use super::mtp::{DeepSeekV4MtpModel, load_mtp_layer, load_mtp_prediction_heads};
 
-pub struct DeepSeekV4ArtifactModel {
+pub struct DeepSeekV4Checkpoint {
     pub descriptor: ModelDescriptor,
     pub config: DeepSeekV4Config,
     pub tokenizer: TokenizerHandle,
-    pub embedding: ArtifactMatrixSlice,
+    pub embedding: CheckpointMatrixSlice,
     pub output_norm: Vec<f32>,
-    pub output_head: ArtifactMatrixSlice,
+    pub output_head: CheckpointMatrixSlice,
     pub hc_head: HyperConnectionHeadWeights,
     inventory: HfSafetensorsInventory,
     routed_expert_catalogs_by_layer: Vec<Arc<ExpertSourceCatalog>>,
     max_tensor_bytes: u64,
 }
 
-impl DeepSeekV4ArtifactModel {
+impl DeepSeekV4Checkpoint {
     pub fn load_hf_with_limit(model_dir: &Path, max_tensor_bytes: u64) -> Result<Self> {
         let descriptor = ModelDescriptor::load(model_dir)?;
         if descriptor.spec.family != ModelFamily::DeepSeekV4 {
             return Err(Error::Model(format!(
-                "DeepSeek-V4 artifact model expected DeepSeek-V4 descriptor, got {}",
+                "DeepSeek-V4 checkpoint expected DeepSeek-V4 descriptor, got {}",
                 descriptor.spec.family
             )));
         }
         if descriptor.spec.weight_source != WeightSource::Safetensors {
             return Err(Error::Model(format!(
-                "DeepSeek-V4 artifact model requires safetensors, got {}",
+                "DeepSeek-V4 checkpoint requires safetensors, got {}",
                 descriptor.spec.weight_source
             )));
         }
@@ -72,9 +72,9 @@ impl DeepSeekV4ArtifactModel {
                     .map(Arc::new)
             })
             .collect::<Result<Vec<_>>>()?;
-        let reader = ArtifactTensorReader::new(max_tensor_bytes);
+        let reader = CheckpointTensorReader::new(max_tensor_bytes);
         let tokenizer = TokenizerHandle::load(model_dir)?;
-        let embedding = ArtifactMatrixSlice::from_slice(
+        let embedding = CheckpointMatrixSlice::from_slice(
             unique_top_level_slice(model_dir, &inventory, TensorRole::TokenEmbedding)?,
             "token embedding",
         )?;
@@ -83,7 +83,7 @@ impl DeepSeekV4ArtifactModel {
             &inventory,
             TensorRole::OutputNorm,
         )?)?)?;
-        let output_head = ArtifactMatrixSlice::from_slice(
+        let output_head = CheckpointMatrixSlice::from_slice(
             unique_top_level_slice(model_dir, &inventory, TensorRole::OutputHead)?,
             "output head",
         )?;
@@ -108,6 +108,10 @@ impl DeepSeekV4ArtifactModel {
         })
     }
 
+    pub(crate) const fn inventory(&self) -> &HfSafetensorsInventory {
+        &self.inventory
+    }
+
     pub fn model_info(&self) -> ModelInfo {
         ModelInfo {
             family: self.descriptor.spec.family.clone(),
@@ -119,12 +123,12 @@ impl DeepSeekV4ArtifactModel {
             num_experts: self.config.num_routed_experts,
             num_experts_per_tok: self.config.num_experts_per_tok,
             vocab_size: self.config.vocab_size,
-            backend: "deepseek-v4-artifact",
+            backend: "deepseek-v4-checkpoint",
         }
     }
 
     pub fn bind_layer(&self, layer: usize) -> Result<DeepSeekV4Layer> {
-        let reader = ArtifactTensorReader::new(self.max_tensor_bytes);
+        let reader = CheckpointTensorReader::new(self.max_tensor_bytes);
         let attention_tensors = self.inventory.attention_tensors();
         let hc_tensors = self.inventory.hyper_connection_tensors();
         let router_tensors = self.inventory.router_tensors();
@@ -217,7 +221,7 @@ impl DeepSeekV4ArtifactModel {
         if mtp_tensors.is_empty() {
             return Ok(None);
         }
-        let reader = ArtifactTensorReader::new(self.max_tensor_bytes);
+        let reader = CheckpointTensorReader::new(self.max_tensor_bytes);
         let hc_config = self.config.hc_config();
         let max_mtp_index = *mtp_tensors.keys().max().expect("MTP tensors are non-empty");
         let expected_stages = self.config.num_mtp_layers;
@@ -246,7 +250,7 @@ impl DeepSeekV4ArtifactModel {
             )?;
             if mtp_index == max_mtp_index {
                 // Collect HC head tensors from the last layer's tensor list.
-                let hc_tensors: Vec<crate::artifact::inventory::HfHyperConnectionTensorInfo> =
+                let hc_tensors: Vec<crate::checkpoint::inventory::HfHyperConnectionTensorInfo> =
                     layer_tensors
                         .iter()
                         .filter_map(super::mtp::parse_mtp_hyper_connection_tensor)
@@ -321,7 +325,7 @@ impl DeepSeekV4ArtifactModel {
                 gpu_slots_per_layer,
                 prefetch_per_layer: moe_prefetch_experts
                     .min(gpu_slots_per_layer.saturating_sub(self.config.num_experts_per_tok)),
-                preserve_artifact_quantization: true,
+                preserve_source_encoding: true,
                 allow_cpu_staging: true,
                 allow_remote_sources: false,
             }
@@ -329,7 +333,7 @@ impl DeepSeekV4ArtifactModel {
             ExpertStreamingPolicy {
                 gpu_slots_per_layer: self.config.num_routed_experts,
                 prefetch_per_layer: 0,
-                preserve_artifact_quantization: true,
+                preserve_source_encoding: true,
                 allow_cpu_staging: true,
                 allow_remote_sources: false,
             }

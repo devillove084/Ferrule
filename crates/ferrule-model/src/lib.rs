@@ -1,5 +1,5 @@
 #![allow(clippy::needless_range_loop)]
-//! Model metadata, artifact formats, quantization, and model-family execution.
+//! Model metadata, checkpoint formats, quantization, and model-family execution.
 //!
 //! ## Crate layout
 //!
@@ -9,7 +9,7 @@
 //! | `descriptor` | `ModelDescriptor` — parsed config.json + tokenizer + inventory |
 //! | `support` | Policy types, layout contracts, engine plans |
 //! | `families` | Per-family tensor name classification (HF/GGUF → semantic roles) |
-//! | `artifact` | Artifact inventory, index, binding, format decoding, tensor I/O |
+//! | `checkpoint` | Checkpoint inventory, bounded tensor reads, and encoding |
 //! | `moe` | Expert streaming, handle stores, routing, MoE step orchestration |
 //! | `runner` | `ModelRunner` trait — the execution boundary |
 //! | `attention_backend` | Sparse attention reference + backend contracts |
@@ -35,7 +35,7 @@ pub mod tensor_policy;
 pub mod tokenizer;
 
 // ── Sub-directory modules ─────────────────────────────────────────────────
-pub mod artifact;
+pub mod checkpoint;
 pub mod families;
 pub mod gguf;
 pub mod models;
@@ -45,8 +45,11 @@ pub mod support;
 
 // ── Re-exports: execution ─────────────────────────────────────────────────
 pub use execution::{
-    ArenaLease, ExecutionShapeKey, ModelExecutionBackend, PersistentArenaPool,
-    PersistentArenaPoolStats, PreparedModel, SequenceStateCore, SequenceStepBinding,
+    ArenaLease, ExecutableStage, ExecutionPlanError, ExecutionShapeKey, MaterializedStage,
+    ModelExecutionBackend, PersistentArenaPool, PersistentArenaPoolStats, PreparedExecutable,
+    PreparedModel, ResourceAccess, ResourceBacking, ResourceLayout, ResourceManifest,
+    ResourceRetention, SequenceStateCore, SequenceStepBinding, StageMaterializationRequest,
+    StageResourceUse, TransformerResourceSlot, TransformerStage, WorkspaceClaim,
 };
 
 // ── Re-exports: spec ──────────────────────────────────────────────────────
@@ -70,10 +73,10 @@ pub use support::{
 
 // ── Re-exports: semantic ──────────────────────────────────────────────────
 pub use semantic::{
-    ArtifactTensorPart, AttentionTensorKind, AttentionTensorRef, DenseLayerTensorKind,
-    DenseLayerTensorRef, HyperConnectionStage, HyperConnectionTensorKind, HyperConnectionTensorRef,
-    RoutedExpertMatrix, RoutedExpertTensorPart, RoutedExpertTensorRef, RouterTensorKind,
-    RouterTensorRef, SharedExpertTensorRef,
+    AttentionTensorKind, AttentionTensorRef, DenseLayerTensorKind, DenseLayerTensorRef,
+    HyperConnectionStage, HyperConnectionTensorKind, HyperConnectionTensorRef, RoutedExpertMatrix,
+    RoutedExpertTensorPart, RoutedExpertTensorRef, RouterTensorKind, RouterTensorRef,
+    SharedExpertTensorRef, TensorPayloadPart,
 };
 
 // ── Re-exports: tensor_policy ─────────────────────────────────────────────
@@ -82,29 +85,16 @@ pub use tensor_policy::{GgufTensorPolicy, HfTensorPolicy, TensorClass, TensorCla
 // ── Re-exports: quant ─────────────────────────────────────────────────────
 pub use quant::{QMatrix, f16_to_f32, f32_to_f16};
 
-// ── Re-exports: artifact ──────────────────────────────────────────────────
-pub use artifact::{
-    ArtifactActivationQuantization, ArtifactLinearExecutionPolicy, ArtifactLinearFormat,
-    ArtifactLinearPayload,
-};
-pub use artifact::{
-    ArtifactDType, ArtifactFormat, ArtifactGroupKind, ArtifactIdentity, ArtifactObjectGroup,
-    ArtifactTensorPayload, ArtifactTensorReader, ArtifactTensorSlice, DtypeCount,
-    HfAttentionTensorInfo, HfDenseLayerTensorInfo, HfFilePurpose, HfHyperConnectionTensorInfo,
-    HfRepoFile, HfRoutedExpertTensorInfo, HfRouterTensorInfo, HfSafetensorsArtifact,
-    HfSafetensorsIndex, HfSafetensorsInventory, HfSafetensorsShardSummary, HfSafetensorsTensorInfo,
-    HfSharedExpertTensorInfo, InputArtifact, TensorRoleCount,
-};
-pub use artifact::{
-    LayerNormArtifactPayload, MlaAttentionArtifactPayload, RouterArtifactPayload,
-    bind_attention_from_artifact_group, bind_attention_from_hf,
-    bind_hyper_connection_from_artifact_group, bind_hyper_connection_from_hf,
-    bind_hyper_connection_head_from_artifact_group, bind_hyper_connection_head_from_hf,
-    bind_layer_norms_from_artifact_group, bind_router_from_artifact_group, bind_router_from_hf,
-    bind_shared_swiglu_ffn_from_artifact_group, bind_shared_swiglu_ffn_from_hf,
-};
-pub use artifact::{
-    decode_e8m0_scale, decode_fp4_e2m1_nibble, decode_fp4_e2m1_packed_low_first,
+// ── Re-exports: checkpoint ────────────────────────────────────────────────
+pub use checkpoint::{
+    ActivationQuantization, CheckpointBundleSource, CheckpointDType, CheckpointMatrixSlice,
+    CheckpointPositionedReader, CheckpointReadExtent, CheckpointReadPlan, CheckpointSourceCatalog,
+    CheckpointSourceFileIdentity, CheckpointTensorPayload, CheckpointTensorReader,
+    CheckpointTensorSlice, DtypeCount, HfAttentionTensorInfo, HfDenseLayerTensorInfo,
+    HfHyperConnectionTensorInfo, HfRoutedExpertTensorInfo, HfRouterTensorInfo, HfSafetensorsIndex,
+    HfSafetensorsInventory, HfSafetensorsShardSummary, HfSafetensorsTensorInfo,
+    HfSharedExpertTensorInfo, LinearExecutionPolicy, LinearWeight, LinearWeightFormat,
+    TensorRoleCount, decode_e8m0_scale, decode_fp4_e2m1_nibble, decode_fp4_e2m1_packed_low_first,
     decode_fp8_e4m3fn_byte, dequantize_fp4_e2m1_with_e8m0_scales,
     dequantize_fp8_e4m3fn_with_e8m0_scales, normalized_hadamard_transform_rows_in_place,
     simulate_fp4_e2m1_e8m0_activation_quant_in_place,
@@ -116,10 +106,10 @@ pub use moe::{
     CpuExpertHandleStore, CpuReferenceExpertExecutor, ExpertArtifactPayload, ExpertComputeBundle,
     ExpertComputeHandle, ExpertEvictRequest, ExpertExecutor, ExpertHandleStore, ExpertId,
     ExpertLinearFormat, ExpertLinearPayload, ExpertLoadReason, ExpertLoadRequest, ExpertLoadSource,
-    ExpertMatrixKind, ExpertMemoryPolicy, ExpertResidentFormat, ExpertRoute, ExpertRouterPolicy,
-    ExpertStorageTier, ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader,
-    ExpertStreamingStep, ExpertTelemetry, ExpertTensorComponent, ExpertTensorKey,
-    ExpertTensorPayload, ExpertTensorSlice, HostStagedExpertCache, ResidentExpertHandle,
+    ExpertMatrixKind, ExpertMemoryPolicy, ExpertRoute, ExpertRouterPolicy, ExpertStorageTier,
+    ExpertStreamingPlanner, ExpertStreamingPolicy, ExpertStreamingReader, ExpertStreamingStep,
+    ExpertTelemetry, ExpertTensorComponent, ExpertTensorKey, ExpertTensorPayload,
+    ExpertTensorSlice, HostStagedExpertCache, ResidentExpertHandle, ResourceResidentFormat,
     RoutedMoeStepOutput, RouterScoreFunction, RouterSelectionPolicy, execute_routed_moe_reference,
     execute_routed_moe_reference_with_handles, execute_routed_moe_with_artifact_router_reference,
     execute_routed_moe_with_artifact_router_reference_with_handles, read_experts_concurrent,
@@ -128,24 +118,25 @@ pub use moe::{
 
 // ── Re-exports: materialization ───────────────────────────────────────────
 pub use materialization::{
-    ContinuationDependencyState, ExpertArtifactIdentity, ExpertDependencyResolution,
-    ExpertMaterializationAdapter, ExpertMaterializationPlacement, ExpertMaterializationRequest,
-    PhysicalExpertMaterializationBackend, PhysicalExpertOperationReservation,
-    PhysicalExpertReservation, PhysicalExpertReservationDescriptor, PhysicalExpertResourceTopology,
+    ContinuationDependencyState, MaterializationPlacement, MaterializationPreparation,
+    MaterializationProvider, MaterializationRequest, MaterializationResident,
+    MaterializationResolver, MaterializationSourceCatalog, MaterializationSourceEntry,
+    MaterializationTransfer, PhysicalMaterializationOperationReservation,
+    PhysicalMaterializationTopology, ResourceSource, resolve_stage_dependencies,
 };
 
 // Stable protocol identities and lease/dependency contracts used by model APIs.
 pub use ferrule_common::{
-    ContinuationId, DependencySet, ExpertLeaseSet, LoadKey, LogicalDependency,
-    ValidatedResidencyBinding,
+    ContinuationId, DependencySet, LogicalDependency, MaterializationKey, MaterializedResourceId,
+    MaterializedResourceKind, PayloadEncodingId, ResidencyLeaseSet, ValidatedResidencyBinding,
 };
 
 // ── Re-exports: runner ────────────────────────────────────────────────────
 pub use runner::{
-    BatchContinuationCancelOutcome, BatchContinuationId, ExpertIoModelRunner,
-    ModelCompletionReactor, ModelInfo, ModelRunner, MultiSessionBatchProgress, MultiSessionRunner,
-    NativeProposal, NativeProposalProgress, NativeProposalSource, PendingModelProgress,
-    ResidentModelRunner, TokenLogit,
+    BatchContinuationCancelOutcome, BatchContinuationId, ModelCompletionReactor, ModelInfo,
+    ModelRunner, MultiSessionBatchProgress, MultiSessionRunner, NativeProposal,
+    NativeProposalProgress, NativeProposalSource, PendingModelProgress, ResidentModelRunner,
+    TokenLogit,
 };
 
 // ── Re-exports: attention_backend ─────────────────────────────────────────

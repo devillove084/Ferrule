@@ -9,11 +9,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 #[cfg(feature = "cuda")]
-use ferrule_common::expert_io::ExpertIoResourceDemand;
+use ferrule_common::materialization_io::MaterializationResourceDemand;
 use ferrule_common::{CompletionHub, Error, Result};
 #[cfg(feature = "cuda")]
 use ferrule_common::{
-    LoadKey, OperationId, RegisteredPinnedAlignedSlabLeaseDescriptor, RegistrationId, SlabId,
+    MaterializationKey, OperationId, RegisteredPinnedAlignedSlabLeaseDescriptor, RegistrationId,
+    SlabId,
 };
 #[cfg(feature = "cuda")]
 use ferrule_cuda::context::{CudaPinnedHostAllocator, CudaPinnedU8HostBuffer};
@@ -45,7 +46,7 @@ pub(crate) struct PinnedExpertReadTicket {
 pub(crate) struct PinnedExpertReadPlan {
     extents: Vec<DirectReadExtent>,
     payload_count: usize,
-    demand: ExpertIoResourceDemand,
+    demand: MaterializationResourceDemand,
 }
 
 #[cfg(feature = "cuda")]
@@ -56,7 +57,7 @@ pub(crate) struct ReservedPinnedExpertRead {
 
 #[cfg(feature = "cuda")]
 impl PinnedExpertReadPlan {
-    pub(crate) const fn demand(&self) -> ExpertIoResourceDemand {
+    pub(crate) const fn demand(&self) -> MaterializationResourceDemand {
         self.demand
     }
 }
@@ -905,7 +906,7 @@ impl IoUringDirectState {
     }
 
     #[cfg(feature = "cuda")]
-    fn physical_resource_capacity(&self) -> Result<Option<ExpertIoResourceDemand>> {
+    fn physical_resource_capacity(&self) -> Result<Option<MaterializationResourceDemand>> {
         if !self
             .buffers
             .first()
@@ -919,11 +920,11 @@ impl IoUringDirectState {
             .checked_mul(self.buffer_bytes)
             .and_then(|bytes| u64::try_from(bytes).ok())
             .ok_or_else(|| Error::Model("pinned io_uring capacity exceeds u64".into()))?;
-        Ok(Some(ExpertIoResourceDemand {
+        Ok(Some(MaterializationResourceDemand {
             read_slots: self.queue_depth as u64,
             storage_read_bytes: pinned_host_bytes,
             pinned_host_bytes,
-            ..ExpertIoResourceDemand::default()
+            ..MaterializationResourceDemand::default()
         }))
     }
 
@@ -966,7 +967,7 @@ impl IoUringDirectState {
         Ok(PinnedExpertReadPlan {
             payload_count: slices.len(),
             extents,
-            demand: ExpertIoResourceDemand {
+            demand: MaterializationResourceDemand {
                 read_slots: 1,
                 storage_read_bytes,
                 pinned_host_bytes,
@@ -983,7 +984,7 @@ impl IoUringDirectState {
         &mut self,
         plan: PinnedExpertReadPlan,
         protocol_operation: OperationId,
-        key: LoadKey,
+        key: MaterializationKey,
     ) -> Result<ReservedPinnedExpertRead> {
         if protocol_operation.is_zero() {
             return Err(Error::Model(
@@ -2021,7 +2022,7 @@ impl IoUringExpertReader {
         &self,
         plan: PinnedExpertReadPlan,
         operation: OperationId,
-        key: LoadKey,
+        key: MaterializationKey,
     ) -> Result<ReservedPinnedExpertRead> {
         self.state
             .lock()
@@ -2080,7 +2081,9 @@ impl IoUringExpertReader {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn physical_resource_capacity(&self) -> Result<Option<ExpertIoResourceDemand>> {
+    pub(crate) fn physical_resource_capacity(
+        &self,
+    ) -> Result<Option<MaterializationResourceDemand>> {
         self.state
             .lock()
             .map_err(|_| Error::Model("expert io_uring state lock poisoned".into()))?

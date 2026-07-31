@@ -49,7 +49,7 @@ pub struct RouterTensorRef {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ArtifactTensorPart {
+pub enum TensorPayloadPart {
     Weight,
     Scale,
     Other,
@@ -73,7 +73,7 @@ pub enum AttentionTensorKind {
 pub struct AttentionTensorRef {
     pub layer: usize,
     pub kind: AttentionTensorKind,
-    pub part: ArtifactTensorPart,
+    pub part: TensorPayloadPart,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -93,7 +93,7 @@ pub enum DenseLayerTensorKind {
 pub struct DenseLayerTensorRef {
     pub layer: usize,
     pub kind: DenseLayerTensorKind,
-    pub part: ArtifactTensorPart,
+    pub part: TensorPayloadPart,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
