@@ -22,7 +22,7 @@ pub(crate) use registry::RegistryDriveStep;
 pub use registry::{
     AttachReport, CompletionDisposition, CompletionRejection, CompletionRejectionReason,
     ContinuationFailure, FailedContinuation, LoadOp, LoadRegistry, LoadRequest, RegistryError,
-    RegistryStats, ResumeLease, ShutdownReport,
+    RegistryStats, ResumeDisposition, ResumeLease, ShutdownReport, TransactionCustodyOutcome,
 };
 pub use resolver::{RuntimeMaterializationResolver, RuntimeMaterializationResolverStats};
 pub use waiters::{

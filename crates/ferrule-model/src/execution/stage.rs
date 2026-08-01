@@ -6,7 +6,10 @@
 
 use std::collections::BTreeSet;
 
-use ferrule_common::{Error, MaterializedResourceId, MaterializedResourceKind};
+use ferrule_common::{
+    DependencySet, Error, LogicalDependency, MaterializationKey, MaterializedResourceId,
+    MaterializedResourceKind,
+};
 
 use crate::materialization::{MaterializationPlacement, MaterializationRequest, ResourceSource};
 
@@ -164,6 +167,21 @@ pub struct StageMaterializationRequest {
 }
 
 impl StageMaterializationRequest {
+    pub fn new(
+        resource_use: StageResourceUse,
+        request: MaterializationRequest,
+    ) -> ferrule_common::Result<Self> {
+        if resource_use.resource() != request.resource() {
+            return Err(Error::Execution(
+                "stage resource use does not match its materialization request".into(),
+            ));
+        }
+        Ok(Self {
+            resource_use,
+            request,
+        })
+    }
+
     pub const fn resource_use(self) -> StageResourceUse {
         self.resource_use
     }
@@ -187,6 +205,98 @@ impl<'a, O> MaterializedStage<'a, O> {
     }
 
     pub fn resources(&self) -> &[StageMaterializationRequest] {
+        &self.resources
+    }
+
+    pub const fn workspace(&self) -> WorkspaceClaim {
+        self.workspace
+    }
+}
+
+/// One exact, generation-qualified resource use retained across a suspended stage edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ResolvedStageResource {
+    key: MaterializationKey,
+    access: ResourceAccess,
+    retention: ResourceRetention,
+}
+
+impl ResolvedStageResource {
+    pub fn new(
+        resource: StageMaterializationRequest,
+        key: MaterializationKey,
+    ) -> ferrule_common::Result<Self> {
+        resource.request().validate_key(key)?;
+        if key.resource() != resource.resource_use().resource() {
+            return Err(Error::Execution(
+                "resolved materialization key does not match its stage resource use".into(),
+            ));
+        }
+        Ok(Self {
+            key,
+            access: resource.resource_use().access(),
+            retention: resource.resource_use().retention(),
+        })
+    }
+
+    pub const fn key(self) -> MaterializationKey {
+        self.key
+    }
+
+    pub const fn access(self) -> ResourceAccess {
+        self.access
+    }
+
+    pub const fn retention(self) -> ResourceRetention {
+        self.retention
+    }
+}
+
+/// Canonical residency dependencies plus the custody contract for one executable stage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedStage {
+    dependencies: Option<DependencySet>,
+    resources: Box<[ResolvedStageResource]>,
+    workspace: WorkspaceClaim,
+}
+
+impl ResolvedStage {
+    pub fn new(
+        resources: impl IntoIterator<Item = ResolvedStageResource>,
+        workspace: WorkspaceClaim,
+    ) -> ferrule_common::Result<Self> {
+        let mut resources = resources.into_iter().collect::<Vec<_>>();
+        resources.sort_unstable_by_key(|resource| resource.key());
+        if resources
+            .windows(2)
+            .any(|window| window[0].key() == window[1].key())
+        {
+            return Err(Error::Execution(
+                "resolved stage contains duplicate materialization keys".into(),
+            ));
+        }
+        let dependencies = if resources.is_empty() {
+            None
+        } else {
+            Some(DependencySet::new(
+                resources
+                    .iter()
+                    .map(|resource| LogicalDependency::resource_resident(resource.key()))
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            )?)
+        };
+        Ok(Self {
+            dependencies,
+            resources: resources.into_boxed_slice(),
+            workspace,
+        })
+    }
+
+    pub fn dependencies(&self) -> Option<&DependencySet> {
+        self.dependencies.as_ref()
+    }
+
+    pub fn resources(&self) -> &[ResolvedStageResource] {
         &self.resources
     }
 
@@ -284,10 +394,10 @@ impl<O> PreparedExecutable<O> {
                     Some(source) => source,
                     None => runtime_source(resource)?,
                 };
-                Ok(StageMaterializationRequest {
-                    resource_use: *resource_use,
-                    request: MaterializationRequest::for_placement(placement, source, resource)?,
-                })
+                StageMaterializationRequest::new(
+                    *resource_use,
+                    MaterializationRequest::for_placement(placement, source, resource)?,
+                )
             })
             .collect::<ferrule_common::Result<Vec<_>>>()?
             .into_boxed_slice();

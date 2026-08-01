@@ -47,9 +47,10 @@ pub mod support;
 pub use execution::{
     ArenaLease, ExecutableStage, ExecutionPlanError, ExecutionShapeKey, MaterializedStage,
     ModelExecutionBackend, PersistentArenaPool, PersistentArenaPoolStats, PreparedExecutable,
-    PreparedModel, ResourceAccess, ResourceBacking, ResourceLayout, ResourceManifest,
-    ResourceRetention, SequenceStateCore, SequenceStepBinding, StageMaterializationRequest,
-    StageResourceUse, TransformerResourceSlot, TransformerStage, WorkspaceClaim,
+    PreparedModel, ResolvedStage, ResolvedStageResource, ResourceAccess, ResourceBacking,
+    ResourceLayout, ResourceManifest, ResourceRetention, SequenceStateCore, SequenceStepBinding,
+    StageMaterializationRequest, StageResourceUse, TransformerResourceSlot, TransformerStage,
+    WorkspaceClaim,
 };
 
 // ── Re-exports: spec ──────────────────────────────────────────────────────
@@ -122,7 +123,7 @@ pub use materialization::{
     MaterializationProvider, MaterializationRequest, MaterializationResident,
     MaterializationResolver, MaterializationSourceCatalog, MaterializationSourceEntry,
     MaterializationTransfer, PhysicalMaterializationOperationReservation,
-    PhysicalMaterializationTopology, ResourceSource, resolve_stage_dependencies,
+    PhysicalMaterializationTopology, ResourceSource, resolve_stage, resolve_stage_resources,
 };
 
 // Stable protocol identities and lease/dependency contracts used by model APIs.

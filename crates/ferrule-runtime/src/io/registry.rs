@@ -15,7 +15,7 @@ use ferrule_common::io_protocol::{
 };
 
 use ferrule_common::materialization_io::MaterializationResourcePlan;
-use ferrule_model::MaterializationPreparation;
+use ferrule_model::{MaterializationPreparation, ResourceRetention};
 
 use crate::io::fairness::{FairQueue, FairQueueConfig, FairQueueError};
 use crate::io::ledger::{CohortId, CriticalPathLedger, CriticalPhase, LedgerError, TimeSpan};
@@ -49,6 +49,7 @@ pub struct LoadRequest {
     pub key: MaterializationKey,
     pub plan: MaterializationResourcePlan,
     pub class: ResourceClass,
+    pub retention: ResourceRetention,
 }
 
 impl LoadRequest {
@@ -56,12 +57,14 @@ impl LoadRequest {
         preparation: MaterializationPreparation,
         plan: MaterializationResourcePlan,
         class: ResourceClass,
+        retention: ResourceRetention,
     ) -> Self {
         Self {
             key: preparation.key(),
             preparation,
             plan,
             class,
+            retention,
         }
     }
 }
@@ -85,6 +88,11 @@ pub enum RegistryError {
     UnknownOperation(OperationId),
     UnknownContinuation(ContinuationId),
     ContinuationAlreadyReady(ContinuationId),
+    ContinuationTransactionMismatch {
+        continuation: ContinuationId,
+        expected: ExecutionTransactionId,
+        requested: ExecutionTransactionId,
+    },
     RegistryShuttingDown,
     ShutdownIncomplete {
         pending_operations: usize,
@@ -100,6 +108,8 @@ pub enum RegistryError {
     PublishedResidencyConflict(Box<MaterializationKey>),
     MissingResidency(Box<MaterializationKey>),
     ResumeLeaseAlreadyTaken(ContinuationId),
+    TransactionCustodyAlreadyFinished(ExecutionTransactionId),
+    PersistentCustodyNotFound(Box<MaterializationKey>),
 }
 
 impl std::fmt::Display for RegistryError {
@@ -349,6 +359,12 @@ pub struct ShutdownReport {
 /// Runtime-owned hard-credit guard paired with the exact lease set passed to one
 /// model resume. The lease set can be taken once; the guard must then be returned
 /// to [`LoadRegistry::finish_resume`] on every success or error path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumeDisposition {
+    Consumed,
+    StillActive,
+}
+
 #[derive(Debug)]
 pub struct ResumeLease {
     continuation: ContinuationId,
@@ -372,10 +388,11 @@ impl ResumeLease {
 /// Consolidated from three parallel BTreeMaps.
 #[derive(Debug)]
 struct ContinuationState {
+    transaction: ExecutionTransactionId,
     grant: PhysicalResourceGrant,
     class: ResourceClass,
     ready_grant: Option<PhysicalResourceGrant>,
-    materializations: BTreeSet<MaterializationKey>,
+    owns_stage_custody: bool,
 }
 
 /// Per-transaction tracking: operations and cohorts.
@@ -384,6 +401,22 @@ struct ContinuationState {
 struct TransactionState {
     operations: BTreeSet<OperationId>,
     cohorts: BTreeSet<CohortId>,
+    owns_materialization_custody: bool,
+    materialization_custody_finished: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum MaterializationCustodyOwner {
+    Stage(ContinuationId),
+    Transaction(ExecutionTransactionId),
+    Persistent(MaterializationKey),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionCustodyOutcome {
+    Committed { started_ns: u64, finished_ns: u64 },
+    RolledBack,
+    Cancelled,
 }
 
 /// Runtime-wide authoritative owner of materialization, waiters, credits,
@@ -403,6 +436,8 @@ pub struct LoadRegistry<P: RuntimeMaterializationProvider> {
     waiter_grants: HashMap<WaiterId, PhysicalResourceGrant, RandomState>,
     ready_waiters: HashMap<ContinuationId, BTreeSet<WaiterId>, RandomState>,
     continuations: HashMap<ContinuationId, ContinuationState, RandomState>,
+    custody: HashMap<MaterializationKey, BTreeSet<MaterializationCustodyOwner>, RandomState>,
+    owner_custody: HashMap<MaterializationCustodyOwner, BTreeSet<MaterializationKey>, RandomState>,
     failed_continuations: VecDeque<FailedContinuation>,
     failed_set: BTreeSet<ContinuationId>,
     runnable: FairQueue<LoadAction>,
@@ -437,6 +472,8 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             waiter_grants: HashMap::default(),
             ready_waiters: HashMap::default(),
             continuations: HashMap::default(),
+            custody: HashMap::default(),
+            owner_custody: HashMap::default(),
             failed_continuations: VecDeque::new(),
             failed_set: BTreeSet::new(),
             runnable: FairQueue::new(fairness)?,
@@ -593,6 +630,7 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         &self,
         key: MaterializationKey,
         class: ResourceClass,
+        retention: ResourceRetention,
     ) -> Result<LoadRequest, RegistryError> {
         let preparation = self.provider.preparation(key)?;
         if preparation.key() != key {
@@ -607,7 +645,7 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             .map_err(|error| {
                 RegistryError::Provider(FailureReason::ProtocolViolation(error.to_string()))
             })?;
-        Ok(LoadRequest::new(preparation, plan, class))
+        Ok(LoadRequest::new(preparation, plan, class, retention))
     }
 
     fn adopt_prepared_residency(
@@ -671,6 +709,57 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         &self.rejected_completions
     }
 
+    fn acquire_custody(&mut self, key: MaterializationKey, owner: MaterializationCustodyOwner) {
+        if self.custody.entry(key).or_default().insert(owner) {
+            self.owner_custody.entry(owner).or_default().insert(key);
+        }
+        if let Some(resident) = self.residencies.get_mut(&key) {
+            resident.lease = ExecutionLeaseState::Held;
+            self.pending_lease_releases.remove(&key);
+        }
+    }
+
+    fn release_custody_owner(&mut self, owner: MaterializationCustodyOwner) -> bool {
+        let Some(keys) = self.owner_custody.remove(&owner) else {
+            return false;
+        };
+        for key in keys {
+            let last_owner = if let Some(owners) = self.custody.get_mut(&key) {
+                owners.remove(&owner);
+                owners.is_empty()
+            } else {
+                false
+            };
+            if !last_owner {
+                continue;
+            }
+            self.custody.remove(&key);
+            if let Some(resident) = self.residencies.get_mut(&key)
+                && resident.lease == ExecutionLeaseState::Held
+            {
+                resident.lease = ExecutionLeaseState::ReleasePending;
+                self.pending_lease_releases.insert(key);
+            }
+        }
+        true
+    }
+
+    fn has_custody(&self, key: MaterializationKey) -> bool {
+        self.custody
+            .get(&key)
+            .is_some_and(|owners| !owners.is_empty())
+    }
+
+    pub fn retire_persistent_custody(
+        &mut self,
+        key: MaterializationKey,
+    ) -> Result<(), RegistryError> {
+        if !self.release_custody_owner(MaterializationCustodyOwner::Persistent(key)) {
+            return Err(RegistryError::PersistentCustodyNotFound(Box::new(key)));
+        }
+        Ok(())
+    }
+
     pub fn attach_waiter(
         &mut self,
         waiter: WaiterId,
@@ -685,10 +774,26 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             return Err(WaiterIndexError::DuplicateWaiter(waiter).into());
         }
         let continuation = waiter.continuation();
-        if self.continuations.contains_key(&continuation)
-            && self.waiters.unresolved_for(continuation).is_none()
+        if self
+            .transactions
+            .get(&waiter.transaction())
+            .is_some_and(|state| state.materialization_custody_finished)
         {
-            return Err(RegistryError::ContinuationAlreadyReady(continuation));
+            return Err(RegistryError::TransactionCustodyAlreadyFinished(
+                waiter.transaction(),
+            ));
+        }
+        if let Some(state) = self.continuations.get(&continuation) {
+            if state.transaction != waiter.transaction() {
+                return Err(RegistryError::ContinuationTransactionMismatch {
+                    continuation,
+                    expected: state.transaction,
+                    requested: waiter.transaction(),
+                });
+            }
+            if self.waiters.unresolved_for(continuation).is_none() {
+                return Err(RegistryError::ContinuationAlreadyReady(continuation));
+            }
         }
 
         let mut requests: Vec<_> = requests.into_iter().collect();
@@ -848,10 +953,13 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             self.continuations.insert(
                 continuation,
                 ContinuationState {
+                    transaction: waiter.transaction(),
                     grant,
                     class,
                     ready_grant: None,
-                    materializations: requests.iter().map(|request| request.key).collect(),
+                    owns_stage_custody: requests
+                        .iter()
+                        .any(|request| request.retention == ResourceRetention::ThroughStage),
                 },
             );
         } else {
@@ -863,9 +971,9 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
                 self.resources.promote(&state.grant, class)?;
                 state.class = class;
             }
-            state
-                .materializations
-                .extend(requests.iter().map(|request| request.key));
+            state.owns_stage_custody |= requests
+                .iter()
+                .any(|request| request.retention == ResourceRetention::ThroughStage);
         }
         let waiter_grant = self.resources.acquire(
             continuation.get(),
@@ -906,12 +1014,20 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             .single_flight_joins
             .saturating_add(joined.len() as u64);
         for request in &requests {
-            if let Some(resident) = self.residencies.get_mut(&request.key)
-                && matches!(request.preparation, MaterializationPreparation::Resident(_))
-            {
-                resident.lease = ExecutionLeaseState::Held;
-                self.pending_lease_releases.remove(&request.key);
-            }
+            let owner = match request.retention {
+                ResourceRetention::ThroughStage => MaterializationCustodyOwner::Stage(continuation),
+                ResourceRetention::ThroughTransaction => {
+                    self.transactions
+                        .entry(waiter.transaction())
+                        .or_default()
+                        .owns_materialization_custody = true;
+                    MaterializationCustodyOwner::Transaction(waiter.transaction())
+                }
+                ResourceRetention::Persistent => {
+                    MaterializationCustodyOwner::Persistent(request.key)
+                }
+            };
+            self.acquire_custody(request.key, owner);
         }
         Ok(AttachReport {
             created,
@@ -1333,6 +1449,7 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
     pub fn finish_resume(
         &mut self,
         lease: &mut ResumeLease,
+        disposition: ResumeDisposition,
         started_ns: u64,
         finished_ns: u64,
     ) -> Result<(), RegistryError> {
@@ -1353,6 +1470,9 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             self.resources.release_all_held(grant)?;
         }
         lease.grant = None;
+        if disposition == ResumeDisposition::StillActive {
+            return Ok(());
+        }
         self.release_ready_waiters(continuation)?;
         self.release_continuation(continuation)
     }
@@ -1386,24 +1506,45 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         Ok(())
     }
 
-    pub fn record_commit(
+    pub fn finish_transaction_custody(
         &mut self,
         transaction: ExecutionTransactionId,
-        started_ns: u64,
-        finished_ns: u64,
+        outcome: TransactionCustodyOutcome,
     ) -> Result<(), RegistryError> {
-        let cohort = CohortId::new(transaction.get());
-        self.transactions
-            .entry(transaction)
-            .or_default()
-            .cohorts
-            .insert(cohort);
-        self.ledger.record_cohort_phase(
-            cohort,
-            CriticalPhase::Commit,
+        if self
+            .transactions
+            .get(&transaction)
+            .is_some_and(|state| state.materialization_custody_finished)
+        {
+            return Err(RegistryError::TransactionCustodyAlreadyFinished(
+                transaction,
+            ));
+        }
+        if let TransactionCustodyOutcome::Committed {
             started_ns,
-            finished_ns.max(started_ns),
-        )?;
+            finished_ns,
+        } = outcome
+        {
+            let cohort = CohortId::new(transaction.get());
+            self.ledger.record_cohort_phase(
+                cohort,
+                CriticalPhase::Commit,
+                started_ns,
+                finished_ns.max(started_ns),
+            )?;
+            self.transactions
+                .entry(transaction)
+                .or_default()
+                .cohorts
+                .insert(cohort);
+        }
+        let state = self.transactions.entry(transaction).or_default();
+        let owned = state.owns_materialization_custody;
+        state.owns_materialization_custody = false;
+        state.materialization_custody_finished = true;
+        if owned {
+            self.release_custody_owner(MaterializationCustodyOwner::Transaction(transaction));
+        }
         Ok(())
     }
 
@@ -1498,6 +1639,10 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         let continuations: Vec<_> = self.continuations.keys().copied().collect();
         for continuation in continuations {
             self.detach_continuation(continuation, CancellationReason::OwnerShutdown, now_ns)?;
+        }
+        let owners = self.owner_custody.keys().copied().collect::<Vec<_>>();
+        for owner in owners {
+            self.release_custody_owner(owner);
         }
         let resident: Vec<_> = self.residencies.keys().copied().collect();
         for key in resident {
@@ -2046,12 +2191,7 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
                 replaced,
             )));
         }
-        if resident.lease != ExecutionLeaseState::Released
-            || self
-                .continuations
-                .values()
-                .any(|state| state.materializations.contains(&replaced))
-        {
+        if resident.lease != ExecutionLeaseState::Released || self.has_custody(replaced) {
             return Ok(PublicationPreflight::Blocked);
         }
         self.resources.can_release_all_held(&resident.grant)?;
@@ -2193,11 +2333,7 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             .take()
             .expect("resident operation owns its destination grant");
         self.resources.release_held(&mut grant, &release)?;
-        let has_logical_owner = self
-            .continuations
-            .values()
-            .any(|state| state.materializations.contains(&operation.key));
-        let lease = if has_logical_owner {
+        let lease = if self.has_custody(operation.key) {
             ExecutionLeaseState::Held
         } else {
             self.pending_lease_releases.insert(operation.key);
@@ -2471,23 +2607,9 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         let Some(mut state) = self.continuations.remove(&continuation) else {
             return Ok(());
         };
-        let keys = state.materializations.iter().copied().collect::<Vec<_>>();
-        for key in keys {
-            let still_owned = self
-                .continuations
-                .values()
-                .any(|other| other.materializations.contains(&key));
-            if still_owned {
-                state.materializations.remove(&key);
-                continue;
-            }
-            if let Some(resident) = self.residencies.get_mut(&key)
-                && resident.lease == ExecutionLeaseState::Held
-            {
-                resident.lease = ExecutionLeaseState::ReleasePending;
-                self.pending_lease_releases.insert(key);
-            }
-            state.materializations.remove(&key);
+        if state.owns_stage_custody {
+            self.release_custody_owner(MaterializationCustodyOwner::Stage(continuation));
+            state.owns_stage_custody = false;
         }
         if let Some(mut ready) = state.ready_grant {
             self.resources.release_all_held(&mut ready)?;

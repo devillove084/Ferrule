@@ -19,6 +19,19 @@ use crate::scheduling::{
 
 const BYTES: u64 = 4096;
 
+fn stage_request(
+    preparation: ferrule_model::MaterializationPreparation,
+    plan: MaterializationResourcePlan,
+    class: ResourceClass,
+) -> LoadRequest {
+    LoadRequest::new(
+        preparation,
+        plan,
+        class,
+        ferrule_model::ResourceRetention::ThroughStage,
+    )
+}
+
 fn key(seed: u8, destination: u64) -> MaterializationKey {
     key_with_source_generation(seed, 1, destination)
 }
@@ -92,7 +105,7 @@ fn preparation(key: MaterializationKey) -> ferrule_model::MaterializationPrepara
 }
 
 fn request(key: MaterializationKey) -> LoadRequest {
-    LoadRequest::new(preparation(key), uniform_plan(BYTES), ResourceClass::Demand)
+    stage_request(preparation(key), uniform_plan(BYTES), ResourceClass::Demand)
 }
 
 fn resident_request(key: MaterializationKey) -> LoadRequest {
@@ -105,7 +118,7 @@ fn resident_request(key: MaterializationKey) -> LoadRequest {
         key.destination_generation(),
     );
     let resident = ferrule_model::MaterializationResident::new(key, binding).unwrap();
-    LoadRequest::new(
+    stage_request(
         ferrule_model::MaterializationPreparation::Resident(resident),
         uniform_plan(BYTES),
         ResourceClass::Demand,
@@ -498,7 +511,7 @@ fn joined_resource_plan_must_match() {
     let error = registry
         .attach_waiter(
             waiter(2),
-            [LoadRequest::new(
+            [stage_request(
                 preparation(materialization_key),
                 uniform_plan(BYTES * 2),
                 ResourceClass::Demand,
@@ -531,7 +544,7 @@ fn invalid_resource_plan_is_rejected() {
     let error = registry
         .attach_waiter(
             waiter(1),
-            [LoadRequest::new(
+            [stage_request(
                 preparation(materialization_key),
                 MaterializationResourcePlan {
                     demand: MaterializationResourceDemand::default(),
@@ -553,7 +566,7 @@ fn transition_larger_than_configured_max_is_rejected() {
     let error = registry
         .attach_waiter(
             waiter(1),
-            [LoadRequest::new(
+            [stage_request(
                 preparation(materialization_key),
                 uniform_plan(maximum + 1),
                 ResourceClass::Demand,
@@ -1190,7 +1203,7 @@ fn demand_reserve_requeues_prefetch_and_allows_demand_progress() {
     let prefetch = registry
         .attach_waiter(
             waiter(1),
-            [LoadRequest::new(
+            [stage_request(
                 preparation(key(1, 1)),
                 uniform_plan(BYTES),
                 ResourceClass::Prefetch,
@@ -2216,7 +2229,9 @@ fn residency_lease_is_held_only_from_prepare_through_finish_resume() {
     assert_eq!(registry.resources().in_use(ResourceKind::ResidencyLease), 1);
     assert_eq!(registry.resources().in_use(ResourceKind::Arena), 1);
     let _leases = resume.take().unwrap();
-    registry.finish_resume(&mut resume, 102, 103).unwrap();
+    registry
+        .finish_resume(&mut resume, ResumeDisposition::Consumed, 102, 103)
+        .unwrap();
     assert_eq!(registry.resources().in_use(ResourceKind::ResidencyLease), 0);
     assert_eq!(registry.resources().in_use(ResourceKind::Arena), 0);
 }
@@ -2239,13 +2254,15 @@ fn finish_resume_precondition_error_preserves_guard_and_credits() {
         .unwrap();
 
     assert!(matches!(
-        registry.finish_resume(&mut resume, 102, 103),
+        registry.finish_resume(&mut resume, ResumeDisposition::Consumed, 102, 103),
         Err(RegistryError::ResumeLeaseAlreadyTaken(candidate)) if candidate == continuation
     ));
     assert_eq!(registry.resources().in_use(ResourceKind::ResidencyLease), 1);
     assert_eq!(registry.resources().in_use(ResourceKind::Arena), 1);
     let _leases = resume.take().unwrap();
-    registry.finish_resume(&mut resume, 104, 105).unwrap();
+    registry
+        .finish_resume(&mut resume, ResumeDisposition::Consumed, 104, 105)
+        .unwrap();
     assert_eq!(registry.resources().in_use(ResourceKind::ResidencyLease), 0);
     assert_eq!(registry.resources().in_use(ResourceKind::Arena), 0);
 }

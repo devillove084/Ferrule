@@ -23,8 +23,8 @@ use crate::cache::{
 };
 use crate::io::{
     FailedContinuation, FairQueue, FairQueueConfig, LoadRegistry, OutputTokenId, RegistryDriveStep,
-    RuntimeMaterializationProvider, RuntimeMaterializationResolver,
-    RuntimeMaterializationResolverStats, SharedMaterializationProvider,
+    ResumeDisposition, RuntimeMaterializationProvider, RuntimeMaterializationResolver,
+    RuntimeMaterializationResolverStats, SharedMaterializationProvider, TransactionCustodyOutcome,
     UnavailableMaterializationProvider,
 };
 use crate::scheduling::resident::{SuspendedSequenceSchedule, greedy_candidate};
@@ -35,11 +35,11 @@ use crate::scheduling::{
     SequenceFinishReason, SequenceSlotPool, SequenceState, SessionId,
 };
 use crate::speculation::{
-    PendingSpeculativeVerificationCohort, SpeculativeCohortProgress, SpeculativeCycleResult,
-    SpeculativeMetrics, SpeculativeVerificationItem, TargetFrontier,
-    begin_resumable_speculative_verification_cohort,
+    PendingSpeculativeRollback, PendingSpeculativeVerificationCohort, SpeculativeCohortProgress,
+    SpeculativeCycleResult, SpeculativeMetrics, SpeculativeTransactionTerminal,
+    SpeculativeVerificationItem, TargetFrontier, begin_resumable_speculative_verification_cohort,
     cancel_resumable_speculative_verification_cohort,
-    resume_resumable_speculative_verification_cohort,
+    resume_resumable_speculative_verification_cohort, retry_speculative_rollback,
 };
 
 use super::observability::{ResidentDriverObservability, ResidentTopKDriverStats};
@@ -324,6 +324,7 @@ struct PendingResidentBatch<S> {
 enum PendingSpeculativeDriverCohort<S> {
     Proposing(PendingNativeProposalCohort<S>),
     Verifying(Box<PendingSpeculativeVerificationDriverCohort<S>>),
+    RollingBack(Box<PendingSpeculativeRollbackDriverCohort<S>>),
 }
 
 impl<S> PendingSpeculativeDriverCohort<S> {
@@ -331,6 +332,7 @@ impl<S> PendingSpeculativeDriverCohort<S> {
         match self {
             Self::Proposing(pending) => &pending.actions,
             Self::Verifying(pending) => &pending.actions,
+            Self::RollingBack(pending) => &pending.actions,
         }
     }
 
@@ -341,6 +343,7 @@ impl<S> PendingSpeculativeDriverCohort<S> {
                 .iter()
                 .any(|slot| matches!(&slot.status, NativeProposalSlotStatus::Waiting(_))),
             Self::Verifying(_) => true,
+            Self::RollingBack(_) => false,
         }
     }
 
@@ -356,6 +359,7 @@ impl<S> PendingSpeculativeDriverCohort<S> {
             Self::Verifying(pending) => {
                 output.push(pending.verification.pending_progress().clone());
             }
+            Self::RollingBack(_) => {}
         }
     }
 }
@@ -370,6 +374,15 @@ struct PendingNativeProposalCohort<S> {
     slots: Vec<PendingNativeProposalSlot>,
     cancellation_request: Option<RequestId>,
     cancellation_error: Option<String>,
+}
+
+struct PendingSpeculativeRollbackDriverCohort<S> {
+    transaction: ExecutionTransactionId,
+    actions: Vec<DecodeAction>,
+    source_states: Vec<S>,
+    schedules: Vec<SuspendedSequenceSchedule>,
+    rollback: PendingSpeculativeRollback<S>,
+    request_id: Option<RequestId>,
 }
 
 struct PendingSpeculativeVerificationDriverCohort<S> {
@@ -917,8 +930,28 @@ where
                     PendingSpeculativeDriverCohort::Verifying(pending) => {
                         pending.cancellation_request.is_some()
                     }
+                    PendingSpeculativeDriverCohort::RollingBack(_) => true,
                 },
             )
+    }
+
+    fn finish_speculative_transaction_custody(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        terminal: SpeculativeTransactionTerminal,
+        started_ns: u64,
+    ) -> Result<()> {
+        let outcome = match terminal {
+            SpeculativeTransactionTerminal::Committed => TransactionCustodyOutcome::Committed {
+                started_ns,
+                finished_ns: self.runtime_now_ns(),
+            },
+            SpeculativeTransactionTerminal::RolledBack => TransactionCustodyOutcome::RolledBack,
+            SpeculativeTransactionTerminal::Cancelled => TransactionCustodyOutcome::Cancelled,
+        };
+        self.load_registry
+            .finish_transaction_custody(transaction, outcome)
+            .map_err(|error| Error::Execution(error.to_string()))
     }
 
     fn transaction_resource_class(
@@ -1009,9 +1042,25 @@ where
             .iter()
             .filter_map(|dependency| dependency.materialization_key())
             .collect::<Vec<_>>();
-        let requests = match keys
+        if keys.len() != progress.resources().len()
+            || progress
+                .resources()
+                .iter()
+                .zip(&keys)
+                .any(|(resource, key)| resource.key() != *key)
+        {
+            return Err(Error::Execution(
+                "pending model progress resource custody does not exactly match its dependencies"
+                    .into(),
+            ));
+        }
+        let requests = match progress
+            .resources()
             .iter()
-            .map(|key| self.load_registry.load_request(*key, class))
+            .map(|resource| {
+                self.load_registry
+                    .load_request(resource.key(), class, resource.retention())
+            })
             .collect::<std::result::Result<Vec<_>, _>>()
         {
             Ok(requests) => requests,
@@ -1301,13 +1350,16 @@ where
         &mut self,
         continuation: ContinuationId,
         mut lease: crate::io::ResumeLease,
+        disposition: ResumeDisposition,
         started_ns: u64,
     ) -> Result<()> {
         debug_assert_eq!(lease.continuation(), continuation);
         self.load_registry
-            .finish_resume(&mut lease, started_ns, self.runtime_now_ns())
+            .finish_resume(&mut lease, disposition, started_ns, self.runtime_now_ns())
             .map_err(|error| Error::Execution(error.to_string()))?;
-        self.unregister_continuation(continuation);
+        if disposition == ResumeDisposition::Consumed {
+            self.unregister_continuation(continuation);
+        }
         Ok(())
     }
 
@@ -1730,6 +1782,9 @@ where
             PendingSpeculativeDriverCohort::Verifying(pending) => {
                 self.cancel_speculative_verification_cohort(*pending, request_id)
             }
+            PendingSpeculativeDriverCohort::RollingBack(pending) => {
+                self.retry_speculative_rollback(*pending, Some(request_id))
+            }
         }
     }
 
@@ -1767,6 +1822,16 @@ where
                 self.enqueue_transaction(transaction);
                 return Err(error);
             }
+            self.load_registry
+                .finish_transaction_custody(
+                    transaction,
+                    TransactionCustodyOutcome::Cancelled,
+                )
+                .map_err(|cleanup| {
+                    Error::Internal(format!(
+                        "transaction {transaction:?} cancellation failed ({error}); materialization custody cleanup also failed ({cleanup})"
+                    ))
+                })?;
             if let Some(continuation) = owned_continuation {
                 self.detach_registered_continuation(
                     continuation,
@@ -1781,10 +1846,87 @@ where
                 ))),
             };
         }
+        self.load_registry
+            .finish_transaction_custody(transaction, TransactionCustodyOutcome::Cancelled)
+            .map_err(|error| Error::Execution(error.to_string()))?;
         if let Some(continuation) = owned_continuation {
             self.detach_registered_continuation(continuation, CancellationReason::ExternalRequest)?;
         }
         self.finish_resident_rollback(pending)
+    }
+
+    fn retry_speculative_rollback(
+        &mut self,
+        mut pending: PendingSpeculativeRollbackDriverCohort<R::SequenceState>,
+        request_id: Option<RequestId>,
+    ) -> Result<()> {
+        if let Some(request_id) = request_id {
+            pending.request_id = Some(request_id);
+        }
+        let transaction = pending.transaction;
+        let mut retirements = Vec::new();
+        let rollback = match self.page_manager.as_mut() {
+            Some(page_manager) => retry_speculative_rollback(
+                &mut self.executor,
+                page_manager,
+                pending.rollback,
+                &mut retirements,
+            ),
+            None => {
+                self.speculative_transactions.insert(
+                    transaction,
+                    PendingSpeculativeDriverCohort::RollingBack(Box::new(pending)),
+                );
+                return Err(Error::Internal(
+                    "authoritative KvPageManager disappeared while retrying speculative rollback"
+                        .into(),
+                ));
+            }
+        };
+        match rollback {
+            Ok(terminal) => {
+                self.finish_speculative_transaction_custody(
+                    transaction,
+                    terminal,
+                    self.runtime_now_ns(),
+                )?;
+                self.progress_speculative_retirements(retirements)?;
+                self.restore_transaction_sessions(pending.schedules, pending.source_states)?;
+                self.scheduler
+                    .requeue_decode_actions_front(&pending.actions)
+            }
+            Err(error) => {
+                let (error, _, rollback, terminal) = error.into_parts();
+                if let Some(terminal) = terminal {
+                    self.finish_speculative_transaction_custody(
+                        transaction,
+                        terminal,
+                        self.runtime_now_ns(),
+                    )?;
+                    self.progress_speculative_retirements(retirements)?;
+                    self.restore_transaction_sessions(pending.schedules, pending.source_states)?;
+                    return match self
+                        .scheduler
+                        .requeue_decode_actions_front(&pending.actions)
+                    {
+                        Ok(()) => Err(error),
+                        Err(requeue) => Err(Error::Internal(format!(
+                            "speculative rollback cleanup failed ({error}); restoring scheduler actions also failed ({requeue})"
+                        ))),
+                    };
+                }
+                pending.rollback = *rollback.ok_or_else(|| {
+                    Error::Internal(
+                        "speculative rollback failure lost its quarantined ownership".into(),
+                    )
+                })?;
+                self.speculative_transactions.insert(
+                    transaction,
+                    PendingSpeculativeDriverCohort::RollingBack(Box::new(pending)),
+                );
+                Err(error)
+            }
+        }
     }
 
     fn cancel_native_proposal_cohort(
@@ -1860,6 +2002,12 @@ where
             return Err(error);
         }
 
+        let transaction = pending.transaction;
+        self.finish_speculative_transaction_custody(
+            transaction,
+            SpeculativeTransactionTerminal::Cancelled,
+            self.runtime_now_ns(),
+        )?;
         let actions = pending.actions;
         self.restore_transaction_sessions(pending.schedules, pending.source_states)?;
         let requeue = self.scheduler.requeue_decode_actions_front(&actions);
@@ -1921,10 +2069,14 @@ where
             verification,
             &mut retirements,
         );
-        let retirement = self.progress_speculative_retirements(retirements);
         match cancellation {
             Ok(()) => {
-                retirement?;
+                self.finish_speculative_transaction_custody(
+                    transaction,
+                    SpeculativeTransactionTerminal::Cancelled,
+                    self.runtime_now_ns(),
+                )?;
+                self.progress_speculative_retirements(retirements)?;
                 self.detach_registered_continuation(
                     continuation,
                     CancellationReason::ExternalRequest,
@@ -1933,11 +2085,34 @@ where
                 self.scheduler.requeue_decode_actions_front(&actions)
             }
             Err(error) => {
-                let (mut error, verification) = error.into_parts();
-                if let Err(retirement) = retirement {
+                let (mut error, verification, rollback, terminal) = error.into_parts();
+                if let Some(terminal) = terminal {
+                    self.finish_speculative_transaction_custody(
+                        transaction,
+                        terminal,
+                        self.runtime_now_ns(),
+                    )?;
+                }
+                if let Err(retirement) = self.progress_speculative_retirements(retirements) {
                     error = Error::Internal(format!(
                         "speculative cancellation failed ({error}); KV retirement also failed ({retirement})"
                     ));
+                }
+                if let Some(rollback) = rollback {
+                    self.speculative_transactions.insert(
+                        transaction,
+                        PendingSpeculativeDriverCohort::RollingBack(Box::new(
+                            PendingSpeculativeRollbackDriverCohort {
+                                transaction,
+                                actions,
+                                source_states,
+                                schedules,
+                                rollback: *rollback,
+                                request_id: Some(request_id),
+                            },
+                        )),
+                    );
+                    return Err(error);
                 }
                 if let Some(verification) = verification {
                     self.speculative_transactions.insert(
@@ -2906,6 +3081,16 @@ where
                     self.resident_transactions.insert(transaction, pending);
                     return Err(error);
                 }
+                self.load_registry
+                    .finish_transaction_custody(
+                        transaction,
+                        TransactionCustodyOutcome::RolledBack,
+                    )
+                    .map_err(|cleanup| {
+                        Error::Internal(format!(
+                            "model execution failed ({error}); materialization custody cleanup also failed ({cleanup})"
+                        ))
+                    })?;
                 let cleanup = self.abort_quiesced_resident_kv(pending.kv);
                 self.restore_transaction_sessions(pending.schedules, pending.states)?;
                 let error = self.abort_action(&pending.action, error, false, "model execution");
@@ -2983,7 +3168,13 @@ where
             continuation,
             leases,
         );
-        self.finish_resume_lease(continuation, resume_lease, resume_started)?;
+        let disposition =
+            if progress.is_err() && self.executor.pending_model_progress(transaction).is_some() {
+                ResumeDisposition::StillActive
+            } else {
+                ResumeDisposition::Consumed
+            };
+        self.finish_resume_lease(continuation, resume_lease, disposition, resume_started)?;
         self.record_runnable_work_span(resume_started)?;
         match progress {
             Ok(NativeBatchExecutionProgress::Complete(output)) => {
@@ -3011,6 +3202,16 @@ where
                     self.resident_transactions.insert(transaction, pending);
                     return Err(error);
                 }
+                self.load_registry
+                    .finish_transaction_custody(
+                        transaction,
+                        TransactionCustodyOutcome::RolledBack,
+                    )
+                    .map_err(|cleanup| {
+                        Error::Internal(format!(
+                            "resumable model execution failed ({error}); materialization custody cleanup also failed ({cleanup})"
+                        ))
+                    })?;
                 let cleanup = self.abort_quiesced_resident_kv(pending.kv);
                 self.restore_transaction_sessions(pending.schedules, pending.states)?;
                 let error =
@@ -3103,7 +3304,13 @@ where
             return Err(self.rollback_and_fail_resident(pending, error, "backend KV commit"));
         }
         self.load_registry
-            .record_commit(transaction, commit_started, self.runtime_now_ns())
+            .finish_transaction_custody(
+                transaction,
+                TransactionCustodyOutcome::Committed {
+                    started_ns: commit_started,
+                    finished_ns: self.runtime_now_ns(),
+                },
+            )
             .map_err(|error| Error::Execution(error.to_string()))?;
         let retirement =
             match std::mem::replace(&mut pending.kv, PendingResidentKv::Reserved(Vec::new())) {
@@ -3189,12 +3396,16 @@ where
                 "{stage} failed ({error}); backend rollback also failed ({rollback_error})"
             ));
         }
+        let custody = self
+            .load_registry
+            .finish_transaction_custody(transaction, TransactionCustodyOutcome::RolledBack);
         let logical = self.abort_quiesced_resident_kv(pending.kv);
         let restore = self.restore_transaction_sessions(pending.schedules, pending.states);
-        match (logical, restore) {
-            (Ok(()), Ok(())) => self.abort_action(&pending.action, error, false, stage),
-            (logical, restore) => Error::Internal(format!(
-                "{stage} failed ({error}); logical cleanup={:?}; session restore={:?}",
+        match (custody, logical, restore) {
+            (Ok(()), Ok(()), Ok(())) => self.abort_action(&pending.action, error, false, stage),
+            (custody, logical, restore) => Error::Internal(format!(
+                "{stage} failed ({error}); materialization custody={:?}; logical cleanup={:?}; session restore={:?}",
+                custody.err(),
                 logical.err(),
                 restore.err()
             )),
@@ -3857,7 +4068,17 @@ where
                                 )
                             },
                         );
-                        self.finish_resume_lease(continuation, resume_lease, resume_started)?;
+                        let disposition = if progress.is_err() {
+                            ResumeDisposition::StillActive
+                        } else {
+                            ResumeDisposition::Consumed
+                        };
+                        self.finish_resume_lease(
+                            continuation,
+                            resume_lease,
+                            disposition,
+                            resume_started,
+                        )?;
                         self.record_runnable_work_span(resume_started)?;
                         Some(progress)
                     }
@@ -4002,6 +4223,11 @@ where
         let verification_items = match verification_items {
             Ok(items) => items,
             Err(error) => {
+                self.finish_speculative_transaction_custody(
+                    transaction,
+                    SpeculativeTransactionTerminal::RolledBack,
+                    self.runtime_now_ns(),
+                )?;
                 self.restore_transaction_sessions(schedules, source_states)?;
                 return Err(self.abort_speculative_decode_batch(
                     &actions,
@@ -4014,6 +4240,11 @@ where
             Ok(reservations) => reservations,
             Err(error) => {
                 drop(verification_items);
+                self.finish_speculative_transaction_custody(
+                    transaction,
+                    SpeculativeTransactionTerminal::RolledBack,
+                    self.runtime_now_ns(),
+                )?;
                 self.restore_transaction_sessions(schedules, source_states)?;
                 return Err(self.abort_speculative_decode_batch(
                     &actions,
@@ -4039,6 +4270,25 @@ where
         };
         self.record_runnable_work_span(verification_started_ns)?;
         drop(verification_items);
+        match &progress {
+            Ok(SpeculativeCohortProgress::Complete(_)) => {
+                self.finish_speculative_transaction_custody(
+                    transaction,
+                    SpeculativeTransactionTerminal::Committed,
+                    verification_started_ns,
+                )?;
+            }
+            Err(error) => {
+                if let Some(terminal) = error.terminal() {
+                    self.finish_speculative_transaction_custody(
+                        transaction,
+                        terminal,
+                        verification_started_ns,
+                    )?;
+                }
+            }
+            Ok(SpeculativeCohortProgress::Waiting(_)) => {}
+        }
         if let Err(error) = self.progress_speculative_retirements(retirements) {
             self.restore_transaction_sessions(schedules, source_states)?;
             return Err(self.abort_speculative_decode_batch(
@@ -4093,7 +4343,23 @@ where
                 ))
             }
             Err(error) => {
-                let (error, verification) = error.into_parts();
+                let (error, verification, rollback, _) = error.into_parts();
+                if let Some(rollback) = rollback {
+                    self.speculative_transactions.insert(
+                        transaction,
+                        PendingSpeculativeDriverCohort::RollingBack(Box::new(
+                            PendingSpeculativeRollbackDriverCohort {
+                                transaction,
+                                actions,
+                                source_states,
+                                schedules,
+                                rollback: *rollback,
+                                request_id: None,
+                            },
+                        )),
+                    );
+                    return Err(error);
+                }
                 if let Some(verification) = verification {
                     if !self
                         .continuations
@@ -4209,6 +4475,15 @@ where
                     ready_continuation,
                     on_token,
                 ),
+            PendingSpeculativeDriverCohort::RollingBack(pending) => {
+                self.speculative_transactions.insert(
+                    transaction,
+                    PendingSpeculativeDriverCohort::RollingBack(pending),
+                );
+                Err(Error::Execution(format!(
+                    "speculative transaction {transaction:?} is quarantined pending rollback retry"
+                )))
+            }
         }
     }
 
@@ -4278,7 +4553,8 @@ where
                         PendingSpeculativeDriverCohort::Verifying(pending) => {
                             Some(pending.verification.pending_progress().continuation().get())
                         }
-                        PendingSpeculativeDriverCohort::Proposing(_) => None,
+                        PendingSpeculativeDriverCohort::Proposing(_)
+                        | PendingSpeculativeDriverCohort::RollingBack(_) => None,
                     })
                     .unwrap_or_default(),
                 ready_continuation.get()
@@ -4300,8 +4576,36 @@ where
             leases,
             &mut retirements,
         );
-        self.finish_resume_lease(ready_continuation, resume_lease, resume_started)?;
+        let disposition = match &progress {
+            Err(error) if error.pending().is_some() => ResumeDisposition::StillActive,
+            _ => ResumeDisposition::Consumed,
+        };
+        self.finish_resume_lease(
+            ready_continuation,
+            resume_lease,
+            disposition,
+            resume_started,
+        )?;
         self.record_runnable_work_span(resume_started)?;
+        match &progress {
+            Ok(SpeculativeCohortProgress::Complete(_)) => {
+                self.finish_speculative_transaction_custody(
+                    transaction,
+                    SpeculativeTransactionTerminal::Committed,
+                    resume_started,
+                )?;
+            }
+            Err(error) => {
+                if let Some(terminal) = error.terminal() {
+                    self.finish_speculative_transaction_custody(
+                        transaction,
+                        terminal,
+                        resume_started,
+                    )?;
+                }
+            }
+            Ok(SpeculativeCohortProgress::Waiting(_)) => {}
+        }
         if let Err(error) = self.progress_speculative_retirements(retirements) {
             self.restore_transaction_sessions(schedules, source_states)?;
             return Err(self.abort_speculative_decode_batch(
@@ -4354,7 +4658,23 @@ where
                 Ok(None)
             }
             Err(error) => {
-                let (error, verification) = error.into_parts();
+                let (error, verification, rollback, _) = error.into_parts();
+                if let Some(rollback) = rollback {
+                    self.speculative_transactions.insert(
+                        transaction,
+                        PendingSpeculativeDriverCohort::RollingBack(Box::new(
+                            PendingSpeculativeRollbackDriverCohort {
+                                transaction,
+                                actions,
+                                source_states,
+                                schedules,
+                                rollback: *rollback,
+                                request_id: cancellation_request,
+                            },
+                        )),
+                    );
+                    return Err(error);
+                }
                 if let Some(verification) = verification {
                     if !self
                         .continuations
@@ -4416,10 +4736,6 @@ where
         let cohort_transaction_time_us = cohort.transaction_time_us;
         let cohort_verify_time_us = cohort.verify_time_us;
         let eos_token_id = self.executor.runner().eos_token_id();
-        let commit_timestamp = self.runtime_now_ns();
-        self.load_registry
-            .record_commit(transaction, commit_timestamp, commit_timestamp)
-            .map_err(|error| Error::Execution(error.to_string()))?;
         let mut rows = 0usize;
         let mut staged = 0usize;
         let mut finished = 0usize;
@@ -5153,6 +5469,8 @@ mod tests {
         prepared_batches: usize,
         committed_batches: usize,
         rolled_back_batches: usize,
+        rollback_failures_remaining: usize,
+        empty_top_k_output: bool,
         paged: bool,
         expert_residency_requirements:
             Option<ferrule_common::expert_residency::ExpertResidencyRequirements>,
@@ -5163,6 +5481,7 @@ mod tests {
         materialization_resolver: Option<Box<dyn MaterializationResolver>>,
         materialization_resolver_install_calls: usize,
         materialization_request: Option<MaterializationRequest>,
+        materialization_retention: ferrule_model::ResourceRetention,
     }
 
     impl std::fmt::Debug for MockTopKRunner {
@@ -5225,6 +5544,8 @@ mod tests {
                 prepared_batches: 0,
                 committed_batches: 0,
                 rolled_back_batches: 0,
+                rollback_failures_remaining: 0,
+                empty_top_k_output: false,
                 paged: false,
                 expert_residency_requirements: None,
                 expert_residency_control_installed: false,
@@ -5234,6 +5555,7 @@ mod tests {
                 materialization_resolver: None,
                 materialization_resolver_install_calls: 0,
                 materialization_request: None,
+                materialization_retention: ferrule_model::ResourceRetention::ThroughStage,
             }
         }
 
@@ -5263,8 +5585,26 @@ mod tests {
             self
         }
 
+        fn with_rollback_failures(mut self, failures: usize) -> Self {
+            self.rollback_failures_remaining = failures;
+            self
+        }
+
+        fn with_empty_top_k_output(mut self) -> Self {
+            self.empty_top_k_output = true;
+            self
+        }
+
         fn with_materialization_request(mut self, request: MaterializationRequest) -> Self {
             self.materialization_request = Some(request);
+            self
+        }
+
+        fn with_materialization_retention(
+            mut self,
+            retention: ferrule_model::ResourceRetention,
+        ) -> Self {
+            self.materialization_retention = retention;
             self
         }
 
@@ -5361,14 +5701,22 @@ mod tests {
             transaction: ExecutionTransactionId,
         ) -> Result<PendingModelProgress> {
             let continuation = ContinuationId::new(transaction.get());
-            let dependencies = match self.materialization_request {
+            match self.materialization_request {
                 Some(request) => {
                     let key = self.materialization_resolver()?.resolve(request)?;
-                    DependencySet::new([LogicalDependency::resource_resident(key)?])?
+                    Ok(materialization_progress_with_retention(
+                        transaction,
+                        continuation,
+                        [(request, key)],
+                        self.materialization_retention,
+                    ))
                 }
-                None => Self::pending_dependencies(continuation),
-            };
-            PendingModelProgress::new(transaction, continuation, dependencies)
+                None => PendingModelProgress::new(
+                    transaction,
+                    continuation,
+                    Self::pending_dependencies(continuation),
+                ),
+            }
         }
 
         fn pending_native_proposal(
@@ -5418,7 +5766,14 @@ mod tests {
                 .into_iter()
                 .enumerate()
                 .filter(|(row, _)| matches!(batch.logits()[*row], LogitsRequest::TopK(_)))
-                .map(|(row, top1)| LogitsRow::new(row as u32, LogitsOutput::TopK(vec![top1])))
+                .map(|(row, top1)| {
+                    let top_k = if self.empty_top_k_output {
+                        Vec::new()
+                    } else {
+                        vec![top1]
+                    };
+                    LogitsRow::new(row as u32, LogitsOutput::TopK(top_k))
+                })
                 .collect();
             Ok(ExecutionOutput::new(logits))
         }
@@ -5851,6 +6206,10 @@ mod tests {
             _states: &mut [Self::SequenceState],
         ) -> Result<()> {
             self.rolled_back_batches += 1;
+            if self.rollback_failures_remaining > 0 {
+                self.rollback_failures_remaining -= 1;
+                return Err(Error::Model("simulated backend rollback failure".into()));
+            }
             Ok(())
         }
 
@@ -6042,6 +6401,48 @@ mod tests {
             DeviceId::new(2),
         )
         .unwrap()
+    }
+
+    fn materialization_progress(
+        transaction: ExecutionTransactionId,
+        continuation: ContinuationId,
+        resources: impl IntoIterator<
+            Item = (MaterializationRequest, ferrule_common::MaterializationKey),
+        >,
+    ) -> PendingModelProgress {
+        materialization_progress_with_retention(
+            transaction,
+            continuation,
+            resources,
+            ferrule_model::ResourceRetention::ThroughStage,
+        )
+    }
+
+    fn materialization_progress_with_retention(
+        transaction: ExecutionTransactionId,
+        continuation: ContinuationId,
+        resources: impl IntoIterator<
+            Item = (MaterializationRequest, ferrule_common::MaterializationKey),
+        >,
+        retention: ferrule_model::ResourceRetention,
+    ) -> PendingModelProgress {
+        let resolved = resources
+            .into_iter()
+            .map(|(request, key)| {
+                let resource_use = ferrule_model::StageResourceUse::new(
+                    request.resource(),
+                    ferrule_model::ResourceAccess::Read,
+                    retention,
+                );
+                let request =
+                    ferrule_model::StageMaterializationRequest::new(resource_use, request).unwrap();
+                ferrule_model::ResolvedStageResource::new(request, key).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let stage =
+            ferrule_model::ResolvedStage::new(resolved, ferrule_model::WorkspaceClaim::NONE)
+                .unwrap();
+        PendingModelProgress::for_resolved_stage(transaction, continuation, stage).unwrap()
     }
 
     fn top(token_id: u32) -> Vec<TokenLogit> {
@@ -6452,12 +6853,11 @@ mod tests {
             .unwrap()
             .resolve(materialization_request(1))
             .unwrap();
-        let progress = PendingModelProgress::new(
+        let progress = materialization_progress(
             ExecutionTransactionId::new(1).unwrap(),
             ContinuationId::new(1),
-            DependencySet::new([LogicalDependency::resource_resident(key).unwrap()]).unwrap(),
-        )
-        .unwrap();
+            [(materialization_request(1), key)],
+        );
 
         let mut listener = driver.completion_hub().listen();
         driver
@@ -6486,6 +6886,7 @@ mod tests {
                     .materialization_key(ferrule_common::DestinationGeneration::new(1))
                     .unwrap(),
                 crate::scheduling::ResourceClass::LatencyCritical,
+                ferrule_model::ResourceRetention::ThroughStage,
             ),
             Err(crate::io::RegistryError::Provider(
                 ferrule_common::FailureReason::DeviceUnavailable
@@ -6568,12 +6969,11 @@ mod tests {
         let key = materialization_request(1)
             .materialization_key(ferrule_common::DestinationGeneration::new(1))
             .unwrap();
-        let progress = PendingModelProgress::new(
+        let progress = materialization_progress(
             transaction,
             continuation,
-            DependencySet::new([LogicalDependency::resource_resident(key).unwrap()]).unwrap(),
-        )
-        .unwrap();
+            [(materialization_request(1), key)],
+        );
         let error = driver
             .register_pending_progress(&progress, crate::scheduling::ResourceClass::LatencyCritical)
             .unwrap_err();
@@ -6783,16 +7183,14 @@ mod tests {
             ];
             for continuation in continuations {
                 let transaction = ExecutionTransactionId::new(continuation.get()).unwrap();
-                let progress = PendingModelProgress::new(
+                let progress = materialization_progress(
                     transaction,
                     continuation,
-                    DependencySet::new([
-                        LogicalDependency::resource_resident(resident_key).unwrap(),
-                        LogicalDependency::resource_resident(failing_key).unwrap(),
-                    ])
-                    .unwrap(),
-                )
-                .unwrap();
+                    [
+                        (resident_request, resident_key),
+                        (failing_request, failing_key),
+                    ],
+                );
                 driver
                     .register_pending_progress(
                         &progress,
@@ -6869,16 +7267,14 @@ mod tests {
         handle.fail_next_release(ferrule_common::FailureReason::DeviceUnavailable);
         let transaction = ExecutionTransactionId::new(200).unwrap();
         let continuation = ContinuationId::new(200);
-        let progress = PendingModelProgress::new(
+        let progress = materialization_progress(
             transaction,
             continuation,
-            DependencySet::new([
-                LogicalDependency::resource_resident(resident_key).unwrap(),
-                LogicalDependency::resource_resident(failing_key).unwrap(),
-            ])
-            .unwrap(),
-        )
-        .unwrap();
+            [
+                (materialization_request(30), resident_key),
+                (materialization_request(31), failing_key),
+            ],
+        );
         driver
             .register_pending_progress(&progress, crate::scheduling::ResourceClass::LatencyCritical)
             .unwrap();
@@ -7360,6 +7756,107 @@ mod tests {
         let report = driver.shutdown(&mut |_| Ok(()), 0).unwrap();
         assert_eq!(report.kv_page_grants, 0);
         assert_eq!(report.registry.active_grants, 0);
+    }
+
+    #[test]
+    fn speculative_rollback_failure_quarantines_all_ownership_until_retry() {
+        let request = materialization_request(9);
+        let key = request
+            .materialization_key(ferrule_common::DestinationGeneration::new(37))
+            .unwrap();
+        let (physical, handle) = MockPhysicalProvider::automatic();
+        let runner = MockTopKRunner::new(vec![top(10)])
+            .with_speculative_cycle(
+                NativeProposal {
+                    token_ids: vec![11, 12],
+                    confidence_logits: vec![1.0, 1.0],
+                },
+                vec![
+                    TokenLogit::new(11, 9.0),
+                    TokenLogit::new(99, 8.0),
+                    TokenLogit::new(98, 7.0),
+                ],
+            )
+            .with_resumable_wait_scripts([0, 1])
+            .with_materialization_request(request)
+            .with_materialization_retention(ferrule_model::ResourceRetention::ThroughTransaction)
+            .with_empty_top_k_output()
+            .with_rollback_failures(1)
+            .with_materialization_provider(Box::new(physical));
+        let mut driver = speculative_driver_from_runner(runner, 1);
+        let actions = ready_speculative_decode_actions(&mut driver, &[1]);
+
+        assert!(matches!(
+            driver
+                .execute_speculative_decode_batch(actions, &mut |_| Ok(()))
+                .unwrap(),
+            ResidentDriverStep::WaitingForModelProgress(ref pending) if pending.len() == 1
+        ));
+        let transaction = *driver
+            .speculative_transactions
+            .keys()
+            .next()
+            .expect("speculative verification should own its transaction");
+        assert!(driver.executor_has_transaction(transaction));
+        assert_eq!(driver.session_owner[&SessionId(1)], transaction);
+        assert!(!driver.sequence_states.contains_key(&SessionId(1)));
+
+        let error = driver.step(&mut |_| Ok(())).unwrap_err();
+        assert!(error.to_string().contains("backend rollback also failed"));
+        let Some(PendingSpeculativeDriverCohort::RollingBack(pending)) =
+            driver.speculative_transactions.get(&transaction)
+        else {
+            panic!("rollback failure must quarantine the complete speculative cohort");
+        };
+        assert_eq!(pending.source_states.len(), 1);
+        assert_eq!(pending.schedules.len(), 1);
+        assert_eq!(pending.actions.len(), 1);
+        assert_eq!(pending.request_id, None);
+        assert!(driver.executor_has_transaction(transaction));
+        assert_eq!(driver.executor().runner().rolled_back_batches, 1);
+        assert_eq!(driver.session_owner[&SessionId(1)], transaction);
+        assert!(!driver.sequence_states.contains_key(&SessionId(1)));
+        assert!(driver.page_manager().unwrap().allocated_pages() > 0);
+        assert_eq!(
+            handle.command_count(|command| matches!(
+                command,
+                MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+            )),
+            0
+        );
+
+        assert_eq!(
+            driver.cancel_request(RequestId(1)).unwrap(),
+            CancelRequestResult::Active {
+                request_id: RequestId(1),
+                session_id: SessionId(1),
+            }
+        );
+        assert!(driver.speculative_transactions.is_empty());
+        assert!(!driver.executor_has_transaction(transaction));
+        assert_eq!(driver.executor().runner().rolled_back_batches, 2);
+        assert!(!driver.session_owner.contains_key(&SessionId(1)));
+        assert!(!driver.sequence_states.contains_key(&SessionId(1)));
+        assert_eq!(driver.page_manager().unwrap().allocated_pages(), 0);
+        assert_eq!(
+            handle.command_count(|command| matches!(
+                command,
+                MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+            )),
+            0
+        );
+
+        driver
+            .load_registry
+            .finish_pending_lease_releases()
+            .unwrap();
+        assert_eq!(
+            handle.command_count(|command| matches!(
+                command,
+                MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+            )),
+            1
+        );
     }
 
     #[test]

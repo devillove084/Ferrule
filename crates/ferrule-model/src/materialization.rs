@@ -10,6 +10,7 @@ mod source;
 
 pub use source::{MaterializationSourceCatalog, MaterializationSourceEntry};
 
+#[cfg(test)]
 use ferrule_common::LogicalDependency;
 use ferrule_common::{
     BackendId, CancellationReason, CompletionEvent, ContentHash, ContinuationId, DependencySet,
@@ -676,6 +677,7 @@ pub(crate) fn validate_continuation_id(continuation: ContinuationId) -> Result<(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn resource_dependency_set(
     keys: impl IntoIterator<Item = MaterializationKey>,
 ) -> Result<DependencySet> {
@@ -686,26 +688,45 @@ pub(crate) fn resource_dependency_set(
     Ok(DependencySet::new(dependencies)?)
 }
 
-/// Resolve every exact resource request for one stage through the global resolver
-/// boundary and return the canonical dependency set retained by its continuation.
-pub fn resolve_stage_dependencies<O>(
-    stage: &crate::execution::MaterializedStage<'_, O>,
+/// Resolve arbitrary exact resource requests through the global resolver boundary.
+///
+/// This is also the post-router path for a dynamically selected routed-expert set.
+/// Every resolved key is validated against the request that produced it before the
+/// canonical stage custody contract is constructed.
+pub fn resolve_stage_resources(
+    resources: impl IntoIterator<Item = crate::execution::StageMaterializationRequest>,
+    workspace: crate::execution::WorkspaceClaim,
     resolver: &mut dyn MaterializationResolver,
-) -> Result<DependencySet> {
-    let mut keys = Vec::with_capacity(stage.resources().len());
-    for resource in stage.resources() {
+) -> Result<crate::execution::ResolvedStage> {
+    let placement = resolver.placement();
+    let mut resolved = Vec::new();
+    for resource in resources {
         let request = resource.request();
-        if request.model() != resolver.placement().model()
-            || request.backend() != resolver.placement().backend()
-            || request.device() != resolver.placement().device()
+        if request.model() != placement.model()
+            || request.backend() != placement.backend()
+            || request.device() != placement.device()
         {
             return Err(Error::Execution(
                 "materialized stage request does not match resolver placement".into(),
             ));
         }
-        keys.push(resolver.resolve(request)?);
+        let key = resolver.resolve(request)?;
+        resolved.push(crate::execution::ResolvedStageResource::new(resource, key)?);
     }
-    resource_dependency_set(keys)
+    crate::execution::ResolvedStage::new(resolved, workspace)
+}
+
+/// Resolve every exact resource request for one prepared stage without losing its
+/// access, retention, or workspace contract.
+pub fn resolve_stage<O>(
+    stage: &crate::execution::MaterializedStage<'_, O>,
+    resolver: &mut dyn MaterializationResolver,
+) -> Result<crate::execution::ResolvedStage> {
+    resolve_stage_resources(
+        stage.resources().iter().copied(),
+        stage.workspace(),
+        resolver,
+    )
 }
 
 #[cfg(test)]
@@ -905,12 +926,30 @@ mod tests {
             })
             .unwrap();
 
-        let dependencies = resolve_stage_dependencies(&stage, &mut resolver).unwrap();
-        let resources = dependencies
+        let resolved = resolve_stage(&stage, &mut resolver).unwrap();
+        let resources = resolved
+            .resources()
             .iter()
-            .map(|dependency| dependency.materialization_key().unwrap().resource())
+            .map(|resource| resource.key().resource())
             .collect::<Vec<_>>();
         assert_eq!(resources, vec![parameter, kv, gradient]);
+        assert_eq!(resolved.workspace(), WorkspaceClaim::NONE);
+        assert_eq!(resolved.dependencies().unwrap().len(), 3);
+        assert_eq!(resolved.resources()[0].access(), ResourceAccess::Read);
+        assert_eq!(
+            resolved.resources()[0].retention(),
+            ResourceRetention::ThroughStage
+        );
+        assert_eq!(resolved.resources()[1].access(), ResourceAccess::ReadWrite);
+        assert_eq!(
+            resolved.resources()[1].retention(),
+            ResourceRetention::ThroughTransaction
+        );
+        assert_eq!(resolved.resources()[2].access(), ResourceAccess::Write);
+        assert_eq!(
+            resolved.resources()[2].retention(),
+            ResourceRetention::ThroughTransaction
+        );
         assert_eq!(resolver.reservations.len(), 3);
         assert_eq!(
             resolver
@@ -921,6 +960,57 @@ mod tests {
                 .source(),
             parameter_source
         );
+    }
+
+    #[test]
+    fn resolved_stage_rejects_a_key_from_a_different_request() {
+        struct WrongKeyResolver;
+
+        impl MaterializationResolver for WrongKeyResolver {
+            fn placement(&self) -> MaterializationPlacement {
+                MaterializationPlacement::new(
+                    request().model(),
+                    request().backend(),
+                    request().device(),
+                )
+                .unwrap()
+            }
+
+            fn resolve(&mut self, request: MaterializationRequest) -> Result<MaterializationKey> {
+                MaterializationRequest::for_placement(
+                    self.placement(),
+                    source(91, 92, 93, 94),
+                    request.resource(),
+                )?
+                .materialization_key(DestinationGeneration::new(20))
+            }
+        }
+
+        let request = request();
+        let resource_use = crate::execution::StageResourceUse::read(request.resource());
+        let resource =
+            crate::execution::StageMaterializationRequest::new(resource_use, request).unwrap();
+        let error = resolve_stage_resources(
+            [resource],
+            crate::execution::WorkspaceClaim::NONE,
+            &mut WrongKeyResolver,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("source identity"));
+    }
+
+    #[test]
+    fn resource_free_resolved_stage_has_no_wait_dependencies() {
+        let resolved = resolve_stage_resources(
+            [],
+            crate::execution::WorkspaceClaim::new(256, 64).unwrap(),
+            &mut MockResolver::default(),
+        )
+        .unwrap();
+        assert!(resolved.dependencies().is_none());
+        assert!(resolved.resources().is_empty());
+        assert_eq!(resolved.workspace().bytes(), 256);
     }
 
     #[test]

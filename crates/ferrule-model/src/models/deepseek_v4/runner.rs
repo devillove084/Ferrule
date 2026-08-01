@@ -21,12 +21,15 @@ use crate::execution::ModelExecutionBackend;
 #[cfg(any(feature = "cuda", test))]
 use crate::execution::SequenceStepBinding;
 #[cfg(feature = "cuda")]
-use crate::execution::{OwnedArenaCheckout, PersistentArenaPool};
+use crate::execution::{
+    OwnedArenaCheckout, PersistentArenaPool, ResourceAccess, ResourceRetention,
+    StageMaterializationRequest, StageResourceUse, WorkspaceClaim,
+};
 #[cfg(any(feature = "cuda", test))]
 use crate::materialization::ContinuationDependencyState;
 #[cfg(feature = "cuda")]
 use crate::materialization::{
-    MaterializationPlacement, MaterializationRequest, resource_dependency_set,
+    MaterializationPlacement, MaterializationRequest, resolve_stage_resources,
 };
 use crate::materialization::{MaterializationProvider, MaterializationResolver};
 use crate::moe::prediction::ExpertHotsetPredictor;
@@ -1389,8 +1392,8 @@ impl DeepSeekV4Runner {
             .as_ref()
             .map(DeepSeekV4DsparkLayerContinuation::pending_experts)
             .unwrap_or_default();
-        let dependencies = if pending.is_empty() {
-            internal_continuation_dependency(continuation.id)?
+        let resolved_stage = if pending.is_empty() {
+            None
         } else {
             let prepared = self
                 .plan
@@ -1434,26 +1437,55 @@ impl DeepSeekV4Runner {
                 )
                 })?;
             let placement = resolver.placement();
-            let mut keys = Vec::with_capacity(requests.len());
-            for (resource_source, layer, expert) in requests {
-                let request = MaterializationRequest::for_placement(
-                    placement,
-                    resource_source,
-                    ferrule_common::MaterializedResourceId::routed_expert(
+            let resources = requests
+                .into_iter()
+                .map(|(resource_source, layer, expert)| {
+                    let resource = ferrule_common::MaterializedResourceId::routed_expert(
                         ferrule_common::LayerId::new(layer),
                         ferrule_common::ExpertId::new(expert),
-                    ),
-                )?;
-                keys.push(resolver.resolve(request)?);
-            }
-            resource_dependency_set(keys)?
+                    );
+                    StageMaterializationRequest::new(
+                        StageResourceUse::new(
+                            resource,
+                            ResourceAccess::Read,
+                            ResourceRetention::ThroughTransaction,
+                        ),
+                        MaterializationRequest::for_placement(
+                            placement,
+                            resource_source,
+                            resource,
+                        )?,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Some(resolve_stage_resources(
+                resources,
+                WorkspaceClaim::NONE,
+                resolver,
+            )?)
+        };
+        let dependencies = match &resolved_stage {
+            Some(stage) => stage
+                .dependencies()
+                .expect("selected experts produce residency dependencies")
+                .clone(),
+            None => internal_continuation_dependency(continuation.id)?,
         };
         record_continuation_dependencies(
             &mut continuation.dependencies,
             continuation.id,
             dependencies.clone(),
         )?;
-        PendingModelProgress::new(continuation.transaction, continuation.id, dependencies)
+        match resolved_stage {
+            Some(stage) => PendingModelProgress::for_resolved_stage(
+                continuation.transaction,
+                continuation.id,
+                stage,
+            ),
+            None => {
+                PendingModelProgress::new(continuation.transaction, continuation.id, dependencies)
+            }
+        }
     }
 
     #[cfg(feature = "cuda")]
@@ -2678,7 +2710,7 @@ impl DeepSeekV4Runner {
         &mut self,
         continuation: &mut DeepSeekV4PackedCudaContinuation,
     ) -> Result<PendingModelProgress> {
-        let dependencies = if matches!(
+        let resolved_stage = if matches!(
             continuation.output_head,
             DeepSeekV4PackedOutputHeadState::Downloading(_)
         ) {
@@ -2688,7 +2720,7 @@ impl DeepSeekV4Runner {
                         .into(),
                 ));
             }
-            internal_continuation_dependency(continuation.id)?
+            None
         } else {
             let layer_continuation = continuation.current_layer.as_ref().ok_or_else(|| {
                 Error::Internal(
@@ -2698,7 +2730,7 @@ impl DeepSeekV4Runner {
             })?;
             let pending = layer_continuation.pending_experts();
             if pending.is_empty() {
-                internal_continuation_dependency(continuation.id)?
+                None
             } else {
                 let requests = pending
                     .into_iter()
@@ -2742,27 +2774,56 @@ impl DeepSeekV4Runner {
                     )
                 })?;
                 let placement = resolver.placement();
-                let mut keys = Vec::with_capacity(requests.len());
-                for (resource_source, layer, expert) in requests {
-                    let request = MaterializationRequest::for_placement(
-                        placement,
-                        resource_source,
-                        ferrule_common::MaterializedResourceId::routed_expert(
+                let resources = requests
+                    .into_iter()
+                    .map(|(resource_source, layer, expert)| {
+                        let resource = ferrule_common::MaterializedResourceId::routed_expert(
                             ferrule_common::LayerId::new(layer),
                             ferrule_common::ExpertId::new(expert),
-                        ),
-                    )?;
-                    keys.push(resolver.resolve(request)?);
-                }
-                resource_dependency_set(keys)?
+                        );
+                        StageMaterializationRequest::new(
+                            StageResourceUse::new(
+                                resource,
+                                ResourceAccess::Read,
+                                ResourceRetention::ThroughTransaction,
+                            ),
+                            MaterializationRequest::for_placement(
+                                placement,
+                                resource_source,
+                                resource,
+                            )?,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Some(resolve_stage_resources(
+                    resources,
+                    WorkspaceClaim::NONE,
+                    resolver,
+                )?)
             }
+        };
+        let dependencies = match &resolved_stage {
+            Some(stage) => stage
+                .dependencies()
+                .expect("selected experts produce residency dependencies")
+                .clone(),
+            None => internal_continuation_dependency(continuation.id)?,
         };
         record_continuation_dependencies(
             &mut continuation.dependencies,
             continuation.id,
             dependencies.clone(),
         )?;
-        PendingModelProgress::new(continuation.transaction, continuation.id, dependencies)
+        match resolved_stage {
+            Some(stage) => PendingModelProgress::for_resolved_stage(
+                continuation.transaction,
+                continuation.id,
+                stage,
+            ),
+            None => {
+                PendingModelProgress::new(continuation.transaction, continuation.id, dependencies)
+            }
+        }
     }
 
     #[cfg(feature = "cuda")]

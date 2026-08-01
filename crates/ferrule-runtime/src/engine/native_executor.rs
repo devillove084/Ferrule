@@ -216,7 +216,6 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         &mut self,
         pages: &[ferrule_common::execution::KvPageId],
     ) -> Result<()> {
-        self.ensure_ready()?;
         self.runner.release_kv_pages(pages)
     }
 
@@ -516,12 +515,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
                 self.fail_transaction(transaction, states, "waiting progress contract", combined)
             }
             BatchContinuationCancelOutcome::StillActive(cancel_error) => {
-                let corrected = PendingModelProgress::new(
-                    transaction,
-                    continuation,
-                    pending.dependencies().clone(),
-                )
-                .expect("validated pending dependencies remain valid under corrected ownership");
+                let corrected = pending.with_transaction(transaction);
                 self.transactions
                     .get_mut(&transaction)
                     .expect("invalid progress must still belong to a registered transaction")

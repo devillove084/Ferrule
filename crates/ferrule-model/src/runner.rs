@@ -6,6 +6,7 @@ use ferrule_common::execution::{
     KvReservationView,
 };
 
+use crate::execution::{ResolvedStage, ResolvedStageResource, WorkspaceClaim};
 use crate::materialization::{
     MaterializationProvider, MaterializationResolver, validate_continuation_id,
 };
@@ -109,6 +110,8 @@ pub struct PendingModelProgress {
     transaction: ExecutionTransactionId,
     continuation: ContinuationId,
     dependencies: DependencySet,
+    resources: Box<[ResolvedStageResource]>,
+    workspace: WorkspaceClaim,
 }
 
 impl PendingModelProgress {
@@ -119,16 +122,53 @@ impl PendingModelProgress {
     ) -> Result<Self> {
         validate_continuation_id(continuation)?;
         dependencies.validate()?;
+        if dependencies
+            .iter()
+            .any(|dependency| dependency.materialization_key().is_some())
+        {
+            return Err(Error::Execution(
+                "materialization waits must be constructed from a resolved stage".into(),
+            ));
+        }
         Ok(Self {
             transaction,
             continuation,
             dependencies,
+            resources: Box::new([]),
+            workspace: WorkspaceClaim::NONE,
+        })
+    }
+
+    pub fn for_resolved_stage(
+        transaction: ExecutionTransactionId,
+        continuation: ContinuationId,
+        stage: ResolvedStage,
+    ) -> Result<Self> {
+        validate_continuation_id(continuation)?;
+        let dependencies = stage.dependencies().cloned().ok_or_else(|| {
+            Error::Execution("a resource-free stage cannot suspend on materialization".into())
+        })?;
+        dependencies.validate()?;
+        Ok(Self {
+            transaction,
+            continuation,
+            dependencies,
+            resources: stage.resources().into(),
+            workspace: stage.workspace(),
         })
     }
 
     /// Return the stable end-to-end transaction owning this wait.
     pub const fn transaction(&self) -> ExecutionTransactionId {
         self.transaction
+    }
+
+    /// Rebind validated pending work to the executor transaction that owns it.
+    /// Resource custody metadata is preserved byte-for-byte.
+    pub fn with_transaction(&self, transaction: ExecutionTransactionId) -> Self {
+        let mut rebound = self.clone();
+        rebound.transaction = transaction;
+        rebound
     }
 
     /// Return the stable continuation identity for resume, detach, or cancel.
@@ -143,6 +183,14 @@ impl PendingModelProgress {
 
     pub const fn dependencies(&self) -> &DependencySet {
         &self.dependencies
+    }
+
+    pub fn resources(&self) -> &[ResolvedStageResource] {
+        &self.resources
+    }
+
+    pub const fn workspace(&self) -> WorkspaceClaim {
+        self.workspace
     }
 }
 
@@ -561,12 +609,11 @@ mod tests {
     #[test]
     fn pending_progress_rejects_zero_continuation_and_exposes_canonical_dependencies() {
         let transaction = ExecutionTransactionId::new(7).unwrap();
-        let dependencies = crate::materialization::resource_dependency_set([
-            materialization_key(8),
-            materialization_key(1),
-            materialization_key(8),
-        ])
+        let dependency = ferrule_common::LogicalDependency::operation_retired(
+            ferrule_common::OperationId::new(8),
+        )
         .unwrap();
+        let dependencies = DependencySet::new([dependency]).unwrap();
         let error =
             PendingModelProgress::new(transaction, ContinuationId::new(0), dependencies.clone())
                 .unwrap_err()
@@ -579,11 +626,26 @@ mod tests {
         assert_eq!(pending.transaction(), transaction);
         assert_eq!(pending.continuation(), continuation);
         assert_eq!(pending.unresolved_dependencies(), &dependencies);
-        assert_eq!(pending.dependencies().len(), 2);
+        assert_eq!(pending.dependencies().len(), 1);
+        assert!(pending.resources().is_empty());
         assert_eq!(
             NativeProposalProgress::Waiting(pending.clone()),
             NativeProposalProgress::Waiting(pending)
         );
+    }
+
+    #[test]
+    fn bare_resource_dependency_cannot_bypass_resolved_stage_custody() {
+        let dependencies =
+            crate::materialization::resource_dependency_set([materialization_key(1)]).unwrap();
+        let error = PendingModelProgress::new(
+            ExecutionTransactionId::new(7).unwrap(),
+            ContinuationId::new(29),
+            dependencies,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("resolved stage"));
     }
 
     #[test]

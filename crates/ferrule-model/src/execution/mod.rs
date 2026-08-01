@@ -18,7 +18,7 @@ pub use plan::PreparedModel;
 pub use resource::{ExecutionPlanError, ResourceBacking, ResourceLayout, ResourceManifest};
 pub use sequence::{SequenceStateCore, SequenceStepBinding};
 pub use stage::{
-    ExecutableStage, MaterializedStage, PreparedExecutable, ResourceAccess, ResourceRetention,
-    StageMaterializationRequest, StageResourceUse, TransformerResourceSlot, TransformerStage,
-    WorkspaceClaim,
+    ExecutableStage, MaterializedStage, PreparedExecutable, ResolvedStage, ResolvedStageResource,
+    ResourceAccess, ResourceRetention, StageMaterializationRequest, StageResourceUse,
+    TransformerResourceSlot, TransformerStage, WorkspaceClaim,
 };

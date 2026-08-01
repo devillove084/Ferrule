@@ -30,6 +30,28 @@ use crate::scheduling::{
 };
 
 const BYTES: u64 = 4096;
+
+fn retained_request(
+    preparation: MaterializationPreparation,
+    plan: MaterializationResourcePlan,
+    class: ResourceClass,
+    retention: ferrule_model::ResourceRetention,
+) -> LoadRequest {
+    LoadRequest::new(preparation, plan, class, retention)
+}
+
+fn stage_request(
+    preparation: MaterializationPreparation,
+    plan: MaterializationResourcePlan,
+    class: ResourceClass,
+) -> LoadRequest {
+    retained_request(
+        preparation,
+        plan,
+        class,
+        ferrule_model::ResourceRetention::ThroughStage,
+    )
+}
 const DESTINATION_GENERATION: u64 = 37;
 const SLOT: u32 = 9;
 const SLAB_ID_OFFSET: u64 = 1000;
@@ -865,7 +887,7 @@ fn load_request(
     plan: MaterializationResourcePlan,
     class: ResourceClass,
 ) -> LoadRequest {
-    LoadRequest::new(registry.provider().preparation(key).unwrap(), plan, class)
+    stage_request(registry.provider().preparation(key).unwrap(), plan, class)
 }
 
 fn attach(
@@ -1072,7 +1094,7 @@ fn registry_adopts_resident_preparation_without_a_read() {
     let provider = SharedMaterializationProvider::new(Box::new(physical));
     let preparation = provider.prepare(request(1)).unwrap();
     let key = preparation.key();
-    let load = LoadRequest::new(preparation, uniform_plan(), ResourceClass::Demand);
+    let load = stage_request(preparation, uniform_plan(), ResourceClass::Demand);
     let mut registry =
         LoadRegistry::new(provider, physical_resources(), FairQueueConfig::default()).unwrap();
     let report = registry.attach_waiter(waiter(1, 1), [load], 1).unwrap();
@@ -1105,11 +1127,7 @@ fn registry_releases_provider_lease_after_last_continuation() {
     registry
         .attach_waiter(
             waiter(1, 1),
-            [LoadRequest::new(
-                first,
-                uniform_plan(),
-                ResourceClass::Demand,
-            )],
+            [stage_request(first, uniform_plan(), ResourceClass::Demand)],
             1,
         )
         .unwrap();
@@ -1117,11 +1135,7 @@ fn registry_releases_provider_lease_after_last_continuation() {
     registry
         .attach_waiter(
             waiter(2, 2),
-            [LoadRequest::new(
-                second,
-                uniform_plan(),
-                ResourceClass::Demand,
-            )],
+            [stage_request(second, uniform_plan(), ResourceClass::Demand)],
             2,
         )
         .unwrap();
@@ -1150,6 +1164,275 @@ fn registry_releases_provider_lease_after_last_continuation() {
     registry.shutdown(5, 0).unwrap();
 }
 
+fn consume_resident_resume(
+    registry: &mut LoadRegistry<SharedMaterializationProvider>,
+    continuation: ContinuationId,
+    key: MaterializationKey,
+    disposition: super::ResumeDisposition,
+    now_ns: u64,
+) {
+    assert_eq!(registry.pop_ready(now_ns).unwrap(), Some(continuation));
+    let dependencies =
+        ferrule_common::DependencySet::new([ferrule_common::LogicalDependency::resource_resident(
+            key,
+        )
+        .unwrap()])
+        .unwrap();
+    let mut resume = registry
+        .prepare_resume(continuation, &dependencies)
+        .unwrap();
+    let leases = resume.take().unwrap();
+    assert_eq!(leases.len(), 1);
+    registry
+        .finish_resume(&mut resume, disposition, now_ns + 1, now_ns + 2)
+        .unwrap();
+}
+
+#[test]
+fn still_active_stage_keeps_provider_lease_until_quiescent_detach() {
+    let (physical, handle) = MockPhysicalProvider::manual();
+    handle.set_resident(true);
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let preparation = provider.prepare(request(1)).unwrap();
+    let key = preparation.key();
+    let mut registry =
+        LoadRegistry::new(provider, physical_resources(), FairQueueConfig::default()).unwrap();
+    registry
+        .attach_waiter(
+            waiter(1, 1),
+            [stage_request(
+                preparation,
+                uniform_plan(),
+                ResourceClass::Demand,
+            )],
+            1,
+        )
+        .unwrap();
+
+    consume_resident_resume(
+        &mut registry,
+        ContinuationId::new(1),
+        key,
+        super::ResumeDisposition::StillActive,
+        2,
+    );
+    registry.drive(5, 1).unwrap();
+    assert_eq!(
+        handle.command_count(|command| matches!(
+            command,
+            MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+        )),
+        0
+    );
+    registry
+        .detach_continuation(ContinuationId::new(1), CancellationReason::Superseded, 6)
+        .unwrap();
+    registry.drive(7, 1).unwrap();
+    assert_eq!(
+        handle.command_count(|command| matches!(
+            command,
+            MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+        )),
+        1
+    );
+    registry.shutdown(8, 0).unwrap();
+}
+
+#[test]
+fn transaction_custody_survives_resume_and_releases_on_commit_or_rollback() {
+    for (seed, outcome) in [
+        (
+            1,
+            super::TransactionCustodyOutcome::Committed {
+                started_ns: 10,
+                finished_ns: 11,
+            },
+        ),
+        (2, super::TransactionCustodyOutcome::RolledBack),
+    ] {
+        let (physical, handle) = MockPhysicalProvider::manual();
+        handle.set_resident(true);
+        let provider = SharedMaterializationProvider::new(Box::new(physical));
+        let preparation = provider.prepare(request(seed)).unwrap();
+        let key = preparation.key();
+        let mut registry =
+            LoadRegistry::new(provider, physical_resources(), FairQueueConfig::default()).unwrap();
+        registry
+            .attach_waiter(
+                waiter(seed as u64, seed as u64),
+                [retained_request(
+                    preparation,
+                    uniform_plan(),
+                    ResourceClass::Demand,
+                    ferrule_model::ResourceRetention::ThroughTransaction,
+                )],
+                1,
+            )
+            .unwrap();
+        consume_resident_resume(
+            &mut registry,
+            ContinuationId::new(seed as u64),
+            key,
+            super::ResumeDisposition::Consumed,
+            2,
+        );
+        registry.drive(5, 1).unwrap();
+        assert_eq!(
+            handle.command_count(|command| matches!(
+                command,
+                MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+            )),
+            0
+        );
+
+        let transaction = ExecutionTransactionId::new(seed as u64).unwrap();
+        registry
+            .finish_transaction_custody(transaction, outcome)
+            .unwrap();
+        assert!(matches!(
+            registry.finish_transaction_custody(transaction, outcome),
+            Err(super::RegistryError::TransactionCustodyAlreadyFinished(candidate))
+                if candidate == transaction
+        ));
+        registry.drive(6, 1).unwrap();
+        assert_eq!(
+            handle.command_count(|command| matches!(
+                command,
+                MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+            )),
+            1
+        );
+        registry.shutdown(7, 0).unwrap();
+    }
+}
+
+#[test]
+fn persistent_custody_survives_transaction_terminal_until_explicit_retirement() {
+    let (physical, handle) = MockPhysicalProvider::manual();
+    handle.set_resident(true);
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let preparation = provider.prepare(request(1)).unwrap();
+    let key = preparation.key();
+    let mut registry =
+        LoadRegistry::new(provider, physical_resources(), FairQueueConfig::default()).unwrap();
+    registry
+        .attach_waiter(
+            waiter(1, 1),
+            [retained_request(
+                preparation,
+                uniform_plan(),
+                ResourceClass::Demand,
+                ferrule_model::ResourceRetention::Persistent,
+            )],
+            1,
+        )
+        .unwrap();
+    consume_resident_resume(
+        &mut registry,
+        ContinuationId::new(1),
+        key,
+        super::ResumeDisposition::Consumed,
+        2,
+    );
+    registry
+        .finish_transaction_custody(
+            ExecutionTransactionId::new(1).unwrap(),
+            super::TransactionCustodyOutcome::Committed {
+                started_ns: 5,
+                finished_ns: 6,
+            },
+        )
+        .unwrap();
+    registry.drive(7, 1).unwrap();
+    assert_eq!(
+        handle.command_count(|command| matches!(
+            command,
+            MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+        )),
+        0
+    );
+
+    registry.retire_persistent_custody(key).unwrap();
+    assert!(matches!(
+        registry.retire_persistent_custody(key),
+        Err(super::RegistryError::PersistentCustodyNotFound(candidate)) if *candidate == key
+    ));
+    registry.drive(8, 1).unwrap();
+    assert_eq!(
+        handle.command_count(|command| matches!(
+            command,
+            MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+        )),
+        1
+    );
+    registry.shutdown(9, 0).unwrap();
+}
+
+#[test]
+fn shared_key_releases_only_after_last_transaction_owner() {
+    let (physical, handle) = MockPhysicalProvider::manual();
+    handle.set_resident(true);
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let first = provider.prepare(request(1)).unwrap();
+    let key = first.key();
+    let second = provider.prepare(request(1)).unwrap();
+    let mut registry =
+        LoadRegistry::new(provider, physical_resources(), FairQueueConfig::default()).unwrap();
+    for (preparation, id) in [(first, 1), (second, 2)] {
+        registry
+            .attach_waiter(
+                waiter(id, id),
+                [retained_request(
+                    preparation,
+                    uniform_plan(),
+                    ResourceClass::Demand,
+                    ferrule_model::ResourceRetention::ThroughTransaction,
+                )],
+                id,
+            )
+            .unwrap();
+        consume_resident_resume(
+            &mut registry,
+            ContinuationId::new(id),
+            key,
+            super::ResumeDisposition::Consumed,
+            id + 2,
+        );
+    }
+    registry
+        .finish_transaction_custody(
+            ExecutionTransactionId::new(1).unwrap(),
+            super::TransactionCustodyOutcome::Committed {
+                started_ns: 10,
+                finished_ns: 11,
+            },
+        )
+        .unwrap();
+    registry.drive(12, 1).unwrap();
+    assert_eq!(
+        handle.command_count(|command| matches!(
+            command,
+            MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+        )),
+        0
+    );
+    registry
+        .finish_transaction_custody(
+            ExecutionTransactionId::new(2).unwrap(),
+            super::TransactionCustodyOutcome::RolledBack,
+        )
+        .unwrap();
+    registry.drive(13, 1).unwrap();
+    assert_eq!(
+        handle.command_count(|command| matches!(
+            command,
+            MockPhysicalCommand::ReleaseExecutionLease(candidate) if *candidate == key
+        )),
+        1
+    );
+    registry.shutdown(14, 0).unwrap();
+}
+
 #[test]
 fn new_attach_cancels_pending_provider_lease_release() {
     let (physical, handle) = MockPhysicalProvider::manual();
@@ -1166,11 +1449,7 @@ fn new_attach_cancels_pending_provider_lease_release() {
     registry
         .attach_waiter(
             waiter(1, 1),
-            [LoadRequest::new(
-                first,
-                uniform_plan(),
-                ResourceClass::Demand,
-            )],
+            [stage_request(first, uniform_plan(), ResourceClass::Demand)],
             1,
         )
         .unwrap();
@@ -1182,11 +1461,7 @@ fn new_attach_cancels_pending_provider_lease_release() {
     registry
         .attach_waiter(
             waiter(2, 2),
-            [LoadRequest::new(
-                second,
-                uniform_plan(),
-                ResourceClass::Demand,
-            )],
+            [stage_request(second, uniform_plan(), ResourceClass::Demand)],
             3,
         )
         .unwrap();
@@ -1224,7 +1499,7 @@ fn registry_retries_failed_provider_lease_release_without_replay() {
     registry
         .attach_waiter(
             waiter(9, 9),
-            [LoadRequest::new(
+            [stage_request(
                 preparation,
                 uniform_plan(),
                 ResourceClass::Demand,
@@ -1314,7 +1589,7 @@ fn replacement_commit_swaps_exact_slot_generation_and_bytes() {
     registry
         .attach_waiter(
             waiter(1, 1),
-            [LoadRequest::new(
+            [stage_request(
                 old_preparation,
                 uniform_plan(),
                 ResourceClass::Demand,
@@ -1334,7 +1609,7 @@ fn replacement_commit_swaps_exact_slot_generation_and_bytes() {
     registry
         .attach_waiter(
             waiter(2, 2),
-            [LoadRequest::new(
+            [stage_request(
                 new_preparation,
                 uniform_plan(),
                 ResourceClass::Demand,
@@ -1381,7 +1656,7 @@ fn replacement_waits_for_old_logical_owner_without_losing_operation() {
     registry
         .attach_waiter(
             waiter(1, 1),
-            [LoadRequest::new(
+            [stage_request(
                 old_preparation,
                 uniform_plan(),
                 ResourceClass::Demand,
@@ -1397,7 +1672,7 @@ fn replacement_waits_for_old_logical_owner_without_losing_operation() {
     let operation = registry
         .attach_waiter(
             waiter(2, 2),
-            [LoadRequest::new(
+            [stage_request(
                 new_preparation,
                 uniform_plan(),
                 ResourceClass::Demand,
@@ -1459,7 +1734,7 @@ fn replacement_cannot_evict_key_from_another_slot() {
     registry
         .attach_waiter(
             waiter(1, 1),
-            [LoadRequest::new(
+            [stage_request(
                 old_preparation,
                 uniform_plan(),
                 ResourceClass::Demand,
@@ -1475,7 +1750,7 @@ fn replacement_cannot_evict_key_from_another_slot() {
     registry
         .attach_waiter(
             waiter(2, 2),
-            [LoadRequest::new(
+            [stage_request(
                 new_preparation,
                 uniform_plan(),
                 ResourceClass::Demand,
@@ -1506,7 +1781,7 @@ fn pre_reserve_cancellation_discards_provider_preparation() {
     registry
         .attach_waiter(
             waiter(11, 11),
-            [LoadRequest::new(
+            [stage_request(
                 preparation,
                 uniform_plan(),
                 ResourceClass::Demand,
@@ -1860,7 +2135,7 @@ fn registry_publication_uses_provider_binding_without_reconciliation() {
     registry
         .attach_waiter(
             waiter(1, 1),
-            [LoadRequest::new(
+            [stage_request(
                 preparation,
                 uniform_plan(),
                 ResourceClass::Demand,
@@ -2113,7 +2388,7 @@ fn physical_bridge_preserves_nonuniform_resource_plan() {
     registry
         .attach_waiter(
             waiter(1, 1),
-            [LoadRequest::new(
+            [stage_request(
                 registry_resolved,
                 plan,
                 ResourceClass::Demand,

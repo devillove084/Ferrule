@@ -1,16 +1,17 @@
 # Ferrule roadmap
 
-> 面向大于显存模型的统一调度、I/O、计算重叠，以及 Qwen3 / DeepSeek-V4 / 多后端 / 训练演进路线。
+> 面向大于单卡显存模型的统一执行系统：资源感知 stage、全局
+> materialization、调度 / I/O / 上传 / 通信 / 计算重叠，以及推理、训练、
+> post-training 和 RL 的共同基础。
 >
-> Updated: 2026-07-31.
+> Updated: 2026-08-02.
 
 ## 0. 当前结论
 
-当前状态仍是 **GPU release NO-GO**，但原因已经不再是旧 roadmap 中单一的 GB10 `n8` wake blocker。
+Ferrule 当前仍是 **GPU release NO-GO**。
 
-P0 的 owner-side 调度、single-flight materialization、continuation、generation 与资源回收协议已经完成 CPU UT / mock 验证；当前正在进行 P1：把模型 preparation 从“opaque resources + provider kernel plan”迁移为唯一的 resource-aware executable contract，并让 dense parameter bundles 与 routed experts 进入同一个 materialization / continuation / custody 协议。
-
-目标执行路径固定为：
+已经完成的核心方向不是某个模型或某张卡的专用推理路径，而是一条唯一、资源感知、
+可挂起和恢复的 out-of-core 执行协议：
 
 ```text
 prepared executable stages
@@ -27,76 +28,96 @@ prepared executable stages
     -> release/retain/evict
 ```
 
-这条路径必须同时覆盖：
+这条路径必须统一覆盖：
 
-- dense parameter bundles；
+- dense parameters；
 - routed experts；
 - KV state；
 - activation checkpoints；
 - gradients；
-- optimizer states。
+- optimizer states；
+- distributed communication buffers 与 collective / point-to-point completion；
+- training、post-training 和 RL 中的多模型、多阶段资源。
 
-任何只适用于“全模型常驻显存”、只适用于 routed experts，或为某个 CUDA/CUTLASS provider 单独建立的执行旁路，都不再是目标架构。
+近期硬件方向调整为 **NVIDIA B300 优先**。RTX 3090、Qwen 和小模型仍是重要的
+portability / correctness 目标，但不再是下一阶段的第一优先级。近期优先级是：
 
-## 1. 冻结原则与近期目标
+1. 收尾唯一 stage / materialization / continuation / custody / terminalization 协议；
+2. 重构 CUDA architecture / capability 与 CUTLASS provider；
+3. 建立 B300 capability profile、kernel selection 和大模型可执行路径；
+4. 建立 DP / TP / PP / EP / SP / CP 的拓扑、通信与资源协议；
+5. 扩展到 training、post-training、RL；
+6. 选择大型模型做端到端验收，候选包括 Kimi K3；
+7. 后续回到 Qwen / Ampere `sm_86` 做可移植性与较小硬件 out-of-core 验收。
+
+任何只适用于“全模型常驻显存”、只适用于 routed experts、只适用于 inference，或为
+某个 CUDA/CUTLASS architecture 建立的生产旁路，都不是目标架构。迁移可以分步，但
+每一步只能有一个生产入口，不保留长期 legacy/new 双路径。
+
+## 1. 冻结原则
 
 | 项目 | 当前决定 |
 |---|---|
-| 核心能力 | 模型可以大于显存，I/O、调度和计算必须可重叠 |
-| 生产执行路径 | 只保留一条 materialization / continuation / custody 路径 |
-| 首个本地硬件目标 | NVIDIA RTX 3090，`sm_86` |
-| 首个新增模型 | dense Qwen3；先做小模型 correctness，再做 8B out-of-core acceptance |
-| 现有硬件路径 | 保留 DeepSeek-V4 `sm_121a` 的语义与 provider 能力，不建立 legacy/new 双路径 |
-| 训练兼容 | inference / training 共用资源身份、访问、生命周期和 continuation 协议 |
-| 后端边界 | CUDA、Metal、ROCm、Ascend 是 backend/provider，不进入模型总抽象 |
-| 当前验证条件 | 本地无模型 checkpoint；只能使用 CPU UT、synthetic fixtures 和 mocks |
-| GPU 结论 | 当前不能宣称 RTX 3090、GB10 或任何 CUDA 路径已验证 |
-
-“Qwen3.8”不是明确的模型标识。当前建议：
-
-1. Qwen3 dense 0.6B 或 1.7B：checkpoint、semantic、stage、CPU reference correctness；
-2. Qwen3 8B：RTX 3090 上的 out-of-core acceptance target；
-3. dense 路径稳定后，再评估 Qwen MoE。
+| 核心能力 | 模型、训练状态或多模型工作集可以大于显存；I/O、上传、通信和计算必须可重叠 |
+| 生产执行路径 | 只保留一条 resource-aware stage / materialization / continuation / custody 路径 |
+| 近期硬件 | NVIDIA B300；具体 architecture ID 由 capability detection 确认，不在模型层硬编码 |
+| 后续硬件 | RTX 3090 / `sm_86`、现有 `sm_121a`、未来 Metal、ROCm、Ascend provider |
+| 模型方向 | 先完善 provider、分布式和训练基础，再选择大型模型验收；Kimi K3 是候选，Qwen 保留为后续 portability track |
+| 训练兼容 | inference / training 共用资源身份、访问、生命周期、continuation 和 terminalization 协议 |
+| 后端边界 | CUDA、Metal、ROCm、Ascend 是 backend/provider，不进入模型通用 stage/resource contract |
+| CUTLASS 边界 | CUTLASS 是 CUDA provider 的一种实现，不等于某个 architecture，也不是跨硬件抽象 |
+| 物理正确性 | 已提交 physical work 不能被逻辑 cancellation 假装为未发生；必须等待或确认 quiescence |
+| 失败处理 | terminal outcome exactly once；未确认 backend terminal 时完整保留 ownership |
+| 验证条件 | 当前没有可用模型 checkpoint；GPU 环境正在变化，现阶段依赖 CPU UT、synthetic fixtures 和 mocks |
+| 证据边界 | 当前不能宣称 B300、RTX 3090、GB10、`sm_121a`、`sm_86` 或任何 CUDA runtime 已验证 |
 
 ## 2. 进度总览
 
 | 工作流 | 状态 | 当前结论 |
 |---|---|---|
-| P0 调度 / I/O / completion correctness | CPU 已完成 | global single-flight、continuation exactness、generation publication、rollback/custody 已有 UT |
-| P0 I/O / compute overlap accounting | CPU 已完成 | completion timestamp clock-domain 已修复，wait overlap UT 已补齐 |
+| P0 runtime-wide materialization | CPU/mock 已完成 | global single-flight、canonical dependencies、generation publication、targeted wake 已覆盖 |
+| P0 调度 / I/O / compute overlap | CPU/mock 已完成 | owner-side progression、fairness、hard resources、critical-path overlap accounting 已覆盖 |
 | 双 broker 合并 | 已完成 | 唯一生产 broker 为 `PhysicalResourceBroker` |
-| Prefetch 评估 | 已完成 | oracle 有收益；当前 score predictor 在槽位竞争下净负收益，不接生产 |
-| Artifact 抽象拆除 | 已完成 | checkpoint 通用层与 DeepSeek 私有 binding 已拆分；不保留 compatibility alias |
-| 通用 materialization identity | 已完成 | 六类资源统一使用完整 `MaterializationKey` |
-| Generic backend naming | 已完成 | expert-only 通用命名与 topology / lease 旧名已清理 |
-| Resource-aware executable contract | 进行中 | 类型和校验已开始落地，尚未完成 DeepSeek publication 迁移与全量验证 |
-| Dense parameter bundle materialization | 进行中 | 正在按 embed / attention / router / FFN / output stage 建立 source-backed bundle |
-| Routed stage 模板统一 | 待完成 | route 后 exact expert set 仍需与 prepared stage contract 直接对接 |
-| Runtime mutable resources | 待完成 | KV / activation / gradient / optimizer 需在 continuation/transaction 实例化 exact capacity 与 generation |
-| DeepSeek 公共组件拆分 | 已开始 | checkpoint、math、shape、RoPE、config helpers 已有公共层；仍需继续去除 family-private 重复 |
-| Qwen3 model implementation | 未开始 | 已有部分 family classification / dense semantic 基础，但没有完整 checkpoint + runner |
-| CUDA provider/profile 重构 | 未开始 | 先稳定 executable contract，再拆 target capability 与 provider 目录 |
-| Ampere `sm_86` kernels | 未开始 | 不在 stage contract 稳定前建立 kernel 旁路 |
-| DeepSeek `sm_121a` GPU 回归 | 未验证 | 当前环境不可验证 |
-| Training execution | 未实现 | resource kind/access/retention 已提前纳入合约设计 |
+| Artifact 总抽象拆除 | 已完成 | checkpoint 公共层与模型私有 semantic binding 已分离，不保留 compatibility alias |
+| Prefetch 评估 | 已完成一轮 | oracle 有收益；当前 score predictor 净负收益，不接生产 |
+| `ResolvedStage` contract | 已实现 | exact resources、access、retention、workspace、canonical dependency validation 已落地 |
+| Typed materialization custody | 已实现 | stage / transaction / persistent ownership 与 provider lease 聚合释放已落地 |
+| Routed expert stage migration | 已实现 | DeepSeek packed / DSpark route 后 exact expert set 进入唯一 resolved-stage 路径 |
+| Resume lifecycle | 已实现 | `Consumed` / `StillActive` 区分，仍活跃 continuation 不提前释放 custody |
+| Transaction terminal propagation | 已实现基础 | ordinary / speculative commit、rollback、cancel 已连接 custody terminal outcome |
+| Rollback failure quarantine | 已实现过渡方案 | rollback 未确认时保留 backend、KV、branch、session、scheduler、custody；有 mock retry UT |
+| Unified terminalization coordinator | 待重构 | 当前 quarantine 保证正确性，但 ordinary/speculative terminal cleanup 仍过于分散 |
+| Dense static bundle materialization | 未完成 | source catalog 已有；generic pinned transport/install 未接通，CUDA runner 仍有 eager static image |
+| Runtime mutable resources | 待完成 | KV / activation / gradient / optimizer 需按 transaction 实例化 exact capacity、generation 和 spill source |
+| DeepSeek 公共组件拆分 | 进行中 | checkpoint、math、shape、RoPE、config、dense semantics 已有公共层；继续去 family-private 重复 |
+| CUDA capability/provider 重构 | 待开始 | 下一阶段近期重点；不能继续假设 CUTLASS 等于 GB10 |
+| B300 provider/kernels | 未开始 | 需先完成 architecture profile、operation requirements、kernel selection 与 workspace contract |
+| Distributed parallelism | 未开始 | DP / TP / PP / EP / SP / CP 需要统一 topology、communication stage、fence 和 custody |
+| Training/post-training/RL | 未实现 | 通用 resource access/retention 已预留，execution/terminal protocol 尚需扩展 |
+| Large-model acceptance | 未开始 | 候选 Kimi K3；最终选择取决于 checkpoint、operator、并行拓扑和许可可用性 |
+| Qwen / 3090 portability | 后置 | 不删除；在核心 provider 和 distributed path 稳定后推进 |
 
-## 3. P0：已完成的统一调度与 I/O 基线
+## 3. P0：统一调度、I/O 与计算重叠基础
 
-### 3.1 Identity、continuation 与 single-flight
+### 3.1 已完成的协议
 
-已经完成：
-
-- 唯一 runtime-wide physical materialization registry；
+- runtime-wide physical materialization registry；
 - 唯一 `PhysicalResourceBroker`；
-- canonical `DependencySet` 与 exact continuation waiter identity；
-- source identity、content hash、payload encoding、backend、device、source generation、destination generation 全部进入 `MaterializationKey`；
-- destination generation 只能来自真实 reservation，模型不能自行合成；
+- canonical `DependencySet` 与 exact `WaiterId` / `ContinuationId`；
+- source identity、content hash、encoding、backend、device、source generation、
+  destination generation 全部进入 `MaterializationKey`；
+- destination generation 由真实 provider reservation 提供，模型不能自行合成；
+- global single-flight：相同 exact key 只提交一次物理 materialization；
 - generation-qualified completion / publication；
-- cancel、stale、failure、shutdown 与 transaction rollback 的资源回收；
-- 已提交 physical work 不会被逻辑 cancel 伪装成“没有发生”；
-- runtime 不再依赖 CUDA 才能编译 owner-side protocol。
+- cancel、stale、failure、shutdown 和 rollback cleanup；
+- physical custody：已提交 read/upload/install 不能被逻辑 cancel 直接撤销；
+- owner-side progress，不要求 CUDA 才能编译 runtime protocol；
+- I/O wait 与其他 runnable compute 的 overlap accounting；
+- fairness、demand reserve 和 hard-resource accounting；
+- completion timestamp clock-domain 一致性；
+- 唯一生产 broker，旧 broker / adapter 路径已删除。
 
-统一资源类型：
+统一资源种类：
 
 ```rust
 pub enum MaterializedResourceKind {
@@ -109,35 +130,229 @@ pub enum MaterializedResourceKind {
 }
 ```
 
-相同 `(group, item)` 的 parameter / gradient / optimizer state 依靠 resource kind 保持不同身份，便于后续训练按同一语义 slot 对齐状态。
+后续 communication buffer 是否成为独立 materialized resource kind，需要在 distributed
+contract 中依据生命周期决定；不能为了目录整齐提前泛化。
 
-### 3.2 Overlap、fairness 与资源回收
+### 3.2 `ResolvedStage` 与 exact custody
 
-已经完成：
+当前 model/runtime contract 已加入：
 
-- I/O wait 与 compute overlap accounting；
-- completion timestamp clock-domain 修复；
-- wait overlap 的 CPU UT；
-- fairness 与 hard-resource accounting；
-- last-demand lease release / wake；
-- continuation suspension / resume 的 exact dependency 校验；
-- dead profiler、旧 attention kernel、旧 broker 和重复 runtime adapter 路径清理。
+```rust
+ResolvedStageResource {
+    key: MaterializationKey,
+    access: ResourceAccess,
+    retention: ResourceRetention,
+}
 
-### 3.3 Prefetch 结论
+ResolvedStage {
+    dependencies: Option<DependencySet>,
+    resources: Box<[ResolvedStageResource]>,
+    workspace: WorkspaceClaim,
+}
+```
 
-`crates/ferrule-model/tests/prefetch_evaluation.rs` 的 mock 结论：
+约束：
 
-- oracle / future-aware prefetch 可以明显降低 selected miss；
-- 当前 `ScoreBasedExpertPredictor` 在有限 residency slots 下会挤占真实 selected working set，净收益为负；
-- 当前 predictor 不接生产；
-- 保留 `Prefetch` resource class / demand reserve，等待 future-aware 信号，例如已知下一 stage、batch router 结果或可靠 draft information；
-- 后续任何 predictor 必须同时通过 latency、selected miss、slot displacement、额外 I/O bytes 和 fairness 验收，不能只看命中率。
+- canonical ordering；
+- request / key / semantic resource identity exact matching；
+- duplicate key fail closed；
+- resource-free stage 不制造虚假的 materialization dependency；
+- `DependencySet` 只描述“什么阻塞进度”；
+- `ResolvedStageResource` 描述 access 与 custody lifetime；
+- materialization wait 只能通过 retention-aware resolved stage 创建，不能用裸
+  `DependencySet<ResourceResident>` 绕过 custody metadata。
 
-## 4. Checkpoint 与模型公共层
+runtime custody owner 已区分：
 
-### 4.1 已完成
+```rust
+Stage(ContinuationId)
+Transaction(ExecutionTransactionId)
+Persistent(MaterializationKey)
+```
 
-旧 `artifact` 总抽象已删除，通用 checkpoint 层为：
+provider execution lease 只有在最后一个聚合 owner 消失后才进入 release pending；物理
+lease release 失败可以重试，但不能重复执行逻辑 owner decrement。
+
+### 3.3 当前 P0 收尾状态
+
+已连接：
+
+- stage completion 与 stage custody；
+- transaction commit / rollback / cancel 与 transaction custody；
+- persistent custody 的显式 retirement；
+- resume `StillActive` 对 continuation 与 stage custody 的保留；
+- speculative terminal outcome 的显式传播；
+- speculative backend rollback failure 的完整 ownership quarantine；
+- shutdown / subsequent cancellation 的 rollback retry。
+
+当前 quarantine 是 correctness baseline，不是最终 API。下一阶段必须收敛 terminalization
+抽象，不能继续为每一种 execution mode 添加新的 rollback 分支。
+
+## 4. Transaction terminalization：保留严格语义，删除分散复杂度
+
+### 4.1 为什么不能删除 rollback correctness
+
+Ferrule 不是同步、全模型常驻显存、失败即退出的执行器。一个 transaction 可能同时拥有：
+
+- 已提交的 storage read / H2D / install；
+- 正在使用 resident parameters / experts 的 backend execution；
+- continuation；
+- provisional KV reservations / prepared commit；
+- model branch state；
+- suspended scheduler/session ownership；
+- activation、gradient、optimizer 或 communication buffers。
+
+因此失败后的安全顺序必须是：
+
+```text
+request commit / rollback / cancel
+    -> quiesce or wait for physical/backend work
+    -> confirm backend terminal state
+    -> publish commit OR discard provisional generations
+    -> release transaction custody
+    -> retire KV/state/materialization/communication resources
+    -> restore or finish scheduler/session ownership
+```
+
+核心不变量：
+
+> 没有确认物理工作终止，就不能因为逻辑 cancellation 而释放它可能仍在访问的资源。
+
+### 4.2 当前过渡实现
+
+当前 speculative rollback failure 会进入 quarantine，完整保留：
+
+- backend transaction 与 verification branches；
+- KV reservations / prepared commit；
+- source states、suspended schedules 和 decode actions；
+- materialization transaction custody；
+- request identity。
+
+只有 retry 确认 backend terminal 后才回收。CPU/mock UT 已覆盖：第一次 rollback 失败时
+不释放 provider lease、session 或 KV；第二次 rollback 成功后 exactly-once cleanup。
+
+### 4.3 目标：统一 terminalization coordinator
+
+当前复杂度来自 terminal ownership 分散在 driver、executor、speculation、KV manager 和
+materialization registry，而不是 rollback 语义本身。目标是将 ordinary execution、
+speculation、training 和 RL rollout 共用一个状态机：
+
+```rust
+enum TransactionState<P> {
+    Running(P),
+    Suspended {
+        continuation: ContinuationId,
+        payload: P,
+    },
+    Terminalizing {
+        intent: TerminalIntent,
+        progress: TerminalProgress,
+        payload: P,
+        cause: Option<Error>,
+    },
+    Terminal(TerminalReceipt),
+}
+
+enum TerminalIntent {
+    Commit,
+    Rollback,
+    Cancel,
+}
+
+enum TerminalProgress {
+    Quiescing,
+    BackendTerminal,
+    Reclaiming,
+}
+```
+
+统一 ownership payload 至少要能持有：
+
+```rust
+TransactionOwnership<S> {
+    backend_transaction,
+    continuations,
+    materialization_custody,
+    kv_or_mutable_state,
+    model_states,
+    suspended_schedules,
+    scheduler_actions,
+    communication_ownership,
+}
+```
+
+目标 API：
+
+```text
+request_terminal(transaction, intent)
+drive_terminalization(transaction)
+```
+
+runtime tick / completion wake 自动推进 terminalization；不应要求调用方再次发送一次
+`cancel_request()` 才能完成 rollback retry。
+
+### 4.4 Backend terminal contract
+
+现有 `rollback_prepared_batch(...) -> Result<()>` 信息量不足，不能区分 pending、已终结、
+可重试错误与 device loss。目标 contract 应表达：
+
+```rust
+enum BackendTerminalProgress {
+    Pending(CompletionFence),
+    Complete(BackendTerminalReceipt),
+    DeviceLost(DeviceLossReceipt),
+}
+```
+
+要求：
+
+- `Pending` 是正常异步进度，不是 error；
+- `Complete` 明确保证 backend 不再访问 transaction resources；
+- `DeviceLost` 触发 device/worker 级 quarantine，不无限重试单 transaction rollback；
+- protocol error 与 backend fatal error 分开；
+- completion fence 是物理 quiescence 证据，不是逻辑状态猜测；
+- terminal outcome exactly once；
+- post-terminal cleanup 失败不允许把已确认 terminal 的 backend 重新描述为 active。
+
+### 4.5 用 generation publication 简化 rollback
+
+mutable state 优先采用 provisional generation，而不是原地写后执行逆操作：
+
+```text
+committed generation N
+    -> create provisional N+1
+    -> execute/read/write N+1
+    -> commit: atomically publish N+1
+    -> rollback: quiesce then discard unpublished N+1
+```
+
+适用于 KV、activation、gradient shard、optimizer shard、checkpoint manifest 和后续
+communication epoch。对于无法完整复制的大 optimizer state，评估：
+
+- shard-level generation；
+- copy-on-write extents；
+- write-ahead journal；
+- step-boundary atomic manifest publication。
+
+目标不是实现昂贵的“逆向恢复所有字节”，而是在 quiescence 后丢弃未发布 generation。
+
+### 4.6 Terminalization 完成条件
+
+- [ ] ordinary / speculative 不再拥有两套 terminal cleanup；
+- [ ] 移除多个互斥 `Option<pending/rollback/terminal>` 表达，非法状态不可构造；
+- [ ] backend terminal progress typed；
+- [ ] retry 由 owner loop / completion fence 自动驱动；
+- [ ] device loss 有设备级处理协议；
+- [ ] commit / rollback / cancel exactly once；
+- [ ] backend terminal 后的 cleanup failure 可重试且不重复 terminal operation；
+- [ ] inference、training、RL transaction 共用 coordinator；
+- [ ] failure-injection UT 覆盖每个 transition 与 ownership leak。
+
+## 5. Checkpoint、模型公共层与 DeepSeek 拆分
+
+### 5.1 已完成
+
+旧 `artifact` 总抽象已删除。通用 checkpoint 能力位于：
 
 ```text
 crates/ferrule-model/src/checkpoint/
@@ -145,374 +360,487 @@ crates/ferrule-model/src/checkpoint/
   hash.rs
   index.rs
   inventory.rs
+  read_plan.rs
+  source.rs
   tensor.rs
   weight.rs
 ```
 
-DeepSeek 私有语义 binding 位于：
+已拆出的公共能力：
 
-```text
-crates/ferrule-model/src/models/deepseek_v4/
-  checkpoint.rs
-  checkpoint_binding.rs
-  local_checkpoint_tests.rs
-```
-
-已经拆出的公共能力包括：
-
-- safetensors index / inventory / bounded tensor slices；
-- checkpoint dtype / payload / matrix descriptors；
+- safetensors index / inventory / bounded reads / positioned read plan；
+- source snapshot、source generation、content hash；
+- checkpoint dtype、payload、matrix descriptor；
 - generic linear weight formats 与 execution policy；
 - dense HF tensor classification；
 - GQA / dense MLP semantic layout；
-- common checkpoint loading、shape validation、math、RMSNorm、RoPE / YaRN 和 config parsing helpers；
-- generic `RouterWeights` 与 routed expert semantic identifiers。
+- common shape validation、math、RMSNorm、RoPE / YaRN、config helpers；
+- generic `RouterWeights` 与 routed expert semantic IDs；
+- model-neutral resource manifest、stage、access、retention、workspace contract。
 
-DeepSeek MLA、compressor、indexer、hyper-connection 和 DSpark 逻辑保持 family-private，不为 Qwen 进行错误泛化。
+DeepSeek MLA、compressor、indexer、hyper-connection、DSpark 等能力只有在证明跨模型语义
+一致后才提升为公共组件，不能因为 Qwen 或其他模型“看起来相似”而错误泛化。
 
-### 4.2 当前进行中
+### 5.2 下一步拆分原则
 
-正在把 routed-expert 私有 source hashing 提升为 checkpoint 公共 source identity builder：
+接入新模型前继续审查 `models/deepseek_v4`：
+
+1. semantic primitive 与 family policy 分离；
+2. checkpoint naming/binding 与 tensor operation 分离；
+3. attention/MLP/router 的通用 shape contract 与 DeepSeek 特有布局分离；
+4. model-neutral execution stage 不携带 CUDA/CUTLASS IDs；
+5. provider-specific packing/layout 留在 backend/provider；
+6. 复用必须减少重复并保持语义清晰，不创建“大而空”的 common 模块。
+
+### 5.3 Dense static bundle 缺口
+
+DeepSeek static bundle descriptor 已进入 provider source catalog，但真正的唯一 out-of-core
+path 尚未闭环：
 
 ```text
-semantic tensor descriptors
-  + ordered bundle domain/version
-  + canonical source file snapshots
-  + exact offsets
-  -> content hash
-  -> source identity
-  -> source generation
+checkpoint extent
+    -> generic pinned read transport
+    -> provider-specific packing/install
+    -> generation-qualified residency binding
+    -> resolved stage resume
+```
+
+当前 CUDA runner 仍临时 eager compile/upload static image。在上述通用 transport/install
+完成前，不能宣称 dense parameter bundle 已支持 out-of-core，也不能删除 eager path 后留下
+不可执行模型。迁移完成时应直接切换唯一生产入口，不保留长期双路径。
+
+## 6. CUDA architecture 与 provider 重构
+
+### 6.1 设计边界
+
+`crates/ferrule-cuda` 必须拆开以下概念：
+
+1. CUDA runtime：context、stream、event、memory、fence；
+2. architecture profile：实际设备、编译 target、capabilities；
+3. operation semantic requirements：dtype、shape、layout、forward/backward、determinism；
+4. provider：CUTLASS、native CUDA 或未来其他 CUDA 实现；
+5. kernel selection：capability + operation requirements -> implementation；
+6. checkpoint transport / packing；
+7. install authority 与 destination generation；
+8. workspace planning；
+9. communication integration；
+10. observability、fallback reason 和 unsupported diagnostics。
+
+CUTLASS 不得成为：
+
+- GB10 的同义词；
+- 某个 SM ID 的全局 feature gate；
+- 模型资源身份的一部分；
+- Metal / ROCm / Ascend 的抽象基类；
+- 只支持 forward inference 的 operation catalog。
+
+### 6.2 方向性组织
+
+目录方向可参考，但在 source review 前不冻结最终文件名：
+
+```text
+ferrule-cuda/
+  runtime/
+  architecture/
+  providers/
+    native/
+    cutlass/
+      common/
+      blackwell/
+      ampere/
 ```
 
 要求：
 
-- catalog 构建只读取文件 metadata，不读取大 payload；
-- semantic content 与 physical source identity 分离；
-- 文件替换、长度、mtime 或 inode/device 变化产生新的 source identity / generation；
-- dense bundles 与 routed experts 共用同一构造协议；
-- physical reader 在 publication 前重新验证 source snapshot。
+- 只有一个 production provider selection 入口；
+- architecture specialization 在 provider 内部，不复制模型 runner；
+- 现有 `sm_121a` operation requirements、ABI 与可执行语义在迁移中保持正确；
+- 不保留 legacy/new 双 provider 路径；
+- B300 的实际 architecture/capability 由工具链与设备查询确认，不凭名称硬编码；
+- Ampere、Blackwell/Blackwell Ultra 等 profile 可共用 semantic requirements，但 kernel
+  implementation 和 workspace 可以不同；
+- forward/backward capability 必须显式，不允许把缺少 backward 的 kernel 误选入训练计划。
 
-## 5. P1：Resource-aware executable contract
+### 6.3 近期推进顺序
 
-### 5.1 目标边界
+1. [ ] 审查现有 `ferrule-cuda` 文件命名、build scripts、operation enums 和 ABI；
+2. [ ] 定义 `CudaTargetProfile` / capability query，不绑定模型 family；
+3. [ ] 定义 provider-neutral operation requirements；
+4. [ ] 将现有 CUTLASS kernels 迁移到唯一 provider selection；
+5. [ ] 去除“CUTLASS == GB10 / `sm_121a`”的全局假设；
+6. [ ] 添加 B300 build/runtime profile；
+7. [ ] 接通 generic checkpoint read -> pinned transport -> install；
+8. [ ] 接入 forward operator set；
+9. [ ] 设计 backward / gradient / optimizer operator capability；
+10. [ ] 后续添加 `sm_86` profile 和 Qwen BF16 operator set；
+11. [ ] 分别做 B300、现有 `sm_121a`、RTX 3090 的独立 compile/runtime acceptance。
 
-`ModelKernelPlan` 继续表示 provider/kernel launch plan，但不再承担跨硬件的资源生命周期抽象。
+## 7. Distributed parallelism：DP / TP / PP / EP / SP / CP
 
-新的 model execution contract 负责：
+并行策略不能只是 runner 外层的启动参数。它们必须进入 prepared topology、stage resource、
+communication、fence、transaction 和 failure protocol。
 
-- ordered semantic stages；
-- exact resource read / write / read-write sets；
-- lease retention lifetime；
-- provider-neutral workspace claims；
-- source-backed manifest；
-- runtime-owned mutable resource declaration；
-- deterministic canonical ordering 与交叉引用校验。
+### 7.1 统一拓扑 contract
 
-它不得包含：
+需要显式描述：
 
-- CUDA kernel ID；
-- CUTLASS operation enum；
-- persistent CUDA arena offset；
-- stream / event handle；
-- destination generation；
-- `sm_86` / `sm_121a` 特定 layout。
+- global rank、local rank、device、node；
+- process/device mesh 与维度命名；
+- DP / TP / PP / EP / SP / CP group；
+- model stage / tensor / expert / sequence shard placement；
+- checkpoint shard source 与 destination placement；
+- communicator identity、generation 和 membership epoch；
+- topology change / rank failure 的 terminal policy。
 
-### 5.2 当前已写入、尚待完成验证的类型
+模型层声明 semantic sharding requirements；runtime 编排 topology；backend/provider 实现
+collective 和 kernel。模型 stage 不直接持有 NCCL handle。
 
-当前 WIP 位于：
+### 7.2 各并行维度
 
-```text
-crates/ferrule-model/src/execution/resource.rs
-crates/ferrule-model/src/execution/stage.rs
-crates/ferrule-model/src/execution/plan.rs
-crates/ferrule-model/src/checkpoint/source.rs
-```
+- **DP**：parameter replica、gradient reduction、optimizer sharding、batch/rollout placement；
+- **TP**：tensor shard、all-reduce / reduce-scatter / all-gather 与 fused kernel boundary；
+- **PP**：microbatch schedule、activation transfer、bubble、stage checkpoint 与 failure boundary；
+- **EP**：router result、expert dispatch/combine、expert placement 与 out-of-core expert residency；
+- **SP**：sequence shard、activation/KV ownership与 sequence collective；
+- **CP**：context partition、attention communication、KV/context exchange 与长上下文 memory plan。
 
-核心类型：
+组合并行必须通过同一 mesh 表达，不能为每个组合手写 runner 分支。
 
-```rust
-ResourceManifest
-ResourceBacking::{Checkpoint, RuntimeOwned}
-ResourceLayout::{CheckpointEncoded, TensorBundle, RuntimeBuffer}
-ResourceAccess::{Read, ReadWrite, Write}
-ResourceRetention::{ThroughStage, ThroughTransaction, Persistent}
-StageResourceUse
-WorkspaceClaim
-ExecutableStage<O>
-PreparedExecutable<O>
-TransformerResourceSlot
-TransformerStage
-PreparedModel<R, O>
-```
+### 7.3 Communication stage/resource/fence
 
-当前设计决定：
+需要纳入 stage graph：
 
-- `PreparedModel` 必须携带 `PreparedExecutable`；不允许 `Option`，不保留旧的空 plan 路径；
-- checkpoint manifest 不携带 destination generation；
-- runtime-owned mutable state 不把当前 spill/source generation 冻结进 immutable prepared plan；
-- parameter / gradient / optimizer 使用同一 `TransformerResourceSlot` 坐标；
-- routed experts 在 router 结果出来后实例化 exact selected resource set，不能在 prepare 时把所有候选专家声明成同时依赖；
-- resource-free stage 与 empty executable 的策略由校验显式定义，不依赖隐含行为。
+- collective read/write sets；
+- point-to-point pipeline transfers；
+- expert dispatch / combine；
+- sequence/context exchange；
+- communication workspace；
+- communication completion fence；
+- communicator/rank epoch；
+- materialization、communication 和 compute 的 overlap；
+- cancel/rollback 时 in-flight collective 的 quiescence 与 device-level failure propagation。
 
-### 5.3 当前迁移状态
+通信完成不能用 CPU enqueue completion 代替真实 device/network fence。
 
-DeepSeek 正在从：
+### 7.4 分布式完成条件
 
-```text
-PreparedModel {
-    generation,
-    opaque prepared resources,
-}
-```
+- [ ] topology 与 group identity 可验证、可序列化、generation-qualified；
+- [ ] 至少一个 selected large model 有明确 parallel plan；
+- [ ] 选定模式的 collective / P2P stage 进入统一 scheduler；
+- [ ] parameter/expert/KV placement 与 materialization 一致；
+- [ ] rank-local failure 不产生跨 rank custody 泄漏；
+- [ ] timeline 能展示 I/O、communication、compute overlap；
+- [ ] DP/TP/PP/EP/SP/CP 单独 correctness 后再验证组合模式。
 
-迁移到：
+## 8. Training、post-training 与 RL
 
-```text
-PreparedModel {
-    generation,
-    model-family resources,
-    validated prepared executable,
-}
-```
+训练不是在 inference runner 旁建立第二套 scheduler。它是在同一 prepared stage/resource /
+transaction protocol 上增加 backward、update 和多模型协调。
 
-计划中的静态 parameter bundles：
+### 8.1 Training execution graph
+
+统一 stage graph 必须支持：
 
 ```text
-prologue:
-  embedding bundle
-
-per layer:
-  attention bundle
-  router bundle
-  shared/dense FFN bundle
-
-runtime route result:
-  exact selected routed expert resources
-
-epilogue:
-  output norm/head bundle
-
-attachments:
-  per-stage DSpark/MTP bundles
+forward
+    -> loss
+    -> backward
+    -> gradient reduction/accumulation
+    -> optimizer update
+    -> checkpoint/publication
 ```
 
-当前迁移尚未完成，因此这部分不能标记为编译通过或 production-ready。
+资源语义：
 
-### 5.4 P1 完成条件
-
-- [ ] `PreparedModel` 全部调用面强制携带 validated executable；
-- [ ] DeepSeek static dense bundles 全部生成 stable `ResourceManifest`；
-- [ ] selected routed experts 由 prepared routed-stage template 实例化 exact resource uses；
-- [ ] KV / activation / gradient / optimizer 由 request/transaction 创建 exact runtime manifests；
-- [ ] runtime 从 stage contract 生成 canonical dependencies，不再从 model-private fields 推断；
-- [ ] stage completion fence 驱动 release / retain / evict；
-- [ ] rollback 保留 mutable state 与已提交 physical work 的真实 custody；
-- [ ] 所有新增 CPU UT、model/runtime UT、workspace check 和 fmt 全绿。
-
-## 6. P2：Qwen3 + RTX 3090 (`sm_86`)
-
-在 P1 contract 稳定后推进 dense Qwen3，不先做 Qwen MoE。
-
-### 6.1 Model/checkpoint
-
-- [ ] 完整解析 Qwen3 config、tokenizer 与 safetensors inventory；
-- [ ] 复用 common dense tensor classification、shape、RMSNorm、RoPE 和 SwiGLU；
-- [ ] 建立 model-neutral GQA semantic plan；
-- [ ] 每层拆成 attention / FFN parameter bundles；
-- [ ] CPU reference forward 与 synthetic checkpoint fixtures；
-- [ ] 验证 tied/untied embedding 与 output head；
-- [ ] 明确 sliding window、RoPE scaling、KV dtype 与 sequence limits。
-
-### 6.2 Out-of-core acceptance
-
-Qwen3 8B 在 3090 上的目标不是“勉强加载成功”，而是验证唯一 stage path：
-
-```text
-materialize layer bundle N+1
-    overlaps
-execute layer bundle N
-    overlaps
-release/evict completed bundle N-1
-```
-
-必须证明：
-
-- 不需要全模型 GPU 常驻；
-- dense parameter miss 会 suspend continuation，而不是同步阻塞整个 owner；
-- selected requests 保有公平性；
-- bundle eviction 不破坏 in-flight completion fence；
-- source/destination generation 与 resumed bindings 完整匹配；
-- CPU/mock correctness 与 GPU output correctness 可对账。
-
-### 6.3 初始 Ampere operator set
-
-在 provider/profile API 完成后，RTX 3090 初始需求：
-
-- BF16 GEMM；
-- RMSNorm；
-- RoPE；
-- SwiGLU；
-- GQA / paged attention；
-- embedding / output projection；
-- 必要的 layout conversion / packing。
-
-在 executable/resource contract 完成前，不为 `sm_86` 建立模型私有 kernel 旁路。
-
-## 7. P3：CUDA / CUTLASS provider 重构
-
-CUTLASS 是 CUDA provider 的实现选择，不是 Metal / ROCm / Ascend 的跨硬件抽象。
-
-目标组织：
-
-```text
-ferrule-cuda/
-  runtime/              # CUDA context, streams, events, memory
-  architecture/         # target/profile/capability detection
-  providers/
-    native/
-    cutlass/
-      sm121/
-      ampere/
-```
-
-推进顺序：
-
-1. [ ] provider-neutral capability / target profile API；
-2. [ ] 将现有 `sm_121a` kernel catalog 收进明确的 provider/architecture 模块；
-3. [ ] 去除 `build.rs` 中“CUTLASS 等于 GB10”的全局假设；
-4. [ ] 添加 Ampere `sm_86` capability/profile；
-5. [ ] 为 Qwen3 编写/接入 BF16 kernels；
-6. [ ] 保持 DeepSeek `sm_121a` operation requirements 与 ABI 不变；
-7. [ ] 分别做 `sm_86` 和 `sm_121a` compile/runtime acceptance。
-
-迁移中不保留长期 legacy/new 双 provider 路径。需要分步移动文件时，每一步都必须保持唯一生产入口。
-
-## 8. Training compatibility
-
-训练不是在推理 runner 旁边再建立第二套 scheduler，而是在同一个 stage/resource 协议上增加 backward/update stages。
-
-合约必须支持：
-
-- parameter `Read`；
-- KV / activation `ReadWrite`；
+- parameter `Read`，更新时按新 generation publication；
+- activation / activation checkpoint `Write`、`Read`、`ReadWrite`；
 - gradient `Write` / accumulation `ReadWrite`；
 - optimizer state `ReadWrite`；
-- activation checkpoint `ThroughTransaction`；
-- persistent parameters / optimizer shards；
-- forward、backward、optimizer step 之间明确的 fence 与 retention；
-- activation / gradient / optimizer spill 与 reload；
-- data/tensor/pipeline parallel 后续对 resource custody 的扩展。
+- forward/backward/update 之间 exact fence 与 retention；
+- activation、gradient、optimizer spill/reload；
+- recomputation 与 checkpoint retention trade-off；
+- mixed precision、master weights、loss scaling；
+- deterministic / non-deterministic kernel capability；
+- distributed gradient / optimizer ownership。
 
-近期不实现完整预训练，但 P1 不允许引入以下只能服务 inference 的假设：
+禁止引入：
 
-- 所有资源只读；
-- stage 完成后所有 lease 都可立即释放；
-- 权重永远全驻留；
-- prepared source generation 可以代表 mutable training state；
-- execution plan 只有 forward operation。
+- “所有资源只读”；
+- “stage 完成后所有 lease 都释放”；
+- “权重永远常驻”；
+- “prepared source generation 等于 mutable training generation”；
+- “execution plan 只有 forward”；
+- “rollback 等于恢复一份完整显存副本”。
 
-## 9. 验证状态与证据边界
+### 8.2 Post-training
 
-### 9.1 当前全绿 CPU 基线
+后续覆盖：
 
-当前 P1-A executable / source-catalog migration 已实际通过：
+- SFT；
+- preference optimization；
+- reward model / value model training；
+- LoRA / adapter 等 parameter-efficient updates；
+- quantization-aware 或蒸馏类流程；
+- 多 checkpoint generation 的原子发布与回收。
+
+具体算法不应写死在 runtime；runtime 提供 stage graph、resource custody、distributed topology、
+terminalization 和 observability。
+
+### 8.3 RL / rollout-learner
+
+RL 系统至少需要协调：
+
+- policy model；
+- reference model；
+- reward model；
+- value/critic model（若算法需要）；
+- rollout generation；
+- trajectory / token / logprob / reward buffers；
+- actor、learner、evaluator 的异步调度；
+- checkpoint generation 发布与 worker refresh；
+- stale policy/version policy；
+- 多模型共享或竞争 GPU/CPU/storage/network resources；
+- rollout cancel、learner failure 和 checkpoint publication rollback。
+
+多模型资源工作集很可能远大于显存，因此 RL 不是 out-of-core 调度之外的独立功能，而是
+其重要验收场景。
+
+## 9. 模型路线
+
+### 9.1 大模型优先验收
+
+B300 可用后，优先选择能验证以下能力的大模型：
+
+- dense + MoE 或至少包含复杂 routed experts；
+- 多卡并行需求；
+- checkpoint 规模足以验证 out-of-core；
+- operator 和精度路径可在目标硬件实现；
+- checkpoint、tokenizer、config、许可和参考输出可获得。
+
+Kimi K3 是候选，但在获得并确认其实际 checkpoint/config/operator requirements 前，不在
+roadmap 中编造具体架构。模型选择应依据：
+
+1. 可获得、可重复的 checkpoint 与 reference；
+2. B300 operator feasibility；
+3. TP/PP/EP 等并行验收价值；
+4. out-of-core materialization 压力；
+5. training/post-training 后续价值；
+6. 固定 workload 与性能证据可复现性。
+
+### 9.2 Qwen 与 RTX 3090 portability track
+
+Qwen 不删除，只后移：
+
+- 复用 DeepSeek 拆出的 common checkpoint/dense/GQA/RMSNorm/RoPE/SwiGLU 组件；
+- synthetic checkpoint 与 CPU reference correctness；
+- 在 provider capability API 完成后添加 Ampere `sm_86`；
+- 选择明确版本和规模，不使用含义不清的“Qwen3.8”名称；
+- 小模型验证 checkpoint/semantic correctness；
+- 大于可用显存的模型验证 3090 out-of-core；
+- 不为 Qwen 或 3090 建模型私有 kernel / scheduler 旁路。
+
+3090 acceptance 仍应证明：
 
 ```text
-cargo test -p ferrule-common --lib
-68 passed
-
-cargo test -p ferrule-model
-288 lib tests passed
-local smoke: 1 passed, 1 ignored
-prefetch mocks: 3 passed
-
-cargo test -p ferrule-runtime
-296 passed
-
-cargo check --workspace --all-targets
-passed
-
-cargo fmt --all -- --check
-passed
+materialize bundle N+1
+    overlaps
+execute bundle N
+    overlaps
+release/evict bundle N-1 after completion fence
 ```
 
-这些结果证明当前 CPU owner-side protocol、resource-aware `PreparedModel`、DeepSeek static executable/source catalog、prefetch mock 与 runtime baseline。它们不证明 CUDA static tensor-bundle transport/install 或任何 GPU 路径已经完成。
+## 10. Prefetch
 
-### 9.2 当前 WIP 状态
+当前结论保持：
 
-P1-A 的 contract、DeepSeek publication、checkpoint source catalog 与 CPU validation 已完成；P1-B 仍在进行。DeepSeek static bundle descriptor 已进入唯一 provider source catalog，但 CUDA 侧 generic pinned transport/install 尚未接通，runner 仍临时 eager compile/upload static image。因此还不能宣称 dense parameter bundle 已经实现真正 out-of-core 执行。
+- oracle / future-aware prefetch 对 selected miss 有明显收益；
+- 当前 `ScoreBasedExpertPredictor` 在有限 residency slots 下挤占真实 working set，净收益为负；
+- 不接入当前 predictor；
+- 保留 `Prefetch` resource class 和 demand reserve；
+- 只评估有因果依据的 future-aware 信号，例如 prepared next stage、router result、pipeline
+  schedule、known backward stage、rollout schedule 或可靠 draft information。
 
-### 9.3 CUDA / GPU 边界
+任何新 predictor 必须同时报告：
 
-尝试启用 CUDA model feature 时，在 Rust/CUDA 编译前被既有 guard 阻止：
+- selected miss；
+- end-to-end latency / throughput；
+- slot displacement；
+- extra storage/H2D bytes；
+- wasted install；
+- demand fairness；
+- memory high-water；
+- 在固定 workload 下相对 no-prefetch baseline 的净收益。
+
+## 11. Observability 与验证策略
+
+### 11.1 当前 CPU/mock 证据
+
+截至本次更新，当前 WIP 已实际运行：
 
 ```text
-CUTLASS is a GB10-only provider; set FERRULE_CUTLASS_ARCH=sm_121a
-or build with --arch sm_121a
+cargo test -p ferrule-model --lib
+291 passed
+
+cargo test -p ferrule-runtime --lib
+301 passed
 ```
 
-因此当前没有：
+新增 mock 覆盖包括：
 
-- CUDA feature compile validation；
-- RTX 3090 `sm_86` compile/runtime validation；
-- DeepSeek-V4 `sm_121a` 当前源码回归；
-- Qwen3 GPU correctness / performance evidence。
+- resolved stage canonicalization 与 fail-closed identity validation；
+- stage / transaction / persistent custody；
+- shared key 最后 owner 才释放；
+- `StillActive` resume 不提前释放；
+- transaction commit / rollback terminal release；
+- speculative terminal propagation；
+- rollback failure quarantine 和成功 retry 后 exactly-once cleanup。
 
-历史 GB10 `n1`、旧 CUDA build 或旧 `n8` 调试记录只能作为历史信息，不能覆盖当前重构后的 release gate。
+本次还通过了 `ferrule-common --lib` 68 tests、完整 `ferrule-model`（包括 local smoke 与
+prefetch mocks）、`cargo check --workspace --all-targets` 和 `cargo fmt --all -- --check`。
+上述结果不证明任何 CUDA/GPU path。
 
-## 10. 近期执行顺序
+### 11.2 必须补齐的 trace
 
-### P1-A：完成 executable contract
+统一 timeline 至少需要：
 
-- [x] 完成 DeepSeek `prepare_executable()` 与 publication migration；
-- [x] 完成公共 checkpoint source catalog / identity builder；
-- [x] 补齐 manifest / stage validation UT；
-- [x] 恢复 `ferrule-model` 定向编译；
-- [x] 跑全量 CPU baseline。
+- stage ready / blocked / resumed；
+- materialization read/upload/install；
+- compute launch / completion fence；
+- communication enqueue / completion；
+- transaction terminalization phases；
+- residency acquire/release/evict；
+- KV/activation/gradient/optimizer spill；
+- resource broker admission / reserve usage；
+- distributed rank/group/epoch；
+- output/checkpoint publication。
 
-### P1-B：runtime 消费 stage contract
+性能结论必须来自固定 workload、原始 trace、memory high-water、I/O bytes、collective bytes 和
+吞吐/延迟，不从 mock、旧 binary 或历史机器结果外推。
 
-- [ ] stage -> exact materialization requests；
-- [ ] missing set -> continuation + canonical dependencies；
-- [ ] residency lease acquisition / completion fence / release；
-- [ ] routed stage post-router exact instantiation；
-- [ ] runtime-created mutable resources 与 transaction custody；
-- [ ] 删除剩余 model-private residency 推断。
+### 11.3 验证层级
 
-### P2-A：Qwen3 CPU correctness
+1. CPU unit tests：identity、canonicalization、state machine、failure atomicity；
+2. synthetic/mocks：I/O、fence、rollback、device loss、collective failure；
+3. CUDA feature compile；
+4. 单卡 kernel/reference correctness；
+5. 单卡 out-of-core overlap；
+6. 多卡 collective/topology correctness；
+7. 组合 parallelism；
+8. training/update/checkpoint transaction；
+9. post-training/RL multi-model workload；
+10. fixed large-model acceptance/performance。
 
-- [ ] Qwen3 config/checkpoint；
-- [ ] dense layer reusable components；
-- [ ] synthetic checkpoint UT；
-- [ ] stage bundle / source identity / continuation mocks；
-- [ ] 0.6B 或 1.7B checkpoint acceptance（获得模型后）。
+## 12. 近期执行顺序
 
-### P2-B：3090 provider 与 kernels
+### P0：提交当前统一 custody 基线
 
-- [ ] CUDA target capability API；
-- [ ] CUTLASS provider 按 architecture 收口；
-- [ ] `sm_86` compile profile；
-- [ ] Qwen3 BF16 operator set；
-- [ ] Qwen3 8B out-of-core correctness；
-- [ ] I/O / compute overlap、memory high-water 与 throughput evidence。
+- [x] `ResolvedStage` 与 retention-aware resource contract；
+- [x] routed experts 进入 resolved-stage wait path；
+- [x] typed stage / transaction / persistent custody；
+- [x] resume `Consumed` / `StillActive`；
+- [x] ordinary/speculative terminal outcome 连接；
+- [x] speculative rollback failure quarantine 与 retry mock；
+- [x] model/runtime lib UT；
+- [x] workspace all-target check、fmt、broader CPU baseline；
+- [x] commit + push，作为换机交接点。
 
-### P3：回归与扩展
+### P1-A：统一 terminalization
 
-- [ ] DeepSeek-V4 `sm_121a` compile/runtime regression；
-- [ ] training forward/backward resource contract prototype；
-- [ ] Metal / ROCm / Ascend backend capability design；
-- [ ] future-aware prefetch signal 与新一轮 mock/production evaluation。
+- [ ] 设计 `TransactionOwnership` 与 `TerminalIntent`；
+- [ ] ordinary/speculative 共用 terminal coordinator；
+- [ ] typed backend pending/complete/device-lost；
+- [ ] owner loop 自动 retry，不依赖第二次 cancellation；
+- [ ] generational mutable-state publication；
+- [ ] failure-injection state-transition matrix。
 
-## 11. Release gate
+### P1-B：闭环通用 static/mutable resource transport
+
+- [ ] generic checkpoint extent -> pinned read；
+- [ ] provider packing/install authority；
+- [ ] dense parameter bundle 进入唯一 continuation path；
+- [ ] 移除 eager static image 生产依赖；
+- [ ] KV / activation / gradient / optimizer runtime manifests；
+- [ ] spill/reload 与 completion fence；
+- [ ] 删除剩余 model-private residency inference。
+
+### P2：B300 CUDA/CUTLASS provider
+
+- [ ] architecture/capability API；
+- [ ] operation semantic requirements；
+- [ ] CUTLASS/native provider selection；
+- [ ] 迁移现有 `sm_121a` 而不建立双路径；
+- [ ] B300 build/runtime profile；
+- [ ] forward operator baseline；
+- [ ] backward/update capability design；
+- [ ] GPU correctness 与 timeline evidence。
+
+### P3：Distributed foundation
+
+- [ ] device/process mesh；
+- [ ] communicator identity/generation；
+- [ ] TP/PP/EP 优先组合由选定大模型决定；
+- [ ] DP/SP/CP 单独与组合 contract；
+- [ ] communication stages/resources/fences；
+- [ ] failure propagation 与 distributed terminalization；
+- [ ] I/O/communication/compute overlap trace。
+
+### P4：Training、post-training、RL
+
+- [ ] forward/backward/update stage prototype；
+- [ ] activation checkpointing 与 recompute；
+- [ ] gradient/optimizer spill；
+- [ ] distributed optimizer/checkpoint publication；
+- [ ] policy/reference/reward/value coordination；
+- [ ] rollout actor/learner scheduling；
+- [ ] RL multi-model out-of-core acceptance。
+
+### P5：模型与硬件扩展
+
+- [ ] 选定并接通 large-model acceptance，候选 Kimi K3；
+- [ ] DeepSeek `sm_121a` 独立回归；
+- [ ] Qwen CPU correctness；
+- [ ] RTX 3090 `sm_86` compile/runtime/out-of-core；
+- [ ] Metal / ROCm / Ascend capability/provider design；
+- [ ] future-aware prefetch 新一轮评估。
+
+## 13. Release gate
 
 在满足以下条件前保持 NO-GO：
 
-- [ ] 唯一 stage/materialization/continuation production path；
-- [ ] CPU UT / mock / workspace check 全绿；
-- [ ] RTX 3090 `sm_86` 当前源码可编译；
-- [ ] Qwen3 reference 与 GPU outputs 可对账；
-- [ ] Qwen3 8B 能在 3090 上以 out-of-core 方式执行；
-- [ ] timeline 证明真实 read/upload 与其他 ready compute 重叠；
-- [ ] cancellation、stale、failure、rollback 后无 waiter/lease/credit/residency 泄漏；
-- [ ] DeepSeek-V4 `sm_121a` 路径完成独立回归；
-- [ ] 所有性能结论都有固定 workload、计数器和原始日志，不从 mock 或历史构建外推。
+### Protocol baseline
+
+- [ ] 唯一 stage/materialization/continuation/custody production path；
+- [ ] CPU UT、synthetic failure mocks、workspace checks 全绿；
+- [ ] commit/rollback/cancel terminal outcome exactly once；
+- [ ] cancellation、stale、failure、rollback、shutdown 后无 waiter/lease/credit/residency/KV 泄漏；
+- [ ] terminalization 不依赖业务调用方重复发起 cancel；
+
+### B300 / CUDA provider
+
+- [ ] CUDA target feature 可编译；
+- [ ] B300 capability negotiation 与 kernel selection 可验证；
+- [ ] 不存在“CUTLASS == GB10”全局假设；
+- [ ] 现有 `sm_121a` 通过独立迁移回归；
+- [ ] forward/backward capability 不会错误选择；
+
+### Out-of-core / overlap
+
+- [ ] 至少一个 large-model stage path 使用真实 generic transport/install；
+- [ ] 模型或工作集实际大于目标显存时仍可执行；
+- [ ] timeline 证明 read/upload/communication 与其他 ready compute 重叠；
+- [ ] completion fence 前不释放或复用 in-flight resource；
+- [ ] memory high-water、I/O bytes、collective bytes 和吞吐/延迟可复现；
+
+### Distributed / training / RL
+
+- [ ] 选定 parallel modes 的 topology 与 collective correctness；
+- [ ] rank/device failure 不产生 distributed ownership leak；
+- [ ] training forward/backward/update transaction correctness；
+- [ ] activation/gradient/optimizer spill correctness；
+- [ ] post-training/RL checkpoint generation 与 rollback/custody correctness；
+
+### Portability gates
+
+- [ ] Qwen/RTX 3090 作为后续独立 portability gate；
+- [ ] Metal/ROCm/Ascend 不要求立即实现，但 model/runtime contract 不得含 CUDA-only 假设；
+- [ ] 所有性能结论都有固定 workload、原始日志和当前源码构建证据。

@@ -225,16 +225,43 @@ pub(crate) enum SpeculativeCohortProgress<S> {
 /// `pending` is retained only when the executor still owns a live backend
 /// continuation. Callers must quarantine or explicitly cancel that transaction;
 /// dropping it would lose model state and provisional-page ownership.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpeculativeTransactionTerminal {
+    Committed,
+    RolledBack,
+    Cancelled,
+}
+
 pub(crate) struct SpeculativeCohortExecutionError<S> {
     error: Error,
     pending: Option<Box<PendingSpeculativeVerificationCohort<S>>>,
+    rollback_pending: Option<Box<PendingSpeculativeRollback<S>>>,
+    terminal: Option<SpeculativeTransactionTerminal>,
 }
 
 impl<S> SpeculativeCohortExecutionError<S> {
+    pub(crate) fn pending(&self) -> Option<&PendingSpeculativeVerificationCohort<S>> {
+        self.pending.as_deref()
+    }
+
+    pub(crate) const fn terminal(&self) -> Option<SpeculativeTransactionTerminal> {
+        self.terminal
+    }
+
     pub(crate) fn into_parts(
         self,
-    ) -> (Error, Option<Box<PendingSpeculativeVerificationCohort<S>>>) {
-        (self.error, self.pending)
+    ) -> (
+        Error,
+        Option<Box<PendingSpeculativeVerificationCohort<S>>>,
+        Option<Box<PendingSpeculativeRollback<S>>>,
+        Option<SpeculativeTransactionTerminal>,
+    ) {
+        (
+            self.error,
+            self.pending,
+            self.rollback_pending,
+            self.terminal,
+        )
     }
 }
 
@@ -255,6 +282,12 @@ struct SpeculativeCohortTransaction<S> {
 pub(crate) struct PendingSpeculativeVerificationCohort<S> {
     transaction: SpeculativeCohortTransaction<S>,
     pending_progress: PendingModelProgress,
+}
+
+/// Complete speculative ownership quarantined after backend rollback failed.
+pub(crate) struct PendingSpeculativeRollback<S> {
+    transaction: SpeculativeCohortTransaction<S>,
+    terminal: SpeculativeTransactionTerminal,
 }
 
 impl<S> PendingSpeculativeVerificationCohort<S> {
@@ -293,20 +326,25 @@ where
     .map_err(|error| SpeculativeCohortExecutionError {
         error,
         pending: None,
+        rollback_pending: None,
+        terminal: Some(SpeculativeTransactionTerminal::RolledBack),
     })?;
     let reservation_views = match page_manager.reservation_views(&transaction.reservations) {
         Ok(views) => views,
         Err(error) => {
+            let (error, rollback_pending, terminal) = discard_speculative_transaction(
+                executor,
+                page_manager,
+                transaction,
+                false,
+                error,
+                retirements,
+            );
             return Err(SpeculativeCohortExecutionError {
-                error: discard_speculative_transaction(
-                    executor,
-                    page_manager,
-                    transaction,
-                    false,
-                    error,
-                    retirements,
-                ),
+                error,
                 pending: None,
+                rollback_pending,
+                terminal,
             });
         }
     };
@@ -326,10 +364,14 @@ where
                 retirements,
             )
             .map(SpeculativeCohortProgress::Complete)
-            .map_err(|error| SpeculativeCohortExecutionError {
-                error,
-                pending: None,
-            })
+            .map_err(
+                |(error, rollback_pending, terminal)| SpeculativeCohortExecutionError {
+                    error,
+                    pending: None,
+                    rollback_pending,
+                    terminal,
+                },
+            )
         }
         Ok(NativeBatchExecutionProgress::Waiting(pending_progress)) => Ok(
             SpeculativeCohortProgress::Waiting(Box::new(PendingSpeculativeVerificationCohort {
@@ -381,10 +423,14 @@ where
                 retirements,
             )
             .map(SpeculativeCohortProgress::Complete)
-            .map_err(|error| SpeculativeCohortExecutionError {
-                error,
-                pending: None,
-            })
+            .map_err(
+                |(error, rollback_pending, terminal)| SpeculativeCohortExecutionError {
+                    error,
+                    pending: None,
+                    rollback_pending,
+                    terminal,
+                },
+            )
         }
         Ok(NativeBatchExecutionProgress::Waiting(pending_progress)) => {
             pending.pending_progress = pending_progress;
@@ -396,9 +442,11 @@ where
                 Err(SpeculativeCohortExecutionError {
                     error,
                     pending: Some(Box::new(pending)),
+                    rollback_pending: None,
+                    terminal: None,
                 })
             } else {
-                let error = discard_speculative_transaction(
+                let (error, rollback_pending, terminal) = discard_speculative_transaction(
                     executor,
                     page_manager,
                     pending.transaction,
@@ -409,6 +457,8 @@ where
                 Err(SpeculativeCohortExecutionError {
                     error,
                     pending: None,
+                    rollback_pending,
+                    terminal,
                 })
             }
         }
@@ -417,6 +467,54 @@ where
 
 /// Cancel one suspended cohort. Logical reservations and branch states are
 /// released only after model quiescence and backend rollback are confirmed.
+pub(crate) fn retry_speculative_rollback<R>(
+    executor: &mut NativeMultiSessionExecutor<R>,
+    page_manager: &mut KvPageManager,
+    mut pending: PendingSpeculativeRollback<R::SequenceState>,
+    retirements: &mut Vec<KvRetirement>,
+) -> std::result::Result<
+    SpeculativeTransactionTerminal,
+    SpeculativeCohortExecutionError<R::SequenceState>,
+>
+where
+    R: MultiSessionRunner,
+{
+    let transaction_id = pending.transaction.id;
+    if executor.has_transaction(transaction_id)
+        && let Err(error) = executor.rollback_prepared_batch(
+            transaction_id,
+            &mut pending.transaction.verification_branches,
+        )
+    {
+        return Err(SpeculativeCohortExecutionError {
+            error,
+            pending: None,
+            rollback_pending: Some(Box::new(pending)),
+            terminal: None,
+        });
+    }
+    let terminal = pending.terminal;
+    let cleanup = cleanup_speculative_cohort(
+        executor,
+        page_manager,
+        Some(transaction_id),
+        pending.transaction.reservations,
+        pending.transaction.prepared_commit,
+        pending.transaction.verification_branches,
+        false,
+        retirements,
+    );
+    match cleanup {
+        None => Ok(terminal),
+        Some(error) => Err(SpeculativeCohortExecutionError {
+            error,
+            pending: None,
+            rollback_pending: None,
+            terminal: Some(terminal),
+        }),
+    }
+}
+
 pub(crate) fn cancel_resumable_speculative_verification_cohort<R>(
     executor: &mut NativeMultiSessionExecutor<R>,
     page_manager: &mut KvPageManager,
@@ -436,6 +534,8 @@ where
         return Err(SpeculativeCohortExecutionError {
             error,
             pending: Some(Box::new(pending)),
+            rollback_pending: None,
+            terminal: None,
         });
     }
     let transaction = pending.transaction;
@@ -453,6 +553,8 @@ where
         Some(error) => Err(SpeculativeCohortExecutionError {
             error,
             pending: None,
+            rollback_pending: None,
+            terminal: Some(SpeculativeTransactionTerminal::Cancelled),
         }),
     }
 }
@@ -471,18 +573,25 @@ fn reconcile_speculative_execution_error<R: MultiSessionRunner>(
                 transaction,
                 pending_progress,
             })),
+            rollback_pending: None,
+            terminal: None,
         },
-        None => SpeculativeCohortExecutionError {
-            error: discard_speculative_transaction(
+        None => {
+            let (error, rollback_pending, terminal) = discard_speculative_transaction(
                 executor,
                 page_manager,
                 transaction,
                 true,
                 error,
                 retirements,
-            ),
-            pending: None,
-        },
+            );
+            SpeculativeCohortExecutionError {
+                error,
+                pending: None,
+                rollback_pending,
+                terminal,
+            }
+        }
     }
 }
 
@@ -668,7 +777,14 @@ fn finish_speculative_cohort_transaction<R: MultiSessionRunner>(
     mut transaction: SpeculativeCohortTransaction<R::SequenceState>,
     output: ExecutionOutput,
     retirements: &mut Vec<KvRetirement>,
-) -> Result<SpeculativeCohortResult> {
+) -> std::result::Result<
+    SpeculativeCohortResult,
+    (
+        Error,
+        Option<Box<PendingSpeculativeRollback<R::SequenceState>>>,
+        Option<SpeculativeTransactionTerminal>,
+    ),
+> {
     let verify_time_us = transaction.verify_start.elapsed().as_micros() as u64;
     let global_row_top1 =
         match collect_global_row_top1(&output, transaction.verification_batch.len()) {
@@ -794,7 +910,8 @@ fn finish_speculative_cohort_transaction<R: MultiSessionRunner>(
     )
     .err();
     retirements.push(retirement);
-    finish_speculative_cohort_publication(None, state_promotion_error, None)?;
+    finish_speculative_cohort_publication(None, state_promotion_error, None)
+        .map_err(|error| (error, None, Some(SpeculativeTransactionTerminal::Committed)))?;
 
     let transaction_time_us = transaction.transaction_start.elapsed().as_micros() as u64;
     let results = transaction
@@ -835,26 +952,52 @@ fn finish_speculative_cohort_transaction<R: MultiSessionRunner>(
 fn discard_speculative_transaction<R: MultiSessionRunner>(
     executor: &mut NativeMultiSessionExecutor<R>,
     page_manager: &mut KvPageManager,
-    transaction: SpeculativeCohortTransaction<R::SequenceState>,
+    mut transaction: SpeculativeCohortTransaction<R::SequenceState>,
     rollback_backend: bool,
     cause: Error,
     retirements: &mut Vec<KvRetirement>,
-) -> Error {
-    match cleanup_speculative_cohort(
+) -> (
+    Error,
+    Option<Box<PendingSpeculativeRollback<R::SequenceState>>>,
+    Option<SpeculativeTransactionTerminal>,
+) {
+    if rollback_backend
+        && executor.has_transaction(transaction.id)
+        && let Err(rollback) =
+            executor.rollback_prepared_batch(transaction.id, &mut transaction.verification_branches)
+    {
+        return (
+            Error::Execution(format!(
+                "{cause}; Speculative backend rollback also failed: {rollback}"
+            )),
+            Some(Box::new(PendingSpeculativeRollback {
+                transaction,
+                terminal: SpeculativeTransactionTerminal::RolledBack,
+            })),
+            None,
+        );
+    }
+    let cleanup = cleanup_speculative_cohort(
         executor,
         page_manager,
         Some(transaction.id),
         transaction.reservations,
         transaction.prepared_commit,
         transaction.verification_branches,
-        rollback_backend,
+        false,
         retirements,
-    ) {
+    );
+    let error = match cleanup {
         None => cause,
         Some(cleanup) => Error::Execution(format!(
             "{cause}; Speculative transaction cleanup also failed: {cleanup}"
         )),
-    }
+    };
+    (
+        error,
+        None,
+        Some(SpeculativeTransactionTerminal::RolledBack),
+    )
 }
 
 fn build_speculative_cohort_batch(
