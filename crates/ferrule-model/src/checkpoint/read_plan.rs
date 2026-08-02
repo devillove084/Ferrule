@@ -25,13 +25,13 @@ pub struct CheckpointReadExtent {
 impl CheckpointReadExtent {
     pub fn new(path: PathBuf, offset: u64, bytes: u64) -> Result<Self> {
         if bytes == 0 {
-            return Err(Error::Model(
-                "checkpoint read extent must contain at least one byte".into(),
-            ));
+            return Err(Error::Model {
+                message: "checkpoint read extent must contain at least one byte".into(),
+            });
         }
-        offset
-            .checked_add(bytes)
-            .ok_or_else(|| Error::Model("checkpoint read extent overflows u64".into()))?;
+        offset.checked_add(bytes).ok_or_else(|| Error::Model {
+            message: "checkpoint read extent overflows u64".into(),
+        })?;
         Ok(Self {
             path,
             offset,
@@ -71,15 +71,15 @@ impl CheckpointReadPlan {
     ) -> Result<Self> {
         let extents = extents.into_iter().collect::<Vec<_>>();
         if extents.is_empty() {
-            return Err(Error::Model(
-                "checkpoint read plan requires at least one extent".into(),
-            ));
+            return Err(Error::Model {
+                message: "checkpoint read plan requires at least one extent".into(),
+            });
         }
         let source_files = source_files.into();
         if source_files.is_empty() {
-            return Err(Error::Model(
-                "checkpoint read plan requires catalog-time source snapshots".into(),
-            ));
+            return Err(Error::Model {
+                message: "checkpoint read plan requires catalog-time source snapshots".into(),
+            });
         }
         let snapshots = source_files
             .iter()
@@ -87,24 +87,29 @@ impl CheckpointReadPlan {
             .collect::<BTreeMap<_, _>>();
         let mut storage_bytes = 0u64;
         for extent in &extents {
-            let source_file = snapshots.get(extent.path()).ok_or_else(|| {
-                Error::Model(format!(
+            let source_file = snapshots.get(extent.path()).ok_or_else(|| Error::Model {
+                message: format!(
                     "checkpoint read extent '{}' has no catalog-time source snapshot",
                     extent.path().display()
-                ))
+                ),
             })?;
             if extent.end() > source_file.length() {
-                return Err(Error::Model(format!(
-                    "checkpoint read extent {}..{} exceeds source length {} for '{}'",
-                    extent.offset(),
-                    extent.end(),
-                    source_file.length(),
-                    extent.path().display()
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "checkpoint read extent {}..{} exceeds source length {} for '{}'",
+                        extent.offset(),
+                        extent.end(),
+                        source_file.length(),
+                        extent.path().display()
+                    ),
+                });
             }
-            storage_bytes = storage_bytes.checked_add(extent.bytes()).ok_or_else(|| {
-                Error::Model("checkpoint read plan byte size overflows u64".into())
-            })?;
+            storage_bytes =
+                storage_bytes
+                    .checked_add(extent.bytes())
+                    .ok_or_else(|| Error::Model {
+                        message: "checkpoint read plan byte size overflows u64".into(),
+                    })?;
         }
         Ok(Self {
             extents: Arc::from(extents),
@@ -165,38 +170,40 @@ impl CheckpointPositionedReader {
         let mut payloads = Vec::with_capacity(plan.extents().len());
         for extent in plan.extents() {
             if extent.bytes() > self.max_extent_bytes {
-                return Err(Error::Model(format!(
-                    "checkpoint read extent exceeds bounded read size: {} > {} bytes",
-                    extent.bytes(),
-                    self.max_extent_bytes
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "checkpoint read extent exceeds bounded read size: {} > {} bytes",
+                        extent.bytes(),
+                        self.max_extent_bytes
+                    ),
+                });
             }
-            let length = usize::try_from(extent.bytes()).map_err(|_| {
-                Error::Model("checkpoint read extent does not fit host address space".into())
+            let length = usize::try_from(extent.bytes()).map_err(|_| Error::Model {
+                message: "checkpoint read extent does not fit host address space".into(),
             })?;
-            let file = std::fs::File::open(extent.path()).map_err(|error| {
-                Error::Model(format!(
+            let file = std::fs::File::open(extent.path()).map_err(|error| Error::Model {
+                message: format!(
                     "open checkpoint read source '{}': {error}",
                     extent.path().display()
-                ))
+                ),
             })?;
             let mut file = file;
             file.seek(SeekFrom::Start(extent.offset()))
-                .map_err(|error| {
-                    Error::Model(format!(
+                .map_err(|error| Error::Model {
+                    message: format!(
                         "seek checkpoint extent {} in '{}': {error}",
                         extent.offset(),
                         extent.path().display()
-                    ))
+                    ),
                 })?;
             let mut bytes = vec![0u8; length];
-            file.read_exact(&mut bytes).map_err(|error| {
-                Error::Model(format!(
+            file.read_exact(&mut bytes).map_err(|error| Error::Model {
+                message: format!(
                     "read checkpoint extent {}..{} from '{}': {error}",
                     extent.offset(),
                     extent.end(),
                     extent.path().display()
-                ))
+                ),
             })?;
             payloads.push(bytes);
         }
@@ -207,7 +214,9 @@ impl CheckpointPositionedReader {
 }
 
 fn stale_source_identity_error(reason: StaleReason) -> Error {
-    Error::Model(format!("stale checkpoint source identity: {reason:?}"))
+    Error::Model {
+        message: format!("stale checkpoint source identity: {reason:?}"),
+    }
 }
 
 #[cfg(test)]

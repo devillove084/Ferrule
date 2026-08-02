@@ -153,12 +153,14 @@ impl LinearWeight {
 
     pub fn reference_matvec(&self, input: &[f32]) -> Result<Vec<f32>> {
         if input.len() != self.format.in_features() {
-            return Err(Error::Model(format!(
-                "linear weight {:?} input length mismatch: expected {}, got {}",
-                self.role,
-                self.format.in_features(),
-                input.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "linear weight {:?} input length mismatch: expected {}, got {}",
+                    self.role,
+                    self.format.in_features(),
+                    input.len()
+                ),
+            });
         }
         let input = self.execution_input(input)?;
         let weights = self.reference_weights_f32()?;
@@ -186,11 +188,11 @@ impl LinearWeight {
                 block_m,
                 block_k,
             } => {
-                let scale = self.scale.as_ref().ok_or_else(|| {
-                    Error::Model(format!(
+                let scale = self.scale.as_ref().ok_or_else(|| Error::Model {
+                    message: format!(
                         "linear weight {:?} FP8 weight is missing E8M0 scale tensor",
                         self.role
-                    ))
+                    ),
                 })?;
                 dequantize_fp8_e4m3fn_with_e8m0_scales(
                     &self.weight.bytes,
@@ -206,11 +208,11 @@ impl LinearWeight {
                 in_features,
                 block_size,
             } => {
-                let scale = self.scale.as_ref().ok_or_else(|| {
-                    Error::Model(format!(
+                let scale = self.scale.as_ref().ok_or_else(|| Error::Model {
+                    message: format!(
                         "linear weight {:?} FP4 weight is missing E8M0 scale tensor",
                         self.role
-                    ))
+                    ),
                 })?;
                 dequantize_fp4_e2m1_with_e8m0_scales(
                     &self.weight.bytes,
@@ -229,10 +231,12 @@ fn infer_linear_weight_format(
     scale: Option<&CheckpointTensorPayload>,
 ) -> Result<LinearWeightFormat> {
     if weight.slice.shape.len() != 2 {
-        return Err(Error::Model(format!(
-            "linear weight '{}' expects 2D weight shape, got {:?}",
-            weight.slice.name, weight.slice.shape
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "linear weight '{}' expects 2D weight shape, got {:?}",
+                weight.slice.name, weight.slice.shape
+            ),
+        });
     }
     let out = weight.slice.shape[0];
     let width = weight.slice.shape[1];
@@ -254,19 +258,21 @@ fn infer_linear_weight_format(
             })
         }
         CheckpointDType::F8E4M3 => {
-            let scale = scale.ok_or_else(|| {
-                Error::Model(format!(
+            let scale = scale.ok_or_else(|| Error::Model {
+                message: format!(
                     "FP8 linear weight '{}' requires E8M0 scale tensor",
                     weight.slice.name
-                ))
+                ),
             })?;
             if scale.slice.dtype != CheckpointDType::F8E8M0 || scale.slice.shape.len() != 2 {
-                return Err(Error::Model(format!(
-                    "FP8 linear weight '{}' expects 2D F8_E8M0 scale, got dtype={} shape={:?}",
-                    weight.slice.name,
-                    scale.slice.dtype.as_str(),
-                    scale.slice.shape
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "FP8 linear weight '{}' expects 2D F8_E8M0 scale, got dtype={} shape={:?}",
+                        weight.slice.name,
+                        scale.slice.dtype.as_str(),
+                        scale.slice.shape
+                    ),
+                });
             }
             ensure_byte_len(weight, out, width, 1)?;
             let block_m =
@@ -281,33 +287,37 @@ fn infer_linear_weight_format(
             })
         }
         CheckpointDType::I8 => {
-            let scale = scale.ok_or_else(|| {
-                Error::Model(format!(
+            let scale = scale.ok_or_else(|| Error::Model {
+                message: format!(
                     "I8 linear weight '{}' requires a scale tensor to infer packed FP4",
                     weight.slice.name
-                ))
+                ),
             })?;
             if scale.slice.dtype != CheckpointDType::F8E8M0 || scale.slice.shape.len() != 2 {
-                return Err(Error::Model(format!(
-                    "I8/FP4 linear weight '{}' expects 2D F8_E8M0 scale, got dtype={} shape={:?}",
-                    weight.slice.name,
-                    scale.slice.dtype.as_str(),
-                    scale.slice.shape
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "I8/FP4 linear weight '{}' expects 2D F8_E8M0 scale, got dtype={} shape={:?}",
+                        weight.slice.name,
+                        scale.slice.dtype.as_str(),
+                        scale.slice.shape
+                    ),
+                });
             }
             ensure_byte_len(weight, out, width, 1)?;
-            let in_features = width.checked_mul(2).ok_or_else(|| {
-                Error::Model(format!(
+            let in_features = width.checked_mul(2).ok_or_else(|| Error::Model {
+                message: format!(
                     "linear weight '{}' FP4 logical input dimension overflow",
                     weight.slice.name
-                ))
+                ),
             })?;
             let scale_cols = scale.slice.shape[1];
             if scale.slice.shape[0] != out || scale_cols == 0 || in_features % scale_cols != 0 {
-                return Err(Error::Model(format!(
-                    "I8/FP4 linear weight '{}' scale shape {:?} is incompatible with weight shape {:?}",
-                    weight.slice.name, scale.slice.shape, weight.slice.shape
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "I8/FP4 linear weight '{}' scale shape {:?} is incompatible with weight shape {:?}",
+                        weight.slice.name, scale.slice.shape, weight.slice.shape
+                    ),
+                });
             }
             let block_size = in_features / scale_cols;
             Ok(LinearWeightFormat::Fp4E2M1PackedWithE8M0Scale {
@@ -316,11 +326,13 @@ fn infer_linear_weight_format(
                 block_size,
             })
         }
-        _ => Err(Error::Model(format!(
-            "linear weight '{}' has unsupported dtype {}",
-            weight.slice.name,
-            weight.slice.dtype.as_str()
-        ))),
+        _ => Err(Error::Model {
+            message: format!(
+                "linear weight '{}' has unsupported dtype {}",
+                weight.slice.name,
+                weight.slice.dtype.as_str()
+            ),
+        }),
     }
 }
 
@@ -329,12 +341,14 @@ fn ensure_no_scale(
     scale: Option<&CheckpointTensorPayload>,
 ) -> Result<()> {
     if let Some(scale) = scale {
-        return Err(Error::Model(format!(
-            "linear weight '{}' has unexpected scale tensor '{}' for dtype {}",
-            weight.slice.name,
-            scale.slice.name,
-            weight.slice.dtype.as_str()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "linear weight '{}' has unexpected scale tensor '{}' for dtype {}",
+                weight.slice.name,
+                scale.slice.name,
+                weight.slice.dtype.as_str()
+            ),
+        });
     }
     Ok(())
 }
@@ -348,19 +362,18 @@ fn ensure_byte_len(
     let expected = rows
         .checked_mul(cols)
         .and_then(|elements| elements.checked_mul(bytes_per_element))
-        .ok_or_else(|| {
-            Error::Model(format!(
-                "checkpoint tensor '{}' size overflow",
-                tensor.slice.name
-            ))
+        .ok_or_else(|| Error::Model {
+            message: format!("checkpoint tensor '{}' size overflow", tensor.slice.name),
         })?;
     if tensor.bytes.len() != expected || tensor.slice.bytes != expected as u64 {
-        return Err(Error::Model(format!(
-            "checkpoint tensor '{}' byte length mismatch: expected {expected}, metadata={}, payload={}",
-            tensor.slice.name,
-            tensor.slice.bytes,
-            tensor.bytes.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "checkpoint tensor '{}' byte length mismatch: expected {expected}, metadata={}, payload={}",
+                tensor.slice.name,
+                tensor.slice.bytes,
+                tensor.bytes.len()
+            ),
+        });
     }
     Ok(())
 }
@@ -373,9 +386,9 @@ fn infer_fp8_block(
     name: &str,
 ) -> Result<usize> {
     if scale_dim == 0 {
-        return Err(Error::Model(format!(
-            "FP8 linear weight '{name}' has zero scale {axis} dimension"
-        )));
+        return Err(Error::Model {
+            message: format!("FP8 linear weight '{name}' has zero scale {axis} dimension"),
+        });
     }
     if dim.div_ceil(preferred) == scale_dim {
         return Ok(preferred);
@@ -384,9 +397,11 @@ fn infer_fp8_block(
     if dim.div_ceil(block) == scale_dim {
         return Ok(block);
     }
-    Err(Error::Model(format!(
-        "FP8 linear weight '{name}' cannot infer {axis} block size from dim={dim}, scale_dim={scale_dim}"
-    )))
+    Err(Error::Model {
+        message: format!(
+            "FP8 linear weight '{name}' cannot infer {axis} block size from dim={dim}, scale_dim={scale_dim}"
+        ),
+    })
 }
 
 fn decode_f32_matrix(

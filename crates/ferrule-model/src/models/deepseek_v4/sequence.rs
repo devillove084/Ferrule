@@ -61,16 +61,18 @@ pub(crate) struct DeepSeekV4PagedKvBinding {
 impl DeepSeekV4PagedKvBinding {
     pub(crate) fn retain_sequence_len(&mut self, sequence_len: usize) -> Result<()> {
         if self.page_tokens == 0 {
-            return Err(Error::Model(
-                "DeepSeek-V4 paged binding has zero page size".into(),
-            ));
+            return Err(Error::Model {
+                message: "DeepSeek-V4 paged binding has zero page size".into(),
+            });
         }
         let retained_blocks = sequence_len.div_ceil(self.page_tokens);
         if retained_blocks > self.physical_block_slots.len() {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 paged binding prefix needs {retained_blocks} blocks but only {} are available",
-                self.physical_block_slots.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 paged binding prefix needs {retained_blocks} blocks but only {} are available",
+                    self.physical_block_slots.len()
+                ),
+            });
         }
         self.physical_block_slots.truncate(retained_blocks);
         self.sequence_len = sequence_len;

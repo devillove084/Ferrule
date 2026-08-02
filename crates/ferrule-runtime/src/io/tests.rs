@@ -8,7 +8,7 @@ use ferrule_common::io_protocol::{
     WaiterId,
 };
 use ferrule_common::materialization_io::{
-    MaterializationResourceDemand, MaterializationResourceLimits, MaterializationResourcePlan,
+    MaterializationResourceLimits, MaterializationResourcePlan, MaterializationResourceRequirements,
 };
 
 use super::*;
@@ -29,6 +29,11 @@ fn stage_request(
         plan,
         class,
         ferrule_model::ResourceRetention::ThroughStage,
+        if class == ResourceClass::Prefetch {
+            ferrule_model::MaterializationPurpose::Prefetch
+        } else {
+            ferrule_model::MaterializationPurpose::Execution
+        },
     )
 }
 
@@ -96,7 +101,7 @@ fn preparation(key: MaterializationKey) -> ferrule_model::MaterializationPrepara
         key.resource(),
         key.backend(),
         key.device(),
-        ferrule_common::DestinationSlotId::new(1),
+        super::provider::fake_slot_for_key(key),
         key.destination_generation(),
     );
     ferrule_model::MaterializationTransfer::new(key, binding, None)
@@ -105,7 +110,23 @@ fn preparation(key: MaterializationKey) -> ferrule_model::MaterializationPrepara
 }
 
 fn request(key: MaterializationKey) -> LoadRequest {
-    stage_request(preparation(key), uniform_plan(BYTES), ResourceClass::Demand)
+    stage_request(
+        preparation(key),
+        uniform_plan(BYTES),
+        ResourceClass::Throughput,
+    )
+}
+
+fn prefetch_request(key: MaterializationKey) -> LoadRequest {
+    stage_request(
+        preparation(key),
+        uniform_plan(BYTES),
+        ResourceClass::Prefetch,
+    )
+}
+
+fn prefetch_id(id: u64) -> PrefetchId {
+    PrefetchId::new(id).unwrap()
 }
 
 fn resident_request(key: MaterializationKey) -> LoadRequest {
@@ -114,14 +135,14 @@ fn resident_request(key: MaterializationKey) -> LoadRequest {
         key.resource(),
         key.backend(),
         key.device(),
-        ferrule_common::DestinationSlotId::new(1),
+        super::provider::fake_slot_for_key(key),
         key.destination_generation(),
     );
     let resident = ferrule_model::MaterializationResident::new(key, binding).unwrap();
     stage_request(
         ferrule_model::MaterializationPreparation::Resident(resident),
         uniform_plan(BYTES),
-        ResourceClass::Demand,
+        ResourceClass::Throughput,
     )
 }
 
@@ -514,7 +535,7 @@ fn joined_resource_plan_must_match() {
             [stage_request(
                 preparation(materialization_key),
                 uniform_plan(BYTES * 2),
-                ResourceClass::Demand,
+                ResourceClass::Throughput,
             )],
             2,
         )
@@ -533,7 +554,10 @@ fn duplicate_dependency_is_rejected_before_side_effects() {
             1,
         )
         .unwrap_err();
-    assert!(matches!(error, RegistryError::DuplicateDependency(_)));
+    assert!(matches!(
+        error,
+        RegistryError::DuplicateDependency { key: _ }
+    ));
     assert_eq!(registry.active_operations(), 0);
 }
 
@@ -547,15 +571,18 @@ fn invalid_resource_plan_is_rejected() {
             [stage_request(
                 preparation(materialization_key),
                 MaterializationResourcePlan {
-                    demand: MaterializationResourceDemand::default(),
+                    requirements: MaterializationResourceRequirements::default(),
                     resident_bytes: 0,
                 },
-                ResourceClass::Demand,
+                ResourceClass::Throughput,
             )],
             1,
         )
         .unwrap_err();
-    assert!(matches!(error, RegistryError::InvalidResourcePlan(_)));
+    assert!(matches!(
+        error,
+        RegistryError::ResourcePlan { key: _, source: _ }
+    ));
 }
 
 #[test]
@@ -569,12 +596,191 @@ fn transition_larger_than_configured_max_is_rejected() {
             [stage_request(
                 preparation(materialization_key),
                 uniform_plan(maximum + 1),
-                ResourceClass::Demand,
+                ResourceClass::Throughput,
             )],
             1,
         )
         .unwrap_err();
-    assert!(matches!(error, RegistryError::Fairness(_)));
+    assert!(matches!(error, RegistryError::Fairness { source: _ }));
+}
+
+#[test]
+fn prefetch_owns_operation_without_execution_state() {
+    let mut registry = manual_registry();
+    let report = registry
+        .prefetch(prefetch_id(1), [prefetch_request(key(1, 1))], 1)
+        .unwrap();
+    let operation = report.created[0];
+
+    assert_eq!(registry.active_prefetches(), 1);
+    assert_eq!(
+        registry
+            .prefetch_operations(prefetch_id(1))
+            .collect::<Vec<_>>(),
+        [operation]
+    );
+    assert!(registry.operation_has_prefetch_owner(operation));
+    assert!(registry.waiters().is_empty());
+    assert_eq!(registry.resources().in_use(ResourceKind::Waiter), 0);
+    assert_eq!(registry.resources().in_use(ResourceKind::Continuation), 0);
+    assert_eq!(
+        registry
+            .transaction_operations(ExecutionTransactionId::new(1).unwrap())
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn execution_joins_active_prefetch_without_second_io() {
+    let mut registry = auto_registry();
+    let materialization_key = key(1, 1);
+    let operation = registry
+        .prefetch(prefetch_id(1), [prefetch_request(materialization_key)], 1)
+        .unwrap()
+        .created[0];
+    let joined = registry
+        .attach_waiter(waiter(1), [request(materialization_key)], 2)
+        .unwrap();
+
+    assert_eq!(joined.joined, [operation]);
+    assert!(joined.created.is_empty());
+    registry.drive(100, 32).unwrap();
+    assert_eq!(registry.provider().physical_reads(), 1);
+    assert_eq!(registry.provider().physical_uploads(), 1);
+    assert_eq!(registry.provider().physical_installs(), 1);
+    assert_eq!(registry.active_prefetches(), 0);
+    assert!(!registry.operation_has_prefetch_owner(operation));
+    assert_eq!(
+        registry.pop_ready(101).unwrap(),
+        Some(ContinuationId::new(1))
+    );
+}
+
+#[test]
+fn cancel_submitted_prefetch_drains_before_retirement() {
+    let mut registry = LoadRegistry::new(
+        FakeMaterializationProvider::new(),
+        PhysicalResourceBroker::testing_default(),
+        FairQueueConfig {
+            prefetch_quantum: BYTES,
+            ..FairQueueConfig::default()
+        },
+    )
+    .unwrap();
+    let materialization_key = key(1, 1);
+    let operation = registry
+        .prefetch(prefetch_id(1), [prefetch_request(materialization_key)], 1)
+        .unwrap()
+        .created[0];
+    for now_ns in 2..32 {
+        registry.schedule_one(now_ns).unwrap();
+        if registry.operation(operation).unwrap().stage() == LoadStage::ReadSubmitted {
+            break;
+        }
+    }
+    assert_eq!(
+        registry.operation(operation).unwrap().stage(),
+        LoadStage::ReadSubmitted
+    );
+
+    registry.cancel_prefetch(prefetch_id(1), 32).unwrap();
+    assert_eq!(registry.active_prefetches(), 0);
+    assert!(registry.operation(operation).is_some());
+    assert_eq!(registry.provider().cancellations(), 1);
+
+    registry.collect_provider_completions(1);
+    registry.process_one_completion().unwrap();
+    assert!(registry.operation(operation).is_none());
+    assert!(registry.retirement(operation).is_some());
+    assert_eq!(registry.resources().active_grants(), 0);
+}
+
+#[test]
+fn cancel_prefetch_does_not_cancel_joined_execution() {
+    let mut registry = auto_registry();
+    let materialization_key = key(1, 1);
+    let operation = registry
+        .prefetch(prefetch_id(1), [prefetch_request(materialization_key)], 1)
+        .unwrap()
+        .created[0];
+    registry
+        .attach_waiter(waiter(1), [request(materialization_key)], 2)
+        .unwrap();
+
+    registry.cancel_prefetch(prefetch_id(1), 3).unwrap();
+    assert!(registry.operation(operation).is_some());
+    assert_eq!(registry.provider().cancellations(), 0);
+    registry.drive(100, 32).unwrap();
+    assert_eq!(registry.provider().physical_reads(), 1);
+    assert_eq!(
+        registry.pop_ready(101).unwrap(),
+        Some(ContinuationId::new(1))
+    );
+}
+
+#[test]
+fn cancel_one_of_multiple_prefetch_owners_keeps_operation() {
+    let mut registry = manual_registry();
+    let materialization_key = key(1, 1);
+    let operation = registry
+        .prefetch(prefetch_id(1), [prefetch_request(materialization_key)], 1)
+        .unwrap()
+        .created[0];
+    let joined = registry
+        .prefetch(prefetch_id(2), [prefetch_request(materialization_key)], 2)
+        .unwrap();
+    assert_eq!(joined.joined, [operation]);
+
+    registry.cancel_prefetch(prefetch_id(1), 3).unwrap();
+    assert!(registry.operation(operation).is_some());
+    assert!(registry.operation_has_prefetch_owner(operation));
+    assert_eq!(registry.provider().cancellations(), 0);
+
+    registry.cancel_prefetch(prefetch_id(2), 4).unwrap();
+    assert!(registry.operation(operation).is_none());
+    assert!(!registry.operation_has_prefetch_owner(operation));
+}
+
+#[test]
+fn prefetch_resident_hit_creates_no_operation_or_execution_credit() {
+    let mut registry = auto_registry();
+    let materialization_key = key(1, 1);
+    let request = stage_request(
+        ferrule_model::MaterializationPreparation::Resident(
+            ferrule_model::MaterializationResident::new(
+                materialization_key,
+                preparation(materialization_key).binding(),
+            )
+            .unwrap(),
+        ),
+        uniform_plan(BYTES),
+        ResourceClass::Prefetch,
+    );
+    let report = registry.prefetch(prefetch_id(1), [request], 1).unwrap();
+
+    assert_eq!(report.already_resident, 1);
+    assert!(report.created.is_empty());
+    assert!(report.joined.is_empty());
+    assert_eq!(registry.active_prefetches(), 0);
+    assert_eq!(registry.active_operations(), 0);
+    assert_eq!(registry.resident_entries(), 1);
+    assert_eq!(registry.resources().in_use(ResourceKind::Waiter), 0);
+    assert_eq!(registry.resources().in_use(ResourceKind::Continuation), 0);
+}
+
+#[test]
+fn explicit_materialization_entrypoints_reject_mixed_purpose() {
+    let mut registry = manual_registry();
+    let materialization_key = key(1, 1);
+    assert!(matches!(
+        registry.attach_waiter(waiter(1), [prefetch_request(materialization_key)], 1),
+        Err(RegistryError::InvalidExecutionClass { key: _ })
+    ));
+    assert!(matches!(
+        registry.prefetch(prefetch_id(1), [request(materialization_key)], 1),
+        Err(RegistryError::InvalidPrefetchClass { key: _ })
+    ));
 }
 
 #[test]
@@ -818,7 +1024,9 @@ fn failed_completion_retires_despite_sibling_cancel_failure() {
 
     assert!(matches!(
         registry.process_one_completion(),
-        Err(RegistryError::Provider(FailureReason::DeviceUnavailable))
+        Err(RegistryError::Provider {
+            source: FailureReason::DeviceUnavailable
+        })
     ));
     assert!(registry.operation(first).is_none());
     assert!(registry.retirement(first).is_some());
@@ -1179,7 +1387,7 @@ fn pinned_slab_exhaustion_requeues_without_failing_attach() {
 }
 
 #[test]
-fn demand_reserve_requeues_prefetch_and_allows_demand_progress() {
+fn execution_reserve_requeues_prefetch_and_allows_execution_progress() {
     let mut resources = staged_broker(2, 2, 2, 2);
     resources
         .reconfigure_limit(ResourceKind::PinnedHostBytes, BYTES * 2, BYTES)
@@ -1201,18 +1409,10 @@ fn demand_reserve_requeues_prefetch_and_allows_demand_progress() {
     )
     .unwrap();
     let prefetch = registry
-        .attach_waiter(
-            waiter(1),
-            [stage_request(
-                preparation(key(1, 1)),
-                uniform_plan(BYTES),
-                ResourceClass::Prefetch,
-            )],
-            1,
-        )
+        .prefetch(prefetch_id(1), [prefetch_request(key(1, 1))], 1)
         .unwrap()
         .created[0];
-    let demand = attach_one(&mut registry, waiter(2), key(2, 1));
+    let execution = attach_one(&mut registry, waiter(2), key(2, 1));
 
     assert!(registry.schedule_one(20).unwrap());
     assert!(registry.schedule_one(21).unwrap());
@@ -1221,7 +1421,7 @@ fn demand_reserve_requeues_prefetch_and_allows_demand_progress() {
         LoadStage::Reserved
     );
     assert_eq!(
-        registry.operation(demand).unwrap().stage(),
+        registry.operation(execution).unwrap().stage(),
         LoadStage::ReadSubmitted
     );
     assert_eq!(registry.provider().physical_reads(), 1);
@@ -1230,8 +1430,8 @@ fn demand_reserve_requeues_prefetch_and_allows_demand_progress() {
     registry.release_hard_resources(&mut base).unwrap();
     registry.begin_shutdown(30).unwrap();
     registry.enqueue_completion(event(
-        demand,
-        registry.key_for_operation(demand).unwrap(),
+        execution,
+        registry.key_for_operation(execution).unwrap(),
         LoadStage::ReadSubmitted,
         CompletionOutcome::Cancelled(CancellationReason::OwnerShutdown),
         0,
@@ -1373,11 +1573,11 @@ fn single_operation_larger_than_physical_capacity_is_permanent_attach_error() {
         .unwrap_err();
     assert!(matches!(
         error,
-        RegistryError::Resources(PhysicalResourceError::ExceedsCapacity {
+        RegistryError::Resources { source: PhysicalResourceError::ExceedsCapacity {
             kind: ResourceKind::PinnedHostBytes,
             requested: BYTES,
             capacity,
-        }) if capacity == BYTES - 1
+        } } if capacity == BYTES - 1
     ));
     assert_eq!(registry.active_operations(), 0);
     assert_eq!(registry.resources().active_grants(), 0);
@@ -1413,7 +1613,7 @@ fn submitted_hard_grant_cannot_be_revoked() {
     let mut grant = broker
         .acquire(
             1,
-            ResourceClass::Demand,
+            ResourceClass::Throughput,
             [PhysicalResourceClaim::new(ResourceKind::ReadSlot, 1)],
         )
         .unwrap();
@@ -1433,7 +1633,7 @@ fn hard_grant_return_requires_submitted_identity() {
     let mut grant = broker
         .acquire(
             1,
-            ResourceClass::Demand,
+            ResourceClass::Throughput,
             [PhysicalResourceClaim::new(ResourceKind::ReadSlot, 1)],
         )
         .unwrap();
@@ -1454,8 +1654,8 @@ fn hard_catalog_contains_every_required_kind() {
 }
 
 #[test]
-fn demand_and_latency_critical_can_use_hard_reserve() {
-    for class in [ResourceClass::Demand, ResourceClass::LatencyCritical] {
+fn execution_classes_can_use_execution_reserve() {
+    for class in [ResourceClass::Throughput, ResourceClass::LatencyCritical] {
         let mut broker = hard_broker_with(ResourceKind::Continuation, 2, 1);
         let _base = broker
             .acquire(
@@ -1472,34 +1672,29 @@ fn demand_and_latency_critical_can_use_hard_reserve() {
                     [PhysicalResourceClaim::new(ResourceKind::Continuation, 1)],
                 )
                 .is_ok(),
-            "{class:?} must be allowed to use the hard reserve"
+            "{class:?} must be allowed to use the execution reserve"
         );
     }
 }
 
 #[test]
-fn prefetch_and_throughput_cannot_consume_hard_reserve() {
-    for class in [ResourceClass::Prefetch, ResourceClass::Throughput] {
-        let mut broker = hard_broker_with(ResourceKind::Continuation, 2, 1);
-        let _base = broker
-            .acquire(
-                1,
-                ResourceClass::Throughput,
-                [PhysicalResourceClaim::new(ResourceKind::Continuation, 1)],
-            )
-            .unwrap();
-        assert!(
-            matches!(
-                broker.acquire(
-                    2,
-                    class,
-                    [PhysicalResourceClaim::new(ResourceKind::Continuation, 1)],
-                ),
-                Err(PhysicalResourceError::DemandReserve { .. })
-            ),
-            "{class:?} must not consume the hard reserve"
-        );
-    }
+fn prefetch_cannot_consume_execution_reserve() {
+    let mut broker = hard_broker_with(ResourceKind::Continuation, 2, 1);
+    let _base = broker
+        .acquire(
+            1,
+            ResourceClass::Throughput,
+            [PhysicalResourceClaim::new(ResourceKind::Continuation, 1)],
+        )
+        .unwrap();
+    assert!(matches!(
+        broker.acquire(
+            2,
+            ResourceClass::Prefetch,
+            [PhysicalResourceClaim::new(ResourceKind::Continuation, 1)],
+        ),
+        Err(PhysicalResourceError::ExecutionReserve { .. })
+    ));
 }
 
 #[test]
@@ -1508,7 +1703,7 @@ fn multi_claim_hard_admission_is_atomic() {
     let error = broker
         .acquire(
             1,
-            ResourceClass::Demand,
+            ResourceClass::Throughput,
             [
                 PhysicalResourceClaim::new(ResourceKind::ReadSlot, 2),
                 PhysicalResourceClaim::new(ResourceKind::PinnedHostBytes, 1),
@@ -1570,7 +1765,7 @@ fn production_fairness_limits(
     device_install_bytes: u64,
 ) -> MaterializationResourceLimits {
     MaterializationResourceLimits {
-        capacity: MaterializationResourceDemand {
+        capacity: MaterializationResourceRequirements {
             read_slots: 1,
             storage_read_bytes,
             pinned_host_bytes,
@@ -1579,7 +1774,7 @@ fn production_fairness_limits(
             install_slots: 1,
             device_install_bytes,
         },
-        demand_reserve: MaterializationResourceDemand::default(),
+        execution_reserve: MaterializationResourceRequirements::default(),
     }
     .validate()
     .unwrap()
@@ -1600,10 +1795,10 @@ fn production_fairness_accepts_large_materialization_and_rejects_capacity_plus_o
 
     let mut queue = FairQueue::new(config).unwrap();
     queue
-        .push('m', ResourceClass::Demand, MATERIALIZATION_BYTES, 0)
+        .push('m', ResourceClass::Throughput, MATERIALIZATION_BYTES, 0)
         .unwrap();
     assert!(matches!(
-        queue.push('x', ResourceClass::Demand, MATERIALIZATION_BYTES + 1, 0),
+        queue.push('x', ResourceClass::Throughput, MATERIALIZATION_BYTES + 1, 0),
         Err(FairQueueError::TransitionTooLarge { cost, maximum })
             if cost == MATERIALIZATION_BYTES + 1 && maximum == MATERIALIZATION_BYTES
     ));
@@ -1639,7 +1834,6 @@ fn production_fairness_rejects_zero_and_out_of_signed_range_capacity() {
     for value in [
         config.prefetch_quantum,
         config.throughput_quantum,
-        config.demand_quantum,
         config.latency_critical_quantum,
         config.max_surplus,
         config.debt_limit,
@@ -1649,9 +1843,10 @@ fn production_fairness_rejects_zero_and_out_of_signed_range_capacity() {
     }
     let mut queue = FairQueue::new(config).unwrap();
     queue
-        .push('x', ResourceClass::Demand, signed_max, 0)
+        .push('x', ResourceClass::Throughput, signed_max, 0)
         .unwrap();
-    assert_eq!(queue.pop_next(0, |_| true), Some('x'));
+    assert_eq!(queue.pop_next(0, |_| true), None);
+    assert_eq!(queue.pop_next(config.starvation_ticks, |_| true), Some('x'));
 
     assert!(matches!(
         FairQueueConfig::for_production(production_fairness_limits(signed_max + 1, 1, 1, 1,)),
@@ -1670,7 +1865,6 @@ fn production_fairness_keeps_throughput_progress_bounded_under_latency_pressure(
         MATERIALIZATION_BYTES,
     ))
     .unwrap();
-    assert_eq!(config.demand_quantum, MATERIALIZATION_BYTES);
     assert_eq!(config.latency_critical_quantum, MATERIALIZATION_BYTES);
     assert!(config.throughput_quantum > config.prefetch_quantum);
     assert!(config.throughput_quantum < config.latency_critical_quantum);
@@ -1701,7 +1895,6 @@ fn fairness_config() -> FairQueueConfig {
     FairQueueConfig {
         prefetch_quantum: 1,
         throughput_quantum: 1,
-        demand_quantum: 1,
         latency_critical_quantum: 1,
         max_surplus: 16,
         debt_limit: 8,
@@ -1748,14 +1941,14 @@ fn prefetch_has_no_aging_forced_progress() {
 #[test]
 fn fairness_never_bypasses_hard_feasibility() {
     let mut queue = FairQueue::new(fairness_config()).unwrap();
-    queue.push('x', ResourceClass::Demand, 1, 0).unwrap();
+    queue.push('x', ResourceClass::Throughput, 1, 0).unwrap();
     assert_eq!(queue.pop_next(100, |_| false), None);
 }
 
 #[test]
 fn fairness_skips_infeasible_head_for_feasible_work() {
     let mut queue = FairQueue::new(fairness_config()).unwrap();
-    queue.push('x', ResourceClass::Demand, 1, 0).unwrap();
+    queue.push('x', ResourceClass::Throughput, 1, 0).unwrap();
     queue.push('y', ResourceClass::Throughput, 1, 0).unwrap();
     assert_eq!(queue.pop_next(0, |item| *item == 'y'), Some('y'));
 }
@@ -1764,7 +1957,7 @@ fn fairness_skips_infeasible_head_for_feasible_work() {
 fn fair_queue_rejects_cost_over_max_transition() {
     let mut queue = FairQueue::new(fairness_config()).unwrap();
     assert!(matches!(
-        queue.push('x', ResourceClass::Demand, 9, 0),
+        queue.push('x', ResourceClass::Throughput, 9, 0),
         Err(FairQueueError::TransitionTooLarge { .. })
     ));
 }
@@ -1899,7 +2092,7 @@ fn duplicate_waiter_identity_is_rejected_after_completion() {
     index.satisfy_operation(OperationId::new(1));
     assert!(matches!(
         index.register(waiter(1), [OperationId::new(2)]),
-        Err(WaiterIndexError::DuplicateWaiter(_))
+        Err(WaiterIndexError::DuplicateWaiter { waiter: _ })
     ));
 }
 
@@ -2027,7 +2220,7 @@ fn output_token_snapshot_records_external_commit_count_and_is_exactly_once() {
     assert_eq!(snapshot.externally_committed_tokens, 3);
     assert!(matches!(
         ledger.snapshot_output(OutputTokenId::new(1), 3, [], [], 11),
-        Err(LedgerError::DuplicateOutputToken(_))
+        Err(LedgerError::DuplicateOutputToken { token: _ })
     ));
 }
 
@@ -2255,7 +2448,7 @@ fn finish_resume_precondition_error_preserves_guard_and_credits() {
 
     assert!(matches!(
         registry.finish_resume(&mut resume, ResumeDisposition::Consumed, 102, 103),
-        Err(RegistryError::ResumeLeaseAlreadyTaken(candidate)) if candidate == continuation
+        Err(RegistryError::ResumeLeaseAlreadyTaken { continuation: candidate }) if candidate == continuation
     ));
     assert_eq!(registry.resources().in_use(ResourceKind::ResidencyLease), 1);
     assert_eq!(registry.resources().in_use(ResourceKind::Arena), 1);

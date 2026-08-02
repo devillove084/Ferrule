@@ -90,13 +90,15 @@ impl ExpertExecutor for CpuReferenceExpertExecutor {
         let mut gate = reference_linear(&bundle.gate, &quantized_input)?;
         let mut up = reference_linear(&bundle.up, &quantized_input)?;
         if gate.len() != up.len() {
-            return Err(Error::Model(format!(
-                "expert layer {} expert {} gate/up mismatch: {} vs {}",
-                bundle.expert.layer,
-                bundle.expert.expert,
-                gate.len(),
-                up.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "expert layer {} expert {} gate/up mismatch: {} vs {}",
+                    bundle.expert.layer,
+                    bundle.expert.expert,
+                    gate.len(),
+                    up.len()
+                ),
+            });
         }
 
         if self.swiglu_limit > 0.0 {
@@ -129,17 +131,19 @@ pub fn reference_linear(linear: &ExpertLinearPayload, input: &[f32]) -> Result<V
             block_size,
         } => {
             if input.len() != in_features {
-                return Err(Error::Model(format!(
-                    "expert {:?} input length mismatch: expected {in_features}, got {}",
-                    linear.matrix,
-                    input.len()
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "expert {:?} input length mismatch: expected {in_features}, got {}",
+                        linear.matrix,
+                        input.len()
+                    ),
+                });
             }
-            let scale = linear.scale.as_ref().ok_or_else(|| {
-                Error::Model(format!(
+            let scale = linear.scale.as_ref().ok_or_else(|| Error::Model {
+                message: format!(
                     "expert {:?} FP4 linear is missing E8M0 scale payload",
                     linear.matrix
-                ))
+                ),
             })?;
             let weights = dequantize_fp4_e2m1_with_e8m0_scales(
                 &linear.weight.bytes,
@@ -150,10 +154,12 @@ pub fn reference_linear(linear: &ExpertLinearPayload, input: &[f32]) -> Result<V
             )?;
             Ok(matvec_row_major(&weights, out_features, in_features, input))
         }
-        ExpertLinearFormat::Opaque => Err(Error::Model(format!(
-            "expert {:?} linear format is opaque; no reference executor is available",
-            linear.matrix
-        ))),
+        ExpertLinearFormat::Opaque => Err(Error::Model {
+            message: format!(
+                "expert {:?} linear format is opaque; no reference executor is available",
+                linear.matrix
+            ),
+        }),
     }
 }
 

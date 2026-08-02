@@ -1,6 +1,6 @@
 //! Fixed-capacity logical sequence-slot allocation.
 
-use ferrule_common::{Error, Result};
+use crate::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct KvHandle(pub usize);
@@ -39,26 +39,23 @@ impl FixedSequenceSlotPool {
 
 impl SequenceSlotPool for FixedSequenceSlotPool {
     fn alloc_slot(&mut self) -> Result<KvHandle> {
-        let slot = self
-            .free_slots
-            .pop()
-            .ok_or_else(|| Error::Internal("no free sequence slots".into()))?;
+        let slot = self.free_slots.pop().ok_or_else(|| Error::Invariant {
+            message: "no free sequence slots".into(),
+        })?;
         self.allocated[slot] = true;
         Ok(KvHandle(slot))
     }
 
     fn free_slot(&mut self, handle: KvHandle) -> Result<()> {
         let Some(allocated) = self.allocated.get_mut(handle.0) else {
-            return Err(Error::Internal(format!(
-                "sequence slot {} out of range",
-                handle.0
-            )));
+            return Err(Error::Invariant {
+                message: format!("sequence slot {} out of range", handle.0),
+            });
         };
         if !*allocated {
-            return Err(Error::Internal(format!(
-                "sequence slot {} is not allocated",
-                handle.0
-            )));
+            return Err(Error::Invariant {
+                message: format!("sequence slot {} is not allocated", handle.0),
+            });
         }
         *allocated = false;
         self.free_slots.push(handle.0);

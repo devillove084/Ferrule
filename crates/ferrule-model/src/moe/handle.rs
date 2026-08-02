@@ -110,18 +110,18 @@ pub trait ExpertHandleStore {
 
     fn artifact_bundle(&self, expert: ExpertId) -> Result<&ExpertComputeBundle> {
         self.get(expert)
-            .ok_or_else(|| {
-                Error::Model(format!(
+            .ok_or_else(|| Error::Model {
+                message: format!(
                     "expert handle missing for resident layer {} expert {}",
                     expert.layer, expert.expert
-                ))
+                ),
             })?
             .as_artifact_bundle()
-            .ok_or_else(|| {
-                Error::Model(format!(
+            .ok_or_else(|| Error::Model {
+                message: format!(
                     "expert handle for layer {} expert {} is not a CPU artifact bundle",
                     expert.layer, expert.expert
-                ))
+                ),
             })
     }
 

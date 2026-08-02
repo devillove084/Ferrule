@@ -141,10 +141,13 @@ fn read_bool(data: &[u8], offset: &mut usize) -> bool {
 fn read_string(data: &[u8], offset: &mut usize) -> Result<String> {
     let len = read_u64(data, offset) as usize;
     if *offset + len > data.len() {
-        return Err(Error::Gguf("string length exceeds data".into()));
+        return Err(Error::Gguf {
+            message: "string length exceeds data".into(),
+        });
     }
-    let s = String::from_utf8(data[*offset..*offset + len].to_vec())
-        .map_err(|e| Error::Gguf(format!("invalid UTF-8: {e}")))?;
+    let s = String::from_utf8(data[*offset..*offset + len].to_vec()).map_err(|e| Error::Gguf {
+        message: format!("invalid UTF-8: {e}"),
+    })?;
     *offset += len;
     Ok(s)
 }
@@ -172,7 +175,11 @@ fn read_value(data: &[u8], offset: &mut usize, vtype: u32) -> Result<GgufValue> 
         10 => GgufValue::U64(read_u64(data, offset)),
         11 => GgufValue::I64(read_i64(data, offset)),
         12 => GgufValue::F64(read_f64(data, offset)),
-        _ => return Err(Error::Gguf(format!("unknown value type: {vtype}"))),
+        _ => {
+            return Err(Error::Gguf {
+                message: format!("unknown value type: {vtype}"),
+            });
+        }
     })
 }
 
@@ -187,12 +194,12 @@ fn metadata_alignment(metadata: &HashMap<String, GgufValue>) -> Option<u32> {
 }
 
 fn align_up(offset: usize, alignment: usize) -> Result<usize> {
-    let add = alignment
-        .checked_sub(1)
-        .ok_or_else(|| Error::Gguf("invalid GGUF alignment".into()))?;
-    let sum = offset
-        .checked_add(add)
-        .ok_or_else(|| Error::Gguf("GGUF alignment overflow".into()))?;
+    let add = alignment.checked_sub(1).ok_or_else(|| Error::Gguf {
+        message: "invalid GGUF alignment".into(),
+    })?;
+    let sum = offset.checked_add(add).ok_or_else(|| Error::Gguf {
+        message: "GGUF alignment overflow".into(),
+    })?;
     Ok(sum / alignment * alignment)
 }
 
@@ -236,15 +243,17 @@ impl GgufFile {
         // Magic
         let magic = read_u32(data, &mut offset);
         if magic != GGUF_MAGIC {
-            return Err(Error::Gguf(format!(
-                "bad magic: 0x{magic:08X}, expected 0x{GGUF_MAGIC:08X}"
-            )));
+            return Err(Error::Gguf {
+                message: format!("bad magic: 0x{magic:08X}, expected 0x{GGUF_MAGIC:08X}"),
+            });
         }
 
         // Version
         let version = read_u32(data, &mut offset);
         if !(2..=3).contains(&version) {
-            return Err(Error::Gguf(format!("unsupported version: {version}")));
+            return Err(Error::Gguf {
+                message: format!("unsupported version: {version}"),
+            });
         }
 
         // Tensor + KV counts
@@ -289,10 +298,12 @@ impl GgufFile {
         let alignment = metadata_alignment(&metadata).unwrap_or(32).max(1) as usize;
         let data_start = align_up(offset, alignment)?;
         if data_start > data.len() {
-            return Err(Error::Gguf(format!(
-                "tensor data section starts past file: {data_start} > {}",
-                data.len()
-            )));
+            return Err(Error::Gguf {
+                message: format!(
+                    "tensor data section starts past file: {data_start} > {}",
+                    data.len()
+                ),
+            });
         }
 
         Ok(Self {
@@ -355,9 +366,9 @@ impl GgufFile {
         let block = t.quant_type.block_size().max(1);
         let blocks = ne.div_ceil(block);
         let block_bytes = quant_block_bytes(t.quant_type);
-        blocks
-            .checked_mul(block_bytes)
-            .ok_or_else(|| Error::Gguf(format!("tensor '{}' byte size overflow", t.name)))
+        blocks.checked_mul(block_bytes).ok_or_else(|| Error::Gguf {
+            message: format!("tensor '{}' byte size overflow", t.name),
+        })
     }
 
     /// Get a raw byte slice for a tensor's data (zero-copy from mmap).
@@ -366,17 +377,21 @@ impl GgufFile {
         let start = self
             .data_start
             .checked_add(relative)
-            .ok_or_else(|| Error::Gguf(format!("tensor '{}' offset overflow", tensor.name)))?;
+            .ok_or_else(|| Error::Gguf {
+                message: format!("tensor '{}' offset overflow", tensor.name),
+            })?;
         let size = Self::tensor_nbytes(tensor)?;
-        let end = start
-            .checked_add(size)
-            .ok_or_else(|| Error::Gguf(format!("tensor '{}' size overflow", tensor.name)))?;
+        let end = start.checked_add(size).ok_or_else(|| Error::Gguf {
+            message: format!("tensor '{}' size overflow", tensor.name),
+        })?;
         if end > self.mmap.len() {
-            return Err(Error::Gguf(format!(
-                "tensor '{}' data extends past file: {end} > {}",
-                tensor.name,
-                self.mmap.len()
-            )));
+            return Err(Error::Gguf {
+                message: format!(
+                    "tensor '{}' data extends past file: {end} > {}",
+                    tensor.name,
+                    self.mmap.len()
+                ),
+            });
         }
         Ok(&self.mmap[start..end])
     }
@@ -497,6 +512,10 @@ fn type_id_to_quant(type_id: u32) -> Result<QuantType> {
         23 => QuantType::Iq4Xs,
         30 => QuantType::Bf16,
         41 => QuantType::Q1_0,
-        _ => return Err(Error::Gguf(format!("unknown GGUF type id: {type_id}"))),
+        _ => {
+            return Err(Error::Gguf {
+                message: format!("unknown GGUF type id: {type_id}"),
+            });
+        }
     })
 }

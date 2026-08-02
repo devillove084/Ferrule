@@ -50,21 +50,25 @@ impl CudaSparseAttentionShape {
             || self.head_dim == 0
             || self.topk == 0
         {
-            return Err(Error::Internal(format!(
-                "invalid sparse attention shape: batch={} tokens_per_batch={} kv_len={} heads={} head_dim={} topk={}",
-                self.batch_size,
-                self.tokens_per_batch,
-                self.kv_len,
-                self.heads,
-                self.head_dim,
-                self.topk
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "invalid sparse attention shape: batch={} tokens_per_batch={} kv_len={} heads={} head_dim={} topk={}",
+                    self.batch_size,
+                    self.tokens_per_batch,
+                    self.kv_len,
+                    self.heads,
+                    self.head_dim,
+                    self.topk
+                ),
+            });
         }
         if !self.softmax_scale.is_finite() || self.softmax_scale <= 0.0 {
-            return Err(Error::Internal(format!(
-                "invalid sparse attention softmax_scale {}",
-                self.softmax_scale
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "invalid sparse attention softmax_scale {}",
+                    self.softmax_scale
+                ),
+            });
         }
         checked_u32(
             self.output_elements(),
@@ -106,20 +110,26 @@ impl PagedSparseAttentionLayout {
     pub fn tokens(&self) -> Result<usize> {
         self.batch_size
             .checked_mul(self.tokens_per_sequence)
-            .ok_or_else(|| Error::Internal("paged sparse attention token count overflow".into()))
+            .ok_or_else(|| Error::Internal {
+                message: "paged sparse attention token count overflow".into(),
+            })
     }
 
     pub fn output_elements(&self) -> Result<usize> {
         self.tokens()?
             .checked_mul(self.heads)
             .and_then(|elements| elements.checked_mul(self.head_dim))
-            .ok_or_else(|| Error::Internal("paged sparse attention output size overflow".into()))
+            .ok_or_else(|| Error::Internal {
+                message: "paged sparse attention output size overflow".into(),
+            })
     }
 
     pub fn topk_elements(&self) -> Result<usize> {
         self.tokens()?
             .checked_mul(self.topk)
-            .ok_or_else(|| Error::Internal("paged sparse attention top-k size overflow".into()))
+            .ok_or_else(|| Error::Internal {
+                message: "paged sparse attention top-k size overflow".into(),
+            })
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -133,30 +143,36 @@ impl PagedSparseAttentionLayout {
             || self.layer_count == 0
             || self.layer_index >= self.layer_count
         {
-            return Err(Error::Internal(format!(
-                "invalid paged sparse attention layout: batch={} tokens_per_sequence={} heads={} head_dim={} topk={} page_tokens={} elements_per_token={} layer={}/{}",
-                self.batch_size,
-                self.tokens_per_sequence,
-                self.heads,
-                self.head_dim,
-                self.topk,
-                self.page_tokens,
-                self.elements_per_token,
-                self.layer_index,
-                self.layer_count
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "invalid paged sparse attention layout: batch={} tokens_per_sequence={} heads={} head_dim={} topk={} page_tokens={} elements_per_token={} layer={}/{}",
+                    self.batch_size,
+                    self.tokens_per_sequence,
+                    self.heads,
+                    self.head_dim,
+                    self.topk,
+                    self.page_tokens,
+                    self.elements_per_token,
+                    self.layer_index,
+                    self.layer_count
+                ),
+            });
         }
         if !self.softmax_scale.is_finite() || self.softmax_scale <= 0.0 {
-            return Err(Error::Internal(format!(
-                "invalid paged sparse attention softmax_scale {}",
-                self.softmax_scale
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "invalid paged sparse attention softmax_scale {}",
+                    self.softmax_scale
+                ),
+            });
         }
         checked_u32(self.tokens()?, "paged sparse attention", "tokens")?;
         checked_u32(
-            self.tokens()?.checked_mul(self.heads).ok_or_else(|| {
-                Error::Internal("paged sparse attention pair count overflow".into())
-            })?,
+            self.tokens()?
+                .checked_mul(self.heads)
+                .ok_or_else(|| Error::Internal {
+                    message: "paged sparse attention pair count overflow".into(),
+                })?,
             "paged sparse attention",
             "token/head pairs",
         )?;
@@ -198,18 +214,20 @@ impl PagedSparseAttentionLayout {
             || sink_elements != self.heads
             || output_elements != expected_output
         {
-            return Err(Error::Internal(format!(
-                "paged sparse attention buffer length mismatch: q={q_elements}/{expected_output} plane={plane_elements} block_slots={block_slots} block_offsets={block_offsets}/{} kv_lens={kv_lens}/{} topk={topk_elements}/{} sink={sink_elements}/{} output={output_elements}/{expected_output}",
-                self.batch_size + 1,
-                self.batch_size,
-                self.topk_elements()?,
-                self.heads,
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "paged sparse attention buffer length mismatch: q={q_elements}/{expected_output} plane={plane_elements} block_slots={block_slots} block_offsets={block_offsets}/{} kv_lens={kv_lens}/{} topk={topk_elements}/{} sink={sink_elements}/{} output={output_elements}/{expected_output}",
+                    self.batch_size + 1,
+                    self.batch_size,
+                    self.topk_elements()?,
+                    self.heads,
+                ),
+            });
         }
         if plane_elements == 0 || block_slots == 0 {
-            return Err(Error::Internal(
-                "paged sparse attention plane and block table must not be empty".into(),
-            ));
+            return Err(Error::Internal {
+                message: "paged sparse attention plane and block table must not be empty".into(),
+            });
         }
         Ok(())
     }
@@ -242,11 +260,13 @@ impl PagedSparseAttentionLayout {
             || plane_elements == 0
             || block_slots == 0
         {
-            return Err(Error::Internal(format!(
-                "selected paged sparse attention buffer length mismatch: rows={rows} q={q_elements}/{expected_output} plane={plane_elements} block_slots={block_slots} block_offsets={block_offsets} sequence_kv_lens={sequence_kv_lens} row_sequence_ids={row_sequence_ids} row_kv_lens={row_kv_lens} topk={topk_elements}/{} sink={sink_elements}/{} output={output_elements}/{expected_output}",
-                self.topk_elements()?,
-                self.heads,
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "selected paged sparse attention buffer length mismatch: rows={rows} q={q_elements}/{expected_output} plane={plane_elements} block_slots={block_slots} block_offsets={block_offsets} sequence_kv_lens={sequence_kv_lens} row_sequence_ids={row_sequence_ids} row_kv_lens={row_kv_lens} topk={topk_elements}/{} sink={sink_elements}/{} output={output_elements}/{expected_output}",
+                    self.topk_elements()?,
+                    self.heads,
+                ),
+            });
         }
         Ok(())
     }
@@ -295,36 +315,41 @@ impl PagedSparseAttentionLayout {
             self.output_elements()?,
         )?;
         if block_offsets.first().copied() != Some(0) {
-            return Err(Error::Internal(
-                "paged sparse attention block offsets must start at zero".into(),
-            ));
+            return Err(Error::Internal {
+                message: "paged sparse attention block offsets must start at zero".into(),
+            });
         }
         if nonnegative_usize(
             *block_offsets.last().expect("validated length"),
             "block offset",
         )? != block_slots.len()
         {
-            return Err(Error::Internal(
-                "paged sparse attention final block offset must equal packed block slot count"
-                    .into(),
-            ));
+            return Err(Error::Internal {
+                message:
+                    "paged sparse attention final block offset must equal packed block slot count"
+                        .into(),
+            });
         }
         for sequence in 0..self.batch_size {
             let start = nonnegative_usize(block_offsets[sequence], "block offset")?;
             let end = nonnegative_usize(block_offsets[sequence + 1], "block offset")?;
             let kv_len = nonnegative_usize(kv_lens[sequence], "KV length")?;
             if start > end || end > block_slots.len() {
-                return Err(Error::Internal(format!(
-                    "paged sparse attention invalid block range for sequence {sequence}: {start}..{end} of {}",
-                    block_slots.len()
-                )));
+                return Err(Error::Internal {
+                    message: format!(
+                        "paged sparse attention invalid block range for sequence {sequence}: {start}..{end} of {}",
+                        block_slots.len()
+                    ),
+                });
             }
             let required_pages = kv_len.div_ceil(self.page_tokens);
             if required_pages > end - start {
-                return Err(Error::Internal(format!(
-                    "paged sparse attention sequence {sequence} needs {required_pages} pages but block range has {}",
-                    end - start
-                )));
+                return Err(Error::Internal {
+                    message: format!(
+                        "paged sparse attention sequence {sequence} needs {required_pages} pages but block range has {}",
+                        end - start
+                    ),
+                });
             }
             for slot in &block_slots[start..end] {
                 if *slot < 0 {
@@ -336,13 +361,15 @@ impl PagedSparseAttentionLayout {
                     .and_then(|slots| slots.checked_mul(self.layer_count))
                     .and_then(|layers| layers.checked_mul(self.page_tokens))
                     .and_then(|tokens| tokens.checked_mul(self.elements_per_token))
-                    .ok_or_else(|| {
-                        Error::Internal("paged sparse attention slot range overflow".into())
+                    .ok_or_else(|| Error::Internal {
+                        message: "paged sparse attention slot range overflow".into(),
                     })?;
                 if end > plane_elements {
-                    return Err(Error::Internal(format!(
-                        "paged sparse attention physical slot {slot} exceeds plane storage {plane_elements}"
-                    )));
+                    return Err(Error::Internal {
+                        message: format!(
+                            "paged sparse attention physical slot {slot} exceeds plane storage {plane_elements}"
+                        ),
+                    });
                 }
             }
         }
@@ -432,10 +459,12 @@ impl DualPlanePagedSparseAttentionLayout {
             output_elements,
         )?;
         if second_plane_elements == 0 || selector_elements != self.base.topk_elements()? {
-            return Err(Error::Internal(format!(
-                "dual-plane paged sparse attention length mismatch: second_plane={second_plane_elements} selectors={selector_elements}/{}",
-                self.base.topk_elements()?
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "dual-plane paged sparse attention length mismatch: second_plane={second_plane_elements} selectors={selector_elements}/{}",
+                    self.base.topk_elements()?
+                ),
+            });
         }
         self.second_layout().validate()?;
         Ok(())
@@ -470,10 +499,12 @@ impl DualPlanePagedSparseAttentionLayout {
             output_elements,
         )?;
         if second_plane_elements == 0 || selector_elements != self.base.topk_elements()? {
-            return Err(Error::Internal(format!(
-                "selected dual-plane paged sparse attention length mismatch: second_plane={second_plane_elements} selectors={selector_elements}/{}",
-                self.base.topk_elements()?
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "selected dual-plane paged sparse attention length mismatch: second_plane={second_plane_elements} selectors={selector_elements}/{}",
+                    self.base.topk_elements()?
+                ),
+            });
         }
         self.second_layout().validate()
     }
@@ -597,9 +628,11 @@ impl<'a> CudaSparseAttentionExecutor<'a> {
             .unwrap_or((sequence_kv_lens, sequence_kv_lens, 0u32));
         let base = layout.base;
         let num_pairs = checked_u32(
-            base.tokens()?.checked_mul(base.heads).ok_or_else(|| {
-                Error::Internal("dual-plane paged sparse attention pair count overflow".into())
-            })?,
+            base.tokens()?
+                .checked_mul(base.heads)
+                .ok_or_else(|| Error::Internal {
+                    message: "dual-plane paged sparse attention pair count overflow".into(),
+                })?,
             "dual-plane paged sparse attention",
             "num_pairs",
         )?;
@@ -751,9 +784,12 @@ impl<'a> CudaSparseAttentionExecutor<'a> {
             .map(|(ids, lens)| (ids, lens, 1u32))
             .unwrap_or((sequence_kv_lens, sequence_kv_lens, 0u32));
         let num_pairs = checked_u32(
-            layout.tokens()?.checked_mul(layout.heads).ok_or_else(|| {
-                Error::Internal("paged sparse attention pair count overflow".into())
-            })?,
+            layout
+                .tokens()?
+                .checked_mul(layout.heads)
+                .ok_or_else(|| Error::Internal {
+                    message: "paged sparse attention pair count overflow".into(),
+                })?,
             "paged sparse attention",
             "num_pairs",
         )?;
@@ -901,18 +937,14 @@ impl<'a> CudaSparseAttentionExecutor<'a> {
 }
 
 fn nonnegative_usize(value: i32, field: &str) -> Result<usize> {
-    usize::try_from(value).map_err(|_| {
-        Error::Internal(format!(
-            "paged sparse attention {field} must be nonnegative, got {value}"
-        ))
+    usize::try_from(value).map_err(|_| Error::Internal {
+        message: format!("paged sparse attention {field} must be nonnegative, got {value}"),
     })
 }
 
 fn checked_u32(value: usize, label: &str, field: &str) -> Result<u32> {
-    u32::try_from(value).map_err(|_| {
-        Error::Internal(format!(
-            "{label} {field} exceeds CUDA u32 launch ABI: {value}"
-        ))
+    u32::try_from(value).map_err(|_| Error::Internal {
+        message: format!("{label} {field} exceeds CUDA u32 launch ABI: {value}"),
     })
 }
 

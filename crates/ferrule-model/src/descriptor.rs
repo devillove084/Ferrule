@@ -30,17 +30,18 @@ impl ModelDescriptor {
             if is_gguf_file(path) {
                 return Self::from_gguf(path);
             }
-            return Err(Error::Model(format!(
-                "unsupported model file '{}'; expected .gguf or a model directory",
-                path.display()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "unsupported model file '{}'; expected .gguf or a model directory",
+                    path.display()
+                ),
+            });
         }
 
         if !path.is_dir() {
-            return Err(Error::Model(format!(
-                "model path not found: {}",
-                path.display()
-            )));
+            return Err(Error::Model {
+                message: format!("model path not found: {}", path.display()),
+            });
         }
 
         let config = path.join("config.json");
@@ -52,10 +53,12 @@ impl ModelDescriptor {
             return Self::from_gguf(&gguf);
         }
 
-        Err(Error::Model(format!(
-            "model directory '{}' has neither config.json nor a .gguf file",
-            path.display()
-        )))
+        Err(Error::Model {
+            message: format!(
+                "model directory '{}' has neither config.json nor a .gguf file",
+                path.display()
+            ),
+        })
     }
 
     /// Build the generic model support contract used by semantic planning.
@@ -73,10 +76,13 @@ impl ModelDescriptor {
     }
 
     fn from_hf_dir(model_dir: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(model_dir.join("config.json"))
-            .map_err(|e| Error::Model(format!("config: {e}")))?;
-        let json: serde_json::Value =
-            serde_json::from_str(&text).map_err(|e| Error::Model(format!("json: {e}")))?;
+        let text =
+            std::fs::read_to_string(model_dir.join("config.json")).map_err(|e| Error::Model {
+                message: format!("config: {e}"),
+            })?;
+        let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| Error::Model {
+            message: format!("json: {e}"),
+        })?;
 
         let architecture = hf_architecture(&json);
         let family = architecture

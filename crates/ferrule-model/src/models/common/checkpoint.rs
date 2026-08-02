@@ -24,13 +24,15 @@ pub(crate) fn unique_top_level_slice(
         .collect::<Vec<_>>();
     match tensors.as_slice() {
         [tensor] => Ok(CheckpointTensorSlice::from_hf_inventory(model_dir, tensor)),
-        [] => Err(Error::Model(format!(
-            "{error_context} missing top-level tensor role {role}"
-        ))),
-        _ => Err(Error::Model(format!(
-            "{error_context} expected exactly one top-level tensor role {role}, got {}",
-            tensors.len()
-        ))),
+        [] => Err(Error::Model {
+            message: format!("{error_context} missing top-level tensor role {role}"),
+        }),
+        _ => Err(Error::Model {
+            message: format!(
+                "{error_context} expected exactly one top-level tensor role {role}, got {}",
+                tensors.len()
+            ),
+        }),
     }
 }
 
@@ -57,7 +59,9 @@ pub(crate) fn inventory_tensor<'a>(
         .tensors
         .iter()
         .find(|tensor| tensor.name == name)
-        .ok_or_else(|| Error::Model(format!("{error_context} missing tensor '{name}'")))
+        .ok_or_else(|| Error::Model {
+            message: format!("{error_context} missing tensor '{name}'"),
+        })
 }
 
 pub(crate) fn decode_vector_f32(
@@ -65,10 +69,12 @@ pub(crate) fn decode_vector_f32(
     error_context: &str,
 ) -> Result<Vec<f32>> {
     if payload.slice.shape.len() != 1 {
-        return Err(Error::Model(format!(
-            "{error_context} checkpoint vector '{}' expects 1D shape, got {:?}",
-            payload.slice.name, payload.slice.shape
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "{error_context} checkpoint vector '{}' expects 1D shape, got {:?}",
+                payload.slice.name, payload.slice.shape
+            ),
+        });
     }
     decode_tensor_f32(payload, error_context)
 }
@@ -81,10 +87,12 @@ pub(crate) fn decode_tensor_f32(
     match payload.slice.dtype {
         CheckpointDType::F32 => {
             if payload.bytes.len() != expected * 4 {
-                return Err(Error::Model(format!(
-                    "{error_context} F32 tensor '{}' byte length mismatch",
-                    payload.slice.name
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "{error_context} F32 tensor '{}' byte length mismatch",
+                        payload.slice.name
+                    ),
+                });
             }
             Ok(payload
                 .bytes
@@ -94,10 +102,12 @@ pub(crate) fn decode_tensor_f32(
         }
         CheckpointDType::Bf16 => {
             if payload.bytes.len() != expected * 2 {
-                return Err(Error::Model(format!(
-                    "{error_context} BF16 tensor '{}' byte length mismatch",
-                    payload.slice.name
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "{error_context} BF16 tensor '{}' byte length mismatch",
+                        payload.slice.name
+                    ),
+                });
             }
             Ok(payload
                 .bytes
@@ -108,11 +118,13 @@ pub(crate) fn decode_tensor_f32(
                 })
                 .collect())
         }
-        _ => Err(Error::Model(format!(
-            "{error_context} checkpoint tensor '{}' has unsupported vector dtype {}",
-            payload.slice.name,
-            payload.slice.dtype.as_str()
-        ))),
+        _ => Err(Error::Model {
+            message: format!(
+                "{error_context} checkpoint tensor '{}' has unsupported vector dtype {}",
+                payload.slice.name,
+                payload.slice.dtype.as_str()
+            ),
+        }),
     }
 }
 
@@ -163,14 +175,14 @@ mod tests {
         let error = decode_vector_f32(&matrix, "DenseDecoder").unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Model: DenseDecoder checkpoint vector 'test.weight' expects 1D shape, got [1, 1]"
+            "model: DenseDecoder checkpoint vector 'test.weight' expects 1D shape, got [1, 1]"
         );
 
         let unsupported = payload(CheckpointDType::I8, vec![1], vec![0]);
         let error = decode_tensor_f32(&unsupported, "DenseDecoder").unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Model: DenseDecoder checkpoint tensor 'test.weight' has unsupported vector dtype I8"
+            "model: DenseDecoder checkpoint tensor 'test.weight' has unsupported vector dtype I8"
         );
     }
 
@@ -227,7 +239,7 @@ mod tests {
         let error = inventory_tensor(&inventory, "missing.weight", "DenseDecoder").unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Model: DenseDecoder missing tensor 'missing.weight'"
+            "model: DenseDecoder missing tensor 'missing.weight'"
         );
 
         std::fs::remove_dir_all(dir).unwrap();
@@ -260,7 +272,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Model: DenseDecoder expected exactly one top-level tensor role output_norm, got 2"
+            "model: DenseDecoder expected exactly one top-level tensor role output_norm, got 2"
         );
     }
 

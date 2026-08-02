@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 #[cfg(feature = "cuda")]
-use ferrule_common::materialization_io::MaterializationResourceDemand;
+use ferrule_common::materialization_io::MaterializationResourceRequirements;
 use ferrule_common::{CompletionHub, Error, Result};
 #[cfg(feature = "cuda")]
 use ferrule_common::{
@@ -46,7 +46,7 @@ pub(crate) struct PinnedExpertReadTicket {
 pub(crate) struct PinnedExpertReadPlan {
     extents: Vec<DirectReadExtent>,
     payload_count: usize,
-    demand: MaterializationResourceDemand,
+    requirements: MaterializationResourceRequirements,
 }
 
 #[cfg(feature = "cuda")]
@@ -57,8 +57,8 @@ pub(crate) struct ReservedPinnedExpertRead {
 
 #[cfg(feature = "cuda")]
 impl PinnedExpertReadPlan {
-    pub(crate) const fn demand(&self) -> MaterializationResourceDemand {
-        self.demand
+    pub(crate) const fn requirements(&self) -> MaterializationResourceRequirements {
+        self.requirements
     }
 }
 
@@ -149,14 +149,16 @@ impl RegisteredBuffer {
 
     #[allow(unsafe_code)]
     fn range(&self, offset: usize, len: usize) -> Result<&[u8]> {
-        let end = offset
-            .checked_add(len)
-            .ok_or_else(|| Error::Model("io_uring expert slice range overflow".into()))?;
+        let end = offset.checked_add(len).ok_or_else(|| Error::Model {
+            message: "io_uring expert slice range overflow".into(),
+        })?;
         if end > self.len {
-            return Err(Error::Model(format!(
-                "io_uring expert slice range exceeds registered buffer: {offset}+{len}>{}",
-                self.len
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "io_uring expert slice range exceeds registered buffer: {offset}+{len}>{}",
+                    self.len
+                ),
+            });
         }
         match &self.backing {
             RegisteredBufferBacking::Pageable(blocks) => {
@@ -181,9 +183,9 @@ impl RegisteredBuffer {
     fn pinned_range(&self, offset: usize, len: usize) -> Result<CudaPinnedU8HostBuffer> {
         match &self.backing {
             RegisteredBufferBacking::CudaPinned(buffer) => buffer.slice(offset, len),
-            RegisteredBufferBacking::Pageable(_) => Err(Error::Model(
-                "io_uring expert reader was not configured with CUDA pinned slabs".into(),
-            )),
+            RegisteredBufferBacking::Pageable(_) => Err(Error::Model {
+                message: "io_uring expert reader was not configured with CUDA pinned slabs".into(),
+            }),
         }
     }
 }
@@ -264,14 +266,14 @@ impl<T> PinnedReadOperation<T> {
 
     fn authorize_submission(&mut self) -> Result<()> {
         if self.submission_authorized {
-            return Err(Error::Internal(
-                "pinned expert read was submitted more than once".into(),
-            ));
+            return Err(Error::Internal {
+                message: "pinned expert read was submitted more than once".into(),
+            });
         }
         if self.cancelled || self.error.is_some() || self.is_terminal() {
-            return Err(Error::Internal(
-                "terminal pinned expert read cannot be submitted".into(),
-            ));
+            return Err(Error::Internal {
+                message: "terminal pinned expert read cannot be submitted".into(),
+            });
         }
         self.submission_authorized = true;
         Ok(())
@@ -290,10 +292,8 @@ impl<T> PinnedReadOperation<T> {
             .get(extent_index)
             .copied()
             .flatten()
-            .ok_or_else(|| {
-                Error::Internal(format!(
-                    "pinned expert read extent {extent_index} has no reserved slab"
-                ))
+            .ok_or_else(|| Error::Internal {
+                message: format!("pinned expert read extent {extent_index} has no reserved slab"),
             })
     }
 
@@ -307,38 +307,48 @@ impl<T> PinnedReadOperation<T> {
 
     fn record_submission(&mut self, extent_index: usize) -> Result<()> {
         if extent_index != self.next_extent || extent_index >= self.extents.len() {
-            return Err(Error::Internal(format!(
-                "pinned expert read submitted unexpected extent {extent_index}, next={} total={}",
-                self.next_extent,
-                self.extents.len()
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "pinned expert read submitted unexpected extent {extent_index}, next={} total={}",
+                    self.next_extent,
+                    self.extents.len()
+                ),
+            });
         }
         self.reserved_buffer(extent_index)?;
         self.next_extent += 1;
         self.outstanding = self
             .outstanding
             .checked_add(1)
-            .ok_or_else(|| Error::Internal("pinned expert read outstanding overflow".into()))?;
+            .ok_or_else(|| Error::Internal {
+                message: "pinned expert read outstanding overflow".into(),
+            })?;
         Ok(())
     }
 
     fn record_completion(&mut self, extent_index: usize) -> Result<()> {
         if extent_index >= self.next_extent || extent_index >= self.completed_extents.len() {
-            return Err(Error::Internal(format!(
-                "pinned expert read completed unsubmitted extent {extent_index}, submitted={}",
-                self.next_extent
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "pinned expert read completed unsubmitted extent {extent_index}, submitted={}",
+                    self.next_extent
+                ),
+            });
         }
         if self.completed_extents[extent_index] {
-            return Err(Error::Internal(format!(
-                "pinned expert read completed extent {extent_index} more than once"
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "pinned expert read completed extent {extent_index} more than once"
+                ),
+            });
         }
         self.completed_extents[extent_index] = true;
         self.outstanding = self
             .outstanding
             .checked_sub(1)
-            .ok_or_else(|| Error::Internal("pinned expert read outstanding underflow".into()))?;
+            .ok_or_else(|| Error::Internal {
+                message: "pinned expert read outstanding underflow".into(),
+            })?;
         Ok(())
     }
 
@@ -440,19 +450,21 @@ fn reserve_all_extent_buffers<T>(
     buffer_reusable: &[bool],
 ) -> Result<bool> {
     if buffer_busy.len() != buffer_reusable.len() {
-        return Err(Error::Internal(format!(
-            "pinned expert slab state length mismatch: busy={} reusable={}",
-            buffer_busy.len(),
-            buffer_reusable.len()
-        )));
+        return Err(Error::Internal {
+            message: format!(
+                "pinned expert slab state length mismatch: busy={} reusable={}",
+                buffer_busy.len(),
+                buffer_reusable.len()
+            ),
+        });
     }
     if operation.has_all_reservations() {
         return Ok(true);
     }
     if !operation.has_no_reservations() {
-        return Err(Error::Internal(
-            "pinned expert read has a partial slab reservation".into(),
-        ));
+        return Err(Error::Internal {
+            message: "pinned expert read has a partial slab reservation".into(),
+        });
     }
 
     let required = operation.extents.len();
@@ -481,62 +493,75 @@ fn validate_pinned_extents(
     registered_files: usize,
 ) -> Result<()> {
     if extents.len() > registered_buffers {
-        return Err(Error::Model(format!(
-            "pinned expert read requires {} extents but only {registered_buffers} registered slabs exist; the operation can never make progress",
-            extents.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "pinned expert read requires {} extents but only {registered_buffers} registered slabs exist; the operation can never make progress",
+                extents.len()
+            ),
+        });
     }
     if registered_buffers > usize::from(u16::MAX) + 1 {
-        return Err(Error::Model(format!(
-            "pinned expert registered slab count {registered_buffers} exceeds the fixed-buffer u16 ABI"
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "pinned expert registered slab count {registered_buffers} exceeds the fixed-buffer u16 ABI"
+            ),
+        });
     }
     for (extent_index, extent) in extents.iter().enumerate() {
         if extent.aligned_len == 0 {
-            return Err(Error::Model(format!(
-                "pinned expert extent {extent_index} is empty"
-            )));
+            return Err(Error::Model {
+                message: format!("pinned expert extent {extent_index} is empty"),
+            });
         }
-        u32::try_from(extent.aligned_len).map_err(|_| {
-            Error::Model(format!(
+        u32::try_from(extent.aligned_len).map_err(|_| Error::Model {
+            message: format!(
                 "pinned expert extent {extent_index} length {} exceeds the io_uring u32 read ABI",
                 extent.aligned_len
-            ))
+            ),
         })?;
         if extent.aligned_len > registered_buffer_bytes {
-            return Err(Error::Model(format!(
-                "pinned expert extent {extent_index} exceeds its registered slab: aligned={} slab={registered_buffer_bytes}",
-                extent.aligned_len
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "pinned expert extent {extent_index} exceeds its registered slab: aligned={} slab={registered_buffer_bytes}",
+                    extent.aligned_len
+                ),
+            });
         }
         if extent.required_end > extent.aligned_len {
-            return Err(Error::Model(format!(
-                "pinned expert extent {extent_index} requires {} bytes from an aligned read of {} bytes",
-                extent.required_end, extent.aligned_len
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "pinned expert extent {extent_index} requires {} bytes from an aligned read of {} bytes",
+                    extent.required_end, extent.aligned_len
+                ),
+            });
         }
-        let file_index = usize::try_from(extent.file_index)
-            .map_err(|_| Error::Model("pinned expert fixed-file index exceeds usize".into()))?;
+        let file_index = usize::try_from(extent.file_index).map_err(|_| Error::Model {
+            message: "pinned expert fixed-file index exceeds usize".into(),
+        })?;
         if file_index >= registered_files || file_index >= FIXED_FILE_CAPACITY {
-            return Err(Error::Model(format!(
-                "pinned expert extent {extent_index} references unregistered fixed file {} (registered={registered_files})",
-                extent.file_index
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "pinned expert extent {extent_index} references unregistered fixed file {} (registered={registered_files})",
+                    extent.file_index
+                ),
+            });
         }
         for view in &extent.views {
             let end = view
                 .payload_offset
                 .checked_add(view.payload_len)
-                .ok_or_else(|| {
-                    Error::Model(format!(
+                .ok_or_else(|| Error::Model {
+                    message: format!(
                         "pinned expert extent {extent_index} payload range overflows usize"
-                    ))
+                    ),
                 })?;
             if end > extent.required_end {
-                return Err(Error::Model(format!(
-                    "pinned expert extent {extent_index} payload range {}..{end} exceeds required read end {}",
-                    view.payload_offset, extent.required_end
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "pinned expert extent {extent_index} payload range {}..{end} exceeds required read end {}",
+                        view.payload_offset, extent.required_end
+                    ),
+                });
             }
         }
     }
@@ -563,12 +588,16 @@ struct PinnedReadSubmission {
 fn allocate_durable_id(next: &mut u64, kind: &str) -> Result<u64> {
     let id = *next;
     if id == 0 {
-        return Err(Error::Internal(format!("{kind} IDs are exhausted")));
+        return Err(Error::Internal {
+            message: format!("{kind} IDs are exhausted"),
+        });
     }
     *next = id
         .checked_add(1)
         .filter(|next| *next != 0)
-        .ok_or_else(|| Error::Internal(format!("{kind} IDs are exhausted")))?;
+        .ok_or_else(|| Error::Internal {
+            message: format!("{kind} IDs are exhausted"),
+        })?;
     Ok(id)
 }
 
@@ -623,14 +652,18 @@ impl IoUringDirectState {
         allocator: &CudaPinnedHostAllocator,
     ) -> Result<Self> {
         if slab_count < queue_depth {
-            return Err(Error::Model(format!(
-                "CUDA pinned expert slab count must be at least queue depth: {slab_count} < {queue_depth}"
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "CUDA pinned expert slab count must be at least queue depth: {slab_count} < {queue_depth}"
+                ),
+            });
         }
         if slab_count > u16::MAX as usize {
-            return Err(Error::Model(format!(
-                "CUDA pinned expert slab count exceeds io_uring fixed-buffer limit: {slab_count}"
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "CUDA pinned expert slab count exceeds io_uring fixed-buffer limit: {slab_count}"
+                ),
+            });
         }
         let buffers = (0..slab_count)
             .map(|_| RegisteredBuffer::new_cuda_pinned(buffer_bytes, allocator))
@@ -645,21 +678,25 @@ impl IoUringDirectState {
         mut buffers: Vec<RegisteredBuffer>,
     ) -> Result<Self> {
         if queue_depth == 0 || queue_depth > u16::MAX as usize {
-            return Err(Error::Model(format!(
-                "io_uring expert queue depth must be in 1..={}, got {queue_depth}",
-                u16::MAX
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "io_uring expert queue depth must be in 1..={}, got {queue_depth}",
+                    u16::MAX
+                ),
+            });
         }
         let buffer_bytes = align_up(buffer_bytes, DIRECT_IO_ALIGNMENT)?;
         let entries = queue_depth.next_power_of_two().max(2);
-        let entries = u32::try_from(entries)
-            .map_err(|_| Error::Model("io_uring expert queue depth exceeds u32".into()))?;
-        let ring = IoUring::new(entries)
-            .map_err(|error| Error::Model(format!("create expert io_uring: {error}")))?;
+        let entries = u32::try_from(entries).map_err(|_| Error::Model {
+            message: "io_uring expert queue depth exceeds u32".into(),
+        })?;
+        let ring = IoUring::new(entries).map_err(|error| Error::Model {
+            message: format!("create expert io_uring: {error}"),
+        })?;
         ring.submitter()
             .register_files_sparse(FIXED_FILE_CAPACITY as u32)
-            .map_err(|error| {
-                Error::Model(format!("register sparse expert io_uring files: {error}"))
+            .map_err(|error| Error::Model {
+                message: format!("register sparse expert io_uring files: {error}"),
             })?;
 
         let iovecs = buffers
@@ -669,8 +706,9 @@ impl IoUringDirectState {
         // SAFETY: every iovec points into a fixed-size boxed allocation owned by
         // this state. Buffers are never resized and the ring is unregistered or
         // dropped before the state releases those allocations.
-        unsafe { ring.submitter().register_buffers(&iovecs) }
-            .map_err(|error| Error::Model(format!("register expert io_uring buffers: {error}")))?;
+        unsafe { ring.submitter().register_buffers(&iovecs) }.map_err(|error| Error::Model {
+            message: format!("register expert io_uring buffers: {error}"),
+        })?;
 
         #[cfg(feature = "cuda")]
         let buffer_count = buffers.len();
@@ -707,10 +745,8 @@ impl IoUringDirectState {
         self.ring
             .submitter()
             .register_eventfd(eventfd.as_raw_fd())
-            .map_err(|error| {
-                Error::Model(format!(
-                    "register expert io_uring completion eventfd: {error}"
-                ))
+            .map_err(|error| Error::Model {
+                message: format!("register expert io_uring completion eventfd: {error}"),
             })?;
         self.completion_eventfd_registered = true;
         Ok(())
@@ -723,10 +759,8 @@ impl IoUringDirectState {
         self.ring
             .submitter()
             .unregister_eventfd()
-            .map_err(|error| {
-                Error::Model(format!(
-                    "unregister expert io_uring completion eventfd: {error}"
-                ))
+            .map_err(|error| Error::Model {
+                message: format!("unregister expert io_uring completion eventfd: {error}"),
             })?;
         self.completion_eventfd_registered = false;
         Ok(())
@@ -737,30 +771,33 @@ impl IoUringDirectState {
             return Ok(index);
         }
         if self.files.len() >= FIXED_FILE_CAPACITY {
-            return Err(Error::Model(format!(
-                "expert io_uring fixed-file table is full at {FIXED_FILE_CAPACITY} entries"
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "expert io_uring fixed-file table is full at {FIXED_FILE_CAPACITY} entries"
+                ),
+            });
         }
         let file = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECT)
             .open(path)
-            .map_err(|error| {
-                Error::Model(format!(
+            .map_err(|error| Error::Model {
+                message: format!(
                     "open expert shard with O_DIRECT '{}': {error}",
                     path.display()
-                ))
+                ),
             })?;
-        let index = u32::try_from(self.files.len())
-            .map_err(|_| Error::Model("expert fixed-file index exceeds u32".into()))?;
+        let index = u32::try_from(self.files.len()).map_err(|_| Error::Model {
+            message: "expert fixed-file index exceeds u32".into(),
+        })?;
         self.ring
             .submitter()
             .register_files_update(index, &[file.as_raw_fd()])
-            .map_err(|error| {
-                Error::Model(format!(
+            .map_err(|error| Error::Model {
+                message: format!(
                     "register expert shard '{}' at fixed index {index}: {error}",
                     path.display()
-                ))
+                ),
             })?;
         self.files.push(file);
         self.file_indices.insert(path.to_path_buf(), index);
@@ -780,12 +817,16 @@ impl IoUringDirectState {
         let mut current: Option<PendingDirectReadExtent> = None;
         for (slice_index, slice) in ordered {
             if slice.bytes == 0 {
-                return Err(Error::Model("expert tensor slice is empty".into()));
+                return Err(Error::Model {
+                    message: "expert tensor slice is empty".into(),
+                });
             }
             let slice_end = slice
                 .offset
                 .checked_add(slice.bytes)
-                .ok_or_else(|| Error::Model("expert tensor slice end overflow".into()))?;
+                .ok_or_else(|| Error::Model {
+                    message: "expert tensor slice end overflow".into(),
+                })?;
             let can_merge = current.as_ref().is_some_and(|current| {
                 if current.path != slice.path
                     || slice.offset > current.end.saturating_add(DIRECT_IO_ALIGNMENT as u64)
@@ -840,26 +881,30 @@ impl IoUringDirectState {
         slices: Vec<(usize, ExpertTensorSlice)>,
     ) -> Result<DirectReadExtent> {
         let aligned_offset = start / DIRECT_IO_ALIGNMENT as u64 * DIRECT_IO_ALIGNMENT as u64;
-        let required_end = usize::try_from(end - aligned_offset)
-            .map_err(|_| Error::Model("expert direct-read extent exceeds usize".into()))?;
+        let required_end = usize::try_from(end - aligned_offset).map_err(|_| Error::Model {
+            message: "expert direct-read extent exceeds usize".into(),
+        })?;
         let aligned_len = align_up(required_end, DIRECT_IO_ALIGNMENT)?;
         if aligned_len > self.buffer_bytes {
-            return Err(Error::Model(format!(
-                "expert direct-read extent exceeds registered buffer: aligned={aligned_len} buffer={} path={}",
-                self.buffer_bytes,
-                path.display()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "expert direct-read extent exceeds registered buffer: aligned={aligned_len} buffer={} path={}",
+                    self.buffer_bytes,
+                    path.display()
+                ),
+            });
         }
         let file_index = self.register_file(&path)?;
         let views = slices
             .into_iter()
             .map(|(slice_index, slice)| {
                 let payload_offset =
-                    usize::try_from(slice.offset - aligned_offset).map_err(|_| {
-                        Error::Model("expert tensor alignment offset exceeds usize".into())
+                    usize::try_from(slice.offset - aligned_offset).map_err(|_| Error::Model {
+                        message: "expert tensor alignment offset exceeds usize".into(),
                     })?;
-                let payload_len = usize::try_from(slice.bytes)
-                    .map_err(|_| Error::Model("expert tensor slice size exceeds usize".into()))?;
+                let payload_len = usize::try_from(slice.bytes).map_err(|_| Error::Model {
+                    message: "expert tensor slice size exceeds usize".into(),
+                })?;
                 Ok(DirectReadView {
                     slice_index,
                     slice,
@@ -884,8 +929,9 @@ impl IoUringDirectState {
         buffer_index: usize,
         extent: &DirectReadExtent,
     ) -> Result<()> {
-        let len = u32::try_from(extent.aligned_len)
-            .map_err(|_| Error::Model("expert direct-read length exceeds u32".into()))?;
+        let len = u32::try_from(extent.aligned_len).map_err(|_| Error::Model {
+            message: "expert direct-read length exceeds u32".into(),
+        })?;
         let buffer = &mut self.buffers[buffer_index];
         let user_data = ((extent_index as u64) << 32) | buffer_index as u64;
         let entry = opcode::ReadFixed::new(
@@ -901,12 +947,13 @@ impl IoUringDirectState {
         // SAFETY: the fixed file and buffer registrations remain alive for the
         // entire state lifetime. A buffer is used by at most one SQE per wave and
         // is not read or reused until every CQE in that wave has been collected.
-        unsafe { submission.push(&entry) }
-            .map_err(|_| Error::Model("expert io_uring submission queue is full".into()))
+        unsafe { submission.push(&entry) }.map_err(|_| Error::Model {
+            message: "expert io_uring submission queue is full".into(),
+        })
     }
 
     #[cfg(feature = "cuda")]
-    fn physical_resource_capacity(&self) -> Result<Option<MaterializationResourceDemand>> {
+    fn physical_resource_capacity(&self) -> Result<Option<MaterializationResourceRequirements>> {
         if !self
             .buffers
             .first()
@@ -919,12 +966,14 @@ impl IoUringDirectState {
             .len()
             .checked_mul(self.buffer_bytes)
             .and_then(|bytes| u64::try_from(bytes).ok())
-            .ok_or_else(|| Error::Model("pinned io_uring capacity exceeds u64".into()))?;
-        Ok(Some(MaterializationResourceDemand {
+            .ok_or_else(|| Error::Model {
+                message: "pinned io_uring capacity exceeds u64".into(),
+            })?;
+        Ok(Some(MaterializationResourceRequirements {
             read_slots: self.queue_depth as u64,
             storage_read_bytes: pinned_host_bytes,
             pinned_host_bytes,
-            ..MaterializationResourceDemand::default()
+            ..MaterializationResourceRequirements::default()
         }))
     }
 
@@ -936,14 +985,14 @@ impl IoUringDirectState {
             .first()
             .is_some_and(RegisteredBuffer::is_cuda_pinned)
         {
-            return Err(Error::Model(
-                "io_uring expert reader was not configured with CUDA pinned slabs".into(),
-            ));
+            return Err(Error::Model {
+                message: "io_uring expert reader was not configured with CUDA pinned slabs".into(),
+            });
         }
         let payload_bytes = slices.iter().try_fold(0u64, |total, slice| {
-            total
-                .checked_add(slice.bytes)
-                .ok_or_else(|| Error::Model("pinned expert payload size overflow".into()))
+            total.checked_add(slice.bytes).ok_or_else(|| Error::Model {
+                message: "pinned expert payload size overflow".into(),
+            })
         })?;
         let extents = self.prepare_read(slices)?;
         validate_pinned_extents(
@@ -955,19 +1004,25 @@ impl IoUringDirectState {
         let storage_read_bytes = extents.iter().try_fold(0u64, |total, extent| {
             total
                 .checked_add(extent.aligned_len as u64)
-                .ok_or_else(|| Error::Model("aligned pinned read size overflow".into()))
+                .ok_or_else(|| Error::Model {
+                    message: "aligned pinned read size overflow".into(),
+                })
         })?;
         let pinned_host_bytes = u64::try_from(
             extents
                 .len()
                 .checked_mul(self.buffer_bytes)
-                .ok_or_else(|| Error::Model("pinned slab demand overflow".into()))?,
+                .ok_or_else(|| Error::Model {
+                    message: "pinned slab demand overflow".into(),
+                })?,
         )
-        .map_err(|_| Error::Model("pinned slab demand exceeds u64".into()))?;
+        .map_err(|_| Error::Model {
+            message: "pinned slab demand exceeds u64".into(),
+        })?;
         Ok(PinnedExpertReadPlan {
             payload_count: slices.len(),
             extents,
-            demand: MaterializationResourceDemand {
+            requirements: MaterializationResourceRequirements {
                 read_slots: 1,
                 storage_read_bytes,
                 pinned_host_bytes,
@@ -987,14 +1042,14 @@ impl IoUringDirectState {
         key: MaterializationKey,
     ) -> Result<ReservedPinnedExpertRead> {
         if protocol_operation.is_zero() {
-            return Err(Error::Model(
-                "physical pinned read requires a non-zero registry operation".into(),
-            ));
+            return Err(Error::Model {
+                message: "physical pinned read requires a non-zero registry operation".into(),
+            });
         }
         if plan.extents.is_empty() {
-            return Err(Error::Model(
-                "physical pinned read requires at least one storage extent".into(),
-            ));
+            return Err(Error::Model {
+                message: "physical pinned read requires at least one storage extent".into(),
+            });
         }
         let operation_id = allocate_durable_id(
             &mut self.next_pinned_operation_id,
@@ -1006,58 +1061,69 @@ impl IoUringDirectState {
             Ok(true) => {}
             Ok(false) => {
                 self.pinned_operations.remove(&operation_id);
-                return Err(Error::Execution(
-                    "registered pinned expert slabs are temporarily exhausted".into(),
-                ));
+                return Err(Error::Execution {
+                    message: "registered pinned expert slabs are temporarily exhausted".into(),
+                });
             }
             Err(error) => {
                 let Some(mut operation) = self.pinned_operations.remove(&operation_id) else {
-                    return Err(Error::Internal(format!(
-                        "physical pinned slab reservation failed ({error}) after its operation disappeared"
-                    )));
+                    return Err(Error::Internal {
+                        message: format!(
+                            "physical pinned slab reservation failed ({error}) after its operation disappeared"
+                        ),
+                    });
                 };
                 let released = operation.release_unqueued_reservations();
                 if let Err(release_error) = self.release_pinned_buffer_reservations(released) {
-                    return Err(Error::Internal(format!(
-                        "physical pinned slab reservation failed ({error}); reservation cleanup also failed ({release_error})"
-                    )));
+                    return Err(Error::Internal {
+                        message: format!(
+                            "physical pinned slab reservation failed ({error}); reservation cleanup also failed ({release_error})"
+                        ),
+                    });
                 }
                 return Err(error);
             }
         }
 
         let descriptor_result = (|| {
-            let operation = self.pinned_operations.get(&operation_id).ok_or_else(|| {
-                Error::Internal(
-                    "physical pinned operation disappeared while describing its slabs".into(),
-                )
-            })?;
+            let operation =
+                self.pinned_operations
+                    .get(&operation_id)
+                    .ok_or_else(|| Error::Internal {
+                        message: "physical pinned operation disappeared while describing its slabs"
+                            .into(),
+                    })?;
             operation
                 .extents
                 .iter()
                 .enumerate()
                 .map(|(extent_index, extent)| {
                     let buffer_index = operation.reserved_buffer(extent_index)?;
-                    let buffer = self.buffers.get_mut(buffer_index).ok_or_else(|| {
-                        Error::Internal(format!(
-                            "physical pinned operation reserved missing slab {buffer_index}"
-                        ))
-                    })?;
+                    let buffer =
+                        self.buffers
+                            .get_mut(buffer_index)
+                            .ok_or_else(|| Error::Internal {
+                                message: format!(
+                                    "physical pinned operation reserved missing slab {buffer_index}"
+                                ),
+                            })?;
                     let identity = u64::try_from(buffer_index)
                         .ok()
                         .and_then(|value| value.checked_add(1))
-                        .ok_or_else(|| Error::Internal("pinned slab identity overflow".into()))?;
+                        .ok_or_else(|| Error::Internal {
+                            message: "pinned slab identity overflow".into(),
+                        })?;
                     RegisteredPinnedAlignedSlabLeaseDescriptor::new(
                         protocol_operation,
                         SlabId::new(identity),
                         RegistrationId::new(identity),
                         buffer.as_mut_ptr()? as usize,
-                        u64::try_from(buffer.len).map_err(|_| {
-                            Error::Model("registered pinned slab length exceeds u64".into())
+                        u64::try_from(buffer.len).map_err(|_| Error::Model {
+                            message: "registered pinned slab length exceeds u64".into(),
                         })?,
                         0,
-                        u64::try_from(extent.aligned_len).map_err(|_| {
-                            Error::Model("registered pinned extent length exceeds u64".into())
+                        u64::try_from(extent.aligned_len).map_err(|_| Error::Model {
+                            message: "registered pinned extent length exceeds u64".into(),
                         })?,
                         DIRECT_IO_ALIGNMENT,
                         key.source_generation(),
@@ -1071,15 +1137,19 @@ impl IoUringDirectState {
             Ok(slabs) => slabs,
             Err(error) => {
                 let Some(mut operation) = self.pinned_operations.remove(&operation_id) else {
-                    return Err(Error::Internal(format!(
-                        "physical pinned slab description failed ({error}) after its operation disappeared"
-                    )));
+                    return Err(Error::Internal {
+                        message: format!(
+                            "physical pinned slab description failed ({error}) after its operation disappeared"
+                        ),
+                    });
                 };
                 let released = operation.release_unqueued_reservations();
                 if let Err(release_error) = self.release_pinned_buffer_reservations(released) {
-                    return Err(Error::Internal(format!(
-                        "physical pinned slab description failed ({error}); reservation cleanup also failed ({release_error})"
-                    )));
+                    return Err(Error::Internal {
+                        message: format!(
+                            "physical pinned slab description failed ({error}); reservation cleanup also failed ({release_error})"
+                        ),
+                    });
                 }
                 return Err(error);
             }
@@ -1096,11 +1166,11 @@ impl IoUringDirectState {
         let operation = self
             .pinned_operations
             .get_mut(&ticket.operation_id)
-            .ok_or_else(|| {
-                Error::Model(format!(
+            .ok_or_else(|| Error::Model {
+                message: format!(
                     "unknown or already consumed pinned expert read operation {}",
                     ticket.operation_id
-                ))
+                ),
             })?;
         operation.authorize_submission()?;
         self.pinned_operation_order.push_back(ticket.operation_id);
@@ -1116,15 +1186,18 @@ impl IoUringDirectState {
         max_completions: usize,
     ) -> Result<PinnedExpertReadPoll> {
         if max_completions == 0 {
-            return Err(Error::Model(
-                "pinned expert read poll completion budget must be greater than zero".into(),
-            ));
+            return Err(Error::Model {
+                message: "pinned expert read poll completion budget must be greater than zero"
+                    .into(),
+            });
         }
         if !self.pinned_operations.contains_key(&ticket.operation_id) {
-            return Err(Error::Model(format!(
-                "unknown or already consumed pinned expert read operation {}",
-                ticket.operation_id
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "unknown or already consumed pinned expert read operation {}",
+                    ticket.operation_id
+                ),
+            });
         }
 
         self.drain_pinned_completions(max_completions)?;
@@ -1141,11 +1214,11 @@ impl IoUringDirectState {
         let released = self
             .pinned_operations
             .get_mut(&ticket.operation_id)
-            .ok_or_else(|| {
-                Error::Model(format!(
+            .ok_or_else(|| Error::Model {
+                message: format!(
                     "unknown or already consumed pinned expert read operation {}",
                     ticket.operation_id
-                ))
+                ),
             })?
             .cancel();
         let Some(released) = released else {
@@ -1172,9 +1245,11 @@ impl IoUringDirectState {
             .progress_detached_pinned_operations(self.queue_depth.max(1))
             .err();
         match (cancel_error, progress_error) {
-            (Some(cancel), Some(progress)) => Err(Error::Internal(format!(
-                "detaching pinned expert read failed ({cancel}); reaping it also failed ({progress})"
-            ))),
+            (Some(cancel), Some(progress)) => Err(Error::Internal {
+                message: format!(
+                    "detaching pinned expert read failed ({cancel}); reaping it also failed ({progress})"
+                ),
+            }),
             (Some(error), None) | (None, Some(error)) => Err(error),
             (None, None) => Ok(()),
         }
@@ -1214,15 +1289,15 @@ impl IoUringDirectState {
             let busy = self
                 .pinned_buffer_busy
                 .get_mut(buffer_index)
-                .ok_or_else(|| {
-                    Error::Internal(format!(
+                .ok_or_else(|| Error::Internal {
+                    message: format!(
                         "pinned expert reservation references missing slab {buffer_index}"
-                    ))
+                    ),
                 })?;
             if !*busy {
-                return Err(Error::Internal(format!(
-                    "pinned expert reservation released idle slab {buffer_index}"
-                )));
+                return Err(Error::Internal {
+                    message: format!("pinned expert reservation released idle slab {buffer_index}"),
+                });
             }
             *busy = false;
         }
@@ -1234,10 +1309,8 @@ impl IoUringDirectState {
         let released = self
             .pinned_operations
             .get_mut(&operation_id)
-            .ok_or_else(|| {
-                Error::Internal(format!(
-                    "cannot fail missing pinned expert operation {operation_id}"
-                ))
+            .ok_or_else(|| Error::Internal {
+                message: format!("cannot fail missing pinned expert operation {operation_id}"),
             })?
             .fail(error);
         self.pinned_operation_order
@@ -1257,10 +1330,10 @@ impl IoUringDirectState {
         let operation = self
             .pinned_operations
             .get_mut(&operation_id)
-            .ok_or_else(|| {
-                Error::Internal(format!(
+            .ok_or_else(|| Error::Internal {
+                message: format!(
                     "cannot reserve slabs for missing pinned expert operation {operation_id}"
-                ))
+                ),
             })?;
         reserve_all_extent_buffers(operation, &mut self.pinned_buffer_busy, &reusable)
     }
@@ -1301,10 +1374,11 @@ impl IoUringDirectState {
             if !self.pinned_operations[&operation_id].has_all_reservations() {
                 self.fail_pinned_operation(
                     operation_id,
-                    Error::Internal(
-                        "pinned expert read reached scheduling with a partial slab reservation"
-                            .into(),
-                    ),
+                    Error::Internal {
+                        message:
+                            "pinned expert read reached scheduling with a partial slab reservation"
+                                .into(),
+                    },
                 )?;
                 continue;
             }
@@ -1391,10 +1465,9 @@ impl IoUringDirectState {
         if self.pinned_queued_submissions.is_empty() {
             return Ok(0);
         }
-        let accepted = self
-            .ring
-            .submit()
-            .map_err(|error| Error::Model(format!("submit expert io_uring reads: {error}")))?;
+        let accepted = self.ring.submit().map_err(|error| Error::Model {
+            message: format!("submit expert io_uring reads: {error}"),
+        })?;
         self.confirm_queued_pinned_submissions(accepted)?;
         Ok(accepted)
     }
@@ -1410,17 +1483,19 @@ impl IoUringDirectState {
             let submission = self
                 .pinned_submissions
                 .get_mut(&submission_id)
-                .ok_or_else(|| {
-                    Error::Internal(format!(
+                .ok_or_else(|| Error::Internal {
+                    message: format!(
                         "confirmed pinned submission {submission_id} has no ownership metadata"
-                    ))
+                    ),
                 })?;
             submission.state = PinnedReadSubmissionState::Submitted;
         }
         if accepted > confirmed {
-            return Err(Error::Internal(format!(
-                "io_uring accepted {accepted} pinned submissions but only {confirmed} were tracked as queued"
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "io_uring accepted {accepted} pinned submissions but only {confirmed} were tracked as queued"
+                ),
+            });
         }
         Ok(())
     }
@@ -1428,9 +1503,11 @@ impl IoUringDirectState {
     #[cfg(feature = "cuda")]
     fn detect_stuck_pinned_operation(&mut self, operation_id: u64) -> Result<()> {
         let Some(operation) = self.pinned_operations.get(&operation_id) else {
-            return Err(Error::Model(format!(
-                "unknown or already consumed pinned expert read operation {operation_id}"
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "unknown or already consumed pinned expert read operation {operation_id}"
+                ),
+            });
         };
         if operation.is_terminal() {
             return Ok(());
@@ -1487,7 +1564,7 @@ impl IoUringDirectState {
         };
 
         if let Some(reason) = reason {
-            self.fail_pinned_operation(operation_id, Error::Internal(reason))?;
+            self.fail_pinned_operation(operation_id, Error::Internal { message: reason })?;
         }
         Ok(())
     }
@@ -1519,10 +1596,10 @@ impl IoUringDirectState {
         let submission = self
             .pinned_submissions
             .remove(&submission_id)
-            .ok_or_else(|| {
-                Error::Internal(format!(
+            .ok_or_else(|| Error::Internal {
+                message: format!(
                     "io_uring returned unknown pinned expert submission {submission_id}"
-                ))
+                ),
             })?;
         if submission.state == PinnedReadSubmissionState::Queued {
             self.pinned_queued_submissions
@@ -1531,56 +1608,64 @@ impl IoUringDirectState {
         let assigned_buffer = self
             .pinned_operations
             .get(&submission.operation_id)
-            .ok_or_else(|| {
-                Error::Internal(format!(
+            .ok_or_else(|| Error::Internal {
+                message: format!(
                     "pinned expert submission {submission_id} references missing operation {}",
                     submission.operation_id
-                ))
+                ),
             })?
             .reserved_buffer(submission.extent_index)?;
         if assigned_buffer != submission.buffer_index {
-            return Err(Error::Internal(format!(
-                "pinned expert submission {submission_id} completed slab {} but extent {} reserved slab {assigned_buffer}",
-                submission.buffer_index, submission.extent_index
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "pinned expert submission {submission_id} completed slab {} but extent {} reserved slab {assigned_buffer}",
+                    submission.buffer_index, submission.extent_index
+                ),
+            });
         }
         let Some(busy) = self.pinned_buffer_busy.get(submission.buffer_index) else {
-            return Err(Error::Internal(format!(
-                "pinned expert submission {submission_id} references missing slab {}",
-                submission.buffer_index
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "pinned expert submission {submission_id} references missing slab {}",
+                    submission.buffer_index
+                ),
+            });
         };
         if !*busy {
-            return Err(Error::Internal(format!(
-                "pinned expert submission {submission_id} completed an idle slab {}",
-                submission.buffer_index
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "pinned expert submission {submission_id} completed an idle slab {}",
+                    submission.buffer_index
+                ),
+            });
         }
 
         let (skip_payload, required_end, path, views) = {
             let operation = self
                 .pinned_operations
                 .get(&submission.operation_id)
-                .ok_or_else(|| {
-                    Error::Internal(format!(
+                .ok_or_else(|| Error::Internal {
+                    message: format!(
                         "pinned expert submission {submission_id} references missing operation {}",
                         submission.operation_id
-                    ))
+                    ),
                 })?;
             let extent = operation
                 .extents
                 .get(submission.extent_index)
-                .ok_or_else(|| {
-                    Error::Internal(format!(
+                .ok_or_else(|| Error::Internal {
+                    message: format!(
                         "pinned expert submission {submission_id} references missing extent {}",
                         submission.extent_index
-                    ))
+                    ),
                 })?;
             let path = extent
                 .views
                 .first()
                 .map(|view| view.slice.path.clone())
-                .ok_or_else(|| Error::Model("expert direct-read extent has no views".into()))?;
+                .ok_or_else(|| Error::Model {
+                    message: "expert direct-read extent has no views".into(),
+                })?;
             let views = extent
                 .views
                 .iter()
@@ -1604,17 +1689,21 @@ impl IoUringDirectState {
         let payload_result = if skip_payload {
             None
         } else if result < 0 {
-            Some(Err(Error::Model(format!(
-                "expert io_uring read '{}' failed: {}",
-                path.display(),
-                std::io::Error::from_raw_os_error(-result)
-            ))))
+            Some(Err(Error::Model {
+                message: format!(
+                    "expert io_uring read '{}' failed: {}",
+                    path.display(),
+                    std::io::Error::from_raw_os_error(-result)
+                ),
+            }))
         } else if (result as usize) < required_end {
-            Some(Err(Error::Model(format!(
-                "short expert io_uring read '{}': got {}, need at least {required_end}",
-                path.display(),
-                result
-            ))))
+            Some(Err(Error::Model {
+                message: format!(
+                    "short expert io_uring read '{}': got {}, need at least {required_end}",
+                    path.display(),
+                    result
+                ),
+            }))
         } else {
             Some(
                 views
@@ -1651,15 +1740,19 @@ impl IoUringDirectState {
                     let mut payload_error = None;
                     for (slice_index, payload) in payloads {
                         let Some(slot) = operation.payloads.get_mut(slice_index) else {
-                            payload_error = Some(Error::Internal(format!(
-                                "pinned expert payload references missing slice {slice_index}"
-                            )));
+                            payload_error = Some(Error::Internal {
+                                message: format!(
+                                    "pinned expert payload references missing slice {slice_index}"
+                                ),
+                            });
                             break;
                         };
                         if slot.replace(payload).is_some() {
-                            payload_error = Some(Error::Internal(format!(
-                                "pinned expert payload produced slice {slice_index} more than once"
-                            )));
+                            payload_error = Some(Error::Internal {
+                                message: format!(
+                                    "pinned expert payload produced slice {slice_index} more than once"
+                                ),
+                            });
                             break;
                         }
                     }
@@ -1741,10 +1834,12 @@ impl IoUringDirectState {
             .collect::<Vec<_>>();
         if buffer_indices.len() != wave_len {
             self.stats.slab_exhaustions = self.stats.slab_exhaustions.saturating_add(1);
-            return Err(Error::Model(format!(
-                "expert io_uring pinned slab pool exhausted: available={} required={wave_len}",
-                buffer_indices.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "expert io_uring pinned slab pool exhausted: available={} required={wave_len}",
+                    buffer_indices.len()
+                ),
+            });
         }
 
         for (extent_index, &buffer_index) in (wave_start..wave_end).zip(buffer_indices.iter()) {
@@ -1760,9 +1855,9 @@ impl IoUringDirectState {
         self.stats.peak_queue_depth = self.stats.peak_queue_depth.max(wave_len);
         if let Err(error) = self.ring.submit_and_wait(wave_len) {
             self.stats.failed_extents = self.stats.failed_extents.saturating_add(wave_len as u64);
-            return Err(Error::Model(format!(
-                "submit/wait expert io_uring reads: {error}"
-            )));
+            return Err(Error::Model {
+                message: format!("submit/wait expert io_uring reads: {error}"),
+            });
         }
 
         let completions = {
@@ -1778,48 +1873,56 @@ impl IoUringDirectState {
                 .stats
                 .failed_extents
                 .saturating_add((wave_len - completions.len()) as u64);
-            return Err(Error::Model(format!(
-                "expert io_uring completion underflow: got {} expected {wave_len}",
-                completions.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "expert io_uring completion underflow: got {} expected {wave_len}",
+                    completions.len()
+                ),
+            });
         }
 
         let mut completed = Vec::with_capacity(wave_len);
         for (user_data, result) in completions {
             let extent_index = (user_data >> 32) as usize;
             let buffer_index = (user_data & 0xffff_ffff) as usize;
-            let extent = extents.get(extent_index).ok_or_else(|| {
-                Error::Model(format!(
-                    "expert io_uring returned invalid extent index {extent_index}"
-                ))
+            let extent = extents.get(extent_index).ok_or_else(|| Error::Model {
+                message: format!("expert io_uring returned invalid extent index {extent_index}"),
             })?;
             if buffer_index >= self.buffers.len() {
-                return Err(Error::Model(format!(
-                    "expert io_uring returned invalid buffer index {buffer_index}"
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "expert io_uring returned invalid buffer index {buffer_index}"
+                    ),
+                });
             }
             let path = extent
                 .views
                 .first()
                 .map(|view| view.slice.path.as_path())
-                .ok_or_else(|| Error::Model("expert direct-read extent has no views".into()))?;
+                .ok_or_else(|| Error::Model {
+                    message: "expert direct-read extent has no views".into(),
+                })?;
             if result < 0 {
                 self.stats.failed_extents = self.stats.failed_extents.saturating_add(1);
-                return Err(Error::Model(format!(
-                    "expert io_uring read '{}' at {} failed: {}",
-                    path.display(),
-                    extent.aligned_offset,
-                    std::io::Error::from_raw_os_error(-result)
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "expert io_uring read '{}' at {} failed: {}",
+                        path.display(),
+                        extent.aligned_offset,
+                        std::io::Error::from_raw_os_error(-result)
+                    ),
+                });
             }
             let bytes_read = result as usize;
             if bytes_read < extent.required_end {
                 self.stats.failed_extents = self.stats.failed_extents.saturating_add(1);
-                return Err(Error::Model(format!(
-                    "short expert io_uring read '{}': got {bytes_read}, need at least {}",
-                    path.display(),
-                    extent.required_end
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "short expert io_uring read '{}': got {bytes_read}, need at least {}",
+                        path.display(),
+                        extent.required_end
+                    ),
+                });
             }
             self.stats.completed_extents = self.stats.completed_extents.saturating_add(1);
             completed.push((extent_index, buffer_index));
@@ -1848,9 +1951,11 @@ impl IoUringDirectState {
         self.progress_detached_pinned_operations(self.queue_depth.max(1))?;
         #[cfg(feature = "cuda")]
         if !self.pinned_operations.is_empty() {
-            return Err(Error::Model(
-                "pageable io_uring reads cannot run while pinned read operations are active".into(),
-            ));
+            return Err(Error::Model {
+                message:
+                    "pageable io_uring reads cannot run while pinned read operations are active"
+                        .into(),
+            });
         }
         let started = Instant::now();
         let result = (|| {
@@ -1886,10 +1991,8 @@ fn collect_payloads<T>(payloads: Vec<Option<T>>) -> Result<Vec<T>> {
         .into_iter()
         .enumerate()
         .map(|(index, payload)| {
-            payload.ok_or_else(|| {
-                Error::Model(format!(
-                    "expert io_uring did not produce payload for slice {index}"
-                ))
+            payload.ok_or_else(|| Error::Model {
+                message: format!("expert io_uring did not produce payload for slice {index}"),
             })
         })
         .collect()
@@ -1960,14 +2063,13 @@ impl IoUringExpertReader {
         };
         Some(Box::pin(async move {
             let _registration = registration;
-            let eventfd = tokio::io::unix::AsyncFd::new(reactor_eventfd).map_err(|error| {
-                Error::Model(format!(
-                    "attach expert io_uring completion eventfd to Tokio: {error}"
-                ))
-            })?;
+            let eventfd =
+                tokio::io::unix::AsyncFd::new(reactor_eventfd).map_err(|error| Error::Model {
+                    message: format!("attach expert io_uring completion eventfd to Tokio: {error}"),
+                })?;
             loop {
-                let mut ready = eventfd.readable().await.map_err(|error| {
-                    Error::Model(format!("await expert io_uring completion eventfd: {error}"))
+                let mut ready = eventfd.readable().await.map_err(|error| Error::Model {
+                    message: format!("await expert io_uring completion eventfd: {error}"),
                 })?;
                 drain_completion_eventfd(eventfd.get_ref())?;
                 ready.clear_ready();
@@ -1979,10 +2081,9 @@ impl IoUringExpertReader {
     }
 
     fn react_to_completions(&self) -> Result<()> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| Error::Model("expert io_uring state lock poisoned".into()))?;
+        let mut state = self.state.lock().map_err(|_| Error::Model {
+            message: "expert io_uring state lock poisoned".into(),
+        })?;
         #[cfg(feature = "cuda")]
         state.react_to_pinned_completions()?;
         #[cfg(not(feature = "cuda"))]
@@ -2002,7 +2103,9 @@ impl IoUringExpertReader {
     ) -> Result<Vec<ExpertTensorPayload>> {
         self.state
             .lock()
-            .map_err(|_| Error::Model("expert io_uring state lock poisoned".into()))?
+            .map_err(|_| Error::Model {
+                message: "expert io_uring state lock poisoned".into(),
+            })?
             .read_slices(slices)
     }
 
@@ -2013,7 +2116,9 @@ impl IoUringExpertReader {
     ) -> Result<PinnedExpertReadPlan> {
         self.state
             .lock()
-            .map_err(|_| Error::Model("expert io_uring state lock poisoned".into()))?
+            .map_err(|_| Error::Model {
+                message: "expert io_uring state lock poisoned".into(),
+            })?
             .plan_slices_pinned(slices)
     }
 
@@ -2026,7 +2131,9 @@ impl IoUringExpertReader {
     ) -> Result<ReservedPinnedExpertRead> {
         self.state
             .lock()
-            .map_err(|_| Error::Model("expert io_uring state lock poisoned".into()))?
+            .map_err(|_| Error::Model {
+                message: "expert io_uring state lock poisoned".into(),
+            })?
             .reserve_slices_pinned(plan, operation, key)
     }
 
@@ -2037,7 +2144,9 @@ impl IoUringExpertReader {
     ) -> Result<()> {
         self.state
             .lock()
-            .map_err(|_| Error::Model("expert io_uring state lock poisoned".into()))?
+            .map_err(|_| Error::Model {
+                message: "expert io_uring state lock poisoned".into(),
+            })?
             .submit_reserved_slices_pinned(ticket)
     }
 
@@ -2046,7 +2155,9 @@ impl IoUringExpertReader {
         let result = self
             .state
             .lock()
-            .map_err(|_| Error::Model("expert io_uring state lock poisoned".into()))?
+            .map_err(|_| Error::Model {
+                message: "expert io_uring state lock poisoned".into(),
+            })?
             .cancel_slices_pinned(ticket);
         self.completion_hub.notify();
         result
@@ -2061,7 +2172,9 @@ impl IoUringExpertReader {
         let result = self
             .state
             .lock()
-            .map_err(|_| Error::Model("expert io_uring state lock poisoned".into()))?
+            .map_err(|_| Error::Model {
+                message: "expert io_uring state lock poisoned".into(),
+            })?
             .poll_slices_pinned(ticket, max_completions);
         if !matches!(&result, Ok(PinnedExpertReadPoll::Pending)) {
             self.completion_hub.notify();
@@ -2074,7 +2187,9 @@ impl IoUringExpertReader {
         let result = self
             .state
             .lock()
-            .map_err(|_| Error::Model("expert io_uring state lock poisoned".into()))?
+            .map_err(|_| Error::Model {
+                message: "expert io_uring state lock poisoned".into(),
+            })?
             .detach_slices_pinned(ticket);
         self.completion_hub.notify();
         result
@@ -2083,10 +2198,12 @@ impl IoUringExpertReader {
     #[cfg(feature = "cuda")]
     pub(crate) fn physical_resource_capacity(
         &self,
-    ) -> Result<Option<MaterializationResourceDemand>> {
+    ) -> Result<Option<MaterializationResourceRequirements>> {
         self.state
             .lock()
-            .map_err(|_| Error::Model("expert io_uring state lock poisoned".into()))?
+            .map_err(|_| Error::Model {
+                message: "expert io_uring state lock poisoned".into(),
+            })?
             .physical_resource_capacity()
     }
 
@@ -2112,20 +2229,24 @@ impl Drop for IoUringCompletionEventfdRegistration {
 fn create_completion_eventfd_pair() -> Result<(OwnedFd, OwnedFd)> {
     let raw_eventfd = unsafe { libc::eventfd(0, libc::EFD_NONBLOCK | libc::EFD_CLOEXEC) };
     if raw_eventfd < 0 {
-        return Err(Error::Model(format!(
-            "create expert io_uring completion eventfd: {}",
-            std::io::Error::last_os_error()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "create expert io_uring completion eventfd: {}",
+                std::io::Error::last_os_error()
+            ),
+        });
     }
     // SAFETY: `eventfd` returned a new descriptor owned by this function.
     let completion_eventfd = unsafe { OwnedFd::from_raw_fd(raw_eventfd) };
     let raw_reactor_eventfd =
         unsafe { libc::fcntl(completion_eventfd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
     if raw_reactor_eventfd < 0 {
-        return Err(Error::Model(format!(
-            "duplicate expert io_uring completion eventfd: {}",
-            std::io::Error::last_os_error()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "duplicate expert io_uring completion eventfd: {}",
+                std::io::Error::last_os_error()
+            ),
+        });
     }
     // SAFETY: `F_DUPFD_CLOEXEC` returned a distinct descriptor owned here.
     let reactor_eventfd = unsafe { OwnedFd::from_raw_fd(raw_reactor_eventfd) };
@@ -2154,26 +2275,28 @@ fn drain_completion_eventfd(eventfd: &OwnedFd) -> Result<()> {
             if error.kind() == std::io::ErrorKind::WouldBlock {
                 return Ok(());
             }
-            return Err(Error::Model(format!(
-                "read expert io_uring completion eventfd: {error}"
-            )));
+            return Err(Error::Model {
+                message: format!("read expert io_uring completion eventfd: {error}"),
+            });
         }
-        return Err(Error::Model(format!(
-            "short expert io_uring completion eventfd read: got {read} bytes"
-        )));
+        return Err(Error::Model {
+            message: format!("short expert io_uring completion eventfd read: got {read} bytes"),
+        });
     }
 }
 
 fn align_up(value: usize, alignment: usize) -> Result<usize> {
     if alignment == 0 || !alignment.is_power_of_two() {
-        return Err(Error::Model(format!(
-            "invalid direct-I/O alignment {alignment}"
-        )));
+        return Err(Error::Model {
+            message: format!("invalid direct-I/O alignment {alignment}"),
+        });
     }
     value
         .checked_add(alignment - 1)
         .map(|rounded| rounded & !(alignment - 1))
-        .ok_or_else(|| Error::Model("direct-I/O alignment overflow".into()))
+        .ok_or_else(|| Error::Model {
+            message: "direct-I/O alignment overflow".into(),
+        })
 }
 
 #[cfg(test)]
@@ -2392,7 +2515,9 @@ mod tests {
         ));
         operation.record_submission(0).unwrap();
         operation.record_submission(1).unwrap();
-        let released = operation.fail(Error::Model("synthetic read failure".into()));
+        let released = operation.fail(Error::Model {
+            message: "synthetic read failure".into(),
+        });
 
         assert_eq!(released, vec![2]);
         busy[released[0]] = false;

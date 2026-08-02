@@ -7,7 +7,8 @@ use std::time::Instant;
 
 use ferrule_runtime::{
     GenerateRequest, InferenceCancelProgress, InferenceCompletionOwner, InferenceEngine, RequestId,
-    ResidentDriverStep, ResidentTokenEvent, SequenceFinishReason, SessionId,
+    ResidentDriverStep, ResidentTokenEvent, Result as RuntimeResult, SequenceFinishReason,
+    SessionId,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -60,6 +61,7 @@ enum WorkerCommand {
 struct ActiveRequest {
     events: mpsc::Sender<WorkerEvent>,
     cancellation: Arc<AtomicBool>,
+    cancellation_submitted: bool,
     session_id: SessionId,
     submitted_at: Instant,
     emitted_tokens: usize,
@@ -367,7 +369,7 @@ async fn run_worker<E>(
             tokio::select! {
                 error = completion_owner.reactor_failure() => {
                     tracing::error!(error = %error, "model completion reactor failed");
-                    fatal_error = Some(error);
+                    fatal_error = Some(error.to_string());
                 }
                 command = commands.recv() => {
                     let Some(command) = command else {
@@ -407,7 +409,7 @@ async fn run_worker<E>(
         // changes the epoch observed by this listener or wakes it after registration.
         let completion = completion_owner.listen();
         let step_result = {
-            let mut emit = |event: &ResidentTokenEvent| -> Result<(), String> {
+            let mut emit = |event: &ResidentTokenEvent| -> RuntimeResult<()> {
                 let Some(request_id) = event.request_id else {
                     return Ok(());
                 };
@@ -451,8 +453,9 @@ async fn run_worker<E>(
                     }
                     error = completion_owner.reactor_failure() => {
                         tracing::error!(error = %error, "model completion reactor failed");
-                        fatal_error = Some(error.clone());
-                        fail_all(&mut engine, &mut active, error);
+                        let message = error.to_string();
+                        fatal_error = Some(message.clone());
+                        fail_all(&mut engine, &mut active, message);
                     }
                     command = commands.recv() => {
                         let Some(command) = command else {
@@ -469,8 +472,9 @@ async fn run_worker<E>(
             Ok(ResidentDriverStep::Idle | ResidentDriverStep::Executed { .. }) => {}
             Err(error) => {
                 tracing::error!(error = %error, "model worker entered a fatal execution state");
-                fatal_error = Some(error.clone());
-                fail_all(&mut engine, &mut active, error);
+                let message = error.to_string();
+                fatal_error = Some(message.clone());
+                fail_all(&mut engine, &mut active, message);
             }
         }
         cancel_disconnected(&mut engine, &mut active, &mut cancellation_scratch);
@@ -490,7 +494,9 @@ where
     match command {
         WorkerCommand::Shutdown => true,
         WorkerCommand::Tokenize(command) => {
-            let result = engine.encode(&command.prompt);
+            let result = engine
+                .encode(&command.prompt)
+                .map_err(|error| error.to_string());
             let _ = command.response.send(result);
             false
         }
@@ -538,6 +544,7 @@ where
                 ActiveRequest {
                     events: command.events,
                     cancellation: Arc::clone(&command.cancellation),
+                    cancellation_submitted: false,
                     session_id,
                     submitted_at: command.enqueued_at,
                     emitted_tokens: 0,
@@ -572,17 +579,16 @@ fn cancel_disconnected<E>(
 {
     scratch.clear();
     scratch.extend(active.iter().filter_map(|(request_id, request)| {
-        request
-            .cancellation
-            .load(Ordering::Acquire)
+        (request.cancellation.load(Ordering::Acquire) && !request.cancellation_submitted)
             .then_some(*request_id)
     }));
     for request_id in scratch.iter().copied() {
         match engine.cancel_request(request_id) {
-            Ok(
-                InferenceCancelProgress::Complete(_)
-                | InferenceCancelProgress::WaitingForModelProgress,
-            ) => {}
+            Ok(InferenceCancelProgress::Complete(_) | InferenceCancelProgress::Pending) => {
+                if let Some(request) = active.get_mut(&request_id) {
+                    request.cancellation_submitted = true;
+                }
+            }
             Err(error) => {
                 if let Some(request) = active.remove(&request_id) {
                     trace_worker_request_terminal(
@@ -720,49 +726,68 @@ async fn cancel_all<E>(
 ) where
     E: InferenceEngine,
 {
-    loop {
-        let completion = completion_owner.listen();
-        let request_ids = active.keys().copied().collect::<Vec<_>>();
-        let mut waiting = false;
-        for request_id in request_ids {
-            match engine.cancel_request(request_id) {
-                Ok(InferenceCancelProgress::Complete(_)) => {}
-                Ok(InferenceCancelProgress::WaitingForModelProgress) => waiting = true,
-                Err(error) => {
-                    if let Some(request) = active.remove(&request_id) {
-                        trace_worker_request_terminal(
-                            request_id,
-                            request.session_id,
-                            "failed",
-                            "shutdown_cancellation_failed",
-                            &request,
-                            None,
-                        );
-                        let _ = request.events.try_send(WorkerEvent::Failed {
-                            message: format!(
-                                "request cancellation failed during shutdown: {error}"
-                            ),
-                        });
-                    }
+    let request_ids = active
+        .iter()
+        .filter_map(|(request_id, request)| {
+            (!request.cancellation_submitted).then_some(*request_id)
+        })
+        .collect::<Vec<_>>();
+    for request_id in request_ids {
+        match engine.cancel_request(request_id) {
+            Ok(InferenceCancelProgress::Complete(_) | InferenceCancelProgress::Pending) => {
+                if let Some(request) = active.get_mut(&request_id) {
+                    request.cancellation_submitted = true;
+                }
+            }
+            Err(error) => {
+                if let Some(request) = active.remove(&request_id) {
+                    trace_worker_request_terminal(
+                        request_id,
+                        request.session_id,
+                        "failed",
+                        "shutdown_cancellation_failed",
+                        &request,
+                        None,
+                    );
+                    let _ = request.events.try_send(WorkerEvent::Failed {
+                        message: format!("request cancellation failed during shutdown: {error}"),
+                    });
                 }
             }
         }
+    }
+    drain_terminal(engine, active);
+
+    while !active.is_empty() {
+        let completion = completion_owner.listen();
+        let mut discard_token = |_event: &ResidentTokenEvent| Ok(());
+        let step = engine.step(&mut discard_token);
         drain_terminal(engine, active);
         if active.is_empty() {
             return;
         }
-        if !waiting {
-            break;
-        }
-        if !engine.has_pending_async_work() {
-            tracing::error!(
-                "engine reported pending cancellation without an owned async continuation"
-            );
-            break;
-        }
-        if let Err(error) = completion_owner.wait(completion).await {
-            tracing::error!(%error, "failed while waiting for model cancellation during shutdown");
-            break;
+        match step {
+            Ok(ResidentDriverStep::Executed { .. }) => continue,
+            Ok(ResidentDriverStep::WaitingForModelProgress(_) | ResidentDriverStep::Blocked) => {
+                if !engine.has_pending_async_work() {
+                    tracing::error!(
+                        "engine reported pending cancellation without an owned async continuation"
+                    );
+                    break;
+                }
+                if let Err(error) = completion_owner.wait(completion).await {
+                    tracing::error!(%error, "failed while waiting for model cancellation during shutdown");
+                    break;
+                }
+            }
+            Ok(ResidentDriverStep::Idle) => {
+                tracing::error!("engine became idle while shutdown cancellation retained requests");
+                break;
+            }
+            Err(error) => {
+                tracing::error!(%error, "model cancellation failed while shutdown was draining");
+                break;
+            }
         }
     }
 
@@ -785,7 +810,9 @@ mod tests {
     use ferrule_common::execution::ExecutionTransactionId;
     use ferrule_common::{CompletionHub, DependencySet, LogicalDependency, OperationId};
     use ferrule_model::{BatchContinuationId, PendingModelProgress};
-    use ferrule_runtime::{CancelRequestResult, InferenceCompletionReactor, SequenceState};
+    use ferrule_runtime::{
+        CancelRequestResult, InferenceCompletionReactor, Result as RuntimeResult, SequenceState,
+    };
     use std::sync::atomic::AtomicUsize;
 
     struct DisconnectEngine {
@@ -794,6 +821,7 @@ mod tests {
         token_index: usize,
         cancellation_count: Arc<AtomicUsize>,
         cancellation_waits_remaining: usize,
+        cancellation_pending: bool,
         cancelled: Vec<SequenceState>,
     }
 
@@ -807,10 +835,10 @@ mod tests {
         }
 
         fn has_pending_async_work(&self) -> bool {
-            self.request.is_some() && self.cancellation_count.load(Ordering::Acquire) > 0
+            self.cancellation_pending
         }
 
-        fn encode(&self, prompt: &str) -> Result<Vec<u32>, String> {
+        fn encode(&self, prompt: &str) -> RuntimeResult<Vec<u32>> {
             Ok(prompt.bytes().map(u32::from).collect())
         }
 
@@ -821,9 +849,28 @@ mod tests {
 
         fn step(
             &mut self,
-            on_token: &mut dyn FnMut(&ResidentTokenEvent) -> Result<(), String>,
-        ) -> Result<ResidentDriverStep, String> {
+            on_token: &mut dyn FnMut(&ResidentTokenEvent) -> RuntimeResult<()>,
+        ) -> RuntimeResult<ResidentDriverStep> {
             std::thread::sleep(std::time::Duration::from_millis(2));
+            if self.cancellation_pending {
+                self.cancellation_pending = false;
+                let request = self
+                    .request
+                    .take()
+                    .expect("pending cancellation retains its request");
+                let mut sequence = SequenceState::from_request(
+                    &request,
+                    request.session_id.expect("worker assigns a session"),
+                );
+                sequence.finish_reason = Some(SequenceFinishReason::Cancelled);
+                self.cancelled.push(sequence);
+                return Ok(ResidentDriverStep::Executed {
+                    action_kind: ferrule_runtime::ResidentActionKind::Cancel,
+                    rows: 0,
+                    staged: 0,
+                    finished: 0,
+                });
+            }
             let Some(request) = self.request.as_ref() else {
                 return Ok(ResidentDriverStep::Idle);
             };
@@ -847,12 +894,13 @@ mod tests {
         fn cancel_request(
             &mut self,
             request_id: RequestId,
-        ) -> Result<InferenceCancelProgress, String> {
+        ) -> RuntimeResult<InferenceCancelProgress> {
             self.cancellation_count.fetch_add(1, Ordering::AcqRel);
             if self.cancellation_waits_remaining > 0 {
                 self.cancellation_waits_remaining -= 1;
+                self.cancellation_pending = true;
                 self.completion_hub.notify();
-                return Ok(InferenceCancelProgress::WaitingForModelProgress);
+                return Ok(InferenceCancelProgress::Pending);
             }
             let Some(request) = self.request.take() else {
                 return Ok(InferenceCancelProgress::Complete(
@@ -905,7 +953,7 @@ mod tests {
             self.request.is_some() && !self.ready.load(Ordering::Acquire)
         }
 
-        fn encode(&self, prompt: &str) -> Result<Vec<u32>, String> {
+        fn encode(&self, prompt: &str) -> RuntimeResult<Vec<u32>> {
             Ok(prompt.bytes().map(u32::from).collect())
         }
 
@@ -915,22 +963,18 @@ mod tests {
 
         fn step(
             &mut self,
-            on_token: &mut dyn FnMut(&ResidentTokenEvent) -> Result<(), String>,
-        ) -> Result<ResidentDriverStep, String> {
+            on_token: &mut dyn FnMut(&ResidentTokenEvent) -> RuntimeResult<()>,
+        ) -> RuntimeResult<ResidentDriverStep> {
             self.step_calls.fetch_add(1, Ordering::AcqRel);
             if self.request.is_none() {
                 return Ok(ResidentDriverStep::Idle);
             }
             if !self.ready.load(Ordering::Acquire) {
                 let continuation = BatchContinuationId::new(1);
-                let dependency = LogicalDependency::operation_retired(OperationId::new(1))
-                    .map_err(|error| error.to_string())?;
-                let dependencies =
-                    DependencySet::new([dependency]).map_err(|error| error.to_string())?;
-                let transaction =
-                    ExecutionTransactionId::new(1).map_err(|error| error.to_string())?;
-                let pending = PendingModelProgress::new(transaction, continuation, dependencies)
-                    .map_err(|error| error.to_string())?;
+                let dependency = LogicalDependency::operation_retired(OperationId::new(1))?;
+                let dependencies = DependencySet::new([dependency])?;
+                let transaction = ExecutionTransactionId::new(1)?;
+                let pending = PendingModelProgress::new(transaction, continuation, dependencies)?;
                 return Ok(ResidentDriverStep::WaitingForModelProgress(vec![pending]));
             }
 
@@ -959,7 +1003,7 @@ mod tests {
         fn cancel_request(
             &mut self,
             request_id: RequestId,
-        ) -> Result<InferenceCancelProgress, String> {
+        ) -> RuntimeResult<InferenceCancelProgress> {
             let Some(request) = self.request.take() else {
                 return Ok(InferenceCancelProgress::Complete(
                     CancelRequestResult::NotFound { request_id },
@@ -1006,6 +1050,7 @@ mod tests {
             token_index: 0,
             cancellation_count: Arc::clone(&cancellation_count),
             cancellation_waits_remaining: 0,
+            cancellation_pending: false,
             cancelled: Vec::new(),
         };
         let mut active = HashMap::new();
@@ -1015,6 +1060,7 @@ mod tests {
             ActiveRequest {
                 events,
                 cancellation: Arc::new(AtomicBool::new(true)),
+                cancellation_submitted: false,
                 session_id: SessionId(1),
                 submitted_at: Instant::now(),
                 emitted_tokens: 0,
@@ -1038,6 +1084,7 @@ mod tests {
             ActiveRequest {
                 events,
                 cancellation: Arc::new(AtomicBool::new(false)),
+                cancellation_submitted: false,
                 session_id: SessionId(2),
                 submitted_at: Instant::now(),
                 emitted_tokens: 0,
@@ -1116,6 +1163,7 @@ mod tests {
             token_index: 0,
             cancellation_count: Arc::clone(&cancellation_count),
             cancellation_waits_remaining: 1,
+            cancellation_pending: false,
             cancelled: Vec::new(),
         };
         let mut active = HashMap::new();
@@ -1125,6 +1173,7 @@ mod tests {
             ActiveRequest {
                 events,
                 cancellation: Arc::new(AtomicBool::new(true)),
+                cancellation_submitted: false,
                 session_id: SessionId(3),
                 submitted_at: Instant::now(),
                 emitted_tokens: 0,
@@ -1142,8 +1191,15 @@ mod tests {
         cancel_disconnected(&mut engine, &mut active, &mut scratch);
 
         assert!(active.contains_key(&RequestId(3)));
-        assert!(engine.request.is_none());
-        assert_eq!(cancellation_count.load(Ordering::Acquire), 2);
+        assert!(engine.request.is_some());
+        assert_eq!(cancellation_count.load(Ordering::Acquire), 1);
+        assert!(matches!(
+            engine.step(&mut |_| Ok(())).unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ferrule_runtime::ResidentActionKind::Cancel,
+                ..
+            }
+        ));
         drain_terminal(&mut engine, &mut active);
         assert!(active.is_empty());
     }
@@ -1157,6 +1213,7 @@ mod tests {
             token_index: 0,
             cancellation_count: Arc::clone(&cancellation_count),
             cancellation_waits_remaining: 1,
+            cancellation_pending: false,
             cancelled: Vec::new(),
         };
         let mut completion_owner = InferenceCompletionOwner::attach(&mut engine);
@@ -1167,6 +1224,7 @@ mod tests {
             ActiveRequest {
                 events,
                 cancellation: Arc::new(AtomicBool::new(false)),
+                cancellation_submitted: false,
                 session_id: SessionId(4),
                 submitted_at: Instant::now(),
                 emitted_tokens: 0,
@@ -1176,7 +1234,7 @@ mod tests {
         cancel_all(&mut engine, &mut completion_owner, &mut active).await;
 
         assert!(active.is_empty());
-        assert_eq!(cancellation_count.load(Ordering::Acquire), 2);
+        assert_eq!(cancellation_count.load(Ordering::Acquire), 1);
         assert!(matches!(
             events_receiver.recv().await,
             Some(WorkerEvent::Cancelled)
@@ -1193,6 +1251,7 @@ mod tests {
                 token_index: 0,
                 cancellation_count: Arc::clone(&cancellation_count),
                 cancellation_waits_remaining: 0,
+                cancellation_pending: false,
                 cancelled: Vec::new(),
             },
             WorkerConfig {

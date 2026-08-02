@@ -88,29 +88,39 @@ pub fn dequantize_fp4_e2m1_with_e8m0_scales(
 ) -> Result<Vec<f32>> {
     if block_size == 0 || !in_features.is_multiple_of(block_size) || !in_features.is_multiple_of(2)
     {
-        return Err(Error::Model(format!(
-            "invalid FP4 shape: in_features={in_features}, block_size={block_size}"
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "invalid FP4 shape: in_features={in_features}, block_size={block_size}"
+            ),
+        });
     }
     let packed_cols = in_features / 2;
     let scale_cols = in_features / block_size;
     let expected_weight = out_features
         .checked_mul(packed_cols)
-        .ok_or_else(|| Error::Model("FP4 weight size overflow".into()))?;
+        .ok_or_else(|| Error::Model {
+            message: "FP4 weight size overflow".into(),
+        })?;
     let expected_scales = out_features
         .checked_mul(scale_cols)
-        .ok_or_else(|| Error::Model("FP4 scale size overflow".into()))?;
+        .ok_or_else(|| Error::Model {
+            message: "FP4 scale size overflow".into(),
+        })?;
     if weight.len() != expected_weight {
-        return Err(Error::Model(format!(
-            "FP4 weight length mismatch: expected {expected_weight}, got {}",
-            weight.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "FP4 weight length mismatch: expected {expected_weight}, got {}",
+                weight.len()
+            ),
+        });
     }
     if scales.len() != expected_scales {
-        return Err(Error::Model(format!(
-            "FP4 scale length mismatch: expected {expected_scales}, got {}",
-            scales.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "FP4 scale length mismatch: expected {expected_scales}, got {}",
+                scales.len()
+            ),
+        });
     }
 
     let mut out = vec![0.0f32; out_features * in_features];
@@ -143,29 +153,37 @@ pub fn dequantize_fp8_e4m3fn_with_e8m0_scales(
     block_k: usize,
 ) -> Result<Vec<f32>> {
     if block_m == 0 || block_k == 0 {
-        return Err(Error::Model(format!(
-            "invalid FP8 block shape: block_m={block_m}, block_k={block_k}"
-        )));
+        return Err(Error::Model {
+            message: format!("invalid FP8 block shape: block_m={block_m}, block_k={block_k}"),
+        });
     }
     let expected_weight = out_features
         .checked_mul(in_features)
-        .ok_or_else(|| Error::Model("FP8 weight size overflow".into()))?;
+        .ok_or_else(|| Error::Model {
+            message: "FP8 weight size overflow".into(),
+        })?;
     let scale_rows = out_features.div_ceil(block_m);
     let scale_cols = in_features.div_ceil(block_k);
     let expected_scales = scale_rows
         .checked_mul(scale_cols)
-        .ok_or_else(|| Error::Model("FP8 scale size overflow".into()))?;
+        .ok_or_else(|| Error::Model {
+            message: "FP8 scale size overflow".into(),
+        })?;
     if weight.len() != expected_weight {
-        return Err(Error::Model(format!(
-            "FP8 weight length mismatch: expected {expected_weight}, got {}",
-            weight.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "FP8 weight length mismatch: expected {expected_weight}, got {}",
+                weight.len()
+            ),
+        });
     }
     if scales.len() != expected_scales {
-        return Err(Error::Model(format!(
-            "FP8 scale length mismatch: expected {expected_scales}, got {}",
-            scales.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "FP8 scale length mismatch: expected {expected_scales}, got {}",
+                scales.len()
+            ),
+        });
     }
 
     let mut out = vec![0.0f32; expected_weight];
@@ -192,15 +210,19 @@ pub fn simulate_fp8_e4m3fn_e8m0_activation_quant_in_place(
     block_size: usize,
 ) -> Result<()> {
     if row_width == 0 || block_size == 0 || !row_width.is_multiple_of(block_size) {
-        return Err(Error::Model(format!(
-            "invalid FP8 activation quant shape: row_width={row_width}, block_size={block_size}"
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "invalid FP8 activation quant shape: row_width={row_width}, block_size={block_size}"
+            ),
+        });
     }
     if !values.len().is_multiple_of(row_width) {
-        return Err(Error::Model(format!(
-            "FP8 activation quant length {} is not a multiple of row_width {row_width}",
-            values.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "FP8 activation quant length {} is not a multiple of row_width {row_width}",
+                values.len()
+            ),
+        });
     }
 
     for row in values.chunks_exact_mut(row_width) {
@@ -230,15 +252,19 @@ pub fn simulate_fp4_e2m1_e8m0_activation_quant_in_place(
     block_size: usize,
 ) -> Result<()> {
     if row_width == 0 || block_size == 0 || !row_width.is_multiple_of(block_size) {
-        return Err(Error::Model(format!(
-            "invalid FP4 activation quant shape: row_width={row_width}, block_size={block_size}"
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "invalid FP4 activation quant shape: row_width={row_width}, block_size={block_size}"
+            ),
+        });
     }
     if !values.len().is_multiple_of(row_width) {
-        return Err(Error::Model(format!(
-            "FP4 activation quant length {} is not a multiple of row_width {row_width}",
-            values.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "FP4 activation quant length {} is not a multiple of row_width {row_width}",
+                values.len()
+            ),
+        });
     }
 
     for row in values.chunks_exact_mut(row_width) {
@@ -267,15 +293,17 @@ pub fn normalized_hadamard_transform_rows_in_place(
     row_width: usize,
 ) -> Result<()> {
     if row_width == 0 || !row_width.is_power_of_two() {
-        return Err(Error::Model(format!(
-            "Hadamard row_width must be a non-zero power of two, got {row_width}"
-        )));
+        return Err(Error::Model {
+            message: format!("Hadamard row_width must be a non-zero power of two, got {row_width}"),
+        });
     }
     if !values.len().is_multiple_of(row_width) {
-        return Err(Error::Model(format!(
-            "Hadamard input length {} is not a multiple of row_width {row_width}",
-            values.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "Hadamard input length {} is not a multiple of row_width {row_width}",
+                values.len()
+            ),
+        });
     }
 
     let scale = (row_width as f32).sqrt().recip();

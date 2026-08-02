@@ -32,10 +32,12 @@ impl RouterWeights {
         };
         let row = token_id as usize;
         if row >= self.hash_rows {
-            return Err(Error::Model(format!(
-                "router hash token id {row} exceeds table rows {} for layer {}",
-                self.hash_rows, self.layer
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "router hash token id {row} exceeds table rows {} for layer {}",
+                    self.hash_rows, self.layer
+                ),
+            });
         }
         let start = row * self.hash_cols;
         Ok(Some(table[start..start + self.hash_cols].to_vec()))
@@ -60,10 +62,12 @@ impl RouterWeights {
         for &token_id in token_ids {
             let row = token_id as usize;
             if row >= self.hash_rows {
-                return Err(Error::Model(format!(
-                    "router hash token id {row} exceeds table rows {} for layer {}",
-                    self.hash_rows, self.layer
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "router hash token id {row} exceeds table rows {} for layer {}",
+                        self.hash_rows, self.layer
+                    ),
+                });
             }
             let start = row * self.hash_cols;
             for &expert in table[start..start + self.hash_cols]
@@ -159,9 +163,11 @@ impl ExpertRouterPolicy {
         {
             let sum = weights.iter().sum::<f32>();
             if sum <= 0.0 || !sum.is_finite() {
-                return Err(Error::Model(format!(
-                    "router selected non-positive or non-finite weight sum: {sum}"
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "router selected non-positive or non-finite weight sum: {sum}"
+                    ),
+                });
             }
             for weight in &mut weights {
                 *weight /= sum;
@@ -202,68 +208,83 @@ fn validate_policy(
     hash_experts: Option<&[usize]>,
 ) -> Result<()> {
     if logits.is_empty() {
-        return Err(Error::Model("router logits are empty".into()));
+        return Err(Error::Model {
+            message: "router logits are empty".into(),
+        });
     }
     if policy.top_k == 0 || policy.top_k > logits.len() {
-        return Err(Error::Model(format!(
-            "router top_k must be in 1..={}, got {}",
-            logits.len(),
-            policy.top_k
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "router top_k must be in 1..={}, got {}",
+                logits.len(),
+                policy.top_k
+            ),
+        });
     }
     if !policy.route_scale.is_finite() {
-        return Err(Error::Model(format!(
-            "router route_scale must be finite, got {}",
-            policy.route_scale
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "router route_scale must be finite, got {}",
+                policy.route_scale
+            ),
+        });
     }
     if let Some(bias) = bias
         && bias.len() != logits.len()
     {
-        return Err(Error::Model(format!(
-            "router bias length mismatch: expected {}, got {}",
-            logits.len(),
-            bias.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "router bias length mismatch: expected {}, got {}",
+                logits.len(),
+                bias.len()
+            ),
+        });
     }
     for (idx, value) in logits.iter().enumerate() {
         if !value.is_finite() {
-            return Err(Error::Model(format!(
-                "router logit at expert {idx} is not finite: {value}"
-            )));
+            return Err(Error::Model {
+                message: format!("router logit at expert {idx} is not finite: {value}"),
+            });
         }
     }
     if let Some(bias) = bias {
         for (idx, value) in bias.iter().enumerate() {
             if !value.is_finite() {
-                return Err(Error::Model(format!(
-                    "router bias at expert {idx} is not finite: {value}"
-                )));
+                return Err(Error::Model {
+                    message: format!("router bias at expert {idx} is not finite: {value}"),
+                });
             }
         }
     }
     if policy.selection == RouterSelectionPolicy::Hash {
-        let hash_experts = hash_experts
-            .ok_or_else(|| Error::Model("hash router requires token-id expert indices".into()))?;
+        let hash_experts = hash_experts.ok_or_else(|| Error::Model {
+            message: "hash router requires token-id expert indices".into(),
+        })?;
         if hash_experts.len() < policy.top_k {
-            return Err(Error::Model(format!(
-                "hash router requires at least {} expert ids, got {}",
-                policy.top_k,
-                hash_experts.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "hash router requires at least {} expert ids, got {}",
+                    policy.top_k,
+                    hash_experts.len()
+                ),
+            });
         }
         for (rank, &expert) in hash_experts.iter().take(policy.top_k).enumerate() {
             if expert >= logits.len() {
-                return Err(Error::Model(format!(
-                    "hash router expert id {expert} exceeds expert count {}",
-                    logits.len()
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "hash router expert id {expert} exceeds expert count {}",
+                        logits.len()
+                    ),
+                });
             }
             if hash_experts[..rank].contains(&expert) {
-                return Err(Error::Model(format!(
-                    "hash router selected duplicate expert id {expert} within the first {} routes",
-                    policy.top_k
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "hash router selected duplicate expert id {expert} within the first {} routes",
+                        policy.top_k
+                    ),
+                });
             }
         }
     }

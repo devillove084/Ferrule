@@ -15,21 +15,27 @@ impl CombinedRingTopkLayout {
     pub fn elements(&self) -> Result<usize> {
         self.rows
             .checked_mul(self.topk)
-            .ok_or_else(|| Error::Internal("combined ring top-k element count overflow".into()))
+            .ok_or_else(|| Error::Internal {
+                message: "combined ring top-k element count overflow".into(),
+            })
     }
 
     pub fn validate(&self) -> Result<()> {
         if self.rows == 0 || self.topk == 0 || self.window_size == 0 {
-            return Err(Error::Internal(format!(
-                "invalid combined ring top-k layout: rows={} topk={} window_size={}",
-                self.rows, self.topk, self.window_size
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "invalid combined ring top-k layout: rows={} topk={} window_size={}",
+                    self.rows, self.topk, self.window_size
+                ),
+            });
         }
         let last_position = self.position(self.rows - 1)?;
         if last_position > i32::MAX as usize {
-            return Err(Error::Internal(format!(
-                "combined ring logical position exceeds i32 output ABI: {last_position}"
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "combined ring logical position exceeds i32 output ABI: {last_position}"
+                ),
+            });
         }
         for (field, value) in [
             ("rows", self.rows),
@@ -38,34 +44,33 @@ impl CombinedRingTopkLayout {
             ("position_stride", self.position_stride),
             ("window_size", self.window_size),
         ] {
-            u32::try_from(value).map_err(|_| {
-                Error::Internal(format!(
-                    "combined ring top-k {field} exceeds u32 kernel ABI: {value}"
-                ))
+            u32::try_from(value).map_err(|_| Error::Internal {
+                message: format!("combined ring top-k {field} exceeds u32 kernel ABI: {value}"),
             })?;
         }
         let elements = self.elements()?;
-        u32::try_from(elements).map_err(|_| {
-            Error::Internal(format!(
-                "combined ring top-k elements exceed u32 kernel ABI: {elements}"
-            ))
+        u32::try_from(elements).map_err(|_| Error::Internal {
+            message: format!("combined ring top-k elements exceed u32 kernel ABI: {elements}"),
         })?;
         Ok(())
     }
 
     pub fn position(&self, row: usize) -> Result<usize> {
         if row >= self.rows {
-            return Err(Error::Internal(format!(
-                "combined ring row {row} exceeds row count {}",
-                self.rows
-            )));
+            return Err(Error::Internal {
+                message: format!("combined ring row {row} exceeds row count {}", self.rows),
+            });
         }
         self.start_position
             .checked_add(
                 row.checked_mul(self.position_stride)
-                    .ok_or_else(|| Error::Internal("combined ring row position overflow".into()))?,
+                    .ok_or_else(|| Error::Internal {
+                        message: "combined ring row position overflow".into(),
+                    })?,
             )
-            .ok_or_else(|| Error::Internal("combined ring absolute position overflow".into()))
+            .ok_or_else(|| Error::Internal {
+                message: "combined ring absolute position overflow".into(),
+            })
     }
 
     pub fn derived_window_len(&self, row: usize) -> Result<usize> {

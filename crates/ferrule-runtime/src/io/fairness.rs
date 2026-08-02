@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use ahash::RandomState;
+use snafu::Snafu;
 
 use crate::scheduling::ResourceClass;
 
@@ -12,7 +13,6 @@ use crate::scheduling::ResourceClass;
 pub struct FairQueueConfig {
     pub prefetch_quantum: u64,
     pub throughput_quantum: u64,
-    pub demand_quantum: u64,
     pub latency_critical_quantum: u64,
     pub max_surplus: u64,
     pub debt_limit: u64,
@@ -25,7 +25,6 @@ impl Default for FairQueueConfig {
         Self {
             prefetch_quantum: 1,
             throughput_quantum: 4 * 1024,
-            demand_quantum: 8 * 1024,
             latency_critical_quantum: 8 * 1024,
             max_surplus: 64 * 1024,
             debt_limit: 64 * 1024,
@@ -40,8 +39,8 @@ impl FairQueueConfig {
     ///
     /// `limits` must already have passed `MaterializationResourceLimits::validate`. Total
     /// byte capacities are used directly instead of inferring a per-request size
-    /// from slot counts. Correctness demand and latency-critical work receive the
-    /// largest quantum and may consume the hard demand reserve.
+    /// from slot counts. All admitted execution may consume the execution reserve;
+    /// latency-critical work receives the largest scheduling quantum.
     pub fn for_production(
         limits: ferrule_common::materialization_io::MaterializationResourceLimits,
     ) -> Result<Self, FairQueueError> {
@@ -81,7 +80,6 @@ impl FairQueueConfig {
         Self {
             prefetch_quantum: progress_quantum,
             throughput_quantum: scaled_quantum(4),
-            demand_quantum: scaled_quantum(8),
             latency_critical_quantum: scaled_quantum(8),
             max_surplus: max_transition_cost.min(MAX_COUNTER),
             debt_limit: max_transition_cost.min(MAX_COUNTER),
@@ -94,7 +92,6 @@ impl FairQueueConfig {
     pub fn validate(self) -> Result<Self, FairQueueError> {
         if self.prefetch_quantum == 0
             || self.throughput_quantum == 0
-            || self.demand_quantum == 0
             || self.latency_critical_quantum == 0
         {
             return Err(FairQueueError::ZeroQuantum);
@@ -104,7 +101,6 @@ impl FairQueueConfig {
         }
         if self.prefetch_quantum > i64::MAX as u64
             || self.throughput_quantum > i64::MAX as u64
-            || self.demand_quantum > i64::MAX as u64
             || self.latency_critical_quantum > i64::MAX as u64
             || self.max_transition_cost > i64::MAX as u64
             || self.max_surplus > i64::MAX as u64
@@ -119,28 +115,24 @@ impl FairQueueConfig {
         match class {
             ResourceClass::Prefetch => self.prefetch_quantum,
             ResourceClass::Throughput => self.throughput_quantum,
-            ResourceClass::Demand => self.demand_quantum,
             ResourceClass::LatencyCritical => self.latency_critical_quantum,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Snafu)]
 pub enum FairQueueError {
+    #[snafu(display("fair queue quanta must be non-zero"))]
     ZeroQuantum,
+    #[snafu(display("fair queue maximum transition cost must be non-zero"))]
     ZeroMaxTransitionCost,
+    #[snafu(display("fair queue cost configuration exceeds the signed deficit range"))]
     CostOutOfRange,
+    #[snafu(display("fair queue entries must have non-zero cost"))]
     ZeroCost,
+    #[snafu(display("fair queue transition cost {cost} exceeds maximum {maximum}"))]
     TransitionTooLarge { cost: u64, maximum: u64 },
 }
-
-impl std::fmt::Display for FairQueueError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "fair queue configuration/entry error: {self:?}")
-    }
-}
-
-impl std::error::Error for FairQueueError {}
 
 #[derive(Debug)]
 struct Entry<T> {
@@ -170,7 +162,6 @@ impl<T> FairQueue<T> {
                 let mut m = HashMap::with_hasher(RandomState::default());
                 m.insert(ResourceClass::Prefetch, 0i64);
                 m.insert(ResourceClass::Throughput, 0);
-                m.insert(ResourceClass::Demand, 0);
                 m.insert(ResourceClass::LatencyCritical, 0);
                 m
             },
@@ -227,6 +218,15 @@ impl<T> FairQueue<T> {
         self.entries.retain(|entry| keep(&entry.item));
     }
 
+    /// Reclassifies matching queued work without resetting its age or queue identity.
+    pub fn reclassify_where(&mut self, class: ResourceClass, mut matches: impl FnMut(&T) -> bool) {
+        for entry in &mut self.entries {
+            if matches(&entry.item) {
+                entry.class = class;
+            }
+        }
+    }
+
     /// Selects one transition. `hard_feasible` is authoritative: aging and debt
     /// never bypass it. Finite exact work may enter bounded debt after aging;
     /// speculative prefetch has no forced-progress entitlement.
@@ -276,7 +276,6 @@ impl<T> FairQueue<T> {
         for class in [
             ResourceClass::Prefetch,
             ResourceClass::Throughput,
-            ResourceClass::Demand,
             ResourceClass::LatencyCritical,
         ] {
             let quantum = self.config.quantum(class) as i64;
@@ -301,7 +300,6 @@ const fn class_priority(class: ResourceClass) -> u8 {
     match class {
         ResourceClass::Prefetch => 0,
         ResourceClass::Throughput => 1,
-        ResourceClass::Demand => 2,
-        ResourceClass::LatencyCritical => 3,
+        ResourceClass::LatencyCritical => 2,
     }
 }

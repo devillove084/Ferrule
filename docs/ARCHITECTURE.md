@@ -54,81 +54,75 @@ serving/API
 - All physically scarce resources are governed by hard credits before use.
 - Submitted work retains its credits until a completion proves that referenced memory and handles are reusable.
 - Soft policy may defer work but may not oversubscribe hard credits.
-- Exact demand receives bounded progress capacity; optional work is suppressed first.
+- Admitted execution receives bounded progress capacity; optional Prefetch is suppressed first.
 - No owner loop may depend on busy polling, full-table rescans, or broadcast wakeups for progress.
 
 ## 2. Execution transaction
 
-`TransactionId` identifies one end-to-end provisional execution, outlives model continuations, and owns immutable request/proposal identity plus mutable branch, checkpoint, arena, dependency, and accounting state.
-At most one non-retired transaction may publish for a request generation.
+`ExecutionTransactionId` identifies one provisional execution and outlives every continuation it owns.
+A transaction payload owns all model states, provisional KV/mutable generations, scheduler/session state,
+continuations, materialization custody, actions, and backend identity required to finish or abort it.
+At most one live transaction may publish for a request generation.
 
-The normative states are:
-
-| State | Meaning |
-|---|---|
-| `Admitted` | Identity and base credits are accepted; no execution has started. |
-| `Runnable` | The next exact transition has complete dependencies and can compete for dispatch. |
-| `Running` | The owner is advancing an atomic step or physical work is submitted. |
-| `Waiting` | A declared `DependencySet` is incomplete; retained resources are explicit. |
-| `Commit` | Exact acceptance and all publication inputs are fixed; atomic publication is in progress. |
-| `Rollback` | Provisional effects are being discarded or an exact checkpoint is being restored. |
-| `Cancelling` | Logical demand is detached and commit is forbidden; new request work may not start. |
-| `Quiescing` | Submitted reads, uploads, kernels, events, leases, and deferred cleanup are draining. |
-| `Retired` | All owned resources and obligations are released exactly once. |
-
-Legal forward transitions are:
-
-```text
-Admitted -> Runnable | Rollback | Cancelling
-Runnable -> Running | Rollback | Cancelling
-Running -> Runnable | Waiting | Commit | Rollback | Cancelling
-Waiting -> Runnable | Rollback | Cancelling
-Commit(before external_publish) -> Rollback | Cancelling
-Commit(at/after external_publish) -> Quiescing
-Rollback -> Quiescing
-Cancelling -> Quiescing
-Quiescing -> Retired
-```
-
-### 2.1 Cancellation, failure, and terminality
-
-| Current state | External cancellation | Internal failure | Terminal condition |
-|---|---|---|---|
-| `Admitted` | `Cancelling` | `Rollback` with no provisional publication | Never retires directly; base obligations first quiesce. |
-| `Runnable` | `Cancelling` and remove from ready indices | `Rollback` | Queue/cohort grants are returned before quiescence ends. |
-| `Running` | `Cancelling`; submitted work still drains | `Rollback` if before publish | All submitted fences become quiescing obligations. |
-| `Waiting` | Detach both waiter indices, then `Cancelling` | `Rollback` | Shared loads may outlive the transaction. |
-| `Commit` before publish | `Cancelling` | `Rollback` | No external token, model state, or KV may yet be visible. |
-| `Commit` at/after publish | Record cancellation for subsequent work | Not a transaction failure | Published prefix is irrevocable; transition only to `Quiescing`. |
-| `Rollback` | Idempotently record cancellation; remain `Rollback` | Remain failed and finish best-effort restoration | Enter `Quiescing` after provisional state cannot publish. |
-| `Cancelling` | Idempotent | Record operational failure; continue cancellation | Enter `Quiescing` after logical demand is detached. |
-| `Quiescing` | Idempotent, no new work | Extend/retry the obligation or fail service health | `Retired` only when every obligation and grant is closed. |
-| `Retired` | No-op/duplicate event | No state mutation | Terminal tombstone; no outgoing transition. |
-
-`external_publish` is the single linearization point for model state, runtime/backend KV, and externally visible tokens.
-Any error before it is a transaction failure and must select rollback/cancellation without external visibility.
-At or after it the outcome cannot fail or be unpublished; cleanup errors are operational faults retained in `Quiescing`, not retroactive transaction failures.
-
-A yield records a complete ownership contract:
+Ferrule does **not** define one giant cross-workload transaction state enum. Ordinary inference,
+speculation, training, and RL have different necessary payload phases. They share only the physical
+terminal contract:
 
 ```rust
-struct YieldRecord {
-    transaction: TransactionId,
-    checkpoint: CheckpointId,
-    dependencies: DependencySet,
-    retained: CreditGrant,
-    leases: ExpertLeaseSet,
-    wake_epoch: u64,
+enum TransactionEndIntent {
+    Publish,
+    Abort,
+}
+
+enum TransactionEndProgress {
+    Pending,
+    Complete,
 }
 ```
 
-The owner explicitly selects bounded park-and-hold, checkpoint-and-release, rollback-and-release, or drain-and-retire; hidden model-held resources across `Waiting` are forbidden.
+- `Pending` means physical/backend work may still access transaction resources. The owner retains the
+  entire payload and automatically calls `end_transaction()` again from a later tick/wake.
+- `Complete` guarantees the backend no longer accesses transaction resources. Only then may the owner
+  publish/discard provisional generations, finish materialization custody, detach continuations,
+  release KV/branches, and restore scheduler/session ownership.
+- `Err` is a fatal backend/protocol failure. It is reported to the worker/service; Ferrule does not
+  add device-loss recovery or device-quarantine transaction states.
 
-## 3. Global expert loading
+Workload-local phases remain minimal. Current inference uses `Executing / Publishing / Aborting` and
+speculation uses `Proposing / Verifying / Ending(Publish|Abort)`. These are payload phases, not
+separate terminal protocols.
+
+### 2.1 Cancellation, failure, and publication
+
+Cancellation records `Abort` once and forbids future publication. Repeating a business cancellation
+is not a progress mechanism; owner ticks drive pending aborts automatically.
+
+The mandatory order is:
+
+```text
+request Publish or Abort
+  -> backend Pending until physically quiescent
+  -> backend Complete
+  -> publish committed generation OR discard provisional generation
+  -> finish transaction materialization custody
+  -> detach continuations and release KV/model branches
+  -> restore, requeue, fail, or finish scheduler/session ownership
+```
+
+No logical cancellation, timeout, or error may release physical resources before backend
+`Complete`. Cleanup failure after `Complete` is retained as a typed operational error and never
+reclassifies the backend transaction as active.
+
+Mutable state SHOULD use provisional generation plus atomic publication. Rollback SHOULD discard an
+unpublished generation after quiescence rather than restore arbitrary bytes in place. Large optimizer
+state MAY use shard generations, copy-on-write extents, journals, or atomic manifests.
+
+## 3. Runtime-wide materialization
 
 ### 3.1 `LoadRegistry` identity
 
-One runtime-wide `LoadRegistry` owns every physical expert materialization.
+One runtime-wide `LoadRegistry` owns physical materialization for parameters, routed experts, KV
+state, activation checkpoints, gradients, and optimizer state.
 Its key includes every property that can change bytes, execution meaning, placement, or completion validity:
 
 ```rust
@@ -146,7 +140,9 @@ struct LoadKey {
 ```
 
 `destination_generation` includes the reserved destination identity and reuse generation; keys differing in any field are never coalesced.
-One exact key has at most one active physical load (single-flight); cache residency shares identity rules but has a distinct lifetime.
+One exact key has at most one active physical load. This is registry-internal physical dedup, not a
+caller-visible single-flight owner, waiter, continuation, or transaction abstraction. Cache residency
+shares identity rules but has a distinct lifetime.
 
 ### 3.2 `LoadOp` lifecycle
 
@@ -179,7 +175,24 @@ The Rust owner is authoritative in every state; a worker/provider has only tempo
 Each op has one monotonic retirement record keyed by `LoadId`; only the owner closes it.
 Stale rebinding never mutates a stale key or recycles its destination generation, and exactly-once retirement is required on success, failure, cancellation, and orphan completion.
 
-### 3.3 Waiters and wakeup
+### 3.3 Prefetch ownership
+
+Prefetch is an explicit optional owner, not a synthetic execution dependency:
+
+- `PrefetchId` owns a set of exact physical operations;
+- Prefetch creates no waiter, continuation, transaction, materialization custody, execution lease, or
+  hard progress entitlement;
+- Execution may join an active Prefetch only for the same exact key/generation/slot and must call
+  provider `promote_to_execution()` after hard admission;
+- provider `prepared(key)` is observation-only and MUST NOT promote purpose;
+- when the last Execution owner leaves while a Prefetch owner remains, the registry releases the
+  execution lease and reclassifies queued work back to `Prefetch`;
+- multi-key promotion is failure-atomic: completed promotions are compensated, newly created work is
+  reclaimed, and original Prefetch ownership survives;
+- cancelling the last Prefetch owner follows the same physical custody rule as any other submitted
+  operation: submitted work drains before resources are reusable.
+
+### 3.4 Waiters and wakeup
 
 The registry maintains both indices:
 
@@ -228,22 +241,26 @@ Every profile defines finite capacities for at least:
 Aggregate host/device/UMA bytes are an additional hard envelope, not a substitute for structural credits; grants transfer with ownership and retire by safe stages exactly once.
 Cancellation cannot refund issued reads or release referenced memory, and no emergency lane, overflow, deadline, or fairness promotion may cross a hard bound.
 
-A decode reserve protects continuation, ready-cohort, arena/KV, and exact-demand I/O capacity.
-Only an unsubmitted grant may borrow reserve and be revoked; after command submission it is non-preemptible until CQE/event/fence return, and reserve is restored by blocking later admissions rather than stealing credits.
-Optional prefetch has no hard progress entitlement and is suppressed first.
+An `execution_reserve` protects continuation, ready-cohort, arena/KV, and physical I/O capacity from
+optional Prefetch. It is not a fourth scheduling class: both `Throughput` and `LatencyCritical`
+execution may use it; only `Prefetch` may not. After command submission a grant is non-preemptible
+until CQE/event/fence return, and reserve is restored by blocking later Prefetch rather than stealing
+credits. Optional Prefetch has no hard progress entitlement and is suppressed first.
 
 ## 5. Scheduling, fairness, and critical path
 
 The scheduler is work-conserving among exact, dependency-complete, hard-feasible transitions and never lets I/O-blocked work occupy a runnable cohort slot.
 Selection is lexicographic: hard feasibility, cancellation/deadline obligations, runnable work, fairness, marginal physical cost, phase policy, deterministic tie-break.
 
-Fairness combines bounded aging with deficit round robin (DRR):
+Fairness has exactly three classes: `Prefetch`, `Throughput`, and `LatencyCritical`. There is no
+separate `Demand` class; logical demand is represented by exact waiters/dependencies, not another
+priority state. Fairness combines bounded aging with deficit round robin (DRR):
 
 - each class has a configured positive `quantum`, finite surplus cap, and finite debt limit;
 - every transition declares an exact charge no greater than `max_transition_cost`; larger work is split or rejected before admission;
 - each round adds `quantum`; dispatch subtracts actual marginal cost, and an aged exact transition may enter debt only down to the configured limit;
 - configuration must let one minimum atomic exact transition fit both `max_transition_cost` and all hard credits;
-- joining an existing single-flight load has zero duplicate physical-byte charge;
+- joining an existing exact-key operation has zero duplicate physical-byte charge;
 - waiting age rises to a hard starvation ceiling, while decode uses its reserve without starving finite prefill;
 - DRR debt changes ordering only, never hard feasibility, and speculative prefetch earns no mandatory service.
 
@@ -253,7 +270,18 @@ Edges encode data, stream/event, credit, generation, and commit order; the measu
 `uncovered wait` is dependency stall left on the critical path after useful independent execution and legal overlap, not total read latency, summed waiter latency, queue residence, or assumed `read + upload`.
 Telemetry separates service, credit, policy, covered, and uncovered wait; overlap claims require DAG evidence of independent work during another transaction's wait.
 
-## 6. Model-neutral execution boundary
+## 6. Typed error boundary
+
+Runtime orchestration uses one SNAFU `Error` boundary. Backend, I/O protocol, materialization,
+registry, fairness, and physical-resource failures remain typed `source` variants. A primary failure
+plus one or more cleanup failures is represented as `Cleanup`, `CleanupBatch`, or `CleanupFailures`;
+internal code MUST NOT flatten these sources into strings.
+
+`InvalidRequest` is reserved for invalid caller/configuration input and `Invariant` for runtime-owned
+state violations. `Pending` is never encoded as an error. String formatting is allowed only at a true
+process/API/IPC boundary where the typed value cannot cross.
+
+## 7. Model-neutral execution boundary
 
 The runtime-facing poll contract is model-neutral:
 
@@ -306,7 +334,7 @@ KernelProvider: exact plan + buffers + ExpertLeaseSet -> compute event/result
 
 Storage cannot call device providers and device code cannot reopen model files; capability negotiation is explicit and versioned by `KERNEL_PROVIDER_ABI`.
 
-## 7. Testing without a GPU
+## 8. Testing without a GPU
 
 The complete owner state machine runs with deterministic fake providers and no GPU: `FakeStorage` controls reads/CQEs/races/errors, while `FakeDevice` controls generations/events/failures/fences.
 A virtual clock drives events without sleeps or polling.
@@ -326,7 +354,7 @@ Required invariant tests include:
 
 GPU integration tests then validate ABI descriptors, event ordering, numerical parity, and real fence lifetime; they do not replace fake-backend state-machine coverage.
 
-## 8. Current mechanism disposition
+## 9. Current mechanism disposition
 
 This section is migration guidance, not a claim that target replacements exist.
 
@@ -342,7 +370,7 @@ This section is migration guidance, not a claim that target replacements exist.
 ### Replace incrementally
 
 - model-local/per-layer in-flight load ownership with the global keyed `LoadRegistry`;
-- batch-local union estimates as physical truth with registry-derived single-flight accounting;
+- batch-local union estimates as physical truth with registry-derived exact-key dedup accounting;
 - model-specific `Waiting` payloads and polling with `Progress::Waiting(DependencySet)`;
 - broad completion polling/wake with bidirectional waiter indices and targeted wake;
 - fragmented I/O permits with one staged hard-credit ledger covering the full transaction lifetime;
@@ -361,7 +389,7 @@ This section is migration guidance, not a claim that target replacements exist.
 Today the proposal guard intentionally serializes proposal-enabled continuations to protect shared topology and remains mandatory through A0–A5.
 Only A6 may permit multiple outstanding proposal transactions after its isolation and failure gates pass.
 
-## 9. Migration plan and exit gates
+## 10. Migration plan and exit gates
 
 ### A0 — Freeze behavior and observability
 Unify stable state/load/operation IDs, trace schema, and a legacy obligation ledger around current mechanisms without changing admission or requiring complete credit grants.
@@ -379,7 +407,7 @@ Add aggregate profile memory accounting, command/return stage release, decode re
 **Exit gate:** every physical and structural use requires a grant; pressure/failure never exceeds capacity or leaks credit, submitted grants are never revoked, and terminal gauges return to baseline; the proposal guard remains enabled.
 
 ### A3 — Land global `LoadRegistry`
-Route exact misses through the full `LoadKey`, single-flight lifecycle, bidirectional waiter indices, and targeted wake.
+Route exact misses through the full `LoadKey`, exact-key physical dedup lifecycle, bidirectional waiter indices, and targeted wake.
 Adapt existing GB10 reads/uploads while retaining storage/device separation.
 **Exit gate:** fake and integration tests prove one physical load per key, exact join accounting, safe cancellation, typed failure, stale-generation rejection, and no unrelated wakeups.
 
@@ -399,7 +427,7 @@ Allow independent ready cohorts to run while another transaction waits for read/
 Remove the serialization guard only after all prior gates pass.
 **Exit gate:** multiple proposal-enabled transactions survive mixed full/partial/zero acceptance, cancellation, read/upload/compute failure, stale completion, and memory pressure with exact parity and bounded credits; traces show targeted wake and measured cross-cohort overlap; disabling multi-outstanding restores the A5 behavior without changing semantics.
 
-## 10. Final architecture gate
+## 11. Final architecture gate
 
 The target is reached only when A0–A6 pass on fake providers and GB10; useful overlap additionally requires a critical-path DAG showing reduced uncovered wait on production-shaped traces.
 GB10 assumptions remain profile-specific, scaffolding is not implementation, and release claims/evidence remain governed by [ROADMAP](ROADMAP.md).

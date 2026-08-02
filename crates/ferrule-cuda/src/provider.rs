@@ -47,9 +47,9 @@ impl CudaProviderCatalog {
         let cutlass = self.cutlass;
 
         for (layer, requirements) in requirements.iter().enumerate() {
-            let layer_plan = model_plan
-                .layer_mut(layer)
-                .ok_or_else(|| Error::Internal(format!("kernel plan lost layer slot {layer}")))?;
+            let layer_plan = model_plan.layer_mut(layer).ok_or_else(|| Error::Internal {
+                message: format!("kernel plan lost layer slot {layer}"),
+            })?;
             for requirement in &requirements.linear_bundles {
                 require_cutlass_bundle(cutlass, requirement)?;
                 set_provider_operation(layer_plan, requirement.operation);
@@ -92,9 +92,9 @@ fn require_semantic_operation(
             crate::cutlass::CutlassKernelId::DsparkProposalHeadSm121
         }
         _ => {
-            return Err(Error::Internal(format!(
-                "no SM121 semantic provider binding for operation={operation:?}"
-            )));
+            return Err(Error::Internal {
+                message: format!("no SM121 semantic provider binding for operation={operation:?}"),
+            });
         }
     };
     require_kernel(provider, operation, kernel)
@@ -105,20 +105,24 @@ fn require_cutlass_bundle(
     requirement: &LinearBundleRequirement,
 ) -> Result<()> {
     if requirement.output_features.is_empty() || requirement.output_features.contains(&0) {
-        return Err(Error::Internal(format!(
-            "SM121 operation {:?} requires non-empty outputs",
-            requirement.operation
-        )));
+        return Err(Error::Internal {
+            message: format!(
+                "SM121 operation {:?} requires non-empty outputs",
+                requirement.operation
+            ),
+        });
     }
     match (requirement.operation, requirement.weight_layout) {
         (KernelOperation::MlaQueryAKv, WeightLayout::Fp8E4m3BlockScaled) => {
             if requirement.output_features.len() != 2
                 || !requirement.input_features.is_multiple_of(128)
             {
-                return Err(Error::Internal(format!(
-                    "SM121 FP8 QueryA+KV requires two outputs and K128, got K={} N={:?}",
-                    requirement.input_features, requirement.output_features
-                )));
+                return Err(Error::Internal {
+                    message: format!(
+                        "SM121 FP8 QueryA+KV requires two outputs and K128, got K={} N={:?}",
+                        requirement.input_features, requirement.output_features
+                    ),
+                });
             }
             require_kernel(
                 provider,
@@ -130,10 +134,12 @@ fn require_cutlass_bundle(
             if requirement.output_features.len() != 1
                 || !requirement.input_features.is_multiple_of(128)
             {
-                return Err(Error::Internal(format!(
-                    "SM121 FP8 QueryB requires one output and K128, got K={} N={:?}",
-                    requirement.input_features, requirement.output_features
-                )));
+                return Err(Error::Internal {
+                    message: format!(
+                        "SM121 FP8 QueryB requires one output and K128, got K={} N={:?}",
+                        requirement.input_features, requirement.output_features
+                    ),
+                });
             }
             require_kernel(
                 provider,
@@ -153,10 +159,14 @@ fn require_cutlass_bundle(
                     .iter()
                     .all(|features| features.is_multiple_of(4))
             {
-                return Err(Error::Internal(format!(
-                    "SM121 BF16 compressor shape is unsupported: operation={:?} K={} N={:?}",
-                    requirement.operation, requirement.input_features, requirement.output_features
-                )));
+                return Err(Error::Internal {
+                    message: format!(
+                        "SM121 BF16 compressor shape is unsupported: operation={:?} K={} N={:?}",
+                        requirement.operation,
+                        requirement.input_features,
+                        requirement.output_features
+                    ),
+                });
             }
             require_kernel(
                 provider,
@@ -164,10 +174,12 @@ fn require_cutlass_bundle(
                 crate::cutlass::CutlassKernelId::Bf16CompressorSm121,
             )
         }
-        _ => Err(Error::Internal(format!(
-            "no SM121 provider binding for operation={:?} layout={:?}",
-            requirement.operation, requirement.weight_layout
-        ))),
+        _ => Err(Error::Internal {
+            message: format!(
+                "no SM121 provider binding for operation={:?} layout={:?}",
+                requirement.operation, requirement.weight_layout
+            ),
+        }),
     }
 }
 
@@ -177,9 +189,9 @@ fn require_kernel(
     kernel: crate::cutlass::CutlassKernelId,
 ) -> Result<()> {
     if !provider.supports(kernel) {
-        return Err(Error::Internal(format!(
-            "required SM121 {operation:?} superkernel is not published"
-        )));
+        return Err(Error::Internal {
+            message: format!("required SM121 {operation:?} superkernel is not published"),
+        });
     }
     Ok(())
 }

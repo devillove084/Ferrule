@@ -48,7 +48,7 @@ fn common_checkpoint_and_shape_helpers_preserve_deepseek_context() {
     };
     assert_eq!(
         decode_vector_f32(&vector).unwrap_err().to_string(),
-        "Model: DeepSeek-V4 checkpoint vector 'norm.weight' expects 1D shape, got [1, 1]"
+        "model: DeepSeek-V4 checkpoint vector 'norm.weight' expects 1D shape, got [1, 1]"
     );
     assert_eq!(
         two_dim_shape_from_payload(&vector, "compressor ape").unwrap(),
@@ -60,11 +60,11 @@ fn common_checkpoint_and_shape_helpers_preserve_deepseek_context() {
         check_linear(2, "q_proj", &linear, 2, 4)
             .unwrap_err()
             .to_string(),
-        "Model: DeepSeek-V4 layer 2 q_proj shape mismatch: got [3, 4], expected [2, 4]"
+        "model: DeepSeek-V4 layer 2 q_proj shape mismatch: got [3, 4], expected [2, 4]"
     );
     assert_eq!(
         check_len(2, "input_norm", 3, 4).unwrap_err().to_string(),
-        "Model: DeepSeek-V4 layer 2 input_norm length mismatch: got 3, expected 4"
+        "model: DeepSeek-V4 layer 2 input_norm length mismatch: got 3, expected 4"
     );
 }
 

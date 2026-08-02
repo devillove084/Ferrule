@@ -83,19 +83,27 @@ impl SafeTensorsFile {
         let data: &[u8] = &mmap;
 
         if data.len() < 8 {
-            return Err(Error::Gguf("safetensors file too small".into()));
+            return Err(Error::Gguf {
+                message: "safetensors file too small".into(),
+            });
         }
 
         let header_size = u64::from_le_bytes(data[..8].try_into().unwrap()) as usize;
         if 8 + header_size > data.len() {
-            return Err(Error::Gguf("safetensors header exceeds file size".into()));
+            return Err(Error::Gguf {
+                message: "safetensors header exceeds file size".into(),
+            });
         }
 
-        let header_json = std::str::from_utf8(&data[8..8 + header_size])
-            .map_err(|e| Error::Gguf(format!("invalid UTF-8 header: {e}")))?;
+        let header_json =
+            std::str::from_utf8(&data[8..8 + header_size]).map_err(|e| Error::Gguf {
+                message: format!("invalid UTF-8 header: {e}"),
+            })?;
 
-        let header: serde_json::Value = serde_json::from_str(header_json)
-            .map_err(|e| Error::Gguf(format!("invalid JSON header: {e}")))?;
+        let header: serde_json::Value =
+            serde_json::from_str(header_json).map_err(|e| Error::Gguf {
+                message: format!("invalid JSON header: {e}"),
+            })?;
 
         // Data starts after header, aligned to 256 bytes (typical) or 8.
         let data_start = (8 + header_size + 7) & !7; // 8-byte align
@@ -233,8 +241,9 @@ pub struct SafeTensorsIndex {
 impl SafeTensorsIndex {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let json = std::fs::read_to_string(path.as_ref())?;
-        let parsed: serde_json::Value =
-            serde_json::from_str(&json).map_err(|e| Error::Gguf(format!("index JSON: {e}")))?;
+        let parsed: serde_json::Value = serde_json::from_str(&json).map_err(|e| Error::Gguf {
+            message: format!("index JSON: {e}"),
+        })?;
         let map = parsed["weight_map"]
             .as_object()
             .map(|o| {

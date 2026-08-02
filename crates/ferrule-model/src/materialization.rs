@@ -14,10 +14,12 @@ pub use source::{MaterializationSourceCatalog, MaterializationSourceEntry};
 use ferrule_common::LogicalDependency;
 use ferrule_common::{
     BackendId, CancellationReason, CompletionEvent, ContentHash, ContinuationId, DependencySet,
-    DestinationGeneration, DeviceId, Error, ExpertId, FailureReason, LayerId, LoadStage,
-    MaterializationKey, MaterializedResourceId, ModelInstanceId, OperationId, PayloadEncodingId,
-    RegisteredPinnedAlignedSlabLeaseDescriptor, ResidencyBinding, ResidencyLeaseSet, Result,
-    SourceGeneration, SourceIdentityHash, UploadFenceContract, ValidatedResidencyBinding,
+    DestinationGeneration, DeviceId, Error, ExpertId, FailureReason, IoProtocolError,
+    IoProtocolResult, LayerId, LoadStage, MaterializationKey, MaterializationPurpose,
+    MaterializationResolveResult, MaterializedResourceId, ModelInstanceId, OperationId,
+    PayloadEncodingId, RegisteredPinnedAlignedSlabLeaseDescriptor, ResidencyBinding,
+    ResidencyLeaseSet, Result, SourceGeneration, SourceIdentityHash, UploadFenceContract,
+    ValidatedResidencyBinding,
 };
 
 /// Versioned protocol format for exact HF safetensors expert payloads.
@@ -42,24 +44,24 @@ impl ResourceSource {
         generation: SourceGeneration,
     ) -> Result<Self> {
         if identity.is_zero() {
-            return Err(Error::Model(
-                "resource source identity hash must be non-zero".into(),
-            ));
+            return Err(Error::Model {
+                message: "resource source identity hash must be non-zero".into(),
+            });
         }
         if content_hash.is_zero() {
-            return Err(Error::Model(
-                "resource source content hash must be non-zero".into(),
-            ));
+            return Err(Error::Model {
+                message: "resource source content hash must be non-zero".into(),
+            });
         }
         if encoding.get() == 0 {
-            return Err(Error::Model(
-                "resource payload encoding must be non-zero".into(),
-            ));
+            return Err(Error::Model {
+                message: "resource payload encoding must be non-zero".into(),
+            });
         }
         if generation.is_zero() {
-            return Err(Error::Model(
-                "resource source generation must be non-zero".into(),
-            ));
+            return Err(Error::Model {
+                message: "resource source generation must be non-zero".into(),
+            });
         }
         Ok(Self {
             identity,
@@ -100,9 +102,9 @@ pub struct MaterializationPlacement {
 impl MaterializationPlacement {
     pub fn new(model: ModelInstanceId, backend: BackendId, device: DeviceId) -> Result<Self> {
         if model.is_zero() {
-            return Err(Error::Model(
-                "materialization model instance must be non-zero".into(),
-            ));
+            return Err(Error::Model {
+                message: "materialization model instance must be non-zero".into(),
+            });
         }
         Ok(Self {
             model,
@@ -200,7 +202,7 @@ impl MaterializationRequest {
         )?)
     }
 
-    pub fn validate_key(self, key: MaterializationKey) -> Result<()> {
+    pub fn validate_key(self, key: MaterializationKey) -> IoProtocolResult<()> {
         key.validate()?;
         let fields = [
             ("model instance", key.model() == self.model),
@@ -222,9 +224,7 @@ impl MaterializationRequest {
             ),
         ];
         if let Some((field, _)) = fields.into_iter().find(|(_, matches)| !matches) {
-            return Err(Error::Execution(format!(
-                "materialization load key {field} does not match the exact post-router request"
-            )));
+            return Err(IoProtocolError::MaterializationRequestMismatch { field });
         }
         Ok(())
     }
@@ -271,14 +271,12 @@ impl MaterializationTransfer {
         key: MaterializationKey,
         binding: ResidencyBinding,
         evicted: Option<MaterializationKey>,
-    ) -> Result<Self> {
+    ) -> IoProtocolResult<Self> {
         ValidatedResidencyBinding::new(key, binding)?;
         if let Some(evicted) = evicted {
             evicted.validate()?;
             if evicted == key {
-                return Err(Error::Execution(
-                    "physical materialization reservation cannot evict its own key".into(),
-                ));
+                return Err(IoProtocolError::SelfEviction { key: Box::new(key) });
             }
         }
         Ok(Self {
@@ -309,7 +307,7 @@ pub struct MaterializationResident {
 }
 
 impl MaterializationResident {
-    pub fn new(key: MaterializationKey, binding: ResidencyBinding) -> Result<Self> {
+    pub fn new(key: MaterializationKey, binding: ResidencyBinding) -> IoProtocolResult<Self> {
         ValidatedResidencyBinding::new(key, binding)?;
         Ok(Self { key, binding })
     }
@@ -368,32 +366,28 @@ impl PhysicalMaterializationOperationReservation {
         binding: ResidencyBinding,
         slabs: impl Into<Box<[RegisteredPinnedAlignedSlabLeaseDescriptor]>>,
         upload_fence: UploadFenceContract,
-    ) -> Result<Self> {
+    ) -> IoProtocolResult<Self> {
         ValidatedResidencyBinding::new(key, binding)?;
         let slabs = slabs.into();
         if slabs.is_empty() {
-            return Err(Error::Execution(
-                "physical materialization operation requires at least one registered pinned slab"
-                    .into(),
-            ));
+            return Err(IoProtocolError::EmptySlabSet);
         }
         for slab in &slabs {
             if slab.operation() != upload_fence.operation
                 || slab.source_generation() != key.source_generation()
                 || slab.destination_generation() != key.destination_generation()
             {
-                return Err(Error::Execution(
-                    "physical materialization slab identity does not match its operation or key"
-                        .into(),
-                ));
+                return Err(IoProtocolError::PhysicalReservationMismatch {
+                    field: "pinned slab operation/generation",
+                });
             }
         }
         if upload_fence.destination_generation != key.destination_generation()
             || upload_fence.fence.is_zero()
         {
-            return Err(Error::Execution(
-                "physical materialization upload fence does not match its key".into(),
-            ));
+            return Err(IoProtocolError::PhysicalReservationMismatch {
+                field: "upload fence generation/identity",
+            });
         }
         Ok(Self {
             key,
@@ -443,10 +437,10 @@ impl PhysicalMaterializationTopology {
         if !stage_limits.capacity.is_empty()
             && (resident_capacity_bytes == 0 || residency_lease_slots_per_continuation == 0)
         {
-            return Err(Error::Execution(
+            return Err(Error::Execution { message:
                 "physical materialization topology requires non-zero resident and residency-lease capacity"
                     .into(),
-            ));
+             });
         }
         Ok(Self {
             stage_limits,
@@ -486,12 +480,21 @@ pub trait MaterializationProvider: std::fmt::Debug + Send {
     fn prepare(
         &mut self,
         request: MaterializationRequest,
+        purpose: MaterializationPurpose,
     ) -> std::result::Result<MaterializationPreparation, FailureReason>;
 
     /// Re-read provider-owned physical state for a key previously returned by
-    /// `prepare`. No runtime cache may synthesize this result.
+    /// `prepare`. This is observation-only and must not acquire execution custody.
     fn prepared(
-        &self,
+        &mut self,
+        key: MaterializationKey,
+    ) -> std::result::Result<MaterializationPreparation, FailureReason>;
+
+    /// Promote an existing prefetch preparation or residency to execution custody.
+    /// The returned key and binding must be exactly unchanged. Promotion is
+    /// idempotent and never submits a second physical transfer.
+    fn promote_to_execution(
+        &mut self,
         key: MaterializationKey,
     ) -> std::result::Result<MaterializationPreparation, FailureReason>;
 
@@ -571,7 +574,10 @@ pub trait MaterializationResolver: Send {
     /// resolver instance.
     fn placement(&self) -> MaterializationPlacement;
 
-    fn resolve(&mut self, request: MaterializationRequest) -> Result<MaterializationKey>;
+    fn resolve(
+        &mut self,
+        request: MaterializationRequest,
+    ) -> MaterializationResolveResult<MaterializationKey>;
 }
 
 /// One unresolved resource-dependency description retained by a model continuation.
@@ -617,10 +623,12 @@ impl ContinuationDependencyState {
 
     pub fn replace_unresolved(&mut self, unresolved: DependencySet) -> Result<()> {
         if self.unresolved.is_some() {
-            return Err(Error::Execution(format!(
-                "continuation {} still owns an unresolved dependency set",
-                self.continuation.get()
-            )));
+            return Err(Error::Execution {
+                message: format!(
+                    "continuation {} still owns an unresolved dependency set",
+                    self.continuation.get()
+                ),
+            });
         }
         unresolved.validate()?;
         self.unresolved = Some(unresolved);
@@ -636,17 +644,19 @@ impl ContinuationDependencyState {
         leases: &ResidencyLeaseSet,
     ) -> Result<()> {
         if continuation != self.continuation {
-            return Err(Error::Execution(format!(
-                "continuation identity mismatch: expected {}, got {}",
-                self.continuation.get(),
-                continuation.get()
-            )));
+            return Err(Error::Execution {
+                message: format!(
+                    "continuation identity mismatch: expected {}, got {}",
+                    self.continuation.get(),
+                    continuation.get()
+                ),
+            });
         }
-        let unresolved = self.unresolved.as_ref().ok_or_else(|| {
-            Error::Execution(format!(
+        let unresolved = self.unresolved.as_ref().ok_or_else(|| Error::Execution {
+            message: format!(
                 "continuation {} has no unresolved dependency set; refusing resume replay",
                 self.continuation.get()
-            ))
+            ),
         })?;
         let required = unresolved
             .iter()
@@ -657,10 +667,12 @@ impl ContinuationDependencyState {
                 .iter()
                 .any(|key| leases.binding_for(*key).is_none())
         {
-            return Err(Error::Execution(format!(
-                "continuation {} lease set does not exactly satisfy its unresolved resource dependencies",
-                self.continuation.get()
-            )));
+            return Err(Error::Execution {
+                message: format!(
+                    "continuation {} lease set does not exactly satisfy its unresolved resource dependencies",
+                    self.continuation.get()
+                ),
+            });
         }
         self.unresolved = None;
         Ok(())
@@ -669,9 +681,9 @@ impl ContinuationDependencyState {
 
 pub(crate) fn validate_continuation_id(continuation: ContinuationId) -> Result<()> {
     if continuation.is_zero() {
-        Err(Error::Execution(
-            "model continuation ID must be non-zero".into(),
-        ))
+        Err(Error::Execution {
+            message: "model continuation ID must be non-zero".into(),
+        })
     } else {
         Ok(())
     }
@@ -706,9 +718,9 @@ pub fn resolve_stage_resources(
             || request.backend() != placement.backend()
             || request.device() != placement.device()
         {
-            return Err(Error::Execution(
-                "materialized stage request does not match resolver placement".into(),
-            ));
+            return Err(Error::Execution {
+                message: "materialized stage request does not match resolver placement".into(),
+            });
         }
         let key = resolver.resolve(request)?;
         resolved.push(crate::execution::ResolvedStageResource::new(resource, key)?);
@@ -837,11 +849,16 @@ mod tests {
             .unwrap()
         }
 
-        fn resolve(&mut self, request: MaterializationRequest) -> Result<MaterializationKey> {
+        fn resolve(
+            &mut self,
+            request: MaterializationRequest,
+        ) -> MaterializationResolveResult<MaterializationKey> {
             let key = if let Some(key) = self.reservations.get(&request) {
                 *key
             } else {
-                let key = request.materialization_key(DestinationGeneration::new(20))?;
+                let key = request
+                    .materialization_key(DestinationGeneration::new(20))
+                    .expect("mock resolver request must produce a valid key");
                 self.reservations.insert(request, key);
                 key
             };
@@ -976,13 +993,19 @@ mod tests {
                 .unwrap()
             }
 
-            fn resolve(&mut self, request: MaterializationRequest) -> Result<MaterializationKey> {
-                MaterializationRequest::for_placement(
+            fn resolve(
+                &mut self,
+                request: MaterializationRequest,
+            ) -> MaterializationResolveResult<MaterializationKey> {
+                let wrong = MaterializationRequest::for_placement(
                     self.placement(),
                     source(91, 92, 93, 94),
                     request.resource(),
-                )?
+                )
+                .expect("wrong-key test request is valid")
                 .materialization_key(DestinationGeneration::new(20))
+                .expect("wrong-key test generation is valid");
+                Ok(wrong)
             }
         }
 

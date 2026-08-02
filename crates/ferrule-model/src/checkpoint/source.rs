@@ -29,24 +29,25 @@ pub struct CheckpointSourceFileIdentity {
 
 impl CheckpointSourceFileIdentity {
     pub fn capture(catalog_path: &Path) -> Result<Self> {
-        let canonical_path = std::fs::canonicalize(catalog_path).map_err(|error| {
-            Error::Model(format!(
+        let canonical_path = std::fs::canonicalize(catalog_path).map_err(|error| Error::Model {
+            message: format!(
                 "canonicalize checkpoint source '{}': {error}",
                 catalog_path.display()
-            ))
+            ),
         })?;
-        let metadata = std::fs::metadata(&canonical_path).map_err(|error| {
-            Error::Model(format!(
+        let metadata = std::fs::metadata(&canonical_path).map_err(|error| Error::Model {
+            message: format!(
                 "read checkpoint source metadata '{}': {error}",
                 canonical_path.display()
-            ))
+            ),
         })?;
-        let file_identity = CheckpointFileIdentity::from_metadata(&metadata).map_err(|error| {
-            Error::Model(format!(
-                "capture checkpoint source identity '{}': {error}",
-                canonical_path.display()
-            ))
-        })?;
+        let file_identity =
+            CheckpointFileIdentity::from_metadata(&metadata).map_err(|error| Error::Model {
+                message: format!(
+                    "capture checkpoint source identity '{}': {error}",
+                    canonical_path.display()
+                ),
+            })?;
         Ok(Self {
             catalog_path: catalog_path.to_path_buf(),
             canonical_path,
@@ -185,11 +186,11 @@ impl CheckpointSourceCatalog {
             .iter()
             .zip(&semantics)
             .map(|(tensor, semantic)| {
-                let source_file = self.files.get(&tensor.path).ok_or_else(|| {
-                    Error::Model(format!(
+                let source_file = self.files.get(&tensor.path).ok_or_else(|| Error::Model {
+                    message: format!(
                         "checkpoint source catalog has no snapshot for '{}'",
                         tensor.path.display()
-                    ))
+                    ),
                 })?;
                 Ok(CheckpointSourceTensor {
                     semantic,
@@ -206,12 +207,15 @@ impl CheckpointSourceCatalog {
         let source_files = tensors
             .iter()
             .map(|tensor| {
-                self.files.get(&tensor.path).cloned().ok_or_else(|| {
-                    Error::Model(format!(
-                        "checkpoint source catalog has no snapshot for '{}'",
-                        tensor.path.display()
-                    ))
-                })
+                self.files
+                    .get(&tensor.path)
+                    .cloned()
+                    .ok_or_else(|| Error::Model {
+                        message: format!(
+                            "checkpoint source catalog has no snapshot for '{}'",
+                            tensor.path.display()
+                        ),
+                    })
             })
             .collect::<Result<BTreeSet<_>>>()?
             .into_iter()
@@ -249,14 +253,14 @@ pub(crate) fn checkpoint_resource_source(
     tensors: &[CheckpointSourceTensor<'_>],
 ) -> Result<ResourceSource> {
     if domain.is_empty() {
-        return Err(Error::Model(
-            "checkpoint resource identity domain must be non-empty".into(),
-        ));
+        return Err(Error::Model {
+            message: "checkpoint resource identity domain must be non-empty".into(),
+        });
     }
     if tensors.is_empty() {
-        return Err(Error::Model(
-            "checkpoint resource identity requires at least one tensor".into(),
-        ));
+        return Err(Error::Model {
+            message: "checkpoint resource identity requires at least one tensor".into(),
+        });
     }
 
     let mut content = Sha256::new();

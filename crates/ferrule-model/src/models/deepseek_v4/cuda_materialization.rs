@@ -27,9 +27,9 @@ use ferrule_common::{
 use crate::checkpoint::CheckpointReadPlan;
 use crate::materialization::{
     MaterializationPlacement, MaterializationPreparation, MaterializationProvider,
-    MaterializationRequest, MaterializationResident, MaterializationSourceCatalog,
-    MaterializationTransfer, PhysicalMaterializationOperationReservation,
-    PhysicalMaterializationTopology,
+    MaterializationPurpose, MaterializationRequest, MaterializationResident,
+    MaterializationSourceCatalog, MaterializationTransfer,
+    PhysicalMaterializationOperationReservation, PhysicalMaterializationTopology,
 };
 use crate::moe::streaming::{
     ExpertId, ExpertLinearFormat, ExpertLoadSource, ExpertMatrixKind, ExpertStreamingReader,
@@ -89,9 +89,9 @@ impl DeepSeekV4SharedExpertSubsystem {
     ) -> Result<()> {
         let mut state = self.lock();
         if state.residency.is_some() {
-            return Err(Error::Execution(
-                "DeepSeek-V4 physical residency control is already installed".into(),
-            ));
+            return Err(Error::Execution {
+                message: "DeepSeek-V4 physical residency control is already installed".into(),
+            });
         }
         state.residency = Some(control);
         Ok(())
@@ -111,14 +111,14 @@ impl DeepSeekV4SharedExpertSubsystem {
     pub(super) fn resident_experts_for_layer(&self, layer: usize) -> Result<BTreeSet<usize>> {
         let state = self.lock();
         if state.poisoned_layers.contains(&layer) {
-            return Err(Error::Execution(format!(
-                "DeepSeek-V4 published expert layer {layer} is poisoned"
-            )));
+            return Err(Error::Execution {
+                message: format!("DeepSeek-V4 published expert layer {layer} is poisoned"),
+            });
         }
         if !state.tables.contains_key(&layer) {
-            return Err(Error::Execution(format!(
-                "DeepSeek-V4 published expert table is missing layer {layer}"
-            )));
+            return Err(Error::Execution {
+                message: format!("DeepSeek-V4 published expert table is missing layer {layer}"),
+            });
         }
         Ok(state
             .experts
@@ -130,18 +130,16 @@ impl DeepSeekV4SharedExpertSubsystem {
     pub(super) fn layer_slot_capacity(&self, layer: usize) -> Result<usize> {
         let state = self.lock();
         if state.poisoned_layers.contains(&layer) {
-            return Err(Error::Execution(format!(
-                "DeepSeek-V4 published expert layer {layer} is poisoned"
-            )));
+            return Err(Error::Execution {
+                message: format!("DeepSeek-V4 published expert layer {layer} is poisoned"),
+            });
         }
         state
             .tables
             .get(&layer)
             .map(|table| table.host().slot_capacity())
-            .ok_or_else(|| {
-                Error::Execution(format!(
-                    "DeepSeek-V4 published expert table is missing layer {layer}"
-                ))
+            .ok_or_else(|| Error::Execution {
+                message: format!("DeepSeek-V4 published expert table is missing layer {layer}"),
             })
     }
 
@@ -157,14 +155,12 @@ impl DeepSeekV4SharedExpertSubsystem {
     ) -> Result<T> {
         let state = self.lock();
         if state.poisoned_layers.contains(&layer) {
-            return Err(Error::Execution(format!(
-                "DeepSeek-V4 published expert layer {layer} is poisoned"
-            )));
+            return Err(Error::Execution {
+                message: format!("DeepSeek-V4 published expert layer {layer} is poisoned"),
+            });
         }
-        let table = state.tables.get(&layer).ok_or_else(|| {
-            Error::Execution(format!(
-                "DeepSeek-V4 published expert table is missing layer {layer}"
-            ))
+        let table = state.tables.get(&layer).ok_or_else(|| Error::Execution {
+            message: format!("DeepSeek-V4 published expert table is missing layer {layer}"),
         })?;
         validate_published_lease_window(layer, selected, leases, |expert_index| {
             let expert = ExpertId::new(layer, expert_index);
@@ -191,11 +187,11 @@ impl DeepSeekV4SharedExpertSubsystem {
         })?;
 
         let first = ExpertId::new(layer, selected[0]);
-        let frame = state.experts.get(&first).ok_or_else(|| {
-            Error::Execution(format!(
+        let frame = state.experts.get(&first).ok_or_else(|| Error::Execution {
+            message: format!(
                 "DeepSeek-V4 published expert frame is unavailable for {}:{}",
                 first.layer, first.expert
-            ))
+            ),
         })?;
         execute(table, frame)
     }
@@ -216,43 +212,54 @@ fn validate_published_lease_window(
     mut published: impl FnMut(usize) -> Option<PublishedExpertBinding>,
 ) -> Result<()> {
     if selected.is_empty() || leases.len() != selected.len() {
-        return Err(Error::Execution(format!(
-            "DeepSeek-V4 expert lease window mismatch: selected={} leases={}",
-            selected.len(),
-            leases.len()
-        )));
+        return Err(Error::Execution {
+            message: format!(
+                "DeepSeek-V4 expert lease window mismatch: selected={} leases={}",
+                selected.len(),
+                leases.len()
+            ),
+        });
     }
-    let layer_u32 = u32::try_from(layer)
-        .map_err(|_| Error::Execution("expert layer exceeds u32 ABI".into()))?;
+    let layer_u32 = u32::try_from(layer).map_err(|_| Error::Execution {
+        message: "expert layer exceeds u32 ABI".into(),
+    })?;
     let mut selected_set = BTreeSet::new();
     for &expert_index in selected {
         if !selected_set.insert(expert_index) {
-            return Err(Error::Execution(format!(
-                "DeepSeek-V4 selected expert window contains duplicate {layer}:{expert_index}"
-            )));
+            return Err(Error::Execution {
+                message: format!(
+                    "DeepSeek-V4 selected expert window contains duplicate {layer}:{expert_index}"
+                ),
+            });
         }
     }
     for candidate in leases.bindings() {
         let key = candidate.key();
         let (key_layer, key_expert) =
-            key.resource().routed_expert_coordinates().ok_or_else(|| {
-                Error::Execution(
-                    "DeepSeek-V4 expert lease window received a non-routed-expert resource".into(),
-                )
-            })?;
-        let expert_index = usize::try_from(key_expert.get())
-            .map_err(|_| Error::Execution("expert index exceeds usize".into()))?;
+            key.resource()
+                .routed_expert_coordinates()
+                .ok_or_else(|| Error::Execution {
+                    message:
+                        "DeepSeek-V4 expert lease window received a non-routed-expert resource"
+                            .into(),
+                })?;
+        let expert_index = usize::try_from(key_expert.get()).map_err(|_| Error::Execution {
+            message: "expert index exceeds usize".into(),
+        })?;
         if key_layer.get() != layer_u32 || !selected_set.contains(&expert_index) {
-            return Err(Error::Execution(format!(
-                "DeepSeek-V4 lease binding {}:{} is outside the selected expert window",
-                key_layer.get(),
-                key_expert.get()
-            )));
+            return Err(Error::Execution {
+                message: format!(
+                    "DeepSeek-V4 lease binding {}:{} is outside the selected expert window",
+                    key_layer.get(),
+                    key_expert.get()
+                ),
+            });
         }
     }
     for &expert_index in selected {
-        let expert_u32 = u32::try_from(expert_index)
-            .map_err(|_| Error::Execution("expert index exceeds u32 ABI".into()))?;
+        let expert_u32 = u32::try_from(expert_index).map_err(|_| Error::Execution {
+            message: "expert index exceeds u32 ABI".into(),
+        })?;
         let mut candidates = leases.bindings().iter().filter(|candidate| {
             candidate
                 .key()
@@ -262,20 +269,20 @@ fn validate_published_lease_window(
                     key_layer.get() == layer_u32 && key_expert.get() == expert_u32
                 })
         });
-        let candidate = candidates.next().ok_or_else(|| {
-            Error::Execution(format!(
+        let candidate = candidates.next().ok_or_else(|| Error::Execution {
+            message: format!(
                 "DeepSeek-V4 selected expert {layer}:{expert_index} has no lease binding"
-            ))
+            ),
         })?;
         if candidates.next().is_some() {
-            return Err(Error::Execution(format!(
-                "DeepSeek-V4 selected expert {layer}:{expert_index} has duplicate lease bindings"
-            )));
+            return Err(Error::Execution {
+                message: format!(
+                    "DeepSeek-V4 selected expert {layer}:{expert_index} has duplicate lease bindings"
+                ),
+            });
         }
-        let published = published(expert_index).ok_or_else(|| {
-            Error::Execution(format!(
-                "DeepSeek-V4 expert {layer}:{expert_index} is not published"
-            ))
+        let published = published(expert_index).ok_or_else(|| Error::Execution {
+            message: format!("DeepSeek-V4 expert {layer}:{expert_index} is not published"),
         })?;
         let binding = candidate.binding();
         if !published.frame_published
@@ -283,9 +290,11 @@ fn validate_published_lease_window(
             || binding.slot != published.slot
             || binding.generation != published.generation
         {
-            return Err(Error::Execution(format!(
-                "DeepSeek-V4 expert {layer}:{expert_index} lease does not match the published key/slot/generation"
-            )));
+            return Err(Error::Execution {
+                message: format!(
+                    "DeepSeek-V4 expert {layer}:{expert_index} lease does not match the published key/slot/generation"
+                ),
+            });
         }
     }
     Ok(())
@@ -318,6 +327,7 @@ struct SlotReservation {
     pinned_plan: PinnedExpertLoadPlan,
     resource_plan: MaterializationResourcePlan,
     prepared: PreparedExpertInstall,
+    purpose: MaterializationPurpose,
     binding: ResidencyBinding,
     evicted: Option<MaterializationKey>,
 }
@@ -329,6 +339,7 @@ struct MaterializationOperation {
     read_plan: CheckpointReadPlan,
     resource_plan: MaterializationResourcePlan,
     prepared: Option<PreparedExpertInstall>,
+    purpose: MaterializationPurpose,
     binding: ResidencyBinding,
     evicted: Option<MaterializationKey>,
     pending_terminal: Option<CompletionOutcome>,
@@ -372,9 +383,9 @@ enum SelectedLeaseRelease {
 impl SelectedLeaseTracker {
     fn begin_pending(&mut self, key: MaterializationKey) -> std::result::Result<(), FailureReason> {
         if self.ownership.contains_key(&key) {
-            return Err(FailureReason::ProtocolViolation(
-                "selected expert already has physical execution ownership".into(),
-            ));
+            return Err(FailureReason::ContractViolation {
+                message: "selected expert already has physical execution ownership".into(),
+            });
         }
         self.ownership.insert(
             key,
@@ -391,16 +402,17 @@ impl SelectedLeaseTracker {
         key: MaterializationKey,
         operation: OperationId,
     ) -> std::result::Result<(), FailureReason> {
-        let ownership = self.ownership.get_mut(&key).ok_or_else(|| {
-            FailureReason::ProtocolViolation(
-                "prepared selected expert has no physical execution ownership".into(),
-            )
-        })?;
+        let ownership =
+            self.ownership
+                .get_mut(&key)
+                .ok_or_else(|| FailureReason::ContractViolation {
+                    message: "prepared selected expert has no physical execution ownership".into(),
+                })?;
         if ownership.operation.is_some() || matches!(ownership.state, SelectedLeaseState::Active(_))
         {
-            return Err(FailureReason::ProtocolViolation(
-                "selected expert execution ownership already has an operation".into(),
-            ));
+            return Err(FailureReason::ContractViolation {
+                message: "selected expert execution ownership already has an operation".into(),
+            });
         }
         ownership.operation = Some(operation);
         Ok(())
@@ -412,9 +424,9 @@ impl SelectedLeaseTracker {
         lease: ExpertLease,
     ) -> std::result::Result<(), FailureReason> {
         if self.ownership.contains_key(&key) {
-            return Err(FailureReason::ProtocolViolation(
-                "selected resident expert already has physical execution ownership".into(),
-            ));
+            return Err(FailureReason::ContractViolation {
+                message: "selected resident expert already has physical execution ownership".into(),
+            });
         }
         self.ownership.insert(
             key,
@@ -432,15 +444,17 @@ impl SelectedLeaseTracker {
         operation: OperationId,
         lease: ExpertLease,
     ) -> std::result::Result<SelectedLeasePublication, FailureReason> {
-        let ownership = self.ownership.get_mut(&key).ok_or_else(|| {
-            FailureReason::ProtocolViolation(
-                "selected expert publication has no pending execution ownership".into(),
-            )
-        })?;
+        let ownership =
+            self.ownership
+                .get_mut(&key)
+                .ok_or_else(|| FailureReason::ContractViolation {
+                    message: "selected expert publication has no pending execution ownership"
+                        .into(),
+                })?;
         if ownership.operation != Some(operation) {
-            return Err(FailureReason::ProtocolViolation(
-                "selected expert publication operation is stale".into(),
-            ));
+            return Err(FailureReason::ContractViolation {
+                message: "selected expert publication operation is stale".into(),
+            });
         }
         match ownership.state {
             SelectedLeaseState::Pending => {
@@ -451,10 +465,23 @@ impl SelectedLeaseTracker {
                 ownership.state = SelectedLeaseState::Active(lease);
                 Ok(SelectedLeasePublication::ReleaseImmediately)
             }
-            SelectedLeaseState::Active(_) => Err(FailureReason::ProtocolViolation(
-                "selected expert publication replaced an active execution lease".into(),
-            )),
+            SelectedLeaseState::Active(_) => Err(FailureReason::ContractViolation {
+                message: "selected expert publication replaced an active execution lease".into(),
+            }),
         }
+    }
+
+    fn retain_execution(
+        &mut self,
+        key: MaterializationKey,
+    ) -> std::result::Result<bool, FailureReason> {
+        let Some(ownership) = self.ownership.get_mut(&key) else {
+            return Ok(false);
+        };
+        if matches!(ownership.state, SelectedLeaseState::ReleaseRequested) {
+            ownership.state = SelectedLeaseState::Pending;
+        }
+        Ok(true)
     }
 
     fn request_release(&mut self, key: MaterializationKey) -> SelectedLeaseRelease {
@@ -615,9 +642,9 @@ impl CudaExpertUploadTicket {
         self.gate.take();
         self.up.take();
         self.down.take();
-        self.frame
-            .take()
-            .ok_or_else(|| Error::Internal("CUDA expert upload lost its frame".into()))
+        self.frame.take().ok_or_else(|| Error::Internal {
+            message: "CUDA expert upload lost its frame".into(),
+        })
     }
 }
 
@@ -713,9 +740,9 @@ impl DeepSeekV4CudaMaterializationOwner {
         control: Box<dyn ExpertResidencyControl>,
     ) -> Result<()> {
         if control.requirements().model_instance != self.placement.model().get() {
-            return Err(Error::Execution(
-                "DeepSeek-V4 physical residency model namespace mismatch".into(),
-            ));
+            return Err(Error::Execution {
+                message: "DeepSeek-V4 physical residency model namespace mismatch".into(),
+            });
         }
         self.shared.install_residency_control(control)
     }
@@ -752,29 +779,31 @@ impl DeepSeekV4CudaMaterializationProvider {
             match entry.descriptor() {
                 DeepSeekV4InstallDescriptor::StaticTensorBundle(_) => {
                     if entry.resource().routed_expert_coordinates().is_some() {
-                        return Err(Error::Model(
+                        return Err(Error::Model { message:
                             "DeepSeek-V4 static tensor-bundle descriptor is bound to a routed-expert resource"
                                 .into(),
-                        ));
+                         });
                     }
                 }
                 DeepSeekV4InstallDescriptor::RoutedExpert(source) => {
                     let (layer, _) =
                         entry.resource().routed_expert_coordinates().ok_or_else(|| {
-                            Error::Model(
+                            Error::Model { message:
                                 "DeepSeek-V4 routed-expert install descriptor is bound to a non-expert resource"
                                     .into(),
-                            )
+                             }
                         })?;
-                    let layer = usize::try_from(layer.get()).map_err(|_| {
-                        Error::Model("DeepSeek-V4 routed-expert layer exceeds usize".into())
+                    let layer = usize::try_from(layer.get()).map_err(|_| Error::Model {
+                        message: "DeepSeek-V4 routed-expert layer exceeds usize".into(),
                     })?;
                     let bytes = source.bytes();
                     if bytes == 0 || bytes != entry.read_plan().storage_bytes() {
-                        return Err(Error::Model(format!(
-                            "DeepSeek-V4 routed-expert source/read size mismatch at layer {layer}: source={bytes} read={}",
-                            entry.read_plan().storage_bytes()
-                        )));
+                        return Err(Error::Model {
+                            message: format!(
+                                "DeepSeek-V4 routed-expert source/read size mismatch at layer {layer}: source={bytes} read={}",
+                                entry.read_plan().storage_bytes()
+                            ),
+                        });
                     }
                     routed_frame_bytes
                         .entry(layer)
@@ -791,52 +820,71 @@ impl DeepSeekV4CudaMaterializationProvider {
         let mut residency_lease_slots_per_continuation = 0u64;
         for &(layer, slots) in layer_slot_capacities {
             if slots == 0 || tables.contains_key(&layer) {
-                return Err(Error::Model(format!(
-                    "invalid or duplicate DeepSeek-V4 physical expert layer capacity {layer}:{slots}"
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "invalid or duplicate DeepSeek-V4 physical expert layer capacity {layer}:{slots}"
+                    ),
+                });
             }
             let layer_frame_bytes = routed_frame_bytes.get(&layer).copied().ok_or_else(|| {
-                Error::Model(format!(
+                Error::Model { message: format!(
                     "DeepSeek-V4 CUDA materialization catalog has no routed experts for layer {layer}"
-                ))
+                ) }
             })?;
-            let slots_u64 = u64::try_from(slots)
-                .map_err(|_| Error::Model("physical expert slot capacity exceeds u64".into()))?;
+            let slots_u64 = u64::try_from(slots).map_err(|_| Error::Model {
+                message: "physical expert slot capacity exceeds u64".into(),
+            })?;
             resident_frame_bytes = resident_frame_bytes
                 .checked_add(layer_frame_bytes.checked_mul(slots_u64).ok_or_else(|| {
-                    Error::Model("physical expert resident byte capacity overflow".into())
+                    Error::Model {
+                        message: "physical expert resident byte capacity overflow".into(),
+                    }
                 })?)
-                .ok_or_else(|| {
-                    Error::Model("physical expert resident byte capacity overflow".into())
+                .ok_or_else(|| Error::Model {
+                    message: "physical expert resident byte capacity overflow".into(),
                 })?;
             maximum_frame_bytes = maximum_frame_bytes.max(layer_frame_bytes);
             residency_lease_slots_per_continuation =
                 residency_lease_slots_per_continuation.max(slots_u64);
-            resident_capacity = resident_capacity
-                .checked_add(slots)
-                .ok_or_else(|| Error::Model("physical expert frame capacity overflow".into()))?;
+            resident_capacity =
+                resident_capacity
+                    .checked_add(slots)
+                    .ok_or_else(|| Error::Model {
+                        message: "physical expert frame capacity overflow".into(),
+                    })?;
             tables.insert(layer, ops.expert_slot_table(expert_capacity, slots)?);
         }
         if let Some(layer) = routed_frame_bytes
             .keys()
             .find(|layer| !tables.contains_key(layer))
         {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 CUDA materialization catalog has no slot capacity for routed-expert layer {layer}"
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 CUDA materialization catalog has no slot capacity for routed-expert layer {layer}"
+                ),
+            });
         }
-        let shadow = usize::try_from(limits.capacity.upload_slots.max(1))
-            .map_err(|_| Error::Model("physical expert upload slots exceed usize".into()))?;
-        let shadow_u64 = u64::try_from(shadow)
-            .map_err(|_| Error::Model("physical expert shadow capacity exceeds u64".into()))?;
+        let shadow =
+            usize::try_from(limits.capacity.upload_slots.max(1)).map_err(|_| Error::Model {
+                message: "physical expert upload slots exceed usize".into(),
+            })?;
+        let shadow_u64 = u64::try_from(shadow).map_err(|_| Error::Model {
+            message: "physical expert shadow capacity exceeds u64".into(),
+        })?;
         let resident_capacity_bytes = resident_frame_bytes
             .checked_add(maximum_frame_bytes.checked_mul(shadow_u64).ok_or_else(|| {
-                Error::Model("physical expert shadow byte capacity overflow".into())
+                Error::Model {
+                    message: "physical expert shadow byte capacity overflow".into(),
+                }
             })?)
-            .ok_or_else(|| Error::Model("physical expert frame byte capacity overflow".into()))?;
+            .ok_or_else(|| Error::Model {
+                message: "physical expert frame byte capacity overflow".into(),
+            })?;
         let frame_capacity = resident_capacity
             .checked_add(shadow)
-            .ok_or_else(|| Error::Model("physical expert frame capacity overflow".into()))?;
+            .ok_or_else(|| Error::Model {
+                message: "physical expert frame capacity overflow".into(),
+            })?;
         let topology = PhysicalMaterializationTopology::new(
             limits,
             resident_capacity_bytes,
@@ -879,29 +927,39 @@ impl DeepSeekV4CudaMaterializationProvider {
             || request.backend() != self.placement.backend()
             || request.device() != self.placement.device()
         {
-            return Err(FailureReason::ProtocolViolation(
-                "DeepSeek-V4 request placement mismatch".into(),
-            ));
+            return Err(FailureReason::ContractViolation {
+                message: "DeepSeek-V4 request placement mismatch".into(),
+            });
         }
         let entry = self.sources.resolve(request)?;
         let install_source = match entry.descriptor() {
             DeepSeekV4InstallDescriptor::RoutedExpert(source) => source.clone(),
             DeepSeekV4InstallDescriptor::StaticTensorBundle(_) => {
-                return Err(FailureReason::ProtocolViolation(
-                    "DeepSeek-V4 static CUDA tensor-bundle installation is not implemented".into(),
-                ));
+                return Err(FailureReason::ContractViolation {
+                    message:
+                        "DeepSeek-V4 static CUDA tensor-bundle installation is not implemented"
+                            .into(),
+                });
             }
         };
         let (protocol_layer, protocol_expert) =
             request.routed_expert_coordinates().ok_or_else(|| {
-                FailureReason::ProtocolViolation(
-                    "DeepSeek-V4 routed-expert descriptor is bound to a non-expert resource".into(),
-                )
+                FailureReason::ContractViolation {
+                    message:
+                        "DeepSeek-V4 routed-expert descriptor is bound to a non-expert resource"
+                            .into(),
+                }
             })?;
-        let layer = usize::try_from(protocol_layer.get())
-            .map_err(|_| FailureReason::ProtocolViolation("expert layer exceeds usize".into()))?;
-        let expert_index = usize::try_from(protocol_expert.get())
-            .map_err(|_| FailureReason::ProtocolViolation("expert index exceeds usize".into()))?;
+        let layer = usize::try_from(protocol_layer.get()).map_err(|_| {
+            FailureReason::ContractViolation {
+                message: "expert layer exceeds usize".into(),
+            }
+        })?;
+        let expert_index = usize::try_from(protocol_expert.get()).map_err(|_| {
+            FailureReason::ContractViolation {
+                message: "expert index exceeds usize".into(),
+            }
+        })?;
         Ok((
             ExpertId::new(layer, expert_index),
             entry.read_plan().clone(),
@@ -921,17 +979,17 @@ impl DeepSeekV4CudaMaterializationProvider {
         ),
         FailureReason,
     > {
-        key.validate().map_err(|error| {
-            FailureReason::ProtocolViolation(format!("invalid physical load key: {error}"))
-        })?;
+        key.validate()
+            .map_err(|error| FailureReason::ContractViolation {
+                message: format!("invalid physical load key: {error}"),
+            })?;
         let request = self
             .request_keys
             .iter()
             .find_map(|(request, candidate)| (*candidate == key).then_some(*request))
-            .ok_or_else(|| {
-                FailureReason::ProtocolViolation(
-                    "physical MaterializationKey cannot be recovered to a source request".into(),
-                )
+            .ok_or_else(|| FailureReason::ContractViolation {
+                message: "physical MaterializationKey cannot be recovered to a source request"
+                    .into(),
             })?;
         request.validate_key(key).map_err(protocol_failure)?;
         let (expert, read_plan, install_source) = self.source_for_request(request)?;
@@ -945,9 +1003,9 @@ impl DeepSeekV4CudaMaterializationProvider {
     ) -> std::result::Result<ResidencyBinding, FailureReason> {
         let generation = DestinationGeneration::new(u64::from(slot.generation.get()));
         if generation.is_zero() {
-            return Err(FailureReason::ProtocolViolation(
-                "physical expert slot generation is zero".into(),
-            ));
+            return Err(FailureReason::ContractViolation {
+                message: "physical expert slot generation is zero".into(),
+            });
         }
         Ok(ResidencyBinding::new(
             request.model(),
@@ -990,7 +1048,9 @@ impl DeepSeekV4CudaMaterializationProvider {
         shared
             .residency
             .as_mut()
-            .ok_or_else(|| Error::Execution("physical residency control is not installed".into()))?
+            .ok_or_else(|| Error::Execution {
+                message: "physical residency control is not installed".into(),
+            })?
             .cancel_install(prepared)
     }
 
@@ -1006,9 +1066,11 @@ impl DeepSeekV4CudaMaterializationProvider {
         self.remove_request_key(request, key);
         match cleanup {
             Ok(()) => primary,
-            Err(error) => FailureReason::ProtocolViolation(format!(
-                "physical reservation failed ({primary:?}); prepared slot rollback also failed ({error})"
-            )),
+            Err(error) => FailureReason::ContractViolation {
+                message: format!(
+                    "physical reservation failed ({primary:?}); prepared slot rollback also failed ({error})"
+                ),
+            },
         }
     }
 
@@ -1046,10 +1108,12 @@ impl DeepSeekV4CudaMaterializationProvider {
             return Ok(frame);
         }
         if shared.frames_allocated >= shared.frame_capacity {
-            return Err(Error::Execution(format!(
-                "DeepSeek-V4 physical expert frame pool exhausted at {} frames",
-                shared.frame_capacity
-            )));
+            return Err(Error::Execution {
+                message: format!(
+                    "DeepSeek-V4 physical expert frame pool exhausted at {} frames",
+                    shared.frame_capacity
+                ),
+            });
         }
         let gate_shape = pinned_linear_shape(&bundle.gate)?;
         let up_shape = pinned_linear_shape(&bundle.up)?;
@@ -1100,9 +1164,11 @@ impl DeepSeekV4CudaMaterializationProvider {
             }),
             Err(error) => {
                 if let Err(sync_error) = self.ops.sync_upload_stream() {
-                    return Err(Error::Internal(format!(
-                        "expert upload submission failed ({error}); upload drain also failed ({sync_error})"
-                    )));
+                    return Err(Error::Internal {
+                        message: format!(
+                            "expert upload submission failed ({error}); upload drain also failed ({sync_error})"
+                        ),
+                    });
                 }
                 self.recycle_frame(frame);
                 Err(error)
@@ -1117,20 +1183,27 @@ impl DeepSeekV4CudaMaterializationProvider {
             return Some(CompletionOutcome::Failed(protocol_failure(error)));
         }
         if let Err(error) = ValidatedResidencyBinding::new(operation.key, operation.binding) {
-            return Some(CompletionOutcome::Failed(FailureReason::ProtocolViolation(
-                error.to_string(),
-            )));
+            return Some(CompletionOutcome::Failed(
+                FailureReason::ContractViolation {
+                    message: error.to_string(),
+                },
+            ));
         }
         let Some(prepared) = operation.prepared else {
-            return Some(CompletionOutcome::Failed(FailureReason::ProtocolViolation(
-                "physical operation lost prepared slot ownership".into(),
-            )));
+            return Some(CompletionOutcome::Failed(
+                FailureReason::ContractViolation {
+                    message: "physical operation lost prepared slot ownership".into(),
+                },
+            ));
         };
         let expected = prepared.binding();
         let Some((layer, expert)) = operation.request.routed_expert_coordinates() else {
-            return Some(CompletionOutcome::Failed(FailureReason::ProtocolViolation(
-                "DeepSeek-V4 expert operation received a non-routed-expert resource".into(),
-            )));
+            return Some(CompletionOutcome::Failed(
+                FailureReason::ContractViolation {
+                    message: "DeepSeek-V4 expert operation received a non-routed-expert resource"
+                        .into(),
+                },
+            ));
         };
         let expected_key =
             ExpertKey::new(operation.request.model().get(), layer.get(), expert.get());
@@ -1140,9 +1213,13 @@ impl DeepSeekV4CudaMaterializationProvider {
             || operation.expert.layer != usize::try_from(layer.get()).unwrap_or(usize::MAX)
             || operation.expert.expert != usize::try_from(expert.get()).unwrap_or(usize::MAX)
         {
-            return Some(CompletionOutcome::Failed(FailureReason::ProtocolViolation(
-                "prepared slot identity/generation diverged from the canonical operation".into(),
-            )));
+            return Some(CompletionOutcome::Failed(
+                FailureReason::ContractViolation {
+                    message:
+                        "prepared slot identity/generation diverged from the canonical operation"
+                            .into(),
+                },
+            ));
         }
         operation
             .read_plan
@@ -1201,9 +1278,11 @@ impl DeepSeekV4CudaMaterializationProvider {
             Ok(binding) => binding,
             Err(error) => {
                 self.shared.lock().free_frames.push(frame);
-                return Err(CompletionOutcome::Failed(FailureReason::ProtocolViolation(
-                    error.to_string(),
-                )));
+                return Err(CompletionOutcome::Failed(
+                    FailureReason::ContractViolation {
+                        message: error.to_string(),
+                    },
+                ));
             }
         };
         let expected = prepared.binding();
@@ -1226,34 +1305,40 @@ impl DeepSeekV4CudaMaterializationProvider {
             ));
         }
         let eviction = (|| -> Result<Option<(ExpertId, ExpertSlotBinding, MaterializationKey)>> {
-            let table = shared.tables.get(&operation.expert.layer).ok_or_else(|| {
-                Error::Internal(format!(
-                    "physical expert slot table missing layer {}",
-                    operation.expert.layer
-                ))
-            })?;
+            let table =
+                shared
+                    .tables
+                    .get(&operation.expert.layer)
+                    .ok_or_else(|| Error::Internal {
+                        message: format!(
+                            "physical expert slot table missing layer {}",
+                            operation.expert.layer
+                        ),
+                    })?;
             if let Some(evicted_key) = prepared.evicted_key() {
                 let evicted =
                     ExpertId::new(evicted_key.layer as usize, evicted_key.expert as usize);
                 if evicted.layer != operation.expert.layer {
-                    return Err(Error::Internal(
-                        "prepared eviction crossed physical expert layers".into(),
-                    ));
+                    return Err(Error::Internal {
+                        message: "prepared eviction crossed physical expert layers".into(),
+                    });
                 }
-                let old = prepared.evicted_binding().ok_or_else(|| {
-                    Error::Internal("prepared eviction lost transaction binding".into())
+                let old = prepared.evicted_binding().ok_or_else(|| Error::Internal {
+                    message: "prepared eviction lost transaction binding".into(),
                 })?;
-                let physical = table.host().binding(evicted.expert).ok_or_else(|| {
-                    Error::Internal("prepared eviction lost physical table binding".into())
-                })?;
+                let physical =
+                    table
+                        .host()
+                        .binding(evicted.expert)
+                        .ok_or_else(|| Error::Internal {
+                            message: "prepared eviction lost physical table binding".into(),
+                        })?;
                 let old_key = shared
                     .resident_keys
                     .get(&evicted_key)
                     .copied()
-                    .ok_or_else(|| {
-                        Error::Internal(
-                            "prepared eviction lost exact resident MaterializationKey".into(),
-                        )
+                    .ok_or_else(|| Error::Internal {
+                        message: "prepared eviction lost exact resident MaterializationKey".into(),
                     })?;
                 if old.slot != expected.slot
                     || old.generation.get().checked_add(1) != Some(expected.generation.get())
@@ -1262,18 +1347,18 @@ impl DeepSeekV4CudaMaterializationProvider {
                     || old_key.destination_generation().get() != u64::from(old.generation.get())
                     || !shared.experts.contains_key(&evicted)
                 {
-                    return Err(Error::Execution(
-                        "prepared eviction source/slot generation is stale".into(),
-                    ));
+                    return Err(Error::Execution {
+                        message: "prepared eviction source/slot generation is stale".into(),
+                    });
                 }
                 Ok(Some((evicted, old, old_key)))
             } else {
                 if table.host().binding(operation.expert.expert).is_some()
                     || shared.experts.contains_key(&operation.expert)
                 {
-                    return Err(Error::Execution(
-                        "prepared empty slot already has a physical expert owner".into(),
-                    ));
+                    return Err(Error::Execution {
+                        message: "prepared empty slot already has a physical expert owner".into(),
+                    });
                 }
                 Ok(None)
             }
@@ -1295,7 +1380,9 @@ impl DeepSeekV4CudaMaterializationProvider {
                 shared
                     .tables
                     .get_mut(&operation.expert.layer)
-                    .ok_or_else(|| Error::Internal("physical expert slot table disappeared".into()))
+                    .ok_or_else(|| Error::Internal {
+                        message: "physical expert slot table disappeared".into(),
+                    })
                     .map_err(|error| CompletionOutcome::Failed(protocol_failure(error)))?,
                 evicted.expert,
                 old.slot.get(),
@@ -1309,7 +1396,9 @@ impl DeepSeekV4CudaMaterializationProvider {
             shared
                 .tables
                 .get_mut(&operation.expert.layer)
-                .ok_or_else(|| Error::Internal("physical expert slot table disappeared".into()))
+                .ok_or_else(|| Error::Internal {
+                    message: "physical expert slot table disappeared".into(),
+                })
                 .map_err(|error| CompletionOutcome::Failed(protocol_failure(error)))?,
             operation.expert.expert,
             expected.slot.get(),
@@ -1344,16 +1433,19 @@ impl DeepSeekV4CudaMaterializationProvider {
             return Err(if physical_matches {
                 CompletionOutcome::Stale(StaleReason::SourceIdentityChanged)
             } else {
-                CompletionOutcome::Failed(FailureReason::ProtocolViolation(
-                    "physical slot generation changed before controller publication".into(),
-                ))
+                CompletionOutcome::Failed(FailureReason::ContractViolation {
+                    message: "physical slot generation changed before controller publication"
+                        .into(),
+                })
             });
         }
 
         let grant = match shared
             .residency
             .as_mut()
-            .ok_or_else(|| Error::Execution("physical residency control is not installed".into()))
+            .ok_or_else(|| Error::Execution {
+                message: "physical residency control is not installed".into(),
+            })
             .and_then(|residency| residency.publish_install(prepared))
         {
             Ok(grant) => {
@@ -1380,10 +1472,14 @@ impl DeepSeekV4CudaMaterializationProvider {
                     && physical.generation == i32::try_from(expected.generation.get()).unwrap_or(-1)
             });
         let lease = grant.lease();
+        let expected_reason = match operation.purpose {
+            MaterializationPurpose::Execution => ExpertInstallReason::Selected,
+            MaterializationPurpose::Prefetch => ExpertInstallReason::Prefetch,
+        };
         let source_is_current = operation.read_plan.validate_source_identity().is_ok();
         if grant.binding() != expected
-            || grant.reason() != ExpertInstallReason::Selected
-            || lease.is_none()
+            || grant.reason() != expected_reason
+            || (operation.purpose == MaterializationPurpose::Execution) != lease.is_some()
             || !controller_matches
             || !physical_matches
             || !source_is_current
@@ -1396,21 +1492,13 @@ impl DeepSeekV4CudaMaterializationProvider {
             shared.poisoned_layers.insert(operation.expert.layer);
             shared.experts.insert(operation.expert, frame);
             return Err(if source_is_current {
-                CompletionOutcome::Failed(FailureReason::ProtocolViolation(
-                    "physical/controller slot identity diverged after publication".into(),
-                ))
+                CompletionOutcome::Failed(FailureReason::ContractViolation {
+                    message: "physical/controller slot identity diverged after publication".into(),
+                })
             } else {
                 CompletionOutcome::Stale(StaleReason::SourceIdentityChanged)
             });
         }
-        let Some(lease) = lease else {
-            shared.poisoned_layers.insert(operation.expert.layer);
-            shared.experts.insert(operation.expert, frame);
-            return Err(CompletionOutcome::Failed(
-                FailureReason::InstallationRejected,
-            ));
-        };
-
         if let Some((evicted, _, old_key)) = eviction {
             if let Some(old_frame) = shared.experts.remove(&evicted) {
                 shared.free_frames.push(old_frame);
@@ -1420,22 +1508,24 @@ impl DeepSeekV4CudaMaterializationProvider {
         shared.experts.insert(operation.expert, frame);
         shared.resident_keys.insert(expected.key, operation.key);
         drop(shared);
-        let publication =
-            match self
-                .selected_lease_ownership
-                .publish(operation.key, operation_id, lease)
-            {
-                Ok(publication) => publication,
-                Err(reason) => {
-                    if let Some(residency) = self.shared.lock().residency.as_mut() {
-                        let _ = residency.release(lease);
+        if let Some(lease) = lease {
+            let publication =
+                match self
+                    .selected_lease_ownership
+                    .publish(operation.key, operation_id, lease)
+                {
+                    Ok(publication) => publication,
+                    Err(reason) => {
+                        if let Some(residency) = self.shared.lock().residency.as_mut() {
+                            let _ = residency.release(lease);
+                        }
+                        return Err(CompletionOutcome::Failed(reason));
                     }
-                    return Err(CompletionOutcome::Failed(reason));
-                }
-            };
-        if publication == SelectedLeasePublication::ReleaseImmediately {
-            self.release_execution_lease(operation.key)
-                .map_err(CompletionOutcome::Failed)?;
+                };
+            if publication == SelectedLeasePublication::ReleaseImmediately {
+                self.release_execution_lease(operation.key)
+                    .map_err(CompletionOutcome::Failed)?;
+            }
         }
         Ok(binding)
     }
@@ -1486,10 +1576,10 @@ impl DeepSeekV4CudaMaterializationProvider {
             record_first_error(
                 &mut first_error,
                 self.release_execution_lease(operation.key)
-                    .map_err(|reason| {
-                        Error::Execution(format!(
+                    .map_err(|reason| Error::Execution {
+                        message: format!(
                             "terminal selected-expert lease release failed: {reason:?}"
-                        ))
+                        ),
                     }),
             );
         }
@@ -1513,9 +1603,9 @@ impl DeepSeekV4CudaMaterializationProvider {
         let cleanup = self.cleanup_operation(operation_id, operation, state, reader_consumed);
         if first_terminal && let Some((stage, mut outcome, bytes)) = completion {
             if let Err(error) = &cleanup {
-                outcome = CompletionOutcome::Failed(protocol_failure(Error::Internal(format!(
-                    "terminal resource cleanup failed: {error}"
-                ))));
+                outcome = CompletionOutcome::Failed(protocol_failure(Error::Internal {
+                    message: format!("terminal resource cleanup failed: {error}"),
+                }));
             }
             self.emit(operation_id, key, stage, outcome, bytes);
         }
@@ -1534,7 +1624,7 @@ impl DeepSeekV4CudaMaterializationProvider {
                 operation.key,
                 LoadStage::Installing,
                 CompletionOutcome::Succeeded,
-                operation.resource_plan.demand.device_install_bytes,
+                operation.resource_plan.requirements.device_install_bytes,
             );
         }
     }
@@ -1562,9 +1652,9 @@ impl DeepSeekV4CudaMaterializationProvider {
                 None,
                 Some((
                     LoadStage::Installing,
-                    CompletionOutcome::Failed(FailureReason::ProtocolViolation(
-                        "active physical operation had no resource owner".into(),
-                    )),
+                    CompletionOutcome::Failed(FailureReason::ContractViolation {
+                        message: "active physical operation had no resource owner".into(),
+                    }),
                     0,
                 )),
                 false,
@@ -1632,14 +1722,15 @@ impl DeepSeekV4CudaMaterializationProvider {
                         match PinnedExpertBundle::from_payload(payload) {
                             Ok(bundle)
                                 if bundle.expert == operation.expert
-                                    && bundle.bytes == operation.resource_plan.demand.h2d_bytes =>
+                                    && bundle.bytes
+                                        == operation.resource_plan.requirements.h2d_bytes =>
                             {
                                 self.emit(
                                     operation_id,
                                     operation.key,
                                     LoadStage::ReadSubmitted,
                                     CompletionOutcome::Succeeded,
-                                    operation.resource_plan.demand.storage_read_bytes,
+                                    operation.resource_plan.requirements.storage_read_bytes,
                                 );
                                 self.keep_operation(
                                     operation_id,
@@ -1655,10 +1746,10 @@ impl DeepSeekV4CudaMaterializationProvider {
                                     Some((
                                         LoadStage::ReadSubmitted,
                                         CompletionOutcome::Failed(
-                                            FailureReason::ProtocolViolation(
+                                            FailureReason::ContractViolation { message:
                                                 "pinned payload expert identity or byte count mismatch"
                                                     .into(),
-                                            ),
+                                             },
                                         ),
                                         0,
                                     )),
@@ -1771,7 +1862,7 @@ impl DeepSeekV4CudaMaterializationProvider {
                                         operation.key,
                                         LoadStage::UploadSubmitted,
                                         CompletionOutcome::Succeeded,
-                                        operation.resource_plan.demand.h2d_bytes,
+                                        operation.resource_plan.requirements.h2d_bytes,
                                     );
                                     self.keep_operation(
                                         operation_id,
@@ -1873,115 +1964,23 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
     fn prepare(
         &mut self,
         request: MaterializationRequest,
+        purpose: MaterializationPurpose,
     ) -> std::result::Result<MaterializationPreparation, FailureReason> {
         let (expert, read_plan, install_source) = self.source_for_request(request)?;
-        read_plan.validate_source_identity().map_err(|_| {
-            FailureReason::ProtocolViolation("checkpoint source identity is already stale".into())
-        })?;
-        if let Some(existing) = self.request_keys.get(&request).copied() {
-            if let Some(reservation) = self.reservations.get(&existing) {
-                return Ok(MaterializationPreparation::Transfer(
-                    MaterializationTransfer::new(
-                        existing,
-                        reservation.binding,
-                        reservation.evicted,
-                    )
-                    .map_err(protocol_failure)?,
-                ));
-            }
-            if let Some(active) = self
-                .operations
-                .values()
-                .find(|operation| operation.key == existing)
-            {
-                return Ok(MaterializationPreparation::Transfer(
-                    MaterializationTransfer::new(existing, active.binding, active.evicted)
-                        .map_err(protocol_failure)?,
-                ));
-            }
-            let (layer, expert_index) = request.routed_expert_coordinates().ok_or_else(|| {
-                FailureReason::ProtocolViolation(
-                    "DeepSeek-V4 routed-expert preparation received a non-expert resource".into(),
-                )
+        read_plan
+            .validate_source_identity()
+            .map_err(|_| FailureReason::ContractViolation {
+                message: "checkpoint source identity is already stale".into(),
             })?;
-            let expert_key = ExpertKey::new(request.model().get(), layer.get(), expert_index.get());
-            if self.selected_lease_ownership.contains(existing) {
-                return self.prepared(existing);
-            }
-            let (raw, lease) = {
-                let mut shared = self.shared.lock();
-                let Some(grant) = shared
-                    .residency
-                    .as_mut()
-                    .ok_or(FailureReason::InstallationRejected)?
-                    .acquire_selected(expert_key)
-                    .map_err(protocol_failure)?
-                else {
-                    drop(shared);
-                    self.request_keys.remove(&request);
-                    return self.prepare(request);
-                };
-                let lease = grant.lease().ok_or_else(|| {
-                    FailureReason::ProtocolViolation(
-                        "selected resident expert did not return a lease".into(),
-                    )
-                })?;
-                let raw = match self.protocol_binding(request, grant.binding()) {
-                    Ok(raw) => raw,
-                    Err(reason) => {
-                        if let Some(residency) = shared.residency.as_mut() {
-                            let _ = residency.release(lease);
-                        }
-                        return Err(reason);
-                    }
-                };
-                let physical = shared
-                    .tables
-                    .get(&expert.layer)
-                    .and_then(|table| table.host().binding(expert.expert));
-                let valid = grant.reason() == ExpertInstallReason::Selected
-                    && read_plan.validate_source_identity().is_ok()
-                    && shared.experts.contains_key(&expert)
-                    && shared.resident_keys.get(&expert_key) == Some(&existing)
-                    && physical.is_some_and(|physical| {
-                        physical.slot == i32::try_from(raw.slot.get()).unwrap_or(-1)
-                            && physical.generation
-                                == i32::try_from(grant.binding().generation.get()).unwrap_or(-1)
-                    });
-                if !valid {
-                    if let Some(residency) = shared.residency.as_mut() {
-                        let _ = residency.release(lease);
-                    }
-                    return Err(FailureReason::ProtocolViolation(
-                        "controller resident binding/source is not physically current".into(),
-                    ));
-                }
-                (raw, lease)
-            };
-            let validated = match ValidatedResidencyBinding::new(existing, raw) {
-                Ok(validated) => validated,
-                Err(error) => {
-                    if let Some(residency) = self.shared.lock().residency.as_mut() {
-                        let _ = residency.release(lease);
-                    }
-                    return Err(FailureReason::ProtocolViolation(error.to_string()));
-                }
-            };
-            if let Err(reason) = self.selected_lease_ownership.begin_active(existing, lease) {
-                if let Some(residency) = self.shared.lock().residency.as_mut() {
-                    let _ = residency.release(lease);
-                }
-                return Err(reason);
-            }
-            return MaterializationResident::new(existing, validated.binding())
-                .map(MaterializationPreparation::Resident)
-                .map_err(protocol_failure);
+        if let Some(existing) = self.request_keys.get(&request).copied() {
+            return self.prepared(existing);
         }
 
         let (layer, expert_index) = request.routed_expert_coordinates().ok_or_else(|| {
-            FailureReason::ProtocolViolation(
-                "DeepSeek-V4 routed-expert preparation received a non-expert resource".into(),
-            )
+            FailureReason::ContractViolation {
+                message: "DeepSeek-V4 routed-expert preparation received a non-expert resource"
+                    .into(),
+            }
         })?;
         let expert_key = ExpertKey::new(request.model().get(), layer.get(), expert_index.get());
         let pinned_plan = self
@@ -1990,31 +1989,50 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
             .map_err(protocol_failure)?
             .ok_or(FailureReason::StorageUnavailable)?;
         let resource_plan = MaterializationResourcePlan::new(
-            pinned_plan.demand(),
-            pinned_plan.demand().device_install_bytes,
+            pinned_plan.requirements(),
+            pinned_plan.requirements().device_install_bytes,
         )
         .map_err(protocol_failure)?;
         let mut shared = self.shared.lock();
         if shared.poisoned_layers.contains(&expert.layer) {
             return Err(FailureReason::InstallationRejected);
         }
+        let install_intent = match purpose {
+            MaterializationPurpose::Execution => ExpertInstallIntent::selected(expert_key),
+            MaterializationPurpose::Prefetch => ExpertInstallIntent::prefetch(expert_key),
+        };
         let outcome = shared
             .residency
             .as_mut()
             .ok_or(FailureReason::InstallationRejected)?
-            .prepare_install(ExpertInstallIntent::selected(expert_key))
+            .prepare_install(install_intent)
             .map_err(protocol_failure)?;
         match outcome {
             ExpertInstallPrepareOutcome::Resident(grant) => {
-                let lease = grant.lease().ok_or_else(|| {
-                    FailureReason::ProtocolViolation(
-                        "selected resident expert did not return a lease".into(),
-                    )
-                })?;
+                let expected_reason = match purpose {
+                    MaterializationPurpose::Execution => ExpertInstallReason::Selected,
+                    MaterializationPurpose::Prefetch => ExpertInstallReason::Prefetch,
+                };
+                let lease = grant.lease();
+                if grant.reason() != expected_reason
+                    || (purpose == MaterializationPurpose::Execution) != lease.is_some()
+                {
+                    if let Some(lease) = lease
+                        && let Some(residency) = shared.residency.as_mut()
+                    {
+                        let _ = residency.release(lease);
+                    }
+                    return Err(FailureReason::ContractViolation {
+                        message: "expert resident grant does not match materialization purpose"
+                            .into(),
+                    });
+                }
                 let raw = match self.protocol_binding(request, grant.binding()) {
                     Ok(raw) => raw,
                     Err(reason) => {
-                        if let Some(residency) = shared.residency.as_mut() {
+                        if let Some(lease) = lease
+                            && let Some(residency) = shared.residency.as_mut()
+                        {
                             let _ = residency.release(lease);
                         }
                         return Err(reason);
@@ -2026,7 +2044,9 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
                 {
                     Ok(key) => key,
                     Err(reason) => {
-                        if let Some(residency) = shared.residency.as_mut() {
+                        if let Some(lease) = lease
+                            && let Some(residency) = shared.residency.as_mut()
+                        {
                             let _ = residency.release(lease);
                         }
                         return Err(reason);
@@ -2036,7 +2056,7 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
                     .tables
                     .get(&expert.layer)
                     .and_then(|table| table.host().binding(expert.expert));
-                if grant.reason() != ExpertInstallReason::Selected
+                if grant.reason() != expected_reason
                     || shared.resident_keys.get(&expert_key) != Some(&key)
                     || !shared.experts.contains_key(&expert)
                     || !physical.is_some_and(|physical| {
@@ -2046,24 +2066,33 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
                     })
                     || read_plan.validate_source_identity().is_err()
                 {
-                    if let Some(residency) = shared.residency.as_mut() {
+                    if let Some(lease) = lease
+                        && let Some(residency) = shared.residency.as_mut()
+                    {
                         let _ = residency.release(lease);
                     }
-                    return Err(FailureReason::ProtocolViolation(
-                        "controller resident binding/source is not physically current".into(),
-                    ));
+                    return Err(FailureReason::ContractViolation {
+                        message: "controller resident binding/source is not physically current"
+                            .into(),
+                    });
                 }
                 let validated = match ValidatedResidencyBinding::new(key, raw) {
                     Ok(validated) => validated,
                     Err(error) => {
-                        if let Some(residency) = shared.residency.as_mut() {
+                        if let Some(lease) = lease
+                            && let Some(residency) = shared.residency.as_mut()
+                        {
                             let _ = residency.release(lease);
                         }
-                        return Err(FailureReason::ProtocolViolation(error.to_string()));
+                        return Err(FailureReason::ContractViolation {
+                            message: error.to_string(),
+                        });
                     }
                 };
                 drop(shared);
-                if let Err(reason) = self.selected_lease_ownership.begin_active(key, lease) {
+                if let Some(lease) = lease
+                    && let Err(reason) = self.selected_lease_ownership.begin_active(key, lease)
+                {
                     if let Some(residency) = self.shared.lock().residency.as_mut() {
                         let _ = residency.release(lease);
                     }
@@ -2112,7 +2141,9 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
                     }
                 };
                 drop(shared);
-                if let Err(reason) = self.selected_lease_ownership.begin_pending(key) {
+                if purpose == MaterializationPurpose::Execution
+                    && let Err(reason) = self.selected_lease_ownership.begin_pending(key)
+                {
                     let _ = self.cancel_prepared(prepared);
                     return Err(reason);
                 }
@@ -2127,6 +2158,7 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
                         pinned_plan,
                         resource_plan,
                         prepared,
+                        purpose,
                         binding: raw,
                         evicted,
                     },
@@ -2140,13 +2172,15 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
     }
 
     fn prepared(
-        &self,
+        &mut self,
         key: MaterializationKey,
     ) -> std::result::Result<MaterializationPreparation, FailureReason> {
         let (request, expert, read_plan, _) = self.source_for_key(key)?;
-        read_plan.validate_source_identity().map_err(|_| {
-            FailureReason::ProtocolViolation("checkpoint source identity is stale".into())
-        })?;
+        read_plan
+            .validate_source_identity()
+            .map_err(|_| FailureReason::ContractViolation {
+                message: "checkpoint source identity is stale".into(),
+            })?;
         if let Some(reservation) = self.reservations.get(&key) {
             return MaterializationTransfer::new(key, reservation.binding, reservation.evicted)
                 .map(MaterializationPreparation::Transfer)
@@ -2161,53 +2195,175 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
                 .map(MaterializationPreparation::Transfer)
                 .map_err(protocol_failure);
         }
-        if !self.selected_lease_ownership.contains(key) {
-            return Err(FailureReason::ProtocolViolation(
-                "materialization key has no provider-owned preparation".into(),
-            ));
-        }
-        let shared = self.shared.lock();
+
         let (layer, expert_index) = request.routed_expert_coordinates().ok_or_else(|| {
-            FailureReason::ProtocolViolation(
-                "DeepSeek-V4 provider received a non-routed-expert resource".into(),
-            )
+            FailureReason::ContractViolation {
+                message: "DeepSeek-V4 provider received a non-routed-expert resource".into(),
+            }
         })?;
         let expert_key = ExpertKey::new(request.model().get(), layer.get(), expert_index.get());
+        let shared = self.shared.lock();
         if shared.resident_keys.get(&expert_key) != Some(&key)
             || !shared.experts.contains_key(&expert)
         {
-            return Err(FailureReason::ProtocolViolation(
-                "prepared resident expert is not physically published".into(),
-            ));
+            return Err(FailureReason::ContractViolation {
+                message: "prepared resident expert is not physically published".into(),
+            });
         }
         let physical = shared
             .tables
             .get(&expert.layer)
             .and_then(|table| table.host().binding(expert.expert))
-            .ok_or_else(|| {
-                FailureReason::ProtocolViolation(
-                    "prepared resident expert has no physical table binding".into(),
-                )
+            .ok_or_else(|| FailureReason::ContractViolation {
+                message: "prepared resident expert has no physical table binding".into(),
             })?;
-        let slot = u32::try_from(physical.slot).map_err(|_| {
-            FailureReason::ProtocolViolation("resident expert slot exceeds protocol ABI".into())
-        })?;
-        let generation = u64::try_from(physical.generation).map_err(|_| {
-            FailureReason::ProtocolViolation(
-                "resident expert generation exceeds protocol ABI".into(),
-            )
-        })?;
         let binding = ResidencyBinding::new(
             request.model(),
             request.resource(),
             request.backend(),
             request.device(),
-            DestinationSlotId::new(slot),
-            DestinationGeneration::new(generation),
+            DestinationSlotId::new(u32::try_from(physical.slot).map_err(|_| {
+                FailureReason::ContractViolation {
+                    message: "resident expert slot exceeds protocol ABI".into(),
+                }
+            })?),
+            DestinationGeneration::new(u64::try_from(physical.generation).map_err(|_| {
+                FailureReason::ContractViolation {
+                    message: "resident expert generation exceeds protocol ABI".into(),
+                }
+            })?),
         );
         MaterializationResident::new(key, binding)
             .map(MaterializationPreparation::Resident)
             .map_err(protocol_failure)
+    }
+
+    fn promote_to_execution(
+        &mut self,
+        key: MaterializationKey,
+    ) -> std::result::Result<MaterializationPreparation, FailureReason> {
+        let observed = self.prepared(key)?;
+        if self.selected_lease_ownership.retain_execution(key)? {
+            return Ok(observed);
+        }
+
+        if let Some(reservation) = self.reservations.get(&key) {
+            let prepared = reservation.prepared;
+            self.selected_lease_ownership.begin_pending(key)?;
+            let promoted = self
+                .shared
+                .lock()
+                .residency
+                .as_mut()
+                .ok_or(FailureReason::InstallationRejected)
+                .and_then(|residency| {
+                    residency
+                        .promote_install(prepared)
+                        .map_err(protocol_failure)
+                });
+            let promoted = match promoted {
+                Ok(promoted) => promoted,
+                Err(reason) => {
+                    self.selected_lease_ownership.cancel_unbound(key);
+                    return Err(reason);
+                }
+            };
+            let reservation = self
+                .reservations
+                .get_mut(&key)
+                .expect("promoted reservation remains provider-owned");
+            reservation.prepared = promoted;
+            reservation.purpose = MaterializationPurpose::Execution;
+            return Ok(observed);
+        }
+
+        if let Some((operation_id, active)) = self
+            .operations
+            .iter()
+            .find(|(_, operation)| operation.key == key)
+        {
+            let operation_id = *operation_id;
+            let prepared = active
+                .prepared
+                .ok_or_else(|| FailureReason::ContractViolation {
+                    message: "active prefetch has no promotable install ownership".into(),
+                })?;
+            self.selected_lease_ownership.begin_pending(key)?;
+            if let Err(reason) = self
+                .selected_lease_ownership
+                .bind_operation(key, operation_id)
+            {
+                self.selected_lease_ownership.cancel_unbound(key);
+                return Err(reason);
+            }
+            let promoted = self
+                .shared
+                .lock()
+                .residency
+                .as_mut()
+                .ok_or(FailureReason::InstallationRejected)
+                .and_then(|residency| {
+                    residency
+                        .promote_install(prepared)
+                        .map_err(protocol_failure)
+                });
+            let promoted = match promoted {
+                Ok(promoted) => promoted,
+                Err(reason) => {
+                    self.selected_lease_ownership
+                        .cancel_operation(key, operation_id);
+                    return Err(reason);
+                }
+            };
+            let active = self
+                .operations
+                .get_mut(&operation_id)
+                .expect("promoted physical operation remains active");
+            active.prepared = Some(promoted);
+            active.purpose = MaterializationPurpose::Execution;
+            return Ok(observed);
+        }
+
+        let (request, _, _, _) = self.source_for_key(key)?;
+        let (layer, expert_index) = request.routed_expert_coordinates().ok_or_else(|| {
+            FailureReason::ContractViolation {
+                message: "DeepSeek-V4 provider received a non-routed-expert resource".into(),
+            }
+        })?;
+        let expert_key = ExpertKey::new(request.model().get(), layer.get(), expert_index.get());
+        let lease = {
+            let mut shared = self.shared.lock();
+            let grant = shared
+                .residency
+                .as_mut()
+                .ok_or(FailureReason::InstallationRejected)?
+                .acquire_selected(expert_key)
+                .map_err(protocol_failure)?
+                .ok_or(FailureReason::InstallationRejected)?;
+            let lease = grant
+                .lease()
+                .ok_or_else(|| FailureReason::ContractViolation {
+                    message: "selected resident expert did not return an execution lease".into(),
+                })?;
+            if grant.reason() != ExpertInstallReason::Selected
+                || self.protocol_binding(request, grant.binding())? != observed.binding()
+            {
+                if let Some(residency) = shared.residency.as_mut() {
+                    let _ = residency.release(lease);
+                }
+                return Err(FailureReason::ContractViolation {
+                    message: "selected resident lease does not match the published binding".into(),
+                });
+            }
+            lease
+        };
+        if let Err(reason) = self.selected_lease_ownership.begin_active(key, lease) {
+            if let Some(residency) = self.shared.lock().residency.as_mut() {
+                let _ = residency.release(lease);
+            }
+            return Err(reason);
+        }
+        Ok(observed)
     }
 
     fn discard_preparation(
@@ -2219,9 +2375,9 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
             .values()
             .any(|operation| operation.key == key)
         {
-            return Err(FailureReason::ProtocolViolation(
-                "cannot discard a preparation claimed by an active operation".into(),
-            ));
+            return Err(FailureReason::ContractViolation {
+                message: "cannot discard a preparation claimed by an active operation".into(),
+            });
         }
         if let Some(reservation) = self.reservations.remove(&key) {
             self.cancel_prepared(reservation.prepared)
@@ -2235,9 +2391,9 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
             self.remove_key(key);
             return Ok(());
         }
-        Err(FailureReason::ProtocolViolation(
-            "cannot discard an unknown materialization preparation".into(),
-        ))
+        Err(FailureReason::ContractViolation {
+            message: "cannot discard an unknown materialization preparation".into(),
+        })
     }
 
     fn materialization_plan(
@@ -2245,11 +2401,13 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
         key: MaterializationKey,
     ) -> std::result::Result<MaterializationResourcePlan, FailureReason> {
         self.source_for_key(key)?;
-        self.resource_plans.get(&key).copied().ok_or_else(|| {
-            FailureReason::ProtocolViolation(
-                "DeepSeek-V4 materialization key has no frozen physical resource plan".into(),
-            )
-        })
+        self.resource_plans
+            .get(&key)
+            .copied()
+            .ok_or_else(|| FailureReason::ContractViolation {
+                message: "DeepSeek-V4 materialization key has no frozen physical resource plan"
+                    .into(),
+            })
     }
 
     fn release_execution_lease(
@@ -2283,33 +2441,35 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
         plan: MaterializationResourcePlan,
     ) -> std::result::Result<PhysicalMaterializationOperationReservation, FailureReason> {
         if operation.is_zero() || self.seen_operations.contains(&operation) {
-            return Err(FailureReason::ProtocolViolation(
-                "duplicate or zero physical materialization operation".into(),
-            ));
+            return Err(FailureReason::ContractViolation {
+                message: "duplicate or zero physical materialization operation".into(),
+            });
         }
         if self.operations.values().any(|active| active.key == key) {
-            return Err(FailureReason::ProtocolViolation(
-                "prepared MaterializationKey already has a physical operation owner".into(),
-            ));
+            return Err(FailureReason::ContractViolation {
+                message: "prepared MaterializationKey already has a physical operation owner"
+                    .into(),
+            });
         }
         if self.materialization_plan(key)? != plan {
-            return Err(FailureReason::ProtocolViolation(
-                "physical materialization resource plan expectation mismatch".into(),
-            ));
+            return Err(FailureReason::ContractViolation {
+                message: "physical materialization resource plan expectation mismatch".into(),
+            });
         }
-        let reservation = self.reservations.remove(&key).ok_or_else(|| {
-            FailureReason::ProtocolViolation(
-                "MaterializationKey has no prepared slot reservation".into(),
-            )
-        })?;
+        let reservation =
+            self.reservations
+                .remove(&key)
+                .ok_or_else(|| FailureReason::ContractViolation {
+                    message: "MaterializationKey has no prepared slot reservation".into(),
+                })?;
         if reservation.read_plan.validate_source_identity().is_err() {
             return Err(self.rollback_slot_reservation(
                 key,
                 reservation.request,
                 reservation.prepared,
-                FailureReason::ProtocolViolation(
-                    "checkpoint source identity changed before reserve".into(),
-                ),
+                FailureReason::ContractViolation {
+                    message: "checkpoint source identity changed before reserve".into(),
+                },
             ));
         }
         if reservation.resource_plan != plan {
@@ -2317,9 +2477,9 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
                 key,
                 reservation.request,
                 reservation.prepared,
-                FailureReason::ProtocolViolation(
-                    "prepared slot resource plan diverged from the canonical plan".into(),
-                ),
+                FailureReason::ContractViolation {
+                    message: "prepared slot resource plan diverged from the canonical plan".into(),
+                },
             ));
         }
         let read =
@@ -2360,13 +2520,17 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
                 );
                 return Err(match cleanup {
                     Ok(()) => reason,
-                    Err(error) => FailureReason::ProtocolViolation(format!(
-                        "physical reservation rollback failed ({reason:?}); read reservation detach also failed ({error})"
-                    )),
+                    Err(error) => FailureReason::ContractViolation {
+                        message: format!(
+                            "physical reservation rollback failed ({reason:?}); read reservation detach also failed ({error})"
+                        ),
+                    },
                 });
             }
         };
-        if let Err(reason) = self.selected_lease_ownership.bind_operation(key, operation) {
+        if reservation.purpose == MaterializationPurpose::Execution
+            && let Err(reason) = self.selected_lease_ownership.bind_operation(key, operation)
+        {
             let cleanup = self.reader.detach_load_source_pinned(read.ticket);
             let reason = self.rollback_slot_reservation(
                 key,
@@ -2376,9 +2540,11 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
             );
             return Err(match cleanup {
                 Ok(()) => reason,
-                Err(error) => FailureReason::ProtocolViolation(format!(
-                    "physical lease bind rollback failed ({reason:?}); read reservation detach also failed ({error})"
-                )),
+                Err(error) => FailureReason::ContractViolation {
+                    message: format!(
+                        "physical lease bind rollback failed ({reason:?}); read reservation detach also failed ({error})"
+                    ),
+                },
             });
         }
         self.operations.insert(
@@ -2390,6 +2556,7 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
                 read_plan: reservation.read_plan,
                 resource_plan: reservation.resource_plan,
                 prepared: Some(reservation.prepared),
+                purpose: reservation.purpose,
                 binding: reservation.binding,
                 evicted: reservation.evicted,
                 pending_terminal: None,
@@ -2408,10 +2575,12 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
         reservation: &PhysicalMaterializationOperationReservation,
         plan: MaterializationResourcePlan,
     ) -> std::result::Result<(), FailureReason> {
-        let mut active = self
-            .operations
-            .remove(&operation)
-            .ok_or_else(|| FailureReason::ProtocolViolation("unknown read operation".into()))?;
+        let mut active =
+            self.operations
+                .remove(&operation)
+                .ok_or_else(|| FailureReason::ContractViolation {
+                    message: "unknown read operation".into(),
+                })?;
         let state = active.state.take();
         if let Err(reason) =
             validate_operation_reservation(&active, operation, key, reservation, plan)
@@ -2456,10 +2625,12 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
         reservation: &PhysicalMaterializationOperationReservation,
         plan: MaterializationResourcePlan,
     ) -> std::result::Result<(), FailureReason> {
-        let mut active = self
-            .operations
-            .remove(&operation)
-            .ok_or_else(|| FailureReason::ProtocolViolation("unknown upload operation".into()))?;
+        let mut active =
+            self.operations
+                .remove(&operation)
+                .ok_or_else(|| FailureReason::ContractViolation {
+                    message: "unknown upload operation".into(),
+                })?;
         let state = active.state.take();
         if let Err(reason) =
             validate_operation_reservation(&active, operation, key, reservation, plan)
@@ -2502,10 +2673,12 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
         reservation: &PhysicalMaterializationOperationReservation,
         plan: MaterializationResourcePlan,
     ) -> std::result::Result<(), FailureReason> {
-        let mut active = self
-            .operations
-            .remove(&operation)
-            .ok_or_else(|| FailureReason::ProtocolViolation("unknown install operation".into()))?;
+        let mut active =
+            self.operations
+                .remove(&operation)
+                .ok_or_else(|| FailureReason::ContractViolation {
+                    message: "unknown install operation".into(),
+                })?;
         let state = active.state.take();
         if let Err(reason) =
             validate_operation_reservation(&active, operation, key, reservation, plan)
@@ -2550,16 +2723,16 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
         };
         let Some(state) = active.state.take() else {
             let _ = self.finish_terminal_operation(operation, active, None, None, false);
-            return Err(FailureReason::ProtocolViolation(
-                "cancel found an ownerless physical operation".into(),
-            ));
+            return Err(FailureReason::ContractViolation {
+                message: "cancel found an ownerless physical operation".into(),
+            });
         };
         if active.key != key {
             active.state = Some(state);
             self.operations.insert(operation, active);
-            return Err(FailureReason::ProtocolViolation(
-                "cancel key does not match physical operation identity".into(),
-            ));
+            return Err(FailureReason::ContractViolation {
+                message: "cancel key does not match physical operation identity".into(),
+            });
         }
         if active.pending_terminal.is_some() {
             active.state = Some(state);
@@ -2570,9 +2743,11 @@ impl MaterializationProvider for DeepSeekV4CudaMaterializationProvider {
             let actual_stage = state.owner_stage();
             active.state = Some(state);
             self.operations.insert(operation, active);
-            return Err(FailureReason::ProtocolViolation(format!(
-                "cancel observed stage {stage:?} is incompatible with physical operation stage {actual_stage:?}"
-            )));
+            return Err(FailureReason::ContractViolation {
+                message: format!(
+                    "cancel observed stage {stage:?} is incompatible with physical operation stage {actual_stage:?}"
+                ),
+            });
         }
         match state {
             MaterializationOperationState::Reserved(ticket) => self
@@ -2693,8 +2868,8 @@ impl Drop for DeepSeekV4CudaMaterializationProvider {
                 let release = shared
                     .residency
                     .as_mut()
-                    .ok_or_else(|| {
-                        Error::Execution("physical residency control is not installed".into())
+                    .ok_or_else(|| Error::Execution {
+                        message: "physical residency control is not installed".into(),
                     })
                     .and_then(|residency| residency.release(lease));
                 if let Err(error) = release {
@@ -2717,9 +2892,9 @@ impl PinnedExpertBundle {
         >::new();
         for tensor in payload.tensors {
             if tensor.slice.key.expert != expert {
-                return Err(Error::Model(
-                    "physical pinned expert payload identity mismatch".into(),
-                ));
+                return Err(Error::Model {
+                    message: "physical pinned expert payload identity mismatch".into(),
+                });
             }
             grouped
                 .entry(tensor.slice.key.matrix)
@@ -2751,8 +2926,8 @@ impl PinnedExpertBundle {
         ]
         .into_iter()
         .try_fold(0u64, |total, bytes| {
-            total.checked_add(bytes as u64).ok_or_else(|| {
-                Error::Model("physical pinned expert payload byte total overflow".into())
+            total.checked_add(bytes as u64).ok_or_else(|| Error::Model {
+                message: "physical pinned expert payload byte total overflow".into(),
             })
         })?;
         Ok(Self {
@@ -2775,30 +2950,40 @@ impl PinnedExpertLinear {
         let mut scale = None;
         for tensor in tensors {
             if tensor.slice.key.expert != expert || tensor.slice.key.matrix != matrix {
-                return Err(Error::Model(
-                    "physical pinned expert tensor identity mismatch".into(),
-                ));
+                return Err(Error::Model {
+                    message: "physical pinned expert tensor identity mismatch".into(),
+                });
             }
             match tensor.slice.component {
                 crate::moe::streaming::ExpertTensorComponent::Weight => {
                     if weight.replace(tensor).is_some() {
-                        return Err(Error::Model("duplicate physical expert weight".into()));
+                        return Err(Error::Model {
+                            message: "duplicate physical expert weight".into(),
+                        });
                     }
                 }
                 crate::moe::streaming::ExpertTensorComponent::Scale => {
                     if scale.replace(tensor).is_some() {
-                        return Err(Error::Model("duplicate physical expert scale".into()));
+                        return Err(Error::Model {
+                            message: "duplicate physical expert scale".into(),
+                        });
                     }
                 }
                 crate::moe::streaming::ExpertTensorComponent::Other(component) => {
-                    return Err(Error::Model(format!(
-                        "unsupported physical expert tensor component {component}"
-                    )));
+                    return Err(Error::Model {
+                        message: format!(
+                            "unsupported physical expert tensor component {component}"
+                        ),
+                    });
                 }
             }
         }
-        let weight = weight.ok_or_else(|| Error::Model("missing physical expert weight".into()))?;
-        let scale = scale.ok_or_else(|| Error::Model("missing physical expert scale".into()))?;
+        let weight = weight.ok_or_else(|| Error::Model {
+            message: "missing physical expert weight".into(),
+        })?;
+        let scale = scale.ok_or_else(|| Error::Model {
+            message: "missing physical expert scale".into(),
+        })?;
         let format = infer_expert_linear_format(
             &weight.slice,
             weight.bytes.len(),
@@ -2822,10 +3007,12 @@ fn pinned_linear_shape(
         block_size: 32,
     } = linear.format
     else {
-        return Err(Error::Model(format!(
-            "CUDA physical expert {:?} requires FP4 E2M1/E8M0 block_size=32",
-            linear.matrix
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "CUDA physical expert {:?} requires FP4 E2M1/E8M0 block_size=32",
+                linear.matrix
+            ),
+        });
     };
     Ok(
         ferrule_cuda::context::CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
@@ -2849,9 +3036,9 @@ fn validate_operation_reservation(
         || reservation.upload_fence().operation != operation
         || reservation.upload_fence().destination_generation != key.destination_generation()
     {
-        return Err(FailureReason::ProtocolViolation(
-            "physical operation reservation identity mismatch".into(),
-        ));
+        return Err(FailureReason::ContractViolation {
+            message: "physical operation reservation identity mismatch".into(),
+        });
     }
     Ok(())
 }
@@ -2863,7 +3050,9 @@ fn record_first_error(first: &mut Option<Error>, result: Result<()>) {
 }
 
 fn protocol_failure(error: Error) -> FailureReason {
-    FailureReason::ProtocolViolation(error.to_string())
+    FailureReason::ContractViolation {
+        message: error.to_string(),
+    }
 }
 
 #[cfg(test)]

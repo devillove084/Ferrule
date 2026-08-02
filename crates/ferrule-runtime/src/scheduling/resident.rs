@@ -12,8 +12,8 @@ use std::collections::{HashMap, VecDeque};
 
 use ahash::RandomState;
 
+use crate::{Error, Result};
 use ferrule_common::execution::{LogitsOutput, TokenLogit};
-use ferrule_common::{Error, Result};
 
 use super::actions::{DecodeAction, PrefillChunkAction, SchedulerAction, plan_prefill_chunk};
 use super::session::{GenerateRequest, RequestId, SequenceFinishReason, SequenceState, SessionId};
@@ -229,35 +229,44 @@ impl ResidentScheduler {
                 .iter()
                 .any(|queued| queued.session_id == action.session_id)
             {
-                return Err(Error::Internal(format!(
-                    "duplicate suspended decode action for session {:?}",
-                    action.session_id
-                )));
+                return Err(Error::Invariant {
+                    message: format!(
+                        "duplicate suspended decode action for session {:?}",
+                        action.session_id
+                    ),
+                });
             }
             if self.decode_ready.contains(&action.session_id) {
-                return Err(Error::Internal(format!(
-                    "suspended decode session {:?} is already ready",
-                    action.session_id
-                )));
+                return Err(Error::Invariant {
+                    message: format!(
+                        "suspended decode session {:?} is already ready",
+                        action.session_id
+                    ),
+                });
             }
-            let sequence = self.active.get(&action.session_id).ok_or_else(|| {
-                Error::Internal(format!(
-                    "cannot restore decode action for inactive session {:?}",
-                    action.session_id
-                ))
-            })?;
-            let token_id = sequence.next_decode_token.ok_or_else(|| {
-                Error::Internal(format!(
+            let sequence = self
+                .active
+                .get(&action.session_id)
+                .ok_or_else(|| Error::Invariant {
+                    message: format!(
+                        "cannot restore decode action for inactive session {:?}",
+                        action.session_id
+                    ),
+                })?;
+            let token_id = sequence.next_decode_token.ok_or_else(|| Error::Invariant {
+                message: format!(
                     "cannot restore decode action without a staged token for session {:?}",
                     action.session_id
-                ))
+                ),
             })?;
             let current = DecodeAction::from_sequence(sequence, token_id);
             if current != *action {
-                return Err(Error::Internal(format!(
-                    "suspended decode action no longer matches session {:?}",
-                    action.session_id
-                )));
+                return Err(Error::Invariant {
+                    message: format!(
+                        "suspended decode action no longer matches session {:?}",
+                        action.session_id
+                    ),
+                });
             }
         }
         for action in actions.iter().rev() {
@@ -310,14 +319,16 @@ impl ResidentScheduler {
         kv_handle: KvHandle,
     ) -> Result<PreparedSequenceFork> {
         if source_session_id == target_session_id {
-            return Err(Error::Execution(
-                "fork source and target sessions must differ".into(),
-            ));
+            return Err(Error::InvalidRequest {
+                message: "fork source and target sessions must differ".into(),
+            });
         }
         if request.session_id != Some(target_session_id) {
-            return Err(Error::Execution(format!(
-                "fork target request must name target session {target_session_id:?}"
-            )));
+            return Err(Error::InvalidRequest {
+                message: format!(
+                    "fork target request must name target session {target_session_id:?}"
+                ),
+            });
         }
         if self.active.contains_key(&target_session_id)
             || self
@@ -325,20 +336,22 @@ impl ResidentScheduler {
                 .iter()
                 .any(|waiting| waiting.request.session_id == Some(target_session_id))
         {
-            return Err(Error::Execution(format!(
-                "fork target session {target_session_id:?} already exists"
-            )));
+            return Err(Error::InvalidRequest {
+                message: format!("fork target session {target_session_id:?} already exists"),
+            });
         }
         if self.active.len() >= self.config.max_active_sequences {
-            return Err(Error::Execution(
-                "resident scheduler has no active-sequence capacity for fork target".into(),
-            ));
+            return Err(Error::InvalidRequest {
+                message: "resident scheduler has no active-sequence capacity for fork target"
+                    .into(),
+            });
         }
-        let source = self.active.get(&source_session_id).ok_or_else(|| {
-            Error::Execution(format!(
-                "fork source session {source_session_id:?} is not active"
-            ))
-        })?;
+        let source = self
+            .active
+            .get(&source_session_id)
+            .ok_or_else(|| Error::InvalidRequest {
+                message: format!("fork source session {source_session_id:?} is not active"),
+            })?;
         let mut target = source.fork_exact(target_session_id, request, expected_position)?;
         target.bind_kv(kv_handle);
         Ok(PreparedSequenceFork {
@@ -381,9 +394,9 @@ impl ResidentScheduler {
     pub fn restore_suspended(&mut self, suspended: SuspendedSequenceSchedule) -> Result<()> {
         let session_id = suspended.sequence.session_id;
         if self.active.contains_key(&session_id) {
-            return Err(Error::Internal(format!(
-                "cannot restore already-active resident session {session_id:?}"
-            )));
+            return Err(Error::Invariant {
+                message: format!("cannot restore already-active resident session {session_id:?}"),
+            });
         }
         if suspended.was_prefill_ready {
             self.prefill_queue.push_back(session_id);
@@ -474,10 +487,9 @@ impl ResidentScheduler {
             let session_id = self.resolve_session_id(waiting.request.session_id);
             if self.active.contains_key(&session_id) {
                 self.waiting.push_front(waiting);
-                return Err(Error::Internal(format!(
-                    "session {:?} is already active",
-                    session_id
-                )));
+                return Err(Error::Invariant {
+                    message: format!("session {:?} is already active", session_id),
+                });
             }
 
             let kv_handle = match slot_pool.alloc_slot() {
@@ -634,12 +646,15 @@ impl ResidentScheduler {
     }
 
     pub fn commit_prefill_action(&mut self, action: &PrefillChunkAction) -> Result<()> {
-        let sequence = self.active.get_mut(&action.session_id).ok_or_else(|| {
-            Error::Internal(format!(
-                "cannot commit prefill for inactive session {:?}",
-                action.session_id
-            ))
-        })?;
+        let sequence = self
+            .active
+            .get_mut(&action.session_id)
+            .ok_or_else(|| Error::Invariant {
+                message: format!(
+                    "cannot commit prefill for inactive session {:?}",
+                    action.session_id
+                ),
+            })?;
         action.commit(sequence)?;
         if sequence.prompt_prefill_done() {
             self.remove_from_queue(action.session_id, QueueKind::Prefill);
@@ -657,12 +672,15 @@ impl ResidentScheduler {
         token_id: u32,
         logit: Option<f32>,
     ) -> Result<()> {
-        let sequence = self.active.get_mut(&session_id).ok_or_else(|| {
-            Error::Internal(format!(
-                "cannot stage decode token for inactive session {:?}",
-                session_id
-            ))
-        })?;
+        let sequence = self
+            .active
+            .get_mut(&session_id)
+            .ok_or_else(|| Error::Invariant {
+                message: format!(
+                    "cannot stage decode token for inactive session {:?}",
+                    session_id
+                ),
+            })?;
         sequence.stage_decode_candidate(token_id, logit)?;
         if !self.decode_ready.iter().any(|queued| *queued == session_id) {
             self.decode_ready.push_back(session_id);
@@ -711,23 +729,30 @@ impl ResidentScheduler {
     }
 
     pub fn commit_decode_action(&mut self, action: &DecodeAction) -> Result<()> {
-        let sequence = self.active.get_mut(&action.session_id).ok_or_else(|| {
-            Error::Internal(format!(
-                "cannot commit decode for inactive session {:?}",
-                action.session_id
-            ))
-        })?;
+        let sequence = self
+            .active
+            .get_mut(&action.session_id)
+            .ok_or_else(|| Error::Invariant {
+                message: format!(
+                    "cannot commit decode for inactive session {:?}",
+                    action.session_id
+                ),
+            })?;
         if sequence.position != action.position {
-            return Err(Error::Internal(format!(
-                "decode position mismatch for session {:?}: sequence at {}, action at {}",
-                action.session_id, sequence.position, action.position
-            )));
+            return Err(Error::Invariant {
+                message: format!(
+                    "decode position mismatch for session {:?}: sequence at {}, action at {}",
+                    action.session_id, sequence.position, action.position
+                ),
+            });
         }
         if sequence.kv_handle != action.kv_handle {
-            return Err(Error::Internal(format!(
-                "decode KV handle mismatch for session {:?}: sequence {:?}, action {:?}",
-                action.session_id, sequence.kv_handle, action.kv_handle
-            )));
+            return Err(Error::Invariant {
+                message: format!(
+                    "decode KV handle mismatch for session {:?}: sequence {:?}, action {:?}",
+                    action.session_id, sequence.kv_handle, action.kv_handle
+                ),
+            });
         }
         sequence.commit_staged_decode_token(action.token_id)
     }
@@ -905,12 +930,11 @@ impl ResidentScheduler {
     fn remove_active_sequence(&mut self, session_id: SessionId) -> Result<SequenceState> {
         self.remove_from_queue(session_id, QueueKind::Prefill);
         self.remove_from_queue(session_id, QueueKind::Decode);
-        self.active.remove(&session_id).ok_or_else(|| {
-            Error::Internal(format!(
-                "cannot remove inactive resident session {:?}",
-                session_id
-            ))
-        })
+        self.active
+            .remove(&session_id)
+            .ok_or_else(|| Error::Invariant {
+                message: format!("cannot remove inactive resident session {:?}", session_id),
+            })
     }
 
     fn remove_from_queue(&mut self, session_id: SessionId, queue: QueueKind) {
@@ -972,7 +996,9 @@ mod tests {
         }
 
         fn free_slot(&mut self, _handle: KvHandle) -> Result<()> {
-            Err(Error::Internal("simulated slot free failure".into()))
+            Err(Error::Invariant {
+                message: "simulated slot free failure".into(),
+            })
         }
     }
 

@@ -17,16 +17,20 @@ pub struct SparseAttentionSpec {
 impl SparseAttentionSpec {
     pub fn validate(&self) -> Result<()> {
         if self.heads == 0 || self.head_dim == 0 || self.topk == 0 {
-            return Err(Error::Model(format!(
-                "invalid sparse attention shape: heads={}, head_dim={}, topk={}",
-                self.heads, self.head_dim, self.topk
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "invalid sparse attention shape: heads={}, head_dim={}, topk={}",
+                    self.heads, self.head_dim, self.topk
+                ),
+            });
         }
         if !self.softmax_scale.is_finite() || self.softmax_scale <= 0.0 {
-            return Err(Error::Model(format!(
-                "invalid sparse attention softmax scale {}",
-                self.softmax_scale
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "invalid sparse attention softmax scale {}",
+                    self.softmax_scale
+                ),
+            });
         }
         Ok(())
     }
@@ -54,37 +58,45 @@ pub fn sparse_attention_reference(
     let head_dim = spec.head_dim;
     let topk = spec.topk;
     if q.len() != tokens * heads * head_dim {
-        return Err(Error::Model(format!(
-            "sparse attention q length mismatch: expected {}, got {}",
-            tokens * heads * head_dim,
-            q.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "sparse attention q length mismatch: expected {}, got {}",
+                tokens * heads * head_dim,
+                q.len()
+            ),
+        });
     }
     if kv.len() != kv_len * head_dim {
-        return Err(Error::Model(format!(
-            "sparse attention kv length mismatch: expected {}, got {}",
-            kv_len * head_dim,
-            kv.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "sparse attention kv length mismatch: expected {}, got {}",
+                kv_len * head_dim,
+                kv.len()
+            ),
+        });
     }
     if topk_indices.len() != tokens * topk {
-        return Err(Error::Model(format!(
-            "sparse attention topk length mismatch: expected {}, got {}",
-            tokens * topk,
-            topk_indices.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "sparse attention topk length mismatch: expected {}, got {}",
+                tokens * topk,
+                topk_indices.len()
+            ),
+        });
     }
     if let Some(sink) = attention_sink {
         if sink.len() != heads {
-            return Err(Error::Model(format!(
-                "attention sink length mismatch: expected {heads}, got {}",
-                sink.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "attention sink length mismatch: expected {heads}, got {}",
+                    sink.len()
+                ),
+            });
         }
     } else if spec.has_attention_sink {
-        return Err(Error::Model(
-            "sparse attention spec requires attention sink".into(),
-        ));
+        return Err(Error::Model {
+            message: "sparse attention spec requires attention sink".into(),
+        });
     }
 
     let mut out = vec![0.0f32; q.len()];
@@ -101,13 +113,15 @@ pub fn sparse_attention_reference(
                 let score = if idx < 0 {
                     f32::NEG_INFINITY
                 } else {
-                    let idx = usize::try_from(idx).map_err(|_| {
-                        Error::Model(format!("negative sparse attention index {idx}"))
+                    let idx = usize::try_from(idx).map_err(|_| Error::Model {
+                        message: format!("negative sparse attention index {idx}"),
                     })?;
                     if idx >= kv_len {
-                        return Err(Error::Model(format!(
-                            "sparse attention index {idx} exceeds kv_len {kv_len}"
-                        )));
+                        return Err(Error::Model {
+                            message: format!(
+                                "sparse attention index {idx} exceeds kv_len {kv_len}"
+                            ),
+                        });
                     }
                     dot(q_vec, &kv[idx * head_dim..(idx + 1) * head_dim]) * spec.softmax_scale
                 };
@@ -124,9 +138,9 @@ pub fn sparse_attention_reference(
                 }
             }
             if denom == 0.0 || !denom.is_finite() {
-                return Err(Error::Model(
-                    "sparse attention denominator is invalid".into(),
-                ));
+                return Err(Error::Model {
+                    message: "sparse attention denominator is invalid".into(),
+                });
             }
 
             for slot in 0..topk {

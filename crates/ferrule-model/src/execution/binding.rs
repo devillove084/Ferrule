@@ -169,5 +169,7 @@ fn validate_basic_batch_shape(batch: &ExecutionBatch) -> Result<()> {
 }
 
 fn execution_error(message: impl Into<String>) -> Error {
-    Error::Execution(message.into())
+    Error::Execution {
+        message: message.into(),
+    }
 }

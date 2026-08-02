@@ -78,10 +78,9 @@ impl<S> MaterializationSourceCatalog<S> {
             let key = (entry.resource(), entry.source());
             resources.insert(entry.resource());
             if indexed.insert(key, entry).is_some() {
-                return Err(Error::Model(format!(
-                    "duplicate exact materialization source for {:?}",
-                    key.0
-                )));
+                return Err(Error::Model {
+                    message: format!("duplicate exact materialization source for {:?}", key.0),
+                });
             }
         }
         Ok(Self {
@@ -98,15 +97,15 @@ impl<S> MaterializationSourceCatalog<S> {
             .get(&(request.resource(), request.source()))
             .ok_or_else(|| {
                 if self.resources.contains(&request.resource()) {
-                    FailureReason::ProtocolViolation(format!(
+                    FailureReason::ContractViolation { message: format!(
                         "materialization request source does not match a registered descriptor for {:?}",
                         request.resource()
-                    ))
+                    ) }
                 } else {
-                    FailureReason::ProtocolViolation(format!(
+                    FailureReason::ContractViolation { message: format!(
                         "materialization request references unregistered resource {:?}",
                         request.resource()
-                    ))
+                    ) }
                 }
             })
     }
@@ -284,7 +283,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             catalog.resolve(request(resource, unknown)),
-            Err(FailureReason::ProtocolViolation(_))
+            Err(FailureReason::ContractViolation { message: _ })
         ));
     }
 

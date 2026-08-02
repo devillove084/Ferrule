@@ -91,21 +91,26 @@ impl DeepSeekV4KvLayoutSchema {
 
     /// Bytes per physical CUDA page for the three f32 token-scaled data planes.
     pub fn cuda_f32_data_page_bytes(&self) -> Result<u64> {
-        let data_planes = self.planes.get(..3).ok_or_else(|| {
-            Error::Model("DeepSeek-V4 KV schema is missing CUDA data planes".into())
+        let data_planes = self.planes.get(..3).ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 KV schema is missing CUDA data planes".into(),
         })?;
         let elements_per_page = data_planes.iter().try_fold(0usize, |total, plane| {
             self.page_size
                 .checked_mul(plane.elements_per_token)
                 .and_then(|elements| elements.checked_mul(plane.layer_count))
                 .and_then(|elements| total.checked_add(elements))
-                .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA KV page size overflow".into()))
+                .ok_or_else(|| Error::Model {
+                    message: "DeepSeek-V4 CUDA KV page size overflow".into(),
+                })
         })?;
         let bytes = elements_per_page
             .checked_mul(std::mem::size_of::<f32>())
-            .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA KV page byte size overflow".into()))?;
-        u64::try_from(bytes)
-            .map_err(|_| Error::Model("DeepSeek-V4 CUDA KV page bytes exceed u64".into()))
+            .ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 CUDA KV page byte size overflow".into(),
+            })?;
+        u64::try_from(bytes).map_err(|_| Error::Model {
+            message: "DeepSeek-V4 CUDA KV page bytes exceed u64".into(),
+        })
     }
 
     pub fn compress_ratios(&self) -> &[usize] {
@@ -197,10 +202,10 @@ impl DeepSeekV4ExecutionPolicy {
     fn resolve() -> Result<Self> {
         Self::resolve_with(|name| match process_environment::var_os(name) {
             None => Ok(None),
-            Some(value) => value.into_string().map(Some).map_err(|_| {
-                Error::Model(format!(
+            Some(value) => value.into_string().map(Some).map_err(|_| Error::Model {
+                message: format!(
                     "DeepSeek-V4 execution policy environment variable {name} is not valid Unicode"
-                ))
+                ),
             }),
         })
     }
@@ -423,31 +428,33 @@ pub fn prepare(
     let mut layers = Vec::new();
     layers
         .try_reserve_exact(options.max_layers)
-        .map_err(|error| {
-            Error::Model(format!(
+        .map_err(|error| Error::Model {
+            message: format!(
                 "DeepSeek-V4 prepared layer allocation failed for {} layers: {error}",
                 options.max_layers
-            ))
+            ),
         })?;
     let mut layer_experts = Vec::new();
     layer_experts
         .try_reserve_exact(options.max_layers)
-        .map_err(|error| {
-            Error::Model(format!(
+        .map_err(|error| Error::Model {
+            message: format!(
                 "DeepSeek-V4 prepared expert catalog allocation failed for {} layers: {error}",
                 options.max_layers
-            ))
+            ),
         })?;
     let expert_streaming_policy = model
         .resolved_expert_streaming_policy(options.moe_prefetch_experts, options.moe_hotset_experts);
     for layer in 0..options.max_layers {
         let source_catalog = Arc::clone(model.expert_source_catalog(layer)?);
         if source_catalog.count() != model.config.num_routed_experts {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} catalog has {} routed experts, expected {}",
-                source_catalog.count(),
-                model.config.num_routed_experts
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {layer} catalog has {} routed experts, expected {}",
+                    source_catalog.count(),
+                    model.config.num_routed_experts
+                ),
+            });
         }
         layers.push(model.bind_layer(layer)?);
         layer_experts.push(DeepSeekV4PreparedLayerExperts::new(
@@ -493,7 +500,9 @@ pub fn prepare(
             .config
             .num_layers
             .checked_add(mtp.layers.len())
-            .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark KV layer count overflow".into()))?;
+            .ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 DSpark KV layer count overflow".into(),
+            })?;
         options.max_layers.max(attachment_end)
     } else {
         options.max_layers
@@ -641,11 +650,13 @@ fn prepare_materialization_sources(
     }
     if let Some(mtp) = mtp {
         if mtp.layers.len() != mtp_layer_experts.len() {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 DSpark stage/expert source mismatch: stages={} sources={}",
-                mtp.layers.len(),
-                mtp_layer_experts.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 DSpark stage/expert source mismatch: stages={} sources={}",
+                    mtp.layers.len(),
+                    mtp_layer_experts.len()
+                ),
+            });
         }
         for experts in mtp_layer_experts {
             entries.extend(
@@ -706,8 +717,9 @@ fn prepare_executable_from_inventory(
     });
 
     for layer in 0..max_layers {
-        let layer_id = u32::try_from(layer)
-            .map_err(|_| Error::Model("DeepSeek-V4 layer index exceeds u32".into()))?;
+        let layer_id = u32::try_from(layer).map_err(|_| Error::Model {
+            message: "DeepSeek-V4 layer index exceeds u32".into(),
+        })?;
         let layer_prefix = format!("layers.{layer}.");
         let mut attention = Vec::new();
         let mut router = Vec::new();
@@ -791,8 +803,9 @@ fn prepare_executable_from_inventory(
     });
 
     for (&attachment, tensors) in &inventory.mtp_layer_tensors() {
-        let attachment = u32::try_from(attachment)
-            .map_err(|_| Error::Model("DeepSeek-V4 attachment index exceeds u32".into()))?;
+        let attachment = u32::try_from(attachment).map_err(|_| Error::Model {
+            message: "DeepSeek-V4 attachment index exceeds u32".into(),
+        })?;
         let tensors = tensors
             .iter()
             .filter(|tensor| !tensor.name.contains(".ffn.experts."))
@@ -806,10 +819,12 @@ fn prepare_executable_from_inventory(
     }
 
     if let Some(empty) = bundles.iter().find(|bundle| bundle.tensors.is_empty()) {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 prepared stage {:?} has no checkpoint-backed tensors",
-            empty.operation
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 prepared stage {:?} has no checkpoint-backed tensors",
+                empty.operation
+            ),
+        });
     }
     for bundle in &mut bundles {
         bundle.tensors.sort_by(|left, right| {
@@ -858,15 +873,17 @@ fn deepseek_v4_layer_kernel_requirements(
         || layer.attn_norm.len() != 4096
         || layer.ffn_norm.len() != 4096
     {
-        return Err(Error::Model(format!(
-            "SM121 HC producer requires hc=4 hidden=4096 mix=24 at layer {}, got hc={} hidden={} mix={} attn_norm={} ffn_norm={}",
-            layer.layer,
-            layer.hc_config.hc_mult,
-            layer.hc_config.hidden_size,
-            layer.hc_config.mix_hc(),
-            layer.attn_norm.len(),
-            layer.ffn_norm.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "SM121 HC producer requires hc=4 hidden=4096 mix=24 at layer {}, got hc={} hidden={} mix={} attn_norm={} ffn_norm={}",
+                layer.layer,
+                layer.hc_config.hc_mult,
+                layer.hc_config.hidden_size,
+                layer.hc_config.mix_hc(),
+                layer.attn_norm.len(),
+                layer.ffn_norm.len()
+            ),
+        });
     }
     validate_shared_ffn_requirement(layer)?;
     validate_mla_output_requirement(layer)?;
@@ -932,10 +949,12 @@ fn validate_shared_ffn_requirement(layer: &DeepSeekV4Layer) -> Result<()> {
         },
     ) = formats
     else {
-        return Err(Error::Model(format!(
-            "SM121 shared FFN requires FP8 K128 weights at layer {}: gate={:?} up={:?} down={:?}",
-            layer.layer, formats.0, formats.1, formats.2
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "SM121 shared FFN requires FP8 K128 weights at layer {}: gate={:?} up={:?} down={:?}",
+                layer.layer, formats.0, formats.1, formats.2
+            ),
+        });
     };
     if gate_in != up_in
         || gate_out != up_out
@@ -945,10 +964,12 @@ fn validate_shared_ffn_requirement(layer: &DeepSeekV4Layer) -> Result<()> {
         || !down_out.is_multiple_of(16)
         || !layer.shared_ffn.swiglu_limit.is_finite()
     {
-        return Err(Error::Model(format!(
-            "SM121 shared FFN shape is unsupported at layer {}: gate=[{gate_out},{gate_in}] up=[{up_out},{up_in}] down=[{down_out},{down_in}] limit={}",
-            layer.layer, layer.shared_ffn.swiglu_limit
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "SM121 shared FFN shape is unsupported at layer {}: gate=[{gate_out},{gate_in}] up=[{up_out},{up_in}] down=[{down_out},{down_in}] limit={}",
+                layer.layer, layer.shared_ffn.swiglu_limit
+            ),
+        });
     }
     Ok(())
 }
@@ -966,13 +987,15 @@ fn deepseek_v4_mtp_kernel_requirements(
         || attention.window_size != ferrule_cuda::cutlass::DSPARK_ATTENTION_WINDOW
         || attention.compress_ratio != 0
     {
-        return Err(Error::Model(format!(
-            "SM121 DSpark hybrid attention shape mismatch at stage {stage}: heads={} head_dim={} window={} compress_ratio={}",
-            attention.num_heads,
-            attention.head_dim,
-            attention.window_size,
-            attention.compress_ratio
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "SM121 DSpark hybrid attention shape mismatch at stage {stage}: heads={} head_dim={} window={} compress_ratio={}",
+                attention.num_heads,
+                attention.head_dim,
+                attention.window_size,
+                attention.compress_ratio
+            ),
+        });
     }
     requirements.require_operation(KernelOperation::DsparkHybridMlaAttention);
     if stage == 0 {
@@ -981,14 +1004,12 @@ fn deepseek_v4_mtp_kernel_requirements(
     if stage != 0 {
         return Ok(requirements);
     }
-    let main_proj = layer
-        .main_proj
-        .as_ref()
-        .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark stage zero is missing main_proj".into()))?;
-    let main_norm = layer
-        .main_norm
-        .as_deref()
-        .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark stage zero is missing main_norm".into()))?;
+    let main_proj = layer.main_proj.as_ref().ok_or_else(|| Error::Model {
+        message: "DeepSeek-V4 DSpark stage zero is missing main_proj".into(),
+    })?;
+    let main_norm = layer.main_norm.as_deref().ok_or_else(|| Error::Model {
+        message: "DeepSeek-V4 DSpark stage zero is missing main_norm".into(),
+    })?;
     let LinearWeightFormat::Fp8E4M3WithE8M0Scale {
         out_features,
         in_features,
@@ -996,10 +1017,12 @@ fn deepseek_v4_mtp_kernel_requirements(
         block_k: 128,
     } = &main_proj.format
     else {
-        return Err(Error::Model(format!(
-            "SM121 DSpark main projection requires FP8/E8M0 K128 weights, got {:?}",
-            main_proj.format
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "SM121 DSpark main projection requires FP8/E8M0 K128 weights, got {:?}",
+                main_proj.format
+            ),
+        });
     };
     if *out_features != layer.transformer.hc_config.hidden_size
         || *in_features != main_norm.len().saturating_mul(target_layer_count)
@@ -1007,11 +1030,13 @@ fn deepseek_v4_mtp_kernel_requirements(
         || !out_features.is_multiple_of(128)
         || !in_features.is_multiple_of(128)
     {
-        return Err(Error::Model(format!(
-            "SM121 DSpark main projection shape mismatch: weight=[{out_features},{in_features}] norm={} hidden={} target_layers={target_layer_count}",
-            main_norm.len(),
-            layer.transformer.hc_config.hidden_size
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "SM121 DSpark main projection shape mismatch: weight=[{out_features},{in_features}] norm={} hidden={} target_layers={target_layer_count}",
+                main_norm.len(),
+                layer.transformer.hc_config.hidden_size
+            ),
+        });
     }
     requirements.require_operation(KernelOperation::DsparkMainProjectNorm);
     Ok(requirements)
@@ -1037,10 +1062,12 @@ fn validate_mla_output_requirement(layer: &DeepSeekV4Layer) -> Result<()> {
         },
     ) = (output_a, output_b)
     else {
-        return Err(Error::Model(format!(
-            "SM121 MLA output requires FP8/E8M0 output-A and output-B at layer {}: output_a={output_a:?} output_b={output_b:?}",
-            layer.layer
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "SM121 MLA output requires FP8/E8M0 output-A and output-B at layer {}: output_a={output_a:?} output_b={output_b:?}",
+                layer.layer
+            ),
+        });
     };
     if *output_a_out != cfg.output_latent_dim()
         || *output_a_in != cfg.output_group_input_dim()
@@ -1049,10 +1076,12 @@ fn validate_mla_output_requirement(layer: &DeepSeekV4Layer) -> Result<()> {
         || !cfg.output_group_input_dim().is_multiple_of(128)
         || !cfg.o_lora_rank.is_multiple_of(16)
     {
-        return Err(Error::Model(format!(
-            "SM121 MLA output shape mismatch at layer {}: output_a=[{output_a_out},{output_a_in}] output_b=[{output_b_out},{output_b_in}] groups={} rank={} hidden={}",
-            layer.layer, cfg.o_groups, cfg.o_lora_rank, cfg.hidden_size
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "SM121 MLA output shape mismatch at layer {}: output_a=[{output_a_out},{output_a_in}] output_b=[{output_b_out},{output_b_in}] groups={} rank={} hidden={}",
+                layer.layer, cfg.o_groups, cfg.o_lora_rank, cfg.hidden_size
+            ),
+        });
     }
     Ok(())
 }
@@ -1078,9 +1107,9 @@ fn fp8_linear_bundle_requirement(
         },
     ) = (&first.format, &second.format)
     else {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 {operation:?} requires two FP8 bindings"
-        )));
+        return Err(Error::Model {
+            message: format!("DeepSeek-V4 {operation:?} requires two FP8 bindings"),
+        });
     };
     if first_in != second_in
         || *first_block_m != 128
@@ -1088,9 +1117,9 @@ fn fp8_linear_bundle_requirement(
         || *second_block_m != 128
         || *second_block_k != 128
     {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 {operation:?} requires matching FP8 K128 layouts"
-        )));
+        return Err(Error::Model {
+            message: format!("DeepSeek-V4 {operation:?} requires matching FP8 K128 layouts"),
+        });
     }
     Ok(LinearBundleRequirement::new(
         operation,
@@ -1112,9 +1141,9 @@ fn fp8_single_linear_requirement(
         block_k: 128,
     } = &linear.format
     else {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 {operation:?} requires one FP8 K128 binding"
-        )));
+        return Err(Error::Model {
+            message: format!("DeepSeek-V4 {operation:?} requires one FP8 K128 binding"),
+        });
     };
     Ok(LinearBundleRequirement::new(
         operation,
@@ -1141,14 +1170,16 @@ fn bf16_linear_bundle_requirement(
         },
     ) = (&first.format, &second.format)
     else {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 {operation:?} requires two BF16 bindings"
-        )));
+        return Err(Error::Model {
+            message: format!("DeepSeek-V4 {operation:?} requires two BF16 bindings"),
+        });
     };
     if first_in != second_in {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 {operation:?} input mismatch: first={first_in} second={second_in}"
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 {operation:?} input mismatch: first={first_in} second={second_in}"
+            ),
+        });
     }
     Ok(LinearBundleRequirement::new(
         operation,
@@ -1170,37 +1201,40 @@ fn validate_mtp_attachment(
         return Ok(());
     }
 
-    let mtp = mtp.ok_or_else(|| {
-        Error::Model(
-            "DeepSeek-V4 config declares a DSpark attachment but no MTP tensors were found".into(),
-        )
+    let mtp = mtp.ok_or_else(|| Error::Model {
+        message: "DeepSeek-V4 config declares a DSpark attachment but no MTP tensors were found"
+            .into(),
     })?;
     let _protocol = mtp.protocol()?;
     if mtp.config.block_size == 0 {
-        return Err(Error::Model(
-            "DeepSeek-V4 DSpark block size must be greater than zero".into(),
-        ));
+        return Err(Error::Model {
+            message: "DeepSeek-V4 DSpark block size must be greater than zero".into(),
+        });
     }
-    let noise_token_id = mtp.config.noise_token_id.ok_or_else(|| {
-        Error::Model("DeepSeek-V4 DSpark attachment is missing its noise token id".into())
+    let noise_token_id = mtp.config.noise_token_id.ok_or_else(|| Error::Model {
+        message: "DeepSeek-V4 DSpark attachment is missing its noise token id".into(),
     })?;
     if noise_token_id as usize >= model.config.vocab_size {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 DSpark noise token {noise_token_id} exceeds vocabulary {}",
-            model.config.vocab_size
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 DSpark noise token {noise_token_id} exceeds vocabulary {}",
+                model.config.vocab_size
+            ),
+        });
     }
     if mtp.config.target_layer_ids.is_empty() {
-        return Err(Error::Model(
-            "DeepSeek-V4 DSpark attachment requires target hidden-state layers".into(),
-        ));
+        return Err(Error::Model {
+            message: "DeepSeek-V4 DSpark attachment requires target hidden-state layers".into(),
+        });
     }
     for &target_layer in &mtp.config.target_layer_ids {
         if target_layer >= model.config.num_layers {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 DSpark target layer {target_layer} exceeds target layer count {}",
-                model.config.num_layers
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 DSpark target layer {target_layer} exceeds target layer count {}",
+                    model.config.num_layers
+                ),
+            });
         }
     }
     if mtp
@@ -1209,40 +1243,49 @@ fn validate_mtp_attachment(
         .windows(2)
         .any(|pair| pair[0] >= pair[1])
     {
-        return Err(Error::Model(
-            "DeepSeek-V4 DSpark target layers must be strictly increasing".into(),
-        ));
+        return Err(Error::Model {
+            message: "DeepSeek-V4 DSpark target layers must be strictly increasing".into(),
+        });
     }
     if mtp.layers.len() != model.config.num_mtp_layers {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 prepared MTP stage count {} does not match config {}",
-            mtp.layers.len(),
-            model.config.num_mtp_layers
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 prepared MTP stage count {} does not match config {}",
+                mtp.layers.len(),
+                model.config.num_mtp_layers
+            ),
+        });
     }
     if mtp.prediction_heads.is_none() {
-        return Err(Error::Model(
-            "DeepSeek-V4 DSpark attachment is missing prediction heads".into(),
-        ));
+        return Err(Error::Model {
+            message: "DeepSeek-V4 DSpark attachment is missing prediction heads".into(),
+        });
     }
     for (stage, layer) in mtp.layers.iter().enumerate() {
-        let expected_execution_layer = model
-            .config
-            .num_layers
-            .checked_add(stage)
-            .ok_or_else(|| Error::Model("DeepSeek-V4 MTP execution layer overflow".into()))?;
+        let expected_execution_layer =
+            model
+                .config
+                .num_layers
+                .checked_add(stage)
+                .ok_or_else(|| Error::Model {
+                    message: "DeepSeek-V4 MTP execution layer overflow".into(),
+                })?;
         if layer.mtp_index != stage || layer.execution_layer != expected_execution_layer {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 MTP stage {stage} has checkpoint index {} and execution layer {}, expected execution layer {expected_execution_layer}",
-                layer.mtp_index, layer.execution_layer
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 MTP stage {stage} has checkpoint index {} and execution layer {}, expected execution layer {expected_execution_layer}",
+                    layer.mtp_index, layer.execution_layer
+                ),
+            });
         }
         let is_stage_zero = stage == 0;
         if layer.main_proj.is_some() != is_stage_zero || layer.main_norm.is_some() != is_stage_zero
         {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 MTP stage {stage} has an invalid stage-zero projection contract"
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 MTP stage {stage} has an invalid stage-zero projection contract"
+                ),
+            });
         }
     }
     Ok(())
@@ -1250,32 +1293,36 @@ fn validate_mtp_attachment(
 
 fn validate_options(model: &DeepSeekV4Checkpoint, options: DeepSeekV4PrepareOptions) -> Result<()> {
     if options.max_layers > model.config.num_layers {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 prepared plan max_layers {} exceeds model layers {}",
-            options.max_layers, model.config.num_layers
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 prepared plan max_layers {} exceeds model layers {}",
+                options.max_layers, model.config.num_layers
+            ),
+        });
     }
 
     if options.output_head_chunk_rows == 0 {
-        return Err(Error::Model(
-            "DeepSeek-V4 prepared plan output_head_chunk_rows must be > 0".into(),
-        ));
+        return Err(Error::Model {
+            message: "DeepSeek-V4 prepared plan output_head_chunk_rows must be > 0".into(),
+        });
     }
     if options.expert_reader_max_tensor_bytes == 0 {
-        return Err(Error::Model(
-            "DeepSeek-V4 prepared plan expert_reader_max_tensor_bytes must be > 0".into(),
-        ));
+        return Err(Error::Model {
+            message: "DeepSeek-V4 prepared plan expert_reader_max_tensor_bytes must be > 0".into(),
+        });
     }
     if model.config.num_routed_experts == 0 || model.config.num_experts_per_tok == 0 {
-        return Err(Error::Model(
-            "DeepSeek-V4 prepared plan requires a non-empty routed-expert catalog".into(),
-        ));
+        return Err(Error::Model {
+            message: "DeepSeek-V4 prepared plan requires a non-empty routed-expert catalog".into(),
+        });
     }
     if model.config.num_experts_per_tok > model.config.num_routed_experts {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 experts per token {} exceed routed experts {}",
-            model.config.num_experts_per_tok, model.config.num_routed_experts
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 experts per token {} exceed routed experts {}",
+                model.config.num_experts_per_tok, model.config.num_routed_experts
+            ),
+        });
     }
     Ok(())
 }
@@ -1302,9 +1349,11 @@ fn parse_env_bool(name: &str, value: Option<String>, default: bool) -> Result<bo
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "on" | "yes" => Ok(true),
         "0" | "false" | "off" | "no" => Ok(false),
-        _ => Err(Error::Model(format!(
-            "DeepSeek-V4 execution policy {name} must be one of 1/0, true/false, on/off, or yes/no; got {value:?}"
-        ))),
+        _ => Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 execution policy {name} must be one of 1/0, true/false, on/off, or yes/no; got {value:?}"
+            ),
+        }),
     }
 }
 
@@ -1312,10 +1361,10 @@ fn parse_env_usize(name: &str, value: Option<String>, default: usize) -> Result<
     let Some(value) = value else {
         return Ok(default);
     };
-    value.trim().parse::<usize>().map_err(|_| {
-        Error::Model(format!(
+    value.trim().parse::<usize>().map_err(|_| Error::Model {
+        message: format!(
             "DeepSeek-V4 execution policy {name} must be a non-negative integer; got {value:?}"
-        ))
+        ),
     })
 }
 
@@ -1549,7 +1598,7 @@ mod tests {
                 None,
                 &[],
             ),
-            Err(Error::Model(message)) if message.contains("duplicate exact materialization source")
+            Err(Error::Model { message }) if message.contains("duplicate exact materialization source")
         ));
 
         std::fs::remove_dir_all(dir).unwrap();
@@ -1630,7 +1679,9 @@ mod tests {
         let generations = AtomicU64::new(41);
         let failed = publish_prepared_with_generation::<(), TransformerStage>(
             &generations,
-            Err(Error::Model("bind failed".into())),
+            Err(Error::Model {
+                message: "bind failed".into(),
+            }),
         );
         assert!(failed.is_err());
         assert_eq!(generations.load(Ordering::Relaxed), 41);
@@ -1733,12 +1784,12 @@ mod tests {
             Ok((name == "FERRULE_DSV4_LOOKAHEAD_PREFETCH").then(|| "sometimes".to_string()))
         })
         .unwrap_err();
-        assert!(matches!(error, Error::Model(_)));
+        assert!(matches!(error, Error::Model { message: _ }));
 
         let error = DeepSeekV4ExecutionPolicy::resolve_with(|name| {
             Ok((name == "FERRULE_DSV4_EXPERT_UPLOAD_INFLIGHT").then(|| "many".to_string()))
         })
         .unwrap_err();
-        assert!(matches!(error, Error::Model(_)));
+        assert!(matches!(error, Error::Model { message: _ }));
     }
 }

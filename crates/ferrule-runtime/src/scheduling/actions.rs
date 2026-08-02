@@ -4,7 +4,7 @@
 //! lowering without owning queueing, admission, or KV lifecycle policy.
 
 use super::KvHandle;
-use ferrule_common::{Error, Result};
+use crate::{Error, Result};
 
 use super::session::{RequestId, SequenceFinishReason, SequenceState, SessionId};
 
@@ -81,28 +81,36 @@ impl PrefillChunkAction {
 
     pub fn commit(&self, sequence: &mut SequenceState) -> Result<()> {
         if sequence.session_id != self.session_id {
-            return Err(Error::Internal(format!(
-                "cannot commit prefill for session {:?} into session {:?}",
-                self.session_id, sequence.session_id
-            )));
+            return Err(Error::Invariant {
+                message: format!(
+                    "cannot commit prefill for session {:?} into session {:?}",
+                    self.session_id, sequence.session_id
+                ),
+            });
         }
         if self.token_range.end < self.token_range.start {
-            return Err(Error::Internal(format!(
-                "cannot commit reversed prefill token range {:?}",
-                self.token_range
-            )));
+            return Err(Error::Invariant {
+                message: format!(
+                    "cannot commit reversed prefill token range {:?}",
+                    self.token_range
+                ),
+            });
         }
         if sequence.prompt_cursor != self.token_range.start {
-            return Err(Error::Internal(format!(
-                "prefill cursor mismatch: sequence at {}, action starts at {}",
-                sequence.prompt_cursor, self.token_range.start
-            )));
+            return Err(Error::Invariant {
+                message: format!(
+                    "prefill cursor mismatch: sequence at {}, action starts at {}",
+                    sequence.prompt_cursor, self.token_range.start
+                ),
+            });
         }
         if sequence.position != self.position_start {
-            return Err(Error::Internal(format!(
-                "prefill position mismatch: sequence at {}, action starts at {}",
-                sequence.position, self.position_start
-            )));
+            return Err(Error::Invariant {
+                message: format!(
+                    "prefill position mismatch: sequence at {}, action starts at {}",
+                    sequence.position, self.position_start
+                ),
+            });
         }
         sequence.commit_prefill_tokens(self.token_range.len())
     }

@@ -347,12 +347,14 @@ impl DeepSeekV4Layer {
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<DeepSeekV4LayerStepOutput> {
         if hc_state.len() != self.hc_config.hc_hidden_size() {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} HC input length mismatch: expected {}, got {}",
-                self.layer,
-                self.hc_config.hc_hidden_size(),
-                hc_state.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {} HC input length mismatch: expected {}, got {}",
+                    self.layer,
+                    self.hc_config.hc_hidden_size(),
+                    hc_state.len()
+                ),
+            });
         }
 
         // CPU reference path only. CUDA callers use decode_step_device_hc_device
@@ -442,9 +444,9 @@ impl DeepSeekV4Layer {
                 .iter()
                 .any(|sequence| *sequence >= states.len())
         {
-            return Err(Error::Model(
-                "DeepSeek-V4 packed row/sequence metadata is inconsistent".into(),
-            ));
+            return Err(Error::Model {
+                message: "DeepSeek-V4 packed row/sequence metadata is inconsistent".into(),
+            });
         }
         let attention_fp8 = operators.cuda_mut()?.hc_pre_rmsnorm_fp8_into(
             self.layer,
@@ -460,9 +462,12 @@ impl DeepSeekV4Layer {
             &mut arena.hc_fp8_pack,
         )?;
 
-        let transition = arena.attention_transition.as_mut().ok_or_else(|| {
-            Error::Internal("packed decode arena is missing attention transition scratch".into())
-        })?;
+        let transition = arena
+            .attention_transition
+            .as_mut()
+            .ok_or_else(|| Error::Internal {
+                message: "packed decode arena is missing attention transition scratch".into(),
+            })?;
 
         let mut attention_caches = states
             .iter_mut()
@@ -619,12 +624,14 @@ impl DeepSeekV4Layer {
         if token_ids.len() != rows
             || hc_state_dev.len() != rows.saturating_mul(self.hc_config.hc_hidden_size())
         {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 DSpark stage {stage} input mismatch: tokens={} hc={} expected_tokens={rows} expected_hc={}",
-                token_ids.len(),
-                hc_state_dev.len(),
-                rows.saturating_mul(self.hc_config.hc_hidden_size())
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 DSpark stage {stage} input mismatch: tokens={} hc={} expected_tokens={rows} expected_hc={}",
+                    token_ids.len(),
+                    hc_state_dev.len(),
+                    rows.saturating_mul(self.hc_config.hc_hidden_size())
+                ),
+            });
         }
 
         let attention_fp8 = operators.cuda_mut()?.hc_pre_rmsnorm_fp8_into(
@@ -784,18 +791,22 @@ impl DeepSeekV4Layer {
     ) -> Result<Vec<f32>> {
         let tokens = token_ids.len();
         if tokens == 0 {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} prefill requires at least one token",
-                self.layer
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {} prefill requires at least one token",
+                    self.layer
+                ),
+            });
         }
         if hc_state.len() != tokens * self.hc_config.hc_hidden_size() {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} batched HC input length mismatch: expected {}, got {}",
-                self.layer,
-                tokens * self.hc_config.hc_hidden_size(),
-                hc_state.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {} batched HC input length mismatch: expected {}, got {}",
+                    self.layer,
+                    tokens * self.hc_config.hc_hidden_size(),
+                    hc_state.len()
+                ),
+            });
         }
 
         let prefill_start = operators.profile_start();
@@ -1045,12 +1056,12 @@ impl DeepSeekV4LayerArena {
         let config = layer.hc_config;
         let hidden = config.hidden_size;
         let hc = config.hc_mult;
-        let hc_dim = hc
-            .checked_mul(hidden)
-            .ok_or_else(|| Error::Internal("DSV4 arena HC dim overflow".into()))?;
-        let comb = hc
-            .checked_mul(hc)
-            .ok_or_else(|| Error::Internal("DSV4 arena HC comb overflow".into()))?;
+        let hc_dim = hc.checked_mul(hidden).ok_or_else(|| Error::Internal {
+            message: "DSV4 arena HC dim overflow".into(),
+        })?;
+        let comb = hc.checked_mul(hc).ok_or_else(|| Error::Internal {
+            message: "DSV4 arena HC comb overflow".into(),
+        })?;
         Ok(Self {
             attn_hidden: operators.cuda_mut()?.ops.zero_f32_buffer(rows * hidden)?,
             attn_pre: operators.cuda_mut()?.ops.zero_f32_buffer(rows * hc)?,

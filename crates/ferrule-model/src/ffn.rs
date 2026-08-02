@@ -25,11 +25,9 @@ impl SwiGluFfn<LinearWeight> {
         let mut gate = self.gate.reference_matvec(input)?;
         let mut up = self.up.reference_matvec(input)?;
         if gate.len() != up.len() {
-            return Err(Error::Model(format!(
-                "SwiGLU gate/up mismatch: {} vs {}",
-                gate.len(),
-                up.len()
-            )));
+            return Err(Error::Model {
+                message: format!("SwiGLU gate/up mismatch: {} vs {}", gate.len(), up.len()),
+            });
         }
 
         if self.swiglu_limit > 0.0 {

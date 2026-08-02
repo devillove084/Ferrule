@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use ahash::RandomState;
+use snafu::Snafu;
 
 use ferrule_common::io_protocol::OperationId;
 
@@ -63,19 +64,13 @@ impl TimeSpan {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Snafu)]
 pub enum LedgerError {
+    #[snafu(display("critical-path span ends at {end_ns} before it starts at {start_ns}"))]
     ReversedSpan { start_ns: u64, end_ns: u64 },
-    DuplicateOutputToken(OutputTokenId),
+    #[snafu(display("output token {token:?} already has a critical-path snapshot"))]
+    DuplicateOutputToken { token: OutputTokenId },
 }
-
-impl std::fmt::Display for LedgerError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "critical-path ledger violation: {self:?}")
-    }
-}
-
-impl std::error::Error for LedgerError {}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PhaseDurations {
@@ -211,7 +206,7 @@ impl CriticalPathLedger {
         captured_at_ns: u64,
     ) -> Result<&OutputTokenSnapshot, LedgerError> {
         if self.snapshots.contains_key(&token) {
-            return Err(LedgerError::DuplicateOutputToken(token));
+            return Err(LedgerError::DuplicateOutputToken { token });
         }
         let operations: HashSet<_, RandomState> = operations.into_iter().collect();
         let cohorts: HashSet<_, RandomState> = cohorts.into_iter().collect();

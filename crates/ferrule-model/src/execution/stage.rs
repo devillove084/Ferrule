@@ -172,9 +172,9 @@ impl StageMaterializationRequest {
         request: MaterializationRequest,
     ) -> ferrule_common::Result<Self> {
         if resource_use.resource() != request.resource() {
-            return Err(Error::Execution(
-                "stage resource use does not match its materialization request".into(),
-            ));
+            return Err(Error::Execution {
+                message: "stage resource use does not match its materialization request".into(),
+            });
         }
         Ok(Self {
             resource_use,
@@ -228,9 +228,10 @@ impl ResolvedStageResource {
     ) -> ferrule_common::Result<Self> {
         resource.request().validate_key(key)?;
         if key.resource() != resource.resource_use().resource() {
-            return Err(Error::Execution(
-                "resolved materialization key does not match its stage resource use".into(),
-            ));
+            return Err(Error::Execution {
+                message: "resolved materialization key does not match its stage resource use"
+                    .into(),
+            });
         }
         Ok(Self {
             key,
@@ -271,9 +272,9 @@ impl ResolvedStage {
             .windows(2)
             .any(|window| window[0].key() == window[1].key())
         {
-            return Err(Error::Execution(
-                "resolved stage contains duplicate materialization keys".into(),
-            ));
+            return Err(Error::Execution {
+                message: "resolved stage contains duplicate materialization keys".into(),
+            });
         }
         let dependencies = if resources.is_empty() {
             None
@@ -375,20 +376,21 @@ impl<O> PreparedExecutable<O> {
         placement: MaterializationPlacement,
         mut runtime_source: impl FnMut(MaterializedResourceId) -> ferrule_common::Result<ResourceSource>,
     ) -> ferrule_common::Result<MaterializedStage<'a, O>> {
-        let stage = self.stages.get(stage_index).ok_or_else(|| {
-            Error::Execution(format!(
-                "prepared executable has no stage at index {stage_index}"
-            ))
-        })?;
+        let stage = self
+            .stages
+            .get(stage_index)
+            .ok_or_else(|| Error::Execution {
+                message: format!("prepared executable has no stage at index {stage_index}"),
+            })?;
         let resources = stage
             .resources()
             .iter()
             .map(|resource_use| {
                 let resource = resource_use.resource();
-                let manifest = self.resource(resource).ok_or_else(|| {
-                    Error::Internal(format!(
+                let manifest = self.resource(resource).ok_or_else(|| Error::Internal {
+                    message: format!(
                         "validated prepared stage {stage_index} lost resource manifest {resource:?}"
-                    ))
+                    ),
                 })?;
                 let source = match manifest.source() {
                     Some(source) => source,

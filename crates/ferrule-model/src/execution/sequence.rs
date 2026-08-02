@@ -130,7 +130,9 @@ impl SequenceStateCore {
 }
 
 fn execution_error(message: impl Into<String>) -> Error {
-    Error::Execution(message.into())
+    Error::Execution {
+        message: message.into(),
+    }
 }
 
 #[cfg(test)]
@@ -145,7 +147,7 @@ mod tests {
         assert_eq!(core.position(), 3);
         assert!(matches!(
             core.commit_step(binding, 1),
-            Err(Error::Execution(_))
+            Err(Error::Execution { message: _ })
         ));
     }
 
@@ -160,7 +162,7 @@ mod tests {
         assert!(!core.is_poisoned());
         assert!(matches!(
             core.commit_step(binding, 1),
-            Err(Error::Execution(_))
+            Err(Error::Execution { message: _ })
         ));
     }
 
@@ -170,7 +172,7 @@ mod tests {
         core.poison();
         let error = core.begin_step().unwrap_err();
         match error {
-            Error::Execution(message) => {
+            Error::Execution { message } => {
                 assert!(!message.contains("DeepSeek"));
                 assert!(message.contains("sequence state"));
             }

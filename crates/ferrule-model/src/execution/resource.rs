@@ -110,7 +110,9 @@ pub enum ExecutionPlanError {
 
 impl From<ExecutionPlanError> for Error {
     fn from(error: ExecutionPlanError) -> Self {
-        Self::Model(format!("invalid prepared executable: {error}"))
+        Self::Model {
+            message: format!("invalid prepared executable: {error}"),
+        }
     }
 }
 
@@ -281,7 +283,7 @@ fn validate_checkpoint_tensors(
                 tensor: tensor.name.clone(),
             });
         }
-        if tensor.shape.iter().any(|dimension| *dimension == 0) {
+        if tensor.shape.contains(&0) {
             return Err(ExecutionPlanError::EmptyTensorDimension {
                 resource,
                 tensor: tensor.name.clone(),

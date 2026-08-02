@@ -45,16 +45,20 @@ impl DeepSeekV4Checkpoint {
     pub fn load_hf_with_limit(model_dir: &Path, max_tensor_bytes: u64) -> Result<Self> {
         let descriptor = ModelDescriptor::load(model_dir)?;
         if descriptor.spec.family != ModelFamily::DeepSeekV4 {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 checkpoint expected DeepSeek-V4 descriptor, got {}",
-                descriptor.spec.family
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 checkpoint expected DeepSeek-V4 descriptor, got {}",
+                    descriptor.spec.family
+                ),
+            });
         }
         if descriptor.spec.weight_source != WeightSource::Safetensors {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 checkpoint requires safetensors, got {}",
-                descriptor.spec.weight_source
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 checkpoint requires safetensors, got {}",
+                    descriptor.spec.weight_source
+                ),
+            });
         }
         let config = DeepSeekV4Config::from_hf_config(model_dir)?;
         let inventory = HfSafetensorsInventory::open(model_dir, ModelFamily::DeepSeekV4)?;
@@ -226,11 +230,13 @@ impl DeepSeekV4Checkpoint {
         let max_mtp_index = *mtp_tensors.keys().max().expect("MTP tensors are non-empty");
         let expected_stages = self.config.num_mtp_layers;
         if mtp_tensors.len() != expected_stages || max_mtp_index + 1 != expected_stages {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 DSpark checkpoint has MTP stages {:?}, expected contiguous 0..{}",
-                mtp_tensors.keys().collect::<Vec<_>>(),
-                expected_stages
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 DSpark checkpoint has MTP stages {:?}, expected contiguous 0..{}",
+                    mtp_tensors.keys().collect::<Vec<_>>(),
+                    expected_stages
+                ),
+            });
         }
         let mut layers = Vec::with_capacity(mtp_tensors.len());
         let mut prediction_heads = None;
@@ -265,11 +271,13 @@ impl DeepSeekV4Checkpoint {
                 )?);
             }
             if layer.expert_source_catalog.count() != self.config.num_routed_experts {
-                return Err(Error::Model(format!(
-                    "DeepSeek-V4 MTP stage {mtp_index} catalog has {} routed experts, expected {}",
-                    layer.expert_source_catalog.count(),
-                    self.config.num_routed_experts
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "DeepSeek-V4 MTP stage {mtp_index} catalog has {} routed experts, expected {}",
+                        layer.expert_source_catalog.count(),
+                        self.config.num_routed_experts
+                    ),
+                });
             }
             layers.push(layer);
         }
@@ -288,7 +296,9 @@ impl DeepSeekV4Checkpoint {
     pub fn expert_source_catalog(&self, layer: usize) -> Result<&Arc<ExpertSourceCatalog>> {
         self.routed_expert_catalogs_by_layer
             .get(layer)
-            .ok_or_else(|| Error::Model(format!("DeepSeek-V4 layer {layer} out of range")))
+            .ok_or_else(|| Error::Model {
+                message: format!("DeepSeek-V4 layer {layer} out of range"),
+            })
     }
 
     pub fn new_layer_expert_runtime(
@@ -298,11 +308,13 @@ impl DeepSeekV4Checkpoint {
     ) -> Result<DeepSeekV4LayerExpertRuntime> {
         let catalog = self.expert_source_catalog(layer)?;
         if catalog.count() != self.config.num_routed_experts {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} catalog has {} routed experts, expected {}",
-                catalog.count(),
-                self.config.num_routed_experts
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {layer} catalog has {} routed experts, expected {}",
+                    catalog.count(),
+                    self.config.num_routed_experts
+                ),
+            });
         }
         Ok(DeepSeekV4LayerExpertRuntime::from_catalog(
             Arc::clone(catalog),

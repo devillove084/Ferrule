@@ -840,7 +840,13 @@ pub(crate) fn runtime_materialization_snapshot(
                     raw_operation
                 )
             })?;
-            registry.load_request(key, ResourceClass::Demand)?.plan
+            registry
+                .prepare_execution_request(
+                    key,
+                    ResourceClass::Throughput,
+                    ferrule_model::ResourceRetention::ThroughStage,
+                )?
+                .plan
         };
 
         for stage in history {
@@ -849,17 +855,19 @@ pub(crate) fn runtime_materialization_snapshot(
                     stages.read_stages = stages.read_stages.saturating_add(1);
                     stages.read_bytes = stages
                         .read_bytes
-                        .saturating_add(plan.demand.storage_read_bytes);
+                        .saturating_add(plan.requirements.storage_read_bytes);
                 }
                 LoadStage::UploadSubmitted => {
                     stages.upload_stages = stages.upload_stages.saturating_add(1);
-                    stages.upload_bytes = stages.upload_bytes.saturating_add(plan.demand.h2d_bytes);
+                    stages.upload_bytes = stages
+                        .upload_bytes
+                        .saturating_add(plan.requirements.h2d_bytes);
                 }
                 LoadStage::Installing => {
                     stages.install_stages = stages.install_stages.saturating_add(1);
                     stages.install_bytes = stages
                         .install_bytes
-                        .saturating_add(plan.demand.device_install_bytes);
+                        .saturating_add(plan.requirements.device_install_bytes);
                 }
                 LoadStage::Resident => {
                     stages.publish_stages = stages.publish_stages.saturating_add(1);

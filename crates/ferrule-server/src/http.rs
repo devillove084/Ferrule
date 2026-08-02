@@ -922,7 +922,8 @@ mod tests {
     use ferrule_common::CompletionHub;
     use ferrule_runtime::{
         CancelRequestResult, GenerateRequest, InferenceCancelProgress, InferenceCompletionReactor,
-        InferenceEngine, RequestId, ResidentDriverStep, SequenceFinishReason, SequenceState,
+        InferenceEngine, RequestId, ResidentDriverStep, Result as RuntimeResult,
+        SequenceFinishReason, SequenceState,
     };
     use http_body_util::BodyExt;
     use tower::ServiceExt;
@@ -948,7 +949,7 @@ mod tests {
             false
         }
 
-        fn encode(&self, prompt: &str) -> Result<Vec<u32>, String> {
+        fn encode(&self, prompt: &str) -> RuntimeResult<Vec<u32>> {
             Ok(prompt.bytes().map(u32::from).collect())
         }
 
@@ -958,8 +959,8 @@ mod tests {
 
         fn step(
             &mut self,
-            on_token: &mut dyn FnMut(&ferrule_runtime::ResidentTokenEvent) -> Result<(), String>,
-        ) -> Result<ResidentDriverStep, String> {
+            on_token: &mut dyn FnMut(&ferrule_runtime::ResidentTokenEvent) -> RuntimeResult<()>,
+        ) -> RuntimeResult<ResidentDriverStep> {
             let Some(request) = self.request.take() else {
                 return Ok(ResidentDriverStep::Idle);
             };
@@ -987,7 +988,7 @@ mod tests {
         fn cancel_request(
             &mut self,
             request_id: RequestId,
-        ) -> Result<InferenceCancelProgress, String> {
+        ) -> RuntimeResult<InferenceCancelProgress> {
             let Some(request) = self.request.take() else {
                 return Ok(InferenceCancelProgress::Complete(
                     CancelRequestResult::NotFound { request_id },

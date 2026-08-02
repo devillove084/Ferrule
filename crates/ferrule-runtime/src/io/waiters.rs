@@ -3,22 +3,17 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use ahash::RandomState;
+use snafu::Snafu;
 
 use ferrule_common::io_protocol::{ContinuationId, OperationId, WaiterId};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Snafu)]
 pub enum WaiterIndexError {
-    DuplicateWaiter(WaiterId),
-    UnknownWaiter(WaiterId),
+    #[snafu(display("waiter {waiter:?} is already registered"))]
+    DuplicateWaiter { waiter: WaiterId },
+    #[snafu(display("waiter {waiter:?} is not registered"))]
+    UnknownWaiter { waiter: WaiterId },
 }
-
-impl std::fmt::Display for WaiterIndexError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "waiter index violation: {self:?}")
-    }
-}
-
-impl std::error::Error for WaiterIndexError {}
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct WaiterDetach {
@@ -64,7 +59,7 @@ impl WaiterIndex {
         operations: impl IntoIterator<Item = OperationId>,
     ) -> Result<bool, WaiterIndexError> {
         if !self.known_waiters.insert(waiter) {
-            return Err(WaiterIndexError::DuplicateWaiter(waiter));
+            return Err(WaiterIndexError::DuplicateWaiter { waiter });
         }
         let operations: HashSet<_> = operations.into_iter().collect();
         if operations.is_empty() {
@@ -126,7 +121,7 @@ impl WaiterIndex {
         let operations = self
             .waiter_to_loads
             .remove(&waiter)
-            .ok_or(WaiterIndexError::UnknownWaiter(waiter))?;
+            .ok_or(WaiterIndexError::UnknownWaiter { waiter })?;
         let mut lost_last = HashSet::new();
         for operation in operations {
             let waiters = self

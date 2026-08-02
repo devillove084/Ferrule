@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use ahash::RandomState;
+use snafu::Snafu;
 
 /// Unit used by one resource capacity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -94,20 +95,20 @@ impl PhysicalResourceClaim {
     }
 }
 
-/// Capacity and correctness/latency reserve for one physical-credit domain.
+/// Capacity and admitted-execution reserve for one physical-credit domain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PhysicalResourceLimit {
     pub kind: ResourceKind,
     pub capacity: u64,
-    pub demand_reserve: u64,
+    pub execution_reserve: u64,
 }
 
 impl PhysicalResourceLimit {
-    pub const fn new(kind: ResourceKind, capacity: u64, demand_reserve: u64) -> Self {
+    pub const fn new(kind: ResourceKind, capacity: u64, execution_reserve: u64) -> Self {
         Self {
             kind,
             capacity,
-            demand_reserve,
+            execution_reserve,
         }
     }
 }
@@ -117,17 +118,15 @@ impl PhysicalResourceLimit {
 pub enum ResourceClass {
     /// Speculative work that may be skipped or cancelled without affecting correctness.
     Prefetch,
-    /// Batch-oriented work optimized for aggregate progress.
+    /// Admitted batch work optimized for aggregate progress.
     Throughput,
-    /// Correctness work required to satisfy an admitted workload.
-    Demand,
-    /// Work on a latency-sensitive committed frontier.
+    /// Admitted work on a latency-sensitive committed frontier.
     LatencyCritical,
 }
 
 impl ResourceClass {
-    const fn may_use_hard_reserve(self) -> bool {
-        matches!(self, Self::Demand | Self::LatencyCritical)
+    const fn may_use_execution_reserve(self) -> bool {
+        !matches!(self, Self::Prefetch)
     }
 }
 
@@ -142,59 +141,71 @@ impl PhysicalResourceGrantId {
 }
 
 /// Rejection or ownership violation in the physical-credit ledger.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Snafu)]
 pub enum PhysicalResourceError {
-    DuplicateLimit(ResourceKind),
-    MissingLimit(ResourceKind),
+    #[snafu(display("duplicate physical resource limit for {kind:?}"))]
+    DuplicateLimit { kind: ResourceKind },
+    #[snafu(display("missing physical resource limit for {kind:?}"))]
+    MissingLimit { kind: ResourceKind },
+    #[snafu(display("physical resource reserve {reserve} exceeds {kind:?} capacity {capacity}"))]
     ReserveExceedsCapacity {
         kind: ResourceKind,
         reserve: u64,
         capacity: u64,
     },
-    ClaimOverflow(ResourceKind),
+    #[snafu(display("physical resource claim overflow for {kind:?}"))]
+    ClaimOverflow { kind: ResourceKind },
+    #[snafu(display("physical resource request {requested} exceeds {kind:?} capacity {capacity}"))]
     ExceedsCapacity {
         kind: ResourceKind,
         requested: u64,
         capacity: u64,
     },
+    #[snafu(display(
+        "physical resource {kind:?} is temporarily unavailable: requested {requested}, available {available}"
+    ))]
     TemporarilyUnavailable {
         kind: ResourceKind,
         requested: u64,
         available: u64,
     },
-    DemandReserve {
+    #[snafu(display(
+        "physical resource request {requested} would consume the {kind:?} execution reserve; base availability is {base_available}"
+    ))]
+    ExecutionReserve {
         kind: ResourceKind,
         requested: u64,
         base_available: u64,
     },
-    UnknownGrant(PhysicalResourceGrantId),
-    GrantOwnerMismatch(PhysicalResourceGrantId),
+    #[snafu(display("unknown physical resource grant {grant:?}"))]
+    UnknownGrant { grant: PhysicalResourceGrantId },
+    #[snafu(display("physical resource grant owner mismatch for {grant:?}"))]
+    GrantOwnerMismatch { grant: PhysicalResourceGrantId },
+    #[snafu(display("physical resource grant {grant:?} has no {kind:?} claim"))]
     MissingClaim {
         grant: PhysicalResourceGrantId,
         kind: ResourceKind,
     },
+    #[snafu(display("physical resource claim {kind:?} in grant {grant:?} was already submitted"))]
     AlreadySubmitted {
         grant: PhysicalResourceGrantId,
         kind: ResourceKind,
     },
+    #[snafu(display("physical resource claim {kind:?} in grant {grant:?} was not submitted"))]
     NotSubmitted {
         grant: PhysicalResourceGrantId,
         kind: ResourceKind,
     },
+    #[snafu(display(
+        "submitted physical resource claim {kind:?} in grant {grant:?} cannot be revoked"
+    ))]
     SubmittedClaimCannotBeRevoked {
         grant: PhysicalResourceGrantId,
         kind: ResourceKind,
     },
+    #[snafu(display("physical resource grant identity space is exhausted"))]
     GrantIdExhausted,
 }
-
-impl std::fmt::Display for PhysicalResourceError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "hard-resource violation: {self:?}")
-    }
-}
-
-impl std::error::Error for PhysicalResourceError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct HardClaimState {
@@ -205,7 +216,7 @@ struct HardClaimState {
 #[derive(Debug, Clone)]
 struct HardLimitState {
     capacity: u64,
-    demand_reserve: u64,
+    execution_reserve: u64,
     in_use: u64,
     high_water: u64,
 }
@@ -267,7 +278,7 @@ pub struct PhysicalResourceSnapshot {
     pub kind: ResourceKind,
     pub unit: ResourceUnit,
     pub capacity: u64,
-    pub demand_reserve: u64,
+    pub execution_reserve: u64,
     pub in_use: u64,
     pub high_water: u64,
 }
@@ -286,10 +297,10 @@ impl PhysicalResourceBroker {
     ) -> std::result::Result<Self, PhysicalResourceError> {
         let mut states = HashMap::default();
         for limit in limits {
-            if limit.demand_reserve > limit.capacity {
+            if limit.execution_reserve > limit.capacity {
                 return Err(PhysicalResourceError::ReserveExceedsCapacity {
                     kind: limit.kind,
-                    reserve: limit.demand_reserve,
+                    reserve: limit.execution_reserve,
                     capacity: limit.capacity,
                 });
             }
@@ -298,19 +309,19 @@ impl PhysicalResourceBroker {
                     limit.kind,
                     HardLimitState {
                         capacity: limit.capacity,
-                        demand_reserve: limit.demand_reserve,
+                        execution_reserve: limit.execution_reserve,
                         in_use: 0,
                         high_water: 0,
                     },
                 )
                 .is_some()
             {
-                return Err(PhysicalResourceError::DuplicateLimit(limit.kind));
+                return Err(PhysicalResourceError::DuplicateLimit { kind: limit.kind });
             }
         }
         for kind in ResourceKind::ALL {
             if !states.contains_key(&kind) {
-                return Err(PhysicalResourceError::MissingLimit(kind));
+                return Err(PhysicalResourceError::MissingLimit { kind });
             }
         }
         Ok(Self {
@@ -344,19 +355,19 @@ impl PhysicalResourceBroker {
         &mut self,
         kind: ResourceKind,
         capacity: u64,
-        demand_reserve: u64,
+        execution_reserve: u64,
     ) -> std::result::Result<(), PhysicalResourceError> {
-        if demand_reserve > capacity {
+        if execution_reserve > capacity {
             return Err(PhysicalResourceError::ReserveExceedsCapacity {
                 kind,
-                reserve: demand_reserve,
+                reserve: execution_reserve,
                 capacity,
             });
         }
         let state = self
             .limits
             .get_mut(&kind)
-            .ok_or(PhysicalResourceError::MissingLimit(kind))?;
+            .ok_or(PhysicalResourceError::MissingLimit { kind })?;
         if state.in_use > capacity {
             return Err(PhysicalResourceError::ExceedsCapacity {
                 kind,
@@ -365,7 +376,7 @@ impl PhysicalResourceBroker {
             });
         }
         state.capacity = capacity;
-        state.demand_reserve = demand_reserve;
+        state.execution_reserve = execution_reserve;
         Ok(())
     }
 
@@ -376,7 +387,7 @@ impl PhysicalResourceBroker {
                 kind: *kind,
                 unit: kind.unit(),
                 capacity: state.capacity,
-                demand_reserve: state.demand_reserve,
+                execution_reserve: state.execution_reserve,
                 in_use: state.in_use,
                 high_water: state.high_water,
             })
@@ -625,7 +636,7 @@ impl PhysicalResourceBroker {
             let amount = merged.entry(claim.kind).or_default();
             *amount = amount
                 .checked_add(claim.amount)
-                .ok_or(PhysicalResourceError::ClaimOverflow(claim.kind))?;
+                .ok_or(PhysicalResourceError::ClaimOverflow { kind: claim.kind })?;
         }
         Ok(merged
             .into_iter()
@@ -642,7 +653,7 @@ impl PhysicalResourceBroker {
             let state = self
                 .limits
                 .get(&claim.kind)
-                .ok_or(PhysicalResourceError::MissingLimit(claim.kind))?;
+                .ok_or(PhysicalResourceError::MissingLimit { kind: claim.kind })?;
             if claim.amount > state.capacity {
                 return Err(PhysicalResourceError::ExceedsCapacity {
                     kind: claim.kind,
@@ -658,11 +669,11 @@ impl PhysicalResourceBroker {
                     available,
                 });
             }
-            if !class.may_use_hard_reserve() {
-                let base_limit = state.capacity.saturating_sub(state.demand_reserve);
+            if !class.may_use_execution_reserve() {
+                let base_limit = state.capacity.saturating_sub(state.execution_reserve);
                 let base_available = base_limit.saturating_sub(state.in_use);
                 if claim.amount > base_available {
-                    return Err(PhysicalResourceError::DemandReserve {
+                    return Err(PhysicalResourceError::ExecutionReserve {
                         kind: claim.kind,
                         requested: claim.amount,
                         base_available,
@@ -678,15 +689,15 @@ impl PhysicalResourceBroker {
         grant: &PhysicalResourceGrant,
     ) -> std::result::Result<(PhysicalResourceGrantId, &HardGrantRecord), PhysicalResourceError>
     {
-        let id = grant.id.ok_or(PhysicalResourceError::GrantOwnerMismatch(
-            PhysicalResourceGrantId(0),
-        ))?;
+        let id = grant.id.ok_or(PhysicalResourceError::GrantOwnerMismatch {
+            grant: PhysicalResourceGrantId(0),
+        })?;
         let record = self
             .grants
             .get(&id)
-            .ok_or(PhysicalResourceError::UnknownGrant(id))?;
+            .ok_or(PhysicalResourceError::UnknownGrant { grant: id })?;
         if record.owner != grant.owner || record.claims != grant.claims {
-            return Err(PhysicalResourceError::GrantOwnerMismatch(id));
+            return Err(PhysicalResourceError::GrantOwnerMismatch { grant: id });
         }
         Ok((id, record))
     }

@@ -19,7 +19,7 @@ prepared executable stages
     -> acquire residency leases
     -> missing resource:
          continuation + canonical DependencySet
-         -> global single-flight materialization
+         -> exact-key deduplicated materialization
          -> read/upload/install
          -> generation-qualified publication
          -> resume
@@ -75,18 +75,17 @@ portability / correctness 目标，但不再是下一阶段的第一优先级。
 
 | 工作流 | 状态 | 当前结论 |
 |---|---|---|
-| P0 runtime-wide materialization | CPU/mock 已完成 | global single-flight、canonical dependencies、generation publication、targeted wake 已覆盖 |
+| P0 runtime-wide materialization | CPU/mock 已完成 | exact-key physical dedup、canonical dependencies、generation publication、targeted wake 已覆盖 |
 | P0 调度 / I/O / compute overlap | CPU/mock 已完成 | owner-side progression、fairness、hard resources、critical-path overlap accounting 已覆盖 |
 | 双 broker 合并 | 已完成 | 唯一生产 broker 为 `PhysicalResourceBroker` |
 | Artifact 总抽象拆除 | 已完成 | checkpoint 公共层与模型私有 semantic binding 已分离，不保留 compatibility alias |
-| Prefetch 评估 | 已完成一轮 | oracle 有收益；当前 score predictor 净负收益，不接生产 |
+| Prefetch 协议 | CPU/mock 已完成 | 独立 `PrefetchId` ownership、Execution join/promote、cancel 与 compensation 已覆盖；当前 score predictor 仍不接生产 |
 | `ResolvedStage` contract | 已实现 | exact resources、access、retention、workspace、canonical dependency validation 已落地 |
 | Typed materialization custody | 已实现 | stage / transaction / persistent ownership 与 provider lease 聚合释放已落地 |
 | Routed expert stage migration | 已实现 | DeepSeek packed / DSpark route 后 exact expert set 进入唯一 resolved-stage 路径 |
 | Resume lifecycle | 已实现 | `Consumed` / `StillActive` 区分，仍活跃 continuation 不提前释放 custody |
-| Transaction terminal propagation | 已实现基础 | ordinary / speculative commit、rollback、cancel 已连接 custody terminal outcome |
-| Rollback failure quarantine | 已实现过渡方案 | rollback 未确认时保留 backend、KV、branch、session、scheduler、custody；有 mock retry UT |
-| Unified terminalization coordinator | 待重构 | 当前 quarantine 保证正确性，但 ordinary/speculative terminal cleanup 仍过于分散 |
+| Transaction terminalization | CPU/mock 已完成 inference 基线 | ordinary / speculative 共用 `end_transaction(Publish|Abort) -> Pending|Complete`；owner tick 自动推进，backend terminal 前完整保留 ownership |
+| Typed runtime errors | 已实现 | runtime orchestration 以 SNAFU source chain 保留 backend、protocol、registry、resource 与 cleanup failures，不在内部字符串化 |
 | Dense static bundle materialization | 未完成 | source catalog 已有；generic pinned transport/install 未接通，CUDA runner 仍有 eager static image |
 | Runtime mutable resources | 待完成 | KV / activation / gradient / optimizer 需按 transaction 实例化 exact capacity、generation 和 spill source |
 | DeepSeek 公共组件拆分 | 进行中 | checkpoint、math、shape、RoPE、config、dense semantics 已有公共层；继续去 family-private 重复 |
@@ -107,13 +106,13 @@ portability / correctness 目标，但不再是下一阶段的第一优先级。
 - source identity、content hash、encoding、backend、device、source generation、
   destination generation 全部进入 `MaterializationKey`；
 - destination generation 由真实 provider reservation 提供，模型不能自行合成；
-- global single-flight：相同 exact key 只提交一次物理 materialization；
+- registry 内部 physical dedup：相同 exact key 只提交一次物理 materialization；它不是调用方可见的 transaction/owner 抽象；
 - generation-qualified completion / publication；
 - cancel、stale、failure、shutdown 和 rollback cleanup；
 - physical custody：已提交 read/upload/install 不能被逻辑 cancel 直接撤销；
 - owner-side progress，不要求 CUDA 才能编译 runtime protocol；
 - I/O wait 与其他 runnable compute 的 overlap accounting；
-- fairness、demand reserve 和 hard-resource accounting；
+- 三类 fairness（`Prefetch / Throughput / LatencyCritical`）、execution reserve 和 hard-resource accounting；
 - completion timestamp clock-domain 一致性；
 - 唯一生产 broker，旧 broker / adapter 路径已删除。
 
@@ -178,15 +177,17 @@ lease release 失败可以重试，但不能重复执行逻辑 owner decrement�
 已连接：
 
 - stage completion 与 stage custody；
-- transaction commit / rollback / cancel 与 transaction custody；
+- transaction publish / abort 与 transaction custody；
 - persistent custody 的显式 retirement；
 - resume `StillActive` 对 continuation 与 stage custody 的保留；
-- speculative terminal outcome 的显式传播；
-- speculative backend rollback failure 的完整 ownership quarantine；
-- shutdown / subsequent cancellation 的 rollback retry。
+- ordinary / speculative 共用 backend terminal contract；
+- backend `Pending` 时完整 ownership quarantine；
+- owner tick 自动推进 terminalization，不依赖第二次 `cancel_request()`；
+- fatal backend/CUDA error 直接上报 worker，不做 device quarantine/recovery；
+- Prefetch 独立 owner、Execution join/promote、降级与 cancellation compensation。
 
-当前 quarantine 是 correctness baseline，不是最终 API。下一阶段必须收敛 terminalization
-抽象，不能继续为每一种 execution mode 添加新的 rollback 分支。
+`LoadRegistry` 内的 physical dedup 只保证相同 exact key 不重复发 I/O；它不再被暴露成
+“single-flight owner”或额外 transaction 状态。
 
 ## 4. Transaction terminalization：保留严格语义，删除分散复杂度
 
@@ -218,101 +219,83 @@ request commit / rollback / cancel
 
 > 没有确认物理工作终止，就不能因为逻辑 cancellation 而释放它可能仍在访问的资源。
 
-### 4.2 当前过渡实现
+### 4.2 当前实现
 
-当前 speculative rollback failure 会进入 quarantine，完整保留：
-
-- backend transaction 与 verification branches；
-- KV reservations / prepared commit；
-- source states、suspended schedules 和 decode actions；
-- materialization transaction custody；
-- request identity。
-
-只有 retry 确认 backend terminal 后才回收。CPU/mock UT 已覆盖：第一次 rollback 失败时
-不释放 provider lease、session 或 KV；第二次 rollback 成功后 exactly-once cleanup。
-
-### 4.3 目标：统一 terminalization coordinator
-
-当前复杂度来自 terminal ownership 分散在 driver、executor、speculation、KV manager 和
-materialization registry，而不是 rollback 语义本身。目标是将 ordinary execution、
-speculation、training 和 RL rollout 共用一个状态机：
+backend contract 已收敛为唯一入口：
 
 ```rust
-enum TransactionState<P> {
-    Running(P),
-    Suspended {
-        continuation: ContinuationId,
-        payload: P,
-    },
-    Terminalizing {
-        intent: TerminalIntent,
-        progress: TerminalProgress,
-        payload: P,
-        cause: Option<Error>,
-    },
-    Terminal(TerminalReceipt),
+enum TransactionEndIntent {
+    Publish,
+    Abort,
 }
 
-enum TerminalIntent {
-    Commit,
-    Rollback,
-    Cancel,
+enum TransactionEndProgress {
+    Pending,
+    Complete,
 }
 
-enum TerminalProgress {
-    Quiescing,
-    BackendTerminal,
-    Reclaiming,
-}
+fn end_transaction(
+    transaction: ExecutionTransactionId,
+    states: &mut [SequenceState],
+    intent: TransactionEndIntent,
+) -> Result<TransactionEndProgress>;
 ```
 
-统一 ownership payload 至少要能持有：
+约束：
 
-```rust
-TransactionOwnership<S> {
-    backend_transaction,
-    continuations,
-    materialization_custody,
-    kv_or_mutable_state,
-    model_states,
-    suspended_schedules,
-    scheduler_actions,
-    communication_ownership,
-}
-```
+- `Pending` 是正常控制结果，driver 每个 tick 自动重试；
+- `Complete` 是释放 KV、branch、materialization custody 和 session ownership 的唯一前提；
+- `Err` 是 fatal backend/protocol failure，不伪装为 retryable pending；
+- backend 未完成时，ordinary/speculative 都完整保留各自 payload ownership；
+- cleanup failure 以 typed SNAFU error tree 保留主失败与 cleanup source，不拼接字符串。
 
-目标 API：
+### 4.3 最小 transaction 形状
+
+不再建立一个覆盖所有 workload 的巨大 `TransactionState`。ordinary、speculative、training
+和 RL 的 payload 本来就不同；强行统一其内部阶段只会增加镜像状态。共同协议只保留：
+
+1. stable `ExecutionTransactionId`；
+2. payload 精确持有所有 provisional ownership；
+3. 唯一 `Publish / Abort` backend 终结意图；
+4. 唯一 `Pending / Complete` 物理进度；
+5. `Complete` 后按固定顺序执行 logical publication/reclaim。
+
+当前 ordinary payload 仅使用：
 
 ```text
-request_terminal(transaction, intent)
-drive_terminalization(transaction)
+Executing
+Publishing { output }
+Aborting { request, custody, continuation, failure }
 ```
 
-runtime tick / completion wake 自动推进 terminalization；不应要求调用方再次发送一次
-`cancel_request()` 才能完成 rollback retry。
+speculative payload 仅使用：
+
+```text
+Proposing
+Verifying
+Ending { Publish | Abort }
+```
+
+这两者不是两套 terminal protocol：它们只是不同 workload 的必要 payload phase，最终都调用
+同一个 `end_transaction()`，并遵守同一 cleanup 顺序。禁止重新加入：
+
+- `pending / rollback_pending / terminal` 三个互斥 `Option`；
+- speculative 专属 rollback wrapper；
+- driver/executor 双 transaction registry；
+- `backend_terminal / custody_finished / cleanup_finished` 平行布尔状态；
+- 通过再次调用 `cancel_request()` 推进 terminalization。
 
 ### 4.4 Backend terminal contract
 
-现有 `rollback_prepared_batch(...) -> Result<()>` 信息量不足，不能区分 pending、已终结、
-可重试错误与 device loss。目标 contract 应表达：
+backend 只返回：
 
-```rust
-enum BackendTerminalProgress {
-    Pending(CompletionFence),
-    Complete(BackendTerminalReceipt),
-    DeviceLost(DeviceLossReceipt),
-}
-```
+- `Pending`：物理工作尚未 quiesce，payload 原样留在 driver；
+- `Complete`：backend 保证不再访问 transaction resources；
+- `Err`：fatal backend/protocol failure，直接上报并终止 worker/service。
 
-要求：
-
-- `Pending` 是正常异步进度，不是 error；
-- `Complete` 明确保证 backend 不再访问 transaction resources；
-- `DeviceLost` 触发 device/worker 级 quarantine，不无限重试单 transaction rollback；
-- protocol error 与 backend fatal error 分开；
-- completion fence 是物理 quiescence 证据，不是逻辑状态猜测；
-- terminal outcome exactly once；
-- post-terminal cleanup 失败不允许把已确认 terminal 的 backend 重新描述为 active。
+本系统不实现 device-loss 恢复、device quarantine 或字符串识别 CUDA fatal error。硬件/context
+级 failure 不是 transaction rollback 的可恢复分支。completion fence 可以是 backend 实现
+`Pending / Complete` 的内部证据，不需要扩张为 runtime 的另一套公开状态。
 
 ### 4.5 用 generation publication 简化 rollback
 
@@ -338,15 +321,16 @@ communication epoch。对于无法完整复制的大 optimizer state，评估：
 
 ### 4.6 Terminalization 完成条件
 
-- [ ] ordinary / speculative 不再拥有两套 terminal cleanup；
-- [ ] 移除多个互斥 `Option<pending/rollback/terminal>` 表达，非法状态不可构造；
-- [ ] backend terminal progress typed；
-- [ ] retry 由 owner loop / completion fence 自动驱动；
-- [ ] device loss 有设备级处理协议；
-- [ ] commit / rollback / cancel exactly once；
-- [ ] backend terminal 后的 cleanup failure 可重试且不重复 terminal operation；
-- [ ] inference、training、RL transaction 共用 coordinator；
-- [ ] failure-injection UT 覆盖每个 transition 与 ownership leak。
+- [x] ordinary / speculative 共用唯一 backend terminal contract；
+- [x] 移除多个互斥 `Option<pending/rollback/terminal>`；
+- [x] backend terminal progress typed 为 `Pending / Complete`；
+- [x] retry 由 owner tick 自动驱动；
+- [x] fatal backend/device error 直接上报，不建立恢复状态机；
+- [x] publish / abort exactly once；
+- [x] backend terminal 后 cleanup error 保留 typed source；
+- [x] CPU failure-injection 覆盖 quiescence 前 ownership quarantine；
+- [ ] training / RL payload 接入同一 `end_transaction()` contract；
+- [ ] 真实 CUDA fence 与 fatal-error integration evidence。
 
 ## 5. Checkpoint、模型公共层与 DeepSeek 拆分
 
@@ -651,14 +635,26 @@ release/evict bundle N-1 after completion fence
 
 ## 10. Prefetch
 
-当前结论保持：
+Prefetch transport 已实现，predictor 与 transport 明确分离：
 
-- oracle / future-aware prefetch 对 selected miss 有明显收益；
-- 当前 `ScoreBasedExpertPredictor` 在有限 residency slots 下挤占真实 working set，净收益为负；
-- 不接入当前 predictor；
-- 保留 `Prefetch` resource class 和 demand reserve；
-- 只评估有因果依据的 future-aware 信号，例如 prepared next stage、router result、pipeline
-  schedule、known backward stage、rollout schedule 或可靠 draft information。
+- `PrefetchId` 是独立 owner；
+- `prepare_prefetch_request / prefetch / cancel_prefetch` 是显式入口；
+- Prefetch 不创建 `WaiterId`、`ContinuationId`、`ExecutionTransactionId`、custody 或 execution lease；
+- Execution 可 join 同 exact key/generation/slot 的 active Prefetch，并显式
+  `promote_to_execution()`，不重发 I/O；
+- `prepared(key)` 只观察，不隐式提升 purpose；
+- 最后一个 Execution owner 离开而 Prefetch owner 仍在时，释放 execution lease 并降回
+  `Prefetch` class；
+- multi-key promotion failure 会补偿已完成 promotion、回收新 work，并保留原 Prefetch owner；
+- physical dedup 只是 registry 内部实现，不是 Prefetch transaction；
+- 调度 class 只有 `Prefetch / Throughput / LatencyCritical`；不存在独立 `Demand` class；
+- `execution_reserve` 只阻止 Prefetch，所有已接纳 Execution（Throughput/LatencyCritical）都可使用；
+- Prefetch 没有 aging forced-progress entitlement。
+
+oracle / future-aware prefetch 对 selected miss 有明显收益，但当前 `ScoreBasedExpertPredictor`
+在有限 residency slots 下挤占真实 working set，净收益为负，因此仍不接生产。后续只评估有
+因果依据的 future-aware 信号，例如 prepared next stage、router result、pipeline schedule、
+known backward stage、rollout schedule 或可靠 draft information。
 
 任何新 predictor 必须同时报告：
 
@@ -667,7 +663,7 @@ release/evict bundle N-1 after completion fence
 - slot displacement；
 - extra storage/H2D bytes；
 - wasted install；
-- demand fairness；
+- execution fairness 与 Prefetch displacement；
 - memory high-water；
 - 在固定 workload 下相对 no-prefetch baseline 的净收益。
 
@@ -675,15 +671,30 @@ release/evict bundle N-1 after completion fence
 
 ### 11.1 当前 CPU/mock 证据
 
-截至本次更新，当前 WIP 已实际运行：
+截至本次更新，本轮已实际运行：
 
 ```text
-cargo test -p ferrule-model --lib
-291 passed
+cargo nextest run --offline --locked --workspace \
+  --exclude ferrule-cuda --no-fail-fast
+707 passed, 1 skipped
 
-cargo test -p ferrule-runtime --lib
-301 passed
+cargo test --workspace --doc --offline
+passed
+
+cargo fmt --all -- --check
+passed
+
+cargo check --workspace --all-targets --offline
+passed
+
+cargo test -p ferrule-runtime --lib --offline
+306 passed
 ```
+
+CUDA 自动探测确认当前机器为 B300 `sm_103a`。`just check-cuda` 在
+`ferrule-cuda` build script 处被现有的 GB10-only CUTLASS provider 明确拒绝；当前
+provider 只接受 `sm_121a`。没有用错误架构覆盖探测结果，因此这不是一条已通过的 CUDA
+feature compile 证据。
 
 新增 mock 覆盖包括：
 
@@ -693,10 +704,12 @@ cargo test -p ferrule-runtime --lib
 - `StillActive` resume 不提前释放；
 - transaction commit / rollback terminal release；
 - speculative terminal propagation；
-- rollback failure quarantine 和成功 retry 后 exactly-once cleanup。
+- owner tick 自动推进 pending abort；
+- backend `Pending` 保留完整 ownership，后续自动推进并 exactly-once cleanup；
+- Prefetch owner/join/promotion/demotion/cancel 与 multi-key compensation；
+- Execution reserve 阻止 Prefetch，但不阻止 Throughput execution；
+- typed backend/registry/resource/cleanup source chain。
 
-本次还通过了 `ferrule-common --lib` 68 tests、完整 `ferrule-model`（包括 local smoke 与
-prefetch mocks）、`cargo check --workspace --all-targets` 和 `cargo fmt --all -- --check`。
 上述结果不证明任何 CUDA/GPU path。
 
 ### 11.2 必须补齐的 trace
@@ -720,7 +733,7 @@ prefetch mocks）、`cargo check --workspace --all-targets` 和 `cargo fmt --all
 ### 11.3 验证层级
 
 1. CPU unit tests：identity、canonicalization、state machine、failure atomicity；
-2. synthetic/mocks：I/O、fence、rollback、device loss、collective failure；
+2. synthetic/mocks：I/O、fence、rollback、fatal backend error、collective failure；
 3. CUDA feature compile；
 4. 单卡 kernel/reference correctness；
 5. 单卡 out-of-core overlap；
@@ -746,12 +759,14 @@ prefetch mocks）、`cargo check --workspace --all-targets` 和 `cargo fmt --all
 
 ### P1-A：统一 terminalization
 
-- [ ] 设计 `TransactionOwnership` 与 `TerminalIntent`；
-- [ ] ordinary/speculative 共用 terminal coordinator；
-- [ ] typed backend pending/complete/device-lost；
-- [ ] owner loop 自动 retry，不依赖第二次 cancellation；
-- [ ] generational mutable-state publication；
-- [ ] failure-injection state-transition matrix。
+- [x] payload 精确持有 transaction ownership；
+- [x] ordinary/speculative 共用 `end_transaction(Publish|Abort)`；
+- [x] typed backend `Pending / Complete`；
+- [x] owner loop 自动推进，不依赖第二次 cancellation；
+- [x] provisional KV generation publication；
+- [x] inference failure-injection state-transition matrix；
+- [ ] activation / gradient / optimizer generation publication；
+- [ ] training / RL payload 接入统一 backend terminal contract。
 
 ### P1-B：闭环通用 static/mutable resource transport
 

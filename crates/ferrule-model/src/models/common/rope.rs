@@ -2,7 +2,7 @@
 //!
 //! Works on any packed `[heads, head_dim]` buffer where the rotary pairs live
 //! in the trailing `rope_dim` channels of each head row. Model families only
-//! contribute their parameter values through [`RopeParams`].
+//! contribute their parameter values through the crate-private `RopeParams`.
 
 use ferrule_common::{Error, Result};
 
@@ -66,10 +66,12 @@ pub(crate) fn apply_rotary_tail_scaled(
         return Ok(());
     }
     if rope_dim > head_dim || !rope_dim.is_multiple_of(2) || values.len() != heads * head_dim {
-        return Err(Error::Model(format!(
-            "rotary shape mismatch: values={}, heads={heads}, head_dim={head_dim}, rope_dim={rope_dim}",
-            values.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "rotary shape mismatch: values={}, heads={heads}, head_dim={head_dim}, rope_dim={rope_dim}",
+                values.len()
+            ),
+        });
     }
     let tail_start = head_dim - rope_dim;
     for head in 0..heads {

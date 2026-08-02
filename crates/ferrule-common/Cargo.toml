@@ -11,7 +11,7 @@ categories = ["science", "machine-learning"]
 
 [dependencies]
 atomic-waker = "1"
-thiserror = "2"
+snafu.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 serde = { version = "1", features = ["derive"] }

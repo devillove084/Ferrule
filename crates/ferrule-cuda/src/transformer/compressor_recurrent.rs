@@ -13,27 +13,29 @@ pub struct CompressorRecurrentShape {
 impl CompressorRecurrentShape {
     pub fn validate(&self) -> Result<()> {
         let minimum_out_dim = if self.overlap {
-            self.head_dim.checked_mul(2).ok_or_else(|| {
-                Error::Internal("compressor recurrent head dimension overflow".into())
-            })?
+            self.head_dim
+                .checked_mul(2)
+                .ok_or_else(|| Error::Internal {
+                    message: "compressor recurrent head dimension overflow".into(),
+                })?
         } else {
             self.head_dim
         };
         if self.ratio == 0 || self.head_dim == 0 || self.out_dim != minimum_out_dim {
-            return Err(Error::Internal(format!(
-                "invalid compressor recurrent shape: ratio={} head_dim={} out_dim={} overlap={}",
-                self.ratio, self.head_dim, self.out_dim, self.overlap
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "invalid compressor recurrent shape: ratio={} head_dim={} out_dim={} overlap={}",
+                    self.ratio, self.head_dim, self.out_dim, self.overlap
+                ),
+            });
         }
         for (field, value) in [
             ("ratio", self.ratio),
             ("head_dim", self.head_dim),
             ("out_dim", self.out_dim),
         ] {
-            u32::try_from(value).map_err(|_| {
-                Error::Internal(format!(
-                    "compressor recurrent {field} exceeds u32 kernel ABI: {value}"
-                ))
+            u32::try_from(value).map_err(|_| Error::Internal {
+                message: format!("compressor recurrent {field} exceeds u32 kernel ABI: {value}"),
             })?;
         }
         self.state_elements()?;
@@ -51,13 +53,17 @@ impl CompressorRecurrentShape {
     pub fn state_elements(&self) -> Result<usize> {
         self.state_rows()
             .checked_mul(self.out_dim)
-            .ok_or_else(|| Error::Internal("compressor recurrent state size overflow".into()))
+            .ok_or_else(|| Error::Internal {
+                message: "compressor recurrent state size overflow".into(),
+            })
     }
 
     pub fn ape_elements(&self) -> Result<usize> {
         self.ratio
             .checked_mul(self.out_dim)
-            .ok_or_else(|| Error::Internal("compressor recurrent APE size overflow".into()))
+            .ok_or_else(|| Error::Internal {
+                message: "compressor recurrent APE size overflow".into(),
+            })
     }
 
     pub fn append_row(&self, position: usize) -> usize {

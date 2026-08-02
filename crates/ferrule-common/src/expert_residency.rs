@@ -260,6 +260,11 @@ pub trait ExpertResidencyControl: Send {
         intent: ExpertInstallIntent,
     ) -> Result<ExpertInstallPrepareOutcome>;
 
+    /// Promote an in-flight prefetch reservation to selected demand without
+    /// changing its slot or generation. Promotion is one-way.
+    fn promote_install(&mut self, prepared: PreparedExpertInstall)
+    -> Result<PreparedExpertInstall>;
+
     /// Hide the old mapping and acquire exclusive slot mutation authority.
     /// Providers call this only after transfer completes and before touching the
     /// physical slot. A lease conflict is retryable and leaves the old mapping live.
@@ -304,14 +309,14 @@ where
 {
     pub fn new(capacity: usize) -> Result<Self> {
         if capacity == 0 {
-            return Err(Error::Execution(
-                "expert residency coordinator capacity must be greater than zero".into(),
-            ));
+            return Err(Error::Execution {
+                message: "expert residency coordinator capacity must be greater than zero".into(),
+            });
         }
         if capacity > u32::MAX as usize {
-            return Err(Error::Execution(
-                "expert residency coordinator capacity exceeds u32".into(),
-            ));
+            return Err(Error::Execution {
+                message: "expert residency coordinator capacity exceeds u32".into(),
+            });
         }
         Ok(Self {
             slots: (0..capacity)
@@ -353,14 +358,16 @@ where
         self.clock = self.clock.saturating_add(1);
         let entry = &mut self.slots[slot.index()];
         if entry.key != Some(key) {
-            return Err(Error::Internal(
-                "expert residency key map and slot table diverged".into(),
-            ));
+            return Err(Error::Internal {
+                message: "expert residency key map and slot table diverged".into(),
+            });
         }
         entry.leases = entry
             .leases
             .checked_add(1)
-            .ok_or_else(|| Error::Execution("expert lease count overflow".into()))?;
+            .ok_or_else(|| Error::Execution {
+                message: "expert lease count overflow".into(),
+            })?;
         entry.last_used = self.clock;
         self.stats.active_leases += 1;
         self.stats.resident_hits = self.stats.resident_hits.saturating_add(1);
@@ -377,33 +384,34 @@ where
         let binding = lease.binding;
         let Some(entry) = self.slots.get_mut(binding.slot.index()) else {
             self.stats.stale_releases = self.stats.stale_releases.saturating_add(1);
-            return Err(Error::Execution(
-                "expert lease references a missing slot".into(),
-            ));
+            return Err(Error::Execution {
+                message: "expert lease references a missing slot".into(),
+            });
         };
         if entry.key != Some(binding.key) || entry.generation != binding.generation {
             self.stats.stale_releases = self.stats.stale_releases.saturating_add(1);
-            return Err(Error::Execution(
-                "expert lease has a stale slot generation".into(),
-            ));
+            return Err(Error::Execution {
+                message: "expert lease has a stale slot generation".into(),
+            });
         }
-        entry.leases = entry
-            .leases
-            .checked_sub(1)
-            .ok_or_else(|| Error::Internal("expert lease count underflow".into()))?;
-        self.stats.active_leases = self
-            .stats
-            .active_leases
-            .checked_sub(1)
-            .ok_or_else(|| Error::Internal("active expert lease count underflow".into()))?;
+        entry.leases = entry.leases.checked_sub(1).ok_or_else(|| Error::Internal {
+            message: "expert lease count underflow".into(),
+        })?;
+        self.stats.active_leases =
+            self.stats
+                .active_leases
+                .checked_sub(1)
+                .ok_or_else(|| Error::Internal {
+                    message: "active expert lease count underflow".into(),
+                })?;
         Ok(())
     }
 
     /// Compatibility entry point: selected installation with a fatal capacity miss.
     pub fn prepare_install(&mut self, key: K) -> Result<PreparedExpertInstall<K>> {
         self.try_prepare_install(key, ExpertInstallReason::Selected)?
-            .ok_or_else(|| {
-                Error::Execution("all expert residency slots are leased or reserved".into())
+            .ok_or_else(|| Error::Execution {
+                message: "all expert residency slots are leased or reserved".into(),
             })
     }
 
@@ -414,9 +422,9 @@ where
         reason: ExpertInstallReason,
     ) -> Result<Option<PreparedExpertInstall<K>>> {
         if self.by_key.contains_key(&key) {
-            return Err(Error::Execution(format!(
-                "expert {key:?} is already resident"
-            )));
+            return Err(Error::Execution {
+                message: format!("expert {key:?} is already resident"),
+            });
         }
         let Some((index, entry)) = self
             .slots
@@ -432,13 +440,17 @@ where
             .0
             .checked_add(1)
             .filter(|generation| *generation != 0)
-            .ok_or_else(|| Error::Execution("expert slot generation exhausted".into()))?;
+            .ok_or_else(|| Error::Execution {
+                message: "expert slot generation exhausted".into(),
+            })?;
         let transaction = self.next_transaction;
         self.next_transaction = self
             .next_transaction
             .checked_add(1)
             .filter(|next| *next != 0)
-            .ok_or_else(|| Error::Execution("expert install transaction IDs exhausted".into()))?;
+            .ok_or_else(|| Error::Execution {
+                message: "expert install transaction IDs exhausted".into(),
+            })?;
         let slot = ExpertSlotId(index as u32);
         let previous_key = entry.key;
         let prepared = PreparedExpertInstall {
@@ -456,26 +468,52 @@ where
         Ok(Some(prepared))
     }
 
+    pub fn promote_install(
+        &mut self,
+        mut prepared: PreparedExpertInstall<K>,
+    ) -> Result<PreparedExpertInstall<K>> {
+        let stored =
+            self.pending
+                .get_mut(&prepared.transaction)
+                .ok_or_else(|| Error::Execution {
+                    message: "prepared expert install is unknown, canceled, or already published"
+                        .into(),
+                })?;
+        if *stored != prepared {
+            return Err(Error::Execution {
+                message: "prepared expert install does not match coordinator ownership".into(),
+            });
+        }
+        if prepared.reason == ExpertInstallReason::Prefetch {
+            prepared.reason = ExpertInstallReason::Selected;
+            stored.reason = ExpertInstallReason::Selected;
+        }
+        Ok(prepared)
+    }
+
     pub fn activate_install(
         &mut self,
         prepared: PreparedExpertInstall<K>,
     ) -> Result<ExpertInstallActivationOutcome> {
         if self.pending.get(&prepared.transaction) != Some(&prepared) {
-            return Err(Error::Execution(
-                "prepared expert install is unknown, canceled, or already published".into(),
-            ));
+            return Err(Error::Execution {
+                message: "prepared expert install is unknown, canceled, or already published"
+                    .into(),
+            });
         }
         let entry = self
             .slots
             .get(prepared.slot.index())
-            .ok_or_else(|| Error::Internal("prepared expert slot is missing".into()))?;
+            .ok_or_else(|| Error::Internal {
+                message: "prepared expert slot is missing".into(),
+            })?;
         if entry.key != prepared.previous_key
             || entry.generation != prepared.previous_generation
             || entry.pending_transaction != Some(prepared.transaction)
         {
-            return Err(Error::Execution(
-                "prepared expert install became stale before activation".into(),
-            ));
+            return Err(Error::Execution {
+                message: "prepared expert install became stale before activation".into(),
+            });
         }
         if entry.install_activated {
             return Ok(ExpertInstallActivationOutcome::Activated);
@@ -484,16 +522,18 @@ where
             return Ok(ExpertInstallActivationOutcome::BlockedByLeases);
         }
         if self.by_key.contains_key(&prepared.key) {
-            return Err(Error::Execution(format!(
-                "expert {:?} became resident before install activation",
-                prepared.key
-            )));
+            return Err(Error::Execution {
+                message: format!(
+                    "expert {:?} became resident before install activation",
+                    prepared.key
+                ),
+            });
         }
         if let Some(previous) = prepared.previous_key {
             if self.by_key.get(&previous) != Some(&prepared.slot) {
-                return Err(Error::Execution(
-                    "prepared eviction lost its published source mapping".into(),
-                ));
+                return Err(Error::Execution {
+                    message: "prepared eviction lost its published source mapping".into(),
+                });
             }
             self.by_key.remove(&previous);
         }
@@ -526,32 +566,39 @@ where
         acquire_lease: bool,
     ) -> Result<(ExpertSlotBinding<K>, Option<ExpertLease<K>>)> {
         if self.pending.get(&prepared.transaction) != Some(&prepared) {
-            return Err(Error::Execution(
-                "prepared expert install is unknown, canceled, or already published".into(),
-            ));
+            return Err(Error::Execution {
+                message: "prepared expert install is unknown, canceled, or already published"
+                    .into(),
+            });
         }
         if self.by_key.contains_key(&prepared.key) {
-            return Err(Error::Execution(format!(
-                "expert {:?} became resident before install publication",
-                prepared.key
-            )));
+            return Err(Error::Execution {
+                message: format!(
+                    "expert {:?} became resident before install publication",
+                    prepared.key
+                ),
+            });
         }
         let entry = self
             .slots
             .get(prepared.slot.index())
-            .ok_or_else(|| Error::Internal("prepared expert slot is missing".into()))?;
+            .ok_or_else(|| Error::Internal {
+                message: "prepared expert slot is missing".into(),
+            })?;
         if entry.key != prepared.previous_key
             || entry.generation != prepared.previous_generation
             || entry.leases != 0
             || entry.pending_transaction != Some(prepared.transaction)
             || !entry.install_activated
         {
-            return Err(Error::Execution(
-                "prepared expert install became stale before publication".into(),
-            ));
+            return Err(Error::Execution {
+                message: "prepared expert install became stale before publication".into(),
+            });
         }
         if acquire_lease && entry.leases == u32::MAX {
-            return Err(Error::Execution("expert lease count overflow".into()));
+            return Err(Error::Execution {
+                message: "expert lease count overflow".into(),
+            });
         }
 
         let entry = &mut self.slots[prepared.slot.index()];
@@ -579,21 +626,24 @@ where
 
     pub fn cancel_install(&mut self, prepared: PreparedExpertInstall<K>) -> Result<()> {
         if self.pending.get(&prepared.transaction) != Some(&prepared) {
-            return Err(Error::Execution(
-                "prepared expert install is unknown, canceled, or already published".into(),
-            ));
+            return Err(Error::Execution {
+                message: "prepared expert install is unknown, canceled, or already published"
+                    .into(),
+            });
         }
         let entry = self
             .slots
             .get(prepared.slot.index())
-            .ok_or_else(|| Error::Internal("prepared expert slot is missing".into()))?;
+            .ok_or_else(|| Error::Internal {
+                message: "prepared expert slot is missing".into(),
+            })?;
         if entry.key != prepared.previous_key
             || entry.generation != prepared.previous_generation
             || entry.pending_transaction != Some(prepared.transaction)
         {
-            return Err(Error::Execution(
-                "prepared expert install reservation became stale".into(),
-            ));
+            return Err(Error::Execution {
+                message: "prepared expert install reservation became stale".into(),
+            });
         }
         if let Some(previous) = prepared.previous_key {
             match (entry.install_activated, self.by_key.get(&previous)) {
@@ -602,9 +652,10 @@ where
                     self.by_key.insert(previous, prepared.slot);
                 }
                 _ => {
-                    return Err(Error::Execution(
-                        "prepared install cancellation found divergent source mapping".into(),
-                    ));
+                    return Err(Error::Execution {
+                        message: "prepared install cancellation found divergent source mapping"
+                            .into(),
+                    });
                 }
             }
         }
@@ -622,14 +673,14 @@ where
         };
         let entry = &mut self.slots[slot.index()];
         if entry.leases != 0 {
-            return Err(Error::Execution(format!(
-                "expert {key:?} cannot be evicted while leased"
-            )));
+            return Err(Error::Execution {
+                message: format!("expert {key:?} cannot be evicted while leased"),
+            });
         }
         if entry.pending_transaction.is_some() {
-            return Err(Error::Execution(format!(
-                "expert {key:?} cannot be evicted while its slot is reserved"
-            )));
+            return Err(Error::Execution {
+                message: format!("expert {key:?} cannot be evicted while its slot is reserved"),
+            });
         }
         let binding = ExpertSlotBinding {
             key,

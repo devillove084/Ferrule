@@ -40,24 +40,30 @@ impl CudaPackedFp4LinearShape {
             || !self.in_features.is_multiple_of(32)
             || !self.in_features.is_multiple_of(2)
         {
-            return Err(Error::Internal(format!(
-                "{label} artifact FP4 linear requires in_features divisible by 32, got {}",
-                self.in_features
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "{label} artifact FP4 linear requires in_features divisible by 32, got {}",
+                    self.in_features
+                ),
+            });
         }
         if self.out_features == 0 {
-            return Err(Error::Internal(format!(
-                "{label} artifact FP4 linear has zero out_features"
-            )));
+            return Err(Error::Internal {
+                message: format!("{label} artifact FP4 linear has zero out_features"),
+            });
         }
         let packed_len = self
             .out_features
             .checked_mul(self.in_features / 2)
-            .ok_or_else(|| Error::Internal(format!("{label} packed FP4 size overflow")))?;
+            .ok_or_else(|| Error::Internal {
+                message: format!("{label} packed FP4 size overflow"),
+            })?;
         let scale_len = self
             .out_features
             .checked_mul(self.in_features / 32)
-            .ok_or_else(|| Error::Internal(format!("{label} FP4 scale size overflow")))?;
+            .ok_or_else(|| Error::Internal {
+                message: format!("{label} FP4 scale size overflow"),
+            })?;
         checked_u32(
             self.packed_offset.saturating_add(packed_len),
             label,
@@ -132,22 +138,28 @@ impl CudaPackedFp4ExpertShape {
         self.up.validate("up")?;
         self.down.validate("down")?;
         if self.gate.in_features != self.up.in_features {
-            return Err(Error::Internal(format!(
-                "packed FP4 expert gate/up input mismatch: {} vs {}",
-                self.gate.in_features, self.up.in_features
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "packed FP4 expert gate/up input mismatch: {} vs {}",
+                    self.gate.in_features, self.up.in_features
+                ),
+            });
         }
         if self.gate.out_features != self.up.out_features {
-            return Err(Error::Internal(format!(
-                "packed FP4 expert gate/up output mismatch: {} vs {}",
-                self.gate.out_features, self.up.out_features
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "packed FP4 expert gate/up output mismatch: {} vs {}",
+                    self.gate.out_features, self.up.out_features
+                ),
+            });
         }
         if self.down.in_features != self.gate.out_features {
-            return Err(Error::Internal(format!(
-                "packed FP4 expert down input {} must match gate/up output {}",
-                self.down.in_features, self.gate.out_features
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "packed FP4 expert down input {} must match gate/up output {}",
+                    self.down.in_features, self.gate.out_features
+                ),
+            });
         }
         Ok(())
     }
@@ -295,10 +307,8 @@ impl<'a> CudaPackedFp4ExpertExecutor<'a> {
 }
 
 fn checked_u32(value: usize, label: &str, field: &str) -> Result<u32> {
-    u32::try_from(value).map_err(|_| {
-        Error::Internal(format!(
-            "{label} artifact FP4 {field} exceeds CUDA u32 launch ABI: {value}"
-        ))
+    u32::try_from(value).map_err(|_| Error::Internal {
+        message: format!("{label} artifact FP4 {field} exceeds CUDA u32 launch ABI: {value}"),
     })
 }
 

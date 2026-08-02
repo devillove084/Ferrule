@@ -10,7 +10,7 @@ mod native_executor;
 mod observability;
 
 pub use driver::{
-    ResidentActionKind, ResidentDriverShutdownReport, ResidentDriverStep,
+    ResidentActionKind, ResidentCancelProgress, ResidentDriverShutdownReport, ResidentDriverStep,
     ResidentRuntimeResourceLimits, ResidentTokenEvent, ResidentTopKDriver,
     ResidentTopKDriverConfig,
 };

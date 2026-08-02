@@ -96,11 +96,13 @@ pub fn execute_routed_moe_reference_with_handles(
     let mut output = routed_output.clone();
     if let Some(shared) = &shared_output {
         if shared.len() != output.len() {
-            return Err(Error::Model(format!(
-                "shared expert output length mismatch: routed={}, shared={}",
-                output.len(),
-                shared.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "shared expert output length mismatch: routed={}, shared={}",
+                    output.len(),
+                    shared.len()
+                ),
+            });
         }
         for (dst, value) in output.iter_mut().zip(shared.iter()) {
             *dst += value;
@@ -181,11 +183,13 @@ pub fn execute_routed_moe_with_artifact_router_reference_with_handles(
 fn accumulate(target: &mut Option<Vec<f32>>, value: Vec<f32>) -> Result<()> {
     if let Some(target) = target {
         if target.len() != value.len() {
-            return Err(Error::Model(format!(
-                "routed expert output length mismatch: accumulated={}, next={}",
-                target.len(),
-                value.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "routed expert output length mismatch: accumulated={}, next={}",
+                    target.len(),
+                    value.len()
+                ),
+            });
         }
         for (dst, value) in target.iter_mut().zip(value) {
             *dst += value;

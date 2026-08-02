@@ -88,11 +88,11 @@ impl CheckpointTensorSlice {
 
     pub fn element_count(&self) -> Result<usize> {
         self.shape.iter().try_fold(1usize, |acc, &dim| {
-            acc.checked_mul(dim).ok_or_else(|| {
-                Error::Model(format!(
+            acc.checked_mul(dim).ok_or_else(|| Error::Model {
+                message: format!(
                     "checkpoint tensor '{}' element count overflow for shape {:?}",
                     self.name, self.shape
-                ))
+                ),
             })
         })
     }
@@ -116,11 +116,11 @@ impl CheckpointMatrixSlice {
                 .shape
                 .clone()
                 .try_into()
-                .map_err(|shape: Vec<usize>| {
-                    Error::Model(format!(
+                .map_err(|shape: Vec<usize>| Error::Model {
+                    message: format!(
                         "checkpoint matrix {label} '{}' expects 2D shape, got {:?}",
                         slice.name, shape
-                    ))
+                    ),
                 })?;
         Ok(Self { slice, rows, cols })
     }
@@ -157,58 +157,65 @@ impl CheckpointTensorReader {
         row_count: usize,
     ) -> Result<CheckpointTensorPayload> {
         if slice.shape.len() != 2 {
-            return Err(Error::Model(format!(
-                "checkpoint tensor '{}' row read expects 2D shape, got {:?}",
-                slice.name, slice.shape
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "checkpoint tensor '{}' row read expects 2D shape, got {:?}",
+                    slice.name, slice.shape
+                ),
+            });
         }
         let rows = slice.shape[0];
         let cols = slice.shape[1];
         let end_row = start_row.checked_add(row_count).ok_or_else(|| {
-            Error::Model(format!(
+            Error::Model { message: format!(
                 "checkpoint tensor '{}' row range overflows: start={start_row} count={row_count}",
                 slice.name
-            ))
+            ) }
         })?;
         if row_count == 0 || start_row >= rows || end_row > rows {
-            return Err(Error::Model(format!(
-                "checkpoint tensor '{}' invalid row range: start={start_row} count={row_count} rows={rows}",
-                slice.name
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "checkpoint tensor '{}' invalid row range: start={start_row} count={row_count} rows={rows}",
+                    slice.name
+                ),
+            });
         }
-        let elem_bytes = slice.dtype.element_size_bytes().ok_or_else(|| {
-            Error::Model(format!(
-                "checkpoint tensor '{}' has unknown dtype {} for row read",
-                slice.name,
-                slice.dtype.as_str()
-            ))
-        })?;
+        let elem_bytes = slice
+            .dtype
+            .element_size_bytes()
+            .ok_or_else(|| Error::Model {
+                message: format!(
+                    "checkpoint tensor '{}' has unknown dtype {} for row read",
+                    slice.name,
+                    slice.dtype.as_str()
+                ),
+            })?;
         let row_bytes = cols.checked_mul(elem_bytes).ok_or_else(|| {
-            Error::Model(format!(
+            Error::Model { message: format!(
                 "checkpoint tensor '{}' row byte size overflows for cols={cols} elem_bytes={elem_bytes}",
                 slice.name
-            ))
+            ) }
         })?;
         let byte_offset = start_row.checked_mul(row_bytes).ok_or_else(|| {
-            Error::Model(format!(
+            Error::Model { message: format!(
                 "checkpoint tensor '{}' row offset overflows: start={start_row} row_bytes={row_bytes}",
                 slice.name
-            ))
+            ) }
         })?;
         let bytes = row_count.checked_mul(row_bytes).ok_or_else(|| {
-            Error::Model(format!(
+            Error::Model { message: format!(
                 "checkpoint tensor '{}' row read byte count overflows: count={row_count} row_bytes={row_bytes}",
                 slice.name
-            ))
+            ) }
         })?;
         let offset = slice
             .offset
             .checked_add(byte_offset as u64)
-            .ok_or_else(|| {
-                Error::Model(format!(
+            .ok_or_else(|| Error::Model {
+                message: format!(
                     "checkpoint tensor '{}' absolute row offset overflows",
                     slice.name
-                ))
+                ),
             })?;
         self.read_physical_range(slice, offset, bytes as u64, vec![row_count, cols])
     }
@@ -221,30 +228,25 @@ impl CheckpointTensorReader {
         shape: Vec<usize>,
     ) -> Result<CheckpointTensorPayload> {
         if bytes > self.max_tensor_bytes {
-            return Err(Error::Model(format!(
-                "checkpoint tensor '{}' exceeds bounded read size: {} > {} bytes",
-                slice.name, bytes, self.max_tensor_bytes
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "checkpoint tensor '{}' exceeds bounded read size: {} > {} bytes",
+                    slice.name, bytes, self.max_tensor_bytes
+                ),
+            });
         }
-        let mut file = std::fs::File::open(&slice.path).map_err(|e| {
-            Error::Model(format!(
-                "checkpoint tensor open '{}': {e}",
-                slice.path.display()
-            ))
+        let mut file = std::fs::File::open(&slice.path).map_err(|e| Error::Model {
+            message: format!("checkpoint tensor open '{}': {e}", slice.path.display()),
         })?;
-        file.seek(SeekFrom::Start(offset)).map_err(|e| {
-            Error::Model(format!(
-                "checkpoint tensor seek '{}': {e}",
-                slice.path.display()
-            ))
-        })?;
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|e| Error::Model {
+                message: format!("checkpoint tensor seek '{}': {e}", slice.path.display()),
+            })?;
         let mut payload_bytes = vec![0u8; bytes as usize];
-        file.read_exact(&mut payload_bytes).map_err(|e| {
-            Error::Model(format!(
-                "checkpoint tensor read '{}': {e}",
-                slice.path.display()
-            ))
-        })?;
+        file.read_exact(&mut payload_bytes)
+            .map_err(|e| Error::Model {
+                message: format!("checkpoint tensor read '{}': {e}", slice.path.display()),
+            })?;
         let mut range_slice = slice.clone();
         range_slice.offset = offset;
         range_slice.bytes = bytes;

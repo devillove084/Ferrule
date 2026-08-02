@@ -20,6 +20,7 @@ serde = { version = "1", features = ["derive"] }
 tracing = "0.1"
 tokio = { version = "1", features = ["macros", "rt", "sync"] }
 ahash = "0.8"
+snafu.workspace = true
 
 [lints]
 workspace = true

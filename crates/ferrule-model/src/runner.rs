@@ -126,9 +126,9 @@ impl PendingModelProgress {
             .iter()
             .any(|dependency| dependency.materialization_key().is_some())
         {
-            return Err(Error::Execution(
-                "materialization waits must be constructed from a resolved stage".into(),
-            ));
+            return Err(Error::Execution {
+                message: "materialization waits must be constructed from a resolved stage".into(),
+            });
         }
         Ok(Self {
             transaction,
@@ -145,9 +145,12 @@ impl PendingModelProgress {
         stage: ResolvedStage,
     ) -> Result<Self> {
         validate_continuation_id(continuation)?;
-        let dependencies = stage.dependencies().cloned().ok_or_else(|| {
-            Error::Execution("a resource-free stage cannot suspend on materialization".into())
-        })?;
+        let dependencies = stage
+            .dependencies()
+            .cloned()
+            .ok_or_else(|| Error::Execution {
+                message: "a resource-free stage cannot suspend on materialization".into(),
+            })?;
         dependencies.validate()?;
         Ok(Self {
             transaction,
@@ -212,17 +215,23 @@ pub enum MultiSessionBatchProgress {
     Waiting(PendingModelProgress),
 }
 
-/// Ownership result of cancelling one retained batch continuation.
-#[derive(Debug)]
-pub enum BatchContinuationCancelOutcome {
-    /// Model work is quiescent and all model-owned continuation cleanup succeeded.
-    Cancelled,
-    /// Cancellation failed before quiescence; the same continuation remains owned
-    /// by the runner and may be cancelled again.
-    StillActive(Error),
-    /// Model work is quiescent, but model-owned cleanup reported an error. The
-    /// caller must drop continuation ownership and continue backend rollback.
-    Quiesced(Error),
+/// The only two ways a backend transaction may end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionEndIntent {
+    /// Publish the prepared backend generation.
+    Publish,
+    /// Quiesce physical work and discard the prepared backend generation.
+    Abort,
+}
+
+/// Non-blocking progress of backend terminalization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionEndProgress {
+    /// Physical work still owns transaction resources. The owner must retain the
+    /// complete transaction payload and call `end_transaction` again after a wake.
+    Pending,
+    /// The backend no longer owns or accesses transaction resources.
+    Complete,
 }
 
 /// A model runner that supports explicit per-sequence state for multi-session
@@ -269,10 +278,10 @@ pub trait MultiSessionRunner: ModelRunner {
         _control: Box<dyn ferrule_common::expert_residency::ExpertResidencyControl>,
     ) -> Result<()> {
         if self.expert_residency_requirements().is_some() {
-            return Err(ferrule_common::Error::Execution(
+            return Err(ferrule_common::Error::Execution { message:
                 "runner reports expert residency requirements but does not support installing expert residency control"
                     .into(),
-            ));
+             });
         }
         Ok(())
     }
@@ -296,17 +305,17 @@ pub trait MultiSessionRunner: ModelRunner {
         &mut self,
         _resolver: Box<dyn MaterializationResolver>,
     ) -> Result<()> {
-        Err(Error::Execution(
-            "runner does not support materialization resolvers".into(),
-        ))
+        Err(Error::Execution {
+            message: "runner does not support materialization resolvers".into(),
+        })
     }
 
     /// Borrow the installed exact-key resolver. It owns no logical demand,
     /// publication, cancellation, residency, or eviction state.
     fn materialization_resolver(&mut self) -> Result<&mut (dyn MaterializationResolver + '_)> {
-        Err(Error::Execution(
-            "runner has no materialization resolver".into(),
-        ))
+        Err(Error::Execution {
+            message: "runner has no materialization resolver".into(),
+        })
     }
 
     /// Execute a closure against an explicit sequence state instead of the
@@ -366,8 +375,9 @@ pub trait MultiSessionRunner: ModelRunner {
     /// Reserve backend-owned physical resources for one packed batch.
     ///
     /// A successful prepare remains provisional until
-    /// [`commit_multi_session_batch`](Self::commit_multi_session_batch). Backends
-    /// must leave the previously committed view unchanged when prepare fails.
+    /// [`end_transaction`](Self::end_transaction) completes with
+    /// [`TransactionEndIntent::Publish`]. Backends must leave the previously
+    /// committed view unchanged when prepare fails.
     fn prepare_multi_session_batch(
         &mut self,
         transaction: ExecutionTransactionId,
@@ -376,24 +386,18 @@ pub trait MultiSessionRunner: ModelRunner {
         kv_reservations: &[KvReservationView],
     ) -> Result<()>;
 
-    /// Atomically publish backend resources prepared for the current batch.
+    /// Advance the single terminal protocol for a prepared transaction.
     ///
-    /// Runtime logical KV metadata is published immediately after this returns
-    /// successfully. An error must mean the backend transaction is still
-    /// uncommitted and can be rolled back with `rollback_multi_session_batch`.
-    fn commit_multi_session_batch(
+    /// `Pending` is normal asynchronous progress, not an error. Until `Complete`,
+    /// the caller must retain every logical and physical ownership token associated
+    /// with the transaction. Hardware or protocol errors are fatal to the worker
+    /// and are returned directly rather than disguised as retryable rollback.
+    fn end_transaction(
         &mut self,
         transaction: ExecutionTransactionId,
         states: &mut [Self::SequenceState],
-    ) -> Result<()>;
-
-    /// Discard resources prepared for the current batch. This must be safe after
-    /// model execution fails and must restore the previous committed KV view.
-    fn rollback_multi_session_batch(
-        &mut self,
-        transaction: ExecutionTransactionId,
-        states: &mut [Self::SequenceState],
-    ) -> Result<()>;
+        intent: TransactionEndIntent,
+    ) -> Result<TransactionEndProgress>;
 
     /// Atomically retain independent exact prefixes for a provisional cohort.
     ///
@@ -437,18 +441,6 @@ pub trait MultiSessionRunner: ModelRunner {
         leases: ResidencyLeaseSet,
     ) -> Result<MultiSessionBatchProgress>;
 
-    /// Cancel a batch continuation previously created by this runner.
-    ///
-    /// Implementations must explicitly report whether an error happened before or
-    /// after quiescence. Callers retain state ownership only for
-    /// [`BatchContinuationCancelOutcome::StillActive`].
-    fn cancel_multi_session_batch(
-        &mut self,
-        transaction: ExecutionTransactionId,
-        states: &mut [Self::SequenceState],
-        continuation: ContinuationId,
-    ) -> BatchContinuationCancelOutcome;
-
     /// Truthful capabilities for multi-session execution. This should report
     /// `max_sequences > 1` and `supports_mixed` accurately for this backend.
     fn multi_session_capabilities(&self) -> ExecutionCapabilities;
@@ -469,10 +461,12 @@ pub struct NativeProposalSource {
 impl NativeProposalSource {
     pub fn validate(&self) -> Result<()> {
         if self.implementation.is_empty() || self.prepared_plan_id == 0 || self.native_width == 0 {
-            return Err(ferrule_common::Error::Model(format!(
-                "invalid native proposal source: implementation={:?} prepared_plan_id={} native_width={}",
-                self.implementation, self.prepared_plan_id, self.native_width
-            )));
+            return Err(ferrule_common::Error::Model {
+                message: format!(
+                    "invalid native proposal source: implementation={:?} prepared_plan_id={} native_width={}",
+                    self.implementation, self.prepared_plan_id, self.native_width
+                ),
+            });
         }
         Ok(())
     }
@@ -492,11 +486,13 @@ pub struct NativeProposal {
 impl NativeProposal {
     pub fn validate(&self) -> Result<()> {
         if self.token_ids.len() != self.confidence_logits.len() {
-            return Err(ferrule_common::Error::Model(format!(
-                "native proposal returned {} tokens but {} confidence logits",
-                self.token_ids.len(),
-                self.confidence_logits.len()
-            )));
+            return Err(ferrule_common::Error::Model {
+                message: format!(
+                    "native proposal returned {} tokens but {} confidence logits",
+                    self.token_ids.len(),
+                    self.confidence_logits.len()
+                ),
+            });
         }
         if let Some((row, confidence)) = self
             .confidence_logits
@@ -504,9 +500,11 @@ impl NativeProposal {
             .enumerate()
             .find(|(_, confidence)| !confidence.is_finite())
         {
-            return Err(ferrule_common::Error::Model(format!(
-                "native proposal confidence row {row} is not finite: {confidence}"
-            )));
+            return Err(ferrule_common::Error::Model {
+                message: format!(
+                    "native proposal confidence row {row} is not finite: {confidence}"
+                ),
+            });
         }
         Ok(())
     }
@@ -515,13 +513,15 @@ impl NativeProposal {
         source.validate()?;
         self.validate()?;
         if self.token_ids.len() != source.native_width {
-            return Err(ferrule_common::Error::Model(format!(
-                "native proposal source {}:{} declares native width {} but returned {} tokens",
-                source.implementation,
-                source.prepared_plan_id,
-                source.native_width,
-                self.token_ids.len()
-            )));
+            return Err(ferrule_common::Error::Model {
+                message: format!(
+                    "native proposal source {}:{} declares native width {} but returned {} tokens",
+                    source.implementation,
+                    source.prepared_plan_id,
+                    source.native_width,
+                    self.token_ids.len()
+                ),
+            });
         }
         Ok(())
     }
@@ -567,13 +567,6 @@ pub trait ResidentModelRunner: MultiSessionRunner {
         continuation: ContinuationId,
         leases: ResidencyLeaseSet,
     ) -> Result<NativeProposalProgress>;
-
-    /// Cancel a retained native proposal continuation.
-    fn cancel_native_proposal(
-        &mut self,
-        transaction: ExecutionTransactionId,
-        continuation: ContinuationId,
-    ) -> BatchContinuationCancelOutcome;
 }
 
 #[cfg(test)]

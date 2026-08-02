@@ -6,6 +6,8 @@
 //! Ferrule runtime for resident workloads, shared scheduling and I/O, resource
 //! residency, transactional state, and exact speculative execution.
 
+mod error;
+
 // ── Sub-directory modules ─────────────────────────────────────────────────
 pub mod cache;
 pub mod io;
@@ -17,6 +19,8 @@ pub mod expert_residency;
 pub mod speculation;
 
 // ── Convenience re-exports ────────────────────────────────────────────────
+pub use error::{CleanupStep, Error, Result};
+
 pub use cache::{
     KvPageManager, KvPageManagerStats, KvReservation, KvReservationBindings, KvReservationCommit,
     KvReservationId, PageBlockTable, PreemptedKvState, PreparedKvSequenceFork,
@@ -24,8 +28,9 @@ pub use cache::{
 pub use engine::{
     InferenceCancelProgress, InferenceCompletionOwner, InferenceCompletionReactor, InferenceEngine,
     LocalResidentInferenceEngine, NativeMultiSessionExecutor, ResidentActionKind,
-    ResidentDriverShutdownReport, ResidentDriverStep, ResidentInferenceEngine, ResidentTokenEvent,
-    ResidentTopKDriver, ResidentTopKDriverConfig, ResidentTopKDriverStats,
+    ResidentCancelProgress, ResidentDriverShutdownReport, ResidentDriverStep,
+    ResidentInferenceEngine, ResidentTokenEvent, ResidentTopKDriver, ResidentTopKDriverConfig,
+    ResidentTopKDriverStats,
 };
 pub use expert_residency::{
     ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertInstallReason, ExpertKey, ExpertLease,

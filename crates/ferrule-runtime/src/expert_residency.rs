@@ -34,9 +34,9 @@ impl ExpertResidencyController {
 
     pub fn with_requirements(requirements: ExpertResidencyRequirements) -> Result<Self> {
         if requirements.layer_capacities.is_empty() {
-            return Err(Error::Execution(
-                "expert residency controller requires at least one layer".into(),
-            ));
+            return Err(Error::Execution {
+                message: "expert residency controller requires at least one layer".into(),
+            });
         }
         let layers = requirements
             .layer_capacities
@@ -53,18 +53,22 @@ impl ExpertResidencyController {
 
     fn layer_index(&self, key: ExpertKey) -> Result<usize> {
         if key.model_instance != self.requirements.model_instance {
-            return Err(Error::Execution(format!(
-                "expert model namespace {} does not match controller namespace {}",
-                key.model_instance, self.requirements.model_instance
-            )));
+            return Err(Error::Execution {
+                message: format!(
+                    "expert model namespace {} does not match controller namespace {}",
+                    key.model_instance, self.requirements.model_instance
+                ),
+            });
         }
         let layer = key.layer as usize;
         if layer >= self.layers.len() {
-            return Err(Error::Execution(format!(
-                "expert layer {} is outside controller layer count {}",
-                key.layer,
-                self.layers.len()
-            )));
+            return Err(Error::Execution {
+                message: format!(
+                    "expert layer {} is outside controller layer count {}",
+                    key.layer,
+                    self.layers.len()
+                ),
+            });
         }
         Ok(layer)
     }
@@ -143,10 +147,9 @@ impl ExpertResidencyControl for ExpertResidencyController {
             let lease = match intent.reason {
                 ExpertInstallReason::Selected => self.layers[layer]
                     .acquire(intent.key)?
-                    .ok_or_else(|| {
-                        Error::Internal(
-                            "resident expert disappeared while acquiring selected lease".into(),
-                        )
+                    .ok_or_else(|| Error::Internal {
+                        message: "resident expert disappeared while acquiring selected lease"
+                            .into(),
                     })?
                     .into(),
                 ExpertInstallReason::Prefetch => None,
@@ -162,11 +165,21 @@ impl ExpertResidencyControl for ExpertResidencyController {
                 self.prefetch_capacity_misses = self.prefetch_capacity_misses.saturating_add(1);
                 Ok(ExpertInstallPrepareOutcome::CapacityAllLeased)
             }
-            None => Err(Error::Execution(format!(
-                "no unleased expert residency slot is available for selected expert {:?}",
-                intent.key
-            ))),
+            None => Err(Error::Execution {
+                message: format!(
+                    "no unleased expert residency slot is available for selected expert {:?}",
+                    intent.key
+                ),
+            }),
         }
+    }
+
+    fn promote_install(
+        &mut self,
+        prepared: PreparedExpertInstall,
+    ) -> Result<PreparedExpertInstall> {
+        let layer = self.layer_index(prepared.binding().key)?;
+        self.layers[layer].promote_install(prepared)
     }
 
     fn activate_install(

@@ -6,7 +6,10 @@
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use ferrule_common::{Error, Result};
+use ferrule_common::{
+    MaterializationKey, MaterializationPurpose, MaterializationResolveError,
+    MaterializationResolveResult,
+};
 use ferrule_model::{MaterializationPlacement, MaterializationRequest, MaterializationResolver};
 
 use super::provider::SharedMaterializationProvider;
@@ -48,6 +51,51 @@ impl RuntimeMaterializationResolver {
         self.lock().stats
     }
 
+    pub fn prepare_prefetch(
+        &self,
+        request: MaterializationRequest,
+    ) -> MaterializationResolveResult<MaterializationKey> {
+        self.prepare(request, MaterializationPurpose::Prefetch)
+    }
+
+    fn prepare(
+        &self,
+        request: MaterializationRequest,
+        purpose: MaterializationPurpose,
+    ) -> MaterializationResolveResult<MaterializationKey> {
+        let provider = {
+            let state = self.lock();
+            let placement = state.placement;
+            if request.model() != placement.model()
+                || request.backend() != placement.backend()
+                || request.device() != placement.device()
+            {
+                return Err(MaterializationResolveError::PlacementMismatch {
+                    purpose,
+                    request_model: request.model(),
+                    request_backend: request.backend(),
+                    request_device: request.device(),
+                    resolver_model: placement.model(),
+                    resolver_backend: placement.backend(),
+                    resolver_device: placement.device(),
+                });
+            }
+            state
+                .provider
+                .clone()
+                .ok_or(MaterializationResolveError::ProviderUnavailable {
+                    purpose,
+                    model: placement.model(),
+                    backend: placement.backend(),
+                    device: placement.device(),
+                })?
+        };
+        provider
+            .prepare(request, purpose)
+            .map(|preparation| preparation.key())
+            .map_err(|source| MaterializationResolveError::Provider { purpose, source })
+    }
+
     fn lock(&self) -> MutexGuard<'_, ResolverState> {
         self.state
             .lock()
@@ -63,31 +111,11 @@ impl MaterializationResolver for RuntimeMaterializationResolver {
     fn resolve(
         &mut self,
         request: MaterializationRequest,
-    ) -> Result<ferrule_common::MaterializationKey> {
-        let provider = {
+    ) -> MaterializationResolveResult<MaterializationKey> {
+        {
             let mut state = self.lock();
             state.stats.resolves = state.stats.resolves.saturating_add(1);
-            if request.model() != state.placement.model()
-                || request.backend() != state.placement.backend()
-                || request.device() != state.placement.device()
-            {
-                return Err(Error::Execution(
-                    "materialization request does not match the runtime placement".into(),
-                ));
-            }
-            state.provider.clone().ok_or_else(|| {
-                Error::Execution(
-                    "runner requested materialization without a physical provider".into(),
-                )
-            })?
-        };
-        provider
-            .prepare(request)
-            .map(|preparation| preparation.key())
-            .map_err(|reason| {
-                Error::Execution(format!(
-                    "physical materialization preparation failed: {reason:?}"
-                ))
-            })
+        }
+        self.prepare(request, MaterializationPurpose::Execution)
     }
 }

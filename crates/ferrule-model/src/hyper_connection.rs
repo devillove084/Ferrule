@@ -28,19 +28,25 @@ impl HyperConnectionConfig {
 
     pub fn validate(&self) -> Result<()> {
         if self.hc_mult == 0 || self.hidden_size == 0 {
-            return Err(Error::Model(format!(
-                "invalid HC shape: hc_mult={}, hidden_size={}",
-                self.hc_mult, self.hidden_size
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "invalid HC shape: hc_mult={}, hidden_size={}",
+                    self.hc_mult, self.hidden_size
+                ),
+            });
         }
         if self.sinkhorn_iters == 0 {
-            return Err(Error::Model("HC sinkhorn_iters must be > 0".into()));
+            return Err(Error::Model {
+                message: "HC sinkhorn_iters must be > 0".into(),
+            });
         }
         if self.eps <= 0.0 || self.norm_eps <= 0.0 {
-            return Err(Error::Model(format!(
-                "HC eps values must be positive: eps={}, norm_eps={}",
-                self.eps, self.norm_eps
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "HC eps values must be positive: eps={}, norm_eps={}",
+                    self.eps, self.norm_eps
+                ),
+            });
         }
         Ok(())
     }
@@ -61,23 +67,29 @@ impl HyperConnectionWeights {
         config.validate()?;
         let expected_fn = config.mix_hc() * config.hc_hidden_size();
         if self.function.len() != expected_fn {
-            return Err(Error::Model(format!(
-                "HC function length mismatch: expected {expected_fn}, got {}",
-                self.function.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "HC function length mismatch: expected {expected_fn}, got {}",
+                    self.function.len()
+                ),
+            });
         }
         if self.scale.len() != 3 {
-            return Err(Error::Model(format!(
-                "HC scale length mismatch: expected 3, got {}",
-                self.scale.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "HC scale length mismatch: expected 3, got {}",
+                    self.scale.len()
+                ),
+            });
         }
         if self.base.len() != config.mix_hc() {
-            return Err(Error::Model(format!(
-                "HC base length mismatch: expected {}, got {}",
-                config.mix_hc(),
-                self.base.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "HC base length mismatch: expected {}, got {}",
+                    config.mix_hc(),
+                    self.base.len()
+                ),
+            });
         }
         Ok(())
     }
@@ -98,23 +110,29 @@ impl HyperConnectionHeadWeights {
         config.validate()?;
         let expected_fn = config.hc_mult * config.hc_hidden_size();
         if self.function.len() != expected_fn {
-            return Err(Error::Model(format!(
-                "HC head function length mismatch: expected {expected_fn}, got {}",
-                self.function.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "HC head function length mismatch: expected {expected_fn}, got {}",
+                    self.function.len()
+                ),
+            });
         }
         if self.scale.len() != 1 {
-            return Err(Error::Model(format!(
-                "HC head scale length mismatch: expected 1, got {}",
-                self.scale.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "HC head scale length mismatch: expected 1, got {}",
+                    self.scale.len()
+                ),
+            });
         }
         if self.base.len() != config.hc_mult {
-            return Err(Error::Model(format!(
-                "HC head base length mismatch: expected {}, got {}",
-                config.hc_mult,
-                self.base.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "HC head base length mismatch: expected {}, got {}",
+                    config.hc_mult,
+                    self.base.len()
+                ),
+            });
         }
         Ok(())
     }
@@ -138,7 +156,9 @@ impl HyperConnectionSplit {
             || self.post.len() != self.tokens * self.hc_mult
             || self.comb.len() != self.tokens * self.hc_mult * self.hc_mult
         {
-            return Err(Error::Model("HC split tensor length mismatch".into()));
+            return Err(Error::Model {
+                message: "HC split tensor length mismatch".into(),
+            });
         }
         Ok(())
     }
@@ -163,18 +183,22 @@ pub fn hc_split_sinkhorn_reference(
     let hc = config.hc_mult;
     let mix_hc = config.mix_hc();
     if mixes.len() != tokens * mix_hc {
-        return Err(Error::Model(format!(
-            "HC mixes length mismatch: expected {}, got {}",
-            tokens * mix_hc,
-            mixes.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "HC mixes length mismatch: expected {}, got {}",
+                tokens * mix_hc,
+                mixes.len()
+            ),
+        });
     }
     if scale.len() != 3 || base.len() != mix_hc {
-        return Err(Error::Model(format!(
-            "HC split scale/base mismatch: scale={}, base={}, mix_hc={mix_hc}",
-            scale.len(),
-            base.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "HC split scale/base mismatch: scale={}, base={}, mix_hc={mix_hc}",
+                scale.len(),
+                base.len()
+            ),
+        });
     }
 
     let mut pre = vec![0.0f32; tokens * hc];
@@ -248,11 +272,13 @@ pub fn hc_pre_reference(
     let dim = config.hidden_size;
     let hc_dim = config.hc_hidden_size();
     if state.len() != tokens * hc_dim {
-        return Err(Error::Model(format!(
-            "HC state length mismatch: expected {}, got {}",
-            tokens * hc_dim,
-            state.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "HC state length mismatch: expected {}, got {}",
+                tokens * hc_dim,
+                state.len()
+            ),
+        });
     }
 
     let mut mixes = vec![0.0f32; tokens * config.mix_hc()];
@@ -296,19 +322,23 @@ pub fn hc_post_reference(
     let hc = config.hc_mult;
     let dim = config.hidden_size;
     if split.hc_mult != hc {
-        return Err(Error::Model(format!(
-            "HC split multiplier mismatch: split={}, config={hc}",
-            split.hc_mult
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "HC split multiplier mismatch: split={}, config={hc}",
+                split.hc_mult
+            ),
+        });
     }
     if hidden.len() != tokens * dim || residual.len() != tokens * hc * dim {
-        return Err(Error::Model(format!(
-            "HC post length mismatch: hidden={}, residual={}, expected hidden={} residual={}",
-            hidden.len(),
-            residual.len(),
-            tokens * dim,
-            tokens * hc * dim
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "HC post length mismatch: hidden={}, residual={}, expected hidden={} residual={}",
+                hidden.len(),
+                residual.len(),
+                tokens * dim,
+                tokens * hc * dim
+            ),
+        });
     }
 
     let mut out = vec![0.0f32; tokens * hc * dim];
@@ -341,11 +371,13 @@ pub fn hc_head_reference(
     let dim = config.hidden_size;
     let hc_dim = config.hc_hidden_size();
     if state.len() != tokens * hc_dim {
-        return Err(Error::Model(format!(
-            "HC head state length mismatch: expected {}, got {}",
-            tokens * hc_dim,
-            state.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "HC head state length mismatch: expected {}, got {}",
+                tokens * hc_dim,
+                state.len()
+            ),
+        });
     }
     let mut out = vec![0.0f32; tokens * dim];
     for token in 0..tokens {

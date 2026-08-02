@@ -18,11 +18,11 @@ pub(crate) fn two_dim_shape_from_payload(
             .shape
             .clone()
             .try_into()
-            .map_err(|shape: Vec<usize>| {
-                Error::Model(format!(
+            .map_err(|shape: Vec<usize>| Error::Model {
+                message: format!(
                     "{error_context} {label} '{}' expects 2D shape, got {:?}",
                     payload.slice.name, shape
-                ))
+                ),
             })?;
     Ok((rows, cols))
 }
@@ -35,11 +35,13 @@ pub(crate) fn check_linear(
     error_context: &str,
 ) -> Result<()> {
     if linear.format.out_features() != out || linear.format.in_features() != input {
-        return Err(Error::Model(format!(
-            "{error_context} {label} shape mismatch: got [{}, {}], expected [{out}, {input}]",
-            linear.format.out_features(),
-            linear.format.in_features()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "{error_context} {label} shape mismatch: got [{}, {}], expected [{out}, {input}]",
+                linear.format.out_features(),
+                linear.format.in_features()
+            ),
+        });
     }
     Ok(())
 }
@@ -51,9 +53,11 @@ pub(crate) fn check_len(
     error_context: &str,
 ) -> Result<()> {
     if got != expected {
-        return Err(Error::Model(format!(
-            "{error_context} {label} length mismatch: got {got}, expected {expected}"
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "{error_context} {label} length mismatch: got {got}, expected {expected}"
+            ),
+        });
     }
     Ok(())
 }
@@ -82,7 +86,7 @@ mod tests {
             two_dim_shape_from_payload(&vector, "projection", "DenseDecoder layer 2").unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Model: DenseDecoder layer 2 projection 'norm.weight' expects 2D shape, got [4]"
+            "model: DenseDecoder layer 2 projection 'norm.weight' expects 2D shape, got [4]"
         );
 
         let linear = LinearWeight::from_weight_and_scale(
@@ -94,13 +98,13 @@ mod tests {
         let error = check_linear(&linear, 2, 4, "q_proj", "DenseDecoder layer 2").unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Model: DenseDecoder layer 2 q_proj shape mismatch: got [3, 4], expected [2, 4]"
+            "model: DenseDecoder layer 2 q_proj shape mismatch: got [3, 4], expected [2, 4]"
         );
 
         let error = check_len(3, 4, "input_norm", "DenseDecoder layer 2").unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Model: DenseDecoder layer 2 input_norm length mismatch: got 3, expected 4"
+            "model: DenseDecoder layer 2 input_norm length mismatch: got 3, expected 4"
         );
     }
 

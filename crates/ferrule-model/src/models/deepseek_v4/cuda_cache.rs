@@ -66,32 +66,40 @@ fn validate_rope_table_request(
     required_positions: usize,
 ) -> Result<()> {
     if rope_dim == 0 || !rope_dim.is_multiple_of(2) {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 RoPE table '{name}' requires a positive even dimension, got {rope_dim}"
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 RoPE table '{name}' requires a positive even dimension, got {rope_dim}"
+            ),
+        });
     }
     if !rope.theta.is_finite() || rope.theta <= 0.0 {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 RoPE table '{name}' requires finite positive theta, got {}",
-            rope.theta
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 RoPE table '{name}' requires finite positive theta, got {}",
+                rope.theta
+            ),
+        });
     }
     if !rope.factor.is_finite() || rope.factor <= 0.0 {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 RoPE table '{name}' requires finite positive factor, got {}",
-            rope.factor
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 RoPE table '{name}' requires finite positive factor, got {}",
+                rope.factor
+            ),
+        });
     }
     if required_positions == 0 {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 RoPE table '{name}' requires at least one position"
-        )));
+        return Err(Error::Model {
+            message: format!("DeepSeek-V4 RoPE table '{name}' requires at least one position"),
+        });
     }
     let max_addressable_positions = u64::from(u32::MAX) + 1;
     if u64::try_from(required_positions).unwrap_or(u64::MAX) > max_addressable_positions {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 RoPE table '{name}' requires {required_positions} positions, exceeding the CUDA u32 position limit of {max_addressable_positions}"
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 RoPE table '{name}' requires {required_positions} positions, exceeding the CUDA u32 position limit of {max_addressable_positions}"
+            ),
+        });
     }
     Ok(())
 }
@@ -103,10 +111,12 @@ fn validate_rope_table_identity(
     rope: DeepSeekV4RopeParams,
 ) -> Result<()> {
     if table.rope_dim != rope_dim || table.rope != rope {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 RoPE table '{name}' identity mismatch: cached dim={} params={:?}, requested dim={rope_dim} params={rope:?}",
-            table.rope_dim, table.rope
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 RoPE table '{name}' identity mismatch: cached dim={} params={:?}, requested dim={rope_dim} params={rope:?}",
+                table.rope_dim, table.rope
+            ),
+        });
     }
     Ok(())
 }
@@ -117,10 +127,12 @@ fn validate_rope_table_capacity(
     required_positions: usize,
 ) -> Result<()> {
     if table.capacity < required_positions {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 RoPE table '{name}' capacity {} is smaller than required position count {required_positions}; prepare/grow it before launching CUDA work",
-            table.capacity
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 RoPE table '{name}' capacity {} is smaller than required position count {required_positions}; prepare/grow it before launching CUDA work",
+                table.capacity
+            ),
+        });
     }
     Ok(())
 }
@@ -129,10 +141,10 @@ fn rope_table_capacity(required_positions: usize) -> Result<usize> {
     required_positions
         .max(DSV4_ROPE_TABLE_MIN_CAPACITY)
         .checked_next_power_of_two()
-        .ok_or_else(|| {
-            Error::Model(format!(
+        .ok_or_else(|| Error::Model {
+            message: format!(
                 "DeepSeek-V4 RoPE table capacity overflow for {required_positions} positions"
-            ))
+            ),
         })
 }
 
@@ -264,9 +276,9 @@ fn restore_recurrent_checkpoint(
             operators.restore_compressor_recurrent_checkpoint(checkpoints, slot, destination)
         }
         (None, None) => Ok(()),
-        _ => Err(Error::Model(
-            "DeepSeek-V4 provisional recurrent checkpoint presence mismatch".into(),
-        )),
+        _ => Err(Error::Model {
+            message: "DeepSeek-V4 provisional recurrent checkpoint presence mismatch".into(),
+        }),
     }
 }
 
@@ -604,9 +616,11 @@ impl CudaRouterHashTableIdentity {
             || self.experts != experts
             || self.top_k != top_k
         {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} router hash table changed after device upload"
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {layer} router hash table changed after device upload"
+                ),
+            });
         }
         Ok(())
     }
@@ -620,15 +634,17 @@ fn validate_router_hash_table_shape(
     hash_cols: usize,
 ) -> Result<()> {
     let expected = hash_rows.checked_mul(hash_cols).ok_or_else(|| {
-        Error::Model(format!(
+        Error::Model { message: format!(
             "DeepSeek-V4 layer {layer} router hash table shape overflows usize: rows={hash_rows} cols={hash_cols}"
-        ))
+        ) }
     })?;
     if table.len() != expected {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 layer {layer} router hash table shape mismatch: rows={hash_rows} cols={hash_cols} require {expected} entries, got {}",
-            table.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 layer {layer} router hash table shape mismatch: rows={hash_rows} cols={hash_cols} require {expected} entries, got {}",
+                table.len()
+            ),
+        });
     }
     Ok(())
 }
@@ -731,17 +747,19 @@ fn decode_compact_router_routes(
     tokens: usize,
     top_k: usize,
 ) -> Result<Vec<Vec<ExpertRoute>>> {
-    let route_count = tokens
-        .checked_mul(top_k)
-        .ok_or_else(|| Error::Internal("CUDA router route count overflow".into()))?;
-    let expected = route_count
-        .checked_mul(2)
-        .ok_or_else(|| Error::Internal("CUDA compact route size overflow".into()))?;
+    let route_count = tokens.checked_mul(top_k).ok_or_else(|| Error::Internal {
+        message: "CUDA router route count overflow".into(),
+    })?;
+    let expected = route_count.checked_mul(2).ok_or_else(|| Error::Internal {
+        message: "CUDA compact route size overflow".into(),
+    })?;
     if compact.len() != expected {
-        return Err(Error::Internal(format!(
-            "CUDA compact route length mismatch: got {} expected {expected}",
-            compact.len()
-        )));
+        return Err(Error::Internal {
+            message: format!(
+                "CUDA compact route length mismatch: got {} expected {expected}",
+                compact.len()
+            ),
+        });
     }
 
     let mut routes_by_token = Vec::with_capacity(tokens);
@@ -749,11 +767,11 @@ fn decode_compact_router_routes(
         let mut routes = Vec::with_capacity(top_k);
         for slot in 0..top_k {
             let index = token * top_k + slot;
-            let expert = usize::try_from(compact[index * 2]).map_err(|_| {
-                Error::Internal(format!(
+            let expert = usize::try_from(compact[index * 2]).map_err(|_| Error::Internal {
+                message: format!(
                     "CUDA compact route contains negative expert index {} at route {index}",
                     compact[index * 2]
-                ))
+                ),
             })?;
             routes.push(ExpertRoute {
                 expert,
@@ -848,18 +866,19 @@ fn packed_moe_resume_action(
 ) -> Result<CudaPackedMoeResumeAction> {
     if routes_pending {
         if lease_count != 0 {
-            return Err(Error::Execution(
+            return Err(Error::Execution { message:
                 "DeepSeek-V4 packed MoE received expert leases before its route dependency completed"
                     .into(),
-            ));
+             });
         }
         return Ok(CudaPackedMoeResumeAction::PollSubmittedRoute);
     }
     if !expert_window_pending {
-        return Err(Error::Execution(
-            "DeepSeek-V4 packed MoE has no declared expert dependency; refusing resume replay"
-                .into(),
-        ));
+        return Err(Error::Execution {
+            message:
+                "DeepSeek-V4 packed MoE has no declared expert dependency; refusing resume replay"
+                    .into(),
+        });
     }
     Ok(CudaPackedMoeResumeAction::SubmitExpertWindow)
 }
@@ -883,20 +902,22 @@ fn record_profile_duration(stat: &mut u64, start: Option<Instant>) {
 fn fixed_eight_segment_capacity(route_count: usize, resident_slots: usize) -> Result<usize> {
     let populated_slots = route_count.min(resident_slots);
     let padding = populated_slots.checked_mul(7).ok_or_else(|| {
-        Error::Internal(format!(
+        Error::Internal { message: format!(
             "CUDA segmented MoE fixed-eight capacity overflow: routes={route_count} resident_slots={resident_slots}"
-        ))
+        ) }
     })?;
     let padded_routes = route_count.checked_add(padding).ok_or_else(|| {
-        Error::Internal(format!(
+        Error::Internal { message: format!(
             "CUDA segmented MoE fixed-eight capacity overflow: routes={route_count} resident_slots={resident_slots}"
-        ))
+        ) }
     })?;
     let segment_capacity = (padded_routes / 8).max(1);
     if segment_capacity > u16::MAX as usize {
-        return Err(Error::Internal(format!(
-            "CUDA segmented MoE fixed-eight segment capacity {segment_capacity} exceeds the u16 limit 65535: routes={route_count} resident_slots={resident_slots}"
-        )));
+        return Err(Error::Internal {
+            message: format!(
+                "CUDA segmented MoE fixed-eight segment capacity {segment_capacity} exceeds the u16 limit 65535: routes={route_count} resident_slots={resident_slots}"
+            ),
+        });
     }
     Ok(segment_capacity)
 }
@@ -911,22 +932,26 @@ fn decode_output_head_topk_rows(
         if compact.is_empty() {
             return Ok((0..batch_rows).map(|_| Vec::new()).collect());
         }
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 output-head compact result must be empty for k=0, got {} values",
-            compact.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 output-head compact result must be empty for k=0, got {} values",
+                compact.len()
+            ),
+        });
     }
-    let expected_pairs = batch_rows
-        .checked_mul(top_k)
-        .ok_or_else(|| Error::Model("DeepSeek-V4 output-head top-k size overflow".into()))?;
-    let expected_len = expected_pairs
-        .checked_mul(2)
-        .ok_or_else(|| Error::Model("DeepSeek-V4 compact output-head size overflow".into()))?;
+    let expected_pairs = batch_rows.checked_mul(top_k).ok_or_else(|| Error::Model {
+        message: "DeepSeek-V4 output-head top-k size overflow".into(),
+    })?;
+    let expected_len = expected_pairs.checked_mul(2).ok_or_else(|| Error::Model {
+        message: "DeepSeek-V4 compact output-head size overflow".into(),
+    })?;
     if compact.len() != expected_len {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 output-head compact result mismatch: rows={batch_rows} k={top_k} expected={expected_len} got={}",
-            compact.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 output-head compact result mismatch: rows={batch_rows} k={top_k} expected={expected_len} got={}",
+                compact.len()
+            ),
+        });
     }
 
     compact
@@ -934,22 +959,24 @@ fn decode_output_head_topk_rows(
         .map(|row| {
             row.chunks_exact(2)
                 .map(|pair| {
-                    let token = usize::try_from(pair[0]).map_err(|_| {
-                        Error::Model(format!(
+                    let token = usize::try_from(pair[0]).map_err(|_| Error::Model {
+                        message: format!(
                             "DeepSeek-V4 output-head returned negative token index {}",
                             pair[0]
-                        ))
+                        ),
                     })?;
                     if token >= vocab {
-                        return Err(Error::Model(format!(
-                            "DeepSeek-V4 output-head token index {token} exceeds vocab {vocab}"
-                        )));
+                        return Err(Error::Model {
+                            message: format!(
+                                "DeepSeek-V4 output-head token index {token} exceeds vocab {vocab}"
+                            ),
+                        });
                     }
                     Ok(TokenLogit {
-                        token_id: u32::try_from(token).map_err(|_| {
-                            Error::Model(format!(
+                        token_id: u32::try_from(token).map_err(|_| Error::Model {
+                            message: format!(
                                 "DeepSeek-V4 output-head token index {token} exceeds u32"
-                            ))
+                            ),
                         })?,
                         logit: f32::from_bits(pair[1] as u32),
                     })
@@ -1019,12 +1046,12 @@ impl DeepSeekV4CudaOperatorCache {
         max_pages: usize,
     ) -> Result<()> {
         if !self.pending_kv_reservations.is_empty() {
-            return Err(Error::Model(
-                "cannot reconfigure DeepSeek-V4 KV pool with a pending batch".into(),
-            ));
+            return Err(Error::Model {
+                message: "cannot reconfigure DeepSeek-V4 KV pool with a pending batch".into(),
+            });
         }
-        let data_planes = schema.planes().get(..3).ok_or_else(|| {
-            Error::Model("DeepSeek-V4 KV schema is missing token-scaled data planes".into())
+        let data_planes = schema.planes().get(..3).ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 KV schema is missing token-scaled data planes".into(),
         })?;
         self.kv_page_pool = Some(ferrule_cuda::CudaKvPagePool::new(
             &self.ops,
@@ -1056,26 +1083,30 @@ impl DeepSeekV4CudaOperatorCache {
             || layer_count == 0
             || sequence_shapes.iter().any(|(_, rows)| *rows == 0)
         {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 provisional checkpoint shape is empty: sequences={} layers={layer_count}",
-                sequence_shapes.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 provisional checkpoint shape is empty: sequences={} layers={layer_count}",
+                    sequence_shapes.len()
+                ),
+            });
         }
         let total_rows = sequence_shapes
             .iter()
             .try_fold(0usize, |total, (_, rows)| {
-                total.checked_add(*rows).ok_or_else(|| {
-                    Error::Model("DeepSeek-V4 provisional checkpoint row count overflow".into())
+                total.checked_add(*rows).ok_or_else(|| Error::Model {
+                    message: "DeepSeek-V4 provisional checkpoint row count overflow".into(),
                 })
             })?;
         if self
             .provisional_prefix_checkpoints
             .contains_key(&transaction)
         {
-            return Err(Error::Execution(format!(
-                "DeepSeek-V4 transaction {} already has provisional checkpoints",
-                transaction.get()
-            )));
+            return Err(Error::Execution {
+                message: format!(
+                    "DeepSeek-V4 transaction {} already has provisional checkpoints",
+                    transaction.get()
+                ),
+            });
         }
         let mut checkpoints = DeepSeekV4CudaProvisionalPrefixCheckpoints::default();
         checkpoints.active = true;
@@ -1126,10 +1157,12 @@ impl DeepSeekV4CudaOperatorCache {
             .provisional_prefix_checkpoints
             .contains_key(&transaction)
         {
-            return Err(Error::Execution(format!(
-                "DeepSeek-V4 transaction {} has no provisional checkpoints",
-                transaction.get()
-            )));
+            return Err(Error::Execution {
+                message: format!(
+                    "DeepSeek-V4 transaction {} has no provisional checkpoints",
+                    transaction.get()
+                ),
+            });
         }
         self.active_provisional_prefix_transaction = Some(transaction);
         Ok(())
@@ -1144,11 +1177,13 @@ impl DeepSeekV4CudaOperatorCache {
                 self.active_provisional_prefix_transaction = None;
                 Ok(())
             }
-            Some(owner) => Err(Error::Execution(format!(
-                "cannot deactivate provisional transaction {}; active owner is {}",
-                transaction.get(),
-                owner.get()
-            ))),
+            Some(owner) => Err(Error::Execution {
+                message: format!(
+                    "cannot deactivate provisional transaction {}; active owner is {}",
+                    transaction.get(),
+                    owner.get()
+                ),
+            }),
             None => Ok(()),
         }
     }
@@ -1179,38 +1214,38 @@ impl DeepSeekV4CudaOperatorCache {
         let checkpoints = self
             .provisional_prefix_checkpoints
             .get_mut(&transaction)
-            .ok_or_else(|| {
-                Error::Internal(format!(
+            .ok_or_else(|| Error::Internal {
+                message: format!(
                     "active provisional transaction {} has no checkpoint state",
                     transaction.get()
-                ))
+                ),
             })?;
         let sequence_index = checkpoints
             .row_to_sequence
             .get(row)
             .copied()
-            .ok_or_else(|| {
-                Error::Model(format!(
+            .ok_or_else(|| Error::Model {
+                message: format!(
                     "DeepSeek-V4 provisional checkpoint row {row} is outside the packed cohort"
-                ))
+                ),
             })?;
         let local_row = checkpoints.row_to_local[row];
         let sequence = checkpoints
             .sequences
             .get_mut(sequence_index)
-            .ok_or_else(|| {
-                Error::Model(format!(
+            .ok_or_else(|| Error::Model {
+                message: format!(
                     "DeepSeek-V4 provisional checkpoint sequence {sequence_index} is missing"
-                ))
+                ),
             })?;
         if local_row + 1 >= sequence.executed_rows {
             return Ok(());
         }
         let checkpoint_slots = sequence.executed_rows - 1;
         let layer_checkpoints = sequence.layers.get_mut(layer).ok_or_else(|| {
-            Error::Model(format!(
+            Error::Model { message: format!(
                 "DeepSeek-V4 provisional checkpoint layer {layer} is not prepared for sequence {sequence_index}"
-            ))
+            ) }
         })?;
         capture_recurrent_checkpoint(
             &self.ops,
@@ -1270,28 +1305,33 @@ impl DeepSeekV4CudaOperatorCache {
         let checkpoints = self
             .provisional_prefix_checkpoints
             .get(&transaction)
-            .ok_or_else(|| {
-                Error::Model(format!(
+            .ok_or_else(|| Error::Model {
+                message: format!(
                     "DeepSeek-V4 transaction {} has no provisional checkpoints",
                     transaction.get()
-                ))
+                ),
             })?;
-        let sequence = checkpoints.sequences.get(sequence_index).ok_or_else(|| {
-            Error::Model(format!(
-                "DeepSeek-V4 provisional checkpoint sequence {sequence_index} is missing"
-            ))
-        })?;
+        let sequence = checkpoints
+            .sequences
+            .get(sequence_index)
+            .ok_or_else(|| Error::Model {
+                message: format!(
+                    "DeepSeek-V4 provisional checkpoint sequence {sequence_index} is missing"
+                ),
+            })?;
         if !checkpoints.active || retained_rows == 0 || retained_rows >= sequence.executed_rows {
-            return Err(Error::Model(format!(
-                "invalid DeepSeek-V4 provisional prefix restore: sequence={sequence_index} active={} retained={retained_rows} executed={}",
-                checkpoints.active, sequence.executed_rows
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "invalid DeepSeek-V4 provisional prefix restore: sequence={sequence_index} active={} retained={retained_rows} executed={}",
+                    checkpoints.active, sequence.executed_rows
+                ),
+            });
         }
         let slot = retained_rows - 1;
         let layer_checkpoints = sequence.layers.get(layer).ok_or_else(|| {
-            Error::Model(format!(
+            Error::Model { message: format!(
                 "DeepSeek-V4 provisional checkpoint layer {layer} is missing for sequence {sequence_index}"
-            ))
+            ) }
         })?;
         let Some(metadata) = layer_checkpoints
             .metadata
@@ -1323,13 +1363,15 @@ impl DeepSeekV4CudaOperatorCache {
         reservations: &[(Vec<KvPageId>, Option<KvCowReplacement>)],
     ) -> Result<()> {
         if self.pending_kv_reservations.contains_key(&transaction) {
-            return Err(Error::Execution(format!(
-                "DeepSeek-V4 CUDA transaction {} is already prepared",
-                transaction.get()
-            )));
+            return Err(Error::Execution {
+                message: format!(
+                    "DeepSeek-V4 CUDA transaction {} is already prepared",
+                    transaction.get()
+                ),
+            });
         }
-        let pool = self.kv_page_pool.as_mut().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        let pool = self.kv_page_pool.as_mut().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA physical KV pool is not configured".into(),
         })?;
         let mut prepared = Vec::with_capacity(reservations.len());
         for (pages, cow) in reservations {
@@ -1353,8 +1395,8 @@ impl DeepSeekV4CudaOperatorCache {
         block_ids: &[ferrule_common::execution::KvBlockId],
         sequence_len: usize,
     ) -> Result<DeepSeekV4PagedKvBinding> {
-        let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        let pool = self.kv_page_pool.as_ref().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA physical KV pool is not configured".into(),
         })?;
         let mut physical_block_slots = Vec::with_capacity(block_ids.len());
         for block in block_ids {
@@ -1368,14 +1410,14 @@ impl DeepSeekV4CudaOperatorCache {
                             .find_map(|reservation| pool.pending_slot(reservation, page))
                     })
             });
-            let slot = slot.ok_or_else(|| {
-                Error::Model(format!(
+            let slot = slot.ok_or_else(|| Error::Model {
+                message: format!(
                     "DeepSeek-V4 KV page {} has no committed or provisional physical slot",
                     page.0
-                ))
+                ),
             })?;
-            physical_block_slots.push(i32::try_from(slot).map_err(|_| {
-                Error::Model("DeepSeek-V4 physical KV slot exceeds i32 ABI".into())
+            physical_block_slots.push(i32::try_from(slot).map_err(|_| Error::Model {
+                message: "DeepSeek-V4 physical KV slot exceeds i32 ABI".into(),
             })?);
         }
         Ok(DeepSeekV4PagedKvBinding {
@@ -1397,11 +1439,13 @@ impl DeepSeekV4CudaOperatorCache {
                 if let Some(owner) = self.active_paged_kv_owner
                     && owner != transaction
                 {
-                    return Err(Error::Execution(format!(
-                        "cannot deactivate paged binding for transaction {}; active owner is {}",
-                        transaction.get(),
-                        owner.get()
-                    )));
+                    return Err(Error::Execution {
+                        message: format!(
+                            "cannot deactivate paged binding for transaction {}; active owner is {}",
+                            transaction.get(),
+                            owner.get()
+                        ),
+                    });
                 }
                 self.active_paged_kv_owner = None;
                 if let Some(active) = self.active_paged_kv.take() {
@@ -1441,29 +1485,33 @@ impl DeepSeekV4CudaOperatorCache {
         if let Some(owner) = self.active_paged_kv_owner
             && owner != transaction
         {
-            return Err(Error::Execution(format!(
-                "cannot activate paged transaction {}; active owner is {}",
-                transaction.get(),
-                owner.get()
-            )));
+            return Err(Error::Execution {
+                message: format!(
+                    "cannot activate paged transaction {}; active owner is {}",
+                    transaction.get(),
+                    owner.get()
+                ),
+            });
         }
         let page_tokens = bindings[0].page_tokens;
         let layer_count = bindings[0].layer_count;
         if page_tokens == 0 || layer_count == 0 {
-            return Err(Error::Model(
-                "DeepSeek-V4 paged binding has invalid page/layer metadata".into(),
-            ));
+            return Err(Error::Model {
+                message: "DeepSeek-V4 paged binding has invalid page/layer metadata".into(),
+            });
         }
 
         let total_blocks = bindings.iter().try_fold(0usize, |total, binding| {
             if binding.page_tokens != page_tokens || binding.layer_count != layer_count {
-                return Err(Error::Model(
-                    "DeepSeek-V4 packed paged bindings use incompatible layouts".into(),
-                ));
+                return Err(Error::Model {
+                    message: "DeepSeek-V4 packed paged bindings use incompatible layouts".into(),
+                });
             }
             total
                 .checked_add(binding.physical_block_slots.len())
-                .ok_or_else(|| Error::Model("DeepSeek-V4 packed block table overflow".into()))
+                .ok_or_else(|| Error::Model {
+                    message: "DeepSeek-V4 packed block table overflow".into(),
+                })
         })?;
         let mut physical_block_slots = Vec::with_capacity(total_blocks);
         let mut block_offsets = Vec::with_capacity(bindings.len() + 1);
@@ -1472,11 +1520,13 @@ impl DeepSeekV4CudaOperatorCache {
         for binding in bindings {
             physical_block_slots.extend_from_slice(&binding.physical_block_slots);
             block_offsets.push(i32::try_from(physical_block_slots.len()).map_err(|_| {
-                Error::Model("DeepSeek-V4 packed block table exceeds i32 ABI".into())
+                Error::Model {
+                    message: "DeepSeek-V4 packed block table exceeds i32 ABI".into(),
+                }
             })?);
             kv_lens.push(
-                i32::try_from(binding.sequence_len).map_err(|_| {
-                    Error::Model("DeepSeek-V4 sequence length exceeds i32 ABI".into())
+                i32::try_from(binding.sequence_len).map_err(|_| Error::Model {
+                    message: "DeepSeek-V4 sequence length exceeds i32 ABI".into(),
                 })?,
             );
         }
@@ -1486,15 +1536,16 @@ impl DeepSeekV4CudaOperatorCache {
                 .iter()
                 .any(|sequence| *sequence >= bindings.len())
         {
-            return Err(Error::Model(
-                "DeepSeek-V4 packed row selector references a missing sequence".into(),
-            ));
+            return Err(Error::Model {
+                message: "DeepSeek-V4 packed row selector references a missing sequence".into(),
+            });
         }
         let row_sequence_ids = row_sequence_ids
             .iter()
             .map(|sequence| {
-                i32::try_from(*sequence)
-                    .map_err(|_| Error::Model("DeepSeek-V4 row sequence ID exceeds i32 ABI".into()))
+                i32::try_from(*sequence).map_err(|_| Error::Model {
+                    message: "DeepSeek-V4 row sequence ID exceeds i32 ABI".into(),
+                })
             })
             .collect::<Result<Vec<_>>>()?;
         let shape = (
@@ -1559,17 +1610,17 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     pub(crate) fn commit_kv_pages(&mut self, transaction: ExecutionTransactionId) -> Result<()> {
-        let pool = self.kv_page_pool.as_mut().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        let pool = self.kv_page_pool.as_mut().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA physical KV pool is not configured".into(),
         })?;
         let reservations = self
             .pending_kv_reservations
             .remove(&transaction)
-            .ok_or_else(|| {
-                Error::Execution(format!(
+            .ok_or_else(|| Error::Execution {
+                message: format!(
                     "DeepSeek-V4 CUDA transaction {} is not prepared",
                     transaction.get()
-                ))
+                ),
             })?;
         let result = pool.commit_many(reservations);
         if result.is_ok() {
@@ -1582,11 +1633,11 @@ impl DeepSeekV4CudaOperatorCache {
         let reservations = self
             .pending_kv_reservations
             .remove(&transaction)
-            .ok_or_else(|| {
-                Error::Execution(format!(
+            .ok_or_else(|| Error::Execution {
+                message: format!(
                     "DeepSeek-V4 CUDA transaction {} is not prepared",
                     transaction.get()
-                ))
+                ),
             })?;
         let result = if let Some(pool) = self.kv_page_pool.as_mut() {
             let mut first_error = None;
@@ -1600,9 +1651,9 @@ impl DeepSeekV4CudaOperatorCache {
                 None => Ok(()),
             }
         } else {
-            Err(Error::Model(
-                "DeepSeek-V4 pending KV pages have no physical pool".into(),
-            ))
+            Err(Error::Model {
+                message: "DeepSeek-V4 pending KV pages have no physical pool".into(),
+            })
         };
         self.discard_provisional_prefix_checkpoints(transaction);
         result
@@ -1624,8 +1675,8 @@ impl DeepSeekV4CudaOperatorCache {
         if pages.is_empty() {
             return Ok(());
         }
-        let pool = self.kv_page_pool.as_mut().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        let pool = self.kv_page_pool.as_mut().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA physical KV pool is not configured".into(),
         })?;
         pool.preempt(&self.ops, pages).map(|_| ())
     }
@@ -1634,8 +1685,8 @@ impl DeepSeekV4CudaOperatorCache {
         if pages.is_empty() {
             return Ok(());
         }
-        let pool = self.kv_page_pool.as_mut().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        let pool = self.kv_page_pool.as_mut().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA physical KV pool is not configured".into(),
         })?;
         pool.restore(&self.ops, pages)
     }
@@ -1691,23 +1742,26 @@ impl DeepSeekV4CudaOperatorCache {
         rows: usize,
     ) -> Result<DeepSeekV4DsparkMainBuffers> {
         if rows == 0 {
-            return Err(Error::Model(
-                "DeepSeek-V4 DSpark main buffers require at least one row".into(),
-            ));
+            return Err(Error::Model {
+                message: "DeepSeek-V4 DSpark main buffers require at least one row".into(),
+            });
         }
         if let Some(buffers) = self.decode_arena.dspark_main.remove(&rows) {
             return Ok(buffers);
         }
         let (tap_count, input_size, output_size, context_kv_size) = {
-            let mtp =
-                self.prepared_image()?.mtp.as_ref().ok_or_else(|| {
-                    Error::Model("DeepSeek-V4 CUDA DSpark image is missing".into())
+            let mtp = self
+                .prepared_image()?
+                .mtp
+                .as_ref()
+                .ok_or_else(|| Error::Model {
+                    message: "DeepSeek-V4 CUDA DSpark image is missing".into(),
                 })?;
-            let stage_zero = mtp.layers.first().ok_or_else(|| {
-                Error::Model("DeepSeek-V4 CUDA DSpark image has no stages".into())
+            let stage_zero = mtp.layers.first().ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 CUDA DSpark image has no stages".into(),
             })?;
-            let projection = stage_zero.main_proj.as_ref().ok_or_else(|| {
-                Error::Model("DeepSeek-V4 CUDA DSpark stage zero main projection is missing".into())
+            let projection = stage_zero.main_proj.as_ref().ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 CUDA DSpark stage zero main projection is missing".into(),
             })?;
             let output_size = projection.handle.shape().out_features();
             let context_kv_size = stage_zero
@@ -1722,11 +1776,13 @@ impl DeepSeekV4CudaOperatorCache {
                     || key_value.shape().out_features() != context_kv_size
                     || layer.transformer.key_value_norm.len() != context_kv_size
                 {
-                    return Err(Error::Model(format!(
-                        "DeepSeek-V4 CUDA DSpark stage {stage} context-KV shape mismatch: wkv={:?} norm={} main_x={output_size} expected_kv={context_kv_size}",
-                        key_value.shape(),
-                        layer.transformer.key_value_norm.len()
-                    )));
+                    return Err(Error::Model {
+                        message: format!(
+                            "DeepSeek-V4 CUDA DSpark stage {stage} context-KV shape mismatch: wkv={:?} norm={} main_x={output_size} expected_kv={context_kv_size}",
+                            key_value.shape(),
+                            layer.transformer.key_value_norm.len()
+                        ),
+                    });
                 }
             }
             (
@@ -1737,19 +1793,23 @@ impl DeepSeekV4CudaOperatorCache {
             )
         };
         if tap_count == 0 || input_size % tap_count != 0 {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 CUDA DSpark tap layout is invalid: taps={tap_count} input={input_size}"
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 CUDA DSpark tap layout is invalid: taps={tap_count} input={input_size}"
+                ),
+            });
         }
-        let target_taps_len = rows.checked_mul(input_size).ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA DSpark target-tap size overflow".into())
+        let target_taps_len = rows.checked_mul(input_size).ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA DSpark target-tap size overflow".into(),
         })?;
-        let main_x_len = rows
-            .checked_mul(output_size)
-            .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA DSpark main-x size overflow".into()))?;
-        let context_kv_len = rows.checked_mul(context_kv_size).ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA DSpark context-KV size overflow".into())
+        let main_x_len = rows.checked_mul(output_size).ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA DSpark main-x size overflow".into(),
         })?;
+        let context_kv_len = rows
+            .checked_mul(context_kv_size)
+            .ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 CUDA DSpark context-KV size overflow".into(),
+            })?;
         Ok(DeepSeekV4DsparkMainBuffers {
             target_taps: self.ops.zero_f32_buffer(target_taps_len)?,
             positions: self.ops.zero_i32_buffer(rows)?,
@@ -1779,13 +1839,17 @@ impl DeepSeekV4CudaOperatorCache {
             .prepared_image()?
             .mtp
             .as_ref()
-            .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA DSpark image is missing".into()))?;
+            .ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 CUDA DSpark image is missing".into(),
+            })?;
         if mtp.block_size != ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 CUDA DSpark attention requires {} proposal rows, checkpoint declares {}",
-                ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS,
-                mtp.block_size
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 CUDA DSpark attention requires {} proposal rows, checkpoint declares {}",
+                    ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS,
+                    mtp.block_size
+                ),
+            });
         }
         Ok(DeepSeekV4DsparkAttentionBuffers {
             workspace: self.ops.dspark_hybrid_attention_workspace()?,
@@ -1800,10 +1864,10 @@ impl DeepSeekV4CudaOperatorCache {
         #[cfg(not(feature = "cuda"))]
         {
             let _ = (token_ids, output);
-            Err(Error::Model(
+            Err(Error::Model { message:
                 "DeepSeek-V4 packed CUDA resident embedding gather requires building with CUTLASS support; host artifact fallback is disabled"
                     .into(),
-            ))
+             })
         }
         #[cfg(feature = "cuda")]
         {
@@ -1815,23 +1879,24 @@ impl DeepSeekV4CudaOperatorCache {
                 )
             };
             if token_ids.is_empty() {
-                return Err(Error::Model(
-                    "DeepSeek-V4 packed CUDA embedding gather requires at least one token".into(),
-                ));
+                return Err(Error::Model {
+                    message: "DeepSeek-V4 packed CUDA embedding gather requires at least one token"
+                        .into(),
+                });
             }
             let device_values = token_ids
                 .iter()
                 .copied()
                 .map(|token_id| {
                     if token_id as usize >= vocab {
-                        return Err(Error::Model(format!(
+                        return Err(Error::Model { message: format!(
                             "DeepSeek-V4 token id {token_id} exceeds resident embedding vocab {vocab}"
-                        )));
+                        ) });
                     }
                     i32::try_from(token_id).map_err(|_| {
-                        Error::Model(format!(
+                        Error::Model { message: format!(
                             "DeepSeek-V4 token id {token_id} exceeds the CUDA i32 token ABI"
-                        ))
+                        ) }
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -1842,12 +1907,14 @@ impl DeepSeekV4CudaOperatorCache {
                 self.embedding_token_ids
                     .insert(rows, self.ops.i32_host_mirror(&device_values)?);
             }
-            let image = self.execution_image.as_ref().ok_or_else(|| {
-                Error::Internal(
-                    "DeepSeek-V4 CUDA execution image was not compiled before embedding gather"
-                        .into(),
-                )
-            })?;
+            let image = self
+                .execution_image
+                .as_ref()
+                .ok_or_else(|| Error::Internal {
+                    message:
+                        "DeepSeek-V4 CUDA execution image was not compiled before embedding gather"
+                            .into(),
+                })?;
             let token_ids = self
                 .embedding_token_ids
                 .get(&rows)
@@ -1869,10 +1936,9 @@ impl DeepSeekV4CudaOperatorCache {
         output: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         let image = self.prepared_image()?;
-        let mtp = image
-            .mtp
-            .as_ref()
-            .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA DSpark image is missing".into()))?;
+        let mtp = image.mtp.as_ref().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA DSpark image is missing".into(),
+        })?;
         self.ops.dspark_embedding_hc_from_resident_bf16_into(
             &image.embedding,
             anchor_token_id,
@@ -1889,10 +1955,9 @@ impl DeepSeekV4CudaOperatorCache {
     ) -> Result<DeepSeekV4DsparkProposalHeadBuffers> {
         const PARTIAL_CAPACITY: usize = 64;
         let image = self.prepared_image()?;
-        let mtp = image
-            .mtp
-            .as_ref()
-            .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA DSpark image is missing".into()))?;
+        let mtp = image.mtp.as_ref().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA DSpark image is missing".into(),
+        })?;
         let output_shape = image.output_head.shape();
         let vocab = output_shape.out_features();
         let hidden = output_shape.in_features();
@@ -1906,13 +1971,15 @@ impl DeepSeekV4CudaOperatorCache {
             || mtp.heads.confidence_proj.handle.shape().in_features()
                 != hidden.saturating_add(markov_rank)
         {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 DSpark proposal-head shape mismatch: output={output_shape:?} block={} w1={:?} w2={:?} confidence={:?}",
-                mtp.block_size,
-                mtp.heads.markov_w1.handle.shape(),
-                mtp.heads.markov_w2.handle.shape(),
-                mtp.heads.confidence_proj.handle.shape()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 DSpark proposal-head shape mismatch: output={output_shape:?} block={} w1={:?} w2={:?} confidence={:?}",
+                    mtp.block_size,
+                    mtp.heads.markov_w1.handle.shape(),
+                    mtp.heads.markov_w2.handle.shape(),
+                    mtp.heads.confidence_proj.handle.shape()
+                ),
+            });
         }
         Ok(DeepSeekV4DsparkProposalHeadBuffers {
             workspace: self.ops.dspark_proposal_head_workspace(
@@ -1933,10 +2000,9 @@ impl DeepSeekV4CudaOperatorCache {
         target_taps: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<bool> {
         let image = self.prepared_image()?;
-        let mtp = image
-            .mtp
-            .as_ref()
-            .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA DSpark image is missing".into()))?;
+        let mtp = image.mtp.as_ref().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA DSpark image is missing".into(),
+        })?;
         let Some(tap_slot) = mtp
             .target_layer_ids
             .iter()
@@ -1966,22 +2032,26 @@ impl DeepSeekV4CudaOperatorCache {
         if descriptor.kernel.provider != KernelProviderId::ExternalProvider
             || !descriptor.is_provider_managed()
         {
-            return Err(Error::Model(format!(
-                "invalid SM121 DSpark main-project/norm provider binding: {:?}",
-                descriptor.kernel
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "invalid SM121 DSpark main-project/norm provider binding: {:?}",
+                    descriptor.kernel
+                ),
+            });
         }
         let image = self.prepared_image()?;
         let stage_zero = image
             .mtp
             .as_ref()
             .and_then(|mtp| mtp.layers.first())
-            .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA DSpark stage zero is missing".into()))?;
-        let projection = stage_zero.main_proj.as_ref().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA DSpark stage-zero projection is missing".into())
+            .ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 CUDA DSpark stage zero is missing".into(),
+            })?;
+        let projection = stage_zero.main_proj.as_ref().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA DSpark stage-zero projection is missing".into(),
         })?;
-        let norm = stage_zero.main_norm.as_ref().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA DSpark stage-zero norm is missing".into())
+        let norm = stage_zero.main_norm.as_ref().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA DSpark stage-zero norm is missing".into(),
         })?;
         self.ops.artifact_dspark_main_project_norm_cutlass_into(
             &projection.handle,
@@ -2006,16 +2076,17 @@ impl DeepSeekV4CudaOperatorCache {
         if descriptor.kernel.provider != KernelProviderId::ExternalProvider
             || !descriptor.is_provider_managed()
         {
-            return Err(Error::Model(format!(
-                "invalid SM121 DSpark proposal-head provider binding: {:?}",
-                descriptor.kernel
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "invalid SM121 DSpark proposal-head provider binding: {:?}",
+                    descriptor.kernel
+                ),
+            });
         }
         let image = self.prepared_image()?;
-        let mtp = image
-            .mtp
-            .as_ref()
-            .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA DSpark image is missing".into()))?;
+        let mtp = image.mtp.as_ref().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA DSpark image is missing".into(),
+        })?;
         let output_shape = image.output_head.shape();
         let markov_rank = mtp.heads.markov_w1.handle.shape().in_features();
         self.ops.artifact_dspark_proposal_head_cutlass_into(
@@ -2069,18 +2140,18 @@ impl DeepSeekV4CudaOperatorCache {
     ) -> Result<(Vec<u32>, Vec<f32>)> {
         let rows = ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS;
         if compact.len() != 1 + 2 * rows || compact[0] != 0 {
-            return Err(Error::Execution(format!(
-                "DeepSeek-V4 DSpark compact proposal-head result is invalid: {compact:?}"
-            )));
+            return Err(Error::Execution {
+                message: format!(
+                    "DeepSeek-V4 DSpark compact proposal-head result is invalid: {compact:?}"
+                ),
+            });
         }
         let token_ids = compact[1..1 + rows]
             .iter()
             .copied()
             .map(|token| {
-                u32::try_from(token).map_err(|_| {
-                    Error::Execution(format!(
-                        "DeepSeek-V4 DSpark proposal emitted invalid token {token}"
-                    ))
+                u32::try_from(token).map_err(|_| Error::Execution {
+                    message: format!("DeepSeek-V4 DSpark proposal emitted invalid token {token}"),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -2112,30 +2183,36 @@ impl DeepSeekV4CudaOperatorCache {
         if descriptor.kernel.provider != KernelProviderId::ExternalProvider
             || !descriptor.is_provider_managed()
         {
-            return Err(Error::Model(format!(
-                "invalid SM121 DSpark hybrid-attention provider binding at stage {stage}: {:?}",
-                descriptor.kernel
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "invalid SM121 DSpark hybrid-attention provider binding at stage {stage}: {:?}",
+                    descriptor.kernel
+                ),
+            });
         }
         let prepared = self.prepared_mtp_stage(stage)?;
         let execution_layer = prepared.execution_layer;
         if execution_layer != expected_execution_layer {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 DSpark stage/execution-layer mismatch: stage={stage} prepared={execution_layer} requested={expected_execution_layer}"
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 DSpark stage/execution-layer mismatch: stage={stage} prepared={execution_layer} requested={expected_execution_layer}"
+                ),
+            });
         }
         if config.num_heads != ferrule_cuda::cutlass::DSPARK_ATTENTION_HEADS
             || config.head_dim != ferrule_cuda::cutlass::DSPARK_ATTENTION_HEAD_DIM
             || config.window_size != ferrule_cuda::cutlass::DSPARK_ATTENTION_WINDOW
             || config.compress_ratio != 0
         {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 DSpark hybrid-attention shape mismatch at stage {stage}: heads={} head_dim={} window={} compress_ratio={}",
-                config.num_heads, config.head_dim, config.window_size, config.compress_ratio
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 DSpark hybrid-attention shape mismatch at stage {stage}: heads={} head_dim={} window={} compress_ratio={}",
+                    config.num_heads, config.head_dim, config.window_size, config.compress_ratio
+                ),
+            });
         }
-        let active = self.active_paged_kv.as_ref().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 DSpark hybrid attention has no active paged binding".into())
+        let active = self.active_paged_kv.as_ref().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 DSpark hybrid attention has no active paged binding".into(),
         })?;
         if active.sequence_count != 1
             || sequence_tokens == 0
@@ -2146,36 +2223,40 @@ impl DeepSeekV4CudaOperatorCache {
                     .saturating_mul(active.page_tokens)
             || execution_layer >= active.layer_count
         {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 DSpark hybrid-attention binding mismatch: stage={stage} execution_layer={execution_layer} sequence_tokens={sequence_tokens} sequences={} slots={} page_tokens={} layer_count={}",
-                active.sequence_count,
-                active.physical_block_slots.len(),
-                active.page_tokens,
-                active.layer_count
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 DSpark hybrid-attention binding mismatch: stage={stage} execution_layer={execution_layer} sequence_tokens={sequence_tokens} sequences={} slots={} page_tokens={} layer_count={}",
+                    active.sequence_count,
+                    active.physical_block_slots.len(),
+                    active.page_tokens,
+                    active.layer_count
+                ),
+            });
         }
-        let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        let pool = self.kv_page_pool.as_ref().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA physical KV pool is not configured".into(),
         })?;
-        let context_plane = pool
-            .plane_storage(0)
-            .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark window KV plane is missing".into()))?;
-        let plane = pool.planes().first().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 DSpark window KV descriptor is missing".into())
+        let context_plane = pool.plane_storage(0).ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 DSpark window KV plane is missing".into(),
+        })?;
+        let plane = pool.planes().first().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 DSpark window KV descriptor is missing".into(),
         })?;
         if active.page_tokens != ferrule_cuda::cutlass::DSPARK_ATTENTION_PAGE_TOKENS
             || plane.elements_per_token != config.head_dim
             || plane.layer_count != active.layer_count
         {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 DSpark hybrid-attention plane mismatch: page_tokens={} elements_per_token={} layer_count={} expected_page_tokens={} expected_head_dim={} active_layers={}",
-                active.page_tokens,
-                plane.elements_per_token,
-                plane.layer_count,
-                ferrule_cuda::cutlass::DSPARK_ATTENTION_PAGE_TOKENS,
-                config.head_dim,
-                active.layer_count
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 DSpark hybrid-attention plane mismatch: page_tokens={} elements_per_token={} layer_count={} expected_page_tokens={} expected_head_dim={} active_layers={}",
+                    active.page_tokens,
+                    plane.elements_per_token,
+                    plane.layer_count,
+                    ferrule_cuda::cutlass::DSPARK_ATTENTION_PAGE_TOKENS,
+                    config.head_dim,
+                    active.layer_count
+                ),
+            });
         }
         self.ops.dspark_hybrid_mla_attention_into(
             query,
@@ -2222,31 +2303,35 @@ impl DeepSeekV4CudaOperatorCache {
             "rope_dspark_stage_7",
         ];
         if rows == 0 || config.compress_ratio != 0 || buffers.positions.len() != rows {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 packed DSpark stage {stage} context-KV shape mismatch: rows={rows} positions={} compress_ratio={}",
-                buffers.positions.len(),
-                config.compress_ratio
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 packed DSpark stage {stage} context-KV shape mismatch: rows={rows} positions={} compress_ratio={}",
+                    buffers.positions.len(),
+                    config.compress_ratio
+                ),
+            });
         }
-        let rope_name = ROPE_NAMES.get(stage).copied().ok_or_else(|| {
-            Error::Model(format!(
+        let rope_name = ROPE_NAMES.get(stage).copied().ok_or_else(|| Error::Model {
+            message: format!(
                 "DeepSeek-V4 DSpark stage {stage} exceeds the prepared RoPE identity table"
-            ))
+            ),
         })?;
         let execution_layer = self.prepared_mtp_stage(stage)?.execution_layer;
         if buffers.main_x.len() != rows.saturating_mul(config.hidden_size)
             || buffers.context_kv_raw.len() != rows.saturating_mul(config.head_dim)
             || buffers.context_kv.len() != rows.saturating_mul(config.head_dim)
         {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 packed DSpark stage {stage} context-KV buffer mismatch: main_x={}/{} raw={}/{} kv={}/{}",
-                buffers.main_x.len(),
-                rows.saturating_mul(config.hidden_size),
-                buffers.context_kv_raw.len(),
-                rows.saturating_mul(config.head_dim),
-                buffers.context_kv.len(),
-                rows.saturating_mul(config.head_dim)
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 packed DSpark stage {stage} context-KV buffer mismatch: main_x={}/{} raw={}/{} kv={}/{}",
+                    buffers.main_x.len(),
+                    rows.saturating_mul(config.hidden_size),
+                    buffers.context_kv_raw.len(),
+                    rows.saturating_mul(config.head_dim),
+                    buffers.context_kv.len(),
+                    rows.saturating_mul(config.head_dim)
+                ),
+            });
         }
 
         {
@@ -2270,9 +2355,9 @@ impl DeepSeekV4CudaOperatorCache {
                 &mut buffers.context_kv,
             )?;
         }
-        let required_positions = max_position
-            .checked_add(1)
-            .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark context position overflow".into()))?;
+        let required_positions = max_position.checked_add(1).ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 DSpark context position overflow".into(),
+        })?;
         self.ensure_rope_tables_with_params(
             rope_name,
             config.rope_head_dim,
@@ -2285,11 +2370,11 @@ impl DeepSeekV4CudaOperatorCache {
             &buffers.positions,
             max_position,
             1,
-            u32::try_from(config.head_dim).map_err(|_| {
-                Error::Model("DeepSeek-V4 DSpark context head dimension exceeds u32".into())
+            u32::try_from(config.head_dim).map_err(|_| Error::Model {
+                message: "DeepSeek-V4 DSpark context head dimension exceeds u32".into(),
             })?,
-            u32::try_from(config.rope_head_dim).map_err(|_| {
-                Error::Model("DeepSeek-V4 DSpark context RoPE dimension exceeds u32".into())
+            u32::try_from(config.rope_head_dim).map_err(|_| Error::Model {
+                message: "DeepSeek-V4 DSpark context RoPE dimension exceeds u32".into(),
             })?,
             false,
         )?;
@@ -2317,9 +2402,9 @@ impl DeepSeekV4CudaOperatorCache {
         subsystem: DeepSeekV4SharedExpertSubsystem,
     ) -> Result<()> {
         if self.expert_subsystem.is_some() {
-            return Err(Error::Execution(
-                "DeepSeek-V4 shared expert subsystem is already attached".into(),
-            ));
+            return Err(Error::Execution {
+                message: "DeepSeek-V4 shared expert subsystem is already attached".into(),
+            });
         }
         self.expert_subsystem = Some(subsystem);
         Ok(())
@@ -2409,24 +2494,30 @@ impl DeepSeekV4CudaOperatorCache {
         let prepared = self.prepared_linear(layer, linear)?;
         let in_features = prepared.handle.shape().in_features();
         if input_len != in_features {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} CUDA readonly {linear:?} input length mismatch: expected {in_features}, got {input_len}"
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {layer} CUDA readonly {linear:?} input length mismatch: expected {in_features}, got {input_len}"
+                ),
+            });
         }
         if prepared.activation_quantization.is_some() {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} CUDA readonly {linear:?} cannot skip activation quantization"
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {layer} CUDA readonly {linear:?} cannot skip activation quantization"
+                ),
+            });
         }
         if !matches!(
             prepared.handle.shape(),
             ferrule_cuda::context::CudaArtifactLinearShape::F32 { .. }
                 | ferrule_cuda::context::CudaArtifactLinearShape::Bf16Bytes { .. }
         ) {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} CUDA readonly {linear:?} requires F32/BF16 weights, got {:?}",
-                prepared.handle.shape()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {layer} CUDA readonly {linear:?} requires F32/BF16 weights, got {:?}",
+                    prepared.handle.shape()
+                ),
+            });
         }
         Ok(prepared)
     }
@@ -2443,9 +2534,9 @@ impl DeepSeekV4CudaOperatorCache {
         #[cfg(not(feature = "cuda"))]
         {
             let _ = (layer, first, second, input, first_output, second_output);
-            return Err(Error::Model(
-                "GB10 compressor execution requires the `cutlass` feature".into(),
-            ));
+            return Err(Error::Model {
+                message: "GB10 compressor execution requires the `cutlass` feature".into(),
+            });
         }
         #[cfg(feature = "cuda")]
         {
@@ -2459,17 +2550,19 @@ impl DeepSeekV4CudaOperatorCache {
                     DeepSeekV4CudaLinear::IndexerCompressorGate,
                 ) => KernelOperation::IndexerCompressorProjection,
                 _ => {
-                    return Err(Error::Model(format!(
-                        "SM121 BF16 bundle does not bind {first:?}+{second:?}"
-                    )));
+                    return Err(Error::Model {
+                        message: format!("SM121 BF16 bundle does not bind {first:?}+{second:?}"),
+                    });
                 }
             };
             let descriptor = self.require_operation(layer, operation)?;
             if descriptor.kernel.provider != KernelProviderId::ExternalProvider {
-                return Err(Error::Model(format!(
-                    "invalid SM121 compressor provider binding: {:?}",
-                    descriptor.kernel
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "invalid SM121 compressor provider binding: {:?}",
+                        descriptor.kernel
+                    ),
+                });
             }
             let first = self.readonly_prepared_linear(layer, first, input.len())?;
             let second = self.readonly_prepared_linear(layer, second, input.len())?;
@@ -2508,50 +2601,57 @@ impl DeepSeekV4CudaOperatorCache {
     ) -> Result<ferrule_cuda::context::CudaArtifactLinearHandle> {
         const CHUNK_BYTES: usize = 16 * 1024 * 1024;
         if matrix.slice.dtype != CheckpointDType::Bf16 {
-            return Err(Error::Model(format!(
-                "resident BF16 matrix '{}' has dtype {:?}",
-                matrix.slice.name, matrix.slice.dtype
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "resident BF16 matrix '{}' has dtype {:?}",
+                    matrix.slice.name, matrix.slice.dtype
+                ),
+            });
         }
         let expected_bytes = matrix
             .rows
             .checked_mul(matrix.cols)
             .and_then(|elements| elements.checked_mul(2))
-            .ok_or_else(|| Error::Model("resident BF16 matrix size overflow".into()))?;
+            .ok_or_else(|| Error::Model {
+                message: "resident BF16 matrix size overflow".into(),
+            })?;
         if matrix.slice.bytes != expected_bytes as u64 {
-            return Err(Error::Model(format!(
-                "resident BF16 matrix '{}' byte mismatch: slice={} expected={expected_bytes}",
-                matrix.slice.name, matrix.slice.bytes
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "resident BF16 matrix '{}' byte mismatch: slice={} expected={expected_bytes}",
+                    matrix.slice.name, matrix.slice.bytes
+                ),
+            });
         }
         let shape = ferrule_cuda::context::CudaArtifactLinearShape::Bf16Bytes {
             out_features: matrix.rows,
             in_features: matrix.cols,
         };
         let mut handle = self.ops.allocate_artifact_linear_device(shape)?;
-        let mut file = File::open(&matrix.slice.path).map_err(|error| {
-            Error::Model(format!(
+        let mut file = File::open(&matrix.slice.path).map_err(|error| Error::Model {
+            message: format!(
                 "open resident BF16 matrix '{}': {error}",
                 matrix.slice.path.display()
-            ))
+            ),
         })?;
         file.seek(SeekFrom::Start(matrix.slice.offset))
-            .map_err(|error| {
-                Error::Model(format!(
+            .map_err(|error| Error::Model {
+                message: format!(
                     "seek resident BF16 matrix '{}': {error}",
                     matrix.slice.path.display()
-                ))
+                ),
             })?;
         let mut chunk = vec![0u8; CHUNK_BYTES.min(expected_bytes)];
         let mut offset = 0usize;
         while offset < expected_bytes {
             let bytes = chunk.len().min(expected_bytes - offset);
-            file.read_exact(&mut chunk[..bytes]).map_err(|error| {
-                Error::Model(format!(
-                    "read resident BF16 matrix '{}' at {offset}: {error}",
-                    matrix.slice.name
-                ))
-            })?;
+            file.read_exact(&mut chunk[..bytes])
+                .map_err(|error| Error::Model {
+                    message: format!(
+                        "read resident BF16 matrix '{}' at {offset}: {error}",
+                        matrix.slice.name
+                    ),
+                })?;
             self.ops.overwrite_artifact_linear_weight_range(
                 &mut handle,
                 offset,
@@ -2637,10 +2737,10 @@ impl DeepSeekV4CudaOperatorCache {
             .as_deref()
             .map(|bias| {
                 if bias.len() != experts {
-                    return Err(Error::Model(format!(
+                    return Err(Error::Model { message: format!(
                         "DeepSeek-V4 layer {layer_id} router bias length mismatch: got {} expected {experts}",
                         bias.len()
-                    )));
+                    ) });
                 }
                 self.ops.upload_f32_buffer(bias)
             })
@@ -2648,11 +2748,15 @@ impl DeepSeekV4CudaOperatorCache {
         let router_hash_table = match layer.router_policy.selection {
             RouterSelectionPolicy::ScoreTopK => None,
             RouterSelectionPolicy::Hash => {
-                let table = layer.router.hash_table.as_deref().ok_or_else(|| {
-                    Error::Model(format!(
-                        "DeepSeek-V4 layer {layer_id} hash router is missing its hash table"
-                    ))
-                })?;
+                let table = layer
+                    .router
+                    .hash_table
+                    .as_deref()
+                    .ok_or_else(|| Error::Model {
+                        message: format!(
+                            "DeepSeek-V4 layer {layer_id} hash router is missing its hash table"
+                        ),
+                    })?;
                 validate_router_hash_table_shape(
                     layer_id,
                     table,
@@ -2709,38 +2813,47 @@ impl DeepSeekV4CudaOperatorCache {
         let Some(mtp) = resources.mtp() else {
             return Ok(None);
         };
-        let transformer_kernel_plan = resources
-            .mtp_transformer_kernel_plan()
-            .ok_or_else(|| Error::Model("DeepSeek-V4 MTP transformer plan is missing".into()))?;
+        let transformer_kernel_plan =
+            resources
+                .mtp_transformer_kernel_plan()
+                .ok_or_else(|| Error::Model {
+                    message: "DeepSeek-V4 MTP transformer plan is missing".into(),
+                })?;
         if transformer_kernel_plan.layers.len() != mtp.layers.len() {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 MTP kernel plan has {} layers for {} prepared stages",
-                transformer_kernel_plan.layers.len(),
-                mtp.layers.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 MTP kernel plan has {} layers for {} prepared stages",
+                    transformer_kernel_plan.layers.len(),
+                    mtp.layers.len()
+                ),
+            });
         }
 
         let mut layers = Vec::new();
         layers
             .try_reserve_exact(mtp.layers.len())
-            .map_err(|error| {
-                Error::Model(format!(
+            .map_err(|error| Error::Model {
+                message: format!(
                     "DeepSeek-V4 CUDA MTP image allocation failed for {} stages: {error}",
                     mtp.layers.len()
-                ))
+                ),
             })?;
         for (stage, layer) in mtp.layers.iter().enumerate() {
             if layer.mtp_index != stage {
-                return Err(Error::Model(format!(
-                    "DeepSeek-V4 CUDA MTP stage identity mismatch: slot={stage} checkpoint_stage={}",
-                    layer.mtp_index
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "DeepSeek-V4 CUDA MTP stage identity mismatch: slot={stage} checkpoint_stage={}",
+                        layer.mtp_index
+                    ),
+                });
             }
             if layer.transformer.layer != layer.execution_layer {
-                return Err(Error::Model(format!(
-                    "DeepSeek-V4 CUDA MTP execution identity mismatch: stage={stage} transformer_layer={} execution_layer={}",
-                    layer.transformer.layer, layer.execution_layer
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "DeepSeek-V4 CUDA MTP execution identity mismatch: stage={stage} transformer_layer={} execution_layer={}",
+                        layer.transformer.layer, layer.execution_layer
+                    ),
+                });
             }
             layers.push(DeepSeekV4CudaPreparedMtpLayer {
                 execution_layer: layer.execution_layer,
@@ -2758,8 +2871,8 @@ impl DeepSeekV4CudaOperatorCache {
             });
         }
 
-        let prediction_heads = mtp.prediction_heads.as_ref().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA MTP image requires prediction heads".into())
+        let prediction_heads = mtp.prediction_heads.as_ref().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA MTP image requires prediction heads".into(),
         })?;
         prediction_heads.hc_head.validate(hc_config)?;
         let heads = DeepSeekV4CudaPreparedMtpHeads {
@@ -2777,8 +2890,8 @@ impl DeepSeekV4CudaOperatorCache {
             markov_w2: self.upload_prepared_linear(&prediction_heads.markov_w2)?,
             confidence_proj: self.upload_prepared_linear(&prediction_heads.confidence_proj)?,
         };
-        let noise_token_id = mtp.config.noise_token_id.ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA MTP image requires a noise token id".into())
+        let noise_token_id = mtp.config.noise_token_id.ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA MTP image requires a noise token id".into(),
         })?;
 
         Ok(Some(DeepSeekV4CudaPreparedMtp {
@@ -2805,11 +2918,13 @@ impl DeepSeekV4CudaOperatorCache {
         let layers = resources.layers();
         let kernel_plan = resources.kernel_plan();
         if kernel_plan.layers.len() != layers.len() {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 kernel plan has {} layers for {} prepared layers",
-                kernel_plan.layers.len(),
-                layers.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 kernel plan has {} layers for {} prepared layers",
+                    kernel_plan.layers.len(),
+                    layers.len()
+                ),
+            });
         }
         if let Some(image) = self.execution_image.as_ref() {
             let image_mtp_layers = image.mtp.as_ref().map_or(0, |mtp| mtp.layers.len());
@@ -2821,11 +2936,13 @@ impl DeepSeekV4CudaOperatorCache {
             {
                 return Ok(());
             }
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 CUDA execution image is already compiled for generation {} with {} layers",
-                image.generation,
-                image.layers.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 CUDA execution image is already compiled for generation {} with {} layers",
+                    image.generation,
+                    image.layers.len()
+                ),
+            });
         }
 
         let hc_config = model.config.hc_config();
@@ -2842,18 +2959,22 @@ impl DeepSeekV4CudaOperatorCache {
         let output_head = self.upload_resident_bf16_matrix(&model.output_head)?;
 
         let mut prepared = Vec::new();
-        prepared.try_reserve_exact(layers.len()).map_err(|error| {
-            Error::Model(format!(
-                "DeepSeek-V4 CUDA execution image allocation failed for {} layers: {error}",
-                layers.len()
-            ))
-        })?;
+        prepared
+            .try_reserve_exact(layers.len())
+            .map_err(|error| Error::Model {
+                message: format!(
+                    "DeepSeek-V4 CUDA execution image allocation failed for {} layers: {error}",
+                    layers.len()
+                ),
+            })?;
         for (layer_index, layer) in layers.iter().enumerate() {
             if layer.layer != layer_index {
-                return Err(Error::Model(format!(
-                    "DeepSeek-V4 CUDA execution image layer identity mismatch: slot={layer_index} layer={}",
-                    layer.layer
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "DeepSeek-V4 CUDA execution image layer identity mismatch: slot={layer_index} layer={}",
+                        layer.layer
+                    ),
+                });
             }
             prepared.push(self.upload_prepared_layer(layer)?);
         }
@@ -2876,11 +2997,12 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     fn prepared_image(&self) -> Result<&DeepSeekV4CudaExecutionImage> {
-        self.execution_image.as_ref().ok_or_else(|| {
-            Error::Internal(
-                "DeepSeek-V4 CUDA execution image was not compiled before execution".into(),
-            )
-        })
+        self.execution_image
+            .as_ref()
+            .ok_or_else(|| Error::Internal {
+                message: "DeepSeek-V4 CUDA execution image was not compiled before execution"
+                    .into(),
+            })
     }
 
     #[cfg(feature = "cuda")]
@@ -2906,10 +3028,10 @@ impl DeepSeekV4CudaOperatorCache {
                     .and_then(|plan| plan.operation(operation))
                     .copied()
             });
-        descriptor.ok_or_else(|| {
-            Error::Model(format!(
+        descriptor.ok_or_else(|| Error::Model {
+            message: format!(
                 "SM121 {operation:?} plan is missing for execution layer={execution_layer}"
-            ))
+            ),
         })
     }
 
@@ -2925,10 +3047,10 @@ impl DeepSeekV4CudaOperatorCache {
             .and_then(|mtp| mtp.transformer_kernel_plan.layer(stage))
             .and_then(|plan| plan.operation(operation))
             .copied()
-            .ok_or_else(|| {
-                Error::Model(format!(
+            .ok_or_else(|| Error::Model {
+                message: format!(
                     "DeepSeek-V4 CUDA MTP stage {stage} is missing required operation {operation:?}"
-                ))
+                ),
             })
     }
 
@@ -2939,10 +3061,12 @@ impl DeepSeekV4CudaOperatorCache {
             || descriptor.kernel.operation != operation
             || !descriptor.is_provider_managed()
         {
-            return Err(Error::Model(format!(
-                "invalid SM121 semantic binding for layer={layer} operation={operation:?}: {:?}",
-                descriptor.kernel
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "invalid SM121 semantic binding for layer={layer} operation={operation:?}: {:?}",
+                    descriptor.kernel
+                ),
+            });
         }
         Ok(())
     }
@@ -2961,10 +3085,10 @@ impl DeepSeekV4CudaOperatorCache {
                     .find(|layer| layer.execution_layer == execution_layer)
             })
             .map(|layer| &layer.transformer)
-            .ok_or_else(|| {
-                Error::Model(format!(
+            .ok_or_else(|| Error::Model {
+                message: format!(
                     "DeepSeek-V4 CUDA execution layer {execution_layer} is not prepared"
-                ))
+                ),
             })
     }
 
@@ -2974,10 +3098,8 @@ impl DeepSeekV4CudaOperatorCache {
             .mtp
             .as_ref()
             .and_then(|mtp| mtp.layers.get(stage))
-            .ok_or_else(|| {
-                Error::Model(format!(
-                    "DeepSeek-V4 CUDA DSpark stage {stage} is out of range"
-                ))
+            .ok_or_else(|| Error::Model {
+                message: format!("DeepSeek-V4 CUDA DSpark stage {stage} is out of range"),
             })
     }
 
@@ -2998,10 +3120,10 @@ impl DeepSeekV4CudaOperatorCache {
             DeepSeekV4CudaCompressor::Main => prepared.main_compressor.as_ref(),
             DeepSeekV4CudaCompressor::Indexer => prepared.indexer_compressor.as_ref(),
         };
-        resources.ok_or_else(|| {
-            Error::Model(format!(
+        resources.ok_or_else(|| Error::Model {
+            message: format!(
                 "DeepSeek-V4 layer {layer} CUDA {compressor:?} compressor resources are unavailable"
-            ))
+            ),
         })
     }
 
@@ -3012,11 +3134,11 @@ impl DeepSeekV4CudaOperatorCache {
     ) -> Result<&DeepSeekV4CudaPreparedLinear> {
         let prepared = self.prepared_layer(layer)?;
         let handle = prepared.linear(linear);
-        handle.ok_or_else(|| {
-            Error::Model(format!(
+        handle.ok_or_else(|| Error::Model {
+            message: format!(
                 "DeepSeek-V4 layer {layer} CUDA {linear:?} ({:?}) linear is unavailable",
                 linear.operation()
-            ))
+            ),
         })
     }
 
@@ -3043,12 +3165,14 @@ impl DeepSeekV4CudaOperatorCache {
             DeepSeekV4CudaLayerNorm::KeyValue => &prepared.key_value_norm,
         };
         if rows == 0 || input.len() != rows * weight.len() || output.len() != input.len() {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} CUDA RMS rows length mismatch: rows={rows} input={} output={} weight={}",
-                input.len(),
-                output.len(),
-                weight.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {layer} CUDA RMS rows length mismatch: rows={rows} input={} output={} weight={}",
+                    input.len(),
+                    output.len(),
+                    weight.len()
+                ),
+            });
         }
         self.ops
             .rms_norm_rows_from_device_into(input, rows, weight, eps, output)
@@ -3065,12 +3189,14 @@ impl DeepSeekV4CudaOperatorCache {
     ) -> Result<()> {
         let weight = &self.prepared_compressor(layer, compressor)?.norm;
         if rows == 0 || input.len() != rows * weight.len() || output.len() != input.len() {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} CUDA {compressor:?} compressor RMS rows length mismatch: rows={rows} input={} output={} weight={}",
-                input.len(),
-                output.len(),
-                weight.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {layer} CUDA {compressor:?} compressor RMS rows length mismatch: rows={rows} input={} output={} weight={}",
+                    input.len(),
+                    output.len(),
+                    weight.len()
+                ),
+            });
         }
         self.ops
             .rms_norm_rows_from_device_into(input, rows, weight, eps, output)
@@ -3215,24 +3341,30 @@ impl DeepSeekV4CudaOperatorCache {
         if router_policy.score_function != RouterScoreFunction::SqrtSoftplus
             || !router_policy.normalize_non_softmax_weights
         {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 CUDA router does not support policy {:?}",
-                router_policy
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 CUDA router does not support policy {:?}",
+                    router_policy
+                ),
+            });
         }
         let tokens = token_ids.len();
         let experts = router.weight.format.out_features();
         let top_k = router_policy.top_k;
         if tokens == 0 || top_k == 0 || top_k > 64 || top_k > experts || experts > 512 {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 CUDA router unsupported shape: tokens={tokens} experts={experts} top_k={top_k}"
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 CUDA router unsupported shape: tokens={tokens} experts={experts} top_k={top_k}"
+                ),
+            });
         }
         if !router_policy.route_scale.is_finite() {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 CUDA router route_scale must be finite, got {}",
-                router_policy.route_scale
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 CUDA router route_scale must be finite, got {}",
+                    router_policy.route_scale
+                ),
+            });
         }
 
         match router_policy.selection {
@@ -3256,10 +3388,10 @@ impl DeepSeekV4CudaOperatorCache {
                     .prepared_layer(layer)?
                     .router_hash_table
                     .as_ref()
-                    .ok_or_else(|| {
-                        Error::Internal(format!(
+                    .ok_or_else(|| Error::Internal {
+                        message: format!(
                             "DeepSeek-V4 layer {layer} prepared hash router table is missing"
-                        ))
+                        ),
                     })?;
                 let token_ids_dev = self
                     .router_token_ids
@@ -3328,12 +3460,12 @@ impl DeepSeekV4CudaOperatorCache {
         tokens: usize,
         top_k: usize,
     ) -> Result<CudaCompactI32Download> {
-        let route_count = tokens
-            .checked_mul(top_k)
-            .ok_or_else(|| Error::Internal("CUDA router route count overflow".into()))?;
-        let compact_len = route_count
-            .checked_mul(2)
-            .ok_or_else(|| Error::Internal("CUDA compact route size overflow".into()))?;
+        let route_count = tokens.checked_mul(top_k).ok_or_else(|| Error::Internal {
+            message: "CUDA router route count overflow".into(),
+        })?;
+        let compact_len = route_count.checked_mul(2).ok_or_else(|| Error::Internal {
+            message: "CUDA compact route size overflow".into(),
+        })?;
         let mut mirror = self.take_compact_i32_mirror(compact_len)?;
         self.ops.pack_i32_f32_pairs_into(
             indices_dev,
@@ -3359,8 +3491,8 @@ impl DeepSeekV4CudaOperatorCache {
         &mut self,
         pending: &mut CudaCompactI32Download,
     ) -> Result<Option<Vec<i32>>> {
-        let mirror = pending.mirror.as_mut().ok_or_else(|| {
-            Error::Internal("CUDA compact download mirror was already restored".into())
+        let mirror = pending.mirror.as_mut().ok_or_else(|| Error::Internal {
+            message: "CUDA compact download mirror was already restored".into(),
         })?;
         let compact = self
             .ops
@@ -3377,8 +3509,8 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     fn restore_compact_i32_download(&mut self, pending: &mut CudaCompactI32Download) -> Result<()> {
-        let mirror = pending.mirror.take().ok_or_else(|| {
-            Error::Internal("CUDA compact download mirror was already restored".into())
+        let mirror = pending.mirror.take().ok_or_else(|| Error::Internal {
+            message: "CUDA compact download mirror was already restored".into(),
         })?;
         self.restore_compact_i32_mirror(pending.compact_len, mirror);
         Ok(())
@@ -3393,10 +3525,10 @@ impl DeepSeekV4CudaOperatorCache {
         #[cfg(not(feature = "cuda"))]
         {
             let _ = (hidden, batch_rows, top_k);
-            Err(Error::Model(
+            Err(Error::Model { message:
                 "DeepSeek-V4 packed CUDA resident output head requires building with CUTLASS support; host artifact fallback is disabled"
                     .into(),
-            ))
+             })
         }
         #[cfg(feature = "cuda")]
         {
@@ -3407,44 +3539,55 @@ impl DeepSeekV4CudaOperatorCache {
                     in_features,
                 } = image.output_head.shape()
                 else {
-                    return Err(Error::Model(format!(
-                        "DeepSeek-V4 resident output head requires BF16 storage, got {:?}",
-                        image.output_head.shape()
-                    )));
+                    return Err(Error::Model {
+                        message: format!(
+                            "DeepSeek-V4 resident output head requires BF16 storage, got {:?}",
+                            image.output_head.shape()
+                        ),
+                    });
                 };
                 (out_features, in_features)
             };
-            let expected_hidden = batch_rows.checked_mul(hidden_width).ok_or_else(|| {
-                Error::Model("DeepSeek-V4 output-head batch input size overflow".into())
-            })?;
+            let expected_hidden =
+                batch_rows
+                    .checked_mul(hidden_width)
+                    .ok_or_else(|| Error::Model {
+                        message: "DeepSeek-V4 output-head batch input size overflow".into(),
+                    })?;
             if hidden.len() != expected_hidden {
-                return Err(Error::Model(format!(
-                    "DeepSeek-V4 output-head input mismatch: expected {batch_rows}x{hidden_width}={expected_hidden}, got {}",
-                    hidden.len()
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "DeepSeek-V4 output-head input mismatch: expected {batch_rows}x{hidden_width}={expected_hidden}, got {}",
+                        hidden.len()
+                    ),
+                });
             }
             if batch_rows == 0 || top_k == 0 || top_k > vocab || top_k > 40 {
-                return Err(Error::Model(format!(
-                    "DeepSeek-V4 output-head top-k requires rows>0 and k in 1..={}, got rows={batch_rows} k={top_k}",
-                    vocab.min(40)
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "DeepSeek-V4 output-head top-k requires rows>0 and k in 1..={}, got rows={batch_rows} k={top_k}",
+                        vocab.min(40)
+                    ),
+                });
             }
             if vocab > i32::MAX as usize {
-                return Err(Error::Model(format!(
-                    "DeepSeek-V4 output-head vocab {vocab} exceeds the device i32 token-id limit"
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "DeepSeek-V4 output-head vocab {vocab} exceeds the device i32 token-id limit"
+                    ),
+                });
             }
 
             let logits_key = (batch_rows, vocab);
             if !self.output_head_logits.contains_key(&logits_key) {
-                let logits_len = batch_rows.checked_mul(vocab).ok_or_else(|| {
-                    Error::Model("DeepSeek-V4 full-vocab logits workspace overflow".into())
+                let logits_len = batch_rows.checked_mul(vocab).ok_or_else(|| Error::Model {
+                    message: "DeepSeek-V4 full-vocab logits workspace overflow".into(),
                 })?;
                 self.output_head_logits
                     .insert(logits_key, self.ops.zero_f32_buffer(logits_len)?);
             }
-            let output_len = batch_rows.checked_mul(top_k).ok_or_else(|| {
-                Error::Model("DeepSeek-V4 output-head top-k workspace overflow".into())
+            let output_len = batch_rows.checked_mul(top_k).ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 output-head top-k workspace overflow".into(),
             })?;
             if !self.output_head_indices.contains_key(&output_len) {
                 self.output_head_indices
@@ -3463,8 +3606,8 @@ impl DeepSeekV4CudaOperatorCache {
                 );
             }
 
-            let compact_len = output_len.checked_mul(2).ok_or_else(|| {
-                Error::Model("DeepSeek-V4 compact output-head workspace overflow".into())
+            let compact_len = output_len.checked_mul(2).ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 compact output-head workspace overflow".into(),
             })?;
             let mut mirror = self.take_compact_i32_mirror(compact_len)?;
             self.metrics.output_head_calls = self.metrics.output_head_calls.saturating_add(1);
@@ -3473,12 +3616,13 @@ impl DeepSeekV4CudaOperatorCache {
                 .output_head_rows
                 .saturating_add(batch_rows as u64);
             let topk_start = profile_start(self.profile);
-            let image = self.execution_image.as_ref().ok_or_else(|| {
-                Error::Internal(
+            let image =
+                self.execution_image.as_ref().ok_or_else(|| {
+                    Error::Internal { message:
                     "DeepSeek-V4 CUDA execution image was not compiled before output-head execution"
                         .into(),
-                )
-            })?;
+                 }
+                })?;
             let logits = self
                 .output_head_logits
                 .get_mut(&logits_key)
@@ -3621,11 +3765,11 @@ impl DeepSeekV4CudaOperatorCache {
                 block_m,
                 block_k,
             } => {
-                let scale = linear.scale.as_ref().ok_or_else(|| {
-                    Error::Model(format!(
+                let scale = linear.scale.as_ref().ok_or_else(|| Error::Model {
+                    message: format!(
                         "artifact linear {:?} CUDA FP8 weight is missing E8M0 scale tensor",
                         linear.role
-                    ))
+                    ),
                 })?;
                 self.ops.upload_fp8_e4m3_e8m0_linear(
                     &linear.weight.bytes,
@@ -3641,11 +3785,11 @@ impl DeepSeekV4CudaOperatorCache {
                 in_features,
                 block_size: 32,
             } => {
-                let scale = linear.scale.as_ref().ok_or_else(|| {
-                    Error::Model(format!(
+                let scale = linear.scale.as_ref().ok_or_else(|| Error::Model {
+                    message: format!(
                         "artifact linear {:?} CUDA FP4 weight is missing E8M0 scale tensor",
                         linear.role
-                    ))
+                    ),
                 })?;
                 self.ops.upload_fp4_e2m1_e8m0_linear(
                     &linear.weight.bytes,
@@ -3656,10 +3800,12 @@ impl DeepSeekV4CudaOperatorCache {
                 )
             }
             LinearWeightFormat::Fp4E2M1PackedWithE8M0Scale { block_size, .. } => {
-                Err(Error::Model(format!(
-                    "artifact linear {:?} CUDA FP4 block_size {block_size} is unsupported (expected 32)",
-                    linear.role
-                )))
+                Err(Error::Model {
+                    message: format!(
+                        "artifact linear {:?} CUDA FP4 block_size {block_size} is unsupported (expected 32)",
+                        linear.role
+                    ),
+                })
             }
         }
     }
@@ -3698,9 +3844,9 @@ impl DeepSeekV4CudaOperatorCache {
     ) -> Result<DeepSeekV4CudaPackedMoeContinuation> {
         let tokens = token_ids.len();
         if tokens == 0 {
-            return Err(Error::Model(
-                "CUDA routed MoE prefill batch requires at least one token".into(),
-            ));
+            return Err(Error::Model {
+                message: "CUDA routed MoE prefill batch requires at least one token".into(),
+            });
         }
         let (row_to_sequence, sequence_phases) = match (row_to_sequence, sequence_phases) {
             (None, None) => (None, None),
@@ -3723,29 +3869,35 @@ impl DeepSeekV4CudaOperatorCache {
                 )
             }
             _ => {
-                return Err(Error::Model(
-                    "CUDA routed MoE packed row/sequence metadata mismatch".into(),
-                ));
+                return Err(Error::Model {
+                    message: "CUDA routed MoE packed row/sequence metadata mismatch".into(),
+                });
             }
         };
         let hidden_size = router.weight.format.in_features();
         let expected_input = tokens
             .checked_mul(hidden_size)
-            .ok_or_else(|| Error::Model("CUDA routed MoE prefill input size overflow".into()))?;
+            .ok_or_else(|| Error::Model {
+                message: "CUDA routed MoE prefill input size overflow".into(),
+            })?;
         if input_dev.len() != expected_input {
-            return Err(Error::Model(format!(
-                "CUDA routed MoE prefill device input length mismatch: input={} expected {} tokens x {} hidden",
-                input_dev.len(),
-                tokens,
-                hidden_size
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "CUDA routed MoE prefill device input length mismatch: input={} expected {} tokens x {} hidden",
+                    input_dev.len(),
+                    tokens,
+                    hidden_size
+                ),
+            });
         }
         if output_dev.len() != input_dev.len() {
-            return Err(Error::Model(format!(
-                "CUDA routed MoE prefill output length mismatch: output={} expected {}",
-                output_dev.len(),
-                input_dev.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "CUDA routed MoE prefill output length mismatch: output={} expected {}",
+                    output_dev.len(),
+                    input_dev.len()
+                ),
+            });
         }
 
         let stage_start = profile_start(self.profile);
@@ -3798,15 +3950,22 @@ impl DeepSeekV4CudaOperatorCache {
         let routes_per_token = router_policy.top_k;
         let route_count = tokens
             .checked_mul(routes_per_token)
-            .ok_or_else(|| Error::Internal("CUDA segmented MoE route count overflow".into()))?;
+            .ok_or_else(|| Error::Internal {
+                message: "CUDA segmented MoE route count overflow".into(),
+            })?;
         if route_count > i32::MAX as usize || tokens > i32::MAX as usize {
-            return Err(Error::Internal(format!(
-                "CUDA segmented MoE exceeds i32 metadata ABI: tokens={tokens} routes={route_count}"
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "CUDA segmented MoE exceeds i32 metadata ABI: tokens={tokens} routes={route_count}"
+                ),
+            });
         }
-        let expected_route_output = route_count
-            .checked_mul(hidden_size)
-            .ok_or_else(|| Error::Internal("CUDA segmented MoE route output overflow".into()))?;
+        let expected_route_output =
+            route_count
+                .checked_mul(hidden_size)
+                .ok_or_else(|| Error::Internal {
+                    message: "CUDA segmented MoE route output overflow".into(),
+                })?;
 
         Ok(DeepSeekV4CudaPackedMoeContinuation {
             layer,
@@ -3908,9 +4067,10 @@ impl DeepSeekV4CudaOperatorCache {
         mut continuation: DeepSeekV4CudaPackedMoeContinuation,
     ) -> Result<()> {
         if continuation.routes_pending() {
-            return Err(Error::Execution(
-                "CUDA packed MoE route download is still active during cancellation".into(),
-            ));
+            return Err(Error::Execution {
+                message: "CUDA packed MoE route download is still active during cancellation"
+                    .into(),
+            });
         }
         continuation.current_chunk = None;
         continuation.retained_leases.clear();
@@ -3959,9 +4119,9 @@ impl DeepSeekV4CudaOperatorCache {
             .into_iter()
             .collect::<Vec<_>>();
         if unique_experts.is_empty() {
-            return Err(Error::Internal(
-                "CUDA segmented MoE selected no experts".into(),
-            ));
+            return Err(Error::Internal {
+                message: "CUDA segmented MoE selected no experts".into(),
+            });
         }
         unique_experts.shrink_to_fit();
         self.metrics.expert_unique_selected = self
@@ -3983,9 +4143,12 @@ impl DeepSeekV4CudaOperatorCache {
         {
             return Ok(());
         }
-        let subsystem = self.expert_subsystem.as_ref().ok_or_else(|| {
-            Error::Execution("DeepSeek-V4 shared expert subsystem is not attached".into())
-        })?;
+        let subsystem = self
+            .expert_subsystem
+            .as_ref()
+            .ok_or_else(|| Error::Execution {
+                message: "DeepSeek-V4 shared expert subsystem is not attached".into(),
+            })?;
         if continuation.resident_slots.is_none() {
             let resident_slots = subsystem
                 .layer_slot_capacity(continuation.layer)?
@@ -4043,19 +4206,23 @@ impl DeepSeekV4CudaOperatorCache {
             || output_dev.len() != input_dev.len()
             || route_output.len() != continuation.expected_route_output
         {
-            return Err(Error::Model(
-                "CUDA resumable routed MoE buffers changed while suspended".into(),
-            ));
+            return Err(Error::Model {
+                message: "CUDA resumable routed MoE buffers changed while suspended".into(),
+            });
         }
-        let subsystem = self.expert_subsystem.clone().ok_or_else(|| {
-            Error::Execution("DeepSeek-V4 shared expert subsystem is not attached".into())
-        })?;
-        let mut chunk = continuation.current_chunk.take().ok_or_else(|| {
-            Error::Execution(
+        let subsystem = self
+            .expert_subsystem
+            .clone()
+            .ok_or_else(|| Error::Execution {
+                message: "DeepSeek-V4 shared expert subsystem is not attached".into(),
+            })?;
+        let mut chunk =
+            continuation.current_chunk.take().ok_or_else(|| {
+                Error::Execution { message:
                 "DeepSeek-V4 packed MoE has no declared expert dependency; refusing resume replay"
                     .into(),
-            )
-        })?;
+             }
+            })?;
         let dispatch = subsystem.with_validated_published_experts(
             continuation.layer,
             &chunk.selected,
@@ -4087,8 +4254,8 @@ impl DeepSeekV4CudaOperatorCache {
         continuation.retained_leases.push(leases);
 
         if continuation.next_chunk_start == continuation.unique_experts.len() {
-            let workspace = segment_workspace.as_mut().ok_or_else(|| {
-                Error::Internal("segmented MoE workspace was not initialized".into())
+            let workspace = segment_workspace.as_mut().ok_or_else(|| Error::Internal {
+                message: "segmented MoE workspace was not initialized".into(),
             })?;
             self.ops.reduce_moe_segment_route_outputs_ranked(
                 route_output,
@@ -4123,21 +4290,27 @@ impl DeepSeekV4CudaOperatorCache {
         route_output: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         if chunk.selected.is_empty() {
-            return Err(Error::Internal("CUDA segmented MoE empty window".into()));
+            return Err(Error::Internal {
+                message: "CUDA segmented MoE empty window".into(),
+            });
         }
         let intermediate_size = first_frame.gate.shape().out_features();
         if first_frame.down.shape().out_features() != continuation.hidden_size {
-            return Err(Error::Model(format!(
-                "CUDA segmented MoE hidden mismatch: expert={} input={}",
-                first_frame.down.shape().out_features(),
-                continuation.hidden_size
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "CUDA segmented MoE hidden mismatch: expert={} input={}",
+                    first_frame.down.shape().out_features(),
+                    continuation.hidden_size
+                ),
+            });
         }
         if let Some(expected) = continuation.expected_intermediate {
             if intermediate_size != expected {
-                return Err(Error::Model(format!(
-                    "CUDA segmented MoE intermediate mismatch: got {intermediate_size} expected {expected}"
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "CUDA segmented MoE intermediate mismatch: got {intermediate_size} expected {expected}"
+                    ),
+                });
             }
         } else {
             continuation.expected_intermediate = Some(intermediate_size);
@@ -4251,27 +4424,30 @@ impl DeepSeekV4CudaOperatorCache {
         output: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         if positions.len() != rows || row_kv_lens.len() != rows {
-            return Err(Error::Model(format!(
-                "packed window attention row metadata mismatch: positions={} visible_lens={} rows={rows}",
-                positions.len(),
-                row_kv_lens.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "packed window attention row metadata mismatch: positions={} visible_lens={} rows={rows}",
+                    positions.len(),
+                    row_kv_lens.len()
+                ),
+            });
         }
-        let elements = rows
-            .checked_mul(spec.topk)
-            .ok_or_else(|| Error::Model("packed window top-k size overflow".into()))?;
+        let elements = rows.checked_mul(spec.topk).ok_or_else(|| Error::Model {
+            message: "packed window top-k size overflow".into(),
+        })?;
         let mut logical = vec![-1i32; elements];
         for (row, position) in positions.iter().copied().enumerate() {
-            let kv_len = position
-                .checked_add(1)
-                .ok_or_else(|| Error::Model("packed window position overflow".into()))?;
+            let kv_len = position.checked_add(1).ok_or_else(|| Error::Model {
+                message: "packed window position overflow".into(),
+            })?;
             let start = kv_len.saturating_sub(spec.topk);
             for (output, index) in logical[row * spec.topk..(row + 1) * spec.topk]
                 .iter_mut()
                 .zip(start..kv_len)
             {
-                *output = i32::try_from(index)
-                    .map_err(|_| Error::Model("packed window index exceeds i32 ABI".into()))?;
+                *output = i32::try_from(index).map_err(|_| Error::Model {
+                    message: "packed window index exceeds i32 ABI".into(),
+                })?;
             }
         }
         self.ensure_topk_buffer(elements)?;
@@ -4279,21 +4455,23 @@ impl DeepSeekV4CudaOperatorCache {
             &logical,
             self.topk_buffers.get_mut(&elements).expect("ensured above"),
         )?;
-        let active = self.active_paged_kv.as_ref().ok_or_else(|| {
-            Error::Model("packed window attention requires an active paged binding".into())
+        let active = self.active_paged_kv.as_ref().ok_or_else(|| Error::Model {
+            message: "packed window attention requires an active paged binding".into(),
         })?;
         if active.row_sequence_ids_device.len() != rows {
-            return Err(Error::Model(format!(
-                "packed window attention selector rows mismatch: got {} expected {rows}",
-                active.row_sequence_ids_device.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "packed window attention selector rows mismatch: got {} expected {rows}",
+                    active.row_sequence_ids_device.len()
+                ),
+            });
         }
-        let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        let pool = self.kv_page_pool.as_ref().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA physical KV pool is not configured".into(),
         })?;
-        let plane = pool
-            .plane_storage(0)
-            .ok_or_else(|| Error::Model("window KV plane is missing".into()))?;
+        let plane = pool.plane_storage(0).ok_or_else(|| Error::Model {
+            message: "window KV plane is missing".into(),
+        })?;
         let descriptor = &pool.planes()[0];
         let layout = ferrule_cuda::PagedSparseAttentionLayout {
             batch_size: rows,
@@ -4335,25 +4513,27 @@ impl DeepSeekV4CudaOperatorCache {
         spec: SparseAttentionSpec,
         output: &mut ferrule_cuda::context::CudaF32Buffer,
     ) -> Result<()> {
-        let active = self.active_paged_kv.as_ref().ok_or_else(|| {
-            Error::Model("packed sparse attention requires an active paged binding".into())
+        let active = self.active_paged_kv.as_ref().ok_or_else(|| Error::Model {
+            message: "packed sparse attention requires an active paged binding".into(),
         })?;
         if active.row_sequence_ids_device.len() != rows || row_kv_lens.len() != rows {
-            return Err(Error::Model(format!(
-                "packed sparse attention row metadata mismatch: selectors={} visible_lens={} expected={rows}",
-                active.row_sequence_ids_device.len(),
-                row_kv_lens.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "packed sparse attention row metadata mismatch: selectors={} visible_lens={} expected={rows}",
+                    active.row_sequence_ids_device.len(),
+                    row_kv_lens.len()
+                ),
+            });
         }
-        let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        let pool = self.kv_page_pool.as_ref().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA physical KV pool is not configured".into(),
         })?;
-        let first = pool
-            .plane_storage(0)
-            .ok_or_else(|| Error::Model("window KV plane is missing".into()))?;
-        let second = pool
-            .plane_storage(1)
-            .ok_or_else(|| Error::Model("compressed KV plane is missing".into()))?;
+        let first = pool.plane_storage(0).ok_or_else(|| Error::Model {
+            message: "window KV plane is missing".into(),
+        })?;
+        let second = pool.plane_storage(1).ok_or_else(|| Error::Model {
+            message: "compressed KV plane is missing".into(),
+        })?;
         let first_descriptor = &pool.planes()[0];
         let second_descriptor = &pool.planes()[1];
         let layout = ferrule_cuda::DualPlanePagedSparseAttentionLayout {
@@ -4404,9 +4584,9 @@ impl DeepSeekV4CudaOperatorCache {
         #[cfg(not(feature = "cuda"))]
         {
             let _ = (context, rows, cfg, layer, latent, workspace, output);
-            return Err(Error::Model(
-                "GB10 MLA output execution requires the `cutlass` feature".into(),
-            ));
+            return Err(Error::Model {
+                message: "GB10 MLA output execution requires the `cutlass` feature".into(),
+            });
         }
         #[cfg(feature = "cuda")]
         {
@@ -4438,9 +4618,9 @@ impl DeepSeekV4CudaOperatorCache {
         #[cfg(not(feature = "cuda"))]
         {
             let _ = (layer, activation, query_a_output, key_value_output);
-            return Err(Error::Model(
-                "GB10 QueryA+KV execution requires the `cutlass` feature".into(),
-            ));
+            return Err(Error::Model {
+                message: "GB10 QueryA+KV execution requires the `cutlass` feature".into(),
+            });
         }
         #[cfg(feature = "cuda")]
         {
@@ -4448,10 +4628,12 @@ impl DeepSeekV4CudaOperatorCache {
             let key_value = self.prepared_linear(layer, DeepSeekV4CudaLinear::KeyValue)?;
             let descriptor = self.require_operation(layer, KernelOperation::MlaQueryAKv)?;
             if descriptor.kernel.provider != KernelProviderId::ExternalProvider {
-                return Err(Error::Model(format!(
-                    "invalid SM121 QueryA+KV provider binding: {:?}",
-                    descriptor.kernel
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "invalid SM121 QueryA+KV provider binding: {:?}",
+                        descriptor.kernel
+                    ),
+                });
             }
             self.ops.artifact_fp8_query_a_kv_cutlass_into(
                 &query_a.handle,
@@ -4475,9 +4657,9 @@ impl DeepSeekV4CudaOperatorCache {
         #[cfg(not(feature = "cuda"))]
         {
             let _ = (layer, compressor, input, rows, kv_output, gate_output);
-            return Err(Error::Model(
-                "GB10 compressor execution requires the `cutlass` feature".into(),
-            ));
+            return Err(Error::Model {
+                message: "GB10 compressor execution requires the `cutlass` feature".into(),
+            });
         }
         #[cfg(feature = "cuda")]
         {
@@ -4487,10 +4669,12 @@ impl DeepSeekV4CudaOperatorCache {
             };
             let descriptor = self.require_operation(layer, operation)?;
             if descriptor.kernel.provider != KernelProviderId::ExternalProvider {
-                return Err(Error::Model(format!(
-                    "invalid SM121 compressor provider binding: {:?}",
-                    descriptor.kernel
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "invalid SM121 compressor provider binding: {:?}",
+                        descriptor.kernel
+                    ),
+                });
             }
             let prepared = self.prepared_compressor(layer, compressor)?;
             self.ops.artifact_bf16_compressor_cutlass_into(
@@ -4516,11 +4700,13 @@ impl DeepSeekV4CudaOperatorCache {
         let prepared = self.prepared_linear(layer, linear)?;
         let in_features = prepared.handle.shape().in_features();
         if rows == 0 || input.len() != rows * in_features {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} CUDA {linear:?} rows input length mismatch: rows={rows} expected {}, got {}",
-                rows * in_features,
-                input.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {layer} CUDA {linear:?} rows input length mismatch: rows={rows} expected {}, got {}",
+                    rows * in_features,
+                    input.len()
+                ),
+            });
         }
 
         #[cfg(feature = "cuda")]
@@ -4606,24 +4792,24 @@ impl DeepSeekV4CudaOperatorCache {
     ) -> Result<()> {
         let rows = positions.len();
         if window_lens.len() != rows || compressed_lens.len() != rows {
-            return Err(Error::Model(
-                "packed decode top-k row metadata is inconsistent".into(),
-            ));
+            return Err(Error::Model {
+                message: "packed decode top-k row metadata is inconsistent".into(),
+            });
         }
-        let active = self.active_paged_kv.as_ref().ok_or_else(|| {
-            Error::Model("packed decode top-k requires an active paged binding".into())
+        let active = self.active_paged_kv.as_ref().ok_or_else(|| Error::Model {
+            message: "packed decode top-k requires an active paged binding".into(),
         })?;
         if active.row_sequence_ids_device.len() != rows {
-            return Err(Error::Model(
-                "packed decode top-k selector row count is inconsistent".into(),
-            ));
+            return Err(Error::Model {
+                message: "packed decode top-k selector row count is inconsistent".into(),
+            });
         }
-        let pool = self.kv_page_pool.as_ref().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        let pool = self.kv_page_pool.as_ref().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA physical KV pool is not configured".into(),
         })?;
-        let indexer_plane = pool
-            .plane_storage(2)
-            .ok_or_else(|| Error::Model("indexer KV plane is missing".into()))?;
+        let indexer_plane = pool.plane_storage(2).ok_or_else(|| Error::Model {
+            message: "indexer KV plane is missing".into(),
+        })?;
         self.ops
             .dsv4_decode_topk_indices_paged_indexer_rows_from_device_into(
                 query,
@@ -4658,34 +4844,35 @@ impl DeepSeekV4CudaOperatorCache {
         mask: Option<&ferrule_cuda::context::CudaI32Buffer>,
         row_dim: usize,
     ) -> Result<()> {
-        let active = self.active_paged_kv.as_ref().ok_or_else(|| {
-            Error::Model("packed paged KV scatter requires an active binding".into())
+        let active = self.active_paged_kv.as_ref().ok_or_else(|| Error::Model {
+            message: "packed paged KV scatter requires an active binding".into(),
         })?;
         if active.row_sequence_ids_device.len() != positions.len()
             || values.len() != positions.len() * row_dim
         {
-            return Err(Error::Model(
-                "packed paged KV scatter row metadata is inconsistent".into(),
-            ));
+            return Err(Error::Model {
+                message: "packed paged KV scatter row metadata is inconsistent".into(),
+            });
         }
         if mask.is_some_and(|mask| mask.len() != positions.len()) {
-            return Err(Error::Model(
-                "packed paged KV scatter mask length is inconsistent".into(),
-            ));
+            return Err(Error::Model {
+                message: "packed paged KV scatter mask length is inconsistent".into(),
+            });
         }
-        let pool = self.kv_page_pool.as_mut().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA physical KV pool is not configured".into())
+        let pool = self.kv_page_pool.as_mut().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA physical KV pool is not configured".into(),
         })?;
-        let descriptor = pool
-            .planes()
-            .get(plane)
-            .ok_or_else(|| Error::Model(format!("paged KV plane {plane} is missing")))?;
+        let descriptor = pool.planes().get(plane).ok_or_else(|| Error::Model {
+            message: format!("paged KV plane {plane} is missing"),
+        })?;
         if descriptor.elements_per_token != row_dim || descriptor.layer_count != active.layer_count
         {
-            return Err(Error::Model(format!(
-                "paged KV plane {plane} layout mismatch: row_dim={row_dim}/{} layers={}/{}",
-                descriptor.elements_per_token, active.layer_count, descriptor.layer_count
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "paged KV plane {plane} layout mismatch: row_dim={row_dim}/{} layers={}/{}",
+                    descriptor.elements_per_token, active.layer_count, descriptor.layer_count
+                ),
+            });
         }
         let layout = ferrule_cuda::PagedPlaneLayout {
             page_tokens: active.page_tokens,
@@ -4724,22 +4911,22 @@ impl DeepSeekV4CudaOperatorCache {
         let capacity = rope_table_capacity(required_positions)?;
         let rd2 = rope_dim / 2;
         let elements = capacity.checked_mul(rd2).ok_or_else(|| {
-            Error::Model(format!(
+            Error::Model { message: format!(
                 "DeepSeek-V4 RoPE table '{name}' element count overflow: capacity={capacity} rope_dim={rope_dim}"
-            ))
+            ) }
         })?;
         let mut cos = Vec::new();
         cos.try_reserve_exact(elements).map_err(|error| {
-            Error::Model(format!(
+            Error::Model { message: format!(
                 "DeepSeek-V4 RoPE cosine table '{name}' host allocation failed for {elements} elements: {error}"
-            ))
+            ) }
         })?;
         cos.resize(elements, 0.0f32);
         let mut sin = Vec::new();
         sin.try_reserve_exact(elements).map_err(|error| {
-            Error::Model(format!(
+            Error::Model { message: format!(
                 "DeepSeek-V4 RoPE sine table '{name}' host allocation failed for {elements} elements: {error}"
-            ))
+            ) }
         })?;
         sin.resize(elements, 0.0f32);
         for position in 0..capacity {
@@ -4774,18 +4961,20 @@ impl DeepSeekV4CudaOperatorCache {
         required_positions: usize,
     ) -> Result<()> {
         if required_positions == 0 {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 RoPE table '{name}' requires at least one position"
-            )));
+            return Err(Error::Model {
+                message: format!("DeepSeek-V4 RoPE table '{name}' requires at least one position"),
+            });
         }
-        let table = self.rope_tables.get(name).ok_or_else(|| {
-            Error::Model(format!("DeepSeek-V4 RoPE table '{name}' is not prepared"))
+        let table = self.rope_tables.get(name).ok_or_else(|| Error::Model {
+            message: format!("DeepSeek-V4 RoPE table '{name}' is not prepared"),
         })?;
         if table.rope_dim != rope_dim {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 RoPE table '{name}' dimension mismatch: cached={} requested={rope_dim}",
-                table.rope_dim
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 RoPE table '{name}' dimension mismatch: cached={} requested={rope_dim}",
+                    table.rope_dim
+                ),
+            });
         }
         validate_rope_table_capacity(name, table, required_positions)
     }
@@ -4831,9 +5020,9 @@ impl DeepSeekV4CudaOperatorCache {
         if positions.is_empty() || heads == 0 || rope_dim == 0 {
             return Ok(());
         }
-        let required_positions = max_position
-            .checked_add(1)
-            .ok_or_else(|| Error::Model("DeepSeek-V4 indexed RoPE position overflow".into()))?;
+        let required_positions = max_position.checked_add(1).ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 indexed RoPE position overflow".into(),
+        })?;
         self.require_rope_tables(name, rope_dim as usize, required_positions)?;
         let table = self
             .rope_tables
@@ -4870,11 +5059,15 @@ impl DeepSeekV4CudaOperatorCache {
         }
         let last_offset = (rows as usize - 1)
             .checked_mul(position_stride as usize)
-            .ok_or_else(|| Error::Model("DeepSeek-V4 RoPE row-stride overflow".into()))?;
+            .ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 RoPE row-stride overflow".into(),
+            })?;
         let required_positions = (start_position as usize)
             .checked_add(last_offset)
             .and_then(|position| position.checked_add(1))
-            .ok_or_else(|| Error::Model("DeepSeek-V4 RoPE position overflow".into()))?;
+            .ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 RoPE position overflow".into(),
+            })?;
         self.require_rope_tables(name, rope_dim as usize, required_positions)?;
         let table = self
             .rope_tables

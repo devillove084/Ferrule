@@ -261,11 +261,11 @@ impl<S> ExpertSourceCatalog<S> {
     }
 
     pub fn require_resource_source(&self, expert: ExpertId) -> Result<ResourceSource> {
-        self.resource_source(expert).ok_or_else(|| {
-            Error::Model(format!(
+        self.resource_source(expert).ok_or_else(|| Error::Model {
+            message: format!(
                 "expert source catalog has no materialization source for layer {} expert {}",
                 expert.layer, expert.expert
-            ))
+            ),
         })
     }
 
@@ -324,22 +324,22 @@ impl ExpertSourceCatalog<ExpertLoadSource> {
             .iter_entries()
             .map(|(expert, source, resource_source)| {
                 let layer = u32::try_from(expert.layer).map_err(|_| {
-                    Error::Model(format!(
+                    Error::Model { message: format!(
                         "expert source layer {} exceeds materialization coordinates",
                         expert.layer
-                    ))
+                    ) }
                 })?;
                 let expert_index = u32::try_from(expert.expert).map_err(|_| {
-                    Error::Model(format!(
+                    Error::Model { message: format!(
                         "expert source index {} exceeds materialization coordinates",
                         expert.expert
-                    ))
+                    ) }
                 })?;
                 let resource_source = resource_source.ok_or_else(|| {
-                    Error::Model(format!(
+                    Error::Model { message: format!(
                         "expert source catalog has no materialization identity for layer {} expert {}",
                         expert.layer, expert.expert
-                    ))
+                    ) }
                 })?;
                 MaterializationSourceEntry::new(
                     MaterializedResourceId::routed_expert(
@@ -385,18 +385,22 @@ fn checkpoint_read_plan_for_expert_source(
         ExpertLoadSource::LocalTensorSet { .. }
         | ExpertLoadSource::LocalShard { .. }
         | ExpertLoadSource::WeightPackChunk { .. } => {
-            return Err(Error::Model(format!(
-                "expert source {}:{} has no catalog-time checkpoint snapshots",
-                expert.layer, expert.expert
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "expert source {}:{} has no catalog-time checkpoint snapshots",
+                    expert.layer, expert.expert
+                ),
+            });
         }
         ExpertLoadSource::GpuResident
         | ExpertLoadSource::CpuResident
         | ExpertLoadSource::Remote { .. } => {
-            return Err(Error::Model(format!(
-                "expert source {}:{} is not a local checkpoint read plan",
-                expert.layer, expert.expert
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "expert source {}:{} is not a local checkpoint read plan",
+                    expert.layer, expert.expert
+                ),
+            });
         }
     };
     CheckpointReadPlan::new(extents, source_files)
@@ -485,20 +489,25 @@ impl ExpertSourceCatalog<ExpertLoadSource> {
                 dtype: tensor.dtype.clone(),
                 shape: tensor.shape.clone(),
             };
-            let end_offset = slice.offset.checked_add(slice.bytes).ok_or_else(|| {
-                Error::Model(format!(
-                    "expert tensor extent overflows for layer {} expert {}",
-                    expert.layer, expert.expert
-                ))
-            })?;
+            let end_offset = slice
+                .offset
+                .checked_add(slice.bytes)
+                .ok_or_else(|| Error::Model {
+                    message: format!(
+                        "expert tensor extent overflows for layer {} expert {}",
+                        expert.layer, expert.expert
+                    ),
+                })?;
             if end_offset > source_file.length() {
-                return Err(Error::Model(format!(
-                    "expert tensor extent {}..{} exceeds shard metadata length {} for '{}'",
-                    slice.offset,
-                    end_offset,
-                    source_file.length(),
-                    slice.path.display()
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "expert tensor extent {}..{} exceeds shard metadata length {} for '{}'",
+                        slice.offset,
+                        end_offset,
+                        source_file.length(),
+                        slice.path.display()
+                    ),
+                });
             }
             grouped
                 .entry(expert)
@@ -520,10 +529,12 @@ impl ExpertSourceCatalog<ExpertLoadSource> {
                     .then_with(|| a.offset.cmp(&b.offset))
             });
             if tensors.is_empty() {
-                return Err(Error::Model(format!(
-                    "empty expert tensor set for layer {} expert {}",
-                    expert.layer, expert.expert
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "empty expert tensor set for layer {} expert {}",
+                        expert.layer, expert.expert
+                    ),
+                });
             }
             let resource_source = hf_expert_resource_source(&tensors)?;
             let source_files = tensors
@@ -804,11 +815,11 @@ impl ExpertStreamingPlanner {
     }
 
     pub fn mark_resident(&mut self, expert: ExpertId, location: ExpertStorageTier) -> Result<()> {
-        let state = self.experts.get_mut(&expert).ok_or_else(|| {
-            Error::Model(format!(
+        let state = self.experts.get_mut(&expert).ok_or_else(|| Error::Model {
+            message: format!(
                 "expert streaming load source missing for layer {} expert {}",
                 expert.layer, expert.expert
-            ))
+            ),
         })?;
         state.location = location;
         Ok(())
@@ -894,12 +905,14 @@ impl ExpertStreamingPlanner {
         self.step = self.step.saturating_add(1);
         let selected = unique_ids(layer, selected);
         if selected.len() > self.policy.gpu_slots_per_layer {
-            return Err(Error::Model(format!(
-                "expert streaming policy has {} GPU slots for layer {}, but {} selected experts must be available",
-                self.policy.gpu_slots_per_layer,
-                layer,
-                selected.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "expert streaming policy has {} GPU slots for layer {}, but {} selected experts must be available",
+                    self.policy.gpu_slots_per_layer,
+                    layer,
+                    selected.len()
+                ),
+            });
         }
         for expert in &selected {
             if let Some(state) = self.experts.get_mut(expert) {
@@ -1003,12 +1016,14 @@ impl ExpertStreamingPlanner {
     }
 
     fn load_source_for(&self, expert: ExpertId) -> Result<&ExpertLoadSource> {
-        self.source_catalog.source(expert).ok_or_else(|| {
-            Error::Model(format!(
-                "expert streaming load source missing for layer {} expert {}",
-                expert.layer, expert.expert
-            ))
-        })
+        self.source_catalog
+            .source(expert)
+            .ok_or_else(|| Error::Model {
+                message: format!(
+                    "expert streaming load source missing for layer {} expert {}",
+                    expert.layer, expert.expert
+                ),
+            })
     }
 
     fn load_source_tier_or_local(&self, expert: ExpertId) -> Result<ExpertStorageTier> {
@@ -1024,22 +1039,28 @@ impl ExpertStreamingPlanner {
         let load_source = self.load_source_for(expert)?;
         let tier = load_source.tier();
         if !tier.is_streamable() && tier != ExpertStorageTier::Gpu {
-            return Err(Error::Model(format!(
-                "expert load source for layer {} expert {} is not streamable: {:?}",
-                expert.layer, expert.expert, tier
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "expert load source for layer {} expert {} is not streamable: {:?}",
+                    expert.layer, expert.expert, tier
+                ),
+            });
         }
         if tier == ExpertStorageTier::Remote && !self.policy.allow_remote_sources {
-            return Err(Error::Model(format!(
-                "remote expert load source for layer {} expert {} requires allow_remote_sources=true",
-                expert.layer, expert.expert
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "remote expert load source for layer {} expert {} requires allow_remote_sources=true",
+                    expert.layer, expert.expert
+                ),
+            });
         }
         if tier == ExpertStorageTier::Cpu && !self.policy.allow_cpu_staging {
-            return Err(Error::Model(format!(
-                "CPU-staged expert load source for layer {} expert {} requires allow_cpu_staging=true",
-                expert.layer, expert.expert
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "CPU-staged expert load source for layer {} expert {} requires allow_cpu_staging=true",
+                    expert.layer, expert.expert
+                ),
+            });
         }
         Ok(())
     }
@@ -1092,13 +1113,15 @@ impl ExpertComputeBundle {
         let mut grouped = BTreeMap::<ExpertMatrixKind, Vec<ExpertTensorPayload>>::new();
         for tensor in payload.tensors {
             if tensor.slice.key.expert != expert {
-                return Err(Error::Model(format!(
-                    "expert payload contains mismatched tensor: expected layer {} expert {}, got layer {} expert {}",
-                    expert.layer,
-                    expert.expert,
-                    tensor.slice.key.expert.layer,
-                    tensor.slice.key.expert.expert
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "expert payload contains mismatched tensor: expected layer {} expert {}, got layer {} expert {}",
+                        expert.layer,
+                        expert.expert,
+                        tensor.slice.key.expert.layer,
+                        tensor.slice.key.expert.expert
+                    ),
+                });
             }
             grouped
                 .entry(tensor.slice.key.matrix)
@@ -1161,10 +1184,10 @@ pub(crate) struct PinnedExpertLoadPlan {
 
 #[cfg(all(target_os = "linux", feature = "cuda"))]
 impl PinnedExpertLoadPlan {
-    pub(crate) const fn demand(
+    pub(crate) const fn requirements(
         &self,
-    ) -> ferrule_common::materialization_io::MaterializationResourceDemand {
-        self.reader.demand()
+    ) -> ferrule_common::materialization_io::MaterializationResourceRequirements {
+        self.reader.requirements()
     }
 }
 
@@ -1248,9 +1271,12 @@ impl ExpertStreamingReader {
             "io_uring" | "uring" => {
                 let queue_depth = parse_expert_io_usize("FERRULE_EXPERT_IO_QUEUE_DEPTH", 2)?;
                 let buffer_mib = parse_expert_io_usize("FERRULE_EXPERT_IO_BUFFER_MIB", 16)?;
-                let buffer_bytes = buffer_mib.checked_mul(1024 * 1024).ok_or_else(|| {
-                    Error::Model("FERRULE_EXPERT_IO_BUFFER_MIB overflows usize".into())
-                })?;
+                let buffer_bytes =
+                    buffer_mib
+                        .checked_mul(1024 * 1024)
+                        .ok_or_else(|| Error::Model {
+                            message: "FERRULE_EXPERT_IO_BUFFER_MIB overflows usize".into(),
+                        })?;
                 Self::with_io_uring_and_completion_hub(
                     max_slice_bytes,
                     queue_depth,
@@ -1258,9 +1284,11 @@ impl ExpertStreamingReader {
                     completion_hub,
                 )
             }
-            other => Err(Error::Model(format!(
-                "unsupported FERRULE_EXPERT_IO_BACKEND '{other}'; expected pread or io_uring"
-            ))),
+            other => Err(Error::Model {
+                message: format!(
+                    "unsupported FERRULE_EXPERT_IO_BACKEND '{other}'; expected pread or io_uring"
+                ),
+            }),
         }
     }
 
@@ -1279,7 +1307,9 @@ impl ExpertStreamingReader {
         let slab_count = parse_expert_io_usize("FERRULE_EXPERT_IO_SLABS", 16)?;
         let buffer_bytes = buffer_mib
             .checked_mul(1024 * 1024)
-            .ok_or_else(|| Error::Model("FERRULE_EXPERT_IO_BUFFER_MIB overflows usize".into()))?;
+            .ok_or_else(|| Error::Model {
+                message: "FERRULE_EXPERT_IO_BUFFER_MIB overflows usize".into(),
+            })?;
         Ok(Self {
             max_slice_bytes,
             completion_hub: completion_hub.clone(),
@@ -1351,9 +1381,9 @@ impl ExpertStreamingReader {
         _buffer_bytes: usize,
         _completion_hub: CompletionHub,
     ) -> Result<Self> {
-        Err(Error::Model(
-            "io_uring expert streaming is supported only on Linux".into(),
-        ))
+        Err(Error::Model {
+            message: "io_uring expert streaming is supported only on Linux".into(),
+        })
     }
 
     pub fn backend_name(&self) -> &'static str {
@@ -1393,7 +1423,8 @@ impl ExpertStreamingReader {
     #[cfg(all(target_os = "linux", feature = "cuda"))]
     pub(crate) fn physical_resource_capacity(
         &self,
-    ) -> Result<Option<ferrule_common::materialization_io::MaterializationResourceDemand>> {
+    ) -> Result<Option<ferrule_common::materialization_io::MaterializationResourceRequirements>>
+    {
         self.io_uring
             .as_ref()
             .map_or(Ok(None), |reader| reader.physical_resource_capacity())
@@ -1423,10 +1454,12 @@ impl ExpertStreamingReader {
                         || slice.bytes != extent.bytes()
                 })
         {
-            return Err(Error::Model(format!(
-                "expert install descriptor {}:{} does not match its checkpoint read plan",
-                expert.layer, expert.expert
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "expert install descriptor {}:{} does not match its checkpoint read plan",
+                    expert.layer, expert.expert
+                ),
+            });
         }
         Ok(Some(PinnedExpertLoadPlan {
             expert,
@@ -1442,8 +1475,8 @@ impl ExpertStreamingReader {
         operation: ferrule_common::OperationId,
         key: ferrule_common::MaterializationKey,
     ) -> Result<ReservedPinnedExpertLoad> {
-        let reader = self.io_uring.as_ref().ok_or_else(|| {
-            Error::Model("pinned expert read plan requires the io_uring backend".into())
+        let reader = self.io_uring.as_ref().ok_or_else(|| Error::Model {
+            message: "pinned expert read plan requires the io_uring backend".into(),
         })?;
         let PinnedExpertLoadPlan {
             expert,
@@ -1456,18 +1489,24 @@ impl ExpertStreamingReader {
             expert,
             reader: reserved.ticket,
         };
-        let mut pinned_source_files = self
-            .pinned_source_files
-            .lock()
-            .map_err(|_| Error::Internal("pinned source identity registry is poisoned".into()))?;
+        let mut pinned_source_files =
+            self.pinned_source_files
+                .lock()
+                .map_err(|_| Error::Internal {
+                    message: "pinned source identity registry is poisoned".into(),
+                })?;
         if pinned_source_files.contains_key(&ticket) {
             drop(pinned_source_files);
             let cleanup = reader.detach_slices_pinned(ticket.reader);
             return Err(match cleanup {
-                Ok(()) => Error::Internal("duplicate pinned expert source identity ticket".into()),
-                Err(error) => Error::Internal(format!(
-                    "duplicate pinned expert source identity ticket; read cleanup also failed ({error})"
-                )),
+                Ok(()) => Error::Internal {
+                    message: "duplicate pinned expert source identity ticket".into(),
+                },
+                Err(error) => Error::Internal {
+                    message: format!(
+                        "duplicate pinned expert source identity ticket; read cleanup also failed ({error})"
+                    ),
+                },
             });
         }
         pinned_source_files.insert(ticket, source_files);
@@ -1483,8 +1522,8 @@ impl ExpertStreamingReader {
         &self,
         ticket: PinnedExpertReadTicket,
     ) -> Result<()> {
-        let reader = self.io_uring.as_ref().ok_or_else(|| {
-            Error::Model("pinned expert read ticket requires the io_uring backend".into())
+        let reader = self.io_uring.as_ref().ok_or_else(|| Error::Model {
+            message: "pinned expert read ticket requires the io_uring backend".into(),
         })?;
         self.pinned_source_files_for_ticket(ticket)?;
         reader.submit_reserved_slices_pinned(ticket.reader)
@@ -1492,8 +1531,8 @@ impl ExpertStreamingReader {
 
     #[cfg(all(target_os = "linux", feature = "cuda"))]
     pub(crate) fn cancel_load_source_pinned(&self, ticket: PinnedExpertReadTicket) -> Result<bool> {
-        let reader = self.io_uring.as_ref().ok_or_else(|| {
-            Error::Model("pinned expert read ticket requires the io_uring backend".into())
+        let reader = self.io_uring.as_ref().ok_or_else(|| Error::Model {
+            message: "pinned expert read ticket requires the io_uring backend".into(),
         })?;
         self.pinned_source_files_for_ticket(ticket)?;
         reader.cancel_slices_pinned(ticket.reader)
@@ -1505,8 +1544,8 @@ impl ExpertStreamingReader {
         ticket: PinnedExpertReadTicket,
         max_completions: usize,
     ) -> Result<PinnedExpertReadPoll> {
-        let reader = self.io_uring.as_ref().ok_or_else(|| {
-            Error::Model("pinned expert read ticket requires the io_uring backend".into())
+        let reader = self.io_uring.as_ref().ok_or_else(|| Error::Model {
+            message: "pinned expert read ticket requires the io_uring backend".into(),
         })?;
         let source_files = self.pinned_source_files_for_ticket(ticket)?;
         let stale = Self::require_source_files_current(&source_files).err();
@@ -1546,8 +1585,8 @@ impl ExpertStreamingReader {
 
     #[cfg(all(target_os = "linux", feature = "cuda"))]
     pub(crate) fn detach_load_source_pinned(&self, ticket: PinnedExpertReadTicket) -> Result<()> {
-        let reader = self.io_uring.as_ref().ok_or_else(|| {
-            Error::Model("pinned expert read ticket requires the io_uring backend".into())
+        let reader = self.io_uring.as_ref().ok_or_else(|| Error::Model {
+            message: "pinned expert read ticket requires the io_uring backend".into(),
         })?;
         let detach = reader.detach_slices_pinned(ticket.reader);
         self.forget_pinned_source_files(ticket)?;
@@ -1561,11 +1600,13 @@ impl ExpertStreamingReader {
     ) -> Result<Arc<[CheckpointSourceFileIdentity]>> {
         self.pinned_source_files
             .lock()
-            .map_err(|_| Error::Internal("pinned source identity registry is poisoned".into()))?
+            .map_err(|_| Error::Internal {
+                message: "pinned source identity registry is poisoned".into(),
+            })?
             .get(&ticket)
             .cloned()
-            .ok_or_else(|| {
-                Error::Internal("pinned read ticket has no source identity snapshot".into())
+            .ok_or_else(|| Error::Internal {
+                message: "pinned read ticket has no source identity snapshot".into(),
             })
     }
 
@@ -1573,10 +1614,12 @@ impl ExpertStreamingReader {
     fn forget_pinned_source_files(&self, ticket: PinnedExpertReadTicket) -> Result<()> {
         self.pinned_source_files
             .lock()
-            .map_err(|_| Error::Internal("pinned source identity registry is poisoned".into()))?
+            .map_err(|_| Error::Internal {
+                message: "pinned source identity registry is poisoned".into(),
+            })?
             .remove(&ticket)
-            .ok_or_else(|| {
-                Error::Internal("pinned read ticket has no source identity snapshot".into())
+            .ok_or_else(|| Error::Internal {
+                message: "pinned read ticket has no source identity snapshot".into(),
             })?;
         Ok(())
     }
@@ -1629,10 +1672,12 @@ impl ExpertStreamingReader {
                     || slice.bytes != extent.bytes()
             })
         {
-            return Err(Error::Model(format!(
-                "expert source {}:{} does not match its checkpoint read plan",
-                expert.layer, expert.expert
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "expert source {}:{} does not match its checkpoint read plan",
+                    expert.layer, expert.expert
+                ),
+            });
         }
         let payloads = CheckpointPositionedReader::new(self.max_slice_bytes).read(&plan)?;
         let tensors = slices
@@ -1645,10 +1690,12 @@ impl ExpertStreamingReader {
 
     pub fn read_local_slice(&self, slice: &ExpertTensorSlice) -> Result<ExpertTensorPayload> {
         if slice.bytes > self.max_slice_bytes {
-            return Err(Error::Model(format!(
-                "expert tensor slice exceeds bounded read size: {} > {} bytes",
-                slice.bytes, self.max_slice_bytes
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "expert tensor slice exceeds bounded read size: {} > {} bytes",
+                    slice.bytes, self.max_slice_bytes
+                ),
+            });
         }
         Self::read_local_slice_positioned(slice)
     }
@@ -1657,19 +1704,17 @@ impl ExpertStreamingReader {
     /// file cursor or virtual-memory mapping.
     fn read_local_slice_positioned(slice: &ExpertTensorSlice) -> Result<ExpertTensorPayload> {
         use std::os::unix::fs::FileExt;
-        let file = std::fs::File::open(&slice.path).map_err(|e| {
-            Error::Model(format!(
-                "expert tensor slice open '{}': {e}",
-                slice.path.display()
-            ))
+        let file = std::fs::File::open(&slice.path).map_err(|e| Error::Model {
+            message: format!("expert tensor slice open '{}': {e}", slice.path.display()),
         })?;
         let mut bytes = vec![0u8; slice.bytes as usize];
-        file.read_exact_at(&mut bytes, slice.offset).map_err(|e| {
-            Error::Model(format!(
-                "expert tensor slice read_at '{}': {e}",
-                slice.path.display()
-            ))
-        })?;
+        file.read_exact_at(&mut bytes, slice.offset)
+            .map_err(|e| Error::Model {
+                message: format!(
+                    "expert tensor slice read_at '{}': {e}",
+                    slice.path.display()
+                ),
+            })?;
         Ok(ExpertTensorPayload {
             slice: slice.clone(),
             bytes,
@@ -1735,20 +1780,24 @@ impl ExpertStreamingReader {
                 dtype: "opaque".into(),
                 shape: Vec::new(),
             }]),
-            other => Err(Error::Model(format!(
-                "expert streaming reader does not support artifact tier {:?} yet",
-                other.tier()
-            ))),
+            other => Err(Error::Model {
+                message: format!(
+                    "expert streaming reader does not support artifact tier {:?} yet",
+                    other.tier()
+                ),
+            }),
         }
     }
 
     fn validate_bounded_slices(&self, slices: &[ExpertTensorSlice]) -> Result<()> {
         for slice in slices {
             if slice.bytes > self.max_slice_bytes {
-                return Err(Error::Model(format!(
-                    "expert tensor slice exceeds bounded read size: {} > {} bytes",
-                    slice.bytes, self.max_slice_bytes
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "expert tensor slice exceeds bounded read size: {} > {} bytes",
+                        slice.bytes, self.max_slice_bytes
+                    ),
+                });
             }
         }
         Ok(())
@@ -1798,7 +1847,9 @@ impl ExpertStreamingReader {
 }
 
 fn stale_source_identity_error(reason: StaleReason) -> Error {
-    Error::Execution(format!("Stale expert source identity: {reason:?}"))
+    Error::Execution {
+        message: format!("Stale expert source identity: {reason:?}"),
+    }
 }
 
 #[cfg(any(all(target_os = "linux", feature = "cuda"), test))]
@@ -1806,9 +1857,11 @@ fn validate_cuda_resident_expert_io_backend(backend: &str) -> Result<()> {
     if backend == "io_uring" {
         return Ok(());
     }
-    Err(Error::Model(format!(
-        "unsupported FERRULE_EXPERT_IO_BACKEND '{backend}' for CUDA resident expert materialization; expected io_uring"
-    )))
+    Err(Error::Model {
+        message: format!(
+            "unsupported FERRULE_EXPERT_IO_BACKEND '{backend}' for CUDA resident expert materialization; expected io_uring"
+        ),
+    })
 }
 
 fn default_expert_io_backend() -> &'static str {
@@ -1826,11 +1879,13 @@ fn parse_expert_io_usize(name: &str, default: usize) -> Result<usize> {
     let Some(value) = std::env::var(name).ok() else {
         return Ok(default);
     };
-    let parsed = value
-        .parse::<usize>()
-        .map_err(|error| Error::Model(format!("invalid {name}='{value}': {error}")))?;
+    let parsed = value.parse::<usize>().map_err(|error| Error::Model {
+        message: format!("invalid {name}='{value}': {error}"),
+    })?;
     if parsed == 0 {
-        return Err(Error::Model(format!("{name} must be greater than zero")));
+        return Err(Error::Model {
+            message: format!("{name} must be greater than zero"),
+        });
     }
     Ok(parsed)
 }
@@ -1868,11 +1923,11 @@ fn build_linear_payload(
     matrix: ExpertMatrixKind,
     tensors: Option<Vec<ExpertTensorPayload>>,
 ) -> Result<ExpertLinearPayload> {
-    let tensors = tensors.ok_or_else(|| {
-        Error::Model(format!(
+    let tensors = tensors.ok_or_else(|| Error::Model {
+        message: format!(
             "expert artifact bundle missing {:?} matrix for layer {} expert {}",
             matrix, expert.layer, expert.expert
-        ))
+        ),
     })?;
     let mut weight = None;
     let mut scale = None;
@@ -1880,33 +1935,39 @@ fn build_linear_payload(
         match tensor.slice.component {
             ExpertTensorComponent::Weight => {
                 if weight.replace(tensor).is_some() {
-                    return Err(Error::Model(format!(
-                        "expert artifact bundle has duplicate {:?} weight for layer {} expert {}",
-                        matrix, expert.layer, expert.expert
-                    )));
+                    return Err(Error::Model {
+                        message: format!(
+                            "expert artifact bundle has duplicate {:?} weight for layer {} expert {}",
+                            matrix, expert.layer, expert.expert
+                        ),
+                    });
                 }
             }
             ExpertTensorComponent::Scale => {
                 if scale.replace(tensor).is_some() {
-                    return Err(Error::Model(format!(
-                        "expert artifact bundle has duplicate {:?} scale for layer {} expert {}",
-                        matrix, expert.layer, expert.expert
-                    )));
+                    return Err(Error::Model {
+                        message: format!(
+                            "expert artifact bundle has duplicate {:?} scale for layer {} expert {}",
+                            matrix, expert.layer, expert.expert
+                        ),
+                    });
                 }
             }
             ExpertTensorComponent::Other(name) => {
-                return Err(Error::Model(format!(
-                    "expert artifact bundle has unsupported {:?} component '{}' for layer {} expert {}",
-                    matrix, name, expert.layer, expert.expert
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "expert artifact bundle has unsupported {:?} component '{}' for layer {} expert {}",
+                        matrix, name, expert.layer, expert.expert
+                    ),
+                });
             }
         }
     }
-    let weight = weight.ok_or_else(|| {
-        Error::Model(format!(
+    let weight = weight.ok_or_else(|| Error::Model {
+        message: format!(
             "expert artifact bundle missing {:?} weight for layer {} expert {}",
             matrix, expert.layer, expert.expert
-        ))
+        ),
     })?;
     let format = infer_linear_format(&weight, scale.as_ref())?;
     Ok(ExpertLinearPayload {
@@ -1938,27 +1999,31 @@ pub(crate) fn infer_expert_linear_format(
     };
     if weight.dtype == "I8" && scale.dtype == "F8_E8M0" {
         if weight.shape.len() != 2 || scale.shape.len() != 2 {
-            return Err(Error::Model(format!(
-                "FP4 expert tensor expects 2D weight/scale shapes, got {:?} and {:?}",
-                weight.shape, scale.shape
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "FP4 expert tensor expects 2D weight/scale shapes, got {:?} and {:?}",
+                    weight.shape, scale.shape
+                ),
+            });
         }
         let out = weight.shape[0];
         let packed_in = weight.shape[1];
-        let logical_in = packed_in
-            .checked_mul(2)
-            .ok_or_else(|| Error::Model("FP4 expert packed input dimension overflow".into()))?;
+        let logical_in = packed_in.checked_mul(2).ok_or_else(|| Error::Model {
+            message: "FP4 expert packed input dimension overflow".into(),
+        })?;
         let expected_scale_cols = logical_in / 32;
         if scale.shape[0] != out || scale.shape[1] != expected_scale_cols {
-            return Err(Error::Model(format!(
-                "FP4 expert scale shape mismatch: weight {:?} implies scale [{out}, {expected_scale_cols}], got {:?}",
-                weight.shape, scale.shape
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "FP4 expert scale shape mismatch: weight {:?} implies scale [{out}, {expected_scale_cols}], got {:?}",
+                    weight.shape, scale.shape
+                ),
+            });
         }
         if weight_len as u64 != weight.bytes || scale_len as u64 != scale.bytes {
-            return Err(Error::Model(
-                "expert payload byte length does not match tensor slice metadata".into(),
-            ));
+            return Err(Error::Model {
+                message: "expert payload byte length does not match tensor slice metadata".into(),
+            });
         }
         return Ok(ExpertLinearFormat::Fp4E2M1PackedWithE8M0Scale {
             out_features: out,
@@ -2185,7 +2250,7 @@ pub fn classify_expert_residency(
 
 enum AsyncHostStagedExpertResult {
     Loaded(Box<ExpertComputeBundle>),
-    Failed { expert: ExpertId, error: String },
+    Failed { expert: ExpertId, error: Error },
 }
 
 impl AsyncHostStagedExpertResult {
@@ -2268,10 +2333,7 @@ impl AsyncHostStagedExpertLoader {
                 .and_then(ExpertComputeBundle::from_artifact_payload);
             let message = match result {
                 Ok(bundle) => AsyncHostStagedExpertResult::Loaded(Box::new(bundle)),
-                Err(error) => AsyncHostStagedExpertResult::Failed {
-                    expert,
-                    error: error.to_string(),
-                },
+                Err(error) => AsyncHostStagedExpertResult::Failed { expert, error },
             };
             let _ = tx.send(message);
             completion_hub.notify();
@@ -2353,7 +2415,7 @@ impl AsyncHostStagedExpertLoader {
                 tracing::debug!(
                     layer = expert.layer,
                     expert = expert.expert,
-                    error,
+                    %error,
                     "async expert host staging failed"
                 );
                 false

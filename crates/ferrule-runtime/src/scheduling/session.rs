@@ -5,7 +5,7 @@
 
 use std::ops::Range;
 
-use ferrule_common::{Error, Result};
+use crate::{Error, Result};
 use ferrule_model::IncrementalDecodeState;
 
 use super::KvHandle;
@@ -186,20 +186,24 @@ impl SequenceState {
 
     pub fn prompt_tokens_for_range(&self, range: Range<usize>) -> Result<&[u32]> {
         if range.start > range.end || range.end > self.prompt_len {
-            return Err(Error::Internal(format!(
-                "prompt chunk range {:?} exceeds prompt length {}",
-                range, self.prompt_len
-            )));
+            return Err(Error::Invariant {
+                message: format!(
+                    "prompt chunk range {:?} exceeds prompt length {}",
+                    range, self.prompt_len
+                ),
+            });
         }
         Ok(&self.current_prompt_tokens()[range])
     }
 
     pub fn commit_prefill_tokens(&mut self, token_count: usize) -> Result<()> {
         if token_count > self.remaining_prompt_tokens() {
-            return Err(Error::Internal(format!(
-                "cannot commit {token_count} prompt tokens with only {} remaining",
-                self.remaining_prompt_tokens()
-            )));
+            return Err(Error::Invariant {
+                message: format!(
+                    "cannot commit {token_count} prompt tokens with only {} remaining",
+                    self.remaining_prompt_tokens()
+                ),
+            });
         }
         self.prompt_cursor += token_count;
         self.position = self.position.saturating_add(token_count);
@@ -217,10 +221,12 @@ impl SequenceState {
 
     pub fn stage_decode_candidate(&mut self, token_id: u32, logit: Option<f32>) -> Result<()> {
         if !self.prompt_prefill_done() {
-            return Err(Error::Internal(format!(
-                "cannot stage decode token before prompt prefill completes: {}/{} prompt tokens committed",
-                self.prompt_cursor, self.prompt_len
-            )));
+            return Err(Error::Invariant {
+                message: format!(
+                    "cannot stage decode token before prompt prefill completes: {}/{} prompt tokens committed",
+                    self.prompt_cursor, self.prompt_len
+                ),
+            });
         }
         self.next_decode_token = Some(token_id);
         self.next_decode_logit = logit;
@@ -235,12 +241,12 @@ impl SequenceState {
                 self.extend_generated(&[token_id]);
                 Ok(())
             }
-            Some(expected) => Err(Error::Internal(format!(
-                "decode token mismatch: staged {expected}, committed {token_id}"
-            ))),
-            None => Err(Error::Internal(
-                "cannot commit decode token without a staged token".into(),
-            )),
+            Some(expected) => Err(Error::Invariant {
+                message: format!("decode token mismatch: staged {expected}, committed {token_id}"),
+            }),
+            None => Err(Error::Invariant {
+                message: "cannot commit decode token without a staged token".into(),
+            }),
         }
     }
 
@@ -297,17 +303,21 @@ impl SequenceState {
         expected_position: usize,
     ) -> Result<Self> {
         if self.position != expected_position {
-            return Err(Error::Execution(format!(
-                "session fork expected committed position {expected_position}, source is at {}",
-                self.position
-            )));
+            return Err(Error::InvalidRequest {
+                message: format!(
+                    "session fork expected committed position {expected_position}, source is at {}",
+                    self.position
+                ),
+            });
         }
         if self.tokens.len() < expected_position {
-            return Err(Error::Internal(format!(
-                "session {:?} has {} tracked tokens at committed position {expected_position}",
-                self.session_id,
-                self.tokens.len()
-            )));
+            return Err(Error::Invariant {
+                message: format!(
+                    "session {:?} has {} tracked tokens at committed position {expected_position}",
+                    self.session_id,
+                    self.tokens.len()
+                ),
+            });
         }
         let mut tokens = self.tokens[..expected_position].to_vec();
         tokens.extend_from_slice(&request.prompt_tokens);

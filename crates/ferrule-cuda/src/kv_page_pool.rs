@@ -735,7 +735,9 @@ fn largest_contiguous_run(slots: &[u32]) -> usize {
 }
 
 fn pool_error(message: impl Into<String>) -> Error {
-    Error::Execution(format!("CUDA KV page pool: {}", message.into()))
+    Error::Execution {
+        message: format!("CUDA KV page pool: {}", message.into()),
+    }
 }
 
 #[cfg(test)]

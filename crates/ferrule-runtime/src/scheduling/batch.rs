@@ -2,11 +2,11 @@
 
 use std::num::NonZeroU32;
 
+use crate::{Error, Result};
 use ferrule_common::execution::{
     ExecutionBatch, ExecutionOutput, ExecutionSequence, ForwardMode, ForwardPhase, LogitsRequest,
     StateSlot,
 };
-use ferrule_common::{Error, Result};
 
 use crate::cache::KvReservationBindings;
 
@@ -508,7 +508,9 @@ fn checked_u32(value: usize, label: &str) -> Result<u32> {
 }
 
 fn execution_error(message: impl Into<String>) -> Error {
-    Error::Execution(message.into())
+    Error::InvalidRequest {
+        message: message.into(),
+    }
 }
 
 #[cfg(test)]
@@ -555,7 +557,7 @@ mod tests {
     }
 
     fn assert_execution_error<T>(result: Result<T>) {
-        assert!(matches!(result, Err(Error::Execution(_))));
+        assert!(matches!(result, Err(Error::InvalidRequest { message: _ })));
     }
 
     #[test]
@@ -833,7 +835,12 @@ mod tests {
             .unwrap()
             .unwrap();
         let invalid = ExecutionOutput::new(vec![LogitsRow::new(2, LogitsOutput::Full(Vec::new()))]);
-        assert_execution_error(batch.validate_output(&invalid));
+        assert!(matches!(
+            batch.validate_output(&invalid),
+            Err(Error::Backend {
+                source: ferrule_common::Error::Execution { .. },
+            })
+        ));
 
         let valid = ExecutionOutput::new(vec![LogitsRow::new(2, LogitsOutput::TopK(Vec::new()))]);
         batch.validate_output(&valid).unwrap();
@@ -841,8 +848,15 @@ mod tests {
         let mut missing_correlation = batch.clone();
         missing_correlation.sequences.clear();
         let error = missing_correlation.validate_output(&invalid).unwrap_err();
-        assert!(matches!(error, Error::Execution(message) if message.contains("requested top-k")));
+        assert!(matches!(
+            error,
+            Error::Backend {
+                source: ferrule_common::Error::Execution { .. },
+            }
+        ));
         let error = missing_correlation.validate_output(&valid).unwrap_err();
-        assert!(matches!(error, Error::Execution(message) if message.contains("correlation")));
+        assert!(
+            matches!(error, Error::InvalidRequest { message } if message.contains("correlation"))
+        );
     }
 }

@@ -21,6 +21,9 @@ edition = "2024"
 version = "0.2.0"
 license = "Apache-2.0"
 
+[workspace.dependencies]
+snafu = "0.8"
+
 [workspace.lints.rust]
 unsafe_code = "warn"
 non_camel_case_types = "warn"

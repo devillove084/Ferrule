@@ -491,13 +491,15 @@ impl DeepSeekV4OperatorContext {
     ) -> Result<Vec<f32>> {
         let in_features = linear.format.in_features();
         if rows == 0 || input.len() != rows * in_features {
-            return Err(Error::Model(format!(
-                "artifact linear {:?} rows input length mismatch: rows={} expected {}, got {}",
-                linear.role,
-                rows,
-                rows * in_features,
-                input.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "artifact linear {:?} rows input length mismatch: rows={} expected {}, got {}",
+                    linear.role,
+                    rows,
+                    rows * in_features,
+                    input.len()
+                ),
+            });
         }
         let mut output = Vec::with_capacity(rows * linear.format.out_features());
         for row in 0..rows {
@@ -553,11 +555,13 @@ impl DeepSeekV4OperatorContext {
         label: &str,
     ) -> Result<Vec<f32>> {
         if rows == 0 || weight.is_empty() || input.len() != rows * weight.len() {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 {label} batched RMS length mismatch: rows={rows} input={} weight={}",
-                input.len(),
-                weight.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 {label} batched RMS length mismatch: rows={rows} input={} weight={}",
+                    input.len(),
+                    weight.len()
+                ),
+            });
         }
         let mut out = Vec::with_capacity(input.len());
         for row in 0..rows {
@@ -646,12 +650,14 @@ impl DeepSeekV4OperatorContext {
     ) -> Result<Vec<f32>> {
         let hidden = router.weight.format.in_features();
         if input.len() != token_ids.len() * hidden {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 CPU MoE prefill input length mismatch: input={} expected {}x{}",
-                input.len(),
-                token_ids.len(),
-                hidden
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 CPU MoE prefill input length mismatch: input={} expected {}x{}",
+                    input.len(),
+                    token_ids.len(),
+                    hidden
+                ),
+            });
         }
         let mut output = Vec::with_capacity(input.len());
         let mut routes_by_token = Vec::with_capacity(token_ids.len());
@@ -704,9 +710,9 @@ impl DeepSeekV4OperatorContext {
         subsystem: DeepSeekV4SharedExpertSubsystem,
     ) -> Result<()> {
         if self.backend != ModelExecutionBackend::Cuda {
-            return Err(Error::Execution(
-                "DeepSeek-V4 shared expert subsystem requires the CUDA backend".into(),
-            ));
+            return Err(Error::Execution {
+                message: "DeepSeek-V4 shared expert subsystem requires the CUDA backend".into(),
+            });
         }
         self.cuda_mut()?.configure_expert_subsystem(subsystem)
     }
@@ -724,8 +730,8 @@ impl DeepSeekV4OperatorContext {
         if self.backend != ModelExecutionBackend::Cuda {
             return Ok(());
         }
-        let cuda = self.cuda.as_ref().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA operator cache is not initialized".into())
+        let cuda = self.cuda.as_ref().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA operator cache is not initialized".into(),
         })?;
         let failed = if indexer {
             cuda.ops.failpoints().check_indexer_compressor_transition()
@@ -734,9 +740,11 @@ impl DeepSeekV4OperatorContext {
         };
         if failed {
             let transition = if indexer { "indexer" } else { "main" };
-            return Err(Error::Internal(format!(
-                "deterministic failpoint: DeepSeek-V4 {transition} compressor transition"
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "deterministic failpoint: DeepSeek-V4 {transition} compressor transition"
+                ),
+            });
         }
         Ok(())
     }
@@ -747,9 +755,9 @@ impl DeepSeekV4OperatorContext {
             return Ok(());
         }
         if self.cuda_failpoints()?.check_arena_acquire() {
-            return Err(Error::Internal(
-                "deterministic failpoint: DeepSeek-V4 arena acquire".into(),
-            ));
+            return Err(Error::Internal {
+                message: "deterministic failpoint: DeepSeek-V4 arena acquire".into(),
+            });
         }
         Ok(())
     }
@@ -759,15 +767,15 @@ impl DeepSeekV4OperatorContext {
         self.cuda
             .as_ref()
             .map(|cuda| cuda.ops.failpoints())
-            .ok_or_else(|| {
-                Error::Model("DeepSeek-V4 CUDA operator cache is not initialized".into())
+            .ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 CUDA operator cache is not initialized".into(),
             })
     }
 
     #[cfg(feature = "cuda")]
     pub(crate) fn cuda_mut(&mut self) -> Result<&mut DeepSeekV4CudaOperatorCache> {
-        self.cuda.as_mut().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 CUDA operator cache is not initialized".into())
+        self.cuda.as_mut().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA operator cache is not initialized".into(),
         })
     }
 }

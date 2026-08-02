@@ -434,43 +434,35 @@ struct ShardHeader {
 
 fn read_safetensors_shard_header(path: impl AsRef<Path>) -> Result<ShardHeader> {
     let path = path.as_ref();
-    let mut file = std::fs::File::open(path)
-        .map_err(|e| Error::Model(format!("safetensors shard open '{}': {e}", path.display())))?;
+    let mut file = std::fs::File::open(path).map_err(|e| Error::Model {
+        message: format!("safetensors shard open '{}': {e}", path.display()),
+    })?;
     let mut len_buf = [0u8; 8];
-    file.read_exact(&mut len_buf).map_err(|e| {
-        Error::Model(format!(
-            "safetensors shard header length '{}': {e}",
-            path.display()
-        ))
+    file.read_exact(&mut len_buf).map_err(|e| Error::Model {
+        message: format!("safetensors shard header length '{}': {e}", path.display()),
     })?;
     let header_len = u64::from_le_bytes(len_buf) as usize;
     if header_len > MAX_SAFETENSORS_HEADER_BYTES {
-        return Err(Error::Model(format!(
-            "safetensors shard header too large in '{}': {} bytes",
-            path.display(),
-            header_len
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "safetensors shard header too large in '{}': {} bytes",
+                path.display(),
+                header_len
+            ),
+        });
     }
 
     let data_start = ((8 + header_len + 7) & !7) as u64;
     let mut header_bytes = vec![0u8; header_len];
-    file.read_exact(&mut header_bytes).map_err(|e| {
-        Error::Model(format!(
-            "safetensors shard header read '{}': {e}",
-            path.display()
-        ))
+    file.read_exact(&mut header_bytes)
+        .map_err(|e| Error::Model {
+            message: format!("safetensors shard header read '{}': {e}", path.display()),
+        })?;
+    let header_text = std::str::from_utf8(&header_bytes).map_err(|e| Error::Model {
+        message: format!("safetensors shard header utf8 '{}': {e}", path.display()),
     })?;
-    let header_text = std::str::from_utf8(&header_bytes).map_err(|e| {
-        Error::Model(format!(
-            "safetensors shard header utf8 '{}': {e}",
-            path.display()
-        ))
-    })?;
-    let json: serde_json::Value = serde_json::from_str(header_text).map_err(|e| {
-        Error::Model(format!(
-            "safetensors shard header json '{}': {e}",
-            path.display()
-        ))
+    let json: serde_json::Value = serde_json::from_str(header_text).map_err(|e| Error::Model {
+        message: format!("safetensors shard header json '{}': {e}", path.display()),
     })?;
     parse_safetensors_header_json(&json, path, data_start)
 }
@@ -480,11 +472,11 @@ fn parse_safetensors_header_json(
     path: &Path,
     data_start: u64,
 ) -> Result<ShardHeader> {
-    let object = json.as_object().ok_or_else(|| {
-        Error::Model(format!(
+    let object = json.as_object().ok_or_else(|| Error::Model {
+        message: format!(
             "safetensors shard header '{}' is not a JSON object",
             path.display()
-        ))
+        ),
     })?;
     let mut tensors = Vec::new();
     for (name, info) in object {
@@ -494,72 +486,79 @@ fn parse_safetensors_header_json(
         let dtype = info
             .get("dtype")
             .and_then(|value| value.as_str())
-            .ok_or_else(|| {
-                Error::Model(format!(
+            .ok_or_else(|| Error::Model {
+                message: format!(
                     "safetensors tensor '{}' in '{}' missing dtype",
                     name,
                     path.display()
-                ))
+                ),
             })?
             .to_string();
         let shape = info
             .get("shape")
             .and_then(|value| value.as_array())
-            .ok_or_else(|| {
-                Error::Model(format!(
+            .ok_or_else(|| Error::Model {
+                message: format!(
                     "safetensors tensor '{}' in '{}' missing shape",
                     name,
                     path.display()
-                ))
+                ),
             })?
             .iter()
             .map(|value| {
-                value.as_u64().map(|value| value as usize).ok_or_else(|| {
-                    Error::Model(format!(
-                        "safetensors tensor '{}' in '{}' has non-integer shape dim",
-                        name,
-                        path.display()
-                    ))
-                })
+                value
+                    .as_u64()
+                    .map(|value| value as usize)
+                    .ok_or_else(|| Error::Model {
+                        message: format!(
+                            "safetensors tensor '{}' in '{}' has non-integer shape dim",
+                            name,
+                            path.display()
+                        ),
+                    })
             })
             .collect::<Result<Vec<_>>>()?;
         let offsets = info
             .get("data_offsets")
             .and_then(|value| value.as_array())
-            .ok_or_else(|| {
-                Error::Model(format!(
+            .ok_or_else(|| Error::Model {
+                message: format!(
                     "safetensors tensor '{}' in '{}' missing data_offsets",
                     name,
                     path.display()
-                ))
+                ),
             })?;
         if offsets.len() != 2 {
-            return Err(Error::Model(format!(
-                "safetensors tensor '{}' in '{}' has invalid data_offsets",
-                name,
-                path.display()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "safetensors tensor '{}' in '{}' has invalid data_offsets",
+                    name,
+                    path.display()
+                ),
+            });
         }
-        let start = offsets[0].as_u64().ok_or_else(|| {
-            Error::Model(format!(
+        let start = offsets[0].as_u64().ok_or_else(|| Error::Model {
+            message: format!(
                 "safetensors tensor '{}' in '{}' has invalid data offset start",
                 name,
                 path.display()
-            ))
+            ),
         })?;
-        let end = offsets[1].as_u64().ok_or_else(|| {
-            Error::Model(format!(
+        let end = offsets[1].as_u64().ok_or_else(|| Error::Model {
+            message: format!(
                 "safetensors tensor '{}' in '{}' has invalid data offset end",
                 name,
                 path.display()
-            ))
+            ),
         })?;
         if end < start {
-            return Err(Error::Model(format!(
-                "safetensors tensor '{}' in '{}' has reversed data_offsets",
-                name,
-                path.display()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "safetensors tensor '{}' in '{}' has reversed data_offsets",
+                    name,
+                    path.display()
+                ),
+            });
         }
         tensors.push(ShardHeaderTensor {
             name: name.clone(),

@@ -104,31 +104,33 @@ impl TryFrom<&DSparkConfig> for DeepSeekV4DsparkProtocol {
 
     fn try_from(config: &DSparkConfig) -> Result<Self> {
         if config.block_size == 0 {
-            return Err(Error::Model(
-                "DeepSeek-V4 DSpark gamma must be greater than zero".into(),
-            ));
+            return Err(Error::Model {
+                message: "DeepSeek-V4 DSpark gamma must be greater than zero".into(),
+            });
         }
-        let noise_token_id = config.noise_token_id.ok_or_else(|| {
-            Error::Model("DeepSeek-V4 DSpark protocol requires a noise token id".into())
+        let noise_token_id = config.noise_token_id.ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 DSpark protocol requires a noise token id".into(),
         })?;
         if config.target_layer_ids.is_empty() {
-            return Err(Error::Model(
-                "DeepSeek-V4 DSpark protocol requires target hidden-state layers".into(),
-            ));
+            return Err(Error::Model {
+                message: "DeepSeek-V4 DSpark protocol requires target hidden-state layers".into(),
+            });
         }
         if config
             .target_layer_ids
             .windows(2)
             .any(|pair| pair[0] >= pair[1])
         {
-            return Err(Error::Model(
-                "DeepSeek-V4 DSpark target layers must be strictly increasing".into(),
-            ));
+            return Err(Error::Model {
+                message: "DeepSeek-V4 DSpark target layers must be strictly increasing".into(),
+            });
         }
         let target_verify_rows = config
             .block_size
             .checked_add(1)
-            .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark target width overflow".into()))?;
+            .ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 DSpark target width overflow".into(),
+            })?;
         Ok(Self {
             gamma: config.block_size,
             draft_backbone_rows: config.block_size,
@@ -152,14 +154,18 @@ impl DeepSeekV4DsparkProtocol {
     /// One carried anchor is verified in addition to every admitted draft token.
     pub fn target_rows_for_drafts(&self, proposed_draft_tokens: usize) -> Result<usize> {
         if proposed_draft_tokens > self.gamma {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 DSpark requested {proposed_draft_tokens} drafts above checkpoint gamma {}",
-                self.gamma
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 DSpark requested {proposed_draft_tokens} drafts above checkpoint gamma {}",
+                    self.gamma
+                ),
+            });
         }
         proposed_draft_tokens
             .checked_add(1)
-            .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark target width overflow".into()))
+            .ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 DSpark target width overflow".into(),
+            })
     }
 }
 
@@ -378,7 +384,9 @@ fn mtp_tensor_slice<'a>(
     tensors
         .iter()
         .find(|tensor| tensor.name == name)
-        .ok_or_else(|| Error::Model(format!("MTP missing tensor '{name}'")))
+        .ok_or_else(|| Error::Model {
+            message: format!("MTP missing tensor '{name}'"),
+        })
 }
 
 /// Reads a linear weight+scale pair from the MTP tensor list by exact name.
@@ -659,29 +667,33 @@ impl DeepSeekV4MtpModel {
     /// boundary. Both the projection result and normalized output are rounded to
     /// BF16 exactly where the checkpoint Python returns BF16 tensors.
     pub fn stage_zero_main_reference(&self, target_taps: &[f32], rows: usize) -> Result<Vec<f32>> {
-        let stage_zero = self
-            .layers
-            .first()
-            .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark stage zero is missing".into()))?;
-        let projection = stage_zero.main_proj.as_ref().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 DSpark stage-zero main projection is missing".into())
+        let stage_zero = self.layers.first().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 DSpark stage zero is missing".into(),
         })?;
-        let norm = stage_zero.main_norm.as_deref().ok_or_else(|| {
-            Error::Model("DeepSeek-V4 DSpark stage-zero main norm is missing".into())
+        let projection = stage_zero.main_proj.as_ref().ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 DSpark stage-zero main projection is missing".into(),
         })?;
+        let norm = stage_zero
+            .main_norm
+            .as_deref()
+            .ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 DSpark stage-zero main norm is missing".into(),
+            })?;
         let input_size = projection.format.in_features();
         let output_size = projection.format.out_features();
-        let expected = rows.checked_mul(input_size).ok_or_else(|| {
-            Error::Model("DeepSeek-V4 DSpark stage-zero reference input size overflow".into())
+        let expected = rows.checked_mul(input_size).ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 DSpark stage-zero reference input size overflow".into(),
         })?;
         if rows == 0 || target_taps.len() != expected || norm.len() != output_size {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 DSpark stage-zero reference shape mismatch: rows={rows} taps={}/{} norm={}/{}",
-                target_taps.len(),
-                expected,
-                norm.len(),
-                output_size
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 DSpark stage-zero reference shape mismatch: rows={rows} taps={}/{} norm={}/{}",
+                    target_taps.len(),
+                    expected,
+                    norm.len(),
+                    output_size
+                ),
+            });
         }
         let mut output = Vec::with_capacity(rows * output_size);
         for row in 0..rows {

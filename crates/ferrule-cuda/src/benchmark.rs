@@ -51,7 +51,9 @@ pub fn run_gemv_rms_smoke_benchmark(
                 dim as u32,
             )
         }
-        .map_err(|e| ferrule_common::Error::Internal(format!("CUDA {e:?}")))?;
+        .map_err(|e| ferrule_common::Error::Internal {
+            message: format!("CUDA {e:?}"),
+        })?;
     }
 
     let t0 = std::time::Instant::now();
@@ -67,7 +69,9 @@ pub fn run_gemv_rms_smoke_benchmark(
                 dim as u32,
             )
         }
-        .map_err(|e| ferrule_common::Error::Internal(format!("CUDA {e:?}")))?;
+        .map_err(|e| ferrule_common::Error::Internal {
+            message: format!("CUDA {e:?}"),
+        })?;
     }
     let gpu_gemv_ms = t0.elapsed().as_secs_f64() * 1000.0 / gemv_iters as f64;
 
@@ -85,7 +89,9 @@ pub fn run_gemv_rms_smoke_benchmark(
                 1e-5f32,
             )
         }
-        .map_err(|e| ferrule_common::Error::Internal(format!("CUDA {e:?}")))?;
+        .map_err(|e| ferrule_common::Error::Internal {
+            message: format!("CUDA {e:?}"),
+        })?;
     }
     let kernel_launch_overhead_us = t0.elapsed().as_secs_f64() * 1e6 / empty_iters as f64;
 
@@ -102,7 +108,9 @@ pub fn run_gemv_rms_smoke_benchmark(
                 1e-5f32,
             )
         }
-        .map_err(|e| ferrule_common::Error::Internal(format!("CUDA {e:?}")))?;
+        .map_err(|e| ferrule_common::Error::Internal {
+            message: format!("CUDA {e:?}"),
+        })?;
     }
     let rms_us = t0.elapsed().as_secs_f64() * 1e6 / rms_iters as f64;
 

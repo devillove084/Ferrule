@@ -76,7 +76,9 @@ impl ExecutionTransactionId {
     pub fn new(value: u64) -> Result<Self> {
         NonZeroU64::new(value)
             .map(Self)
-            .ok_or_else(|| Error::Execution("execution transaction ID must be non-zero".into()))
+            .ok_or_else(|| Error::Execution {
+                message: "execution transaction ID must be non-zero".into(),
+            })
     }
 
     pub const fn get(self) -> u64 {
@@ -956,7 +958,9 @@ impl ExecutionOutput {
 }
 
 fn execution_error(message: impl Into<String>) -> Error {
-    Error::Execution(message.into())
+    Error::Execution {
+        message: message.into(),
+    }
 }
 
 // ── E5: Physical paged KV layout schema ───────────────────────────────────
@@ -1127,7 +1131,7 @@ mod tests {
     }
 
     fn assert_execution_error(result: Result<()>) {
-        assert!(matches!(result, Err(Error::Execution(_))));
+        assert!(matches!(result, Err(Error::Execution { message: _ })));
     }
 
     #[test]

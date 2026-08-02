@@ -76,8 +76,9 @@ impl CutlassProvider {
     pub fn execution_manifest(self) -> Result<ferrule_common::kernel_plan::ProviderManifest> {
         Ok(ferrule_common::kernel_plan::ProviderManifest::external(
             "cutlass-sm121a",
-            u16::try_from(self.manifest.abi_version)
-                .map_err(|_| Error::Internal("CUTLASS ABI version exceeds u16".into()))?,
+            u16::try_from(self.manifest.abi_version).map_err(|_| Error::Internal {
+                message: "CUTLASS ABI version exceeds u16".into(),
+            })?,
             self.manifest.kernel_count as usize,
         ))
     }
@@ -88,43 +89,51 @@ impl CutlassProvider {
 pub fn discover_provider() -> Result<CutlassProvider> {
     #[cfg(not(feature = "cuda"))]
     {
-        Err(Error::Internal(
-            "GB10 execution requires the `cutlass` feature and SM121a provider".into(),
-        ))
+        Err(Error::Internal {
+            message: "GB10 execution requires the `cutlass` feature and SM121a provider".into(),
+        })
     }
     #[cfg(feature = "cuda")]
     {
         let manifest = unsafe { ffi::ferrule_cutlass_provider_manifest() };
         if manifest.abi_version != CUTLASS_ABI_VERSION {
-            return Err(Error::Internal(format!(
-                "CUTLASS ABI mismatch: native={} rust={CUTLASS_ABI_VERSION}",
-                manifest.abi_version
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "CUTLASS ABI mismatch: native={} rust={CUTLASS_ABI_VERSION}",
+                    manifest.abi_version
+                ),
+            });
         }
         if manifest.cutlass_version != PINNED_CUTLASS_VERSION {
-            return Err(Error::Internal(format!(
-                "CUTLASS version mismatch: native={} expected={PINNED_CUTLASS_VERSION}",
-                manifest.cutlass_version
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "CUTLASS version mismatch: native={} expected={PINNED_CUTLASS_VERSION}",
+                    manifest.cutlass_version
+                ),
+            });
         }
         if manifest.target_sm != GB10_SM {
-            return Err(Error::Internal(format!(
-                "Ferrule requires the GB10 SM121a provider, got sm_{}",
-                manifest.target_sm
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "Ferrule requires the GB10 SM121a provider, got sm_{}",
+                    manifest.target_sm
+                ),
+            });
         }
         let target = crate::architecture::CudaTarget::parse(crate::architecture::COMPILED_TARGET)
-            .ok_or_else(|| {
-            Error::Internal(format!(
+            .ok_or_else(|| Error::Internal {
+            message: format!(
                 "invalid compiled CUDA target '{}'",
                 crate::architecture::COMPILED_TARGET
-            ))
+            ),
         })?;
         if target.compute_capability() != GB10_SM || !target.has_accelerated_target() {
-            return Err(Error::Internal(format!(
-                "Ferrule GB10 provider requires sm_121a, compiled for '{}'",
-                crate::architecture::COMPILED_TARGET
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "Ferrule GB10 provider requires sm_121a, compiled for '{}'",
+                    crate::architecture::COMPILED_TARGET
+                ),
+            });
         }
         Ok(CutlassProvider { manifest })
     }
@@ -652,7 +661,9 @@ impl CutlassDsparkHybridMlaAttentionArgs {
             softmax_scale: layout.softmax_scale,
             reserved0: 0,
             context_plane_elements: u64::try_from(context_plane.len()).map_err(|_| {
-                Error::Internal("SM121 DSpark context plane exceeds u64 ABI".into())
+                Error::Internal {
+                    message: "SM121 DSpark context plane exceeds u64 ABI".into(),
+                }
             })?,
             query_f32: query.cu_deviceptr(),
             context_plane_f32: context_plane.cu_deviceptr(),
@@ -738,8 +749,8 @@ impl CutlassDsparkProposalHeadArgs {
                     layout
                         .hidden
                         .checked_add(layout.markov_rank)
-                        .ok_or_else(|| {
-                            Error::Internal("DSpark confidence width overflow".into())
+                        .ok_or_else(|| Error::Internal {
+                            message: "DSpark confidence width overflow".into(),
                         })?,
                     2,
                     "DSpark confidence bytes",
@@ -764,9 +775,11 @@ impl CutlassDsparkProposalHeadArgs {
         ];
         for (name, actual, expected) in required {
             if actual != expected {
-                return Err(Error::Internal(format!(
-                    "SM121 DSpark proposal-head {name} length mismatch: actual={actual} expected={expected}"
-                )));
+                return Err(Error::Internal {
+                    message: format!(
+                        "SM121 DSpark proposal-head {name} length mismatch: actual={actual} expected={expected}"
+                    ),
+                });
             }
         }
         if layout.rows != DSPARK_PROPOSAL_ROWS
@@ -780,9 +793,9 @@ impl CutlassDsparkProposalHeadArgs {
             || layout.hc_eps <= 0.0
             || layout.norm_eps <= 0.0
         {
-            return Err(Error::Internal(format!(
-                "invalid SM121 DSpark proposal-head layout: {layout:?}"
-            )));
+            return Err(Error::Internal {
+                message: format!("invalid SM121 DSpark proposal-head layout: {layout:?}"),
+            });
         }
         Ok(Self {
             abi_version: CUTLASS_ABI_VERSION,
@@ -859,7 +872,9 @@ fn validate_dspark_hybrid_mla_attention_problem(
     let slot_end = layout
         .block_slot_offset
         .checked_add(layout.block_slot_count)
-        .ok_or_else(|| Error::Internal("SM121 DSpark block-slot range overflow".into()))?;
+        .ok_or_else(|| Error::Internal {
+            message: "SM121 DSpark block-slot range overflow".into(),
+        })?;
     let required_slots = layout
         .sequence_tokens
         .div_ceil(DSPARK_ATTENTION_PAGE_TOKENS);
@@ -874,11 +889,13 @@ fn validate_dspark_hybrid_mla_attention_problem(
         || !layout.softmax_scale.is_finite()
         || layout.softmax_scale <= 0.0
     {
-        return Err(Error::Internal(format!(
-            "invalid SM121 DSpark hybrid-attention layout: {layout:?} slots={} plane={}",
-            block_slots.len(),
-            context_plane.len()
-        )));
+        return Err(Error::Internal {
+            message: format!(
+                "invalid SM121 DSpark hybrid-attention layout: {layout:?} slots={} plane={}",
+                block_slots.len(),
+                context_plane.len()
+            ),
+        });
     }
     let required = [
         ("query", query.len(), output_values),
@@ -905,9 +922,11 @@ fn validate_dspark_hybrid_mla_attention_problem(
     ];
     for (name, actual, expected) in required {
         if actual != expected {
-            return Err(Error::Internal(format!(
-                "SM121 DSpark hybrid-attention {name} length mismatch: actual={actual} expected={expected}"
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "SM121 DSpark hybrid-attention {name} length mismatch: actual={actual} expected={expected}"
+                ),
+            });
         }
     }
     Ok(())
@@ -937,9 +956,11 @@ fn validate_dspark_main_project_norm_problem(
         || !rms_eps.is_finite()
         || rms_eps <= 0.0
     {
-        return Err(Error::Internal(format!(
-            "invalid SM121 DSpark main-project/norm shape: rows={rows} input={input_size} output={output_size} eps={rms_eps}"
-        )));
+        return Err(Error::Internal {
+            message: format!(
+                "invalid SM121 DSpark main-project/norm shape: rows={rows} input={input_size} output={output_size} eps={rms_eps}"
+            ),
+        });
     }
     let scale_cols = input_size / 128;
     let required = [
@@ -982,9 +1003,11 @@ fn validate_dspark_main_project_norm_problem(
     ];
     for (name, actual, expected) in required {
         if actual != expected {
-            return Err(Error::Internal(format!(
-                "SM121 DSpark main-project/norm {name} length mismatch: actual={actual} expected={expected}"
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "SM121 DSpark main-project/norm {name} length mismatch: actual={actual} expected={expected}"
+                ),
+            });
         }
     }
     Ok(())
@@ -1004,9 +1027,11 @@ fn validate_bf16_problem(
     k: usize,
 ) -> Result<()> {
     if rows == 0 || n1 == 0 || n2 == 0 || k == 0 || !k.is_multiple_of(16) {
-        return Err(Error::Internal(format!(
-            "invalid SM121 BF16 compressor shape: rows={rows} n1={n1} n2={n2} k={k}"
-        )));
+        return Err(Error::Internal {
+            message: format!(
+                "invalid SM121 BF16 compressor shape: rows={rows} n1={n1} n2={n2} k={k}"
+            ),
+        });
     }
     let required = [
         (
@@ -1045,9 +1070,11 @@ fn validate_bf16_problem(
     ];
     for (name, actual, expected) in required {
         if actual != expected {
-            return Err(Error::Internal(format!(
-                "SM121 BF16 compressor {name} length mismatch: actual={actual} expected={expected}"
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "SM121 BF16 compressor {name} length mismatch: actual={actual} expected={expected}"
+                ),
+            });
         }
     }
     Ok(())
@@ -1070,9 +1097,11 @@ fn validate_fp8_problem(
     k: usize,
 ) -> Result<()> {
     if rows == 0 || n1 == 0 || n2 == 0 || k == 0 || !k.is_multiple_of(128) {
-        return Err(Error::Internal(format!(
-            "invalid SM121 FP8 QueryA+KV shape: rows={rows} n1={n1} n2={n2} k={k}"
-        )));
+        return Err(Error::Internal {
+            message: format!(
+                "invalid SM121 FP8 QueryA+KV shape: rows={rows} n1={n1} n2={n2} k={k}"
+            ),
+        });
     }
     let scale_cols = k / 128;
     let required = [
@@ -1119,9 +1148,11 @@ fn validate_fp8_problem(
     ];
     for (name, actual, expected) in required {
         if actual != expected {
-            return Err(Error::Internal(format!(
-                "SM121 FP8 QueryA+KV {name} length mismatch: actual={actual} expected={expected}"
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "SM121 FP8 QueryA+KV {name} length mismatch: actual={actual} expected={expected}"
+                ),
+            });
         }
     }
     Ok(())
@@ -1140,9 +1171,9 @@ fn validate_fp8_projection_problem(
     k: usize,
 ) -> Result<()> {
     if rows == 0 || n == 0 || k == 0 || !k.is_multiple_of(128) {
-        return Err(Error::Internal(format!(
-            "invalid SM121 FP8 projection shape: rows={rows} n={n} k={k}"
-        )));
+        return Err(Error::Internal {
+            message: format!("invalid SM121 FP8 projection shape: rows={rows} n={n} k={k}"),
+        });
     }
     let scale_cols = k / 128;
     let activation_required = checked_mul(rows, k, "activation")?;
@@ -1150,13 +1181,15 @@ fn validate_fp8_projection_problem(
     if activation.len() < activation_required
         || activation_scales.len() < activation_scales_required
     {
-        return Err(Error::Internal(format!(
-            "SM121 FP8 projection scratch too small: activation={}/{} scales={}/{}",
-            activation.len(),
-            activation_required,
-            activation_scales.len(),
-            activation_scales_required
-        )));
+        return Err(Error::Internal {
+            message: format!(
+                "SM121 FP8 projection scratch too small: activation={}/{} scales={}/{}",
+                activation.len(),
+                activation_required,
+                activation_scales.len(),
+                activation_scales_required
+            ),
+        });
     }
     let required = [
         ("weight", weight.len(), checked_mul(n, k, "weight")?),
@@ -1169,9 +1202,11 @@ fn validate_fp8_projection_problem(
     ];
     for (name, actual, expected) in required {
         if actual != expected {
-            return Err(Error::Internal(format!(
-                "SM121 FP8 projection {name} length mismatch: actual={actual} expected={expected}"
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "SM121 FP8 projection {name} length mismatch: actual={actual} expected={expected}"
+                ),
+            });
         }
     }
     Ok(())
@@ -1179,13 +1214,16 @@ fn validate_fp8_projection_problem(
 
 #[cfg(feature = "cuda")]
 fn checked_mul(lhs: usize, rhs: usize, name: &str) -> Result<usize> {
-    lhs.checked_mul(rhs)
-        .ok_or_else(|| Error::Internal(format!("SM121 FP8 {name} size overflow")))
+    lhs.checked_mul(rhs).ok_or_else(|| Error::Internal {
+        message: format!("SM121 FP8 {name} size overflow"),
+    })
 }
 
 #[cfg(feature = "cuda")]
 fn checked_u32(value: usize, name: &str) -> Result<u32> {
-    u32::try_from(value).map_err(|_| Error::Internal(format!("SM121 FP8 {name} exceeds u32")))
+    u32::try_from(value).map_err(|_| Error::Internal {
+        message: format!("SM121 FP8 {name} exceeds u32"),
+    })
 }
 
 /// Launch one semantic BF16 compressor bundle. The native GB10 provider owns
@@ -1568,9 +1606,11 @@ pub fn hc_producer(
         || !hc_norm_eps.is_finite()
         || !layer_rms_eps.is_finite()
     {
-        return Err(Error::Internal(format!(
-            "invalid SM121 HC producer parameters: rows={rows} hc={hc} hidden={hidden} sinkhorn={sinkhorn_iters}"
-        )));
+        return Err(Error::Internal {
+            message: format!(
+                "invalid SM121 HC producer parameters: rows={rows} hc={hc} hidden={hidden} sinkhorn={sinkhorn_iters}"
+            ),
+        });
     }
     validate_lengths("SM121 HC producer", &required)?;
     let args = CutlassHcProducerArgs {
@@ -1710,17 +1750,21 @@ pub fn shared_ffn(
         ),
     ];
     if rows == 0 || !output_scale.is_finite() || !swiglu_limit.is_finite() {
-        return Err(Error::Internal(format!(
-            "invalid SM121 shared FFN parameters: rows={rows} output_scale={output_scale} swiglu_limit={swiglu_limit}"
-        )));
+        return Err(Error::Internal {
+            message: format!(
+                "invalid SM121 shared FFN parameters: rows={rows} output_scale={output_scale} swiglu_limit={swiglu_limit}"
+            ),
+        });
     }
     validate_lengths("SM121 shared FFN", &required)?;
     let hidden_values = checked_mul(rows, intermediate_size, "shared FFN hidden F32")?;
     if hidden_f32.len() < hidden_values {
-        return Err(Error::Internal(format!(
-            "SM121 shared FFN hidden F32 capacity is too small: actual={} required={hidden_values}",
-            hidden_f32.len()
-        )));
+        return Err(Error::Internal {
+            message: format!(
+                "SM121 shared FFN hidden F32 capacity is too small: actual={} required={hidden_values}",
+                hidden_f32.len()
+            ),
+        });
     }
     let args = CutlassSharedFfnArgs {
         abi_version: CUTLASS_ABI_VERSION,
@@ -1837,22 +1881,26 @@ pub fn mla_output(
         || !rank.is_multiple_of(16)
         || !latent_size.is_multiple_of(128)
     {
-        return Err(Error::Internal(format!(
-            "invalid SM121 MLA output shape: rows={rows} context={context_size} groups={groups} group_input={group_input_size} rank={rank} latent={latent_size} hidden={hidden_size}"
-        )));
+        return Err(Error::Internal {
+            message: format!(
+                "invalid SM121 MLA output shape: rows={rows} context={context_size} groups={groups} group_input={group_input_size} rank={rank} latent={latent_size} hidden={hidden_size}"
+            ),
+        });
     }
     validate_lengths("SM121 MLA output", &required)?;
     let latent_values = checked_mul(rows, latent_size, "MLA output latent FP8")?;
     let latent_scale_values = checked_mul(rows, latent_size / 128, "MLA output latent scales")?;
 
     if latent_fp8.len() < latent_values || latent_scales.len() < latent_scale_values {
-        return Err(Error::Internal(format!(
-            "SM121 MLA output scratch is too small: latent_fp8={}/{} latent_scales={}/{}",
-            latent_fp8.len(),
-            latent_values,
-            latent_scales.len(),
-            latent_scale_values
-        )));
+        return Err(Error::Internal {
+            message: format!(
+                "SM121 MLA output scratch is too small: latent_fp8={}/{} latent_scales={}/{}",
+                latent_fp8.len(),
+                latent_values,
+                latent_scales.len(),
+                latent_scale_values
+            ),
+        });
     }
 
     let args = CutlassMlaOutputArgs {
@@ -2010,16 +2058,18 @@ pub fn stable_frame_fp4_moe(
         || num_segments == 0
         || !swiglu_limit.is_finite()
     {
-        return Err(Error::Internal(
-            "invalid SM121 stable-frame FP4 MoE parameters".into(),
-        ));
+        return Err(Error::Internal {
+            message: "invalid SM121 stable-frame FP4 MoE parameters".into(),
+        });
     }
     validate_lengths("SM121 stable-frame FP4 MoE", &required)?;
     if route_written.len() < num_routes {
-        return Err(Error::Internal(format!(
-            "SM121 stable-frame FP4 MoE route written capacity is too small: actual={} required={num_routes}",
-            route_written.len()
-        )));
+        return Err(Error::Internal {
+            message: format!(
+                "SM121 stable-frame FP4 MoE route written capacity is too small: actual={} required={num_routes}",
+                route_written.len()
+            ),
+        });
     }
     let args = CutlassStableFrameFp4MoeArgs {
         abi_version: CUTLASS_ABI_VERSION,
@@ -2075,9 +2125,11 @@ pub fn stable_frame_fp4_moe(
 fn validate_lengths(scope: &str, required: &[(&str, usize, usize)]) -> Result<()> {
     for &(name, actual, expected) in required {
         if actual != expected {
-            return Err(Error::Internal(format!(
-                "{scope} {name} length mismatch: actual={actual} expected={expected}"
-            )));
+            return Err(Error::Internal {
+                message: format!(
+                    "{scope} {name} length mismatch: actual={actual} expected={expected}"
+                ),
+            });
         }
     }
     Ok(())
@@ -2091,7 +2143,9 @@ fn native_error(operation: &str, code: i32) -> Error {
         status::LAUNCH_FAILED => "kernel launch failed",
         _ => "unknown native status",
     };
-    Error::Internal(format!("CUTLASS {operation} failed: {reason} ({code})"))
+    Error::Internal {
+        message: format!("CUTLASS {operation} failed: {reason} ({code})"),
+    }
 }
 
 #[cfg(feature = "cuda")]

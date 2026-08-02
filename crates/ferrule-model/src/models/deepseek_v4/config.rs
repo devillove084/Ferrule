@@ -127,10 +127,11 @@ pub struct DeepSeekV4Config {
 impl DeepSeekV4Config {
     pub fn from_hf_config(model_dir: &Path) -> Result<Self> {
         let path = model_dir.join("config.json");
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| Error::Model(format!("DeepSeek-V4 config '{}': {e}", path.display())))?;
-        let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
-            Error::Model(format!("DeepSeek-V4 config json '{}': {e}", path.display()))
+        let text = std::fs::read_to_string(&path).map_err(|e| Error::Model {
+            message: format!("DeepSeek-V4 config '{}': {e}", path.display()),
+        })?;
+        let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| Error::Model {
+            message: format!("DeepSeek-V4 config json '{}': {e}", path.display()),
         })?;
         let rope_scaling = json.get("rope_scaling").unwrap_or(&serde_json::Value::Null);
         let compress_ratios = json
@@ -276,10 +277,12 @@ impl DeepSeekV4Config {
 
     pub fn attention_config_for_layer(&self, layer: usize) -> Result<DeepSeekV4AttentionConfig> {
         if layer >= self.num_layers {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} exceeds layer count {}",
-                self.num_layers
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {layer} exceeds layer count {}",
+                    self.num_layers
+                ),
+            });
         }
         Ok(DeepSeekV4AttentionConfig {
             hidden_size: self.hidden_size,
@@ -340,35 +343,41 @@ impl DeepSeekV4AttentionConfig {
             || self.index_head_dim == 0
             || self.index_topk == 0
         {
-            return Err(Error::Model(format!(
-                "invalid DeepSeek-V4 attention shape: hidden={}, heads={}, head_dim={}, groups={}, o_rank={}, window={}, index_heads={}, index_dim={}, index_topk={}",
-                self.hidden_size,
-                self.num_heads,
-                self.head_dim,
-                self.o_groups,
-                self.o_lora_rank,
-                self.window_size,
-                self.index_n_heads,
-                self.index_head_dim,
-                self.index_topk
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "invalid DeepSeek-V4 attention shape: hidden={}, heads={}, head_dim={}, groups={}, o_rank={}, window={}, index_heads={}, index_dim={}, index_topk={}",
+                    self.hidden_size,
+                    self.num_heads,
+                    self.head_dim,
+                    self.o_groups,
+                    self.o_lora_rank,
+                    self.window_size,
+                    self.index_n_heads,
+                    self.index_head_dim,
+                    self.index_topk
+                ),
+            });
         }
         if !self.num_heads.is_multiple_of(self.o_groups) {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 attention heads {} must be divisible by o_groups {}",
-                self.num_heads, self.o_groups
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 attention heads {} must be divisible by o_groups {}",
+                    self.num_heads, self.o_groups
+                ),
+            });
         }
         if self.rope_head_dim > self.head_dim || !self.rope_head_dim.is_multiple_of(2) {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 rope_head_dim {} must be even and <= head_dim {}",
-                self.rope_head_dim, self.head_dim
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 rope_head_dim {} must be even and <= head_dim {}",
+                    self.rope_head_dim, self.head_dim
+                ),
+            });
         }
         if self.norm_eps <= 0.0 || self.rope_theta <= 0.0 || self.compress_rope_theta <= 0.0 {
-            return Err(Error::Model(
-                "DeepSeek-V4 attention eps/theta values must be positive".into(),
-            ));
+            return Err(Error::Model {
+                message: "DeepSeek-V4 attention eps/theta values must be positive".into(),
+            });
         }
         Ok(())
     }

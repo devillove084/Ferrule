@@ -32,9 +32,9 @@ impl IncrementalDecodeState {
             return Ok(None);
         }
         if !decoded.starts_with(&self.prefix) {
-            return Err(Error::Tokenization(
-                "incremental decode produced a non-prefix continuation".into(),
-            ));
+            return Err(Error::Tokenization {
+                message: "incremental decode produced a non-prefix continuation".into(),
+            });
         }
 
         let delta = decoded[self.prefix.len()..].to_owned();
@@ -65,9 +65,10 @@ impl TokenizerHandle {
     /// Load tokenizer and EOS config from a HuggingFace model directory.
     pub fn load(model_dir: &Path) -> Result<Self> {
         let tokenizer_path = model_dir.join("tokenizer.json");
-        let inner = tokenizers::Tokenizer::from_file(&tokenizer_path).map_err(|e| {
-            Error::Tokenization(format!("tokenizer '{}': {e}", tokenizer_path.display()))
-        })?;
+        let inner =
+            tokenizers::Tokenizer::from_file(&tokenizer_path).map_err(|e| Error::Tokenization {
+                message: format!("tokenizer '{}': {e}", tokenizer_path.display()),
+            })?;
         Ok(Self {
             inner,
             eos_token_id: read_eos_token_id(model_dir)?,
@@ -79,14 +80,18 @@ impl TokenizerHandle {
         self.inner
             .encode(text, false)
             .map(|e| e.get_ids().to_vec())
-            .map_err(|e| ferrule_common::Error::Tokenization(format!("encode: {e}")))
+            .map_err(|e| ferrule_common::Error::Tokenization {
+                message: format!("encode: {e}"),
+            })
     }
 
     /// Decode token IDs into text.
     pub fn decode(&self, ids: &[u32]) -> Result<String> {
         self.inner
             .decode(ids, true)
-            .map_err(|e| ferrule_common::Error::Tokenization(format!("decode: {e}")))
+            .map_err(|e| ferrule_common::Error::Tokenization {
+                message: format!("decode: {e}"),
+            })
     }
 
     /// Return the EOS token ID from config, if set.
@@ -100,10 +105,12 @@ fn read_eos_token_id(model_dir: &Path) -> Result<Option<u32>> {
     if !config_path.exists() {
         return Ok(None);
     }
-    let text = std::fs::read_to_string(&config_path)
-        .map_err(|e| Error::Model(format!("config '{}': {e}", config_path.display())))?;
-    let json: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| Error::Model(format!("config json '{}': {e}", config_path.display())))?;
+    let text = std::fs::read_to_string(&config_path).map_err(|e| Error::Model {
+        message: format!("config '{}': {e}", config_path.display()),
+    })?;
+    let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| Error::Model {
+        message: format!("config json '{}': {e}", config_path.display()),
+    })?;
     Ok(json
         .get("eos_token_id")
         .and_then(|value| value.as_u64())

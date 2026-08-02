@@ -9,80 +9,95 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
+use snafu::Snafu;
 
 use crate::execution::ExecutionTransactionId;
+use crate::materialization_io::MaterializationResourceError;
 
 /// Result type for final I/O protocol validation.
 pub type IoProtocolResult<T> = std::result::Result<T, IoProtocolError>;
 
 /// A fail-closed violation of an I/O protocol invariant.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Snafu)]
 pub enum IoProtocolError {
-    #[error("invalid materialization key: {0}")]
-    InvalidMaterializationKey(&'static str),
-    #[error("invalid waiter identity: {0}")]
-    InvalidWaiterId(&'static str),
-    #[error("a dependency set must contain at least one dependency")]
+    #[snafu(display("invalid materialization key: {reason}"))]
+    InvalidMaterializationKey { reason: &'static str },
+    #[snafu(display("invalid waiter identity: {reason}"))]
+    InvalidWaiterId { reason: &'static str },
+    #[snafu(display("materialization request field `{field}` does not match its exact key"))]
+    MaterializationRequestMismatch { field: &'static str },
+    #[snafu(display("materialization transfer cannot evict its own key {key:?}"))]
+    SelfEviction { key: Box<MaterializationKey> },
+    #[snafu(display("physical materialization reservation must contain at least one pinned slab"))]
+    EmptySlabSet,
+    #[snafu(display("physical materialization reservation field `{field}` is inconsistent"))]
+    PhysicalReservationMismatch { field: &'static str },
+    #[snafu(display("a dependency set must contain at least one dependency"))]
     EmptyDependencySet,
-    #[error("dependency set is not in strictly sorted canonical order")]
+    #[snafu(display("dependency set is not in strictly sorted canonical order"))]
     NonCanonicalDependencySet,
-    #[error("illegal load-stage transition from {from:?} to {to:?}")]
+    #[snafu(display("illegal load-stage transition from {from:?} to {to:?}"))]
     InvalidLoadTransition { from: LoadStage, to: LoadStage },
-    #[error("completion field `{field}` does not match the owner expectation")]
+    #[snafu(display("completion field `{field}` does not match the owner expectation"))]
     CompletionMismatch { field: &'static str },
-    #[error("completion generation {observed:?} does not match owner generation {expected:?}")]
+    #[snafu(display(
+        "completion generation {observed:?} does not match owner generation {expected:?}"
+    ))]
     CompletionGenerationMismatch {
         expected: CompletionGeneration,
         observed: CompletionGeneration,
     },
-    #[error("{stage:?} is not a provider-submitted completion stage")]
+    #[snafu(display("{stage:?} is not a provider-submitted completion stage"))]
     InvalidCompletionStage { stage: LoadStage },
-    #[error("successful completion returned {actual} bytes, expected exactly {expected}")]
+    #[snafu(display("successful completion returned {actual} bytes, expected exactly {expected}"))]
     IncompleteSuccessfulCompletion { expected: u64, actual: u64 },
-    #[error("unsuccessful completion returned {actual} bytes, exceeding expected {expected}")]
+    #[snafu(display(
+        "unsuccessful completion returned {actual} bytes, exceeding expected {expected}"
+    ))]
     CompletionByteOverflow { expected: u64, actual: u64 },
-    #[error("retirement authority was already consumed")]
+    #[snafu(display("retirement authority was already consumed"))]
     RetirementAlreadyConsumed,
-    #[error("slab alignment {alignment} must be a non-zero power of two")]
+    #[snafu(display("slab alignment {alignment} must be a non-zero power of two"))]
     InvalidAlignment { alignment: usize },
-    #[error("slab {field} value {value} is not aligned to {alignment}")]
+    #[snafu(display("slab {field} value {value} is not aligned to {alignment}"))]
     MisalignedSlabField {
         field: &'static str,
         value: u64,
         alignment: usize,
     },
-    #[error("registered slab address must be non-zero")]
+    #[snafu(display("registered slab address must be non-zero"))]
     NullSlabAddress,
-    #[error("arithmetic overflow while validating {0}")]
-    ArithmeticOverflow(&'static str),
-    #[error("slab lease range {offset}..{end} exceeds registered allocation length {capacity}")]
+    #[snafu(display("arithmetic overflow while validating {context}"))]
+    ArithmeticOverflow { context: &'static str },
+    #[snafu(display(
+        "slab lease range {offset}..{end} exceeds registered allocation length {capacity}"
+    ))]
     SlabRangeOutOfBounds {
         offset: u64,
         end: u64,
         capacity: u64,
     },
-    #[error("illegal slab lease transition from {from:?} to {to:?}")]
+    #[snafu(display("illegal slab lease transition from {from:?} to {to:?}"))]
     InvalidSlabTransition {
         from: SlabLeaseState,
         to: SlabLeaseState,
     },
-    #[error("upload fence field `{field}` does not match the retained contract")]
+    #[snafu(display("upload fence field `{field}` does not match the retained contract"))]
     UploadFenceMismatch { field: &'static str },
-    #[error("residency field `{field}` does not match the required load key")]
+    #[snafu(display("residency field `{field}` does not match the required load key"))]
     ResidencyMismatch { field: &'static str },
-    #[error("mapping epoch must be non-zero")]
+    #[snafu(display("mapping epoch must be non-zero"))]
     InvalidMappingEpoch,
-    #[error("completion fence identity must be non-zero")]
+    #[snafu(display("completion fence identity must be non-zero"))]
     InvalidFenceContract,
-    #[error("duplicate residency binding for {0:?}")]
-    DuplicateResidencyBinding(Box<MaterializationKey>),
-    #[error("missing residency binding for {0:?}")]
-    MissingResidencyBinding(Box<MaterializationKey>),
-    #[error("unexpected residency binding for {0:?}")]
-    UnexpectedResidencyBinding(Box<MaterializationKey>),
-    #[error("dependency {0:?} is not a residency dependency")]
-    NonResidencyDependency(Box<LogicalDependency>),
+    #[snafu(display("duplicate residency binding for {key:?}"))]
+    DuplicateResidencyBinding { key: Box<MaterializationKey> },
+    #[snafu(display("missing residency binding for {key:?}"))]
+    MissingResidencyBinding { key: Box<MaterializationKey> },
+    #[snafu(display("unexpected residency binding for {key:?}"))]
+    UnexpectedResidencyBinding { key: Box<MaterializationKey> },
+    #[snafu(display("dependency {dependency:?} is not a residency dependency"))]
+    NonResidencyDependency { dependency: Box<LogicalDependency> },
 }
 
 macro_rules! define_u64_id {
@@ -329,19 +344,19 @@ impl WaiterId {
 
     pub fn validate(self) -> IoProtocolResult<()> {
         if self.request_generation.is_zero() {
-            return Err(IoProtocolError::InvalidWaiterId(
-                "request generation must be non-zero",
-            ));
+            return Err(IoProtocolError::InvalidWaiterId {
+                reason: "request generation must be non-zero",
+            });
         }
         if self.dependency_set_epoch.is_zero() {
-            return Err(IoProtocolError::InvalidWaiterId(
-                "dependency-set epoch must be non-zero",
-            ));
+            return Err(IoProtocolError::InvalidWaiterId {
+                reason: "dependency-set epoch must be non-zero",
+            });
         }
         if self.continuation.is_zero() {
-            return Err(IoProtocolError::InvalidWaiterId(
-                "continuation ID must be non-zero",
-            ));
+            return Err(IoProtocolError::InvalidWaiterId {
+                reason: "continuation ID must be non-zero",
+            });
         }
         Ok(())
     }
@@ -454,34 +469,34 @@ impl MaterializationKey {
 
     pub fn validate(&self) -> IoProtocolResult<()> {
         if self.model.is_zero() {
-            return Err(IoProtocolError::InvalidMaterializationKey(
-                "model instance ID must be non-zero",
-            ));
+            return Err(IoProtocolError::InvalidMaterializationKey {
+                reason: "model instance ID must be non-zero",
+            });
         }
         if self.source.is_zero() {
-            return Err(IoProtocolError::InvalidMaterializationKey(
-                "source identity hash must be non-zero",
-            ));
+            return Err(IoProtocolError::InvalidMaterializationKey {
+                reason: "source identity hash must be non-zero",
+            });
         }
         if self.source_hash.is_zero() {
-            return Err(IoProtocolError::InvalidMaterializationKey(
-                "source content hash must be non-zero",
-            ));
+            return Err(IoProtocolError::InvalidMaterializationKey {
+                reason: "source content hash must be non-zero",
+            });
         }
         if self.payload_encoding.get() == 0 {
-            return Err(IoProtocolError::InvalidMaterializationKey(
-                "artifact format must be non-zero",
-            ));
+            return Err(IoProtocolError::InvalidMaterializationKey {
+                reason: "artifact format must be non-zero",
+            });
         }
         if self.source_generation.is_zero() {
-            return Err(IoProtocolError::InvalidMaterializationKey(
-                "source generation must be non-zero",
-            ));
+            return Err(IoProtocolError::InvalidMaterializationKey {
+                reason: "source generation must be non-zero",
+            });
         }
         if self.destination_generation.is_zero() {
-            return Err(IoProtocolError::InvalidMaterializationKey(
-                "destination generation must be non-zero",
-            ));
+            return Err(IoProtocolError::InvalidMaterializationKey {
+                reason: "destination generation must be non-zero",
+            });
         }
         Ok(())
     }
@@ -540,9 +555,9 @@ impl LogicalDependency {
 
     pub fn operation_retired(operation: OperationId) -> IoProtocolResult<Self> {
         if operation.is_zero() {
-            return Err(IoProtocolError::InvalidMaterializationKey(
-                "retirement dependency operation ID must be non-zero",
-            ));
+            return Err(IoProtocolError::InvalidMaterializationKey {
+                reason: "retirement dependency operation ID must be non-zero",
+            });
         }
         Ok(Self::OperationRetired(operation))
     }
@@ -551,9 +566,9 @@ impl LogicalDependency {
         match self {
             Self::ResourceResident(key) => key.validate(),
             Self::OperationRetired(operation) if operation.is_zero() => {
-                Err(IoProtocolError::InvalidMaterializationKey(
-                    "retirement dependency operation ID must be non-zero",
-                ))
+                Err(IoProtocolError::InvalidMaterializationKey {
+                    reason: "retirement dependency operation ID must be non-zero",
+                })
             }
             Self::OperationRetired(_) => Ok(()),
         }
@@ -713,18 +728,83 @@ impl LoadStage {
     }
 }
 
-/// Typed physical failure retained by a failed load and its waiters.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum FailureReason {
-    StorageUnavailable,
-    ReadRejected,
-    ShortRead { expected: u64, actual: u64 },
-    DeviceUnavailable,
-    UploadRejected,
-    InstallationRejected,
-    ProviderFailure { backend: BackendId, code: i64 },
-    ProtocolViolation(String),
+/// Logical owner of an exact materialization preparation.
+///
+/// Purpose is deliberately absent from [`MaterializationKey`]: execution can
+/// promote an active prefetch without changing its physical identity or issuing
+/// a second transfer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MaterializationPurpose {
+    Execution,
+    Prefetch,
 }
+
+/// Typed physical failure retained by a failed load and its owners.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Snafu)]
+pub enum FailureReason {
+    #[snafu(display("storage is unavailable"))]
+    StorageUnavailable,
+    #[snafu(display("storage read was rejected"))]
+    ReadRejected,
+    #[snafu(display("short read: expected {expected} bytes, received {actual}"))]
+    ShortRead { expected: u64, actual: u64 },
+    #[snafu(display("destination device is unavailable"))]
+    DeviceUnavailable,
+    #[snafu(display("device upload was rejected"))]
+    UploadRejected,
+    #[snafu(display("resource installation was rejected"))]
+    InstallationRejected,
+    #[snafu(display("provider {backend:?} failed with code {code}"))]
+    ProviderFailure { backend: BackendId, code: i64 },
+    #[snafu(transparent)]
+    Protocol { source: IoProtocolError },
+    #[snafu(transparent)]
+    Resources {
+        source: MaterializationResourceError,
+    },
+    #[snafu(display("materialization provider contract violation: {message}"))]
+    ContractViolation { message: String },
+    #[snafu(display(
+        "materialization provider contract violation: {message}; physical cleanup also failed: {cleanup}"
+    ))]
+    ContractCleanup {
+        message: String,
+        cleanup: Box<FailureReason>,
+    },
+}
+
+/// Failure while resolving one logical request into an exact physical identity.
+#[derive(Debug, Clone, PartialEq, Eq, Snafu)]
+pub enum MaterializationResolveError {
+    #[snafu(display(
+        "{purpose:?} materialization request placement ({request_model:?}, {request_backend:?}, {request_device:?}) does not match resolver placement ({resolver_model:?}, {resolver_backend:?}, {resolver_device:?})"
+    ))]
+    PlacementMismatch {
+        purpose: MaterializationPurpose,
+        request_model: ModelInstanceId,
+        request_backend: BackendId,
+        request_device: DeviceId,
+        resolver_model: ModelInstanceId,
+        resolver_backend: BackendId,
+        resolver_device: DeviceId,
+    },
+    #[snafu(display(
+        "{purpose:?} materialization for ({model:?}, {backend:?}, {device:?}) has no physical provider"
+    ))]
+    ProviderUnavailable {
+        purpose: MaterializationPurpose,
+        model: ModelInstanceId,
+        backend: BackendId,
+        device: DeviceId,
+    },
+    #[snafu(display("{purpose:?} materialization preparation failed: {source}"))]
+    Provider {
+        purpose: MaterializationPurpose,
+        source: FailureReason,
+    },
+}
+
+pub type MaterializationResolveResult<T> = std::result::Result<T, MaterializationResolveError>;
 
 /// Why logical demand was detached without pretending submitted work disappeared.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -732,6 +812,7 @@ pub enum CancellationReason {
     ExternalRequest,
     DeadlineExceeded,
     LastWaiterDetached,
+    PrefetchCancelled,
     Superseded,
     OwnerShutdown,
 }
@@ -1041,8 +1122,10 @@ impl RegisteredPinnedAlignedSlabLeaseDescriptor {
         if base_address == 0 {
             return Err(IoProtocolError::NullSlabAddress);
         }
-        let alignment_u64 = u64::try_from(alignment)
-            .map_err(|_| IoProtocolError::ArithmeticOverflow("slab alignment conversion"))?;
+        let alignment_u64 =
+            u64::try_from(alignment).map_err(|_| IoProtocolError::ArithmeticOverflow {
+                context: "slab alignment conversion",
+            })?;
         if !base_address.is_multiple_of(alignment) {
             return Err(IoProtocolError::MisalignedSlabField {
                 field: "base address",
@@ -1052,9 +1135,9 @@ impl RegisteredPinnedAlignedSlabLeaseDescriptor {
         }
         for (field, value) in [("offset", offset), ("length", len)] {
             if value == 0 && field == "length" {
-                return Err(IoProtocolError::InvalidMaterializationKey(
-                    "slab lease length must be non-zero",
-                ));
+                return Err(IoProtocolError::InvalidMaterializationKey {
+                    reason: "slab lease length must be non-zero",
+                });
             }
             if !value.is_multiple_of(alignment_u64) {
                 return Err(IoProtocolError::MisalignedSlabField {
@@ -1066,7 +1149,9 @@ impl RegisteredPinnedAlignedSlabLeaseDescriptor {
         }
         let end = offset
             .checked_add(len)
-            .ok_or(IoProtocolError::ArithmeticOverflow("slab range end"))?;
+            .ok_or(IoProtocolError::ArithmeticOverflow {
+                context: "slab range end",
+            })?;
         if end > allocation_len {
             return Err(IoProtocolError::SlabRangeOutOfBounds {
                 offset,
@@ -1074,33 +1159,41 @@ impl RegisteredPinnedAlignedSlabLeaseDescriptor {
                 capacity: allocation_len,
             });
         }
-        let allocation_len = usize::try_from(allocation_len)
-            .map_err(|_| IoProtocolError::ArithmeticOverflow("slab allocation length"))?;
+        let allocation_len =
+            usize::try_from(allocation_len).map_err(|_| IoProtocolError::ArithmeticOverflow {
+                context: "slab allocation length",
+            })?;
         base_address
             .checked_add(allocation_len)
-            .ok_or(IoProtocolError::ArithmeticOverflow(
-                "registered slab address range",
-            ))?;
-        let offset = usize::try_from(offset)
-            .map_err(|_| IoProtocolError::ArithmeticOverflow("slab range offset"))?;
-        let len = usize::try_from(len)
-            .map_err(|_| IoProtocolError::ArithmeticOverflow("slab range length"))?;
-        let address = base_address
-            .checked_add(offset)
-            .ok_or(IoProtocolError::ArithmeticOverflow("slab lease address"))?;
+            .ok_or(IoProtocolError::ArithmeticOverflow {
+                context: "registered slab address range",
+            })?;
+        let offset = usize::try_from(offset).map_err(|_| IoProtocolError::ArithmeticOverflow {
+            context: "slab range offset",
+        })?;
+        let len = usize::try_from(len).map_err(|_| IoProtocolError::ArithmeticOverflow {
+            context: "slab range length",
+        })?;
+        let address =
+            base_address
+                .checked_add(offset)
+                .ok_or(IoProtocolError::ArithmeticOverflow {
+                    context: "slab lease address",
+                })?;
         address
             .checked_add(len)
-            .ok_or(IoProtocolError::ArithmeticOverflow(
-                "slab lease address range",
-            ))?;
+            .ok_or(IoProtocolError::ArithmeticOverflow {
+                context: "slab lease address range",
+            })?;
 
         Ok(Self {
             operation,
             slab,
             registration,
             address: StableAddress(address),
-            len: u64::try_from(len)
-                .map_err(|_| IoProtocolError::ArithmeticOverflow("slab length round trip"))?,
+            len: u64::try_from(len).map_err(|_| IoProtocolError::ArithmeticOverflow {
+                context: "slab length round trip",
+            })?,
             alignment,
             source_generation,
             destination_generation,
@@ -1200,7 +1293,7 @@ pub struct UploadFenceObservation {
 }
 
 /// Custody state of an owning registered pinned slab lease.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SlabLeaseState {
     Reserved,
     ReadSubmitted,
@@ -1466,9 +1559,9 @@ impl ResidencyLeaseSet {
             .find(|window| window[0].key() == window[1].key())
             .map(|window| window[0].key())
         {
-            return Err(IoProtocolError::DuplicateResidencyBinding(Box::new(
-                duplicate,
-            )));
+            return Err(IoProtocolError::DuplicateResidencyBinding {
+                key: Box::new(duplicate),
+            });
         }
 
         let bound: BTreeSet<_> = bindings
@@ -1477,12 +1570,14 @@ impl ResidencyLeaseSet {
             .collect();
         let required_set: BTreeSet<_> = required.iter().copied().collect();
         if let Some(missing) = required_set.difference(&bound).next() {
-            return Err(IoProtocolError::MissingResidencyBinding(Box::new(*missing)));
+            return Err(IoProtocolError::MissingResidencyBinding {
+                key: Box::new(*missing),
+            });
         }
         if let Some(extra) = bound.difference(&required_set).next() {
-            return Err(IoProtocolError::UnexpectedResidencyBinding(Box::new(
-                *extra,
-            )));
+            return Err(IoProtocolError::UnexpectedResidencyBinding {
+                key: Box::new(*extra),
+            });
         }
 
         for binding in &bindings {
@@ -1517,7 +1612,9 @@ impl ResidencyLeaseSet {
             match dependency {
                 LogicalDependency::ResourceResident(key) => required.push(key),
                 other => {
-                    return Err(IoProtocolError::NonResidencyDependency(Box::new(other)));
+                    return Err(IoProtocolError::NonResidencyDependency {
+                        dependency: Box::new(other),
+                    });
                 }
             }
         }
@@ -2040,15 +2137,17 @@ mod tests {
         ));
         assert!(matches!(
             slab_descriptor(0x1000, u64::MAX, u64::MAX - 0xfff, 0x1000, 0x1000),
-            Err(IoProtocolError::ArithmeticOverflow("slab range end"))
+            Err(IoProtocolError::ArithmeticOverflow {
+                context: "slab range end"
+            })
         ));
 
         let near_end = usize::MAX & !0xfff;
         assert!(matches!(
             slab_descriptor(near_end, 0x2000, 0, 0x1000, 0x1000),
-            Err(IoProtocolError::ArithmeticOverflow(
-                "registered slab address range"
-            ))
+            Err(IoProtocolError::ArithmeticOverflow {
+                context: "registered slab address range"
+            })
         ));
     }
 
@@ -2145,7 +2244,7 @@ mod tests {
                 MappingEpoch::new(1),
                 dispatch_fence(),
             ),
-            Err(IoProtocolError::MissingResidencyBinding(missing)) if *missing == second
+            Err(IoProtocolError::MissingResidencyBinding { key: missing }) if *missing == second
         ));
         assert!(matches!(
             ResidencyLeaseSet::new(
@@ -2154,7 +2253,7 @@ mod tests {
                 MappingEpoch::new(1),
                 dispatch_fence(),
             ),
-            Err(IoProtocolError::UnexpectedResidencyBinding(extra)) if *extra == second
+            Err(IoProtocolError::UnexpectedResidencyBinding { key: extra }) if *extra == second
         ));
         assert!(matches!(
             ResidencyLeaseSet::new(
@@ -2163,7 +2262,7 @@ mod tests {
                 MappingEpoch::new(1),
                 dispatch_fence(),
             ),
-            Err(IoProtocolError::DuplicateResidencyBinding(duplicate)) if *duplicate == first
+            Err(IoProtocolError::DuplicateResidencyBinding { key: duplicate }) if *duplicate == first
         ));
         assert!(matches!(
             ResidencyLeaseSet::new(
@@ -2190,7 +2289,7 @@ mod tests {
                 MappingEpoch::new(1),
                 dispatch_fence(),
             ),
-            Err(IoProtocolError::NonResidencyDependency(dependency))
+            Err(IoProtocolError::NonResidencyDependency { dependency })
                 if matches!(*dependency, LogicalDependency::OperationRetired(_))
         ));
     }

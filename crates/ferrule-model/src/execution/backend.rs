@@ -22,9 +22,11 @@ impl ModelExecutionBackend {
         match value {
             "cpu" | "cpu-reference" | "reference" => Ok(Self::Cpu),
             "cuda" | "cuda-hybrid" | "gpu" => Ok(Self::Cuda),
-            other => Err(Error::Model(format!(
-                "unknown model execution backend '{other}' (expected cpu or cuda)"
-            ))),
+            other => Err(Error::Model {
+                message: format!(
+                    "unknown model execution backend '{other}' (expected cpu or cuda)"
+                ),
+            }),
         }
     }
 }

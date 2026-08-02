@@ -110,8 +110,9 @@ pub fn bind_router_from_hf(
             RouterTensorKind::Other(_) => {}
         }
     }
-    let weight = weight
-        .ok_or_else(|| Error::Model(format!("missing router weight tensor for layer {layer}")))?;
+    let weight = weight.ok_or_else(|| Error::Model {
+        message: format!("missing router weight tensor for layer {layer}"),
+    })?;
     let weight_payload = reader.read_slice(&checkpoint_slice_from_router_info(
         model_dir,
         weight,
@@ -259,10 +260,10 @@ pub fn bind_hyper_connection_from_hf(
     config: HyperConnectionConfig,
 ) -> Result<HyperConnectionWeights> {
     if stage == HyperConnectionStage::Head {
-        return Err(Error::Model(
+        return Err(Error::Model { message:
             "layer hyper-connection binding cannot use head stage; call bind_hyper_connection_head_from_hf"
                 .into(),
-        ));
+         });
     }
 
     let mut function = None;
@@ -370,11 +371,8 @@ fn bind_attention_linear(
     tensors: Option<Vec<&HfAttentionTensorInfo>>,
     reader: &CheckpointTensorReader,
 ) -> Result<LinearWeight> {
-    let tensors = tensors.ok_or_else(|| {
-        Error::Model(format!(
-            "missing attention {:?} tensors for layer {layer}",
-            kind
-        ))
+    let tensors = tensors.ok_or_else(|| Error::Model {
+        message: format!("missing attention {:?} tensors for layer {layer}", kind),
     })?;
     let mut weight = None;
     let mut scale = None;
@@ -385,11 +383,11 @@ fn bind_attention_linear(
             TensorPayloadPart::Other => {}
         }
     }
-    let weight = weight.ok_or_else(|| {
-        Error::Model(format!(
+    let weight = weight.ok_or_else(|| Error::Model {
+        message: format!(
             "missing attention {:?} weight tensor for layer {layer}",
             kind
-        ))
+        ),
     })?;
     let weight_payload = reader.read_slice(&checkpoint_slice_from_attention_info(
         model_dir,
@@ -416,11 +414,8 @@ fn bind_attention_vector(
     tensors: Option<Vec<&HfAttentionTensorInfo>>,
     reader: &CheckpointTensorReader,
 ) -> Result<Vec<f32>> {
-    let tensors = tensors.ok_or_else(|| {
-        Error::Model(format!(
-            "missing attention {:?} tensor for layer {layer}",
-            kind
-        ))
+    let tensors = tensors.ok_or_else(|| Error::Model {
+        message: format!("missing attention {:?} tensor for layer {layer}", kind),
     })?;
     let mut value = None;
     for tensor in tensors {
@@ -431,11 +426,11 @@ fn bind_attention_vector(
             TensorPayloadPart::Scale => {}
         }
     }
-    let value = value.ok_or_else(|| {
-        Error::Model(format!(
+    let value = value.ok_or_else(|| Error::Model {
+        message: format!(
             "missing attention {:?} vector payload for layer {layer}",
             kind
-        ))
+        ),
     })?;
     let payload = reader.read_slice(&checkpoint_slice_from_attention_info(
         model_dir, value, role,
@@ -457,10 +452,12 @@ fn read_hyper_connection_tensor_f32(
         } else {
             format!("layer {layer}")
         };
-        Error::Model(format!(
-            "missing hyper-connection {:?} {:?} tensor for {scope}",
-            stage, kind
-        ))
+        Error::Model {
+            message: format!(
+                "missing hyper-connection {:?} {:?} tensor for {scope}",
+                stage, kind
+            ),
+        }
     })?;
     let payload = reader.read_slice(&checkpoint_slice_from_hyper_connection_info(
         model_dir,
@@ -478,11 +475,11 @@ fn bind_shared_linear(
     tensors: Option<Vec<&HfSharedExpertTensorInfo>>,
     reader: &CheckpointTensorReader,
 ) -> Result<LinearWeight> {
-    let tensors = tensors.ok_or_else(|| {
-        Error::Model(format!(
+    let tensors = tensors.ok_or_else(|| Error::Model {
+        message: format!(
             "missing shared expert {:?} tensors for layer {layer}",
             matrix
-        ))
+        ),
     })?;
     let mut weight = None;
     let mut scale = None;
@@ -495,11 +492,11 @@ fn bind_shared_linear(
             RoutedExpertTensorPart::Other(_) => {}
         }
     }
-    let weight = weight.ok_or_else(|| {
-        Error::Model(format!(
+    let weight = weight.ok_or_else(|| Error::Model {
+        message: format!(
             "missing shared expert {:?} weight for layer {layer}",
             matrix
-        ))
+        ),
     })?;
     let weight_payload = reader.read_slice(&checkpoint_slice_from_shared_info(
         model_dir,
@@ -525,9 +522,9 @@ fn set_once<'a, T>(
     label: &str,
 ) -> Result<()> {
     if slot.replace(value).is_some() {
-        return Err(Error::Model(format!(
-            "duplicate {label} tensor for layer {layer}"
-        )));
+        return Err(Error::Model {
+            message: format!("duplicate {label} tensor for layer {layer}"),
+        });
     }
     Ok(())
 }
@@ -623,19 +620,23 @@ fn hyper_connection_role_for_stage(stage: HyperConnectionStage) -> TensorRole {
 fn two_dim_shape(slice: &CheckpointTensorSlice, label: &str) -> Result<(usize, usize)> {
     match slice.shape.as_slice() {
         [rows, cols] => Ok((*rows, *cols)),
-        _ => Err(Error::Model(format!(
-            "{label} '{}' expects 2D shape, got {:?}",
-            slice.name, slice.shape
-        ))),
+        _ => Err(Error::Model {
+            message: format!(
+                "{label} '{}' expects 2D shape, got {:?}",
+                slice.name, slice.shape
+            ),
+        }),
     }
 }
 
 fn decode_vector_f32(payload: &CheckpointTensorPayload) -> Result<Vec<f32>> {
     if payload.slice.shape.len() != 1 {
-        return Err(Error::Model(format!(
-            "checkpoint vector '{}' expects 1D shape, got {:?}",
-            payload.slice.name, payload.slice.shape
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "checkpoint vector '{}' expects 1D shape, got {:?}",
+                payload.slice.name, payload.slice.shape
+            ),
+        });
     }
     decode_tensor_f32(payload)
 }
@@ -645,10 +646,9 @@ fn decode_tensor_f32(payload: &CheckpointTensorPayload) -> Result<Vec<f32>> {
     match payload.slice.dtype {
         CheckpointDType::F32 => {
             if payload.bytes.len() != expected * 4 {
-                return Err(Error::Model(format!(
-                    "F32 tensor '{}' byte length mismatch",
-                    payload.slice.name
-                )));
+                return Err(Error::Model {
+                    message: format!("F32 tensor '{}' byte length mismatch", payload.slice.name),
+                });
             }
             Ok(payload
                 .bytes
@@ -658,10 +658,9 @@ fn decode_tensor_f32(payload: &CheckpointTensorPayload) -> Result<Vec<f32>> {
         }
         CheckpointDType::Bf16 => {
             if payload.bytes.len() != expected * 2 {
-                return Err(Error::Model(format!(
-                    "BF16 tensor '{}' byte length mismatch",
-                    payload.slice.name
-                )));
+                return Err(Error::Model {
+                    message: format!("BF16 tensor '{}' byte length mismatch", payload.slice.name),
+                });
             }
             Ok(payload
                 .bytes
@@ -672,11 +671,13 @@ fn decode_tensor_f32(payload: &CheckpointTensorPayload) -> Result<Vec<f32>> {
                 })
                 .collect())
         }
-        _ => Err(Error::Model(format!(
-            "checkpoint tensor '{}' has unsupported dtype {}",
-            payload.slice.name,
-            payload.slice.dtype.as_str()
-        ))),
+        _ => Err(Error::Model {
+            message: format!(
+                "checkpoint tensor '{}' has unsupported dtype {}",
+                payload.slice.name,
+                payload.slice.dtype.as_str()
+            ),
+        }),
     }
 }
 
@@ -685,31 +686,29 @@ fn decode_indices_usize(payload: &CheckpointTensorPayload) -> Result<Vec<usize>>
     match payload.slice.dtype {
         CheckpointDType::I32 => {
             if payload.bytes.len() != expected * 4 {
-                return Err(Error::Model(format!(
-                    "I32 indices '{}' byte length mismatch",
-                    payload.slice.name
-                )));
+                return Err(Error::Model {
+                    message: format!("I32 indices '{}' byte length mismatch", payload.slice.name),
+                });
             }
             payload
                 .bytes
                 .chunks_exact(4)
                 .map(|chunk| {
                     let value = i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-                    usize::try_from(value).map_err(|_| {
-                        Error::Model(format!(
+                    usize::try_from(value).map_err(|_| Error::Model {
+                        message: format!(
                             "negative router index {value} in '{}'",
                             payload.slice.name
-                        ))
+                        ),
                     })
                 })
                 .collect()
         }
         CheckpointDType::I64 => {
             if payload.bytes.len() != expected * 8 {
-                return Err(Error::Model(format!(
-                    "I64 indices '{}' byte length mismatch",
-                    payload.slice.name
-                )));
+                return Err(Error::Model {
+                    message: format!("I64 indices '{}' byte length mismatch", payload.slice.name),
+                });
             }
             payload
                 .bytes
@@ -719,20 +718,22 @@ fn decode_indices_usize(payload: &CheckpointTensorPayload) -> Result<Vec<usize>>
                         chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
                         chunk[7],
                     ]);
-                    usize::try_from(value).map_err(|_| {
-                        Error::Model(format!(
+                    usize::try_from(value).map_err(|_| Error::Model {
+                        message: format!(
                             "negative router index {value} in '{}'",
                             payload.slice.name
-                        ))
+                        ),
                     })
                 })
                 .collect()
         }
-        _ => Err(Error::Model(format!(
-            "router index tensor '{}' has unsupported dtype {}",
-            payload.slice.name,
-            payload.slice.dtype.as_str()
-        ))),
+        _ => Err(Error::Model {
+            message: format!(
+                "router index tensor '{}' has unsupported dtype {}",
+                payload.slice.name,
+                payload.slice.dtype.as_str()
+            ),
+        }),
     }
 }
 

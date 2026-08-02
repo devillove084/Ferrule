@@ -69,10 +69,12 @@ impl DeepSeekV4CompressedAttentionPayload {
     ) -> Result<Option<Self>> {
         if cfg.compress_ratio == 0 {
             if !auxiliary.is_empty() {
-                return Err(Error::Model(format!(
-                    "DeepSeek-V4 layer {layer} has non-compressed config but {} compressed attention auxiliary tensors",
-                    auxiliary.len()
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "DeepSeek-V4 layer {layer} has non-compressed config but {} compressed attention auxiliary tensors",
+                        auxiliary.len()
+                    ),
+                });
             }
             return Ok(None);
         }
@@ -140,10 +142,12 @@ impl DeepSeekV4CompressorPayload {
         )?;
 
         if ape_shape != (compress_ratio, out_dim) {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} compressor '{prefix}.ape' shape mismatch: got {:?}, expected [{compress_ratio}, {out_dim}]",
-                ape_shape
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {layer} compressor '{prefix}.ape' shape mismatch: got {:?}, expected [{compress_ratio}, {out_dim}]",
+                    ape_shape
+                ),
+            });
         }
         check_len(layer, &format!("{prefix}.norm"), norm.len(), head_dim)?;
         check_linear(layer, &format!("{prefix}.wkv"), &wkv, out_dim, hidden_size)?;
@@ -408,8 +412,9 @@ fn decode_metadata_i32(values: &[usize], label: &str) -> Result<Vec<i32>> {
     values
         .iter()
         .map(|&value| {
-            i32::try_from(value)
-                .map_err(|_| Error::Model(format!("packed decode {label} exceeds i32 ABI")))
+            i32::try_from(value).map_err(|_| Error::Model {
+                message: format!("packed decode {label} exceeds i32 ABI"),
+            })
         })
         .collect()
 }
@@ -431,9 +436,11 @@ impl DeepSeekV4Attention {
     ) -> Result<Self> {
         config.validate()?;
         if config.compress_ratio == 0 && compressed.is_some() {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {layer} has non-compressed attention but compressed payload is present"
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {layer} has non-compressed attention but compressed payload is present"
+                ),
+            });
         }
         let attention = Self {
             layer,
@@ -515,12 +522,14 @@ impl DeepSeekV4Attention {
             return self.prefill_segment_with_operators(cache, hidden, start_pos, operators);
         }
         if hidden.is_empty() || !hidden.len().is_multiple_of(cfg.hidden_size) {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} prefill hidden length mismatch: hidden={} dim={}",
-                self.layer,
-                hidden.len(),
-                cfg.hidden_size
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {} prefill hidden length mismatch: hidden={} dim={}",
+                    self.layer,
+                    hidden.len(),
+                    cfg.hidden_size
+                ),
+            });
         }
         if cfg.compress_ratio == 0 {
             self.prefill_start_no_compress_with_operators(cache, hidden, start_pos, operators)
@@ -538,12 +547,14 @@ impl DeepSeekV4Attention {
     ) -> Result<Vec<f32>> {
         let cfg = self.config;
         if hidden.is_empty() || !hidden.len().is_multiple_of(cfg.hidden_size) {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} segment prefill hidden length mismatch: hidden={} dim={}",
-                self.layer,
-                hidden.len(),
-                cfg.hidden_size
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {} segment prefill hidden length mismatch: hidden={} dim={}",
+                    self.layer,
+                    hidden.len(),
+                    cfg.hidden_size
+                ),
+            });
         }
         let tokens = hidden.len() / cfg.hidden_size;
         let mut out = Vec::with_capacity(tokens * cfg.hidden_size);
@@ -567,14 +578,16 @@ impl DeepSeekV4Attention {
         let tokens = hidden.len() / cfg.hidden_size;
         operators.record_attention_call(self.layer, tokens);
         if cache.window.head_dim != cfg.head_dim || cache.window.window_size != cfg.window_size {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} KV cache shape mismatch: cache window={} head_dim={}, expected window={} head_dim={}",
-                self.layer,
-                cache.window.window_size,
-                cache.window.head_dim,
-                cfg.window_size,
-                cfg.head_dim
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {} KV cache shape mismatch: cache window={} head_dim={}, expected window={} head_dim={}",
+                    self.layer,
+                    cache.window.window_size,
+                    cache.window.head_dim,
+                    cfg.window_size,
+                    cfg.head_dim
+                ),
+            });
         }
 
         let stage_start = operators.profile_start();
@@ -742,20 +755,22 @@ impl DeepSeekV4Attention {
         let tokens = hidden.len() / cfg.hidden_size;
         operators.record_attention_call(self.layer, tokens);
         if cache.window.head_dim != cfg.head_dim || cache.window.window_size != cfg.window_size {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} KV cache shape mismatch: cache window={} head_dim={}, expected window={} head_dim={}",
-                self.layer,
-                cache.window.window_size,
-                cache.window.head_dim,
-                cfg.window_size,
-                cfg.head_dim
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {} KV cache shape mismatch: cache window={} head_dim={}, expected window={} head_dim={}",
+                    self.layer,
+                    cache.window.window_size,
+                    cache.window.head_dim,
+                    cfg.window_size,
+                    cfg.head_dim
+                ),
+            });
         }
         let compressed = self.compressed.as_ref().ok_or_else(|| {
-            Error::Model(format!(
+            Error::Model { message: format!(
                 "DeepSeek-V4 layer {} has compress_ratio {} but no typed compressed attention payload is bound",
                 self.layer, cfg.compress_ratio
-            ))
+            ) }
         })?;
         let rope = cfg.rope_params();
 
@@ -889,12 +904,15 @@ impl DeepSeekV4Attention {
         if let Some(indexer) = compressed.indexer.as_ref() {
             let stage_start = operators.profile_start();
             let indexer_values = {
-                let state = cache.indexer_compressor.as_mut().ok_or_else(|| {
-                    Error::Model(format!(
-                        "DeepSeek-V4 layer {} missing indexer compressor state",
-                        self.layer
-                    ))
-                })?;
+                let state = cache
+                    .indexer_compressor
+                    .as_mut()
+                    .ok_or_else(|| Error::Model {
+                        message: format!(
+                            "DeepSeek-V4 layer {} missing indexer compressor state",
+                            self.layer
+                        ),
+                    })?;
                 state.prefill_start(
                     &indexer.compressor,
                     hidden,
@@ -910,12 +928,14 @@ impl DeepSeekV4Attention {
                 stage_start,
             )?;
             if indexer_values.len() % cfg.index_head_dim != 0 {
-                return Err(Error::Model(format!(
-                    "DeepSeek-V4 layer {} indexer prefill compressed length {} is not divisible by {}",
-                    self.layer,
-                    indexer_values.len(),
-                    cfg.index_head_dim
-                )));
+                return Err(Error::Model {
+                    message: format!(
+                        "DeepSeek-V4 layer {} indexer prefill compressed length {} is not divisible by {}",
+                        self.layer,
+                        indexer_values.len(),
+                        cfg.index_head_dim
+                    ),
+                });
             }
             cache.record_indexer_compressed_rows(indexer_values.len() / cfg.index_head_dim)?;
             cache.indexer_compressed.extend_from_slice(&indexer_values);
@@ -923,11 +943,11 @@ impl DeepSeekV4Attention {
 
         let stage_start = operators.profile_start();
         let main_compressed = {
-            let state = cache.main_compressor.as_mut().ok_or_else(|| {
-                Error::Model(format!(
+            let state = cache.main_compressor.as_mut().ok_or_else(|| Error::Model {
+                message: format!(
                     "DeepSeek-V4 layer {} missing main compressor state",
                     self.layer
-                ))
+                ),
             })?;
             state.prefill_start(
                 &compressed.compressor,
@@ -944,12 +964,14 @@ impl DeepSeekV4Attention {
             stage_start,
         )?;
         if main_compressed.len() % cfg.head_dim != 0 {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} main prefill compressed length {} is not divisible by {}",
-                self.layer,
-                main_compressed.len(),
-                cfg.head_dim
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {} main prefill compressed length {} is not divisible by {}",
+                    self.layer,
+                    main_compressed.len(),
+                    cfg.head_dim
+                ),
+            });
         }
         cache.record_compressed_rows(main_compressed.len() / cfg.head_dim)?;
         cache.compressed.extend_from_slice(&main_compressed);
@@ -1021,12 +1043,14 @@ impl DeepSeekV4Attention {
     ) -> Result<Vec<f32>> {
         let cfg = self.config;
         if context.len() != tokens * cfg.q_full_dim() {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} attention context length mismatch: expected {}, got {}",
-                self.layer,
-                tokens * cfg.q_full_dim(),
-                context.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {} attention context length mismatch: expected {}, got {}",
+                    self.layer,
+                    tokens * cfg.q_full_dim(),
+                    context.len()
+                ),
+            });
         }
         let mut out = Vec::with_capacity(tokens * cfg.hidden_size);
         for token in 0..tokens {
@@ -1098,28 +1122,32 @@ impl DeepSeekV4Attention {
             );
         }
         if hidden.len() != cfg.hidden_size {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} attention input mismatch: expected {}, got {}",
-                self.layer,
-                cfg.hidden_size,
-                hidden.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {} attention input mismatch: expected {}, got {}",
+                    self.layer,
+                    cfg.hidden_size,
+                    hidden.len()
+                ),
+            });
         }
         if cache.window.head_dim != cfg.head_dim || cache.window.window_size != cfg.window_size {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} KV cache shape mismatch: cache window={} head_dim={}, expected window={} head_dim={}",
-                self.layer,
-                cache.window.window_size,
-                cache.window.head_dim,
-                cfg.window_size,
-                cfg.head_dim
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {} KV cache shape mismatch: cache window={} head_dim={}, expected window={} head_dim={}",
+                    self.layer,
+                    cache.window.window_size,
+                    cache.window.head_dim,
+                    cfg.window_size,
+                    cfg.head_dim
+                ),
+            });
         }
         let compressed = self.compressed.as_ref().ok_or_else(|| {
-            Error::Model(format!(
+            Error::Model { message: format!(
                 "DeepSeek-V4 layer {} has compress_ratio {} but no typed compressed attention payload is bound",
                 self.layer, cfg.compress_ratio
-            ))
+            ) }
         })?;
         let rope = cfg.rope_params();
 
@@ -1161,12 +1189,15 @@ impl DeepSeekV4Attention {
 
         if let Some(indexer) = compressed.indexer.as_ref() {
             let new_indexer_kv = {
-                let state = cache.indexer_compressor.as_mut().ok_or_else(|| {
-                    Error::Model(format!(
-                        "DeepSeek-V4 layer {} missing indexer compressor state",
-                        self.layer
-                    ))
-                })?;
+                let state = cache
+                    .indexer_compressor
+                    .as_mut()
+                    .ok_or_else(|| Error::Model {
+                        message: format!(
+                            "DeepSeek-V4 layer {} missing indexer compressor state",
+                            self.layer
+                        ),
+                    })?;
                 state.append_step(
                     &indexer.compressor,
                     hidden,
@@ -1184,11 +1215,11 @@ impl DeepSeekV4Attention {
         }
 
         let new_main_kv = {
-            let state = cache.main_compressor.as_mut().ok_or_else(|| {
-                Error::Model(format!(
+            let state = cache.main_compressor.as_mut().ok_or_else(|| Error::Model {
+                message: format!(
                     "DeepSeek-V4 layer {} missing main compressor state",
                     self.layer
-                ))
+                ),
             })?;
             state.append_step(
                 &compressed.compressor,
@@ -1257,16 +1288,18 @@ impl DeepSeekV4Attention {
         let cfg = self.config;
         let rows = arena.positions.len();
         if rows == 0 || hidden_dev.len() != rows * cfg.hidden_size {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} packed attention input mismatch: rows={rows} expected={} got={}",
-                self.layer,
-                rows * cfg.hidden_size,
-                hidden_dev.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {} packed attention input mismatch: rows={rows} expected={} got={}",
+                    self.layer,
+                    rows * cfg.hidden_size,
+                    hidden_dev.len()
+                ),
+            });
         }
-        let required_positions = max_position
-            .checked_add(1)
-            .ok_or_else(|| Error::Model("DeepSeek-V4 packed RoPE position overflow".into()))?;
+        let required_positions = max_position.checked_add(1).ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 packed RoPE position overflow".into(),
+        })?;
         let layer_tag = format!("attn_L{}", self.layer);
         let rope_name = format!("rope_{layer_tag}");
         operators.record_attention_call(self.layer, rows);
@@ -1489,9 +1522,10 @@ impl DeepSeekV4Attention {
                 .iter()
                 .any(|sequence| *sequence >= caches.len())
         {
-            return Err(Error::Model(
-                "DeepSeek-V4 packed attention row/sequence metadata is inconsistent".into(),
-            ));
+            return Err(Error::Model {
+                message: "DeepSeek-V4 packed attention row/sequence metadata is inconsistent"
+                    .into(),
+            });
         }
 
         let visible_lens = positions
@@ -1500,8 +1534,8 @@ impl DeepSeekV4Attention {
                 position
                     .checked_add(1)
                     .and_then(|length| i32::try_from(length).ok())
-                    .ok_or_else(|| {
-                        Error::Model("packed attention visible length exceeds i32 ABI".into())
+                    .ok_or_else(|| Error::Model {
+                        message: "packed attention visible length exceeds i32 ABI".into(),
                     })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1511,7 +1545,9 @@ impl DeepSeekV4Attention {
                 .iter()
                 .copied()
                 .max()
-                .ok_or_else(|| Error::Model("packed decode positions are empty".into()))?;
+                .ok_or_else(|| Error::Model {
+                    message: "packed decode positions are empty".into(),
+                })?;
             let positions_i32 = decode_metadata_i32(positions, "position")?;
             {
                 let ops = &operators.cuda_mut()?.ops;
@@ -1542,7 +1578,9 @@ impl DeepSeekV4Attention {
                 .iter()
                 .map(|position| position.saturating_add(1).min(cfg.window_size))
                 .max()
-                .ok_or_else(|| Error::Model("packed attention positions are empty".into()))?;
+                .ok_or_else(|| Error::Model {
+                    message: "packed attention positions are empty".into(),
+                })?;
             let stage_start = operators.profile_start();
             operators
                 .cuda_mut()?
@@ -1574,11 +1612,11 @@ impl DeepSeekV4Attention {
             );
         }
 
-        let compressed = self.compressed.as_ref().ok_or_else(|| {
-            Error::Model(format!(
+        let compressed = self.compressed.as_ref().ok_or_else(|| Error::Model {
+            message: format!(
                 "DeepSeek-V4 layer {} has compressed config without payload",
                 self.layer
-            ))
+            ),
         })?;
         let cfg = self.config;
         let rope = cfg.rope_params();
@@ -1586,7 +1624,9 @@ impl DeepSeekV4Attention {
             .iter()
             .copied()
             .max()
-            .ok_or_else(|| Error::Model("packed decode positions are empty".into()))?;
+            .ok_or_else(|| Error::Model {
+                message: "packed decode positions are empty".into(),
+            })?;
         let positions_i32 = decode_metadata_i32(positions, "position")?;
         {
             let ops = &operators.cuda_mut()?.ops;
@@ -1660,29 +1700,31 @@ impl DeepSeekV4Attention {
                         cfg.hidden_size,
                     )
                     .map_err(|error| {
-                        Error::Internal(format!(
+                        Error::Internal { message: format!(
                             "DeepSeek-V4 layer {} row {row} transition input copy failed: source_len={} destination_len={}: {error}",
                             self.layer,
                             hidden_dev.len(),
                             transition.input.len()
-                        ))
+                        ) }
                     })?;
 
                 if let Some(indexer) = compressed.indexer.as_ref() {
                     let new_indexer_kv = {
                         let (compressor_state, window) =
                             (&mut cache.indexer_compressor, &mut cache.window);
-                        let state = compressor_state.as_mut().ok_or_else(|| {
-                            Error::Model(format!(
+                        let state = compressor_state.as_mut().ok_or_else(|| Error::Model {
+                            message: format!(
                                 "DeepSeek-V4 layer {} missing indexer compressor state",
                                 self.layer
-                            ))
+                            ),
                         })?;
                         let scratch = transition.indexer_compressor.as_mut().ok_or_else(|| {
-                            Error::Internal(format!(
-                                "DeepSeek-V4 layer {} missing indexer compressor row arena",
-                                self.layer
-                            ))
+                            Error::Internal {
+                                message: format!(
+                                    "DeepSeek-V4 layer {} missing indexer compressor row arena",
+                                    self.layer
+                                ),
+                            }
                         })?;
                         let cuda = window.cuda_state_mut();
                         if sequence_phases[sequence] == ForwardPhase::Prefill {
@@ -1727,9 +1769,10 @@ impl DeepSeekV4Attention {
                     if new_indexer_kv {
                         let index = cache.indexer_compressed_len(cfg.index_head_dim);
                         cache.record_indexer_compressed_rows(1)?;
-                        indexer_positions[row] = i32::try_from(index).map_err(|_| {
-                            Error::Model("packed indexer position exceeds i32 ABI".into())
-                        })?;
+                        indexer_positions[row] =
+                            i32::try_from(index).map_err(|_| Error::Model {
+                                message: "packed indexer position exceeds i32 ABI".into(),
+                            })?;
                         indexer_mask[row] = 1;
                         let transition_normalized = &transition
                             .indexer_compressor
@@ -1752,13 +1795,13 @@ impl DeepSeekV4Attention {
                                 cfg.index_head_dim,
                             )
                             .map_err(|error| {
-                                Error::Internal(format!(
+                                Error::Internal { message: format!(
                                     "DeepSeek-V4 layer {} row {row} indexer normalized copy failed: source_len={} destination_len={} row_dim={}: {error}",
                                     self.layer,
                                     transition_normalized.len(),
                                     packed_normalized.len(),
                                     cfg.index_head_dim
-                                ))
+                                ) }
                             })?;
                     }
                 }
@@ -1766,18 +1809,22 @@ impl DeepSeekV4Attention {
                 let new_main_kv = {
                     let (compressor_state, window) =
                         (&mut cache.main_compressor, &mut cache.window);
-                    let state = compressor_state.as_mut().ok_or_else(|| {
-                        Error::Model(format!(
+                    let state = compressor_state.as_mut().ok_or_else(|| Error::Model {
+                        message: format!(
                             "DeepSeek-V4 layer {} missing main compressor state",
                             self.layer
-                        ))
+                        ),
                     })?;
-                    let scratch = transition.main_compressor.as_mut().ok_or_else(|| {
-                        Error::Internal(format!(
-                            "DeepSeek-V4 layer {} missing main compressor row arena",
-                            self.layer
-                        ))
-                    })?;
+                    let scratch =
+                        transition
+                            .main_compressor
+                            .as_mut()
+                            .ok_or_else(|| Error::Internal {
+                                message: format!(
+                                    "DeepSeek-V4 layer {} missing main compressor row arena",
+                                    self.layer
+                                ),
+                            })?;
                     let cuda = window.cuda_state_mut();
                     if sequence_phases[sequence] == ForwardPhase::Prefill {
                         let projected = arena
@@ -1821,8 +1868,8 @@ impl DeepSeekV4Attention {
                 if new_main_kv {
                     let index = cache.compressed_len();
                     cache.record_compressed_rows(1)?;
-                    main_positions[row] = i32::try_from(index).map_err(|_| {
-                        Error::Model("packed main compressed position exceeds i32 ABI".into())
+                    main_positions[row] = i32::try_from(index).map_err(|_| Error::Model {
+                        message: "packed main compressed position exceeds i32 ABI".into(),
                     })?;
                     main_mask[row] = 1;
                     let transition_normalized = &transition
@@ -1846,13 +1893,13 @@ impl DeepSeekV4Attention {
                             cfg.head_dim,
                         )
                         .map_err(|error| {
-                            Error::Internal(format!(
+                            Error::Internal { message: format!(
                                 "DeepSeek-V4 layer {} row {row} main normalized copy failed: source_len={} destination_len={} row_dim={}: {error}",
                                 self.layer,
                                 transition_normalized.len(),
                                 packed_normalized.len(),
                                 cfg.head_dim
-                            ))
+                            ) }
                         })?;
                 }
                 window_lens[row] = cache.window.len;
@@ -1921,7 +1968,9 @@ impl DeepSeekV4Attention {
                     .copied()
                     .max()
                     .and_then(|position| position.checked_add(1))
-                    .ok_or_else(|| Error::Model("packed indexer RoPE position overflow".into()))?;
+                    .ok_or_else(|| Error::Model {
+                        message: "packed indexer RoPE position overflow".into(),
+                    })?;
                 operators.cuda_mut()?.ensure_rope_tables_with_params(
                     &index_rope_name,
                     index_rope_dim,
@@ -2027,24 +2076,30 @@ impl DeepSeekV4Attention {
     ) -> Result<Vec<f32>> {
         let cfg = self.config;
         if cfg.compress_ratio != 0 {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} has compress_ratio {}; compressed CSA/HCA attention is not implemented in this path",
-                self.layer, cfg.compress_ratio
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {} has compress_ratio {}; compressed CSA/HCA attention is not implemented in this path",
+                    self.layer, cfg.compress_ratio
+                ),
+            });
         }
         if hidden.len() != cfg.hidden_size {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} attention input mismatch: expected {}, got {}",
-                self.layer,
-                cfg.hidden_size,
-                hidden.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {} attention input mismatch: expected {}, got {}",
+                    self.layer,
+                    cfg.hidden_size,
+                    hidden.len()
+                ),
+            });
         }
         if cache.head_dim != cfg.head_dim || cache.window_size != cfg.window_size {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 layer {} KV cache shape mismatch: cache window={} head_dim={}, expected window={} head_dim={}",
-                self.layer, cache.window_size, cache.head_dim, cfg.window_size, cfg.head_dim
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 layer {} KV cache shape mismatch: cache window={} head_dim={}, expected window={} head_dim={}",
+                    self.layer, cache.window_size, cache.head_dim, cfg.window_size, cfg.head_dim
+                ),
+            });
         }
 
         let q_latent = operators.linear_matvec(&self.payload.query_a, hidden)?;
@@ -2128,17 +2183,21 @@ impl DeepSeekV4Attention {
             || arena.kv.len() != rows.saturating_mul(cfg.head_dim)
             || arena.context.len() != rows.saturating_mul(cfg.q_full_dim())
         {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 DSpark proposal-attention shape mismatch at stage {stage}: sequence_tokens={sequence_tokens} compress_ratio={} query={} kv={} context={} rows={rows}",
-                cfg.compress_ratio,
-                arena.query.len(),
-                arena.kv.len(),
-                arena.context.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 DSpark proposal-attention shape mismatch at stage {stage}: sequence_tokens={sequence_tokens} compress_ratio={} query={} kv={} context={} rows={rows}",
+                    cfg.compress_ratio,
+                    arena.query.len(),
+                    arena.kv.len(),
+                    arena.context.len()
+                ),
+            });
         }
         let required_positions = sequence_tokens
             .checked_add(rows)
-            .ok_or_else(|| Error::Model("DeepSeek-V4 DSpark proposal position overflow".into()))?;
+            .ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 DSpark proposal position overflow".into(),
+            })?;
         let rope_name = format!("rope_dspark_stage_{stage}");
         operators.cuda_mut()?.ensure_rope_tables_with_params(
             &rope_name,
@@ -2211,17 +2270,21 @@ impl DeepSeekV4Attention {
         operators.cuda_mut()?.rope_tail_rows_from_device(
             &rope_name,
             &mut arena.query,
-            u32::try_from(sequence_tokens).map_err(|_| {
-                Error::Model("DeepSeek-V4 DSpark proposal position exceeds u32".into())
+            u32::try_from(sequence_tokens).map_err(|_| Error::Model {
+                message: "DeepSeek-V4 DSpark proposal position exceeds u32".into(),
             })?,
-            u32::try_from(rows)
-                .map_err(|_| Error::Model("DeepSeek-V4 DSpark row count exceeds u32".into()))?,
-            u32::try_from(cfg.num_heads)
-                .map_err(|_| Error::Model("DeepSeek-V4 DSpark head count exceeds u32".into()))?,
-            u32::try_from(cfg.head_dim)
-                .map_err(|_| Error::Model("DeepSeek-V4 DSpark head dim exceeds u32".into()))?,
-            u32::try_from(cfg.rope_head_dim)
-                .map_err(|_| Error::Model("DeepSeek-V4 DSpark RoPE dim exceeds u32".into()))?,
+            u32::try_from(rows).map_err(|_| Error::Model {
+                message: "DeepSeek-V4 DSpark row count exceeds u32".into(),
+            })?,
+            u32::try_from(cfg.num_heads).map_err(|_| Error::Model {
+                message: "DeepSeek-V4 DSpark head count exceeds u32".into(),
+            })?,
+            u32::try_from(cfg.head_dim).map_err(|_| Error::Model {
+                message: "DeepSeek-V4 DSpark head dim exceeds u32".into(),
+            })?,
+            u32::try_from(cfg.rope_head_dim).map_err(|_| Error::Model {
+                message: "DeepSeek-V4 DSpark RoPE dim exceeds u32".into(),
+            })?,
             false,
         )?;
 
@@ -2237,16 +2300,19 @@ impl DeepSeekV4Attention {
         operators.cuda_mut()?.rope_tail_rows_from_device(
             &rope_name,
             &mut arena.kv,
-            u32::try_from(sequence_tokens).map_err(|_| {
-                Error::Model("DeepSeek-V4 DSpark proposal position exceeds u32".into())
+            u32::try_from(sequence_tokens).map_err(|_| Error::Model {
+                message: "DeepSeek-V4 DSpark proposal position exceeds u32".into(),
             })?,
-            u32::try_from(rows)
-                .map_err(|_| Error::Model("DeepSeek-V4 DSpark row count exceeds u32".into()))?,
+            u32::try_from(rows).map_err(|_| Error::Model {
+                message: "DeepSeek-V4 DSpark row count exceeds u32".into(),
+            })?,
             1,
-            u32::try_from(cfg.head_dim)
-                .map_err(|_| Error::Model("DeepSeek-V4 DSpark head dim exceeds u32".into()))?,
-            u32::try_from(cfg.rope_head_dim)
-                .map_err(|_| Error::Model("DeepSeek-V4 DSpark RoPE dim exceeds u32".into()))?,
+            u32::try_from(cfg.head_dim).map_err(|_| Error::Model {
+                message: "DeepSeek-V4 DSpark head dim exceeds u32".into(),
+            })?,
+            u32::try_from(cfg.rope_head_dim).map_err(|_| Error::Model {
+                message: "DeepSeek-V4 DSpark RoPE dim exceeds u32".into(),
+            })?,
             false,
         )?;
         operators
@@ -2285,17 +2351,21 @@ impl DeepSeekV4Attention {
         operators.cuda_mut()?.rope_tail_rows_from_device(
             &rope_name,
             &mut arena.context,
-            u32::try_from(sequence_tokens).map_err(|_| {
-                Error::Model("DeepSeek-V4 DSpark proposal position exceeds u32".into())
+            u32::try_from(sequence_tokens).map_err(|_| Error::Model {
+                message: "DeepSeek-V4 DSpark proposal position exceeds u32".into(),
             })?,
-            u32::try_from(rows)
-                .map_err(|_| Error::Model("DeepSeek-V4 DSpark row count exceeds u32".into()))?,
-            u32::try_from(cfg.num_heads)
-                .map_err(|_| Error::Model("DeepSeek-V4 DSpark head count exceeds u32".into()))?,
-            u32::try_from(cfg.head_dim)
-                .map_err(|_| Error::Model("DeepSeek-V4 DSpark head dim exceeds u32".into()))?,
-            u32::try_from(cfg.rope_head_dim)
-                .map_err(|_| Error::Model("DeepSeek-V4 DSpark RoPE dim exceeds u32".into()))?,
+            u32::try_from(rows).map_err(|_| Error::Model {
+                message: "DeepSeek-V4 DSpark row count exceeds u32".into(),
+            })?,
+            u32::try_from(cfg.num_heads).map_err(|_| Error::Model {
+                message: "DeepSeek-V4 DSpark head count exceeds u32".into(),
+            })?,
+            u32::try_from(cfg.head_dim).map_err(|_| Error::Model {
+                message: "DeepSeek-V4 DSpark head dim exceeds u32".into(),
+            })?,
+            u32::try_from(cfg.rope_head_dim).map_err(|_| Error::Model {
+                message: "DeepSeek-V4 DSpark RoPE dim exceeds u32".into(),
+            })?,
             true,
         )?;
         operators.cuda_mut()?.mla_output_rows_from_device_into(
@@ -2317,9 +2387,9 @@ fn record_attention_stage(
     start: Option<Instant>,
 ) -> Result<()> {
     let Some(elapsed_us) = operators.finish_profile_stage(start).map_err(|error| {
-        Error::Internal(format!(
+        Error::Internal { message: format!(
             "DeepSeek-V4 layer {layer} attention stage {stage:?} failed while synchronizing: {error}"
-        ))
+        ) }
     })?
     else {
         return Ok(());
@@ -2335,28 +2405,30 @@ fn required_rope_positions(
     rows: usize,
 ) -> Result<usize> {
     if rows == 0 {
-        return Err(Error::Model(
-            "DeepSeek-V4 CUDA RoPE launch requires at least one row".into(),
-        ));
+        return Err(Error::Model {
+            message: "DeepSeek-V4 CUDA RoPE launch requires at least one row".into(),
+        });
     }
     for (field, value) in [
         ("start_position", start_position),
         ("position_stride", position_stride),
         ("rows", rows),
     ] {
-        u32::try_from(value).map_err(|_| {
-            Error::Model(format!(
-                "DeepSeek-V4 CUDA RoPE {field} exceeds the u32 kernel ABI: {value}"
-            ))
+        u32::try_from(value).map_err(|_| Error::Model {
+            message: format!("DeepSeek-V4 CUDA RoPE {field} exceeds the u32 kernel ABI: {value}"),
         })?;
     }
     let last_offset = (rows - 1)
         .checked_mul(position_stride)
-        .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA RoPE row-stride overflow".into()))?;
+        .ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA RoPE row-stride overflow".into(),
+        })?;
     start_position
         .checked_add(last_offset)
         .and_then(|position| position.checked_add(1))
-        .ok_or_else(|| Error::Model("DeepSeek-V4 CUDA RoPE position overflow".into()))
+        .ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 CUDA RoPE position overflow".into(),
+        })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2459,10 +2531,12 @@ impl DeepSeekV4AttentionCache {
         metadata: DeepSeekV4CudaAttentionPrefixMetadata,
     ) -> Result<()> {
         if metadata.window_len > self.window.window_size {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 restored window length {} exceeds capacity {}",
-                metadata.window_len, self.window.window_size
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 restored window length {} exceeds capacity {}",
+                    metadata.window_len, self.window.window_size
+                ),
+            });
         }
         self.window.len = metadata.window_len;
         self.compressed_rows = metadata.compressed_rows;
@@ -2483,9 +2557,9 @@ impl DeepSeekV4AttentionCache {
             || source.main_compressor.is_some()
             || source.indexer_compressor.is_some()
         {
-            return Err(Error::Model(
-                "DeepSeek-V4 uncompressed prefix restore received compressor state".into(),
-            ));
+            return Err(Error::Model {
+                message: "DeepSeek-V4 uncompressed prefix restore received compressor state".into(),
+            });
         }
         self.window.len = self
             .window
@@ -2497,10 +2571,12 @@ impl DeepSeekV4AttentionCache {
     }
 
     fn record_compressed_rows(&mut self, rows: usize) -> Result<()> {
-        self.compressed_rows = self
-            .compressed_rows
-            .checked_add(rows)
-            .ok_or_else(|| Error::Model("DeepSeek-V4 compressed KV row count overflow".into()))?;
+        self.compressed_rows =
+            self.compressed_rows
+                .checked_add(rows)
+                .ok_or_else(|| Error::Model {
+                    message: "DeepSeek-V4 compressed KV row count overflow".into(),
+                })?;
         Ok(())
     }
 
@@ -2508,19 +2584,21 @@ impl DeepSeekV4AttentionCache {
         self.indexer_compressed_rows =
             self.indexer_compressed_rows
                 .checked_add(rows)
-                .ok_or_else(|| {
-                    Error::Model("DeepSeek-V4 indexer compressed KV row count overflow".into())
+                .ok_or_else(|| Error::Model {
+                    message: "DeepSeek-V4 indexer compressed KV row count overflow".into(),
                 })?;
         Ok(())
     }
 
     fn append_compressed(&mut self, value: &[f32]) -> Result<()> {
         if value.len() != self.window.head_dim {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 compressed KV append mismatch: expected {}, got {}",
-                self.window.head_dim,
-                value.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 compressed KV append mismatch: expected {}, got {}",
+                    self.window.head_dim,
+                    value.len()
+                ),
+            });
         }
         self.record_compressed_rows(1)?;
         self.compressed.extend_from_slice(value);
@@ -2529,10 +2607,12 @@ impl DeepSeekV4AttentionCache {
 
     fn append_indexer_compressed(&mut self, value: &[f32], index_head_dim: usize) -> Result<()> {
         if value.len() != index_head_dim {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 indexer compressed KV append mismatch: expected {index_head_dim}, got {}",
-                value.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 indexer compressed KV append mismatch: expected {index_head_dim}, got {}",
+                    value.len()
+                ),
+            });
         }
         self.record_indexer_compressed_rows(1)?;
         self.indexer_compressed.extend_from_slice(value);
@@ -2598,20 +2678,22 @@ impl DeepSeekV4CompressorState {
             || payload.head_dim != self.head_dim
             || payload.overlap != self.overlap
         {
-            return Err(Error::Model(
-                "DeepSeek-V4 compressor payload/state shape mismatch".into(),
-            ));
+            return Err(Error::Model {
+                message: "DeepSeek-V4 compressor payload/state shape mismatch".into(),
+            });
         }
         if hidden.is_empty()
             || !hidden
                 .len()
                 .is_multiple_of(payload.wkv.format.in_features())
         {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 compressor prefill hidden length mismatch: hidden={} in_features={}",
-                hidden.len(),
-                payload.wkv.format.in_features()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 compressor prefill hidden length mismatch: hidden={} in_features={}",
+                    hidden.len(),
+                    payload.wkv.format.in_features()
+                ),
+            });
         }
         self.kv_state.fill(0.0);
         self.score_state.fill(f32::NEG_INFINITY);
@@ -2638,13 +2720,15 @@ impl DeepSeekV4CompressorState {
             score: score_rows,
         } = projection;
         if kv_rows.len() != tokens * self.out_dim || score_rows.len() != tokens * self.out_dim {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 compressor prefill rows matvec length mismatch: kv={} score={} expected {}x{}",
-                kv_rows.len(),
-                score_rows.len(),
-                tokens,
-                self.out_dim
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 compressor prefill rows matvec length mismatch: kv={} score={} expected {}x{}",
+                    kv_rows.len(),
+                    score_rows.len(),
+                    tokens,
+                    self.out_dim
+                ),
+            });
         }
 
         let remainder = tokens % self.ratio;
@@ -2841,15 +2925,15 @@ impl DeepSeekV4CompressorState {
         scratch: &mut DeepSeekV4CompressorDecodeArena,
     ) -> Result<bool> {
         self.validate_append_payload(payload)?;
-        let offset = row
-            .checked_mul(self.out_dim)
-            .ok_or_else(|| Error::Model("compressor projected row offset overflow".into()))?;
+        let offset = row.checked_mul(self.out_dim).ok_or_else(|| Error::Model {
+            message: "compressor projected row offset overflow".into(),
+        })?;
         if projected_kv.len() < offset + self.out_dim
             || projected_score.len() < offset + self.out_dim
         {
-            return Err(Error::Model(
-                "compressor projected packed rows are too short".into(),
-            ));
+            return Err(Error::Model {
+                message: "compressor projected packed rows are too short".into(),
+            });
         }
         operators.cuda_mut()?.ops.copy_f32_range(
             projected_kv,
@@ -2965,9 +3049,9 @@ impl DeepSeekV4CompressorState {
             || payload.head_dim != self.head_dim
             || payload.overlap != self.overlap
         {
-            return Err(Error::Model(
-                "DeepSeek-V4 compressor payload/state shape mismatch".into(),
-            ));
+            return Err(Error::Model {
+                message: "DeepSeek-V4 compressor payload/state shape mismatch".into(),
+            });
         }
         Ok(())
     }
@@ -2980,12 +3064,14 @@ impl DeepSeekV4CompressorState {
         position: usize,
     ) -> Result<bool> {
         if kv.len() != self.out_dim || score.len() != self.out_dim {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 compressor matvec length mismatch: kv={} score={} expected {}",
-                kv.len(),
-                score.len(),
-                self.out_dim
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 compressor matvec length mismatch: kv={} score={} expected {}",
+                    kv.len(),
+                    score.len(),
+                    self.out_dim
+                ),
+            });
         }
         let ape_row = position % self.ratio;
         let ape_start = ape_row * payload.ape_cols;
@@ -3098,9 +3184,9 @@ impl DeepSeekV4CompressorState {
                 }
             }
             if denom == 0.0 || !denom.is_finite() {
-                return Err(Error::Model(
-                    "DeepSeek-V4 compressor softmax denominator is invalid".into(),
-                ));
+                return Err(Error::Model {
+                    message: "DeepSeek-V4 compressor softmax denominator is invalid".into(),
+                });
             }
             for row in 0..rows {
                 let score = score_rows[row * self.head_dim + dim];
@@ -3204,11 +3290,13 @@ impl DeepSeekV4WindowKvCache {
 
     pub fn append(&mut self, position: usize, value: &[f32]) -> Result<()> {
         if value.len() != self.head_dim {
-            return Err(Error::Model(format!(
-                "DeepSeek-V4 KV append mismatch: expected {}, got {}",
-                self.head_dim,
-                value.len()
-            )));
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 KV append mismatch: expected {}, got {}",
+                    self.head_dim,
+                    value.len()
+                ),
+            });
         }
         let slot = position % self.window_size;
         let start = slot * self.head_dim;

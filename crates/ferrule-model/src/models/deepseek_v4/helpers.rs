@@ -67,7 +67,9 @@ pub(crate) fn read_aux_tensor(
     let slice = auxiliary
         .iter()
         .find(|slice| slice.name == name)
-        .ok_or_else(|| Error::Model(format!("DeepSeek-V4 missing auxiliary tensor '{name}'")))?;
+        .ok_or_else(|| Error::Model {
+            message: format!("DeepSeek-V4 missing auxiliary tensor '{name}'"),
+        })?;
     reader.read_slice(slice)
 }
 
@@ -122,11 +124,13 @@ pub(crate) fn rms_norm_rows_with_operators(
     label: &str,
 ) -> Result<Vec<f32>> {
     if tokens == 0 || weight.is_empty() || input.len() != tokens * weight.len() {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 {label} batched RMS length mismatch: tokens={tokens} input={} weight={}",
-            input.len(),
-            weight.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 {label} batched RMS length mismatch: tokens={tokens} input={} weight={}",
+                input.len(),
+                weight.len()
+            ),
+        });
     }
     operators.rms_norm_rows(input, tokens, weight, eps, label)
 }
@@ -159,10 +163,12 @@ pub(crate) fn quantize_non_rope_fp8_for_qat_in_place(
     block_size: usize,
 ) -> Result<()> {
     if head_dim == 0 || rope_dim > head_dim || !values.len().is_multiple_of(head_dim) {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 QAT FP8 shape mismatch: values={} head_dim={head_dim} rope_dim={rope_dim}",
-            values.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 QAT FP8 shape mismatch: values={} head_dim={head_dim} rope_dim={rope_dim}",
+                values.len()
+            ),
+        });
     }
     let non_rope = head_dim - rope_dim;
     if non_rope == 0 {
@@ -238,11 +244,13 @@ pub(crate) fn concat_topk_rows(
     tokens: usize,
 ) -> Result<Vec<isize>> {
     if left.len() != tokens * left_cols || right.len() != tokens * right_cols {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 top-k concat shape mismatch: tokens={tokens} left={} left_cols={left_cols} right={} right_cols={right_cols}",
-            left.len(),
-            right.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 top-k concat shape mismatch: tokens={tokens} left={} left_cols={left_cols} right={} right_cols={right_cols}",
+                left.len(),
+                right.len()
+            ),
+        });
     }
     let mut out = Vec::with_capacity(tokens * (left_cols + right_cols));
     for token in 0..tokens {
@@ -271,12 +279,14 @@ pub(crate) fn indexer_topk_indices_prefill(
         || q_latents.len() != tokens * cfg.q_lora_rank
         || indexer_compressed.len() != compressed_len * cfg.index_head_dim
     {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 indexer prefill shape mismatch: tokens={tokens} hidden={} q_latents={} compressed={}",
-            hidden.len(),
-            q_latents.len(),
-            indexer_compressed.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 indexer prefill shape mismatch: tokens={tokens} hidden={} q_latents={} compressed={}",
+                hidden.len(),
+                q_latents.len(),
+                indexer_compressed.len()
+            ),
+        });
     }
 
     let mut out = vec![-1; tokens * cols];
@@ -341,11 +351,13 @@ pub(crate) fn compress_rows_softmax(
         || kv_rows.len() != rows * head_dim
         || score_rows.len() != rows * head_dim
     {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 compressor row shape mismatch: rows={rows} head_dim={head_dim} kv={} score={}",
-            kv_rows.len(),
-            score_rows.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 compressor row shape mismatch: rows={rows} head_dim={head_dim} kv={} score={}",
+                kv_rows.len(),
+                score_rows.len()
+            ),
+        });
     }
     let mut out = vec![0.0f32; head_dim];
     for dim in 0..head_dim {
@@ -364,9 +376,9 @@ pub(crate) fn compress_rows_softmax(
             }
         }
         if denom == 0.0 || !denom.is_finite() {
-            return Err(Error::Model(
-                "DeepSeek-V4 compressor softmax denominator is invalid".into(),
-            ));
+            return Err(Error::Model {
+                message: "DeepSeek-V4 compressor softmax denominator is invalid".into(),
+            });
         }
         for row in 0..rows {
             let score = score_rows[row * head_dim + dim];
@@ -398,9 +410,11 @@ pub(crate) fn indexer_topk_indices(
         return Ok(Vec::new());
     }
     if indexer_compressed.len() != compressed_len * cfg.index_head_dim {
-        return Err(Error::Model(
-            "DeepSeek-V4 indexer compressed cache length is not divisible by index_head_dim".into(),
-        ));
+        return Err(Error::Model {
+            message:
+                "DeepSeek-V4 indexer compressed cache length is not divisible by index_head_dim"
+                    .into(),
+        });
     }
     let mut query = operators.linear_matvec(&indexer.wq_b, q_latent)?;
     apply_rotary_tail_scaled(
@@ -450,11 +464,13 @@ pub(crate) fn grouped_output_a(
     layer: usize,
 ) -> Result<Vec<f32>> {
     if context.len() != cfg.q_full_dim() {
-        return Err(Error::Model(format!(
-            "DeepSeek-V4 layer {layer} context length mismatch: expected {}, got {}",
-            cfg.q_full_dim(),
-            context.len()
-        )));
+        return Err(Error::Model {
+            message: format!(
+                "DeepSeek-V4 layer {layer} context length mismatch: expected {}, got {}",
+                cfg.q_full_dim(),
+                context.len()
+            ),
+        });
     }
     check_linear(
         layer,

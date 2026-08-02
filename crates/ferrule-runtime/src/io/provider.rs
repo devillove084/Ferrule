@@ -1,5 +1,6 @@
 //! Materialization-provider boundary and deterministic fake implementation.
 
+use std::collections::HashMap;
 #[cfg(test)]
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -17,7 +18,7 @@ use ferrule_common::io_protocol::{
 use ferrule_common::materialization_io::MaterializationResourcePlan;
 use ferrule_model::{
     MaterializationPlacement, MaterializationPreparation, MaterializationProvider,
-    MaterializationRequest, PhysicalMaterializationOperationReservation,
+    MaterializationPurpose, MaterializationRequest, PhysicalMaterializationOperationReservation,
     PhysicalMaterializationTopology,
 };
 
@@ -45,11 +46,12 @@ impl MaterializationOperationReservation {
     }
 
     fn physical(&self) -> Result<&PhysicalMaterializationOperationReservation, FailureReason> {
-        self.physical.as_ref().ok_or_else(|| {
-            FailureReason::ProtocolViolation(
-                "runner materialization command received a non-physical reservation".into(),
-            )
-        })
+        self.physical
+            .as_ref()
+            .ok_or_else(|| FailureReason::ContractViolation {
+                message: "runner materialization command received a non-physical reservation"
+                    .into(),
+            })
     }
 
     pub(crate) fn mark_read_submitted(&mut self) -> Result<(), ferrule_common::IoProtocolError> {
@@ -100,6 +102,24 @@ impl MaterializationOperationReservation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionPromotion {
+    AlreadyExecution(MaterializationPreparation),
+    Promoted(MaterializationPreparation),
+}
+
+impl ExecutionPromotion {
+    pub const fn preparation(self) -> MaterializationPreparation {
+        match self {
+            Self::AlreadyExecution(preparation) | Self::Promoted(preparation) => preparation,
+        }
+    }
+
+    pub const fn changed(self) -> bool {
+        matches!(self, Self::Promoted(_))
+    }
+}
+
 /// Runtime/provider command interface. Command acceptance never changes owner
 /// state by itself; physical progress is observed only through `CompletionEvent`.
 pub trait RuntimeMaterializationProvider: std::fmt::Debug + Send {
@@ -108,6 +128,13 @@ pub trait RuntimeMaterializationProvider: std::fmt::Debug + Send {
         &self,
         key: MaterializationKey,
     ) -> Result<MaterializationPreparation, FailureReason>;
+
+    /// Explicitly promote a frozen prefetch to execution custody without changing
+    /// its key, binding, or physical operation.
+    fn promote_to_execution(
+        &mut self,
+        key: MaterializationKey,
+    ) -> Result<ExecutionPromotion, FailureReason>;
 
     /// Roll back a preparation that never became registry-owned work.
     fn discard_preparation(&mut self, key: MaterializationKey) -> Result<(), FailureReason>;
@@ -171,8 +198,15 @@ pub struct SharedMaterializationProvider {
     state: Arc<Mutex<SharedMaterializationProviderState>>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FrozenPreparation {
+    preparation: MaterializationPreparation,
+    purpose: MaterializationPurpose,
+}
+
 struct SharedMaterializationProviderState {
     provider: Box<dyn MaterializationProvider>,
+    preparations: HashMap<MaterializationKey, FrozenPreparation>,
 }
 
 impl std::fmt::Debug for SharedMaterializationProvider {
@@ -195,7 +229,10 @@ impl Clone for SharedMaterializationProvider {
 impl SharedMaterializationProvider {
     pub fn new(provider: Box<dyn MaterializationProvider>) -> Self {
         Self {
-            state: Arc::new(Mutex::new(SharedMaterializationProviderState { provider })),
+            state: Arc::new(Mutex::new(SharedMaterializationProviderState {
+                provider,
+                preparations: HashMap::new(),
+            })),
         }
     }
 
@@ -210,11 +247,21 @@ impl SharedMaterializationProvider {
     pub fn prepare(
         &self,
         request: MaterializationRequest,
+        intent: MaterializationPurpose,
     ) -> Result<MaterializationPreparation, FailureReason> {
-        let preparation = self.lock().provider.prepare(request)?;
+        let mut state = self.lock();
+        let preparation = state.provider.prepare(request, intent)?;
         request
             .validate_key(preparation.key())
-            .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))?;
+            .map_err(|source| FailureReason::Protocol { source })?;
+        state
+            .preparations
+            .entry(preparation.key())
+            .and_modify(|frozen| frozen.preparation = preparation)
+            .or_insert(FrozenPreparation {
+                preparation,
+                purpose: intent,
+            });
         Ok(preparation)
     }
 
@@ -222,11 +269,58 @@ impl SharedMaterializationProvider {
         &self,
         key: MaterializationKey,
     ) -> Result<MaterializationPreparation, FailureReason> {
-        self.lock().provider.prepared(key)
+        let mut state = self.lock();
+        let preparation = state.provider.prepared(key)?;
+        if preparation.key() != key {
+            return Err(FailureReason::ContractViolation {
+                message: "physical provider returned a different prepared key".into(),
+            });
+        }
+        let frozen =
+            state
+                .preparations
+                .get_mut(&key)
+                .ok_or_else(|| FailureReason::ContractViolation {
+                    message: "provider observation has no frozen preparation purpose".into(),
+                })?;
+        frozen.preparation = preparation;
+        Ok(preparation)
+    }
+
+    pub fn promote_to_execution(
+        &self,
+        key: MaterializationKey,
+    ) -> Result<ExecutionPromotion, FailureReason> {
+        let mut state = self.lock();
+        let expected = state.preparations.get(&key).copied().ok_or_else(|| {
+            FailureReason::ContractViolation {
+                message: "execution promotion has no frozen provider preparation".into(),
+            }
+        })?;
+        if expected.purpose == MaterializationPurpose::Execution {
+            return Ok(ExecutionPromotion::AlreadyExecution(expected.preparation));
+        }
+        let preparation = state.provider.promote_to_execution(key)?;
+        if preparation.key() != key || preparation.binding() != expected.preparation.binding() {
+            return Err(FailureReason::ContractViolation {
+                message: "execution promotion changed the frozen key or binding".into(),
+            });
+        }
+        state.preparations.insert(
+            key,
+            FrozenPreparation {
+                preparation,
+                purpose: MaterializationPurpose::Execution,
+            },
+        );
+        Ok(ExecutionPromotion::Promoted(preparation))
     }
 
     pub fn discard_preparation(&self, key: MaterializationKey) -> Result<(), FailureReason> {
-        self.lock().provider.discard_preparation(key)
+        let mut state = self.lock();
+        state.provider.discard_preparation(key)?;
+        state.preparations.remove(&key);
+        Ok(())
     }
 
     fn lock(&self) -> MutexGuard<'_, SharedMaterializationProviderState> {
@@ -244,12 +338,24 @@ impl RuntimeMaterializationProvider for SharedMaterializationProvider {
         self.prepared(key)
     }
 
+    fn promote_to_execution(
+        &mut self,
+        key: MaterializationKey,
+    ) -> Result<ExecutionPromotion, FailureReason> {
+        SharedMaterializationProvider::promote_to_execution(self, key)
+    }
+
     fn discard_preparation(&mut self, key: MaterializationKey) -> Result<(), FailureReason> {
         SharedMaterializationProvider::discard_preparation(self, key)
     }
 
     fn release_execution_lease(&mut self, key: MaterializationKey) -> Result<(), FailureReason> {
-        self.lock().provider.release_execution_lease(key)
+        let mut state = self.lock();
+        state.provider.release_execution_lease(key)?;
+        if let Some(frozen) = state.preparations.get_mut(&key) {
+            frozen.purpose = MaterializationPurpose::Prefetch;
+        }
+        Ok(())
     }
 
     fn materialization_plan(
@@ -266,13 +372,20 @@ impl RuntimeMaterializationProvider for SharedMaterializationProvider {
         plan: MaterializationResourcePlan,
     ) -> Result<MaterializationOperationReservation, FailureReason> {
         let mut state = self.lock();
-        let expected = state.provider.prepared(key)?;
-        let expected_binding = expected.binding();
-        if !matches!(expected, MaterializationPreparation::Transfer(_)) {
-            return Err(FailureReason::ProtocolViolation(
-                "physical operation reserve requires a prepared transfer".into(),
-            ));
+        let expected = state.preparations.get(&key).copied().ok_or_else(|| {
+            FailureReason::ContractViolation {
+                message: "physical operation has no frozen provider preparation".into(),
+            }
+        })?;
+        if !matches!(
+            expected.preparation,
+            MaterializationPreparation::Transfer(_)
+        ) {
+            return Err(FailureReason::ContractViolation {
+                message: "physical operation reserve requires a prepared transfer".into(),
+            });
         }
+        let expected_binding = expected.preparation.binding();
         let physical = state.provider.reserve(operation, key, plan)?;
         let binding = physical.binding();
         let upload_fence = physical.upload_fence();
@@ -298,11 +411,15 @@ impl RuntimeMaterializationProvider for SharedMaterializationProvider {
                 LoadStage::Reserved,
                 CancellationReason::Superseded,
             );
-            let message = match cleanup {
-                Ok(()) => violation.to_owned(),
-                Err(cleanup) => format!("{violation}; physical cleanup failed: {cleanup:?}"),
-            };
-            return Err(FailureReason::ProtocolViolation(message));
+            return Err(match cleanup {
+                Ok(()) => FailureReason::ContractViolation {
+                    message: violation.into(),
+                },
+                Err(cleanup) => FailureReason::ContractCleanup {
+                    message: violation.into(),
+                    cleanup: Box::new(cleanup),
+                },
+            });
         }
         let slabs = physical
             .slabs()
@@ -563,6 +680,16 @@ impl FakeMaterializationProvider {
 }
 
 #[cfg(test)]
+pub(crate) fn fake_slot_for_key(key: MaterializationKey) -> DestinationSlotId {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    let slot = (hasher.finish() as u32).max(1);
+    DestinationSlotId::new(slot)
+}
+
+#[cfg(test)]
 impl RuntimeMaterializationProvider for FakeMaterializationProvider {
     fn preparation(
         &self,
@@ -573,12 +700,20 @@ impl RuntimeMaterializationProvider for FakeMaterializationProvider {
             key.resource(),
             key.backend(),
             key.device(),
-            DestinationSlotId::new(1),
+            fake_slot_for_key(key),
             key.destination_generation(),
         );
         ferrule_model::MaterializationTransfer::new(key, binding, None)
             .map(MaterializationPreparation::Transfer)
-            .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))
+            .map_err(|source| FailureReason::Protocol { source })
+    }
+
+    fn promote_to_execution(
+        &mut self,
+        key: MaterializationKey,
+    ) -> Result<ExecutionPromotion, FailureReason> {
+        self.preparation(key)
+            .map(ExecutionPromotion::AlreadyExecution)
     }
 
     fn discard_preparation(&mut self, _key: MaterializationKey) -> Result<(), FailureReason> {
@@ -594,7 +729,7 @@ impl RuntimeMaterializationProvider for FakeMaterializationProvider {
         _key: MaterializationKey,
     ) -> Result<MaterializationResourcePlan, FailureReason> {
         MaterializationResourcePlan::new(
-            ferrule_common::materialization_io::MaterializationResourceDemand {
+            ferrule_common::materialization_io::MaterializationResourceRequirements {
                 read_slots: 1,
                 storage_read_bytes: 4096,
                 pinned_host_bytes: 4096,
@@ -605,7 +740,7 @@ impl RuntimeMaterializationProvider for FakeMaterializationProvider {
             },
             4096,
         )
-        .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))
+        .map_err(|source| FailureReason::Resources { source })
     }
 
     fn reserve(
@@ -616,7 +751,7 @@ impl RuntimeMaterializationProvider for FakeMaterializationProvider {
     ) -> Result<MaterializationOperationReservation, FailureReason> {
         self.commands
             .push(FakeMaterializationCommand::Reserve(operation));
-        let bytes = plan.demand.pinned_host_bytes;
+        let bytes = plan.requirements.pinned_host_bytes;
         if let Some(reason) = self.reserve_failures.pop_front() {
             return Err(reason);
         }
@@ -636,8 +771,8 @@ impl RuntimeMaterializationProvider for FakeMaterializationProvider {
             key.source_generation(),
             key.destination_generation(),
         )
-        .map_err(|error| FailureReason::ProtocolViolation(error.to_string()))?;
-        let slot = DestinationSlotId::new(identity.min(u32::MAX as u64) as u32);
+        .map_err(|source| FailureReason::Protocol { source })?;
+        let slot = fake_slot_for_key(key);
         Ok(MaterializationOperationReservation {
             slabs: vec![RegisteredPinnedAlignedSlabLease::new(descriptor)].into_boxed_slice(),
             binding: ResidencyBinding::new(
@@ -672,7 +807,7 @@ impl RuntimeMaterializationProvider for FakeMaterializationProvider {
             operation,
             key,
             LoadStage::ReadSubmitted,
-            plan.demand.storage_read_bytes,
+            plan.requirements.storage_read_bytes,
         );
         Ok(())
     }
@@ -692,7 +827,7 @@ impl RuntimeMaterializationProvider for FakeMaterializationProvider {
             operation,
             key,
             LoadStage::UploadSubmitted,
-            plan.demand.h2d_bytes,
+            plan.requirements.h2d_bytes,
         );
         Ok(())
     }
@@ -712,7 +847,7 @@ impl RuntimeMaterializationProvider for FakeMaterializationProvider {
             operation,
             key,
             LoadStage::Installing,
-            plan.demand.device_install_bytes,
+            plan.requirements.device_install_bytes,
         );
         Ok(())
     }
@@ -760,6 +895,13 @@ where
         key: MaterializationKey,
     ) -> Result<MaterializationPreparation, FailureReason> {
         (**self).preparation(key)
+    }
+
+    fn promote_to_execution(
+        &mut self,
+        key: MaterializationKey,
+    ) -> Result<ExecutionPromotion, FailureReason> {
+        (**self).promote_to_execution(key)
     }
 
     fn discard_preparation(&mut self, key: MaterializationKey) -> Result<(), FailureReason> {
@@ -840,6 +982,13 @@ impl RuntimeMaterializationProvider for UnavailableMaterializationProvider {
         &self,
         _key: MaterializationKey,
     ) -> Result<MaterializationPreparation, FailureReason> {
+        Err(FailureReason::DeviceUnavailable)
+    }
+
+    fn promote_to_execution(
+        &mut self,
+        _key: MaterializationKey,
+    ) -> Result<ExecutionPromotion, FailureReason> {
         Err(FailureReason::DeviceUnavailable)
     }
 

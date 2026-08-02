@@ -14,7 +14,9 @@ use ferrule_cuda::kernels::kernels;
 use std::sync::Arc;
 
 fn rc<T, E: std::fmt::Debug>(r: std::result::Result<T, E>) -> Result<T> {
-    r.map_err(|e| ferrule_common::Error::Internal(format!("{e:?}")))
+    r.map_err(|e| ferrule_common::Error::Internal {
+        message: format!("{e:?}"),
+    })
 }
 
 fn has_cuda() -> bool {

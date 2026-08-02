@@ -16,8 +16,9 @@ impl HfSafetensorsIndex {
     }
 
     pub fn from_json_str(text: &str) -> Result<Self> {
-        let json: serde_json::Value = serde_json::from_str(text)
-            .map_err(|e| Error::Model(format!("safetensors index json: {e}")))?;
+        let json: serde_json::Value = serde_json::from_str(text).map_err(|e| Error::Model {
+            message: format!("safetensors index json: {e}"),
+        })?;
         let total_size = json
             .get("metadata")
             .and_then(|metadata| metadata.get("total_size"))
@@ -25,7 +26,9 @@ impl HfSafetensorsIndex {
         let weight_map = json
             .get("weight_map")
             .and_then(|value| value.as_object())
-            .ok_or_else(|| Error::Model("safetensors index missing weight_map".into()))?
+            .ok_or_else(|| Error::Model {
+                message: "safetensors index missing weight_map".into(),
+            })?
             .iter()
             .map(|(tensor, shard)| (tensor.clone(), shard.as_str().unwrap_or("").to_string()))
             .collect();

@@ -128,16 +128,17 @@ pub use materialization::{
 
 // Stable protocol identities and lease/dependency contracts used by model APIs.
 pub use ferrule_common::{
-    ContinuationId, DependencySet, LogicalDependency, MaterializationKey, MaterializedResourceId,
+    ContinuationId, DependencySet, LogicalDependency, MaterializationKey, MaterializationPurpose,
+    MaterializationResolveError, MaterializationResolveResult, MaterializedResourceId,
     MaterializedResourceKind, PayloadEncodingId, ResidencyLeaseSet, ValidatedResidencyBinding,
 };
 
 // ── Re-exports: runner ────────────────────────────────────────────────────
 pub use runner::{
-    BatchContinuationCancelOutcome, BatchContinuationId, ModelCompletionReactor, ModelInfo,
-    ModelRunner, MultiSessionBatchProgress, MultiSessionRunner, NativeProposal,
-    NativeProposalProgress, NativeProposalSource, PendingModelProgress, ResidentModelRunner,
-    TokenLogit,
+    BatchContinuationId, ModelCompletionReactor, ModelInfo, ModelRunner, MultiSessionBatchProgress,
+    MultiSessionRunner, NativeProposal, NativeProposalProgress, NativeProposalSource,
+    PendingModelProgress, ResidentModelRunner, TokenLogit, TransactionEndIntent,
+    TransactionEndProgress,
 };
 
 // ── Re-exports: attention_backend ─────────────────────────────────────────

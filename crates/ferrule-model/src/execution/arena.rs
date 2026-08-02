@@ -288,8 +288,12 @@ mod tests {
     fn failed_build_does_not_publish_bucket() {
         let mut pool = PersistentArenaPool::<u32, u32>::new();
         {
-            let result = pool.acquire(3, || Err(Error::Execution("injected build failure".into())));
-            assert!(matches!(result, Err(Error::Execution(_))));
+            let result = pool.acquire(3, || {
+                Err(Error::Execution {
+                    message: "injected build failure".into(),
+                })
+            });
+            assert!(matches!(result, Err(Error::Execution { message: _ })));
         }
         assert!(pool.is_empty());
         assert!(!pool.contains(&3));
@@ -331,7 +335,11 @@ mod tests {
         let mut pool = PersistentArenaPool::<char, u32>::new();
         drop(pool.acquire('A', || Ok(10)).unwrap());
         {
-            let failed_b = pool.acquire('B', || Err(Error::Execution("B failed".into())));
+            let failed_b = pool.acquire('B', || {
+                Err(Error::Execution {
+                    message: "B failed".into(),
+                })
+            });
             assert!(failed_b.is_err());
         }
         assert!(pool.contains(&'A'));
@@ -517,8 +525,12 @@ mod tests {
         let checkout_a = pool.checkout('A', || Ok(10)).unwrap();
         let checkout_b = pool.checkout('B', || Ok(20)).unwrap();
 
-        let failed_a = pool.checkout('A', || Err(Error::Execution("A failed".into())));
-        assert!(matches!(failed_a, Err(Error::Execution(_))));
+        let failed_a = pool.checkout('A', || {
+            Err(Error::Execution {
+                message: "A failed".into(),
+            })
+        });
+        assert!(matches!(failed_a, Err(Error::Execution { message: _ })));
         assert_eq!(*checkout_a, 10);
         assert_eq!(*checkout_b, 20);
         assert!(pool.is_empty());

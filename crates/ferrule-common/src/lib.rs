@@ -22,40 +22,109 @@ pub use memory::{
     MemoryPoolKind, MemoryPoolLimits, MemoryPoolStats, MemoryTopology, OwnerMemoryLru,
 };
 
-use thiserror::Error;
+use snafu::Snafu;
 
-/// The one error type for the entire system.
-#[derive(Error, Debug)]
+/// Cross-crate error boundary for model, execution, and backend APIs.
+///
+/// Subsystems keep their own typed errors and preserve them as sources at their
+/// outer boundary. Message variants remain only for legacy leaf APIs that have
+/// not yet acquired a subsystem-specific error type.
+#[derive(Debug, Snafu)]
 pub enum Error {
-    #[error("I/O: {0}")]
-    Io(#[from] std::io::Error),
+    #[snafu(transparent)]
+    Io { source: std::io::Error },
 
-    #[error("I/O protocol: {0}")]
-    IoProtocol(#[from] io_protocol::IoProtocolError),
+    #[snafu(transparent)]
+    IoProtocol {
+        source: io_protocol::IoProtocolError,
+    },
 
-    #[error("GGUF: {0}")]
-    Gguf(String),
+    #[snafu(transparent)]
+    Materialization {
+        source: io_protocol::MaterializationResolveError,
+    },
 
-    #[error("Graph: {0}")]
-    Graph(String),
+    #[snafu(transparent)]
+    MaterializationResources {
+        source: materialization_io::MaterializationResourceError,
+    },
 
-    #[error("Kernel: {0}")]
-    Kernel(String),
+    #[snafu(display("GGUF: {message}"))]
+    Gguf { message: String },
 
-    #[error("Model: {0}")]
-    Model(String),
+    #[snafu(display("graph: {message}"))]
+    Graph { message: String },
 
-    #[error("Execution: {0}")]
-    Execution(String),
+    #[snafu(display("kernel: {message}"))]
+    Kernel { message: String },
 
-    #[error("Tokenization: {0}")]
-    Tokenization(String),
+    #[snafu(display("model: {message}"))]
+    Model { message: String },
 
-    #[error("Internal: {0}")]
-    Internal(String),
+    #[snafu(display("execution: {message}"))]
+    Execution { message: String },
+
+    #[snafu(display("tokenization: {message}"))]
+    Tokenization { message: String },
+
+    #[snafu(display("internal invariant: {message}"))]
+    Internal { message: String },
+
+    #[snafu(display("{operation}: {source}"))]
+    Context {
+        operation: String,
+        source: Box<Error>,
+    },
+
+    #[snafu(display("{operation} failed: {source}; cleanup also failed: {cleanup}"))]
+    Cleanup {
+        operation: String,
+        source: Box<Error>,
+        cleanup: Box<Error>,
+    },
+
+    #[snafu(display(
+        "{operation} encountered {} independent failures",
+        failures.len()
+    ))]
+    FailureBatch {
+        operation: String,
+        failures: Vec<Error>,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl Error {
+    pub fn context(operation: impl Into<String>, source: Error) -> Self {
+        Self::Context {
+            operation: operation.into(),
+            source: Box::new(source),
+        }
+    }
+
+    pub fn with_cleanup(operation: impl Into<String>, source: Error, cleanup: Result<()>) -> Self {
+        match cleanup {
+            Ok(()) => source,
+            Err(cleanup) => Self::Cleanup {
+                operation: operation.into(),
+                source: Box::new(source),
+                cleanup: Box::new(cleanup),
+            },
+        }
+    }
+
+    pub fn failures(operation: impl Into<String>, failures: Vec<Error>) -> Result<()> {
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(Self::FailureBatch {
+                operation: operation.into(),
+                failures,
+            })
+        }
+    }
+}
 
 /// Quantization format identifier — mirrors GGUF's type enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]

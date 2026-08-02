@@ -12,17 +12,18 @@ pub use ledger::{
     CohortId, CriticalPathLedger, CriticalPhase, LedgerError, OutputTokenId, OutputTokenSnapshot,
     PhaseDurations, TimeSpan,
 };
-#[cfg(test)]
-pub use provider::{FakeCompletionSpec, FakeMaterializationCommand, FakeMaterializationProvider};
 pub use provider::{
-    MaterializationOperationReservation, RuntimeMaterializationProvider,
+    ExecutionPromotion, MaterializationOperationReservation, RuntimeMaterializationProvider,
     SharedMaterializationProvider, UnavailableMaterializationProvider,
 };
+#[cfg(test)]
+pub use provider::{FakeCompletionSpec, FakeMaterializationCommand, FakeMaterializationProvider};
 pub(crate) use registry::RegistryDriveStep;
 pub use registry::{
     AttachReport, CompletionDisposition, CompletionRejection, CompletionRejectionReason,
-    ContinuationFailure, FailedContinuation, LoadOp, LoadRegistry, LoadRequest, RegistryError,
-    RegistryStats, ResumeDisposition, ResumeLease, ShutdownReport, TransactionCustodyOutcome,
+    ContinuationFailure, FailedContinuation, LoadOp, LoadRegistry, LoadRequest, PrefetchId,
+    PrefetchReport, RegistryError, RegistryStats, ResumeDisposition, ResumeLease, ShutdownReport,
+    TransactionCustodyOutcome,
 };
 pub use resolver::{RuntimeMaterializationResolver, RuntimeMaterializationResolverStats};
 pub use waiters::{

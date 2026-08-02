@@ -20,11 +20,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::{Error, Result};
 use ferrule_common::execution::{
     KvBlockId, KvCowReplacement, KvLayoutSchema, KvPageId, KvReservationView, KvWriteSlot,
     StateSlot,
 };
-use ferrule_common::{Error, Result};
 
 /// Per-sequence block table mapping logical page indices to physical page IDs.
 #[derive(Debug, Clone, Default)]
@@ -347,7 +347,9 @@ impl KvPageManager {
             .get()
             .checked_add(1)
             .and_then(NonZeroU64::new)
-            .ok_or_else(|| Error::Execution("KV reservation ID space exhausted".into()))?;
+            .ok_or_else(|| Error::InvalidRequest {
+                message: "KV reservation ID space exhausted".into(),
+            })?;
         self.next_reservation_id = next;
         Ok(id)
     }
@@ -357,33 +359,39 @@ impl KvPageManager {
         let mut slots = HashSet::with_capacity(reservations.len());
         for reservation in reservations {
             if !ids.insert(reservation.id) {
-                return Err(Error::Execution(format!(
-                    "page manager: reservation {} appears more than once",
-                    reservation.id.get()
-                )));
+                return Err(Error::InvalidRequest {
+                    message: format!(
+                        "page manager: reservation {} appears more than once",
+                        reservation.id.get()
+                    ),
+                });
             }
             let slot = reservation.state_slot.get();
             if !slots.insert(slot) {
-                return Err(Error::Execution(format!(
-                    "page manager: packed transaction contains duplicate state slot {slot}"
-                )));
+                return Err(Error::InvalidRequest {
+                    message: format!(
+                        "page manager: packed transaction contains duplicate state slot {slot}"
+                    ),
+                });
             }
             let stored = self
                 .pending_reservations
                 .get(&reservation.id)
-                .ok_or_else(|| {
-                    Error::Execution(format!(
+                .ok_or_else(|| Error::InvalidRequest {
+                    message: format!(
                         "page manager: reservation {} is not live",
                         reservation.id.get()
-                    ))
+                    ),
                 })?;
             if stored != &reservation.view
                 || self.reservation_owners.get(&slot) != Some(&reservation.id)
             {
-                return Err(Error::Internal(format!(
-                    "page manager: reservation {} ownership changed",
-                    reservation.id.get()
-                )));
+                return Err(Error::Invariant {
+                    message: format!(
+                        "page manager: reservation {} ownership changed",
+                        reservation.id.get()
+                    ),
+                });
             }
         }
         Ok(())
@@ -425,13 +433,13 @@ impl KvPageManager {
         retirement: KvRetirement,
     ) -> std::result::Result<(), ConfirmKvRetirementError> {
         let invalid = if retirement.manager_id != self.manager_id {
-            Some(Error::Execution(
-                "page manager: retirement belongs to another manager".into(),
-            ))
+            Some(Error::InvalidRequest {
+                message: "page manager: retirement belongs to another manager".into(),
+            })
         } else {
             retirement.pages.iter().find_map(|page| {
-                (!self.retiring_pages.contains(page)).then(|| {
-                    Error::Execution(format!("page manager: page {} is not retiring", page.0))
+                (!self.retiring_pages.contains(page)).then(|| Error::InvalidRequest {
+                    message: format!("page manager: page {} is not retiring", page.0),
                 })
             })
         };
@@ -509,9 +517,9 @@ impl KvPageManager {
     pub fn alloc_sequence(&mut self, state_slot: StateSlot, generation: u64) -> Result<()> {
         let slot = state_slot.get();
         if self.sequences.contains_key(&slot) {
-            return Err(Error::Internal(format!(
-                "page manager: state slot {slot} is already allocated"
-            )));
+            return Err(Error::Invariant {
+                message: format!("page manager: state slot {slot} is already allocated"),
+            });
         }
         self.sequences.insert(
             slot,
@@ -527,11 +535,11 @@ impl KvPageManager {
         self.sequences
             .get(&state_slot.get())
             .map(|sequence| sequence.generation)
-            .ok_or_else(|| {
-                Error::Internal(format!(
+            .ok_or_else(|| Error::Invariant {
+                message: format!(
                     "page manager: state slot {} is not allocated",
                     state_slot.get()
-                ))
+                ),
             })
     }
 
@@ -545,31 +553,37 @@ impl KvPageManager {
     ) -> Result<usize> {
         let slot = state_slot.get();
         if self.reservation_owners.contains_key(&slot) {
-            return Err(Error::Execution(format!(
-                "page manager: state slot {slot} already owns a live reservation"
-            )));
+            return Err(Error::InvalidRequest {
+                message: format!("page manager: state slot {slot} already owns a live reservation"),
+            });
         }
-        let sequence = self.sequences.get(&slot).ok_or_else(|| {
-            Error::Internal(format!(
+        let sequence = self.sequences.get(&slot).ok_or_else(|| Error::Invariant {
+            message: format!(
                 "page manager: cannot size reservation for unallocated state slot {slot}"
-            ))
+            ),
         })?;
         if sequence.generation != generation {
-            return Err(Error::Execution(format!(
-                "page manager: stale generation {generation} for state slot {slot} (expected {})",
-                sequence.generation
-            )));
+            return Err(Error::InvalidRequest {
+                message: format!(
+                    "page manager: stale generation {generation} for state slot {slot} (expected {})",
+                    sequence.generation
+                ),
+            });
         }
         let end = sequence
             .block_table
             .committed_tokens
             .checked_add(token_count)
-            .ok_or_else(|| Error::Execution("page manager: sequence length overflow".into()))?;
+            .ok_or_else(|| Error::InvalidRequest {
+                message: "page manager: sequence length overflow".into(),
+            })?;
         if end > self.schema.max_sequence_len() {
-            return Err(Error::Execution(format!(
-                "page manager: sequence length {end} exceeds schema maximum {}",
-                self.schema.max_sequence_len()
-            )));
+            return Err(Error::InvalidRequest {
+                message: format!(
+                    "page manager: sequence length {end} exceeds schema maximum {}",
+                    self.schema.max_sequence_len()
+                ),
+            });
         }
         let pages_needed = self
             .schema
@@ -600,34 +614,41 @@ impl KvPageManager {
     ) -> Result<KvReservation> {
         let slot = state_slot.get();
         if let Some(owner) = self.reservation_owners.get(&slot) {
-            return Err(Error::Execution(format!(
-                "page manager: state slot {slot} is already owned by reservation {}",
-                owner.get()
-            )));
+            return Err(Error::InvalidRequest {
+                message: format!(
+                    "page manager: state slot {slot} is already owned by reservation {}",
+                    owner.get()
+                ),
+            });
         }
-        let seq = self.sequences.get(&slot).ok_or_else(|| {
-            Error::Internal(format!(
-                "page manager: cannot reserve for unallocated state slot {slot}"
-            ))
+        let seq = self.sequences.get(&slot).ok_or_else(|| Error::Invariant {
+            message: format!("page manager: cannot reserve for unallocated state slot {slot}"),
         })?;
 
         if seq.generation != generation {
-            return Err(Error::Execution(format!(
-                "page manager: stale generation {generation} for state slot {slot} (expected {})",
-                seq.generation
-            )));
+            return Err(Error::InvalidRequest {
+                message: format!(
+                    "page manager: stale generation {generation} for state slot {slot} (expected {})",
+                    seq.generation
+                ),
+            });
         }
 
         let committed_tokens = seq.block_table.committed_tokens;
         let existing_pages = seq.block_table.pages.clone();
-        let end = committed_tokens
-            .checked_add(token_count)
-            .ok_or_else(|| Error::Execution("page manager: sequence length overflow".into()))?;
+        let end =
+            committed_tokens
+                .checked_add(token_count)
+                .ok_or_else(|| Error::InvalidRequest {
+                    message: "page manager: sequence length overflow".into(),
+                })?;
         if end > self.schema.max_sequence_len() {
-            return Err(Error::Execution(format!(
-                "page manager: sequence length {end} exceeds schema maximum {}",
-                self.schema.max_sequence_len()
-            )));
+            return Err(Error::InvalidRequest {
+                message: format!(
+                    "page manager: sequence length {end} exceeds schema maximum {}",
+                    self.schema.max_sequence_len()
+                ),
+            });
         }
         let positions = committed_tokens..end;
         let pages_needed = self
@@ -699,45 +720,56 @@ impl KvPageManager {
             for commit in &commits {
                 let reservation = &commit.reservation;
                 let slot = reservation.state_slot.get();
-                let sequence = self.sequences.get(&slot).ok_or_else(|| {
-                    Error::Internal(format!(
-                        "page manager: cannot commit unallocated state slot {slot}"
-                    ))
+                let sequence = self.sequences.get(&slot).ok_or_else(|| Error::Invariant {
+                    message: format!("page manager: cannot commit unallocated state slot {slot}"),
                 })?;
                 if sequence.generation != reservation.generation {
-                    return Err(Error::Execution(format!(
-                        "page manager: stale generation on commit for state slot {slot}"
-                    )));
+                    return Err(Error::InvalidRequest {
+                        message: format!(
+                            "page manager: stale generation on commit for state slot {slot}"
+                        ),
+                    });
                 }
                 if sequence.block_table.committed_tokens != reservation.positions.start {
-                    return Err(Error::Execution(format!(
-                        "page manager: reservation starts at {}, committed view is {}",
-                        reservation.positions.start, sequence.block_table.committed_tokens
-                    )));
+                    return Err(Error::InvalidRequest {
+                        message: format!(
+                            "page manager: reservation starts at {}, committed view is {}",
+                            reservation.positions.start, sequence.block_table.committed_tokens
+                        ),
+                    });
                 }
                 if commit.committed_rows > reservation.positions.len() {
-                    return Err(Error::Execution(format!(
-                        "page manager: committed prefix {} exceeds reservation length {}",
-                        commit.committed_rows,
-                        reservation.positions.len()
-                    )));
+                    return Err(Error::InvalidRequest {
+                        message: format!(
+                            "page manager: committed prefix {} exceeds reservation length {}",
+                            commit.committed_rows,
+                            reservation.positions.len()
+                        ),
+                    });
                 }
 
                 let final_end = reservation
                     .positions
                     .start
                     .checked_add(commit.committed_rows)
-                    .ok_or_else(|| Error::Execution("page manager: prefix end overflow".into()))?;
+                    .ok_or_else(|| Error::InvalidRequest {
+                        message: "page manager: prefix end overflow".into(),
+                    })?;
                 let pages_before = self.schema.pages_for_tokens(reservation.positions.start);
                 let pages_after = self.schema.pages_for_tokens(final_end);
-                let kept_new_pages = pages_after.checked_sub(pages_before).ok_or_else(|| {
-                    Error::Internal("page manager: committed page count moved backwards".into())
-                })?;
+                let kept_new_pages =
+                    pages_after
+                        .checked_sub(pages_before)
+                        .ok_or_else(|| Error::Invariant {
+                            message: "page manager: committed page count moved backwards".into(),
+                        })?;
                 if kept_new_pages > reservation.newly_allocated.len() {
-                    return Err(Error::Internal(format!(
-                        "page manager: prefix ending at {final_end} needs {kept_new_pages} new pages but reservation has {}",
-                        reservation.newly_allocated.len()
-                    )));
+                    return Err(Error::Invariant {
+                        message: format!(
+                            "page manager: prefix ending at {final_end} needs {kept_new_pages} new pages but reservation has {}",
+                            reservation.newly_allocated.len()
+                        ),
+                    });
                 }
 
                 let mut after = sequence.block_table.clone();
@@ -761,21 +793,21 @@ impl KvPageManager {
 
                 if let Some(cow) = reservation.cow_replacement {
                     if sequence.block_table.pages.get(cow.logical_page) != Some(&cow.source) {
-                        return Err(Error::Execution(
-                            "page manager: stale COW tail mapping".into(),
-                        ));
+                        return Err(Error::InvalidRequest {
+                            message: "page manager: stale COW tail mapping".into(),
+                        });
                     }
                     if self.page_refcount(cow.source) == 0 {
-                        return Err(Error::Internal(
-                            "page manager: COW source has no live refcount".into(),
-                        ));
+                        return Err(Error::Invariant {
+                            message: "page manager: COW source has no live refcount".into(),
+                        });
                     }
                     if !provisional_pages.insert(cow.replacement)
                         || self.page_refcounts.contains_key(&cow.replacement)
                     {
-                        return Err(Error::Execution(
-                            "page manager: COW replacement is already allocated".into(),
-                        ));
+                        return Err(Error::InvalidRequest {
+                            message: "page manager: COW replacement is already allocated".into(),
+                        });
                     }
                     abort_pages.push(cow.replacement);
                     if commit.committed_rows == 0 {
@@ -789,9 +821,9 @@ impl KvPageManager {
 
                 for page in &reservation.newly_allocated {
                     if !provisional_pages.insert(*page) || self.page_refcounts.contains_key(page) {
-                        return Err(Error::Execution(
-                            "page manager: provisional page is already allocated".into(),
-                        ));
+                        return Err(Error::InvalidRequest {
+                            message: "page manager: provisional page is already allocated".into(),
+                        });
                     }
                 }
                 retained_pages.extend_from_slice(&reservation.newly_allocated[..kept_new_pages]);
@@ -804,10 +836,14 @@ impl KvPageManager {
 
                 retirement_capacity = retirement_capacity
                     .checked_add(rejected_pages.len() + usize::from(cow_source.is_some()))
-                    .ok_or_else(|| Error::Execution("page retirement capacity overflow".into()))?;
+                    .ok_or_else(|| Error::InvalidRequest {
+                        message: "page retirement capacity overflow".into(),
+                    })?;
                 retained_capacity = retained_capacity
                     .checked_add(retained_pages.len())
-                    .ok_or_else(|| Error::Execution("page commit capacity overflow".into()))?;
+                    .ok_or_else(|| Error::InvalidRequest {
+                        message: "page commit capacity overflow".into(),
+                    })?;
                 entries.push(PreparedKvCommitEntry {
                     reservation_id: reservation.id,
                     state_slot: reservation.state_slot,
@@ -905,18 +941,18 @@ impl KvPageManager {
     pub fn free_sequence_pages(&mut self, state_slot: StateSlot) -> Result<KvRetirement> {
         let slot = state_slot.get();
         if let Some(owner) = self.reservation_owners.get(&slot) {
-            return Err(Error::Execution(format!(
-                "page manager: cannot free state slot {slot} owned by reservation {}",
-                owner.get()
-            )));
+            return Err(Error::InvalidRequest {
+                message: format!(
+                    "page manager: cannot free state slot {slot} owned by reservation {}",
+                    owner.get()
+                ),
+            });
         }
         let pages = self
             .sequences
             .get(&slot)
-            .ok_or_else(|| {
-                Error::Internal(format!(
-                    "page manager: cannot free unallocated state slot {slot}"
-                ))
+            .ok_or_else(|| Error::Invariant {
+                message: format!("page manager: cannot free unallocated state slot {slot}"),
             })?
             .block_table
             .pages
@@ -946,42 +982,56 @@ impl KvPageManager {
         expected_prefix_tokens: usize,
     ) -> Result<PreparedKvSequenceFork> {
         if self.sequences.contains_key(&target.get()) {
-            return Err(Error::Internal(format!(
-                "page manager: target state slot {} is already allocated",
-                target.get()
-            )));
+            return Err(Error::Invariant {
+                message: format!(
+                    "page manager: target state slot {} is already allocated",
+                    target.get()
+                ),
+            });
         }
         let block_table = self
             .sequences
             .get(&source.get())
-            .ok_or_else(|| Error::Internal("page manager: fork source is not allocated".into()))?
+            .ok_or_else(|| Error::Invariant {
+                message: "page manager: fork source is not allocated".into(),
+            })?
             .block_table
             .clone();
         if block_table.committed_tokens != expected_prefix_tokens {
-            return Err(Error::Execution(format!(
-                "page manager: fork prefix mismatch: expected {expected_prefix_tokens} committed tokens, source has {}",
-                block_table.committed_tokens
-            )));
+            return Err(Error::InvalidRequest {
+                message: format!(
+                    "page manager: fork prefix mismatch: expected {expected_prefix_tokens} committed tokens, source has {}",
+                    block_table.committed_tokens
+                ),
+            });
         }
         for page in &block_table.pages {
-            let refcount = self.page_refcounts.get(page).copied().ok_or_else(|| {
-                Error::Internal(format!(
-                    "page manager: fork source page {} has no refcount",
-                    page.0
-                ))
-            })?;
+            let refcount =
+                self.page_refcounts
+                    .get(page)
+                    .copied()
+                    .ok_or_else(|| Error::Invariant {
+                        message: format!(
+                            "page manager: fork source page {} has no refcount",
+                            page.0
+                        ),
+                    })?;
             if refcount == 0 {
-                return Err(Error::Internal(format!(
-                    "page manager: fork source page {} has zero refcount",
-                    page.0
-                )));
+                return Err(Error::Invariant {
+                    message: format!(
+                        "page manager: fork source page {} has zero refcount",
+                        page.0
+                    ),
+                });
             }
-            refcount.checked_add(1).ok_or_else(|| {
-                Error::Execution(format!(
-                    "page manager: fork source page {} refcount overflow",
-                    page.0
-                ))
-            })?;
+            refcount
+                .checked_add(1)
+                .ok_or_else(|| Error::InvalidRequest {
+                    message: format!(
+                        "page manager: fork source page {} refcount overflow",
+                        page.0
+                    ),
+                })?;
         }
         Ok(PreparedKvSequenceFork {
             source,
@@ -994,28 +1044,39 @@ impl KvPageManager {
     /// Publish a previously validated page-table fork.
     pub fn publish_fork_sequence_exact(&mut self, prepared: PreparedKvSequenceFork) -> Result<()> {
         if self.sequences.contains_key(&prepared.target.get()) {
-            return Err(Error::Internal(format!(
-                "page manager: prepared fork target state slot {} became allocated",
-                prepared.target.get()
-            )));
+            return Err(Error::Invariant {
+                message: format!(
+                    "page manager: prepared fork target state slot {} became allocated",
+                    prepared.target.get()
+                ),
+            });
         }
-        let source = self.sequences.get(&prepared.source.get()).ok_or_else(|| {
-            Error::Internal("page manager: prepared fork source disappeared".into())
-        })?;
+        let source =
+            self.sequences
+                .get(&prepared.source.get())
+                .ok_or_else(|| Error::Invariant {
+                    message: "page manager: prepared fork source disappeared".into(),
+                })?;
         if source.block_table.pages != prepared.block_table.pages
             || source.block_table.committed_tokens != prepared.block_table.committed_tokens
         {
-            return Err(Error::Execution(
-                "page manager: prepared fork source changed before publish".into(),
-            ));
+            return Err(Error::InvalidRequest {
+                message: "page manager: prepared fork source changed before publish".into(),
+            });
         }
         for page in &prepared.block_table.pages {
-            let refcount = self.page_refcounts.get(page).copied().ok_or_else(|| {
-                Error::Internal("page manager: prepared fork source refcount disappeared".into())
-            })?;
-            refcount.checked_add(1).ok_or_else(|| {
-                Error::Execution("page manager: prepared fork refcount overflow".into())
-            })?;
+            let refcount =
+                self.page_refcounts
+                    .get(page)
+                    .copied()
+                    .ok_or_else(|| Error::Invariant {
+                        message: "page manager: prepared fork source refcount disappeared".into(),
+                    })?;
+            refcount
+                .checked_add(1)
+                .ok_or_else(|| Error::InvalidRequest {
+                    message: "page manager: prepared fork refcount overflow".into(),
+                })?;
         }
         for page in &prepared.block_table.pages {
             *self
@@ -1036,15 +1097,20 @@ impl KvPageManager {
     /// Detach a sequence from scheduling while retaining its page references.
     pub fn preempt_sequence(&mut self, state_slot: StateSlot) -> Result<PreemptedKvState> {
         if let Some(owner) = self.reservation_owners.get(&state_slot.get()) {
-            return Err(Error::Execution(format!(
-                "page manager: cannot preempt state slot {} owned by reservation {}",
-                state_slot.get(),
-                owner.get()
-            )));
+            return Err(Error::InvalidRequest {
+                message: format!(
+                    "page manager: cannot preempt state slot {} owned by reservation {}",
+                    state_slot.get(),
+                    owner.get()
+                ),
+            });
         }
-        let state = self.sequences.remove(&state_slot.get()).ok_or_else(|| {
-            Error::Internal("page manager: cannot preempt an unallocated sequence".into())
-        })?;
+        let state = self
+            .sequences
+            .remove(&state_slot.get())
+            .ok_or_else(|| Error::Invariant {
+                message: "page manager: cannot preempt an unallocated sequence".into(),
+            })?;
         let evicted_pages = state
             .block_table
             .pages
@@ -1066,9 +1132,9 @@ impl KvPageManager {
         state: PreemptedKvState,
     ) -> Result<()> {
         if self.sequences.contains_key(&state_slot.get()) {
-            return Err(Error::Internal(
-                "page manager: restore target is allocated".into(),
-            ));
+            return Err(Error::Invariant {
+                message: "page manager: restore target is allocated".into(),
+            });
         }
         self.sequences.insert(
             state_slot.get(),
@@ -1105,17 +1171,19 @@ impl KvPageManager {
         let stored = self
             .pending_reservations
             .get_mut(&reservation.id)
-            .ok_or_else(|| {
-                Error::Execution(format!(
+            .ok_or_else(|| Error::InvalidRequest {
+                message: format!(
                     "page manager: reservation {} is not live",
                     reservation.id.get()
-                ))
+                ),
             })?;
         if stored != &reservation.view {
-            return Err(Error::Internal(format!(
-                "page manager: reservation {} view changed before execution binding",
-                reservation.id.get()
-            )));
+            return Err(Error::Invariant {
+                message: format!(
+                    "page manager: reservation {} view changed before execution binding",
+                    reservation.id.get()
+                ),
+            });
         }
         stored.execution_state_slot = execution_state_slot;
         stored.execution_generation = execution_generation;
@@ -1128,17 +1196,19 @@ impl KvPageManager {
         let stored = self
             .pending_reservations
             .get(&reservation.id)
-            .ok_or_else(|| {
-                Error::Execution(format!(
+            .ok_or_else(|| Error::InvalidRequest {
+                message: format!(
                     "page manager: reservation {} is not live",
                     reservation.id.get()
-                ))
+                ),
             })?;
         if stored != &reservation.view {
-            return Err(Error::Internal(format!(
-                "page manager: reservation {} view changed",
-                reservation.id.get()
-            )));
+            return Err(Error::Invariant {
+                message: format!(
+                    "page manager: reservation {} view changed",
+                    reservation.id.get()
+                ),
+            });
         }
         Ok(stored.clone())
     }
@@ -1162,26 +1232,35 @@ impl KvPageManager {
     ) -> Result<KvReservationView> {
         let mut view = self.reservation_view(reservation)?;
         if prefix_rows > view.positions.len() {
-            return Err(Error::Execution(format!(
-                "page manager: reservation prefix {prefix_rows} exceeds reserved rows {}",
-                view.positions.len()
-            )));
+            return Err(Error::InvalidRequest {
+                message: format!(
+                    "page manager: reservation prefix {prefix_rows} exceeds reserved rows {}",
+                    view.positions.len()
+                ),
+            });
         }
         let prefix_end = view
             .positions
             .start
             .checked_add(prefix_rows)
-            .ok_or_else(|| Error::Execution("page manager: prefix view end overflow".into()))?;
+            .ok_or_else(|| Error::InvalidRequest {
+                message: "page manager: prefix view end overflow".into(),
+            })?;
         let pages_before = self.schema.pages_for_tokens(view.positions.start);
         let pages_after = self.schema.pages_for_tokens(prefix_end);
-        let prefix_new_pages = pages_after.checked_sub(pages_before).ok_or_else(|| {
-            Error::Internal("page manager: prefix view page count moved backwards".into())
-        })?;
+        let prefix_new_pages =
+            pages_after
+                .checked_sub(pages_before)
+                .ok_or_else(|| Error::Invariant {
+                    message: "page manager: prefix view page count moved backwards".into(),
+                })?;
         if prefix_new_pages > view.newly_allocated.len() {
-            return Err(Error::Internal(format!(
-                "page manager: prefix view needs {prefix_new_pages} new pages but reservation has {}",
-                view.newly_allocated.len()
-            )));
+            return Err(Error::Invariant {
+                message: format!(
+                    "page manager: prefix view needs {prefix_new_pages} new pages but reservation has {}",
+                    view.newly_allocated.len()
+                ),
+            });
         }
         view.positions.end = prefix_end;
         view.newly_allocated.truncate(prefix_new_pages);
@@ -1199,18 +1278,20 @@ impl KvPageManager {
         let state = self
             .sequences
             .get(&reservation.state_slot.get())
-            .ok_or_else(|| {
-                Error::Internal("page manager: reservation sequence is not allocated".into())
+            .ok_or_else(|| Error::Invariant {
+                message: "page manager: reservation sequence is not allocated".into(),
             })?;
         if state.generation != reservation.generation {
-            return Err(Error::Execution(
-                "page manager: stale reservation binding".into(),
-            ));
+            return Err(Error::InvalidRequest {
+                message: "page manager: stale reservation binding".into(),
+            });
         }
         let mut pages = state.block_table.pages.clone();
         if let Some(cow) = reservation.cow_replacement {
             if pages.get(cow.logical_page) != Some(&cow.source) {
-                return Err(Error::Execution("page manager: stale COW binding".into()));
+                return Err(Error::InvalidRequest {
+                    message: "page manager: stale COW binding".into(),
+                });
             }
             pages[cow.logical_page] = cow.replacement;
         }
@@ -1223,16 +1304,20 @@ impl KvPageManager {
         for position in reservation.positions.clone() {
             let logical_page = position / self.schema.page_size();
             let offset = position % self.schema.page_size();
-            let page = pages.get(logical_page).ok_or_else(|| {
-                Error::Internal("page manager: reservation has no page for write".into())
+            let page = pages.get(logical_page).ok_or_else(|| Error::Invariant {
+                message: "page manager: reservation has no page for write".into(),
             })?;
             let physical = usize::try_from(page.0)
                 .ok()
                 .and_then(|page| page.checked_mul(self.schema.page_size()))
                 .and_then(|base| base.checked_add(offset))
-                .ok_or_else(|| Error::Execution("page manager: write slot overflow".into()))?;
+                .ok_or_else(|| Error::InvalidRequest {
+                    message: "page manager: write slot overflow".into(),
+                })?;
             write_slots.push(KvWriteSlot::try_from(physical).map_err(|_| {
-                Error::Execution("page manager: write slot exceeds u32 ABI".into())
+                Error::InvalidRequest {
+                    message: "page manager: write slot exceeds u32 ABI".into(),
+                }
             })?);
         }
         Ok(KvReservationBindings {
@@ -1245,19 +1330,25 @@ impl KvPageManager {
         let mut decrements = HashMap::<KvPageId, u32>::new();
         for page in pages {
             let count = decrements.entry(*page).or_default();
-            *count = count.checked_add(1).ok_or_else(|| {
-                Error::Execution("page manager: refcount decrement overflow".into())
+            *count = count.checked_add(1).ok_or_else(|| Error::InvalidRequest {
+                message: "page manager: refcount decrement overflow".into(),
             })?;
         }
         for (page, decrement) in decrements {
-            let refcount = self.page_refcounts.get(&page).copied().ok_or_else(|| {
-                Error::Internal(format!("page manager: page {} has no refcount", page.0))
-            })?;
+            let refcount =
+                self.page_refcounts
+                    .get(&page)
+                    .copied()
+                    .ok_or_else(|| Error::Invariant {
+                        message: format!("page manager: page {} has no refcount", page.0),
+                    })?;
             if refcount < decrement {
-                return Err(Error::Internal(format!(
-                    "page manager: page {} refcount {refcount} is below decrement {decrement}",
-                    page.0
-                )));
+                return Err(Error::Invariant {
+                    message: format!(
+                        "page manager: page {} refcount {refcount} is below decrement {decrement}",
+                        page.0
+                    ),
+                });
             }
         }
         Ok(())
@@ -1269,10 +1360,9 @@ impl KvPageManager {
         }
 
         if self.max_pages > 0 && (self.next_page_id as usize) >= self.max_pages {
-            return Err(Error::Internal(format!(
-                "page manager: out of pages (max {})",
-                self.max_pages
-            )));
+            return Err(Error::Invariant {
+                message: format!("page manager: out of pages (max {})", self.max_pages),
+            });
         }
 
         let page_id = KvPageId(self.next_page_id);
