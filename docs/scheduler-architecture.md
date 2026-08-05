@@ -3,7 +3,7 @@
 <!-- markdownlint-disable MD013 MD060 -->
 
 > Design contract for exact speculative execution, dynamic MoE routing, global
-> expert loading, and acceptance-aware scheduling on one DGX Spark / GB10.
+> expert loading, and acceptance-aware scheduling on one coherent-unified-memory CUDA profile.
 >
 > Status: design proposal; implementation and hardware contracts remain staged.
 >
@@ -26,7 +26,7 @@ The most important corrections to the earlier design are:
 - readiness and authoritative leases are segment-scoped, not whole-cycle claims;
 - all-hit is normally an observed outcome, not a host-side admission class;
 - physical expert I/O is global and may outlive the cycle that first requested it;
-- GB10 staging, CUDA allocations, KV, workspaces, page cache, and parked activations
+- current-profile staging, CUDA allocations, KV, workspaces, page cache, and parked activations
   consume one shared physical UMA pool;
 - cancellation detaches logical demand immediately but releases submitted physical
   resources only after a cancellation completion or execution fence;
@@ -43,7 +43,7 @@ resumed through typed events. It does not require a general coroutine framework.
 
 ## 1. Scope and platform facts
 
-Ferrule targets exact DeepSeek-V4-Flash-DSpark inference on one GB10 with:
+Ferrule targets exact DeepSeek-V4 Flash inference with a checkpoint-native proposal attachment on one coherent-unified-memory CUDA profile with:
 
 - 43 target layers and dynamically selected routed experts;
 - packed verification widths drawn from supported buckets such as `V=2/4/8`;
@@ -81,7 +81,7 @@ The model-owner thread is the only writer of:
 - authoritative binding snapshots and leases;
 - scheduler queues, credits, and accounting ledgers.
 
-For the current GB10 release path, the model-owner thread is also the only CUDA API
+For the current CUDA release profile, the model-owner thread is also the only CUDA API
 submitter. It creates and owns contexts, streams, graph objects, and events, and it
 submits placement copies, kernels, and graph replays.
 
@@ -146,7 +146,7 @@ submission fence completes.
 
 - The target verifier never substitutes a predicted or fallback expert.
 - Exact selected misses leave execution only at a provider-declared safe boundary.
-- Full, partial, and zero draft acceptance follow the exact DSpark/MTP protocol.
+- Full, partial, and zero draft acceptance follow the exact checkpoint-native proposal/MTP protocol.
 - Only externally committed output tokens become visible to the client.
 - A correction or bonus token, if required by the selected protocol, is counted
   separately from accepted draft tokens.
@@ -157,7 +157,7 @@ submission fence completes.
 
 Ferrule enforces both:
 
-1. one aggregate GB10 UMA capacity bound;
+1. one aggregate CUDA-profile UMA capacity bound;
 2. structural credits for operations and address-stable resources.
 
 No fairness, liveness, deadline, or singleton-overflow rule may violate either hard
@@ -495,7 +495,7 @@ Recommended counters include:
 `IoChargeOwner` identifies the global release ledger and may retain a first-trigger
 attempt for diagnostics. It does not make that attempt the owner of the physical load.
 
-## 5. GB10 UMA and transfer model
+## 5. Current CUDA-profile UMA and transfer model
 
 ### 5.1 Logical transfer backend
 
@@ -519,7 +519,7 @@ immutable source extent
 ```
 
 The conservative release baseline is `DirectIoToPinnedThenCudaCopy`, but even that path
-uses allocations backed by the same GB10 physical DRAM. “Placement” is preferred to
+uses allocations backed by the same current-profile physical DRAM. “Placement” is preferred to
 “upload” in target-architecture state names.
 
 Experimental mapped or managed paths require independent correctness, graph, residency,
@@ -592,7 +592,7 @@ reserved together. Partial reservation is rolled back in deterministic order.
 ### 5.4 Shared bandwidth and interference
 
 Storage, CPU prediction, placement copies, KV traffic, routed GEMMs, and graph execution
-are not independent servers on GB10. They share UMA bandwidth to different degrees.
+are not independent servers on the current CUDA profile. They share UMA bandwidth to different degrees.
 
 The scheduler should not assume:
 
@@ -713,7 +713,7 @@ does not necessarily imply:
 externally_committed_tokens = 0
 ```
 
-Ferrule must document the concrete DSpark/MTP protocol once the production proposal
+Ferrule must document the concrete proposal-attachment/MTP protocol once the production proposal
 source is connected. Until then, transaction tests and mock traces must provide each
 counter explicitly rather than infer correction behavior.
 
@@ -1241,7 +1241,7 @@ useful for token-budget, queue-rotation, rollback, and deterministic-advisor par
 ### 14.1 Purpose
 
 The simulator verifies exact state transitions, bounded physical resources, policy
-behavior, and service interference without pretending to predict GB10 performance from
+behavior, and service interference without pretending to predict current-CUDA-profile performance from
 unmeasured constants.
 
 It drives the same conceptual attempt, segment, global-load, binding-snapshot, and event
@@ -1543,7 +1543,7 @@ Additional
 evidence include:
 
 - EcoSpec / Less Experts, Faster Decoding;
-- DSpark dynamic verification-length work;
+- dynamic proposal verification-length work;
 - AdaSpec;
 - ProMoE;
 - Sarathi-Serve;
@@ -1579,7 +1579,7 @@ single authoritative owner
 + globally shared ExpertLoads
 + segment-scoped exact readiness
 + immutable binding snapshots held to CUDA fences
-+ aggregate GB10 UMA and structural credits
++ aggregate CUDA-profile UMA and structural credits
 + draining cancellation
 + physical-byte token bucket
 + externally committed output accounting
@@ -1610,7 +1610,7 @@ Not justified:
 - acquiring whole-cycle authoritative leases for future dynamic routes;
 - request-owned physical expert transfers;
 - immediate reuse of buffers after logical cancellation;
-- independent GB10 host/device memory budgets;
+- independent CUDA-profile host/device memory budgets;
 - repeated physical charging for shared loads;
 - a large opaque weighted scheduler score;
 - a general async/coroutine framework in the production hot path;

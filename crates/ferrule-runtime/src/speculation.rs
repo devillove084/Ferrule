@@ -29,13 +29,13 @@ use ferrule_common::execution::{
     ExecutionBatch, ExecutionIntent, ExecutionOutput, ExecutionSequence, ExecutionTransactionId,
     ForwardMode, ForwardPhase, LogitsOutput, LogitsRequest, StateSlot, TokenLogit,
 };
-use ferrule_model::{MultiSessionRunner, PendingModelProgress};
+use ferrule_model::{MultiSessionBatchProgress, MultiSessionRunner, PendingModelProgress};
 
 use crate::cache::{
     KvPageManager, KvReservation, KvReservationBindings, KvReservationCommit, KvRetirement,
     PreparedKvCommit,
 };
-use crate::engine::{NativeBatchExecutionProgress, NativeMultiSessionExecutor};
+use crate::engine::NativeMultiSessionExecutor;
 
 // ── Transaction types ─────────────────────────────────────────────────
 
@@ -264,6 +264,10 @@ impl<S> SpeculativeCohortTransaction<S> {
     pub(crate) fn states_mut(&mut self) -> &mut [S] {
         &mut self.verification_branches
     }
+
+    pub(crate) const fn batch(&self) -> &ExecutionBatch {
+        &self.verification_batch
+    }
 }
 
 impl<S> PendingSpeculativeVerificationCohort<S> {
@@ -282,8 +286,11 @@ impl<S> PreparedSpeculativeCohort<S> {
     }
 }
 
-/// Begin one exact packed target-verification transaction.
-pub(crate) fn begin_resumable_speculative_verification_cohort<R>(
+/// Construct the complete provisional verification payload before the backend
+/// transaction becomes active. The caller may use the exact packed batch to
+/// declare non-blocking materialization work before calling
+/// [`begin_prepared_speculative_verification`].
+pub(crate) fn prepare_speculative_verification_transaction<R>(
     executor: &mut NativeMultiSessionExecutor<R>,
     page_manager: &mut KvPageManager,
     transaction_id: ExecutionTransactionId,
@@ -293,13 +300,13 @@ pub(crate) fn begin_resumable_speculative_verification_cohort<R>(
     top_k: NonZeroU32,
     retirements: &mut Vec<KvRetirement>,
 ) -> std::result::Result<
-    SpeculativeCohortProgress<R::SequenceState>,
+    SpeculativeCohortTransaction<R::SequenceState>,
     SpeculativeCohortFailure<R::SequenceState>,
 >
 where
     R: MultiSessionRunner,
 {
-    let mut transaction = prepare_speculative_cohort_transaction(
+    prepare_speculative_cohort_transaction(
         executor,
         page_manager,
         transaction_id,
@@ -309,7 +316,24 @@ where
         top_k,
         retirements,
     )
-    .map_err(SpeculativeCohortFailure::Quiesced)?;
+    .map_err(SpeculativeCohortFailure::Quiesced)
+}
+
+/// Activate and execute a fully constructed target-verification transaction.
+pub(crate) fn begin_prepared_speculative_verification<R>(
+    executor: &mut NativeMultiSessionExecutor<R>,
+    page_manager: &mut KvPageManager,
+    source_states: &[R::SequenceState],
+    mut transaction: SpeculativeCohortTransaction<R::SequenceState>,
+    retirements: &mut Vec<KvRetirement>,
+) -> std::result::Result<
+    SpeculativeCohortProgress<R::SequenceState>,
+    SpeculativeCohortFailure<R::SequenceState>,
+>
+where
+    R: MultiSessionRunner,
+{
+    let transaction_id = transaction.id;
     let reservation_views = match page_manager.reservation_views(&transaction.reservations) {
         Ok(views) => views,
         Err(error) => {
@@ -345,7 +369,7 @@ where
         &mut transaction.verification_branches,
         &transaction.verification_batch,
     ) {
-        Ok(NativeBatchExecutionProgress::Complete(output)) => prepare_speculative_cohort_result(
+        Ok(MultiSessionBatchProgress::Complete(output)) => prepare_speculative_cohort_result(
             executor,
             page_manager,
             source_states,
@@ -353,7 +377,7 @@ where
             output,
         )
         .map(|prepared| SpeculativeCohortProgress::Ready(Box::new(prepared))),
-        Ok(NativeBatchExecutionProgress::Waiting(pending_progress)) => Ok(
+        Ok(MultiSessionBatchProgress::Waiting(pending_progress)) => Ok(
             SpeculativeCohortProgress::Waiting(Box::new(PendingSpeculativeVerificationCohort {
                 transaction,
                 pending_progress,
@@ -389,7 +413,7 @@ where
         continuation,
         leases,
     ) {
-        Ok(NativeBatchExecutionProgress::Complete(output)) => prepare_speculative_cohort_result(
+        Ok(MultiSessionBatchProgress::Complete(output)) => prepare_speculative_cohort_result(
             executor,
             page_manager,
             source_states,
@@ -397,7 +421,7 @@ where
             output,
         )
         .map(|prepared| SpeculativeCohortProgress::Ready(Box::new(prepared))),
-        Ok(NativeBatchExecutionProgress::Waiting(pending_progress)) => {
+        Ok(MultiSessionBatchProgress::Waiting(pending_progress)) => {
             pending.pending_progress = pending_progress;
             Ok(SpeculativeCohortProgress::Waiting(Box::new(pending)))
         }
@@ -743,7 +767,7 @@ pub(crate) fn abort_quiesced_speculative_transaction<R: MultiSessionRunner>(
     cleanup_quiesced_speculative_transaction(executor, page_manager, transaction, retirements)
 }
 
-fn discard_unsubmitted_speculative_transaction<R: MultiSessionRunner>(
+pub(crate) fn discard_unsubmitted_speculative_transaction<R: MultiSessionRunner>(
     executor: &mut NativeMultiSessionExecutor<R>,
     page_manager: &mut KvPageManager,
     transaction: SpeculativeCohortTransaction<R::SequenceState>,

@@ -11,13 +11,13 @@ mod observability;
 
 pub use driver::{
     ResidentActionKind, ResidentCancelProgress, ResidentDriverShutdownReport, ResidentDriverStep,
-    ResidentRuntimeResourceLimits, ResidentTokenEvent, ResidentTopKDriver,
-    ResidentTopKDriverConfig,
+    ResidentRuntimeResourceLimits, ResidentShutdownProgress, ResidentTokenEvent,
+    ResidentTopKDriver, ResidentTopKDriverConfig,
 };
 pub use inference::{
     InferenceCancelProgress, InferenceCompletionOwner, InferenceCompletionReactor, InferenceEngine,
-    LocalResidentInferenceEngine, ResidentInferenceEngine,
+    InferenceShutdownProgress, LocalResidentInferenceEngine, ResidentInferenceEngine,
 };
 pub use observability::ResidentTopKDriverStats;
 
-pub use native_executor::{NativeBatchExecutionProgress, NativeMultiSessionExecutor};
+pub use native_executor::NativeMultiSessionExecutor;

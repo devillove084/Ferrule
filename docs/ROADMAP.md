@@ -39,16 +39,16 @@ prepared executable stages
 - distributed communication buffers 与 collective / point-to-point completion；
 - training、post-training 和 RL 中的多模型、多阶段资源。
 
-近期硬件方向调整为 **NVIDIA B300 优先**。RTX 3090、Qwen 和小模型仍是重要的
-portability / correctness 目标，但不再是下一阶段的第一优先级。近期优先级是：
+近期 CUDA 硬件方向调整为 **compute capability 10.3 / `sm_103` profile 优先**。compute capability 8.6 /
+`sm_86` profile、Qwen 和小模型仍是重要的 portability / correctness 目标，但不再是下一阶段的第一优先级。近期优先级是：
 
 1. 收尾唯一 stage / materialization / continuation / custody / terminalization 协议；
 2. 重构 CUDA architecture / capability 与 CUTLASS provider；
-3. 建立 B300 capability profile、kernel selection 和大模型可执行路径；
+3. 建立 compute capability 10.3 / `sm_103` profile、kernel selection 和大模型可执行路径；
 4. 建立 DP / TP / PP / EP / SP / CP 的拓扑、通信与资源协议；
 5. 扩展到 training、post-training、RL；
 6. 选择大型模型做端到端验收，候选包括 Kimi K3；
-7. 后续回到 Qwen / Ampere `sm_86` 做可移植性与较小硬件 out-of-core 验收。
+7. 后续回到 Qwen / Ampere `sm_86` profile 做可移植性与较小显存条件下的 out-of-core 验收。
 
 任何只适用于“全模型常驻显存”、只适用于 routed experts、只适用于 inference，或为
 某个 CUDA/CUTLASS architecture 建立的生产旁路，都不是目标架构。迁移可以分步，但
@@ -60,8 +60,8 @@ portability / correctness 目标，但不再是下一阶段的第一优先级。
 |---|---|
 | 核心能力 | 模型、训练状态或多模型工作集可以大于显存；I/O、上传、通信和计算必须可重叠 |
 | 生产执行路径 | 只保留一条 resource-aware stage / materialization / continuation / custody 路径 |
-| 近期硬件 | NVIDIA B300；具体 architecture ID 由 capability detection 确认，不在模型层硬编码 |
-| 后续硬件 | RTX 3090 / `sm_86`、现有 `sm_121a`、未来 Metal、ROCm、Ascend provider |
+| 近期硬件 | Compute capability 10.3 / `sm_103` profile；architecture ID 由 capability detection 确认，不在模型层硬编码 |
+| 后续硬件 | Compute capability 8.6 / `sm_86` profile、现有 `sm_121a` profile、未来 Metal、ROCm、Ascend provider |
 | 模型方向 | 先完善 provider、分布式和训练基础，再选择大型模型验收；Kimi K3 是候选，Qwen 保留为后续 portability track |
 | 训练兼容 | inference / training 共用资源身份、访问、生命周期、continuation 和 terminalization 协议 |
 | 后端边界 | CUDA、Metal、ROCm、Ascend 是 backend/provider，不进入模型通用 stage/resource contract |
@@ -69,7 +69,7 @@ portability / correctness 目标，但不再是下一阶段的第一优先级。
 | 物理正确性 | 已提交 physical work 不能被逻辑 cancellation 假装为未发生；必须等待或确认 quiescence |
 | 失败处理 | terminal outcome exactly once；未确认 backend terminal 时完整保留 ownership |
 | 验证条件 | 当前没有可用模型 checkpoint；GPU 环境正在变化，现阶段依赖 CPU UT、synthetic fixtures 和 mocks |
-| 证据边界 | 当前不能宣称 B300、RTX 3090、GB10、`sm_121a`、`sm_86` 或任何 CUDA runtime 已验证 |
+| 证据边界 | 已有 GPU 证据只适用于下述 `sm_103` profile build/runtime 和固定 workload；不能外推为 CC 12.1、`sm_121a`、`sm_86` 或其他 CUDA profile 已验证 |
 
 ## 2. 进度总览
 
@@ -79,22 +79,22 @@ portability / correctness 目标，但不再是下一阶段的第一优先级。
 | P0 调度 / I/O / compute overlap | CPU/mock 已完成 | owner-side progression、fairness、hard resources、critical-path overlap accounting 已覆盖 |
 | 双 broker 合并 | 已完成 | 唯一生产 broker 为 `PhysicalResourceBroker` |
 | Artifact 总抽象拆除 | 已完成 | checkpoint 公共层与模型私有 semantic binding 已分离，不保留 compatibility alias |
-| Prefetch 协议 | CPU/mock 已完成 | 独立 `PrefetchId` ownership、Execution join/promote、cancel 与 compensation 已覆盖；当前 score predictor 仍不接生产 |
+| Prefetch 协议 | CPU/mock 已完成 | typed `PrefetchOwner`、exact phase demand、transaction-scoped declaration、Required join/reclassification 与 terminal cleanup 已覆盖；score-top-k 不猜测 |
 | `ResolvedStage` contract | 已实现 | exact resources、access、retention、workspace、canonical dependency validation 已落地 |
 | Typed materialization custody | 已实现 | stage / transaction / persistent ownership 与 provider lease 聚合释放已落地 |
-| Routed expert stage migration | 已实现 | DeepSeek packed / DSpark route 后 exact expert set 进入唯一 resolved-stage 路径 |
+| Routed expert stage migration | 已实现 | DeepSeek packed / proposal attachment route 后 exact expert set 进入唯一 resolved-stage 路径 |
 | Resume lifecycle | 已实现 | `Consumed` / `StillActive` 区分，仍活跃 continuation 不提前释放 custody |
 | Transaction terminalization | CPU/mock 已完成 inference 基线 | ordinary / speculative 共用 `end_transaction(Publish|Abort) -> Pending|Complete`；owner tick 自动推进，backend terminal 前完整保留 ownership |
 | Typed runtime errors | 已实现 | runtime orchestration 以 SNAFU source chain 保留 backend、protocol、registry、resource 与 cleanup failures，不在内部字符串化 |
 | Dense static bundle materialization | 未完成 | source catalog 已有；generic pinned transport/install 未接通，CUDA runner 仍有 eager static image |
 | Runtime mutable resources | 待完成 | KV / activation / gradient / optimizer 需按 transaction 实例化 exact capacity、generation 和 spill source |
 | DeepSeek 公共组件拆分 | 进行中 | checkpoint、math、shape、RoPE、config、dense semantics 已有公共层；继续去 family-private 重复 |
-| CUDA capability/provider 重构 | 待开始 | 下一阶段近期重点；不能继续假设 CUTLASS 等于 GB10 |
-| B300 provider/kernels | 未开始 | 需先完成 architecture profile、operation requirements、kernel selection 与 workspace contract |
+| CUDA capability/provider 重构 | 基线已完成 | `ferrule-cuda` 已删除并迁入 `ferrule-backend`；architecture/profile、provider-neutral plan、core/CUTLASS catalog 与唯一 selection 入口已建立，oxide 已删除 |
+| `sm_103` profile provider/kernels | 可执行基线已验证 | compute capability 10.3 自动映射为 `sm_103`；标准 Cargo + NVCC release build、43 层 DeepSeek-V4 proposal attachment 固定生成已通过；性能优化与 backward catalog 未完成 |
 | Distributed parallelism | 未开始 | DP / TP / PP / EP / SP / CP 需要统一 topology、communication stage、fence 和 custody |
 | Training/post-training/RL | 未实现 | 通用 resource access/retention 已预留，execution/terminal protocol 尚需扩展 |
 | Large-model acceptance | 未开始 | 候选 Kimi K3；最终选择取决于 checkpoint、operator、并行拓扑和许可可用性 |
-| Qwen / 3090 portability | 后置 | 不删除；在核心 provider 和 distributed path 稳定后推进 |
+| Qwen / `sm_86` portability | 后置 | 不删除；在核心 provider 和 distributed path 稳定后推进 |
 
 ## 3. P0：统一调度、I/O 与计算重叠基础
 
@@ -112,7 +112,7 @@ portability / correctness 目标，但不再是下一阶段的第一优先级。
 - physical custody：已提交 read/upload/install 不能被逻辑 cancel 直接撤销；
 - owner-side progress，不要求 CUDA 才能编译 runtime protocol；
 - I/O wait 与其他 runnable compute 的 overlap accounting；
-- 三类 fairness（`Prefetch / Throughput / LatencyCritical`）、execution reserve 和 hard-resource accounting；
+- exact `ExecutionPhaseSet`、`ModelWarmup / Prefetch / Required` demand、私有三段物理公平队列和 hard-resource accounting；
 - completion timestamp clock-domain 一致性；
 - 唯一生产 broker，旧 broker / adapter 路径已删除。
 
@@ -184,7 +184,7 @@ lease release 失败可以重试，但不能重复执行逻辑 owner decrement�
 - backend `Pending` 时完整 ownership quarantine；
 - owner tick 自动推进 terminalization，不依赖第二次 `cancel_request()`；
 - fatal backend/CUDA error 直接上报 worker，不做 device quarantine/recovery；
-- Prefetch 独立 owner、Execution join/promote、降级与 cancellation compensation。
+- typed Prefetch owner、Required join/reclassification、transaction terminal cleanup 与 cancellation compensation。
 
 `LoadRegistry` 内的 physical dedup 只保证相同 exact key 不重复发 I/O；它不再被暴露成
 “single-flight owner”或额外 transaction 状态。
@@ -362,7 +362,7 @@ crates/ferrule-model/src/checkpoint/
 - generic `RouterWeights` 与 routed expert semantic IDs；
 - model-neutral resource manifest、stage、access、retention、workspace contract。
 
-DeepSeek MLA、compressor、indexer、hyper-connection、DSpark 等能力只有在证明跨模型语义
+DeepSeek MLA、compressor、indexer、hyper-connection、proposal attachment 等能力只有在证明跨模型语义
 一致后才提升为公共组件，不能因为 Qwen 或其他模型“看起来相似”而错误泛化。
 
 ### 5.2 下一步拆分原则
@@ -397,7 +397,7 @@ checkpoint extent
 
 ### 6.1 设计边界
 
-`crates/ferrule-cuda` 必须拆开以下概念：
+`crates/ferrule-backend` 已按以下边界承接并拆开原 `ferrule-cuda`：
 
 1. CUDA runtime：context、stream、event、memory、fence；
 2. architecture profile：实际设备、编译 target、capabilities；
@@ -412,7 +412,7 @@ checkpoint extent
 
 CUTLASS 不得成为：
 
-- GB10 的同义词；
+- 某个 CUDA target/profile 的同义词；
 - 某个 SM ID 的全局 feature gate；
 - 模型资源身份的一部分；
 - Metal / ROCm / Ascend 的抽象基类；
@@ -420,44 +420,43 @@ CUTLASS 不得成为：
 
 ### 6.2 方向性组织
 
-目录方向可参考，但在 source review 前不冻结最终文件名：
+当前唯一生产组织为：
 
 ```text
-ferrule-cuda/
-  runtime/
-  architecture/
-  providers/
-    native/
-    cutlass/
-      common/
-      blackwell/
-      ampere/
+ferrule-backend/
+  architecture_target.rs
+  src/
+    plan.rs
+    cuda/{runtime,architecture,provider,cutlass,...}
+  native/cuda/
+    abi/{core_provider,cutlass_provider}.h
+    providers/{core,cutlass}/
 ```
 
 要求：
 
 - 只有一个 production provider selection 入口；
 - architecture specialization 在 provider 内部，不复制模型 runner；
-- 现有 `sm_121a` operation requirements、ABI 与可执行语义在迁移中保持正确；
-- 不保留 legacy/new 双 provider 路径；
-- B300 的实际 architecture/capability 由工具链与设备查询确认，不凭名称硬编码；
-- Ampere、Blackwell/Blackwell Ultra 等 profile 可共用 semantic requirements，但 kernel
+- `sm_121a` 与 `sm_103` 共用 provider-neutral semantic requirements，架构 specialization 留在 provider；
+- 原 `ferrule-cuda` 和 oxide build path 已删除，不保留 legacy/new 双 provider；
+- compute capability 10.3 被字面映射为 `sm_103`，不凭设备名称推断 `a/f` suffix；
+- Ampere、Blackwell/Blackwell Ultra 等 architecture profiles 可共用 semantic requirements，但 kernel
   implementation 和 workspace 可以不同；
 - forward/backward capability 必须显式，不允许把缺少 backward 的 kernel 误选入训练计划。
 
 ### 6.3 近期推进顺序
 
-1. [ ] 审查现有 `ferrule-cuda` 文件命名、build scripts、operation enums 和 ABI；
-2. [ ] 定义 `CudaTargetProfile` / capability query，不绑定模型 family；
-3. [ ] 定义 provider-neutral operation requirements；
-4. [ ] 将现有 CUTLASS kernels 迁移到唯一 provider selection；
-5. [ ] 去除“CUTLASS == GB10 / `sm_121a`”的全局假设；
-6. [ ] 添加 B300 build/runtime profile；
-7. [ ] 接通 generic checkpoint read -> pinned transport -> install；
-8. [ ] 接入 forward operator set；
-9. [ ] 设计 backward / gradient / optimizer operator capability；
-10. [ ] 后续添加 `sm_86` profile 和 Qwen BF16 operator set；
-11. [ ] 分别做 B300、现有 `sm_121a`、RTX 3090 的独立 compile/runtime acceptance。
+1. [x] 删除 `ferrule-cuda`，建立 `ferrule-backend` runtime/architecture/provider 边界；
+2. [x] 定义 CUDA target/capability query，不绑定模型 family；
+3. [x] 定义 provider-neutral operation requirements 与 executable plan；
+4. [x] CUTLASS/core kernels 迁入唯一 provider selection；
+5. [x] 去除“CUTLASS == 某个 CUDA profile / `sm_121a`”和 oxide build path；
+6. [x] compute capability 10.3 / `sm_103` build/runtime profile；
+7. [x] routed-expert checkpoint read -> pinned transport -> install；
+8. [x] DeepSeek-V4 proposal attachment forward operator executable baseline；
+9. [ ] generic dense/static checkpoint transport；
+10. [ ] backward / gradient / optimizer operator catalog；
+11. [ ] `sm_86` profile、Qwen BF16 operator set，以及 `sm_121a`/`sm_86` 独立回归。
 
 ## 7. Distributed parallelism：DP / TP / PP / EP / SP / CP
 
@@ -593,7 +592,7 @@ RL 系统至少需要协调：
 
 ### 9.1 大模型优先验收
 
-B300 可用后，优先选择能验证以下能力的大模型：
+compute capability 10.3 / `sm_103` execution environment 可用后，优先选择能验证以下能力的大模型：
 
 - dense + MoE 或至少包含复杂 routed experts；
 - 多卡并行需求；
@@ -605,13 +604,13 @@ Kimi K3 是候选，但在获得并确认其实际 checkpoint/config/operator re
 roadmap 中编造具体架构。模型选择应依据：
 
 1. 可获得、可重复的 checkpoint 与 reference；
-2. B300 operator feasibility；
+2. `sm_103` profile operator feasibility；
 3. TP/PP/EP 等并行验收价值；
 4. out-of-core materialization 压力；
 5. training/post-training 后续价值；
 6. 固定 workload 与性能证据可复现性。
 
-### 9.2 Qwen 与 RTX 3090 portability track
+### 9.2 Qwen 与 `sm_86` portability track
 
 Qwen 不删除，只后移：
 
@@ -620,10 +619,10 @@ Qwen 不删除，只后移：
 - 在 provider capability API 完成后添加 Ampere `sm_86`；
 - 选择明确版本和规模，不使用含义不清的“Qwen3.8”名称；
 - 小模型验证 checkpoint/semantic correctness；
-- 大于可用显存的模型验证 3090 out-of-core；
-- 不为 Qwen 或 3090 建模型私有 kernel / scheduler 旁路。
+- 大于可用显存的模型验证 `sm_86` profile out-of-core；
+- 不为 Qwen 或 `sm_86` profile 建模型私有 kernel / scheduler 旁路。
 
-3090 acceptance 仍应证明：
+`sm_86` profile acceptance 仍应证明：
 
 ```text
 materialize bundle N+1
@@ -635,26 +634,50 @@ release/evict bundle N-1 after completion fence
 
 ## 10. Prefetch
 
-Prefetch transport 已实现，predictor 与 transport 明确分离：
+Prefetch transport 已实现，资源语义、阻塞性和物理排队策略彼此分离：
 
-- `PrefetchId` 是独立 owner；
-- `prepare_prefetch_request / prefetch / cancel_prefetch` 是显式入口；
-- Prefetch 不创建 `WaiterId`、`ContinuationId`、`ExecutionTransactionId`、custody 或 execution lease；
-- Execution 可 join 同 exact key/generation/slot 的 active Prefetch，并显式
-  `promote_to_execution()`，不重发 I/O；
-- `prepared(key)` 只观察，不隐式提升 purpose；
-- 最后一个 Execution owner 离开而 Prefetch owner 仍在时，释放 execution lease 并降回
-  `Prefetch` class；
-- multi-key promotion failure 会补偿已完成 promotion、回收新 work，并保留原 Prefetch owner；
-- physical dedup 只是 registry 内部实现，不是 Prefetch transaction；
-- 调度 class 只有 `Prefetch / Throughput / LatencyCritical`；不存在独立 `Demand` class；
-- `execution_reserve` 只阻止 Prefetch，所有已接纳 Execution（Throughput/LatencyCritical）都可使用；
-- Prefetch 没有 aging forced-progress entitlement。
+```rust
+PrefetchOwner::{ModelWarmup, Transaction { transaction, phases }, External(id)}
+ResourceDemand::{ModelWarmup, Prefetch(phases), Required(phases)}
+FairQueueBand::{Background, Prefetch, Required}
+```
 
-oracle / future-aware prefetch 对 selected miss 有明显收益，但当前 `ScoreBasedExpertPredictor`
-在有限 residency slots 下挤占真实 working set，净收益为负，因此仍不接生产。后续只评估有
-因果依据的 future-aware 信号，例如 prepared next stage、router result、pipeline schedule、
-known backward stage、rollout schedule 或可靠 draft information。
+- `ExecutionPhaseSet` 精确保留 `MultimodalEncode / Prefill / Decode /
+  SpeculativeProposal / SpeculativeVerification / TrainingForward /
+  TrainingBackward / OptimizerUpdate / RolloutGeneration / RewardEvaluation`，混合 batch
+  使用 phase union，不制造 `BatchExecution` 或 `TokenExecution` 融合状态；
+- `ResourceDemand` 只表达是否阻塞物理执行；它没有 `Ord`，合并必须保留 exact phase union，
+  并只允许 `Prefetch -> Required`；
+- `FairQueueBand` 仅是 registry 私有物理策略，不泄漏为模型或 transaction 状态；
+- registry 不抢占已提交 physical custody，并由 workload owner 显式控制 warmup admission：startup
+  只提交一个小的初始物理 wave 后立即允许请求进入；foreground 不 reserve 新的 ModelWarmup
+  operation，但已 reserve/submitted 的 read/upload/install 必须继续排空；idle/request gap 使用普通
+  `drive()` 全速填充规划 residency high-water；
+- execution reserve 按模型 top-k required wave 推导，ModelWarmup/Prefetch 不能侵占；foreground
+  exact Required miss 始终推进，不需要第二 executor 或 full-fit/partial-fit 执行分支；
+- model residency planner 以静态权重加载后的实时 free VRAM、显式 dynamic reserve 和每层 frame
+  大小计算高水位；full-fit 最终填满全部 expert，partial-fit 只声明规划 slot 数，避免无界 eviction；
+- `prepare_prefetch_request / prefetch / cancel_prefetch` 是 external/warmup 的显式入口；
+- transaction prefetch 在 backend activation 前由 runner 声明 exact requests，复用唯一
+  resolver/provider/registry，不创建 waiter、continuation 或 execution lease；
+- DeepSeek hash router 可从已知 token 精确声明 target expert；score-top-k 在 router 结果未知时
+  不猜 expert，也不制造 correctness barrier；
+- Required waiter 可 join 同 exact key/generation/slot 的已提交 operation，不重发 I/O；provider
+  execution lease 只在 hard admission 成功后获取；
+- owner 离开后 operation demand 从剩余 Prefetch owner 和 Required waiter 重新计算，不能盲目降级；
+- transaction-scoped Prefetch 只在 backend terminal 完成后随
+  `finish_transaction_custody()` 自动释放，不依赖第二次 cancel；
+- physical dedup 只是 registry 内部实现，不是 Prefetch transaction 或额外 lifecycle；
+- `execution_reserve` 仅可由 `Required` 使用；Prefetch 没有 aging forced-progress entitlement；
+- 已提交 read/upload/install 即使失去所有逻辑 owner，也必须完成 cancellation/drain 后才能释放
+  physical custody。
+
+full-fit 下不启用 predictive expert prefetch：全部 immutable resource 已由 idle warmup 最终常驻，
+冷请求只能在 router 产生 exact identity 后走 Required，预测既不改变 correctness，也会与 compute
+争用 H2D/install。partial-fit 下，oracle / future-aware prefetch 对 selected miss 有明显收益，
+但当前 `ScoreBasedExpertPredictor` 会挤占真实 working set，端到端净收益为负，因此不接生产。
+后续只评估有因果依据的 future-aware 信号，例如 prepared next stage、router result、pipeline
+schedule、known backward stage、rollout schedule 或可靠 draft information。
 
 任何新 predictor 必须同时报告：
 
@@ -674,12 +697,6 @@ known backward stage、rollout schedule 或可靠 draft information。
 截至本次更新，本轮已实际运行：
 
 ```text
-cargo nextest run --offline --locked --workspace \
-  --exclude ferrule-cuda --no-fail-fast
-707 passed, 1 skipped
-
-cargo test --workspace --doc --offline
-passed
 
 cargo fmt --all -- --check
 passed
@@ -688,13 +705,37 @@ cargo check --workspace --all-targets --offline
 passed
 
 cargo test -p ferrule-runtime --lib --offline
-306 passed
+317 passed
+
+cargo test -p ferrule-model --lib --offline
+301 passed
+
+cargo test -p ferrule-server --lib --offline
+24 passed
 ```
 
-CUDA 自动探测确认当前机器为 B300 `sm_103a`。`just check-cuda` 在
-`ferrule-cuda` build script 处被现有的 GB10-only CUTLASS provider 明确拒绝；当前
-provider 只接受 `sm_121a`。没有用错误架构覆盖探测结果，因此这不是一条已通过的 CUDA
-feature compile 证据。
+当前机器自动探测到 compute capability 10.3，并字面映射为 `sm_103`；architecture suffix 不从设备名称或 major version
+推断。CUDA backend 已迁入 `ferrule-backend`，标准 Cargo + NVCC 构建不依赖 oxide。
+
+实际验证：
+
+```text
+just build-cuda sm_103
+passed without warnings
+
+DeepSeek-V4-Flash-0731, 43 target layers, 3 proposal attachment stages, max_tokens=6
+generated_token_ids = [7249, 17, 40897, 17, 40897, 68082]
+cycles=4, proposed=12, accepted_draft=2, correction=3
+rolled_back_rows=10, verified_rows=16, externally_committed_tokens=6
+```
+
+background residency 已验证可填到 planner high-water。模型初始化后只提交小的 startup wave
+便允许请求进入；foreground 不 reserve 新 warmup，但已经进入物理流水线的工作必须 drain；idle
+owner 再全速填满规划 residency。`sm_103` profile A/B 固定请求证明前台持续注入 background H2D/install 会把
+`decode_seconds` 从 `21.26s`（resident `1886`，uncovered wait `10.21s`）恶化到 `40.09s`
+（resident `8346`，uncovered wait `8.13s`）。因此吞吐更高的 resident 数不能抵消 compute contention；
+最终策略是 foreground reserve suppression，而不是持续 background fill。正确性已经通过，但性能仍
+未达到 vLLM/SGLang release gate。
 
 新增 mock 覆盖包括：
 
@@ -706,11 +747,18 @@ feature compile 证据。
 - speculative terminal propagation；
 - owner tick 自动推进 pending abort；
 - backend `Pending` 保留完整 ownership，后续自动推进并 exactly-once cleanup；
-- Prefetch owner/join/promotion/demotion/cancel 与 multi-key compensation；
-- Execution reserve 阻止 Prefetch，但不阻止 Throughput execution；
+- typed Prefetch owner、exact phase merge、Required join/reclassification/cancel 与 compensation；
+- transaction exact prefetch 不创建 waiter/continuation，并在 terminal custody 后自动释放；
+- submitted physical work 在逻辑 owner 消失后继续 drain；
+- foreground 只禁止新的 ModelWarmup reserve，已经 reserve/submitted 的 warmup read/upload/install
+  继续到 Resident，尚未 reserve 的 operation 保持 queued；
+- execution reserve 阻止 Prefetch，但不阻止 Required execution；
+- initial residency 异步填充 high-water，hard Required wave reserve 不被 ModelWarmup/Prefetch 侵占；
+- exact request terminal 与 model background lifecycle 解耦；
 - typed backend/registry/resource/cleanup source chain。
 
-上述结果不证明任何 CUDA/GPU path。
+CPU/mock 结果证明 protocol；上面的 `sm_103` build 与固定 DeepSeek 运行是独立 GPU 证据，
+尚不等同于完整 kernel/reference、timeline 或性能 release gate。
 
 ### 11.2 必须补齐的 trace
 
@@ -778,16 +826,16 @@ feature compile 证据。
 - [ ] spill/reload 与 completion fence；
 - [ ] 删除剩余 model-private residency inference。
 
-### P2：B300 CUDA/CUTLASS provider
+### P2：`sm_103` CUDA/CUTLASS provider
 
-- [ ] architecture/capability API；
-- [ ] operation semantic requirements；
-- [ ] CUTLASS/native provider selection；
-- [ ] 迁移现有 `sm_121a` 而不建立双路径；
-- [ ] B300 build/runtime profile；
-- [ ] forward operator baseline；
-- [ ] backward/update capability design；
-- [ ] GPU correctness 与 timeline evidence。
+- [x] architecture/capability API；
+- [x] operation semantic requirements；
+- [x] CUTLASS/core provider selection；
+- [x] 删除旧 `ferrule-cuda`/oxide 双路径；
+- [x] compute capability 10.3 / `sm_103` build/runtime profile；
+- [x] DeepSeek-V4 proposal attachment forward executable baseline；
+- [ ] backward/update capability implementation；
+- [ ] kernel 性能对齐、完整 timeline evidence 与 vLLM/SGLang gate。
 
 ### P3：Distributed foundation
 
@@ -814,7 +862,7 @@ feature compile 证据。
 - [ ] 选定并接通 large-model acceptance，候选 Kimi K3；
 - [ ] DeepSeek `sm_121a` 独立回归；
 - [ ] Qwen CPU correctness；
-- [ ] RTX 3090 `sm_86` compile/runtime/out-of-core；
+- [ ] `sm_86` profile compile/runtime/out-of-core；
 - [ ] Metal / ROCm / Ascend capability/provider design；
 - [ ] future-aware prefetch 新一轮评估。
 
@@ -830,11 +878,11 @@ feature compile 证据。
 - [ ] cancellation、stale、failure、rollback、shutdown 后无 waiter/lease/credit/residency/KV 泄漏；
 - [ ] terminalization 不依赖业务调用方重复发起 cancel；
 
-### B300 / CUDA provider
+### `sm_103` / CUDA provider
 
 - [ ] CUDA target feature 可编译；
-- [ ] B300 capability negotiation 与 kernel selection 可验证；
-- [ ] 不存在“CUTLASS == GB10”全局假设；
+- [ ] `sm_103` capability negotiation 与 kernel selection 可验证；
+- [ ] 不存在“CUTLASS == 某个 CUDA target/profile”全局假设；
 - [ ] 现有 `sm_121a` 通过独立迁移回归；
 - [ ] forward/backward capability 不会错误选择；
 
@@ -856,6 +904,6 @@ feature compile 证据。
 
 ### Portability gates
 
-- [ ] Qwen/RTX 3090 作为后续独立 portability gate；
+- [ ] Qwen/`sm_86` profile 作为后续独立 portability gate；
 - [ ] Metal/ROCm/Ascend 不要求立即实现，但 model/runtime contract 不得含 CUDA-only 假设；
 - [ ] 所有性能结论都有固定 workload、原始日志和当前源码构建证据。

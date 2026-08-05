@@ -4,7 +4,7 @@ pub mod async_wake;
 pub mod execution;
 pub mod expert_residency;
 pub mod io_protocol;
-pub mod kernel_plan;
+
 pub mod materialization_io;
 pub mod memory;
 pub mod observability;
@@ -58,8 +58,18 @@ pub enum Error {
     #[snafu(display("kernel: {message}"))]
     Kernel { message: String },
 
+    #[snafu(display("backend: {source}"))]
+    Backend {
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
     #[snafu(display("model: {message}"))]
     Model { message: String },
+
+    #[snafu(display("model: {source}"))]
+    ModelSource {
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 
     #[snafu(display("execution: {message}"))]
     Execution { message: String },

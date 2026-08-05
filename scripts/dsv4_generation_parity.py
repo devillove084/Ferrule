@@ -79,7 +79,7 @@ def main() -> None:
     parser.add_argument(
         "model_dir",
         nargs="?",
-        default="models/DeepSeek-V4-Flash-DSpark",
+        default="models/DeepSeek-V4-Flash-0731",
         help="DeepSeek-V4 HF model directory",
     )
     parser.add_argument("--prompt", default="Hello", help="single-turn user prompt")

@@ -1,6 +1,6 @@
 # Expert Memory and Telemetry Architecture
 
-_Status: owner-thread host/pinned cache budgets implemented; alternative GB10 backing modes require A/B validation._
+_Status: owner-thread host/pinned cache budgets implemented; alternative coherent-memory CUDA backing modes require A/B validation._
 
 _Last updated: 2026-07-13_
 
@@ -87,10 +87,10 @@ MiB conversion is checked; overflow is rejected. The resulting
 prepared runner/operator construction path to the actual host and pinned caches.
 There is no second DSV4 environment-variable capacity source.
 
-Example bounded GB10 starting point (a tuning input, not a universal optimum):
+Example bounded current-CUDA-profile starting point (a tuning input, not a universal optimum):
 
 ```bash
-./target/release/ferrule serve models/DeepSeek-V4-Flash-DSpark \
+./target/release/ferrule serve models/DeepSeek-V4-Flash-0731 \
   --expert-host-cache-entries 64 \
   --expert-host-cache-mb 1024 \
   --expert-pinned-cache-entries 16 \
@@ -102,9 +102,9 @@ residency, OS page cache, and concurrency. KV has an independent enforced servin
 budget (`--kv-cache-mb`, default 1024 MiB); expert-cache budgets do not borrow from it.
 Benchmark sweeps must report the selected limits and current/peak/rejection statistics.
 
-## 5. GB10 / coherent unified memory
+## 5. Current CUDA profile / coherent unified memory
 
-DGX Spark exposes 128 GiB coherent unified LPDDR5x to CPU and GPU. Pageable host,
+The coherent-unified-memory reference profile exposes 128 GiB LPDDR5x to CPU and GPU. Pageable host,
 pinned host, device allocations, file page cache, KV pools, arenas, and upload
 retirement therefore compete for one physical capacity and memory bandwidth even when
 CUDA presents different allocation APIs.
@@ -112,7 +112,7 @@ CUDA presents different allocation APIs.
 For the current DSV4 shape, one whole routed expert is approximately 12.75 MiB. An
 entry-only 256/64 host/pinned policy can retain roughly 3.2 GiB plus 0.8 GiB before
 allocator overhead and in-flight references. Byte limits are therefore the authoritative
-capacity safety control on GB10; entry limits remain useful for metadata and LRU bounds.
+capacity safety control on that CUDA profile; entry limits remain useful for metadata and LRU bounds.
 
 Ferrule does **not** yet assume that mapped pinned direct reads or managed expert
 backing outperform explicit asynchronous uploads. The required A/B matrix is:
@@ -158,5 +158,5 @@ on the model thread are prohibited.
   per-layer stable-slot capacity;
 - account for duplicate physical backing and allocator overhead in platform-specific
   process metrics;
-- A/B mapped/managed backing on GB10 before changing the default transfer path;
+- A/B mapped/managed backing on the coherent-unified-memory CUDA profile before changing the default transfer path;
 - expose periodic production metrics without adding synchronization to decode.

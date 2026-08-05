@@ -36,7 +36,7 @@ pub const ROPE_BETA_SLOW: usize = 1;
 pub const INDEX_N_HEADS: usize = 64;
 pub const INDEX_HEAD_DIM: usize = 128;
 pub const INDEX_TOPK: usize = 512;
-pub const DSPARK_BLOCK_SIZE: usize = 5;
+pub const PROPOSAL_BLOCK_SIZE: usize = 5;
 
 use super::common;
 use crate::semantic::{
@@ -66,14 +66,14 @@ pub fn has_mla_gguf_tensor_names<'a>(names: impl IntoIterator<Item = &'a str>) -
 
 pub fn refine_hf_spec(spec: &mut TransformerSpec, json: &serde_json::Value) {
     refine_semantics(spec, json);
-    if has_dspark_metadata(json) {
+    if has_proposal_metadata(json) {
         spec.notes.push(format!(
-            "DSpark attachment metadata detected: block_size={}, target_layers={}, markov_rank={}",
-            fmt_json_opt(json.get("dspark_block_size")),
-            json_array_len(json.get("dspark_target_layer_ids"))
+            "Proposal attachment metadata detected: block_size={}, target_layers={}, markov_rank={}",
+            fmt_json_opt(json.get("proposal_block_size")),
+            json_array_len(json.get("proposal_target_layer_ids"))
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "unknown".into()),
-            fmt_json_opt(json.get("dspark_markov_rank")),
+            fmt_json_opt(json.get("proposal_markov_rank")),
         ));
     }
 }
@@ -319,7 +319,7 @@ fn classify_tensor_name(name: &str) -> TensorClass {
         return TensorClass::MlaCompressor;
     }
 
-    // DSpark / MTP speculative attachment tensors.
+    // Proposal / MTP speculative attachment tensors.
     if name.starts_with("mtp.") && name.contains(".main_proj.") {
         return TensorClass::SpeculativeProjection;
     }
@@ -453,11 +453,11 @@ fn f32_json_key(json: &serde_json::Value, keys: &[&str]) -> Option<f32> {
     })
 }
 
-fn has_dspark_metadata(json: &serde_json::Value) -> bool {
+fn has_proposal_metadata(json: &serde_json::Value) -> bool {
     [
-        "dspark_block_size",
-        "dspark_target_layer_ids",
-        "dspark_markov_rank",
+        "proposal_block_size",
+        "proposal_target_layer_ids",
+        "proposal_markov_rank",
     ]
     .iter()
     .any(|key| !json.get(*key).unwrap_or(&serde_json::Value::Null).is_null())
@@ -747,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn classifies_dspark_mtp_tensors() {
+    fn classifies_proposal_mtp_tensors() {
         assert_eq!(
             classify_hf_tensor("mtp.0.main_proj.weight"),
             TensorClass::SpeculativeProjection
@@ -763,7 +763,7 @@ mod tests {
     }
 
     #[test]
-    fn deepseek_hf_spec_records_dspark_metadata() {
+    fn deepseek_hf_spec_records_proposal_metadata() {
         let mut spec = TransformerSpec {
             family: crate::ModelFamily::DeepSeekV4,
             architecture: Some("DeepseekV4ForCausalLM".into()),
@@ -782,15 +782,15 @@ mod tests {
             notes: Vec::new(),
         };
         let json = serde_json::json!({
-            "dspark_block_size": 5,
-            "dspark_target_layer_ids": [40, 41, 42],
-            "dspark_markov_rank": 256
+            "proposal_block_size": 5,
+            "proposal_target_layer_ids": [40, 41, 42],
+            "proposal_markov_rank": 256
         });
         refine_hf_spec(&mut spec, &json);
         assert!(
             spec.notes
                 .iter()
-                .any(|note| note.contains("DSpark attachment metadata"))
+                .any(|note| note.contains("Proposal attachment metadata"))
         );
     }
 }

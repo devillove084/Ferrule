@@ -92,6 +92,24 @@ pub enum CancelRequestResult {
     NotFound { request_id: RequestId },
 }
 
+/// Exactly one terminal request outcome removed from scheduler ownership.
+#[derive(Debug, Clone)]
+pub enum RequestTerminal {
+    Finished(SequenceState),
+    Cancelled(SequenceState),
+    Failed(SequenceState),
+}
+
+impl RequestTerminal {
+    pub const fn sequence(&self) -> &SequenceState {
+        match self {
+            Self::Finished(sequence) | Self::Cancelled(sequence) | Self::Failed(sequence) => {
+                sequence
+            }
+        }
+    }
+}
+
 impl ResidentSchedulerConfig {
     fn normalized(self) -> Self {
         let max_decode_batch = self.max_decode_batch.max(1);
@@ -454,6 +472,23 @@ impl ResidentScheduler {
         }
 
         Ok(CancelRequestResult::NotFound { request_id })
+    }
+
+    pub fn take_request_terminal(&mut self, request_id: RequestId) -> Option<RequestTerminal> {
+        fn take(
+            sequences: &mut Vec<SequenceState>,
+            request_id: RequestId,
+        ) -> Option<SequenceState> {
+            let index = sequences
+                .iter()
+                .position(|sequence| sequence.request_id == Some(request_id))?;
+            Some(sequences.remove(index))
+        }
+
+        take(&mut self.finished, request_id)
+            .map(RequestTerminal::Finished)
+            .or_else(|| take(&mut self.cancelled, request_id).map(RequestTerminal::Cancelled))
+            .or_else(|| take(&mut self.failed, request_id).map(RequestTerminal::Failed))
     }
 
     pub fn drain_finished(&mut self) -> Vec<SequenceState> {
@@ -1335,6 +1370,40 @@ mod tests {
         );
         assert_eq!(cancelled[0].kv_handle, None);
         assert!(scheduler.is_idle());
+    }
+
+    #[test]
+    fn take_request_terminal_removes_only_the_exact_request_and_preserves_outcome() {
+        let mut scheduler = ResidentScheduler::default();
+        let mut finished = SequenceState::from_request(&request(1, vec![1]), SessionId(1));
+        finished.mark_finished(SequenceFinishReason::MaxTokens);
+        let mut cancelled = SequenceState::from_request(&request(2, vec![2]), SessionId(2));
+        cancelled.mark_cancelled();
+        let mut failed = SequenceState::from_request(&request(3, vec![3]), SessionId(3));
+        failed.mark_error();
+        scheduler.finished.push(finished);
+        scheduler.cancelled.push(cancelled);
+        scheduler.failed.push(failed);
+
+        assert!(matches!(
+            scheduler.take_request_terminal(RequestId(2)),
+            Some(RequestTerminal::Cancelled(sequence))
+                if sequence.request_id == Some(RequestId(2))
+        ));
+        assert!(scheduler.take_request_terminal(RequestId(99)).is_none());
+        assert!(matches!(
+            scheduler.take_request_terminal(RequestId(1)),
+            Some(RequestTerminal::Finished(sequence))
+                if sequence.request_id == Some(RequestId(1))
+        ));
+        assert!(matches!(
+            scheduler.take_request_terminal(RequestId(3)),
+            Some(RequestTerminal::Failed(sequence))
+                if sequence.request_id == Some(RequestId(3))
+        ));
+        assert!(scheduler.finished.is_empty());
+        assert!(scheduler.cancelled.is_empty());
+        assert!(scheduler.failed.is_empty());
     }
 
     #[test]

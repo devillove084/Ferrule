@@ -19,11 +19,13 @@ pub use actions::{
 };
 pub(crate) use batch::ScheduledBatch;
 
-pub use resident::{CancelRequestResult, ResidentScheduler, ResidentSchedulerConfig};
+pub use resident::{
+    CancelRequestResult, RequestTerminal, ResidentScheduler, ResidentSchedulerConfig,
+};
 pub use resources::{
-    PhysicalResourceBroker, PhysicalResourceClaim, PhysicalResourceError, PhysicalResourceGrant,
-    PhysicalResourceGrantId, PhysicalResourceLimit, PhysicalResourceSnapshot, ResourceClass,
-    ResourceKind, ResourceUnit,
+    ExecutionPhase, ExecutionPhaseSet, PhysicalResourceBroker, PhysicalResourceClaim,
+    PhysicalResourceError, PhysicalResourceGrant, PhysicalResourceGrantId, PhysicalResourceLimit,
+    PhysicalResourceSnapshot, ResourceDemand, ResourceKind, ResourceUnit,
 };
 pub use session::{
     GenerateRequest, RequestId, SequenceFinishReason, SequenceState, SequenceStatus, SessionId,

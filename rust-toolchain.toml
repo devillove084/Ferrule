@@ -1,5 +1,3 @@
 [toolchain]
-# Pinned to match cuda_oxide's rustc-codegen-cuda requirement.
-# All crates (CPU + CUDA) compile with this nightly.
-channel = "nightly-2026-04-03"
-components = ["rustfmt", "clippy", "rust-src", "rustc-dev"]
+channel = "nightly-2026-08-01"
+components = ["rustfmt", "clippy"]

@@ -1,17 +1,20 @@
 //! Immutable DeepSeek-V4 preparation output and execution policy resolution.
 
 use std::env as process_environment;
+use std::time::Instant;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use ferrule_common::execution::{KvLayoutSchema, KvPlaneDescriptor};
-use ferrule_common::kernel_plan::ModelKernelPlan;
+use ferrule_backend::plan::ModelKernelPlan;
 #[cfg(feature = "cuda")]
-use ferrule_common::kernel_plan::{
-    KernelOperation, LayerKernelRequirements, LinearBundleRequirement, WeightLayout,
+use ferrule_backend::plan::{
+    ExecutionMode, KernelOperation, LayerKernelRequirements, LinearBundleRequirement,
+    OperationRequirement, WeightLayout,
 };
+use ferrule_common::execution::{KvLayoutSchema, KvPlaneDescriptor};
 use ferrule_common::{Error, Result};
+use rayon::prelude::*;
 
 #[cfg(feature = "cuda")]
 use crate::checkpoint::weight::{LinearWeight, LinearWeightFormat};
@@ -29,22 +32,36 @@ use crate::moe::streaming::{
 
 use super::checkpoint::DeepSeekV4Checkpoint;
 use super::layer::DeepSeekV4Layer;
-use super::mtp::DeepSeekV4MtpModel;
+use super::proposal_attachment::DeepSeekV4ProposalAttachment;
+#[cfg(feature = "cuda")]
+use super::proposal_attachment::DeepSeekV4ProposalStage;
 
 static NEXT_PREPARED_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeepSeekV4PrepareProfile {
+    pub validation_us: u64,
+    pub attachment_bind_us: u64,
+    pub target_bind_us: u64,
+    pub execution_plan_us: u64,
+    pub manifest_us: u64,
+    pub total_us: u64,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeepSeekV4PrepareOptions {
     pub max_layers: usize,
     pub output_head_chunk_rows: usize,
     pub expert_reader_max_tensor_bytes: u64,
-    pub moe_prefetch_experts: usize,
     /// Retention limits for pageable and pinned whole-expert host caches.
     pub expert_memory_policy: ExpertMemoryPolicy,
-    /// Optional bounded per-layer resident hotset. `0` keeps the managed-memory
-    /// default (no planner eviction); non-zero clamps residency to at least
-    /// `num_experts_per_tok` and retains hottest routed experts first.
+    /// Per-layer routed-expert slot cap. `0` selects automatic device-budget
+    /// planning; a non-zero value is a strict requested cap, still bounded by the
+    /// physical device budget.
     pub moe_hotset_experts: usize,
+    /// Device bytes kept outside routed-expert residency for KV, activations,
+    /// workspaces, upload transients, and allocator headroom.
+    pub reserved_device_bytes: u64,
 }
 
 impl Default for DeepSeekV4PrepareOptions {
@@ -53,9 +70,9 @@ impl Default for DeepSeekV4PrepareOptions {
             max_layers: crate::families::deepseek_v4::NUM_LAYERS,
             output_head_chunk_rows: 1024,
             expert_reader_max_tensor_bytes: 64 * 1024 * 1024,
-            moe_prefetch_experts: 0,
             expert_memory_policy: ExpertMemoryPolicy::default(),
             moe_hotset_experts: 0,
+            reserved_device_bytes: 8 * 1024 * 1024 * 1024,
         }
     }
 }
@@ -136,10 +153,6 @@ impl KvLayoutSchema for DeepSeekV4KvLayoutSchema {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeepSeekV4ExecutionPolicy {
     prefill_progress: bool,
-    lookahead_prefetch: bool,
-    decode_lookahead_prefetch: bool,
-    hash_decode_prefetch_window: bool,
-    prefill_hash_lookahead: bool,
     managed_experts: bool,
     expert_upload_inflight: usize,
     profile: bool,
@@ -150,10 +163,6 @@ impl Default for DeepSeekV4ExecutionPolicy {
     fn default() -> Self {
         Self {
             prefill_progress: false,
-            lookahead_prefetch: true,
-            decode_lookahead_prefetch: true,
-            hash_decode_prefetch_window: false,
-            prefill_hash_lookahead: false,
             managed_experts: true,
             expert_upload_inflight: 32,
             profile: false,
@@ -165,22 +174,6 @@ impl Default for DeepSeekV4ExecutionPolicy {
 impl DeepSeekV4ExecutionPolicy {
     pub const fn prefill_progress(&self) -> bool {
         self.prefill_progress
-    }
-
-    pub const fn lookahead_prefetch(&self) -> bool {
-        self.lookahead_prefetch
-    }
-
-    pub const fn decode_lookahead_prefetch(&self) -> bool {
-        self.decode_lookahead_prefetch
-    }
-
-    pub const fn hash_decode_prefetch_window(&self) -> bool {
-        self.hash_decode_prefetch_window
-    }
-
-    pub const fn prefill_hash_lookahead(&self) -> bool {
-        self.prefill_hash_lookahead
     }
 
     pub const fn managed_experts(&self) -> bool {
@@ -199,7 +192,7 @@ impl DeepSeekV4ExecutionPolicy {
         self.profile_sync
     }
 
-    fn resolve() -> Result<Self> {
+    pub(crate) fn resolve() -> Result<Self> {
         Self::resolve_with(|name| match process_environment::var_os(name) {
             None => Ok(None),
             Some(value) => value.into_string().map(Some).map_err(|_| Error::Model {
@@ -216,26 +209,7 @@ impl DeepSeekV4ExecutionPolicy {
             lookup("FERRULE_DSV4_PREFILL_PROGRESS")?,
             false,
         )?;
-        let lookahead_prefetch = parse_env_bool(
-            "FERRULE_DSV4_LOOKAHEAD_PREFETCH",
-            lookup("FERRULE_DSV4_LOOKAHEAD_PREFETCH")?,
-            true,
-        )?;
-        let decode_lookahead_prefetch = parse_env_bool(
-            "FERRULE_DSV4_DECODE_LOOKAHEAD_PREFETCH",
-            lookup("FERRULE_DSV4_DECODE_LOOKAHEAD_PREFETCH")?,
-            true,
-        )?;
-        let hash_decode_prefetch_window = parse_env_bool(
-            "FERRULE_DSV4_HASH_PREFETCH_WINDOW",
-            lookup("FERRULE_DSV4_HASH_PREFETCH_WINDOW")?,
-            false,
-        )?;
-        let prefill_hash_lookahead = parse_env_bool(
-            "FERRULE_DSV4_PREFILL_HASH_LOOKAHEAD",
-            lookup("FERRULE_DSV4_PREFILL_HASH_LOOKAHEAD")?,
-            false,
-        )?;
+
         let managed_experts = parse_env_bool(
             "FERRULE_MANAGED_EXPERTS",
             lookup("FERRULE_MANAGED_EXPERTS")?,
@@ -265,10 +239,6 @@ impl DeepSeekV4ExecutionPolicy {
 
         Ok(Self {
             prefill_progress,
-            lookahead_prefetch,
-            decode_lookahead_prefetch,
-            hash_decode_prefetch_window,
-            prefill_hash_lookahead,
             managed_experts,
             expert_upload_inflight,
             profile,
@@ -326,19 +296,28 @@ pub struct DeepSeekV4PreparedResources {
     options: DeepSeekV4PrepareOptions,
     layers: Box<[DeepSeekV4Layer]>,
     layer_experts: Box<[DeepSeekV4PreparedLayerExperts]>,
-    /// Bound DSpark attachment owned by the same immutable prepared generation
+    /// Bound Proposal attachment owned by the same immutable prepared generation
     /// as the target model. CUDA image compilation is a subsequent R1 step.
-    mtp: Option<DeepSeekV4MtpModel>,
-    mtp_layer_experts: Box<[DeepSeekV4PreparedLayerExperts]>,
+    proposal_attachment: Option<DeepSeekV4ProposalAttachment>,
+    proposal_stage_experts: Box<[DeepSeekV4PreparedLayerExperts]>,
     materialization_sources: Arc<MaterializationSourceCatalog<DeepSeekV4InstallDescriptor>>,
+    #[cfg_attr(
+        not(feature = "cuda"),
+        allow(
+            dead_code,
+            reason = "consumed by the CUDA expert materialization provider"
+        )
+    )]
+    expert_materialization_sources: Arc<MaterializationSourceCatalog<ExpertLoadSource>>,
     kv_layout: DeepSeekV4KvLayoutSchema,
     policy: DeepSeekV4ExecutionPolicy,
     /// Required per-layer semantic superkernel plan. Missing operations are
     /// prepare-time errors; row-count schedule selection is provider-owned.
     kernel_plan: ModelKernelPlan,
-    /// Transformer-body and stage-zero DSpark projection plan for attachment
+    /// Transformer-body and stage-zero Proposal projection plan for attachment
     /// execution layers. Prediction-head plans remain explicit follow-up work.
-    mtp_transformer_kernel_plan: Option<ModelKernelPlan>,
+    proposal_transformer_kernel_plan: Option<ModelKernelPlan>,
+    prepare_profile: DeepSeekV4PrepareProfile,
 }
 
 impl DeepSeekV4PreparedResources {
@@ -358,12 +337,18 @@ impl DeepSeekV4PreparedResources {
         &self.layer_experts
     }
 
-    pub const fn mtp(&self) -> Option<&DeepSeekV4MtpModel> {
-        self.mtp.as_ref()
+    pub const fn proposal_attachment(&self) -> Option<&DeepSeekV4ProposalAttachment> {
+        self.proposal_attachment.as_ref()
     }
 
-    pub fn mtp_layer_experts(&self) -> &[DeepSeekV4PreparedLayerExperts] {
-        &self.mtp_layer_experts
+    /// Compatibility accessor for callers that still identify the attachment by
+    /// its checkpoint `mtp.*` namespace.
+    pub const fn mtp(&self) -> Option<&DeepSeekV4ProposalAttachment> {
+        self.proposal_attachment()
+    }
+
+    pub fn proposal_stage_experts(&self) -> &[DeepSeekV4PreparedLayerExperts] {
+        &self.proposal_stage_experts
     }
 
     pub fn materialization_source_count(&self) -> usize {
@@ -371,10 +356,10 @@ impl DeepSeekV4PreparedResources {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn materialization_sources(
+    pub(crate) fn expert_materialization_sources(
         &self,
-    ) -> &Arc<MaterializationSourceCatalog<DeepSeekV4InstallDescriptor>> {
-        &self.materialization_sources
+    ) -> &Arc<MaterializationSourceCatalog<ExpertLoadSource>> {
+        &self.expert_materialization_sources
     }
 
     pub fn layer_expert_source_catalog(&self, layer: usize) -> Option<&Arc<ExpertSourceCatalog>> {
@@ -408,8 +393,12 @@ impl DeepSeekV4PreparedResources {
         &self.kernel_plan
     }
 
-    pub const fn mtp_transformer_kernel_plan(&self) -> Option<&ModelKernelPlan> {
-        self.mtp_transformer_kernel_plan.as_ref()
+    pub const fn proposal_transformer_kernel_plan(&self) -> Option<&ModelKernelPlan> {
+        self.proposal_transformer_kernel_plan.as_ref()
+    }
+
+    pub const fn prepare_profile(&self) -> DeepSeekV4PrepareProfile {
+        self.prepare_profile
     }
 }
 
@@ -420,56 +409,72 @@ pub fn prepare(
     model: DeepSeekV4Checkpoint,
     options: DeepSeekV4PrepareOptions,
 ) -> Result<DeepSeekV4PreparedModelPlan> {
-    validate_options(&model, options)?;
+    let phase_start = Instant::now();
     let policy = DeepSeekV4ExecutionPolicy::resolve()?;
-    let mtp = model.load_mtp()?;
-    validate_mtp_attachment(&model, mtp.as_ref())?;
+    prepare_with_policy(model, options, policy, elapsed_us(phase_start))
+}
 
-    let mut layers = Vec::new();
-    layers
-        .try_reserve_exact(options.max_layers)
-        .map_err(|error| Error::Model {
-            message: format!(
-                "DeepSeek-V4 prepared layer allocation failed for {} layers: {error}",
-                options.max_layers
-            ),
-        })?;
-    let mut layer_experts = Vec::new();
-    layer_experts
-        .try_reserve_exact(options.max_layers)
-        .map_err(|error| Error::Model {
-            message: format!(
-                "DeepSeek-V4 prepared expert catalog allocation failed for {} layers: {error}",
-                options.max_layers
-            ),
-        })?;
-    let expert_streaming_policy = model
-        .resolved_expert_streaming_policy(options.moe_prefetch_experts, options.moe_hotset_experts);
-    for layer in 0..options.max_layers {
-        let source_catalog = Arc::clone(model.expert_source_catalog(layer)?);
-        if source_catalog.count() != model.config.num_routed_experts {
-            return Err(Error::Model {
-                message: format!(
-                    "DeepSeek-V4 layer {layer} catalog has {} routed experts, expected {}",
-                    source_catalog.count(),
-                    model.config.num_routed_experts
-                ),
-            });
-        }
-        layers.push(model.bind_layer(layer)?);
-        layer_experts.push(DeepSeekV4PreparedLayerExperts::new(
-            source_catalog,
-            expert_streaming_policy.clone(),
-        ));
+pub(crate) fn prepare_with_policy(
+    model: DeepSeekV4Checkpoint,
+    options: DeepSeekV4PrepareOptions,
+    policy: DeepSeekV4ExecutionPolicy,
+    policy_resolution_us: u64,
+) -> Result<DeepSeekV4PreparedModelPlan> {
+    let total_start = Instant::now();
+    let phase_start = Instant::now();
+    validate_options(&model, options)?;
+    let validation_us = policy_resolution_us.saturating_add(elapsed_us(phase_start));
+
+    let phase_start = Instant::now();
+    let include_proposal_attachment = options.max_layers == model.config.num_layers;
+    let proposal_attachment = if include_proposal_attachment {
+        model.load_proposal_attachment()?
+    } else {
+        None
+    };
+    if include_proposal_attachment {
+        validate_proposal_attachment(&model, proposal_attachment.as_ref())?;
     }
-    let mtp_layer_experts = mtp
+    let attachment_bind_us = elapsed_us(phase_start);
+
+    let phase_start = Instant::now();
+    let expert_streaming_policy =
+        model.resolved_expert_streaming_policy(options.moe_hotset_experts);
+    let bound_layers = (0..options.max_layers)
+        .into_par_iter()
+        .map(|layer| {
+            let source_catalog = Arc::clone(model.expert_source_catalog(layer)?);
+            if source_catalog.count() != model.config.num_routed_experts {
+                return Err(Error::Model {
+                    message: format!(
+                        "DeepSeek-V4 layer {layer} catalog has {} routed experts, expected {}",
+                        source_catalog.count(),
+                        model.config.num_routed_experts
+                    ),
+                });
+            }
+            Ok((
+                model.bind_layer(layer)?,
+                DeepSeekV4PreparedLayerExperts::new(
+                    source_catalog,
+                    expert_streaming_policy.clone(),
+                ),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let (layers, layer_experts): (Vec<_>, Vec<_>) = bound_layers.into_iter().unzip();
+    let target_bind_us = elapsed_us(phase_start);
+
+    let phase_start = Instant::now();
+    let proposal_stage_experts = proposal_attachment
         .as_ref()
-        .map(|mtp| {
-            mtp.layers
+        .map(|attachment| {
+            attachment
+                .layers
                 .iter()
-                .map(|layer| {
+                .map(|stage| {
                     DeepSeekV4PreparedLayerExperts::new(
-                        Arc::clone(&layer.expert_source_catalog),
+                        Arc::clone(&stage.expert_source_catalog),
                         expert_streaming_policy.clone(),
                     )
                 })
@@ -491,17 +496,17 @@ pub fn prepare(
     let indexer_metadata_width = 4usize
         .saturating_mul(max_compress_ratio)
         .saturating_mul(model.config.index_head_dim);
-    // DSpark stages own committed target-context KV at their non-aliasing
+    // Proposal stages own committed target-context KV at their non-aliasing
     // execution identities (43–45 for the release checkpoint). Keeping these
-    // slots in the same paged transaction makes target and DSpark context
+    // slots in the same paged transaction makes target and Proposal context
     // promotion/rollback atomic while proposal-block KV remains scratch-only.
-    let kv_layer_count = if let Some(mtp) = mtp.as_ref() {
+    let kv_layer_count = if let Some(attachment) = proposal_attachment.as_ref() {
         let attachment_end = model
             .config
             .num_layers
-            .checked_add(mtp.layers.len())
+            .checked_add(attachment.layers.len())
             .ok_or_else(|| Error::Model {
-                message: "DeepSeek-V4 DSpark KV layer count overflow".into(),
+                message: "DeepSeek-V4 Proposal KV layer count overflow".into(),
             })?;
         options.max_layers.max(attachment_end)
     } else {
@@ -559,52 +564,69 @@ pub fn prepare(
             .iter()
             .map(deepseek_v4_layer_kernel_requirements)
             .collect::<Result<Vec<_>>>()?;
-        ferrule_cuda::provider::compile_cuda_model_plan(&requirements)?
+        ferrule_backend::cuda::provider::compile_cuda_model_plan(&requirements)?
     };
     #[cfg(feature = "cuda")]
-    let mtp_transformer_kernel_plan = mtp
+    let proposal_transformer_kernel_plan = proposal_attachment
         .as_ref()
-        .map(|mtp| {
-            let requirements = mtp
+        .map(|attachment| {
+            let requirements = attachment
                 .layers
                 .iter()
                 .enumerate()
-                .map(|(stage, layer)| {
-                    deepseek_v4_mtp_kernel_requirements(
+                .map(|(stage_index, stage)| {
+                    deepseek_v4_proposal_kernel_requirements(
+                        stage_index,
                         stage,
-                        layer,
-                        mtp.config.target_layer_ids.len(),
+                        attachment.config.target_layer_ids.len(),
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
-            ferrule_cuda::provider::compile_cuda_model_plan(&requirements)
+            ferrule_backend::cuda::provider::compile_cuda_model_plan(&requirements)
         })
         .transpose()?;
     #[cfg(not(feature = "cuda"))]
     let kernel_plan = ModelKernelPlan::new(options.max_layers);
     #[cfg(not(feature = "cuda"))]
-    let mtp_transformer_kernel_plan = mtp
+    let proposal_transformer_kernel_plan = proposal_attachment
         .as_ref()
-        .map(|mtp| ModelKernelPlan::new(mtp.layers.len()));
+        .map(|attachment| ModelKernelPlan::new(attachment.layers.len()));
+    let execution_plan_us = elapsed_us(phase_start);
+
+    let phase_start = Instant::now();
     let executable = prepare_executable(&model, options.max_layers)?;
     let materialization_sources = Arc::new(prepare_materialization_sources(
         &executable,
         &layer_experts,
-        mtp.as_ref(),
-        &mtp_layer_experts,
+        proposal_attachment.as_ref(),
+        &proposal_stage_experts,
     )?);
+    let expert_materialization_sources = Arc::new(prepare_expert_materialization_sources(
+        &materialization_sources,
+    )?);
+    let manifest_us = elapsed_us(phase_start);
+    let prepare_profile = DeepSeekV4PrepareProfile {
+        validation_us,
+        attachment_bind_us,
+        target_bind_us,
+        execution_plan_us,
+        manifest_us,
+        total_us: policy_resolution_us.saturating_add(elapsed_us(total_start)),
+    };
     let resources = DeepSeekV4PreparedResources {
         model,
         options,
         layers: layers.into_boxed_slice(),
         layer_experts: layer_experts.into_boxed_slice(),
-        mtp,
-        mtp_layer_experts,
+        proposal_attachment,
+        proposal_stage_experts,
         materialization_sources,
+        expert_materialization_sources,
         kv_layout,
         policy,
         kernel_plan,
-        mtp_transformer_kernel_plan,
+        proposal_transformer_kernel_plan,
+        prepare_profile,
     };
 
     publish_prepared(Ok((resources, executable)))
@@ -613,8 +635,8 @@ pub fn prepare(
 fn prepare_materialization_sources(
     executable: &PreparedExecutable<TransformerStage>,
     layer_experts: &[DeepSeekV4PreparedLayerExperts],
-    mtp: Option<&DeepSeekV4MtpModel>,
-    mtp_layer_experts: &[DeepSeekV4PreparedLayerExperts],
+    proposal_attachment: Option<&DeepSeekV4ProposalAttachment>,
+    proposal_stage_experts: &[DeepSeekV4PreparedLayerExperts],
 ) -> Result<MaterializationSourceCatalog<DeepSeekV4InstallDescriptor>> {
     let static_entries =
         MaterializationSourceCatalog::from_checkpoint_manifests(executable.resources())?
@@ -648,17 +670,17 @@ fn prepare_materialization_sources(
                 .collect::<Result<Vec<_>>>()?,
         );
     }
-    if let Some(mtp) = mtp {
-        if mtp.layers.len() != mtp_layer_experts.len() {
+    if let Some(attachment) = proposal_attachment {
+        if attachment.layers.len() != proposal_stage_experts.len() {
             return Err(Error::Model {
                 message: format!(
-                    "DeepSeek-V4 DSpark stage/expert source mismatch: stages={} sources={}",
-                    mtp.layers.len(),
-                    mtp_layer_experts.len()
+                    "DeepSeek-V4 Proposal stage/expert source mismatch: stages={} sources={}",
+                    attachment.layers.len(),
+                    proposal_stage_experts.len()
                 ),
             });
         }
-        for experts in mtp_layer_experts {
+        for experts in proposal_stage_experts {
             entries.extend(
                 experts
                     .source_catalog()
@@ -676,6 +698,26 @@ fn prepare_materialization_sources(
             );
         }
     }
+    MaterializationSourceCatalog::new(entries)
+}
+
+fn prepare_expert_materialization_sources(
+    sources: &MaterializationSourceCatalog<DeepSeekV4InstallDescriptor>,
+) -> Result<MaterializationSourceCatalog<ExpertLoadSource>> {
+    let entries = sources
+        .iter()
+        .filter_map(|entry| match entry.descriptor() {
+            DeepSeekV4InstallDescriptor::StaticTensorBundle(_) => None,
+            DeepSeekV4InstallDescriptor::RoutedExpert(source) => {
+                Some(MaterializationSourceEntry::new(
+                    entry.resource(),
+                    entry.source(),
+                    entry.read_plan().clone(),
+                    source.clone(),
+                ))
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
     MaterializationSourceCatalog::new(entries)
 }
 
@@ -875,7 +917,7 @@ fn deepseek_v4_layer_kernel_requirements(
     {
         return Err(Error::Model {
             message: format!(
-                "SM121 HC producer requires hc=4 hidden=4096 mix=24 at layer {}, got hc={} hidden={} mix={} attn_norm={} ffn_norm={}",
+                "HC producer requires hc=4 hidden=4096 mix=24 at layer {}, got hc={} hidden={} mix={} attn_norm={} ffn_norm={}",
                 layer.layer,
                 layer.hc_config.hc_mult,
                 layer.hc_config.hidden_size,
@@ -887,11 +929,18 @@ fn deepseek_v4_layer_kernel_requirements(
     }
     validate_shared_ffn_requirement(layer)?;
     validate_mla_output_requirement(layer)?;
-    requirements.require_operation(KernelOperation::AttentionHcPre);
-    requirements.require_operation(KernelOperation::FeedForwardHcPre);
-    requirements.require_operation(KernelOperation::SharedFfn);
-    requirements.require_operation(KernelOperation::RoutedFp4Moe);
-    requirements.require_operation(KernelOperation::MlaOutput);
+    for operation in [
+        KernelOperation::AttentionHcPre,
+        KernelOperation::FeedForwardHcPre,
+        KernelOperation::SharedFfn,
+        KernelOperation::GroupedFp4Moe,
+        KernelOperation::MlaOutput,
+    ] {
+        requirements.require(OperationRequirement::new(
+            operation,
+            ExecutionMode::Inference,
+        ));
+    }
     requirements.add_linear_bundle(fp8_linear_bundle_requirement(
         KernelOperation::MlaQueryAKv,
         [
@@ -951,7 +1000,7 @@ fn validate_shared_ffn_requirement(layer: &DeepSeekV4Layer) -> Result<()> {
     else {
         return Err(Error::Model {
             message: format!(
-                "SM121 shared FFN requires FP8 K128 weights at layer {}: gate={:?} up={:?} down={:?}",
+                "shared FFN requires FP8 K128 weights at layer {}: gate={:?} up={:?} down={:?}",
                 layer.layer, formats.0, formats.1, formats.2
             ),
         });
@@ -966,7 +1015,7 @@ fn validate_shared_ffn_requirement(layer: &DeepSeekV4Layer) -> Result<()> {
     {
         return Err(Error::Model {
             message: format!(
-                "SM121 shared FFN shape is unsupported at layer {}: gate=[{gate_out},{gate_in}] up=[{up_out},{up_in}] down=[{down_out},{down_in}] limit={}",
+                "shared FFN shape is unsupported at layer {}: gate=[{gate_out},{gate_in}] up=[{up_out},{up_in}] down=[{down_out},{down_in}] limit={}",
                 layer.layer, layer.shared_ffn.swiglu_limit
             ),
         });
@@ -975,21 +1024,21 @@ fn validate_shared_ffn_requirement(layer: &DeepSeekV4Layer) -> Result<()> {
 }
 
 #[cfg(feature = "cuda")]
-fn deepseek_v4_mtp_kernel_requirements(
-    stage: usize,
-    layer: &super::mtp::DeepSeekV4MtpLayer,
+fn deepseek_v4_proposal_kernel_requirements(
+    stage_index: usize,
+    stage: &DeepSeekV4ProposalStage,
     target_layer_count: usize,
 ) -> Result<LayerKernelRequirements> {
-    let mut requirements = deepseek_v4_layer_kernel_requirements(&layer.transformer)?;
-    let attention = layer.transformer.attention.config;
-    if attention.num_heads != ferrule_cuda::cutlass::DSPARK_ATTENTION_HEADS
-        || attention.head_dim != ferrule_cuda::cutlass::DSPARK_ATTENTION_HEAD_DIM
-        || attention.window_size != ferrule_cuda::cutlass::DSPARK_ATTENTION_WINDOW
+    let mut requirements = deepseek_v4_layer_kernel_requirements(&stage.transformer)?;
+    let attention = stage.transformer.attention.config;
+    if attention.num_heads != ferrule_backend::cuda::cutlass::HYBRID_MLA_ATTENTION_HEADS
+        || attention.head_dim != ferrule_backend::cuda::cutlass::HYBRID_MLA_ATTENTION_HEAD_DIM
+        || attention.window_size != ferrule_backend::cuda::cutlass::HYBRID_MLA_ATTENTION_WINDOW
         || attention.compress_ratio != 0
     {
         return Err(Error::Model {
             message: format!(
-                "SM121 DSpark hybrid attention shape mismatch at stage {stage}: heads={} head_dim={} window={} compress_ratio={}",
+                "Proposal hybrid attention shape mismatch at stage {stage_index}: heads={} head_dim={} window={} compress_ratio={}",
                 attention.num_heads,
                 attention.head_dim,
                 attention.window_size,
@@ -997,18 +1046,24 @@ fn deepseek_v4_mtp_kernel_requirements(
             ),
         });
     }
-    requirements.require_operation(KernelOperation::DsparkHybridMlaAttention);
-    if stage == 0 {
-        requirements.require_operation(KernelOperation::DsparkProposalHead);
+    requirements.require(OperationRequirement::new(
+        KernelOperation::HybridMlaAttention,
+        ExecutionMode::Inference,
+    ));
+    if stage_index == 0 {
+        requirements.require(OperationRequirement::new(
+            KernelOperation::ProposalHead,
+            ExecutionMode::Inference,
+        ));
     }
-    if stage != 0 {
+    if stage_index != 0 {
         return Ok(requirements);
     }
-    let main_proj = layer.main_proj.as_ref().ok_or_else(|| Error::Model {
-        message: "DeepSeek-V4 DSpark stage zero is missing main_proj".into(),
+    let main_proj = stage.main_proj.as_ref().ok_or_else(|| Error::Model {
+        message: "DeepSeek-V4 Proposal stage zero is missing main_proj".into(),
     })?;
-    let main_norm = layer.main_norm.as_deref().ok_or_else(|| Error::Model {
-        message: "DeepSeek-V4 DSpark stage zero is missing main_norm".into(),
+    let main_norm = stage.main_norm.as_deref().ok_or_else(|| Error::Model {
+        message: "DeepSeek-V4 Proposal stage zero is missing main_norm".into(),
     })?;
     let LinearWeightFormat::Fp8E4M3WithE8M0Scale {
         out_features,
@@ -1019,12 +1074,12 @@ fn deepseek_v4_mtp_kernel_requirements(
     else {
         return Err(Error::Model {
             message: format!(
-                "SM121 DSpark main projection requires FP8/E8M0 K128 weights, got {:?}",
+                "Proposal main projection requires FP8/E8M0 K128 weights, got {:?}",
                 main_proj.format
             ),
         });
     };
-    if *out_features != layer.transformer.hc_config.hidden_size
+    if *out_features != stage.transformer.hc_config.hidden_size
         || *in_features != main_norm.len().saturating_mul(target_layer_count)
         || main_norm.len() != *out_features
         || !out_features.is_multiple_of(128)
@@ -1032,13 +1087,16 @@ fn deepseek_v4_mtp_kernel_requirements(
     {
         return Err(Error::Model {
             message: format!(
-                "SM121 DSpark main projection shape mismatch: weight=[{out_features},{in_features}] norm={} hidden={} target_layers={target_layer_count}",
+                "Proposal main projection shape mismatch: weight=[{out_features},{in_features}] norm={} hidden={} target_layers={target_layer_count}",
                 main_norm.len(),
-                layer.transformer.hc_config.hidden_size
+                stage.transformer.hc_config.hidden_size
             ),
         });
     }
-    requirements.require_operation(KernelOperation::DsparkMainProjectNorm);
+    requirements.require(OperationRequirement::new(
+        KernelOperation::MainProjectNorm,
+        ExecutionMode::Inference,
+    ));
     Ok(requirements)
 }
 
@@ -1064,7 +1122,7 @@ fn validate_mla_output_requirement(layer: &DeepSeekV4Layer) -> Result<()> {
     else {
         return Err(Error::Model {
             message: format!(
-                "SM121 MLA output requires FP8/E8M0 output-A and output-B at layer {}: output_a={output_a:?} output_b={output_b:?}",
+                "MLA output requires FP8/E8M0 output-A and output-B at layer {}: output_a={output_a:?} output_b={output_b:?}",
                 layer.layer
             ),
         });
@@ -1078,7 +1136,7 @@ fn validate_mla_output_requirement(layer: &DeepSeekV4Layer) -> Result<()> {
     {
         return Err(Error::Model {
             message: format!(
-                "SM121 MLA output shape mismatch at layer {}: output_a=[{output_a_out},{output_a_in}] output_b=[{output_b_out},{output_b_in}] groups={} rank={} hidden={}",
+                "MLA output shape mismatch at layer {}: output_a=[{output_a_out},{output_a_in}] output_b=[{output_b_out},{output_b_in}] groups={} rank={} hidden={}",
                 layer.layer, cfg.o_groups, cfg.o_lora_rank, cfg.hidden_size
             ),
         });
@@ -1123,6 +1181,7 @@ fn fp8_linear_bundle_requirement(
     }
     Ok(LinearBundleRequirement::new(
         operation,
+        ExecutionMode::Inference,
         *first_in,
         [*first_out, *second_out],
         WeightLayout::Fp8E4m3BlockScaled,
@@ -1147,6 +1206,7 @@ fn fp8_single_linear_requirement(
     };
     Ok(LinearBundleRequirement::new(
         operation,
+        ExecutionMode::Inference,
         *in_features,
         [*out_features],
         WeightLayout::Fp8E4m3BlockScaled,
@@ -1183,112 +1243,115 @@ fn bf16_linear_bundle_requirement(
     }
     Ok(LinearBundleRequirement::new(
         operation,
+        ExecutionMode::Inference,
         *first_in,
         [*first_out, *second_out],
         WeightLayout::Bf16RowMajor,
     ))
 }
 
-fn validate_mtp_attachment(
+fn validate_proposal_attachment(
     model: &DeepSeekV4Checkpoint,
-    mtp: Option<&DeepSeekV4MtpModel>,
+    proposal_attachment: Option<&DeepSeekV4ProposalAttachment>,
 ) -> Result<()> {
-    let declares_attachment = model.config.num_mtp_layers > 0
-        || model.config.dspark_block_size > 1
-        || !model.config.dspark_target_layer_ids.is_empty()
-        || model.config.dspark_markov_rank.is_some();
+    let declares_attachment = model.config.proposal_block_size > 1
+        || model.config.proposal_noise_token_id.is_some()
+        || !model.config.proposal_target_layer_ids.is_empty()
+        || model.config.proposal_markov_rank.is_some();
     if !declares_attachment {
         return Ok(());
     }
 
-    let mtp = mtp.ok_or_else(|| Error::Model {
-        message: "DeepSeek-V4 config declares a DSpark attachment but no MTP tensors were found"
+    let attachment = proposal_attachment.ok_or_else(|| Error::Model {
+        message: "DeepSeek-V4 config declares a Proposal attachment but no MTP tensors were found"
             .into(),
     })?;
-    let _protocol = mtp.protocol()?;
-    if mtp.config.block_size == 0 {
+    let _protocol = attachment.protocol()?;
+    if attachment.config.block_size == 0 {
         return Err(Error::Model {
-            message: "DeepSeek-V4 DSpark block size must be greater than zero".into(),
+            message: "DeepSeek-V4 Proposal block size must be greater than zero".into(),
         });
     }
-    let noise_token_id = mtp.config.noise_token_id.ok_or_else(|| Error::Model {
-        message: "DeepSeek-V4 DSpark attachment is missing its noise token id".into(),
-    })?;
+    let noise_token_id = attachment
+        .config
+        .noise_token_id
+        .ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 Proposal attachment is missing its noise token id".into(),
+        })?;
     if noise_token_id as usize >= model.config.vocab_size {
         return Err(Error::Model {
             message: format!(
-                "DeepSeek-V4 DSpark noise token {noise_token_id} exceeds vocabulary {}",
+                "DeepSeek-V4 Proposal noise token {noise_token_id} exceeds vocabulary {}",
                 model.config.vocab_size
             ),
         });
     }
-    if mtp.config.target_layer_ids.is_empty() {
+    if attachment.config.target_layer_ids.is_empty() {
         return Err(Error::Model {
-            message: "DeepSeek-V4 DSpark attachment requires target hidden-state layers".into(),
+            message: "DeepSeek-V4 Proposal attachment requires target hidden-state layers".into(),
         });
     }
-    for &target_layer in &mtp.config.target_layer_ids {
+    for &target_layer in &attachment.config.target_layer_ids {
         if target_layer >= model.config.num_layers {
             return Err(Error::Model {
                 message: format!(
-                    "DeepSeek-V4 DSpark target layer {target_layer} exceeds target layer count {}",
+                    "DeepSeek-V4 Proposal target layer {target_layer} exceeds target layer count {}",
                     model.config.num_layers
                 ),
             });
         }
     }
-    if mtp
+    if attachment
         .config
         .target_layer_ids
         .windows(2)
         .any(|pair| pair[0] >= pair[1])
     {
         return Err(Error::Model {
-            message: "DeepSeek-V4 DSpark target layers must be strictly increasing".into(),
+            message: "DeepSeek-V4 Proposal target layers must be strictly increasing".into(),
         });
     }
-    if mtp.layers.len() != model.config.num_mtp_layers {
+    if attachment.layers.is_empty() {
         return Err(Error::Model {
-            message: format!(
-                "DeepSeek-V4 prepared MTP stage count {} does not match config {}",
-                mtp.layers.len(),
-                model.config.num_mtp_layers
-            ),
+            message: "DeepSeek-V4 Proposal attachment has no transformer stages".into(),
         });
     }
-    if mtp.prediction_heads.is_none() {
+    if attachment.prediction_heads.is_none() {
         return Err(Error::Model {
-            message: "DeepSeek-V4 DSpark attachment is missing prediction heads".into(),
+            message: "DeepSeek-V4 Proposal attachment is missing prediction heads".into(),
         });
     }
-    for (stage, layer) in mtp.layers.iter().enumerate() {
-        let expected_execution_layer =
-            model
-                .config
-                .num_layers
-                .checked_add(stage)
-                .ok_or_else(|| Error::Model {
-                    message: "DeepSeek-V4 MTP execution layer overflow".into(),
-                })?;
-        if layer.mtp_index != stage || layer.execution_layer != expected_execution_layer {
+    for (stage_index, stage) in attachment.layers.iter().enumerate() {
+        let expected_execution_layer = model
+            .config
+            .num_layers
+            .checked_add(stage_index)
+            .ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 Proposal execution layer overflow".into(),
+            })?;
+        if stage.mtp_index != stage_index || stage.execution_layer != expected_execution_layer {
             return Err(Error::Model {
                 message: format!(
-                    "DeepSeek-V4 MTP stage {stage} has checkpoint index {} and execution layer {}, expected execution layer {expected_execution_layer}",
-                    layer.mtp_index, layer.execution_layer
+                    "DeepSeek-V4 Proposal stage {stage_index} has checkpoint index {} and execution layer {}, expected execution layer {expected_execution_layer}",
+                    stage.mtp_index, stage.execution_layer
                 ),
             });
         }
-        let is_stage_zero = stage == 0;
-        if layer.main_proj.is_some() != is_stage_zero || layer.main_norm.is_some() != is_stage_zero
+        let is_stage_zero = stage_index == 0;
+        if stage.main_proj.is_some() != is_stage_zero || stage.main_norm.is_some() != is_stage_zero
         {
             return Err(Error::Model {
                 message: format!(
-                    "DeepSeek-V4 MTP stage {stage} has an invalid stage-zero projection contract"
+                    "DeepSeek-V4 Proposal stage {stage_index} has an invalid stage-zero projection contract"
                 ),
             });
         }
     }
     Ok(())
+}
+
+fn elapsed_us(start: Instant) -> u64 {
+    start.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
 }
 
 fn validate_options(model: &DeepSeekV4Checkpoint, options: DeepSeekV4PrepareOptions) -> Result<()> {
@@ -1591,6 +1654,16 @@ mod tests {
                 expert_catalog.source(expert).unwrap().clone()
             )
         );
+        let expert_sources = prepare_expert_materialization_sources(&sources).unwrap();
+        assert_eq!(expert_sources.len(), 1);
+        let expert_entry = expert_sources.get(routed_resource, expert_source).unwrap();
+        assert_eq!(expert_entry.resource(), routed_resource);
+        assert_eq!(expert_entry.source(), expert_source);
+        assert_eq!(expert_entry.read_plan(), routed_entry.read_plan());
+        assert_eq!(
+            expert_entry.descriptor(),
+            expert_catalog.source(expert).unwrap()
+        );
         assert!(matches!(
             prepare_materialization_sources(
                 &executable,
@@ -1691,8 +1764,6 @@ mod tests {
     fn execution_policy_parses_once_with_documented_defaults() {
         let values = BTreeMap::from([
             ("FERRULE_DSV4_PREFILL_PROGRESS", "yes"),
-            ("FERRULE_DSV4_LOOKAHEAD_PREFETCH", "0"),
-            ("FERRULE_DSV4_HASH_PREFETCH_WINDOW", "true"),
             ("FERRULE_MANAGED_EXPERTS", "false"),
             ("FERRULE_DSV4_EXPERT_UPLOAD_INFLIGHT", "7"),
             ("FERRULE_DSV4_PROFILE", "0"),
@@ -1704,10 +1775,6 @@ mod tests {
         .unwrap();
 
         assert!(policy.prefill_progress());
-        assert!(!policy.lookahead_prefetch());
-        assert!(policy.decode_lookahead_prefetch());
-        assert!(policy.hash_decode_prefetch_window());
-        assert!(!policy.prefill_hash_lookahead());
         assert!(!policy.managed_experts());
         assert_eq!(policy.expert_upload_inflight(), 7);
         assert!(policy.profile_enabled());
@@ -1780,12 +1847,6 @@ mod tests {
 
     #[test]
     fn execution_policy_rejects_invalid_values() {
-        let error = DeepSeekV4ExecutionPolicy::resolve_with(|name| {
-            Ok((name == "FERRULE_DSV4_LOOKAHEAD_PREFETCH").then(|| "sometimes".to_string()))
-        })
-        .unwrap_err();
-        assert!(matches!(error, Error::Model { message: _ }));
-
         let error = DeepSeekV4ExecutionPolicy::resolve_with(|name| {
             Ok((name == "FERRULE_DSV4_EXPERT_UPLOAD_INFLIGHT").then(|| "many".to_string()))
         })

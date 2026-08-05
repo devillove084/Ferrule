@@ -499,7 +499,7 @@ fn local_deepseek_v4_layer_state_registers_real_routed_expert_artifacts_if_prese
         .new_layer_sequence_state(0)
         .expect("local DeepSeek V4 layer sequence state should initialize");
     let expert_runtime = model
-        .new_quality_first_layer_expert_runtime_with_residency(0, 0, 0)
+        .new_layer_expert_runtime_with_residency(0, 0)
         .expect("local DeepSeek V4 expert runtime should register routed artifacts");
     assert_eq!(state.kv.len(), 0);
     assert_eq!(
@@ -557,7 +557,7 @@ fn local_deepseek_v4_dir() -> Option<PathBuf> {
     let default = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join("models")
-        .join("DeepSeek-V4-Flash-DSpark");
+        .join("DeepSeek-V4-Flash-0731");
     has_complete_deepseek_v4_artifact(&default).then_some(default)
 }
 

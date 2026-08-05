@@ -6,9 +6,9 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use ferrule_runtime::{
-    GenerateRequest, InferenceCancelProgress, InferenceCompletionOwner, InferenceEngine, RequestId,
-    ResidentDriverStep, ResidentTokenEvent, Result as RuntimeResult, SequenceFinishReason,
-    SessionId,
+    GenerateRequest, InferenceCancelProgress, InferenceCompletionOwner, InferenceEngine,
+    InferenceShutdownProgress, RequestId, ResidentDriverStep, ResidentTokenEvent,
+    Result as RuntimeResult, SequenceFinishReason, SessionId,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -323,7 +323,13 @@ where
                         return;
                     }
                 };
-                let completion_owner = InferenceCompletionOwner::attach(&mut engine);
+                let mut completion_owner = InferenceCompletionOwner::attach(&mut engine);
+                if let Err(error) = completion_owner.initialize(&mut engine).await {
+                    let _ = ready_sender.send(Err(format!(
+                        "model startup materialization failed: {error}"
+                    )));
+                    return;
+                }
                 let _ = ready_sender.send(Ok(()));
                 run_worker(engine, completion_owner, receiver, thread_config).await;
             });
@@ -364,13 +370,12 @@ async fn run_worker<E>(
     let mut cancellation_scratch = Vec::<RequestId>::new();
     let mut fatal_error: Option<String> = None;
 
-    loop {
-        if active.is_empty() {
+    'worker: loop {
+        let should_step =
+            fatal_error.is_none() && (!active.is_empty() || engine.has_background_work());
+        if !should_step {
             tokio::select! {
-                error = completion_owner.reactor_failure() => {
-                    tracing::error!(error = %error, "model completion reactor failed");
-                    fatal_error = Some(error.to_string());
-                }
+                biased;
                 command = commands.recv() => {
                     let Some(command) = command else {
                         break;
@@ -380,6 +385,10 @@ async fn run_worker<E>(
                         break;
                     }
                 }
+                error = completion_owner.reactor_failure() => {
+                    tracing::error!(error = %error, "model completion reactor failed");
+                    fatal_error = Some(error.to_string());
+                }
             }
         }
 
@@ -388,20 +397,20 @@ async fn run_worker<E>(
                 Ok(command) => {
                     if handle_command(command, &mut engine, &mut active, fatal_error.as_deref()) {
                         cancel_all(&mut engine, &mut completion_owner, &mut active).await;
-                        return;
+                        break 'worker;
                     }
                 }
                 Err(mpsc::error::TryRecvError::Empty) => break,
                 Err(mpsc::error::TryRecvError::Disconnected) => {
                     cancel_all(&mut engine, &mut completion_owner, &mut active).await;
-                    return;
+                    break 'worker;
                 }
             }
         }
 
         cancel_disconnected(&mut engine, &mut active, &mut cancellation_scratch);
         drain_terminal(&mut engine, &mut active);
-        if active.is_empty() || fatal_error.is_some() {
+        if fatal_error.is_some() || (active.is_empty() && !engine.has_background_work()) {
             continue;
         }
 
@@ -443,6 +452,17 @@ async fn run_worker<E>(
                     continue;
                 }
                 tokio::select! {
+                    biased;
+                    command = commands.recv() => {
+                        let Some(command) = command else {
+                            cancel_all(&mut engine, &mut completion_owner, &mut active).await;
+                            break 'worker;
+                        };
+                        if handle_command(command, &mut engine, &mut active, fatal_error.as_deref()) {
+                            cancel_all(&mut engine, &mut completion_owner, &mut active).await;
+                            break 'worker;
+                        }
+                    }
                     wake = completion => {
                         if matches!(wake, ferrule_common::CompletionWake::Closed) {
                             let error = "model completion source closed with live async work".to_owned();
@@ -457,19 +477,18 @@ async fn run_worker<E>(
                         fatal_error = Some(message.clone());
                         fail_all(&mut engine, &mut active, message);
                     }
-                    command = commands.recv() => {
-                        let Some(command) = command else {
-                            cancel_all(&mut engine, &mut completion_owner, &mut active).await;
-                            return;
-                        };
-                        if handle_command(command, &mut engine, &mut active, fatal_error.as_deref()) {
-                            cancel_all(&mut engine, &mut completion_owner, &mut active).await;
-                            return;
-                        }
-                    }
                 }
             }
-            Ok(ResidentDriverStep::Idle | ResidentDriverStep::Executed { .. }) => {}
+            Ok(ResidentDriverStep::Idle) => {
+                if active.is_empty() && engine.has_background_work() {
+                    let error =
+                        "runtime reported idle while model background work remained runnable"
+                            .to_owned();
+                    tracing::error!(error = %error, "model worker entered a fatal scheduling state");
+                    fatal_error = Some(error);
+                }
+            }
+            Ok(ResidentDriverStep::Executed { .. }) => {}
             Err(error) => {
                 tracing::error!(error = %error, "model worker entered a fatal execution state");
                 let message = error.to_string();
@@ -479,6 +498,26 @@ async fn run_worker<E>(
         }
         cancel_disconnected(&mut engine, &mut active, &mut cancellation_scratch);
         drain_terminal(&mut engine, &mut active);
+    }
+
+    if let Err(error) = shutdown_engine(&mut engine, &mut completion_owner).await {
+        tracing::error!(error = %error, "model worker failed to drain runtime ownership");
+    }
+}
+
+async fn shutdown_engine<E>(
+    engine: &mut E,
+    completion_owner: &mut InferenceCompletionOwner,
+) -> RuntimeResult<()>
+where
+    E: InferenceEngine,
+{
+    loop {
+        let completion = completion_owner.listen();
+        match engine.shutdown()? {
+            InferenceShutdownProgress::Complete => return Ok(()),
+            InferenceShutdownProgress::Pending => completion_owner.wait(completion).await?,
+        }
     }
 }
 
@@ -932,6 +971,90 @@ mod tests {
         }
     }
 
+    struct BackgroundEngine {
+        completion_hub: CompletionHub,
+        ready: Arc<AtomicBool>,
+        phase: Arc<AtomicUsize>,
+        step_calls: Arc<AtomicUsize>,
+    }
+
+    impl InferenceEngine for BackgroundEngine {
+        fn completion_hub(&self) -> CompletionHub {
+            self.completion_hub.clone()
+        }
+
+        fn take_completion_reactors(&mut self) -> Vec<InferenceCompletionReactor> {
+            Vec::new()
+        }
+
+        fn has_background_work(&self) -> bool {
+            self.phase.load(Ordering::Acquire) < 2
+        }
+
+        fn has_pending_async_work(&self) -> bool {
+            self.phase.load(Ordering::Acquire) == 1
+        }
+
+        fn encode(&self, prompt: &str) -> RuntimeResult<Vec<u32>> {
+            Ok(prompt.bytes().map(u32::from).collect())
+        }
+
+        fn submit(&mut self, _request: GenerateRequest) {
+            panic!("background-only test engine does not accept requests");
+        }
+
+        fn step(
+            &mut self,
+            _on_token: &mut dyn FnMut(&ResidentTokenEvent) -> RuntimeResult<()>,
+        ) -> RuntimeResult<ResidentDriverStep> {
+            self.step_calls.fetch_add(1, Ordering::AcqRel);
+            match self.phase.load(Ordering::Acquire) {
+                0 => {
+                    self.phase.store(1, Ordering::Release);
+                    let continuation = BatchContinuationId::new(2);
+                    let dependency = LogicalDependency::operation_retired(OperationId::new(2))?;
+                    let dependencies = DependencySet::new([dependency])?;
+                    let transaction = ExecutionTransactionId::new(2)?;
+                    let pending =
+                        PendingModelProgress::new(transaction, continuation, dependencies)?;
+                    Ok(ResidentDriverStep::WaitingForModelProgress(vec![pending]))
+                }
+                1 if self.ready.load(Ordering::Acquire) => {
+                    self.phase.store(2, Ordering::Release);
+                    Ok(ResidentDriverStep::Executed {
+                        action_kind: ferrule_runtime::ResidentActionKind::Prefill,
+                        rows: 0,
+                        staged: 0,
+                        finished: 0,
+                    })
+                }
+                1 => Ok(ResidentDriverStep::Blocked),
+                _ => Ok(ResidentDriverStep::Idle),
+            }
+        }
+
+        fn cancel_request(
+            &mut self,
+            request_id: RequestId,
+        ) -> RuntimeResult<InferenceCancelProgress> {
+            Ok(InferenceCancelProgress::Complete(
+                CancelRequestResult::NotFound { request_id },
+            ))
+        }
+
+        fn drain_finished(&mut self) -> Vec<SequenceState> {
+            Vec::new()
+        }
+
+        fn drain_cancelled(&mut self) -> Vec<SequenceState> {
+            Vec::new()
+        }
+
+        fn drain_failed(&mut self) -> Vec<SequenceState> {
+            Vec::new()
+        }
+    }
+
     struct CompletionDrivenEngine {
         completion_hub: CompletionHub,
         ready: Arc<AtomicBool>,
@@ -1099,6 +1222,78 @@ mod tests {
             engine.request.as_ref().map(|request| request.id),
             Some(RequestId(2))
         );
+    }
+
+    #[tokio::test]
+    async fn idle_worker_drives_background_work_without_polling() {
+        let completion_hub = CompletionHub::new();
+        let ready = Arc::new(AtomicBool::new(false));
+        let phase = Arc::new(AtomicUsize::new(0));
+        let step_calls = Arc::new(AtomicUsize::new(0));
+        let worker = spawn_model_worker(
+            BackgroundEngine {
+                completion_hub: completion_hub.clone(),
+                ready: Arc::clone(&ready),
+                phase: Arc::clone(&phase),
+                step_calls: Arc::clone(&step_calls),
+            },
+            WorkerConfig::default(),
+        )
+        .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while step_calls.load(Ordering::Acquire) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("idle worker never started background work");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(step_calls.load(Ordering::Acquire), 1);
+        assert_eq!(phase.load(Ordering::Acquire), 1);
+
+        ready.store(true, Ordering::Release);
+        completion_hub.notify();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while phase.load(Ordering::Acquire) != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("completion wake did not resume background work");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(step_calls.load(Ordering::Acquire), 2);
+
+        worker.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn shutdown_preempts_waiting_background_work() {
+        let completion_hub = CompletionHub::new();
+        let phase = Arc::new(AtomicUsize::new(0));
+        let step_calls = Arc::new(AtomicUsize::new(0));
+        let worker = spawn_model_worker(
+            BackgroundEngine {
+                completion_hub,
+                ready: Arc::new(AtomicBool::new(false)),
+                phase,
+                step_calls: Arc::clone(&step_calls),
+            },
+            WorkerConfig::default(),
+        )
+        .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while step_calls.load(Ordering::Acquire) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("idle worker never entered background wait");
+        tokio::time::timeout(std::time::Duration::from_secs(1), worker.shutdown())
+            .await
+            .expect("shutdown did not preempt background completion wait")
+            .unwrap();
     }
 
     #[tokio::test]

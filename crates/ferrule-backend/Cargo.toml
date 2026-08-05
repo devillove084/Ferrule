@@ -1,0 +1,33 @@
+[package]
+name = "ferrule-backend"
+edition.workspace = true
+build = "build.rs"
+version.workspace = true
+license.workspace = true
+description = "Ferrule device runtime and kernel provider boundary"
+repository = "https://github.com/ferrule/ferrule"
+readme = "../../README.md"
+keywords = ["llm", "inference", "training", "gpu", "rust"]
+categories = ["science", "machine-learning"]
+
+[features]
+default = []
+cuda = [
+    "dep:rayon",
+    "dep:memmap2",
+    "dep:tracing",
+]
+
+[dependencies]
+ferrule-common = { version = "0.2.0", path = "../ferrule-common" }
+snafu.workspace = true
+rayon = { version = "1.10", optional = true }
+memmap2 = { version = "0.9", optional = true }
+tracing = { version = "0.1", optional = true }
+
+
+[build-dependencies]
+cc = "1.2"
+
+[lints]
+workspace = true

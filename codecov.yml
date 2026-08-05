@@ -15,4 +15,4 @@ comment:
   require_changes: true
 
 ignore:
-  - "crates/ferrule-cuda/**"
+  - "crates/ferrule-backend/native/**"

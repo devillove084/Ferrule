@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 #[cfg(feature = "cuda")]
+use ferrule_backend::cuda::context::{CudaPinnedHostAllocator, CudaPinnedU8HostBuffer};
+#[cfg(feature = "cuda")]
 use ferrule_common::materialization_io::MaterializationResourceRequirements;
 use ferrule_common::{CompletionHub, Error, Result};
 #[cfg(feature = "cuda")]
@@ -16,14 +18,12 @@ use ferrule_common::{
     MaterializationKey, OperationId, RegisteredPinnedAlignedSlabLeaseDescriptor, RegistrationId,
     SlabId,
 };
-#[cfg(feature = "cuda")]
-use ferrule_cuda::context::{CudaPinnedHostAllocator, CudaPinnedU8HostBuffer};
 use io_uring::{IoUring, opcode, types};
 
-use super::streaming::{ExpertIoStats, ExpertTensorPayload, ExpertTensorSlice};
+use super::streaming::{ExpertIoStats, ExpertIoTransport, ExpertTensorPayload, ExpertTensorSlice};
 use crate::runner::ModelCompletionReactor;
 
-const DIRECT_IO_ALIGNMENT: usize = 4096;
+pub(crate) const DIRECT_IO_ALIGNMENT: usize = 4096;
 const FIXED_FILE_CAPACITY: usize = 64;
 
 #[repr(C, align(4096))]
@@ -422,13 +422,14 @@ fn reap_detached_pinned_operations<T>(
 
 #[cfg(any(feature = "cuda", test))]
 fn unscheduled_pinned_operation_reason(
+    scheduler_queued: bool,
     scheduler_can_queue: bool,
     has_all_reservations: bool,
     has_no_reservations: bool,
     reusable_buffers: usize,
     extent_count: usize,
 ) -> Option<String> {
-    if !scheduler_can_queue {
+    if scheduler_queued || !scheduler_can_queue {
         return None;
     }
     if has_all_reservations {
@@ -608,8 +609,9 @@ struct PendingDirectReadExtent {
     slices: Vec<(usize, ExpertTensorSlice)>,
 }
 
-struct IoUringDirectState {
+struct IoUringReadState {
     ring: IoUring,
+    transport: ExpertIoTransport,
     completion_eventfd_registered: bool,
     queue_depth: usize,
     buffer_bytes: usize,
@@ -636,12 +638,12 @@ struct IoUringDirectState {
     next_pinned_submission_id: u64,
 }
 
-impl IoUringDirectState {
-    fn new(queue_depth: usize, buffer_bytes: usize) -> Result<Self> {
+impl IoUringReadState {
+    fn new(queue_depth: usize, buffer_bytes: usize, transport: ExpertIoTransport) -> Result<Self> {
         let buffers = (0..queue_depth)
             .map(|_| RegisteredBuffer::new_pageable(buffer_bytes))
             .collect::<Result<Vec<_>>>()?;
-        Self::new_with_buffers(queue_depth, buffer_bytes, buffers)
+        Self::new_with_buffers(queue_depth, buffer_bytes, buffers, transport)
     }
 
     #[cfg(feature = "cuda")]
@@ -650,6 +652,7 @@ impl IoUringDirectState {
         buffer_bytes: usize,
         slab_count: usize,
         allocator: &CudaPinnedHostAllocator,
+        transport: ExpertIoTransport,
     ) -> Result<Self> {
         if slab_count < queue_depth {
             return Err(Error::Model {
@@ -668,7 +671,7 @@ impl IoUringDirectState {
         let buffers = (0..slab_count)
             .map(|_| RegisteredBuffer::new_cuda_pinned(buffer_bytes, allocator))
             .collect::<Result<Vec<_>>>()?;
-        Self::new_with_buffers(queue_depth, buffer_bytes, buffers)
+        Self::new_with_buffers(queue_depth, buffer_bytes, buffers, transport)
     }
 
     #[allow(unsafe_code)]
@@ -676,6 +679,7 @@ impl IoUringDirectState {
         queue_depth: usize,
         buffer_bytes: usize,
         mut buffers: Vec<RegisteredBuffer>,
+        transport: ExpertIoTransport,
     ) -> Result<Self> {
         if queue_depth == 0 || queue_depth > u16::MAX as usize {
             return Err(Error::Model {
@@ -714,6 +718,7 @@ impl IoUringDirectState {
         let buffer_count = buffers.len();
         Ok(Self {
             ring,
+            transport,
             completion_eventfd_registered: false,
             queue_depth,
             buffer_bytes,
@@ -777,16 +782,18 @@ impl IoUringDirectState {
                 ),
             });
         }
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECT)
-            .open(path)
-            .map_err(|error| Error::Model {
-                message: format!(
-                    "open expert shard with O_DIRECT '{}': {error}",
-                    path.display()
-                ),
-            })?;
+        let mut options = OpenOptions::new();
+        options.read(true);
+        if self.transport == ExpertIoTransport::DirectIoUring {
+            options.custom_flags(libc::O_DIRECT);
+        }
+        let file = options.open(path).map_err(|error| Error::Model {
+            message: format!(
+                "open expert shard '{}' for {}: {error}",
+                path.display(),
+                self.transport.as_str()
+            ),
+        })?;
         let index = u32::try_from(self.files.len()).map_err(|_| Error::Model {
             message: "expert fixed-file index exceeds u32".into(),
         })?;
@@ -1174,7 +1181,11 @@ impl IoUringDirectState {
             })?;
         operation.authorize_submission()?;
         self.pinned_operation_order.push_back(ticket.operation_id);
-        self.schedule_pinned_reads()?;
+        // Admit one extent from a newly authorized operation. The surrounding
+        // registry drive authorizes a batch of experts; completion-side refill
+        // can then order their remaining extents by physical checkpoint offset
+        // instead of letting the first expert monopolize the SQ.
+        self.schedule_pinned_reads(1)?;
         self.submit_queued_pinned_reads()?;
         self.detect_stuck_pinned_operation(ticket.operation_id)
     }
@@ -1201,7 +1212,7 @@ impl IoUringDirectState {
         }
 
         self.drain_pinned_completions(max_completions)?;
-        self.schedule_pinned_reads()?;
+        self.schedule_pinned_reads(self.queue_depth)?;
         self.submit_queued_pinned_reads()?;
         self.reap_detached_pinned_operations();
         self.detect_stuck_pinned_operation(ticket.operation_id)?;
@@ -1274,7 +1285,7 @@ impl IoUringDirectState {
     fn react_to_pinned_completions(&mut self) -> Result<()> {
         loop {
             let drained = self.drain_pinned_completions(usize::MAX)?;
-            self.schedule_pinned_reads()?;
+            self.schedule_pinned_reads(self.queue_depth)?;
             self.submit_queued_pinned_reads()?;
             self.reap_detached_pinned_operations();
             if drained == 0 {
@@ -1339,10 +1350,18 @@ impl IoUringDirectState {
     }
 
     #[cfg(feature = "cuda")]
+    fn next_storage_local_operation(&mut self) -> Option<u64> {
+        take_storage_local_operation(&mut self.pinned_operation_order, &self.pinned_operations)
+    }
+
+    #[cfg(feature = "cuda")]
     #[allow(unsafe_code)]
-    fn schedule_pinned_reads(&mut self) -> Result<()> {
+    fn schedule_pinned_reads(&mut self, maximum_new_submissions: usize) -> Result<()> {
         let mut consecutively_blocked = 0usize;
-        while self.pinned_submissions.len() < self.queue_depth {
+        let mut scheduled = 0usize;
+        while scheduled < maximum_new_submissions
+            && self.pinned_submissions.len() < self.queue_depth
+        {
             let sq_has_capacity = {
                 let submission = self.ring.submission();
                 !submission.is_full()
@@ -1351,7 +1370,7 @@ impl IoUringDirectState {
                 break;
             }
 
-            let Some(operation_id) = self.pinned_operation_order.pop_front() else {
+            let Some(operation_id) = self.next_storage_local_operation() else {
                 break;
             };
             let can_submit = self
@@ -1450,6 +1469,7 @@ impl IoUringDirectState {
                 self.pinned_operation_order.push_back(operation_id);
             }
 
+            scheduled += 1;
             self.stats.submitted_extents = self.stats.submitted_extents.saturating_add(1);
             self.stats.aligned_bytes = self.stats.aligned_bytes.saturating_add(u64::from(len));
             self.stats.peak_queue_depth = self
@@ -1522,6 +1542,10 @@ impl IoUringDirectState {
         let has_no_reservations = operation.has_no_reservations();
         let has_all_reservations = operation.has_all_reservations();
         let can_submit = operation.can_submit();
+        let scheduler_queued = self
+            .pinned_operation_order
+            .iter()
+            .any(|queued| *queued == operation_id);
 
         let reason = if extent_count > self.buffers.len() {
             Some(format!(
@@ -1551,6 +1575,7 @@ impl IoUringDirectState {
                 })
                 .unwrap_or(0);
             unscheduled_pinned_operation_reason(
+                scheduler_queued,
                 scheduler_can_queue,
                 has_all_reservations,
                 has_no_reservations,
@@ -1998,7 +2023,7 @@ fn collect_payloads<T>(payloads: Vec<Option<T>>) -> Result<Vec<T>> {
         .collect()
 }
 
-impl Drop for IoUringDirectState {
+impl Drop for IoUringReadState {
     fn drop(&mut self) {
         let _ = self.unregister_completion_eventfd();
         let _ = self.ring.submitter().unregister_buffers();
@@ -2007,7 +2032,7 @@ impl Drop for IoUringDirectState {
 }
 
 pub(crate) struct IoUringExpertReader {
-    state: Mutex<IoUringDirectState>,
+    state: Mutex<IoUringReadState>,
     completion_hub: CompletionHub,
     _completion_eventfd: OwnedFd,
     reactor_eventfd: Mutex<Option<OwnedFd>>,
@@ -2017,10 +2042,11 @@ impl IoUringExpertReader {
     pub(crate) fn new(
         queue_depth: usize,
         buffer_bytes: usize,
+        transport: ExpertIoTransport,
         completion_hub: CompletionHub,
     ) -> Result<Self> {
         Self::from_state(
-            IoUringDirectState::new(queue_depth, buffer_bytes)?,
+            IoUringReadState::new(queue_depth, buffer_bytes, transport)?,
             completion_hub,
         )
     }
@@ -2031,15 +2057,22 @@ impl IoUringExpertReader {
         buffer_bytes: usize,
         slab_count: usize,
         allocator: &CudaPinnedHostAllocator,
+        transport: ExpertIoTransport,
         completion_hub: CompletionHub,
     ) -> Result<Self> {
         Self::from_state(
-            IoUringDirectState::new_cuda_pinned(queue_depth, buffer_bytes, slab_count, allocator)?,
+            IoUringReadState::new_cuda_pinned(
+                queue_depth,
+                buffer_bytes,
+                slab_count,
+                allocator,
+                transport,
+            )?,
             completion_hub,
         )
     }
 
-    fn from_state(mut state: IoUringDirectState, completion_hub: CompletionHub) -> Result<Self> {
+    fn from_state(mut state: IoUringReadState, completion_hub: CompletionHub) -> Result<Self> {
         let (completion_eventfd, reactor_eventfd) = create_completion_eventfd_pair()?;
         state.register_completion_eventfd(&completion_eventfd)?;
         Ok(Self {
@@ -2285,6 +2318,34 @@ fn drain_completion_eventfd(eventfd: &OwnedFd) -> Result<()> {
     }
 }
 
+#[cfg(any(feature = "cuda", test))]
+fn take_storage_local_operation<T>(
+    order: &mut VecDeque<u64>,
+    operations: &HashMap<u64, PinnedReadOperation<T>>,
+) -> Option<u64> {
+    let mut selected = None;
+    let mut waiting = VecDeque::with_capacity(order.len());
+    while let Some(operation_id) = order.pop_front() {
+        let Some(operation) = operations.get(&operation_id) else {
+            continue;
+        };
+        if !operation.can_submit() {
+            continue;
+        }
+        let extent = &operation.extents[operation.next_extent];
+        let key = (extent.file_index, extent.aligned_offset, operation_id);
+        if selected.is_none_or(|(selected_key, _)| key < selected_key) {
+            if let Some((_, previous)) = selected.replace((key, operation_id)) {
+                waiting.push_back(previous);
+            }
+        } else {
+            waiting.push_back(operation_id);
+        }
+    }
+    *order = waiting;
+    selected.map(|(_, operation_id)| operation_id)
+}
+
 fn align_up(value: usize, alignment: usize) -> Result<usize> {
     if alignment == 0 || !alignment.is_power_of_two() {
         return Err(Error::Model {
@@ -2317,12 +2378,45 @@ mod tests {
             .collect()
     }
 
+    fn temporary_shard(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "ferrule-{name}-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, vec![0u8; DIRECT_IO_ALIGNMENT]).unwrap();
+        path
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn expert_transport_controls_direct_io_file_flag() {
+        for (transport, expected) in [
+            (ExpertIoTransport::BufferedIoUring, false),
+            (ExpertIoTransport::DirectIoUring, true),
+        ] {
+            let Ok(mut state) = IoUringReadState::new(1, DIRECT_IO_ALIGNMENT, transport) else {
+                return;
+            };
+            let path = temporary_shard(transport.as_str());
+            state.register_file(&path).unwrap();
+            let flags = unsafe { libc::fcntl(state.files[0].as_raw_fd(), libc::F_GETFL) };
+            assert_ne!(flags, -1);
+            assert_eq!(flags & libc::O_DIRECT != 0, expected);
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
     #[test]
     #[allow(unsafe_code)]
     fn completion_reactor_is_claimed_once_and_does_not_lose_an_early_wake() {
         let completion_hub = CompletionHub::new();
-        let Ok(reader) = IoUringExpertReader::new(1, DIRECT_IO_ALIGNMENT, completion_hub.clone())
-        else {
+        let Ok(reader) = IoUringExpertReader::new(
+            1,
+            DIRECT_IO_ALIGNMENT,
+            ExpertIoTransport::DirectIoUring,
+            completion_hub.clone(),
+        ) else {
             return;
         };
         let reader = Arc::new(reader);
@@ -2359,7 +2453,12 @@ mod tests {
     #[test]
     fn dropping_an_unpolled_completion_reactor_unregisters_eventfd() {
         let completion_hub = CompletionHub::new();
-        let Ok(reader) = IoUringExpertReader::new(1, DIRECT_IO_ALIGNMENT, completion_hub) else {
+        let Ok(reader) = IoUringExpertReader::new(
+            1,
+            DIRECT_IO_ALIGNMENT,
+            ExpertIoTransport::DirectIoUring,
+            completion_hub,
+        ) else {
             return;
         };
         let reader = Arc::new(reader);
@@ -2399,13 +2498,44 @@ mod tests {
     }
 
     #[test]
-    fn queue_saturation_keeps_a_reservable_pinned_operation_waiting() {
+    fn storage_local_selection_prefers_file_then_offset_without_losing_fifo_work() {
+        let mut operations = HashMap::new();
+        let mut first = PinnedReadOperation::<()>::new(synthetic_extents(2), 0);
+        first.extents[0].aligned_offset = 8 * DIRECT_IO_ALIGNMENT as u64;
+        first.extents[1].aligned_offset = 9 * DIRECT_IO_ALIGNMENT as u64;
+        let mut second = PinnedReadOperation::<()>::new(synthetic_extents(2), 0);
+        second.extents[0].aligned_offset = 2 * DIRECT_IO_ALIGNMENT as u64;
+        second.extents[1].aligned_offset = 3 * DIRECT_IO_ALIGNMENT as u64;
+        operations.insert(1, first);
+        operations.insert(2, second);
+        let mut order = VecDeque::from([1, 2]);
+
         assert_eq!(
-            unscheduled_pinned_operation_reason(false, false, true, 2, 2),
+            take_storage_local_operation(&mut order, &operations),
+            Some(2)
+        );
+        assert_eq!(order, VecDeque::from([1]));
+        order.push_back(2);
+        operations.get_mut(&2).unwrap().next_extent = 1;
+        assert_eq!(
+            take_storage_local_operation(&mut order, &operations),
+            Some(2)
+        );
+        assert_eq!(order, VecDeque::from([1]));
+    }
+
+    #[test]
+    fn queued_or_saturated_pinned_operation_remains_waiting() {
+        assert_eq!(
+            unscheduled_pinned_operation_reason(false, false, false, true, 2, 2),
+            None
+        );
+        assert_eq!(
+            unscheduled_pinned_operation_reason(true, true, true, false, 0, 2),
             None
         );
         assert!(
-            unscheduled_pinned_operation_reason(true, false, true, 2, 2)
+            unscheduled_pinned_operation_reason(false, true, false, true, 2, 2)
                 .is_some_and(|reason| reason.contains("scheduling made no progress"))
         );
     }

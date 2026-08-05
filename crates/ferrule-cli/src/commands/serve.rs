@@ -46,16 +46,20 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
             cache_byte_limit(args.expert_pinned_cache_mb, "expert-pinned-cache-mb")?,
         ),
     );
+    let kv_cache_bytes = required_mebibytes_to_bytes(args.kv_cache_mb, "kv-cache-mb")?;
+    let reserved_device_bytes = DeepSeekV4PrepareOptions::default()
+        .reserved_device_bytes
+        .checked_add(kv_cache_bytes)
+        .ok_or_else(|| anyhow::anyhow!("device residency reserve overflow"))?;
     let prepare_options = DeepSeekV4PrepareOptions {
         max_layers: args.max_layers,
         output_head_chunk_rows: args.output_head_chunk_rows,
         expert_reader_max_tensor_bytes: args.expert_reader_max_slice_mb.saturating_mul(1024 * 1024),
-        moe_prefetch_experts: args.moe_prefetch_experts,
         expert_memory_policy,
         moe_hotset_experts: args.moe_hotset_experts,
+        reserved_device_bytes,
     };
     let max_tensor_bytes = args.max_tensor_mb.saturating_mul(1024 * 1024);
-    let kv_cache_bytes = required_mebibytes_to_bytes(args.kv_cache_mb, "kv-cache-mb")?;
     let scheduler_config = ResidentSchedulerConfig {
         prefill_chunk_size: args.prefill_chunk_size,
         max_active_sequences: args.max_active_sequences,

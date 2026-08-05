@@ -1,19 +1,16 @@
 //! Bounded aging and deficit-round-robin for runnable I/O transitions.
 
-use std::collections::HashMap;
+use std::collections::VecDeque;
 
-use ahash::RandomState;
 use snafu::Snafu;
-
-use crate::scheduling::ResourceClass;
 
 /// Deterministic fairness configuration. Costs and quanta use the same units
 /// (normally marginal physical bytes, with metadata-only transitions costing one).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FairQueueConfig {
-    pub prefetch_quantum: u64,
-    pub throughput_quantum: u64,
-    pub latency_critical_quantum: u64,
+    pub model_warmup_quantum: u64,
+    pub transaction_prefetch_quantum: u64,
+    pub required_quantum: u64,
     pub max_surplus: u64,
     pub debt_limit: u64,
     pub starvation_ticks: u64,
@@ -23,9 +20,9 @@ pub struct FairQueueConfig {
 impl Default for FairQueueConfig {
     fn default() -> Self {
         Self {
-            prefetch_quantum: 1,
-            throughput_quantum: 4 * 1024,
-            latency_critical_quantum: 8 * 1024,
+            model_warmup_quantum: 1,
+            transaction_prefetch_quantum: 2 * 1024,
+            required_quantum: 8 * 1024,
             max_surplus: 64 * 1024,
             debt_limit: 64 * 1024,
             starvation_ticks: 8,
@@ -39,8 +36,8 @@ impl FairQueueConfig {
     ///
     /// `limits` must already have passed `MaterializationResourceLimits::validate`. Total
     /// byte capacities are used directly instead of inferring a per-request size
-    /// from slot counts. All admitted execution may consume the execution reserve;
-    /// latency-critical work receives the largest scheduling quantum.
+    /// from slot counts. All Required work may consume the execution reserve and
+    /// receives the largest scheduling quantum.
     pub fn for_production(
         limits: ferrule_common::materialization_io::MaterializationResourceLimits,
     ) -> Result<Self, FairQueueError> {
@@ -60,8 +57,6 @@ impl FairQueueConfig {
             return Err(FairQueueError::CostOutOfRange);
         }
 
-        // One-eighth of a maximum transition gives even speculative prefetch
-        // bounded deficit progress without allowing it to consume hard reserve.
         let progress_quantum = max_transition_cost
             .checked_div(STARVATION_TICKS)
             .expect("the production starvation interval is non-zero")
@@ -78,9 +73,9 @@ impl FairQueueConfig {
         };
 
         Self {
-            prefetch_quantum: progress_quantum,
-            throughput_quantum: scaled_quantum(4),
-            latency_critical_quantum: scaled_quantum(8),
+            model_warmup_quantum: progress_quantum,
+            transaction_prefetch_quantum: scaled_quantum(2),
+            required_quantum: scaled_quantum(8),
             max_surplus: max_transition_cost.min(MAX_COUNTER),
             debt_limit: max_transition_cost.min(MAX_COUNTER),
             starvation_ticks: STARVATION_TICKS,
@@ -90,18 +85,18 @@ impl FairQueueConfig {
     }
 
     pub fn validate(self) -> Result<Self, FairQueueError> {
-        if self.prefetch_quantum == 0
-            || self.throughput_quantum == 0
-            || self.latency_critical_quantum == 0
+        if self.model_warmup_quantum == 0
+            || self.transaction_prefetch_quantum == 0
+            || self.required_quantum == 0
         {
             return Err(FairQueueError::ZeroQuantum);
         }
         if self.max_transition_cost == 0 {
             return Err(FairQueueError::ZeroMaxTransitionCost);
         }
-        if self.prefetch_quantum > i64::MAX as u64
-            || self.throughput_quantum > i64::MAX as u64
-            || self.latency_critical_quantum > i64::MAX as u64
+        if self.model_warmup_quantum > i64::MAX as u64
+            || self.transaction_prefetch_quantum > i64::MAX as u64
+            || self.required_quantum > i64::MAX as u64
             || self.max_transition_cost > i64::MAX as u64
             || self.max_surplus > i64::MAX as u64
             || self.debt_limit > i64::MAX as u64
@@ -111,11 +106,11 @@ impl FairQueueConfig {
         Ok(self)
     }
 
-    pub const fn quantum(self, class: ResourceClass) -> u64 {
-        match class {
-            ResourceClass::Prefetch => self.prefetch_quantum,
-            ResourceClass::Throughput => self.throughput_quantum,
-            ResourceClass::LatencyCritical => self.latency_critical_quantum,
+    const fn quantum(self, band: FairQueueBand) -> u64 {
+        match band {
+            FairQueueBand::Background => self.model_warmup_quantum,
+            FairQueueBand::Prefetch => self.transaction_prefetch_quantum,
+            FairQueueBand::Required => self.required_quantum,
         }
     }
 }
@@ -134,21 +129,62 @@ pub enum FairQueueError {
     TransitionTooLarge { cost: u64, maximum: u64 },
 }
 
+/// Owner-side classification of a queued item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FairQueueEntryState {
+    /// The item is current and its hard physical claims can be admitted.
+    Ready,
+    /// The item is current but must wait for hard physical capacity.
+    Blocked,
+    /// The item no longer names current owner state and can be discarded.
+    Stale,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FairQueueBand {
+    Background,
+    Prefetch,
+    Required,
+}
+
+impl FairQueueBand {
+    const ALL: [Self; 3] = [Self::Background, Self::Prefetch, Self::Required];
+}
+
 #[derive(Debug)]
 struct Entry<T> {
     item: T,
-    class: ResourceClass,
+    band: FairQueueBand,
     cost: u64,
     enqueued_at: u64,
     sequence: u64,
 }
 
-/// Work-conserving queue whose policy can reorder only hard-feasible work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CandidateKind {
+    Eligible,
+    Forced,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Candidate {
+    band: FairQueueBand,
+    kind: CandidateKind,
+    age: u64,
+    sequence: u64,
+}
+
+/// Work-conserving policy bands that reorder only hard-feasible work.
+///
+/// Each band is FIFO. A selection pass rotates blocked entries at most once and
+/// drops stale entries lazily, so normal queue operations never scan or shift the
+/// complete cross-band workload.
 #[derive(Debug)]
 pub struct FairQueue<T> {
     config: FairQueueConfig,
-    entries: Vec<Entry<T>>,
-    deficit: HashMap<ResourceClass, i64, RandomState>,
+    queues: [VecDeque<Entry<T>>; 3],
+    deficit: [i64; 3],
+    len: usize,
     next_sequence: u64,
 }
 
@@ -157,14 +193,9 @@ impl<T> FairQueue<T> {
         let config = config.validate()?;
         Ok(Self {
             config,
-            entries: Vec::new(),
-            deficit: {
-                let mut m = HashMap::with_hasher(RandomState::default());
-                m.insert(ResourceClass::Prefetch, 0i64);
-                m.insert(ResourceClass::Throughput, 0);
-                m.insert(ResourceClass::LatencyCritical, 0);
-                m
-            },
+            queues: std::array::from_fn(|_| VecDeque::new()),
+            deficit: [0; 3],
+            len: 0,
             next_sequence: 1,
         })
     }
@@ -173,22 +204,22 @@ impl<T> FairQueue<T> {
         self.config
     }
 
-    pub fn len(&self) -> usize {
-        self.entries.len()
+    pub const fn len(&self) -> usize {
+        self.len
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
-    pub fn deficit(&self, class: ResourceClass) -> i64 {
-        self.deficit.get(&class).copied().unwrap_or_default()
+    pub fn deficit(&self, band: FairQueueBand) -> i64 {
+        self.deficit[band_index(band)]
     }
 
     pub fn push(
         &mut self,
         item: T,
-        class: ResourceClass,
+        band: FairQueueBand,
         cost: u64,
         now: u64,
     ) -> Result<(), FairQueueError> {
@@ -203,103 +234,178 @@ impl<T> FairQueue<T> {
         }
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.saturating_add(1);
-        self.entries.push(Entry {
+        self.queues[band_index(band)].push_back(Entry {
             item,
-            class,
+            band,
             cost,
             enqueued_at: now,
             sequence,
         });
+        self.len = self.len.saturating_add(1);
         Ok(())
     }
 
-    /// Removes stale owner actions without treating hard infeasibility as staleness.
+    /// Removes matching owner work. This is intended for explicit cancellation;
+    /// hot-path stale removal belongs in [`Self::pop_next_by`].
     pub fn retain(&mut self, mut keep: impl FnMut(&T) -> bool) {
-        self.entries.retain(|entry| keep(&entry.item));
-    }
-
-    /// Reclassifies matching queued work without resetting its age or queue identity.
-    pub fn reclassify_where(&mut self, class: ResourceClass, mut matches: impl FnMut(&T) -> bool) {
-        for entry in &mut self.entries {
-            if matches(&entry.item) {
-                entry.class = class;
-            }
+        for queue in &mut self.queues {
+            let before = queue.len();
+            queue.retain(|entry| keep(&entry.item));
+            self.len -= before - queue.len();
         }
     }
 
-    /// Selects one transition. `hard_feasible` is authoritative: aging and debt
-    /// never bypass it. Finite exact work may enter bounded debt after aging;
-    /// speculative prefetch has no forced-progress entitlement.
+    /// Reclassifies matching queued work without resetting age or identity.
+    pub fn reclassify_where(&mut self, band: FairQueueBand, mut matches: impl FnMut(&T) -> bool) {
+        let mut moved = Vec::new();
+        for queue in &mut self.queues {
+            let count = queue.len();
+            for _ in 0..count {
+                let mut entry = queue
+                    .pop_front()
+                    .expect("band queue length is stable during reclassification");
+                if matches(&entry.item) {
+                    entry.band = band;
+                    moved.push(entry);
+                } else {
+                    queue.push_back(entry);
+                }
+            }
+        }
+        let target = &mut self.queues[band_index(band)];
+        target.extend(moved);
+        target.make_contiguous().sort_by_key(|entry| entry.sequence);
+    }
+
+    /// Selects one transition. Hard physical feasibility is authoritative: aging
+    /// and debt never bypass it. Finite execution work may enter bounded debt after
+    /// aging; speculative prefetch has no forced-progress entitlement.
     pub fn pop_next(&mut self, now: u64, mut hard_feasible: impl FnMut(&T) -> bool) -> Option<T> {
-        if self.entries.is_empty() {
+        self.pop_next_by(now, |item| {
+            if hard_feasible(item) {
+                FairQueueEntryState::Ready
+            } else {
+                FairQueueEntryState::Blocked
+            }
+        })
+    }
+
+    pub(crate) fn pop_next_by(
+        &mut self,
+        now: u64,
+        mut state: impl FnMut(&T) -> FairQueueEntryState,
+    ) -> Option<T> {
+        if self.is_empty() {
             return None;
         }
         self.add_quantum();
 
-        let mut eligible = Vec::new();
-        let mut forced = Vec::new();
-        for (index, entry) in self.entries.iter().enumerate() {
-            if !hard_feasible(&entry.item) {
+        let mut selected = None;
+        for band in FairQueueBand::ALL {
+            let Some(candidate) = self.prepare_candidate(band, now, &mut state) else {
                 continue;
-            }
-            let deficit = self.deficit(entry.class);
-            let cost = entry.cost as i64;
-            if deficit >= cost {
-                eligible.push(index);
-                continue;
-            }
-            let age = now.saturating_sub(entry.enqueued_at);
-            if entry.class != ResourceClass::Prefetch
-                && age >= self.config.starvation_ticks
-                && deficit.saturating_sub(cost) >= -(self.config.debt_limit as i64)
-            {
-                forced.push(index);
+            };
+            if selected.is_none_or(|current| candidate_precedes(candidate, current)) {
+                selected = Some(candidate);
             }
         }
 
-        let selected = if forced.is_empty() {
-            self.best_candidate(&eligible, now)
-        } else {
-            self.best_candidate(&forced, now)
-        }?;
-        let entry = self.entries.remove(selected);
-        let deficit = self
-            .deficit
-            .get_mut(&entry.class)
-            .expect("all resource classes have a deficit account");
+        let selected = selected?;
+        let entry = self.queues[band_index(selected.band)]
+            .pop_front()
+            .expect("prepared fair-queue candidate remains at its band head");
+        self.len -= 1;
+        let deficit = &mut self.deficit[band_index(entry.band)];
         *deficit = deficit.saturating_sub(entry.cost as i64);
         Some(entry.item)
     }
 
+    fn prepare_candidate(
+        &mut self,
+        band: FairQueueBand,
+        now: u64,
+        state: &mut impl FnMut(&T) -> FairQueueEntryState,
+    ) -> Option<Candidate> {
+        let index = band_index(band);
+        let count = self.queues[index].len();
+        for _ in 0..count {
+            let entry = self.queues[index]
+                .pop_front()
+                .expect("band queue length is stable during one selection pass");
+            match state(&entry.item) {
+                FairQueueEntryState::Stale => {
+                    self.len -= 1;
+                }
+                FairQueueEntryState::Blocked => self.queues[index].push_back(entry),
+                FairQueueEntryState::Ready => {
+                    let deficit = self.deficit[index];
+                    let cost = entry.cost as i64;
+                    let age = now.saturating_sub(entry.enqueued_at);
+                    let kind = if deficit >= cost {
+                        Some(CandidateKind::Eligible)
+                    } else if band != FairQueueBand::Background
+                        && age >= self.config.starvation_ticks
+                        && deficit.saturating_sub(cost) >= -(self.config.debt_limit as i64)
+                    {
+                        Some(CandidateKind::Forced)
+                    } else {
+                        None
+                    };
+                    let sequence = entry.sequence;
+                    self.queues[index].push_back(entry);
+                    if let Some(kind) = kind {
+                        self.queues[index].rotate_right(1);
+                        return Some(Candidate {
+                            band,
+                            kind,
+                            age,
+                            sequence,
+                        });
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn add_quantum(&mut self) {
         let cap = self.config.max_surplus as i64;
-        for class in [
-            ResourceClass::Prefetch,
-            ResourceClass::Throughput,
-            ResourceClass::LatencyCritical,
-        ] {
-            let quantum = self.config.quantum(class) as i64;
-            let deficit = self
-                .deficit
-                .get_mut(&class)
-                .expect("all resource classes have a deficit account");
+        for band in FairQueueBand::ALL {
+            let quantum = self.config.quantum(band) as i64;
+            let deficit = &mut self.deficit[band_index(band)];
             *deficit = deficit.saturating_add(quantum).min(cap);
         }
     }
+}
 
-    fn best_candidate(&self, candidates: &[usize], now: u64) -> Option<usize> {
-        candidates.iter().copied().max_by_key(|index| {
-            let entry = &self.entries[*index];
-            let age = now.saturating_sub(entry.enqueued_at);
-            (age, class_priority(entry.class), u64::MAX - entry.sequence)
-        })
+const fn band_index(band: FairQueueBand) -> usize {
+    match band {
+        FairQueueBand::Background => 0,
+        FairQueueBand::Prefetch => 1,
+        FairQueueBand::Required => 2,
     }
 }
 
-const fn class_priority(class: ResourceClass) -> u8 {
-    match class {
-        ResourceClass::Prefetch => 0,
-        ResourceClass::Throughput => 1,
-        ResourceClass::LatencyCritical => 2,
+const fn band_priority(band: FairQueueBand) -> u8 {
+    match band {
+        FairQueueBand::Background => 0,
+        FairQueueBand::Prefetch => 1,
+        FairQueueBand::Required => 2,
     }
+}
+
+fn candidate_precedes(candidate: Candidate, current: Candidate) -> bool {
+    let forced = u8::from(candidate.kind == CandidateKind::Forced);
+    let current_forced = u8::from(current.kind == CandidateKind::Forced);
+    (
+        forced,
+        candidate.age,
+        band_priority(candidate.band),
+        u64::MAX - candidate.sequence,
+    ) > (
+        current_forced,
+        current.age,
+        band_priority(current.band),
+        u64::MAX - current.sequence,
+    )
 }

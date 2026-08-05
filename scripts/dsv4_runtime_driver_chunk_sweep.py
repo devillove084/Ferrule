@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_MODEL = "models/DeepSeek-V4-Flash-DSpark"
+DEFAULT_MODEL = "models/DeepSeek-V4-Flash-0731"
 DEFAULT_PROMPTS = ["Hello", "Explain Ferrule in one sentence."]
 DEFAULT_CHUNKS = "1,2,4,8,16,4096"
 
@@ -421,7 +421,7 @@ def main() -> int:
     parser.add_argument("--keep-going", action="store_true")
     parser.add_argument("--profile-sync", action="store_true")
     parser.add_argument("--build-cuda", action="store_true")
-    parser.add_argument("--cuda-arch", default=os.environ.get("FERRULE_CUDA_ARCH", "sm_121a"))
+    parser.add_argument("--cuda-arch", default=os.environ.get("FERRULE_CUDA_ARCH"))
     args, extra = parser.parse_known_args()
     args.extra = extra
     if args.prompt is None:
@@ -431,6 +431,8 @@ def main() -> int:
         parser.error("--max-tokens/--warmup-tokens must be >= 0 and --max-layers must be > 0")
 
     if args.build_cuda:
+        if not args.cuda_arch:
+            parser.error("--build-cuda requires --cuda-arch or FERRULE_CUDA_ARCH")
         build_cuda(args.cuda_arch)
 
     out_dir = Path(args.output_dir)

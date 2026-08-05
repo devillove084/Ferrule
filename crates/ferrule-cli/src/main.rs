@@ -40,7 +40,6 @@ fn main() -> anyhow::Result<()> {
             max_layers,
             prefill_chunk_size,
             output_head_chunk_rows,
-            moe_prefetch_experts,
             moe_hotset_experts,
             golden,
             json,
@@ -53,7 +52,6 @@ fn main() -> anyhow::Result<()> {
             max_layers,
             prefill_chunk_size,
             output_head_chunk_rows,
-            moe_prefetch_experts,
             moe_hotset_experts,
             golden.as_deref(),
             json,
@@ -80,7 +78,6 @@ fn main() -> anyhow::Result<()> {
             chat,
             json,
             warmup_tokens,
-            moe_prefetch_experts,
             moe_hotset_experts,
         } => cmd_deepseek_v4_generate(
             &model,
@@ -95,7 +92,6 @@ fn main() -> anyhow::Result<()> {
             chat,
             json,
             warmup_tokens,
-            moe_prefetch_experts,
             moe_hotset_experts,
         ),
     }

@@ -225,7 +225,7 @@ fn model_support_contract_deepseek_binding_stays_semantic() {
 }
 
 #[test]
-fn model_support_contract_dspark_tensors_select_mtp_speculation_policy() {
+fn model_support_contract_proposal_tensors_select_mtp_speculation_policy() {
     let spec = deepseek_spec();
     let classes = vec![
         TensorClassCount {

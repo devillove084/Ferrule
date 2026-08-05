@@ -13,7 +13,7 @@ use std::ops::Range;
 use std::path::Path;
 #[cfg(feature = "cuda")]
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(feature = "cuda")]
 use crate::execution::ExecutionShapeKey;
@@ -28,11 +28,16 @@ use crate::execution::{
 #[cfg(any(feature = "cuda", test))]
 use crate::materialization::ContinuationDependencyState;
 #[cfg(feature = "cuda")]
+use crate::materialization::{MaterializationPlacement, resolve_stage_resources};
 use crate::materialization::{
-    MaterializationPlacement, MaterializationRequest, resolve_stage_resources,
+    MaterializationProvider, MaterializationRequest, MaterializationResolver,
 };
-use crate::materialization::{MaterializationProvider, MaterializationResolver};
+#[cfg(feature = "cuda")]
+use crate::moe::cuda_materialization::CudaExpertMaterializationOwner;
 use crate::moe::prediction::ExpertHotsetPredictor;
+
+#[cfg(all(feature = "cuda", target_os = "linux"))]
+use crate::moe::streaming::ExpertIoPlan;
 use crate::moe::streaming::ExpertStreamingReader;
 #[cfg(feature = "cuda")]
 use crate::runner::NativeProposal;
@@ -73,24 +78,19 @@ use super::cuda_cache::{
 };
 #[cfg(feature = "cuda")]
 use super::cuda_cache::{
-    DeepSeekV4DsparkAttentionBuffers, DeepSeekV4DsparkMainBuffers,
-    DeepSeekV4DsparkProposalHeadBuffers,
+    DeepSeekV4ProposalAttentionBuffers, DeepSeekV4ProposalHeadBuffers,
+    DeepSeekV4ProposalMainBuffers,
 };
 
 #[cfg(feature = "cuda")]
-use super::cuda_materialization::DeepSeekV4CudaMaterializationOwner;
-#[cfg(feature = "cuda")]
 use super::layer::{
-    DeepSeekV4DsparkLayerContinuation, DeepSeekV4DsparkLayerProgress, DeepSeekV4LayerArena,
+    DeepSeekV4LayerArena, DeepSeekV4ProposalLayerContinuation, DeepSeekV4ProposalLayerProgress,
 };
 #[cfg(feature = "cuda")]
 use super::layer::{
     DeepSeekV4LayerArenaVariants, DeepSeekV4PackedLayerContinuation, DeepSeekV4PackedLayerProgress,
 };
 use super::layer::{DeepSeekV4LayerExpertRuntime, DeepSeekV4LayerState};
-#[cfg(feature = "cuda")]
-use super::mtp::DeepSeekV4DsparkProtocol;
-use super::mtp::DeepSeekV4MtpModel;
 use super::operators::{
     DeepSeekV4AttentionProfileStats, DeepSeekV4LayerProfileStats, DeepSeekV4OperatorContext,
     DeepSeekV4OperatorRuntimeCounters,
@@ -99,13 +99,21 @@ pub use super::prepared::DeepSeekV4PrepareOptions;
 #[cfg(feature = "cuda")]
 use super::prepared::DeepSeekV4PreparedResources;
 use super::prepared::{
-    DeepSeekV4ExecutionPolicy, DeepSeekV4PreparedLayerExperts, DeepSeekV4PreparedModelPlan, prepare,
+    DeepSeekV4ExecutionPolicy, DeepSeekV4PrepareProfile, DeepSeekV4PreparedLayerExperts,
+    DeepSeekV4PreparedModelPlan, prepare_with_policy,
 };
+use super::proposal_attachment::DeepSeekV4ProposalAttachment;
+#[cfg(feature = "cuda")]
+use super::proposal_attachment::DeepSeekV4ProposalProtocol;
 use super::sequence::DeepSeekV4SequenceExecutionState;
 #[cfg(any(feature = "cuda", test))]
 use super::sequence::DeepSeekV4SequenceTopologyId;
 #[cfg(feature = "cuda")]
 use super::sequence::{DeepSeekV4PagedKvBinding, DeepSeekV4SequenceMoeAccessEvent};
+#[cfg(feature = "cuda")]
+use crate::moe::residency::{
+    DeviceResidencyPlan, DeviceResidencyPlanError, ExpertLayerInventory, plan_device_residency,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeepSeekV4LayerRuntimeStats {
@@ -133,9 +141,27 @@ pub struct DeepSeekV4OutputProfileStats {
     pub lm_head_topk_us: u64,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeepSeekV4LoadProfile {
+    pub checkpoint_us: u64,
+    pub prepare: DeepSeekV4PrepareProfile,
+    pub cuda_context_us: u64,
+    pub sequence_state_us: u64,
+    pub reader_us: u64,
+    pub static_image_globals_us: u64,
+    pub static_image_embedding_us: u64,
+    pub static_image_output_head_us: u64,
+    pub static_image_target_layers_us: u64,
+    pub static_image_attachment_us: u64,
+    pub static_image_total_us: u64,
+    pub residency_us: u64,
+    pub total_us: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct DeepSeekV4ObservabilitySnapshot {
     pub position: usize,
+    pub load: DeepSeekV4LoadProfile,
     pub operator: DeepSeekV4OperatorRuntimeCounters,
     pub layers: Vec<DeepSeekV4LayerProfileStats>,
     pub attention: Vec<DeepSeekV4AttentionProfileStats>,
@@ -491,7 +517,7 @@ struct DeepSeekV4PackedCudaContinuation {
         Option<OwnedArenaCheckout<DeepSeekV4LayerArenaPoolKey, DeepSeekV4LayerArenaVariants>>,
     decode_buffers: Option<DeepSeekV4DecodeBuffers>,
     #[cfg(feature = "cuda")]
-    dspark_main_buffers: Option<DeepSeekV4DsparkMainBuffers>,
+    proposal_main_buffers: Option<DeepSeekV4ProposalMainBuffers>,
     initialized: bool,
     next_layer_index: usize,
     current_layer: Option<DeepSeekV4PackedLayerContinuation>,
@@ -535,12 +561,14 @@ enum DeepSeekV4PackedCudaStep {
 }
 
 struct DeepSeekV4RunnerObservability {
+    load: DeepSeekV4LoadProfile,
     output: DeepSeekV4OutputProfileStats,
 }
 
 impl DeepSeekV4RunnerObservability {
     fn new() -> Self {
         Self {
+            load: DeepSeekV4LoadProfile::default(),
             output: DeepSeekV4OutputProfileStats::default(),
         }
     }
@@ -553,12 +581,17 @@ pub struct DeepSeekV4Runner {
     /// catalogs while runtime owns logical slots, generations, leases, and policy.
     cpu_expert_runtimes: Option<Box<[DeepSeekV4LayerExpertRuntime]>>,
     materialization_resolver: Option<Box<dyn MaterializationResolver>>,
+
     #[cfg(feature = "cuda")]
-    model_instance: u64,
-    #[cfg(feature = "cuda")]
-    cuda_materialization_owner: Option<DeepSeekV4CudaMaterializationOwner>,
+    cuda_materialization_owner: Option<CudaExpertMaterializationOwner>,
     #[cfg(feature = "cuda")]
     materialization_provider_transferred: bool,
+    #[cfg(feature = "cuda")]
+    expert_residency_requirements: Option<ExpertResidencyRequirements>,
+    #[cfg(feature = "cuda")]
+    warmup_requests: Vec<MaterializationRequest>,
+    #[cfg(feature = "cuda")]
+    device_residency_plan: Option<DeviceResidencyPlan>,
     #[cfg(feature = "cuda")]
     layer_arena_pool:
         PersistentArenaPool<DeepSeekV4LayerArenaPoolKey, DeepSeekV4LayerArenaVariants>,
@@ -567,11 +600,10 @@ pub struct DeepSeekV4Runner {
     #[cfg(feature = "cuda")]
     next_packed_cuda_continuation_id: NonZeroU64,
     #[cfg(feature = "cuda")]
-    dspark_proposal_arena_pool: Vec<DeepSeekV4DsparkProposalArena>,
+    proposal_arena_pool: Vec<DeepSeekV4ProposalArena>,
     #[cfg(feature = "cuda")]
-    dspark_proposal_continuations:
-        HashMap<BatchContinuationId, DeepSeekV4DsparkProposalContinuation>,
-    dspark_proposal_source: Option<NativeProposalSource>,
+    proposal_continuations: HashMap<BatchContinuationId, DeepSeekV4ProposalContinuation>,
+    proposal_source: Option<NativeProposalSource>,
     /// E3: per-sequence state. The runner wraps one default sequence.
     sequence: DeepSeekV4SequenceExecutionState,
     observability: DeepSeekV4RunnerObservability,
@@ -583,28 +615,28 @@ pub struct DeepSeekV4Runner {
 }
 
 #[cfg(feature = "cuda")]
-struct DeepSeekV4DsparkProposalArena {
+struct DeepSeekV4ProposalArena {
     stages: Box<[DeepSeekV4LayerArena]>,
-    attention: DeepSeekV4DsparkAttentionBuffers,
-    head: DeepSeekV4DsparkProposalHeadBuffers,
-    hc_state: ferrule_cuda::context::CudaF32Buffer,
+    attention: DeepSeekV4ProposalAttentionBuffers,
+    head: DeepSeekV4ProposalHeadBuffers,
+    hc_state: ferrule_backend::cuda::context::CudaF32Buffer,
 }
 
 #[cfg(feature = "cuda")]
-struct DeepSeekV4DsparkProposalContinuation {
+struct DeepSeekV4ProposalContinuation {
     transaction: ExecutionTransactionId,
     id: BatchContinuationId,
     anchor_token_id: u32,
     token_ids: Vec<u32>,
     sequence_tokens: usize,
     paged_binding: Option<DeepSeekV4PagedKvBinding>,
-    arena: Option<DeepSeekV4DsparkProposalArena>,
+    arena: Option<DeepSeekV4ProposalArena>,
     initialized: bool,
     stage: usize,
-    current_layer: Option<DeepSeekV4DsparkLayerContinuation>,
+    current_layer: Option<DeepSeekV4ProposalLayerContinuation>,
     moe_access_events: Vec<DeepSeekV4SequenceMoeAccessEvent>,
     expert_leases: Vec<ResidencyLeaseSet>,
-    head_download: Option<ferrule_cuda::context::CudaI32HostDownload>,
+    head_download: Option<ferrule_backend::cuda::context::CudaI32HostDownload>,
     cancel_quiescence: Option<DeepSeekV4CudaComputeQuiescence>,
     paged_binding_active: bool,
     callback_armed: bool,
@@ -613,38 +645,161 @@ struct DeepSeekV4DsparkProposalContinuation {
 }
 
 #[cfg(feature = "cuda")]
-enum DeepSeekV4DsparkProposalStep {
+enum DeepSeekV4ProposalStep {
     Waiting(PendingModelProgress),
     Complete(NativeProposal),
 }
 
 #[cfg(feature = "cuda")]
-fn expert_residency_layer_capacities(resources: &DeepSeekV4PreparedResources) -> Vec<usize> {
-    let mut capacities = resources
-        .layer_experts()
-        .iter()
-        .map(DeepSeekV4PreparedLayerExperts::resident_capacity)
-        .collect::<Vec<_>>();
-    if capacities.len() == resources.model().config.num_layers {
-        if let Some(mtp) = resources.mtp() {
-            debug_assert_eq!(mtp.layers.len(), resources.mtp_layer_experts().len());
-            for (stage, experts) in mtp.layers.iter().zip(resources.mtp_layer_experts()) {
-                debug_assert_eq!(stage.execution_layer, capacities.len());
-                capacities.push(experts.resident_capacity());
-            }
-        }
+fn plan_cuda_expert_residency(
+    resources: &DeepSeekV4PreparedResources,
+    free_device_bytes: u64,
+) -> Result<DeviceResidencyPlan> {
+    let mut layers = BTreeMap::<usize, (usize, u64)>::new();
+    for entry in resources.expert_materialization_sources().iter() {
+        let source = entry.descriptor();
+        let (layer, _) = entry
+            .resource()
+            .routed_expert_coordinates()
+            .ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 routed-expert source has a non-expert resource identity"
+                    .into(),
+            })?;
+        let layer = usize::try_from(layer.get()).map_err(|_| Error::Model {
+            message: "DeepSeek-V4 routed-expert execution layer exceeds usize".into(),
+        })?;
+        let state = layers.entry(layer).or_default();
+        state.0 = state.0.checked_add(1).ok_or_else(|| Error::Model {
+            message: "DeepSeek-V4 routed-expert count overflow".into(),
+        })?;
+        state.1 = state.1.max(source.bytes());
     }
-    capacities
+    let expected_experts = resources.model().config.num_routed_experts;
+    let inventory = layers
+        .into_iter()
+        .map(|(execution_layer, (expert_count, frame_bytes))| {
+            if expert_count != expected_experts {
+                return Err(Error::Model {
+                    message: format!(
+                        "DeepSeek-V4 execution layer {execution_layer} has {expert_count} routed-expert sources, expected {expected_experts}"
+                    ),
+                });
+            }
+            Ok(ExpertLayerInventory {
+                execution_layer,
+                expert_count,
+                frame_bytes,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let manual_slot_cap = (resources.prepare_options().moe_hotset_experts != 0)
+        .then_some(resources.prepare_options().moe_hotset_experts);
+    plan_device_residency(
+        free_device_bytes,
+        resources.prepare_options().reserved_device_bytes,
+        resources.model().config.num_experts_per_tok,
+        manual_slot_cap,
+        inventory,
+    )
+    .map_err(|source| Error::ModelSource {
+        source: Box::new(source),
+    })
 }
 
 #[cfg(feature = "cuda")]
-const DSPARK_PROPOSAL_IMPLEMENTATION: &str = "deepseek-v4-dspark-cuda-cutlass-v1";
+fn residency_requirements(
+    model_instance: u64,
+    plan: &DeviceResidencyPlan,
+) -> Result<ExpertResidencyRequirements> {
+    let mut capacities = Vec::with_capacity(plan.layer_slot_capacities.len());
+    for (expected_layer, &(execution_layer, capacity)) in
+        plan.layer_slot_capacities.iter().enumerate()
+    {
+        if execution_layer != expected_layer {
+            return Err(Error::Model {
+                message: format!(
+                    "DeepSeek-V4 routed-expert execution layers must be contiguous: expected {expected_layer}, found {execution_layer}"
+                ),
+            });
+        }
+        capacities.push(capacity);
+    }
+    Ok(ExpertResidencyRequirements::new(model_instance, capacities))
+}
 
-fn prepared_dspark_proposal_source(
+#[cfg(feature = "cuda")]
+fn planned_residency_warmup_requests(
+    resources: &DeepSeekV4PreparedResources,
+    placement: MaterializationPlacement,
+    plan: &DeviceResidencyPlan,
+) -> Result<Vec<MaterializationRequest>> {
+    let mut remaining = plan
+        .layer_slot_capacities
+        .iter()
+        .copied()
+        .collect::<BTreeMap<_, _>>();
+    let planned_slots = remaining
+        .values()
+        .copied()
+        .try_fold(0usize, |total, slots| {
+            total
+                .checked_add(slots)
+                .ok_or(DeviceResidencyPlanError::WarmupSlotCountOverflow)
+        })
+        .map_err(|source| Error::ModelSource {
+            source: Box::new(source),
+        })?;
+    let mut requests = Vec::with_capacity(planned_slots);
+
+    for entry in resources.expert_materialization_sources().iter() {
+        let (layer, _) = entry
+            .resource()
+            .routed_expert_coordinates()
+            .ok_or_else(|| Error::Model {
+                message: "expert materialization catalog contains a non-expert resource".into(),
+            })?;
+        let layer = usize::try_from(layer.get()).map_err(|_| Error::ModelSource {
+            source: Box::new(DeviceResidencyPlanError::WarmupLayerOutOfRange {
+                layer: layer.get(),
+            }),
+        })?;
+        let slots = remaining
+            .get_mut(&layer)
+            .ok_or_else(|| Error::ModelSource {
+                source: Box::new(DeviceResidencyPlanError::WarmupUnplannedLayer {
+                    execution_layer: layer,
+                }),
+            })?;
+        if *slots == 0 {
+            continue;
+        }
+        requests.push(MaterializationRequest::for_placement(
+            placement,
+            entry.source(),
+            entry.resource(),
+        )?);
+        *slots -= 1;
+    }
+
+    if let Some((&layer, &missing)) = remaining.iter().find(|(_, missing)| **missing != 0) {
+        return Err(Error::ModelSource {
+            source: Box::new(DeviceResidencyPlanError::WarmupCapacityUnfilled {
+                execution_layer: layer,
+                missing_slots: missing,
+            }),
+        });
+    }
+    Ok(requests)
+}
+
+#[cfg(feature = "cuda")]
+const PROPOSAL_IMPLEMENTATION: &str = "deepseek-v4-proposal-cuda-cutlass-v1";
+
+fn prepared_proposal_source(
     plan: &DeepSeekV4PreparedModelPlan,
     backend: ModelExecutionBackend,
 ) -> Result<Option<NativeProposalSource>> {
-    let Some(mtp) = plan.resources().mtp() else {
+    let Some(attachment) = plan.resources().proposal_attachment() else {
         return Ok(None);
     };
     if backend != ModelExecutionBackend::Cuda {
@@ -655,7 +810,7 @@ fn prepared_dspark_proposal_source(
     }
     #[cfg(not(feature = "cuda"))]
     {
-        let _ = mtp;
+        let _ = attachment;
         Err(Error::Model { message:
             "DeepSeek-V4 checkpoint contains a native proposal attachment that requires building with CUDA and CUTLASS support"
                 .into(),
@@ -663,15 +818,15 @@ fn prepared_dspark_proposal_source(
     }
     #[cfg(feature = "cuda")]
     {
-        if mtp.prediction_heads.is_none() {
+        if attachment.prediction_heads.is_none() {
             return Err(Error::Model {
-                message: "DeepSeek-V4 DSpark proposal source is missing prediction heads".into(),
+                message: "DeepSeek-V4 Proposal source is missing prediction heads".into(),
             });
         }
         let source = NativeProposalSource {
-            implementation: DSPARK_PROPOSAL_IMPLEMENTATION,
+            implementation: PROPOSAL_IMPLEMENTATION,
             prepared_plan_id: plan.generation(),
-            native_width: mtp.config.block_size,
+            native_width: attachment.config.block_size,
         };
         source.validate()?;
         Ok(Some(source))
@@ -804,14 +959,12 @@ fn validate_cuda_backend_shutdown_ownership(
 fn prepared_physical_expert_io_resource_limits(
     resources: &DeepSeekV4PreparedResources,
     reader: &ExpertStreamingReader,
+    io_plan: ExpertIoPlan,
 ) -> Result<ferrule_common::materialization_io::MaterializationResourceLimits> {
     use ferrule_common::materialization_io::{
         MaterializationResourceLimits, MaterializationResourceRequirements,
     };
 
-    // The physical backend still carries exact per-plan demand for reservation
-    // validation; startup capacity sizing intentionally uses conservative bounds.
-    let _exact_plan_demand = crate::moe::streaming::PinnedExpertLoadPlan::demand;
     let reader_capacity = reader
         .physical_resource_capacity()?
         .ok_or_else(|| Error::Model {
@@ -822,7 +975,7 @@ fn prepared_physical_expert_io_resource_limits(
     let maximum_expert_bytes = resources
         .layer_experts()
         .iter()
-        .chain(resources.mtp_layer_experts())
+        .chain(resources.proposal_stage_experts())
         .flat_map(|layer| {
             layer
                 .source_catalog()
@@ -858,20 +1011,15 @@ fn prepared_physical_expert_io_resource_limits(
         device_install_bytes: transfer_bytes,
         ..reader_capacity
     };
-    let execution_reserve = MaterializationResourceRequirements {
-        read_slots: 1,
-        storage_read_bytes: reader_capacity.storage_read_bytes,
-        pinned_host_bytes: reader_capacity.pinned_host_bytes,
-        upload_slots: 1,
-        h2d_bytes: maximum_expert_bytes,
-        install_slots: 1,
-        device_install_bytes: maximum_expert_bytes,
-    };
-    MaterializationResourceLimits {
+    let execution_reserve = io_plan.execution_reserve(
+        maximum_expert_bytes,
+        resources.model().config.num_experts_per_tok,
+    )?;
+    Ok(MaterializationResourceLimits {
         capacity,
         execution_reserve,
     }
-    .validate()
+    .validate()?)
 }
 
 #[cfg(any(feature = "cuda", test))]
@@ -1001,7 +1149,7 @@ impl PackedBatchMetadata {
     /// Native CUDA keeps row-owned projection/HC/MoE work packed while mutable
     /// recurrent state is advanced once per sequence in query order.
     ///
-    /// Single-sequence multi-row batches (DSpark verification: 1 sequence × V
+    /// Single-sequence multi-row batches (Proposal verification: 1 sequence × V
     /// candidate rows) use the same packed path as multi-session batches.
     #[cfg(feature = "cuda")]
     pub(super) fn supports_native_cuda(&self) -> bool {
@@ -1055,6 +1203,21 @@ impl DeepSeekV4Runner {
         options: DeepSeekV4PrepareOptions,
         operator_backend: ModelExecutionBackend,
     ) -> Result<Self> {
+        Self::new_with_operator_backend_profiled(
+            model,
+            options,
+            operator_backend,
+            DeepSeekV4LoadProfile::default(),
+        )
+    }
+
+    fn new_with_operator_backend_profiled(
+        model: DeepSeekV4Checkpoint,
+        options: DeepSeekV4PrepareOptions,
+        operator_backend: ModelExecutionBackend,
+        mut load_profile: DeepSeekV4LoadProfile,
+    ) -> Result<Self> {
+        let total_start = Instant::now();
         if operator_backend != ModelExecutionBackend::Cuda {
             return Err(Error::Model {
                 message:
@@ -1062,18 +1225,59 @@ impl DeepSeekV4Runner {
                         .into(),
             });
         }
-        let plan = prepare(model, options)?;
-        let dspark_proposal_source = prepared_dspark_proposal_source(&plan, operator_backend)?;
+        let completion_hub = CompletionHub::new();
+        let policy_start = Instant::now();
+        let policy = DeepSeekV4ExecutionPolicy::resolve()?;
+        let policy_resolution_us = duration_us(policy_start.elapsed());
+        #[cfg(feature = "cuda")]
+        let (plan_result, cuda_result) = std::thread::scope(|scope| {
+            let cuda_completion_hub = completion_hub.clone();
+            let cuda_policy = policy.clone();
+            let cuda_start = Instant::now();
+            let cuda = scope.spawn(move || {
+                super::cuda_cache::DeepSeekV4CudaOperatorCache::new_with_completion_hub(
+                    &cuda_policy,
+                    options.expert_memory_policy,
+                    cuda_completion_hub,
+                )
+                .map(|cuda| (cuda, duration_us(cuda_start.elapsed())))
+            });
+            let plan = prepare_with_policy(model, options, policy.clone(), policy_resolution_us);
+            let cuda = cuda.join().map_err(|_| Error::Internal {
+                message: "DeepSeek-V4 CUDA initialization thread panicked".into(),
+            });
+            (plan, cuda)
+        });
+        #[cfg(feature = "cuda")]
+        let (plan, (cuda, cuda_context_us)) = match (plan_result, cuda_result) {
+            (Ok(plan), Ok(Ok(cuda))) => (plan, cuda),
+            (Err(plan_error), Ok(Err(cuda_error))) => {
+                return Err(Error::FailureBatch {
+                    operation: "DeepSeek-V4 parallel preparation".into(),
+                    failures: vec![plan_error, cuda_error],
+                });
+            }
+            (Err(error), _) | (_, Err(error)) => return Err(error),
+            (Ok(_), Ok(Err(error))) => return Err(error),
+        };
+        #[cfg(not(feature = "cuda"))]
+        let plan = prepare_with_policy(model, options, policy.clone(), policy_resolution_us)?;
+        load_profile.prepare = plan.resources().prepare_profile();
+        #[cfg(feature = "cuda")]
+        {
+            load_profile.cuda_context_us = cuda_context_us;
+        }
+        let proposal_source = prepared_proposal_source(&plan, operator_backend)?;
         let options = *plan.resources().prepare_options();
         let policy = plan.resources().policy();
         let model = plan.resources().model();
-        let completion_hub = CompletionHub::new();
-        let mut operators = DeepSeekV4OperatorContext::new_with_completion_hub(
+        let mut operators = DeepSeekV4OperatorContext::from_preinitialized(
             operator_backend,
             policy,
-            options.expert_memory_policy,
-            completion_hub.clone(),
-        )?;
+            #[cfg(feature = "cuda")]
+            Some(cuda),
+        );
+        let phase_start = Instant::now();
         let mut layer_states = Vec::with_capacity(options.max_layers);
         for layer_idx in 0..options.max_layers {
             let state_start = operators.profile_start();
@@ -1082,11 +1286,12 @@ impl DeepSeekV4Runner {
                 operators.record_layer_state_init(layer_idx, duration_us(state_start.elapsed()));
             }
         }
-        let dspark_stage_states = plan
+        let proposal_stage_states = plan
             .resources()
-            .mtp()
-            .map(|mtp| {
-                mtp.layers
+            .proposal_attachment()
+            .map(|attachment| {
+                attachment
+                    .layers
                     .iter()
                     .map(|stage| DeepSeekV4LayerState::new(stage.transformer.attention.config))
                     .collect::<Vec<_>>()
@@ -1094,32 +1299,46 @@ impl DeepSeekV4Runner {
             .unwrap_or_default();
         let cpu_expert_runtimes =
             build_cpu_expert_runtimes(operator_backend, plan.resources().layer_experts());
+        load_profile.sequence_state_us = duration_us(phase_start.elapsed());
 
         let sequence = DeepSeekV4SequenceExecutionState::new(
             layer_states,
-            dspark_stage_states,
+            proposal_stage_states,
             model.config.num_routed_experts,
         );
 
         #[cfg(feature = "cuda")]
+        let phase_start = Instant::now();
+        #[cfg(feature = "cuda")]
         let expert_reader_max_tensor_bytes = options.expert_reader_max_tensor_bytes;
         #[cfg(all(feature = "cuda", target_os = "linux"))]
-        let expert_reader = if operator_backend == ModelExecutionBackend::Cuda {
+        let (expert_reader, expert_io_plan) = if operator_backend == ModelExecutionBackend::Cuda {
             let allocator = operators
                 .cuda
                 .as_ref()
                 .expect("CUDA backend initialized above")
                 .pinned_host_allocator();
-            ExpertStreamingReader::from_env_with_cuda_pinned(
+            let io_plan = ExpertIoPlan::for_checkpoint_plans(
+                plan.resources()
+                    .expert_materialization_sources()
+                    .iter()
+                    .map(|entry| entry.read_plan()),
+            )?;
+            let (reader, io_plan) = ExpertStreamingReader::from_env_with_cuda_pinned(
                 expert_reader_max_tensor_bytes,
                 allocator,
                 completion_hub.clone(),
-            )?
+                io_plan,
+            )?;
+            (reader, Some(io_plan))
         } else {
-            ExpertStreamingReader::from_env_with_completion_hub(
-                expert_reader_max_tensor_bytes,
-                completion_hub.clone(),
-            )?
+            (
+                ExpertStreamingReader::from_env_with_completion_hub(
+                    expert_reader_max_tensor_bytes,
+                    completion_hub.clone(),
+                )?,
+                None,
+            )
         };
         #[cfg(all(feature = "cuda", not(target_os = "linux")))]
         let expert_reader = if operator_backend == ModelExecutionBackend::Cuda {
@@ -1134,13 +1353,23 @@ impl DeepSeekV4Runner {
             )?
         };
         #[cfg(all(feature = "cuda", target_os = "linux"))]
-        let expert_io_resource_limits =
-            prepared_physical_expert_io_resource_limits(plan.resources(), &expert_reader)?;
+        let expert_io_resource_limits = match expert_io_plan {
+            Some(io_plan) => prepared_physical_expert_io_resource_limits(
+                plan.resources(),
+                &expert_reader,
+                io_plan,
+            )?,
+            None => ferrule_common::materialization_io::MaterializationResourceLimits::default(),
+        };
         #[cfg(all(feature = "cuda", not(target_os = "linux")))]
         let expert_io_resource_limits =
             ferrule_common::materialization_io::MaterializationResourceLimits::default();
         #[cfg(feature = "cuda")]
         let expert_completion_reactors = expert_reader.take_completion_reactors();
+        #[cfg(feature = "cuda")]
+        {
+            load_profile.reader_us = duration_us(phase_start.elapsed());
+        }
         #[cfg(not(feature = "cuda"))]
         let expert_completion_reactors = ExpertStreamingReader::new_with_completion_hub(
             options.expert_reader_max_tensor_bytes,
@@ -1150,17 +1379,22 @@ impl DeepSeekV4Runner {
 
         #[cfg(feature = "cuda")]
         let model_instance = NEXT_DSV4_MODEL_INSTANCE.fetch_add(1, Ordering::Relaxed);
-        let runner = Self {
+        let mut runner = Self {
             plan,
             operators,
             cpu_expert_runtimes,
             materialization_resolver: None,
-            #[cfg(feature = "cuda")]
-            model_instance,
+
             #[cfg(feature = "cuda")]
             cuda_materialization_owner: None,
             #[cfg(feature = "cuda")]
             materialization_provider_transferred: false,
+            #[cfg(feature = "cuda")]
+            expert_residency_requirements: None,
+            #[cfg(feature = "cuda")]
+            warmup_requests: Vec::new(),
+            #[cfg(feature = "cuda")]
+            device_residency_plan: None,
             #[cfg(feature = "cuda")]
             layer_arena_pool: PersistentArenaPool::new(),
             #[cfg(feature = "cuda")]
@@ -1168,12 +1402,15 @@ impl DeepSeekV4Runner {
             #[cfg(feature = "cuda")]
             next_packed_cuda_continuation_id: NonZeroU64::new(1).expect("one is non-zero"),
             #[cfg(feature = "cuda")]
-            dspark_proposal_arena_pool: Vec::new(),
+            proposal_arena_pool: Vec::new(),
             #[cfg(feature = "cuda")]
-            dspark_proposal_continuations: HashMap::new(),
-            dspark_proposal_source,
+            proposal_continuations: HashMap::new(),
+            proposal_source,
             sequence,
-            observability: DeepSeekV4RunnerObservability::new(),
+            observability: DeepSeekV4RunnerObservability {
+                load: load_profile,
+                ..DeepSeekV4RunnerObservability::new()
+            },
             completion_hub,
             expert_completion_reactors,
             #[cfg(feature = "cuda")]
@@ -1181,63 +1418,87 @@ impl DeepSeekV4Runner {
             shutdown: false,
         };
         #[cfg(feature = "cuda")]
-        let mut runner = runner;
-
-        #[cfg(feature = "cuda")]
         if operator_backend == ModelExecutionBackend::Cuda {
-            let resources = runner.plan.resources();
-            let mut layer_slot_capacities = resources
-                .layer_experts()
-                .iter()
-                .enumerate()
-                .map(|(layer, experts)| (layer, experts.resident_capacity()))
-                .collect::<Vec<_>>();
-
-            if let Some(mtp) = resources.mtp() {
-                if mtp.layers.len() != resources.mtp_layer_experts().len() {
-                    return Err(Error::Model {
-                        message: format!(
-                            "DeepSeek-V4 DSpark stage/expert capacity mismatch: stages={} capacities={}",
-                            mtp.layers.len(),
-                            resources.mtp_layer_experts().len()
-                        ),
-                    });
-                }
-                layer_slot_capacities.extend(
-                    mtp.layers
-                        .iter()
-                        .zip(resources.mtp_layer_experts())
-                        .map(|(stage, experts)| {
-                            (stage.execution_layer, experts.resident_capacity())
-                        }),
-                );
-            }
+            // Static bundle descriptors share the provider catalog, but their generic
+            // transport/install path is not connected yet. Compile them first so the
+            // residency budget is based on the actual remaining device memory.
+            let image_profile = runner
+                .operators
+                .compile_cuda_execution_image(runner.plan.generation(), runner.plan.resources())?;
+            runner.observability.load.static_image_globals_us = image_profile.globals_us;
+            runner.observability.load.static_image_embedding_us = image_profile.embedding_us;
+            runner.observability.load.static_image_output_head_us = image_profile.output_head_us;
+            runner.observability.load.static_image_target_layers_us =
+                image_profile.target_layers_us;
+            runner.observability.load.static_image_attachment_us = image_profile.attachment_us;
+            runner.observability.load.static_image_total_us = image_profile.total_us;
+            let residency_start = Instant::now();
+            let (free_device_bytes, total_device_bytes) = runner.operators.cuda_memory_info()?;
+            let free_device_bytes = u64::try_from(free_device_bytes).map_err(|_| Error::Model {
+                message: "CUDA free-memory byte count exceeds u64".into(),
+            })?;
+            let total_device_bytes =
+                u64::try_from(total_device_bytes).map_err(|_| Error::Model {
+                    message: "CUDA total-memory byte count exceeds u64".into(),
+                })?;
+            let residency_plan =
+                plan_cuda_expert_residency(runner.plan.resources(), free_device_bytes)?;
+            let requirements = residency_requirements(model_instance, &residency_plan)?;
             let limits = runner.expert_io_resource_limits;
             let placement = MaterializationPlacement::new(
                 ModelInstanceId::new(model_instance),
                 BackendId::new(1),
                 DeviceId::new(0),
             )?;
-            let owner = DeepSeekV4CudaMaterializationOwner::create(
+            let warmup_requests = planned_residency_warmup_requests(
+                runner.plan.resources(),
+                placement,
+                &residency_plan,
+            )?;
+            let materialization_sources =
+                std::sync::Arc::clone(runner.plan.resources().expert_materialization_sources());
+            let expert_capacity = runner.plan.resources().model().config.num_routed_experts;
+            let consumer_compute = runner.operators.cuda_compute_stream_authority()?;
+            let owner = CudaExpertMaterializationOwner::create(
                 placement,
                 limits,
-                std::sync::Arc::clone(resources.materialization_sources()),
+                materialization_sources,
                 expert_reader,
-                resources.model().config.num_routed_experts,
-                &layer_slot_capacities,
+                expert_capacity,
+                &residency_plan.layer_slot_capacities,
+                consumer_compute,
             )?;
             runner
                 .operators
                 .configure_expert_subsystem(owner.handle())?;
-            // Static bundle descriptors share the provider catalog now, but their
-            // generic pinned transport/install path is not connected yet. Keep image
-            // compilation eager until that single materialization path is complete.
-            runner
-                .operators
-                .compile_cuda_execution_image(runner.plan.generation(), runner.plan.resources())?;
+            tracing::info!(
+                device = placement.device().get(),
+                free_device_bytes,
+                total_device_bytes,
+                reserved_dynamic_bytes = residency_plan.reserved_dynamic_bytes,
+                expert_budget_bytes = residency_plan.expert_budget_bytes,
+                planned_expert_bytes = residency_plan.planned_expert_bytes,
+                expert_slots = residency_plan
+                    .layer_slot_capacities
+                    .iter()
+                    .map(|(_, capacity)| *capacity)
+                    .sum::<usize>(),
+                fully_resident = residency_plan.fully_resident,
+                warmup_resources = warmup_requests.len(),
+                "planned DeepSeek-V4 device residency"
+            );
+            runner.expert_residency_requirements = Some(requirements);
+            runner.warmup_requests = warmup_requests;
+            runner.device_residency_plan = Some(residency_plan);
             runner.cuda_materialization_owner = Some(owner);
+            runner.observability.load.residency_us = duration_us(residency_start.elapsed());
         }
 
+        runner.observability.load.total_us = runner
+            .observability
+            .load
+            .checkpoint_us
+            .saturating_add(duration_us(total_start.elapsed()));
         Ok(runner)
     }
 
@@ -1259,30 +1520,34 @@ impl DeepSeekV4Runner {
         options: DeepSeekV4PrepareOptions,
         operator_backend: ModelExecutionBackend,
     ) -> Result<Self> {
-        Self::new_with_operator_backend(
-            DeepSeekV4Checkpoint::load_hf_with_limit(model_dir, max_tensor_bytes)?,
-            options,
-            operator_backend,
-        )
+        let checkpoint_start = Instant::now();
+        let model = DeepSeekV4Checkpoint::load_hf_with_limit(model_dir, max_tensor_bytes)?;
+        let load_profile = DeepSeekV4LoadProfile {
+            checkpoint_us: duration_us(checkpoint_start.elapsed()),
+            ..DeepSeekV4LoadProfile::default()
+        };
+        Self::new_with_operator_backend_profiled(model, options, operator_backend, load_profile)
     }
 
     pub fn model(&self) -> &DeepSeekV4Checkpoint {
         self.plan.resources().model()
     }
 
-    pub fn mtp(&self) -> Option<&DeepSeekV4MtpModel> {
-        self.plan.resources().mtp()
+    pub fn proposal_attachment(&self) -> Option<&DeepSeekV4ProposalAttachment> {
+        self.plan.resources().proposal_attachment()
     }
 
     #[cfg(feature = "cuda")]
-    fn build_dspark_proposal_arena(&mut self) -> Result<DeepSeekV4DsparkProposalArena> {
+    fn build_proposal_arena(&mut self) -> Result<DeepSeekV4ProposalArena> {
         let resources = self.plan.resources();
-        let mtp = resources.mtp().ok_or_else(|| Error::Model {
-            message: "DeepSeek-V4 DSpark attachment is missing".into(),
-        })?;
-        let rows = ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS;
-        let mut stages = Vec::with_capacity(mtp.layers.len());
-        for layer in &mtp.layers {
+        let attachment = resources
+            .proposal_attachment()
+            .ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 Proposal attachment is missing".into(),
+            })?;
+        let rows = ferrule_backend::cuda::cutlass::PROPOSAL_ROWS;
+        let mut stages = Vec::with_capacity(attachment.layers.len());
+        for layer in &attachment.layers {
             stages.push(DeepSeekV4LayerArena::new(
                 &layer.transformer,
                 rows,
@@ -1294,18 +1559,18 @@ impl DeepSeekV4Runner {
         let attention = self
             .operators
             .cuda_mut()?
-            .allocate_dspark_attention_buffers()?;
+            .allocate_proposal_attention_buffers()?;
         let head = self
             .operators
             .cuda_mut()?
-            .allocate_dspark_proposal_head_buffers()?;
+            .allocate_proposal_head_buffers()?;
         let hc_state = self.operators.cuda_mut()?.ops.zero_f32_buffer(
             rows.checked_mul(resources.model().config.hc_config().hc_hidden_size())
                 .ok_or_else(|| Error::Model {
-                    message: "DSpark proposal HC size overflow".into(),
+                    message: "Proposal HC size overflow".into(),
                 })?,
         )?;
-        Ok(DeepSeekV4DsparkProposalArena {
+        Ok(DeepSeekV4ProposalArena {
             stages: stages.into_boxed_slice(),
             attention,
             head,
@@ -1314,60 +1579,64 @@ impl DeepSeekV4Runner {
     }
 
     #[cfg(feature = "cuda")]
-    fn begin_dspark_proposal_continuation(
+    fn begin_proposal_continuation(
         &mut self,
         transaction: ExecutionTransactionId,
         anchor_token_id: u32,
-    ) -> Result<DeepSeekV4DsparkProposalContinuation> {
+    ) -> Result<DeepSeekV4ProposalContinuation> {
         if self.operators.backend() != ModelExecutionBackend::Cuda {
             return Err(Error::Model {
-                message: "DeepSeek-V4 DSpark production proposal requires CUDA".into(),
+                message: "DeepSeek-V4 Proposal production proposal requires CUDA".into(),
             });
         }
         if !self
             .cuda_materialization_owner
             .as_ref()
-            .is_some_and(DeepSeekV4CudaMaterializationOwner::residency_control_installed)
+            .is_some_and(CudaExpertMaterializationOwner::residency_control_installed)
         {
             return Err(Error::Execution {
                 message: "runtime expert residency controller is not installed".into(),
             });
         }
         let (protocol, stage_count) = {
-            let mtp = self.plan.resources().mtp().ok_or_else(|| Error::Model {
-                message: "DeepSeek-V4 DSpark attachment is missing".into(),
-            })?;
+            let attachment =
+                self.plan
+                    .resources()
+                    .proposal_attachment()
+                    .ok_or_else(|| Error::Model {
+                        message: "DeepSeek-V4 Proposal attachment is missing".into(),
+                    })?;
             (
-                DeepSeekV4DsparkProtocol::try_from(&mtp.config)?,
-                mtp.layers.len(),
+                DeepSeekV4ProposalProtocol::try_from(&attachment.config)?,
+                attachment.layers.len(),
             )
         };
         let token_ids = protocol.draft_input_ids(anchor_token_id);
         let sequence_tokens = self.sequence.core.position();
         if sequence_tokens == 0 {
             return Err(Error::Model {
-                message: "DeepSeek-V4 DSpark proposal requires committed target context".into(),
+                message: "DeepSeek-V4 Proposal requires committed target context".into(),
             });
         }
         let paged_binding = self.sequence.paged_kv_binding.clone();
         let id = take_packed_cuda_continuation_id(&mut self.next_packed_cuda_continuation_id)?;
-        let arena = match self.dspark_proposal_arena_pool.pop() {
+        let arena = match self.proposal_arena_pool.pop() {
             Some(arena) => arena,
-            None => self.build_dspark_proposal_arena()?,
+            None => self.build_proposal_arena()?,
         };
         let arena_stage_count = arena.stages.len();
         if arena_stage_count != stage_count
-            || stage_count != self.plan.resources().mtp_layer_experts().len()
+            || stage_count != self.plan.resources().proposal_stage_experts().len()
         {
-            self.dspark_proposal_arena_pool.push(arena);
+            self.proposal_arena_pool.push(arena);
             return Err(Error::Model {
                 message: format!(
-                    "DeepSeek-V4 DSpark proposal arena mismatch: arenas={arena_stage_count} stages={stage_count} expert_catalogs={}",
-                    self.plan.resources().mtp_layer_experts().len()
+                    "DeepSeek-V4 Proposal arena mismatch: arenas={arena_stage_count} stages={stage_count} expert_catalogs={}",
+                    self.plan.resources().proposal_stage_experts().len()
                 ),
             });
         }
-        Ok(DeepSeekV4DsparkProposalContinuation {
+        Ok(DeepSeekV4ProposalContinuation {
             transaction,
             id,
             anchor_token_id,
@@ -1390,9 +1659,9 @@ impl DeepSeekV4Runner {
     }
 
     #[cfg(feature = "cuda")]
-    fn activate_dspark_proposal_binding(
+    fn activate_proposal_binding(
         &mut self,
-        continuation: &mut DeepSeekV4DsparkProposalContinuation,
+        continuation: &mut DeepSeekV4ProposalContinuation,
     ) -> Result<()> {
         self.operators.cuda_mut()?.activate_paged_binding(
             continuation.transaction,
@@ -1403,9 +1672,9 @@ impl DeepSeekV4Runner {
     }
 
     #[cfg(feature = "cuda")]
-    fn deactivate_dspark_proposal_binding(
+    fn deactivate_proposal_binding(
         &mut self,
-        continuation: &mut DeepSeekV4DsparkProposalContinuation,
+        continuation: &mut DeepSeekV4ProposalContinuation,
     ) -> Result<()> {
         if continuation.paged_binding_active {
             self.operators
@@ -1417,14 +1686,14 @@ impl DeepSeekV4Runner {
     }
 
     #[cfg(feature = "cuda")]
-    fn pending_dspark_proposal_progress(
+    fn pending_proposal_progress(
         &mut self,
-        continuation: &mut DeepSeekV4DsparkProposalContinuation,
+        continuation: &mut DeepSeekV4ProposalContinuation,
     ) -> Result<PendingModelProgress> {
         let pending = continuation
             .current_layer
             .as_ref()
-            .map(DeepSeekV4DsparkLayerContinuation::pending_experts)
+            .map(DeepSeekV4ProposalLayerContinuation::pending_experts)
             .unwrap_or_default();
         let resolved_stage = if pending.is_empty() {
             None
@@ -1432,11 +1701,11 @@ impl DeepSeekV4Runner {
             let prepared = self
                 .plan
                 .resources()
-                .mtp_layer_experts()
+                .proposal_stage_experts()
                 .get(continuation.stage)
                 .ok_or_else(|| Error::Internal {
                     message: format!(
-                        "DeepSeek-V4 DSpark stage {} has no prepared expert catalog",
+                        "DeepSeek-V4 Proposal stage {} has no prepared expert catalog",
                         continuation.stage
                     ),
                 })?;
@@ -1523,9 +1792,9 @@ impl DeepSeekV4Runner {
     }
 
     #[cfg(feature = "cuda")]
-    fn poll_dspark_route_cancel_ready(
+    fn poll_proposal_route_cancel_ready(
         &mut self,
-        continuation: &mut DeepSeekV4DsparkProposalContinuation,
+        continuation: &mut DeepSeekV4ProposalContinuation,
     ) -> Result<bool> {
         let Some(layer_continuation) = continuation.current_layer.as_mut() else {
             return Ok(true);
@@ -1534,21 +1803,20 @@ impl DeepSeekV4Runner {
         let layer = self
             .plan
             .resources()
-            .mtp()
-            .and_then(|mtp| mtp.layers.get(stage))
+            .proposal_attachment()
+            .and_then(|attachment| attachment.layers.get(stage))
             .ok_or_else(|| Error::Internal {
-                message: format!("current DSpark stage {stage} is outside the prepared attachment"),
+                message: format!(
+                    "current Proposal stage {stage} is outside the prepared attachment"
+                ),
             })?;
         layer
             .transformer
-            .poll_dspark_proposal_cancel_ready(layer_continuation, &mut self.operators)
+            .poll_proposal_cancel_ready(layer_continuation, &mut self.operators)
     }
 
     #[cfg(feature = "cuda")]
-    fn arm_dspark_proposal_completion(
-        &mut self,
-        continuation: &mut DeepSeekV4DsparkProposalContinuation,
-    ) {
+    fn arm_proposal_completion(&mut self, continuation: &mut DeepSeekV4ProposalContinuation) {
         let notify = crate::runner::completion_notify_callback(self.completion_hub.clone());
         continuation.callback_armed = self
             .operators
@@ -1561,11 +1829,11 @@ impl DeepSeekV4Runner {
     }
 
     #[cfg(feature = "cuda")]
-    fn progress_dspark_proposal(
+    fn progress_proposal(
         &mut self,
-        continuation: &mut DeepSeekV4DsparkProposalContinuation,
+        continuation: &mut DeepSeekV4ProposalContinuation,
         resume_leases: Option<ResidencyLeaseSet>,
-    ) -> Result<DeepSeekV4DsparkProposalStep> {
+    ) -> Result<DeepSeekV4ProposalStep> {
         if continuation.failed {
             return Err(Error::Execution {
                 message: format!(
@@ -1577,22 +1845,19 @@ impl DeepSeekV4Runner {
         let stage_count = self
             .plan
             .resources()
-            .mtp()
+            .proposal_attachment()
             .ok_or_else(|| Error::Model {
-                message: "DeepSeek-V4 DSpark attachment is missing".into(),
+                message: "DeepSeek-V4 Proposal attachment is missing".into(),
             })?
             .layers
             .len();
         if !continuation.initialized {
             let arena = continuation.arena.as_mut().ok_or_else(|| Error::Internal {
-                message: "DeepSeek-V4 DSpark proposal arena is unavailable".into(),
+                message: "DeepSeek-V4 Proposal arena is unavailable".into(),
             })?;
             self.operators
                 .cuda_mut()?
-                .dspark_proposal_input_device_into(
-                    continuation.anchor_token_id,
-                    &mut arena.hc_state,
-                )?;
+                .proposal_input_device_into(continuation.anchor_token_id, &mut arena.hc_state)?;
             continuation.initialized = true;
         }
 
@@ -1602,24 +1867,24 @@ impl DeepSeekV4Runner {
             let leases = if continuation.current_layer.is_some() {
                 resume_leases.take().ok_or_else(|| Error::Execution {
                     message: format!(
-                        "DeepSeek-V4 DSpark continuation {} has no lease set for its current layer",
+                        "DeepSeek-V4 Proposal continuation {} has no lease set for its current layer",
                         continuation.id.get()
                     ),
                 })?
             } else {
-                let mtp = self
+                let attachment = self
                     .plan
                     .resources()
-                    .mtp()
-                    .expect("validated DSpark attachment above");
-                let layer = &mtp.layers[stage].transformer;
+                    .proposal_attachment()
+                    .expect("validated Proposal attachment above");
+                let layer = &attachment.layers[stage].transformer;
                 let arena = continuation.arena.as_mut().ok_or_else(|| Error::Internal {
-                    message: "DeepSeek-V4 DSpark proposal arena is unavailable".into(),
+                    message: "DeepSeek-V4 Proposal arena is unavailable".into(),
                 })?;
                 let stage_arena = arena.stages.get_mut(stage).ok_or_else(|| Error::Internal {
-                    message: format!("DeepSeek-V4 DSpark stage arena {stage} is unavailable"),
+                    message: format!("DeepSeek-V4 Proposal stage arena {stage} is unavailable"),
                 })?;
-                match layer.begin_dspark_proposal_block_device_hc_device(
+                match layer.begin_proposal_block_device_hc_device(
                     stage,
                     continuation.sequence_tokens,
                     stage_arena,
@@ -1628,20 +1893,20 @@ impl DeepSeekV4Runner {
                     &mut self.operators,
                     &mut arena.attention,
                 )? {
-                    DeepSeekV4DsparkLayerProgress::Waiting(next) => {
+                    DeepSeekV4ProposalLayerProgress::Waiting(next) => {
                         continuation.current_layer = Some(next);
                         if continuation
                             .current_layer
                             .as_ref()
                             .is_some_and(|current| !current.pending_experts().is_empty())
                         {
-                            return Ok(DeepSeekV4DsparkProposalStep::Waiting(
-                                self.pending_dspark_proposal_progress(continuation)?,
+                            return Ok(DeepSeekV4ProposalStep::Waiting(
+                                self.pending_proposal_progress(continuation)?,
                             ));
                         }
                         empty_expert_lease_set(continuation.id)?
                     }
-                    DeepSeekV4DsparkLayerProgress::Complete { events, leases } => {
+                    DeepSeekV4ProposalLayerProgress::Complete { events, leases } => {
                         continuation.moe_access_events.extend(events);
                         continuation.expert_leases.extend(leases);
                         continuation.stage += 1;
@@ -1650,36 +1915,36 @@ impl DeepSeekV4Runner {
                 }
             };
 
-            let mtp = self
+            let attachment = self
                 .plan
                 .resources()
-                .mtp()
-                .expect("validated DSpark attachment above");
-            let layer = &mtp.layers[stage].transformer;
+                .proposal_attachment()
+                .expect("validated Proposal attachment above");
+            let layer = &attachment.layers[stage].transformer;
             let arena = continuation.arena.as_mut().ok_or_else(|| Error::Internal {
-                message: "DeepSeek-V4 DSpark proposal arena is unavailable".into(),
+                message: "DeepSeek-V4 Proposal arena is unavailable".into(),
             })?;
             let stage_arena = arena.stages.get_mut(stage).ok_or_else(|| Error::Internal {
-                message: format!("DeepSeek-V4 DSpark stage arena {stage} is unavailable"),
+                message: format!("DeepSeek-V4 Proposal stage arena {stage} is unavailable"),
             })?;
             let layer_continuation = continuation
                 .current_layer
                 .take()
-                .expect("DSpark layer continuation was created above");
-            match layer.resume_dspark_proposal_block_device_hc_device(
+                .expect("Proposal layer continuation was created above");
+            match layer.resume_proposal_block_device_hc_device(
                 layer_continuation,
                 leases,
                 stage_arena,
                 &mut arena.hc_state,
                 &mut self.operators,
             )? {
-                DeepSeekV4DsparkLayerProgress::Waiting(next) => {
+                DeepSeekV4ProposalLayerProgress::Waiting(next) => {
                     continuation.current_layer = Some(next);
-                    return Ok(DeepSeekV4DsparkProposalStep::Waiting(
-                        self.pending_dspark_proposal_progress(continuation)?,
+                    return Ok(DeepSeekV4ProposalStep::Waiting(
+                        self.pending_proposal_progress(continuation)?,
                     ));
                 }
-                DeepSeekV4DsparkLayerProgress::Complete { events, leases } => {
+                DeepSeekV4ProposalLayerProgress::Complete { events, leases } => {
                     continuation.moe_access_events.extend(events);
                     continuation.expert_leases.extend(leases);
                     continuation.stage += 1;
@@ -1690,7 +1955,7 @@ impl DeepSeekV4Runner {
             if !unused.is_empty() {
                 return Err(Error::Execution {
                     message: format!(
-                        "DeepSeek-V4 DSpark continuation {} received expert leases without a current layer",
+                        "DeepSeek-V4 Proposal continuation {} received expert leases without a current layer",
                         continuation.id.get()
                     ),
                 });
@@ -1699,47 +1964,47 @@ impl DeepSeekV4Runner {
 
         if continuation.head_download.is_none() {
             let arena = continuation.arena.as_mut().ok_or_else(|| Error::Internal {
-                message: "DeepSeek-V4 DSpark proposal arena is unavailable".into(),
+                message: "DeepSeek-V4 Proposal arena is unavailable".into(),
             })?;
-            self.operators
-                .cuda_mut()?
-                .dspark_proposal_head_device_into(
-                    continuation.anchor_token_id,
-                    &arena.hc_state,
-                    &mut arena.head,
-                )?;
+            self.operators.cuda_mut()?.proposal_head_device_into(
+                continuation.anchor_token_id,
+                &arena.hc_state,
+                &mut arena.head,
+            )?;
             continuation.head_download = Some(
                 self.operators
                     .cuda_mut()?
-                    .begin_dspark_proposal_head_result_download(&mut arena.head)?,
+                    .begin_proposal_head_result_download(&mut arena.head)?,
             );
-            self.arm_dspark_proposal_completion(continuation);
+            self.arm_proposal_completion(continuation);
             let dependencies = internal_continuation_dependency(continuation.id)?;
             record_continuation_dependencies(
                 &mut continuation.dependencies,
                 continuation.id,
                 dependencies.clone(),
             )?;
-            return Ok(DeepSeekV4DsparkProposalStep::Waiting(
-                PendingModelProgress::new(continuation.transaction, continuation.id, dependencies)?,
-            ));
+            return Ok(DeepSeekV4ProposalStep::Waiting(PendingModelProgress::new(
+                continuation.transaction,
+                continuation.id,
+                dependencies,
+            )?));
         }
 
         let compact = {
             let arena = continuation.arena.as_mut().ok_or_else(|| Error::Internal {
-                message: "DeepSeek-V4 DSpark proposal arena is unavailable".into(),
+                message: "DeepSeek-V4 Proposal arena is unavailable".into(),
             })?;
             let download = continuation
                 .head_download
                 .as_ref()
-                .expect("checked DSpark proposal head download");
+                .expect("checked Proposal head download");
             self.operators
                 .cuda_mut()?
-                .poll_dspark_proposal_head_result_download(&mut arena.head, download)?
+                .poll_proposal_head_result(&mut arena.head, download)?
         };
         let Some(compact) = compact else {
             if !continuation.callback_armed {
-                self.arm_dspark_proposal_completion(continuation);
+                self.arm_proposal_completion(continuation);
             }
             let dependencies = internal_continuation_dependency(continuation.id)?;
             record_continuation_dependencies(
@@ -1747,43 +2012,45 @@ impl DeepSeekV4Runner {
                 continuation.id,
                 dependencies.clone(),
             )?;
-            return Ok(DeepSeekV4DsparkProposalStep::Waiting(
-                PendingModelProgress::new(continuation.transaction, continuation.id, dependencies)?,
-            ));
+            return Ok(DeepSeekV4ProposalStep::Waiting(PendingModelProgress::new(
+                continuation.transaction,
+                continuation.id,
+                dependencies,
+            )?));
         };
         continuation.head_download = None;
         let (token_ids, confidence_logits) = self
             .operators
             .cuda_mut()?
-            .decode_dspark_proposal_head_result(compact)?;
+            .decode_proposal_head_result(compact)?;
         let proposal = NativeProposal {
             token_ids,
             confidence_logits,
         };
-        let source = self.dspark_proposal_source.ok_or_else(|| Error::Model {
+        let source = self.proposal_source.ok_or_else(|| Error::Model {
             message: "DeepSeek-V4 has no checkpoint-native proposal capability".into(),
         })?;
         proposal.validate_for_source(source)?;
 
-        Ok(DeepSeekV4DsparkProposalStep::Complete(proposal))
+        Ok(DeepSeekV4ProposalStep::Complete(proposal))
     }
 
     #[cfg(feature = "cuda")]
-    fn release_dspark_proposal_arena(
+    fn release_proposal_arena(
         &mut self,
-        continuation: &mut DeepSeekV4DsparkProposalContinuation,
+        continuation: &mut DeepSeekV4ProposalContinuation,
     ) -> Result<()> {
         let arena = continuation.arena.take().ok_or_else(|| Error::Internal {
-            message: "DeepSeek-V4 DSpark proposal arena was already released".into(),
+            message: "DeepSeek-V4 Proposal arena was already released".into(),
         })?;
-        self.dspark_proposal_arena_pool.push(arena);
+        self.proposal_arena_pool.push(arena);
         Ok(())
     }
 
     #[cfg(feature = "cuda")]
-    fn cleanup_unpublished_dspark_proposal(
+    fn cleanup_unpublished_proposal(
         &mut self,
-        continuation: &mut DeepSeekV4DsparkProposalContinuation,
+        continuation: &mut DeepSeekV4ProposalContinuation,
         error: Error,
     ) -> Error {
         let mut cleanup_errors = Vec::new();
@@ -1792,13 +2059,12 @@ impl DeepSeekV4Runner {
             match self
                 .plan
                 .resources()
-                .mtp()
-                .and_then(|mtp| mtp.layers.get(stage))
+                .proposal_attachment()
+                .and_then(|attachment| attachment.layers.get(stage))
             {
                 Some(layer) => {
-                    if let Err(cancel_error) = layer
-                        .transformer
-                        .cancel_dspark_proposal_block_device_hc_device(
+                    if let Err(cancel_error) =
+                        layer.transformer.cancel_proposal_block_device_hc_device(
                             layer_continuation,
                             &mut self.operators,
                         )
@@ -1811,12 +2077,12 @@ impl DeepSeekV4Runner {
                 }
                 None => cleanup_errors.push(Error::Internal {
                     message: format!(
-                        "current DSpark stage {stage} is outside the prepared attachment"
+                        "current Proposal stage {stage} is outside the prepared attachment"
                     ),
                 }),
             }
         }
-        if let Err(deactivate_error) = self.deactivate_dspark_proposal_binding(continuation) {
+        if let Err(deactivate_error) = self.deactivate_proposal_binding(continuation) {
             cleanup_errors.push(Error::context(
                 "paged binding deactivation",
                 deactivate_error,
@@ -1824,7 +2090,7 @@ impl DeepSeekV4Runner {
         }
         self.discard_continuation_dependencies(&mut continuation.dependencies);
         if let Some(arena) = continuation.arena.take() {
-            self.dspark_proposal_arena_pool.push(arena);
+            self.proposal_arena_pool.push(arena);
         }
         Error::with_cleanup(
             "DeepSeek-V4 native proposal",
@@ -1833,9 +2099,9 @@ impl DeepSeekV4Runner {
         )
     }
 
-    pub fn dspark_context_kv_lengths(&self) -> Vec<usize> {
+    pub fn proposal_context_kv_lengths(&self) -> Vec<usize> {
         self.sequence
-            .dspark_stages
+            .proposal_stages
             .iter()
             .map(|state| state.kv.len())
             .collect()
@@ -1882,12 +2148,12 @@ impl DeepSeekV4Runner {
     }
 
     #[cfg(feature = "cuda")]
-    fn ensure_no_dspark_proposal_continuations(&self, operation: &str) -> Result<()> {
-        if !self.dspark_proposal_continuations.is_empty() {
+    fn ensure_no_proposal_continuations(&self, operation: &str) -> Result<()> {
+        if !self.proposal_continuations.is_empty() {
             return Err(Error::Execution {
                 message: format!(
                     "cannot {operation} while {} DeepSeek-V4 native proposal continuation(s) are outstanding",
-                    self.dspark_proposal_continuations.len()
+                    self.proposal_continuations.len()
                 ),
             });
         }
@@ -1895,7 +2161,7 @@ impl DeepSeekV4Runner {
     }
 
     #[cfg(feature = "cuda")]
-    pub fn cuda_failpoints(&self) -> Result<&ferrule_cuda::CudaFailpoints> {
+    pub fn cuda_failpoints(&self) -> Result<&ferrule_backend::cuda::CudaFailpoints> {
         self.operators.cuda_failpoints()
     }
 
@@ -1928,6 +2194,7 @@ impl DeepSeekV4Runner {
     pub fn observability_snapshot(&self) -> DeepSeekV4ObservabilitySnapshot {
         DeepSeekV4ObservabilitySnapshot {
             position: self.position(),
+            load: self.observability.load,
             operator: self.operator_runtime_counters(),
             layers: self.layer_profile_stats(),
             attention: self.attention_profile_stats(),
@@ -1943,10 +2210,11 @@ impl DeepSeekV4Runner {
         for layer in 0..resources.prepare_options().max_layers {
             layers.push(resources.model().new_layer_sequence_state(layer)?);
         }
-        let dspark_stages = resources
-            .mtp()
-            .map(|mtp| {
-                mtp.layers
+        let proposal_stages = resources
+            .proposal_attachment()
+            .map(|attachment| {
+                attachment
+                    .layers
                     .iter()
                     .map(|stage| DeepSeekV4LayerState::new(stage.transformer.attention.config))
                     .collect::<Vec<_>>()
@@ -1954,7 +2222,7 @@ impl DeepSeekV4Runner {
             .unwrap_or_default();
         Ok(DeepSeekV4SequenceExecutionState::new(
             layers,
-            dspark_stages,
+            proposal_stages,
             resources.model().config.num_routed_experts,
         ))
     }
@@ -1991,8 +2259,8 @@ impl DeepSeekV4Runner {
         for layer in &source.layers {
             layers.push(layer.fork_paged_prefix_metadata(operators)?);
         }
-        let dspark_stages = source
-            .dspark_stages
+        let proposal_stages = source
+            .proposal_stages
             .iter()
             .map(|stage| stage.fork_paged_prefix_metadata(operators))
             .collect::<Result<Vec<_>>>()?;
@@ -2001,7 +2269,7 @@ impl DeepSeekV4Runner {
             topology_id: DeepSeekV4SequenceTopologyId::take(),
             core: source.core.forked()?,
             layers,
-            dspark_stages,
+            proposal_stages,
             predictor: source.predictor.clone(),
             #[cfg(feature = "cuda")]
             paged_kv_binding: None,
@@ -2019,8 +2287,8 @@ impl DeepSeekV4Runner {
             .iter()
             .map(|layer| layer.fork_paged_prefix_metadata(operators))
             .collect::<Result<Vec<_>>>()?;
-        let dspark_stages = source
-            .dspark_stages
+        let proposal_stages = source
+            .proposal_stages
             .iter()
             .map(|stage| stage.fork_paged_prefix_metadata(operators))
             .collect::<Result<Vec<_>>>()?;
@@ -2028,7 +2296,7 @@ impl DeepSeekV4Runner {
             topology_id: source.topology_id(),
             core: source.core.clone(),
             layers,
-            dspark_stages,
+            proposal_stages,
             predictor: source.predictor.clone(),
             paged_kv_binding: source.paged_kv_binding.clone(),
         })
@@ -2056,12 +2324,12 @@ impl DeepSeekV4Runner {
                 ),
             });
         }
-        if state.dspark_stage_count() != self.sequence.dspark_stage_count() {
+        if state.proposal_stage_count() != self.sequence.proposal_stage_count() {
             return Err(Error::Model {
                 message: format!(
-                    "DeepSeek-V4 sequence DSpark stage count {} does not match runner stage count {}",
-                    state.dspark_stage_count(),
-                    self.sequence.dspark_stage_count()
+                    "DeepSeek-V4 sequence Proposal stage count {} does not match runner stage count {}",
+                    state.proposal_stage_count(),
+                    self.sequence.proposal_stage_count()
                 ),
             });
         }
@@ -2109,7 +2377,7 @@ impl DeepSeekV4Runner {
              });
         }
         #[cfg(feature = "cuda")]
-        self.ensure_no_dspark_proposal_continuations("shut down the runner")?;
+        self.ensure_no_proposal_continuations("shut down the runner")?;
         if self.shutdown {
             return Ok(());
         }
@@ -2128,8 +2396,8 @@ impl DeepSeekV4Runner {
             self.layer_arena_pool.clear();
             #[cfg(feature = "cuda")]
             {
-                self.dspark_proposal_arena_pool.clear();
-                self.dspark_proposal_continuations.clear();
+                self.proposal_arena_pool.clear();
+                self.proposal_continuations.clear();
             }
         }
         self.operators.shutdown()?;
@@ -2318,12 +2586,12 @@ impl DeepSeekV4Runner {
                 self.restore_cuda_decode_buffers(decode_buffers);
             }
             #[cfg(feature = "cuda")]
-            if let Some(dspark) = continuation.dspark_main_buffers.take() {
+            if let Some(proposal) = continuation.proposal_main_buffers.take() {
                 self.operators
                     .cuda
                     .as_mut()
                     .expect("checked CUDA cache availability")
-                    .restore_dspark_main_buffers(continuation.batch.len(), dspark);
+                    .restore_proposal_main_buffers(continuation.batch.len(), proposal);
             }
         } else {
             if continuation.decode_buffers.is_some() {
@@ -2332,9 +2600,9 @@ impl DeepSeekV4Runner {
                 });
             }
             #[cfg(feature = "cuda")]
-            if continuation.dspark_main_buffers.is_some() {
+            if continuation.proposal_main_buffers.is_some() {
                 errors.push(Error::Internal {
-                    message: "DSpark main buffer cache is unavailable".into(),
+                    message: "Proposal main buffer cache is unavailable".into(),
                 });
             }
         }
@@ -2539,7 +2807,7 @@ impl DeepSeekV4Runner {
         if !self
             .cuda_materialization_owner
             .as_ref()
-            .is_some_and(DeepSeekV4CudaMaterializationOwner::residency_control_installed)
+            .is_some_and(CudaExpertMaterializationOwner::residency_control_installed)
         {
             return Err(Error::Execution {
                 message: "runtime expert residency controller is not installed".into(),
@@ -2676,7 +2944,7 @@ impl DeepSeekV4Runner {
             arena_checkout: Some(arena_checkout),
             decode_buffers: None,
             #[cfg(feature = "cuda")]
-            dspark_main_buffers: None,
+            proposal_main_buffers: None,
             initialized: false,
             next_layer_index: 0,
             current_layer: None,
@@ -2710,23 +2978,27 @@ impl DeepSeekV4Runner {
 
         #[cfg(feature = "cuda")]
         {
-            let capture = self.plan.resources().mtp().is_some_and(|mtp| {
-                !mtp.config.target_layer_ids.is_empty()
-                    && mtp
-                        .config
-                        .target_layer_ids
-                        .iter()
-                        .all(|layer| *layer < max_layers)
-            });
+            let capture = self
+                .plan
+                .resources()
+                .proposal_attachment()
+                .is_some_and(|attachment| {
+                    !attachment.config.target_layer_ids.is_empty()
+                        && attachment
+                            .config
+                            .target_layer_ids
+                            .iter()
+                            .all(|layer| *layer < max_layers)
+                });
             if capture {
-                continuation.dspark_main_buffers =
-                    match self.operators.cuda_mut()?.take_dspark_main_buffers(rows) {
+                continuation.proposal_main_buffers =
+                    match self.operators.cuda_mut()?.take_proposal_main_buffers(rows) {
                         Ok(buffers) => Some(buffers),
                         Err(error) => {
                             let cleanup =
                                 self.release_packed_cuda_resources(&mut continuation, false, true);
                             return Err(Self::packed_cuda_error_with_cleanup(
-                                "DeepSeek-V4 packed DSpark buffer checkout",
+                                "DeepSeek-V4 packed Proposal buffer checkout",
                                 error,
                                 cleanup,
                             ));
@@ -3003,20 +3275,20 @@ impl DeepSeekV4Runner {
                 &mut decode_buffers.hc_input,
             )?;
             #[cfg(feature = "cuda")]
-            if let Some(dspark) = continuation.dspark_main_buffers.as_mut() {
+            if let Some(proposal) = continuation.proposal_main_buffers.as_mut() {
                 let positions_i32 = continuation
                     .positions
                     .iter()
                     .map(|position| {
                         i32::try_from(*position).map_err(|_| Error::Model {
-                            message: "DeepSeek-V4 packed DSpark position exceeds i32".into(),
+                            message: "DeepSeek-V4 packed Proposal position exceeds i32".into(),
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
                 self.operators
                     .cuda_mut()?
                     .ops
-                    .overwrite_i32_buffer(&positions_i32, &mut dspark.positions)?;
+                    .overwrite_i32_buffer(&positions_i32, &mut proposal.positions)?;
             }
             continuation.initialized = true;
         }
@@ -3146,14 +3418,14 @@ impl DeepSeekV4Runner {
                         })?
                         .hc_input;
                     #[cfg(feature = "cuda")]
-                    if let Some(dspark) = continuation.dspark_main_buffers.as_mut() {
+                    if let Some(proposal) = continuation.proposal_main_buffers.as_mut() {
                         self.operators
                             .cuda_mut()?
-                            .capture_dspark_target_tap_from_device(
+                            .capture_proposal_target_tap_from_device(
                                 layer_idx,
                                 hc_state,
                                 continuation.batch.len(),
-                                &mut dspark.target_taps,
+                                &mut proposal.target_taps,
                             )?;
                     }
                     continuation.moe_access_events.extend(events);
@@ -3195,22 +3467,26 @@ impl DeepSeekV4Runner {
         ) {
             let rows = continuation.batch.len();
             #[cfg(feature = "cuda")]
-            if let Some(dspark) = continuation.dspark_main_buffers.as_mut() {
+            if let Some(proposal) = continuation.proposal_main_buffers.as_mut() {
                 self.operators
                     .cuda_mut()?
-                    .dspark_main_project_norm_device_into(rows, dspark)?;
-                let mtp = self.plan.resources().mtp().ok_or_else(|| Error::Model {
-                    message: "DeepSeek-V4 packed DSpark context has no attachment".into(),
-                })?;
-                let stage_count = mtp.layers.len();
+                    .proposal_main_project_norm_device_into(rows, proposal)?;
+                let attachment =
+                    self.plan
+                        .resources()
+                        .proposal_attachment()
+                        .ok_or_else(|| Error::Model {
+                            message: "DeepSeek-V4 packed Proposal context has no attachment".into(),
+                        })?;
+                let stage_count = attachment.layers.len();
                 for sequence in &continuation.metadata.sequences {
                     let state = &states[sequence.state_index];
-                    if state.dspark_stages.len() != stage_count {
+                    if state.proposal_stages.len() != stage_count {
                         return Err(Error::Model {
                             message: format!(
-                                "DeepSeek-V4 packed DSpark context mismatch for state {}: states={} stages={stage_count}",
+                                "DeepSeek-V4 packed Proposal context mismatch for state {}: states={} stages={stage_count}",
                                 sequence.state_index,
-                                state.dspark_stages.len()
+                                state.proposal_stages.len()
                             ),
                         });
                     }
@@ -3222,18 +3498,18 @@ impl DeepSeekV4Runner {
                         .copied()
                         .max()
                         .ok_or_else(|| Error::Model {
-                            message: "DeepSeek-V4 packed DSpark positions are empty".into(),
+                            message: "DeepSeek-V4 packed Proposal positions are empty".into(),
                         })?;
                 for stage in 0..stage_count {
-                    let config = mtp.layers[stage].transformer.attention.config;
+                    let config = attachment.layers[stage].transformer.attention.config;
                     self.operators
                         .cuda_mut()?
-                        .dspark_context_kv_stage_packed_device_into(
+                        .proposal_context_kv_stage_packed_device_into(
                             stage,
                             config,
                             rows,
                             max_position,
-                            dspark,
+                            proposal,
                         )?;
                 }
             }
@@ -3354,13 +3630,13 @@ impl DeepSeekV4Runner {
             });
         }
         #[cfg(feature = "cuda")]
-        let dspark_stage_count = if continuation.dspark_main_buffers.is_some() {
+        let proposal_stage_count = if continuation.proposal_main_buffers.is_some() {
             Some(
                 self.plan
                     .resources()
-                    .mtp()
+                    .proposal_attachment()
                     .ok_or_else(|| Error::Model {
-                        message: "DeepSeek-V4 packed DSpark context has no attachment".into(),
+                        message: "DeepSeek-V4 packed Proposal context has no attachment".into(),
                     })?
                     .layers
                     .len(),
@@ -3375,11 +3651,11 @@ impl DeepSeekV4Runner {
             continuation.sequence_step_bindings.clone(),
         )?;
         #[cfg(feature = "cuda")]
-        if let Some(stage_count) = dspark_stage_count {
+        if let Some(stage_count) = proposal_stage_count {
             for sequence in &continuation.metadata.sequences {
                 let state = &mut states[sequence.state_index];
                 for stage in 0..stage_count {
-                    state.dspark_stages[stage]
+                    state.proposal_stages[stage]
                         .kv
                         .window
                         .record_device_rows(sequence.query.len());
@@ -3443,7 +3719,7 @@ impl DeepSeekV4Runner {
     ) -> Result<TransactionEndProgress> {
         loop {
             let Some(continuation_id) =
-                self.dspark_proposal_continuations
+                self.proposal_continuations
                     .iter()
                     .find_map(|(id, continuation)| {
                         (continuation.transaction == transaction).then_some(*id)
@@ -3452,13 +3728,13 @@ impl DeepSeekV4Runner {
                 return Ok(TransactionEndProgress::Complete);
             };
             let mut continuation = self
-                .dspark_proposal_continuations
+                .proposal_continuations
                 .remove(&continuation_id)
                 .expect("native proposal continuation was selected above");
             self.discard_continuation_dependencies(&mut continuation.dependencies);
 
-            if !self.poll_dspark_route_cancel_ready(&mut continuation)? {
-                self.dspark_proposal_continuations
+            if !self.poll_proposal_route_cancel_ready(&mut continuation)? {
+                self.proposal_continuations
                     .insert(continuation_id, continuation);
                 return Ok(TransactionEndProgress::Pending);
             }
@@ -3468,18 +3744,18 @@ impl DeepSeekV4Runner {
                     .arena
                     .as_mut()
                     .ok_or_else(|| Error::Internal {
-                        message: "DeepSeek-V4 DSpark proposal arena is unavailable".into(),
+                        message: "DeepSeek-V4 Proposal arena is unavailable".into(),
                     })
                     .and_then(|arena| {
                         self.operators
                             .cuda_mut()?
-                            .poll_dspark_proposal_head_result_download(&mut arena.head, download)
+                            .poll_proposal_head_result(&mut arena.head, download)
                     })?;
                 if result.is_none() {
                     if !continuation.callback_armed {
-                        self.arm_dspark_proposal_completion(&mut continuation);
+                        self.arm_proposal_completion(&mut continuation);
                     }
-                    self.dspark_proposal_continuations
+                    self.proposal_continuations
                         .insert(continuation_id, continuation);
                     return Ok(TransactionEndProgress::Pending);
                 }
@@ -3489,7 +3765,7 @@ impl DeepSeekV4Runner {
             if continuation.cancel_quiescence.is_none() {
                 continuation.cancel_quiescence =
                     Some(self.operators.cuda_mut()?.begin_compute_quiescence()?);
-                self.dspark_proposal_continuations
+                self.proposal_continuations
                     .insert(continuation_id, continuation);
                 return Ok(TransactionEndProgress::Pending);
             }
@@ -3499,7 +3775,7 @@ impl DeepSeekV4Runner {
                     .as_mut()
                     .expect("proposal cancellation quiescence was initialized above"),
             )? {
-                self.dspark_proposal_continuations
+                self.proposal_continuations
                     .insert(continuation_id, continuation);
                 return Ok(TransactionEndProgress::Pending);
             }
@@ -3510,24 +3786,22 @@ impl DeepSeekV4Runner {
                 let layer = self
                     .plan
                     .resources()
-                    .mtp()
-                    .and_then(|mtp| mtp.layers.get(stage))
+                    .proposal_attachment()
+                    .and_then(|attachment| attachment.layers.get(stage))
                     .ok_or_else(|| Error::Internal {
                         message: format!(
-                            "current DSpark stage {stage} is outside the prepared attachment"
+                            "current Proposal stage {stage} is outside the prepared attachment"
                         ),
                     })?;
-                layer
-                    .transformer
-                    .cancel_dspark_proposal_block_device_hc_device(
-                        layer_continuation,
-                        &mut self.operators,
-                    )?;
+                layer.transformer.cancel_proposal_block_device_hc_device(
+                    layer_continuation,
+                    &mut self.operators,
+                )?;
             }
-            self.deactivate_dspark_proposal_binding(&mut continuation)?;
+            self.deactivate_proposal_binding(&mut continuation)?;
             continuation.moe_access_events.clear();
             continuation.expert_leases.clear();
-            self.release_dspark_proposal_arena(&mut continuation)?;
+            self.release_proposal_arena(&mut continuation)?;
         }
     }
 }
@@ -3600,7 +3874,7 @@ impl ResidentModelRunner for DeepSeekV4Runner {
     }
 
     fn native_proposal_source(&self) -> Result<Option<NativeProposalSource>> {
-        Ok(self.dspark_proposal_source)
+        Ok(self.proposal_source)
     }
 
     fn begin_native_proposal(
@@ -3608,25 +3882,25 @@ impl ResidentModelRunner for DeepSeekV4Runner {
         transaction: ExecutionTransactionId,
         anchor_token_id: u32,
     ) -> Result<NativeProposalProgress> {
-        let source = self.dspark_proposal_source.ok_or_else(|| Error::Model {
+        let source = self.proposal_source.ok_or_else(|| Error::Model {
             message: "DeepSeek-V4 has no checkpoint-native proposal capability".into(),
         })?;
         #[cfg(feature = "cuda")]
         {
             source.validate()?;
             let mut continuation =
-                self.begin_dspark_proposal_continuation(transaction, anchor_token_id)?;
-            if let Err(error) = self.activate_dspark_proposal_binding(&mut continuation) {
-                return Err(self.cleanup_unpublished_dspark_proposal(&mut continuation, error));
+                self.begin_proposal_continuation(transaction, anchor_token_id)?;
+            if let Err(error) = self.activate_proposal_binding(&mut continuation) {
+                return Err(self.cleanup_unpublished_proposal(&mut continuation, error));
             }
-            let progress = self.progress_dspark_proposal(&mut continuation, None);
+            let progress = self.progress_proposal(&mut continuation, None);
             match progress {
-                Ok(DeepSeekV4DsparkProposalStep::Waiting(pending)) => {
-                    if let Err(error) = self.deactivate_dspark_proposal_binding(&mut continuation) {
+                Ok(DeepSeekV4ProposalStep::Waiting(pending)) => {
+                    if let Err(error) = self.deactivate_proposal_binding(&mut continuation) {
                         continuation.failed = true;
                         self.completion_hub.notify();
                         let continuation_id = continuation.id;
-                        self.dspark_proposal_continuations
+                        self.proposal_continuations
                             .insert(continuation_id, continuation);
                         return Err(Error::context(
                             "paged binding deactivation after proposal begin",
@@ -3634,23 +3908,19 @@ impl ResidentModelRunner for DeepSeekV4Runner {
                         ));
                     }
                     let replaced = self
-                        .dspark_proposal_continuations
+                        .proposal_continuations
                         .insert(continuation.id, continuation);
                     debug_assert!(replaced.is_none(), "native proposal continuation ID reused");
                     Ok(NativeProposalProgress::Waiting(pending))
                 }
-                Ok(DeepSeekV4DsparkProposalStep::Complete(proposal)) => {
-                    if let Err(error) = self.deactivate_dspark_proposal_binding(&mut continuation) {
-                        return Err(
-                            self.cleanup_unpublished_dspark_proposal(&mut continuation, error)
-                        );
+                Ok(DeepSeekV4ProposalStep::Complete(proposal)) => {
+                    if let Err(error) = self.deactivate_proposal_binding(&mut continuation) {
+                        return Err(self.cleanup_unpublished_proposal(&mut continuation, error));
                     }
-                    self.release_dspark_proposal_arena(&mut continuation)?;
+                    self.release_proposal_arena(&mut continuation)?;
                     Ok(NativeProposalProgress::Complete(proposal))
                 }
-                Err(error) => {
-                    Err(self.cleanup_unpublished_dspark_proposal(&mut continuation, error))
-                }
+                Err(error) => Err(self.cleanup_unpublished_proposal(&mut continuation, error)),
             }
         }
         #[cfg(not(feature = "cuda"))]
@@ -3671,7 +3941,7 @@ impl ResidentModelRunner for DeepSeekV4Runner {
         #[cfg(feature = "cuda")]
         {
             let mut continuation = self
-                .dspark_proposal_continuations
+                .proposal_continuations
                 .remove(&continuation_id)
                 .ok_or_else(|| Error::Execution {
                     message: format!(
@@ -3681,7 +3951,7 @@ impl ResidentModelRunner for DeepSeekV4Runner {
                 })?;
             if continuation.transaction != transaction {
                 let owner = continuation.transaction;
-                self.dspark_proposal_continuations
+                self.proposal_continuations
                     .insert(continuation_id, continuation);
                 return Err(Error::Execution {
                     message: format!(
@@ -3699,7 +3969,7 @@ impl ResidentModelRunner for DeepSeekV4Runner {
                         continuation_id.get()
                     ),
                 };
-                self.dspark_proposal_continuations
+                self.proposal_continuations
                     .insert(continuation_id, continuation);
                 return Err(error);
             }
@@ -3716,27 +3986,27 @@ impl ResidentModelRunner for DeepSeekV4Runner {
                     dependencies.validate_resume(continuation_id, &leases)
                 });
             if let Err(error) = resume_validation {
-                self.dspark_proposal_continuations
+                self.proposal_continuations
                     .insert(continuation_id, continuation);
                 return Err(error);
             }
-            if let Err(error) = self.activate_dspark_proposal_binding(&mut continuation) {
-                self.dspark_proposal_continuations
+            if let Err(error) = self.activate_proposal_binding(&mut continuation) {
+                self.proposal_continuations
                     .insert(continuation_id, continuation);
                 return Err(error);
             }
-            let progress = self.progress_dspark_proposal(&mut continuation, Some(leases));
-            let deactivate = self.deactivate_dspark_proposal_binding(&mut continuation);
+            let progress = self.progress_proposal(&mut continuation, Some(leases));
+            let deactivate = self.deactivate_proposal_binding(&mut continuation);
             match (progress, deactivate) {
-                (Ok(DeepSeekV4DsparkProposalStep::Waiting(pending)), Ok(())) => {
-                    self.dspark_proposal_continuations
+                (Ok(DeepSeekV4ProposalStep::Waiting(pending)), Ok(())) => {
+                    self.proposal_continuations
                         .insert(continuation_id, continuation);
                     Ok(NativeProposalProgress::Waiting(pending))
                 }
-                (Ok(DeepSeekV4DsparkProposalStep::Complete(proposal)), Ok(())) => {
-                    if let Err(error) = self.release_dspark_proposal_arena(&mut continuation) {
+                (Ok(DeepSeekV4ProposalStep::Complete(proposal)), Ok(())) => {
+                    if let Err(error) = self.release_proposal_arena(&mut continuation) {
                         continuation.failed = true;
-                        self.dspark_proposal_continuations
+                        self.proposal_continuations
                             .insert(continuation_id, continuation);
                         return Err(error);
                     }
@@ -3754,7 +4024,7 @@ impl ResidentModelRunner for DeepSeekV4Runner {
                         (Ok(_), Ok(())) => unreachable!("handled successful proposal progress"),
                     };
                     continuation.failed = true;
-                    self.dspark_proposal_continuations
+                    self.proposal_continuations
                         .insert(continuation_id, continuation);
                     Err(error)
                 }
@@ -3781,12 +4051,10 @@ impl MultiSessionRunner for DeepSeekV4Runner {
 
     fn expert_residency_requirements(&self) -> Option<ExpertResidencyRequirements> {
         #[cfg(feature = "cuda")]
-        if self.operators.backend() == ModelExecutionBackend::Cuda {
-            return Some(ExpertResidencyRequirements::new(
-                self.model_instance,
-                expert_residency_layer_capacities(self.plan.resources()),
-            ));
+        {
+            return self.expert_residency_requirements.clone();
         }
+        #[cfg(not(feature = "cuda"))]
         None
     }
 
@@ -3796,7 +4064,7 @@ impl MultiSessionRunner for DeepSeekV4Runner {
             return self
                 .cuda_materialization_owner
                 .as_ref()
-                .is_some_and(DeepSeekV4CudaMaterializationOwner::residency_control_installed);
+                .is_some_and(CudaExpertMaterializationOwner::residency_control_installed);
         }
         #[cfg(not(feature = "cuda"))]
         false
@@ -3833,7 +4101,7 @@ impl MultiSessionRunner for DeepSeekV4Runner {
             return install_residency_control_on_owner(
                 self.cuda_materialization_owner.as_ref(),
                 control,
-                DeepSeekV4CudaMaterializationOwner::install_residency_control,
+                CudaExpertMaterializationOwner::install_residency_control,
             );
         }
         #[cfg(not(feature = "cuda"))]
@@ -3852,7 +4120,7 @@ impl MultiSessionRunner for DeepSeekV4Runner {
             let physical = take_cuda_backend_once(
                 execution_backend,
                 self.cuda_materialization_owner.as_mut(),
-                DeepSeekV4CudaMaterializationOwner::take_provider,
+                CudaExpertMaterializationOwner::take_provider,
             );
             if physical.is_some() {
                 self.materialization_provider_transferred = true;
@@ -3861,6 +4129,82 @@ impl MultiSessionRunner for DeepSeekV4Runner {
         }
         #[cfg(not(feature = "cuda"))]
         None
+    }
+
+    fn take_warmup_requests(&mut self) -> Result<Vec<MaterializationRequest>> {
+        #[cfg(feature = "cuda")]
+        {
+            return Ok(std::mem::take(&mut self.warmup_requests));
+        }
+        #[cfg(not(feature = "cuda"))]
+        Ok(Vec::new())
+    }
+
+    fn transaction_prefetch_requests(
+        &self,
+        _transaction: ExecutionTransactionId,
+        batch: &ExecutionBatch,
+    ) -> Result<Vec<MaterializationRequest>> {
+        #[cfg(feature = "cuda")]
+        {
+            if self.operators.backend() != ModelExecutionBackend::Cuda {
+                return Ok(Vec::new());
+            }
+            let Some(owner) = self.cuda_materialization_owner.as_ref() else {
+                return Ok(Vec::new());
+            };
+            let resources = self.plan.resources();
+            let expert_limit = resources.model().config.num_routed_experts;
+            let mut requests = Vec::new();
+            for (layer_index, layer) in resources.layers().iter().enumerate() {
+                let prepared = resources.layer_experts().get(layer_index).ok_or_else(|| {
+                    Error::Internal {
+                        message: format!(
+                            "DeepSeek-V4 execution layer {layer_index} has no prepared expert catalog"
+                        ),
+                    }
+                })?;
+                let Some(experts) = layer.router.hash_expert_union_for_tokens(
+                    batch.token_ids(),
+                    layer.router_policy.top_k,
+                    expert_limit,
+                )?
+                else {
+                    continue;
+                };
+                for expert in experts {
+                    let layer_id = u32::try_from(layer.layer).map_err(|_| Error::Model {
+                        message: format!(
+                            "DeepSeek-V4 execution layer {} exceeds the materialization ABI",
+                            layer.layer
+                        ),
+                    })?;
+                    let expert_id = u32::try_from(expert).map_err(|_| Error::Model {
+                        message: format!(
+                            "DeepSeek-V4 routed expert {expert} exceeds the materialization ABI"
+                        ),
+                    })?;
+                    let source = prepared.source_catalog().require_resource_source(
+                        crate::moe::streaming::ExpertId::new(layer.layer, expert),
+                    )?;
+                    let resource = ferrule_common::MaterializedResourceId::routed_expert(
+                        ferrule_common::LayerId::new(layer_id),
+                        ferrule_common::ExpertId::new(expert_id),
+                    );
+                    requests.push(MaterializationRequest::for_placement(
+                        owner.placement(),
+                        source,
+                        resource,
+                    )?);
+                }
+            }
+            return Ok(requests);
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            let _ = batch;
+            Ok(Vec::new())
+        }
     }
 
     fn materialization_resolver_installed(&self) -> bool {
@@ -4155,7 +4499,7 @@ impl MultiSessionRunner for DeepSeekV4Runner {
             match intent {
                 TransactionEndIntent::Publish => {
                     if self
-                        .dspark_proposal_continuations
+                        .proposal_continuations
                         .values()
                         .any(|continuation| continuation.transaction == transaction)
                     {
@@ -4192,6 +4536,14 @@ impl MultiSessionRunner for DeepSeekV4Runner {
                             .put_payload(transaction, topology)?;
                         return Err(error);
                     }
+                    let DeepSeekV4PackedTransactionExecution::Complete(expert_leases) =
+                        std::mem::replace(
+                            &mut topology.execution,
+                            DeepSeekV4PackedTransactionExecution::Prepared,
+                        )
+                    else {
+                        unreachable!("packed execution was validated as complete")
+                    };
                     for (state_index, working_state) in topology
                         .committed_state_indices
                         .iter()
@@ -4200,6 +4552,7 @@ impl MultiSessionRunner for DeepSeekV4Runner {
                     {
                         states[state_index] = working_state;
                     }
+                    drop(expert_leases);
                     self.packed_transactions.finalize_checkout(transaction);
                     Ok(TransactionEndProgress::Complete)
                 }
@@ -4351,7 +4704,7 @@ impl MultiSessionRunner for DeepSeekV4Runner {
                         })?;
                     if branch.position() != expected_branch_position
                         || source.layers.len() != branch.layers.len()
-                        || source.dspark_stages.len() != branch.dspark_stages.len()
+                        || source.proposal_stages.len() != branch.proposal_stages.len()
                         || branch.paged_kv_binding.is_none()
                     {
                         return Err(Error::Model {
@@ -4362,8 +4715,8 @@ impl MultiSessionRunner for DeepSeekV4Runner {
                                 expected_branch_position,
                                 source.layers.len(),
                                 branch.layers.len(),
-                                source.dspark_stages.len(),
-                                branch.dspark_stages.len(),
+                                source.proposal_stages.len(),
+                                branch.proposal_stages.len(),
                                 branch.paged_kv_binding.is_some()
                             ),
                         });
@@ -4418,8 +4771,10 @@ impl MultiSessionRunner for DeepSeekV4Runner {
                                 .restore_uncompressed_prefix_from(&source_state.kv, retained)?;
                         }
                     }
-                    for (source_stage, branch_stage) in
-                        source.dspark_stages.iter().zip(&mut branch.dspark_stages)
+                    for (source_stage, branch_stage) in source
+                        .proposal_stages
+                        .iter()
+                        .zip(&mut branch.proposal_stages)
                     {
                         branch_stage
                             .kv

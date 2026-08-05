@@ -165,6 +165,13 @@ impl InferenceCompletionOwner {
         }
     }
 
+    /// Start model-lifecycle background warmup without delaying request admission.
+    /// The first owner step creates ordinary prefetch operations; later execution
+    /// demand may join and promote them through the same materialization registry.
+    pub async fn initialize(&mut self, engine: &mut impl InferenceEngine) -> Result<()> {
+        engine.start_background_work()
+    }
+
     /// Advance one engine step and, when it suspends, await a real completion
     /// before returning. This is the event-driven primitive used by local CLI
     /// owners; it never retries the engine or polls a timer internally.
@@ -275,8 +282,34 @@ where
         self.engine.driver_mut().reset_session(session_id)
     }
 
+    pub async fn initialize(&mut self) -> Result<()> {
+        self.completion_owner.initialize(&mut self.engine).await
+    }
+
+    /// Wait until model-lifecycle materialization has reached its planned ready
+    /// state. Request-serving owners may omit this and overlap background warmup
+    /// with admission; latency-sensitive offline owners can call it explicitly.
+    pub async fn wait_for_model_warmup(&mut self) -> Result<()> {
+        while self.engine.driver().warmup_pending() {
+            let step = self.step(&mut |_| Ok(())).await?;
+            if matches!(step, ResidentDriverStep::Idle) && self.engine.driver().warmup_pending() {
+                return Err(Error::Invariant {
+                    message: "runtime became idle before model warmup completed".into(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub fn submit(&mut self, request: GenerateRequest) {
         self.engine.driver_mut().submit(request);
+    }
+
+    pub fn take_request_terminal(
+        &mut self,
+        request_id: crate::scheduling::RequestId,
+    ) -> Option<crate::scheduling::RequestTerminal> {
+        self.engine.driver_mut().take_request_terminal(request_id)
     }
 
     pub fn drain_finished(&mut self) -> Vec<SequenceState> {
@@ -288,6 +321,25 @@ where
         F: FnMut(&ResidentTokenEvent) -> Result<()> + ?Sized,
     {
         self.completion_owner.step(&mut self.engine, on_token).await
+    }
+
+    /// Cancel background warmup and drain every submitted physical operation before
+    /// releasing the model owner. Logical shutdown never releases resources while a
+    /// provider still owns physical work.
+    pub async fn shutdown(&mut self) -> Result<()> {
+        loop {
+            let completion = self.completion_owner.listen();
+            let mut discard = |_event: &ResidentTokenEvent| Ok(());
+            match self.engine.driver_mut().shutdown_progress(&mut discard)? {
+                super::driver::ResidentShutdownProgress::Complete(report) => {
+                    debug_assert!(report.registry.drained);
+                    return Ok(());
+                }
+                super::driver::ResidentShutdownProgress::Pending => {
+                    self.completion_owner.wait(completion).await?;
+                }
+            }
+        }
     }
 }
 
@@ -303,6 +355,12 @@ pub enum InferenceCancelProgress {
     /// subsequent ticks. The caller retains request ownership but must not resubmit
     /// the cancellation request.
     Pending,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InferenceShutdownProgress {
+    Pending,
+    Complete,
 }
 
 /// Execution lifecycle consumed by serving frontends.
@@ -321,9 +379,24 @@ pub trait InferenceEngine: Send + 'static {
     /// Transfer completion reactors to the dedicated inference owner exactly once.
     fn take_completion_reactors(&mut self) -> Vec<InferenceCompletionReactor>;
 
-    /// Whether a returned Waiting/Blocked step has an owned continuation that can
-    /// be woken by the completion hub.
+    /// Whether model-lifecycle work should continue while no requests are active.
+    /// Implementations must return false once one idle step cannot make progress
+    /// without an external command or completion.
+    fn has_background_work(&self) -> bool {
+        false
+    }
+
+    /// Whether a returned Waiting/Blocked step has owned work that can be woken by
+    /// the completion hub.
     fn has_pending_async_work(&self) -> bool;
+
+    fn start_background_work(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn shutdown(&mut self) -> Result<InferenceShutdownProgress> {
+        Ok(InferenceShutdownProgress::Complete)
+    }
 
     fn encode(&self, prompt: &str) -> Result<Vec<u32>>;
     fn submit(&mut self, request: GenerateRequest);
@@ -394,8 +467,30 @@ where
             .collect()
     }
 
+    fn has_background_work(&self) -> bool {
+        self.driver.has_background_work()
+    }
+
     fn has_pending_async_work(&self) -> bool {
         self.driver.has_pending_async_work()
+    }
+
+    fn start_background_work(&mut self) -> Result<()> {
+        self.driver.start_background_work()
+    }
+
+    fn shutdown(&mut self) -> Result<InferenceShutdownProgress> {
+        let mut discard = |_event: &ResidentTokenEvent| Ok(());
+        self.driver
+            .shutdown_progress(&mut discard)
+            .map(|progress| match progress {
+                super::driver::ResidentShutdownProgress::Pending => {
+                    InferenceShutdownProgress::Pending
+                }
+                super::driver::ResidentShutdownProgress::Complete(_) => {
+                    InferenceShutdownProgress::Complete
+                }
+            })
     }
 
     fn encode(&self, prompt: &str) -> Result<Vec<u32>> {

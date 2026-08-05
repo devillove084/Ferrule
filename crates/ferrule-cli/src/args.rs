@@ -75,11 +75,9 @@ pub(crate) enum Command {
         /// lm_head chunk size in rows for full-vocabulary top-1 scans.
         #[arg(long = "output-head-chunk-rows", default_value_t = 4096)]
         output_head_chunk_rows: usize,
-        /// Maximum routed-expert lookahead candidates per layer (0 disables lookahead).
-        #[arg(long = "moe-prefetch-experts", default_value_t = 0)]
-        moe_prefetch_experts: usize,
-        /// Maximum runtime residency slots per layer (0 = runtime default).
-        #[arg(long = "moe-hotset-experts", default_value_t = 48)]
+
+        /// Routed-expert slots per layer (0 = automatic device-budget planning).
+        #[arg(long = "moe-hotset-experts", default_value_t = 0)]
         moe_hotset_experts: usize,
         /// Path to a golden interactive trace JSON for correctness comparison.
         #[arg(long = "golden")]
@@ -140,11 +138,9 @@ pub(crate) enum Command {
         /// Number of warmup decode tokens before timing.
         #[arg(long, default_value_t = 0)]
         warmup_tokens: usize,
-        /// Maximum routed-expert lookahead candidates per layer (0 disables lookahead).
-        #[arg(long, default_value_t = 32)]
-        moe_prefetch_experts: usize,
-        /// Maximum runtime residency slots per layer (0 = runtime default).
-        #[arg(long, default_value_t = 48)]
+
+        /// Routed-expert slots per layer (0 = automatic device-budget planning).
+        #[arg(long, default_value_t = 0)]
         moe_hotset_experts: usize,
     },
 }
@@ -207,11 +203,9 @@ pub(crate) struct ServeArgs {
     /// Maximum single expert artifact read size.
     #[arg(long = "expert-max-slice-mb", default_value_t = 64)]
     pub(crate) expert_reader_max_slice_mb: u64,
-    /// Number of routed experts per layer to predictively prefetch.
+
+    /// Routed-expert slots per layer (0 = automatic device-budget planning).
     #[arg(long, default_value_t = 0)]
-    pub(crate) moe_prefetch_experts: usize,
-    /// Bound resident routed experts per layer (0 = managed default).
-    #[arg(long, default_value_t = 96)]
     pub(crate) moe_hotset_experts: usize,
     /// Maximum whole experts retained in pageable host memory (0 disables retention).
     #[arg(long = "expert-host-cache-entries", default_value_t = 64)]
@@ -295,11 +289,11 @@ mod tests {
     }
 
     #[test]
-    fn serve_defaults_to_the_measured_speculative_hotset() {
+    fn serve_defaults_to_automatic_device_budget_planning() {
         let cli = Cli::try_parse_from(["ferrule", "serve", "model"]).unwrap();
         let Command::Serve(args) = cli.command else {
             panic!("serve command was not parsed");
         };
-        assert_eq!(args.moe_hotset_experts, 96);
+        assert_eq!(args.moe_hotset_experts, 0);
     }
 }

@@ -26,7 +26,7 @@ use crate::moe::streaming::{ExpertMemoryPolicy, ExpertStreamingPlanner, ExpertSt
 
 use super::config::DeepSeekV4AttentionConfig;
 #[cfg(feature = "cuda")]
-use super::cuda_cache::DeepSeekV4CudaOperatorCache;
+use super::cuda_cache::{DeepSeekV4CudaImageProfile, DeepSeekV4CudaOperatorCache};
 #[cfg(feature = "cuda")]
 use super::cuda_materialization::DeepSeekV4SharedExpertSubsystem;
 use super::helpers::{grouped_output_a, rms_norm, rms_norm_heads_in_place};
@@ -145,14 +145,10 @@ pub struct DeepSeekV4OperatorRuntimeCounters {
     pub stream_wide_syncs: u64,
     pub stream_wide_sync_failures: u64,
     pub moe_calls: u64,
-    pub moe_tc_calls: u64,
-    pub moe_scalar_calls: u64,
-    pub moe_reduce_calls: u64,
     pub moe_total_us: u64,
     pub moe_input_prepare_us: u64,
     pub moe_gate_up_us: u64,
     pub moe_swiglu_us: u64,
-    pub moe_hidden_pack_us: u64,
     pub moe_down_us: u64,
     pub moe_router_us: u64,
     pub moe_routing_us: u64,
@@ -222,9 +218,33 @@ impl DeepSeekV4OperatorContext {
         expert_memory_policy: ExpertMemoryPolicy,
         completion_hub: CompletionHub,
     ) -> Result<Self> {
+        #[cfg(feature = "cuda")]
+        let cuda = match backend {
+            ModelExecutionBackend::Cpu => None,
+            ModelExecutionBackend::Cuda => {
+                Some(DeepSeekV4CudaOperatorCache::new_with_completion_hub(
+                    policy,
+                    expert_memory_policy,
+                    completion_hub,
+                )?)
+            }
+        };
         #[cfg(not(feature = "cuda"))]
         let _ = (expert_memory_policy, completion_hub);
-        Ok(Self {
+        Ok(Self::from_preinitialized(
+            backend,
+            policy,
+            #[cfg(feature = "cuda")]
+            cuda,
+        ))
+    }
+
+    pub(crate) fn from_preinitialized(
+        backend: ModelExecutionBackend,
+        policy: &DeepSeekV4ExecutionPolicy,
+        #[cfg(feature = "cuda")] cuda: Option<DeepSeekV4CudaOperatorCache>,
+    ) -> Self {
+        Self {
             backend,
             layer_profiles: BTreeMap::new(),
             attention_profiles: BTreeMap::new(),
@@ -232,17 +252,8 @@ impl DeepSeekV4OperatorContext {
             profile_sync: policy.profile_sync(),
             moe_access_events: Vec::new(),
             #[cfg(feature = "cuda")]
-            cuda: match backend {
-                ModelExecutionBackend::Cpu => None,
-                ModelExecutionBackend::Cuda => {
-                    Some(DeepSeekV4CudaOperatorCache::new_with_completion_hub(
-                        policy,
-                        expert_memory_policy,
-                        completion_hub,
-                    )?)
-                }
-            },
-        })
+            cuda,
+        }
     }
 
     pub fn new_cpu() -> Result<Self> {
@@ -696,12 +707,45 @@ impl DeepSeekV4OperatorContext {
         &mut self,
         generation: u64,
         resources: &DeepSeekV4PreparedResources,
-    ) -> Result<()> {
+    ) -> Result<DeepSeekV4CudaImageProfile> {
         if self.backend != ModelExecutionBackend::Cuda {
-            return Ok(());
+            return Ok(DeepSeekV4CudaImageProfile::default());
         }
         self.cuda_mut()?
             .compile_execution_image(generation, resources)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_memory_info(&self) -> Result<(usize, usize)> {
+        if self.backend != ModelExecutionBackend::Cuda {
+            return Err(Error::Execution {
+                message: "CUDA memory information requires the CUDA backend".into(),
+            });
+        }
+        self.cuda
+            .as_ref()
+            .ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 CUDA operator cache is not initialized".into(),
+            })?
+            .memory_info()
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_compute_stream_authority(
+        &self,
+    ) -> Result<ferrule_backend::cuda::context::CudaComputeStreamAuthority> {
+        if self.backend != ModelExecutionBackend::Cuda {
+            return Err(Error::Execution {
+                message: "CUDA compute-stream authority requires the CUDA backend".into(),
+            });
+        }
+        Ok(self
+            .cuda
+            .as_ref()
+            .ok_or_else(|| Error::Model {
+                message: "DeepSeek-V4 CUDA operator cache is not initialized".into(),
+            })?
+            .compute_stream_authority())
     }
 
     #[cfg(feature = "cuda")]
@@ -763,7 +807,7 @@ impl DeepSeekV4OperatorContext {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn cuda_failpoints(&self) -> Result<&ferrule_cuda::CudaFailpoints> {
+    pub(crate) fn cuda_failpoints(&self) -> Result<&ferrule_backend::cuda::CudaFailpoints> {
         self.cuda
             .as_ref()
             .map(|cuda| cuda.ops.failpoints())

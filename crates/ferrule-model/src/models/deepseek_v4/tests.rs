@@ -455,7 +455,7 @@ fn packed_metadata_supports_single_committed_row_native_cuda() {
 
 #[test]
 fn packed_metadata_supports_single_sequence_multi_row_verification() {
-    // DSpark verification: 1 sequence × V=4 candidate rows.
+    // Proposal verification: 1 sequence × V=4 candidate rows.
     // This must use the same packed CUDA path as multi-session batches.
     let batch = packed_metadata_batch(
         ForwardMode::Prefill,

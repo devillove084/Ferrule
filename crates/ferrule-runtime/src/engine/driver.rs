@@ -3,17 +3,19 @@ use std::num::NonZeroU32;
 use std::time::Instant;
 
 use crate::{CleanupStep, Error, Result};
+
 use ferrule_common::execution::{
     ExecutionOutput, ExecutionTransactionId, KvBindingMode, KvPageId, KvReservationView, StateSlot,
 };
 use ferrule_common::io_protocol::{
     BackendId, CancellationReason, ContinuationId, DependencySetEpoch, DeviceId, ModelInstanceId,
-    RequestGeneration, WaiterId,
+    RequestGeneration, RetirementReason, WaiterId,
 };
 use ferrule_model::{
-    MaterializationPlacement, MultiSessionRunner, NativeProposal, NativeProposalProgress,
-    NativeProposalSource, PendingModelProgress, PhysicalMaterializationTopology,
-    ResidentModelRunner, TransactionEndIntent, TransactionEndProgress,
+    MaterializationPlacement, MultiSessionBatchProgress, MultiSessionRunner, NativeProposal,
+    NativeProposalProgress, NativeProposalSource, PendingModelProgress,
+    PhysicalMaterializationTopology, ResidentModelRunner, TransactionEndIntent,
+    TransactionEndProgress,
 };
 use tracing;
 
@@ -22,28 +24,29 @@ use crate::cache::{
     PreparedKvCommit,
 };
 use crate::io::{
-    FailedContinuation, FairQueue, FairQueueConfig, LoadRegistry, OutputTokenId, RegistryDriveStep,
-    ResumeDisposition, RuntimeMaterializationProvider, RuntimeMaterializationResolver,
+    FailedContinuation, FairQueueConfig, LoadRegistry, OutputTokenId, ResumeDisposition,
+    RuntimeMaterializationProvider, RuntimeMaterializationResolver,
     RuntimeMaterializationResolverStats, SharedMaterializationProvider, TransactionCustodyOutcome,
     UnavailableMaterializationProvider,
 };
 use crate::scheduling::resident::{SuspendedSequenceSchedule, greedy_candidate};
 use crate::scheduling::{
-    CancelRequestResult, DecodeAction, GenerateRequest, PhysicalResourceBroker,
-    PhysicalResourceClaim, PhysicalResourceGrant, PhysicalResourceLimit, RequestId,
-    ResidentScheduler, ResidentSchedulerConfig, ResourceKind, ScheduledBatch, SchedulerAction,
-    SequenceFinishReason, SequenceSlotPool, SequenceState, SessionId,
+    CancelRequestResult, DecodeAction, ExecutionPhase, ExecutionPhaseSet, GenerateRequest,
+    PhysicalResourceBroker, PhysicalResourceClaim, PhysicalResourceGrant, PhysicalResourceLimit,
+    RequestId, ResidentScheduler, ResidentSchedulerConfig, ResourceKind, ScheduledBatch,
+    SchedulerAction, SequenceFinishReason, SequenceSlotPool, SequenceState, SessionId,
 };
 use crate::speculation::{
     PendingSpeculativeVerificationCohort, PreparedSpeculativeCohort, SpeculativeCohortFailure,
     SpeculativeCohortProgress, SpeculativeCohortTransaction, SpeculativeCycleResult,
     SpeculativeMetrics, SpeculativeVerificationItem, TargetFrontier,
-    abort_quiesced_speculative_transaction, begin_resumable_speculative_verification_cohort,
+    abort_quiesced_speculative_transaction, begin_prepared_speculative_verification,
+    discard_unsubmitted_speculative_transaction, prepare_speculative_verification_transaction,
     publish_quiesced_speculative_cohort, resume_resumable_speculative_verification_cohort,
 };
 
+use super::NativeMultiSessionExecutor;
 use super::observability::{ResidentDriverObservability, ResidentTopKDriverStats};
-use super::{NativeBatchExecutionProgress, NativeMultiSessionExecutor};
 
 fn matched_stop(text: &str, stop: &[String]) -> bool {
     stop.iter()
@@ -187,6 +190,12 @@ pub enum ResidentActionKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResidentShutdownProgress {
+    Pending,
+    Complete(ResidentDriverShutdownReport),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResidentDriverShutdownReport {
     pub registry: crate::io::ShutdownReport,
     pub executor_transactions: usize,
@@ -246,6 +255,7 @@ struct ResidentRuntimeParts<R: MultiSessionRunner> {
     completion_hub: ferrule_common::CompletionHub,
     registry: LoadRegistry<Box<dyn RuntimeMaterializationProvider>>,
     resolver: RuntimeMaterializationResolver,
+    warmup_requests: Vec<ferrule_model::MaterializationRequest>,
     #[cfg(test)]
     uninstalled_resolver: Option<RuntimeMaterializationResolver>,
 }
@@ -487,10 +497,13 @@ where
     uninstalled_materialization_resolver: Option<RuntimeMaterializationResolver>,
     continuations: HashMap<ContinuationId, RegisteredModelContinuation>,
     transaction_continuations: HashMap<ExecutionTransactionId, HashSet<ContinuationId>>,
-    ready_transactions: FairQueue<ExecutionTransactionId>,
+    ready_transactions: VecDeque<ExecutionTransactionId>,
     queued_transactions: HashSet<ExecutionTransactionId>,
     ready_continuations: HashSet<ContinuationId>,
     pending_materialization_failures: VecDeque<PendingMaterializationFailure>,
+    warmup_requests: Vec<ferrule_model::MaterializationRequest>,
+    warmup_started_ns: Option<u64>,
+    warmup_last_report_ns: u64,
 
     pending_registry_detaches: HashMap<ContinuationId, CancellationReason>,
     next_dependency_epoch: u64,
@@ -575,13 +588,13 @@ where
     where
         R: ResidentModelRunner,
     {
-        Ok(Self::with_parts(
+        Self::with_parts(
             ResidentScheduler::new(scheduler_config),
             slot_pool,
             Self::runtime_parts(runner, runtime_limits)?,
             top_k,
             driver_config,
-        ))
+        )
     }
 
     fn runtime_parts(
@@ -607,6 +620,8 @@ where
             )?;
             runner.install_expert_residency_control(Box::new(control))?;
         }
+
+        let warmup_requests = runner.take_warmup_requests()?;
 
         // Materialization capability is independent of model topology. Expert
         // residency requirements add slot-policy validation but do not gate dense
@@ -689,6 +704,7 @@ where
             completion_hub,
             registry,
             resolver,
+            warmup_requests,
             #[cfg(test)]
             uninstalled_resolver,
         })
@@ -700,16 +716,17 @@ where
         runtime: ResidentRuntimeParts<R>,
         top_k: NonZeroU32,
         config: ResidentTopKDriverConfig,
-    ) -> Self {
+    ) -> Result<Self> {
         let ResidentRuntimeParts {
             executor,
             completion_hub,
             registry,
             resolver,
+            warmup_requests,
             #[cfg(test)]
             uninstalled_resolver,
         } = runtime;
-        Self {
+        let driver = Self {
             scheduler,
             slot_pool,
             executor,
@@ -734,11 +751,13 @@ where
             uninstalled_materialization_resolver: uninstalled_resolver,
             continuations: HashMap::new(),
             transaction_continuations: HashMap::new(),
-            ready_transactions: FairQueue::new(FairQueueConfig::default())
-                .expect("default ready-transaction fairness is valid"),
+            ready_transactions: VecDeque::new(),
             queued_transactions: HashSet::new(),
             ready_continuations: HashSet::new(),
             pending_materialization_failures: VecDeque::new(),
+            warmup_requests,
+            warmup_started_ns: None,
+            warmup_last_report_ns: 0,
             pending_registry_detaches: HashMap::new(),
             next_dependency_epoch: 1,
             runtime_clock: Instant::now(),
@@ -748,7 +767,8 @@ where
             pending_sequence_cleanups: HashMap::new(),
             committed_token_outbox: VecDeque::new(),
             shutting_down: false,
-        }
+        };
+        Ok(driver)
     }
 
     pub fn scheduler(&self) -> &ResidentScheduler {
@@ -801,6 +821,76 @@ where
         R: ResidentModelRunner,
     {
         self.executor.runner_mut().take_completion_reactors()
+    }
+
+    pub fn warmup_pending(&self) -> bool {
+        !self.warmup_requests.is_empty()
+            || self
+                .load_registry
+                .prefetch_active(crate::io::PrefetchOwner::ModelWarmup)
+            || self
+                .load_registry
+                .prefetch_failed(crate::io::PrefetchOwner::ModelWarmup)
+    }
+
+    pub(crate) fn start_background_work(&mut self) -> Result<()> {
+        const INITIAL_BACKGROUND_TRANSITIONS: usize = 64;
+
+        self.begin_warmup()?;
+        let now_ns = self.runtime_now_ns();
+        self.load_registry
+            .drive(now_ns, INITIAL_BACKGROUND_TRANSITIONS)?;
+        self.check_warmup()?;
+        self.update_hard_resource_observability();
+        Ok(())
+    }
+
+    fn begin_warmup(&mut self) -> Result<()> {
+        let owner = crate::io::PrefetchOwner::ModelWarmup;
+        if self.load_registry.prefetch_active(owner) || self.warmup_requests.is_empty() {
+            return Ok(());
+        }
+        let requests = std::mem::take(&mut self.warmup_requests);
+        match self.prefetch(
+            owner,
+            crate::scheduling::ResourceDemand::ModelWarmup,
+            requests.clone(),
+        ) {
+            Ok(_) => {
+                self.warmup_started_ns = Some(self.runtime_now_ns());
+                self.warmup_last_report_ns = 0;
+                Ok(())
+            }
+            Err(error) => {
+                self.warmup_requests = requests;
+                Err(error)
+            }
+        }
+    }
+
+    fn check_warmup(&mut self) -> Result<()> {
+        let owner = crate::io::PrefetchOwner::ModelWarmup;
+        let Some(reason) = self.load_registry.take_prefetch_failure(owner) else {
+            if !self.load_registry.prefetch_active(owner) && self.warmup_requests.is_empty() {
+                self.warmup_started_ns = None;
+            }
+            return Ok(());
+        };
+        match reason {
+            RetirementReason::Failed(source) => Err(Error::WarmupMaterialization { source }),
+            RetirementReason::Cancelled(reason) => {
+                Err(Error::WarmupMaterializationCancelled { reason })
+            }
+            RetirementReason::Stale(reason) => Err(Error::WarmupMaterializationStale { reason }),
+            RetirementReason::ResidentOwnershipTransferred => Ok(()),
+            RetirementReason::Drained
+            | RetirementReason::OrphanCompletion
+            | RetirementReason::OwnerShutdown => Err(Error::WarmupMaterializationNotPublished),
+        }
+    }
+
+    pub fn has_background_work(&self) -> bool {
+        self.warmup_pending()
     }
 
     pub fn has_pending_async_work(&self) -> bool {
@@ -861,9 +951,17 @@ where
 
     pub fn prefetch(
         &mut self,
-        owner: crate::io::PrefetchId,
+        owner: crate::io::PrefetchOwner,
+        demand: crate::scheduling::ResourceDemand,
         requests: impl IntoIterator<Item = ferrule_model::MaterializationRequest>,
     ) -> Result<crate::io::PrefetchReport> {
+        if !demand.is_prefetch() {
+            return Err(Error::InvalidRequest {
+                message: format!(
+                    "prefetch requires a non-blocking resource demand, got {demand:?}"
+                ),
+            });
+        }
         if self.shutting_down {
             return Err(Error::InvalidRequest {
                 message: "cannot submit prefetch after driver shutdown begins".into(),
@@ -889,7 +987,7 @@ where
         let loads = match prepared
             .iter()
             .copied()
-            .map(|key| self.load_registry.prepare_prefetch_request(key))
+            .map(|key| self.load_registry.prepare_prefetch_request(key, demand))
             .collect::<std::result::Result<Vec<_>, _>>()
         {
             Ok(loads) => loads,
@@ -925,7 +1023,7 @@ where
         }
     }
 
-    pub fn cancel_prefetch(&mut self, owner: crate::io::PrefetchId) -> Result<()> {
+    pub fn cancel_prefetch(&mut self, owner: crate::io::PrefetchOwner) -> Result<()> {
         self.load_registry
             .cancel_prefetch(owner, self.runtime_now_ns())
             .map_err(Error::from)
@@ -1051,51 +1149,43 @@ where
         transaction: ExecutionTransactionId,
         outcome: TransactionCustodyOutcome,
     ) -> Result<()> {
+        let now_ns = self.runtime_now_ns();
         self.load_registry
-            .finish_transaction_custody(transaction, outcome)
+            .finish_transaction_custody(transaction, outcome, now_ns)
             .map_err(Error::from)
     }
 
-    fn transaction_resource_class(
-        &self,
-        transaction: ExecutionTransactionId,
-    ) -> crate::scheduling::ResourceClass {
-        if let Some(pending) = self.resident_transactions.get(&transaction) {
-            return match &pending.action {
-                SchedulerAction::PrefillChunk(_) => crate::scheduling::ResourceClass::Throughput,
-                SchedulerAction::DecodeBatch(_) => {
-                    crate::scheduling::ResourceClass::LatencyCritical
+    fn action_demand(action: &SchedulerAction) -> crate::scheduling::ResourceDemand {
+        let phases = match action {
+            SchedulerAction::PrefillChunk(_) => ExecutionPhaseSet::one(ExecutionPhase::Prefill),
+            SchedulerAction::DecodeBatch(_) => ExecutionPhaseSet::one(ExecutionPhase::Decode),
+            SchedulerAction::Execute { prefills, decodes } => {
+                let phases = ExecutionPhaseSet::one(if prefills.is_empty() {
+                    ExecutionPhase::Decode
+                } else {
+                    ExecutionPhase::Prefill
+                });
+                if decodes.is_empty() {
+                    phases
+                } else {
+                    phases.with(ExecutionPhase::Decode)
                 }
-                SchedulerAction::Execute { prefills, decodes } => {
-                    if !decodes.is_empty() {
-                        crate::scheduling::ResourceClass::LatencyCritical
-                    } else if !prefills.is_empty() {
-                        crate::scheduling::ResourceClass::Throughput
-                    } else {
-                        crate::scheduling::ResourceClass::LatencyCritical
-                    }
-                }
-                SchedulerAction::Finish { .. } | SchedulerAction::Cancel { .. } => {
-                    crate::scheduling::ResourceClass::LatencyCritical
-                }
-            };
-        }
-        crate::scheduling::ResourceClass::LatencyCritical
+            }
+            SchedulerAction::Finish { .. } | SchedulerAction::Cancel { .. } => {
+                unreachable!("terminal scheduler actions never lower to execution batches")
+            }
+        };
+        crate::scheduling::ResourceDemand::required_phases(phases)
     }
 
     fn enqueue_transaction(&mut self, transaction: ExecutionTransactionId) {
         if self.queued_transactions.insert(transaction) {
-            let class = self.transaction_resource_class(transaction);
-            self.ready_transactions
-                .push(transaction, class, 1, self.runtime_tick)
-                .expect("unit ready transaction fits the configured fairness queue");
+            self.ready_transactions.push_back(transaction);
         }
     }
 
     fn pop_ready_transaction(&mut self) -> Option<ExecutionTransactionId> {
-        let transaction = self
-            .ready_transactions
-            .pop_next(self.runtime_tick, |_| true)?;
+        let transaction = self.ready_transactions.pop_front()?;
         self.queued_transactions.remove(&transaction);
         Some(transaction)
     }
@@ -1119,10 +1209,40 @@ where
             .min_by_key(|continuation| continuation.get())
     }
 
+    fn declare_transaction_prefetch(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        required: crate::scheduling::ResourceDemand,
+        batch: &ferrule_common::execution::ExecutionBatch,
+    ) -> Result<()> {
+        let phases = required.phases().ok_or_else(|| Error::Invariant {
+            message: "transaction execution demand has no execution phase".into(),
+        })?;
+        let demand = crate::scheduling::ResourceDemand::prefetch_phases(phases);
+        let requests = self
+            .executor
+            .runner()
+            .transaction_prefetch_requests(transaction, batch)?;
+        if requests.is_empty() {
+            return Ok(());
+        }
+        let owner = crate::io::PrefetchOwner::transaction(transaction, phases);
+        let report = self.prefetch(owner, demand, requests)?;
+        let operations = report.created.len().saturating_add(report.joined.len());
+        if operations == 0 {
+            return Ok(());
+        }
+        let transition_budget = operations.saturating_mul(2).max(1);
+        let now_ns = self.runtime_now_ns();
+        self.load_registry
+            .drive_foreground(now_ns, transition_budget)?;
+        Ok(())
+    }
+
     fn register_pending_progress(
         &mut self,
         progress: &PendingModelProgress,
-        class: crate::scheduling::ResourceClass,
+        demand: crate::scheduling::ResourceDemand,
     ) -> Result<()> {
         progress.dependencies().validate()?;
         let continuation = progress.continuation();
@@ -1166,7 +1286,7 @@ where
             .map(|resource| {
                 self.load_registry.prepare_execution_request(
                     resource.key(),
-                    class,
+                    demand,
                     resource.retention(),
                 )
             })
@@ -1186,7 +1306,7 @@ where
         };
         if let Err(error) =
             self.load_registry
-                .attach_waiter(waiter, requests, self.runtime_now_ns())
+                .attach_waiter(waiter, demand, requests, self.runtime_now_ns())
         {
             let cleanup = self
                 .load_registry
@@ -1341,29 +1461,56 @@ where
         Err(Error::InvalidRequest { message })
     }
 
-    fn progress_materialization(&mut self) -> Result<()> {
-        const TRANSITION_BUDGET: usize = 256;
+    fn foreground_lifecycle_active(&self) -> bool {
+        !self.scheduler.is_idle()
+            || !self.resident_transactions.is_empty()
+            || !self.speculative_transactions.is_empty()
+            || !self.continuations.is_empty()
+            || !self.pending_sequence_cleanups.is_empty()
+            || !self.pending_materialization_failures.is_empty()
+    }
 
+    fn materialization_transition_budget(&self) -> usize {
+        const ACTIVE_TRANSITIONS_PER_SLICE: usize = 2;
+        const IDLE_MINIMUM_TRANSITIONS: usize = 4_096;
+        const IDLE_MAXIMUM_TRANSITIONS: usize = 32_768;
+        const FOREGROUND_TRANSITIONS: usize = 512;
+
+        if self.foreground_lifecycle_active() || !self.warmup_pending() {
+            FOREGROUND_TRANSITIONS
+        } else {
+            self.load_registry
+                .active_operations()
+                .saturating_mul(ACTIVE_TRANSITIONS_PER_SLICE)
+                .clamp(IDLE_MINIMUM_TRANSITIONS, IDLE_MAXIMUM_TRANSITIONS)
+        }
+    }
+
+    fn progress_materialization(&mut self) -> Result<()> {
         self.retry_pending_continuation_cleanups()?;
         self.cleanup_materialization_failures(true)?;
 
         let now_ns = self.runtime_now_ns();
-        let mut progressed = 0;
-        while progressed < TRANSITION_BUDGET {
-            let step = self.load_registry.drive_one(now_ns)?;
-            let RegistryDriveStep::Progressed { .. } = step else {
-                break;
-            };
-            progressed += 1;
-        }
+        let transition_budget = self.materialization_transition_budget();
+        let progressed = if self.foreground_lifecycle_active() {
+            self.load_registry
+                .drive_foreground(now_ns, transition_budget)?
+        } else {
+            self.load_registry.drive(now_ns, transition_budget)?
+        };
         // The inference owner arms its listener before entering this method. If
         // owner-side work consumes the whole slice, publish a local wake so a
         // runnable transition left at the budget boundary cannot wait forever
         // for a provider completion that may never be needed.
-        if progressed == TRANSITION_BUDGET {
+        if progressed == transition_budget {
             self.completion_hub.notify();
         }
-        if std::env::var_os("FERRULE_IO_TRACE").is_some() {
+        const WARMUP_REPORT_INTERVAL_NS: u64 = 1_000_000_000;
+        let trace_enabled = std::env::var_os("FERRULE_IO_TRACE").is_some();
+        let report_warmup = self.warmup_pending()
+            && now_ns.saturating_sub(self.warmup_last_report_ns) >= WARMUP_REPORT_INTERVAL_NS;
+        if trace_enabled && report_warmup {
+            self.warmup_last_report_ns = now_ns;
             let stages = self.load_registry.stage_counts().collect::<Vec<_>>();
             let resources = self
                 .load_registry
@@ -1386,15 +1533,38 @@ where
                 })
                 .map(|snapshot| (snapshot.kind, snapshot.in_use, snapshot.capacity))
                 .collect::<Vec<_>>();
+            let resident = self.load_registry.resident_entries();
+            let resident_bytes = self.load_registry.resident_bytes();
+            let elapsed_seconds = self
+                .warmup_started_ns
+                .map(|started| now_ns.saturating_sub(started) as f64 / 1_000_000_000.0)
+                .unwrap_or_default();
+            let gib_per_second = if elapsed_seconds > 0.0 {
+                resident_bytes as f64 / elapsed_seconds / (1u64 << 30) as f64
+            } else {
+                0.0
+            };
+            let total = resident.saturating_add(
+                self.load_registry
+                    .prefetch_operations(crate::io::PrefetchOwner::ModelWarmup)
+                    .count(),
+            );
+            let eta_seconds = if resident != 0 && elapsed_seconds > 0.0 {
+                elapsed_seconds * total.saturating_sub(resident) as f64 / resident as f64
+            } else {
+                0.0
+            };
             eprintln!(
-                "[ferrule-io] tick={} progressed={} active={} physical={} runnable={} completions={} resident={} stages={stages:?} resources={resources:?}",
+                "[ferrule-io] tick={} progressed={} active={} physical={} runnable={} completions={} resident={}/{} resident_bytes={} elapsed_s={elapsed_seconds:.2} gib_s={gib_per_second:.2} eta_s={eta_seconds:.1} stages={stages:?} resources={resources:?}",
                 self.runtime_tick,
                 progressed,
                 self.load_registry.active_operations(),
                 self.load_registry.pending_physical_operations(),
                 self.load_registry.runnable_actions(),
                 self.load_registry.pending_completions(),
-                self.load_registry.resident_entries(),
+                resident,
+                total,
+                resident_bytes,
             );
         }
         self.cleanup_materialization_failures(true)?;
@@ -2266,6 +2436,13 @@ where
         Ok(target_session_id)
     }
 
+    pub fn take_request_terminal(
+        &mut self,
+        request_id: RequestId,
+    ) -> Option<crate::scheduling::RequestTerminal> {
+        self.scheduler.take_request_terminal(request_id)
+    }
+
     pub fn drain_finished(&mut self) -> Vec<SequenceState> {
         self.scheduler.drain_finished()
     }
@@ -2545,7 +2722,7 @@ where
     fn reserve_batch_pages(
         &mut self,
         transaction: ExecutionTransactionId,
-        class: crate::scheduling::ResourceClass,
+        demand: crate::scheduling::ResourceDemand,
         batch: &ScheduledBatch,
         execution_generations: &[u64],
     ) -> Result<Vec<KvReservation>> {
@@ -2596,7 +2773,7 @@ where
             for _ in 0..required {
                 match self.load_registry.acquire_hard_resources(
                     transaction.get(),
-                    class,
+                    demand,
                     [PhysicalResourceClaim::new(ResourceKind::KvPage, 1)],
                 ) {
                     Ok(grant) => grants.push(grant),
@@ -2719,7 +2896,9 @@ where
             for _ in 0..required {
                 match self.load_registry.acquire_hard_resources(
                     transaction.get(),
-                    crate::scheduling::ResourceClass::LatencyCritical,
+                    crate::scheduling::ResourceDemand::required(
+                        ExecutionPhase::SpeculativeVerification,
+                    ),
                     [PhysicalResourceClaim::new(ResourceKind::KvPage, 1)],
                 ) {
                     Ok(grant) => grants.push(grant),
@@ -2857,7 +3036,7 @@ where
     }
 
     fn no_action_step(&self) -> ResidentDriverStep {
-        if self.scheduler.is_idle() {
+        if self.scheduler.is_idle() && !self.warmup_pending() {
             ResidentDriverStep::Idle
         } else {
             ResidentDriverStep::Blocked
@@ -2894,24 +3073,14 @@ where
             .claim_transaction_sessions(transaction, &session_ids)
             .map_err(|error| self.abort_action(&action, error, false, "session claim"))?;
 
-        let resource_class = match &action {
-            SchedulerAction::PrefillChunk(_) => crate::scheduling::ResourceClass::Throughput,
-            SchedulerAction::DecodeBatch(_) => crate::scheduling::ResourceClass::LatencyCritical,
-            SchedulerAction::Execute { decodes, .. } if !decodes.is_empty() => {
-                crate::scheduling::ResourceClass::LatencyCritical
-            }
-            SchedulerAction::Execute { .. } => crate::scheduling::ResourceClass::Throughput,
-            SchedulerAction::Finish { .. } | SchedulerAction::Cancel { .. } => {
-                crate::scheduling::ResourceClass::LatencyCritical
-            }
-        };
+        let resource_demand = Self::action_demand(&action);
         let execution_generations = states
             .iter()
             .map(|state| self.executor.runner().sequence_generation(state))
             .collect::<Vec<_>>();
         let mut page_reservations = match self.reserve_batch_pages(
             transaction,
-            resource_class,
+            resource_demand,
             &scheduled,
             &execution_generations,
         ) {
@@ -2947,6 +3116,34 @@ where
             }
         };
 
+        if let Err(error) =
+            self.declare_transaction_prefetch(transaction, resource_demand, scheduled.execution())
+        {
+            let now_ns = self.runtime_now_ns();
+            let materialization_cleanup = self
+                .load_registry
+                .finish_transaction_custody(
+                    transaction,
+                    TransactionCustodyOutcome::RolledBack,
+                    now_ns,
+                )
+                .map_err(Error::from);
+            let kv_cleanup =
+                self.abort_quiesced_resident_kv(PendingResidentKv::Reserved(page_reservations));
+            self.restore_transaction_sessions(schedules, states)?;
+            let error = self.abort_action(&action, error, false, "transaction prefetch");
+            let error = Error::with_cleanup(
+                "transaction prefetch materialization",
+                error,
+                materialization_cleanup,
+            );
+            return Err(Error::with_cleanup(
+                "transaction prefetch KV",
+                error,
+                kv_cleanup,
+            ));
+        }
+
         let execution_started_ns = self.runtime_now_ns();
         if let Err(error) = self.executor.prepare_batch_with_kv(
             transaction,
@@ -2954,11 +3151,25 @@ where
             scheduled.execution(),
             &reservation_views,
         ) {
-            let cleanup =
+            let now_ns = self.runtime_now_ns();
+            let materialization_cleanup = self
+                .load_registry
+                .finish_transaction_custody(
+                    transaction,
+                    TransactionCustodyOutcome::RolledBack,
+                    now_ns,
+                )
+                .map_err(Error::from);
+            let kv_cleanup =
                 self.abort_quiesced_resident_kv(PendingResidentKv::Reserved(page_reservations));
             self.restore_transaction_sessions(schedules, states)?;
             let error = self.abort_action(&action, error, false, "backend prepare");
-            return Err(Error::with_cleanup("backend prepare", error, cleanup));
+            let error = Error::with_cleanup(
+                "backend prepare materialization",
+                error,
+                materialization_cleanup,
+            );
+            return Err(Error::with_cleanup("backend prepare KV", error, kv_cleanup));
         }
         let progress =
             self.executor
@@ -2974,26 +3185,11 @@ where
             phase: ResidentTransactionPhase::Executing(None),
         };
         match progress {
-            Ok(NativeBatchExecutionProgress::Complete(output)) => {
+            Ok(MultiSessionBatchProgress::Complete(output)) => {
                 self.finish_resident_transaction(pending, output, on_token)
             }
-            Ok(NativeBatchExecutionProgress::Waiting(progress)) => {
-                let class = match &pending.action {
-                    SchedulerAction::PrefillChunk(_) => {
-                        crate::scheduling::ResourceClass::Throughput
-                    }
-                    SchedulerAction::DecodeBatch(_) => {
-                        crate::scheduling::ResourceClass::LatencyCritical
-                    }
-                    SchedulerAction::Execute { decodes, .. } if !decodes.is_empty() => {
-                        crate::scheduling::ResourceClass::LatencyCritical
-                    }
-                    SchedulerAction::Execute { .. } => crate::scheduling::ResourceClass::Throughput,
-                    SchedulerAction::Finish { .. } | SchedulerAction::Cancel { .. } => {
-                        crate::scheduling::ResourceClass::LatencyCritical
-                    }
-                };
-                self.register_pending_progress(&progress, class)?;
+            Ok(MultiSessionBatchProgress::Waiting(progress)) => {
+                self.register_pending_progress(&progress, resource_demand)?;
                 pending.phase = ResidentTransactionPhase::Executing(Some(progress));
                 self.resident_transactions.insert(transaction, pending);
                 Ok(ResidentDriverStep::WaitingForModelProgress(
@@ -3061,16 +3257,13 @@ where
         self.finish_resume_lease(continuation, resume_lease, disposition, resume_started)?;
         self.record_runnable_work_span(resume_started)?;
         match progress {
-            Ok(NativeBatchExecutionProgress::Complete(output)) => {
+            Ok(MultiSessionBatchProgress::Complete(output)) => {
                 pending.phase = ResidentTransactionPhase::Executing(None);
                 self.finish_resident_transaction(pending, output, on_token)
                     .map(Some)
             }
-            Ok(NativeBatchExecutionProgress::Waiting(progress)) => {
-                self.register_pending_progress(
-                    &progress,
-                    crate::scheduling::ResourceClass::LatencyCritical,
-                )?;
+            Ok(MultiSessionBatchProgress::Waiting(progress)) => {
+                self.register_pending_progress(&progress, Self::action_demand(&pending.action))?;
                 pending.phase = ResidentTransactionPhase::Executing(Some(progress));
                 self.resident_transactions.insert(transaction, pending);
                 Ok(None)
@@ -3176,6 +3369,7 @@ where
                 started_ns,
                 finished_ns: self.runtime_now_ns(),
             },
+            self.runtime_now_ns(),
         )?;
         let retirement =
             match std::mem::replace(&mut pending.kv, PendingResidentKv::Reserved(Vec::new())) {
@@ -3538,8 +3732,11 @@ where
         failure: Option<(Error, &'static str)>,
     ) -> Result<()> {
         let transaction = pending.transaction;
-        self.load_registry
-            .finish_transaction_custody(transaction, custody)?;
+        self.load_registry.finish_transaction_custody(
+            transaction,
+            custody,
+            self.runtime_now_ns(),
+        )?;
         if let Some(continuation) = continuation {
             self.detach_registered_continuation(continuation, CancellationReason::ExternalRequest)?;
         }
@@ -3831,6 +4028,26 @@ where
     R: ResidentModelRunner,
     C: SequenceSlotPool,
 {
+    pub fn shutdown_progress<F>(&mut self, on_token: &mut F) -> Result<ResidentShutdownProgress>
+    where
+        F: FnMut(&ResidentTokenEvent) -> Result<()>,
+    {
+        const COMPLETIONS_PER_TICK: usize = 512;
+        match self.shutdown(on_token, COMPLETIONS_PER_TICK) {
+            Ok(report) => Ok(ResidentShutdownProgress::Complete(report)),
+            Err(Error::Registry { source })
+                if matches!(
+                    *source,
+                    crate::io::RegistryError::ShutdownIncomplete { .. }
+                        | crate::io::RegistryError::LostCompletion { .. }
+                ) =>
+            {
+                Ok(ResidentShutdownProgress::Pending)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Stop admission, quiesce model transactions, release all session/KV
     /// ownership, and drain provider completions. An error retains any ownership
     /// that could not yet be proven quiescent so the caller may retry.
@@ -3988,7 +4205,9 @@ where
         }
         self.progress_pending_cleanups()?;
         self.flush_committed_token_outbox(on_token)?;
+        self.begin_warmup()?;
         self.progress_materialization()?;
+        self.check_warmup()?;
         self.update_hard_resource_observability();
         let proposal_enabled = self.executor.runner().native_proposal_source()?.is_some();
 
@@ -4264,7 +4483,9 @@ where
                     Ok(NativeProposalProgress::Waiting(waiting)) => {
                         self.register_pending_progress(
                             &waiting,
-                            crate::scheduling::ResourceClass::LatencyCritical,
+                            crate::scheduling::ResourceDemand::required(
+                                ExecutionPhase::SpeculativeProposal,
+                            ),
                         )?;
                         pending.slots[slot_index].status =
                             NativeProposalSlotStatus::Waiting(waiting);
@@ -4416,8 +4637,8 @@ where
         };
         let mut retirements = Vec::new();
         let verification_started_ns = self.runtime_now_ns();
-        let progress = match self.page_manager.as_mut() {
-            Some(page_manager) => begin_resumable_speculative_verification_cohort(
+        let verification = match self.page_manager.as_mut() {
+            Some(page_manager) => prepare_speculative_verification_transaction(
                 &mut self.executor,
                 page_manager,
                 transaction,
@@ -4429,8 +4650,74 @@ where
             ),
             None => unreachable!("speculative page reservations require a page manager"),
         };
-        self.record_runnable_work_span(verification_started_ns)?;
         drop(verification_items);
+        let verification = match verification {
+            Ok(verification) => verification,
+            Err(SpeculativeCohortFailure::Quiesced(error)) => {
+                self.progress_speculative_retirements(retirements)?;
+                self.finish_speculative_transaction_custody(
+                    transaction,
+                    TransactionCustodyOutcome::RolledBack,
+                )?;
+                self.restore_transaction_sessions(schedules, source_states)?;
+                return Err(self.abort_speculative_decode_batch(
+                    &actions,
+                    error,
+                    "production speculative verification preparation",
+                ));
+            }
+            Err(SpeculativeCohortFailure::Active { .. }) => {
+                unreachable!("verification preparation cannot activate backend ownership")
+            }
+        };
+        let demand =
+            crate::scheduling::ResourceDemand::required(ExecutionPhase::SpeculativeVerification);
+        if let Err(error) =
+            self.declare_transaction_prefetch(transaction, demand, verification.batch())
+        {
+            let now_ns = self.runtime_now_ns();
+            let materialization_cleanup = self
+                .load_registry
+                .finish_transaction_custody(
+                    transaction,
+                    TransactionCustodyOutcome::RolledBack,
+                    now_ns,
+                )
+                .map_err(Error::from);
+            let cleanup = match self.page_manager.as_mut() {
+                Some(page_manager) => discard_unsubmitted_speculative_transaction(
+                    &mut self.executor,
+                    page_manager,
+                    verification,
+                    error,
+                    &mut retirements,
+                ),
+                None => unreachable!("speculative verification owns a page manager"),
+            };
+            self.progress_speculative_retirements(retirements)?;
+            self.restore_transaction_sessions(schedules, source_states)?;
+            let error = Error::with_cleanup(
+                "speculative verification materialization",
+                cleanup,
+                materialization_cleanup,
+            );
+            return Err(self.abort_speculative_decode_batch(
+                &actions,
+                error,
+                "speculative verification prefetch",
+            ));
+        }
+        let progress = match self.page_manager.as_mut() {
+            Some(page_manager) => begin_prepared_speculative_verification(
+                &mut self.executor,
+                page_manager,
+                &source_states,
+                verification,
+                &mut retirements,
+            ),
+            None => unreachable!("speculative page reservations require a page manager"),
+        };
+        self.record_runnable_work_span(verification_started_ns)?;
         self.progress_speculative_retirements(retirements)?;
 
         match progress {
@@ -4452,7 +4739,9 @@ where
             Ok(SpeculativeCohortProgress::Waiting(verification)) => {
                 self.register_pending_progress(
                     verification.pending_progress(),
-                    crate::scheduling::ResourceClass::LatencyCritical,
+                    crate::scheduling::ResourceDemand::required(
+                        ExecutionPhase::SpeculativeVerification,
+                    ),
                 )?;
                 self.speculative_transactions.insert(
                     transaction,
@@ -4684,7 +4973,9 @@ where
             Ok(SpeculativeCohortProgress::Waiting(verification)) => {
                 self.register_pending_progress(
                     verification.pending_progress(),
-                    crate::scheduling::ResourceClass::LatencyCritical,
+                    crate::scheduling::ResourceDemand::required(
+                        ExecutionPhase::SpeculativeVerification,
+                    ),
                 )?;
                 self.speculative_transactions.insert(
                     transaction,
@@ -5396,9 +5687,10 @@ mod tests {
         LogitsRequest, LogitsRow,
     };
     use ferrule_common::{
-        ContentHash, DependencySet, Error as ModelError, ExpertId, LayerId, LogicalDependency,
-        MaterializedResourceId, OperationId, PayloadEncodingId, ResidencyLeaseSet,
-        Result as ModelResult, SourceGeneration, SourceIdentityHash,
+        CompletionOutcome, ContentHash, DependencySet, Error as ModelError, ExpertId,
+        FailureReason, LayerId, LoadStage, LogicalDependency, MaterializedResourceId, OperationId,
+        PayloadEncodingId, ResidencyLeaseSet, Result as ModelResult, SourceGeneration,
+        SourceIdentityHash,
     };
     use ferrule_model::{
         ContinuationId, MaterializationProvider, MaterializationRequest, MaterializationResolver,
@@ -5526,6 +5818,8 @@ mod tests {
         materialization_resolver: Option<Box<dyn MaterializationResolver>>,
         materialization_resolver_install_calls: usize,
         materialization_request: Option<MaterializationRequest>,
+        transaction_prefetch_request: Option<MaterializationRequest>,
+        warmup_requests: Vec<MaterializationRequest>,
         materialization_retention: ferrule_model::ResourceRetention,
     }
 
@@ -5600,6 +5894,8 @@ mod tests {
                 materialization_resolver: None,
                 materialization_resolver_install_calls: 0,
                 materialization_request: None,
+                transaction_prefetch_request: None,
+                warmup_requests: Vec::new(),
                 materialization_retention: ferrule_model::ResourceRetention::ThroughStage,
             }
         }
@@ -5645,6 +5941,11 @@ mod tests {
             self
         }
 
+        fn with_transaction_prefetch(mut self, request: MaterializationRequest) -> Self {
+            self.transaction_prefetch_request = Some(request);
+            self
+        }
+
         fn with_materialization_retention(
             mut self,
             retention: ferrule_model::ResourceRetention,
@@ -5665,6 +5966,11 @@ mod tests {
             provider: Box<dyn MaterializationProvider>,
         ) -> Self {
             self.materialization_provider = Some(provider);
+            self
+        }
+
+        fn with_warmup(mut self, request: MaterializationRequest) -> Self {
+            self.warmup_requests.push(request);
             self
         }
 
@@ -6075,6 +6381,18 @@ mod tests {
         fn take_materialization_provider(&mut self) -> Option<Box<dyn MaterializationProvider>> {
             self.materialization_provider_take_calls += 1;
             self.materialization_provider.take()
+        }
+
+        fn take_warmup_requests(&mut self) -> ModelResult<Vec<MaterializationRequest>> {
+            Ok(std::mem::take(&mut self.warmup_requests))
+        }
+
+        fn transaction_prefetch_requests(
+            &self,
+            _transaction: ExecutionTransactionId,
+            _batch: &ferrule_common::execution::ExecutionBatch,
+        ) -> ModelResult<Vec<MaterializationRequest>> {
+            Ok(self.transaction_prefetch_request.into_iter().collect())
         }
 
         fn materialization_resolver_installed(&self) -> bool {
@@ -6667,7 +6985,7 @@ mod tests {
             .load_registry
             .acquire_hard_resources(
                 1,
-                crate::scheduling::ResourceClass::LatencyCritical,
+                crate::scheduling::ResourceDemand::required(ExecutionPhase::Decode),
                 [PhysicalResourceClaim::new(ResourceKind::KvPage, 1)],
             )
             .unwrap();
@@ -6833,6 +7151,119 @@ mod tests {
     }
 
     #[test]
+    fn foreground_lifecycle_uses_the_bounded_materialization_slice() {
+        let warmup = materialization_request(1);
+        let (physical, _) = MockPhysicalProvider::manual();
+        let runner = MockTopKRunner::new(Vec::new())
+            .with_materialization_provider(Box::new(physical))
+            .with_warmup(warmup);
+        let mut driver =
+            ResidentTopKDriver::try_new(runner, FixedSequenceSlotPool::new(1)).unwrap();
+
+        assert!(driver.warmup_pending());
+        assert_eq!(driver.materialization_transition_budget(), 4_096);
+        driver.submit(request(1, &[1], 1, Vec::new()));
+        assert!(driver.foreground_lifecycle_active());
+        assert!(driver.warmup_pending());
+        assert_eq!(driver.materialization_transition_budget(), 512);
+    }
+
+    #[test]
+    fn idle_owner_fills_the_planned_residency_high_water_before_idling() {
+        let (physical, _) = MockPhysicalProvider::automatic();
+        let runner = MockTopKRunner::new(Vec::new())
+            .with_materialization_provider(Box::new(physical))
+            .with_warmup(materialization_request(1))
+            .with_warmup(materialization_request(2));
+        let mut driver =
+            ResidentTopKDriver::try_new(runner, FixedSequenceSlotPool::new(1)).unwrap();
+
+        let mut reached_idle = false;
+        for _ in 0..16 {
+            let step = driver.step(&mut |_| Ok(())).unwrap();
+            if matches!(step, ResidentDriverStep::Idle) {
+                assert!(!driver.warmup_pending());
+                reached_idle = true;
+                break;
+            }
+            assert!(driver.warmup_pending());
+        }
+
+        assert!(
+            reached_idle,
+            "idle background fill did not reach its high water"
+        );
+        assert_eq!(driver.load_registry().resident_entries(), 2);
+        assert_eq!(driver.load_registry().active_operations(), 0);
+        assert_eq!(driver.load_registry().active_prefetches(), 0);
+    }
+
+    #[test]
+    fn warmup_does_not_block_request_execution_or_stop_background_io() {
+        let warmup = materialization_request(1);
+        let (physical, handle) = MockPhysicalProvider::manual();
+        let runner = MockTopKRunner::new(vec![top(b'a' as u32)])
+            .with_materialization_provider(Box::new(physical))
+            .with_warmup(warmup);
+        let mut driver =
+            ResidentTopKDriver::try_new(runner, FixedSequenceSlotPool::new(1)).unwrap();
+        driver.start_background_work().unwrap();
+        driver.submit(request(1, &[1], 1, Vec::new()));
+
+        let mut events = Vec::new();
+        for _ in 0..8 {
+            let step = driver
+                .step(&mut |event| {
+                    events.push(event.token);
+                    Ok(())
+                })
+                .unwrap();
+            if !events.is_empty() {
+                assert!(matches!(step, ResidentDriverStep::Executed { .. }));
+                break;
+            }
+        }
+
+        assert_eq!(events, [b'a' as u32]);
+        assert!(driver.warmup_pending());
+        assert_eq!(driver.load_registry().active_prefetches(), 1);
+        assert_eq!(driver.load_registry().active_operations(), 1);
+        assert_eq!(
+            handle.command_count(|command| matches!(command, MockPhysicalCommand::SubmitRead(..))),
+            1,
+            "the startup wave must remain submitted while foreground execution blocks new warmup commands"
+        );
+    }
+
+    #[test]
+    fn warmup_failure_is_typed_and_fatal() {
+        let request = materialization_request(1);
+        let (physical, handle) = MockPhysicalProvider::automatic();
+        handle.script_outcome(
+            LoadStage::ReadSubmitted,
+            CompletionOutcome::Failed(FailureReason::StorageUnavailable),
+        );
+        let runner = MockTopKRunner::new(Vec::new())
+            .with_materialization_provider(Box::new(physical))
+            .with_warmup(request);
+        let mut driver =
+            ResidentTopKDriver::try_new(runner, FixedSequenceSlotPool::new(1)).unwrap();
+
+        let error = (0..16)
+            .find_map(|_| driver.step(&mut |_| Ok(())).err())
+            .expect("warmup failure must become terminal within the bounded fake pipeline");
+        assert!(matches!(
+            error,
+            Error::WarmupMaterialization {
+                source: FailureReason::StorageUnavailable
+            }
+        ));
+        assert!(!driver.warmup_pending());
+        assert!(driver.resident_transactions.is_empty());
+        assert!(driver.speculative_transactions.is_empty());
+    }
+
+    #[test]
     fn dense_runner_can_install_and_resolve_through_materialization_provider() {
         let (physical, _) = MockPhysicalProvider::manual();
         let runner =
@@ -6894,16 +7325,109 @@ mod tests {
     }
 
     #[test]
+    fn transaction_prefetch_submits_io_without_a_waiter_and_drains_after_terminal() {
+        let request = materialization_request(7);
+        let (physical, handle) = MockPhysicalProvider::manual();
+        let runner = MockTopKRunner::new(Vec::new())
+            .with_transaction_prefetch(request)
+            .with_materialization_provider(Box::new(physical));
+        let mut driver =
+            ResidentTopKDriver::try_new(runner, FixedSequenceSlotPool::new(1)).unwrap();
+        let transaction = ExecutionTransactionId::new(17).unwrap();
+        let batch = ferrule_common::execution::ExecutionBatch::new(
+            ferrule_common::execution::ForwardMode::Prefill,
+            vec![11],
+            vec![0],
+            vec![None],
+            vec![ferrule_common::execution::LogitsRequest::None],
+            vec![ferrule_common::execution::ExecutionSequence::new(
+                StateSlot::new(0),
+                ForwardPhase::Prefill,
+                0..1,
+                0,
+                1,
+                0..0,
+            )],
+            Vec::new(),
+        );
+        let phases = ExecutionPhaseSet::one(ExecutionPhase::Prefill);
+
+        driver
+            .declare_transaction_prefetch(
+                transaction,
+                crate::scheduling::ResourceDemand::required_phases(phases),
+                &batch,
+            )
+            .unwrap();
+
+        assert_eq!(driver.load_registry().active_prefetches(), 1);
+        assert!(driver.load_registry().waiters().is_empty());
+        assert_eq!(
+            driver
+                .load_registry()
+                .resources()
+                .in_use(ResourceKind::Continuation),
+            0
+        );
+        assert_eq!(
+            handle.command_count(|command| matches!(command, MockPhysicalCommand::Prepare(_))),
+            1
+        );
+        assert_eq!(
+            handle.command_count(|command| matches!(command, MockPhysicalCommand::Reserve(..))),
+            1
+        );
+        assert_eq!(
+            handle.command_count(|command| matches!(command, MockPhysicalCommand::SubmitRead(..))),
+            1
+        );
+        let operation = driver
+            .load_registry()
+            .prefetch_operations(crate::io::PrefetchOwner::transaction(transaction, phases))
+            .next()
+            .unwrap();
+        assert_eq!(
+            driver
+                .load_registry()
+                .operation(operation)
+                .unwrap()
+                .demand(),
+            crate::scheduling::ResourceDemand::prefetch_phases(phases)
+        );
+
+        let now_ns = driver.runtime_now_ns();
+        driver
+            .load_registry
+            .finish_transaction_custody(transaction, TransactionCustodyOutcome::RolledBack, now_ns)
+            .unwrap();
+        assert_eq!(driver.load_registry().active_prefetches(), 0);
+        assert!(driver.load_registry().operation(operation).is_some());
+        assert_eq!(
+            handle.command_count(|command| matches!(command, MockPhysicalCommand::Cancel(..))),
+            1
+        );
+
+        driver.load_registry.collect_provider_completions(1);
+        driver.load_registry.process_one_completion().unwrap();
+        assert!(driver.load_registry().operation(operation).is_none());
+        assert_eq!(driver.load_registry().resources().active_grants(), 0);
+    }
+
+    #[test]
     fn driver_prefetch_is_explicit_and_creates_no_execution_owner() {
         let (physical, handle) = MockPhysicalProvider::manual();
         let runner =
             MockTopKRunner::new(Vec::new()).with_materialization_provider(Box::new(physical));
         let mut driver =
             ResidentTopKDriver::try_new(runner, FixedSequenceSlotPool::new(1)).unwrap();
-        let owner = crate::io::PrefetchId::new(1).unwrap();
+        let owner = crate::io::PrefetchOwner::external(std::num::NonZeroU64::new(1).unwrap());
 
         let report = driver
-            .prefetch(owner, [materialization_request(1)])
+            .prefetch(
+                owner,
+                crate::scheduling::ResourceDemand::prefetch(ExecutionPhase::Prefill),
+                [materialization_request(1)],
+            )
             .unwrap();
         assert_eq!(report.created.len(), 1);
         assert!(driver.has_pending_async_work());
@@ -6974,7 +7498,10 @@ mod tests {
 
         let mut listener = driver.completion_hub().listen();
         driver
-            .register_pending_progress(&progress, crate::scheduling::ResourceClass::Throughput)
+            .register_pending_progress(
+                &progress,
+                crate::scheduling::ResourceDemand::required(ExecutionPhase::Prefill),
+            )
             .unwrap();
         assert_eq!(driver.load_registry().stats().operations_created, 1);
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
@@ -6998,7 +7525,7 @@ mod tests {
                 materialization_request(1)
                     .materialization_key(ferrule_common::DestinationGeneration::new(1))
                     .unwrap(),
-                crate::scheduling::ResourceClass::LatencyCritical,
+                crate::scheduling::ResourceDemand::required(ExecutionPhase::Decode),
                 ferrule_model::ResourceRetention::ThroughStage,
             ),
             Err(crate::io::RegistryError::Provider {
@@ -7088,7 +7615,10 @@ mod tests {
             [(materialization_request(1), key)],
         );
         let error = driver
-            .register_pending_progress(&progress, crate::scheduling::ResourceClass::LatencyCritical)
+            .register_pending_progress(
+                &progress,
+                crate::scheduling::ResourceDemand::required(ExecutionPhase::Decode),
+            )
             .unwrap_err();
         assert!(matches!(
             error,
@@ -7316,7 +7846,7 @@ mod tests {
                 driver
                     .register_pending_progress(
                         &progress,
-                        crate::scheduling::ResourceClass::LatencyCritical,
+                        crate::scheduling::ResourceDemand::required(ExecutionPhase::Decode),
                     )
                     .unwrap();
             }
@@ -7398,7 +7928,10 @@ mod tests {
             ],
         );
         driver
-            .register_pending_progress(&progress, crate::scheduling::ResourceClass::LatencyCritical)
+            .register_pending_progress(
+                &progress,
+                crate::scheduling::ResourceDemand::required(ExecutionPhase::Decode),
+            )
             .unwrap();
 
         let cleanup_error = driver.progress_materialization().unwrap_err();

@@ -266,7 +266,8 @@ if command -v aria2c >/dev/null 2>&1; then
         --retry-wait=3 \
         --connect-timeout=10 \
         --timeout=60 \
-        --lowest-speed-limit=50K
+        --lowest-speed-limit=5K \
+        --max-download-limit=10M
 
     FAILED=0
     COMPLETE=0

@@ -73,16 +73,45 @@ fn artifact_linear_format_has_quantized_weight(format: &LinearWeightFormat) -> b
     )
 }
 
-/// DSpark speculative decoding configuration.
-///
-/// Bundles the MTP-related fields parsed from `config.json` so that the MTP
-/// model and runner can consume them as a single value.
+/// Proposal attachment configuration parsed from `config.json`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct DSparkConfig {
+pub struct ProposalAttachmentConfig {
     pub block_size: usize,
     pub noise_token_id: Option<u32>,
     pub target_layer_ids: Vec<usize>,
     pub markov_rank: Option<usize>,
+}
+
+fn legacy_attachment_namespace(json: &serde_json::Value) -> Result<Option<String>> {
+    const FIELDS: [&str; 4] = [
+        "block_size",
+        "noise_token_id",
+        "target_layer_ids",
+        "markov_rank",
+    ];
+    let Some(object) = json.as_object() else {
+        return Ok(None);
+    };
+    let mut namespaces = object
+        .keys()
+        .filter_map(|key| key.strip_suffix("_block_size"))
+        .filter(|namespace| *namespace != "proposal")
+        .filter(|namespace| {
+            FIELDS
+                .iter()
+                .all(|field| object.contains_key(&format!("{namespace}_{field}")))
+        })
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    namespaces.sort_unstable();
+    namespaces.dedup();
+    match namespaces.as_slice() {
+        [] => Ok(None),
+        [namespace] => Ok(Some(namespace.clone())),
+        _ => Err(Error::Model {
+            message: "DeepSeek-V4 config has ambiguous legacy Proposal metadata namespaces".into(),
+        }),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -117,11 +146,10 @@ pub struct DeepSeekV4Config {
     pub index_head_dim: usize,
     pub index_topk: usize,
     pub compress_ratios: Vec<usize>,
-    pub dspark_block_size: usize,
-    pub dspark_noise_token_id: Option<u32>,
-    pub dspark_target_layer_ids: Vec<usize>,
-    pub dspark_markov_rank: Option<usize>,
-    pub num_mtp_layers: usize,
+    pub proposal_block_size: usize,
+    pub proposal_noise_token_id: Option<u32>,
+    pub proposal_target_layer_ids: Vec<usize>,
+    pub proposal_markov_rank: Option<usize>,
 }
 
 impl DeepSeekV4Config {
@@ -144,8 +172,17 @@ impl DeepSeekV4Config {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_else(|| vec![0; deepseek_v4::NUM_LAYERS]);
-        let dspark_target_layer_ids = json
-            .get("dspark_target_layer_ids")
+        let legacy_attachment_namespace = legacy_attachment_namespace(&json)?;
+        let proposal_value = |field: &str| {
+            let canonical = format!("proposal_{field}");
+            json.get(&canonical).or_else(|| {
+                legacy_attachment_namespace.as_ref().and_then(|namespace| {
+                    let legacy = format!("{namespace}_{field}");
+                    json.get(&legacy)
+                })
+            })
+        };
+        let proposal_target_layer_ids = proposal_value("target_layer_ids")
             .and_then(|value| value.as_array())
             .map(|items| {
                 items
@@ -154,13 +191,6 @@ impl DeepSeekV4Config {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        // DeepSeek-V4-Flash-DSpark's HF config reports one next-token
-        // prediction block, while the converted executable checkpoint contains
-        // one MTP stage per target hidden layer. The target-layer list is the
-        // authoritative stage count for this DSpark architecture.
-        let num_mtp_layers = usize_key(&json, &["n_mtp_layers", "num_nextn_predict_layers"])
-            .unwrap_or(0)
-            .max(dspark_target_layer_ids.len());
 
         Ok(Self {
             hidden_size: usize_key(&json, &["hidden_size"]).unwrap_or(deepseek_v4::HIDDEN_SIZE),
@@ -215,22 +245,27 @@ impl DeepSeekV4Config {
                 .unwrap_or(deepseek_v4::INDEX_HEAD_DIM),
             index_topk: usize_key(&json, &["index_topk"]).unwrap_or(deepseek_v4::INDEX_TOPK),
             compress_ratios,
-            dspark_block_size: usize_key(&json, &["dspark_block_size"]).unwrap_or(1),
-            dspark_noise_token_id: usize_key(&json, &["dspark_noise_token_id"])
+            proposal_block_size: proposal_value("block_size")
+                .and_then(|value| value.as_u64())
+                .map(|value| value as usize)
+                .unwrap_or(1),
+            proposal_noise_token_id: proposal_value("noise_token_id")
+                .and_then(|value| value.as_u64())
                 .map(|value| value as u32),
-            dspark_target_layer_ids,
-            dspark_markov_rank: usize_key(&json, &["dspark_markov_rank"]),
-            num_mtp_layers,
+            proposal_target_layer_ids,
+            proposal_markov_rank: proposal_value("markov_rank")
+                .and_then(|value| value.as_u64())
+                .map(|value| value as usize),
         })
     }
 
-    /// Returns the DSpark speculative decoding configuration bundled as a single value.
-    pub fn dspark_config(&self) -> DSparkConfig {
-        DSparkConfig {
-            block_size: self.dspark_block_size,
-            noise_token_id: self.dspark_noise_token_id,
-            target_layer_ids: self.dspark_target_layer_ids.clone(),
-            markov_rank: self.dspark_markov_rank,
+    /// Returns the proposal attachment configuration as a single value.
+    pub fn proposal_attachment_config(&self) -> ProposalAttachmentConfig {
+        ProposalAttachmentConfig {
+            block_size: self.proposal_block_size,
+            noise_token_id: self.proposal_noise_token_id,
+            target_layer_ids: self.proposal_target_layer_ids.clone(),
+            markov_rank: self.proposal_markov_rank,
         }
     }
 
@@ -244,13 +279,13 @@ impl DeepSeekV4Config {
         }
     }
 
-    /// Returns an attention configuration suitable for an MTP layer.
+    /// Returns an attention configuration for one proposal transformer stage.
     ///
-    /// MTP layers share the same MLA attention structure as main layers but do
-    /// not use compressed attention (compress_ratio = 0).
-    pub fn attention_config_for_mtp_layer(
+    /// Proposal stages share the target MLA structure but do not use compressed
+    /// attention.
+    pub fn attention_config_for_proposal_stage(
         &self,
-        _mtp_index: usize,
+        _proposal_stage: usize,
     ) -> Result<DeepSeekV4AttentionConfig> {
         Ok(DeepSeekV4AttentionConfig {
             hidden_size: self.hidden_size,

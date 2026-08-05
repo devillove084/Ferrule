@@ -26,7 +26,10 @@ use super::config::{
 };
 use super::helpers::{decode_vector_f32, read_named_vector_f32, unique_top_level_slice};
 use super::layer::{DeepSeekV4Layer, DeepSeekV4LayerExpertRuntime, DeepSeekV4LayerState};
-use super::mtp::{DeepSeekV4MtpModel, load_mtp_layer, load_mtp_prediction_heads};
+use super::proposal_attachment::{
+    DeepSeekV4ProposalAttachment, load_proposal_heads, load_proposal_stage,
+    parse_proposal_hyper_connection_tensor,
+};
 
 pub struct DeepSeekV4Checkpoint {
     pub descriptor: ModelDescriptor,
@@ -217,36 +220,41 @@ impl DeepSeekV4Checkpoint {
         })
     }
 
-    /// Loads the MTP (Multi-Token Prediction) model for DSpark speculative decoding.
+    /// Loads the Proposal attachment stored under the checkpoint's `mtp.*` namespace.
     ///
-    /// Returns `Ok(None)` when the checkpoint contains no MTP tensors.
-    pub fn load_mtp(&self) -> Result<Option<DeepSeekV4MtpModel>> {
-        let mtp_tensors = self.inventory.mtp_layer_tensors();
-        if mtp_tensors.is_empty() {
+    /// Returns `Ok(None)` when the checkpoint contains no Proposal attachment tensors.
+    pub fn load_proposal_attachment(&self) -> Result<Option<DeepSeekV4ProposalAttachment>> {
+        let proposal_tensors = self.inventory.mtp_layer_tensors();
+        if proposal_tensors.is_empty() {
             return Ok(None);
         }
         let reader = CheckpointTensorReader::new(self.max_tensor_bytes);
         let hc_config = self.config.hc_config();
-        let max_mtp_index = *mtp_tensors.keys().max().expect("MTP tensors are non-empty");
-        let expected_stages = self.config.num_mtp_layers;
-        if mtp_tensors.len() != expected_stages || max_mtp_index + 1 != expected_stages {
+        let max_proposal_stage = *proposal_tensors
+            .keys()
+            .max()
+            .expect("Proposal attachment tensors are non-empty");
+        if proposal_tensors.len() != max_proposal_stage + 1
+            || proposal_tensors.keys().copied().ne(0..=max_proposal_stage)
+        {
             return Err(Error::Model {
                 message: format!(
-                    "DeepSeek-V4 DSpark checkpoint has MTP stages {:?}, expected contiguous 0..{}",
-                    mtp_tensors.keys().collect::<Vec<_>>(),
-                    expected_stages
+                    "DeepSeek-V4 checkpoint Proposal stages are not contiguous from zero: {:?}",
+                    proposal_tensors.keys().collect::<Vec<_>>()
                 ),
             });
         }
-        let mut layers = Vec::with_capacity(mtp_tensors.len());
+        let mut layers = Vec::with_capacity(proposal_tensors.len());
         let mut prediction_heads = None;
-        for (&mtp_index, layer_tensors) in &mtp_tensors {
-            let attention_config = self.config.attention_config_for_mtp_layer(mtp_index)?;
-            let layer = load_mtp_layer(
+        for (&proposal_stage, stage_tensors) in &proposal_tensors {
+            let attention_config = self
+                .config
+                .attention_config_for_proposal_stage(proposal_stage)?;
+            let stage = load_proposal_stage(
                 &self.descriptor.path,
-                mtp_index,
-                self.config.num_layers + mtp_index,
-                layer_tensors,
+                proposal_stage,
+                self.config.num_layers + proposal_stage,
+                stage_tensors,
                 &reader,
                 attention_config,
                 hc_config,
@@ -254,37 +262,36 @@ impl DeepSeekV4Checkpoint {
                 self.config.num_experts_per_tok,
                 self.config.route_scale,
             )?;
-            if mtp_index == max_mtp_index {
-                // Collect HC head tensors from the last layer's tensor list.
+            if proposal_stage == max_proposal_stage {
                 let hc_tensors: Vec<crate::checkpoint::inventory::HfHyperConnectionTensorInfo> =
-                    layer_tensors
+                    stage_tensors
                         .iter()
-                        .filter_map(super::mtp::parse_mtp_hyper_connection_tensor)
+                        .filter_map(parse_proposal_hyper_connection_tensor)
                         .collect();
-                prediction_heads = Some(load_mtp_prediction_heads(
+                prediction_heads = Some(load_proposal_heads(
                     &self.descriptor.path,
-                    mtp_index,
-                    layer_tensors,
+                    proposal_stage,
+                    stage_tensors,
                     &reader,
                     &hc_tensors,
                     hc_config,
                 )?);
             }
-            if layer.expert_source_catalog.count() != self.config.num_routed_experts {
+            if stage.expert_source_catalog.count() != self.config.num_routed_experts {
                 return Err(Error::Model {
                     message: format!(
-                        "DeepSeek-V4 MTP stage {mtp_index} catalog has {} routed experts, expected {}",
-                        layer.expert_source_catalog.count(),
+                        "DeepSeek-V4 Proposal stage {proposal_stage} catalog has {} routed experts, expected {}",
+                        stage.expert_source_catalog.count(),
                         self.config.num_routed_experts
                     ),
                 });
             }
-            layers.push(layer);
+            layers.push(stage);
         }
-        Ok(Some(DeepSeekV4MtpModel {
+        Ok(Some(DeepSeekV4ProposalAttachment {
             layers,
             prediction_heads,
-            config: self.config.dspark_config(),
+            config: self.config.proposal_attachment_config(),
         }))
     }
 
@@ -324,57 +331,33 @@ impl DeepSeekV4Checkpoint {
 
     pub fn resolved_expert_streaming_policy(
         &self,
-        moe_prefetch_experts: usize,
         moe_hotset_experts: usize,
     ) -> ExpertStreamingPolicy {
         let moe_hotset_experts = moe_hotset_experts.min(self.config.num_routed_experts);
-        let moe_prefetch_experts = moe_prefetch_experts.min(self.config.num_routed_experts);
-        let mut policy = if moe_hotset_experts > 0 {
-            let gpu_slots_per_layer = moe_hotset_experts
-                .max(self.config.num_experts_per_tok)
-                .min(self.config.num_routed_experts);
-            ExpertStreamingPolicy {
-                gpu_slots_per_layer,
-                prefetch_per_layer: moe_prefetch_experts
-                    .min(gpu_slots_per_layer.saturating_sub(self.config.num_experts_per_tok)),
-                preserve_source_encoding: true,
-                allow_cpu_staging: true,
-                allow_remote_sources: false,
-            }
-        } else if moe_prefetch_experts == 0 {
-            ExpertStreamingPolicy {
-                gpu_slots_per_layer: self.config.num_routed_experts,
-                prefetch_per_layer: 0,
-                preserve_source_encoding: true,
-                allow_cpu_staging: true,
-                allow_remote_sources: false,
-            }
+        let gpu_slots_per_layer = if moe_hotset_experts == 0 {
+            self.config.num_routed_experts
         } else {
-            ExpertStreamingPolicy::quality_first_with_prefetch(
-                self.config.num_experts_per_tok,
-                moe_prefetch_experts,
-            )
+            moe_hotset_experts
+                .max(self.config.num_experts_per_tok)
+                .min(self.config.num_routed_experts)
         };
-        policy.gpu_slots_per_layer = policy
-            .gpu_slots_per_layer
-            .min(self.config.num_routed_experts);
-        policy.prefetch_per_layer = policy.prefetch_per_layer.min(
-            policy
-                .gpu_slots_per_layer
-                .saturating_sub(self.config.num_experts_per_tok),
-        );
-        policy
+        ExpertStreamingPolicy {
+            gpu_slots_per_layer,
+            prefetch_per_layer: 0,
+            preserve_source_encoding: true,
+            allow_cpu_staging: true,
+            allow_remote_sources: false,
+        }
     }
 
-    pub fn new_quality_first_layer_expert_runtime_with_residency(
+    pub fn new_layer_expert_runtime_with_residency(
         &self,
         layer: usize,
-        moe_prefetch_experts: usize,
         moe_hotset_experts: usize,
     ) -> Result<DeepSeekV4LayerExpertRuntime> {
         self.new_layer_expert_runtime(
             layer,
-            self.resolved_expert_streaming_policy(moe_prefetch_experts, moe_hotset_experts),
+            self.resolved_expert_streaming_policy(moe_hotset_experts),
         )
     }
 }

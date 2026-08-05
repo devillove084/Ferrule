@@ -1,44 +1,73 @@
-# Current GB10 SM121 CUTLASS/CuTe provider
+# CUDA/CUTLASS provider
 
-Ferrule's current production kernel implementation is deliberately narrow. It is the
-SM121 provider for the DeepSeek-V4/GB10 validation profile, not Ferrule's global hardware
-or core runtime contract:
+Ferrule 的 CUDA kernel 实现位于 `crates/ferrule-backend`。CUTLASS/CuTe 是 CUDA
+provider 的内部实现依赖，不是模型、调度器、materialization protocol 或跨硬件 ABI。
+
+当前已验证 architecture and capability profile：
 
 ```text
-NVIDIA GB10
-compute capability 12.1
-sm_121a
-CUTLASS/CuTe 4.6.1
+compute capability 10.3
+sm_103
+CUDA 13.3
+CUTLASS 4.6.1
 ```
 
-Unsupported hardware, missing plans, and unsupported artifact shapes fail explicitly. There is no CPU or generic CUDA production fallback.
-
-
+设备 compute capability 被字面映射为公开 target；compute capability 10.3 映射为 `sm_103`。
+完整指令集所需的 NVCC feature codegen 由 `build.rs` 在 provider 内部自动选择，不进入
+设备 capability、operator ABI 或模型 plan。其他 target 使用同一个 capability/parser 和
+provider-neutral plan，但必须分别通过 build/runtime 验收。
 
 ## Ownership boundary
 
-Rust remains the unique owner of:
+Rust host 唯一拥有：
 
-- CUDA contexts and streams;
-- allocations and graph-stable workspaces;
-- the executable model plan;
-- paged KV and sequence transactions;
-- expert residency, I/O, and scheduling.
+- CUDA context、stream、event、allocation 和 graph-stable workspace；
+- provider-neutral executable model plan；
+- paged KV、sequence 和 transaction lifecycle；
+- materialization、expert residency、I/O 和调度；
+- completion、error propagation 和 shutdown drain。
 
-This ownership boundary does not change when additional providers are introduced.
-`crates/ferrule-cuda/native/cutlass/ferrule_cutlass.h` is the current SM121 provider's
-versioned C POD ABI. No C++ object crosses it. Every launch receives Ferrule-owned pointers
-and a Ferrule-owned stream. The provider allocates nothing and performs no host
-synchronization.
+Native provider 只临时使用 Ferrule 传入的 device pointers、workspace 和 stream。C++
+对象不跨 ABI；provider 不取得 transaction、KV、resource identity 或 scheduler ownership。
 
-The future provider-neutral contract, compatibility rules, and adapter requirements are
-specified in [Kernel Provider ABI](KERNEL_PROVIDER_ABI.md). [Architecture](ARCHITECTURE.md)
-describes how providers fit beneath the Rust-owned runtime.
+## Current organization
 
-## Semantic ABI
+```text
+crates/ferrule-backend/
+  architecture_target.rs
+  build.rs
+  src/
+    plan.rs
+    cuda/
+      runtime.rs
+      architecture.rs
+      provider.rs
+      cutlass.rs
+      context.rs
+      ...
+  native/cuda/
+    abi/
+      core_provider.h
+      cutlass_provider.h
+    implementations/
+      portable/
+        entrypoints.cu
+      cutlass/
+        entrypoints.cu
+        architectures/
+        capabilities/
+```
 
-The current SM121 FFI unit is a semantic superkernel, not a generic GEMM. The checked-in
-code ABI is **9** and publishes ten operations:
+`plan.rs` 定义 provider-neutral semantic requirements、capabilities、kernel identity 和
+pre-resolved launch descriptors。Native `capabilities/` 按 semantic capability 组织实现，
+`architectures/` 则包含 provider 私有的 architecture implementations。`cuda/provider.rs` 在
+prepare/compile 阶段发现 native capabilities 并生成 model plan；hot path 不查询 architecture
+string、环境变量或动态 trait。缺失 operation/capability 是 typed fatal error，不存在 CPU 或
+另一 CUDA provider 的静默 fallback。
+
+## Semantic provider ABI
+
+当前 CUTLASS ABI 发布十个 semantic operations：
 
 | Operation | Fused boundary |
 |---|---|
@@ -48,66 +77,26 @@ code ABI is **9** and publishes ten operations:
 | shared FFN | gate/up → SwiGLU → hidden pack → down |
 | routed MXFP4 MoE | stable-frame resolve → gate/up → pack → down |
 | MLA output | OutputA → BF16 latent boundary → FP8 pack → OutputB |
-| DSpark main projection/norm | target-tap FP8 projection → BF16 boundary → RMSNorm |
-| DSpark hybrid MLA attention | committed paged context + ephemeral full-block KV → sink-aware tensor-core QK/softmax/PV |
-| DSpark proposal head | HC head/final norm → BF16 LM projection → sequential Markov selection and confidence |
+| Proposal attachment main projection/norm | target tap projection → boundary → RMSNorm |
+| Proposal hybrid MLA attention | committed paged context + ephemeral proposal KV |
+| Proposal head | HC head/final norm → LM projection → proposal selection |
 | FP8 projection | one packed activation producer, one projection consumer |
 
-Model plans bind one operation per semantic role. Small-M and tiled schedules are provider-private; model plans do not contain M=1/2/4/8 kernel variants. The semantic entry supports cross-tile M and validates its real grid/resource range.
+Model code binds semantic roles, not row-count kernel variants. Small-M/tile schedule、architecture
+specialization、MMA atom、workspace layout 和 launch geometry 都属于 provider 私有实现。
 
-For this GB10 provider, CUTLASS 4.6.1 and CuTe provide MMA atoms, layouts, block-scaled
-types, and copy primitives. Ferrule implements the model-specific fused dataflow around
-those primitives. CUTLASS 4.6.1 is the pinned implementation dependency for the current
-GB10 profile; it is not a Ferrule-wide core or kernel-provider ABI contract.
+## Architecture and build
 
-## Current hard coupling and adapter migration
+`crates/ferrule-backend/build.rs`：
 
-The current path is not yet a provider-neutral build/load adapter. SM121 details remain
-hard-coupled in:
+1. 默认从 GPU 0 的 compute capability 自动得到 exact device target；
+2. `FERRULE_CUDA_ARCH` 仅用于显式 cross-build override；
+3. 验证 NVCC 发布对应 base code，并在 provider 内部选择所需 feature codegen；
+4. 生成 device target/capability compile definitions；
+5. 使用标准 Cargo `cc::Build` + NVCC 编译 portable/CUTLASS entrypoints 及其实现；
+6. 链接 shared CUDA runtime。
 
-- `crates/ferrule-cuda/build.rs`, which validates `sm_121a` and directly compiles the
-  CUTLASS translation unit;
-- `crates/ferrule-cuda/native/cutlass/bridge.cu`, which includes the SM121 kernels,
-  constructs their manifest, and exports their launch functions;
-- the mirrored kernel IDs in `crates/ferrule-cuda/src/cutlass.rs` and
-  `crates/ferrule-cuda/native/cutlass/ferrule_cutlass.h`, plus the operation-to-ID mapping
-  in `crates/ferrule-cuda/src/provider.rs`;
-- `ferrule_cutlass.h` itself, which currently combines the C ABI structs with the SM121
-  kernel catalog.
-
-The gradual migration in the provider ABI specification **has not been implemented**. It
-first freezes and inventories the ABI9 direct functions, then introduces an SM121 adapter
-that maps the neutral manifest/prepare/launch contract to those functions. One operation
-will move through shadow comparison and a temporary observable fallback before the same
-process expands to the remaining operations and removes the direct exports. Provider-specific
-build and bridge selection can then be separated without changing Rust ownership.
-
-Until those stages land, the runtime continues to use the directly wired SM121 path. This
-document does not claim a generic plugin, portable adapter, or multi-provider implementation;
-additional hardware can be registered only after its own validation and performance
-contract passes.
-
-### Portable adapter migration exit gate
-
-Throughout migration—and before the portable adapter migration is considered complete or
-any ABI9 direct fallback or export is removed—all of the following must hold:
-
-- all ten published ABI9 operations retain direct-vs-adapter per-operation parity;
-- the complete 43-layer packed path retains its established parity;
-- the proposal path passes the near-tie and acceptance corpus without semantic drift;
-- `status_i32` and `route_error` preserve their existing status, ordering, and failure
-  semantics;
-- prepare, launch, capture, and replay introduce no implicit host/device allocation or
-  synchronization;
-- provider DSO, CUDA module, plan, and graph lifetimes and unload ordering follow
-  [Kernel Provider ABI](KERNEL_PROVIDER_ABI.md).
-
-These are migration gates, not claims about the current directly wired implementation or
-unfinished adapter.
-
-## Reproducible dependency setup
-
-The current GB10 implementation pins:
+Ferrule 不使用 `cargo-oxide`。CUTLASS 是 header-only pinned dependency：
 
 ```text
 repository  https://github.com/NVIDIA/cutlass.git
@@ -115,49 +104,60 @@ tag         v4.6.1
 commit      e05f953a5b3d38adc240df2ff928e0421c2abba3
 ```
 
-Fetch and verify it with:
+准备依赖并构建当前 GPU：
 
 ```bash
 just cutlass-setup
+just build-cuda
 ```
 
-The checkout is stored under ignored build artifacts at `target/vendor/cutlass` by default. Set `FERRULE_CUTLASS_DIR` to use another checkout; it must resolve to the same pinned commit.
-
-All GB10 build/test/run recipes depend on `cutlass-setup`, so normal use does not require a manual clone:
+显式构建 `sm_103` profile：
 
 ```bash
-just build-cuda
-just test-cutlass-provider
-just dsv4-runtime-driver-bench
+just build-cuda sm_103
 ```
 
-CUTLASS is header-only in this integration. `crates/ferrule-cuda/build.rs` stays offline and uses NVCC through `cc::Build` to compile `native/cutlass/bridge.cu` for `sm_121a`. Keeping network access out of Cargo build scripts preserves offline and reproducible builds.
+直接使用 Cargo 时只需先准备 CUTLASS checkout；当前 GPU 会被自动检测：
 
-A direct `cargo oxide build` that bypasses `just` must either run `just cutlass-setup` first or provide `FERRULE_CUTLASS_DIR`.
+```bash
+cargo build --locked --release --features cuda
+```
+
+仅 cross-build 时显式覆盖 target：
+
+```bash
+FERRULE_CUDA_ARCH=sm_103 cargo build --locked --release --features cuda
+```
+
+可用 `FERRULE_CUTLASS_DIR` 指向另一个 checkout，但它必须满足 pinned version/manifest
+contract。
 
 ## Validation contract
 
-A provider operation is usable only when all of the following hold:
+Provider operation 可用必须同时满足：
 
-- ABI and manifest versions match;
-- the compiled and runtime target is GB10 / SM121a;
-- required pointers are non-null and correctly aligned;
-- tensor shapes and quantization layouts match the model artifact;
-- caller-owned workspaces have exact required capacity;
-- the operation passes numerical parity for small and cross-tile M;
-- the complete model path wins end to end.
+- provider ABI、CUTLASS version 和 native/Rust manifest 一致；
+- compiled target 与 native provider target 一致；
+- semantic operation、execution mode、dtype、layout 和 determinism capability 可满足；
+- pointers、shape、workspace、stream 和 generation binding 合法；
+- synchronous status 与 asynchronous status record 都成功；
+- numerical、near-tie、route-order 和 transaction acceptance semantics 不漂移；
+- complete model path 正确且端到端性能不回退。
 
-Current validation includes provider ABI tests, dynamic-M tests including 4,097 rows, FP8/BF16 smoke tests, MXFP4 MoE smoke tests, and 43-layer packed-vs-token-loop CUDA parity.
+当前 `sm_103` profile 已通过标准 release build 和 43 层 DeepSeek-V4 proposal attachment 固定生成正确性。
+Backward/update catalog、更多 architecture 独立回归、完整 timeline 和 vLLM/SGLang 性能 gate
+仍未完成。
 
 ## Benchmark rule
 
-CUTLASS is not assumed faster merely because a kernel uses Tensor Cores. For every semantic operation:
+CUTLASS/Tensor Core 标签本身不是性能证据。每个 semantic operation 必须：
 
-1. measure the complete fused operation, including packs and epilogues;
-2. sweep M across 1/2/4/8 and at least one cross-tile shape;
-3. record workspace bytes and steady-state allocations;
-4. verify graph safety and stream ownership;
-5. run numerical and near-tie parity;
-6. accept the change only when the complete 43-layer workload improves.
+1. 测量完整 fused boundary，包括 pack、epilogue 和必要 synchronization；
+2. 覆盖 small-M、batch/prefill 和 cross-tile shapes；
+3. 报告 workspace bytes、steady-state allocations 和 stream/event behavior；
+4. 验证 graph capture/replay 和 concurrent workspace isolation；
+5. 通过 numerical、near-tie、route 和 proposal acceptance parity；
+6. 只有完整 43 层 workload 改善时才接受 microbenchmark 优化。
 
-Microbenchmark wins that regress the resident verification sweep are removed.
+另见 [Kernel Provider ABI](KERNEL_PROVIDER_ABI.md)、[Architecture](ARCHITECTURE.md) 和
+[Roadmap](ROADMAP.md)。

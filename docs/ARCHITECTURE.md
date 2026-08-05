@@ -9,7 +9,7 @@
 ## 0. Purpose and scope
 
 Ferrule is a **Rust-owned exact Mixture-of-Experts runtime**: Rust owns lifecycle, scheduling, memory, I/O, residency, transactions, cancellation, and publication while model semantics remain exact.
-GB10 is the first hardware profile, not Ferrule's architectural identity; later profiles may change providers without weakening these contracts.
+The current CUDA profile is the first hardware profile, not Ferrule's architectural identity; later profiles may change providers without weakening these contracts.
 
 This document defines the target control plane and its non-negotiable boundaries; `MUST`, `MUST NOT`, `SHOULD`, and `MAY` are normative.
 Model-specific algorithms may extend the data plane without acquiring runtime ownership; performance policy may change ordering but never exactness or hard feasibility.
@@ -31,7 +31,7 @@ serving/API
 
 - One Rust owner is the sole writer of authoritative runtime state.
 - The owner controls requests, transactions, queues, credits, waiter indices, KV branches, arenas, residency, generations, leases, and retirement.
-- For the GB10 profile, the model-owner thread is the only CUDA submitter and owns contexts, streams, events, graphs, and allocations.
+- For the current CUDA profile, the model-owner thread is the only CUDA submitter and owns contexts, streams, events, graphs, and allocations.
 - Workers receive owner-authorized immutable commands and return opaque completions; they never publish residency or mutate transactions.
 - Native providers consume versioned POD descriptors containing Ferrule-owned pointers and handles.
 - Providers allocate nothing, retain no hidden request state, perform no host synchronization, and do not choose fallback semantics.
@@ -179,16 +179,33 @@ Stale rebinding never mutates a stale key or recycles its destination generation
 
 Prefetch is an explicit optional owner, not a synthetic execution dependency:
 
-- `PrefetchId` owns a set of exact physical operations;
-- Prefetch creates no waiter, continuation, transaction, materialization custody, execution lease, or
-  hard progress entitlement;
-- Execution may join an active Prefetch only for the same exact key/generation/slot and must call
-  provider `promote_to_execution()` after hard admission;
+- `PrefetchOwner` distinguishes model warmup, transaction-scoped exact phase ownership, and external
+  callers; their identity namespaces cannot collide;
+- `ResourceDemand` is either `ModelWarmup`, `Prefetch(ExecutionPhaseSet)`, or
+  `Required(ExecutionPhaseSet)`; it preserves exact phases and expresses only whether work blocks
+  physical execution;
+- the registry never preempts submitted physical custody, while its workload owner controls only new
+  model-warmup admission: startup submits a small physical wave and opens request admission;
+  foreground drive reserves no new warmup operation but drains every admitted read/upload/install;
+  idle drive fills the planned residency high-water at full physical throughput;
+- a model-derived Required-wave execution reserve and hard capacity remain available to exact misses;
+  this is one registry/provider path, not full-fit/partial-fit executors or a second admission mode;
+- the model residency planner bounds warmup at its VRAM high-water mark: full-fit eventually declares
+  and installs every immutable resource, while partial-fit declares only the planned slot capacity and
+  cannot create an unbounded eviction loop;
+- full-fit does not use predictive expert prefetch: idle warmup establishes steady-state residency and
+  a cold foreground request promotes only exact identities; a partial-fit predictor is production-ready
+  only after demonstrating positive end-to-end benefit including displacement and H2D contention;
+- Prefetch creates no waiter, continuation, materialization custody, execution lease, or hard progress
+  entitlement; transaction ownership already exists independently;
+- Required execution may join an active Prefetch only for the same exact key/generation/slot and may
+  acquire the provider execution lease only after hard admission;
 - provider `prepared(key)` is observation-only and MUST NOT promote purpose;
-- when the last Execution owner leaves while a Prefetch owner remains, the registry releases the
-  execution lease and reclassifies queued work back to `Prefetch`;
-- multi-key promotion is failure-atomic: completed promotions are compensated, newly created work is
-  reclaimed, and original Prefetch ownership survives;
+- whenever owners change, operation demand is recomputed from all remaining Prefetch owners and
+  Required waiters; queued work is reclassified without changing submitted physical custody;
+- multi-key execution admission is failure-atomic: acquired execution leases are compensated, newly
+  created work is reclaimed, and original Prefetch ownership survives;
+- transaction-scoped Prefetch is released automatically only after backend terminalization completes;
 - cancelling the last Prefetch owner follows the same physical custody rule as any other submitted
   operation: submitted work drains before resources are reusable.
 
@@ -242,26 +259,30 @@ Aggregate host/device/UMA bytes are an additional hard envelope, not a substitut
 Cancellation cannot refund issued reads or release referenced memory, and no emergency lane, overflow, deadline, or fairness promotion may cross a hard bound.
 
 An `execution_reserve` protects continuation, ready-cohort, arena/KV, and physical I/O capacity from
-optional Prefetch. It is not a fourth scheduling class: both `Throughput` and `LatencyCritical`
-execution may use it; only `Prefetch` may not. After command submission a grant is non-preemptible
-until CQE/event/fence return, and reserve is restored by blocking later Prefetch rather than stealing
-credits. Optional Prefetch has no hard progress entitlement and is suppressed first.
+optional Prefetch. Only `ResourceDemand::Required` may use it; `ModelWarmup` and `Prefetch` may not.
+After command submission a grant is non-preemptible until CQE/event/fence return, and reserve is
+restored by blocking later optional work rather than stealing credits. Optional work has no hard
+progress entitlement and is suppressed first.
 
 ## 5. Scheduling, fairness, and critical path
 
 The scheduler is work-conserving among exact, dependency-complete, hard-feasible transitions and never lets I/O-blocked work occupy a runnable cohort slot.
 Selection is lexicographic: hard feasibility, cancellation/deadline obligations, runnable work, fairness, marginal physical cost, phase policy, deterministic tie-break.
 
-Fairness has exactly three classes: `Prefetch`, `Throughput`, and `LatencyCritical`. There is no
-separate `Demand` class; logical demand is represented by exact waiters/dependencies, not another
-priority state. Fairness combines bounded aging with deficit round robin (DRR):
+Materialization fairness has exactly three private policy bands: `Background`, `Prefetch`, and
+`Required`. These bands do not replace `ExecutionPhaseSet` or become transaction states: exact
+prefill, decode, proposal, verification, multimodal, training, optimizer, rollout, and reward phases
+remain attached to `ResourceDemand`. Foreground ownership suppresses only new `ModelWarmup` reserve
+actions before fairness selection; it does not block completions or the remaining stages of admitted
+physical work. Fairness combines bounded aging with deficit round robin (DRR):
 
-- each class has a configured positive `quantum`, finite surplus cap, and finite debt limit;
+- each band has a configured positive `quantum`, finite surplus cap, and finite debt limit;
 - every transition declares an exact charge no greater than `max_transition_cost`; larger work is split or rejected before admission;
 - each round adds `quantum`; dispatch subtracts actual marginal cost, and an aged exact transition may enter debt only down to the configured limit;
 - configuration must let one minimum atomic exact transition fit both `max_transition_cost` and all hard credits;
 - joining an existing exact-key operation has zero duplicate physical-byte charge;
-- waiting age rises to a hard starvation ceiling, while decode uses its reserve without starving finite prefill;
+- required waiting age rises to a hard starvation ceiling; execution-phase policy orders runnable work
+  without erasing the exact phase set;
 - DRR debt changes ordering only, never hard feasibility, and speculative prefetch earns no mandatory service.
 
 Every transaction/shared load contributes timestamped DAG nodes for proposal, route, read, host-ready, upload, event, publish, compute, acceptance, KV publication, rollback, and retirement.
@@ -322,7 +343,7 @@ trait ExpertStorageBackend {
 }
 ```
 
-The GB10 `O_DIRECT` implementation reads immutable extents directly into the registered, pinned, alignment-valid slab: no pageable bounce buffer, hidden reallocation, or intermediate host copy is permitted.
+The current CUDA-profile `O_DIRECT` implementation reads immutable extents directly into the registered, pinned, alignment-valid slab: no pageable bounce buffer, hidden reallocation, or intermediate host copy is permitted.
 Source offset, length, and address alignment are validated before SQE submission; short/partial completion cannot expose `HostReady` until the exact extent is complete.
 The owner retains the slab grant and stable address from read submission through `HostReady`, transfers that obligation into the upload command, and releases it only after the upload fence.
 This is storage-side zero-copy into staging followed by one explicit placement, not a claim of NVMe-to-GPU GDS.
@@ -360,10 +381,10 @@ This section is migration guidance, not a claim that target replacements exist.
 
 ### Preserve
 
-- the single Rust model-owner authority and GB10 single CUDA-submitter rule;
+- the single Rust model-owner authority and current-profile single CUDA-submitter rule;
 - stable `ExecutionTransactionId`, provisional paged-KV commit/rollback, and external-token reconciliation;
 - stable expert slot/generation/lease semantics and failure-atomic publication;
-- `O_DIRECT + io_uring` registered-slab reads as the first GB10 storage path;
+- `O_DIRECT + io_uring` registered-slab reads as the first current-profile storage path;
 - exact pre-MoE continuation, owned arenas, completion reactor, and deferred sequence/KV cleanup foundations;
 - deterministic queue rotation, advisor traces, and existing hard-resource broker tests.
 
@@ -408,7 +429,7 @@ Add aggregate profile memory accounting, command/return stage release, decode re
 
 ### A3 — Land global `LoadRegistry`
 Route exact misses through the full `LoadKey`, exact-key physical dedup lifecycle, bidirectional waiter indices, and targeted wake.
-Adapt existing GB10 reads/uploads while retaining storage/device separation.
+Adapt existing current-profile reads/uploads while retaining storage/device separation.
 **Exit gate:** fake and integration tests prove one physical load per key, exact join accounting, safe cancellation, typed failure, stale-generation rejection, and no unrelated wakeups.
 
 ### A4 — Make transactions fully explicit
@@ -429,5 +450,5 @@ Remove the serialization guard only after all prior gates pass.
 
 ## 11. Final architecture gate
 
-The target is reached only when A0–A6 pass on fake providers and GB10; useful overlap additionally requires a critical-path DAG showing reduced uncovered wait on production-shaped traces.
-GB10 assumptions remain profile-specific, scaffolding is not implementation, and release claims/evidence remain governed by [ROADMAP](ROADMAP.md).
+The target is reached only when A0–A6 pass on fake providers and the current CUDA profile; useful overlap additionally requires a critical-path DAG showing reduced uncovered wait on production-shaped traces.
+Current CUDA-profile assumptions remain profile-specific, scaffolding is not implementation, and release claims/evidence remain governed by [ROADMAP](ROADMAP.md).

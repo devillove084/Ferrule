@@ -15,7 +15,7 @@ use ferrule_common::{Error, Result};
 
 use super::config::{DeepSeekV4AttentionConfig, DeepSeekV4RopeParams};
 #[cfg(feature = "cuda")]
-use super::cuda_cache::DeepSeekV4DsparkAttentionBuffers;
+use super::cuda_cache::DeepSeekV4ProposalAttentionBuffers;
 #[cfg(feature = "cuda")]
 use super::cuda_cache::{
     DeepSeekV4CudaAttentionPrefixMetadata, DeepSeekV4CudaCompressor, DeepSeekV4CudaLayerNorm,
@@ -238,10 +238,10 @@ pub struct DeepSeekV4Attention {
 
 #[cfg(feature = "cuda")]
 struct DeepSeekV4CompressorDecodeArena {
-    kv: ferrule_cuda::context::CudaF32Buffer,
-    score: ferrule_cuda::context::CudaF32Buffer,
-    compressed: ferrule_cuda::context::CudaF32Buffer,
-    normalized: ferrule_cuda::context::CudaF32Buffer,
+    kv: ferrule_backend::cuda::context::CudaF32Buffer,
+    score: ferrule_backend::cuda::context::CudaF32Buffer,
+    compressed: ferrule_backend::cuda::context::CudaF32Buffer,
+    normalized: ferrule_backend::cuda::context::CudaF32Buffer,
 }
 
 #[cfg(feature = "cuda")]
@@ -269,7 +269,7 @@ impl DeepSeekV4CompressorDecodeArena {
 
 #[cfg(feature = "cuda")]
 pub(crate) struct DeepSeekV4AttentionRowsTransitionArena {
-    input: ferrule_cuda::context::CudaF32Buffer,
+    input: ferrule_backend::cuda::context::CudaF32Buffer,
     main_compressor: Option<DeepSeekV4CompressorDecodeArena>,
     indexer_compressor: Option<DeepSeekV4CompressorDecodeArena>,
 }
@@ -306,29 +306,30 @@ impl DeepSeekV4AttentionRowsTransitionArena {
 
 #[cfg(feature = "cuda")]
 pub(crate) struct DeepSeekV4AttentionDecodeArena {
-    q_latent: ferrule_cuda::context::CudaF32Buffer,
-    q_norm: ferrule_cuda::context::CudaF32Buffer,
-    q_indexer: ferrule_cuda::context::CudaF32Buffer,
-    query_raw: ferrule_cuda::context::CudaF32Buffer,
-    query: ferrule_cuda::context::CudaF32Buffer,
-    kv_raw: ferrule_cuda::context::CudaF32Buffer,
-    kv: ferrule_cuda::context::CudaF32Buffer,
-    index_query: ferrule_cuda::context::CudaF32Buffer,
-    index_weights: ferrule_cuda::context::CudaF32Buffer,
-    positions: ferrule_cuda::context::CudaI32HostMirror,
-    window_lens: ferrule_cuda::context::CudaI32HostMirror,
-    compressed_lens: ferrule_cuda::context::CudaI32HostMirror,
-    visible_lens: ferrule_cuda::context::CudaI32HostMirror,
-    main_positions: ferrule_cuda::context::CudaI32HostMirror,
-    main_mask: ferrule_cuda::context::CudaI32HostMirror,
-    indexer_positions: ferrule_cuda::context::CudaI32HostMirror,
-    indexer_mask: ferrule_cuda::context::CudaI32HostMirror,
-    topk: ferrule_cuda::context::CudaI32Buffer,
-    topk_selectors: ferrule_cuda::context::CudaI32Buffer,
-    context: ferrule_cuda::context::CudaF32Buffer,
-    latent: ferrule_cuda::context::CudaF32Buffer,
-    pub(crate) output: ferrule_cuda::context::CudaF32Buffer,
-    pub(crate) linear_workspace: ferrule_cuda::context::CudaArtifactLinearWorkspace,
+    q_latent: ferrule_backend::cuda::context::CudaF32Buffer,
+    q_norm: ferrule_backend::cuda::context::CudaF32Buffer,
+    q_indexer: ferrule_backend::cuda::context::CudaF32Buffer,
+    query_raw: ferrule_backend::cuda::context::CudaF32Buffer,
+    query: ferrule_backend::cuda::context::CudaF32Buffer,
+    kv_raw: ferrule_backend::cuda::context::CudaF32Buffer,
+    kv: ferrule_backend::cuda::context::CudaF32Buffer,
+    index_query: ferrule_backend::cuda::context::CudaF32Buffer,
+    index_weights: ferrule_backend::cuda::context::CudaF32Buffer,
+    positions: ferrule_backend::cuda::context::CudaI32HostMirror,
+    window_lens: ferrule_backend::cuda::context::CudaI32HostMirror,
+    compressed_lens: ferrule_backend::cuda::context::CudaI32HostMirror,
+    visible_lens: ferrule_backend::cuda::context::CudaI32HostMirror,
+    main_positions: ferrule_backend::cuda::context::CudaI32HostMirror,
+    main_mask: ferrule_backend::cuda::context::CudaI32HostMirror,
+    indexer_positions: ferrule_backend::cuda::context::CudaI32HostMirror,
+    indexer_mask: ferrule_backend::cuda::context::CudaI32HostMirror,
+    window_topk: ferrule_backend::cuda::context::CudaI32Buffer,
+    topk: ferrule_backend::cuda::context::CudaI32Buffer,
+    topk_selectors: ferrule_backend::cuda::context::CudaI32Buffer,
+    context: ferrule_backend::cuda::context::CudaF32Buffer,
+    latent: ferrule_backend::cuda::context::CudaF32Buffer,
+    pub(crate) output: ferrule_backend::cuda::context::CudaF32Buffer,
+    pub(crate) linear_workspace: ferrule_backend::cuda::context::CudaArtifactLinearWorkspace,
     main_compressor: Option<DeepSeekV4CompressorDecodeArena>,
     indexer_compressor: Option<DeepSeekV4CompressorDecodeArena>,
 }
@@ -395,6 +396,7 @@ impl DeepSeekV4AttentionDecodeArena {
             main_mask: ops.i32_host_mirror(&zero_control_rows)?,
             indexer_positions: ops.i32_host_mirror(&zero_control_rows)?,
             indexer_mask: ops.i32_host_mirror(&zero_control_rows)?,
+            window_topk: ops.zero_i32_buffer(rows * cfg.window_size)?,
             topk: ops.zero_i32_buffer(rows * (cfg.window_size + cfg.index_topk))?,
             topk_selectors: ops.zero_i32_buffer(rows * (cfg.window_size + cfg.index_topk))?,
             context: ops.zero_f32_buffer(rows * cfg.q_full_dim())?,
@@ -1279,8 +1281,8 @@ impl DeepSeekV4Attention {
     #[cfg(feature = "cuda")]
     fn project_decode_rows_from_device_into(
         &self,
-        hidden_dev: &ferrule_cuda::context::CudaF32Buffer,
-        hidden_fp8: &ferrule_cuda::context::CudaPreparedFp8Activation<'_>,
+        hidden_dev: &ferrule_backend::cuda::context::CudaF32Buffer,
+        hidden_fp8: &ferrule_backend::cuda::context::CudaPreparedFp8Activation<'_>,
         max_position: usize,
         operators: &mut DeepSeekV4OperatorContext,
         arena: &mut DeepSeekV4AttentionDecodeArena,
@@ -1501,8 +1503,8 @@ impl DeepSeekV4Attention {
     pub(crate) fn packed_rows_from_device_into(
         &self,
         caches: &mut [&mut DeepSeekV4AttentionCache],
-        hidden_dev: &ferrule_cuda::context::CudaF32Buffer,
-        hidden_fp8: &ferrule_cuda::context::CudaPreparedFp8Activation<'_>,
+        hidden_dev: &ferrule_backend::cuda::context::CudaF32Buffer,
+        hidden_fp8: &ferrule_backend::cuda::context::CudaPreparedFp8Activation<'_>,
         positions: &[usize],
         row_to_sequence: &[usize],
         sequence_major_rows: &[usize],
@@ -1581,13 +1583,19 @@ impl DeepSeekV4Attention {
                 .ok_or_else(|| Error::Model {
                     message: "packed attention positions are empty".into(),
                 })?;
+            let window_topk_len = rows
+                .checked_mul(attention_topk)
+                .ok_or_else(|| Error::Model {
+                    message: "packed window top-k size overflow".into(),
+                })?;
+            let mut window_topk = arena.window_topk.prefix(window_topk_len)?;
             let stage_start = operators.profile_start();
             operators
                 .cuda_mut()?
                 .paged_window_sparse_attention_rows_into(
                     &arena.query,
-                    positions,
                     &arena.visible_lens,
+                    &mut window_topk,
                     rows,
                     self.layer,
                     SparseAttentionSpec {
@@ -2162,21 +2170,21 @@ impl DeepSeekV4Attention {
         operators.linear_matvec(&self.payload.output_b, &latent)
     }
 
-    /// DSpark proposal attention is deliberately separate from ordinary packed
+    /// Proposal attention is deliberately separate from ordinary packed
     /// target attention: all five rows see the complete ephemeral block, and the
     /// block KV is never appended to the committed page table.
     #[cfg(feature = "cuda")]
-    pub(crate) fn dspark_proposal_block_from_device_into(
+    pub(crate) fn proposal_block_from_device_into(
         &self,
         stage: usize,
-        hidden_fp8: &ferrule_cuda::context::CudaPreparedFp8Activation<'_>,
+        hidden_fp8: &ferrule_backend::cuda::context::CudaPreparedFp8Activation<'_>,
         sequence_tokens: usize,
         operators: &mut DeepSeekV4OperatorContext,
         arena: &mut DeepSeekV4AttentionDecodeArena,
-        dspark: &mut DeepSeekV4DsparkAttentionBuffers,
+        proposal: &mut DeepSeekV4ProposalAttentionBuffers,
     ) -> Result<()> {
         let cfg = self.config;
-        let rows = ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS;
+        let rows = ferrule_backend::cuda::cutlass::PROPOSAL_ROWS;
         if sequence_tokens == 0
             || cfg.compress_ratio != 0
             || arena.query.len() != rows.saturating_mul(cfg.q_full_dim())
@@ -2185,7 +2193,7 @@ impl DeepSeekV4Attention {
         {
             return Err(Error::Model {
                 message: format!(
-                    "DeepSeek-V4 DSpark proposal-attention shape mismatch at stage {stage}: sequence_tokens={sequence_tokens} compress_ratio={} query={} kv={} context={} rows={rows}",
+                    "DeepSeek-V4 Proposal-attention shape mismatch at stage {stage}: sequence_tokens={sequence_tokens} compress_ratio={} query={} kv={} context={} rows={rows}",
                     cfg.compress_ratio,
                     arena.query.len(),
                     arena.kv.len(),
@@ -2196,9 +2204,9 @@ impl DeepSeekV4Attention {
         let required_positions = sequence_tokens
             .checked_add(rows)
             .ok_or_else(|| Error::Model {
-                message: "DeepSeek-V4 DSpark proposal position overflow".into(),
+                message: "DeepSeek-V4 Proposal position overflow".into(),
             })?;
-        let rope_name = format!("rope_dspark_stage_{stage}");
+        let rope_name = format!("rope_proposal_stage_{stage}");
         operators.cuda_mut()?.ensure_rope_tables_with_params(
             &rope_name,
             cfg.rope_head_dim,
@@ -2271,19 +2279,19 @@ impl DeepSeekV4Attention {
             &rope_name,
             &mut arena.query,
             u32::try_from(sequence_tokens).map_err(|_| Error::Model {
-                message: "DeepSeek-V4 DSpark proposal position exceeds u32".into(),
+                message: "DeepSeek-V4 Proposal position exceeds u32".into(),
             })?,
             u32::try_from(rows).map_err(|_| Error::Model {
-                message: "DeepSeek-V4 DSpark row count exceeds u32".into(),
+                message: "DeepSeek-V4 Proposal row count exceeds u32".into(),
             })?,
             u32::try_from(cfg.num_heads).map_err(|_| Error::Model {
-                message: "DeepSeek-V4 DSpark head count exceeds u32".into(),
+                message: "DeepSeek-V4 Proposal head count exceeds u32".into(),
             })?,
             u32::try_from(cfg.head_dim).map_err(|_| Error::Model {
-                message: "DeepSeek-V4 DSpark head dim exceeds u32".into(),
+                message: "DeepSeek-V4 Proposal head dim exceeds u32".into(),
             })?,
             u32::try_from(cfg.rope_head_dim).map_err(|_| Error::Model {
-                message: "DeepSeek-V4 DSpark RoPE dim exceeds u32".into(),
+                message: "DeepSeek-V4 Proposal RoPE dim exceeds u32".into(),
             })?,
             false,
         )?;
@@ -2301,17 +2309,17 @@ impl DeepSeekV4Attention {
             &rope_name,
             &mut arena.kv,
             u32::try_from(sequence_tokens).map_err(|_| Error::Model {
-                message: "DeepSeek-V4 DSpark proposal position exceeds u32".into(),
+                message: "DeepSeek-V4 Proposal position exceeds u32".into(),
             })?,
             u32::try_from(rows).map_err(|_| Error::Model {
-                message: "DeepSeek-V4 DSpark row count exceeds u32".into(),
+                message: "DeepSeek-V4 Proposal row count exceeds u32".into(),
             })?,
             1,
             u32::try_from(cfg.head_dim).map_err(|_| Error::Model {
-                message: "DeepSeek-V4 DSpark head dim exceeds u32".into(),
+                message: "DeepSeek-V4 Proposal head dim exceeds u32".into(),
             })?,
             u32::try_from(cfg.rope_head_dim).map_err(|_| Error::Model {
-                message: "DeepSeek-V4 DSpark RoPE dim exceeds u32".into(),
+                message: "DeepSeek-V4 Proposal RoPE dim exceeds u32".into(),
             })?,
             false,
         )?;
@@ -2331,16 +2339,18 @@ impl DeepSeekV4Attention {
         )?;
 
         let stage_start = operators.profile_start();
-        operators.cuda_mut()?.dspark_hybrid_attention_device_into(
-            stage,
-            self.layer,
-            cfg,
-            sequence_tokens,
-            &arena.query,
-            &arena.kv,
-            &mut arena.context,
-            dspark,
-        )?;
+        operators
+            .cuda_mut()?
+            .proposal_hybrid_attention_device_into(
+                stage,
+                self.layer,
+                cfg,
+                sequence_tokens,
+                &arena.query,
+                &arena.kv,
+                &mut arena.context,
+                proposal,
+            )?;
         record_attention_stage(
             operators,
             self.layer,
@@ -2352,19 +2362,19 @@ impl DeepSeekV4Attention {
             &rope_name,
             &mut arena.context,
             u32::try_from(sequence_tokens).map_err(|_| Error::Model {
-                message: "DeepSeek-V4 DSpark proposal position exceeds u32".into(),
+                message: "DeepSeek-V4 Proposal position exceeds u32".into(),
             })?,
             u32::try_from(rows).map_err(|_| Error::Model {
-                message: "DeepSeek-V4 DSpark row count exceeds u32".into(),
+                message: "DeepSeek-V4 Proposal row count exceeds u32".into(),
             })?,
             u32::try_from(cfg.num_heads).map_err(|_| Error::Model {
-                message: "DeepSeek-V4 DSpark head count exceeds u32".into(),
+                message: "DeepSeek-V4 Proposal head count exceeds u32".into(),
             })?,
             u32::try_from(cfg.head_dim).map_err(|_| Error::Model {
-                message: "DeepSeek-V4 DSpark head dim exceeds u32".into(),
+                message: "DeepSeek-V4 Proposal head dim exceeds u32".into(),
             })?,
             u32::try_from(cfg.rope_head_dim).map_err(|_| Error::Model {
-                message: "DeepSeek-V4 DSpark RoPE dim exceeds u32".into(),
+                message: "DeepSeek-V4 Proposal RoPE dim exceeds u32".into(),
             })?,
             true,
         )?;
@@ -2860,12 +2870,12 @@ impl DeepSeekV4CompressorState {
         payload: &DeepSeekV4CompressorPayload,
         layer: usize,
         compressor: DeepSeekV4CudaCompressor,
-        hidden_dev: &ferrule_cuda::context::CudaF32Buffer,
+        hidden_dev: &ferrule_backend::cuda::context::CudaF32Buffer,
         position: usize,
         rope_dim: usize,
         rope: DeepSeekV4RopeParams,
         rope_name: &str,
-        recurrent_state: &mut Option<ferrule_cuda::CudaCompressorRecurrentState>,
+        recurrent_state: &mut Option<ferrule_backend::cuda::CudaCompressorRecurrentState>,
         recurrent_needs_reset: &mut bool,
         operators: &mut DeepSeekV4OperatorContext,
         scratch: &mut DeepSeekV4CompressorDecodeArena,
@@ -2912,14 +2922,14 @@ impl DeepSeekV4CompressorState {
         payload: &DeepSeekV4CompressorPayload,
         layer: usize,
         compressor: DeepSeekV4CudaCompressor,
-        projected_kv: &ferrule_cuda::context::CudaF32Buffer,
-        projected_score: &ferrule_cuda::context::CudaF32Buffer,
+        projected_kv: &ferrule_backend::cuda::context::CudaF32Buffer,
+        projected_score: &ferrule_backend::cuda::context::CudaF32Buffer,
         row: usize,
         position: usize,
         rope_dim: usize,
         rope: DeepSeekV4RopeParams,
         rope_name: &str,
-        recurrent_state: &mut Option<ferrule_cuda::CudaCompressorRecurrentState>,
+        recurrent_state: &mut Option<ferrule_backend::cuda::CudaCompressorRecurrentState>,
         recurrent_needs_reset: &mut bool,
         operators: &mut DeepSeekV4OperatorContext,
         scratch: &mut DeepSeekV4CompressorDecodeArena,
@@ -2973,7 +2983,7 @@ impl DeepSeekV4CompressorState {
         rope_dim: usize,
         rope: DeepSeekV4RopeParams,
         rope_name: &str,
-        recurrent_state: &mut Option<ferrule_cuda::CudaCompressorRecurrentState>,
+        recurrent_state: &mut Option<ferrule_backend::cuda::CudaCompressorRecurrentState>,
         recurrent_needs_reset: &mut bool,
         operators: &mut DeepSeekV4OperatorContext,
         scratch: &mut DeepSeekV4CompressorDecodeArena,

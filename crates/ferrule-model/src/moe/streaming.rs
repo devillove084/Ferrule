@@ -29,6 +29,77 @@ use ferrule_common::{
     MemoryPoolLimits, MemoryPoolStats, OwnerMemoryLru, Result, StaleReason,
 };
 use rayon::prelude::*;
+use snafu::Snafu;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ExpertIoTransport {
+    Positioned,
+    BufferedIoUring,
+    DirectIoUring,
+}
+
+impl ExpertIoTransport {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Positioned => "positioned",
+            Self::BufferedIoUring => "buffered_io_uring",
+            Self::DirectIoUring => "direct_io_uring",
+        }
+    }
+
+    fn from_env() -> std::result::Result<Self, ExpertIoTransportError> {
+        let value = std::env::var("FERRULE_EXPERT_IO_TRANSPORT")
+            .unwrap_or_else(|_| default_expert_io_transport().as_str().to_owned());
+        match value.to_ascii_lowercase().as_str() {
+            "positioned" => Ok(Self::Positioned),
+            "buffered_io_uring" => Ok(Self::BufferedIoUring),
+            "direct_io_uring" => Ok(Self::DirectIoUring),
+            _ => Err(ExpertIoTransportError::Unsupported { value }),
+        }
+    }
+
+    const fn is_io_uring(self) -> bool {
+        matches!(self, Self::BufferedIoUring | Self::DirectIoUring)
+    }
+}
+
+#[derive(Debug, Snafu, PartialEq, Eq)]
+pub enum ExpertIoTransportError {
+    #[snafu(display(
+        "unsupported FERRULE_EXPERT_IO_TRANSPORT '{value}'; expected positioned, buffered_io_uring, or direct_io_uring"
+    ))]
+    Unsupported { value: String },
+
+    #[snafu(display(
+        "io_uring expert streaming requires buffered_io_uring or direct_io_uring, got {}",
+        transport.as_str()
+    ))]
+    IoUringReaderRequiresIoUring { transport: ExpertIoTransport },
+}
+
+fn transport_error(source: ExpertIoTransportError) -> Error {
+    Error::ModelSource {
+        source: Box::new(source),
+    }
+}
+
+#[cfg(all(target_os = "linux", any(feature = "cuda", test)))]
+#[derive(Debug, Snafu, PartialEq, Eq)]
+enum ExpertIoPlanError {
+    #[snafu(display("expert I/O execution reserve requires at least one operation slot"))]
+    EmptyExecutionReserve,
+    #[snafu(display("expert I/O execution reserve slot count {slots} exceeds u64"))]
+    ExecutionReserveSlotsOutOfRange { slots: usize },
+    #[snafu(display("expert I/O execution reserve {resource} byte calculation overflowed"))]
+    ExecutionReserveByteOverflow { resource: &'static str },
+}
+
+#[cfg(all(target_os = "linux", any(feature = "cuda", test)))]
+fn io_plan_error(source: ExpertIoPlanError) -> Error {
+    Error::ModelSource {
+        source: Box::new(source),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ExpertId {
@@ -1169,6 +1240,142 @@ pub struct ExpertIoStats {
     pub read_us: u64,
 }
 
+#[cfg(all(target_os = "linux", any(feature = "cuda", test)))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExpertIoPlan {
+    pub queue_depth: usize,
+    pub buffer_bytes: usize,
+    pub slab_count: usize,
+    pub maximum_extents_per_operation: usize,
+}
+
+#[cfg(all(target_os = "linux", any(feature = "cuda", test)))]
+impl ExpertIoPlan {
+    const DEFAULT_PINNED_BYTES: usize = 256 * 1024 * 1024;
+    const MAX_QUEUE_DEPTH: usize = 32;
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn for_checkpoint_plans<'a>(
+        plans: impl IntoIterator<Item = &'a CheckpointReadPlan>,
+    ) -> Result<Self> {
+        let mut maximum_extent_bytes = 0u64;
+        let mut maximum_extents = 0usize;
+        for plan in plans {
+            maximum_extents = maximum_extents.max(plan.extents().len());
+            for extent in plan.extents() {
+                maximum_extent_bytes = maximum_extent_bytes.max(extent.bytes());
+            }
+        }
+        Self::from_layout(maximum_extent_bytes, maximum_extents)
+    }
+
+    fn from_layout(maximum_extent_bytes: u64, maximum_extents: usize) -> Result<Self> {
+        if maximum_extent_bytes == 0 || maximum_extents == 0 {
+            return Err(Error::Model {
+                message: "expert I/O planning requires non-empty checkpoint extents".into(),
+            });
+        }
+        let alignment = super::io_uring_reader::DIRECT_IO_ALIGNMENT;
+        let maximum_extent_bytes =
+            usize::try_from(maximum_extent_bytes).map_err(|_| Error::Model {
+                message: "expert I/O extent exceeds usize".into(),
+            })?;
+        // A tensor beginning at an unaligned file offset can require one extra
+        // alignment unit even when its payload is alignment-sized.
+        let buffer_bytes = maximum_extent_bytes
+            .checked_add(alignment - 1)
+            .and_then(|bytes| bytes.checked_add(alignment - 1))
+            .map(|bytes| bytes / alignment * alignment)
+            .ok_or_else(|| Error::Model {
+                message: "expert I/O buffer size overflow".into(),
+            })?;
+        let raw_slabs = (Self::DEFAULT_PINNED_BYTES / buffer_bytes).max(maximum_extents);
+        let slab_count = (raw_slabs / maximum_extents)
+            .max(1)
+            .checked_mul(maximum_extents)
+            .ok_or_else(|| Error::Model {
+                message: "expert I/O slab count overflow".into(),
+            })?;
+        let queue_depth = slab_count.min(Self::MAX_QUEUE_DEPTH).max(1);
+        Ok(Self {
+            queue_depth,
+            buffer_bytes,
+            slab_count,
+            maximum_extents_per_operation: maximum_extents,
+        })
+    }
+
+    #[cfg(feature = "cuda")]
+    fn from_env(self) -> Result<Self> {
+        let buffer_bytes =
+            parse_expert_io_mib_override("FERRULE_EXPERT_IO_BUFFER_MIB", self.buffer_bytes)?;
+        let plan = Self {
+            queue_depth: parse_expert_io_usize("FERRULE_EXPERT_IO_QUEUE_DEPTH", self.queue_depth)?,
+            buffer_bytes,
+            slab_count: parse_expert_io_usize("FERRULE_EXPERT_IO_SLABS", self.slab_count)?,
+            maximum_extents_per_operation: self.maximum_extents_per_operation,
+        };
+        if plan.slab_count < plan.maximum_extents_per_operation {
+            return Err(Error::Model {
+                message: format!(
+                    "expert I/O slab count {} cannot hold one operation with {} extents",
+                    plan.slab_count, plan.maximum_extents_per_operation
+                ),
+            });
+        }
+        Ok(plan)
+    }
+
+    pub(crate) fn execution_reserve(
+        self,
+        maximum_expert_bytes: u64,
+        required_operation_slots: usize,
+    ) -> Result<ferrule_common::materialization_io::MaterializationResourceRequirements> {
+        if required_operation_slots == 0 {
+            return Err(io_plan_error(ExpertIoPlanError::EmptyExecutionReserve));
+        }
+        let operation_slots = u64::try_from(required_operation_slots).map_err(|_| {
+            io_plan_error(ExpertIoPlanError::ExecutionReserveSlotsOutOfRange {
+                slots: required_operation_slots,
+            })
+        })?;
+        let staged_bytes_per_operation = self
+            .buffer_bytes
+            .checked_mul(self.maximum_extents_per_operation)
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or_else(|| {
+                io_plan_error(ExpertIoPlanError::ExecutionReserveByteOverflow {
+                    resource: "staged operation",
+                })
+            })?;
+        let staged_bytes = staged_bytes_per_operation
+            .checked_mul(operation_slots)
+            .ok_or_else(|| {
+                io_plan_error(ExpertIoPlanError::ExecutionReserveByteOverflow {
+                    resource: "staged wave",
+                })
+            })?;
+        let device_bytes = maximum_expert_bytes
+            .checked_mul(operation_slots)
+            .ok_or_else(|| {
+                io_plan_error(ExpertIoPlanError::ExecutionReserveByteOverflow {
+                    resource: "device wave",
+                })
+            })?;
+        Ok(
+            ferrule_common::materialization_io::MaterializationResourceRequirements {
+                read_slots: operation_slots,
+                storage_read_bytes: staged_bytes,
+                pinned_host_bytes: staged_bytes,
+                upload_slots: operation_slots,
+                h2d_bytes: device_bytes,
+                install_slots: operation_slots,
+                device_install_bytes: device_bytes,
+            },
+        )
+    }
+}
+
 #[cfg(all(target_os = "linux", feature = "cuda"))]
 pub(crate) struct PinnedExpertArtifactPayload {
     pub(crate) expert: ExpertId,
@@ -1215,6 +1422,7 @@ pub(crate) struct ReservedPinnedExpertLoad {
 #[derive(Clone)]
 pub struct ExpertStreamingReader {
     max_slice_bytes: u64,
+    transport: ExpertIoTransport,
     completion_hub: CompletionHub,
     #[cfg(target_os = "linux")]
     io_uring: Option<Arc<super::io_uring_reader::IoUringExpertReader>>,
@@ -1244,6 +1452,7 @@ impl ExpertStreamingReader {
     ) -> Self {
         Self {
             max_slice_bytes,
+            transport: ExpertIoTransport::Positioned,
             completion_hub,
             #[cfg(target_os = "linux")]
             io_uring: None,
@@ -1260,99 +1469,101 @@ impl ExpertStreamingReader {
         max_slice_bytes: u64,
         completion_hub: CompletionHub,
     ) -> Result<Self> {
-        let backend = std::env::var("FERRULE_EXPERT_IO_BACKEND")
-            .unwrap_or_else(|_| default_expert_io_backend().to_string())
-            .to_ascii_lowercase();
-        match backend.as_str() {
-            "pread" | "positioned" => Ok(Self::new_with_completion_hub(
+        let transport = ExpertIoTransport::from_env().map_err(transport_error)?;
+        if transport == ExpertIoTransport::Positioned {
+            return Ok(Self::new_with_completion_hub(
                 max_slice_bytes,
                 completion_hub,
-            )),
-            "io_uring" | "uring" => {
-                let queue_depth = parse_expert_io_usize("FERRULE_EXPERT_IO_QUEUE_DEPTH", 2)?;
-                let buffer_mib = parse_expert_io_usize("FERRULE_EXPERT_IO_BUFFER_MIB", 16)?;
-                let buffer_bytes =
-                    buffer_mib
-                        .checked_mul(1024 * 1024)
-                        .ok_or_else(|| Error::Model {
-                            message: "FERRULE_EXPERT_IO_BUFFER_MIB overflows usize".into(),
-                        })?;
-                Self::with_io_uring_and_completion_hub(
-                    max_slice_bytes,
-                    queue_depth,
-                    buffer_bytes,
-                    completion_hub,
-                )
-            }
-            other => Err(Error::Model {
-                message: format!(
-                    "unsupported FERRULE_EXPERT_IO_BACKEND '{other}'; expected pread or io_uring"
-                ),
-            }),
+            ));
         }
-    }
-
-    #[cfg(all(target_os = "linux", feature = "cuda"))]
-    pub(crate) fn from_env_with_cuda_pinned(
-        max_slice_bytes: u64,
-        allocator: ferrule_cuda::context::CudaPinnedHostAllocator,
-        completion_hub: CompletionHub,
-    ) -> Result<Self> {
-        let backend = std::env::var("FERRULE_EXPERT_IO_BACKEND")
-            .unwrap_or_else(|_| "io_uring".to_string())
-            .to_ascii_lowercase();
-        validate_cuda_resident_expert_io_backend(&backend)?;
         let queue_depth = parse_expert_io_usize("FERRULE_EXPERT_IO_QUEUE_DEPTH", 2)?;
         let buffer_mib = parse_expert_io_usize("FERRULE_EXPERT_IO_BUFFER_MIB", 16)?;
-        let slab_count = parse_expert_io_usize("FERRULE_EXPERT_IO_SLABS", 16)?;
         let buffer_bytes = buffer_mib
             .checked_mul(1024 * 1024)
             .ok_or_else(|| Error::Model {
                 message: "FERRULE_EXPERT_IO_BUFFER_MIB overflows usize".into(),
             })?;
-        Ok(Self {
-            max_slice_bytes,
-            completion_hub: completion_hub.clone(),
-            io_uring: Some(Arc::new(
-                super::io_uring_reader::IoUringExpertReader::new_cuda_pinned(
-                    queue_depth,
-                    buffer_bytes,
-                    slab_count,
-                    &allocator,
-                    completion_hub,
-                )?,
-            )),
-            pinned_source_files: Arc::new(Mutex::new(HashMap::new())),
-        })
-    }
-
-    #[cfg(target_os = "linux")]
-    pub fn with_io_uring(
-        max_slice_bytes: u64,
-        queue_depth: usize,
-        buffer_bytes: usize,
-    ) -> Result<Self> {
-        Self::with_io_uring_and_completion_hub(
+        Self::with_transport_and_completion_hub(
             max_slice_bytes,
             queue_depth,
             buffer_bytes,
+            transport,
+            completion_hub,
+        )
+    }
+
+    #[cfg(all(target_os = "linux", feature = "cuda"))]
+    pub(crate) fn from_env_with_cuda_pinned(
+        max_slice_bytes: u64,
+        allocator: ferrule_backend::cuda::context::CudaPinnedHostAllocator,
+        completion_hub: CompletionHub,
+        plan: ExpertIoPlan,
+    ) -> Result<(Self, ExpertIoPlan)> {
+        let transport = ExpertIoTransport::from_env().map_err(transport_error)?;
+        validate_io_uring_transport(transport).map_err(transport_error)?;
+        let plan = plan.from_env()?;
+        tracing::info!(
+            transport = transport.as_str(),
+            queue_depth = plan.queue_depth,
+            buffer_bytes = plan.buffer_bytes,
+            slab_count = plan.slab_count,
+            pinned_bytes = plan.buffer_bytes.saturating_mul(plan.slab_count),
+            "planned expert I/O pipeline"
+        );
+        Ok((
+            Self {
+                max_slice_bytes,
+                transport,
+                completion_hub: completion_hub.clone(),
+                io_uring: Some(Arc::new(
+                    super::io_uring_reader::IoUringExpertReader::new_cuda_pinned(
+                        plan.queue_depth,
+                        plan.buffer_bytes,
+                        plan.slab_count,
+                        &allocator,
+                        transport,
+                        completion_hub,
+                    )?,
+                )),
+                pinned_source_files: Arc::new(Mutex::new(HashMap::new())),
+            },
+            plan,
+        ))
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn with_transport(
+        max_slice_bytes: u64,
+        queue_depth: usize,
+        buffer_bytes: usize,
+        transport: ExpertIoTransport,
+    ) -> Result<Self> {
+        Self::with_transport_and_completion_hub(
+            max_slice_bytes,
+            queue_depth,
+            buffer_bytes,
+            transport,
             CompletionHub::new(),
         )
     }
 
     #[cfg(target_os = "linux")]
-    fn with_io_uring_and_completion_hub(
+    fn with_transport_and_completion_hub(
         max_slice_bytes: u64,
         queue_depth: usize,
         buffer_bytes: usize,
+        transport: ExpertIoTransport,
         completion_hub: CompletionHub,
     ) -> Result<Self> {
+        validate_io_uring_transport(transport).map_err(transport_error)?;
         Ok(Self {
             max_slice_bytes,
+            transport,
             completion_hub: completion_hub.clone(),
             io_uring: Some(Arc::new(super::io_uring_reader::IoUringExpertReader::new(
                 queue_depth,
                 buffer_bytes,
+                transport,
                 completion_hub,
             )?)),
             #[cfg(feature = "cuda")]
@@ -1361,24 +1572,27 @@ impl ExpertStreamingReader {
     }
 
     #[cfg(not(target_os = "linux"))]
-    pub fn with_io_uring(
+    pub fn with_transport(
         max_slice_bytes: u64,
         queue_depth: usize,
         buffer_bytes: usize,
+        transport: ExpertIoTransport,
     ) -> Result<Self> {
-        Self::with_io_uring_and_completion_hub(
+        Self::with_transport_and_completion_hub(
             max_slice_bytes,
             queue_depth,
             buffer_bytes,
+            transport,
             CompletionHub::new(),
         )
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn with_io_uring_and_completion_hub(
+    fn with_transport_and_completion_hub(
         _max_slice_bytes: u64,
         _queue_depth: usize,
         _buffer_bytes: usize,
+        _transport: ExpertIoTransport,
         _completion_hub: CompletionHub,
     ) -> Result<Self> {
         Err(Error::Model {
@@ -1386,12 +1600,12 @@ impl ExpertStreamingReader {
         })
     }
 
-    pub fn backend_name(&self) -> &'static str {
-        #[cfg(target_os = "linux")]
-        if self.io_uring.is_some() {
-            return "io_uring";
-        }
-        "pread"
+    pub const fn transport(&self) -> ExpertIoTransport {
+        self.transport
+    }
+
+    pub const fn backend_name(&self) -> &'static str {
+        self.transport.as_str()
     }
 
     pub fn max_slice_bytes(&self) -> u64 {
@@ -1852,27 +2066,43 @@ fn stale_source_identity_error(reason: StaleReason) -> Error {
     }
 }
 
-#[cfg(any(all(target_os = "linux", feature = "cuda"), test))]
-fn validate_cuda_resident_expert_io_backend(backend: &str) -> Result<()> {
-    if backend == "io_uring" {
+#[cfg(any(target_os = "linux", test))]
+fn validate_io_uring_transport(
+    transport: ExpertIoTransport,
+) -> std::result::Result<(), ExpertIoTransportError> {
+    if transport.is_io_uring() {
         return Ok(());
     }
-    Err(Error::Model {
-        message: format!(
-            "unsupported FERRULE_EXPERT_IO_BACKEND '{backend}' for CUDA resident expert materialization; expected io_uring"
-        ),
-    })
+    Err(ExpertIoTransportError::IoUringReaderRequiresIoUring { transport })
 }
 
-fn default_expert_io_backend() -> &'static str {
+const fn default_expert_io_transport() -> ExpertIoTransport {
     #[cfg(target_os = "linux")]
     {
-        "io_uring"
+        ExpertIoTransport::BufferedIoUring
     }
     #[cfg(not(target_os = "linux"))]
     {
-        "pread"
+        ExpertIoTransport::Positioned
     }
+}
+
+#[cfg(all(target_os = "linux", feature = "cuda"))]
+fn parse_expert_io_mib_override(name: &str, default_bytes: usize) -> Result<usize> {
+    let Some(value) = std::env::var(name).ok() else {
+        return Ok(default_bytes);
+    };
+    let mib = value.parse::<usize>().map_err(|error| Error::Model {
+        message: format!("invalid {name}='{value}': {error}"),
+    })?;
+    if mib == 0 {
+        return Err(Error::Model {
+            message: format!("{name} must be greater than zero"),
+        });
+    }
+    mib.checked_mul(1024 * 1024).ok_or_else(|| Error::Model {
+        message: format!("{name} overflows usize"),
+    })
 }
 
 fn parse_expert_io_usize(name: &str, default: usize) -> Result<usize> {
@@ -1888,6 +2118,33 @@ fn parse_expert_io_usize(name: &str, default: usize) -> Result<usize> {
         });
     }
     Ok(parsed)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod io_plan_tests {
+    use super::ExpertIoPlan;
+
+    #[test]
+    fn checkpoint_layout_drives_bounded_nvme_pipeline() {
+        let plan = ExpertIoPlan::from_layout(4 * 1024 * 1024, 6).unwrap();
+        assert_eq!(plan.buffer_bytes, 4 * 1024 * 1024 + 4096);
+        assert_eq!(plan.slab_count, 60);
+        assert_eq!(plan.queue_depth, 32);
+        assert_eq!(plan.maximum_extents_per_operation, 6);
+        assert!(plan.buffer_bytes * plan.slab_count <= 256 * 1024 * 1024);
+
+        let reserve = plan.execution_reserve(13_369_344, 6).unwrap();
+        assert_eq!(reserve.read_slots, 6);
+        assert_eq!(
+            reserve.pinned_host_bytes,
+            6 * 6 * (4 * 1024 * 1024 + 4096) as u64
+        );
+        assert_eq!(reserve.storage_read_bytes, reserve.pinned_host_bytes);
+        assert_eq!(reserve.upload_slots, 6);
+        assert_eq!(reserve.install_slots, 6);
+        assert_eq!(reserve.h2d_bytes, 6 * 13_369_344);
+        assert_eq!(reserve.device_install_bytes, reserve.h2d_bytes);
+    }
 }
 
 /// Read multiple experts concurrently. Each expert's slices are read in
@@ -3117,16 +3374,25 @@ mod tests {
     }
 
     #[test]
-    fn cuda_resident_expert_io_accepts_only_exact_io_uring_backend() {
-        validate_cuda_resident_expert_io_backend("io_uring").unwrap();
-        for backend in ["pread", "positioned", "uring"] {
-            let error = validate_cuda_resident_expert_io_backend(backend)
-                .unwrap_err()
-                .to_string();
-            assert!(error.contains(&format!("'{backend}'")));
-            assert!(error.ends_with("expected io_uring"));
-            assert!(!error.contains("pread or io_uring"));
-        }
+    fn io_uring_reader_accepts_only_io_uring_transports() {
+        validate_io_uring_transport(ExpertIoTransport::BufferedIoUring).unwrap();
+        validate_io_uring_transport(ExpertIoTransport::DirectIoUring).unwrap();
+        assert_eq!(
+            validate_io_uring_transport(ExpertIoTransport::Positioned),
+            Err(ExpertIoTransportError::IoUringReaderRequiresIoUring {
+                transport: ExpertIoTransport::Positioned,
+            })
+        );
+    }
+
+    #[test]
+    fn expert_io_transport_names_are_explicit_and_stable() {
+        assert_eq!(ExpertIoTransport::Positioned.as_str(), "positioned");
+        assert_eq!(
+            ExpertIoTransport::BufferedIoUring.as_str(),
+            "buffered_io_uring"
+        );
+        assert_eq!(ExpertIoTransport::DirectIoUring.as_str(), "direct_io_uring");
     }
 
     #[test]

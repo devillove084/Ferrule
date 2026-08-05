@@ -26,8 +26,8 @@ use ferrule_runtime::{
 
 #[cfg(feature = "cuda")]
 use crate::commands::resident::{
-    block_on_local_inference, build_resident_topk_driver, resident_driver_config,
-    single_sequence_scheduler_config,
+    block_on_local_inference, build_resident_topk_driver, require_finished_request,
+    resident_driver_config, single_sequence_scheduler_config,
 };
 
 #[cfg(feature = "cuda")]
@@ -50,7 +50,6 @@ pub fn cmd_deepseek_v4_generate(
     chat_prompt: bool,
     json: bool,
     warmup_tokens: usize,
-    moe_prefetch_experts: usize,
     moe_hotset_experts: usize,
 ) -> anyhow::Result<()> {
     block_on_local_inference(cmd_deepseek_v4_generate_async(
@@ -66,7 +65,6 @@ pub fn cmd_deepseek_v4_generate(
         chat_prompt,
         json,
         warmup_tokens,
-        moe_prefetch_experts,
         moe_hotset_experts,
     ))
 }
@@ -86,7 +84,6 @@ async fn cmd_deepseek_v4_generate_async(
     chat_prompt: bool,
     json: bool,
     warmup_tokens: usize,
-    moe_prefetch_experts: usize,
     moe_hotset_experts: usize,
 ) -> anyhow::Result<()> {
     let model_path = Path::new(model_dir);
@@ -94,7 +91,6 @@ async fn cmd_deepseek_v4_generate_async(
         max_layers,
         output_head_chunk_rows,
         expert_reader_max_tensor_bytes: expert_reader_max_slice_mb.saturating_mul(1024 * 1024),
-        moe_prefetch_experts,
         moe_hotset_experts,
         ..DeepSeekV4PrepareOptions::default()
     };
@@ -154,6 +150,8 @@ async fn cmd_deepseek_v4_generate_async(
         .saturating_add(max_new_tokens.max(warmup_tokens))
         .max(1);
     let mut driver = LocalResidentInferenceEngine::new(build_driver(runner, runtime_ctx)?);
+    driver.initialize().await?;
+    driver.wait_for_model_warmup().await?;
     if max_new_tokens > 0 && warmup_tokens > 0 {
         driver.submit(GenerateRequest {
             id: RequestId(0),
@@ -165,8 +163,15 @@ async fn cmd_deepseek_v4_generate_async(
         });
         let warmup_start = Instant::now();
         loop {
-            match driver.step(&mut |_| Ok(())).await? {
-                ResidentDriverStep::Idle => break,
+            let step = driver.step(&mut |_| Ok(())).await?;
+            if let Some(terminal) = driver.take_request_terminal(RequestId(0)) {
+                let _ = require_finished_request(terminal, "resident warmup")?;
+                break;
+            }
+            match step {
+                ResidentDriverStep::Idle => {
+                    anyhow::bail!("resident warmup became idle before request terminalization")
+                }
                 ResidentDriverStep::Blocked => {
                     anyhow::bail!("resident warmup remained blocked after a completion wake")
                 }
@@ -174,7 +179,6 @@ async fn cmd_deepseek_v4_generate_async(
                 | ResidentDriverStep::Executed { .. } => {}
             }
         }
-        let _ = driver.drain_finished();
         if !json {
             eprintln!(
                 "[warmup] {warmup_tokens} tokens in {:.3}s",
@@ -202,7 +206,7 @@ async fn cmd_deepseek_v4_generate_async(
             ignore_eos: !stop_at_eos,
         });
 
-        loop {
+        let sequence = loop {
             let step_start = Instant::now();
             let step = driver
                 .step(&mut |event| {
@@ -216,13 +220,18 @@ async fn cmd_deepseek_v4_generate_async(
                     }
                     if !json {
                         print!("{}", event.text);
-                        std::io::stdout().flush()?;
+                        std::io::stdout()
+                            .flush()
+                            .map_err(ferrule_common::Error::from)?;
                     }
                     generated.push(event.token);
                     Ok(())
                 })
                 .await?;
             let step_elapsed = step_start.elapsed();
+            if let Some(terminal) = driver.take_request_terminal(RequestId(1)) {
+                break require_finished_request(terminal, "DeepSeek-V4 generation")?;
+            }
             match step {
                 ResidentDriverStep::Executed { action_kind, .. } => match action_kind {
                     ResidentActionKind::Prefill | ResidentActionKind::Mixed => {
@@ -232,17 +241,15 @@ async fn cmd_deepseek_v4_generate_async(
                     ResidentActionKind::Finish | ResidentActionKind::Cancel => {}
                 },
                 ResidentDriverStep::WaitingForModelProgress(_) => decode_elapsed += step_elapsed,
-                ResidentDriverStep::Idle => break,
+                ResidentDriverStep::Idle => {
+                    anyhow::bail!("resident runtime became idle before request terminalization")
+                }
                 ResidentDriverStep::Blocked => {
                     anyhow::bail!("resident runtime driver blocked during DSV4 generation")
                 }
             }
-        }
+        };
 
-        let finished = driver.drain_finished();
-        let sequence = finished.last().ok_or_else(|| {
-            anyhow::anyhow!("resident runtime driver produced no finished sequence")
-        })?;
         final_position = sequence.position;
     }
 
@@ -297,8 +304,33 @@ async fn cmd_deepseek_v4_generate_async(
         out["bound_layers"] = serde_json::json!(bound_layer_count);
         out["position"] = serde_json::json!(final_position);
         out["layers"] = serde_json::json!(layers);
+        let load_profile = observability.load;
         out["timing"] = serde_json::json!({
             "load_seconds": load_elapsed.as_secs_f64(),
+            "load_profile": {
+                "checkpoint_seconds": load_profile.checkpoint_us as f64 / 1_000_000.0,
+                "prepare": {
+                    "validation_seconds": load_profile.prepare.validation_us as f64 / 1_000_000.0,
+                    "attachment_bind_seconds": load_profile.prepare.attachment_bind_us as f64 / 1_000_000.0,
+                    "target_bind_seconds": load_profile.prepare.target_bind_us as f64 / 1_000_000.0,
+                    "execution_plan_seconds": load_profile.prepare.execution_plan_us as f64 / 1_000_000.0,
+                    "manifest_seconds": load_profile.prepare.manifest_us as f64 / 1_000_000.0,
+                    "total_seconds": load_profile.prepare.total_us as f64 / 1_000_000.0,
+                },
+                "cuda_context_seconds": load_profile.cuda_context_us as f64 / 1_000_000.0,
+                "sequence_state_seconds": load_profile.sequence_state_us as f64 / 1_000_000.0,
+                "reader_seconds": load_profile.reader_us as f64 / 1_000_000.0,
+                "static_image": {
+                    "globals_seconds": load_profile.static_image_globals_us as f64 / 1_000_000.0,
+                    "embedding_seconds": load_profile.static_image_embedding_us as f64 / 1_000_000.0,
+                    "output_head_seconds": load_profile.static_image_output_head_us as f64 / 1_000_000.0,
+                    "target_layers_seconds": load_profile.static_image_target_layers_us as f64 / 1_000_000.0,
+                    "attachment_seconds": load_profile.static_image_attachment_us as f64 / 1_000_000.0,
+                    "total_seconds": load_profile.static_image_total_us as f64 / 1_000_000.0,
+                },
+                "residency_seconds": load_profile.residency_us as f64 / 1_000_000.0,
+                "total_seconds": load_profile.total_us as f64 / 1_000_000.0,
+            },
             "prefill_seconds": prefill_elapsed.as_secs_f64(),
             "decode_seconds": decode_elapsed.as_secs_f64(),
             "total_seconds": elapsed.as_secs_f64(),
@@ -317,6 +349,7 @@ async fn cmd_deepseek_v4_generate_async(
         print_hard_resource_high_water(&runtime_driver_stats.hard_resource_high_water);
         println!("run:        {:.3} ms", elapsed.as_secs_f64() * 1000.0);
     }
+    driver.shutdown().await?;
     Ok(())
 }
 
@@ -428,7 +461,6 @@ pub fn cmd_deepseek_v4_generate(
     _chat_prompt: bool,
     _json: bool,
     _warmup_tokens: usize,
-    _moe_prefetch_experts: usize,
     _moe_hotset_experts: usize,
 ) -> anyhow::Result<()> {
     anyhow::bail!("deepseek-v4-generate requires --features cuda")

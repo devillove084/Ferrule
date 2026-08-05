@@ -8,7 +8,7 @@
 #
 # Common overrides:
 #   BASE_URL=http://127.0.0.1:8000 \
-#   TOKENIZER=models/DeepSeek-V4-Flash-DSpark \
+#   TOKENIZER=models/DeepSeek-V4-Flash-0731 \
 #   INPUT_LEN=32 OUTPUT_LEN=8 NUM_PROMPTS=20 \
 #   CONCURRENCIES=1,2,4 \
 #   ./scripts/bench_vllm_serve.sh sweep
@@ -73,7 +73,7 @@ BASE_URL="${BASE_URL:-http://127.0.0.1:8000}"
 ENDPOINT="${ENDPOINT:-/v1/chat/completions}"
 MODEL="${MODEL:-deepseek-v4}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-$MODEL}"
-TOKENIZER="${TOKENIZER:-models/DeepSeek-V4-Flash-DSpark}"
+TOKENIZER="${TOKENIZER:-models/DeepSeek-V4-Flash-0731}"
 INPUT_LEN="${INPUT_LEN:-$DEFAULT_INPUT_LEN}"
 OUTPUT_LEN="${OUTPUT_LEN:-$DEFAULT_OUTPUT_LEN}"
 NUM_PROMPTS="${NUM_PROMPTS:-$DEFAULT_NUM_PROMPTS}"

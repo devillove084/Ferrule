@@ -91,8 +91,8 @@ just dsv4-serve
 Equivalent explicit command:
 
 ```bash
-cargo oxide build --features cuda --arch sm_121a -- --release -p ferrule-cli
-./target/release/ferrule serve models/DeepSeek-V4-Flash-DSpark \
+FERRULE_CUDA_ARCH=sm_103 cargo build --locked --release -p ferrule-cli --features cuda
+./target/release/ferrule serve models/DeepSeek-V4-Flash-0731 \
   --backend cuda \
   --served-model-name deepseek-v4 \
   --host 127.0.0.1 \
@@ -102,8 +102,8 @@ cargo oxide build --features cuda --arch sm_121a -- --release -p ferrule-cli
   --prefill-chunk-size 512 \
   --max-batch-tokens 512 \
   --kv-cache-mb 1024 \
-  --moe-prefetch-experts 0 \
-  --moe-hotset-experts 12 \
+
+  --moe-hotset-experts 0 \
   --expert-host-cache-entries 64 \
   --expert-host-cache-mb 1024 \
   --expert-pinned-cache-entries 16 \
@@ -112,7 +112,7 @@ cargo oxide build --features cuda --arch sm_121a -- --release -p ferrule-cli
 
 Important tuning controls:
 
-- `--max-active-sequences`: resident scheduler slots. The conservative GB10 default is
+- `--max-active-sequences`: resident scheduler slots. The conservative current-CUDA-profile default is
   4, not the old unsafe value of 64.
 - `--kv-cache-mb`: hard byte budget for preallocated CUDA KV data planes. The default
   is 1024 MiB; it caps the page count implied by context size and active sequences.
@@ -127,7 +127,7 @@ Important tuning controls:
 
 On the 43-layer DSV4 artifact, one physical f32 KV page is 3.023 MiB. The old
 `64 × 4096` full-capacity configuration implied 16,384 pages, or 48.375 GiB, before
-model weights, resident experts, host/pinned caches, and upload transients. On GB10
+model weights, resident experts, host/pinned caches, and upload transients. On the current CUDA profile's
 coherent memory that can trigger an OS `SIGKILL` (exit 137) when the pages are first
 touched. Ferrule now converts `--kv-cache-mb` to a hard page limit and prints both the
 requested full-capacity page count and the bounded allocation before serving.
@@ -196,8 +196,8 @@ is not included in the reported metrics; its default readiness timeout is 600 se
 to accommodate a cold 43-layer DSV4 path. Each run directory also contains the Ferrule
 commit, vLLM version, server model response, GPU snapshot, and console logs under
 `target/bench/vllm-serve/<UTC timestamp>/`. The client process defaults to
-`CUDA_VISIBLE_DEVICES=""`; HTTP benchmarking must not create a competing GB10 CUDA
-context. Set `BENCH_CUDA_VISIBLE_DEVICES` only when intentionally testing a client-side
+`CUDA_VISIBLE_DEVICES=""`; HTTP benchmarking must not create a competing CUDA
+context on the benchmark device. Set `BENCH_CUDA_VISIBLE_DEVICES` only when intentionally testing a client-side
 GPU feature.
 
 Override workload or server settings with environment variables:
@@ -222,7 +222,7 @@ python -m sglang.benchmark.serving \
   --backend vllm-chat \
   --base-url http://127.0.0.1:8000 \
   --model deepseek-v4 \
-  --tokenizer models/DeepSeek-V4-Flash-DSpark \
+  --tokenizer models/DeepSeek-V4-Flash-0731 \
   --dataset-name random \
   --random-input-len 32 \
   --random-output-len 8 \

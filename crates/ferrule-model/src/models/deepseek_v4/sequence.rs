@@ -36,7 +36,7 @@ pub(super) struct DeepSeekV4SequenceTopologyId(NonZeroU64);
 impl DeepSeekV4SequenceTopologyId {
     pub(super) fn take() -> Self {
         let value = NEXT_DSV4_SEQUENCE_TOPOLOGY_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
             .expect("DeepSeek-V4 sequence topology ID space is exhausted");
@@ -100,9 +100,9 @@ pub struct DeepSeekV4SequenceExecutionState {
     pub(crate) core: SequenceStateCore,
     /// Fully initialized target-layer attention/compressor/indexer/physical KV state.
     pub(crate) layers: Vec<DeepSeekV4LayerState>,
-    /// Dedicated DSpark stage context state. These caches hold only committed
+    /// Dedicated Proposal stage context state. These caches hold only committed
     /// projected target context; proposal-block KV remains ephemeral scratch.
-    pub(crate) dspark_stages: Vec<DeepSeekV4LayerState>,
+    pub(crate) proposal_stages: Vec<DeepSeekV4LayerState>,
     /// Sequence-specific expert prediction state.
     pub(crate) predictor: ScoreBasedExpertPredictor,
     #[cfg(feature = "cuda")]
@@ -112,7 +112,7 @@ pub struct DeepSeekV4SequenceExecutionState {
 impl DeepSeekV4SequenceExecutionState {
     pub fn new(
         layers: Vec<DeepSeekV4LayerState>,
-        dspark_stages: Vec<DeepSeekV4LayerState>,
+        proposal_stages: Vec<DeepSeekV4LayerState>,
         num_routed_experts: usize,
     ) -> Self {
         let max_layers = layers.len();
@@ -121,7 +121,7 @@ impl DeepSeekV4SequenceExecutionState {
             topology_id: DeepSeekV4SequenceTopologyId::take(),
             core: SequenceStateCore::new(),
             layers,
-            dspark_stages,
+            proposal_stages,
             predictor: ScoreBasedExpertPredictor::new(max_layers, num_routed_experts),
             #[cfg(feature = "cuda")]
             paged_kv_binding: None,
@@ -132,8 +132,8 @@ impl DeepSeekV4SequenceExecutionState {
         self.layers.len()
     }
 
-    pub fn dspark_stage_count(&self) -> usize {
-        self.dspark_stages.len()
+    pub fn proposal_stage_count(&self) -> usize {
+        self.proposal_stages.len()
     }
 
     pub fn generation(&self) -> u64 {
@@ -182,7 +182,7 @@ impl DeepSeekV4SequenceExecutionState {
         for state in &mut self.layers {
             state.reset_sequence();
         }
-        for state in &mut self.dspark_stages {
+        for state in &mut self.proposal_stages {
             state.reset_sequence();
         }
         self.finish_reset();
@@ -193,7 +193,7 @@ impl DeepSeekV4SequenceExecutionState {
         for state in &mut self.layers {
             state.release_sequence_capacity();
         }
-        for state in &mut self.dspark_stages {
+        for state in &mut self.proposal_stages {
             state.release_sequence_capacity();
         }
         self.finish_reset();

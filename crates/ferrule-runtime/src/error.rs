@@ -1,6 +1,8 @@
 use snafu::Snafu;
 
-use ferrule_common::io_protocol::{IoProtocolError, MaterializationResolveError};
+use ferrule_common::io_protocol::{
+    CancellationReason, FailureReason, IoProtocolError, MaterializationResolveError, StaleReason,
+};
 use ferrule_common::materialization_io::MaterializationResourceError;
 
 use crate::io::{FairQueueError, RegistryError};
@@ -39,6 +41,18 @@ pub enum Error {
 
     #[snafu(transparent)]
     Fairness { source: FairQueueError },
+
+    #[snafu(display("background warmup materialization failed: {source}"))]
+    WarmupMaterialization { source: FailureReason },
+
+    #[snafu(display("background warmup materialization was cancelled: {reason:?}"))]
+    WarmupMaterializationCancelled { reason: CancellationReason },
+
+    #[snafu(display("background warmup materialization became stale: {reason:?}"))]
+    WarmupMaterializationStale { reason: StaleReason },
+
+    #[snafu(display("background warmup retired without publishing residency"))]
+    WarmupMaterializationNotPublished,
 
     #[snafu(display("invalid runtime request: {message}"))]
     InvalidRequest { message: String },

@@ -37,7 +37,7 @@ need deterministic transaction ownership, bounded KV state, expert placement, st
 and failure-safe cancellation. Ferrule treats those concerns as one runtime rather than a set of
 independent caches and callbacks.
 
-Ferrule currently focuses on an exact DeepSeek-V4 Flash DSpark inference profile and provides:
+Ferrule currently focuses on exact DeepSeek-V4 Flash inference with a checkpoint-native proposal attachment and provides:
 
 - **Exact execution transactions** — packed proposal verification, per-sequence acceptance,
   correction or bonus staging, and commit/rollback share explicit identities.
@@ -54,7 +54,7 @@ Ferrule currently focuses on an exact DeepSeek-V4 Flash DSpark inference profile
 - **Auditable performance** — stage counters, resource high-water marks, acceptance accounting,
   and uncovered critical-path time are first-class output.
 
-Ferrule is under active systems validation. The GB10 concurrency acceptance gate is still open;
+Ferrule is under active systems validation. The current CUDA-profile concurrency acceptance gate is still open;
 see [Roadmap](docs/ROADMAP.md) for the exact status and [Throughput methodology](docs/THROUGHPUT.md)
 for the difference between targets, roofline models, and measured results.
 
@@ -77,16 +77,16 @@ specified in [Kernel Provider ABI](docs/KERNEL_PROVIDER_ABI.md) and [CUTLASS int
 
 | Area | Current status |
 |---|---|
-| Model profile | DeepSeek-V4 Flash DSpark is the active end-to-end validation target |
+| Model profile | DeepSeek-V4 Flash with its proposal attachment is the active end-to-end validation target |
 | Execution | Native Rust resident runtime with packed exact verification |
 | Expert I/O | Direct `io_uring` reads into registered pinned slabs, then CUDA event-gated upload |
 | KV cache | Runtime-owned paged reservations, COW forks, prefix commit, rollback, retirement |
-| CUDA profile | NVIDIA GB10 / `sm_121a`; current concurrency acceptance remains open |
+| CUDA profile | Current CUDA profile with an explicitly detected and validated target; concurrency acceptance remains open |
 | Kernels | Semantic provider registry with CUDA/CUTLASS implementations |
 | Serving | OpenAI-compatible HTTP and SSE path with official vLLM benchmark integration |
 | Other accelerators | Not yet validated; results and capabilities are hardware-profile specific |
 
-Do not extrapolate GB10 measurements or kernel availability to another device. A backend is
+Do not extrapolate current CUDA-profile measurements or kernel availability to another device. A backend is
 supported only after its provider capabilities, correctness suite, and end-to-end evidence pass.
 
 ## Quick start
@@ -97,7 +97,7 @@ supported only after its provider capabilities, correctness suite, and end-to-en
 - CUDA toolkit and a supported NVIDIA environment;
 - `cargo-oxide` for the current CUDA build path;
 - `just` for repository workflows;
-- a local DeepSeek-V4 Flash DSpark checkpoint for model commands.
+- a local DeepSeek-V4 Flash checkpoint and proposal attachment for model commands.
 
 Inspect the local CUDA setup:
 
@@ -106,7 +106,7 @@ just cuda-info
 just oxide-doctor
 ```
 
-Build the current GB10 profile:
+Build the current CUDA profile with its detected target:
 
 ```bash
 just build-cuda sm_121a
@@ -115,7 +115,7 @@ just build-cuda sm_121a
 Run an interactive session:
 
 ```bash
-just chat models/DeepSeek-V4-Flash-DSpark
+just chat models/DeepSeek-V4-Flash-0731
 ```
 
 Run the resident driver benchmark:
@@ -191,7 +191,7 @@ hermetic unit tests.
 ## Project status
 
 Ferrule is not yet release-ready. The typed I/O and scheduler architecture is implemented and has
-broad deterministic coverage, but the current real-GB10 multi-request path still requires the
+broad deterministic coverage, but the current real-CUDA multi-request path still requires the
 continuous `n8 → c1/c2/c4` acceptance chain documented in the roadmap. No SOTA or production
 throughput claim is made from partial, historical, or single-request evidence.
 

@@ -1,10 +1,10 @@
 #[cfg(feature = "cuda")]
 pub fn cmd_cuda() -> anyhow::Result<()> {
     println!("=== CUDA Probe ===");
-    ferrule_cuda::cuda_probe()?;
+    ferrule_backend::cuda::cuda_probe()?;
 
     println!("\n=== GEMV Benchmark (2048×2048) ===");
-    let report = ferrule_cuda::run_smoke_benchmark()?;
+    let report = ferrule_backend::cuda::run_smoke_benchmark()?;
     println!("  CPU: {:.2} ms", report.cpu_ms);
     println!("  GPU GEMV (kernel only): {:.3} ms", report.gpu_gemv_ms);
     println!(

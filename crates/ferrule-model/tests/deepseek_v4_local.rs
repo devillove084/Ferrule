@@ -8,7 +8,7 @@ use ferrule_model::{
 };
 
 #[test]
-fn local_deepseek_v4_flash_dspark_descriptor_smoke_if_present() {
+fn local_deepseek_v4_flash_proposal_descriptor_smoke_if_present() {
     let Some(model_dir) = local_deepseek_v4_dir() else {
         return;
     };
@@ -81,13 +81,6 @@ fn local_deepseek_v4_flash_dspark_descriptor_smoke_if_present() {
     assert_eq!(descriptor.spec.moe.router, RouterKind::HashAssistedTopK);
     assert!(descriptor.spec.moe.has_shared_experts);
     assert_eq!(descriptor.spec.tensor_count, Some(72_317));
-    assert!(
-        descriptor
-            .spec
-            .notes
-            .iter()
-            .any(|note| note.contains("DSpark attachment metadata"))
-    );
 
     assert!(
         descriptor
@@ -148,14 +141,14 @@ fn local_deepseek_v4_flash_dspark_descriptor_smoke_if_present() {
 }
 
 #[test]
-#[ignore = "reads the local DSpark attachment payloads"]
-fn local_deepseek_v4_flash_dspark_mtp_attachment_loads() {
+#[ignore = "reads the local Proposal attachment payloads"]
+fn local_deepseek_v4_flash_proposal_mtp_attachment_loads() {
     let model_dir = local_deepseek_v4_dir().expect("local DeepSeek V4 checkpoint is required");
     let model = DeepSeekV4Checkpoint::load_hf_with_limit(&model_dir, 128 * 1024 * 1024)
         .expect("local DeepSeek V4 artifact should load");
     let mtp = model
-        .load_mtp()
-        .expect("local DSpark attachment should bind")
+        .load_proposal_attachment()
+        .expect("local Proposal attachment should bind")
         .expect("local checkpoint should contain an MTP attachment");
 
     assert_eq!(mtp.config.block_size, 5);
@@ -186,7 +179,7 @@ fn local_deepseek_v4_dir() -> Option<PathBuf> {
     let default = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join("models")
-        .join("DeepSeek-V4-Flash-DSpark");
+        .join("DeepSeek-V4-Flash-0731");
     has_complete_deepseek_v4_artifact(&default).then_some(default)
 }
 

@@ -10,12 +10,12 @@ use std::io::{Read, Seek, SeekFrom};
 
 use std::time::{Duration, Instant};
 
+use ferrule_backend::plan::{ExecutionMode, KernelOperation, ModelKernelPlan};
+#[cfg(feature = "cuda")]
+use ferrule_backend::plan::{KernelProviderId, LaunchDescriptor};
 use ferrule_common::execution::{
     ExecutionTransactionId, ForwardPhase, KvCowReplacement, KvLayoutSchema, KvPageId,
 };
-use ferrule_common::kernel_plan::{KernelOperation, ModelKernelPlan};
-#[cfg(feature = "cuda")]
-use ferrule_common::kernel_plan::{KernelProviderId, LaunchDescriptor};
 use ferrule_common::{CompletionHub, Error, ResidencyLeaseSet, Result};
 
 use crate::attention_backend::SparseAttentionSpec;
@@ -26,6 +26,7 @@ use crate::checkpoint::weight::ActivationQuantization;
 use crate::checkpoint::weight::{LinearWeight, LinearWeightFormat};
 use crate::ffn::SwiGluFfnPayload;
 use crate::hyper_connection::{HyperConnectionConfig, HyperConnectionWeights};
+use crate::moe::cuda_materialization::{CudaExpertFrame, CudaSharedExpertSubsystem};
 use crate::moe::routing::RouterWeights;
 
 use crate::moe::prediction::{ExpertAccessPhase, ExpertBatchAccessEvent};
@@ -38,7 +39,7 @@ use crate::runner::{TokenLogit, completion_notify_callback};
 
 use super::attention::DeepSeekV4CompressorPayload;
 use super::config::{DeepSeekV4AttentionConfig, DeepSeekV4RopeParams};
-use super::cuda_materialization::DeepSeekV4SharedExpertSubsystem;
+
 use super::helpers::yarn_frequency;
 use super::layer::DeepSeekV4Layer;
 
@@ -55,8 +56,8 @@ struct CudaRopeTable {
     rope_dim: usize,
     rope: DeepSeekV4RopeParams,
     capacity: usize,
-    cos: ferrule_cuda::context::CudaF32Buffer,
-    sin: ferrule_cuda::context::CudaF32Buffer,
+    cos: ferrule_backend::cuda::context::CudaF32Buffer,
+    sin: ferrule_backend::cuda::context::CudaF32Buffer,
 }
 
 fn validate_rope_table_request(
@@ -154,9 +155,11 @@ fn rope_table_capacity(required_positions: usize) -> Result<usize> {
 #[cfg(feature = "cuda")]
 #[derive(Default)]
 pub(crate) struct DeepSeekV4CudaSequenceKvState {
-    pub(crate) main_compressor_recurrent: Option<ferrule_cuda::CudaCompressorRecurrentState>,
+    pub(crate) main_compressor_recurrent:
+        Option<ferrule_backend::cuda::CudaCompressorRecurrentState>,
     pub(crate) main_compressor_needs_reset: bool,
-    pub(crate) indexer_compressor_recurrent: Option<ferrule_cuda::CudaCompressorRecurrentState>,
+    pub(crate) indexer_compressor_recurrent:
+        Option<ferrule_backend::cuda::CudaCompressorRecurrentState>,
     pub(crate) indexer_compressor_needs_reset: bool,
 }
 
@@ -164,7 +167,7 @@ pub(crate) struct DeepSeekV4CudaSequenceKvState {
 impl DeepSeekV4CudaSequenceKvState {
     fn fork_paged_prefix(
         &self,
-        operators: &ferrule_cuda::CudaArtifactOperatorContext,
+        operators: &ferrule_backend::cuda::CudaArtifactOperatorContext,
     ) -> Result<Self> {
         Ok(Self {
             main_compressor_recurrent: self
@@ -217,8 +220,8 @@ pub(crate) struct DeepSeekV4CudaAttentionPrefixMetadata {
 #[cfg(feature = "cuda")]
 #[derive(Default)]
 struct DeepSeekV4CudaLayerPrefixCheckpoints {
-    main: Option<ferrule_cuda::CudaCompressorRecurrentCheckpointSlab>,
-    indexer: Option<ferrule_cuda::CudaCompressorRecurrentCheckpointSlab>,
+    main: Option<ferrule_backend::cuda::CudaCompressorRecurrentCheckpointSlab>,
+    indexer: Option<ferrule_backend::cuda::CudaCompressorRecurrentCheckpointSlab>,
     metadata: Vec<Option<DeepSeekV4CudaAttentionPrefixMetadata>>,
 }
 
@@ -241,9 +244,9 @@ struct DeepSeekV4CudaProvisionalPrefixCheckpoints {
 
 #[cfg(feature = "cuda")]
 fn capture_recurrent_checkpoint(
-    operators: &ferrule_cuda::CudaArtifactOperatorContext,
-    source: Option<&ferrule_cuda::CudaCompressorRecurrentState>,
-    checkpoints: &mut Option<ferrule_cuda::CudaCompressorRecurrentCheckpointSlab>,
+    operators: &ferrule_backend::cuda::CudaArtifactOperatorContext,
+    source: Option<&ferrule_backend::cuda::CudaCompressorRecurrentState>,
+    checkpoints: &mut Option<ferrule_backend::cuda::CudaCompressorRecurrentCheckpointSlab>,
     slots: usize,
     slot: usize,
 ) -> Result<()> {
@@ -266,10 +269,10 @@ fn capture_recurrent_checkpoint(
 
 #[cfg(feature = "cuda")]
 fn restore_recurrent_checkpoint(
-    operators: &ferrule_cuda::CudaArtifactOperatorContext,
-    checkpoints: Option<&ferrule_cuda::CudaCompressorRecurrentCheckpointSlab>,
+    operators: &ferrule_backend::cuda::CudaArtifactOperatorContext,
+    checkpoints: Option<&ferrule_backend::cuda::CudaCompressorRecurrentCheckpointSlab>,
     slot: usize,
-    destination: &mut Option<ferrule_cuda::CudaCompressorRecurrentState>,
+    destination: &mut Option<ferrule_backend::cuda::CudaCompressorRecurrentState>,
 ) -> Result<()> {
     match (checkpoints, destination.as_mut()) {
         (Some(checkpoints), Some(destination)) => {
@@ -302,14 +305,15 @@ struct DeepSeekV4CudaMetrics {
 
 #[cfg(feature = "cuda")]
 pub(crate) struct DeepSeekV4CudaOperatorCache {
-    pub(crate) ops: ferrule_cuda::context::CudaArtifactOperatorContext,
+    pub(crate) ops: ferrule_backend::cuda::context::CudaArtifactOperatorContext,
     completion_hub: CompletionHub,
     profile: bool,
     metrics: DeepSeekV4CudaMetrics,
     managed_experts: bool,
-    expert_subsystem: Option<DeepSeekV4SharedExpertSubsystem>,
-    kv_page_pool: Option<ferrule_cuda::CudaKvPagePool>,
-    pending_kv_reservations: HashMap<ExecutionTransactionId, Vec<ferrule_cuda::KvPoolReservation>>,
+    expert_subsystem: Option<CudaSharedExpertSubsystem>,
+    kv_page_pool: Option<ferrule_backend::cuda::CudaKvPagePool>,
+    pending_kv_reservations:
+        HashMap<ExecutionTransactionId, Vec<ferrule_backend::cuda::KvPoolReservation>>,
     provisional_prefix_checkpoints:
         HashMap<ExecutionTransactionId, DeepSeekV4CudaProvisionalPrefixCheckpoints>,
     active_provisional_prefix_transaction: Option<ExecutionTransactionId>,
@@ -322,21 +326,21 @@ pub(crate) struct DeepSeekV4CudaOperatorCache {
     execution_image: Option<DeepSeekV4CudaExecutionImage>,
     /// Packed input token IDs reuse one device allocation for each row count.
     #[cfg(feature = "cuda")]
-    embedding_token_ids: HashMap<usize, ferrule_cuda::context::CudaI32HostMirror>,
+    embedding_token_ids: HashMap<usize, ferrule_backend::cuda::context::CudaI32HostMirror>,
     /// Token ids are persistent by packed batch shape. The host mirror prevents
     /// repeated H2D copies as every routed layer sees the same batch/step ids.
-    router_token_ids: HashMap<usize, ferrule_cuda::context::CudaDsv4RouterTokenIds>,
+    router_token_ids: HashMap<usize, ferrule_backend::cuda::context::CudaDsv4RouterTokenIds>,
     /// Reusable interleaved i32/f32-bit mirrors. A mirror is removed from this
     /// pool while its control-stream D2H is owned by a model continuation.
-    compact_i32_mirrors: HashMap<usize, Vec<ferrule_cuda::context::CudaI32HostMirror>>,
+    compact_i32_mirrors: HashMap<usize, Vec<ferrule_backend::cuda::context::CudaI32HostMirror>>,
     /// Typed precomputed RoPE tables keyed by their stable layer/resource name.
     /// Each entry records its parameters and growable position capacity so a
     /// same-name shape/configuration mismatch cannot be silently reused.
     rope_tables: HashMap<String, CudaRopeTable>,
-    /// Exact-shape top-k index buffers for device-resident sparse attention.
-    /// Packed prefill and decode use different row counts and must not evict each
-    /// other's warm buffer.
-    topk_buffers: HashMap<usize, ferrule_cuda::context::CudaI32Buffer>,
+
+    /// Reusable maximum-width provider scratch keyed by packed row count.
+    hybrid_mla_explicit_selection_workspaces:
+        HashMap<usize, ferrule_backend::cuda::context::CudaHybridMlaExplicitSelectionWorkspace>,
     /// Exact-shape logical/selector scratch for combined-ring paged attention.
     /// DSV4 compression boundaries make adjacent layers alternate between a few
     /// top-k widths; caching by element count avoids synchronizing `cuMemFree`
@@ -344,19 +348,19 @@ pub(crate) struct DeepSeekV4CudaOperatorCache {
     paged_topk_buffers: HashMap<
         usize,
         (
-            ferrule_cuda::context::CudaI32Buffer,
-            ferrule_cuda::context::CudaI32Buffer,
+            ferrule_backend::cuda::context::CudaI32Buffer,
+            ferrule_backend::cuda::context::CudaI32Buffer,
         ),
     >,
     #[cfg(feature = "cuda")]
-    output_head_logits: HashMap<(usize, usize), ferrule_cuda::context::CudaF32Buffer>,
+    output_head_logits: HashMap<(usize, usize), ferrule_backend::cuda::context::CudaF32Buffer>,
     #[cfg(feature = "cuda")]
     output_head_linear_workspaces:
-        HashMap<usize, ferrule_cuda::context::CudaArtifactLinearWorkspace>,
+        HashMap<usize, ferrule_backend::cuda::context::CudaArtifactLinearWorkspace>,
     #[cfg(feature = "cuda")]
-    output_head_indices: HashMap<usize, ferrule_cuda::context::CudaI32Buffer>,
+    output_head_indices: HashMap<usize, ferrule_backend::cuda::context::CudaI32Buffer>,
     #[cfg(feature = "cuda")]
-    output_head_values: HashMap<usize, ferrule_cuda::context::CudaF32Buffer>,
+    output_head_values: HashMap<usize, ferrule_backend::cuda::context::CudaF32Buffer>,
 }
 
 #[cfg(feature = "cuda")]
@@ -422,22 +426,22 @@ impl DeepSeekV4CudaLinear {
 #[cfg(feature = "cuda")]
 struct HcDeviceWeights {
     /// Logical `[rows, K]` HC function repacked as `[K, rows]` on device.
-    function_col_major: ferrule_cuda::context::CudaF32Buffer,
-    scale: ferrule_cuda::context::CudaF32Buffer,
-    base: ferrule_cuda::context::CudaF32Buffer,
+    function_col_major: ferrule_backend::cuda::context::CudaF32Buffer,
+    scale: ferrule_backend::cuda::context::CudaF32Buffer,
+    base: ferrule_backend::cuda::context::CudaF32Buffer,
 }
 
 #[cfg(feature = "cuda")]
 struct DeepSeekV4CudaPreparedLinear {
-    handle: ferrule_cuda::context::CudaArtifactLinearHandle,
+    handle: ferrule_backend::cuda::context::CudaArtifactLinearHandle,
     #[cfg(feature = "cuda")]
     activation_quantization: Option<ActivationQuantization>,
 }
 
 #[cfg(feature = "cuda")]
 struct DeepSeekV4CudaPreparedCompressor {
-    ape: ferrule_cuda::context::CudaF32Buffer,
-    norm: ferrule_cuda::context::CudaF32Buffer,
+    ape: ferrule_backend::cuda::context::CudaF32Buffer,
+    norm: ferrule_backend::cuda::context::CudaF32Buffer,
     kv: DeepSeekV4CudaPreparedLinear,
     gate: DeepSeekV4CudaPreparedLinear,
 }
@@ -459,17 +463,17 @@ struct DeepSeekV4CudaPreparedLayer {
     shared_gate: DeepSeekV4CudaPreparedLinear,
     shared_up: DeepSeekV4CudaPreparedLinear,
     shared_down: DeepSeekV4CudaPreparedLinear,
-    attention_norm: ferrule_cuda::context::CudaF32Buffer,
-    feed_forward_norm: ferrule_cuda::context::CudaF32Buffer,
-    query_norm: ferrule_cuda::context::CudaF32Buffer,
-    key_value_norm: ferrule_cuda::context::CudaF32Buffer,
+    attention_norm: ferrule_backend::cuda::context::CudaF32Buffer,
+    feed_forward_norm: ferrule_backend::cuda::context::CudaF32Buffer,
+    query_norm: ferrule_backend::cuda::context::CudaF32Buffer,
+    key_value_norm: ferrule_backend::cuda::context::CudaF32Buffer,
     attention_hc: HcDeviceWeights,
     feed_forward_hc: HcDeviceWeights,
-    attention_sink: ferrule_cuda::context::CudaF32Buffer,
+    attention_sink: ferrule_backend::cuda::context::CudaF32Buffer,
     main_compressor: Option<DeepSeekV4CudaPreparedCompressor>,
     indexer_compressor: Option<DeepSeekV4CudaPreparedCompressor>,
-    router_bias: Option<ferrule_cuda::context::CudaF32Buffer>,
-    router_hash_table: Option<ferrule_cuda::context::CudaDsv4RouterHashTable>,
+    router_bias: Option<ferrule_backend::cuda::context::CudaF32Buffer>,
+    router_hash_table: Option<ferrule_backend::cuda::context::CudaDsv4RouterHashTable>,
 }
 
 #[cfg(feature = "cuda")]
@@ -510,41 +514,52 @@ struct DeepSeekV4CudaExecutionImage {
     generation: u64,
     hc_config: HyperConnectionConfig,
     hc_head: HcHeadDeviceWeights,
-    output_norm: ferrule_cuda::context::CudaF32Buffer,
+    output_norm: ferrule_backend::cuda::context::CudaF32Buffer,
     #[cfg(feature = "cuda")]
-    embedding: ferrule_cuda::context::CudaArtifactLinearHandle,
+    embedding: ferrule_backend::cuda::context::CudaArtifactLinearHandle,
     #[cfg(feature = "cuda")]
-    output_head: ferrule_cuda::context::CudaArtifactLinearHandle,
+    output_head: ferrule_backend::cuda::context::CudaArtifactLinearHandle,
     layers: Box<[DeepSeekV4CudaPreparedLayer]>,
     kernel_plan: ModelKernelPlan,
-    mtp: Option<DeepSeekV4CudaPreparedMtp>,
+    mtp: Option<DeepSeekV4CudaPreparedProposalAttachment>,
 }
 
-/// Immutable DSpark resources are prepared before publication even though the
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct DeepSeekV4CudaImageProfile {
+    pub globals_us: u64,
+    pub embedding_us: u64,
+    pub output_head_us: u64,
+    pub target_layers_us: u64,
+    pub attachment_us: u64,
+    pub total_us: u64,
+}
+
+/// Immutable Proposal resources are prepared before publication even though the
 /// execution methods are connected in a subsequent R1 step. Holding them in the
 /// image gives every pointer the same generation and CUDA-context lifetime.
 #[allow(dead_code)]
-struct DeepSeekV4CudaPreparedMtp {
+struct DeepSeekV4CudaPreparedProposalAttachment {
     block_size: usize,
     noise_token_id: u32,
     target_layer_ids: Box<[usize]>,
-    layers: Box<[DeepSeekV4CudaPreparedMtpLayer]>,
-    heads: DeepSeekV4CudaPreparedMtpHeads,
+    layers: Box<[DeepSeekV4CudaPreparedProposalStage]>,
+    heads: DeepSeekV4CudaPreparedProposalHeads,
     transformer_kernel_plan: ModelKernelPlan,
 }
 
 #[allow(dead_code)]
-struct DeepSeekV4CudaPreparedMtpLayer {
+struct DeepSeekV4CudaPreparedProposalStage {
     execution_layer: usize,
     transformer: DeepSeekV4CudaPreparedLayer,
     main_proj: Option<DeepSeekV4CudaPreparedLinear>,
-    main_norm: Option<ferrule_cuda::context::CudaF32Buffer>,
+    main_norm: Option<ferrule_backend::cuda::context::CudaF32Buffer>,
 }
 
 #[allow(dead_code)]
-struct DeepSeekV4CudaPreparedMtpHeads {
+struct DeepSeekV4CudaPreparedProposalHeads {
     hc_head: HcHeadDeviceWeights,
-    norm: ferrule_cuda::context::CudaF32Buffer,
+    norm: ferrule_backend::cuda::context::CudaF32Buffer,
     markov_w1: DeepSeekV4CudaPreparedLinear,
     markov_w2: DeepSeekV4CudaPreparedLinear,
     confidence_proj: DeepSeekV4CudaPreparedLinear,
@@ -553,18 +568,18 @@ struct DeepSeekV4CudaPreparedMtpHeads {
 #[cfg(feature = "cuda")]
 struct HcHeadDeviceWeights {
     /// HC head has only four rows; its original row-major streams are faster.
-    function_row_major: ferrule_cuda::context::CudaF32Buffer,
-    scale: ferrule_cuda::context::CudaF32Buffer,
-    base: ferrule_cuda::context::CudaF32Buffer,
+    function_row_major: ferrule_backend::cuda::context::CudaF32Buffer,
+    scale: ferrule_backend::cuda::context::CudaF32Buffer,
+    base: ferrule_backend::cuda::context::CudaF32Buffer,
 }
 
 #[cfg(feature = "cuda")]
 struct ActivePagedKvBinding {
     physical_block_slots: Vec<i32>,
-    block_slots_device: ferrule_cuda::context::CudaI32HostMirror,
-    block_offsets_device: ferrule_cuda::context::CudaI32HostMirror,
-    kv_len_device: ferrule_cuda::context::CudaI32HostMirror,
-    row_sequence_ids_device: ferrule_cuda::context::CudaI32HostMirror,
+    block_slots_device: ferrule_backend::cuda::context::CudaI32HostMirror,
+    block_offsets_device: ferrule_backend::cuda::context::CudaI32HostMirror,
+    kv_len_device: ferrule_backend::cuda::context::CudaI32HostMirror,
+    row_sequence_ids_device: ferrule_backend::cuda::context::CudaI32HostMirror,
     page_tokens: usize,
     layer_count: usize,
     sequence_count: usize,
@@ -653,48 +668,48 @@ fn validate_router_hash_table_shape(
 #[derive(Default)]
 struct DeepSeekV4DecodeArena {
     #[cfg(feature = "cuda")]
-    dspark_main: HashMap<usize, DeepSeekV4DsparkMainBuffers>,
-    hc_inputs: HashMap<usize, ferrule_cuda::context::CudaF32Buffer>,
-    final_hiddens: HashMap<usize, ferrule_cuda::context::CudaF32Buffer>,
-    final_norms: HashMap<usize, ferrule_cuda::context::CudaF32Buffer>,
-    topk_rows: HashMap<usize, ferrule_cuda::context::CudaF32Buffer>,
+    proposal_main: HashMap<usize, DeepSeekV4ProposalMainBuffers>,
+    hc_inputs: HashMap<usize, ferrule_backend::cuda::context::CudaF32Buffer>,
+    final_hiddens: HashMap<usize, ferrule_backend::cuda::context::CudaF32Buffer>,
+    final_norms: HashMap<usize, ferrule_backend::cuda::context::CudaF32Buffer>,
+    topk_rows: HashMap<usize, ferrule_backend::cuda::context::CudaF32Buffer>,
 }
 
 #[cfg(feature = "cuda")]
-pub(crate) struct DeepSeekV4DsparkMainBuffers {
-    pub(crate) target_taps: ferrule_cuda::context::CudaF32Buffer,
-    pub(crate) positions: ferrule_cuda::context::CudaI32Buffer,
-    activation: ferrule_cuda::context::CudaFp8ActivationPack,
-    inv_rms: ferrule_cuda::context::CudaF32Buffer,
-    pub(crate) main_x: ferrule_cuda::context::CudaF32Buffer,
-    context_kv_raw: ferrule_cuda::context::CudaF32Buffer,
-    context_kv: ferrule_cuda::context::CudaF32Buffer,
-    context_linear_workspace: ferrule_cuda::context::CudaArtifactLinearWorkspace,
+pub(crate) struct DeepSeekV4ProposalMainBuffers {
+    pub(crate) target_taps: ferrule_backend::cuda::context::CudaF32Buffer,
+    pub(crate) positions: ferrule_backend::cuda::context::CudaI32Buffer,
+    activation: ferrule_backend::cuda::context::CudaFp8ActivationPack,
+    inv_rms: ferrule_backend::cuda::context::CudaF32Buffer,
+    pub(crate) main_x: ferrule_backend::cuda::context::CudaF32Buffer,
+    context_kv_raw: ferrule_backend::cuda::context::CudaF32Buffer,
+    context_kv: ferrule_backend::cuda::context::CudaF32Buffer,
+    context_linear_workspace: ferrule_backend::cuda::context::CudaArtifactLinearWorkspace,
 }
 
 #[cfg(feature = "cuda")]
-pub(crate) struct DeepSeekV4DsparkAttentionBuffers {
-    workspace: ferrule_cuda::context::CudaDsparkHybridAttentionWorkspace,
+pub(crate) struct DeepSeekV4ProposalAttentionBuffers {
+    workspace: ferrule_backend::cuda::context::CudaHybridMlaAttentionWorkspace,
 }
 
 #[cfg(feature = "cuda")]
-pub(crate) struct DeepSeekV4DsparkProposalHeadBuffers {
-    workspace: ferrule_cuda::context::CudaDsparkProposalHeadWorkspace,
+pub(crate) struct DeepSeekV4ProposalHeadBuffers {
+    workspace: ferrule_backend::cuda::context::CudaProposalHeadWorkspace,
 }
 
 #[cfg(feature = "cuda")]
 pub(crate) struct DeepSeekV4DecodeBuffers {
-    pub(crate) hc_input: ferrule_cuda::context::CudaF32Buffer,
-    pub(crate) final_hidden: ferrule_cuda::context::CudaF32Buffer,
-    pub(crate) final_norm: ferrule_cuda::context::CudaF32Buffer,
-    pub(crate) topk_row: ferrule_cuda::context::CudaF32Buffer,
+    pub(crate) hc_input: ferrule_backend::cuda::context::CudaF32Buffer,
+    pub(crate) final_hidden: ferrule_backend::cuda::context::CudaF32Buffer,
+    pub(crate) final_norm: ferrule_backend::cuda::context::CudaF32Buffer,
+    pub(crate) topk_row: ferrule_backend::cuda::context::CudaF32Buffer,
 }
 
 #[cfg(feature = "cuda")]
 struct CudaCompactI32Download {
     compact_len: usize,
-    mirror: Option<ferrule_cuda::context::CudaI32HostMirror>,
-    download: ferrule_cuda::context::CudaI32HostDownload,
+    mirror: Option<ferrule_backend::cuda::context::CudaI32HostMirror>,
+    download: ferrule_backend::cuda::context::CudaI32HostDownload,
     callback_armed: bool,
 }
 
@@ -709,7 +724,7 @@ pub(crate) struct DeepSeekV4OutputHeadTopKDownload {
 
 #[cfg(feature = "cuda")]
 pub(crate) struct DeepSeekV4CudaComputeQuiescence {
-    event: ferrule_cuda::context::CudaComputeEvent,
+    event: ferrule_backend::cuda::context::CudaComputeEvent,
     callback_armed: bool,
 }
 
@@ -813,8 +828,8 @@ pub(crate) struct DeepSeekV4CudaPackedMoeContinuation {
     sequence_phases: Option<Vec<ExpertAccessPhase>>,
     row_to_sequence: Option<Vec<usize>>,
     swiglu_limit: f32,
-    resident_slots: Option<usize>,
-    segment_capacity: Option<usize>,
+    resident_slot_capacity: Option<usize>,
+    route_plan_capacity: usize,
     next_chunk_start: usize,
     current_chunk: Option<CudaPackedMoeChunk>,
     retained_leases: Vec<ResidencyLeaseSet>,
@@ -899,29 +914,6 @@ fn record_profile_duration(stat: &mut u64, start: Option<Instant>) {
     }
 }
 
-fn fixed_eight_segment_capacity(route_count: usize, resident_slots: usize) -> Result<usize> {
-    let populated_slots = route_count.min(resident_slots);
-    let padding = populated_slots.checked_mul(7).ok_or_else(|| {
-        Error::Internal { message: format!(
-            "CUDA segmented MoE fixed-eight capacity overflow: routes={route_count} resident_slots={resident_slots}"
-        ) }
-    })?;
-    let padded_routes = route_count.checked_add(padding).ok_or_else(|| {
-        Error::Internal { message: format!(
-            "CUDA segmented MoE fixed-eight capacity overflow: routes={route_count} resident_slots={resident_slots}"
-        ) }
-    })?;
-    let segment_capacity = (padded_routes / 8).max(1);
-    if segment_capacity > u16::MAX as usize {
-        return Err(Error::Internal {
-            message: format!(
-                "CUDA segmented MoE fixed-eight segment capacity {segment_capacity} exceeds the u16 limit 65535: routes={route_count} resident_slots={resident_slots}"
-            ),
-        });
-    }
-    Ok(segment_capacity)
-}
-
 fn decode_output_head_topk_rows(
     compact: &[i32],
     batch_rows: usize,
@@ -988,8 +980,20 @@ fn decode_output_head_topk_rows(
 
 #[cfg(feature = "cuda")]
 impl DeepSeekV4CudaOperatorCache {
-    pub(crate) fn pinned_host_allocator(&self) -> ferrule_cuda::context::CudaPinnedHostAllocator {
+    pub(crate) fn pinned_host_allocator(
+        &self,
+    ) -> ferrule_backend::cuda::context::CudaPinnedHostAllocator {
         self.ops.pinned_host_allocator()
+    }
+
+    pub(crate) fn memory_info(&self) -> Result<(usize, usize)> {
+        self.ops.memory_info()
+    }
+
+    pub(crate) fn compute_stream_authority(
+        &self,
+    ) -> ferrule_backend::cuda::context::CudaComputeStreamAuthority {
+        self.ops.compute_stream_authority()
     }
 
     #[cfg(test)]
@@ -1000,13 +1004,13 @@ impl DeepSeekV4CudaOperatorCache {
         Self::new_with_completion_hub(policy, expert_memory_policy, CompletionHub::new())
     }
 
-    pub(crate) fn new_with_completion_hub(
+    pub(super) fn new_with_completion_hub(
         policy: &DeepSeekV4ExecutionPolicy,
         _expert_memory_policy: ExpertMemoryPolicy,
         completion_hub: CompletionHub,
     ) -> Result<Self> {
         Ok(Self {
-            ops: ferrule_cuda::context::CudaArtifactOperatorContext::new()?,
+            ops: ferrule_backend::cuda::context::CudaArtifactOperatorContext::new()?,
             completion_hub,
             profile: policy.profile_enabled(),
             metrics: DeepSeekV4CudaMetrics::default(),
@@ -1027,7 +1031,8 @@ impl DeepSeekV4CudaOperatorCache {
             router_token_ids: HashMap::new(),
             compact_i32_mirrors: HashMap::new(),
             rope_tables: HashMap::new(),
-            topk_buffers: HashMap::new(),
+
+            hybrid_mla_explicit_selection_workspaces: HashMap::new(),
             paged_topk_buffers: HashMap::new(),
             #[cfg(feature = "cuda")]
             output_head_logits: HashMap::new(),
@@ -1053,7 +1058,7 @@ impl DeepSeekV4CudaOperatorCache {
         let data_planes = schema.planes().get(..3).ok_or_else(|| Error::Model {
             message: "DeepSeek-V4 KV schema is missing token-scaled data planes".into(),
         })?;
-        self.kv_page_pool = Some(ferrule_cuda::CudaKvPagePool::new(
+        self.kv_page_pool = Some(ferrule_backend::cuda::CudaKvPagePool::new(
             &self.ops,
             data_planes,
             schema.page_size(),
@@ -1737,16 +1742,16 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn take_dspark_main_buffers(
+    pub(crate) fn take_proposal_main_buffers(
         &mut self,
         rows: usize,
-    ) -> Result<DeepSeekV4DsparkMainBuffers> {
+    ) -> Result<DeepSeekV4ProposalMainBuffers> {
         if rows == 0 {
             return Err(Error::Model {
-                message: "DeepSeek-V4 DSpark main buffers require at least one row".into(),
+                message: "DeepSeek-V4 Proposal main buffers require at least one row".into(),
             });
         }
-        if let Some(buffers) = self.decode_arena.dspark_main.remove(&rows) {
+        if let Some(buffers) = self.decode_arena.proposal_main.remove(&rows) {
             return Ok(buffers);
         }
         let (tap_count, input_size, output_size, context_kv_size) = {
@@ -1755,13 +1760,13 @@ impl DeepSeekV4CudaOperatorCache {
                 .mtp
                 .as_ref()
                 .ok_or_else(|| Error::Model {
-                    message: "DeepSeek-V4 CUDA DSpark image is missing".into(),
+                    message: "DeepSeek-V4 CUDA Proposal image is missing".into(),
                 })?;
             let stage_zero = mtp.layers.first().ok_or_else(|| Error::Model {
-                message: "DeepSeek-V4 CUDA DSpark image has no stages".into(),
+                message: "DeepSeek-V4 CUDA Proposal image has no stages".into(),
             })?;
             let projection = stage_zero.main_proj.as_ref().ok_or_else(|| Error::Model {
-                message: "DeepSeek-V4 CUDA DSpark stage zero main projection is missing".into(),
+                message: "DeepSeek-V4 CUDA Proposal stage zero main projection is missing".into(),
             })?;
             let output_size = projection.handle.shape().out_features();
             let context_kv_size = stage_zero
@@ -1778,7 +1783,7 @@ impl DeepSeekV4CudaOperatorCache {
                 {
                     return Err(Error::Model {
                         message: format!(
-                            "DeepSeek-V4 CUDA DSpark stage {stage} context-KV shape mismatch: wkv={:?} norm={} main_x={output_size} expected_kv={context_kv_size}",
+                            "DeepSeek-V4 CUDA Proposal stage {stage} context-KV shape mismatch: wkv={:?} norm={} main_x={output_size} expected_kv={context_kv_size}",
                             key_value.shape(),
                             layer.transformer.key_value_norm.len()
                         ),
@@ -1795,22 +1800,22 @@ impl DeepSeekV4CudaOperatorCache {
         if tap_count == 0 || input_size % tap_count != 0 {
             return Err(Error::Model {
                 message: format!(
-                    "DeepSeek-V4 CUDA DSpark tap layout is invalid: taps={tap_count} input={input_size}"
+                    "DeepSeek-V4 CUDA Proposal tap layout is invalid: taps={tap_count} input={input_size}"
                 ),
             });
         }
         let target_taps_len = rows.checked_mul(input_size).ok_or_else(|| Error::Model {
-            message: "DeepSeek-V4 CUDA DSpark target-tap size overflow".into(),
+            message: "DeepSeek-V4 CUDA Proposal target-tap size overflow".into(),
         })?;
         let main_x_len = rows.checked_mul(output_size).ok_or_else(|| Error::Model {
-            message: "DeepSeek-V4 CUDA DSpark main-x size overflow".into(),
+            message: "DeepSeek-V4 CUDA Proposal main-x size overflow".into(),
         })?;
         let context_kv_len = rows
             .checked_mul(context_kv_size)
             .ok_or_else(|| Error::Model {
-                message: "DeepSeek-V4 CUDA DSpark context-KV size overflow".into(),
+                message: "DeepSeek-V4 CUDA Proposal context-KV size overflow".into(),
             })?;
-        Ok(DeepSeekV4DsparkMainBuffers {
+        Ok(DeepSeekV4ProposalMainBuffers {
             target_taps: self.ops.zero_f32_buffer(target_taps_len)?,
             positions: self.ops.zero_i32_buffer(rows)?,
             activation: self.ops.fp8_activation_pack(rows, input_size)?,
@@ -1823,43 +1828,43 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn restore_dspark_main_buffers(
+    pub(crate) fn restore_proposal_main_buffers(
         &mut self,
         rows: usize,
-        buffers: DeepSeekV4DsparkMainBuffers,
+        buffers: DeepSeekV4ProposalMainBuffers,
     ) {
-        self.decode_arena.dspark_main.insert(rows, buffers);
+        self.decode_arena.proposal_main.insert(rows, buffers);
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn allocate_dspark_attention_buffers(
+    pub(crate) fn allocate_proposal_attention_buffers(
         &self,
-    ) -> Result<DeepSeekV4DsparkAttentionBuffers> {
+    ) -> Result<DeepSeekV4ProposalAttentionBuffers> {
         let mtp = self
             .prepared_image()?
             .mtp
             .as_ref()
             .ok_or_else(|| Error::Model {
-                message: "DeepSeek-V4 CUDA DSpark image is missing".into(),
+                message: "DeepSeek-V4 CUDA Proposal image is missing".into(),
             })?;
-        if mtp.block_size != ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS {
+        if mtp.block_size != ferrule_backend::cuda::cutlass::PROPOSAL_ROWS {
             return Err(Error::Model {
                 message: format!(
-                    "DeepSeek-V4 CUDA DSpark attention requires {} proposal rows, checkpoint declares {}",
-                    ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS,
+                    "DeepSeek-V4 CUDA Proposal attention requires {} proposal rows, checkpoint declares {}",
+                    ferrule_backend::cuda::cutlass::PROPOSAL_ROWS,
                     mtp.block_size
                 ),
             });
         }
-        Ok(DeepSeekV4DsparkAttentionBuffers {
-            workspace: self.ops.dspark_hybrid_attention_workspace()?,
+        Ok(DeepSeekV4ProposalAttentionBuffers {
+            workspace: self.ops.hybrid_mla_attention_workspace()?,
         })
     }
 
     pub(crate) fn resident_embedding_hc_rows_into(
         &mut self,
         token_ids: &[u32],
-        output: &mut ferrule_cuda::context::CudaF32Buffer,
+        output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         #[cfg(not(feature = "cuda"))]
         {
@@ -1930,16 +1935,16 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn dspark_proposal_input_device_into(
+    pub(crate) fn proposal_input_device_into(
         &self,
         anchor_token_id: u32,
-        output: &mut ferrule_cuda::context::CudaF32Buffer,
+        output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         let image = self.prepared_image()?;
         let mtp = image.mtp.as_ref().ok_or_else(|| Error::Model {
-            message: "DeepSeek-V4 CUDA DSpark image is missing".into(),
+            message: "DeepSeek-V4 CUDA Proposal image is missing".into(),
         })?;
-        self.ops.dspark_embedding_hc_from_resident_bf16_into(
+        self.ops.proposal_embedding_hc_from_resident_bf16_into(
             &image.embedding,
             anchor_token_id,
             mtp.noise_token_id,
@@ -1950,19 +1955,17 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn allocate_dspark_proposal_head_buffers(
-        &self,
-    ) -> Result<DeepSeekV4DsparkProposalHeadBuffers> {
+    pub(crate) fn allocate_proposal_head_buffers(&self) -> Result<DeepSeekV4ProposalHeadBuffers> {
         const PARTIAL_CAPACITY: usize = 64;
         let image = self.prepared_image()?;
         let mtp = image.mtp.as_ref().ok_or_else(|| Error::Model {
-            message: "DeepSeek-V4 CUDA DSpark image is missing".into(),
+            message: "DeepSeek-V4 CUDA Proposal image is missing".into(),
         })?;
         let output_shape = image.output_head.shape();
         let vocab = output_shape.out_features();
         let hidden = output_shape.in_features();
         let markov_rank = mtp.heads.markov_w1.handle.shape().in_features();
-        if mtp.block_size != ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS
+        if mtp.block_size != ferrule_backend::cuda::cutlass::PROPOSAL_ROWS
             || hidden != image.hc_config.hidden_size
             || mtp.heads.markov_w1.handle.shape().out_features() != vocab
             || mtp.heads.markov_w2.handle.shape().out_features() != vocab
@@ -1973,7 +1976,7 @@ impl DeepSeekV4CudaOperatorCache {
         {
             return Err(Error::Model {
                 message: format!(
-                    "DeepSeek-V4 DSpark proposal-head shape mismatch: output={output_shape:?} block={} w1={:?} w2={:?} confidence={:?}",
+                    "DeepSeek-V4 Proposal-head shape mismatch: output={output_shape:?} block={} w1={:?} w2={:?} confidence={:?}",
                     mtp.block_size,
                     mtp.heads.markov_w1.handle.shape(),
                     mtp.heads.markov_w2.handle.shape(),
@@ -1981,8 +1984,8 @@ impl DeepSeekV4CudaOperatorCache {
                 ),
             });
         }
-        Ok(DeepSeekV4DsparkProposalHeadBuffers {
-            workspace: self.ops.dspark_proposal_head_workspace(
+        Ok(DeepSeekV4ProposalHeadBuffers {
+            workspace: self.ops.proposal_head_workspace(
                 mtp.block_size,
                 hidden,
                 vocab,
@@ -1992,16 +1995,16 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn capture_dspark_target_tap_from_device(
+    pub(crate) fn capture_proposal_target_tap_from_device(
         &self,
         target_layer: usize,
-        hc_state: &ferrule_cuda::context::CudaF32Buffer,
+        hc_state: &ferrule_backend::cuda::context::CudaF32Buffer,
         rows: usize,
-        target_taps: &mut ferrule_cuda::context::CudaF32Buffer,
+        target_taps: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<bool> {
         let image = self.prepared_image()?;
         let mtp = image.mtp.as_ref().ok_or_else(|| Error::Model {
-            message: "DeepSeek-V4 CUDA DSpark image is missing".into(),
+            message: "DeepSeek-V4 CUDA Proposal image is missing".into(),
         })?;
         let Some(tap_slot) = mtp
             .target_layer_ids
@@ -2023,18 +2026,19 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn dspark_main_project_norm_device_into(
+    pub(crate) fn proposal_main_project_norm_device_into(
         &self,
         rows: usize,
-        buffers: &mut DeepSeekV4DsparkMainBuffers,
+        buffers: &mut DeepSeekV4ProposalMainBuffers,
     ) -> Result<()> {
-        let descriptor = self.require_mtp_operation(0, KernelOperation::DsparkMainProjectNorm)?;
-        if descriptor.kernel.provider != KernelProviderId::ExternalProvider
+        let descriptor =
+            self.require_mtp_inference_descriptor(0, KernelOperation::MainProjectNorm)?;
+        if descriptor.kernel.provider != KernelProviderId::CUDA_CUTLASS
             || !descriptor.is_provider_managed()
         {
             return Err(Error::Model {
                 message: format!(
-                    "invalid SM121 DSpark main-project/norm provider binding: {:?}",
+                    "invalid Proposal main-project/norm provider binding: {:?}",
                     descriptor.kernel
                 ),
             });
@@ -2045,15 +2049,15 @@ impl DeepSeekV4CudaOperatorCache {
             .as_ref()
             .and_then(|mtp| mtp.layers.first())
             .ok_or_else(|| Error::Model {
-                message: "DeepSeek-V4 CUDA DSpark stage zero is missing".into(),
+                message: "DeepSeek-V4 CUDA Proposal stage zero is missing".into(),
             })?;
         let projection = stage_zero.main_proj.as_ref().ok_or_else(|| Error::Model {
-            message: "DeepSeek-V4 CUDA DSpark stage-zero projection is missing".into(),
+            message: "DeepSeek-V4 CUDA Proposal stage-zero projection is missing".into(),
         })?;
         let norm = stage_zero.main_norm.as_ref().ok_or_else(|| Error::Model {
-            message: "DeepSeek-V4 CUDA DSpark stage-zero norm is missing".into(),
+            message: "DeepSeek-V4 CUDA Proposal stage-zero norm is missing".into(),
         })?;
-        self.ops.artifact_dspark_main_project_norm_cutlass_into(
+        self.ops.artifact_main_project_norm_into(
             &projection.handle,
             norm,
             &buffers.target_taps,
@@ -2066,30 +2070,30 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn dspark_proposal_head_device_into(
+    pub(crate) fn proposal_head_device_into(
         &self,
         anchor_token_id: u32,
-        hc_state: &ferrule_cuda::context::CudaF32Buffer,
-        buffers: &mut DeepSeekV4DsparkProposalHeadBuffers,
+        hc_state: &ferrule_backend::cuda::context::CudaF32Buffer,
+        buffers: &mut DeepSeekV4ProposalHeadBuffers,
     ) -> Result<()> {
-        let descriptor = self.require_mtp_operation(0, KernelOperation::DsparkProposalHead)?;
-        if descriptor.kernel.provider != KernelProviderId::ExternalProvider
+        let descriptor = self.require_mtp_inference_descriptor(0, KernelOperation::ProposalHead)?;
+        if descriptor.kernel.provider != KernelProviderId::CUDA_CUTLASS
             || !descriptor.is_provider_managed()
         {
             return Err(Error::Model {
                 message: format!(
-                    "invalid SM121 DSpark proposal-head provider binding: {:?}",
+                    "invalid Proposal-head provider binding: {:?}",
                     descriptor.kernel
                 ),
             });
         }
         let image = self.prepared_image()?;
         let mtp = image.mtp.as_ref().ok_or_else(|| Error::Model {
-            message: "DeepSeek-V4 CUDA DSpark image is missing".into(),
+            message: "DeepSeek-V4 CUDA Proposal image is missing".into(),
         })?;
         let output_shape = image.output_head.shape();
         let markov_rank = mtp.heads.markov_w1.handle.shape().in_features();
-        self.ops.artifact_dspark_proposal_head_cutlass_into(
+        self.ops.artifact_proposal_head_into(
             hc_state,
             &mtp.heads.hc_head.function_row_major,
             &mtp.heads.hc_head.scale,
@@ -2100,7 +2104,7 @@ impl DeepSeekV4CudaOperatorCache {
             &mtp.heads.markov_w2.handle,
             &mtp.heads.confidence_proj.handle,
             anchor_token_id,
-            ferrule_cuda::cutlass::DsparkProposalHeadLayout {
+            ferrule_backend::cuda::cutlass::ProposalHeadLayout {
                 rows: mtp.block_size,
                 hc: image.hc_config.hc_mult,
                 hidden: output_shape.in_features(),
@@ -2115,34 +2119,34 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn begin_dspark_proposal_head_result_download(
+    pub(crate) fn begin_proposal_head_result_download(
         &self,
-        buffers: &mut DeepSeekV4DsparkProposalHeadBuffers,
-    ) -> Result<ferrule_cuda::context::CudaI32HostDownload> {
+        buffers: &mut DeepSeekV4ProposalHeadBuffers,
+    ) -> Result<ferrule_backend::cuda::context::CudaI32HostDownload> {
         self.ops
-            .begin_dspark_proposal_head_result_download(&mut buffers.workspace)
+            .begin_proposal_head_result_download(&mut buffers.workspace)
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn poll_dspark_proposal_head_result_download(
+    pub(crate) fn poll_proposal_head_result(
         &self,
-        buffers: &mut DeepSeekV4DsparkProposalHeadBuffers,
-        download: &ferrule_cuda::context::CudaI32HostDownload,
+        buffers: &mut DeepSeekV4ProposalHeadBuffers,
+        download: &ferrule_backend::cuda::context::CudaI32HostDownload,
     ) -> Result<Option<Vec<i32>>> {
         self.ops
-            .poll_dspark_proposal_head_result_download(&mut buffers.workspace, download)
+            .poll_proposal_head_result(&mut buffers.workspace, download)
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn decode_dspark_proposal_head_result(
+    pub(crate) fn decode_proposal_head_result(
         &self,
         compact: Vec<i32>,
     ) -> Result<(Vec<u32>, Vec<f32>)> {
-        let rows = ferrule_cuda::cutlass::DSPARK_PROPOSAL_ROWS;
+        let rows = ferrule_backend::cuda::cutlass::PROPOSAL_ROWS;
         if compact.len() != 1 + 2 * rows || compact[0] != 0 {
             return Err(Error::Execution {
                 message: format!(
-                    "DeepSeek-V4 DSpark compact proposal-head result is invalid: {compact:?}"
+                    "DeepSeek-V4 Proposal compact proposal-head result is invalid: {compact:?}"
                 ),
             });
         }
@@ -2151,7 +2155,7 @@ impl DeepSeekV4CudaOperatorCache {
             .copied()
             .map(|token| {
                 u32::try_from(token).map_err(|_| Error::Execution {
-                    message: format!("DeepSeek-V4 DSpark proposal emitted invalid token {token}"),
+                    message: format!("DeepSeek-V4 Proposal emitted invalid token {token}"),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -2162,30 +2166,30 @@ impl DeepSeekV4CudaOperatorCache {
         Ok((token_ids, confidence))
     }
 
-    /// Execute the official DSpark hybrid attention against one stage's
+    /// Execute the official Proposal hybrid attention against one stage's
     /// committed paged context and the read-only five-row proposal KV block.
     /// The stage is resolved only through the prepared MTP image; target-layer
     /// bindings are never consulted.
     #[cfg(feature = "cuda")]
-    pub(crate) fn dspark_hybrid_attention_device_into(
+    pub(crate) fn proposal_hybrid_attention_device_into(
         &self,
         stage: usize,
         expected_execution_layer: usize,
         config: DeepSeekV4AttentionConfig,
         sequence_tokens: usize,
-        query: &ferrule_cuda::context::CudaF32Buffer,
-        block_kv: &ferrule_cuda::context::CudaF32Buffer,
-        output: &mut ferrule_cuda::context::CudaF32Buffer,
-        buffers: &mut DeepSeekV4DsparkAttentionBuffers,
+        query: &ferrule_backend::cuda::context::CudaF32Buffer,
+        block_kv: &ferrule_backend::cuda::context::CudaF32Buffer,
+        output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        buffers: &mut DeepSeekV4ProposalAttentionBuffers,
     ) -> Result<()> {
         let descriptor =
-            self.require_mtp_operation(stage, KernelOperation::DsparkHybridMlaAttention)?;
-        if descriptor.kernel.provider != KernelProviderId::ExternalProvider
+            self.require_mtp_inference_descriptor(stage, KernelOperation::HybridMlaAttention)?;
+        if descriptor.kernel.provider != KernelProviderId::CUDA_CUTLASS
             || !descriptor.is_provider_managed()
         {
             return Err(Error::Model {
                 message: format!(
-                    "invalid SM121 DSpark hybrid-attention provider binding at stage {stage}: {:?}",
+                    "invalid Proposal hybrid-attention provider binding at stage {stage}: {:?}",
                     descriptor.kernel
                 ),
             });
@@ -2195,24 +2199,24 @@ impl DeepSeekV4CudaOperatorCache {
         if execution_layer != expected_execution_layer {
             return Err(Error::Model {
                 message: format!(
-                    "DeepSeek-V4 DSpark stage/execution-layer mismatch: stage={stage} prepared={execution_layer} requested={expected_execution_layer}"
+                    "DeepSeek-V4 Proposal stage/execution-layer mismatch: stage={stage} prepared={execution_layer} requested={expected_execution_layer}"
                 ),
             });
         }
-        if config.num_heads != ferrule_cuda::cutlass::DSPARK_ATTENTION_HEADS
-            || config.head_dim != ferrule_cuda::cutlass::DSPARK_ATTENTION_HEAD_DIM
-            || config.window_size != ferrule_cuda::cutlass::DSPARK_ATTENTION_WINDOW
+        if config.num_heads != ferrule_backend::cuda::cutlass::HYBRID_MLA_ATTENTION_HEADS
+            || config.head_dim != ferrule_backend::cuda::cutlass::HYBRID_MLA_ATTENTION_HEAD_DIM
+            || config.window_size != ferrule_backend::cuda::cutlass::HYBRID_MLA_ATTENTION_WINDOW
             || config.compress_ratio != 0
         {
             return Err(Error::Model {
                 message: format!(
-                    "DeepSeek-V4 DSpark hybrid-attention shape mismatch at stage {stage}: heads={} head_dim={} window={} compress_ratio={}",
+                    "DeepSeek-V4 Proposal hybrid-attention shape mismatch at stage {stage}: heads={} head_dim={} window={} compress_ratio={}",
                     config.num_heads, config.head_dim, config.window_size, config.compress_ratio
                 ),
             });
         }
         let active = self.active_paged_kv.as_ref().ok_or_else(|| Error::Model {
-            message: "DeepSeek-V4 DSpark hybrid attention has no active paged binding".into(),
+            message: "DeepSeek-V4 Proposal hybrid attention has no active paged binding".into(),
         })?;
         if active.sequence_count != 1
             || sequence_tokens == 0
@@ -2225,7 +2229,7 @@ impl DeepSeekV4CudaOperatorCache {
         {
             return Err(Error::Model {
                 message: format!(
-                    "DeepSeek-V4 DSpark hybrid-attention binding mismatch: stage={stage} execution_layer={execution_layer} sequence_tokens={sequence_tokens} sequences={} slots={} page_tokens={} layer_count={}",
+                    "DeepSeek-V4 Proposal hybrid-attention binding mismatch: stage={stage} execution_layer={execution_layer} sequence_tokens={sequence_tokens} sequences={} slots={} page_tokens={} layer_count={}",
                     active.sequence_count,
                     active.physical_block_slots.len(),
                     active.page_tokens,
@@ -2237,34 +2241,34 @@ impl DeepSeekV4CudaOperatorCache {
             message: "DeepSeek-V4 CUDA physical KV pool is not configured".into(),
         })?;
         let context_plane = pool.plane_storage(0).ok_or_else(|| Error::Model {
-            message: "DeepSeek-V4 DSpark window KV plane is missing".into(),
+            message: "DeepSeek-V4 Proposal window KV plane is missing".into(),
         })?;
         let plane = pool.planes().first().ok_or_else(|| Error::Model {
-            message: "DeepSeek-V4 DSpark window KV descriptor is missing".into(),
+            message: "DeepSeek-V4 Proposal window KV descriptor is missing".into(),
         })?;
-        if active.page_tokens != ferrule_cuda::cutlass::DSPARK_ATTENTION_PAGE_TOKENS
+        if active.page_tokens != ferrule_backend::cuda::cutlass::HYBRID_MLA_ATTENTION_PAGE_TOKENS
             || plane.elements_per_token != config.head_dim
             || plane.layer_count != active.layer_count
         {
             return Err(Error::Model {
                 message: format!(
-                    "DeepSeek-V4 DSpark hybrid-attention plane mismatch: page_tokens={} elements_per_token={} layer_count={} expected_page_tokens={} expected_head_dim={} active_layers={}",
+                    "DeepSeek-V4 Proposal hybrid-attention plane mismatch: page_tokens={} elements_per_token={} layer_count={} expected_page_tokens={} expected_head_dim={} active_layers={}",
                     active.page_tokens,
                     plane.elements_per_token,
                     plane.layer_count,
-                    ferrule_cuda::cutlass::DSPARK_ATTENTION_PAGE_TOKENS,
+                    ferrule_backend::cuda::cutlass::HYBRID_MLA_ATTENTION_PAGE_TOKENS,
                     config.head_dim,
                     active.layer_count
                 ),
             });
         }
-        self.ops.dspark_hybrid_mla_attention_into(
+        self.ops.hybrid_mla_attention_into(
             query,
             context_plane,
             block_kv,
             &active.block_slots_device,
             &prepared.transformer.attention_sink,
-            ferrule_cuda::cutlass::DsparkHybridMlaAttentionLayout {
+            ferrule_backend::cuda::cutlass::HybridMlaAttentionLayout {
                 sequence_tokens,
                 page_tokens: active.page_tokens,
                 elements_per_token: plane.elements_per_token,
@@ -2279,33 +2283,33 @@ impl DeepSeekV4CudaOperatorCache {
         )
     }
 
-    /// Packed variant of the official DSpark context branch. Target rows may
+    /// Packed variant of the official Proposal context branch. Target rows may
     /// belong to multiple sequences, so RoPE and paged publication use the
     /// authoritative per-row positions and active row-to-sequence bindings.
     #[cfg(feature = "cuda")]
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn dspark_context_kv_stage_packed_device_into(
+    pub(crate) fn proposal_context_kv_stage_packed_device_into(
         &mut self,
         stage: usize,
         config: DeepSeekV4AttentionConfig,
         rows: usize,
         max_position: usize,
-        buffers: &mut DeepSeekV4DsparkMainBuffers,
+        buffers: &mut DeepSeekV4ProposalMainBuffers,
     ) -> Result<()> {
         const ROPE_NAMES: [&str; 8] = [
-            "rope_dspark_stage_0",
-            "rope_dspark_stage_1",
-            "rope_dspark_stage_2",
-            "rope_dspark_stage_3",
-            "rope_dspark_stage_4",
-            "rope_dspark_stage_5",
-            "rope_dspark_stage_6",
-            "rope_dspark_stage_7",
+            "rope_proposal_stage_0",
+            "rope_proposal_stage_1",
+            "rope_proposal_stage_2",
+            "rope_proposal_stage_3",
+            "rope_proposal_stage_4",
+            "rope_proposal_stage_5",
+            "rope_proposal_stage_6",
+            "rope_proposal_stage_7",
         ];
         if rows == 0 || config.compress_ratio != 0 || buffers.positions.len() != rows {
             return Err(Error::Model {
                 message: format!(
-                    "DeepSeek-V4 packed DSpark stage {stage} context-KV shape mismatch: rows={rows} positions={} compress_ratio={}",
+                    "DeepSeek-V4 packed Proposal stage {stage} context-KV shape mismatch: rows={rows} positions={} compress_ratio={}",
                     buffers.positions.len(),
                     config.compress_ratio
                 ),
@@ -2313,7 +2317,7 @@ impl DeepSeekV4CudaOperatorCache {
         }
         let rope_name = ROPE_NAMES.get(stage).copied().ok_or_else(|| Error::Model {
             message: format!(
-                "DeepSeek-V4 DSpark stage {stage} exceeds the prepared RoPE identity table"
+                "DeepSeek-V4 Proposal stage {stage} exceeds the prepared RoPE identity table"
             ),
         })?;
         let execution_layer = self.prepared_mtp_stage(stage)?.execution_layer;
@@ -2323,7 +2327,7 @@ impl DeepSeekV4CudaOperatorCache {
         {
             return Err(Error::Model {
                 message: format!(
-                    "DeepSeek-V4 packed DSpark stage {stage} context-KV buffer mismatch: main_x={}/{} raw={}/{} kv={}/{}",
+                    "DeepSeek-V4 packed Proposal stage {stage} context-KV buffer mismatch: main_x={}/{} raw={}/{} kv={}/{}",
                     buffers.main_x.len(),
                     rows.saturating_mul(config.hidden_size),
                     buffers.context_kv_raw.len(),
@@ -2356,7 +2360,7 @@ impl DeepSeekV4CudaOperatorCache {
             )?;
         }
         let required_positions = max_position.checked_add(1).ok_or_else(|| Error::Model {
-            message: "DeepSeek-V4 DSpark context position overflow".into(),
+            message: "DeepSeek-V4 Proposal context position overflow".into(),
         })?;
         self.ensure_rope_tables_with_params(
             rope_name,
@@ -2371,10 +2375,10 @@ impl DeepSeekV4CudaOperatorCache {
             max_position,
             1,
             u32::try_from(config.head_dim).map_err(|_| Error::Model {
-                message: "DeepSeek-V4 DSpark context head dimension exceeds u32".into(),
+                message: "DeepSeek-V4 Proposal context head dimension exceeds u32".into(),
             })?,
             u32::try_from(config.rope_head_dim).map_err(|_| Error::Model {
-                message: "DeepSeek-V4 DSpark context RoPE dimension exceeds u32".into(),
+                message: "DeepSeek-V4 Proposal context RoPE dimension exceeds u32".into(),
             })?,
             false,
         )?;
@@ -2399,7 +2403,7 @@ impl DeepSeekV4CudaOperatorCache {
 
     pub(super) fn configure_expert_subsystem(
         &mut self,
-        subsystem: DeepSeekV4SharedExpertSubsystem,
+        subsystem: CudaSharedExpertSubsystem,
     ) -> Result<()> {
         if self.expert_subsystem.is_some() {
             return Err(Error::Execution {
@@ -2419,7 +2423,8 @@ impl DeepSeekV4CudaOperatorCache {
     pub(crate) fn shutdown(&mut self) -> Result<()> {
         self.ops.sync_stream()?;
         self.decode_arena = DeepSeekV4DecodeArena::default();
-        self.topk_buffers.clear();
+
+        self.hybrid_mla_explicit_selection_workspaces.clear();
         self.paged_topk_buffers.clear();
         #[cfg(feature = "cuda")]
         {
@@ -2454,14 +2459,10 @@ impl DeepSeekV4CudaOperatorCache {
             stream_wide_syncs: cuda.stream_wide_syncs,
             stream_wide_sync_failures: cuda.stream_wide_sync_failures,
             moe_calls: cuda.moe_calls,
-            moe_tc_calls: cuda.moe_tc_calls,
-            moe_scalar_calls: cuda.moe_scalar_calls,
-            moe_reduce_calls: cuda.moe_reduce_calls,
             moe_total_us: cuda.moe_total_us,
             moe_input_prepare_us: cuda.moe_input_prepare_us,
             moe_gate_up_us: cuda.moe_gate_up_us,
             moe_swiglu_us: cuda.moe_swiglu_us,
-            moe_hidden_pack_us: cuda.moe_hidden_pack_us,
             moe_down_us: cuda.moe_down_us,
             output_head_calls: self.metrics.output_head_calls,
             output_head_rows: self.metrics.output_head_rows,
@@ -2509,8 +2510,8 @@ impl DeepSeekV4CudaOperatorCache {
         }
         if !matches!(
             prepared.handle.shape(),
-            ferrule_cuda::context::CudaArtifactLinearShape::F32 { .. }
-                | ferrule_cuda::context::CudaArtifactLinearShape::Bf16Bytes { .. }
+            ferrule_backend::cuda::context::CudaArtifactLinearShape::F32 { .. }
+                | ferrule_backend::cuda::context::CudaArtifactLinearShape::Bf16Bytes { .. }
         ) {
             return Err(Error::Model {
                 message: format!(
@@ -2527,15 +2528,15 @@ impl DeepSeekV4CudaOperatorCache {
         layer: usize,
         first: DeepSeekV4CudaLinear,
         second: DeepSeekV4CudaLinear,
-        input: &ferrule_cuda::context::CudaF32Buffer,
-        first_output: &mut ferrule_cuda::context::CudaF32Buffer,
-        second_output: &mut ferrule_cuda::context::CudaF32Buffer,
+        input: &ferrule_backend::cuda::context::CudaF32Buffer,
+        first_output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        second_output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         #[cfg(not(feature = "cuda"))]
         {
             let _ = (layer, first, second, input, first_output, second_output);
             return Err(Error::Model {
-                message: "GB10 compressor execution requires the `cutlass` feature".into(),
+                message: "CUDA compressor execution requires the `cutlass` feature".into(),
             });
         }
         #[cfg(feature = "cuda")]
@@ -2551,22 +2552,14 @@ impl DeepSeekV4CudaOperatorCache {
                 ) => KernelOperation::IndexerCompressorProjection,
                 _ => {
                     return Err(Error::Model {
-                        message: format!("SM121 BF16 bundle does not bind {first:?}+{second:?}"),
+                        message: format!("BF16 bundle does not bind {first:?}+{second:?}"),
                     });
                 }
             };
-            let descriptor = self.require_operation(layer, operation)?;
-            if descriptor.kernel.provider != KernelProviderId::ExternalProvider {
-                return Err(Error::Model {
-                    message: format!(
-                        "invalid SM121 compressor provider binding: {:?}",
-                        descriptor.kernel
-                    ),
-                });
-            }
+            self.require_inference_operation(layer, operation)?;
             let first = self.readonly_prepared_linear(layer, first, input.len())?;
             let second = self.readonly_prepared_linear(layer, second, input.len())?;
-            self.ops.artifact_bf16_compressor_cutlass_into(
+            self.ops.artifact_bf16_compressor_into(
                 &first.handle,
                 &second.handle,
                 input,
@@ -2583,7 +2576,7 @@ impl DeepSeekV4CudaOperatorCache {
         config: HyperConnectionConfig,
     ) -> Result<HcDeviceWeights> {
         weights.validate(config)?;
-        let function_col_major = ferrule_cuda::context::transpose_hc_function_for_device(
+        let function_col_major = ferrule_backend::cuda::context::transpose_hc_function_for_device(
             &weights.function,
             config.mix_hc(),
         )?;
@@ -2598,7 +2591,7 @@ impl DeepSeekV4CudaOperatorCache {
     fn upload_resident_bf16_matrix(
         &self,
         matrix: &CheckpointMatrixSlice,
-    ) -> Result<ferrule_cuda::context::CudaArtifactLinearHandle> {
+    ) -> Result<ferrule_backend::cuda::context::CudaArtifactLinearHandle> {
         const CHUNK_BYTES: usize = 16 * 1024 * 1024;
         if matrix.slice.dtype != CheckpointDType::Bf16 {
             return Err(Error::Model {
@@ -2623,7 +2616,7 @@ impl DeepSeekV4CudaOperatorCache {
                 ),
             });
         }
-        let shape = ferrule_cuda::context::CudaArtifactLinearShape::Bf16Bytes {
+        let shape = ferrule_backend::cuda::context::CudaArtifactLinearShape::Bf16Bytes {
             out_features: matrix.rows,
             in_features: matrix.cols,
         };
@@ -2805,17 +2798,17 @@ impl DeepSeekV4CudaOperatorCache {
         })
     }
 
-    fn upload_prepared_mtp(
+    fn upload_prepared_proposal_attachment(
         &self,
         resources: &DeepSeekV4PreparedResources,
         hc_config: HyperConnectionConfig,
-    ) -> Result<Option<DeepSeekV4CudaPreparedMtp>> {
+    ) -> Result<Option<DeepSeekV4CudaPreparedProposalAttachment>> {
         let Some(mtp) = resources.mtp() else {
             return Ok(None);
         };
         let transformer_kernel_plan =
             resources
-                .mtp_transformer_kernel_plan()
+                .proposal_transformer_kernel_plan()
                 .ok_or_else(|| Error::Model {
                     message: "DeepSeek-V4 MTP transformer plan is missing".into(),
                 })?;
@@ -2855,7 +2848,7 @@ impl DeepSeekV4CudaOperatorCache {
                     ),
                 });
             }
-            layers.push(DeepSeekV4CudaPreparedMtpLayer {
+            layers.push(DeepSeekV4CudaPreparedProposalStage {
                 execution_layer: layer.execution_layer,
                 transformer: self.upload_prepared_layer(&layer.transformer)?,
                 main_proj: layer
@@ -2875,7 +2868,7 @@ impl DeepSeekV4CudaOperatorCache {
             message: "DeepSeek-V4 CUDA MTP image requires prediction heads".into(),
         })?;
         prediction_heads.hc_head.validate(hc_config)?;
-        let heads = DeepSeekV4CudaPreparedMtpHeads {
+        let heads = DeepSeekV4CudaPreparedProposalHeads {
             hc_head: HcHeadDeviceWeights {
                 function_row_major: self
                     .ops
@@ -2894,7 +2887,7 @@ impl DeepSeekV4CudaOperatorCache {
             message: "DeepSeek-V4 CUDA MTP image requires a noise token id".into(),
         })?;
 
-        Ok(Some(DeepSeekV4CudaPreparedMtp {
+        Ok(Some(DeepSeekV4CudaPreparedProposalAttachment {
             block_size: mtp.config.block_size,
             noise_token_id,
             target_layer_ids: mtp.config.target_layer_ids.clone().into_boxed_slice(),
@@ -2913,7 +2906,7 @@ impl DeepSeekV4CudaOperatorCache {
         &mut self,
         generation: u64,
         resources: &DeepSeekV4PreparedResources,
-    ) -> Result<()> {
+    ) -> Result<DeepSeekV4CudaImageProfile> {
         let model = resources.model();
         let layers = resources.layers();
         let kernel_plan = resources.kernel_plan();
@@ -2934,7 +2927,7 @@ impl DeepSeekV4CudaOperatorCache {
                 && image.kernel_plan.layers.len() == kernel_plan.layers.len()
                 && image_mtp_layers == requested_mtp_layers
             {
-                return Ok(());
+                return Ok(DeepSeekV4CudaImageProfile::default());
             }
             return Err(Error::Model {
                 message: format!(
@@ -2945,6 +2938,8 @@ impl DeepSeekV4CudaOperatorCache {
             });
         }
 
+        let total_start = Instant::now();
+        let phase_start = Instant::now();
         let hc_config = model.config.hc_config();
         model.hc_head.validate(hc_config)?;
         let hc_head = HcHeadDeviceWeights {
@@ -2953,11 +2948,21 @@ impl DeepSeekV4CudaOperatorCache {
             base: self.ops.upload_f32_buffer(&model.hc_head.base)?,
         };
         let output_norm = self.upload_norm_weight(&model.output_norm)?;
+        let globals_us = duration_us(phase_start.elapsed());
+        #[cfg(feature = "cuda")]
+        let phase_start = Instant::now();
         #[cfg(feature = "cuda")]
         let embedding = self.upload_resident_bf16_matrix(&model.embedding)?;
         #[cfg(feature = "cuda")]
+        let embedding_us = duration_us(phase_start.elapsed());
+        #[cfg(feature = "cuda")]
+        let phase_start = Instant::now();
+        #[cfg(feature = "cuda")]
         let output_head = self.upload_resident_bf16_matrix(&model.output_head)?;
+        #[cfg(feature = "cuda")]
+        let output_head_us = duration_us(phase_start.elapsed());
 
+        let phase_start = Instant::now();
         let mut prepared = Vec::new();
         prepared
             .try_reserve_exact(layers.len())
@@ -2978,8 +2983,11 @@ impl DeepSeekV4CudaOperatorCache {
             }
             prepared.push(self.upload_prepared_layer(layer)?);
         }
+        let target_layers_us = duration_us(phase_start.elapsed());
 
-        let prepared_mtp = self.upload_prepared_mtp(resources, hc_config)?;
+        let phase_start = Instant::now();
+        let prepared_mtp = self.upload_prepared_proposal_attachment(resources, hc_config)?;
+        let attachment_us = duration_us(phase_start.elapsed());
         self.execution_image = Some(DeepSeekV4CudaExecutionImage {
             generation,
             hc_config,
@@ -2993,7 +3001,14 @@ impl DeepSeekV4CudaOperatorCache {
             kernel_plan: kernel_plan.clone(),
             mtp: prepared_mtp,
         });
-        Ok(())
+        Ok(DeepSeekV4CudaImageProfile {
+            globals_us,
+            embedding_us,
+            output_head_us,
+            target_layers_us,
+            attachment_us,
+            total_us: duration_us(total_start.elapsed()),
+        })
     }
 
     fn prepared_image(&self) -> Result<&DeepSeekV4CudaExecutionImage> {
@@ -3006,7 +3021,7 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     #[cfg(feature = "cuda")]
-    fn require_operation(
+    fn require_inference_descriptor(
         &self,
         execution_layer: usize,
         operation: KernelOperation,
@@ -3015,7 +3030,7 @@ impl DeepSeekV4CudaOperatorCache {
         let descriptor = image
             .kernel_plan
             .layer(execution_layer)
-            .and_then(|plan| plan.operation(operation))
+            .and_then(|plan| plan.operation(operation, ExecutionMode::Inference))
             .copied()
             .or_else(|| {
                 let mtp = image.mtp.as_ref()?;
@@ -3025,18 +3040,18 @@ impl DeepSeekV4CudaOperatorCache {
                     .position(|layer| layer.execution_layer == execution_layer)?;
                 mtp.transformer_kernel_plan
                     .layer(stage)
-                    .and_then(|plan| plan.operation(operation))
+                    .and_then(|plan| plan.operation(operation, ExecutionMode::Inference))
                     .copied()
             });
         descriptor.ok_or_else(|| Error::Model {
             message: format!(
-                "SM121 {operation:?} plan is missing for execution layer={execution_layer}"
+                "inference operation {operation:?} is missing for execution layer={execution_layer}"
             ),
         })
     }
 
     #[cfg(feature = "cuda")]
-    fn require_mtp_operation(
+    fn require_mtp_inference_descriptor(
         &self,
         stage: usize,
         operation: KernelOperation,
@@ -3045,25 +3060,26 @@ impl DeepSeekV4CudaOperatorCache {
             .mtp
             .as_ref()
             .and_then(|mtp| mtp.transformer_kernel_plan.layer(stage))
-            .and_then(|plan| plan.operation(operation))
+            .and_then(|plan| plan.operation(operation, ExecutionMode::Inference))
             .copied()
             .ok_or_else(|| Error::Model {
                 message: format!(
-                    "DeepSeek-V4 CUDA MTP stage {stage} is missing required operation {operation:?}"
+                    "DeepSeek-V4 CUDA MTP stage {stage} is missing inference operation {operation:?}"
                 ),
             })
     }
 
     #[cfg(feature = "cuda")]
-    fn require_cutlass_operation(&self, layer: usize, operation: KernelOperation) -> Result<()> {
-        let descriptor = self.require_operation(layer, operation)?;
-        if descriptor.kernel.provider != KernelProviderId::ExternalProvider
+    fn require_inference_operation(&self, layer: usize, operation: KernelOperation) -> Result<()> {
+        let descriptor = self.require_inference_descriptor(layer, operation)?;
+        if descriptor.kernel.provider != KernelProviderId::CUDA_CUTLASS
             || descriptor.kernel.operation != operation
+            || descriptor.kernel.mode != ExecutionMode::Inference
             || !descriptor.is_provider_managed()
         {
             return Err(Error::Model {
                 message: format!(
-                    "invalid SM121 semantic binding for layer={layer} operation={operation:?}: {:?}",
+                    "invalid CUDA inference binding for layer={layer} operation={operation:?}: {:?}",
                     descriptor.kernel
                 ),
             });
@@ -3093,20 +3109,20 @@ impl DeepSeekV4CudaOperatorCache {
     }
 
     #[cfg(feature = "cuda")]
-    fn prepared_mtp_stage(&self, stage: usize) -> Result<&DeepSeekV4CudaPreparedMtpLayer> {
+    fn prepared_mtp_stage(&self, stage: usize) -> Result<&DeepSeekV4CudaPreparedProposalStage> {
         self.prepared_image()?
             .mtp
             .as_ref()
             .and_then(|mtp| mtp.layers.get(stage))
             .ok_or_else(|| Error::Model {
-                message: format!("DeepSeek-V4 CUDA DSpark stage {stage} is out of range"),
+                message: format!("DeepSeek-V4 CUDA Proposal stage {stage} is out of range"),
             })
     }
 
     fn prepared_attention_sink(
         &self,
         layer: usize,
-    ) -> Result<&ferrule_cuda::context::CudaF32Buffer> {
+    ) -> Result<&ferrule_backend::cuda::context::CudaF32Buffer> {
         Ok(&self.prepared_layer(layer)?.attention_sink)
     }
 
@@ -3146,7 +3162,7 @@ impl DeepSeekV4CudaOperatorCache {
     pub(crate) fn upload_norm_weight(
         &self,
         weight: &[f32],
-    ) -> Result<ferrule_cuda::context::CudaF32Buffer> {
+    ) -> Result<ferrule_backend::cuda::context::CudaF32Buffer> {
         self.ops.upload_norm_weight(weight)
     }
 
@@ -3154,10 +3170,10 @@ impl DeepSeekV4CudaOperatorCache {
         &self,
         layer: usize,
         norm: DeepSeekV4CudaLayerNorm,
-        input: &ferrule_cuda::context::CudaF32Buffer,
+        input: &ferrule_backend::cuda::context::CudaF32Buffer,
         rows: usize,
         eps: f32,
-        output: &mut ferrule_cuda::context::CudaF32Buffer,
+        output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         let prepared = self.prepared_layer(layer)?;
         let weight = match norm {
@@ -3182,10 +3198,10 @@ impl DeepSeekV4CudaOperatorCache {
         &self,
         layer: usize,
         compressor: DeepSeekV4CudaCompressor,
-        input: &ferrule_cuda::context::CudaF32Buffer,
+        input: &ferrule_backend::cuda::context::CudaF32Buffer,
         rows: usize,
         eps: f32,
-        output: &mut ferrule_cuda::context::CudaF32Buffer,
+        output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         let weight = &self.prepared_compressor(layer, compressor)?.norm;
         if rows == 0 || input.len() != rows * weight.len() || output.len() != input.len() {
@@ -3207,18 +3223,18 @@ impl DeepSeekV4CudaOperatorCache {
         &self,
         layer: usize,
         stage: DeepSeekV4CudaHcStage,
-        state: &ferrule_cuda::context::CudaF32Buffer,
+        state: &ferrule_backend::cuda::context::CudaF32Buffer,
         tokens: usize,
         config: HyperConnectionConfig,
-        hidden: &mut ferrule_cuda::context::CudaF32Buffer,
-        normalized: &mut ferrule_cuda::context::CudaF32Buffer,
-        pre: &mut ferrule_cuda::context::CudaF32Buffer,
-        post: &mut ferrule_cuda::context::CudaF32Buffer,
-        comb: &mut ferrule_cuda::context::CudaF32Buffer,
-        packed: &'a mut ferrule_cuda::context::CudaFp8ActivationPack,
-    ) -> Result<ferrule_cuda::context::CudaPreparedFp8Activation<'a>> {
+        hidden: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        normalized: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        pre: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        post: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        comb: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        packed: &'a mut ferrule_backend::cuda::context::CudaFp8ActivationPack,
+    ) -> Result<ferrule_backend::cuda::context::CudaPreparedFp8Activation<'a>> {
         #[cfg(feature = "cuda")]
-        self.require_cutlass_operation(
+        self.require_inference_operation(
             layer,
             match stage {
                 DeepSeekV4CudaHcStage::Attention => KernelOperation::AttentionHcPre,
@@ -3257,13 +3273,13 @@ impl DeepSeekV4CudaOperatorCache {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn hc_post_from_device_into(
         &self,
-        hidden: &ferrule_cuda::context::CudaF32Buffer,
-        residual: &ferrule_cuda::context::CudaF32Buffer,
-        split_post: &ferrule_cuda::context::CudaF32Buffer,
-        split_comb: &ferrule_cuda::context::CudaF32Buffer,
+        hidden: &ferrule_backend::cuda::context::CudaF32Buffer,
+        residual: &ferrule_backend::cuda::context::CudaF32Buffer,
+        split_post: &ferrule_backend::cuda::context::CudaF32Buffer,
+        split_comb: &ferrule_backend::cuda::context::CudaF32Buffer,
         tokens: usize,
         config: HyperConnectionConfig,
-        output: &mut ferrule_cuda::context::CudaF32Buffer,
+        output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         self.ops.hc_post_from_device_into(
             hidden,
@@ -3279,9 +3295,9 @@ impl DeepSeekV4CudaOperatorCache {
 
     pub(crate) fn hc_head_from_device_into(
         &self,
-        state: &ferrule_cuda::context::CudaF32Buffer,
+        state: &ferrule_backend::cuda::context::CudaF32Buffer,
         tokens: usize,
-        output: &mut ferrule_cuda::context::CudaF32Buffer,
+        output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         let image = self.prepared_image()?;
         self.ops.hc_head_from_device_into(
@@ -3302,10 +3318,10 @@ impl DeepSeekV4CudaOperatorCache {
     /// elements; `output` is written in-place with the same layout.
     pub(crate) fn rms_norm_output_rows_device_into(
         &self,
-        input: &ferrule_cuda::context::CudaF32Buffer,
+        input: &ferrule_backend::cuda::context::CudaF32Buffer,
         rows: usize,
         eps: f32,
-        output: &mut ferrule_cuda::context::CudaF32Buffer,
+        output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         let image = self.prepared_image()?;
         let weight = &image.output_norm;
@@ -3331,12 +3347,12 @@ impl DeepSeekV4CudaOperatorCache {
     fn dsv4_router_topk_routes_from_device_logits(
         &mut self,
         layer: usize,
-        logits: &ferrule_cuda::context::CudaF32Buffer,
+        logits: &ferrule_backend::cuda::context::CudaF32Buffer,
         token_ids: &[u32],
         router: &RouterWeights,
         router_policy: &ExpertRouterPolicy,
-        indices_dev: &mut ferrule_cuda::context::CudaI32Buffer,
-        weights_dev: &mut ferrule_cuda::context::CudaF32Buffer,
+        indices_dev: &mut ferrule_backend::cuda::context::CudaI32Buffer,
+        weights_dev: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         if router_policy.score_function != RouterScoreFunction::SqrtSoftplus
             || !router_policy.normalize_non_softmax_weights
@@ -3418,7 +3434,7 @@ impl DeepSeekV4CudaOperatorCache {
     fn take_compact_i32_mirror(
         &mut self,
         compact_len: usize,
-    ) -> Result<ferrule_cuda::context::CudaI32HostMirror> {
+    ) -> Result<ferrule_backend::cuda::context::CudaI32HostMirror> {
         if let Some(buffer) = self
             .compact_i32_mirrors
             .get_mut(&compact_len)
@@ -3432,7 +3448,7 @@ impl DeepSeekV4CudaOperatorCache {
     fn restore_compact_i32_mirror(
         &mut self,
         compact_len: usize,
-        buffer: ferrule_cuda::context::CudaI32HostMirror,
+        buffer: ferrule_backend::cuda::context::CudaI32HostMirror,
     ) {
         self.compact_i32_mirrors
             .entry(compact_len)
@@ -3455,8 +3471,8 @@ impl DeepSeekV4CudaOperatorCache {
 
     fn begin_dsv4_router_route_download(
         &mut self,
-        indices_dev: &ferrule_cuda::context::CudaI32Buffer,
-        weights_dev: &ferrule_cuda::context::CudaF32Buffer,
+        indices_dev: &ferrule_backend::cuda::context::CudaI32Buffer,
+        weights_dev: &ferrule_backend::cuda::context::CudaF32Buffer,
         tokens: usize,
         top_k: usize,
     ) -> Result<CudaCompactI32Download> {
@@ -3518,7 +3534,7 @@ impl DeepSeekV4CudaOperatorCache {
 
     pub(crate) fn begin_output_head_topk_rows_from_execution_image(
         &mut self,
-        hidden: &ferrule_cuda::context::CudaF32Buffer,
+        hidden: &ferrule_backend::cuda::context::CudaF32Buffer,
         batch_rows: usize,
         top_k: usize,
     ) -> Result<DeepSeekV4OutputHeadTopKDownload> {
@@ -3534,7 +3550,7 @@ impl DeepSeekV4CudaOperatorCache {
         {
             let (vocab, hidden_width) = {
                 let image = self.prepared_image()?;
-                let ferrule_cuda::context::CudaArtifactLinearShape::Bf16Bytes {
+                let ferrule_backend::cuda::context::CudaArtifactLinearShape::Bf16Bytes {
                     out_features,
                     in_features,
                 } = image.output_head.shape()
@@ -3745,7 +3761,7 @@ impl DeepSeekV4CudaOperatorCache {
     pub(crate) fn upload_linear(
         &self,
         linear: &LinearWeight,
-    ) -> Result<ferrule_cuda::context::CudaArtifactLinearHandle> {
+    ) -> Result<ferrule_backend::cuda::context::CudaArtifactLinearHandle> {
         match linear.format {
             LinearWeightFormat::F32 {
                 out_features,
@@ -3812,11 +3828,11 @@ impl DeepSeekV4CudaOperatorCache {
 
     pub(crate) fn rms_norm_heads_from_device_into(
         &self,
-        input: &ferrule_cuda::context::CudaF32Buffer,
+        input: &ferrule_backend::cuda::context::CudaF32Buffer,
         heads: usize,
         head_dim: usize,
         eps: f32,
-        output: &mut ferrule_cuda::context::CudaF32Buffer,
+        output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         self.ops
             .rms_norm_heads_from_device_into(input, heads, head_dim, eps, output)
@@ -3826,21 +3842,21 @@ impl DeepSeekV4CudaOperatorCache {
     pub(crate) fn begin_routed_moe_prefill_batch_from_device_into(
         &mut self,
         layer: usize,
-        input_dev: &ferrule_cuda::context::CudaF32Buffer,
-        shared_input_fp8: &ferrule_cuda::context::CudaPreparedFp8Activation<'_>,
-        shared_hidden_f32: &mut ferrule_cuda::context::CudaF32Buffer,
-        shared_hidden_fp8: &mut ferrule_cuda::context::CudaFp8ActivationPack,
+        input_dev: &ferrule_backend::cuda::context::CudaF32Buffer,
+        shared_input_fp8: &ferrule_backend::cuda::context::CudaPreparedFp8Activation<'_>,
+        shared_hidden_f32: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        shared_hidden_fp8: &mut ferrule_backend::cuda::context::CudaFp8ActivationPack,
         token_ids: &[u32],
         row_to_sequence: Option<&[usize]>,
         sequence_phases: Option<&[ForwardPhase]>,
         router: &RouterWeights,
         router_policy: &ExpertRouterPolicy,
         shared_expert: &SwiGluFfnPayload,
-        router_logits_dev: &mut ferrule_cuda::context::CudaF32Buffer,
-        router_indices_dev: &mut ferrule_cuda::context::CudaI32Buffer,
-        router_weights_dev: &mut ferrule_cuda::context::CudaF32Buffer,
-        linear_workspace: &mut ferrule_cuda::context::CudaArtifactLinearWorkspace,
-        output_dev: &mut ferrule_cuda::context::CudaF32Buffer,
+        router_logits_dev: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        router_indices_dev: &mut ferrule_backend::cuda::context::CudaI32Buffer,
+        router_weights_dev: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        linear_workspace: &mut ferrule_backend::cuda::context::CudaArtifactLinearWorkspace,
+        output_dev: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<DeepSeekV4CudaPackedMoeContinuation> {
         let tokens = token_ids.len();
         if tokens == 0 {
@@ -3928,7 +3944,7 @@ impl DeepSeekV4CudaOperatorCache {
 
         let stage_start = profile_start(self.profile);
         #[cfg(feature = "cuda")]
-        self.require_cutlass_operation(layer, KernelOperation::SharedFfn)?;
+        self.require_inference_operation(layer, KernelOperation::SharedFfn)?;
         let prepared = self.prepared_layer(layer)?;
         self.ops.artifact_shared_ffn_into(
             &prepared.shared_gate.handle,
@@ -3946,17 +3962,17 @@ impl DeepSeekV4CudaOperatorCache {
         record_profile_duration(&mut self.metrics.moe_shared_us, stage_start);
 
         #[cfg(feature = "cuda")]
-        self.require_cutlass_operation(layer, KernelOperation::RoutedFp4Moe)?;
+        self.require_inference_operation(layer, KernelOperation::GroupedFp4Moe)?;
         let routes_per_token = router_policy.top_k;
         let route_count = tokens
             .checked_mul(routes_per_token)
             .ok_or_else(|| Error::Internal {
-                message: "CUDA segmented MoE route count overflow".into(),
+                message: "CUDA routed MoE route count overflow".into(),
             })?;
         if route_count > i32::MAX as usize || tokens > i32::MAX as usize {
             return Err(Error::Internal {
                 message: format!(
-                    "CUDA segmented MoE exceeds i32 metadata ABI: tokens={tokens} routes={route_count}"
+                    "CUDA routed MoE exceeds i32 metadata ABI: tokens={tokens} routes={route_count}"
                 ),
             });
         }
@@ -3964,7 +3980,7 @@ impl DeepSeekV4CudaOperatorCache {
             route_count
                 .checked_mul(hidden_size)
                 .ok_or_else(|| Error::Internal {
-                    message: "CUDA segmented MoE route output overflow".into(),
+                    message: "CUDA routed MoE route output overflow".into(),
                 })?;
 
         Ok(DeepSeekV4CudaPackedMoeContinuation {
@@ -3980,8 +3996,8 @@ impl DeepSeekV4CudaOperatorCache {
             sequence_phases,
             row_to_sequence,
             swiglu_limit: shared_expert.swiglu_limit,
-            resident_slots: None,
-            segment_capacity: None,
+            resident_slot_capacity: None,
+            route_plan_capacity: route_count,
             next_chunk_start: 0,
             current_chunk: None,
             retained_leases: Vec::new(),
@@ -4010,12 +4026,12 @@ impl DeepSeekV4CudaOperatorCache {
         &mut self,
         mut continuation: DeepSeekV4CudaPackedMoeContinuation,
         leases: ResidencyLeaseSet,
-        input_dev: &ferrule_cuda::context::CudaF32Buffer,
-        router_indices: &ferrule_cuda::context::CudaI32Buffer,
-        router_weights: &ferrule_cuda::context::CudaF32Buffer,
-        segment_workspace: &mut Option<ferrule_cuda::context::CudaMoeSegmentWorkspace>,
-        route_output: &mut ferrule_cuda::context::CudaF32Buffer,
-        output_dev: &mut ferrule_cuda::context::CudaF32Buffer,
+        input_dev: &ferrule_backend::cuda::context::CudaF32Buffer,
+        router_indices: &ferrule_backend::cuda::context::CudaI32Buffer,
+        router_weights: &ferrule_backend::cuda::context::CudaF32Buffer,
+        route_plan: &mut Option<ferrule_backend::cuda::context::CudaExpertGroupRoutePlan>,
+        route_output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        output_dev: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<DeepSeekV4CudaPackedMoeProgress> {
         match packed_moe_resume_action(
             continuation.routes_pending(),
@@ -4035,7 +4051,7 @@ impl DeepSeekV4CudaOperatorCache {
             input_dev,
             router_indices,
             router_weights,
-            segment_workspace,
+            route_plan,
             route_output,
             output_dev,
         );
@@ -4120,7 +4136,7 @@ impl DeepSeekV4CudaOperatorCache {
             .collect::<Vec<_>>();
         if unique_experts.is_empty() {
             return Err(Error::Internal {
-                message: "CUDA segmented MoE selected no experts".into(),
+                message: "CUDA routed MoE selected no experts".into(),
             });
         }
         unique_experts.shrink_to_fit();
@@ -4149,26 +4165,22 @@ impl DeepSeekV4CudaOperatorCache {
             .ok_or_else(|| Error::Execution {
                 message: "DeepSeek-V4 shared expert subsystem is not attached".into(),
             })?;
-        if continuation.resident_slots.is_none() {
-            let resident_slots = subsystem
+        if continuation.resident_slot_capacity.is_none() {
+            let resident_slot_capacity = subsystem
                 .layer_slot_capacity(continuation.layer)?
                 .clamp(1, DSV4_EXPERT_TABLE_CAPACITY);
             let resident_experts = subsystem.resident_experts_for_layer(continuation.layer)?;
             continuation
                 .unique_experts
                 .sort_by_key(|expert| (!resident_experts.contains(expert), *expert));
-            continuation.resident_slots = Some(resident_slots);
-            continuation.segment_capacity = Some(fixed_eight_segment_capacity(
-                continuation.route_count,
-                resident_slots,
-            )?);
+            continuation.resident_slot_capacity = Some(resident_slot_capacity);
         }
-        let resident_slots = continuation
-            .resident_slots
-            .expect("resident capacity initialized above");
+        let resident_slot_capacity = continuation
+            .resident_slot_capacity
+            .expect("resident slot capacity initialized above");
         let end = continuation
             .next_chunk_start
-            .saturating_add(resident_slots)
+            .saturating_add(resident_slot_capacity)
             .min(continuation.unique_experts.len());
         let selected = continuation.unique_experts[continuation.next_chunk_start..end].to_vec();
         let selected_ids = selected
@@ -4195,12 +4207,12 @@ impl DeepSeekV4CudaOperatorCache {
         &mut self,
         continuation: &mut DeepSeekV4CudaPackedMoeContinuation,
         leases: ResidencyLeaseSet,
-        input_dev: &ferrule_cuda::context::CudaF32Buffer,
-        router_indices: &ferrule_cuda::context::CudaI32Buffer,
-        router_weights: &ferrule_cuda::context::CudaF32Buffer,
-        segment_workspace: &mut Option<ferrule_cuda::context::CudaMoeSegmentWorkspace>,
-        route_output: &mut ferrule_cuda::context::CudaF32Buffer,
-        output_dev: &mut ferrule_cuda::context::CudaF32Buffer,
+        input_dev: &ferrule_backend::cuda::context::CudaF32Buffer,
+        router_indices: &ferrule_backend::cuda::context::CudaI32Buffer,
+        router_weights: &ferrule_backend::cuda::context::CudaF32Buffer,
+        route_plan: &mut Option<ferrule_backend::cuda::context::CudaExpertGroupRoutePlan>,
+        route_output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        output_dev: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<Option<Vec<DeepSeekV4SequenceMoeAccessEvent>>> {
         if input_dev.len() != continuation.tokens * continuation.hidden_size
             || output_dev.len() != input_dev.len()
@@ -4236,7 +4248,7 @@ impl DeepSeekV4CudaOperatorCache {
                     input_dev,
                     router_indices,
                     router_weights,
-                    segment_workspace,
+                    route_plan,
                     route_output,
                 )
             },
@@ -4254,15 +4266,11 @@ impl DeepSeekV4CudaOperatorCache {
         continuation.retained_leases.push(leases);
 
         if continuation.next_chunk_start == continuation.unique_experts.len() {
-            let workspace = segment_workspace.as_mut().ok_or_else(|| Error::Internal {
-                message: "segmented MoE workspace was not initialized".into(),
-            })?;
-            self.ops.reduce_moe_segment_route_outputs_ranked(
+            self.ops.reduce_moe_route_outputs_ranked(
                 route_output,
                 continuation.tokens,
                 continuation.routes_per_token,
                 continuation.hidden_size,
-                workspace,
                 output_dev,
             )?;
             record_profile_duration(
@@ -4281,25 +4289,28 @@ impl DeepSeekV4CudaOperatorCache {
         &mut self,
         continuation: &mut DeepSeekV4CudaPackedMoeContinuation,
         chunk: &CudaPackedMoeChunk,
-        table: &ferrule_cuda::context::CudaExpertSlotTable,
-        first_frame: &super::cuda_materialization::CudaExpertFrame,
-        input_dev: &ferrule_cuda::context::CudaF32Buffer,
-        router_indices: &ferrule_cuda::context::CudaI32Buffer,
-        router_weights: &ferrule_cuda::context::CudaF32Buffer,
-        segment_workspace: &mut Option<ferrule_cuda::context::CudaMoeSegmentWorkspace>,
-        route_output: &mut ferrule_cuda::context::CudaF32Buffer,
+        table: &ferrule_backend::cuda::context::CudaExpertSlotTable,
+        first_frame: &CudaExpertFrame,
+        input_dev: &ferrule_backend::cuda::context::CudaF32Buffer,
+        router_indices: &ferrule_backend::cuda::context::CudaI32Buffer,
+        router_weights: &ferrule_backend::cuda::context::CudaF32Buffer,
+        route_plan: &mut Option<ferrule_backend::cuda::context::CudaExpertGroupRoutePlan>,
+        route_output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         if chunk.selected.is_empty() {
             return Err(Error::Internal {
-                message: "CUDA segmented MoE empty window".into(),
+                message: "CUDA routed MoE empty expert window".into(),
             });
         }
-        let intermediate_size = first_frame.gate.shape().out_features();
-        if first_frame.down.shape().out_features() != continuation.hidden_size {
+        let intermediate_size = first_frame.intermediate_size();
+        if first_frame.input_size() != continuation.hidden_size
+            || first_frame.output_size() != continuation.hidden_size
+        {
             return Err(Error::Model {
                 message: format!(
-                    "CUDA segmented MoE hidden mismatch: expert={} input={}",
-                    first_frame.down.shape().out_features(),
+                    "CUDA grouped MoE hidden mismatch: expert input={} output={} expected={}",
+                    first_frame.input_size(),
+                    first_frame.output_size(),
                     continuation.hidden_size
                 ),
             });
@@ -4308,22 +4319,22 @@ impl DeepSeekV4CudaOperatorCache {
             if intermediate_size != expected {
                 return Err(Error::Model {
                     message: format!(
-                        "CUDA segmented MoE intermediate mismatch: got {intermediate_size} expected {expected}"
+                        "CUDA routed MoE intermediate mismatch: got {intermediate_size} expected {expected}"
                     ),
                 });
             }
         } else {
             continuation.expected_intermediate = Some(intermediate_size);
         }
-        let segment_capacity = continuation
-            .segment_capacity
-            .expect("segment capacity initialized before chunk execution");
-        let workspace_needs_init = segment_workspace
+        let resident_slot_capacity = continuation
+            .resident_slot_capacity
+            .expect("resident slot capacity initialized before expert execution");
+        let plan_needs_init = route_plan
             .as_ref()
-            .map(|workspace| {
-                !workspace.matches(
-                    DSV4_EXPERT_TABLE_CAPACITY,
-                    segment_capacity,
+            .map(|plan| {
+                !plan.matches(
+                    resident_slot_capacity,
+                    continuation.route_plan_capacity,
                     continuation.tokens,
                     continuation.hidden_size,
                     intermediate_size,
@@ -4331,10 +4342,10 @@ impl DeepSeekV4CudaOperatorCache {
                 )
             })
             .unwrap_or(true);
-        if workspace_needs_init {
-            *segment_workspace = Some(self.ops.moe_segment_workspace(
-                DSV4_EXPERT_TABLE_CAPACITY,
-                segment_capacity,
+        if plan_needs_init {
+            *route_plan = Some(self.ops.expert_group_route_plan(
+                resident_slot_capacity,
+                continuation.route_plan_capacity,
                 continuation.tokens,
                 continuation.hidden_size,
                 intermediate_size,
@@ -4343,38 +4354,38 @@ impl DeepSeekV4CudaOperatorCache {
             continuation.input_prepared = false;
         }
         if !continuation.input_prepared {
-            let workspace = segment_workspace
+            let plan = route_plan
                 .as_mut()
-                .expect("segmented MoE workspace initialized above");
-            self.ops.prepare_moe_segment_input_from_device(
+                .expect("expert group route plan initialized above");
+            self.ops.prepare_expert_group_route_input_from_device(
                 input_dev,
                 continuation.tokens,
                 continuation.hidden_size,
-                workspace,
+                plan,
             )?;
-            self.ops.begin_moe_segment_invocation(
+            self.ops.begin_expert_group_route_invocation(
                 continuation.routes_per_token,
-                workspace,
+                plan,
                 route_output,
             )?;
             continuation.input_prepared = true;
         }
-        let workspace = segment_workspace
+        let plan = route_plan
             .as_mut()
-            .expect("segmented MoE workspace initialized above");
-        self.ops.prepare_moe_segment_grouping_stable(
+            .expect("expert group route plan initialized above");
+        self.ops.prepare_expert_group_route_plan(
             table,
             router_indices,
             router_weights,
             continuation.route_count,
             continuation.routes_per_token,
-            workspace,
+            plan,
         )?;
-        self.ops.moe_expert_segments_stable_from_prepared(
+        self.ops.grouped_fp4_moe_from_prepared_plan(
             table,
             continuation.routes_per_token,
             continuation.swiglu_limit,
-            workspace,
+            plan,
             route_output,
         )
     }
@@ -4415,46 +4426,24 @@ impl DeepSeekV4CudaOperatorCache {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn paged_window_sparse_attention_rows_into(
         &mut self,
-        query: &ferrule_cuda::context::CudaF32Buffer,
-        positions: &[usize],
-        row_kv_lens: &ferrule_cuda::context::CudaI32Buffer,
+        query: &ferrule_backend::cuda::context::CudaF32Buffer,
+        row_kv_lens: &ferrule_backend::cuda::context::CudaI32Buffer,
+        topk: &mut ferrule_backend::cuda::context::CudaI32Buffer,
         rows: usize,
         layer: usize,
         spec: SparseAttentionSpec,
-        output: &mut ferrule_cuda::context::CudaF32Buffer,
+        output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<()> {
-        if positions.len() != rows || row_kv_lens.len() != rows {
+        if row_kv_lens.len() != rows {
             return Err(Error::Model {
                 message: format!(
-                    "packed window attention row metadata mismatch: positions={} visible_lens={} rows={rows}",
-                    positions.len(),
+                    "packed window attention row metadata mismatch: visible_lens={} rows={rows}",
                     row_kv_lens.len()
                 ),
             });
         }
-        let elements = rows.checked_mul(spec.topk).ok_or_else(|| Error::Model {
-            message: "packed window top-k size overflow".into(),
-        })?;
-        let mut logical = vec![-1i32; elements];
-        for (row, position) in positions.iter().copied().enumerate() {
-            let kv_len = position.checked_add(1).ok_or_else(|| Error::Model {
-                message: "packed window position overflow".into(),
-            })?;
-            let start = kv_len.saturating_sub(spec.topk);
-            for (output, index) in logical[row * spec.topk..(row + 1) * spec.topk]
-                .iter_mut()
-                .zip(start..kv_len)
-            {
-                *output = i32::try_from(index).map_err(|_| Error::Model {
-                    message: "packed window index exceeds i32 ABI".into(),
-                })?;
-            }
-        }
-        self.ensure_topk_buffer(elements)?;
-        self.ops.overwrite_i32_buffer(
-            &logical,
-            self.topk_buffers.get_mut(&elements).expect("ensured above"),
-        )?;
+        self.ops
+            .fill_recent_rows_into(row_kv_lens, rows, spec.topk, topk)?;
         let active = self.active_paged_kv.as_ref().ok_or_else(|| Error::Model {
             message: "packed window attention requires an active paged binding".into(),
         })?;
@@ -4473,7 +4462,7 @@ impl DeepSeekV4CudaOperatorCache {
             message: "window KV plane is missing".into(),
         })?;
         let descriptor = &pool.planes()[0];
-        let layout = ferrule_cuda::PagedSparseAttentionLayout {
+        let layout = ferrule_backend::cuda::PagedSparseAttentionLayout {
             batch_size: rows,
             tokens_per_sequence: 1,
             heads: spec.heads,
@@ -4485,7 +4474,19 @@ impl DeepSeekV4CudaOperatorCache {
             layer_count: active.layer_count,
             softmax_scale: spec.softmax_scale,
         };
-        self.ops
+        let explicit_selection_layout = layout.explicit_selection_layout(true)?;
+        let mut workspace = match self.hybrid_mla_explicit_selection_workspaces.remove(&rows) {
+            Some(workspace) => workspace,
+            None => self.ops.hybrid_mla_explicit_selection_workspace(
+                ferrule_backend::cuda::cutlass::HybridMlaExplicitSelectionLayout {
+                    selected_width:
+                        ferrule_backend::cuda::cutlass::HYBRID_MLA_EXPLICIT_SELECTION_MAXIMUM_WIDTH,
+                    ..explicit_selection_layout
+                },
+            )?,
+        };
+        let result = self
+            .ops
             .paged_sparse_attention_selected_rows_from_device_into(
                 query,
                 plane,
@@ -4494,24 +4495,28 @@ impl DeepSeekV4CudaOperatorCache {
                 &active.kv_len_device,
                 &active.row_sequence_ids_device,
                 row_kv_lens,
-                self.topk_buffers.get(&elements).expect("filled above"),
+                topk,
                 self.prepared_attention_sink(layer)?,
                 layout,
+                &mut workspace,
                 output,
-            )
+            );
+        self.hybrid_mla_explicit_selection_workspaces
+            .insert(rows, workspace);
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn dual_plane_paged_sparse_attention_rows_into(
         &mut self,
-        query: &ferrule_cuda::context::CudaF32Buffer,
-        topk: &ferrule_cuda::context::CudaI32Buffer,
-        selectors: &ferrule_cuda::context::CudaI32Buffer,
-        row_kv_lens: &ferrule_cuda::context::CudaI32Buffer,
+        query: &ferrule_backend::cuda::context::CudaF32Buffer,
+        topk: &ferrule_backend::cuda::context::CudaI32Buffer,
+        selectors: &ferrule_backend::cuda::context::CudaI32Buffer,
+        row_kv_lens: &ferrule_backend::cuda::context::CudaI32Buffer,
         rows: usize,
         layer: usize,
         spec: SparseAttentionSpec,
-        output: &mut ferrule_cuda::context::CudaF32Buffer,
+        output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         let active = self.active_paged_kv.as_ref().ok_or_else(|| Error::Model {
             message: "packed sparse attention requires an active paged binding".into(),
@@ -4536,8 +4541,8 @@ impl DeepSeekV4CudaOperatorCache {
         })?;
         let first_descriptor = &pool.planes()[0];
         let second_descriptor = &pool.planes()[1];
-        let layout = ferrule_cuda::DualPlanePagedSparseAttentionLayout {
-            base: ferrule_cuda::PagedSparseAttentionLayout {
+        let layout = ferrule_backend::cuda::DualPlanePagedSparseAttentionLayout {
+            base: ferrule_backend::cuda::PagedSparseAttentionLayout {
                 batch_size: rows,
                 tokens_per_sequence: 1,
                 heads: spec.heads,
@@ -4551,7 +4556,19 @@ impl DeepSeekV4CudaOperatorCache {
             },
             second_elements_per_token: second_descriptor.elements_per_token,
         };
-        self.ops
+        let explicit_selection_layout = layout.explicit_selection_layout(true)?;
+        let mut workspace = match self.hybrid_mla_explicit_selection_workspaces.remove(&rows) {
+            Some(workspace) => workspace,
+            None => self.ops.hybrid_mla_explicit_selection_workspace(
+                ferrule_backend::cuda::cutlass::HybridMlaExplicitSelectionLayout {
+                    selected_width:
+                        ferrule_backend::cuda::cutlass::HYBRID_MLA_EXPLICIT_SELECTION_MAXIMUM_WIDTH,
+                    ..explicit_selection_layout
+                },
+            )?,
+        };
+        let result = self
+            .ops
             .dual_plane_paged_sparse_attention_selected_rows_from_device_into(
                 query,
                 first,
@@ -4565,32 +4582,36 @@ impl DeepSeekV4CudaOperatorCache {
                 selectors,
                 self.prepared_attention_sink(layer)?,
                 layout,
+                &mut workspace,
                 output,
-            )
+            );
+        self.hybrid_mla_explicit_selection_workspaces
+            .insert(rows, workspace);
+        result
     }
 
     /// One-launch grouped output-A -> BF16 latent -> output-B MLA transaction.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn mla_output_rows_from_device_into(
         &self,
-        context: &ferrule_cuda::context::CudaF32Buffer,
+        context: &ferrule_backend::cuda::context::CudaF32Buffer,
         rows: usize,
         cfg: DeepSeekV4AttentionConfig,
         layer: usize,
-        latent: &mut ferrule_cuda::context::CudaF32Buffer,
-        workspace: &mut ferrule_cuda::context::CudaArtifactLinearWorkspace,
-        output: &mut ferrule_cuda::context::CudaF32Buffer,
+        latent: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        workspace: &mut ferrule_backend::cuda::context::CudaArtifactLinearWorkspace,
+        output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         #[cfg(not(feature = "cuda"))]
         {
             let _ = (context, rows, cfg, layer, latent, workspace, output);
             return Err(Error::Model {
-                message: "GB10 MLA output execution requires the `cutlass` feature".into(),
+                message: "CUDA MLA output execution requires the `cutlass` feature".into(),
             });
         }
         #[cfg(feature = "cuda")]
         {
-            self.require_cutlass_operation(layer, KernelOperation::MlaOutput)?;
+            self.require_inference_operation(layer, KernelOperation::MlaOutput)?;
             let prepared = self.prepared_layer(layer)?;
             self.ops.artifact_mla_output_into(
                 context,
@@ -4611,31 +4632,23 @@ impl DeepSeekV4CudaOperatorCache {
     pub(crate) fn query_a_kv_from_prepared_fp8_into(
         &self,
         layer: usize,
-        activation: &ferrule_cuda::context::CudaPreparedFp8Activation<'_>,
-        query_a_output: &mut ferrule_cuda::context::CudaF32Buffer,
-        key_value_output: &mut ferrule_cuda::context::CudaF32Buffer,
+        activation: &ferrule_backend::cuda::context::CudaPreparedFp8Activation<'_>,
+        query_a_output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        key_value_output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         #[cfg(not(feature = "cuda"))]
         {
             let _ = (layer, activation, query_a_output, key_value_output);
             return Err(Error::Model {
-                message: "GB10 QueryA+KV execution requires the `cutlass` feature".into(),
+                message: "CUDA QueryA+KV execution requires the `cutlass` feature".into(),
             });
         }
         #[cfg(feature = "cuda")]
         {
             let query_a = self.prepared_linear(layer, DeepSeekV4CudaLinear::QueryA)?;
             let key_value = self.prepared_linear(layer, DeepSeekV4CudaLinear::KeyValue)?;
-            let descriptor = self.require_operation(layer, KernelOperation::MlaQueryAKv)?;
-            if descriptor.kernel.provider != KernelProviderId::ExternalProvider {
-                return Err(Error::Model {
-                    message: format!(
-                        "invalid SM121 QueryA+KV provider binding: {:?}",
-                        descriptor.kernel
-                    ),
-                });
-            }
-            self.ops.artifact_fp8_query_a_kv_cutlass_into(
+            self.require_inference_operation(layer, KernelOperation::MlaQueryAKv)?;
+            self.ops.artifact_fp8_query_a_kv_into(
                 &query_a.handle,
                 &key_value.handle,
                 activation,
@@ -4649,16 +4662,16 @@ impl DeepSeekV4CudaOperatorCache {
         &self,
         layer: usize,
         compressor: DeepSeekV4CudaCompressor,
-        input: &ferrule_cuda::context::CudaF32Buffer,
+        input: &ferrule_backend::cuda::context::CudaF32Buffer,
         rows: usize,
-        kv_output: &mut ferrule_cuda::context::CudaF32Buffer,
-        gate_output: &mut ferrule_cuda::context::CudaF32Buffer,
+        kv_output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        gate_output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<()> {
         #[cfg(not(feature = "cuda"))]
         {
             let _ = (layer, compressor, input, rows, kv_output, gate_output);
             return Err(Error::Model {
-                message: "GB10 compressor execution requires the `cutlass` feature".into(),
+                message: "CUDA compressor execution requires the `cutlass` feature".into(),
             });
         }
         #[cfg(feature = "cuda")]
@@ -4667,17 +4680,9 @@ impl DeepSeekV4CudaOperatorCache {
                 DeepSeekV4CudaCompressor::Main => KernelOperation::MainCompressorProjection,
                 DeepSeekV4CudaCompressor::Indexer => KernelOperation::IndexerCompressorProjection,
             };
-            let descriptor = self.require_operation(layer, operation)?;
-            if descriptor.kernel.provider != KernelProviderId::ExternalProvider {
-                return Err(Error::Model {
-                    message: format!(
-                        "invalid SM121 compressor provider binding: {:?}",
-                        descriptor.kernel
-                    ),
-                });
-            }
+            self.require_inference_operation(layer, operation)?;
             let prepared = self.prepared_compressor(layer, compressor)?;
-            self.ops.artifact_bf16_compressor_cutlass_into(
+            self.ops.artifact_bf16_compressor_into(
                 &prepared.kv.handle,
                 &prepared.gate.handle,
                 input,
@@ -4692,10 +4697,10 @@ impl DeepSeekV4CudaOperatorCache {
         &self,
         layer: usize,
         linear: DeepSeekV4CudaLinear,
-        input: &ferrule_cuda::context::CudaF32Buffer,
+        input: &ferrule_backend::cuda::context::CudaF32Buffer,
         rows: usize,
-        output: &mut ferrule_cuda::context::CudaF32Buffer,
-        workspace: &mut ferrule_cuda::context::CudaArtifactLinearWorkspace,
+        output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        workspace: &mut ferrule_backend::cuda::context::CudaArtifactLinearWorkspace,
     ) -> Result<()> {
         let prepared = self.prepared_linear(layer, linear)?;
         let in_features = prepared.handle.shape().in_features();
@@ -4711,10 +4716,10 @@ impl DeepSeekV4CudaOperatorCache {
 
         #[cfg(feature = "cuda")]
         if linear == DeepSeekV4CudaLinear::QueryB {
-            self.require_cutlass_operation(layer, KernelOperation::MlaQueryB)?;
+            self.require_inference_operation(layer, KernelOperation::MlaQueryB)?;
             return self
                 .ops
-                .artifact_fp8_projection_cutlass_rows_from_device_into_with_scratch(
+                .artifact_fp8_projection_rows_from_device_into_with_scratch(
                     &prepared.handle,
                     input,
                     rows,
@@ -4736,16 +4741,16 @@ impl DeepSeekV4CudaOperatorCache {
         &self,
         layer: usize,
         compressor: DeepSeekV4CudaCompressor,
-        state: &mut Option<ferrule_cuda::CudaCompressorRecurrentState>,
+        state: &mut Option<ferrule_backend::cuda::CudaCompressorRecurrentState>,
         needs_reset: &mut bool,
-        projected_kv: &ferrule_cuda::context::CudaF32Buffer,
-        projected_score: &ferrule_cuda::context::CudaF32Buffer,
+        projected_kv: &ferrule_backend::cuda::context::CudaF32Buffer,
+        projected_score: &ferrule_backend::cuda::context::CudaF32Buffer,
         position: usize,
         ratio: usize,
         head_dim: usize,
         out_dim: usize,
         overlap: bool,
-        compressed: &mut ferrule_cuda::context::CudaF32Buffer,
+        compressed: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<bool> {
         let ape = &self.prepared_compressor(layer, compressor)?.ape;
         if state.is_none() {
@@ -4776,19 +4781,19 @@ impl DeepSeekV4CudaOperatorCache {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn decode_topk_indices_paged_indexer_rows_into(
         &mut self,
-        query: &ferrule_cuda::context::CudaF32Buffer,
-        weights: &ferrule_cuda::context::CudaF32Buffer,
-        positions: &ferrule_cuda::context::CudaI32Buffer,
-        window_lens: &ferrule_cuda::context::CudaI32Buffer,
-        compressed_lens: &ferrule_cuda::context::CudaI32Buffer,
+        query: &ferrule_backend::cuda::context::CudaF32Buffer,
+        weights: &ferrule_backend::cuda::context::CudaF32Buffer,
+        positions: &ferrule_backend::cuda::context::CudaI32Buffer,
+        window_lens: &ferrule_backend::cuda::context::CudaI32Buffer,
+        compressed_lens: &ferrule_backend::cuda::context::CudaI32Buffer,
         layer: usize,
         window_size: usize,
         index_topk: usize,
         index_heads: usize,
         index_head_dim: usize,
         weight_scale: f32,
-        logical_indices: &mut ferrule_cuda::context::CudaI32Buffer,
-        plane_selectors: &mut ferrule_cuda::context::CudaI32Buffer,
+        logical_indices: &mut ferrule_backend::cuda::context::CudaI32Buffer,
+        plane_selectors: &mut ferrule_backend::cuda::context::CudaI32Buffer,
     ) -> Result<()> {
         let rows = positions.len();
         if window_lens.len() != rows || compressed_lens.len() != rows {
@@ -4839,9 +4844,9 @@ impl DeepSeekV4CudaOperatorCache {
         &mut self,
         plane: usize,
         layer: usize,
-        values: &ferrule_cuda::context::CudaF32Buffer,
-        positions: &ferrule_cuda::context::CudaI32Buffer,
-        mask: Option<&ferrule_cuda::context::CudaI32Buffer>,
+        values: &ferrule_backend::cuda::context::CudaF32Buffer,
+        positions: &ferrule_backend::cuda::context::CudaI32Buffer,
+        mask: Option<&ferrule_backend::cuda::context::CudaI32Buffer>,
         row_dim: usize,
     ) -> Result<()> {
         let active = self.active_paged_kv.as_ref().ok_or_else(|| Error::Model {
@@ -4874,7 +4879,7 @@ impl DeepSeekV4CudaOperatorCache {
                 ),
             });
         }
-        let layout = ferrule_cuda::PagedPlaneLayout {
+        let layout = ferrule_backend::cuda::PagedPlaneLayout {
             page_tokens: active.page_tokens,
             elements_per_token: row_dim,
             layer_index: layer,
@@ -4984,7 +4989,7 @@ impl DeepSeekV4CudaOperatorCache {
     pub(crate) fn rope_tail_rows_from_device(
         &mut self,
         name: &str,
-        qk: &mut ferrule_cuda::context::CudaF32Buffer,
+        qk: &mut ferrule_backend::cuda::context::CudaF32Buffer,
         start_position: u32,
         rows: u32,
         heads: u32,
@@ -5009,8 +5014,8 @@ impl DeepSeekV4CudaOperatorCache {
     pub(crate) fn rope_tail_rows_indexed_from_device(
         &mut self,
         name: &str,
-        qk: &mut ferrule_cuda::context::CudaF32Buffer,
-        positions: &ferrule_cuda::context::CudaI32Buffer,
+        qk: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        positions: &ferrule_backend::cuda::context::CudaI32Buffer,
         max_position: usize,
         heads: u32,
         head_dim: u32,
@@ -5045,7 +5050,7 @@ impl DeepSeekV4CudaOperatorCache {
     pub(crate) fn rope_tail_rows_strided_from_device(
         &mut self,
         name: &str,
-        qk: &mut ferrule_cuda::context::CudaF32Buffer,
+        qk: &mut ferrule_backend::cuda::context::CudaF32Buffer,
         start_position: u32,
         position_stride: u32,
         rows: u32,
@@ -5085,17 +5090,6 @@ impl DeepSeekV4CudaOperatorCache {
             rope_dim,
             inverse,
         )
-    }
-
-    // ── Device-resident top-k index buffer ───────────────────────────
-
-    /// Ensure an exact-shape i32 device buffer is allocated for top-k indices.
-    pub(crate) fn ensure_topk_buffer(&mut self, elements: usize) -> Result<()> {
-        if !self.topk_buffers.contains_key(&elements) {
-            self.topk_buffers
-                .insert(elements, self.ops.zero_i32_buffer(elements)?);
-        }
-        Ok(())
     }
 }
 
@@ -5249,27 +5243,7 @@ mod tests {
     }
 
     #[test]
-    fn fixed_eight_segment_capacity_uses_resident_window_upper_bound() {
-        assert_eq!(fixed_eight_segment_capacity(0, 0).unwrap(), 1);
-        assert_eq!(fixed_eight_segment_capacity(8, 1).unwrap(), 1);
-        assert_eq!(fixed_eight_segment_capacity(9, 1).unwrap(), 2);
-        assert_eq!(fixed_eight_segment_capacity(9, 9).unwrap(), 9);
-        assert_eq!(fixed_eight_segment_capacity(100, 4).unwrap(), 16);
-    }
-
-    #[test]
-    fn fixed_eight_segment_capacity_rejects_overflow_and_u16_excess() {
-        let error = fixed_eight_segment_capacity(usize::MAX, usize::MAX)
-            .expect_err("arithmetic overflow must be rejected");
-        assert!(error.to_string().contains("capacity overflow"));
-
-        let error = fixed_eight_segment_capacity(8 * 65_536, 1)
-            .expect_err("capacity above u16 must be rejected");
-        assert!(error.to_string().contains("u16 limit 65535"));
-    }
-
-    #[test]
-    #[ignore = "requires cargo-oxide and CUDA"]
+    #[ignore = "requires CUDA hardware"]
     fn packed_paged_scatter_rows_handles_mixed_compressor_and_page_boundaries() -> Result<()> {
         let mut operators = DeepSeekV4CudaOperatorCache::new(
             &DeepSeekV4ExecutionPolicy::default(),
@@ -5292,7 +5266,7 @@ mod tests {
                 layer_count: 1,
             },
         ];
-        operators.kv_page_pool = Some(ferrule_cuda::CudaKvPagePool::new(
+        operators.kv_page_pool = Some(ferrule_backend::cuda::CudaKvPagePool::new(
             &operators.ops,
             &planes,
             2,
@@ -5358,7 +5332,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires cargo-oxide and CUDA"]
+    #[ignore = "requires CUDA hardware"]
     fn rope_table_grows_across_4096_boundary() -> Result<()> {
         let mut operators = DeepSeekV4CudaOperatorCache::new(
             &DeepSeekV4ExecutionPolicy::default(),

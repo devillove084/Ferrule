@@ -8,7 +8,8 @@ use ferrule_common::execution::{
 
 use crate::execution::{ResolvedStage, ResolvedStageResource, WorkspaceClaim};
 use crate::materialization::{
-    MaterializationProvider, MaterializationResolver, validate_continuation_id,
+    MaterializationProvider, MaterializationRequest, MaterializationResolver,
+    validate_continuation_id,
 };
 use crate::{IncrementalDecodeState, ModelDescriptor};
 pub use ferrule_common::ContinuationId;
@@ -293,6 +294,26 @@ pub trait MultiSessionRunner: ModelRunner {
     /// dense fully resident runners may return `None`.
     fn take_materialization_provider(&mut self) -> Option<Box<dyn MaterializationProvider>> {
         None
+    }
+
+    /// Transfer model-lifecycle resources that should be warmed in the background.
+    /// These are ordinary prefetches: they do not gate request admission and own no
+    /// waiter, continuation, execution transaction, or execution lease. Execution
+    /// demand may join and promote the same physical operation.
+    fn take_warmup_requests(&mut self) -> Result<Vec<MaterializationRequest>> {
+        Ok(Vec::new())
+    }
+
+    /// Declare resources whose exact identities are already known for an admitted
+    /// transaction. These requests are non-blocking hints: runtime may start the
+    /// same physical operation early, while execution still declares its exact
+    /// barrier only if the resource is not resident when needed.
+    fn transaction_prefetch_requests(
+        &self,
+        _transaction: ExecutionTransactionId,
+        _batch: &ExecutionBatch,
+    ) -> Result<Vec<MaterializationRequest>> {
+        Ok(Vec::new())
     }
 
     /// Whether the runner-level exact-key resolver is installed.

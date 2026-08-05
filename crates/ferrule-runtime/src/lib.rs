@@ -27,10 +27,10 @@ pub use cache::{
 };
 pub use engine::{
     InferenceCancelProgress, InferenceCompletionOwner, InferenceCompletionReactor, InferenceEngine,
-    LocalResidentInferenceEngine, NativeMultiSessionExecutor, ResidentActionKind,
-    ResidentCancelProgress, ResidentDriverShutdownReport, ResidentDriverStep,
-    ResidentInferenceEngine, ResidentTokenEvent, ResidentTopKDriver, ResidentTopKDriverConfig,
-    ResidentTopKDriverStats,
+    InferenceShutdownProgress, LocalResidentInferenceEngine, NativeMultiSessionExecutor,
+    ResidentActionKind, ResidentCancelProgress, ResidentDriverShutdownReport, ResidentDriverStep,
+    ResidentInferenceEngine, ResidentShutdownProgress, ResidentTokenEvent, ResidentTopKDriver,
+    ResidentTopKDriverConfig, ResidentTopKDriverStats,
 };
 pub use expert_residency::{
     ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertInstallReason, ExpertKey, ExpertLease,
@@ -41,11 +41,12 @@ pub use expert_residency::{
 };
 
 pub use scheduling::{
-    CancelRequestResult, DecodeAction, FixedSequenceSlotPool, KvHandle, LogitsSelection,
-    PhysicalResourceBroker, PhysicalResourceClaim, PhysicalResourceError, PhysicalResourceGrant,
-    PhysicalResourceGrantId, PhysicalResourceLimit, PhysicalResourceSnapshot, PrefillChunkAction,
-    ResidentScheduler, ResidentSchedulerConfig, ResourceClass, ResourceKind, ResourceUnit,
-    SchedulerAction, SequenceSlotPool, plan_prefill_chunk,
+    CancelRequestResult, DecodeAction, ExecutionPhase, ExecutionPhaseSet, FixedSequenceSlotPool,
+    KvHandle, LogitsSelection, PhysicalResourceBroker, PhysicalResourceClaim,
+    PhysicalResourceError, PhysicalResourceGrant, PhysicalResourceGrantId, PhysicalResourceLimit,
+    PhysicalResourceSnapshot, PrefillChunkAction, RequestTerminal, ResidentScheduler,
+    ResidentSchedulerConfig, ResourceDemand, ResourceKind, ResourceUnit, SchedulerAction,
+    SequenceSlotPool, plan_prefill_chunk,
 };
 pub use scheduling::{
     GenerateRequest, RequestId, SequenceFinishReason, SequenceState, SequenceStatus, SessionId,

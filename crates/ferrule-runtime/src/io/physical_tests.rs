@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ferrule_common::execution::ExecutionTransactionId;
@@ -26,7 +27,7 @@ use super::{
     RuntimeMaterializationProvider, RuntimeMaterializationResolver, SharedMaterializationProvider,
 };
 use crate::scheduling::{
-    PhysicalResourceBroker, PhysicalResourceLimit, ResourceClass, ResourceKind,
+    ExecutionPhase, PhysicalResourceBroker, PhysicalResourceLimit, ResourceDemand, ResourceKind,
 };
 
 const BYTES: u64 = 4096;
@@ -34,31 +35,21 @@ const BYTES: u64 = 4096;
 fn retained_request(
     preparation: MaterializationPreparation,
     plan: MaterializationResourcePlan,
-    class: ResourceClass,
+    demand: ResourceDemand,
     retention: ferrule_model::ResourceRetention,
 ) -> LoadRequest {
-    LoadRequest::new(
-        preparation,
-        plan,
-        class,
-        retention,
-        if class == ResourceClass::Prefetch {
-            MaterializationPurpose::Prefetch
-        } else {
-            MaterializationPurpose::Execution
-        },
-    )
+    LoadRequest::new(preparation, plan, demand, retention)
 }
 
 fn stage_request(
     preparation: MaterializationPreparation,
     plan: MaterializationResourcePlan,
-    class: ResourceClass,
+    demand: ResourceDemand,
 ) -> LoadRequest {
     retained_request(
         preparation,
         plan,
-        class,
+        demand,
         ferrule_model::ResourceRetention::ThroughStage,
     )
 }
@@ -969,9 +960,9 @@ fn load_request(
     registry: &LoadRegistry<SharedMaterializationProvider>,
     key: MaterializationKey,
     plan: MaterializationResourcePlan,
-    class: ResourceClass,
+    demand: ResourceDemand,
 ) -> LoadRequest {
-    stage_request(registry.provider().preparation(key).unwrap(), plan, class)
+    stage_request(registry.provider().preparation(key).unwrap(), plan, demand)
 }
 
 fn attach(
@@ -980,9 +971,19 @@ fn attach(
     key: MaterializationKey,
     now_ns: u64,
 ) -> OperationId {
-    let request = load_request(registry, key, uniform_plan(), ResourceClass::Throughput);
+    let request = load_request(
+        registry,
+        key,
+        uniform_plan(),
+        ResourceDemand::required(ExecutionPhase::Prefill),
+    );
     registry
-        .attach_waiter(waiter, [request], now_ns)
+        .attach_waiter(
+            waiter,
+            ResourceDemand::required(ExecutionPhase::Prefill),
+            [request],
+            now_ns,
+        )
         .unwrap()
         .created[0]
 }
@@ -1134,6 +1135,95 @@ fn physical_bridge_forwards_read_upload_install_commands() {
 }
 
 #[test]
+fn foreground_drains_submitted_warmup_without_reserving_another() {
+    let (physical, handle) = MockPhysicalProvider::manual();
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let preparations = [
+        provider
+            .prepare(request(1), MaterializationPurpose::Prefetch)
+            .unwrap(),
+        provider
+            .prepare(request(2), MaterializationPurpose::Prefetch)
+            .unwrap(),
+    ];
+    let keys = preparations.map(|preparation| preparation.key());
+    let mut fairness = FairQueueConfig::default();
+    fairness.model_warmup_quantum = BYTES;
+    let mut registry =
+        LoadRegistry::new(provider, bounded_physical_resources(1, 1, 1, 1), fairness).unwrap();
+    let report = registry
+        .prefetch(
+            super::PrefetchOwner::ModelWarmup,
+            preparations.map(|preparation| {
+                stage_request(preparation, uniform_plan(), ResourceDemand::ModelWarmup)
+            }),
+            1,
+        )
+        .unwrap();
+
+    registry.drive(2, 16).unwrap();
+
+    let submitted = report
+        .created
+        .iter()
+        .copied()
+        .find(|operation| {
+            registry.operation(*operation).unwrap().stage() == LoadStage::ReadSubmitted
+        })
+        .expect("one warmup operation must enter the physical pipeline");
+    let queued = report
+        .created
+        .iter()
+        .copied()
+        .find(|operation| registry.operation(*operation).unwrap().stage() == LoadStage::Reserved)
+        .expect("the next warmup operation must remain unreserved");
+    let submitted_key = registry.operation(submitted).unwrap().key();
+    assert_eq!(
+        handle.command_count(|command| matches!(command, MockPhysicalCommand::Reserve(..))),
+        1
+    );
+    assert_eq!(
+        handle.command_count(|command| matches!(command, MockPhysicalCommand::SubmitRead(..))),
+        1
+    );
+
+    handle.push_outcome(
+        submitted,
+        submitted_key,
+        LoadStage::ReadSubmitted,
+        CompletionOutcome::Succeeded,
+    );
+    handle.script_outcome(LoadStage::UploadSubmitted, CompletionOutcome::Succeeded);
+    handle.script_outcome(LoadStage::Installing, CompletionOutcome::Succeeded);
+    registry.drive_foreground(3, 32).unwrap();
+
+    assert!(registry.residency_binding(submitted_key).is_some());
+    assert_eq!(
+        registry.operation(queued).unwrap().stage(),
+        LoadStage::Reserved
+    );
+    assert_eq!(
+        keys.iter()
+            .filter(|key| registry.residency_binding(**key).is_some())
+            .count(),
+        1
+    );
+    assert_eq!(
+        handle.command_count(|command| matches!(command, MockPhysicalCommand::Reserve(..))),
+        1,
+        "foreground drive must not reserve the next warmup operation"
+    );
+    assert_eq!(
+        handle.command_count(|command| matches!(command, MockPhysicalCommand::SubmitUpload(..))),
+        1
+    );
+    assert_eq!(
+        handle.command_count(|command| matches!(command, MockPhysicalCommand::PollInstall(..))),
+        1
+    );
+}
+
+#[test]
 fn physical_bridge_completion_enters_registry_unchanged() {
     let (mut registry, handle, key, operation) = manual_at_read();
     let mut completion = CompletionEvent::new(
@@ -1182,10 +1272,21 @@ fn registry_adopts_resident_preparation_without_a_read() {
         .prepare(request(1), MaterializationPurpose::Execution)
         .unwrap();
     let key = preparation.key();
-    let load = stage_request(preparation, uniform_plan(), ResourceClass::Throughput);
+    let load = stage_request(
+        preparation,
+        uniform_plan(),
+        ResourceDemand::required(ExecutionPhase::Prefill),
+    );
     let mut registry =
         LoadRegistry::new(provider, physical_resources(), FairQueueConfig::default()).unwrap();
-    let report = registry.attach_waiter(waiter(1, 1), [load], 1).unwrap();
+    let report = registry
+        .attach_waiter(
+            waiter(1, 1),
+            ResourceDemand::required(ExecutionPhase::Prefill),
+            [load],
+            1,
+        )
+        .unwrap();
     assert_eq!(report.already_resident, 1);
     assert!(report.created.is_empty());
     assert_eq!(registry.residency_binding(key), Some(handle.binding(key)));
@@ -1217,10 +1318,11 @@ fn registry_releases_provider_lease_after_last_continuation() {
     registry
         .attach_waiter(
             waiter(1, 1),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [stage_request(
                 first,
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             1,
         )
@@ -1231,10 +1333,11 @@ fn registry_releases_provider_lease_after_last_continuation() {
     registry
         .attach_waiter(
             waiter(2, 2),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [stage_request(
                 second,
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             2,
         )
@@ -1302,10 +1405,11 @@ fn still_active_stage_keeps_provider_lease_until_quiescent_detach() {
     registry
         .attach_waiter(
             waiter(1, 1),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [stage_request(
                 preparation,
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             1,
         )
@@ -1342,15 +1446,16 @@ fn still_active_stage_keeps_provider_lease_until_quiescent_detach() {
 
 #[test]
 fn transaction_custody_survives_resume_and_releases_on_commit_or_rollback() {
-    for (seed, outcome) in [
+    for (seed, outcome, terminal_ns) in [
         (
             1,
             super::TransactionCustodyOutcome::Committed {
                 started_ns: 10,
                 finished_ns: 11,
             },
+            11,
         ),
-        (2, super::TransactionCustodyOutcome::RolledBack),
+        (2, super::TransactionCustodyOutcome::RolledBack, 6),
     ] {
         let (physical, handle) = MockPhysicalProvider::manual();
         handle.set_resident(true);
@@ -1364,10 +1469,11 @@ fn transaction_custody_survives_resume_and_releases_on_commit_or_rollback() {
         registry
             .attach_waiter(
                 waiter(seed as u64, seed as u64),
+                ResourceDemand::required(ExecutionPhase::Prefill),
                 [retained_request(
                     preparation,
                     uniform_plan(),
-                    ResourceClass::Throughput,
+                    ResourceDemand::required(ExecutionPhase::Prefill),
                     ferrule_model::ResourceRetention::ThroughTransaction,
                 )],
                 1,
@@ -1391,10 +1497,10 @@ fn transaction_custody_survives_resume_and_releases_on_commit_or_rollback() {
 
         let transaction = ExecutionTransactionId::new(seed as u64).unwrap();
         registry
-            .finish_transaction_custody(transaction, outcome)
+            .finish_transaction_custody(transaction, outcome, terminal_ns)
             .unwrap();
         assert!(matches!(
-            registry.finish_transaction_custody(transaction, outcome),
+            registry.finish_transaction_custody(transaction, outcome, terminal_ns),
             Err(super::RegistryError::TransactionCustodyAlreadyFinished { transaction: candidate })
                 if candidate == transaction
         ));
@@ -1424,10 +1530,11 @@ fn persistent_custody_survives_transaction_terminal_until_explicit_retirement() 
     registry
         .attach_waiter(
             waiter(1, 1),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [retained_request(
                 preparation,
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
                 ferrule_model::ResourceRetention::Persistent,
             )],
             1,
@@ -1447,6 +1554,7 @@ fn persistent_custody_survives_transaction_terminal_until_explicit_retirement() 
                 started_ns: 5,
                 finished_ns: 6,
             },
+            6,
         )
         .unwrap();
     registry.drive(7, 1).unwrap();
@@ -1492,10 +1600,11 @@ fn shared_key_releases_only_after_last_transaction_owner() {
         registry
             .attach_waiter(
                 waiter(id, id),
+                ResourceDemand::required(ExecutionPhase::Prefill),
                 [retained_request(
                     preparation,
                     uniform_plan(),
-                    ResourceClass::Throughput,
+                    ResourceDemand::required(ExecutionPhase::Prefill),
                     ferrule_model::ResourceRetention::ThroughTransaction,
                 )],
                 id,
@@ -1516,6 +1625,7 @@ fn shared_key_releases_only_after_last_transaction_owner() {
                 started_ns: 10,
                 finished_ns: 11,
             },
+            11,
         )
         .unwrap();
     registry.drive(12, 1).unwrap();
@@ -1530,6 +1640,7 @@ fn shared_key_releases_only_after_last_transaction_owner() {
         .finish_transaction_custody(
             ExecutionTransactionId::new(2).unwrap(),
             super::TransactionCustodyOutcome::RolledBack,
+            13,
         )
         .unwrap();
     registry.drive(13, 1).unwrap();
@@ -1561,10 +1672,11 @@ fn new_attach_cancels_pending_provider_lease_release() {
     registry
         .attach_waiter(
             waiter(1, 1),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [stage_request(
                 first,
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             1,
         )
@@ -1579,10 +1691,11 @@ fn new_attach_cancels_pending_provider_lease_release() {
     registry
         .attach_waiter(
             waiter(2, 2),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [stage_request(
                 second,
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             3,
         )
@@ -1623,10 +1736,11 @@ fn registry_retries_failed_provider_lease_release_without_replay() {
     registry
         .attach_waiter(
             waiter(9, 9),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [stage_request(
                 preparation,
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             1,
         )
@@ -1715,10 +1829,11 @@ fn replacement_commit_swaps_exact_slot_generation_and_bytes() {
     registry
         .attach_waiter(
             waiter(1, 1),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [stage_request(
                 old_preparation,
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             1,
         )
@@ -1737,10 +1852,11 @@ fn replacement_commit_swaps_exact_slot_generation_and_bytes() {
     registry
         .attach_waiter(
             waiter(2, 2),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [stage_request(
                 new_preparation,
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             4,
         )
@@ -1786,10 +1902,11 @@ fn replacement_waits_for_old_logical_owner_without_losing_operation() {
     registry
         .attach_waiter(
             waiter(1, 1),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [stage_request(
                 old_preparation,
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             1,
         )
@@ -1804,10 +1921,11 @@ fn replacement_waits_for_old_logical_owner_without_losing_operation() {
     let operation = registry
         .attach_waiter(
             waiter(2, 2),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [stage_request(
                 new_preparation,
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             2,
         )
@@ -1868,10 +1986,11 @@ fn replacement_cannot_evict_key_from_another_slot() {
     registry
         .attach_waiter(
             waiter(1, 1),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [stage_request(
                 old_preparation,
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             1,
         )
@@ -1886,10 +2005,11 @@ fn replacement_cannot_evict_key_from_another_slot() {
     registry
         .attach_waiter(
             waiter(2, 2),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [stage_request(
                 new_preparation,
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             2,
         )
@@ -1919,10 +2039,11 @@ fn pre_reserve_cancellation_discards_provider_preparation() {
     registry
         .attach_waiter(
             waiter(11, 11),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [stage_request(
                 preparation,
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             1,
         )
@@ -1957,11 +2078,12 @@ fn physical_bridge_registry_surfaces_reserve_failure_without_credit_leak() {
     let report = registry
         .attach_waiter(
             waiter(1, 1),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [load_request(
                 &registry,
                 key(1),
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             1,
         )
@@ -1981,11 +2103,11 @@ fn physical_bridge_execution_promotes_prefetch_exactly_once_and_can_release_back
     let binding = registry.provider().preparation(key).unwrap().binding();
     let prefetch = registry
         .prefetch(
-            super::PrefetchId::new(1).unwrap(),
+            super::PrefetchOwner::external(NonZeroU64::new(1).unwrap()),
             [stage_request(
                 registry.provider().preparation(key).unwrap(),
                 uniform_plan(),
-                ResourceClass::Prefetch,
+                ResourceDemand::ModelWarmup,
             )],
             1,
         )
@@ -1994,10 +2116,11 @@ fn physical_bridge_execution_promotes_prefetch_exactly_once_and_can_release_back
     let joined = registry
         .attach_waiter(
             waiter(1, 1),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [stage_request(
                 registry.provider().preparation(key).unwrap(),
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             2,
         )
@@ -2029,8 +2152,8 @@ fn physical_bridge_execution_promotes_prefetch_exactly_once_and_can_release_back
         1
     );
     assert_eq!(
-        registry.operation(operation).unwrap().class(),
-        ResourceClass::Prefetch
+        registry.operation(operation).unwrap().demand(),
+        ResourceDemand::ModelWarmup
     );
     assert_eq!(
         registry.provider().preparation(key).unwrap().binding(),
@@ -2053,7 +2176,7 @@ fn failed_multi_key_promotion_restores_prefetch_and_reclaims_new_work() {
     preparations.sort_unstable_by_key(|preparation| preparation.key());
     let prefetch_key = preparations[0].key();
     let failing_key = preparations[1].key();
-    let owner = super::PrefetchId::new(41).unwrap();
+    let owner = super::PrefetchOwner::external(NonZeroU64::new(41).unwrap());
     let mut registry =
         LoadRegistry::new(provider, physical_resources(), FairQueueConfig::default()).unwrap();
     let prefetched = registry
@@ -2062,7 +2185,7 @@ fn failed_multi_key_promotion_restores_prefetch_and_reclaims_new_work() {
             [stage_request(
                 preparations[0],
                 uniform_plan(),
-                ResourceClass::Prefetch,
+                ResourceDemand::ModelWarmup,
             )],
             1,
         )
@@ -2075,8 +2198,13 @@ fn failed_multi_key_promotion_restores_prefetch_and_reclaims_new_work() {
     let error = registry
         .attach_waiter(
             execution_waiter,
+            ResourceDemand::required(ExecutionPhase::Prefill),
             preparations.map(|preparation| {
-                stage_request(preparation, uniform_plan(), ResourceClass::Throughput)
+                stage_request(
+                    preparation,
+                    uniform_plan(),
+                    ResourceDemand::required(ExecutionPhase::Prefill),
+                )
             }),
             2,
         )
@@ -2097,8 +2225,8 @@ fn failed_multi_key_promotion_restores_prefetch_and_reclaims_new_work() {
     assert_eq!(registry.operation_for_key(failing_key), None);
     assert!(registry.operation_has_prefetch_owner(prefetch_operation));
     assert_eq!(
-        registry.operation(prefetch_operation).unwrap().class(),
-        ResourceClass::Prefetch
+        registry.operation(prefetch_operation).unwrap().demand(),
+        ResourceDemand::ModelWarmup
     );
     assert_eq!(registry.resources().active_grants(), baseline_grants);
     assert_eq!(registry.waiters().active_waiters().count(), 0);
@@ -2121,10 +2249,11 @@ fn failed_multi_key_promotion_restores_prefetch_and_reclaims_new_work() {
     let retry = registry
         .attach_waiter(
             execution_waiter,
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [stage_request(
                 registry.provider().preparation(prefetch_key).unwrap(),
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             3,
         )
@@ -2141,9 +2270,19 @@ fn physical_bridge_single_flight_issues_one_physical_read() {
     let (mut registry, handle) = registry(true);
     let key = key(1);
     let operation = attach(&mut registry, waiter(1, 1), key, 1);
-    let joined_request = load_request(&registry, key, uniform_plan(), ResourceClass::Throughput);
+    let joined_request = load_request(
+        &registry,
+        key,
+        uniform_plan(),
+        ResourceDemand::required(ExecutionPhase::Prefill),
+    );
     let joined = registry
-        .attach_waiter(waiter(2, 2), [joined_request], 2)
+        .attach_waiter(
+            waiter(2, 2),
+            ResourceDemand::required(ExecutionPhase::Prefill),
+            [joined_request],
+            2,
+        )
         .unwrap();
     assert_eq!(joined.joined, vec![operation]);
     registry.drive(100, 32).unwrap();
@@ -2202,9 +2341,19 @@ fn physical_bridge_cancel_one_waiter_retains_shared_operation() {
     let (mut registry, handle) = registry(false);
     let key = key(1);
     attach(&mut registry, waiter(1, 1), key, 1);
-    let joined_request = load_request(&registry, key, uniform_plan(), ResourceClass::Throughput);
+    let joined_request = load_request(
+        &registry,
+        key,
+        uniform_plan(),
+        ResourceDemand::required(ExecutionPhase::Prefill),
+    );
     registry
-        .attach_waiter(waiter(2, 2), [joined_request], 2)
+        .attach_waiter(
+            waiter(2, 2),
+            ResourceDemand::required(ExecutionPhase::Prefill),
+            [joined_request],
+            2,
+        )
         .unwrap();
     registry.schedule_one(3).unwrap();
     registry
@@ -2334,9 +2483,19 @@ fn physical_bridge_read_failure_fails_all_waiters() {
     );
     let key = key(1);
     attach(&mut registry, waiter(1, 1), key, 1);
-    let joined_request = load_request(&registry, key, uniform_plan(), ResourceClass::Throughput);
+    let joined_request = load_request(
+        &registry,
+        key,
+        uniform_plan(),
+        ResourceDemand::required(ExecutionPhase::Prefill),
+    );
     registry
-        .attach_waiter(waiter(2, 2), [joined_request], 2)
+        .attach_waiter(
+            waiter(2, 2),
+            ResourceDemand::required(ExecutionPhase::Prefill),
+            [joined_request],
+            2,
+        )
         .unwrap();
     registry.drive(100, 16).unwrap();
     let failures = [
@@ -2436,10 +2595,11 @@ fn registry_publication_uses_provider_binding_without_reconciliation() {
     registry
         .attach_waiter(
             waiter(1, 1),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [stage_request(
                 preparation,
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             1,
         )
@@ -2486,12 +2646,19 @@ fn forty_dependencies_attach_and_complete_with_qd_two() {
                 &registry,
                 key(seed),
                 uniform_plan(),
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )
         })
         .collect::<Vec<_>>();
 
-    let report = registry.attach_waiter(waiter(1, 1), requests, 1).unwrap();
+    let report = registry
+        .attach_waiter(
+            waiter(1, 1),
+            ResourceDemand::required(ExecutionPhase::Prefill),
+            requests,
+            1,
+        )
+        .unwrap();
     assert_eq!(report.created.len(), usize::from(DEPENDENCIES));
     assert_eq!(
         handle.command_count(|command| matches!(command, MockPhysicalCommand::Reserve(..))),
@@ -2708,10 +2875,11 @@ fn physical_bridge_preserves_nonuniform_resource_plan() {
     registry
         .attach_waiter(
             waiter(1, 1),
+            ResourceDemand::required(ExecutionPhase::Prefill),
             [stage_request(
                 registry_resolved,
                 plan,
-                ResourceClass::Throughput,
+                ResourceDemand::required(ExecutionPhase::Prefill),
             )],
             1,
         )

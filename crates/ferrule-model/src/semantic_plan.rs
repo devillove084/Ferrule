@@ -397,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn dspark_mtp_attachment_is_planned_as_semantic_attachment() {
+    fn proposal_mtp_attachment_is_planned_as_semantic_attachment() {
         let contract = ModelSupportContract::from_spec(
             &TransformerSpec {
                 family: ModelFamily::DeepSeekV4,

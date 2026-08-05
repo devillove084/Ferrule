@@ -113,20 +113,107 @@ impl PhysicalResourceLimit {
     }
 }
 
-/// Priority class for a physical resource request.
+/// Exact execution phase associated with a resource request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ResourceClass {
-    /// Speculative work that may be skipped or cancelled without affecting correctness.
-    Prefetch,
-    /// Admitted batch work optimized for aggregate progress.
-    Throughput,
-    /// Admitted work on a latency-sensitive committed frontier.
-    LatencyCritical,
+pub enum ExecutionPhase {
+    MultimodalEncode,
+    Prefill,
+    Decode,
+    SpeculativeProposal,
+    SpeculativeVerification,
+    TrainingForward,
+    TrainingBackward,
+    OptimizerUpdate,
+    RolloutGeneration,
+    RewardEvaluation,
 }
 
-impl ResourceClass {
+/// Compact set of exact execution phases. Mixed scheduling preserves every phase
+/// as an independent bit instead of inventing a fused state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ExecutionPhaseSet(u16);
+
+impl ExecutionPhaseSet {
+    pub const fn one(phase: ExecutionPhase) -> Self {
+        Self(1 << phase as u16)
+    }
+
+    pub const fn with(self, phase: ExecutionPhase) -> Self {
+        Self(self.0 | Self::one(phase).0)
+    }
+
+    pub const fn contains(self, phase: ExecutionPhase) -> bool {
+        self.0 & Self::one(phase).0 != 0
+    }
+
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
+
+/// Why a physical resource is being requested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResourceDemand {
+    /// Model-lifecycle residency warmup, independent of a transaction.
+    ModelWarmup,
+    /// Exact non-blocking work declared by an admitted transaction.
+    Prefetch(ExecutionPhaseSet),
+    /// A resource currently required for physical execution progress.
+    Required(ExecutionPhaseSet),
+}
+
+impl ResourceDemand {
+    pub const fn prefetch(phase: ExecutionPhase) -> Self {
+        Self::Prefetch(ExecutionPhaseSet::one(phase))
+    }
+
+    pub const fn required(phase: ExecutionPhase) -> Self {
+        Self::Required(ExecutionPhaseSet::one(phase))
+    }
+
+    pub const fn prefetch_phases(phases: ExecutionPhaseSet) -> Self {
+        Self::Prefetch(phases)
+    }
+
+    pub const fn required_phases(phases: ExecutionPhaseSet) -> Self {
+        Self::Required(phases)
+    }
+
+    pub const fn phases(self) -> Option<ExecutionPhaseSet> {
+        match self {
+            Self::ModelWarmup => None,
+            Self::Prefetch(phases) | Self::Required(phases) => Some(phases),
+        }
+    }
+
+    pub const fn is_prefetch(self) -> bool {
+        matches!(self, Self::ModelWarmup | Self::Prefetch(_))
+    }
+
+    pub const fn is_required(self) -> bool {
+        matches!(self, Self::Required(_))
+    }
+
+    pub const fn purpose(self) -> ferrule_common::MaterializationPurpose {
+        if self.is_required() {
+            ferrule_common::MaterializationPurpose::Execution
+        } else {
+            ferrule_common::MaterializationPurpose::Prefetch
+        }
+    }
+
+    pub const fn merge(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::ModelWarmup, demand) | (demand, Self::ModelWarmup) => demand,
+            (Self::Prefetch(left), Self::Prefetch(right)) => Self::Prefetch(left.union(right)),
+            (Self::Prefetch(left), Self::Required(right))
+            | (Self::Required(right), Self::Prefetch(left)) => Self::Required(left.union(right)),
+            (Self::Required(left), Self::Required(right)) => Self::Required(left.union(right)),
+        }
+    }
+
     const fn may_use_execution_reserve(self) -> bool {
-        !matches!(self, Self::Prefetch)
+        self.is_required()
     }
 }
 
@@ -224,7 +311,7 @@ struct HardLimitState {
 #[derive(Debug, Clone)]
 struct HardGrantRecord {
     owner: u64,
-    class: ResourceClass,
+    demand: ResourceDemand,
     claims: HashMap<ResourceKind, HardClaimState, RandomState>,
 }
 
@@ -403,21 +490,21 @@ impl PhysicalResourceBroker {
 
     pub fn can_acquire(
         &self,
-        class: ResourceClass,
+        demand: ResourceDemand,
         claims: impl IntoIterator<Item = PhysicalResourceClaim>,
     ) -> std::result::Result<(), PhysicalResourceError> {
         let claims = Self::canonical_claims(claims)?;
-        self.validate_available(class, &claims)
+        self.validate_available(demand, &claims)
     }
 
     pub fn acquire(
         &mut self,
         owner: u64,
-        class: ResourceClass,
+        demand: ResourceDemand,
         claims: impl IntoIterator<Item = PhysicalResourceClaim>,
     ) -> std::result::Result<PhysicalResourceGrant, PhysicalResourceError> {
         let claims = Self::canonical_claims(claims)?;
-        self.validate_available(class, &claims)?;
+        self.validate_available(demand, &claims)?;
         let id = PhysicalResourceGrantId(self.next_grant);
         self.next_grant = self
             .next_grant
@@ -447,7 +534,7 @@ impl PhysicalResourceBroker {
             id,
             HardGrantRecord {
                 owner,
-                class,
+                demand,
                 claims: claims.clone(),
             },
         );
@@ -458,18 +545,16 @@ impl PhysicalResourceBroker {
         })
     }
 
-    pub fn promote(
+    pub fn reclassify(
         &mut self,
         grant: &PhysicalResourceGrant,
-        class: ResourceClass,
+        demand: ResourceDemand,
     ) -> std::result::Result<(), PhysicalResourceError> {
-        let (id, record) = self.record_for(grant)?;
-        if class > record.class {
-            self.grants
-                .get_mut(&id)
-                .expect("validated grant remains present")
-                .class = class;
-        }
+        let (id, _) = self.record_for(grant)?;
+        self.grants
+            .get_mut(&id)
+            .expect("validated grant remains present")
+            .demand = demand;
         Ok(())
     }
 
@@ -646,7 +731,7 @@ impl PhysicalResourceBroker {
 
     fn validate_available(
         &self,
-        class: ResourceClass,
+        demand: ResourceDemand,
         claims: &[PhysicalResourceClaim],
     ) -> std::result::Result<(), PhysicalResourceError> {
         for claim in claims {
@@ -669,7 +754,7 @@ impl PhysicalResourceBroker {
                     available,
                 });
             }
-            if !class.may_use_execution_reserve() {
+            if !demand.may_use_execution_reserve() {
                 let base_limit = state.capacity.saturating_sub(state.execution_reserve);
                 let base_available = base_limit.saturating_sub(state.in_use);
                 if claim.amount > base_available {

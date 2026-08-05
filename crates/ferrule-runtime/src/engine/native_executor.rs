@@ -5,24 +5,16 @@
 //! calls without maintaining a third lifecycle registry.
 
 use ferrule_common::execution::{
-    ExecutionBatch, ExecutionCapabilities, ExecutionOutput, ExecutionTransactionId,
-    KvReservationView,
+    ExecutionBatch, ExecutionCapabilities, ExecutionTransactionId, KvReservationView,
 };
 use ferrule_common::{ContinuationId, ResidencyLeaseSet};
 
 use crate::{Error, Result};
 use ferrule_model::{
-    MultiSessionBatchProgress, MultiSessionRunner, PendingModelProgress, TransactionEndIntent,
-    TransactionEndProgress,
+    MultiSessionBatchProgress, MultiSessionRunner, TransactionEndIntent, TransactionEndProgress,
 };
 
 use crate::expert_residency::ExpertResidencyController;
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum NativeBatchExecutionProgress {
-    Complete(ExecutionOutput),
-    Waiting(PendingModelProgress),
-}
 
 /// Thin owner-thread adapter over a `MultiSessionRunner`.
 ///
@@ -197,7 +189,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         transaction: ExecutionTransactionId,
         states: &mut [R::SequenceState],
         batch: &ExecutionBatch,
-    ) -> Result<NativeBatchExecutionProgress> {
+    ) -> Result<MultiSessionBatchProgress> {
         batch.validate(states.len(), &self.capabilities)?;
         let progress =
             self.runner
@@ -212,7 +204,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         batch: &ExecutionBatch,
         continuation: ContinuationId,
         leases: ResidencyLeaseSet,
-    ) -> Result<NativeBatchExecutionProgress> {
+    ) -> Result<MultiSessionBatchProgress> {
         batch.validate(states.len(), &self.capabilities)?;
         let progress = self.runner.resume_multi_session_batch(
             transaction,
@@ -229,11 +221,11 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         batch: &ExecutionBatch,
         capabilities: &ExecutionCapabilities,
         progress: MultiSessionBatchProgress,
-    ) -> Result<NativeBatchExecutionProgress> {
+    ) -> Result<MultiSessionBatchProgress> {
         match progress {
             MultiSessionBatchProgress::Complete(output) => {
                 output.validate_with_capabilities(batch, capabilities)?;
-                Ok(NativeBatchExecutionProgress::Complete(output))
+                Ok(MultiSessionBatchProgress::Complete(output))
             }
             MultiSessionBatchProgress::Waiting(pending) => {
                 if pending.transaction() != transaction {
@@ -244,7 +236,7 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
                         ),
                     });
                 }
-                Ok(NativeBatchExecutionProgress::Waiting(pending))
+                Ok(MultiSessionBatchProgress::Waiting(pending))
             }
         }
     }
@@ -273,12 +265,12 @@ mod tests {
 
     use super::*;
     use ferrule_common::execution::{
-        ExecutionSequence, ForwardMode, ForwardPhase, LogitsOutput, LogitsRequest, LogitsRow,
-        StateSlot, TokenLogit,
+        ExecutionOutput, ExecutionSequence, ForwardMode, ForwardPhase, LogitsOutput, LogitsRequest,
+        LogitsRow, StateSlot, TokenLogit,
     };
     use ferrule_common::{DependencySet, LogicalDependency, OperationId};
     use ferrule_common::{Error as ModelError, Result as ModelResult};
-    use ferrule_model::{ModelInfo, ModelRunner};
+    use ferrule_model::{ModelInfo, ModelRunner, PendingModelProgress};
 
     #[derive(Debug, Default)]
     struct MockSequenceState {
@@ -629,7 +621,7 @@ mod tests {
             executor
                 .execute_prepared_batch(transaction, &mut states, &batch)
                 .unwrap(),
-            NativeBatchExecutionProgress::Complete(_)
+            MultiSessionBatchProgress::Complete(_)
         ));
         assert!(executor.runner().commits.is_empty());
         assert!(executor.runner().rollbacks.is_empty());

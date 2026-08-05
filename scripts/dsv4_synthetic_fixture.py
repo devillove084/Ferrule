@@ -124,7 +124,7 @@ def iter_tensor_specs(config: dict[str, Any]) -> Iterator[tuple[str, str, list[i
     o_groups = config.get("o_groups", 8)
     n_experts_per_tok = config.get("num_experts_per_tok", 6)
     num_mtp = config.get("num_nextn_predict_layers", 1)
-    markov_rank = config.get("dspark_markov_rank", 256)
+    markov_rank = config.get("proposal_markov_rank", 256)
 
     T = tuple[str, str, list[int]]
 
@@ -329,8 +329,8 @@ def scale_config(config: dict[str, Any], factor: float) -> dict[str, Any]:
     cfg["num_experts_per_tok"] = min(
         cfg.get("num_experts_per_tok", 6), cfg["n_routed_experts"]
     )
-    if "dspark_markov_rank" in cfg:
-        cfg["dspark_markov_rank"] = s(cfg["dspark_markov_rank"])
+    if "proposal_markov_rank" in cfg:
+        cfg["proposal_markov_rank"] = s(cfg["proposal_markov_rank"])
 
     # Drop MTP if model shrinks below 30%
     if factor < 0.3:
@@ -347,10 +347,10 @@ def scale_config(config: dict[str, Any], factor: float) -> dict[str, Any]:
     # auxiliary tensors, so set all ratios to 0 (standard attention only)
     cfg["compress_ratios"] = [0] * cfg["num_hidden_layers"]
 
-    if "dspark_target_layer_ids" in cfg:
-        cfg["dspark_target_layer_ids"] = [
+    if "proposal_target_layer_ids" in cfg:
+        cfg["proposal_target_layer_ids"] = [
             lid
-            for lid in cfg["dspark_target_layer_ids"]
+            for lid in cfg["proposal_target_layer_ids"]
             if lid < cfg["num_hidden_layers"]
         ]
 
@@ -444,11 +444,11 @@ def distribute_to_shards(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--source", default="models/DeepSeek-V4-Flash-DSpark",
+        "--source", default="models/DeepSeek-V4-Flash-0731",
         help="Path to official DSV4 HF dir (for config.json, tokenizer)",
     )
     parser.add_argument(
-        "--output", "-o", default="models/DeepSeek-V4-Flash-DSpark-synthetic",
+        "--output", "-o", default="models/DeepSeek-V4-Flash-0731-synthetic",
         help="Output directory",
     )
     parser.add_argument(

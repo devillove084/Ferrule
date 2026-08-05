@@ -36,17 +36,17 @@ use ferrule_model::{
 #[cfg(feature = "cuda")]
 use ferrule_runtime::io::{OutputTokenId, RuntimeMaterializationResolverStats};
 #[cfg(feature = "cuda")]
+use ferrule_runtime::{ExecutionPhase, ResourceDemand, ResourceKind};
+#[cfg(feature = "cuda")]
 use ferrule_runtime::{
     FixedSequenceSlotPool, GenerateRequest, LocalResidentInferenceEngine, RequestId,
     ResidentActionKind, ResidentDriverStep, ResidentTopKDriverStats, SessionId, SpeculativeMetrics,
 };
-#[cfg(feature = "cuda")]
-use ferrule_runtime::{ResourceClass, ResourceKind};
 
 #[cfg(feature = "cuda")]
 use super::resident::{
-    block_on_local_inference, build_resident_topk_driver, resident_driver_config,
-    single_sequence_scheduler_config,
+    block_on_local_inference, build_resident_topk_driver, require_finished_request,
+    resident_driver_config, single_sequence_scheduler_config,
 };
 
 #[cfg(feature = "cuda")]
@@ -241,7 +241,6 @@ pub fn cmd_bench_interactive(
     max_layers: usize,
     prefill_chunk_size: usize,
     output_head_chunk_rows: usize,
-    moe_prefetch_experts: usize,
     moe_hotset_experts: usize,
     golden_trace_path: Option<&str>,
     json: bool,
@@ -265,7 +264,6 @@ pub fn cmd_bench_interactive(
     let options = DeepSeekV4PrepareOptions {
         max_layers,
         output_head_chunk_rows,
-        moe_prefetch_experts,
         moe_hotset_experts,
         ..DeepSeekV4PrepareOptions::default()
     };
@@ -519,6 +517,8 @@ async fn run_with_resident_driver_async(
         build_resident_topk_driver(runner, Box::new(schema), scheduler_config, driver_config)
     };
     let mut driver = LocalResidentInferenceEngine::new(build_driver(runner)?);
+    driver.initialize().await?;
+    driver.wait_for_model_warmup().await?;
 
     if warmup_tokens > 0 {
         let warmup_prompt = chat_template.format_turn("warmup", true);
@@ -533,8 +533,15 @@ async fn run_with_resident_driver_async(
         let warmup_start = Instant::now();
         driver.submit(warmup_request);
         loop {
-            match driver.step(&mut |_| Ok(())).await? {
-                ResidentDriverStep::Idle => break,
+            let step = driver.step(&mut |_| Ok(())).await?;
+            if let Some(terminal) = driver.take_request_terminal(RequestId(0)) {
+                let _ = require_finished_request(terminal, "interactive benchmark warmup")?;
+                break;
+            }
+            match step {
+                ResidentDriverStep::Idle => anyhow::bail!(
+                    "interactive benchmark warmup became idle before request terminalization"
+                ),
                 ResidentDriverStep::Blocked => {
                     anyhow::bail!("speculative warmup blocked while running resident benchmark")
                 }
@@ -544,7 +551,6 @@ async fn run_with_resident_driver_async(
         }
         report.warmup_us = duration_us(warmup_start.elapsed());
         report.warmup_generated_tokens = driver.stats().emitted_tokens;
-        let _ = driver.drain_finished();
     }
 
     let observability_baseline: DeepSeekV4ObservabilitySnapshot =
@@ -577,8 +583,9 @@ async fn run_with_resident_driver_async(
             continue;
         }
 
+        let request_id = RequestId(turn_idx as u64 + 1);
         let request = driver_request(
-            turn_idx as u64 + 1,
+            request_id.0,
             SessionId(0),
             prompt_tokens.clone(),
             gen_cfg.max_new_tokens,
@@ -601,7 +608,7 @@ async fn run_with_resident_driver_async(
         let mut generated_tokens = Vec::new();
         let mut runtime_steps = Vec::new();
 
-        loop {
+        let sequence = loop {
             let step_observability_before = driver.model_observability_snapshot();
             let step_operator_counters_before = step_observability_before.operator;
             let step_layer_profile_before = step_observability_before.layers;
@@ -616,6 +623,7 @@ async fn run_with_resident_driver_async(
                 })
                 .await?;
             let step_us = duration_us(step_start.elapsed());
+            let step_is_idle = matches!(&step, ResidentDriverStep::Idle);
             let step_observability_after = driver.model_observability_snapshot();
             let step_operator_counters = dsv4_operator_counters_delta(
                 step_operator_counters_before,
@@ -681,12 +689,18 @@ async fn run_with_resident_driver_async(
                         dsv4_output_profile_stats: step_output_profile_stats,
                     });
                 }
-                ResidentDriverStep::Idle => break,
+                ResidentDriverStep::Idle => {}
                 ResidentDriverStep::Blocked => {
                     anyhow::bail!("resident runtime driver blocked while running measured turn")
                 }
             }
-        }
+            if let Some(terminal) = driver.take_request_terminal(request_id) {
+                break require_finished_request(terminal, "interactive benchmark turn")?;
+            }
+            if step_is_idle {
+                anyhow::bail!("interactive benchmark became idle before request terminalization");
+            }
+        };
 
         let first_token_us = first_token_us.unwrap_or_else(|| duration_us(turn_start.elapsed()));
         if !first_token_measured {
@@ -694,10 +708,6 @@ async fn run_with_resident_driver_async(
             first_token_measured = true;
         }
 
-        let finished = driver.drain_finished();
-        let sequence = finished.last().ok_or_else(|| {
-            anyhow::anyhow!("resident runtime driver produced no finished sequence")
-        })?;
         let finish_reason = sequence.finish_reason;
         let stopped_by_string = if matches!(
             finish_reason,
@@ -799,6 +809,7 @@ async fn run_with_resident_driver_async(
         total_prompt_tokens,
         total_generated,
     );
+    driver.shutdown().await?;
     Ok(())
 }
 
@@ -843,7 +854,7 @@ pub(crate) fn runtime_materialization_snapshot(
             registry
                 .prepare_execution_request(
                     key,
-                    ResourceClass::Throughput,
+                    ResourceDemand::required(ExecutionPhase::Prefill),
                     ferrule_model::ResourceRetention::ThroughStage,
                 )?
                 .plan
@@ -1334,22 +1345,12 @@ pub(crate) fn dsv4_operator_counters_delta(
             .stream_wide_sync_failures
             .saturating_sub(before.stream_wide_sync_failures),
         moe_calls: after.moe_calls.saturating_sub(before.moe_calls),
-        moe_tc_calls: after.moe_tc_calls.saturating_sub(before.moe_tc_calls),
-        moe_scalar_calls: after
-            .moe_scalar_calls
-            .saturating_sub(before.moe_scalar_calls),
-        moe_reduce_calls: after
-            .moe_reduce_calls
-            .saturating_sub(before.moe_reduce_calls),
         moe_total_us: after.moe_total_us.saturating_sub(before.moe_total_us),
         moe_input_prepare_us: after
             .moe_input_prepare_us
             .saturating_sub(before.moe_input_prepare_us),
         moe_gate_up_us: after.moe_gate_up_us.saturating_sub(before.moe_gate_up_us),
         moe_swiglu_us: after.moe_swiglu_us.saturating_sub(before.moe_swiglu_us),
-        moe_hidden_pack_us: after
-            .moe_hidden_pack_us
-            .saturating_sub(before.moe_hidden_pack_us),
         moe_down_us: after.moe_down_us.saturating_sub(before.moe_down_us),
         moe_router_us: after.moe_router_us.saturating_sub(before.moe_router_us),
         moe_routing_us: after.moe_routing_us.saturating_sub(before.moe_routing_us),
@@ -2092,14 +2093,10 @@ pub(crate) fn dsv4_operator_counters_json(
         },
         "moe_compute": {
             "calls": stats.moe_calls,
-            "tensor_core_calls": stats.moe_tc_calls,
-            "scalar_calls": stats.moe_scalar_calls,
-            "reduce_calls": stats.moe_reduce_calls,
             "total_us": stats.moe_total_us,
             "input_prepare_us": stats.moe_input_prepare_us,
             "gate_up_us": stats.moe_gate_up_us,
             "swiglu_us": stats.moe_swiglu_us,
-            "hidden_pack_us": stats.moe_hidden_pack_us,
             "down_us": stats.moe_down_us,
             "router_us": stats.moe_router_us,
             "routing_us": stats.moe_routing_us,
@@ -2365,7 +2362,6 @@ pub fn cmd_bench_interactive(
     _max_layers: usize,
     _prefill_chunk_size: usize,
     _output_head_chunk_rows: usize,
-    _moe_prefetch_experts: usize,
     _moe_hotset_experts: usize,
     _golden_trace_path: Option<&str>,
     _json: bool,

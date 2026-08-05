@@ -40,7 +40,7 @@ A valid report includes at least:
 
 ## 2. Current target and evidence boundary
 
-The current GB10 acceptance target is a warm externally committed output throughput whose 95%
+The current CUDA-profile acceptance target is a warm externally committed output throughput whose 95%
 confidence lower bound reaches:
 
 ```text
@@ -51,9 +51,9 @@ This is a **target**, not a current result.
 
 Current evidence boundaries as of 2026-07-29:
 
-- a real GB10 `n1` run previously completed in `12.11 s`;
+- a real current-CUDA-profile `n1` run previously completed in `12.11 s`;
 - that completion proves one historical end-to-end path ran, not that the 16 tok/s target was met;
-- the latest real GB10 `n8` attempt timed out after `91.33 s` with empty stderr;
+- the latest real current-CUDA-profile `n8` attempt timed out after `91.33 s` with empty stderr;
 - the current wake-path patch still needs build, unit-test, and real-device revalidation;
 - `c1`, `c2`, and `c4` overlap/counter acceptance has not completed;
 - Ferrule therefore makes no release, production-readiness, or SOTA throughput claim.
@@ -62,7 +62,7 @@ The authoritative implementation status is maintained in [ROADMAP.md](ROADMAP.md
 
 ## 3. Release equation
 
-For one exact DSpark cycle, let:
+For one exact proposal-verification cycle, let:
 
 | Symbol | Meaning |
 |---|---|
@@ -129,9 +129,9 @@ Real execution lies between these models and may be slower because of queueing, 
 launch overhead, cache misses, and contention. A roofline must never be labeled as measured
 throughput.
 
-## 5. GB10 shared-memory constraint
+## 5. Current CUDA-profile shared-memory constraint
 
-On one NVIDIA GB10, CPU, GPU, CUDA copies, pinned staging, and NVMe DMA share the same coherent
+On the current coherent-memory CUDA profile, CPU, GPU, CUDA copies, pinned staging, and NVMe DMA share the same coherent
 LPDDR system. They cannot each claim the full vendor bandwidth independently.
 
 A useful accounting identity is:
@@ -241,7 +241,7 @@ shutdown residual grants must be zero.
 ### Build
 
 ```bash
-just build-cuda sm_121a
+just build-cuda sm_103
 ```
 
 ### Direct resident-driver probe
@@ -283,11 +283,12 @@ be included with the result.
 just test-runtime
 just test-model
 just test-cuda-required
-just test-cutlass-provider sm_121a
+just test-cutlass-provider sm_103
 ```
 
-Do not replace the CUDA build with a plain feature-enabled Cargo invocation when the repository's
-CUDA toolchain requires `cargo-oxide` and an explicit architecture.
+Use the repository recipes so the detected CUDA compute capability is passed literally to the
+standard Cargo + NVCC build. Ferrule no longer uses `cargo-oxide`; for the compute capability 10.3
+profile the target is `sm_103` without an inferred architecture suffix.
 
 ## 10. Artifact checklist
 
@@ -320,7 +321,7 @@ Do not:
 - divide logical requested bytes by time when physical single-flight bytes differ;
 - omit failed or timed-out requests;
 - use vendor peak FLOP/s as a measured small-batch rate;
-- extrapolate one GB10 result to another accelerator profile;
+- extrapolate one CUDA-profile result to another accelerator profile;
 - describe a historical build or benchmark as evidence for the current source revision.
 
 The roadmap may close a performance gate only when correctness, lifecycle, resource, and

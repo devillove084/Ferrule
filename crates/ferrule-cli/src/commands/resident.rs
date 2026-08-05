@@ -8,6 +8,8 @@ use ferrule_runtime::cache::KvPageManager;
 use ferrule_runtime::{
     FixedSequenceSlotPool, ResidentSchedulerConfig, ResidentTopKDriver, ResidentTopKDriverConfig,
 };
+#[cfg(feature = "cuda")]
+use ferrule_runtime::{RequestTerminal, SequenceState};
 
 /// Run a non-`Send` inference owner on the calling OS thread.
 ///
@@ -29,6 +31,26 @@ where
 /// interactive/benchmark entry point until the calibrated batch-wide
 /// scheduler lands.
 pub(crate) const DEFAULT_PROPOSAL_CONFIDENCE_THRESHOLD: f32 = 0.2;
+
+#[cfg(feature = "cuda")]
+pub(crate) fn require_finished_request(
+    terminal: RequestTerminal,
+    context: &str,
+) -> anyhow::Result<SequenceState> {
+    match terminal {
+        RequestTerminal::Finished(sequence) => Ok(sequence),
+        RequestTerminal::Cancelled(sequence) => anyhow::bail!(
+            "{context} request {:?} was cancelled ({:?})",
+            sequence.request_id,
+            sequence.finish_reason
+        ),
+        RequestTerminal::Failed(sequence) => anyhow::bail!(
+            "{context} request {:?} failed ({:?})",
+            sequence.request_id,
+            sequence.finish_reason
+        ),
+    }
+}
 
 /// Driver configuration shared by all resident-model entry points.
 pub(crate) fn resident_driver_config(

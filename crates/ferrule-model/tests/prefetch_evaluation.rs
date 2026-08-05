@@ -35,7 +35,7 @@
 //! Conclusion: do not wire the current predictor into prefetch. Useful
 //! prefetch requires a future-aware signal (hidden-state lookahead, routing
 //! hash, or a learned predictor), not popularity statistics. Keep
-//! `ResourceClass::Prefetch`/demand-reserve in the runtime as the correct
+//! `ResourceDemand::ModelWarmup`/demand-reserve in the runtime as the correct
 //! carrier for that future signal.
 
 use std::collections::{BTreeMap, VecDeque};

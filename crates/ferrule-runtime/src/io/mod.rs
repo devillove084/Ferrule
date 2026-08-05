@@ -18,10 +18,10 @@ pub use provider::{
 };
 #[cfg(test)]
 pub use provider::{FakeCompletionSpec, FakeMaterializationCommand, FakeMaterializationProvider};
-pub(crate) use registry::RegistryDriveStep;
+
 pub use registry::{
     AttachReport, CompletionDisposition, CompletionRejection, CompletionRejectionReason,
-    ContinuationFailure, FailedContinuation, LoadOp, LoadRegistry, LoadRequest, PrefetchId,
+    ContinuationFailure, FailedContinuation, LoadOp, LoadRegistry, LoadRequest, PrefetchOwner,
     PrefetchReport, RegistryError, RegistryStats, ResumeDisposition, ResumeLease, ShutdownReport,
     TransactionCustodyOutcome,
 };

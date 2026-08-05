@@ -28,8 +28,8 @@ use std::time::Instant;
 use super::info::print_model_info;
 #[cfg(feature = "cuda")]
 use super::resident::{
-    block_on_local_inference, build_resident_topk_driver, resident_driver_config,
-    single_sequence_scheduler_config,
+    block_on_local_inference, build_resident_topk_driver, require_finished_request,
+    resident_driver_config, single_sequence_scheduler_config,
 };
 
 // ── resolve_template ─────────────────────────────────────────────────────────
@@ -99,11 +99,7 @@ pub fn cmd_chat(
 fn deepseek_v4_chat_options() -> DeepSeekV4PrepareOptions {
     DeepSeekV4PrepareOptions {
         output_head_chunk_rows: 4096,
-        // Match the bench-interactive configuration: a bounded per-layer GPU hotset
-        // without speculative prefetch. The predictive advisor was removed; prefetch
-        // without prediction competes with selected experts for limited slots.
-        moe_prefetch_experts: 0,
-        moe_hotset_experts: 48,
+        moe_hotset_experts: 0,
         ..DeepSeekV4PrepareOptions::default()
     }
 }
@@ -167,6 +163,10 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
         let log_file = std::fs::File::create(&log_path)?;
         let log_fd = log_file.as_raw_fd();
         // SAFETY: dup2 replaces stderr fd before any multi-threaded work starts.
+        #[allow(
+            unsafe_code,
+            reason = "redirecting the inherited stderr file descriptor requires libc"
+        )]
         unsafe {
             libc::dup2(log_fd, 2);
         }
@@ -190,6 +190,7 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
         scheduler_config,
         driver_config,
     )?);
+    driver.initialize().await?;
     driver.retain_session(session_id)?;
     print_model_info(&driver.model_info());
     println!(
@@ -287,8 +288,9 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
         let mut spinner_active = true;
 
         turns = turns.saturating_add(1);
+        let request_id = RequestId(turns);
         driver.submit(GenerateRequest {
-            id: RequestId(turns),
+            id: request_id,
             session_id: Some(session_id),
             prompt_tokens: prompt_tokens.clone(),
             max_new_tokens: generation.max_new_tokens,
@@ -300,7 +302,7 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
         let mut prefill_time = std::time::Duration::ZERO;
         let mut decode_time = std::time::Duration::ZERO;
         let mut turn_tokens = 0usize;
-        loop {
+        let turn = loop {
             let step_started = Instant::now();
             let step = driver
                 .step(&mut |event| {
@@ -308,19 +310,24 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
                         spinner.finish_and_clear();
                         spinner_active = false;
                         print!("{} ", style("Ferrule>").cyan().bold());
-                        std::io::stdout().flush()?;
+                        std::io::stdout()
+                            .flush()
+                            .map_err(ferrule_common::Error::from)?;
                     }
                     first_token_time.get_or_insert_with(|| turn_start.elapsed());
                     if sampling.verbose_tokens() {
                         eprint!("[{}:{:.4}]", event.token, event.logit.unwrap_or(f32::NAN));
                     }
                     print!("{}", event.text);
-                    std::io::stdout().flush()?;
+                    std::io::stdout()
+                        .flush()
+                        .map_err(ferrule_common::Error::from)?;
                     turn_tokens = turn_tokens.saturating_add(1);
                     Ok(())
                 })
                 .await?;
             let elapsed = step_started.elapsed();
+            let step_is_idle = matches!(&step, ResidentDriverStep::Idle);
             match step {
                 ResidentDriverStep::Executed { action_kind, .. } => match action_kind {
                     ResidentActionKind::Prefill | ResidentActionKind::Mixed => {
@@ -330,7 +337,7 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
                     ResidentActionKind::Finish | ResidentActionKind::Cancel => {}
                 },
                 ResidentDriverStep::WaitingForModelProgress(_) => decode_time += elapsed,
-                ResidentDriverStep::Idle => break,
+                ResidentDriverStep::Idle => {}
                 ResidentDriverStep::Blocked => {
                     if spinner_active {
                         spinner.finish_and_clear();
@@ -338,17 +345,19 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
                     anyhow::bail!("resident chat driver blocked while running a turn")
                 }
             }
-        }
+            if let Some(terminal) = driver.take_request_terminal(request_id) {
+                break require_finished_request(terminal, "resident chat turn")?;
+            }
+            if step_is_idle {
+                anyhow::bail!("resident chat became idle before request terminalization");
+            }
+        };
         if spinner_active {
             spinner.finish_and_clear();
         }
         println!();
         generated_tokens = generated_tokens.saturating_add(turn_tokens);
 
-        let finished = driver.drain_finished();
-        let turn = finished
-            .last()
-            .ok_or_else(|| anyhow::anyhow!("resident chat driver produced no finished sequence"))?;
         if generation.max_new_tokens == 0 {
             println!("{} max_new_tokens is 0.", style("Ferrule>").cyan().bold());
         } else if turn.finish_reason == Some(SequenceFinishReason::MaxTokens) {
@@ -389,6 +398,7 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
         eprintln!("{} {}", style("stats>").dim(), style(&stats_line).dim());
     }
 
+    driver.shutdown().await?;
     Ok(())
 }
 

@@ -11,11 +11,11 @@ categories = ["science", "machine-learning"]
 
 [features]
 default = []
-cuda = ["dep:ferrule-cuda", "ferrule-cuda/cuda"]
+cuda = ["ferrule-backend/cuda"]
 
 [dependencies]
 ferrule-common = { version = "0.2.0", path = "../ferrule-common" }
-ferrule-cuda = { version = "0.2.0", path = "../ferrule-cuda", optional = true }
+ferrule-backend = { version = "0.2.0", path = "../ferrule-backend" }
 memmap2 = "0.9"
 byteorder = "1"
 half = "2"

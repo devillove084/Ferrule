@@ -2,7 +2,7 @@
 members = [
   "crates/ferrule-common",
   "crates/ferrule-model",
-  "crates/ferrule-cuda",
+  "crates/ferrule-backend",
   "crates/ferrule-runtime",
   "crates/ferrule-server",
   "crates/ferrule-cli",
