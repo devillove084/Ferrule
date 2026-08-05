@@ -11,11 +11,16 @@ default: check test
 
 # ── Detection helpers ──────────────────────────────────────────────────
 
-# `FERRULE_CUDA_ARCH` always wins. Otherwise convert the first GPU's compute
-# capability literally: 10.3 becomes sm_103. Architecture-specific suffixes
-# (`a`/`f`) are never inferred from the major version.
+# `FERRULE_CUDA_ARCH` always wins for compilation. Otherwise convert the first
+# GPU's compute capability literally: 10.3 becomes sm_103. Architecture-specific
+# suffixes (`a`/`f`) are never inferred from the major version.
 [private]
 _cuda-arch := `if [ -n "${FERRULE_CUDA_ARCH:-}" ]; then printf '%s\n' "$FERRULE_CUDA_ARCH"; elif command -v nvidia-smi >/dev/null 2>&1; then cap=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | sed -n '1p' | tr -d '[:space:].'); if [ -n "$cap" ]; then printf 'sm_%s\n' "$(printf '%s' "$cap" | tr -d '.')"; fi; fi`
+
+# Runtime validation must ignore `FERRULE_CUDA_ARCH`: a binary compiled for a
+# different target must never be launched merely because some NVIDIA GPU exists.
+[private]
+_cuda-device-arch := `if command -v nvidia-smi >/dev/null 2>&1; then cap=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | sed -n '1p' | tr -d '[:space:].'); if [ -n "$cap" ]; then printf 'sm_%s\n' "$(printf '%s' "$cap" | tr -d '.')"; fi; fi`
 
 [private]
 _has-nvcc := `command -v nvcc >/dev/null 2>&1 && echo 1 || echo 0`
@@ -40,11 +45,20 @@ cutlass-setup:
 build-cutlass arch='':
     just build-cuda "{{ arch }}"
 
+# Compile every CUDA backend target without loading it on the local GPU. Each
+# architecture gets an isolated Cargo target directory so build-script outputs
+# and native objects cannot be reused across incompatible capabilities.
+check-cuda-arch arch: cutlass-setup
+    @test "{{ _has-nvcc }}" = "1" || { echo "error: nvcc not found"; exit 1; }; test -n "{{ arch }}" || { echo "error: CUDA architecture is required"; exit 1; }; echo "→ CUDA compile-only validation (arch: {{ arch }})"; CUDA_VISIBLE_DEVICES="" CARGO_TARGET_DIR="target/validation/{{ arch }}" FERRULE_CUDA_ARCH="{{ arch }}" cargo test --locked --release -p ferrule-backend --features cuda --all-targets --no-run
+
+check-cuda-arch-matrix arches='sm_89 sm_90 sm_103 sm_120': cutlass-setup
+    @for arch in {{ arches }}; do just check-cuda-arch "$arch" || exit 1; done
+
 test-cutlass-provider arch='': cutlass-setup
-    @arch="{{ arch }}"; test -n "$arch" || arch="{{ _cuda-arch }}"; test "{{ _has-nvcc }}" = "1" || { echo "error: nvcc not found"; exit 1; }; test "{{ _has-gpu }}" = "1" || { echo "error: no NVIDIA GPU detected"; exit 1; }; FERRULE_CUDA_ARCH="$arch" cargo test --locked -p ferrule-backend --features cuda --test cutlass_provider -- --test-threads=1
+    @arch="{{ arch }}"; test -n "$arch" || arch="{{ _cuda-arch }}"; device_arch="{{ _cuda-device-arch }}"; test "{{ _has-nvcc }}" = "1" || { echo "error: nvcc not found"; exit 1; }; test "{{ _has-gpu }}" = "1" || { echo "error: no NVIDIA GPU detected"; exit 1; }; test -n "$arch" || { echo "error: could not determine requested CUDA architecture"; exit 1; }; test "$arch" = "$device_arch" || { echo "error: refusing to run $arch provider tests on $device_arch hardware; use 'just check-cuda-arch $arch' for compile-only validation"; exit 1; }; FERRULE_CUDA_ARCH="$arch" cargo test --locked -p ferrule-backend --features cuda --test cutlass_provider -- --test-threads=1
 
 proposal-hybrid-attention-bench arch='': cutlass-setup
-    @arch="{{ arch }}"; test -n "$arch" || arch="{{ _cuda-arch }}"; test "{{ _has-nvcc }}" = "1" || { echo "error: nvcc not found"; exit 1; }; test "{{ _has-gpu }}" = "1" || { echo "error: no NVIDIA GPU detected"; exit 1; }; FERRULE_CUDA_ARCH="$arch" cargo test --locked -p ferrule-backend --features cuda --test cutlass_provider hybrid_attention_formal_shape_latency -- --ignored --nocapture --test-threads=1
+    @arch="{{ arch }}"; test -n "$arch" || arch="{{ _cuda-arch }}"; device_arch="{{ _cuda-device-arch }}"; test "{{ _has-nvcc }}" = "1" || { echo "error: nvcc not found"; exit 1; }; test "{{ _has-gpu }}" = "1" || { echo "error: no NVIDIA GPU detected"; exit 1; }; test "$arch" = "$device_arch" || { echo "error: refusing to run $arch benchmark on $device_arch hardware"; exit 1; }; FERRULE_CUDA_ARCH="$arch" cargo test --locked -p ferrule-backend --features cuda --test cutlass_provider hybrid_attention_formal_shape_latency -- --ignored --nocapture --test-threads=1
 
 build-dev:
     cargo build --locked

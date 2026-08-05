@@ -10,6 +10,7 @@ namespace ferrule::cuda::cutlass::architectures {
 __device__ __forceinline__ void fp8_e4m3_m16n8k32(float (&accumulator)[4],
                                                   const std::uint32_t (&a)[4],
                                                   const std::uint32_t (&b)[2]) {
+#if FERRULE_CUDA_HAS_FP8_MMA_SYNC
   asm volatile("mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32 "
                "{%0, %1, %2, %3}, "
                "{%4, %5, %6, %7}, "
@@ -19,6 +20,11 @@ __device__ __forceinline__ void fp8_e4m3_m16n8k32(float (&accumulator)[4],
                  "+f"(accumulator[2]), "+f"(accumulator[3])
                : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b[0]),
                  "r"(b[1]));
+#else
+  (void)accumulator;
+  (void)a;
+  (void)b;
+#endif
 }
 
 } // namespace ferrule::cuda::cutlass::architectures

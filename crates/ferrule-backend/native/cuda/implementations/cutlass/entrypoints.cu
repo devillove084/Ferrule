@@ -44,9 +44,9 @@ static_assert(sizeof(FerruleCutlassMlaOutputArgs) == 120,
               "Ferrule CUTLASS MLA output ABI layout changed");
 static_assert(sizeof(FerruleCutlassMainProjectNormArgs) == 104,
               "Ferrule CUTLASS main-project/norm ABI layout changed");
-static_assert(sizeof(FerruleCutlassHybridMlaAttentionArgs) == 160,
+static_assert(sizeof(FerruleCutlassHybridMlaAttentionArgs) == 176,
               "Ferrule CUTLASS hybrid-attention ABI layout changed");
-static_assert(sizeof(FerruleCutlassHybridMlaExplicitSelectionArgs) == 208,
+static_assert(sizeof(FerruleCutlassHybridMlaExplicitSelectionArgs) == 224,
               "Ferrule CUTLASS explicit-selection ABI layout changed");
 static_assert(sizeof(FerruleCutlassWorkspaceRequirements) == 16,
               "Ferrule CUTLASS workspace requirements ABI layout changed");
@@ -272,12 +272,16 @@ FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaAttentionArgs, scores_f32,
                               120);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaAttentionArgs,
                               probabilities_bf16, 128);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaAttentionArgs,
+                              online_rescales_f32, 136);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaAttentionArgs,
+                              denominators_f32, 144);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaAttentionArgs, output_f32,
-                              136);
-FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaAttentionArgs, status_i32,
-                              144);
-FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaAttentionArgs, stream,
                               152);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaAttentionArgs, status_i32,
+                              160);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaAttentionArgs, stream,
+                              168);
 
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaExplicitSelectionArgs,
                               kind, 0);
@@ -326,25 +330,29 @@ FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaExplicitSelectionArgs,
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaExplicitSelectionArgs,
                               sequence_kv_lens_i32, 120);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaExplicitSelectionArgs,
-                              row_sequence_ids_i32, 128);
+                              second_sequence_kv_lens_i32, 128);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaExplicitSelectionArgs,
-                              row_kv_lens_i32, 136);
+                              row_sequence_ids_i32, 136);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaExplicitSelectionArgs,
-                              selected_indices_i32, 144);
+                              row_kv_lens_i32, 144);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaExplicitSelectionArgs,
-                              selectors_i32, 152);
+                              row_second_kv_lens_i32, 152);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaExplicitSelectionArgs,
-                              attention_sink_f32, 160);
+                              selected_indices_i32, 160);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaExplicitSelectionArgs,
-                              workspace, 168);
+                              selectors_i32, 168);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaExplicitSelectionArgs,
-                              workspace_bytes, 176);
+                              attention_sink_f32, 176);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaExplicitSelectionArgs,
-                              output_f32, 184);
+                              workspace, 184);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaExplicitSelectionArgs,
-                              status_i32, 192);
+                              workspace_bytes, 192);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaExplicitSelectionArgs,
-                              stream, 200);
+                              output_f32, 200);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaExplicitSelectionArgs,
+                              status_i32, 208);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHybridMlaExplicitSelectionArgs,
+                              stream, 216);
 
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassWorkspaceRequirements, bytes, 0);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassWorkspaceRequirements, alignment,
@@ -989,7 +997,8 @@ hybrid_mla_attention::Args make_hybrid_mla_attention_args(
       args.block_kv_f32,       args.block_slots_i32,
       args.attention_sink_f32, args.query_bf16,
       args.gathered_kv_bf16,   args.scores_f32,
-      args.probabilities_bf16, args.output_f32,
+      args.probabilities_bf16, args.online_rescales_f32,
+      args.denominators_f32,   args.output_f32,
       args.status_i32,         args.stream,
   };
 }
@@ -1025,8 +1034,10 @@ make_hybrid_mla_explicit_selection_args(
       native_pointer<const int32_t>(args.block_slots_i32),
       native_pointer<const int32_t>(args.block_offsets_i32),
       native_pointer<const int32_t>(args.sequence_kv_lens_i32),
+      native_pointer<const int32_t>(args.second_sequence_kv_lens_i32),
       native_pointer<const int32_t>(args.row_sequence_ids_i32),
       native_pointer<const int32_t>(args.row_kv_lens_i32),
+      native_pointer<const int32_t>(args.row_second_kv_lens_i32),
       native_pointer<const int32_t>(args.selected_indices_i32),
       native_pointer<const int32_t>(args.selectors_i32),
       native_pointer<const float>(args.attention_sink_f32),
@@ -1151,26 +1162,42 @@ int32_t helper_launch_status(cudaError_t status) {
 extern "C" FerruleCutlassProviderManifest
 ferrule_cutlass_provider_manifest(void) {
   return FerruleCutlassProviderManifest{
-      FERRULE_CUTLASS_KERNEL_BIT(FERRULE_CUTLASS_KERNEL_FP8_QUERY_A_KV) |
+      (FERRULE_CUDA_HAS_FP8_MMA_SYNC
+           ? FERRULE_CUTLASS_KERNEL_BIT(FERRULE_CUTLASS_KERNEL_FP8_QUERY_A_KV)
+           : 0ull) |
           FERRULE_CUTLASS_KERNEL_BIT(FERRULE_CUTLASS_KERNEL_BF16_COMPRESSOR) |
           FERRULE_CUTLASS_KERNEL_BIT(
               FERRULE_CUTLASS_KERNEL_HYPER_CONNECTION_PRODUCER) |
-          FERRULE_CUTLASS_KERNEL_BIT(FERRULE_CUTLASS_KERNEL_SHARED_FFN) |
+          (FERRULE_CUDA_HAS_FP8_MMA_SYNC
+               ? FERRULE_CUTLASS_KERNEL_BIT(FERRULE_CUTLASS_KERNEL_SHARED_FFN)
+               : 0ull) |
           (FERRULE_CUTLASS_HAS_SM103_GROUPED_FP4_MOE
                ? FERRULE_CUTLASS_KERNEL_BIT(
                      FERRULE_CUTLASS_KERNEL_GROUPED_FP4_MOE)
                : 0ull) |
-          FERRULE_CUTLASS_KERNEL_BIT(FERRULE_CUTLASS_KERNEL_MLA_OUTPUT) |
-          FERRULE_CUTLASS_KERNEL_BIT(FERRULE_CUTLASS_KERNEL_MAIN_PROJECT_NORM) |
+          (FERRULE_CUDA_HAS_FP8_MMA_SYNC
+               ? FERRULE_CUTLASS_KERNEL_BIT(FERRULE_CUTLASS_KERNEL_MLA_OUTPUT)
+               : 0ull) |
+          (FERRULE_CUDA_HAS_FP8_MMA_SYNC
+               ? FERRULE_CUTLASS_KERNEL_BIT(
+                     FERRULE_CUTLASS_KERNEL_MAIN_PROJECT_NORM)
+               : 0ull) |
           FERRULE_CUTLASS_KERNEL_BIT(
               FERRULE_CUTLASS_KERNEL_HYBRID_MLA_ATTENTION) |
           FERRULE_CUTLASS_KERNEL_BIT(FERRULE_CUTLASS_KERNEL_PROPOSAL_HEAD) |
-          FERRULE_CUTLASS_KERNEL_BIT(FERRULE_CUTLASS_KERNEL_FP8_PROJECTION),
+          (FERRULE_CUDA_HAS_FP8_MMA_SYNC
+               ? FERRULE_CUTLASS_KERNEL_BIT(
+                     FERRULE_CUTLASS_KERNEL_FP8_PROJECTION)
+               : 0ull),
   };
 }
 
 extern "C" int32_t ferrule_cutlass_fp8_query_a_kv_can_implement(
     const FerruleCutlassFp8QueryAKvArgs *args) {
+#if !FERRULE_CUDA_HAS_FP8_MMA_SYNC
+  (void)args;
+  return FERRULE_CUTLASS_UNSUPPORTED;
+#else
   if (args == nullptr) {
     return FERRULE_CUTLASS_INVALID_ARGUMENT;
   }
@@ -1181,6 +1208,7 @@ extern "C" int32_t ferrule_cutlass_fp8_query_a_kv_can_implement(
                  fp8_prefill::ValidationResult::kSuccess
              ? FERRULE_CUTLASS_SUCCESS
              : FERRULE_CUTLASS_INVALID_ARGUMENT;
+#endif
 }
 
 extern "C" int32_t ferrule_cutlass_fp8_query_a_kv_launch(
@@ -1198,6 +1226,10 @@ extern "C" int32_t ferrule_cutlass_fp8_query_a_kv_launch(
 
 extern "C" int32_t ferrule_cutlass_fp8_projection_can_implement(
     const FerruleCutlassFp8QueryAKvArgs *args) {
+#if !FERRULE_CUDA_HAS_FP8_MMA_SYNC
+  (void)args;
+  return FERRULE_CUTLASS_UNSUPPORTED;
+#else
   if (args == nullptr) {
     return FERRULE_CUTLASS_INVALID_ARGUMENT;
   }
@@ -1210,6 +1242,7 @@ extern "C" int32_t ferrule_cutlass_fp8_projection_can_implement(
                  fp8_prefill::ValidationResult::kSuccess
              ? FERRULE_CUTLASS_SUCCESS
              : FERRULE_CUTLASS_INVALID_ARGUMENT;
+#endif
 }
 
 extern "C" int32_t ferrule_cutlass_fp8_projection_launch(
@@ -1278,6 +1311,10 @@ ferrule_cutlass_hc_producer_launch(const FerruleCutlassHcProducerArgs *args) {
 
 extern "C" int32_t ferrule_cutlass_shared_ffn_can_implement(
     const FerruleCutlassSharedFfnArgs *args) {
+#if !FERRULE_CUDA_HAS_FP8_MMA_SYNC
+  (void)args;
+  return FERRULE_CUTLASS_UNSUPPORTED;
+#else
   if (args == nullptr) {
     return FERRULE_CUTLASS_INVALID_ARGUMENT;
   }
@@ -1285,6 +1322,7 @@ extern "C" int32_t ferrule_cutlass_shared_ffn_can_implement(
                  shared_ffn::ValidationResult::kSuccess
              ? FERRULE_CUTLASS_SUCCESS
              : FERRULE_CUTLASS_INVALID_ARGUMENT;
+#endif
 }
 
 extern "C" int32_t
@@ -1301,11 +1339,16 @@ ferrule_cutlass_shared_ffn_launch(const FerruleCutlassSharedFfnArgs *args) {
 
 extern "C" int32_t ferrule_cutlass_mla_output_can_implement(
     const FerruleCutlassMlaOutputArgs *args) {
+#if !FERRULE_CUDA_HAS_FP8_MMA_SYNC
+  (void)args;
+  return FERRULE_CUTLASS_UNSUPPORTED;
+#else
   if (args == nullptr) {
     return FERRULE_CUTLASS_INVALID_ARGUMENT;
   }
   const auto native_args = make_mla_output_args(*args);
   return static_cast<int32_t>(mla_output::validate(&native_args));
+#endif
 }
 
 extern "C" int32_t
@@ -1320,11 +1363,16 @@ ferrule_cutlass_mla_output_launch(const FerruleCutlassMlaOutputArgs *args) {
 
 extern "C" int32_t ferrule_cutlass_main_project_norm_can_implement(
     const FerruleCutlassMainProjectNormArgs *args) {
+#if !FERRULE_CUDA_HAS_FP8_MMA_SYNC
+  (void)args;
+  return FERRULE_CUTLASS_UNSUPPORTED;
+#else
   if (args == nullptr) {
     return FERRULE_CUTLASS_INVALID_ARGUMENT;
   }
   const auto native_args = make_main_project_norm_args(*args);
   return static_cast<int32_t>(main_project_norm::validate(&native_args));
+#endif
 }
 
 extern "C" int32_t ferrule_cutlass_main_project_norm_launch(

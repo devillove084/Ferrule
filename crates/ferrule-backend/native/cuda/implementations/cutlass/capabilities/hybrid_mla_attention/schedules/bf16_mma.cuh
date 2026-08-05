@@ -68,8 +68,10 @@ struct Args {
   std::uint64_t block_slots_i32;
   std::uint64_t block_offsets_i32;
   std::uint64_t sequence_kv_lens_i32;
+  std::uint64_t second_sequence_kv_lens_i32;
   std::uint64_t row_sequence_ids_i32;
   std::uint64_t row_kv_lens_i32;
+  std::uint64_t row_second_kv_lens_i32;
   std::uint64_t selected_indices_i32;
   std::uint64_t selectors_i32;
   std::uint64_t attention_sink_f32;
@@ -87,7 +89,7 @@ struct Args {
 
 static_assert(std::is_standard_layout_v<Args>);
 static_assert(std::is_trivially_copyable_v<Args>);
-static_assert(sizeof(Args) == 248u, "BF16 selected-attention POD changed");
+static_assert(sizeof(Args) == 264u, "BF16 selected-attention POD changed");
 static_assert(alignof(Args) == 8u);
 static_assert(offsetof(Args, kind) == 0u);
 static_assert(offsetof(Args, rows) == 4u);
@@ -112,21 +114,23 @@ static_assert(offsetof(Args, second_plane_f32) == 96u);
 static_assert(offsetof(Args, block_slots_i32) == 104u);
 static_assert(offsetof(Args, block_offsets_i32) == 112u);
 static_assert(offsetof(Args, sequence_kv_lens_i32) == 120u);
-static_assert(offsetof(Args, row_sequence_ids_i32) == 128u);
-static_assert(offsetof(Args, row_kv_lens_i32) == 136u);
-static_assert(offsetof(Args, selected_indices_i32) == 144u);
-static_assert(offsetof(Args, selectors_i32) == 152u);
-static_assert(offsetof(Args, attention_sink_f32) == 160u);
-static_assert(offsetof(Args, source_addresses_u64) == 168u);
-static_assert(offsetof(Args, query_bf16) == 176u);
-static_assert(offsetof(Args, gathered_kv_bf16) == 184u);
-static_assert(offsetof(Args, raw_scores_f32) == 192u);
-static_assert(offsetof(Args, probabilities_bf16) == 200u);
-static_assert(offsetof(Args, online_rescales_f32) == 208u);
-static_assert(offsetof(Args, denominators_f32) == 216u);
-static_assert(offsetof(Args, output_f32) == 224u);
-static_assert(offsetof(Args, status_i32) == 232u);
-static_assert(offsetof(Args, stream) == 240u);
+static_assert(offsetof(Args, second_sequence_kv_lens_i32) == 128u);
+static_assert(offsetof(Args, row_sequence_ids_i32) == 136u);
+static_assert(offsetof(Args, row_kv_lens_i32) == 144u);
+static_assert(offsetof(Args, row_second_kv_lens_i32) == 152u);
+static_assert(offsetof(Args, selected_indices_i32) == 160u);
+static_assert(offsetof(Args, selectors_i32) == 168u);
+static_assert(offsetof(Args, attention_sink_f32) == 176u);
+static_assert(offsetof(Args, source_addresses_u64) == 184u);
+static_assert(offsetof(Args, query_bf16) == 192u);
+static_assert(offsetof(Args, gathered_kv_bf16) == 200u);
+static_assert(offsetof(Args, raw_scores_f32) == 208u);
+static_assert(offsetof(Args, probabilities_bf16) == 216u);
+static_assert(offsetof(Args, online_rescales_f32) == 224u);
+static_assert(offsetof(Args, denominators_f32) == 232u);
+static_assert(offsetof(Args, output_f32) == 240u);
+static_assert(offsetof(Args, status_i32) == 248u);
+static_assert(offsetof(Args, stream) == 256u);
 
 using Status = ExplicitSelectionStatus;
 
@@ -139,8 +143,10 @@ struct Binding {
   const std::int32_t *block_slots;
   const std::int32_t *block_offsets;
   const std::int32_t *sequence_kv_lens;
+  const std::int32_t *second_sequence_kv_lens;
   const std::int32_t *row_sequence_ids;
   const std::int32_t *row_kv_lens;
+  const std::int32_t *row_second_kv_lens;
   const std::int32_t *selected_indices;
   const std::int32_t *selectors;
   const float *attention_sink;
@@ -212,14 +218,15 @@ sequence_for_row(const Args &args, const Binding &binding, std::uint32_t row) {
 }
 
 __device__ __forceinline__ ValueLocation
-paged_location(const Args &args, const Binding &binding, const float *plane,
+paged_location(const Args &args, const Binding &binding,
+               const std::int32_t *sequence_kv_lens, const float *plane,
                std::uint64_t plane_elements, std::uint32_t elements_per_token,
                std::uint32_t sequence, std::int32_t logical) {
   if (logical < 0 || sequence == UINT32_MAX) {
     return {nullptr, 0u, false};
   }
 
-  const std::int32_t sequence_length = binding.sequence_kv_lens[sequence];
+  const std::int32_t sequence_length = sequence_kv_lens[sequence];
   if (sequence_length < 0 || logical >= sequence_length) {
     return {nullptr, 0u, false};
   }
@@ -265,8 +272,11 @@ selected_location(const Args &args, const Binding &binding, std::uint32_t row,
   const std::uint64_t index =
       static_cast<std::uint64_t>(row) * args.selected_width + selected;
   std::int32_t logical = binding.selected_indices[index];
+  const std::int32_t selector =
+      args.kind == kDualPaged ? binding.selectors[index] : 0;
   if ((args.flags & 2u) != 0u) {
-    const std::int32_t visible = binding.row_kv_lens[row];
+    const std::int32_t visible = selector == 1 ? binding.row_second_kv_lens[row]
+                                               : binding.row_kv_lens[row];
     if (logical < 0 || logical >= visible) {
       logical = -1;
     }
@@ -290,16 +300,14 @@ selected_location(const Args &args, const Binding &binding, std::uint32_t row,
   }
 
   const std::uint32_t sequence = sequence_for_row(args, binding, row);
-  const std::int32_t selector =
-      args.kind == kDualPaged ? binding.selectors[index] : 0;
   if (selector == 0) {
-    return paged_location(args, binding, binding.first_plane,
-                          args.first_plane_elements,
+    return paged_location(args, binding, binding.sequence_kv_lens,
+                          binding.first_plane, args.first_plane_elements,
                           args.first_elements_per_token, sequence, logical);
   }
   if (args.kind == kDualPaged && selector == 1) {
-    return paged_location(args, binding, binding.second_plane,
-                          args.second_plane_elements,
+    return paged_location(args, binding, binding.second_sequence_kv_lens,
+                          binding.second_plane, args.second_plane_elements,
                           args.second_elements_per_token, sequence, logical);
   }
   return {nullptr, 0u, false};
@@ -718,6 +726,9 @@ inline Status validate(const Args *args) {
   }
   if (args->kind == kDualPaged &&
       (!detail::aligned(args->second_plane_f32, 16u) ||
+       !detail::aligned(args->second_sequence_kv_lens_i32, 4u) ||
+       (((args->flags & 2u) == 0u) ||
+        !detail::aligned(args->row_second_kv_lens_i32, 4u)) ||
        !detail::aligned(args->selectors_i32, 4u))) {
     return Status::kInvalidArgument;
   }
@@ -725,8 +736,10 @@ inline Status validate(const Args *args) {
       !detail::optional_aligned(args->block_slots_i32, 4u) ||
       !detail::optional_aligned(args->block_offsets_i32, 4u) ||
       !detail::optional_aligned(args->sequence_kv_lens_i32, 4u) ||
+      !detail::optional_aligned(args->second_sequence_kv_lens_i32, 4u) ||
       !detail::optional_aligned(args->row_sequence_ids_i32, 4u) ||
       !detail::optional_aligned(args->row_kv_lens_i32, 4u) ||
+      !detail::optional_aligned(args->row_second_kv_lens_i32, 4u) ||
       !detail::optional_aligned(args->selectors_i32, 4u)) {
     return Status::kInvalidArgument;
   }
@@ -764,8 +777,11 @@ inline Status launch(const Args *args) {
       detail::device_pointer<const std::int32_t>(args->block_slots_i32),
       detail::device_pointer<const std::int32_t>(args->block_offsets_i32),
       detail::device_pointer<const std::int32_t>(args->sequence_kv_lens_i32),
+      detail::device_pointer<const std::int32_t>(
+          args->second_sequence_kv_lens_i32),
       detail::device_pointer<const std::int32_t>(args->row_sequence_ids_i32),
       detail::device_pointer<const std::int32_t>(args->row_kv_lens_i32),
+      detail::device_pointer<const std::int32_t>(args->row_second_kv_lens_i32),
       detail::device_pointer<const std::int32_t>(args->selected_indices_i32),
       detail::device_pointer<const std::int32_t>(args->selectors_i32),
       detail::device_pointer<const float>(args->attention_sink_f32),

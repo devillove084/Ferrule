@@ -579,6 +579,7 @@ struct ActivePagedKvBinding {
     block_slots_device: ferrule_backend::cuda::context::CudaI32HostMirror,
     block_offsets_device: ferrule_backend::cuda::context::CudaI32HostMirror,
     kv_len_device: ferrule_backend::cuda::context::CudaI32HostMirror,
+    second_kv_len_device: ferrule_backend::cuda::context::CudaI32HostMirror,
     row_sequence_ids_device: ferrule_backend::cuda::context::CudaI32HostMirror,
     page_tokens: usize,
     layer_count: usize,
@@ -1545,6 +1546,7 @@ impl DeepSeekV4CudaOperatorCache {
                 message: "DeepSeek-V4 packed row selector references a missing sequence".into(),
             });
         }
+        let second_kv_lens = vec![0i32; kv_lens.len()];
         let row_sequence_ids = row_sequence_ids
             .iter()
             .map(|sequence| {
@@ -1593,6 +1595,8 @@ impl DeepSeekV4CudaOperatorCache {
             self.ops
                 .update_i32_host_mirror(&kv_lens, &mut active.kv_len_device)?;
             self.ops
+                .update_i32_host_mirror(&second_kv_lens, &mut active.second_kv_len_device)?;
+            self.ops
                 .update_i32_host_mirror(&row_sequence_ids, &mut active.row_sequence_ids_device)?;
             active.physical_block_slots = physical_block_slots;
             active.page_tokens = page_tokens;
@@ -1603,6 +1607,7 @@ impl DeepSeekV4CudaOperatorCache {
                 block_slots_device: self.ops.i32_host_mirror(&physical_block_slots)?,
                 block_offsets_device: self.ops.i32_host_mirror(&block_offsets)?,
                 kv_len_device: self.ops.i32_host_mirror(&kv_lens)?,
+                second_kv_len_device: self.ops.i32_host_mirror(&second_kv_lens)?,
                 row_sequence_ids_device: self.ops.i32_host_mirror(&row_sequence_ids)?,
                 physical_block_slots,
                 page_tokens,
@@ -4513,23 +4518,42 @@ impl DeepSeekV4CudaOperatorCache {
         topk: &ferrule_backend::cuda::context::CudaI32Buffer,
         selectors: &ferrule_backend::cuda::context::CudaI32Buffer,
         row_kv_lens: &ferrule_backend::cuda::context::CudaI32Buffer,
+        row_second_kv_lens: &ferrule_backend::cuda::context::CudaI32Buffer,
+        second_sequence_kv_lens: &[i32],
         rows: usize,
         layer: usize,
         spec: SparseAttentionSpec,
         output: &mut ferrule_backend::cuda::context::CudaF32Buffer,
     ) -> Result<()> {
-        let active = self.active_paged_kv.as_ref().ok_or_else(|| Error::Model {
-            message: "packed sparse attention requires an active paged binding".into(),
-        })?;
-        if active.row_sequence_ids_device.len() != rows || row_kv_lens.len() != rows {
-            return Err(Error::Model {
-                message: format!(
-                    "packed sparse attention row metadata mismatch: selectors={} visible_lens={} expected={rows}",
-                    active.row_sequence_ids_device.len(),
-                    row_kv_lens.len()
-                ),
-            });
+        {
+            let active = self.active_paged_kv.as_mut().ok_or_else(|| Error::Model {
+                message: "packed sparse attention requires an active paged binding".into(),
+            })?;
+            if active.row_sequence_ids_device.len() != rows
+                || row_kv_lens.len() != rows
+                || row_second_kv_lens.len() != rows
+                || second_sequence_kv_lens.len() != active.sequence_count
+            {
+                return Err(Error::Model {
+                    message: format!(
+                        "packed sparse attention metadata mismatch: selectors={} first_row_lens={} second_row_lens={} second_sequence_lens={} expected_rows={rows} expected_sequences={}",
+                        active.row_sequence_ids_device.len(),
+                        row_kv_lens.len(),
+                        row_second_kv_lens.len(),
+                        second_sequence_kv_lens.len(),
+                        active.sequence_count,
+                    ),
+                });
+            }
+            self.ops.update_i32_host_mirror(
+                second_sequence_kv_lens,
+                &mut active.second_kv_len_device,
+            )?;
         }
+        let active = self
+            .active_paged_kv
+            .as_ref()
+            .expect("validated active paged binding remains installed");
         let pool = self.kv_page_pool.as_ref().ok_or_else(|| Error::Model {
             message: "DeepSeek-V4 CUDA physical KV pool is not configured".into(),
         })?;
@@ -4576,8 +4600,10 @@ impl DeepSeekV4CudaOperatorCache {
                 &active.block_slots_device,
                 &active.block_offsets_device,
                 &active.kv_len_device,
+                &active.second_kv_len_device,
                 &active.row_sequence_ids_device,
                 row_kv_lens,
+                row_second_kv_lens,
                 topk,
                 selectors,
                 self.prepared_attention_sink(layer)?,
@@ -5280,6 +5306,7 @@ mod tests {
             block_slots_device: operators.ops.i32_host_mirror(&block_slots)?,
             block_offsets_device: operators.ops.i32_host_mirror(&block_offsets)?,
             kv_len_device: operators.ops.i32_host_mirror(&kv_lens)?,
+            second_kv_len_device: operators.ops.i32_host_mirror(&[0, 0])?,
             row_sequence_ids_device: operators.ops.i32_host_mirror(&[0, 1])?,
             page_tokens: 2,
             layer_count: 1,

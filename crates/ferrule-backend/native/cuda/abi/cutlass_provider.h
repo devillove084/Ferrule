@@ -220,6 +220,8 @@ typedef struct FerruleCutlassHybridMlaAttentionArgs {
   uint64_t gathered_kv_bf16;
   uint64_t scores_f32;
   uint64_t probabilities_bf16;
+  uint64_t online_rescales_f32;
+  uint64_t denominators_f32;
   uint64_t output_f32;
   uint64_t status_i32;
   uint64_t stream;
@@ -262,8 +264,10 @@ typedef struct FerruleCutlassHybridMlaExplicitSelectionArgs {
   uint64_t block_slots_i32;
   uint64_t block_offsets_i32;
   uint64_t sequence_kv_lens_i32;
+  uint64_t second_sequence_kv_lens_i32;
   uint64_t row_sequence_ids_i32;
   uint64_t row_kv_lens_i32;
+  uint64_t row_second_kv_lens_i32;
   uint64_t selected_indices_i32;
   uint64_t selectors_i32;
   uint64_t attention_sink_f32;

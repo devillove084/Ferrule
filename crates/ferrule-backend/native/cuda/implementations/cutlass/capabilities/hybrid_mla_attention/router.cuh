@@ -60,8 +60,10 @@ make_bf16_mma_args(const ExplicitSelectionArgs *args,
       address(args->block_slots),
       address(args->block_offsets),
       address(args->sequence_kv_lens),
+      address(args->second_sequence_kv_lens),
       address(args->row_sequence_ids),
       address(args->row_kv_lens),
+      address(args->row_second_kv_lens),
       address(args->selected_indices),
       address(args->selectors),
       address(args->attention_sink),
@@ -79,29 +81,6 @@ make_bf16_mma_args(const ExplicitSelectionArgs *args,
   return ExplicitSelectionStatus::kSuccess;
 }
 
-namespace architecture_private {
-
-struct Bf16MmaImplementation {
-  static ExplicitSelectionStatus
-  validate(const schedules::bf16_mma::Args *args) {
-    return schedules::bf16_mma::validate(args);
-  }
-
-  static ExplicitSelectionStatus launch(const schedules::bf16_mma::Args *args) {
-    return schedules::bf16_mma::launch(args);
-  }
-};
-
-template <std::uint32_t TargetSm> struct ExplicitSelectionRoute;
-
-template <> struct ExplicitSelectionRoute<103u> : Bf16MmaImplementation {};
-
-template <> struct ExplicitSelectionRoute<120u> : Bf16MmaImplementation {};
-
-template <> struct ExplicitSelectionRoute<121u> : Bf16MmaImplementation {};
-
-} // namespace architecture_private
-
 #ifdef FERRULE_CUDA_TEST_ORACLE
 inline ExplicitSelectionStatus
 make_preserve_f32_order_args(const ExplicitSelectionArgs *args,
@@ -113,93 +92,42 @@ make_preserve_f32_order_args(const ExplicitSelectionArgs *args,
 inline ExplicitSelectionStatus explicit_selection_workspace_requirements(
     const ExplicitSelectionArgs *args,
     explicit_selection_workspace::Requirements *requirements) {
-  switch (FERRULE_CUDA_TARGET_SM) {
-  case 103:
-  case 120:
-  case 121:
-    return explicit_selection_workspace::requirements(args, requirements);
-  default:
-    return ExplicitSelectionStatus::kUnsupported;
-  }
+#if FERRULE_CUDA_HAS_BF16_MMA_SYNC
+  return explicit_selection_workspace::requirements(args, requirements);
+#else
+  (void)args;
+  (void)requirements;
+  return ExplicitSelectionStatus::kUnsupported;
+#endif
 }
 
 inline ExplicitSelectionStatus
 explicit_selection_can_implement(const ExplicitSelectionArgs *args) {
-#ifdef FERRULE_CUDA_TEST_ORACLE
-  schedules::preserve_f32_order::Args schedule_args{};
-  const ExplicitSelectionStatus status =
-      router_detail::make_preserve_f32_order_args(args, &schedule_args);
-  if (status != ExplicitSelectionStatus::kSuccess) {
-    return status;
-  }
-  switch (FERRULE_CUDA_TARGET_SM) {
-  case 103:
-  case 120:
-  case 121:
-    return schedules::preserve_f32_order::validate(&schedule_args);
-  default:
-    return ExplicitSelectionStatus::kUnsupported;
-  }
-#else
+#if FERRULE_CUDA_HAS_BF16_MMA_SYNC
   schedules::bf16_mma::Args schedule_args{};
   const ExplicitSelectionStatus status =
       router_detail::make_bf16_mma_args(args, &schedule_args);
-  if (status != ExplicitSelectionStatus::kSuccess) {
-    return status;
-  }
-  switch (FERRULE_CUDA_TARGET_SM) {
-  case 103:
-    return router_detail::architecture_private::ExplicitSelectionRoute<
-        103u>::validate(&schedule_args);
-  case 120:
-    return router_detail::architecture_private::ExplicitSelectionRoute<
-        120u>::validate(&schedule_args);
-  case 121:
-    return router_detail::architecture_private::ExplicitSelectionRoute<
-        121u>::validate(&schedule_args);
-  default:
-    return ExplicitSelectionStatus::kUnsupported;
-  }
+  return status == ExplicitSelectionStatus::kSuccess
+             ? schedules::bf16_mma::validate(&schedule_args)
+             : status;
+#else
+  (void)args;
+  return ExplicitSelectionStatus::kUnsupported;
 #endif
 }
 
 inline ExplicitSelectionStatus
 explicit_selection_launch(const ExplicitSelectionArgs *args) {
-#ifdef FERRULE_CUDA_TEST_ORACLE
-  schedules::preserve_f32_order::Args schedule_args{};
-  const ExplicitSelectionStatus status =
-      router_detail::make_preserve_f32_order_args(args, &schedule_args);
-  if (status != ExplicitSelectionStatus::kSuccess) {
-    return status;
-  }
-  switch (FERRULE_CUDA_TARGET_SM) {
-  case 103:
-  case 120:
-  case 121:
-    return schedules::preserve_f32_order::launch(&schedule_args);
-  default:
-    return ExplicitSelectionStatus::kUnsupported;
-  }
-#else
+#if FERRULE_CUDA_HAS_BF16_MMA_SYNC
   schedules::bf16_mma::Args schedule_args{};
   const ExplicitSelectionStatus status =
       router_detail::make_bf16_mma_args(args, &schedule_args);
-  if (status != ExplicitSelectionStatus::kSuccess) {
-    return status;
-  }
-  switch (FERRULE_CUDA_TARGET_SM) {
-  case 103:
-    return router_detail::architecture_private::ExplicitSelectionRoute<
-        103u>::launch(&schedule_args);
-  case 120:
-    return router_detail::architecture_private::ExplicitSelectionRoute<
-        120u>::launch(&schedule_args);
-  case 121:
-    return router_detail::architecture_private::ExplicitSelectionRoute<
-        121u>::launch(&schedule_args);
-  default:
-    return ExplicitSelectionStatus::kUnsupported;
-  }
+  return status == ExplicitSelectionStatus::kSuccess
+             ? schedules::bf16_mma::launch(&schedule_args)
+             : status;
+#else
+  (void)args;
+  return ExplicitSelectionStatus::kUnsupported;
 #endif
 }
 
@@ -247,8 +175,10 @@ make_preserve_f32_order_args(const ExplicitSelectionArgs *args,
       address(args->block_slots),
       address(args->block_offsets),
       address(args->sequence_kv_lens),
+      address(args->second_sequence_kv_lens),
       address(args->row_sequence_ids),
       address(args->row_kv_lens),
+      address(args->row_second_kv_lens),
       address(args->selected_indices),
       address(args->selectors),
       address(args->attention_sink),
@@ -273,14 +203,11 @@ scalar_launch(const ExplicitSelectionArgs *args) {
   if (status != ExplicitSelectionStatus::kSuccess) {
     return status;
   }
-  switch (FERRULE_CUDA_TARGET_SM) {
-  case 103:
-  case 120:
-  case 121:
-    return schedules::preserve_f32_order::test_oracle::launch(&schedule_args);
-  default:
-    return ExplicitSelectionStatus::kUnsupported;
-  }
+#if FERRULE_CUDA_HAS_PORTABLE_SIMT
+  return schedules::preserve_f32_order::test_oracle::launch(&schedule_args);
+#else
+  return ExplicitSelectionStatus::kUnsupported;
+#endif
 }
 
 inline ExplicitSelectionStatus
@@ -293,15 +220,12 @@ compare_launch(const ExplicitSelectionArgs *args,
   if (status != ExplicitSelectionStatus::kSuccess) {
     return status;
   }
-  switch (FERRULE_CUDA_TARGET_SM) {
-  case 103:
-  case 120:
-  case 121:
-    return schedules::preserve_f32_order::test_oracle::launch_compare(
-        &schedule_args, oracle_output_f32, compare_result_i32);
-  default:
-    return ExplicitSelectionStatus::kUnsupported;
-  }
+#if FERRULE_CUDA_HAS_PORTABLE_SIMT
+  return schedules::preserve_f32_order::test_oracle::launch_compare(
+      &schedule_args, oracle_output_f32, compare_result_i32);
+#else
+  return ExplicitSelectionStatus::kUnsupported;
+#endif
 }
 
 } // namespace test_oracle

@@ -29,9 +29,8 @@ struct ActiveProfile {
   static constexpr std::uint32_t kCooperativeBlockLimit = 160;
 };
 
-static_assert(ActiveProfile::kBf16MmaSync);
-static_assert(ActiveProfile::kFp8MmaSync,
-              "the current semantic catalog requires FP8 mma.sync");
+static_assert(ActiveProfile::kBf16MmaSync,
+              "the CUTLASS provider requires BF16 mma.sync");
 
 } // namespace ferrule::cuda::cutlass::architectures
 

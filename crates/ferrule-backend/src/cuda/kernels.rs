@@ -253,11 +253,20 @@ struct RopeArgs {
     start_position: u32,
     position_stride: u32,
     inverse: u32,
+    restore_bf16_boundary: u32,
     values: u64,
     cosine: u64,
     sine: u64,
     positions: u64,
     stream: u64,
+}
+
+impl RopeArgs {
+    fn with_inverse(mut self, inverse: u32) -> Self {
+        self.inverse = inverse;
+        self.restore_bf16_boundary = inverse;
+        self
+    }
 }
 
 #[repr(C)]
@@ -1851,7 +1860,8 @@ pub mod kernels {
                 cosine: device_ptr(freqs_cos),
                 sine: device_ptr(freqs_sin),
                 ..Default::default()
-            };
+            }
+            .with_inverse(0);
             invoke!(stream, args, ferrule_core_rope_launch, "YAARN rotary")
         }
 
@@ -1881,12 +1891,12 @@ pub mod kernels {
                 pair_count: num_pairs,
                 start_position,
                 position_stride,
-                inverse,
                 values: device_ptr(qk),
                 cosine: device_ptr(cos_table),
                 sine: device_ptr(sin_table),
                 ..Default::default()
-            };
+            }
+            .with_inverse(inverse);
             invoke!(
                 stream,
                 args,
@@ -1918,13 +1928,13 @@ pub mod kernels {
                 head_dim,
                 rope_dim,
                 pair_count: num_pairs,
-                inverse,
                 values: device_ptr(qk),
                 cosine: device_ptr(cos_table),
                 sine: device_ptr(sin_table),
                 positions: device_ptr(positions),
                 ..Default::default()
-            };
+            }
+            .with_inverse(inverse);
             invoke!(
                 stream,
                 args,
@@ -3270,6 +3280,8 @@ mod tests {
         assert_pod_layout!(EmbeddingArgs, 64, kind, embedding => 32, 56);
         assert_pod_layout!(NormArgs, 56, kind, input => 24, 48);
         assert_pod_layout!(RopeArgs, 80, kind, values => 40, 72);
+        assert_eq!(offset_of!(RopeArgs, inverse), 32);
+        assert_eq!(offset_of!(RopeArgs, restore_bf16_boundary), 36);
         assert_pod_layout!(RouterArgs, 96, kind, logits => 40, 88);
         assert_pod_layout!(CompressorArgs, 96, kind, kv_input => 40, 88);
         assert_pod_layout!(IndexerArgs, 200, rows, query => 80, 192);
@@ -3281,6 +3293,17 @@ mod tests {
         assert_pod_layout!(MlaArgs, 72, hidden_size, input => 24, 64);
 
         assert_eq!(offset_of!(DataArgs, output_elements), 128);
+    }
+
+    #[test]
+    fn rope_inverse_restores_bf16_boundary() {
+        let forward = RopeArgs::default().with_inverse(0);
+        assert_eq!(forward.inverse, 0);
+        assert_eq!(forward.restore_bf16_boundary, 0);
+
+        let inverse = RopeArgs::default().with_inverse(1);
+        assert_eq!(inverse.inverse, 1);
+        assert_eq!(inverse.restore_bf16_boundary, 1);
     }
 
     #[test]

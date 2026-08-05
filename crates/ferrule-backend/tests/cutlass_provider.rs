@@ -17,6 +17,12 @@ fn bf16_boundary(value: f32) -> f32 {
     f32::from_bits(u32::from(bf16_storage_word(value)) << 16)
 }
 
+fn native_kernel_available(kernel: CutlassKernelId) -> bool {
+    cutlass::discover_provider()
+        .expect("CUDA provider")
+        .supports(kernel)
+}
+
 fn bf16_storage_bytes(values: &[f32]) -> Vec<u8> {
     values
         .iter()
@@ -26,21 +32,28 @@ fn bf16_storage_bytes(values: &[f32]) -> Vec<u8> {
 
 #[test]
 fn cuda_plan_selects_published_inference_operations() {
+    let manifest = cutlass::discover_provider()
+        .expect("CUDA provider")
+        .manifest();
     let mut layer = LayerKernelRequirements::default();
-    layer.add_linear_bundle(LinearBundleRequirement::new(
-        KernelOperation::MlaQueryAKv,
-        ExecutionMode::Inference,
-        4096,
-        [1024, 1024],
-        WeightLayout::Fp8E4m3BlockScaled,
-    ));
-    layer.add_linear_bundle(LinearBundleRequirement::new(
-        KernelOperation::MlaQueryB,
-        ExecutionMode::Inference,
-        1024,
-        [32768],
-        WeightLayout::Fp8E4m3BlockScaled,
-    ));
+    if manifest.supports(CutlassKernelId::Fp8QueryAKv) {
+        layer.add_linear_bundle(LinearBundleRequirement::new(
+            KernelOperation::MlaQueryAKv,
+            ExecutionMode::Inference,
+            4096,
+            [1024, 1024],
+            WeightLayout::Fp8E4m3BlockScaled,
+        ));
+    }
+    if manifest.supports(CutlassKernelId::Fp8Projection) {
+        layer.add_linear_bundle(LinearBundleRequirement::new(
+            KernelOperation::MlaQueryB,
+            ExecutionMode::Inference,
+            1024,
+            [32768],
+            WeightLayout::Fp8E4m3BlockScaled,
+        ));
+    }
     layer.add_linear_bundle(LinearBundleRequirement::new(
         KernelOperation::MainCompressorProjection,
         ExecutionMode::Inference,
@@ -48,35 +61,47 @@ fn cuda_plan_selects_published_inference_operations() {
         [1024, 1024],
         WeightLayout::Bf16RowMajor,
     ));
-    for operation in [
-        KernelOperation::AttentionHcPre,
-        KernelOperation::FeedForwardHcPre,
-        KernelOperation::MlaOutput,
-        KernelOperation::SharedFfn,
-        KernelOperation::MainProjectNorm,
-        KernelOperation::HybridMlaAttention,
-        KernelOperation::ProposalHead,
+    let mut expected_operations = vec![KernelOperation::MainCompressorProjection];
+    for (operation, kernel) in [
+        (KernelOperation::MlaQueryAKv, CutlassKernelId::Fp8QueryAKv),
+        (KernelOperation::MlaQueryB, CutlassKernelId::Fp8Projection),
+        (
+            KernelOperation::AttentionHcPre,
+            CutlassKernelId::HyperConnectionProducer,
+        ),
+        (
+            KernelOperation::FeedForwardHcPre,
+            CutlassKernelId::HyperConnectionProducer,
+        ),
+        (KernelOperation::MlaOutput, CutlassKernelId::MlaOutput),
+        (KernelOperation::SharedFfn, CutlassKernelId::SharedFfn),
+        (
+            KernelOperation::MainProjectNorm,
+            CutlassKernelId::MainProjectNorm,
+        ),
+        (
+            KernelOperation::HybridMlaAttention,
+            CutlassKernelId::HybridMlaAttention,
+        ),
+        (KernelOperation::ProposalHead, CutlassKernelId::ProposalHead),
     ] {
-        layer.require(OperationRequirement::new(
-            operation,
-            ExecutionMode::Inference,
-        ));
+        if manifest.supports(kernel) {
+            if !matches!(
+                operation,
+                KernelOperation::MlaQueryAKv | KernelOperation::MlaQueryB
+            ) {
+                layer.require(OperationRequirement::new(
+                    operation,
+                    ExecutionMode::Inference,
+                ));
+            }
+            expected_operations.push(operation);
+        }
     }
 
     let plan = ferrule_backend::cuda::compile_cuda_model_plan(&[layer])
         .expect("compile CUDA inference plan");
-    for operation in [
-        KernelOperation::MlaQueryAKv,
-        KernelOperation::MlaQueryB,
-        KernelOperation::MainCompressorProjection,
-        KernelOperation::AttentionHcPre,
-        KernelOperation::FeedForwardHcPre,
-        KernelOperation::MlaOutput,
-        KernelOperation::SharedFfn,
-        KernelOperation::MainProjectNorm,
-        KernelOperation::HybridMlaAttention,
-        KernelOperation::ProposalHead,
-    ] {
+    for operation in expected_operations {
         let launch = plan.layers[0]
             .operation(operation, ExecutionMode::Inference)
             .expect("required semantic launch");
@@ -133,23 +158,42 @@ fn cuda_manifest_publishes_native_capabilities() {
         .manifest();
     let target = ferrule_backend::cuda::CudaTarget::parse(ferrule_backend::cuda::COMPILED_TARGET)
         .expect("compiled CUDA target");
-    assert!(manifest.supports(CutlassKernelId::Fp8QueryAKv));
+    let capabilities = target.capabilities();
+    assert_eq!(
+        manifest.supports(CutlassKernelId::Fp8QueryAKv),
+        capabilities.fp8_mma_sync
+    );
     assert!(manifest.supports(CutlassKernelId::Bf16Compressor));
     assert!(manifest.supports(CutlassKernelId::HyperConnectionProducer));
-    assert!(manifest.supports(CutlassKernelId::SharedFfn));
+    assert_eq!(
+        manifest.supports(CutlassKernelId::SharedFfn),
+        capabilities.fp8_mma_sync
+    );
     assert_eq!(
         manifest.supports(CutlassKernelId::GroupedFp4Moe),
-        target.capabilities().sm103_block_scaled_fp4 && !cfg!(debug_assertions)
+        capabilities.sm103_block_scaled_fp4 && !cfg!(debug_assertions)
     );
-    assert!(manifest.supports(CutlassKernelId::MlaOutput));
-    assert!(manifest.supports(CutlassKernelId::MainProjectNorm));
+    assert_eq!(
+        manifest.supports(CutlassKernelId::MlaOutput),
+        capabilities.fp8_mma_sync
+    );
+    assert_eq!(
+        manifest.supports(CutlassKernelId::MainProjectNorm),
+        capabilities.fp8_mma_sync
+    );
     assert!(manifest.supports(CutlassKernelId::HybridMlaAttention));
     assert!(manifest.supports(CutlassKernelId::ProposalHead));
-    assert!(manifest.supports(CutlassKernelId::Fp8Projection));
+    assert_eq!(
+        manifest.supports(CutlassKernelId::Fp8Projection),
+        capabilities.fp8_mma_sync
+    );
 }
 
 #[test]
 fn cuda_mla_output_single_row_matches_cooperative_path_bitwise() {
+    if !native_kernel_available(CutlassKernelId::MlaOutput) {
+        return;
+    }
     let context = CudaContext::new(0).expect("CUDA context");
     context.bind_to_thread().expect("bind CUDA context");
     let stream = context.new_stream().expect("create CUDA stream");
@@ -464,6 +508,9 @@ fn cuda_hc_mean_scatter_builds_proposal_target_taps_without_host_concat() {
 
 #[test]
 fn cuda_main_project_norm_preserves_bf16_boundary() {
+    if !native_kernel_available(CutlassKernelId::MainProjectNorm) {
+        return;
+    }
     let context = CudaContext::new(0).expect("CUDA context");
     context.bind_to_thread().expect("bind CUDA context");
     let stream = context.default_stream();
@@ -605,23 +652,45 @@ fn cuda_hybrid_mla_attention_matches_full_block_reference() {
                     }
                     scores.push(dot * scale);
                 }
-                let maximum = scores.iter().copied().fold(sink[head], f32::max);
-                let denominator = (sink[head] - maximum).exp()
-                    + scores
-                        .iter()
-                        .map(|score| (*score - maximum).exp())
-                        .sum::<f32>();
-                for (token, score) in scores.into_iter().enumerate() {
-                    let probability = bf16_boundary((score - maximum).exp() / denominator);
-                    let values = if token < context_tokens {
-                        &context[token * DIM..(token + 1) * DIM]
+                let mut running_maximum = f32::NEG_INFINITY;
+                let mut denominator = 0.0f32;
+                let mut accumulator = vec![0.0f32; DIM];
+                for (tile_index, score_tile) in scores
+                    .chunks(cutlass::HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILE)
+                    .enumerate()
+                {
+                    let tile_maximum = score_tile.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                    let next_maximum = running_maximum.max(tile_maximum);
+                    let rescale = if running_maximum == f32::NEG_INFINITY {
+                        0.0
                     } else {
-                        let block_row = token - context_tokens;
-                        &block[block_row * DIM..(block_row + 1) * DIM]
+                        (running_maximum - next_maximum).exp()
                     };
-                    for dim in 0..DIM {
-                        output[q_base + dim] += probability * bf16_boundary(values[dim]);
+                    denominator *= rescale;
+                    for value in &mut accumulator {
+                        *value *= rescale;
                     }
+                    let tile_base = tile_index * cutlass::HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILE;
+                    for (tile_token, score) in score_tile.iter().copied().enumerate() {
+                        let token = tile_base + tile_token;
+                        let exponent = (score - next_maximum).exp();
+                        denominator += exponent;
+                        let weight = bf16_boundary(exponent);
+                        let values = if token < context_tokens {
+                            &context[token * DIM..(token + 1) * DIM]
+                        } else {
+                            let block_row = token - context_tokens;
+                            &block[block_row * DIM..(block_row + 1) * DIM]
+                        };
+                        for dim in 0..DIM {
+                            accumulator[dim] += weight * bf16_boundary(values[dim]);
+                        }
+                    }
+                    running_maximum = next_maximum;
+                }
+                denominator += (sink[head] - running_maximum).exp();
+                for dim in 0..DIM {
+                    output[q_base + dim] = bf16_boundary(accumulator[dim] / denominator);
                 }
             }
         }
@@ -662,6 +731,13 @@ fn cuda_hybrid_mla_attention_matches_full_block_reference() {
         .expect("proposal score scratch");
     let mut probabilities = DeviceBuffer::<u16>::zeroed(&stream, ROWS * HEADS * CAPACITY)
         .expect("proposal probability scratch");
+    let mut online_rescales = DeviceBuffer::<f32>::zeroed(
+        &stream,
+        ROWS * HEADS * cutlass::HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILES,
+    )
+    .expect("proposal online-softmax rescale scratch");
+    let mut denominators = DeviceBuffer::<f32>::zeroed(&stream, ROWS * HEADS)
+        .expect("proposal softmax denominator scratch");
     let mut output = DeviceBuffer::<f32>::zeroed(&stream, ROWS * HEADS * DIM)
         .expect("proposal attention output");
     let mut status = DeviceBuffer::<i32>::zeroed(&stream, 1).expect("proposal device status");
@@ -677,6 +753,8 @@ fn cuda_hybrid_mla_attention_matches_full_block_reference() {
         &mut gathered_kv_bf16,
         &mut scores,
         &mut probabilities,
+        &mut online_rescales,
+        &mut denominators,
         &mut output,
         &mut status,
         cutlass::HybridMlaAttentionLayout {
@@ -708,14 +786,25 @@ fn cuda_hybrid_mla_attention_matches_full_block_reference() {
         expected_context_plane,
         "ephemeral proposal-block attention modified committed paged KV"
     );
+    assert!(
+        actual.iter().all(|value| value.to_bits() & 0xffff == 0),
+        "proposal hybrid attention output crossed its final BF16 boundary"
+    );
     let max_abs = actual
         .iter()
         .zip(&expected)
         .map(|(actual, expected)| (actual - expected).abs())
         .fold(0.0f32, f32::max);
+    let max_bf16_ulp = actual
+        .iter()
+        .zip(&expected)
+        .map(|(&actual, &expected)| bf16_ulp_distance(actual, expected))
+        .max()
+        .unwrap_or(0);
     assert!(
-        max_abs <= 3.0e-3,
-        "proposal hybrid attention differs from full-block reference: max_abs={max_abs:e}"
+        max_bf16_ulp <= 1,
+        "proposal hybrid attention differs from checkpoint-native BF16 reference: \
+         max_abs={max_abs:e} max_bf16_ulp={max_bf16_ulp}"
     );
     assert!(
         (actual[0] - causal[0]).abs() > 0.1,
@@ -736,8 +825,10 @@ struct HybridMlaExplicitSelectionHostCase<'a> {
     block_slots: Option<&'a [i32]>,
     block_offsets: Option<&'a [i32]>,
     sequence_kv_lens: Option<&'a [i32]>,
+    second_sequence_kv_lens: Option<&'a [i32]>,
     row_sequence_ids: Option<&'a [i32]>,
     row_kv_lens: Option<&'a [i32]>,
+    row_second_kv_lens: Option<&'a [i32]>,
     selected_indices: &'a [i32],
     selectors: Option<&'a [i32]>,
     attention_sink: &'a [f32],
@@ -933,7 +1024,10 @@ fn assert_hybrid_mla_explicit_selection_numerical_contract(
     let max_abs_bf16 = max_abs_difference(actual, expected_bf16);
     println!("{label}: max_abs_f32={max_abs_f32:e} max_abs_bf16={max_abs_bf16:e}");
 
-    let (expected, policy) = if cfg!(ferrule_cuda_test_oracle) {
+    let scalar_oracle = cfg!(ferrule_cuda_test_oracle)
+        && std::env::var("FERRULE_CUDA_HYBRID_MLA_EXPLICIT_SELECTION_TEST_ORACLE")
+            .is_ok_and(|value| value == "1");
+    let (expected, policy) = if scalar_oracle {
         (expected_f32, "test-only ordered F32")
     } else {
         (expected_bf16, "BF16 operands with FP32 accumulation")
@@ -1008,11 +1102,19 @@ fn run_hybrid_mla_explicit_selection_case(case: HybridMlaExplicitSelectionHostCa
     let sequence_kv_lens = case.sequence_kv_lens.map(|values| {
         DeviceBuffer::from_host(&stream, values).expect("upload selected sequence lengths")
     });
+    let second_sequence_kv_lens = case.second_sequence_kv_lens.map(|values| {
+        DeviceBuffer::from_host(&stream, values)
+            .expect("upload selected second-plane sequence lengths")
+    });
     let row_sequence_ids = case.row_sequence_ids.map(|values| {
         DeviceBuffer::from_host(&stream, values).expect("upload selected row sequence IDs")
     });
     let row_kv_lens = case.row_kv_lens.map(|values| {
         DeviceBuffer::from_host(&stream, values).expect("upload selected row KV lengths")
+    });
+    let row_second_kv_lens = case.row_second_kv_lens.map(|values| {
+        DeviceBuffer::from_host(&stream, values)
+            .expect("upload selected row second-plane KV lengths")
     });
     let selected_indices =
         DeviceBuffer::from_host(&stream, case.selected_indices).expect("upload selected indices");
@@ -1044,8 +1146,10 @@ fn run_hybrid_mla_explicit_selection_case(case: HybridMlaExplicitSelectionHostCa
         block_slots: block_slots.as_ref(),
         block_offsets: block_offsets.as_ref(),
         sequence_kv_lens: sequence_kv_lens.as_ref(),
+        second_sequence_kv_lens: second_sequence_kv_lens.as_ref(),
         row_sequence_ids: row_sequence_ids.as_ref(),
         row_kv_lens: row_kv_lens.as_ref(),
+        row_second_kv_lens: row_second_kv_lens.as_ref(),
         selected_indices: &selected_indices,
         selectors: selectors.as_ref(),
         attention_sink: &attention_sink,
@@ -1116,8 +1220,10 @@ fn explicit_selection_paged_gather(
     block_slots: &[i32],
     block_offsets: &[i32],
     sequence_kv_lens: &[i32],
+    second_sequence_kv_lens: Option<&[i32]>,
     row_sequence_ids: &[i32],
     row_kv_lens: &[i32],
+    row_second_kv_lens: Option<&[i32]>,
     selected_indices: &[i32],
     selectors: Option<&[i32]>,
     layout: PagedGatherLayout,
@@ -1127,24 +1233,37 @@ fn explicit_selection_paged_gather(
     let mut valid = vec![0i32; layout.rows * layout.selected_width];
     for row in 0..layout.rows {
         let sequence = usize::try_from(row_sequence_ids[row]).expect("valid row sequence ID");
-        let sequence_len = usize::try_from(sequence_kv_lens[sequence]).expect("valid sequence len");
-        let visible = usize::try_from(row_kv_lens[row]).expect("valid row KV len");
         for selected in 0..layout.selected_width {
             let selected_index = row * layout.selected_width + selected;
             let Ok(logical) = usize::try_from(selected_indices[selected_index]) else {
                 continue;
             };
+            let selector = selectors.map_or(0, |values| values[selected_index]);
+            let (plane, elements_per_token, sequence_len, visible) = match selector {
+                0 => (
+                    first_plane,
+                    layout.first_elements_per_token,
+                    usize::try_from(sequence_kv_lens[sequence]).expect("valid sequence len"),
+                    usize::try_from(row_kv_lens[row]).expect("valid row KV len"),
+                ),
+                1 => (
+                    second_plane.expect("selector one requires the second plane"),
+                    layout.second_elements_per_token,
+                    usize::try_from(
+                        second_sequence_kv_lens
+                            .expect("selector one requires second sequence lengths")[sequence],
+                    )
+                    .expect("valid second sequence len"),
+                    usize::try_from(
+                        row_second_kv_lens.expect("selector one requires second row lengths")[row],
+                    )
+                    .expect("valid second row KV len"),
+                ),
+                _ => continue,
+            };
             if logical >= visible || logical >= sequence_len {
                 continue;
             }
-            let (plane, elements_per_token) = match selectors.map(|values| values[selected_index]) {
-                None | Some(0) => (first_plane, layout.first_elements_per_token),
-                Some(1) => (
-                    second_plane.expect("selector one requires the second plane"),
-                    layout.second_elements_per_token,
-                ),
-                Some(_) => continue,
-            };
             let begin = usize::try_from(block_offsets[sequence]).expect("valid block begin");
             let end = usize::try_from(block_offsets[sequence + 1]).expect("valid block end");
             let block_entry = begin + logical / layout.page_tokens;
@@ -1235,7 +1354,10 @@ fn hybrid_mla_explicit_selection_policy_reference(
     selected_width: usize,
     softmax_scale: f32,
 ) -> Vec<f32> {
-    if cfg!(ferrule_cuda_test_oracle) {
+    let scalar_oracle = cfg!(ferrule_cuda_test_oracle)
+        && std::env::var("FERRULE_CUDA_HYBRID_MLA_EXPLICIT_SELECTION_TEST_ORACLE")
+            .is_ok_and(|value| value == "1");
+    if scalar_oracle {
         hybrid_mla_explicit_selection_f32_scalar_reference(
             query,
             gathered,
@@ -1381,8 +1503,10 @@ fn cuda_hybrid_mla_explicit_selection_contiguous_production_widths_match_numeric
             block_slots: None,
             block_offsets: None,
             sequence_kv_lens: None,
+            second_sequence_kv_lens: None,
             row_sequence_ids: None,
             row_kv_lens: None,
+            row_second_kv_lens: None,
             selected_indices: &selected_indices,
             selectors: None,
             attention_sink: &attention_sink,
@@ -1557,8 +1681,10 @@ fn cuda_hybrid_mla_explicit_selection_latency() {
                     block_slots: None,
                     block_offsets: None,
                     sequence_kv_lens: None,
+                    second_sequence_kv_lens: None,
                     row_sequence_ids: None,
                     row_kv_lens: None,
+                    row_second_kv_lens: None,
                     selected_indices: &selected_indices,
                     selectors: None,
                     attention_sink: &attention_sink,
@@ -1735,8 +1861,10 @@ fn cuda_hybrid_mla_explicit_selection_reuses_workspace_across_43_async_launches(
             block_slots: None,
             block_offsets: None,
             sequence_kv_lens: None,
+            second_sequence_kv_lens: None,
             row_sequence_ids: None,
             row_kv_lens: None,
+            row_second_kv_lens: None,
             selected_indices: &selected_indices_view,
             selectors: None,
             attention_sink: &attention_sink,
@@ -1897,8 +2025,10 @@ fn cuda_hybrid_mla_explicit_selection_multi_row_paged_workspace_stress() {
         &block_slots,
         &block_offsets,
         &sequence_kv_lens,
+        None,
         &paged_row_sequence_ids,
         &paged_row_kv_lens,
+        None,
         &paged_selected_indices,
         None,
         paged_gather_layout,
@@ -1918,8 +2048,10 @@ fn cuda_hybrid_mla_explicit_selection_multi_row_paged_workspace_stress() {
         &block_slots,
         &block_offsets,
         &sequence_kv_lens,
+        Some(&sequence_kv_lens),
         &dual_row_sequence_ids,
         &dual_row_kv_lens,
+        Some(&dual_row_kv_lens),
         &dual_selected_indices,
         Some(&dual_selectors),
         dual_gather_layout,
@@ -1971,6 +2103,8 @@ fn cuda_hybrid_mla_explicit_selection_multi_row_paged_workspace_stress() {
         DeviceBuffer::from_host(&stream, &block_slots).expect("upload stress block slots");
     let block_offsets =
         DeviceBuffer::from_host(&stream, &block_offsets).expect("upload stress block offsets");
+    let second_sequence_kv_lens = DeviceBuffer::from_host(&stream, &sequence_kv_lens)
+        .expect("upload stress second-plane sequence lengths");
     let sequence_kv_lens = DeviceBuffer::from_host(&stream, &sequence_kv_lens)
         .expect("upload stress sequence lengths");
     let paged_row_sequence_ids = DeviceBuffer::from_host(&stream, &paged_row_sequence_ids)
@@ -1979,6 +2113,8 @@ fn cuda_hybrid_mla_explicit_selection_multi_row_paged_workspace_stress() {
         DeviceBuffer::from_host(&stream, &paged_row_kv_lens).expect("upload paged row visibility");
     let dual_row_sequence_ids = DeviceBuffer::from_host(&stream, &dual_row_sequence_ids)
         .expect("upload dual-paged row sequence IDs");
+    let dual_row_second_kv_lens = DeviceBuffer::from_host(&stream, &dual_row_kv_lens)
+        .expect("upload dual-paged second-plane row visibility");
     let dual_row_kv_lens = DeviceBuffer::from_host(&stream, &dual_row_kv_lens)
         .expect("upload dual-paged row visibility");
     let paged_selected_indices = DeviceBuffer::from_host(&stream, &paged_selected_indices)
@@ -2053,8 +2189,10 @@ fn cuda_hybrid_mla_explicit_selection_multi_row_paged_workspace_stress() {
             shape,
             query,
             second_plane,
+            second_sequence_kv_lens,
             row_sequence_ids,
             row_kv_lens,
+            row_second_kv_lens,
             selected_indices,
             selectors,
             expected_output,
@@ -2065,8 +2203,10 @@ fn cuda_hybrid_mla_explicit_selection_multi_row_paged_workspace_stress() {
                 "kind=dual-paged rows=8 heads=64 dim=512 width=640 page_tokens=16 layer=2/4 first_stride=528 second_stride=560",
                 &dual_query,
                 Some(&second_plane),
+                Some(&second_sequence_kv_lens),
                 &dual_row_sequence_ids,
                 &dual_row_kv_lens,
+                Some(&dual_row_second_kv_lens),
                 &dual_selected_indices,
                 Some(&dual_selectors),
                 dual_expected.as_slice(),
@@ -2078,8 +2218,10 @@ fn cuda_hybrid_mla_explicit_selection_multi_row_paged_workspace_stress() {
                 "kind=paged rows=5 heads=64 dim=512 width=128 page_tokens=16 layer=2/4 first_stride=528 second_stride=0",
                 &paged_query,
                 None,
+                None,
                 &paged_row_sequence_ids,
                 &paged_row_kv_lens,
+                None,
                 &paged_selected_indices,
                 None,
                 paged_expected.as_slice(),
@@ -2107,8 +2249,10 @@ fn cuda_hybrid_mla_explicit_selection_multi_row_paged_workspace_stress() {
             block_slots: Some(&block_slots),
             block_offsets: Some(&block_offsets),
             sequence_kv_lens: Some(&sequence_kv_lens),
+            second_sequence_kv_lens,
             row_sequence_ids: Some(row_sequence_ids),
             row_kv_lens: Some(row_kv_lens),
+            row_second_kv_lens,
             selected_indices,
             selectors,
             attention_sink: &attention_sink,
@@ -2177,8 +2321,10 @@ fn cuda_hybrid_mla_explicit_selection_contiguous_matches_f32_semantics() {
         block_slots: None,
         block_offsets: None,
         sequence_kv_lens: None,
+        second_sequence_kv_lens: None,
         row_sequence_ids: None,
         row_kv_lens: None,
+        row_second_kv_lens: None,
         selected_indices: &selected_indices,
         selectors: None,
         attention_sink: &attention_sink,
@@ -2249,8 +2395,10 @@ fn cuda_hybrid_mla_explicit_selection_paged_row_metadata_matches_f32_semantics()
         &block_slots,
         &block_offsets,
         &sequence_kv_lens,
+        None,
         &row_sequence_ids,
         &row_kv_lens,
+        None,
         &selected_indices,
         None,
         gather_layout,
@@ -2269,8 +2417,10 @@ fn cuda_hybrid_mla_explicit_selection_paged_row_metadata_matches_f32_semantics()
         block_slots: Some(&block_slots),
         block_offsets: Some(&block_offsets),
         sequence_kv_lens: Some(&sequence_kv_lens),
+        second_sequence_kv_lens: None,
         row_sequence_ids: Some(&row_sequence_ids),
         row_kv_lens: Some(&row_kv_lens),
+        row_second_kv_lens: None,
         selected_indices: &selected_indices,
         selectors: None,
         attention_sink: &attention_sink,
@@ -2309,8 +2459,10 @@ fn cuda_hybrid_mla_explicit_selection_dual_paged_uses_selector_stride() {
     let block_slots = [2, 0, 3, 1];
     let block_offsets = [0, 2, 4];
     let sequence_kv_lens = [6, 8];
+    let second_sequence_kv_lens = [4, 5];
     let row_sequence_ids = [1, 0];
     let row_kv_lens = [7, 5];
+    let row_second_kv_lens = [5, 3];
     let selected_indices = [3, 4, -1, 5, 2, 7, 4, 0, 3, 5, 1, -2];
     let selectors = [0, 1, 0, 1, 2, 0, 1, 0, 1, 0, 2, 1];
     let mut first_plane =
@@ -2354,13 +2506,15 @@ fn cuda_hybrid_mla_explicit_selection_dual_paged_uses_selector_stride() {
         &block_slots,
         &block_offsets,
         &sequence_kv_lens,
+        Some(&second_sequence_kv_lens),
         &row_sequence_ids,
         &row_kv_lens,
+        Some(&row_second_kv_lens),
         &selected_indices,
         Some(&selectors),
         gather_layout,
     );
-    assert_eq!(valid, [1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0]);
+    assert_eq!(valid, [1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0]);
     let query = explicit_selection_query(ROWS);
     let attention_sink = explicit_selection_attention_sink();
     let softmax_scale = (HYBRID_MLA_EXPLICIT_SELECTION_HEAD_DIM as f32)
@@ -2374,8 +2528,10 @@ fn cuda_hybrid_mla_explicit_selection_dual_paged_uses_selector_stride() {
         block_slots: Some(&block_slots),
         block_offsets: Some(&block_offsets),
         sequence_kv_lens: Some(&sequence_kv_lens),
+        second_sequence_kv_lens: Some(&second_sequence_kv_lens),
         row_sequence_ids: Some(&row_sequence_ids),
         row_kv_lens: Some(&row_kv_lens),
+        row_second_kv_lens: Some(&row_second_kv_lens),
         selected_indices: &selected_indices,
         selectors: Some(&selectors),
         attention_sink: &attention_sink,
@@ -2437,6 +2593,13 @@ fn cuda_hybrid_mla_attention_formal_shape_latency() {
         .expect("proposal benchmark scores");
     let mut probabilities = DeviceBuffer::<u16>::zeroed(&stream, ROWS * HEADS * CAPACITY)
         .expect("proposal benchmark probabilities");
+    let mut online_rescales = DeviceBuffer::<f32>::zeroed(
+        &stream,
+        ROWS * HEADS * cutlass::HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILES,
+    )
+    .expect("proposal benchmark online-softmax rescales");
+    let mut denominators = DeviceBuffer::<f32>::zeroed(&stream, ROWS * HEADS)
+        .expect("proposal benchmark softmax denominators");
     let mut output = DeviceBuffer::<f32>::zeroed(&stream, ROWS * HEADS * DIM)
         .expect("proposal benchmark output");
     let mut status = DeviceBuffer::<i32>::zeroed(&stream, 1).expect("proposal benchmark status");
@@ -2463,6 +2626,8 @@ fn cuda_hybrid_mla_attention_formal_shape_latency() {
             &mut gathered_kv_bf16,
             &mut scores,
             &mut probabilities,
+            &mut online_rescales,
+            &mut denominators,
             &mut output,
             &mut status,
             layout,
@@ -2484,6 +2649,8 @@ fn cuda_hybrid_mla_attention_formal_shape_latency() {
             &mut gathered_kv_bf16,
             &mut scores,
             &mut probabilities,
+            &mut online_rescales,
+            &mut denominators,
             &mut output,
             &mut status,
             layout,
@@ -2558,6 +2725,7 @@ fn cuda_bf16_compressor_is_one_launch_and_numerically_exact() {
 
 #[test]
 fn cuda_fp8_query_a_kv_is_one_launch_and_numerically_exact() {
+    let fp8_available = native_kernel_available(CutlassKernelId::Fp8QueryAKv);
     let context = CudaContext::new(0).expect("CUDA context");
     context.bind_to_thread().expect("bind CUDA context");
     let stream = context.default_stream();
@@ -2581,7 +2749,7 @@ fn cuda_fp8_query_a_kv_is_one_launch_and_numerically_exact() {
         DeviceBuffer::<f32>::zeroed(&stream, ROWS * N1).expect("QueryA output");
     let mut kv_output = DeviceBuffer::<f32>::zeroed(&stream, ROWS * N2).expect("KV output");
 
-    cutlass::fp8_query_a_kv(
+    let result = cutlass::fp8_query_a_kv(
         &stream,
         &activation,
         &activation_scales,
@@ -2595,8 +2763,15 @@ fn cuda_fp8_query_a_kv_is_one_launch_and_numerically_exact() {
         N1,
         N2,
         K,
-    )
-    .expect("CUDA QueryA+KV launch");
+    );
+    if !fp8_available {
+        let message = result
+            .expect_err("FP8 MMA must fail closed on this target")
+            .to_string();
+        assert!(message.contains("unsupported capability (4)"), "{message}");
+        return;
+    }
+    result.expect("CUDA QueryA+KV launch");
 
     for value in query_a_output
         .to_host_vec(&stream)
@@ -2620,48 +2795,52 @@ fn cuda_linear_semantic_entry_supports_grid_derived_row_range() {
     const N1: usize = 16;
     const N2: usize = 32;
 
-    let fp8_activation = DeviceBuffer::from_host(&stream, &vec![0x38u8; ROWS * FP8_K])
-        .expect("upload FP8 prefill activation");
-    let fp8_activation_scales = DeviceBuffer::from_host(&stream, &vec![127u8; ROWS])
-        .expect("upload FP8 prefill activation scales");
-    let query_a_weight = DeviceBuffer::from_host(&stream, &vec![0x38u8; N1 * FP8_K])
-        .expect("upload QueryA prefill weight");
-    let query_a_scales =
-        DeviceBuffer::from_host(&stream, &[127u8]).expect("upload QueryA prefill scales");
-    let kv_weight = DeviceBuffer::from_host(&stream, &vec![0x38u8; N2 * FP8_K])
-        .expect("upload KV prefill weight");
-    let kv_scales = DeviceBuffer::from_host(&stream, &[127u8]).expect("upload KV prefill scales");
-    let mut query_a_output =
-        DeviceBuffer::<f32>::zeroed(&stream, ROWS * N1).expect("QueryA prefill output");
-    let mut kv_output = DeviceBuffer::<f32>::zeroed(&stream, ROWS * N2).expect("KV prefill output");
+    if native_kernel_available(CutlassKernelId::Fp8QueryAKv) {
+        let fp8_activation = DeviceBuffer::from_host(&stream, &vec![0x38u8; ROWS * FP8_K])
+            .expect("upload FP8 prefill activation");
+        let fp8_activation_scales = DeviceBuffer::from_host(&stream, &vec![127u8; ROWS])
+            .expect("upload FP8 prefill activation scales");
+        let query_a_weight = DeviceBuffer::from_host(&stream, &vec![0x38u8; N1 * FP8_K])
+            .expect("upload QueryA prefill weight");
+        let query_a_scales =
+            DeviceBuffer::from_host(&stream, &[127u8]).expect("upload QueryA prefill scales");
+        let kv_weight = DeviceBuffer::from_host(&stream, &vec![0x38u8; N2 * FP8_K])
+            .expect("upload KV prefill weight");
+        let kv_scales =
+            DeviceBuffer::from_host(&stream, &[127u8]).expect("upload KV prefill scales");
+        let mut query_a_output =
+            DeviceBuffer::<f32>::zeroed(&stream, ROWS * N1).expect("QueryA prefill output");
+        let mut kv_output =
+            DeviceBuffer::<f32>::zeroed(&stream, ROWS * N2).expect("KV prefill output");
 
-    cutlass::fp8_query_a_kv(
-        &stream,
-        &fp8_activation,
-        &fp8_activation_scales,
-        &query_a_weight,
-        &query_a_scales,
-        &kv_weight,
-        &kv_scales,
-        &mut query_a_output,
-        &mut kv_output,
-        ROWS,
-        N1,
-        N2,
-        FP8_K,
-    )
-    .expect("CUDA tiled FP8 QueryA+KV launch");
-    for value in query_a_output
-        .to_host_vec(&stream)
-        .expect("download QueryA prefill output")
-        .into_iter()
-        .chain(
-            kv_output
-                .to_host_vec(&stream)
-                .expect("download KV prefill output"),
+        cutlass::fp8_query_a_kv(
+            &stream,
+            &fp8_activation,
+            &fp8_activation_scales,
+            &query_a_weight,
+            &query_a_scales,
+            &kv_weight,
+            &kv_scales,
+            &mut query_a_output,
+            &mut kv_output,
+            ROWS,
+            N1,
+            N2,
+            FP8_K,
         )
-    {
-        assert_eq!(value, 128.0);
+        .expect("CUDA tiled FP8 QueryA+KV launch");
+        for value in query_a_output
+            .to_host_vec(&stream)
+            .expect("download QueryA prefill output")
+            .into_iter()
+            .chain(
+                kv_output
+                    .to_host_vec(&stream)
+                    .expect("download KV prefill output"),
+            )
+        {
+            assert_eq!(value, 128.0);
+        }
     }
 
     let bf16_activation = DeviceBuffer::from_host(&stream, &vec![1.0f32; ROWS * BF16_K])
@@ -2968,6 +3147,9 @@ fn cuda_hc_producer_formal_shape_latency() {
 
 #[test]
 fn cuda_shared_ffn_accepts_dynamic_m_and_accumulates() {
+    if !native_kernel_available(CutlassKernelId::SharedFfn) {
+        return;
+    }
     let context = CudaContext::new(0).expect("CUDA context");
     context.bind_to_thread().expect("bind CUDA context");
     let stream = context.default_stream();

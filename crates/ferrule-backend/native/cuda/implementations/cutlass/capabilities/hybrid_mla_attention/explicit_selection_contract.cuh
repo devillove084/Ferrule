@@ -52,8 +52,10 @@ struct ExplicitSelectionArgs {
   const std::int32_t *block_slots;
   const std::int32_t *block_offsets;
   const std::int32_t *sequence_kv_lens;
+  const std::int32_t *second_sequence_kv_lens;
   const std::int32_t *row_sequence_ids;
   const std::int32_t *row_kv_lens;
+  const std::int32_t *row_second_kv_lens;
   const std::int32_t *selected_indices;
   const std::int32_t *selectors;
   const float *attention_sink;
@@ -148,6 +150,9 @@ validate_explicit_selection_contract(const ExplicitSelectionArgs *args) {
   }
   if (args->kind == kExplicitSelectionDualPaged &&
       (!contract_detail::aligned(args->second_plane, 16u) ||
+       !contract_detail::aligned(args->second_sequence_kv_lens, 4u) ||
+       (((args->flags & 2u) == 0u) ||
+        !contract_detail::aligned(args->row_second_kv_lens, 4u)) ||
        !contract_detail::aligned(args->selectors, 4u))) {
     return ExplicitSelectionStatus::kInvalidArgument;
   }
@@ -155,8 +160,10 @@ validate_explicit_selection_contract(const ExplicitSelectionArgs *args) {
       !contract_detail::optional_aligned(args->block_slots, 4u) ||
       !contract_detail::optional_aligned(args->block_offsets, 4u) ||
       !contract_detail::optional_aligned(args->sequence_kv_lens, 4u) ||
+      !contract_detail::optional_aligned(args->second_sequence_kv_lens, 4u) ||
       !contract_detail::optional_aligned(args->row_sequence_ids, 4u) ||
       !contract_detail::optional_aligned(args->row_kv_lens, 4u) ||
+      !contract_detail::optional_aligned(args->row_second_kv_lens, 4u) ||
       !contract_detail::optional_aligned(args->selectors, 4u)) {
     return ExplicitSelectionStatus::kInvalidArgument;
   }

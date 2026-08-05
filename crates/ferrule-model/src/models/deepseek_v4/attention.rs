@@ -318,6 +318,7 @@ pub(crate) struct DeepSeekV4AttentionDecodeArena {
     positions: ferrule_backend::cuda::context::CudaI32HostMirror,
     window_lens: ferrule_backend::cuda::context::CudaI32HostMirror,
     compressed_lens: ferrule_backend::cuda::context::CudaI32HostMirror,
+    main_compressed_lens: ferrule_backend::cuda::context::CudaI32HostMirror,
     visible_lens: ferrule_backend::cuda::context::CudaI32HostMirror,
     main_positions: ferrule_backend::cuda::context::CudaI32HostMirror,
     main_mask: ferrule_backend::cuda::context::CudaI32HostMirror,
@@ -391,6 +392,7 @@ impl DeepSeekV4AttentionDecodeArena {
             positions: ops.i32_host_mirror(&zero_control_rows)?,
             window_lens: ops.i32_host_mirror(&zero_control_rows)?,
             compressed_lens: ops.i32_host_mirror(&zero_control_rows)?,
+            main_compressed_lens: ops.i32_host_mirror(&zero_control_rows)?,
             visible_lens: ops.i32_host_mirror(&zero_control_rows)?,
             main_positions: ops.i32_host_mirror(&zero_control_rows)?,
             main_mask: ops.i32_host_mirror(&zero_control_rows)?,
@@ -1693,6 +1695,7 @@ impl DeepSeekV4Attention {
             let mut indexer_mask = vec![0i32; rows];
             let mut window_lens = vec![0usize; rows];
             let mut compressed_lens = vec![0usize; rows];
+            let mut main_compressed_lens = vec![0usize; rows];
             for &row in sequence_major_rows {
                 let sequence = row_to_sequence[row];
                 let cache = &mut caches[sequence];
@@ -1911,6 +1914,7 @@ impl DeepSeekV4Attention {
                         })?;
                 }
                 window_lens[row] = cache.window.len;
+                main_compressed_lens[row] = cache.compressed_len();
                 if compressed.indexer.is_some() {
                     compressed_lens[row] = cache.indexer_compressed_len(cfg.index_head_dim);
                 }
@@ -2013,10 +2017,23 @@ impl DeepSeekV4Attention {
             }
             let window_lens_i32 = decode_metadata_i32(&window_lens, "window length")?;
             let compressed_lens_i32 = decode_metadata_i32(&compressed_lens, "compressed length")?;
+            let main_compressed_lens_i32 =
+                decode_metadata_i32(&main_compressed_lens, "main compressed length")?;
+            let sequence_main_compressed_lens_i32 = decode_metadata_i32(
+                &caches
+                    .iter()
+                    .map(|cache| cache.compressed_len())
+                    .collect::<Vec<_>>(),
+                "sequence main compressed length",
+            )?;
             {
                 let ops = &operators.cuda_mut()?.ops;
                 ops.update_i32_host_mirror(&window_lens_i32, &mut arena.window_lens)?;
                 ops.update_i32_host_mirror(&compressed_lens_i32, &mut arena.compressed_lens)?;
+                ops.update_i32_host_mirror(
+                    &main_compressed_lens_i32,
+                    &mut arena.main_compressed_lens,
+                )?;
             }
             let weight_scale =
                 (cfg.index_head_dim as f32).powf(-0.5) * (cfg.index_n_heads as f32).powf(-0.5);
@@ -2044,6 +2061,8 @@ impl DeepSeekV4Attention {
                     &arena.topk,
                     &arena.topk_selectors,
                     &arena.visible_lens,
+                    &arena.main_compressed_lens,
+                    &sequence_main_compressed_lens_i32,
                     rows,
                     self.layer,
                     cfg.sparse_spec_with_topk(cfg.window_size + cfg.index_topk),

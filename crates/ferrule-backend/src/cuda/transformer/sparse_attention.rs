@@ -502,6 +502,7 @@ impl DualPlanePagedSparseAttentionLayout {
         block_slots: usize,
         block_offsets: usize,
         kv_lens: usize,
+        second_kv_lens: usize,
         topk_elements: usize,
         selector_elements: usize,
         sink_elements: usize,
@@ -517,10 +518,13 @@ impl DualPlanePagedSparseAttentionLayout {
             sink_elements,
             output_elements,
         )?;
-        if second_plane_elements == 0 || selector_elements != self.base.topk_elements()? {
+        if second_plane_elements == 0
+            || second_kv_lens != kv_lens
+            || selector_elements != self.base.topk_elements()?
+        {
             return Err(Error::Internal {
                 message: format!(
-                    "dual-plane paged sparse attention length mismatch: second_plane={second_plane_elements} selectors={selector_elements}/{}",
+                    "dual-plane paged sparse attention length mismatch: second_plane={second_plane_elements} second_kv_lens={second_kv_lens}/{kv_lens} selectors={selector_elements}/{}",
                     self.base.topk_elements()?
                 ),
             });
@@ -538,8 +542,10 @@ impl DualPlanePagedSparseAttentionLayout {
         block_slots: usize,
         block_offsets: usize,
         sequence_kv_lens: usize,
+        second_sequence_kv_lens: usize,
         row_sequence_ids: usize,
         row_kv_lens: usize,
+        row_second_kv_lens: usize,
         topk_elements: usize,
         selector_elements: usize,
         sink_elements: usize,
@@ -557,10 +563,14 @@ impl DualPlanePagedSparseAttentionLayout {
             sink_elements,
             output_elements,
         )?;
-        if second_plane_elements == 0 || selector_elements != self.base.topk_elements()? {
+        if second_plane_elements == 0
+            || second_sequence_kv_lens != sequence_kv_lens
+            || row_second_kv_lens != row_kv_lens
+            || selector_elements != self.base.topk_elements()?
+        {
             return Err(Error::Internal {
                 message: format!(
-                    "selected dual-plane paged sparse attention length mismatch: second_plane={second_plane_elements} selectors={selector_elements}/{}",
+                    "selected dual-plane paged sparse attention length mismatch: second_plane={second_plane_elements} second_sequence_kv_lens={second_sequence_kv_lens}/{sequence_kv_lens} row_second_kv_lens={row_second_kv_lens}/{row_kv_lens} selectors={selector_elements}/{}",
                     self.base.topk_elements()?
                 ),
             });
@@ -575,6 +585,7 @@ impl DualPlanePagedSparseAttentionLayout {
         block_slots: &[i32],
         block_offsets: &[i32],
         kv_lens: &[i32],
+        second_kv_lens: &[i32],
     ) -> Result<()> {
         self.base
             .validate_metadata(first_plane_elements, block_slots, block_offsets, kv_lens)?;
@@ -582,7 +593,7 @@ impl DualPlanePagedSparseAttentionLayout {
             second_plane_elements,
             block_slots,
             block_offsets,
-            kv_lens,
+            second_kv_lens,
         )
     }
 
@@ -597,6 +608,7 @@ impl DualPlanePagedSparseAttentionLayout {
         block_slots: &[i32],
         block_offsets: &[i32],
         kv_lens: &[i32],
+        second_kv_lens: &[i32],
     ) -> Option<(usize, usize)> {
         match selector {
             0 => self
@@ -618,7 +630,7 @@ impl DualPlanePagedSparseAttentionLayout {
                     second_plane_elements,
                     block_slots,
                     block_offsets,
-                    kv_lens,
+                    second_kv_lens,
                 )
                 .map(|offset| (1, offset)),
             _ => None,
@@ -645,7 +657,8 @@ impl<'a> CudaSparseAttentionExecutor<'a> {
         block_slots: &DeviceBuffer<i32>,
         sequence_block_offsets: &DeviceBuffer<i32>,
         sequence_kv_lens: &DeviceBuffer<i32>,
-        row_metadata: Option<(&DeviceBuffer<i32>, &DeviceBuffer<i32>)>,
+        second_sequence_kv_lens: &DeviceBuffer<i32>,
+        row_metadata: Option<(&DeviceBuffer<i32>, &DeviceBuffer<i32>, &DeviceBuffer<i32>)>,
         topk: &DeviceBuffer<i32>,
         selectors: &DeviceBuffer<i32>,
         sink: &DeviceBuffer<f32>,
@@ -655,7 +668,7 @@ impl<'a> CudaSparseAttentionExecutor<'a> {
         #[cfg(ferrule_cuda_test_oracle)] oracle_output: &mut DeviceBuffer<f32>,
         layout: DualPlanePagedSparseAttentionLayout,
     ) -> Result<()> {
-        if let Some((row_sequence_ids, row_kv_lens)) = row_metadata {
+        if let Some((row_sequence_ids, row_kv_lens, row_second_kv_lens)) = row_metadata {
             layout.validate_selected_buffer_lengths(
                 q.len(),
                 first_plane.len(),
@@ -663,8 +676,10 @@ impl<'a> CudaSparseAttentionExecutor<'a> {
                 block_slots.len(),
                 sequence_block_offsets.len(),
                 sequence_kv_lens.len(),
+                second_sequence_kv_lens.len(),
                 row_sequence_ids.len(),
                 row_kv_lens.len(),
+                row_second_kv_lens.len(),
                 topk.len(),
                 selectors.len(),
                 sink.len(),
@@ -678,6 +693,7 @@ impl<'a> CudaSparseAttentionExecutor<'a> {
                 block_slots.len(),
                 sequence_block_offsets.len(),
                 sequence_kv_lens.len(),
+                second_sequence_kv_lens.len(),
                 topk.len(),
                 selectors.len(),
                 sink.len(),
@@ -685,9 +701,11 @@ impl<'a> CudaSparseAttentionExecutor<'a> {
             )?;
         }
 
-        let (row_sequence_ids, row_kv_lens) = match row_metadata {
-            Some((ids, lens)) => (Some(ids), Some(lens)),
-            None => (None, None),
+        let (row_sequence_ids, row_kv_lens, row_second_kv_lens) = match row_metadata {
+            Some((ids, first_lens, second_lens)) => {
+                (Some(ids), Some(first_lens), Some(second_lens))
+            }
+            None => (None, None, None),
         };
         let cutlass_layout = layout.explicit_selection_layout(row_metadata.is_some())?;
         let mut buffers = HybridMlaExplicitSelectionBuffers {
@@ -699,8 +717,10 @@ impl<'a> CudaSparseAttentionExecutor<'a> {
             block_slots: Some(block_slots),
             block_offsets: Some(sequence_block_offsets),
             sequence_kv_lens: Some(sequence_kv_lens),
+            second_sequence_kv_lens: Some(second_sequence_kv_lens),
             row_sequence_ids,
             row_kv_lens,
+            row_second_kv_lens,
             selected_indices: topk,
             selectors: Some(selectors),
             attention_sink: sink,
@@ -768,8 +788,10 @@ impl<'a> CudaSparseAttentionExecutor<'a> {
             block_slots: Some(block_slots),
             block_offsets: Some(sequence_block_offsets),
             sequence_kv_lens: Some(sequence_kv_lens),
+            second_sequence_kv_lens: None,
             row_sequence_ids,
             row_kv_lens,
+            row_second_kv_lens: None,
             selected_indices: topk,
             selectors: None,
             attention_sink: sink,
@@ -813,8 +835,10 @@ impl<'a> CudaSparseAttentionExecutor<'a> {
             block_slots: None,
             block_offsets: None,
             sequence_kv_lens: None,
+            second_sequence_kv_lens: None,
             row_sequence_ids: None,
             row_kv_lens: None,
+            row_second_kv_lens: None,
             selected_indices: topk,
             selectors: None,
             attention_sink: sink,
@@ -956,25 +980,89 @@ mod tests {
         let block_slots = [2, 5, -1];
         let block_offsets = [0, 2, 3];
         let kv_lens = [4, 1];
+        let second_kv_lens = [1, 0];
         layout
-            .validate_metadata(144, 288, &block_slots, &block_offsets, &kv_lens)
+            .validate_metadata(
+                144,
+                288,
+                &block_slots,
+                &block_offsets,
+                &kv_lens,
+                &second_kv_lens,
+            )
             .unwrap();
         assert_eq!(
-            layout.resolve_kv_offset(0, 0, 0, 144, 288, &block_slots, &block_offsets, &kv_lens),
+            layout.resolve_kv_offset(
+                0,
+                0,
+                0,
+                144,
+                288,
+                &block_slots,
+                &block_offsets,
+                &kv_lens,
+                &second_kv_lens,
+            ),
             Some((0, 56))
         );
         assert_eq!(
-            layout.resolve_kv_offset(1, 0, 0, 144, 288, &block_slots, &block_offsets, &kv_lens),
+            layout.resolve_kv_offset(
+                1,
+                0,
+                0,
+                144,
+                288,
+                &block_slots,
+                &block_offsets,
+                &kv_lens,
+                &second_kv_lens,
+            ),
             Some((1, 112))
         );
         assert_eq!(
-            layout.resolve_kv_offset(-1, 0, 0, 144, 288, &block_slots, &block_offsets, &kv_lens),
-            None
+            layout.resolve_kv_offset(
+                0,
+                0,
+                1,
+                144,
+                288,
+                &block_slots,
+                &block_offsets,
+                &kv_lens,
+                &second_kv_lens,
+            ),
+            Some((0, 60))
         );
         assert_eq!(
-            layout.resolve_kv_offset(2, 0, 0, 144, 288, &block_slots, &block_offsets, &kv_lens),
+            layout.resolve_kv_offset(
+                1,
+                0,
+                1,
+                144,
+                288,
+                &block_slots,
+                &block_offsets,
+                &kv_lens,
+                &second_kv_lens,
+            ),
             None
         );
+        for selector in [-1, 2] {
+            assert_eq!(
+                layout.resolve_kv_offset(
+                    selector,
+                    0,
+                    0,
+                    144,
+                    288,
+                    &block_slots,
+                    &block_offsets,
+                    &kv_lens,
+                    &second_kv_lens,
+                ),
+                None
+            );
+        }
     }
 
     #[test]

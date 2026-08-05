@@ -1452,6 +1452,22 @@ pub struct CudaHybridMlaAttentionWorkspace {
         allow(dead_code, reason = "keeps native CUTLASS probability scratch alive")
     )]
     probabilities_bf16: DeviceBuffer<u16>,
+    #[cfg_attr(
+        not(feature = "cuda"),
+        allow(
+            dead_code,
+            reason = "keeps native CUTLASS online-softmax rescale scratch alive"
+        )
+    )]
+    online_rescales: CudaF32Buffer,
+    #[cfg_attr(
+        not(feature = "cuda"),
+        allow(
+            dead_code,
+            reason = "keeps native CUTLASS softmax denominator scratch alive"
+        )
+    )]
+    denominators: CudaF32Buffer,
     status: CudaI32Buffer,
 }
 
@@ -1462,6 +1478,23 @@ impl CudaHybridMlaAttentionWorkspace {
 }
 
 /// Opaque provider workspace for hybrid MLA explicit selection.
+fn hybrid_mla_explicit_selection_launch_count() -> u64 {
+    #[cfg(ferrule_cuda_test_oracle)]
+    {
+        if std::env::var("FERRULE_CUDA_HYBRID_MLA_EXPLICIT_SELECTION_TEST_COMPARE")
+            .is_ok_and(|value| value == "1")
+        {
+            return 7;
+        }
+        if std::env::var("FERRULE_CUDA_HYBRID_MLA_EXPLICIT_SELECTION_TEST_ORACLE")
+            .is_ok_and(|value| value == "1")
+        {
+            return 1;
+        }
+    }
+    4
+}
+
 pub struct CudaHybridMlaExplicitSelectionWorkspace {
     storage: DeviceBuffer<u8>,
     status: CudaI32Buffer,
@@ -3624,11 +3657,23 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "proposal gathered KV size overflow".into(),
             })?;
+        let pair_values = crate::cuda::cutlass::PROPOSAL_ROWS
+            .checked_mul(crate::cuda::cutlass::HYBRID_MLA_ATTENTION_HEADS)
+            .ok_or_else(|| Error::Internal {
+                message: "proposal attention row/head size overflow".into(),
+            })?;
+        let rescale_values = pair_values
+            .checked_mul(crate::cuda::cutlass::HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILES)
+            .ok_or_else(|| Error::Internal {
+                message: "proposal attention online-softmax size overflow".into(),
+            })?;
         Ok(CudaHybridMlaAttentionWorkspace {
             query_bf16: self.zeroed_device_buffer::<u16>(output_values)?,
             gathered_kv_bf16: self.zeroed_device_buffer::<u16>(gathered_values)?,
             scores: self.zero_f32_buffer(score_values)?,
             probabilities_bf16: self.zeroed_device_buffer::<u16>(score_values)?,
+            online_rescales: self.zero_f32_buffer(rescale_values)?,
+            denominators: self.zero_f32_buffer(pair_values)?,
             status: self.zero_i32_buffer(1)?,
         })
     }
@@ -4773,6 +4818,8 @@ impl CudaArtifactOperatorContext {
             &mut workspace.gathered_kv_bf16,
             &mut workspace.scores.buffer,
             &mut workspace.probabilities_bf16,
+            &mut workspace.online_rescales.buffer,
+            &mut workspace.denominators.buffer,
             &mut output.buffer,
             &mut workspace.status.buffer,
             layout,
@@ -10944,6 +10991,7 @@ impl CudaArtifactOperatorContext {
         block_slots: &CudaI32Buffer,
         sequence_block_offsets: &CudaI32Buffer,
         sequence_kv_lens: &CudaI32Buffer,
+        second_sequence_kv_lens: &CudaI32Buffer,
         topk: &CudaI32Buffer,
         selectors: &CudaI32Buffer,
         sink: &CudaF32Buffer,
@@ -10957,6 +11005,7 @@ impl CudaArtifactOperatorContext {
             block_slots,
             sequence_block_offsets,
             sequence_kv_lens,
+            second_sequence_kv_lens,
             topk,
             selectors,
             sink,
@@ -10975,6 +11024,7 @@ impl CudaArtifactOperatorContext {
         block_slots: &CudaI32Buffer,
         sequence_block_offsets: &CudaI32Buffer,
         sequence_kv_lens: &CudaI32Buffer,
+        second_sequence_kv_lens: &CudaI32Buffer,
         topk: &CudaI32Buffer,
         selectors: &CudaI32Buffer,
         sink: &CudaF32Buffer,
@@ -10988,6 +11038,7 @@ impl CudaArtifactOperatorContext {
             block_slots.len,
             sequence_block_offsets.len,
             sequence_kv_lens.len,
+            second_sequence_kv_lens.len,
             topk.len,
             selectors.len,
             sink.len,
@@ -11003,6 +11054,7 @@ impl CudaArtifactOperatorContext {
             &block_slots.buffer,
             &sequence_block_offsets.buffer,
             &sequence_kv_lens.buffer,
+            &second_sequence_kv_lens.buffer,
             None,
             &topk.buffer,
             &selectors.buffer,
@@ -11014,7 +11066,7 @@ impl CudaArtifactOperatorContext {
             &mut workspace.oracle_output,
             layout,
         )?;
-        self.record_kernel_launches(if cfg!(ferrule_cuda_test_oracle) { 2 } else { 4 });
+        self.record_kernel_launches(hybrid_mla_explicit_selection_launch_count());
         Ok(())
     }
 
@@ -11027,8 +11079,10 @@ impl CudaArtifactOperatorContext {
         block_slots: &CudaI32Buffer,
         sequence_block_offsets: &CudaI32Buffer,
         sequence_kv_lens: &CudaI32Buffer,
+        second_sequence_kv_lens: &CudaI32Buffer,
         row_sequence_ids: &CudaI32Buffer,
         row_kv_lens: &CudaI32Buffer,
+        row_second_kv_lens: &CudaI32Buffer,
         topk: &CudaI32Buffer,
         selectors: &CudaI32Buffer,
         sink: &CudaF32Buffer,
@@ -11043,8 +11097,10 @@ impl CudaArtifactOperatorContext {
             block_slots.len,
             sequence_block_offsets.len,
             sequence_kv_lens.len,
+            second_sequence_kv_lens.len,
             row_sequence_ids.len,
             row_kv_lens.len,
+            row_second_kv_lens.len,
             topk.len,
             selectors.len,
             sink.len,
@@ -11066,7 +11122,12 @@ impl CudaArtifactOperatorContext {
             &block_slots.buffer,
             &sequence_block_offsets.buffer,
             &sequence_kv_lens.buffer,
-            Some((&row_sequence_ids.buffer, &row_kv_lens.buffer)),
+            &second_sequence_kv_lens.buffer,
+            Some((
+                &row_sequence_ids.buffer,
+                &row_kv_lens.buffer,
+                &row_second_kv_lens.buffer,
+            )),
             &topk.buffer,
             &selectors.buffer,
             &sink.buffer,
@@ -11077,7 +11138,7 @@ impl CudaArtifactOperatorContext {
             &mut workspace.oracle_output,
             layout,
         )?;
-        self.record_kernel_launches(if cfg!(ferrule_cuda_test_oracle) { 2 } else { 4 });
+        self.record_kernel_launches(hybrid_mla_explicit_selection_launch_count());
         Ok(())
     }
 
@@ -11150,7 +11211,7 @@ impl CudaArtifactOperatorContext {
             &mut workspace.oracle_output,
             layout,
         )?;
-        self.record_kernel_launches(if cfg!(ferrule_cuda_test_oracle) { 2 } else { 4 });
+        self.record_kernel_launches(hybrid_mla_explicit_selection_launch_count());
         Ok(())
     }
 
@@ -11207,7 +11268,7 @@ impl CudaArtifactOperatorContext {
             &mut workspace.oracle_output,
             layout,
         )?;
-        self.record_kernel_launches(if cfg!(ferrule_cuda_test_oracle) { 2 } else { 4 });
+        self.record_kernel_launches(hybrid_mla_explicit_selection_launch_count());
         Ok(())
     }
 
@@ -11258,7 +11319,7 @@ impl CudaArtifactOperatorContext {
             &mut workspace.oracle_output,
             shape,
         )?;
-        self.record_kernel_launches(if cfg!(ferrule_cuda_test_oracle) { 2 } else { 4 });
+        self.record_kernel_launches(hybrid_mla_explicit_selection_launch_count());
         Ok(())
     }
 
@@ -11485,7 +11546,7 @@ impl CudaArtifactOperatorContext {
             &mut workspace.oracle_output,
             shape,
         )?;
-        self.record_kernel_launches(if cfg!(ferrule_cuda_test_oracle) { 2 } else { 4 });
+        self.record_kernel_launches(hybrid_mla_explicit_selection_launch_count());
         self.download_f32(&od, shape.output_elements())
     }
 }

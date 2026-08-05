@@ -20,6 +20,9 @@ inline constexpr std::uint32_t kHeadDim = 512u;
 inline constexpr std::uint32_t kWindowSize = 128u;
 inline constexpr std::uint32_t kPageTokens = 16u;
 inline constexpr std::uint32_t kTokenCapacity = kWindowSize + kBlockRows;
+inline constexpr std::uint32_t kOnlineSoftmaxTile = 64u;
+inline constexpr std::uint32_t kOnlineSoftmaxTiles =
+    (kTokenCapacity + kOnlineSoftmaxTile - 1u) / kOnlineSoftmaxTile;
 inline constexpr std::uint32_t kMmaRows = 8u;
 inline constexpr std::uint32_t kMmaColumns = 16u;
 inline constexpr std::uint32_t kKTile = 16u;
@@ -70,6 +73,8 @@ struct Args {
   std::uint64_t gathered_kv_bf16;
   std::uint64_t scores_f32;
   std::uint64_t probabilities_bf16;
+  std::uint64_t online_rescales_f32;
+  std::uint64_t denominators_f32;
   std::uint64_t output_f32;
   std::uint64_t status_i32;
   std::uint64_t stream;
@@ -77,11 +82,11 @@ struct Args {
 
 static_assert(std::is_standard_layout_v<Args>);
 static_assert(std::is_trivially_copyable_v<Args>);
-static_assert(sizeof(Args) == 160u, "hybrid-attention POD ABI changed");
+static_assert(sizeof(Args) == 176u, "hybrid-attention POD ABI changed");
 static_assert(alignof(Args) == 8u);
 static_assert(offsetof(Args, block_rows) == 0u);
 static_assert(offsetof(Args, context_plane_elements) == 56u);
-static_assert(offsetof(Args, stream) == 152u);
+static_assert(offsetof(Args, stream) == 168u);
 
 enum class Status : std::int32_t {
   kSuccess = 0,
@@ -112,6 +117,8 @@ struct Binding {
   std::uint16_t *gathered_kv_bf16;
   float *scores;
   std::uint16_t *probabilities;
+  float *online_rescales;
+  float *denominators;
   float *output;
   std::int32_t *status;
 };
@@ -297,7 +304,8 @@ store_scores(const Args &args, const Binding &binding, std::uint32_t head,
     if (row < args.block_rows && token < total_tokens) {
       binding.scores[(static_cast<std::uint64_t>(row) * args.heads + head) *
                          kTokenCapacity +
-                     token] = accumulator[element] * args.softmax_scale;
+                     token] =
+          __fmul_rn(accumulator[element], args.softmax_scale);
     }
   }
 }
@@ -352,23 +360,56 @@ __device__ __forceinline__ void softmax_task(const Args &args,
   const std::uint64_t base =
       (static_cast<std::uint64_t>(row) * args.heads + head) * kTokenCapacity;
 
-  float maximum = lane == 0u ? binding.attention_sink[head] : -INFINITY;
-  for (std::uint32_t token = lane; token < total_tokens; token += kWarpSize) {
-    maximum = fmaxf(maximum, binding.scores[base + token]);
+  float running_maximum = -INFINITY;
+  float denominator = 0.0f;
+  for (std::uint32_t online_tile = 0u; online_tile < kOnlineSoftmaxTiles;
+       ++online_tile) {
+    const std::uint32_t tile_base = online_tile * kOnlineSoftmaxTile;
+    float tile_maximum = -INFINITY;
+#pragma unroll
+    for (std::uint32_t iteration = 0u; iteration < 2u; ++iteration) {
+      const std::uint32_t token = tile_base + lane + iteration * kWarpSize;
+      if (token < total_tokens) {
+        tile_maximum = fmaxf(tile_maximum, binding.scores[base + token]);
+      }
+    }
+    tile_maximum = warp_max(tile_maximum);
+    const float next_maximum = fmaxf(running_maximum, tile_maximum);
+    const float rescale = running_maximum == -INFINITY
+                              ? 0.0f
+                              : expf(__fsub_rn(running_maximum, next_maximum));
+    float tile_sum = 0.0f;
+#pragma unroll
+    for (std::uint32_t iteration = 0u; iteration < 2u; ++iteration) {
+      const std::uint32_t token = tile_base + lane + iteration * kWarpSize;
+      if (token >= kTokenCapacity) {
+        continue;
+      }
+      std::uint16_t weight = 0u;
+      if (token < total_tokens) {
+        const float value =
+            expf(__fsub_rn(binding.scores[base + token], next_maximum));
+        tile_sum = __fadd_rn(tile_sum, value);
+        weight = f32_to_bf16_rne(value);
+      }
+      binding.probabilities[base + token] = weight;
+    }
+    tile_sum = warp_sum(tile_sum);
+    denominator = __fmaf_rn(denominator, rescale, tile_sum);
+    if (lane == 0u) {
+      binding.online_rescales[task * kOnlineSoftmaxTiles + online_tile] =
+          rescale;
+    }
+    running_maximum = next_maximum;
   }
-  maximum = warp_max(maximum);
 
-  float denominator =
-      lane == 0u ? __expf(binding.attention_sink[head] - maximum) : 0.0f;
-  for (std::uint32_t token = lane; token < total_tokens; token += kWarpSize) {
-    denominator += __expf(binding.scores[base + token] - maximum);
-  }
-  denominator = warp_sum(denominator);
-
-  for (std::uint32_t token = lane; token < total_tokens; token += kWarpSize) {
-    const float probability =
-        __expf(binding.scores[base + token] - maximum) / denominator;
-    binding.probabilities[base + token] = f32_to_bf16_rne(probability);
+  if (lane == 0u) {
+    binding.denominators[task] =
+        running_maximum == -INFINITY
+            ? 1.0f
+            : __fadd_rn(denominator,
+                        expf(__fsub_rn(binding.attention_sink[head],
+                                       running_maximum)));
   }
 }
 
@@ -424,9 +465,12 @@ store_output(const Args &args, const Binding &binding, std::uint32_t head,
         channel_base + channel_group + (element >= 2u ? 8u : 0u);
     const std::uint32_t row = row_pair * 2u + (element & 1u);
     if (row < args.block_rows && channel < args.head_dim) {
-      binding.output[(static_cast<std::uint64_t>(row) * args.heads + head) *
-                         args.head_dim +
-                     channel] = accumulator[element];
+      const std::uint64_t pair =
+          static_cast<std::uint64_t>(row) * args.heads + head;
+      const float normalized =
+          __fdiv_rn(accumulator[element], binding.denominators[pair]);
+      binding.output[pair * args.head_dim + channel] =
+          bf16_to_f32(f32_to_bf16_rne(normalized));
     }
   }
 }
@@ -444,6 +488,22 @@ pv_task(const Args &args, const Binding &binding, SharedStorage &shared,
 
   for (std::uint32_t token_base = 0u; token_base < total_tokens;
        token_base += kKTile) {
+    if ((token_base % kOnlineSoftmaxTile) == 0u) {
+      const std::uint32_t online_tile = token_base / kOnlineSoftmaxTile;
+      const std::uint32_t row_pair = lane & 3u;
+#pragma unroll
+      for (std::uint32_t element = 0u; element < 4u; ++element) {
+        const std::uint32_t row = row_pair * 2u + (element & 1u);
+        if (row < args.block_rows) {
+          const std::uint64_t pair =
+              static_cast<std::uint64_t>(row) * args.heads + head;
+          accumulator[element] = __fmul_rn(
+              accumulator[element],
+              binding
+                  .online_rescales[pair * kOnlineSoftmaxTiles + online_tile]);
+        }
+      }
+    }
     stage_pv_latent(args, binding, shared, channel_base, token_base);
     stage_probabilities(args, binding, shared, warp, lane, head, token_base);
     __syncthreads();
@@ -526,6 +586,8 @@ inline Status validate(const Args *args) {
                               detail::aligned(args->gathered_kv_bf16, 16u) &&
                               detail::aligned(args->scores_f32, 16u) &&
                               detail::aligned(args->probabilities_bf16, 16u) &&
+                              detail::aligned(args->online_rescales_f32, 16u) &&
+                              detail::aligned(args->denominators_f32, 16u) &&
                               detail::aligned(args->output_f32, 16u) &&
                               detail::aligned(args->status_i32, 4u);
   return pointers_valid ? Status::kSuccess : Status::kInvalidArgument;
@@ -548,6 +610,8 @@ inline Status launch(const Args *args) {
       detail::device_pointer<std::uint16_t>(args->gathered_kv_bf16),
       detail::device_pointer<float>(args->scores_f32),
       detail::device_pointer<std::uint16_t>(args->probabilities_bf16),
+      detail::device_pointer<float>(args->online_rescales_f32),
+      detail::device_pointer<float>(args->denominators_f32),
       detail::device_pointer<float>(args->output_f32),
       detail::device_pointer<std::int32_t>(args->status_i32),
   };

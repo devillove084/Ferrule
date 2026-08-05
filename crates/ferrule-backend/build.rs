@@ -34,6 +34,7 @@ fn main() {
         .unwrap_or_else(|| panic!("invalid CUDA target `{cuda_arch}`; expected sm_XX or sm_XXX"));
     verify_nvcc_support(&cuda_arch, target);
     println!("cargo:rustc-env=FERRULE_BACKEND_CUDA_COMPILED_TARGET={cuda_arch}");
+    publish_cuda_driver_search_path();
 
     let manifest_dir = PathBuf::from(
         env::var_os("CARGO_MANIFEST_DIR").expect("Cargo must set CARGO_MANIFEST_DIR"),
@@ -117,6 +118,16 @@ fn main() {
     // directives even though these implementations share no device symbols.
     configure_implementation(portable_root.join("entrypoints.cu")).compile("ferrule_cuda_core");
     configure_implementation(cutlass_root.join("entrypoints.cu")).compile("ferrule_cuda_cutlass");
+}
+
+fn publish_cuda_driver_search_path() {
+    let wsl_driver_dir = Path::new("/usr/lib/wsl/lib");
+    if wsl_driver_dir.join("libcuda.so").is_file() {
+        println!(
+            "cargo:rustc-link-search=native={}",
+            wsl_driver_dir.display()
+        );
+    }
 }
 
 fn native_codegen_target(target: CudaTarget) -> String {

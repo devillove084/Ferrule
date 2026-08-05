@@ -16,6 +16,9 @@ pub const HYBRID_MLA_ATTENTION_HEAD_DIM: usize = 512;
 pub const HYBRID_MLA_ATTENTION_WINDOW: usize = 128;
 pub const HYBRID_MLA_ATTENTION_PAGE_TOKENS: usize = 16;
 pub const HYBRID_MLA_ATTENTION_TOKEN_CAPACITY: usize = HYBRID_MLA_ATTENTION_WINDOW + PROPOSAL_ROWS;
+pub const HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILE: usize = 64;
+pub const HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILES: usize =
+    HYBRID_MLA_ATTENTION_TOKEN_CAPACITY.div_ceil(HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILE);
 pub const HYBRID_MLA_EXPLICIT_SELECTION_MAXIMUM_WIDTH: usize = 640;
 #[cfg(ferrule_cuda_test_oracle)]
 pub const HYBRID_MLA_EXPLICIT_SELECTION_TEST_COMPARE_RESULT_WORDS: usize = 5;
@@ -91,20 +94,43 @@ impl CutlassProvider {
         };
 
         let mut operations = [
-            KernelOperation::MlaQueryAKv,
-            KernelOperation::MlaQueryB,
-            KernelOperation::MainCompressorProjection,
-            KernelOperation::IndexerCompressorProjection,
-            KernelOperation::AttentionHcPre,
-            KernelOperation::FeedForwardHcPre,
-            KernelOperation::MlaOutput,
-            KernelOperation::SharedFfn,
-            KernelOperation::MainProjectNorm,
-            KernelOperation::HybridMlaAttention,
-            KernelOperation::ProposalHead,
+            (KernelOperation::MlaQueryAKv, CutlassKernelId::Fp8QueryAKv),
+            (KernelOperation::MlaQueryB, CutlassKernelId::Fp8Projection),
+            (
+                KernelOperation::MainCompressorProjection,
+                CutlassKernelId::Bf16Compressor,
+            ),
+            (
+                KernelOperation::IndexerCompressorProjection,
+                CutlassKernelId::Bf16Compressor,
+            ),
+            (
+                KernelOperation::AttentionHcPre,
+                CutlassKernelId::HyperConnectionProducer,
+            ),
+            (
+                KernelOperation::FeedForwardHcPre,
+                CutlassKernelId::HyperConnectionProducer,
+            ),
+            (KernelOperation::MlaOutput, CutlassKernelId::MlaOutput),
+            (KernelOperation::SharedFfn, CutlassKernelId::SharedFfn),
+            (
+                KernelOperation::MainProjectNorm,
+                CutlassKernelId::MainProjectNorm,
+            ),
+            (
+                KernelOperation::HybridMlaAttention,
+                CutlassKernelId::HybridMlaAttention,
+            ),
+            (KernelOperation::ProposalHead, CutlassKernelId::ProposalHead),
         ]
         .into_iter()
-        .map(|operation| OperationCapability::new(operation, ExecutionModeSet::INFERENCE))
+        .filter_map(|(operation, kernel)| {
+            self.supports(kernel).then_some(OperationCapability::new(
+                operation,
+                ExecutionModeSet::INFERENCE,
+            ))
+        })
         .collect::<Vec<_>>();
         if self.supports(CutlassKernelId::GroupedFp4Moe) {
             operations.push(OperationCapability::new(
@@ -209,6 +235,8 @@ struct CutlassHybridMlaAttentionArgs {
     gathered_kv_bf16: u64,
     scores_f32: u64,
     probabilities_bf16: u64,
+    online_rescales_f32: u64,
+    denominators_f32: u64,
     output_f32: u64,
     status_i32: u64,
     stream: u64,
@@ -240,8 +268,10 @@ struct FerruleCutlassHybridMlaExplicitSelectionArgs {
     block_slots_i32: u64,
     block_offsets_i32: u64,
     sequence_kv_lens_i32: u64,
+    second_sequence_kv_lens_i32: u64,
     row_sequence_ids_i32: u64,
     row_kv_lens_i32: u64,
+    row_second_kv_lens_i32: u64,
     selected_indices_i32: u64,
     selectors_i32: u64,
     attention_sink_f32: u64,
@@ -358,8 +388,10 @@ pub struct HybridMlaExplicitSelectionBuffers<'a> {
     pub block_slots: Option<&'a DeviceBuffer<i32>>,
     pub block_offsets: Option<&'a DeviceBuffer<i32>>,
     pub sequence_kv_lens: Option<&'a DeviceBuffer<i32>>,
+    pub second_sequence_kv_lens: Option<&'a DeviceBuffer<i32>>,
     pub row_sequence_ids: Option<&'a DeviceBuffer<i32>>,
     pub row_kv_lens: Option<&'a DeviceBuffer<i32>>,
+    pub row_second_kv_lens: Option<&'a DeviceBuffer<i32>>,
     pub selected_indices: &'a DeviceBuffer<i32>,
     pub selectors: Option<&'a DeviceBuffer<i32>>,
     pub attention_sink: &'a DeviceBuffer<f32>,
@@ -696,6 +728,8 @@ impl CutlassHybridMlaAttentionArgs {
         gathered_kv_bf16: &mut DeviceBuffer<u16>,
         scores: &mut DeviceBuffer<f32>,
         probabilities_bf16: &mut DeviceBuffer<u16>,
+        online_rescales: &mut DeviceBuffer<f32>,
+        denominators: &mut DeviceBuffer<f32>,
         output: &mut DeviceBuffer<f32>,
         status: &mut DeviceBuffer<i32>,
         layout: HybridMlaAttentionLayout,
@@ -710,6 +744,8 @@ impl CutlassHybridMlaAttentionArgs {
             gathered_kv_bf16,
             scores,
             probabilities_bf16,
+            online_rescales,
+            denominators,
             output,
             status,
             layout,
@@ -745,6 +781,8 @@ impl CutlassHybridMlaAttentionArgs {
             gathered_kv_bf16: gathered_kv_bf16.cu_deviceptr(),
             scores_f32: scores.cu_deviceptr(),
             probabilities_bf16: probabilities_bf16.cu_deviceptr(),
+            online_rescales_f32: online_rescales.cu_deviceptr(),
+            denominators_f32: denominators.cu_deviceptr(),
             output_f32: output.cu_deviceptr(),
             status_i32: status.cu_deviceptr(),
             stream: stream.cu_stream() as usize as u64,
@@ -802,8 +840,10 @@ impl FerruleCutlassHybridMlaExplicitSelectionArgs {
             block_slots_i32: 0,
             block_offsets_i32: 0,
             sequence_kv_lens_i32: 0,
+            second_sequence_kv_lens_i32: 0,
             row_sequence_ids_i32: 0,
             row_kv_lens_i32: 0,
+            row_second_kv_lens_i32: 0,
             selected_indices_i32: 0,
             selectors_i32: 0,
             attention_sink_f32: 0,
@@ -843,10 +883,16 @@ impl FerruleCutlassHybridMlaExplicitSelectionArgs {
         args.sequence_kv_lens_i32 = buffers
             .sequence_kv_lens
             .map_or(0, DeviceBuffer::cu_deviceptr);
+        args.second_sequence_kv_lens_i32 = buffers
+            .second_sequence_kv_lens
+            .map_or(0, DeviceBuffer::cu_deviceptr);
         args.row_sequence_ids_i32 = buffers
             .row_sequence_ids
             .map_or(0, DeviceBuffer::cu_deviceptr);
         args.row_kv_lens_i32 = buffers.row_kv_lens.map_or(0, DeviceBuffer::cu_deviceptr);
+        args.row_second_kv_lens_i32 = buffers
+            .row_second_kv_lens
+            .map_or(0, DeviceBuffer::cu_deviceptr);
         args.selected_indices_i32 = buffers.selected_indices.cu_deviceptr();
         args.selectors_i32 = buffers.selectors.map_or(0, DeviceBuffer::cu_deviceptr);
         args.attention_sink_f32 = buffers.attention_sink.cu_deviceptr();
@@ -1021,6 +1067,8 @@ fn validate_hybrid_mla_attention_problem(
     gathered_kv_bf16: &DeviceBuffer<u16>,
     scores: &DeviceBuffer<f32>,
     probabilities_bf16: &DeviceBuffer<u16>,
+    online_rescales: &DeviceBuffer<f32>,
+    denominators: &DeviceBuffer<f32>,
     output: &DeviceBuffer<f32>,
     status: &DeviceBuffer<i32>,
     layout: HybridMlaAttentionLayout,
@@ -1042,6 +1090,16 @@ fn validate_hybrid_mla_attention_problem(
         )?,
         HYBRID_MLA_ATTENTION_TOKEN_CAPACITY,
         "proposal score values",
+    )?;
+    let pair_values = checked_mul(
+        PROPOSAL_ROWS,
+        HYBRID_MLA_ATTENTION_HEADS,
+        "proposal row/head pairs",
+    )?;
+    let rescale_values = checked_mul(
+        pair_values,
+        HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILES,
+        "proposal online-softmax rescales",
     )?;
     let block_values = checked_mul(
         PROPOSAL_ROWS,
@@ -1095,6 +1153,16 @@ fn validate_hybrid_mla_attention_problem(
             "probability scratch",
             probabilities_bf16.len(),
             score_values,
+        ),
+        (
+            "online-softmax rescale scratch",
+            online_rescales.len(),
+            rescale_values,
+        ),
+        (
+            "softmax denominator scratch",
+            denominators.len(),
+            pair_values,
         ),
         ("output", output.len(), output_values),
         ("device status", status.len(), 1),
@@ -1158,7 +1226,9 @@ fn validate_hybrid_mla_explicit_selection_contract(
                 || paged_metadata.0.is_some()
                 || paged_metadata.1.is_some()
                 || paged_metadata.2.is_some()
+                || buffers.second_sequence_kv_lens.is_some()
                 || buffers.row_sequence_ids.is_some()
+                || buffers.row_second_kv_lens.is_some()
                 || buffers.selectors.is_some()
             {
                 return Err(Error::Internal {
@@ -1224,6 +1294,8 @@ fn validate_hybrid_mla_explicit_selection_contract(
                 HybridMlaKvStorageKind::Paged => {
                     if layout.second_elements_per_token != 0
                         || buffers.second_plane.is_some()
+                        || buffers.second_sequence_kv_lens.is_some()
+                        || buffers.row_second_kv_lens.is_some()
                         || buffers.selectors.is_some()
                     {
                         return Err(Error::Internal {
@@ -1236,11 +1308,22 @@ fn validate_hybrid_mla_explicit_selection_contract(
                 HybridMlaKvStorageKind::DualPaged => {
                     if layout.second_elements_per_token < layout.head_dim
                         || buffers.second_plane.is_none_or(DeviceBuffer::is_empty)
+                        || buffers.second_sequence_kv_lens.is_none()
+                        || (layout.row_kv_lens && buffers.row_second_kv_lens.is_none())
+                        || (!layout.row_kv_lens && buffers.row_second_kv_lens.is_some())
                         || buffers.selectors.is_none()
                     {
                         return Err(Error::Internal {
                             message: "dual-paged hybrid MLA explicit selection requires its second plane and selectors"
                                 .into(),
+                        });
+                    }
+                    let second_sequence_kv_lens = buffers
+                        .second_sequence_kv_lens
+                        .expect("validated dual-paged second sequence lengths");
+                    if second_sequence_kv_lens.len() != sequence_kv_lens.len() {
+                        return Err(Error::Internal {
+                            message: "dual-paged hybrid MLA explicit selection sequence length metadata mismatch".into(),
                         });
                     }
                 }
@@ -1287,6 +1370,16 @@ fn validate_hybrid_mla_explicit_selection_contract(
         validate_lengths(
             "hybrid MLA explicit selection",
             &[("row KV lengths", row_kv_lens.len(), layout.rows)],
+        )?;
+    }
+    if let Some(row_second_kv_lens) = buffers.row_second_kv_lens {
+        validate_lengths(
+            "hybrid MLA explicit selection",
+            &[(
+                "row second-plane KV lengths",
+                row_second_kv_lens.len(),
+                layout.rows,
+            )],
         )?;
     }
     if let Some(selectors) = buffers.selectors {
@@ -1777,6 +1870,8 @@ pub fn hybrid_mla_attention(
     gathered_kv_bf16: &mut DeviceBuffer<u16>,
     scores: &mut DeviceBuffer<f32>,
     probabilities_bf16: &mut DeviceBuffer<u16>,
+    online_rescales: &mut DeviceBuffer<f32>,
+    denominators: &mut DeviceBuffer<f32>,
     output: &mut DeviceBuffer<f32>,
     status: &mut DeviceBuffer<i32>,
     layout: HybridMlaAttentionLayout,
@@ -1792,6 +1887,8 @@ pub fn hybrid_mla_attention(
         gathered_kv_bf16,
         scores,
         probabilities_bf16,
+        online_rescales,
+        denominators,
         output,
         status,
         layout,
@@ -3089,7 +3186,7 @@ mod tests {
         );
         assert_pod_layout!(
             CutlassHybridMlaAttentionArgs,
-            size = 160,
+            size = 176,
             align = 8,
             block_rows = 0,
             heads = 4,
@@ -3114,13 +3211,15 @@ mod tests {
             gathered_kv_bf16 = 112,
             scores_f32 = 120,
             probabilities_bf16 = 128,
-            output_f32 = 136,
-            status_i32 = 144,
-            stream = 152,
+            online_rescales_f32 = 136,
+            denominators_f32 = 144,
+            output_f32 = 152,
+            status_i32 = 160,
+            stream = 168,
         );
         assert_pod_layout!(
             FerruleCutlassHybridMlaExplicitSelectionArgs,
-            size = 208,
+            size = 224,
             align = 8,
             kind = 0,
             rows = 4,
@@ -3145,16 +3244,18 @@ mod tests {
             block_slots_i32 = 104,
             block_offsets_i32 = 112,
             sequence_kv_lens_i32 = 120,
-            row_sequence_ids_i32 = 128,
-            row_kv_lens_i32 = 136,
-            selected_indices_i32 = 144,
-            selectors_i32 = 152,
-            attention_sink_f32 = 160,
-            workspace = 168,
-            workspace_bytes = 176,
-            output_f32 = 184,
-            status_i32 = 192,
-            stream = 200,
+            second_sequence_kv_lens_i32 = 128,
+            row_sequence_ids_i32 = 136,
+            row_kv_lens_i32 = 144,
+            row_second_kv_lens_i32 = 152,
+            selected_indices_i32 = 160,
+            selectors_i32 = 168,
+            attention_sink_f32 = 176,
+            workspace = 184,
+            workspace_bytes = 192,
+            output_f32 = 200,
+            status_i32 = 208,
+            stream = 216,
         );
         assert_pod_layout!(
             FerruleCutlassWorkspaceRequirements,
@@ -3254,18 +3355,34 @@ mod tests {
             crate::cuda::architecture::COMPILED_TARGET,
         )
         .expect("compiled CUDA target");
-        assert!(manifest.supports(CutlassKernelId::Fp8QueryAKv));
+        let capabilities = target.capabilities();
+        assert_eq!(
+            manifest.supports(CutlassKernelId::Fp8QueryAKv),
+            capabilities.fp8_mma_sync
+        );
         assert!(manifest.supports(CutlassKernelId::Bf16Compressor));
         assert!(manifest.supports(CutlassKernelId::HyperConnectionProducer));
-        assert!(manifest.supports(CutlassKernelId::SharedFfn));
+        assert_eq!(
+            manifest.supports(CutlassKernelId::SharedFfn),
+            capabilities.fp8_mma_sync
+        );
         assert_eq!(
             manifest.supports(CutlassKernelId::GroupedFp4Moe),
-            target.capabilities().sm103_block_scaled_fp4 && !cfg!(debug_assertions)
+            capabilities.sm103_block_scaled_fp4 && !cfg!(debug_assertions)
         );
-        assert!(manifest.supports(CutlassKernelId::MlaOutput));
-        assert!(manifest.supports(CutlassKernelId::MainProjectNorm));
+        assert_eq!(
+            manifest.supports(CutlassKernelId::MlaOutput),
+            capabilities.fp8_mma_sync
+        );
+        assert_eq!(
+            manifest.supports(CutlassKernelId::MainProjectNorm),
+            capabilities.fp8_mma_sync
+        );
         assert!(manifest.supports(CutlassKernelId::HybridMlaAttention));
         assert!(manifest.supports(CutlassKernelId::ProposalHead));
-        assert!(manifest.supports(CutlassKernelId::Fp8Projection));
+        assert_eq!(
+            manifest.supports(CutlassKernelId::Fp8Projection),
+            capabilities.fp8_mma_sync
+        );
     }
 }

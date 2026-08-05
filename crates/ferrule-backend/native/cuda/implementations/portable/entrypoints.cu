@@ -685,8 +685,12 @@ __global__ void rope_kernel(FerruleCoreRopeArgs args) {
         static_cast<uint64_t>(head) * args.head_dim + pair * 2;
     const float x0 = values[base];
     const float x1 = values[base + 1];
-    values[base] = x0 * cosine[pair] - x1 * sine[pair];
-    values[base + 1] = x0 * sine[pair] + x1 * cosine[pair];
+    const float output0 = x0 * cosine[pair] - x1 * sine[pair];
+    const float output1 = x0 * sine[pair] + x1 * cosine[pair];
+    values[base] =
+        args.restore_bf16_boundary != 0 ? bf16_round(output0) : output0;
+    values[base + 1] =
+        args.restore_bf16_boundary != 0 ? bf16_round(output1) : output1;
     return;
   }
   const uint32_t pairs_per_head = args.rope_dim / 2;
@@ -712,8 +716,12 @@ __global__ void rope_kernel(FerruleCoreRopeArgs args) {
       (args.head_dim - args.rope_dim) + pair * 2;
   const float x0 = values[base];
   const float x1 = values[base + 1];
-  values[base] = x0 * c - x1 * s;
-  values[base + 1] = x0 * s + x1 * c;
+  const float output0 = x0 * c - x1 * s;
+  const float output1 = x0 * s + x1 * c;
+  values[base] =
+      args.restore_bf16_boundary != 0 ? bf16_round(output0) : output0;
+  values[base + 1] =
+      args.restore_bf16_boundary != 0 ? bf16_round(output1) : output1;
 }
 
 __device__ inline void insert_topk(float value, int32_t candidate,

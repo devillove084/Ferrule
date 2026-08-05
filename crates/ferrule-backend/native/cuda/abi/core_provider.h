@@ -193,6 +193,7 @@ typedef struct FerruleCoreRopeArgs {
   uint32_t start_position;
   uint32_t position_stride;
   uint32_t inverse;
+  uint32_t restore_bf16_boundary;
   uint64_t values;
   uint64_t cosine;
   uint64_t sine;
@@ -518,6 +519,10 @@ FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreEmbeddingArgs, 64, kind, embedding, 32,
                            56);
 FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreNormArgs, 56, kind, input, 24, 48);
 FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreRopeArgs, 80, kind, values, 40, 72);
+static_assert(offsetof(FerruleCoreRopeArgs, inverse) == 32,
+              "FerruleCoreRopeArgs inverse offset mismatch");
+static_assert(offsetof(FerruleCoreRopeArgs, restore_bf16_boundary) == 36,
+              "FerruleCoreRopeArgs BF16 boundary offset mismatch");
 FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreRouterArgs, 96, kind, logits, 40, 88);
 FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreCompressorArgs, 96, kind, kv_input, 40,
                            88);
