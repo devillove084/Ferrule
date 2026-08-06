@@ -313,8 +313,10 @@ fn bulk_drive_fills_read_capacity_from_thousands_of_prefetches() {
 
     let provider = FakeMaterializationProvider::manual();
     let resources = staged_broker(READ_SLOTS, 60, 32, OPERATIONS);
-    let mut fairness = FairQueueConfig::default();
-    fairness.model_warmup_quantum = BYTES;
+    let fairness = FairQueueConfig {
+        model_warmup_quantum: BYTES,
+        ..FairQueueConfig::default()
+    };
     let mut registry = LoadRegistry::new(provider, resources, fairness).unwrap();
     let requests = (1..=OPERATIONS).map(|generation| prefetch_request(key(1, generation)));
     let report = registry.prefetch(prefetch_id(1), requests, 1).unwrap();
@@ -341,8 +343,10 @@ fn bulk_drive_fills_read_capacity_from_thousands_of_prefetches() {
 fn foreground_drive_reserves_no_new_warmup_operations() {
     const WARMUP_OPERATIONS: u64 = 64;
 
-    let mut fairness = FairQueueConfig::default();
-    fairness.model_warmup_quantum = BYTES;
+    let fairness = FairQueueConfig {
+        model_warmup_quantum: BYTES,
+        ..FairQueueConfig::default()
+    };
     let mut registry = LoadRegistry::new(
         FakeMaterializationProvider::new(),
         staged_broker(32, 64, 32, WARMUP_OPERATIONS + 1),
@@ -385,8 +389,10 @@ fn foreground_drive_reserves_no_new_warmup_operations() {
 
 #[test]
 fn required_work_runs_first_without_freezing_background_warmup() {
-    let mut fairness = FairQueueConfig::default();
-    fairness.model_warmup_quantum = BYTES;
+    let fairness = FairQueueConfig {
+        model_warmup_quantum: BYTES,
+        ..FairQueueConfig::default()
+    };
     let mut registry = LoadRegistry::new(
         FakeMaterializationProvider::new(),
         staged_broker(4, 4, 4, 4),

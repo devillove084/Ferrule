@@ -14,6 +14,7 @@ use crate::checkpoint::tensor::{
     CheckpointTensorPayload, CheckpointTensorReader, CheckpointTensorSlice,
 };
 use crate::checkpoint::weight::LinearWeight;
+use crate::models::common::math::{round_to_bf16, round_to_bf16_in_place};
 use crate::{HfSafetensorsInventory, TensorRole};
 use ferrule_common::{Error, Result};
 
@@ -193,7 +194,9 @@ pub(crate) fn quantize_indexer_activation_for_qat_in_place(
     values: &mut [f32],
     row_width: usize,
 ) -> Result<()> {
+    round_to_bf16_in_place(values);
     normalized_hadamard_transform_rows_in_place(values, row_width)?;
+    round_to_bf16_in_place(values);
     simulate_fp4_e2m1_e8m0_activation_quant_in_place(values, row_width, 32)
 }
 
@@ -306,9 +309,7 @@ pub(crate) fn indexer_topk_indices_prefill(
         let hidden_row = &hidden[token * cfg.hidden_size..(token + 1) * cfg.hidden_size];
         let mut weights = operators.linear_matvec(&indexer.weights_proj, hidden_row)?;
         let scale = (cfg.index_head_dim as f32).powf(-0.5) * (cfg.index_n_heads as f32).powf(-0.5);
-        for weight in &mut weights {
-            *weight *= scale;
-        }
+        scale_indexer_weights_bf16_in_place(&mut weights, scale);
 
         let visible = (token + 1) / cfg.compress_ratio;
         if visible == 0 {
@@ -317,12 +318,8 @@ pub(crate) fn indexer_topk_indices_prefill(
         let mut scores = vec![f32::NEG_INFINITY; compressed_len];
         for idx in 0..compressed_len.min(visible) {
             let kv = &indexer_compressed[idx * cfg.index_head_dim..(idx + 1) * cfg.index_head_dim];
-            let mut score = 0.0f32;
-            for head in 0..cfg.index_n_heads {
-                let q = &query[head * cfg.index_head_dim..(head + 1) * cfg.index_head_dim];
-                score += dot(q, kv).max(0.0) * weights[head];
-            }
-            scores[idx] = score;
+            scores[idx] =
+                indexer_score_bf16(&query, kv, &weights, cfg.index_n_heads, cfg.index_head_dim);
         }
         let mut order = (0..compressed_len.min(visible)).collect::<Vec<_>>();
         order.sort_by(|&a, &b| {
@@ -429,18 +426,12 @@ pub(crate) fn indexer_topk_indices(
     quantize_indexer_activation_for_qat_in_place(&mut query, cfg.index_head_dim)?;
     let mut weights = operators.linear_matvec(&indexer.weights_proj, hidden)?;
     let scale = (cfg.index_head_dim as f32).powf(-0.5) * (cfg.index_n_heads as f32).powf(-0.5);
-    for weight in &mut weights {
-        *weight *= scale;
-    }
+    scale_indexer_weights_bf16_in_place(&mut weights, scale);
     let mut scores = vec![0.0f32; compressed_len];
     for token in 0..compressed_len {
         let kv = &indexer_compressed[token * cfg.index_head_dim..(token + 1) * cfg.index_head_dim];
-        let mut score = 0.0f32;
-        for head in 0..cfg.index_n_heads {
-            let q = &query[head * cfg.index_head_dim..(head + 1) * cfg.index_head_dim];
-            score += dot(q, kv).max(0.0) * weights[head];
-        }
-        scores[token] = score;
+        scores[token] =
+            indexer_score_bf16(&query, kv, &weights, cfg.index_n_heads, cfg.index_head_dim);
     }
     let take = cfg.index_topk.min(compressed_len);
     let mut order = (0..compressed_len).collect::<Vec<_>>();
@@ -455,6 +446,29 @@ pub(crate) fn indexer_topk_indices(
         .take(take)
         .map(|idx| (offset + idx) as isize)
         .collect())
+}
+
+fn scale_indexer_weights_bf16_in_place(weights: &mut [f32], scale: f32) {
+    for weight in weights {
+        *weight = round_to_bf16(round_to_bf16(*weight) * scale);
+    }
+}
+
+fn indexer_score_bf16(
+    query: &[f32],
+    kv: &[f32],
+    weights: &[f32],
+    heads: usize,
+    head_dim: usize,
+) -> f32 {
+    let mut score = 0.0f32;
+    for head in 0..heads {
+        let start = head * head_dim;
+        let dot = round_to_bf16(dot(&query[start..start + head_dim], kv));
+        let contribution = round_to_bf16(dot.max(0.0) * weights[head]);
+        score += contribution;
+    }
+    round_to_bf16(score)
 }
 
 pub(crate) fn grouped_output_a(
@@ -555,4 +569,23 @@ pub(crate) fn decode_vector_f32(payload: &CheckpointTensorPayload) -> Result<Vec
 
 pub(crate) fn decode_tensor_f32(payload: &CheckpointTensorPayload) -> Result<Vec<f32>> {
     crate::models::common::checkpoint::decode_tensor_f32(payload, "DeepSeek-V4")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn indexer_score_rounds_dot_products_before_near_tie_ranking() {
+        let query = [1.5625, 3.875, 2.9375, -1.6875];
+        let first = [1.0, 2.625, 2.375, 1.875];
+        let second = [0.3125, 3.625, -0.9375, -2.25];
+        let first_f32 = dot(&query, &first);
+        let second_f32 = dot(&query, &second);
+        assert!(second_f32 > first_f32);
+        assert_eq!(
+            indexer_score_bf16(&query, &first, &[1.0], 1, 4),
+            indexer_score_bf16(&query, &second, &[1.0], 1, 4),
+        );
+    }
 }

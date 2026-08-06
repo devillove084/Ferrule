@@ -143,8 +143,8 @@ typedef struct FerruleCutlassSharedFfnArgs {
 } FerruleCutlassSharedFfnArgs;
 
 // Semantic one-launch MLA output bundle. Grouped FP8/E8M0 output-A writes the
-// BF16-rounded latent boundary, which is packed once and consumed by FP8/E8M0
-// output-B after device-wide barriers. No projection sub-kernel crosses FFI.
+// BF16 latent boundary, which is packed once and consumed by FP8/E8M0 output-B
+// after device-wide barriers. No projection sub-kernel crosses FFI.
 typedef struct FerruleCutlassMlaOutputArgs {
   uint32_t rows;
   uint32_t context_size;
@@ -161,7 +161,7 @@ typedef struct FerruleCutlassMlaOutputArgs {
   uint64_t output_a_weight_ue8m0;
   uint64_t output_b_weight_fp8;
   uint64_t output_b_weight_ue8m0;
-  uint64_t latent_f32;
+  uint64_t latent_bf16;
   uint64_t latent_fp8;
   uint64_t latent_ue8m0;
   uint64_t output_f32;

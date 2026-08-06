@@ -320,7 +320,7 @@ inline DeviceDescriptorView slice_descriptors(DeviceDescriptorView view,
 }
 
 template <class T>
-__device__ __forceinline__ T *device_pointer(std::uint64_t address) {
+__host__ __device__ __forceinline__ T *device_pointer(std::uint64_t address) {
   return reinterpret_cast<T *>(static_cast<std::uintptr_t>(address));
 }
 
@@ -648,8 +648,8 @@ __global__ __launch_bounds__(kQuantThreads) void swiglu_requant_kernel(
   const auto *gate_up = workspace.gate_up_bf16;
   const float route_weight =
       device_pointer<float const>(args.route_weights)[routed_row];
-  const float gate = bf16_to_f32(f32_to_bf16_rne(gate_up[value_index]));
-  const float up = bf16_to_f32(f32_to_bf16_rne(gate_up[up_base + value_index]));
+  const float gate = static_cast<float>(gate_up[value_index]);
+  const float up = static_cast<float>(gate_up[up_base + value_index]);
   float value = swiglu(gate, up, args.swiglu_limit) * route_weight;
   if (!isfinite(value)) {
     value = 0.0f;
@@ -765,7 +765,7 @@ __global__ __launch_bounds__(kScatterThreads) void scatter_kernel(
                       static_cast<std::size_t>(route) * args.hidden_size;
   for (std::size_t channel = threadIdx.x; channel < args.hidden_size;
        channel += blockDim.x) {
-    destination[channel] = bf16_to_f32(f32_to_bf16_rne(source[channel]));
+    destination[channel] = static_cast<float>(source[channel]);
   }
   if (threadIdx.x == 0) {
     auto *written = device_pointer<std::int32_t>(args.route_written);
@@ -1180,7 +1180,8 @@ inline Status launch(GroupedFp4MoeArgs const *args, void *workspace,
     return Status::kUnsupportedResources;
   }
   moe_detail::swiglu_requant_kernel<<<static_cast<unsigned>(quant_blocks),
-                                      kQuantThreads, 0, stream>>>(*args, view);
+                                      kQuantThreads, 0, stream>>>(
+      *args, view, nullptr, UINT32_MAX, UINT32_MAX);
   if (cudaGetLastError() != cudaSuccess) {
     return Status::kLaunchFailed;
   }

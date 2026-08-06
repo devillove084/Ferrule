@@ -95,11 +95,11 @@ fn f32_range_device_ptr(
     let end = offset.checked_add(len).ok_or_else(|| Error::Internal {
         message: format!("{operation} range overflow"),
     })?;
-    if end > buffer.len {
+    if end > buffer.len() {
         return Err(Error::Internal {
             message: format!(
                 "{operation} out of bounds: buffer={} range={offset}..{end}",
-                buffer.len
+                buffer.len()
             ),
         });
     }
@@ -1371,15 +1371,19 @@ impl CudaArtifactLinearHandle {
     }
 }
 
-/// Opaque f32 device buffer used by generic artifact operators.
+/// Opaque typed device buffer used by generic artifact operators.
 ///
 /// This is intentionally a CUDA/backend type, not a model-specific arena type.
 /// Model-family code can own and reuse these buffers without exposing CUDA driver
-/// handles through the execution boundary.
-pub struct CudaF32Buffer {
-    buffer: DeviceBuffer<f32>,
-    len: usize,
+/// handles through the execution boundary. Length and allocation ownership remain
+/// authoritative in the underlying [`DeviceBuffer`].
+pub struct CudaTypedBuffer<T: DeviceCopy> {
+    buffer: DeviceBuffer<T>,
 }
+
+pub type CudaF32Buffer = CudaTypedBuffer<f32>;
+pub type CudaBf16Buffer = CudaTypedBuffer<u16>;
+pub type CudaI32Buffer = CudaTypedBuffer<i32>;
 
 pub struct CudaCompressorRecurrentState {
     kv_state: CudaF32Buffer,
@@ -1725,25 +1729,22 @@ impl CudaExpertGroupRoutePlan {
     }
 }
 
-impl CudaF32Buffer {
+impl<T: DeviceCopy> CudaTypedBuffer<T> {
+    fn from_device_buffer(buffer: DeviceBuffer<T>) -> Self {
+        Self { buffer }
+    }
+
     pub fn len(&self) -> usize {
-        self.len
+        self.buffer.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.buffer.is_empty()
     }
 
-    pub fn as_device_buffer(&self) -> &DeviceBuffer<f32> {
+    pub fn as_device_buffer(&self) -> &DeviceBuffer<T> {
         &self.buffer
     }
-}
-
-/// Opaque i32 device buffer used by sparse-attention top-k index sets and
-/// other integer-valued device operands. Mirrors [`CudaF32Buffer`].
-pub struct CudaI32Buffer {
-    buffer: DeviceBuffer<i32>,
-    len: usize,
 }
 
 pub enum CombinedRingWindowLens<'a> {
@@ -1751,36 +1752,21 @@ pub enum CombinedRingWindowLens<'a> {
     Explicit(&'a CudaI32Buffer),
 }
 
-impl CudaI32Buffer {
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
+impl CudaTypedBuffer<i32> {
     pub fn prefix(&self, len: usize) -> Result<Self> {
-        if len > self.len {
+        if len > self.len() {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA i32 prefix exceeds capacity: requested={len} capacity={}",
-                    self.len
+                    self.len()
                 ),
             });
         }
-        Ok(Self {
-            buffer: self.buffer.slice(0, len).map_err(|source| Error::Backend {
+        Ok(Self::from_device_buffer(
+            self.buffer.slice(0, len).map_err(|source| Error::Backend {
                 source: Box::new(source),
             })?,
-            len,
-        })
-    }
-
-    /// Borrow the underlying `DeviceBuffer<i32>` for kernels (e.g. sparse
-    /// attention) that take a raw device buffer reference.
-    pub fn as_device_buffer(&self) -> &DeviceBuffer<i32> {
-        &self.buffer
+        ))
     }
 }
 
@@ -3066,19 +3052,19 @@ impl CudaArtifactOperatorContext {
         workspace: &mut CudaExpertRouteResolveWorkspace,
     ) -> Result<()> {
         table.ensure_healthy()?;
-        if route_count > expert_ids.len
-            || route_count > workspace.route_slots.len
-            || route_count > workspace.route_generations.len
-            || route_count > workspace.miss_markers.len
+        if route_count > expert_ids.len()
+            || route_count > workspace.route_slots.len()
+            || route_count > workspace.route_generations.len()
+            || route_count > workspace.miss_markers.len()
             || route_count > workspace.route_capacity
         {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA expert route resolve exceeds capacity: routes={route_count} ids={} slots={} generations={} markers={}",
-                    expert_ids.len,
-                    workspace.route_slots.len,
-                    workspace.route_generations.len,
-                    workspace.miss_markers.len
+                    expert_ids.len(),
+                    workspace.route_slots.len(),
+                    workspace.route_generations.len(),
+                    workspace.miss_markers.len()
                 ),
             });
         }
@@ -3154,7 +3140,7 @@ impl CudaArtifactOperatorContext {
     ) -> Result<CudaExpertRouteMisses> {
         self.check_capture_safe("expert miss control download")?;
         cu(self.control_stream.wait(&produced.event))?;
-        let bytes = element_bytes::<i32>(workspace.miss_control.len) as usize;
+        let bytes = element_bytes::<i32>(workspace.miss_control.len()) as usize;
         let staging = workspace.miss_staging.as_mut_slice();
         cu(runtime::copy_device_to_host(
             &self.control_stream,
@@ -3187,7 +3173,7 @@ impl CudaArtifactOperatorContext {
         workspace: &mut CudaExpertRouteResolveWorkspace,
         route_count: usize,
     ) -> Result<CudaExpertRouteResolveResult> {
-        if route_count > workspace.route_slots.len {
+        if route_count > workspace.route_slots.len() {
             return Err(Error::Internal {
                 message: "CUDA expert route resolve download exceeds route capacity".into(),
             });
@@ -3561,17 +3547,21 @@ impl CudaArtifactOperatorContext {
     }
 
     pub fn upload_f32_buffer(&self, values: &[f32]) -> Result<CudaF32Buffer> {
-        Ok(CudaF32Buffer {
-            buffer: self.upload_f32(values)?,
-            len: values.len(),
-        })
+        Ok(CudaTypedBuffer::from_device_buffer(
+            self.upload_f32(values)?,
+        ))
     }
 
     pub fn zero_f32_buffer(&self, len: usize) -> Result<CudaF32Buffer> {
-        Ok(CudaF32Buffer {
-            buffer: self.zeroed_device_buffer::<f32>(len)?,
-            len,
-        })
+        Ok(CudaTypedBuffer::from_device_buffer(
+            self.zeroed_device_buffer::<f32>(len)?,
+        ))
+    }
+
+    pub fn zero_bf16_buffer(&self, len: usize) -> Result<CudaBf16Buffer> {
+        Ok(CudaTypedBuffer::from_device_buffer(
+            self.zeroed_device_buffer::<u16>(len)?,
+        ))
     }
 
     pub fn hybrid_mla_explicit_selection_workspace(
@@ -3621,10 +3611,9 @@ impl CudaArtifactOperatorContext {
 
         Ok(CudaHybridMlaExplicitSelectionWorkspace {
             storage,
-            status: CudaI32Buffer {
-                buffer: self.uninitialized_device_buffer::<i32>(status_words)?,
-                len: status_words,
-            },
+            status: CudaTypedBuffer::from_device_buffer(
+                self.uninitialized_device_buffer::<i32>(status_words)?,
+            ),
             capacity_bytes,
             alignment,
             allocated_layout: layout,
@@ -3709,7 +3698,7 @@ impl CudaArtifactOperatorContext {
             &self.stream,
             buf.buffer.cu_deviceptr(),
             0,
-            buf.len,
+            buf.len(),
         ))?;
         self.counters.add_compute_kernel_launch();
         Ok(())
@@ -3757,11 +3746,11 @@ impl CudaArtifactOperatorContext {
         let dst_end = dst_offset.checked_add(len).ok_or_else(|| Error::Internal {
             message: "CUDA f32 within-copy destination overflow".into(),
         })?;
-        if src_end > buffer.len || dst_end > buffer.len {
+        if src_end > buffer.len() || dst_end > buffer.len() {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA f32 within-copy out of bounds: buffer={} src={src_offset}..{src_end} dst={dst_offset}..{dst_end}",
-                    buffer.len
+                    buffer.len()
                 ),
             });
         }
@@ -3823,29 +3812,40 @@ impl CudaArtifactOperatorContext {
     }
 
     pub fn download_f32_buffer(&self, buffer: &CudaF32Buffer) -> Result<Vec<f32>> {
-        self.download_f32(&buffer.buffer, buffer.len)
+        self.download_f32(&buffer.buffer, buffer.len())
+    }
+
+    pub fn download_bf16_buffer(&self, buffer: &CudaBf16Buffer) -> Result<Vec<f32>> {
+        self.check_capture_safe("BF16 device-to-host download")?;
+        let values = cu(buffer.buffer.to_host_vec(&self.stream))?;
+        self.counters
+            .add_device_to_host(element_bytes::<u16>(buffer.len()));
+        Ok(values
+            .into_iter()
+            .map(|word| f32::from_bits(u32::from(word) << 16))
+            .collect())
     }
 
     pub fn download_i32_buffer(&self, buffer: &CudaI32Buffer) -> Result<Vec<i32>> {
         let values = cu(buffer.buffer.to_host_vec(&self.stream))?;
         self.counters
-            .add_device_to_host(element_bytes::<i32>(buffer.len));
+            .add_device_to_host(element_bytes::<i32>(buffer.len()));
         Ok(values)
     }
 
     pub fn clone_f32_buffer(&self, src: &CudaF32Buffer) -> Result<CudaF32Buffer> {
-        let mut dst = self.zero_f32_buffer(src.len)?;
+        let mut dst = self.zero_f32_buffer(src.len())?;
         self.copy_f32_into_slot(src, &mut dst, 0)?;
         Ok(dst)
     }
 
     pub fn overwrite_f32_buffer(&self, src: &[f32], dst: &mut CudaF32Buffer) -> Result<()> {
-        if src.len() != dst.len {
+        if src.len() != dst.len() {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA f32 overwrite length mismatch: src={} dst={}",
                     src.len(),
-                    dst.len
+                    dst.len()
                 ),
             });
         }
@@ -3870,41 +3870,41 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "CUDA f32 concat first size overflow".into(),
             })?;
-        if first.len != first_len || !second.len.is_multiple_of(row_width) {
+        if first.len() != first_len || !second.len().is_multiple_of(row_width) {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA f32 concat shape mismatch: first={} expected_first={first_len} second={} row_width={row_width}",
-                    first.len, second.len
+                    first.len(),
+                    second.len()
                 ),
             });
         }
         let total = first_len
-            .checked_add(second.len)
+            .checked_add(second.len())
             .ok_or_else(|| Error::Internal {
                 message: "CUDA f32 concat length overflow".into(),
             })?;
-        if output.len != total {
+        if output.len() != total {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA f32 concat output length mismatch: expected {total}, got {}",
-                    output.len
+                    output.len()
                 ),
             });
         }
         if first_len != 0 {
             self.copy_f32_into_slot(first, output, 0)?;
         }
-        if second.len != 0 {
+        if !second.is_empty() {
             self.copy_f32_into_slot(second, output, first_len)?;
         }
         Ok(())
     }
 
     pub fn upload_i32_buffer(&self, values: &[i32]) -> Result<CudaI32Buffer> {
-        Ok(CudaI32Buffer {
-            buffer: self.upload_i32(values)?,
-            len: values.len(),
-        })
+        Ok(CudaTypedBuffer::from_device_buffer(
+            self.upload_i32(values)?,
+        ))
     }
 
     pub fn i32_host_mirror(&self, values: &[i32]) -> Result<CudaI32HostMirror> {
@@ -3929,10 +3929,7 @@ impl CudaArtifactOperatorContext {
         };
         Ok(CudaI32HostMirror {
             host: values.to_vec(),
-            device: CudaI32Buffer {
-                buffer,
-                len: values.len(),
-            },
+            device: CudaTypedBuffer::from_device_buffer(buffer),
             staging,
             copy_event,
             active_download: None,
@@ -3958,7 +3955,7 @@ impl CudaArtifactOperatorContext {
                 ),
             });
         }
-        let bytes = element_bytes::<i32>(mirror.device.len) as usize;
+        let bytes = element_bytes::<i32>(mirror.device.len()) as usize;
         let staging = mirror.staging.as_mut_slice();
         if let Err(error) = runtime::copy_device_to_host(
             &self.control_stream,
@@ -4065,10 +4062,9 @@ impl CudaArtifactOperatorContext {
     }
 
     pub fn zero_i32_buffer(&self, len: usize) -> Result<CudaI32Buffer> {
-        Ok(CudaI32Buffer {
-            buffer: self.zeroed_device_buffer::<i32>(len)?,
-            len,
-        })
+        Ok(CudaTypedBuffer::from_device_buffer(
+            self.zeroed_device_buffer::<i32>(len)?,
+        ))
     }
 
     fn zero_i32_buffer_in_place(&self, buf: &mut CudaI32Buffer) -> Result<()> {
@@ -4076,7 +4072,7 @@ impl CudaArtifactOperatorContext {
             &self.stream,
             buf.buffer.cu_deviceptr(),
             0,
-            buf.len,
+            buf.len(),
         ))?;
         self.counters.add_compute_kernel_launch();
         Ok(())
@@ -4089,22 +4085,23 @@ impl CudaArtifactOperatorContext {
         output: &mut CudaI32Buffer,
         pair_count: usize,
     ) -> Result<()> {
-        if pair_count > indices.len || pair_count > weights.len {
+        if pair_count > indices.len() || pair_count > weights.len() {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA pair pack input too small: pairs={pair_count} indices={} weights={}",
-                    indices.len, weights.len
+                    indices.len(),
+                    weights.len()
                 ),
             });
         }
         let output_len = pair_count.checked_mul(2).ok_or_else(|| Error::Internal {
             message: "CUDA pair pack output size overflow".into(),
         })?;
-        if output.len != output_len {
+        if output.len() != output_len {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA pair pack output mismatch: expected {output_len}, got {}",
-                    output.len
+                    output.len()
                 ),
             });
         }
@@ -4131,11 +4128,11 @@ impl CudaArtifactOperatorContext {
         start: i32,
         len: usize,
     ) -> Result<()> {
-        if len > dst.len {
+        if len > dst.len() {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA i32 sequence exceeds destination: len={len} capacity={}",
-                    dst.len
+                    dst.len()
                 ),
             });
         }
@@ -4161,11 +4158,11 @@ impl CudaArtifactOperatorContext {
         position: usize,
         window_size: usize,
     ) -> Result<()> {
-        if window_size == 0 || window_size > dst.len {
+        if window_size == 0 || window_size > dst.len() {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA paged window top-k invalid size: window={window_size} capacity={}",
-                    dst.len
+                    dst.len()
                 ),
             });
         }
@@ -4219,11 +4216,11 @@ impl CudaArtifactOperatorContext {
                 .ok_or_else(|| Error::Internal {
                     message: "CUDA decode attention top-k size overflow".into(),
                 })?;
-        if output_len > dst.len {
+        if output_len > dst.len() {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA decode attention top-k exceeds destination: required={output_len} capacity={}",
-                    dst.len
+                    dst.len()
                 ),
             });
         }
@@ -4255,22 +4252,22 @@ impl CudaArtifactOperatorContext {
         width: usize,
         dst: &mut CudaI32Buffer,
     ) -> Result<()> {
-        if rows == 0 || width == 0 || visible_lens.len != rows {
+        if rows == 0 || width == 0 || visible_lens.len() != rows {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA recent-row metadata mismatch: visible_lens={} rows={rows} width={width}",
-                    visible_lens.len
+                    visible_lens.len()
                 ),
             });
         }
         let output_len = rows.checked_mul(width).ok_or_else(|| Error::Internal {
             message: "CUDA recent-row output size overflow".into(),
         })?;
-        if dst.len != output_len {
+        if dst.len() != output_len {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA recent-row destination mismatch: actual={} expected={output_len}",
-                    dst.len
+                    dst.len()
                 ),
             });
         }
@@ -4292,12 +4289,12 @@ impl CudaArtifactOperatorContext {
     /// Overwrite an existing i32 device buffer without allocating.
     pub fn overwrite_i32_buffer(&self, src: &[i32], dst: &mut CudaI32Buffer) -> Result<()> {
         self.check_capture_safe("host-to-device i32 overwrite")?;
-        if src.len() != dst.len {
+        if src.len() != dst.len() {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA i32 overwrite length mismatch: src={} dst={}",
                     src.len(),
-                    dst.len
+                    dst.len()
                 ),
             });
         }
@@ -4319,12 +4316,12 @@ impl CudaArtifactOperatorContext {
     /// Overwrite the valid prefix of a capacity-sized i32 workspace.
     pub fn overwrite_i32_prefix(&self, src: &[i32], dst: &mut CudaI32Buffer) -> Result<()> {
         self.check_capture_safe("host-to-device i32 prefix upload")?;
-        if src.len() > dst.len {
+        if src.len() > dst.len() {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA i32 prefix overwrite exceeds capacity: src={} dst={}",
                     src.len(),
-                    dst.len
+                    dst.len()
                 ),
             });
         }
@@ -4359,15 +4356,17 @@ impl CudaArtifactOperatorContext {
         slot_offset_elements: usize,
     ) -> Result<()> {
         let end = slot_offset_elements
-            .checked_add(src.len)
+            .checked_add(src.len())
             .ok_or_else(|| Error::Internal {
                 message: "CUDA slot copy offset overflow".into(),
             })?;
-        if end > dst.len {
+        if end > dst.len() {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA slot copy out of bounds: dst.len={}, offset={}, src.len={}",
-                    dst.len, slot_offset_elements, src.len
+                    dst.len(),
+                    slot_offset_elements,
+                    src.len()
                 ),
             });
         }
@@ -4376,7 +4375,7 @@ impl CudaArtifactOperatorContext {
                 message: format!("CUDA slot copy range exceeds u32 device indexing: end={end}"),
             });
         }
-        let copy_len = checked_u32(src.len, "copy_f32_into_slot", "src.len")?;
+        let copy_len = checked_u32(src.len(), "copy_f32_into_slot", "src.len")?;
         let dst_offset = checked_u32(
             slot_offset_elements,
             "copy_f32_into_slot",
@@ -4415,11 +4414,11 @@ impl CudaArtifactOperatorContext {
                 ),
             });
         };
-        if rows == 0 || hc_mult == 0 || token_ids.len != rows {
+        if rows == 0 || hc_mult == 0 || token_ids.len() != rows {
             return Err(Error::Internal {
                 message: format!(
                     "resident embedding gather shape mismatch: rows={rows} token_ids={} hc_mult={hc_mult} hidden={hidden} vocab={vocab}",
-                    token_ids.len
+                    token_ids.len()
                 ),
             });
         }
@@ -4429,11 +4428,11 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "resident embedding gather size overflow".into(),
             })?;
-        if output.len != expected {
+        if output.len() != expected {
             return Err(Error::Internal {
                 message: format!(
                     "resident embedding gather output mismatch: output={} expected={expected}",
-                    output.len
+                    output.len()
                 ),
             });
         }
@@ -4495,11 +4494,11 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "proposal embedding gather size overflow".into(),
             })?;
-        if output.len != expected {
+        if output.len() != expected {
             return Err(Error::Internal {
                 message: format!(
                     "proposal embedding gather output mismatch: output={} expected={expected}",
-                    output.len
+                    output.len()
                 ),
             });
         }
@@ -4541,19 +4540,19 @@ impl CudaArtifactOperatorContext {
         rows: usize,
         row_width: usize,
     ) -> Result<CudaF32Buffer> {
-        if rows == 0 || row_width == 0 || row_indices.len != rows {
+        if rows == 0 || row_width == 0 || row_indices.len() != rows {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA row gather invalid shape: rows={rows} row_width={row_width} indices={}",
-                    row_indices.len
+                    row_indices.len()
                 ),
             });
         }
-        if !src.len.is_multiple_of(row_width) {
+        if !src.len().is_multiple_of(row_width) {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA row gather source length {} is not divisible by row_width {row_width}",
-                    src.len
+                    src.len()
                 ),
             });
         }
@@ -4583,30 +4582,30 @@ impl CudaArtifactOperatorContext {
         rows: usize,
         row_width: usize,
     ) -> Result<()> {
-        if rows == 0 || row_width == 0 || row_indices.len != rows {
+        if rows == 0 || row_width == 0 || row_indices.len() != rows {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA row scatter invalid shape: rows={rows} row_width={row_width} indices={}",
-                    row_indices.len
+                    row_indices.len()
                 ),
             });
         }
         let expected_src = rows.checked_mul(row_width).ok_or_else(|| Error::Internal {
             message: "CUDA row scatter source size overflow".into(),
         })?;
-        if src.len != expected_src {
+        if src.len() != expected_src {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA row scatter source length mismatch: src={} expected={expected_src}",
-                    src.len
+                    src.len()
                 ),
             });
         }
-        if !dst.len.is_multiple_of(row_width) {
+        if !dst.len().is_multiple_of(row_width) {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA row scatter destination length {} is not divisible by row_width {row_width}",
-                    dst.len
+                    dst.len()
                 ),
             });
         }
@@ -4733,7 +4732,7 @@ impl CudaArtifactOperatorContext {
         &self,
         workspace: &mut CudaProposalHeadWorkspace,
     ) -> Result<CudaI32HostDownload> {
-        let rows = workspace.confidence.len;
+        let rows = workspace.confidence.len();
         let result_values =
             1usize
                 .checked_add(rows.saturating_mul(2))
@@ -4889,43 +4888,44 @@ impl CudaArtifactOperatorContext {
         layout: crate::cuda::kv_page_pool::PagedPlaneLayout,
     ) -> Result<()> {
         layout.validate()?;
-        let rows = positions.len;
+        let rows = positions.len();
         let expected_values =
             rows.checked_mul(layout.elements_per_token)
                 .ok_or_else(|| Error::Internal {
                     message: "CUDA paged plane scatter value size overflow".into(),
                 })?;
-        if values.len != expected_values {
+        if values.len() != expected_values {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA paged plane scatter values length mismatch: got {} expected {expected_values} for rows={rows} row_dim={}",
-                    values.len, layout.elements_per_token
+                    values.len(),
+                    layout.elements_per_token
                 ),
             });
         }
-        if block_offsets.len < 2 {
+        if block_offsets.len() < 2 {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA paged plane scatter requires at least one sequence, got {} offsets",
-                    block_offsets.len
+                    block_offsets.len()
                 ),
             });
         }
         if let Some(row_sequence_ids) = row_sequence_ids {
-            if row_sequence_ids.len != rows {
+            if row_sequence_ids.len() != rows {
                 return Err(Error::Internal {
                     message: format!(
                         "CUDA paged plane scatter row selector length mismatch: got {} expected {rows}",
-                        row_sequence_ids.len
+                        row_sequence_ids.len()
                     ),
                 });
             }
-        } else if block_offsets.len != rows + 1 {
+        } else if block_offsets.len() != rows + 1 {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA paged plane scatter identity mapping requires {} offsets, got {}",
                     rows + 1,
-                    block_offsets.len
+                    block_offsets.len()
                 ),
             });
         }
@@ -4935,12 +4935,12 @@ impl CudaArtifactOperatorContext {
             });
         }
         if let Some(mask) = mask
-            && mask.len != rows
+            && mask.len() != rows
         {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA paged plane scatter mask length mismatch: got {} expected {rows}",
-                    mask.len
+                    mask.len()
                 ),
             });
         }
@@ -4951,15 +4951,16 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "CUDA paged plane scatter slot size overflow".into(),
             })?;
-        if plane.len < slot_elements || !plane.len.is_multiple_of(slot_elements) {
+        if plane.len() < slot_elements || !plane.len().is_multiple_of(slot_elements) {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA paged plane scatter storage length {} is not a positive multiple of slot size {slot_elements}",
-                    plane.len
+                    plane.len()
                 ),
             });
         }
-        let plane_elements = checked_u32(plane.len, "CUDA paged plane scatter", "plane elements")?;
+        let plane_elements =
+            checked_u32(plane.len(), "CUDA paged plane scatter", "plane elements")?;
         let rows = checked_u32(rows, "CUDA paged plane scatter", "rows")?;
         let row_dim = checked_u32(
             layout.elements_per_token,
@@ -5011,19 +5012,19 @@ impl CudaArtifactOperatorContext {
     /// Used to accumulate routed expert outputs on the GPU without
     /// downloading each expert's output to host and accumulating in `Vec<f32>`.
     pub fn saxpy_into(&self, scale: f32, x: &CudaF32Buffer, y: &mut CudaF32Buffer) -> Result<()> {
-        if x.len != y.len {
+        if x.len() != y.len() {
             return Err(Error::Internal {
-                message: format!("CUDA saxpy length mismatch: x={} y={}", x.len, y.len),
+                message: format!("CUDA saxpy length mismatch: x={} y={}", x.len(), y.len()),
             });
         }
         self.launched(unsafe {
             self.module.saxpy(
                 &self.stream,
-                LaunchConfig::for_num_elems(x.len as u32),
+                LaunchConfig::for_num_elems(x.len() as u32),
                 scale,
                 &x.buffer,
                 &mut y.buffer,
-                x.len as u32,
+                x.len() as u32,
             )
         })
     }
@@ -5728,21 +5729,21 @@ impl CudaArtifactOperatorContext {
         input: &CudaF32Buffer,
         output: &mut CudaF32Buffer,
     ) -> Result<()> {
-        if input.len != handle.shape.in_features() {
+        if input.len() != handle.shape.in_features() {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA artifact linear device input length mismatch: expected {}, got {}",
                     handle.shape.in_features(),
-                    input.len
+                    input.len()
                 ),
             });
         }
-        if output.len != handle.shape.out_features() {
+        if output.len() != handle.shape.out_features() {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA artifact linear device output length mismatch: expected {}, got {}",
                     handle.shape.out_features(),
-                    output.len
+                    output.len()
                 ),
             });
         }
@@ -5767,21 +5768,22 @@ impl CudaArtifactOperatorContext {
     ) -> Result<()> {
         let first_in = first.shape.in_features();
         let second_in = second.shape.in_features();
-        if first_in != second_in || input.len != first_in {
+        if first_in != second_in || input.len() != first_in {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA artifact linear pair input mismatch: first={first_in}, second={second_in}, input={}",
-                    input.len
+                    input.len()
                 ),
             });
         }
         let first_out = first.shape.out_features();
         let second_out = second.shape.out_features();
-        if first_output.len != first_out || second_output.len != second_out {
+        if first_output.len() != first_out || second_output.len() != second_out {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA artifact linear pair output mismatch: first expected={first_out} got={}, second expected={second_out} got={}",
-                    first_output.len, second_output.len
+                    first_output.len(),
+                    second_output.len()
                 ),
             });
         }
@@ -5845,10 +5847,8 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "CUDA artifact linear rows output size overflow".into(),
             })?;
-        let mut output = CudaF32Buffer {
-            buffer: self.uninitialized_device_buffer::<f32>(len)?,
-            len,
-        };
+        let mut output =
+            CudaTypedBuffer::from_device_buffer(self.uninitialized_device_buffer::<f32>(len)?);
         self.artifact_linear_rows_from_device_into(handle, input, rows, &mut output)?;
         Ok(output)
     }
@@ -5862,11 +5862,11 @@ impl CudaArtifactOperatorContext {
     ) -> Result<()> {
         let in_features = handle.shape.in_features();
         let out_features = handle.shape.out_features();
-        if rows == 0 || input.len != rows * in_features {
+        if rows == 0 || input.len() != rows * in_features {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA artifact linear rows input mismatch: rows={rows} in_features={in_features} input={}",
-                    input.len
+                    input.len()
                 ),
             });
         }
@@ -5875,11 +5875,11 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "CUDA artifact linear rows output size overflow".into(),
             })?;
-        if output.len != expected_output {
+        if output.len() != expected_output {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA artifact linear rows output mismatch: expected {expected_output}, got {}",
-                    output.len
+                    output.len()
                 ),
             });
         }
@@ -5923,11 +5923,11 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "CUDA artifact linear rows input size overflow".into(),
             })?;
-        if rows == 0 || input.len != input_len {
+        if rows == 0 || input.len() != input_len {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA artifact linear rows input mismatch: rows={rows} in_features={in_features} input={}",
-                    input.len
+                    input.len()
                 ),
             });
         }
@@ -5936,11 +5936,11 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "CUDA artifact linear rows output size overflow".into(),
             })?;
-        if output.len != expected_output {
+        if output.len() != expected_output {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA artifact linear rows output mismatch: expected {expected_output}, got {}",
-                    output.len
+                    output.len()
                 ),
             });
         }
@@ -6009,11 +6009,14 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "FP8 projection output size overflow".into(),
             })?;
-        if rows == 0 || input.len != input_len || output.len != output_len {
+        if rows == 0 || input.len() != input_len || output.len() != output_len {
             return Err(Error::Internal {
                 message: format!(
                     "FP8 projection shape mismatch: rows={rows} input={}/{} output={}/{}",
-                    input.len, input_len, output.len, output_len
+                    input.len(),
+                    input_len,
+                    output.len(),
+                    output_len
                 ),
             });
         }
@@ -6068,11 +6071,11 @@ impl CudaArtifactOperatorContext {
         let expected = rows.checked_mul(row_width).ok_or_else(|| Error::Internal {
             message: "CUDA FP8 activation pack input size overflow".into(),
         })?;
-        if rows == 0 || row_width == 0 || input.len != expected {
+        if rows == 0 || row_width == 0 || input.len() != expected {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA FP8 activation pack input mismatch: rows={rows} row_width={row_width} input={}",
-                    input.len
+                    input.len()
                 ),
             });
         }
@@ -6204,21 +6207,21 @@ impl CudaArtifactOperatorContext {
                 ),
             });
         };
-        if k1 != k2 || activation.len != rows * k1 {
+        if k1 != k2 || activation.len() != rows * k1 {
             return Err(Error::Internal {
                 message: format!(
                     "BF16 compressor input mismatch: rows={rows} first_k={k1} second_k={k2} input={}",
-                    activation.len
+                    activation.len()
                 ),
             });
         }
-        if projection1_output.len != rows * n1 || projection2_output.len != rows * n2 {
+        if projection1_output.len() != rows * n1 || projection2_output.len() != rows * n2 {
             return Err(Error::Internal {
                 message: format!(
                     "BF16 compressor output mismatch: first={}/{} second={}/{}",
-                    projection1_output.len,
+                    projection1_output.len(),
                     rows * n1,
-                    projection2_output.len,
+                    projection2_output.len(),
                     rows * n2
                 ),
             });
@@ -6290,27 +6293,27 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "proposal main projection scale size overflow".into(),
             })?;
-        if input.len != input_len
-            || norm_weight.len != out_features
+        if input.len() != input_len
+            || norm_weight.len() != out_features
             || activation.value_capacity != input_len
             || activation.scale_capacity != scale_len
-            || inv_rms.len != rows
-            || output.len != output_len
+            || inv_rms.len() != rows
+            || output.len() != output_len
         {
             return Err(Error::Internal {
                 message: format!(
                     "fused proposal main-project/norm binding mismatch: input={}/{} norm={}/{} activation={}/{} scales={}/{} inv_rms={}/{} output={}/{}",
-                    input.len,
+                    input.len(),
                     input_len,
-                    norm_weight.len,
+                    norm_weight.len(),
                     out_features,
                     activation.value_capacity,
                     input_len,
                     activation.scale_capacity,
                     scale_len,
-                    inv_rms.len,
+                    inv_rms.len(),
                     rows,
-                    output.len,
+                    output.len(),
                     output_len
                 ),
             });
@@ -6384,13 +6387,13 @@ impl CudaArtifactOperatorContext {
             });
         }
         let rows = activation.rows;
-        if query_a_output.len != rows * query_a_out || key_value_output.len != rows * kv_out {
+        if query_a_output.len() != rows * query_a_out || key_value_output.len() != rows * kv_out {
             return Err(Error::Internal {
                 message: format!(
                     "CUTLASS FP8 QueryA+KV output mismatch: query_a={}/{} kv={}/{}",
-                    query_a_output.len,
+                    query_a_output.len(),
                     rows * query_a_out,
-                    key_value_output.len,
+                    key_value_output.len(),
                     rows * kv_out
                 ),
             });
@@ -6447,11 +6450,11 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "CUDA prepared FP8 output size overflow".into(),
             })?;
-        if output.len != expected_output {
+        if output.len() != expected_output {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA prepared FP8 output mismatch: expected={expected_output} got={}",
-                    output.len
+                    output.len()
                 ),
             });
         }
@@ -6495,11 +6498,11 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "CUDA artifact linear pair input size overflow".into(),
             })?;
-        if rows == 0 || input.len != input_len {
+        if rows == 0 || input.len() != input_len {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA artifact linear pair rows input mismatch: rows={rows} in_features={in_features} input={}",
-                    input.len
+                    input.len()
                 ),
             });
         }
@@ -6513,11 +6516,14 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "CUDA artifact linear pair second output overflow".into(),
             })?;
-        if first_output.len != first_output_len || second_output.len != second_output_len {
+        if first_output.len() != first_output_len || second_output.len() != second_output_len {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA artifact linear pair output mismatch: first={}/{} second={}/{}",
-                    first_output.len, first_output_len, second_output.len, second_output_len
+                    first_output.len(),
+                    first_output_len,
+                    second_output.len(),
+                    second_output_len
                 ),
             });
         }
@@ -6578,11 +6584,11 @@ impl CudaArtifactOperatorContext {
     ) -> Result<CudaF32Buffer> {
         let in_features = gate.shape.in_features();
         let intermediate = gate.shape.out_features();
-        if rows == 0 || input.len != rows * in_features || up.shape.in_features() != in_features {
+        if rows == 0 || input.len() != rows * in_features || up.shape.in_features() != in_features {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA batched SwiGLU input mismatch: rows={rows} input={} gate_in={} up_in={}",
-                    input.len,
+                    input.len(),
                     in_features,
                     up.shape.in_features()
                 ),
@@ -6702,11 +6708,14 @@ impl CudaArtifactOperatorContext {
                 .ok_or_else(|| Error::Internal {
                     message: "CUDA grouped WO-A output size overflow".into(),
                 })?;
-        if rows == 0 || context.len != expected_context || output.len != expected_output {
+        if rows == 0 || context.len() != expected_context || output.len() != expected_output {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA grouped WO-A BF16 MMA buffer mismatch: rows={rows} context={}/{} output={}/{}",
-                    context.len, expected_context, output.len, expected_output
+                    context.len(),
+                    expected_context,
+                    output.len(),
+                    expected_output
                 ),
             });
         }
@@ -6751,7 +6760,7 @@ impl CudaArtifactOperatorContext {
         groups: usize,
         group_input: usize,
         rank: usize,
-        latent: &mut CudaF32Buffer,
+        latent: &mut CudaBf16Buffer,
         workspace: &mut CudaArtifactLinearWorkspace,
         output: &mut CudaF32Buffer,
     ) -> Result<()> {
@@ -6775,7 +6784,7 @@ impl CudaArtifactOperatorContext {
                     message: format!(
                         "fused MLA output-B requires FP8/E8M0 [{hidden_size},{latent_size}], got {:?}",
                         output_b.shape,
-                        hidden_size = output.len.checked_div(rows).unwrap_or(0)
+                        hidden_size = output.len().checked_div(rows).unwrap_or(0)
                     ),
                 });
             }
@@ -6865,11 +6874,11 @@ impl CudaArtifactOperatorContext {
                     "CUDA grouped rows matvec context size overflow: rows={rows} groups={groups} group_in={group_in}"
                 ) }
             })?;
-        if context.len != expected_context {
+        if context.len() != expected_context {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA grouped rows matvec context length mismatch: expected {expected_context}, got {}",
-                    context.len
+                    context.len()
                 ),
             });
         }
@@ -6878,11 +6887,11 @@ impl CudaArtifactOperatorContext {
                 "CUDA grouped rows matvec weight size overflow: out={output_latent_dim} group_in={group_in}"
             ) }
         })?;
-        if weight.len != expected_weight {
+        if weight.len() != expected_weight {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA grouped rows matvec weight length mismatch: expected {expected_weight}, got {}",
-                    weight.len
+                    weight.len()
                 ),
             });
         }
@@ -6939,11 +6948,11 @@ impl CudaArtifactOperatorContext {
                     "CUDA grouped rows matvec context size overflow: rows={rows} groups={groups} group_in={group_in}"
                 ) }
             })?;
-        if context.len != expected_context {
+        if context.len() != expected_context {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA grouped rows matvec context length mismatch: expected {expected_context}, got {}",
-                    context.len
+                    context.len()
                 ),
             });
         }
@@ -6952,11 +6961,11 @@ impl CudaArtifactOperatorContext {
                 "CUDA grouped rows matvec weight size overflow: out={output_latent_dim} group_in={group_in}"
             ) }
         })?;
-        if weight.len != expected_weight {
+        if weight.len() != expected_weight {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA grouped rows matvec weight length mismatch: expected {expected_weight}, got {}",
-                    weight.len
+                    weight.len()
                 ),
             });
         }
@@ -6965,11 +6974,11 @@ impl CudaArtifactOperatorContext {
                 "CUDA grouped rows matvec output size overflow: rows={rows} out={output_latent_dim}"
             ) }
         })?;
-        if output.len != output_len {
+        if output.len() != output_len {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA grouped rows matvec output length mismatch: expected {output_len}, got {}",
-                    output.len
+                    output.len()
                 ),
             });
         }
@@ -7045,10 +7054,7 @@ impl CudaArtifactOperatorContext {
         };
         Ok(CudaDsv4RouterTokenIds {
             host: token_ids.to_vec(),
-            device: CudaI32Buffer {
-                buffer,
-                len: validated.len(),
-            },
+            device: CudaTypedBuffer::from_device_buffer(buffer),
             staging,
             copy_event,
         })
@@ -7153,20 +7159,22 @@ impl CudaArtifactOperatorContext {
                 ),
             });
         }
-        if logits.len != tokens * experts {
+        if logits.len() != tokens * experts {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA DSV4 router topk logits length mismatch: got {} expected {}x{}",
-                    logits.len, tokens, experts
+                    logits.len(),
+                    tokens,
+                    experts
                 ),
             });
         }
         let (bias_buf, bias_enabled) = if let Some(bias) = bias {
-            if bias.len != experts {
+            if bias.len() != experts {
                 return Err(Error::Internal {
                     message: format!(
                         "CUDA DSV4 router topk bias length mismatch: got {} expected {experts}",
-                        bias.len
+                        bias.len()
                     ),
                 });
             }
@@ -7177,11 +7185,12 @@ impl CudaArtifactOperatorContext {
         let out_len = tokens.checked_mul(top_k).ok_or_else(|| Error::Internal {
             message: "CUDA DSV4 router topk output overflow".into(),
         })?;
-        if indices.len != out_len || weights.len != out_len {
+        if indices.len() != out_len || weights.len() != out_len {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA DSV4 router topk output mismatch: expected {out_len}, indices={}, weights={}",
-                    indices.len, weights.len
+                    indices.len(),
+                    weights.len()
                 ),
             });
         }
@@ -7244,19 +7253,21 @@ impl CudaArtifactOperatorContext {
         let output_len = tokens.checked_mul(top_k).ok_or_else(|| Error::Internal {
             message: "CUDA DSV4 hash router output shape overflow".into(),
         })?;
-        if logits.len != logits_len || token_ids.device.len != tokens {
+        if logits.len() != logits_len || token_ids.device.len() != tokens {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA DSV4 hash router input mismatch: logits={} expected={logits_len}, token_ids={} expected={tokens}",
-                    logits.len, token_ids.device.len
+                    logits.len(),
+                    token_ids.device.len()
                 ),
             });
         }
-        if indices.len != output_len || weights.len != output_len {
+        if indices.len() != output_len || weights.len() != output_len {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA DSV4 hash router output mismatch: expected {output_len}, indices={}, weights={}",
-                    indices.len, weights.len
+                    indices.len(),
+                    weights.len()
                 ),
             });
         }
@@ -7321,11 +7332,13 @@ impl CudaArtifactOperatorContext {
         let output_len = rows.checked_mul(top_k).ok_or_else(|| Error::Internal {
             message: "CUDA vocab rows top-k output size overflow".into(),
         })?;
-        if logits.len != logits_len || indices.len < output_len || values.len < output_len {
+        if logits.len() != logits_len || indices.len() < output_len || values.len() < output_len {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA vocab rows top-k workspace mismatch: logits={} indices={} values={} expected_logits={logits_len} expected_output={output_len}",
-                    logits.len, indices.len, values.len
+                    logits.len(),
+                    indices.len(),
+                    values.len()
                 ),
             });
         }
@@ -7387,18 +7400,18 @@ impl CudaArtifactOperatorContext {
                 message: format!("CUDA artifact linear top-k supports k<=40, got {top_k}"),
             });
         }
-        if input.len != handle.shape.in_features()
-            || logits.len != handle.shape.out_features()
-            || indices.len < top_k
-            || values.len < top_k
+        if input.len() != handle.shape.in_features()
+            || logits.len() != handle.shape.out_features()
+            || indices.len() < top_k
+            || values.len() < top_k
         {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA artifact linear device top-k workspace mismatch: input={} logits={} indices={} values={} expected_input={} expected_logits={} k={top_k}",
-                    input.len,
-                    logits.len,
-                    indices.len,
-                    values.len,
+                    input.len(),
+                    logits.len(),
+                    indices.len(),
+                    values.len(),
                     handle.shape.in_features(),
                     handle.shape.out_features(),
                 ),
@@ -7431,7 +7444,8 @@ impl CudaArtifactOperatorContext {
         row_width: usize,
         block_size: usize,
     ) -> Result<()> {
-        self.fp8_activation_quantize_in_place(&mut values.buffer, values.len, row_width, block_size)
+        let value_len = values.len();
+        self.fp8_activation_quantize_in_place(&mut values.buffer, value_len, row_width, block_size)
     }
 
     pub fn fp8_activation_quantize_in_place(
@@ -7471,15 +7485,15 @@ impl CudaArtifactOperatorContext {
         head_dim: usize,
         rope_dim: usize,
     ) -> Result<()> {
-        if values.len == 0
+        if values.is_empty()
             || head_dim == 0
             || rope_dim > head_dim
-            || !values.len.is_multiple_of(head_dim)
+            || !values.len().is_multiple_of(head_dim)
         {
             return Err(Error::Internal {
                 message: format!(
                     "invalid CUDA attention KV QAT shape: len={} head_dim={head_dim} rope_dim={rope_dim}",
-                    values.len
+                    values.len()
                 ),
             });
         }
@@ -7493,14 +7507,15 @@ impl CudaArtifactOperatorContext {
         } else {
             non_rope
         };
-        let rows = values.len / head_dim;
+        let value_len = values.len();
+        let rows = value_len / head_dim;
         let blocks_per_row = non_rope.div_ceil(effective_block_size);
         self.launched(unsafe {
             self.module.fp8_e4m3fn_e8m0_quantize_non_rope_f32_inplace(
                 &self.stream,
                 LaunchConfig::for_num_elems((rows * blocks_per_row) as u32),
                 &mut values.buffer,
-                values.len as u32,
+                value_len as u32,
                 head_dim as u32,
                 rope_dim as u32,
                 block_size as u32,
@@ -7513,24 +7528,25 @@ impl CudaArtifactOperatorContext {
         values: &mut CudaF32Buffer,
         row_width: usize,
     ) -> Result<()> {
-        if values.len == 0
+        if values.is_empty()
             || row_width == 0
             || !row_width.is_power_of_two()
-            || !values.len.is_multiple_of(row_width)
+            || !values.len().is_multiple_of(row_width)
         {
             return Err(Error::Internal {
                 message: format!(
                     "invalid CUDA indexer Hadamard/FP4 QAT shape: len={} row_width={row_width}",
-                    values.len
+                    values.len()
                 ),
             });
         }
+        let value_len = values.len();
         self.launched(unsafe {
             self.module.hadamard_fp4_e2m1_e8m0_quantize_f32_inplace(
                 &self.stream,
-                LaunchConfig::for_num_elems((values.len / row_width) as u32),
+                LaunchConfig::for_num_elems((value_len / row_width) as u32),
                 &mut values.buffer,
-                values.len as u32,
+                value_len as u32,
                 row_width as u32,
                 32,
             )
@@ -7711,16 +7727,16 @@ impl CudaArtifactOperatorContext {
                 .ok_or_else(|| Error::Internal {
                     message: "compressor recurrent seed size overflow".into(),
                 })?;
-        if projected_kv_rows.len != projected_elements
-            || projected_score_rows.len != projected_elements
-            || ape.len != state.shape.ape_elements()?
+        if projected_kv_rows.len() != projected_elements
+            || projected_score_rows.len() != projected_elements
+            || ape.len() != state.shape.ape_elements()?
         {
             return Err(Error::Internal {
                 message: format!(
                     "compressor recurrent seed length mismatch: kv={} score={} ape={} expected projected={} ape={}",
-                    projected_kv_rows.len,
-                    projected_score_rows.len,
-                    ape.len,
+                    projected_kv_rows.len(),
+                    projected_score_rows.len(),
+                    ape.len(),
                     projected_elements,
                     state.shape.ape_elements()?
                 ),
@@ -7763,16 +7779,16 @@ impl CudaArtifactOperatorContext {
         position: usize,
     ) -> Result<bool> {
         state.shape.validate()?;
-        if projected_kv.len != state.shape.out_dim
-            || projected_score.len != state.shape.out_dim
-            || ape.len != state.shape.ape_elements()?
+        if projected_kv.len() != state.shape.out_dim
+            || projected_score.len() != state.shape.out_dim
+            || ape.len() != state.shape.ape_elements()?
         {
             return Err(Error::Internal {
                 message: format!(
                     "compressor recurrent append length mismatch: kv={} score={} ape={} expected row={} ape={}",
-                    projected_kv.len,
-                    projected_score.len,
-                    ape.len,
+                    projected_kv.len(),
+                    projected_score.len(),
+                    ape.len(),
                     state.shape.out_dim,
                     state.shape.ape_elements()?
                 ),
@@ -7812,11 +7828,12 @@ impl CudaArtifactOperatorContext {
         output: &mut CudaF32Buffer,
     ) -> Result<()> {
         state.shape.validate()?;
-        if output.len != state.shape.head_dim {
+        if output.len() != state.shape.head_dim {
             return Err(Error::Internal {
                 message: format!(
                     "compressor recurrent output length mismatch: got {} expected {}",
-                    output.len, state.shape.head_dim
+                    output.len(),
+                    state.shape.head_dim
                 ),
             });
         }
@@ -7919,27 +7936,28 @@ impl CudaArtifactOperatorContext {
                 .ok_or_else(|| Error::Internal {
                     message: "CUDA compressor projected row size overflow".into(),
                 })?;
-        if kv_rows.len < min_projected
-            || score_rows.len < min_projected
-            || !kv_rows.len.is_multiple_of(out_dim)
-            || !score_rows.len.is_multiple_of(out_dim)
-            || kv_rows.len != score_rows.len
+        if kv_rows.len() < min_projected
+            || score_rows.len() < min_projected
+            || !kv_rows.len().is_multiple_of(out_dim)
+            || !score_rows.len().is_multiple_of(out_dim)
+            || kv_rows.len() != score_rows.len()
         {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA compressor projected length mismatch: kv={} score={} min_required={min_projected} out_dim={out_dim}",
-                    kv_rows.len, score_rows.len
+                    kv_rows.len(),
+                    score_rows.len()
                 ),
             });
         }
         let expected_ape = ratio.checked_mul(out_dim).ok_or_else(|| Error::Internal {
             message: "CUDA compressor APE size overflow".into(),
         })?;
-        if ape.len != expected_ape {
+        if ape.len() != expected_ape {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA compressor APE length mismatch: got {} expected {expected_ape}",
-                    ape.len
+                    ape.len()
                 ),
             });
         }
@@ -7948,11 +7966,11 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "CUDA compressor output size overflow".into(),
             })?;
-        if output.len != expected_output {
+        if output.len() != expected_output {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA compressor output length mismatch: got {} expected {expected_output}",
-                    output.len
+                    output.len()
                 ),
             });
         }
@@ -7985,20 +8003,20 @@ impl CudaArtifactOperatorContext {
         layout: crate::cuda::kv_page_pool::PagedPlaneLayout,
     ) -> Result<()> {
         layout.validate()?;
-        if block_offsets.len != 2 {
+        if block_offsets.len() != 2 {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA paged indexer requires one sequence block range (2 offsets), got {}",
-                    block_offsets.len
+                    block_offsets.len()
                 ),
             });
         }
         let required_pages = compressed_len.div_ceil(layout.page_tokens);
-        if block_slots.len < required_pages {
+        if block_slots.len() < required_pages {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA paged indexer block table too short: need {required_pages}, got {}",
-                    block_slots.len
+                    block_slots.len()
                 ),
             });
         }
@@ -8009,11 +8027,11 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "CUDA paged indexer slot size overflow".into(),
             })?;
-        if plane.len < slot_elements || !plane.len.is_multiple_of(slot_elements) {
+        if plane.len() < slot_elements || !plane.len().is_multiple_of(slot_elements) {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA paged indexer plane length {} is not a positive multiple of slot size {slot_elements}",
-                    plane.len
+                    plane.len()
                 ),
             });
         }
@@ -8085,9 +8103,9 @@ impl CudaArtifactOperatorContext {
             })?;
         if window_cols > window_size
             || window_cols > tokens
-            || query.len != query_len
-            || weights.len != weight_len
-            || output.len < output_len
+            || query.len() != query_len
+            || weights.len() != weight_len
+            || output.len() < output_len
         {
             return Err(Error::Internal {
                 message: "CUDA paged prefill indexer buffer mismatch".into(),
@@ -8203,11 +8221,11 @@ impl CudaArtifactOperatorContext {
             || !rope_dim.is_multiple_of(2)
             || window_cols > window_size
             || window_cols > tokens
-            || query.len != query_len
-            || weights.len != weight_len
-            || output.len < output_len
-            || cos_table.len < rope_len
-            || sin_table.len < rope_len
+            || query.len() != query_len
+            || weights.len() != weight_len
+            || output.len() < output_len
+            || cos_table.len() < rope_len
+            || sin_table.len() < rope_len
         {
             return Err(Error::Internal {
                 message: "CUDA fused paged prefill indexer shape mismatch".into(),
@@ -8298,9 +8316,9 @@ impl CudaArtifactOperatorContext {
             || window_len > window_size
             || extra_cols == 0
             || extra_cols > 512
-            || query.len != query_len
-            || weights.len != index_heads
-            || output.len < output_len
+            || query.len() != query_len
+            || weights.len() != index_heads
+            || output.len() < output_len
         {
             return Err(Error::Internal {
                 message: "CUDA paged decode indexer shape mismatch".into(),
@@ -8347,6 +8365,8 @@ impl CudaArtifactOperatorContext {
         rows: usize,
         window_size: usize,
         index_topk: usize,
+        compress_ratio: usize,
+        direct_compressed: bool,
         index_heads: usize,
         index_head_dim: usize,
         page_tokens: usize,
@@ -8377,6 +8397,8 @@ impl CudaArtifactOperatorContext {
             rows,
             window_size,
             index_topk,
+            compress_ratio,
+            direct_compressed,
             index_heads,
             index_head_dim,
             page_tokens,
@@ -8404,6 +8426,8 @@ impl CudaArtifactOperatorContext {
         rows: usize,
         window_size: usize,
         index_topk: usize,
+        compress_ratio: usize,
+        direct_compressed: bool,
         index_heads: usize,
         index_head_dim: usize,
         page_tokens: usize,
@@ -8426,11 +8450,12 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "CUDA paged decode rows slot size overflow".into(),
             })?;
-        if indexer_plane.len < slot_elements || !indexer_plane.len.is_multiple_of(slot_elements) {
+        if indexer_plane.len() < slot_elements || !indexer_plane.len().is_multiple_of(slot_elements)
+        {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA paged decode rows plane length {} is not a positive multiple of slot size {slot_elements}",
-                    indexer_plane.len
+                    indexer_plane.len()
                 ),
             });
         }
@@ -8442,15 +8467,15 @@ impl CudaArtifactOperatorContext {
             index_head_dim,
         }
         .validate_lengths(
-            query.len,
-            weights.len,
-            block_offsets.len,
-            row_sequence_ids.len,
-            positions.len,
-            window_lens.len,
-            compressed_lens.len,
-            logical_indices.len,
-            plane_selectors.len,
+            query.len(),
+            weights.len(),
+            block_offsets.len(),
+            row_sequence_ids.len(),
+            positions.len(),
+            window_lens.len(),
+            compressed_lens.len(),
+            logical_indices.len(),
+            plane_selectors.len(),
         )?;
         self.launched(unsafe {
             self.module.dsv4_decode_topk_indices_paged_indexer_rows(
@@ -8474,6 +8499,8 @@ impl CudaArtifactOperatorContext {
                 checked_u32(rows, "CUDA paged decode rows", "rows")?,
                 checked_u32(window_size, "CUDA paged decode rows", "window_size")?,
                 checked_u32(index_topk, "CUDA paged decode rows", "index_topk")?,
+                checked_u32(compress_ratio, "CUDA paged decode rows", "compress_ratio")?,
+                direct_compressed,
                 checked_u32(index_heads, "CUDA paged decode rows", "index_heads")?,
                 checked_u32(index_head_dim, "CUDA paged decode rows", "index_head_dim")?,
                 checked_u32(page_tokens, "CUDA paged decode rows", "page_tokens")?,
@@ -8548,11 +8575,11 @@ impl CudaArtifactOperatorContext {
             || !index_head_dim.is_multiple_of(32)
             || rope_dim > index_head_dim
             || !rope_dim.is_multiple_of(2)
-            || query.len != query_len
-            || weights.len != index_heads
-            || output.len < output_len
-            || cos_table.len < rope_len
-            || sin_table.len < rope_len
+            || query.len() != query_len
+            || weights.len() != index_heads
+            || output.len() < output_len
+            || cos_table.len() < rope_len
+            || sin_table.len() < rope_len
             || query_len > DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS
         {
             return Err(Error::Internal {
@@ -8661,11 +8688,11 @@ impl CudaArtifactOperatorContext {
         output_scale: f32,
         swiglu_limit: f32,
     ) -> Result<CudaF32Buffer> {
-        if input.len != gate.shape.in_features() || input.len != up.shape.in_features() {
+        if input.len() != gate.shape.in_features() || input.len() != up.shape.in_features() {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA SwiGLU device input length mismatch: input={} gate_in={} up_in={}",
-                    input.len,
+                    input.len(),
                     gate.shape.in_features(),
                     up.shape.in_features()
                 ),
@@ -8716,10 +8743,9 @@ impl CudaArtifactOperatorContext {
                 message: "CUDA artifact linear workspace scale size overflow".into(),
             })?;
         Ok(CudaArtifactLinearWorkspace {
-            cloned: CudaF32Buffer {
-                buffer: self.uninitialized_device_buffer::<f32>(value_capacity)?,
-                len: value_capacity,
-            },
+            cloned: CudaTypedBuffer::from_device_buffer(
+                self.uninitialized_device_buffer::<f32>(value_capacity)?,
+            ),
             x_packed: self.uninitialized_device_buffer::<u8>(value_capacity)?,
             x_scales: self.uninitialized_device_buffer::<u8>(scale_capacity)?,
             value_capacity,
@@ -8806,20 +8832,20 @@ impl CudaArtifactOperatorContext {
             || intermediate != down_in
             || input.rows != rows
             || input.row_width != input_size
-            || hidden_f32.len < rows * intermediate
+            || hidden_f32.len() < rows * intermediate
             || hidden.value_capacity != rows * intermediate
             || hidden.scale_capacity != rows * intermediate.div_ceil(128)
-            || output.len != rows * output_size
+            || output.len() != rows * output_size
         {
             return Err(Error::Internal {
                 message: format!(
                     "fused shared FFN shape mismatch: rows={rows} input=[{},{}] hidden_f32={} hidden=[{},{}] output={} gate={:?} up={:?} down={:?}",
                     input.rows,
                     input.row_width,
-                    hidden_f32.len,
+                    hidden_f32.len(),
                     hidden.value_capacity,
                     hidden.scale_capacity,
-                    output.len,
+                    output.len(),
                     gate.shape,
                     up.shape,
                     down.shape
@@ -8907,10 +8933,9 @@ impl CudaArtifactOperatorContext {
             route_weights: self.zeroed_device_buffer::<f32>(max_experts)?,
             route_slots: self.zeroed_device_buffer::<i32>(max_experts)?,
             dispatch_error: self.zeroed_device_buffer::<i32>(1)?,
-            expert_output: CudaF32Buffer {
-                buffer: self.uninitialized_device_buffer::<f32>(total_expert_output)?,
-                len: total_expert_output,
-            },
+            expert_output: CudaTypedBuffer::from_device_buffer(
+                self.uninitialized_device_buffer::<f32>(total_expert_output)?,
+            ),
             max_experts,
             input_size,
             intermediate_size,
@@ -9090,11 +9115,13 @@ impl CudaArtifactOperatorContext {
                 ),
             });
         }
-        if input.len != expected_len {
+        if input.len() != expected_len {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA expert group route input length mismatch: input={} expected={}x{}={expected_len}",
-                    input.len, tokens, input_size
+                    input.len(),
+                    tokens,
+                    input_size
                 ),
             });
         }
@@ -9169,10 +9196,9 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "CUDA MoE route output element count overflow".into(),
             })?;
-        Ok(CudaF32Buffer {
-            buffer: self.uninitialized_device_buffer::<f32>(len)?,
-            len,
-        })
+        Ok(CudaTypedBuffer::from_device_buffer(
+            self.uninitialized_device_buffer::<f32>(len)?,
+        ))
     }
 
     /// Begin one expert-group MoE invocation. Completion/error state and the
@@ -9201,12 +9227,12 @@ impl CudaArtifactOperatorContext {
                 .ok_or_else(|| Error::Internal {
                     message: "CUDA expert group route output size overflow".into(),
                 })?;
-        if routes > plan.route_written.len() || route_output.len != output_elements {
+        if routes > plan.route_written.len() || route_output.len() != output_elements {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA expert group route invocation capacity mismatch: routes={routes} completion_capacity={} output={} expected={output_elements}",
                     plan.route_written.len(),
-                    route_output.len
+                    route_output.len()
                 ),
             });
         }
@@ -9257,15 +9283,17 @@ impl CudaArtifactOperatorContext {
         self.check_capture_safe("expert group route host scalar readback")?;
         if route_count == 0
             || routes_per_token == 0
-            || route_count > expert_ids.len
-            || route_count > router_weights.len
+            || route_count > expert_ids.len()
+            || route_count > router_weights.len()
             || route_count > plan.route_capacity
             || !route_count.is_multiple_of(routes_per_token)
         {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA expert group route plan shape mismatch: routes={route_count} routes_per_token={routes_per_token} capacity={} ids={} weights={}",
-                    plan.route_capacity, expert_ids.len, router_weights.len
+                    plan.route_capacity,
+                    expert_ids.len(),
+                    router_weights.len()
                 ),
             });
         }
@@ -9477,11 +9505,12 @@ impl CudaArtifactOperatorContext {
                 .ok_or_else(|| Error::Internal {
                     message: "CUDA grouped FP4 MoE output size overflow".into(),
                 })?;
-        if plan.invocation_routes != Some(route_count) || route_output.len != expected_output {
+        if plan.invocation_routes != Some(route_count) || route_output.len() != expected_output {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA grouped FP4 MoE invocation mismatch: active={:?} routes={route_count} output={} expected={expected_output}",
-                    plan.invocation_routes, route_output.len
+                    plan.invocation_routes,
+                    route_output.len()
                 ),
             });
         }
@@ -9591,11 +9620,12 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "CUDA MoE route reducer output size overflow".into(),
             })?;
-        if route_output.len != expected_routes || output.len != expected_output {
+        if route_output.len() != expected_routes || output.len() != expected_output {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA MoE route reducer length mismatch: route_output={} expected={expected_routes}, output={} expected={expected_output}",
-                    route_output.len, output.len
+                    route_output.len(),
+                    output.len()
                 ),
             });
         }
@@ -9651,13 +9681,15 @@ impl CudaArtifactOperatorContext {
             })?;
         if routes_per_token == 0
             || plan.invocation_routes != Some(routes)
-            || route_output.len != expected_routes
-            || output.len != expected_output
+            || route_output.len() != expected_routes
+            || output.len() != expected_output
         {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA expert group route reducer state/shape mismatch: active={:?} routes={routes} route_output={} expected={expected_routes} output={} expected={expected_output}",
-                    plan.invocation_routes, route_output.len, output.len
+                    plan.invocation_routes,
+                    route_output.len(),
+                    output.len()
                 ),
             });
         }
@@ -9714,11 +9746,12 @@ impl CudaArtifactOperatorContext {
                 ),
             });
         }
-        if route_count > expert_ids.len || route_count > router_weights.len {
+        if route_count > expert_ids.len() || route_count > router_weights.len() {
             return Err(Error::Internal {
                 message: format!(
                     "stable CUDA MoE router metadata too short: routes={route_count} ids={} weights={}",
-                    expert_ids.len, router_weights.len
+                    expert_ids.len(),
+                    router_weights.len()
                 ),
             });
         }
@@ -9789,24 +9822,24 @@ impl CudaArtifactOperatorContext {
         workspace: &mut CudaMoeBatchedWorkspace,
     ) -> Result<()> {
         table.ensure_healthy()?;
-        if route_count == 0 || route_count > 6 || route_count > router_weights.len {
+        if route_count == 0 || route_count > 6 || route_count > router_weights.len() {
             return Err(Error::Internal {
                 message: format!(
                     "resolved CUDA MoE dispatch has invalid route metadata: routes={route_count} weights={}",
-                    router_weights.len
+                    router_weights.len()
                 ),
             });
         }
-        if route_count > resolved.route_slots.len
-            || route_count > resolved.route_generations.len
-            || route_count > active_markers.miss_markers.len
+        if route_count > resolved.route_slots.len()
+            || route_count > resolved.route_generations.len()
+            || route_count > active_markers.miss_markers.len()
         {
             return Err(Error::Internal {
                 message: format!(
                     "resolved CUDA MoE dispatch exceeds scratch capacity: routes={route_count} slots={} generations={} markers={}",
-                    resolved.route_slots.len,
-                    resolved.route_generations.len,
-                    active_markers.miss_markers.len
+                    resolved.route_slots.len(),
+                    resolved.route_generations.len(),
+                    active_markers.miss_markers.len()
                 ),
             });
         }
@@ -9891,12 +9924,14 @@ impl CudaArtifactOperatorContext {
         if num_experts == 0
             || num_experts > resident.max_experts
             || num_experts > materialized.max_experts
-            || num_experts > original.miss_markers.len
+            || num_experts > original.miss_markers.len()
         {
             return Err(Error::Internal {
                 message: format!(
                     "split CUDA MoE reduction exceeds capacity: routes={num_experts} resident={} materialized={} markers={}",
-                    resident.max_experts, materialized.max_experts, original.miss_markers.len
+                    resident.max_experts,
+                    materialized.max_experts,
+                    original.miss_markers.len()
                 ),
             });
         }
@@ -9966,13 +10001,13 @@ impl CudaArtifactOperatorContext {
         eps: f32,
         output: &mut CudaF32Buffer,
     ) -> Result<()> {
-        if input.len() != weight.len() || input.is_empty() || output.len != input.len() {
+        if input.len() != weight.len() || input.is_empty() || output.len() != input.len() {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA RMS norm device length mismatch: input={} weight={} output={}",
                     input.len(),
                     weight.len(),
-                    output.len
+                    output.len()
                 ),
             });
         }
@@ -10014,7 +10049,7 @@ impl CudaArtifactOperatorContext {
         weight: &CudaF32Buffer,
         eps: f32,
     ) -> Result<CudaF32Buffer> {
-        let mut output = self.zero_f32_buffer(input.len)?;
+        let mut output = self.zero_f32_buffer(input.len())?;
         self.rms_norm_rows_from_device_into(input, rows, weight, eps, &mut output)?;
         Ok(output)
     }
@@ -10029,13 +10064,15 @@ impl CudaArtifactOperatorContext {
     ) -> Result<()> {
         if rows == 0
             || weight.is_empty()
-            || input.len != rows * weight.len
-            || output.len != input.len
+            || input.len() != rows * weight.len()
+            || output.len() != input.len()
         {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA affine RMS rows length mismatch: rows={rows} input={} weight={} output={}",
-                    input.len, weight.len, output.len
+                    input.len(),
+                    weight.len(),
+                    output.len()
                 ),
             });
         }
@@ -10051,7 +10088,7 @@ impl CudaArtifactOperatorContext {
                 &weight.buffer,
                 &mut output.buffer,
                 rows as u32,
-                weight.len as u32,
+                weight.len() as u32,
                 eps,
             )
         })
@@ -10076,7 +10113,7 @@ impl CudaArtifactOperatorContext {
         head_dim: usize,
         eps: f32,
     ) -> Result<CudaF32Buffer> {
-        let mut output = self.zero_f32_buffer(input.len)?;
+        let mut output = self.zero_f32_buffer(input.len())?;
         self.rms_norm_heads_from_device_into(input, heads, head_dim, eps, &mut output)?;
         Ok(output)
     }
@@ -10089,11 +10126,16 @@ impl CudaArtifactOperatorContext {
         eps: f32,
         output: &mut CudaF32Buffer,
     ) -> Result<()> {
-        if heads == 0 || head_dim == 0 || input.len != heads * head_dim || output.len != input.len {
+        if heads == 0
+            || head_dim == 0
+            || input.len() != heads * head_dim
+            || output.len() != input.len()
+        {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA per-head RMS device length mismatch: input={} output={} heads={heads} head_dim={head_dim}",
-                    input.len, output.len
+                    input.len(),
+                    output.len()
                 ),
             });
         }
@@ -10149,26 +10191,26 @@ impl CudaArtifactOperatorContext {
             || hc_mult > 16
             || mix_hc > 128
             || hc_mult * hc_mult > 256
-            || state.len != tokens * hc_dim
-            || function_col_major.len != mix_hc * hc_dim
-            || scale.len != 3
-            || base.len != mix_hc
-            || hidden.len != tokens * hidden_size
-            || pre.len != tokens * hc_mult
-            || post.len != tokens * hc_mult
-            || comb.len != tokens * hc_mult * hc_mult
+            || state.len() != tokens * hc_dim
+            || function_col_major.len() != mix_hc * hc_dim
+            || scale.len() != 3
+            || base.len() != mix_hc
+            || hidden.len() != tokens * hidden_size
+            || pre.len() != tokens * hc_mult
+            || post.len() != tokens * hc_mult
+            || comb.len() != tokens * hc_mult * hc_mult
         {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA HC pre device shape mismatch: tokens={tokens} state={} function={} scale={} base={} hidden={} pre={} post={} comb={} hc={hc_mult} hidden_size={hidden_size} mix={mix_hc}",
-                    state.len,
-                    function_col_major.len,
-                    scale.len,
-                    base.len,
-                    hidden.len,
-                    pre.len,
-                    post.len,
-                    comb.len
+                    state.len(),
+                    function_col_major.len(),
+                    scale.len(),
+                    base.len(),
+                    hidden.len(),
+                    pre.len(),
+                    post.len(),
+                    comb.len()
                 ),
             });
         }
@@ -10302,11 +10344,11 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "CUDA HC post hidden size overflow".into(),
             })?;
-        if tokens == 0 || hc_mult == 0 || hidden_size == 0 || output.len != tokens * hc_dim {
+        if tokens == 0 || hc_mult == 0 || hidden_size == 0 || output.len() != tokens * hc_dim {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA HC post device shape mismatch: tokens={tokens} hc={hc_mult} hidden_size={hidden_size} output={}",
-                    output.len
+                    output.len()
                 ),
             });
         }
@@ -10475,13 +10517,16 @@ impl CudaArtifactOperatorContext {
             || hidden_size == 0
             || tap_count == 0
             || tap_slot >= tap_count
-            || state.len != expected_state
-            || output.len != expected_output
+            || state.len() != expected_state
+            || output.len() != expected_output
         {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA HC mean-scatter shape mismatch: state={}/{} output={}/{} rows={rows} hc={hc_mult} hidden={hidden_size} tap={tap_slot}/{tap_count}",
-                    state.len, expected_state, output.len, expected_output
+                    state.len(),
+                    expected_state,
+                    output.len(),
+                    expected_output
                 ),
             });
         }
@@ -10529,16 +10574,20 @@ impl CudaArtifactOperatorContext {
         if tokens == 0
             || hc_mult == 0
             || hc_mult > 16
-            || state.len < tokens * hc_dim
-            || function.len != hc_mult * hc_dim
-            || scale.len != 1
-            || base.len != hc_mult
-            || hidden.len != tokens * hidden_size
+            || state.len() < tokens * hc_dim
+            || function.len() != hc_mult * hc_dim
+            || scale.len() != 1
+            || base.len() != hc_mult
+            || hidden.len() != tokens * hidden_size
         {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA HC head device shape mismatch: tokens={tokens} state={} function={} scale={} base={} output={} hc={hc_mult} hidden={hidden_size}",
-                    state.len, function.len, scale.len, base.len, hidden.len,
+                    state.len(),
+                    function.len(),
+                    scale.len(),
+                    base.len(),
+                    hidden.len(),
                 ),
             });
         }
@@ -10945,25 +10994,28 @@ impl CudaArtifactOperatorContext {
     ) -> Result<()> {
         layout.validate()?;
         let elements = layout.elements()?;
-        if combined.len < elements
-            || logical_indices.len != elements
-            || plane_selectors.len != elements
+        if combined.len() < elements
+            || logical_indices.len() != elements
+            || plane_selectors.len() != elements
         {
             return Err(Error::Internal {
                 message: format!(
                     "combined ring conversion length mismatch: input={} logical={} selectors={} expected={elements}",
-                    combined.len, logical_indices.len, plane_selectors.len
+                    combined.len(),
+                    logical_indices.len(),
+                    plane_selectors.len()
                 ),
             });
         }
         let (row_window_lens, explicit) = match window_lens {
             CombinedRingWindowLens::PositionDerived => (combined, 0u32),
             CombinedRingWindowLens::Explicit(values) => {
-                if values.len != layout.rows {
+                if values.len() != layout.rows {
                     return Err(Error::Internal {
                         message: format!(
                             "combined ring row window length mismatch: got {} expected {}",
-                            values.len, layout.rows
+                            values.len(),
+                            layout.rows
                         ),
                     });
                 }
@@ -11055,17 +11107,17 @@ impl CudaArtifactOperatorContext {
         output: &mut CudaF32Buffer,
     ) -> Result<()> {
         layout.validate_buffer_lengths(
-            query.len,
-            first_plane.len,
-            second_plane.len,
-            block_slots.len,
-            sequence_block_offsets.len,
-            sequence_kv_lens.len,
-            second_sequence_kv_lens.len,
-            topk.len,
-            selectors.len,
-            sink.len,
-            output.len,
+            query.len(),
+            first_plane.len(),
+            second_plane.len(),
+            block_slots.len(),
+            sequence_block_offsets.len(),
+            sequence_kv_lens.len(),
+            second_sequence_kv_lens.len(),
+            topk.len(),
+            selectors.len(),
+            sink.len(),
+            output.len(),
         )?;
         let explicit_selection_layout = layout.explicit_selection_layout(false)?;
         let mut workspace =
@@ -11114,20 +11166,20 @@ impl CudaArtifactOperatorContext {
         output: &mut CudaF32Buffer,
     ) -> Result<()> {
         layout.validate_selected_buffer_lengths(
-            query.len,
-            first_plane.len,
-            second_plane.len,
-            block_slots.len,
-            sequence_block_offsets.len,
-            sequence_kv_lens.len,
-            second_sequence_kv_lens.len,
-            row_sequence_ids.len,
-            row_kv_lens.len,
-            row_second_kv_lens.len,
-            topk.len,
-            selectors.len,
-            sink.len,
-            output.len,
+            query.len(),
+            first_plane.len(),
+            second_plane.len(),
+            block_slots.len(),
+            sequence_block_offsets.len(),
+            sequence_kv_lens.len(),
+            second_sequence_kv_lens.len(),
+            row_sequence_ids.len(),
+            row_kv_lens.len(),
+            row_second_kv_lens.len(),
+            topk.len(),
+            selectors.len(),
+            sink.len(),
+            output.len(),
         )?;
         let explicit_selection_layout = layout.explicit_selection_layout(true)?;
         if !workspace.supports(explicit_selection_layout)? {
@@ -11206,14 +11258,14 @@ impl CudaArtifactOperatorContext {
         output: &mut CudaF32Buffer,
     ) -> Result<()> {
         layout.validate_buffer_lengths(
-            query.len,
-            plane.len,
-            block_slots.len,
-            sequence_block_offsets.len,
-            sequence_kv_lens.len,
-            topk.len,
-            sink.len,
-            output.len,
+            query.len(),
+            plane.len(),
+            block_slots.len(),
+            sequence_block_offsets.len(),
+            sequence_kv_lens.len(),
+            topk.len(),
+            sink.len(),
+            output.len(),
         )?;
         let explicit_selection_layout = layout.explicit_selection_layout(false)?;
         let mut workspace =
@@ -11255,16 +11307,16 @@ impl CudaArtifactOperatorContext {
         output: &mut CudaF32Buffer,
     ) -> Result<()> {
         layout.validate_selected_buffer_lengths(
-            query.len,
-            plane.len,
-            block_slots.len,
-            sequence_block_offsets.len,
-            sequence_kv_lens.len,
-            row_sequence_ids.len,
-            row_kv_lens.len,
-            topk.len,
-            sink.len,
-            output.len,
+            query.len(),
+            plane.len(),
+            block_slots.len(),
+            sequence_block_offsets.len(),
+            sequence_kv_lens.len(),
+            row_sequence_ids.len(),
+            row_kv_lens.len(),
+            topk.len(),
+            sink.len(),
+            output.len(),
         )?;
         let explicit_selection_layout = layout.explicit_selection_layout(true)?;
         if !workspace.supports(explicit_selection_layout)? {
@@ -11318,12 +11370,12 @@ impl CudaArtifactOperatorContext {
         output: &mut CudaF32Buffer,
     ) -> Result<()> {
         shape.validate()?;
-        if output.len != shape.output_elements() {
+        if output.len() != shape.output_elements() {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA sparse attention output length mismatch: expected {}, got {}",
                     shape.output_elements(),
-                    output.len
+                    output.len()
                 ),
             });
         }
@@ -11415,11 +11467,14 @@ impl CudaArtifactOperatorContext {
             return Ok(());
         }
         let expected = rows as usize * heads as usize * head_dim as usize;
-        if qk.len != expected {
+        if qk.len() != expected {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA rope rows length mismatch: len={} expected rows={} heads={} head_dim={}",
-                    qk.len, rows, heads, head_dim
+                    qk.len(),
+                    rows,
+                    heads,
+                    head_dim
                 ),
             });
         }
@@ -11460,11 +11515,11 @@ impl CudaArtifactOperatorContext {
         rope_dim: u32,
         inverse: bool,
     ) -> Result<()> {
-        if positions.len != rows as usize {
+        if positions.len() != rows as usize {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA indexed rope positions length mismatch: got {} expected rows={rows}",
-                    positions.len
+                    positions.len()
                 ),
             });
         }
@@ -11477,11 +11532,14 @@ impl CudaArtifactOperatorContext {
             .ok_or_else(|| Error::Internal {
                 message: "CUDA indexed rope row size overflow".into(),
             })?;
-        if qk.len != expected {
+        if qk.len() != expected {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA indexed rope rows length mismatch: len={} expected rows={} heads={} head_dim={}",
-                    qk.len, rows, heads, head_dim
+                    qk.len(),
+                    rows,
+                    heads,
+                    head_dim
                 ),
             });
         }
@@ -11489,11 +11547,12 @@ impl CudaArtifactOperatorContext {
         if table_width == 0 {
             return Ok(());
         }
-        if cos_table.len != sin_table.len || !cos_table.len.is_multiple_of(table_width) {
+        if cos_table.len() != sin_table.len() || !cos_table.len().is_multiple_of(table_width) {
             return Err(Error::Internal {
                 message: format!(
                     "CUDA indexed rope table shape mismatch: cos={} sin={} row_width={table_width}",
-                    cos_table.len, sin_table.len
+                    cos_table.len(),
+                    sin_table.len()
                 ),
             });
         }
@@ -11929,6 +11988,27 @@ mod tests {
         }
     }
 
+    fn restore_rope_tail_bf16_boundary(
+        qk: &mut [f32],
+        rows: usize,
+        heads: usize,
+        head_dim: usize,
+        rope_dim: usize,
+    ) {
+        let row_stride = heads * head_dim;
+        let tail_start = head_dim - rope_dim;
+        for row in 0..rows {
+            for head in 0..heads {
+                let base = row * row_stride + head * head_dim + tail_start;
+                for value in &mut qk[base..base + rope_dim] {
+                    let bits = value.to_bits();
+                    let rounded = bits.wrapping_add(0x7fff + ((bits >> 16) & 1));
+                    *value = f32::from_bits(rounded & 0xffff_0000);
+                }
+            }
+        }
+    }
+
     fn rope_test_tables(positions: usize, rope_dim: usize) -> (Vec<f32>, Vec<f32>) {
         let table_width = rope_dim / 2;
         let mut cos = Vec::with_capacity(positions * table_width);
@@ -12007,16 +12087,17 @@ mod tests {
             ROPE_DIM,
             false,
         );
+        restore_rope_tail_bf16_boundary(&mut expected, ROWS, HEADS, HEAD_DIM, ROPE_DIM);
         let mut actual = context.upload_f32_buffer(&input).unwrap();
-        let cos = context.upload_f32_buffer(&cos).unwrap();
-        let sin = context.upload_f32_buffer(&sin).unwrap();
+        let cos_device = context.upload_f32_buffer(&cos).unwrap();
+        let sin_device = context.upload_f32_buffer(&sin).unwrap();
         let positions = context.upload_i32_buffer(&positions_host).unwrap();
 
         context
             .rope_tail_rows_indexed_from_device(
                 &mut actual,
-                &cos,
-                &sin,
+                &cos_device,
+                &sin_device,
                 &positions,
                 ROWS as u32,
                 HEADS as u32,
@@ -12033,11 +12114,23 @@ mod tests {
             );
         }
 
+        let mut expected_round_trip = expected.clone();
+        apply_indexed_rope_cpu(
+            &mut expected_round_trip,
+            &cos,
+            &sin,
+            &positions_host,
+            HEADS,
+            HEAD_DIM,
+            ROPE_DIM,
+            true,
+        );
+        restore_rope_tail_bf16_boundary(&mut expected_round_trip, ROWS, HEADS, HEAD_DIM, ROPE_DIM);
         context
             .rope_tail_rows_indexed_from_device(
                 &mut actual,
-                &cos,
-                &sin,
+                &cos_device,
+                &sin_device,
                 &positions,
                 ROWS as u32,
                 HEADS as u32,
@@ -12047,9 +12140,9 @@ mod tests {
             )
             .unwrap();
         let round_trip = context.download_f32_buffer(&actual).unwrap();
-        for (index, (actual, expected)) in round_trip.iter().zip(&input).enumerate() {
+        for (index, (actual, expected)) in round_trip.iter().zip(&expected_round_trip).enumerate() {
             assert!(
-                (actual - expected).abs() <= 2e-6,
+                (actual - expected).abs() <= 1e-6,
                 "inverse mismatch at {index}: actual={actual} expected={expected}"
             );
         }
@@ -12139,6 +12232,101 @@ mod tests {
                 "reducer mismatch at output index {index}: actual={actual:?} expected={expected:?}"
             );
         }
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn split_moe_reducer_respects_nonzero_output_offset() {
+        const NUM_EXPERTS: usize = 2;
+        const BATCH_COLS: usize = 2;
+        const HIDDEN_SIZE: usize = 7;
+        const ROUTES_PER_COL: usize = 2;
+        const OUTPUT_OFFSET: usize = 5;
+        const SUFFIX: usize = 3;
+        const ELEMENTS: usize = BATCH_COLS * HIDDEN_SIZE;
+
+        let ctx = cu(CudaContext::new(0)).unwrap();
+        cu(ctx.bind_to_thread()).unwrap();
+        let module = cu(crate::cuda::kernels::kernels::load(&ctx)).unwrap();
+        let stream = ctx.default_stream();
+
+        let resident_output = (0..NUM_EXPERTS * BATCH_COLS * HIDDEN_SIZE)
+            .map(|index| 1.0 + (index % 11) as f32)
+            .collect::<Vec<_>>();
+        let materialized_output = (0..NUM_EXPERTS * BATCH_COLS * HIDDEN_SIZE)
+            .map(|index| 13.0 + (index % 7) as f32)
+            .collect::<Vec<_>>();
+        let resident_slots = [0i32, -1, 1, -1];
+        let materialized_slots = [-1i32, 1, -1, 0];
+        let miss_markers = [0i32, 1, 0, 1];
+        let initial = (0..OUTPUT_OFFSET + ELEMENTS + SUFFIX)
+            .map(|index| 32.0 + index as f32)
+            .collect::<Vec<_>>();
+        let mut expected = initial.clone();
+        for column in 0..BATCH_COLS {
+            for row in 0..HIDDEN_SIZE {
+                let output = OUTPUT_OFFSET + column * HIDDEN_SIZE + row;
+                for rank in 0..ROUTES_PER_COL {
+                    let route = column * ROUTES_PER_COL + rank;
+                    let (slot, values) = if miss_markers[route] != 0 {
+                        (materialized_slots[route] as usize, &materialized_output)
+                    } else {
+                        (resident_slots[route] as usize, &resident_output)
+                    };
+                    expected[output] += values[(slot * BATCH_COLS + column) * HIDDEN_SIZE + row];
+                }
+                expected[output] = f32::from_bits(
+                    (expected[output].to_bits()
+                        + 0x7fff
+                        + ((expected[output].to_bits() >> 16) & 1))
+                        & 0xffff_0000,
+                );
+            }
+        }
+
+        let resident_output = cu(DeviceBuffer::from_host(&stream, &resident_output)).unwrap();
+        let materialized_output =
+            cu(DeviceBuffer::from_host(&stream, &materialized_output)).unwrap();
+        let resident_slots = cu(DeviceBuffer::from_host(&stream, &resident_slots)).unwrap();
+        let materialized_slots = cu(DeviceBuffer::from_host(&stream, &materialized_slots)).unwrap();
+        let miss_markers = cu(DeviceBuffer::from_host(&stream, &miss_markers)).unwrap();
+        let mut output = cu(DeviceBuffer::from_host(&stream, &initial)).unwrap();
+
+        cu(unsafe {
+            module.moe_reduce_split_expert_outputs_ranked(
+                &stream,
+                LaunchConfig::for_num_elems(ELEMENTS as u32),
+                &resident_output,
+                &materialized_output,
+                &resident_slots,
+                &materialized_slots,
+                &miss_markers,
+                &mut output,
+                OUTPUT_OFFSET as u32,
+                HIDDEN_SIZE as u32,
+                BATCH_COLS as u32,
+                ROUTES_PER_COL as u32,
+                NUM_EXPERTS as u32,
+            )
+        })
+        .unwrap();
+        let actual = cu(output.to_host_vec(&stream)).unwrap();
+
+        assert_eq!(
+            actual
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(&actual[..OUTPUT_OFFSET], &initial[..OUTPUT_OFFSET]);
+        assert_eq!(
+            &actual[OUTPUT_OFFSET + ELEMENTS..],
+            &initial[OUTPUT_OFFSET + ELEMENTS..]
+        );
     }
 
     #[test]

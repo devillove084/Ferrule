@@ -3,6 +3,7 @@
 //! FP8 E4M3 Tensor Core smoke tests for unified-memory CUDA systems (`sm_121a`).
 
 use ferrule_backend::cuda::context::CudaArtifactOperatorContext;
+use ferrule_backend::cuda::cutlass::{self, CutlassKernelId};
 use ferrule_backend::cuda::kernels::kernels;
 use ferrule_backend::cuda::runtime::{CudaContext, DeviceBuffer, LaunchConfig};
 use std::sync::{Mutex, MutexGuard};
@@ -17,6 +18,10 @@ fn cuda_test_guard() -> MutexGuard<'static, ()> {
 
 fn has_cuda() -> bool {
     CudaContext::new(0).is_ok()
+}
+
+fn native_kernel_available(kernel: CutlassKernelId) -> bool {
+    cutlass::discover_provider().is_ok_and(|provider| provider.supports(kernel))
 }
 
 fn fp8_e4m3fn(byte: u8) -> f32 {
@@ -375,8 +380,7 @@ fn fp8_prepacked_rows_match_matvec() {
         .download_f32_buffer(&rows_output)
         .expect("rows download");
 
-    #[cfg(feature = "cuda")]
-    {
+    if native_kernel_available(CutlassKernelId::Fp8Projection) {
         let mut native_output = ops.zero_f32_buffer(ROWS * OUT).expect("native output");
         let mut workspace = ops
             .artifact_linear_workspace(ROWS, K)
@@ -399,6 +403,10 @@ fn fp8_prepacked_rows_match_matvec() {
                 "Rust/native rows mismatch at {index}: rust={rust} native={native}"
             );
         }
+    } else {
+        eprintln!(
+            "skipping native rows comparison: compiled target has no FP8 projection provider"
+        );
     }
 
     for row in 0..ROWS {

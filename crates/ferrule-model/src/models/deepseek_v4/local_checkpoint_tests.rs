@@ -30,14 +30,16 @@ fn round_bf16(value: f32) -> f32 {
 #[ignore = "manual layer-0 expert boundary oracle"]
 fn local_deepseek_v4_layer0_expert_127_182_boundary_oracle() {
     let model_dir = local_deepseek_v4_dir().expect("local DeepSeek-V4 checkpoint");
-    let stage_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(".tmp-dsv4-stage");
+    let stage_dir = env::var_os("FERRULE_DEBUG_STAGE_DUMP_DIR")
+        .map(PathBuf::from)
+        .expect("FERRULE_DEBUG_STAGE_DUMP_DIR must point at the captured layer dump");
     let input_bytes =
         std::fs::read(stage_dir.join("layer_0_ffn_norm.f32")).expect("position-4 FFN input dump");
     let mut input = input_bytes
-        .chunks_exact(4)
-        .map(|bytes| f32::from_ne_bytes(bytes.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|bytes| f32::from_ne_bytes(*bytes))
         .collect::<Vec<_>>();
     assert_eq!(input.len(), deepseek_v4::HIDDEN_SIZE);
     let input_len = input.len();
@@ -57,8 +59,10 @@ fn local_deepseek_v4_layer0_expert_127_182_boundary_oracle() {
     let route_output_bytes = std::fs::read(stage_dir.join("layer_0_route_output.f32"))
         .expect("position-4 route output dump");
     let route_output = route_output_bytes
-        .chunks_exact(4)
-        .map(|bytes| f32::from_ne_bytes(bytes.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|bytes| f32::from_ne_bytes(*bytes))
         .collect::<Vec<_>>();
     let weights = [(127usize, 0.5453123f32, 0usize), (182, 0.21186334, 1)];
 

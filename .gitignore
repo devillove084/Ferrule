@@ -43,6 +43,11 @@ __pycache__/
 .rustc_info.json
 .DS_Store
 
+# Temporary download staging and paper PDFs
+/.tmp-dsv4-stage/
+/.tmp-dsv4-artifacts/
+/papers/
+
 # Cargo mutants
 **/mutants.out*/
 

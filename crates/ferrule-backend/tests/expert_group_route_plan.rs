@@ -6,6 +6,7 @@ use ferrule_backend::cuda::CudaContext;
 use ferrule_backend::cuda::context::{
     CudaArtifactOperatorContext, CudaExpertSlotInstallTarget, CudaExpertSlotPointers,
 };
+use ferrule_backend::cuda::cutlass::{self, CutlassKernelId};
 use std::sync::{Mutex, MutexGuard, mpsc};
 
 static CUDA_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -18,6 +19,11 @@ fn cuda_test_guard() -> MutexGuard<'static, ()> {
 
 fn has_cuda() -> bool {
     CudaContext::new(0).is_ok()
+}
+
+fn has_grouped_fp4_moe() -> bool {
+    cutlass::discover_provider()
+        .is_ok_and(|provider| provider.supports(CutlassKernelId::GroupedFp4Moe))
 }
 
 #[test]
@@ -402,6 +408,10 @@ fn device_group_route_plan_compacts_active_groups_indptr_and_routes() {
     let _guard = cuda_test_guard();
     if !has_cuda() {
         eprintln!("skipping: no CUDA device");
+        return;
+    }
+    if !has_grouped_fp4_moe() {
+        eprintln!("skipping: compiled CUDA target has no grouped FP4 MoE provider");
         return;
     }
 

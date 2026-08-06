@@ -237,7 +237,7 @@ fn cuda_mla_output_single_row_matches_cooperative_path_bitwise() {
             .expect("upload MLA output-B scales");
 
     let mut single_latent =
-        DeviceBuffer::<f32>::zeroed(&stream, SINGLE_ROWS * LATENT).expect("single-row latent");
+        DeviceBuffer::<u16>::zeroed(&stream, SINGLE_ROWS * LATENT).expect("single-row BF16 latent");
     let mut single_latent_fp8 =
         DeviceBuffer::<u8>::zeroed(&stream, SINGLE_ROWS * LATENT).expect("single-row latent FP8");
     let mut single_latent_scales =
@@ -267,8 +267,8 @@ fn cuda_mla_output_single_row_matches_cooperative_path_bitwise() {
     )
     .expect("single-row MLA split launch");
 
-    let mut cooperative_latent = DeviceBuffer::<f32>::zeroed(&stream, COOPERATIVE_ROWS * LATENT)
-        .expect("cooperative latent");
+    let mut cooperative_latent = DeviceBuffer::<u16>::zeroed(&stream, COOPERATIVE_ROWS * LATENT)
+        .expect("cooperative BF16 latent");
     let mut cooperative_latent_fp8 = DeviceBuffer::<u8>::zeroed(&stream, COOPERATIVE_ROWS * LATENT)
         .expect("cooperative latent FP8");
     let mut cooperative_latent_scales =
@@ -304,16 +304,7 @@ fn cuda_mla_output_single_row_matches_cooperative_path_bitwise() {
     let cooperative_latent = cooperative_latent
         .to_host_vec(&stream)
         .expect("download cooperative latent");
-    assert_eq!(
-        single_latent
-            .iter()
-            .map(|value| value.to_bits())
-            .collect::<Vec<_>>(),
-        cooperative_latent[..LATENT]
-            .iter()
-            .map(|value| value.to_bits())
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(single_latent, cooperative_latent[..LATENT]);
     assert_eq!(
         single_latent_fp8
             .to_host_vec(&stream)
@@ -356,6 +347,96 @@ fn cuda_mla_output_single_row_matches_cooperative_path_bitwise() {
             .iter()
             .map(|value| value.to_bits())
             .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn cuda_mla_output_b_accumulates_all_groups_before_bf16_rounding() {
+    if !native_kernel_available(CutlassKernelId::MlaOutput) {
+        return;
+    }
+    let context = CudaContext::new(0).expect("CUDA context");
+    context.bind_to_thread().expect("bind CUDA context");
+    let stream = context.new_stream().expect("create CUDA stream");
+
+    const ROWS: usize = 1;
+    const GROUPS: usize = 2;
+    const GROUP_INPUT: usize = 128;
+    const CONTEXT: usize = GROUPS * GROUP_INPUT;
+    const RANK: usize = 128;
+    const LATENT: usize = GROUPS * RANK;
+    const HIDDEN: usize = 16;
+
+    // Output-A produces an exact latent value of 1 in every channel. Output-B's
+    // first K128 block contributes 1 + 1/256 and its second contributes -1.
+    // Rounding each group first loses the residual; one final BF16 boundary keeps it.
+    let mut context_host = vec![0.0f32; CONTEXT];
+    for group in 0..GROUPS {
+        context_host[group * GROUP_INPUT] = 1.0;
+    }
+    let mut output_a_weight_host = vec![0u8; LATENT * GROUP_INPUT];
+    for channel in 0..LATENT {
+        output_a_weight_host[channel * GROUP_INPUT] = 0x38; // E4M3 1.0
+    }
+    let output_a_scales_host = vec![127u8; LATENT / 128];
+
+    let mut output_b_weight_host = vec![0u8; HIDDEN * LATENT];
+    for channel in 0..HIDDEN {
+        let base = channel * LATENT;
+        output_b_weight_host[base..base + 128].fill(0x38); // E4M3 1.0
+        output_b_weight_host[base + 127] = 0x3c; // E4M3 1.5
+        output_b_weight_host[base + 128..base + 256].fill(0xb8); // E4M3 -1.0
+    }
+    let output_b_scales_host = vec![120u8; LATENT / 128]; // UE8M0 2^-7
+
+    let context = DeviceBuffer::from_host(&stream, &context_host).expect("upload MLA context");
+    let output_a_weight = DeviceBuffer::from_host(&stream, &output_a_weight_host)
+        .expect("upload MLA output-A weight");
+    let output_a_scales = DeviceBuffer::from_host(&stream, &output_a_scales_host)
+        .expect("upload MLA output-A scales");
+    let output_b_weight = DeviceBuffer::from_host(&stream, &output_b_weight_host)
+        .expect("upload MLA output-B weight");
+    let output_b_scales = DeviceBuffer::from_host(&stream, &output_b_scales_host)
+        .expect("upload MLA output-B scales");
+    let mut latent = DeviceBuffer::<u16>::zeroed(&stream, LATENT).expect("MLA BF16 latent");
+    let mut latent_fp8 = DeviceBuffer::<u8>::zeroed(&stream, LATENT).expect("MLA latent FP8");
+    let mut latent_scales =
+        DeviceBuffer::<u8>::zeroed(&stream, LATENT / 128).expect("MLA latent scales");
+    let mut output = DeviceBuffer::<f32>::zeroed(&stream, HIDDEN).expect("MLA output");
+
+    cutlass::mla_output(
+        &stream,
+        &context,
+        &output_a_weight,
+        &output_a_scales,
+        &output_b_weight,
+        &output_b_scales,
+        &mut latent,
+        &mut latent_fp8,
+        &mut latent_scales,
+        &mut output,
+        ROWS,
+        CONTEXT,
+        GROUPS,
+        GROUP_INPUT,
+        RANK,
+        LATENT,
+        HIDDEN,
+    )
+    .expect("MLA accumulation-order launch");
+
+    let latent = latent.to_host_vec(&stream).expect("download MLA latent");
+    assert!(latent.iter().all(|&value| value == bf16_storage_word(1.0)));
+
+    let expected = bf16_boundary((257.0f32 / 256.0) - 1.0);
+    let rounded_per_group = bf16_boundary(bf16_boundary(257.0 / 256.0) + bf16_boundary(-1.0));
+    assert_ne!(expected.to_bits(), rounded_per_group.to_bits());
+    let actual = output.to_host_vec(&stream).expect("download MLA output");
+    assert!(
+        actual
+            .iter()
+            .all(|value| value.to_bits() == expected.to_bits()),
+        "output-B must preserve the cross-group residual until its final BF16 boundary: actual={actual:?} expected={expected} old_group_rounded={rounded_per_group}"
     );
 }
 
@@ -496,7 +577,7 @@ fn cuda_hc_mean_scatter_builds_proposal_target_taps_without_host_concat() {
             for dim in 0..HIDDEN {
                 let value = taps[row * TAPS * HIDDEN + tap * HIDDEN + dim];
                 let expected = if tap == SLOT {
-                    row as f32 * 10.0 + 1.5 + dim as f32 / HIDDEN as f32
+                    bf16_boundary(row as f32 * 10.0 + 1.5 + dim as f32 / HIDDEN as f32)
                 } else {
                     0.0
                 };
@@ -2918,6 +2999,9 @@ fn cuda_hc_single_row_tile_matches_tiled_path_bitwise() {
     let rms_weight = DeviceBuffer::from_host(&stream, &rms_weight_host).expect("upload RMS weight");
 
     let run = |state: &DeviceBuffer<f32>, rows: usize| {
+        let mut mix = DeviceBuffer::<f32>::zeroed(&stream, rows * MIX).expect("HC mix");
+        let mut workspace =
+            DeviceBuffer::<f32>::zeroed(&stream, rows * MIX * 64 + 1).expect("HC workspace");
         let mut hidden = DeviceBuffer::<f32>::zeroed(&stream, rows * HIDDEN).expect("HC hidden");
         let mut normalized =
             DeviceBuffer::<f32>::zeroed(&stream, rows * HIDDEN).expect("HC normalized");
@@ -2933,6 +3017,8 @@ fn cuda_hc_single_row_tile_matches_tiled_path_bitwise() {
             &hc_scale,
             &hc_base,
             &rms_weight,
+            &mut mix,
+            &mut workspace,
             &mut hidden,
             &mut normalized,
             &mut packed,
@@ -3008,6 +3094,9 @@ fn cuda_hc_producer_accepts_dynamic_m() {
     for rows in [1usize, 2, 4, 8, 17] {
         let state = DeviceBuffer::from_host(&stream, &vec![1.0f32; rows * HC * HIDDEN])
             .expect("upload HC state");
+        let mut mix = DeviceBuffer::<f32>::zeroed(&stream, rows * MIX).expect("HC mix");
+        let mut workspace =
+            DeviceBuffer::<f32>::zeroed(&stream, rows * MIX * 64 + 1).expect("HC workspace");
         let mut hidden = DeviceBuffer::<f32>::zeroed(&stream, rows * HIDDEN).expect("HC hidden");
         let mut normalized =
             DeviceBuffer::<f32>::zeroed(&stream, rows * HIDDEN).expect("HC normalized");
@@ -3025,6 +3114,8 @@ fn cuda_hc_producer_accepts_dynamic_m() {
             &hc_scale,
             &hc_base,
             &rms_weight,
+            &mut mix,
+            &mut workspace,
             &mut hidden,
             &mut normalized,
             &mut packed,
@@ -3078,6 +3169,9 @@ fn cuda_hc_producer_formal_shape_latency() {
     for rows in [1usize, 2, 4, 8, 17] {
         let state = DeviceBuffer::from_host(&stream, &vec![1.0f32; rows * HC * HIDDEN])
             .expect("upload HC state");
+        let mut mix = DeviceBuffer::<f32>::zeroed(&stream, rows * MIX).expect("HC mix");
+        let mut workspace =
+            DeviceBuffer::<f32>::zeroed(&stream, rows * MIX * 64 + 1).expect("HC workspace");
         let mut hidden = DeviceBuffer::<f32>::zeroed(&stream, rows * HIDDEN).expect("HC hidden");
         let mut normalized =
             DeviceBuffer::<f32>::zeroed(&stream, rows * HIDDEN).expect("HC normalized");
@@ -3095,6 +3189,8 @@ fn cuda_hc_producer_formal_shape_latency() {
             &hc_scale,
             &hc_base,
             &rms_weight,
+            &mut mix,
+            &mut workspace,
             &mut hidden,
             &mut normalized,
             &mut packed,
@@ -3122,6 +3218,8 @@ fn cuda_hc_producer_formal_shape_latency() {
                 &hc_scale,
                 &hc_base,
                 &rms_weight,
+                &mut mix,
+                &mut workspace,
                 &mut hidden,
                 &mut normalized,
                 &mut packed,

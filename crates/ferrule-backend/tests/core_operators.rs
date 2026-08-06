@@ -169,7 +169,7 @@ fn bf16_linear_matches_cpu_reference_for_real_dsv4_shapes() {
             block_pair_second, output,
             "second dual-linear output must match the standalone operator for {n}x{k}"
         );
-        for row in 0..n {
+        for (row, &actual) in output.iter().take(n).enumerate() {
             let expected = (0..k)
                 .map(|col| {
                     let offset = (row * k + col) * 2;
@@ -179,7 +179,7 @@ fn bf16_linear_matches_cpu_reference_for_real_dsv4_shapes() {
                 .sum::<f32>();
             let tolerance = 5e-4f32.max(expected.abs() * 5e-4);
             assert_close(
-                output[row],
+                actual,
                 expected,
                 tolerance,
                 &format!("BF16 linear {n}x{k} row {row}"),
@@ -209,7 +209,7 @@ fn bf16_rows_cover_batch_and_channel_tails() {
         "upload BF16 rows input",
     );
     let weight = assert_cuda(
-        DeviceBuffer::from_host(&stream, &vec![0x80u8, 0x3f].repeat(N * K)),
+        DeviceBuffer::from_host(&stream, &[0x80u8, 0x3f].repeat(N * K)),
         "upload BF16 rows weight",
     );
     let mut output = assert_cuda(

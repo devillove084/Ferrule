@@ -4,6 +4,7 @@
 
 use ferrule_backend::cuda::CudaContext;
 use ferrule_backend::cuda::context::{CudaArtifactOperatorContext, CudaRoutedExpertShape};
+use ferrule_backend::cuda::cutlass::{self, CutlassKernelId};
 use std::sync::{Mutex, MutexGuard};
 
 static CUDA_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -16,6 +17,11 @@ fn cuda_test_guard() -> MutexGuard<'static, ()> {
 
 fn has_cuda() -> bool {
     CudaContext::new(0).is_ok()
+}
+
+fn has_grouped_fp4_moe() -> bool {
+    cutlass::discover_provider()
+        .is_ok_and(|provider| provider.supports(CutlassKernelId::GroupedFp4Moe))
 }
 
 fn assert_close_slice(actual: &[f32], expected: &[f32], tolerance: f32, label: &str) {
@@ -112,6 +118,10 @@ fn expert_major_groups_gather_scatter_and_reduce() {
     let _guard = cuda_test_guard();
     if !has_cuda() {
         eprintln!("skipping: no CUDA device");
+        return;
+    }
+    if !has_grouped_fp4_moe() {
+        eprintln!("skipping: compiled CUDA target has no grouped FP4 MoE provider");
         return;
     }
 

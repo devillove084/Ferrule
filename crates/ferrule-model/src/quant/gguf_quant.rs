@@ -108,7 +108,7 @@ pub fn dequantize_q4_k_row(bytes: &[u8], row_values: usize) -> GgufQuantResult<V
         });
     }
     let mut out = Vec::with_capacity(row_values);
-    for chunk in bytes.chunks_exact(Q4_K_BLOCK_BYTES) {
+    for chunk in bytes.as_chunks::<Q4_K_BLOCK_BYTES>().0 {
         out.extend(Q4KBlock::from_bytes(chunk)?.dequantize());
     }
     Ok(out)

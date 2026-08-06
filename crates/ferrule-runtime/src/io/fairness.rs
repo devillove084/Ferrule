@@ -246,7 +246,7 @@ impl<T> FairQueue<T> {
     }
 
     /// Removes matching owner work. This is intended for explicit cancellation;
-    /// hot-path stale removal belongs in [`Self::pop_next_by`].
+    /// hot-path stale removal belongs in `Self::pop_next_by`.
     pub fn retain(&mut self, mut keep: impl FnMut(&T) -> bool) {
         for queue in &mut self.queues {
             let before = queue.len();

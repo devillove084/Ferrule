@@ -254,10 +254,9 @@ fn parse_hc_field(field: &str) -> Option<(HyperConnectionStage, HyperConnectionT
         (HyperConnectionStage::Attention, suffix)
     } else if let Some(suffix) = field.strip_prefix("hc_ffn_") {
         (HyperConnectionStage::FeedForward, suffix)
-    } else if let Some(suffix) = field.strip_prefix("hc_head_") {
-        (HyperConnectionStage::Head, suffix)
     } else {
-        return None;
+        let suffix = field.strip_prefix("hc_head_")?;
+        (HyperConnectionStage::Head, suffix)
     };
     let kind = match suffix {
         "fn" => HyperConnectionTensorKind::Function,

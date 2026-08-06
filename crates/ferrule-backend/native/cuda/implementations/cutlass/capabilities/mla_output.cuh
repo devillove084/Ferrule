@@ -29,7 +29,7 @@ inline constexpr std::uint32_t kMaxRows = 65535u * kMmaRows;
 //
 //   context_f32 [rows, context_size]
 //     -> grouped output-A FP8/E8M0 [latent_size, group_input_size]
-//     -> BF16-rounded latent_f32 [rows, latent_size]
+//     -> latent_bf16 [rows, latent_size]
 //     -> latent FP8/E8M0 pack [rows, latent_size]
 //     -> output-B FP8/E8M0 [hidden_size, latent_size]
 //     -> output_f32 [rows, hidden_size]
@@ -54,7 +54,7 @@ struct Args {
   std::uint64_t output_a_weight_ue8m0;
   std::uint64_t output_b_weight_fp8;
   std::uint64_t output_b_weight_ue8m0;
-  std::uint64_t latent_f32;
+  std::uint64_t latent_bf16;
   std::uint64_t latent_fp8;
   std::uint64_t latent_ue8m0;
   std::uint64_t output_f32;
@@ -76,7 +76,7 @@ struct Binding {
   const std::uint8_t *output_a_scales;
   const std::uint8_t *output_b_weight;
   const std::uint8_t *output_b_scales;
-  float *latent;
+  std::uint16_t *latent;
   std::uint8_t *latent_fp8;
   std::uint8_t *latent_scales;
   float *output;
@@ -301,7 +301,8 @@ pack_latent_task(const Args &args, const Binding &binding, std::uint32_t row,
   float amax = 1.0e-4f;
 #pragma unroll
   for (std::uint32_t element = 0u; element < 4u; ++element) {
-    const float value = binding.latent[base + lane + element * kWarpSize];
+    const float value =
+        bf16_to_f32(binding.latent[base + lane + element * kWarpSize]);
     values[element] = value;
     amax = fmaxf(amax, fabsf(value));
   }
@@ -325,10 +326,10 @@ pack_latent_task(const Args &args, const Binding &binding, std::uint32_t row,
 }
 
 __device__ __forceinline__ void
-store_tile(float *output, std::uint32_t output_columns, std::uint32_t rows,
-           std::uint32_t row_base, std::uint32_t channel_base,
-           std::uint32_t lane, const float (&accumulator)[4],
-           bool round_to_bf16) {
+store_bf16_tile(std::uint16_t *output, std::uint32_t output_columns,
+                std::uint32_t rows, std::uint32_t row_base,
+                std::uint32_t channel_base, std::uint32_t lane,
+                const float (&accumulator)[4]) {
   const std::uint32_t channel_group = lane >> 2;
   const std::uint32_t row_pair = lane & 3u;
 #pragma unroll
@@ -337,11 +338,27 @@ store_tile(float *output, std::uint32_t output_columns, std::uint32_t rows,
         channel_base + channel_group + (element >= 2u ? 8u : 0u);
     const std::uint32_t row = row_base + row_pair * 2u + (element & 1u);
     if (row < rows && channel < output_columns) {
-      const float value =
-          round_to_bf16 ? bf16_to_f32(f32_to_bf16_rne(accumulator[element]))
-                        : accumulator[element];
       output[static_cast<std::uint64_t>(row) * output_columns + channel] =
-          value;
+          f32_to_bf16_rne(accumulator[element]);
+    }
+  }
+}
+
+__device__ __forceinline__ void
+store_f32_bf16_tile(float *output, std::uint32_t output_columns,
+                    std::uint32_t rows, std::uint32_t row_base,
+                    std::uint32_t channel_base, std::uint32_t lane,
+                    const float (&accumulator)[4]) {
+  const std::uint32_t channel_group = lane >> 2;
+  const std::uint32_t row_pair = lane & 3u;
+#pragma unroll
+  for (std::uint32_t element = 0u; element < 4u; ++element) {
+    const std::uint32_t channel =
+        channel_base + channel_group + (element >= 2u ? 8u : 0u);
+    const std::uint32_t row = row_base + row_pair * 2u + (element & 1u);
+    if (row < rows && channel < output_columns) {
+      output[static_cast<std::uint64_t>(row) * output_columns + channel] =
+          bf16_to_f32(f32_to_bf16_rne(accumulator[element]));
     }
   }
 }
@@ -367,8 +384,8 @@ output_a_task(const Args &args, const Binding &binding, WarpStage &stage,
     mma_bf16(accumulator, weight_fragment, activation_fragment);
     __syncwarp();
   }
-  store_tile(binding.latent, args.latent_size, args.rows, row_base,
-             channel_base, lane, accumulator, true);
+  store_bf16_tile(binding.latent, args.latent_size, args.rows, row_base,
+                  channel_base, lane, accumulator);
 }
 
 __device__ __forceinline__ void
@@ -376,9 +393,7 @@ output_b_task(const Args &args, const Binding &binding, WarpStage &stage,
               std::uint32_t row_base, std::uint32_t channel_base,
               std::uint32_t lane) {
   float accumulator[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-  float group_accumulator[4] = {0.0f, 0.0f, 0.0f, 0.0f};
   const std::uint32_t scale_cols = args.latent_size / 128u;
-  const std::uint32_t group_scale_cols = args.rank / 128u;
   for (std::uint32_t scale_block = 0u; scale_block < scale_cols;
        ++scale_block) {
     float block_accumulator[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -410,21 +425,13 @@ output_b_task(const Args &args, const Binding &binding, WarpStage &stage,
         const float activation_scale = ue8m0_to_float(
             binding.latent_scales[static_cast<std::uint64_t>(row) * scale_cols +
                                   scale_block]);
-        group_accumulator[element] +=
+        accumulator[element] +=
             block_accumulator[element] * weight_scale * activation_scale;
       }
     }
-    if ((scale_block + 1u) % group_scale_cols == 0u) {
-#pragma unroll
-      for (std::uint32_t element = 0u; element < 4u; ++element) {
-        accumulator[element] +=
-            bf16_to_f32(f32_to_bf16_rne(group_accumulator[element]));
-        group_accumulator[element] = 0.0f;
-      }
-    }
   }
-  store_tile(binding.output, args.hidden_size, args.rows, row_base,
-             channel_base, lane, accumulator, true);
+  store_f32_bf16_tile(binding.output, args.hidden_size, args.rows, row_base,
+                      channel_base, lane, accumulator);
 }
 
 __global__ __launch_bounds__(kThreads,
@@ -536,7 +543,7 @@ inline Status validate(const Args *args) {
       detail::aligned(args->output_a_weight_ue8m0, 16u) &&
       detail::aligned(args->output_b_weight_fp8, 16u) &&
       detail::aligned(args->output_b_weight_ue8m0, 16u) &&
-      detail::aligned(args->latent_f32, 16u) &&
+      detail::aligned(args->latent_bf16, 16u) &&
       detail::aligned(args->latent_fp8, 16u) &&
       detail::aligned(args->latent_ue8m0, 16u) &&
       detail::aligned(args->output_f32, 16u) && args->stream != 0u;
@@ -565,7 +572,8 @@ inline Status launch(const Args *args) {
           static_cast<std::uintptr_t>(args->output_b_weight_fp8)),
       reinterpret_cast<const std::uint8_t *>(
           static_cast<std::uintptr_t>(args->output_b_weight_ue8m0)),
-      reinterpret_cast<float *>(static_cast<std::uintptr_t>(args->latent_f32)),
+      reinterpret_cast<std::uint16_t *>(
+          static_cast<std::uintptr_t>(args->latent_bf16)),
       reinterpret_cast<std::uint8_t *>(
           static_cast<std::uintptr_t>(args->latent_fp8)),
       reinterpret_cast<std::uint8_t *>(

@@ -68,6 +68,10 @@ const COMPRESSOR_APPEND: u32 = 3;
 const COMPRESSOR_SEED: u32 = 4;
 const COMPRESSOR_SOFTMAX: u32 = 5;
 
+const INDEXER_FUSED_QUERY: u32 = 1 << 0;
+const INDEXER_ROW_METADATA: u32 = 1 << 1;
+const INDEXER_DIRECT_COMPRESSED: u32 = 1 << 2;
+
 const EXPERT_INSTALL: u32 = 1;
 const EXPERT_EVICT: u32 = 2;
 const EXPERT_INITIALIZE_RESOLVE: u32 = 3;
@@ -1844,11 +1848,7 @@ pub mod kernels {
             head_dim: u32,
             rope_dim: u32,
         ) -> KernelResult<()> {
-            let heads = if head_dim == 0 {
-                0
-            } else {
-                num_elements / head_dim
-            };
+            let heads = num_elements.checked_div(head_dim).unwrap_or(0);
             let mut args = RopeArgs {
                 kind: ROPE_YARN,
                 rows: 1,
@@ -2348,7 +2348,7 @@ pub mod kernels {
                         rope_dim,
                         start_position,
                         weight_scale,
-                        flags: 1,
+                        flags: INDEXER_FUSED_QUERY,
                         query: device_ptr(query),
                         weights: device_ptr(weights),
                         cosine: device_ptr(cosine),
@@ -2463,7 +2463,7 @@ pub mod kernels {
                         window_len,
                         rope_dim,
                         weight_scale,
-                        flags: 1,
+                        flags: INDEXER_FUSED_QUERY,
                         query: device_ptr(query),
                         weights: device_ptr(weights),
                         cosine: device_ptr(cosine),
@@ -2498,6 +2498,8 @@ pub mod kernels {
             rows: u32,
             window_size: u32,
             index_topk: u32,
+            compress_ratio: u32,
+            direct_compressed: bool,
             index_heads: u32,
             index_head_dim: u32,
             page_tokens: u32,
@@ -2512,12 +2514,19 @@ pub mod kernels {
                         rows,
                         window_size,
                         topk: index_topk,
+                        compress_ratio,
                         heads: index_heads,
                         head_dim: index_head_dim,
                         page_tokens,
                         layer_index,
                         layer_count,
                         weight_scale,
+                        flags: INDEXER_ROW_METADATA
+                            | if direct_compressed {
+                                INDEXER_DIRECT_COMPRESSED
+                            } else {
+                                0
+                            },
                         query: device_ptr(query),
                         weights: device_ptr(weights),
                         plane: device_ptr(indexer_plane),

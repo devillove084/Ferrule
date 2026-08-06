@@ -1296,7 +1296,7 @@ impl ExpertIoPlan {
             .ok_or_else(|| Error::Model {
                 message: "expert I/O slab count overflow".into(),
             })?;
-        let queue_depth = slab_count.min(Self::MAX_QUEUE_DEPTH).max(1);
+        let queue_depth = slab_count.clamp(1, Self::MAX_QUEUE_DEPTH);
         Ok(Self {
             queue_depth,
             buffer_bytes,

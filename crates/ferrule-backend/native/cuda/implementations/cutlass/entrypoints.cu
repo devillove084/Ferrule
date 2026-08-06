@@ -200,7 +200,7 @@ FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassMlaOutputArgs, output_b_weight_fp8,
                               64);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassMlaOutputArgs,
                               output_b_weight_ue8m0, 72);
-FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassMlaOutputArgs, latent_f32, 80);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassMlaOutputArgs, latent_bf16, 80);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassMlaOutputArgs, latent_fp8, 88);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassMlaOutputArgs, latent_ue8m0, 96);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassMlaOutputArgs, output_f32, 104);
@@ -585,7 +585,7 @@ FERRULE_CUTLASS_ASSERT_SAME_OFFSET(FerruleCutlassMlaOutputArgs,
 FERRULE_CUTLASS_ASSERT_SAME_OFFSET(FerruleCutlassMlaOutputArgs,
                                    mla_output::Args, output_b_weight_ue8m0);
 FERRULE_CUTLASS_ASSERT_SAME_OFFSET(FerruleCutlassMlaOutputArgs,
-                                   mla_output::Args, latent_f32);
+                                   mla_output::Args, latent_bf16);
 FERRULE_CUTLASS_ASSERT_SAME_OFFSET(FerruleCutlassMlaOutputArgs,
                                    mla_output::Args, latent_fp8);
 FERRULE_CUTLASS_ASSERT_SAME_OFFSET(FerruleCutlassMlaOutputArgs,
@@ -960,7 +960,7 @@ mla_output::Args make_mla_output_args(const FerruleCutlassMlaOutputArgs &args) {
       args.output_a_weight_ue8m0,
       args.output_b_weight_fp8,
       args.output_b_weight_ue8m0,
-      args.latent_f32,
+      args.latent_bf16,
       args.latent_fp8,
       args.latent_ue8m0,
       args.output_f32,

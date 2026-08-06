@@ -204,18 +204,18 @@ impl SafeTensorsFile {
         let mut out = vec![0.0f32; n];
         match dtype {
             SafeDtype::F32 => {
-                for (value, bytes) in out.iter_mut().zip(raw.chunks_exact(4)) {
+                for (value, bytes) in out.iter_mut().zip(raw.as_chunks::<4>().0.iter()) {
                     *value = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
                 }
             }
             SafeDtype::F16 => {
-                for (value, bytes) in out.iter_mut().zip(raw.chunks_exact(2)) {
+                for (value, bytes) in out.iter_mut().zip(raw.as_chunks::<2>().0.iter()) {
                     let bits = u16::from_le_bytes([bytes[0], bytes[1]]);
                     *value = half::f16::from_bits(bits).to_f32();
                 }
             }
             SafeDtype::Bf16 => {
-                for (value, bytes) in out.iter_mut().zip(raw.chunks_exact(2)) {
+                for (value, bytes) in out.iter_mut().zip(raw.as_chunks::<2>().0.iter()) {
                     let bits = u16::from_le_bytes([bytes[0], bytes[1]]);
                     *value = half::bf16::from_bits(bits).to_f32();
                 }

@@ -32,14 +32,10 @@ use super::operators::{DeepSeekV4AttentionProfileStage, DeepSeekV4OperatorContex
 #[cfg(feature = "cuda")]
 use super::sequence::DeepSeekV4PagedKvBinding;
 use crate::TensorRole;
+use crate::models::common::math::round_to_bf16_in_place;
 
 #[cfg(feature = "cuda")]
-fn debug_cuda_attention_stage(
-    layer: usize,
-    stage: &str,
-    buffer: &ferrule_backend::cuda::context::CudaF32Buffer,
-    operators: &mut DeepSeekV4OperatorContext,
-) -> Result<()> {
+fn debug_cuda_attention_values(layer: usize, stage: &str, values: &[f32]) -> Result<()> {
     if std::env::var("FERRULE_DEBUG_ATTENTION_LAYER")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -47,7 +43,6 @@ fn debug_cuda_attention_stage(
     {
         return Ok(());
     }
-    let values = operators.cuda_mut()?.ops.download_f32_buffer(buffer)?;
     if let Some(directory) = std::env::var_os("FERRULE_DEBUG_ATTENTION_DUMP_DIR") {
         std::fs::create_dir_all(&directory).map_err(|source| Error::Internal {
             message: format!("failed to create attention dump directory: {source}"),
@@ -82,6 +77,42 @@ fn debug_cuda_attention_stage(
         &values[..values.len().min(4)]
     );
     Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn debug_cuda_attention_stage(
+    layer: usize,
+    stage: &str,
+    buffer: &ferrule_backend::cuda::context::CudaF32Buffer,
+    operators: &mut DeepSeekV4OperatorContext,
+) -> Result<()> {
+    if std::env::var("FERRULE_DEBUG_ATTENTION_LAYER")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        != Some(layer)
+    {
+        return Ok(());
+    }
+    let values = operators.cuda_mut()?.ops.download_f32_buffer(buffer)?;
+    debug_cuda_attention_values(layer, stage, &values)
+}
+
+#[cfg(feature = "cuda")]
+fn debug_cuda_attention_bf16_stage(
+    layer: usize,
+    stage: &str,
+    buffer: &ferrule_backend::cuda::context::CudaBf16Buffer,
+    operators: &mut DeepSeekV4OperatorContext,
+) -> Result<()> {
+    if std::env::var("FERRULE_DEBUG_ATTENTION_LAYER")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        != Some(layer)
+    {
+        return Ok(());
+    }
+    let values = operators.cuda_mut()?.ops.download_bf16_buffer(buffer)?;
+    debug_cuda_attention_values(layer, stage, &values)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -379,7 +410,7 @@ pub(crate) struct DeepSeekV4AttentionDecodeArena {
     topk: ferrule_backend::cuda::context::CudaI32Buffer,
     topk_selectors: ferrule_backend::cuda::context::CudaI32Buffer,
     context: ferrule_backend::cuda::context::CudaF32Buffer,
-    latent: ferrule_backend::cuda::context::CudaF32Buffer,
+    latent: ferrule_backend::cuda::context::CudaBf16Buffer,
     pub(crate) output: ferrule_backend::cuda::context::CudaF32Buffer,
     pub(crate) linear_workspace: ferrule_backend::cuda::context::CudaArtifactLinearWorkspace,
     main_compressor: Option<DeepSeekV4CompressorDecodeArena>,
@@ -453,7 +484,7 @@ impl DeepSeekV4AttentionDecodeArena {
             topk: ops.zero_i32_buffer(rows * (cfg.window_size + cfg.index_topk))?,
             topk_selectors: ops.zero_i32_buffer(rows * (cfg.window_size + cfg.index_topk))?,
             context: ops.zero_f32_buffer(rows * cfg.q_full_dim())?,
-            latent: ops.zero_f32_buffer(rows * cfg.output_latent_dim())?,
+            latent: ops.zero_bf16_buffer(rows * cfg.output_latent_dim())?,
             output: ops.zero_f32_buffer(rows * cfg.hidden_size)?,
             linear_workspace: ops.artifact_linear_workspace(rows, max_linear_width)?,
             main_compressor,
@@ -1556,7 +1587,7 @@ impl DeepSeekV4Attention {
             &mut arena.linear_workspace,
             &mut arena.output,
         )?;
-        debug_cuda_attention_stage(self.layer, "latent", &arena.latent, operators)?;
+        debug_cuda_attention_bf16_stage(self.layer, "latent", &arena.latent, operators)?;
         debug_cuda_attention_stage(self.layer, "output", &arena.output, operators)?;
         record_attention_stage(
             operators,
@@ -1846,11 +1877,10 @@ impl DeepSeekV4Attention {
                     };
                     operators.fail_compressor_transition_if_armed(true)?;
                     if new_indexer_kv {
-                        let index = cache.indexer_compressed_len(cfg.index_head_dim);
                         cache.record_indexer_compressed_rows(1)?;
                         indexer_positions[row] =
-                            i32::try_from(index).map_err(|_| Error::Model {
-                                message: "packed indexer position exceeds i32 ABI".into(),
+                            i32::try_from(positions[row]).map_err(|_| Error::Model {
+                                message: "packed indexer boundary position exceeds i32 ABI".into(),
                             })?;
                         indexer_mask[row] = 1;
                         let transition_normalized = &transition
@@ -1945,11 +1975,12 @@ impl DeepSeekV4Attention {
                 };
                 operators.fail_compressor_transition_if_armed(false)?;
                 if new_main_kv {
-                    let index = cache.compressed_len();
                     cache.record_compressed_rows(1)?;
-                    main_positions[row] = i32::try_from(index).map_err(|_| Error::Model {
-                        message: "packed main compressed position exceeds i32 ABI".into(),
-                    })?;
+                    main_positions[row] =
+                        i32::try_from(positions[row]).map_err(|_| Error::Model {
+                            message: "packed main compressed boundary position exceeds i32 ABI"
+                                .into(),
+                        })?;
                     main_mask[row] = 1;
                     let transition_normalized = &transition
                         .main_compressor
@@ -1982,10 +2013,19 @@ impl DeepSeekV4Attention {
                         })?;
                 }
                 window_lens[row] = cache.window.len;
-                main_compressed_lens[row] = cache.compressed_len();
-                if compressed.indexer.is_some() {
-                    compressed_lens[row] = cache.indexer_compressed_len(cfg.index_head_dim);
-                }
+                let main_compressed_rows = cache.compressed_len();
+                main_compressed_lens[row] = if main_compressed_rows == 0 {
+                    0
+                } else {
+                    positions[row].checked_add(1).ok_or_else(|| Error::Model {
+                        message: "packed main compressed visible length overflow".into(),
+                    })?
+                };
+                compressed_lens[row] = if compressed.indexer.is_some() {
+                    cache.indexer_compressed_len(cfg.index_head_dim)
+                } else {
+                    main_compressed_rows
+                };
                 operators
                     .cuda_mut()?
                     .capture_provisional_prefix_checkpoint(
@@ -2134,9 +2174,16 @@ impl DeepSeekV4Attention {
             let sequence_main_compressed_lens_i32 = decode_metadata_i32(
                 &caches
                     .iter()
-                    .map(|cache| cache.compressed_len())
+                    .zip(paged_bindings)
+                    .map(|(cache, binding)| {
+                        if cache.compressed_len() == 0 {
+                            0
+                        } else {
+                            binding.sequence_len
+                        }
+                    })
                     .collect::<Vec<_>>(),
-                "sequence main compressed length",
+                "sequence main compressed visible length",
             )?;
             {
                 let ops = &operators.cuda_mut()?.ops;
@@ -2160,6 +2207,8 @@ impl DeepSeekV4Attention {
                     self.layer,
                     cfg.window_size,
                     cfg.index_topk,
+                    cfg.compress_ratio,
+                    compressed.indexer.is_none(),
                     cfg.index_n_heads,
                     cfg.index_head_dim,
                     weight_scale,
@@ -2955,25 +3004,18 @@ impl DeepSeekV4CompressorState {
                     }
                 }
             }
-            let mut out =
+            let out =
                 compress_rows_softmax(&kv_group, &score_group, rows_per_group, self.head_dim)?;
-            out = operators.rms_norm(&out, &payload.norm, 1e-6, "compressor.norm")?;
-            apply_rotary_tail_scaled(
-                &mut out,
-                1,
+            out_all.extend_from_slice(&finalize_compressed_kv_reference(
+                out,
+                &payload.norm,
                 self.head_dim,
-                rope_dim.min(self.head_dim),
-                group * self.ratio,
-                rope,
-                false,
-            )?;
-            quantize_compressed_kv_for_qat_in_place(
-                &mut out,
-                self.head_dim,
-                rope_dim.min(self.head_dim),
                 payload.rotate_for_indexer,
-            )?;
-            out_all.extend_from_slice(&out);
+                group * self.ratio,
+                rope_dim,
+                rope,
+                operators,
+            )?);
         }
         Ok(out_all)
     }
@@ -3337,24 +3379,51 @@ impl DeepSeekV4CompressorState {
                 }
             }
         }
-        let mut out = operators.rms_norm(&out, &payload.norm, 1e-6, "compressor.norm")?;
-        apply_rotary_tail_scaled(
-            &mut out,
-            1,
+        finalize_compressed_kv_reference(
+            out,
+            &payload.norm,
             self.head_dim,
-            rope_dim.min(self.head_dim),
-            compressed_position,
-            rope,
-            false,
-        )?;
-        quantize_compressed_kv_for_qat_in_place(
-            &mut out,
-            self.head_dim,
-            rope_dim.min(self.head_dim),
             payload.rotate_for_indexer,
-        )?;
-        Ok(out)
+            compressed_position,
+            rope_dim,
+            rope,
+            operators,
+        )
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finalize_compressed_kv_reference(
+    mut pooled: Vec<f32>,
+    norm: &[f32],
+    head_dim: usize,
+    rotate_for_indexer: bool,
+    compressed_position: usize,
+    rope_dim: usize,
+    rope: DeepSeekV4RopeParams,
+    operators: &mut DeepSeekV4OperatorContext,
+) -> Result<Vec<f32>> {
+    round_to_bf16_in_place(&mut pooled);
+    let mut output = operators.rms_norm(&pooled, norm, 1e-6, "compressor.norm")?;
+    round_to_bf16_in_place(&mut output);
+    let effective_rope_dim = rope_dim.min(head_dim);
+    apply_rotary_tail_scaled(
+        &mut output,
+        1,
+        head_dim,
+        effective_rope_dim,
+        compressed_position,
+        rope,
+        false,
+    )?;
+    round_to_bf16_in_place(&mut output);
+    quantize_compressed_kv_for_qat_in_place(
+        &mut output,
+        head_dim,
+        effective_rope_dim,
+        rotate_for_indexer,
+    )?;
+    Ok(output)
 }
 
 pub struct DeepSeekV4WindowKvCache {
@@ -3535,6 +3604,31 @@ mod tests {
             index_head_dim: 2,
             index_topk: 1,
         }
+    }
+
+    #[test]
+    fn compressor_rounds_pooled_values_before_rms_norm() -> Result<()> {
+        let pooled = vec![-3.083_272, -3.485_734, -2.008_115_5, 2.311_841_2];
+        let mut operators = DeepSeekV4OperatorContext::new_cpu()?;
+        let actual = finalize_compressed_kv_reference(
+            pooled.clone(),
+            &[1.0; 4],
+            4,
+            false,
+            0,
+            4,
+            DeepSeekV4RopeParams::plain(10_000.0),
+            &mut operators,
+        )?;
+        assert_eq!(
+            actual,
+            vec![-1.101_562_5, -1.25, -0.722_656_25, 0.832_031_25]
+        );
+
+        let mut without_input_boundary = operators.rms_norm(&pooled, &[1.0; 4], 1e-6, "test")?;
+        round_to_bf16_in_place(&mut without_input_boundary);
+        assert_ne!(actual, without_input_boundary);
+        Ok(())
     }
 
     #[test]

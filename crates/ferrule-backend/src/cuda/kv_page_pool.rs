@@ -831,6 +831,36 @@ mod tests {
     }
 
     #[test]
+    fn compressed_boundaries_resolve_in_token_scaled_pages() {
+        let layout = PagedPlaneLayout {
+            page_tokens: 16,
+            elements_per_token: 1,
+            layer_index: 0,
+            layer_count: 1,
+        };
+        let slots = (0..16).rev().collect::<Vec<i32>>();
+        let offsets = [0, 16];
+        let storage_elements = 16 * 16;
+
+        let ratio4_boundary = 5 * 4 - 1;
+        let ratio128_boundary = 2 * 128 - 1;
+        assert_eq!(ratio4_boundary / layout.page_tokens, 1);
+        assert_eq!(ratio128_boundary / layout.page_tokens, 15);
+        assert_eq!(
+            layout.resolve_row_offset(0, ratio4_boundary, storage_elements, &slots, &offsets,),
+            Some(14 * 16 + 3)
+        );
+        assert_eq!(
+            layout.resolve_row_offset(0, ratio128_boundary, storage_elements, &slots, &offsets,),
+            Some(15)
+        );
+        assert_ne!(
+            layout.resolve_row_offset(0, 4, storage_elements, &slots, &offsets),
+            layout.resolve_row_offset(0, ratio4_boundary, storage_elements, &slots, &offsets,)
+        );
+    }
+
+    #[test]
     fn layout_and_metadata_are_cuda_independent() {
         let planes = [
             KvPlaneDescriptor {
@@ -983,7 +1013,9 @@ mod tests {
         let weights = context.upload_f32_buffer(&[1.0]).unwrap();
         let query_values = [0.25, -0.5, 0.75, 1.0];
         let mut candidates = rows
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .enumerate()
             .map(|(index, row)| {
                 let score = row
@@ -1038,6 +1070,94 @@ mod tests {
             )
             .unwrap();
         assert_eq!(context.download_i32_buffer(&actual).unwrap(), expected);
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn cuda_compressed_boundary_scatter_isolates_cow_token_pages() {
+        let context = CudaArtifactOperatorContext::new().unwrap();
+        let descriptor = KvPlaneDescriptor {
+            name: "compressed_boundary_test",
+            elements_per_token: 1,
+            layer_count: 1,
+        };
+        let mut pool = CudaKvPagePool::new(&context, &[descriptor], 16, 5).unwrap();
+        let filler = KvPageId(10);
+        let ratio4_source = KvPageId(11);
+        let ratio128_source = KvPageId(12);
+        let ratio4_branch = KvPageId(13);
+        let ratio128_branch = KvPageId(14);
+        for page in [filler, ratio4_source, ratio128_source] {
+            pool.ensure(&context, page).unwrap();
+        }
+        for (page, sentinel) in [(ratio4_source, 4.0f32), (ratio128_source, 128.0)] {
+            let offset = pool.page_element_offset(page, 0).unwrap();
+            context
+                .overwrite_f32_range(&[sentinel; 16], pool.plane_storage_mut(0).unwrap(), offset)
+                .unwrap();
+        }
+        for (source, replacement) in [
+            (ratio4_source, ratio4_branch),
+            (ratio128_source, ratio128_branch),
+        ] {
+            let reservation = pool
+                .reserve(
+                    &context,
+                    &[],
+                    Some(KvCowReplacement {
+                        logical_page: 0,
+                        source,
+                        replacement,
+                    }),
+                )
+                .unwrap();
+            pool.commit(reservation).unwrap();
+        }
+
+        let filler_slot = pool.physical_slot(filler).unwrap() as i32;
+        let mut block_slots = vec![
+            filler_slot,
+            pool.physical_slot(ratio4_branch).unwrap() as i32,
+        ];
+        block_slots.extend(vec![filler_slot; 15]);
+        block_slots.push(pool.physical_slot(ratio128_branch).unwrap() as i32);
+        let block_slots = context.upload_i32_buffer(&block_slots).unwrap();
+        let block_offsets = context.upload_i32_buffer(&[0, 2, 18]).unwrap();
+        let row_sequence_ids = context.upload_i32_buffer(&[0, 1]).unwrap();
+        let positions = context.upload_i32_buffer(&[19, 255]).unwrap();
+        let values = context.upload_f32_buffer(&[19.0, 255.0]).unwrap();
+        context
+            .paged_plane_scatter_selected_rows_from_device(
+                &values,
+                &positions,
+                &block_slots,
+                &block_offsets,
+                &row_sequence_ids,
+                None,
+                pool.plane_storage_mut(0).unwrap(),
+                PagedPlaneLayout {
+                    page_tokens: 16,
+                    elements_per_token: 1,
+                    layer_index: 0,
+                    layer_count: 1,
+                },
+            )
+            .unwrap();
+
+        let download = |pool: &CudaKvPagePool, page| {
+            let range = pool.plane_slot_range(page, 0).unwrap();
+            context
+                .download_f32_range(pool.plane_storage(0).unwrap(), range.start, range.len())
+                .unwrap()
+        };
+        assert_eq!(download(&pool, ratio4_source), vec![4.0; 16]);
+        assert_eq!(download(&pool, ratio128_source), vec![128.0; 16]);
+        let mut ratio4_expected = vec![4.0; 16];
+        ratio4_expected[3] = 19.0;
+        assert_eq!(download(&pool, ratio4_branch), ratio4_expected);
+        let mut ratio128_expected = vec![128.0; 16];
+        ratio128_expected[15] = 255.0;
+        assert_eq!(download(&pool, ratio128_branch), ratio128_expected);
     }
 
     #[test]

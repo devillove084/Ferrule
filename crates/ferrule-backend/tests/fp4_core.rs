@@ -2,6 +2,7 @@
 
 //! Architecture-neutral FP4 core operator tests.
 
+use ferrule_backend::cuda::context::CudaArtifactOperatorContext;
 use ferrule_backend::cuda::kernels::kernels;
 use ferrule_backend::cuda::runtime::{CudaContext, DeviceBuffer, LaunchConfig};
 use std::sync::{Mutex, MutexGuard};
@@ -56,6 +57,113 @@ fn quantize_fp4_e2m1_nibble(value: f32) -> u8 {
         }
     }
     sign | best
+}
+
+fn bf16_round(value: f32) -> f32 {
+    let bits = value.to_bits();
+    let rounded = bits.wrapping_add(0x7fff + ((bits >> 16) & 1));
+    f32::from_bits(rounded & 0xffff_0000)
+}
+
+fn normalized_hadamard(values: &mut [f32]) {
+    let mut span = 1;
+    while span < values.len() {
+        for start in (0..values.len()).step_by(span * 2) {
+            for offset in 0..span {
+                let left = start + offset;
+                let right = left + span;
+                let first = values[left];
+                let second = values[right];
+                values[left] = first + second;
+                values[right] = first - second;
+            }
+        }
+        span *= 2;
+    }
+    let scale = (values.len() as f32).sqrt().recip();
+    for value in values {
+        *value *= scale;
+    }
+}
+
+fn fp4_qat_in_place(values: &mut [f32], block_size: usize) {
+    for block in values.chunks_exact_mut(block_size) {
+        let amax = block
+            .iter()
+            .map(|value| value.abs())
+            .fold(6.0 * 2.0f32.powi(-126), f32::max);
+        let scale = e8m0_scale(e8m0_scale_byte_for_amax(amax, 6.0));
+        for value in block {
+            *value = fp4_e2m1(quantize_fp4_e2m1_nibble(*value / scale)) * scale;
+        }
+    }
+}
+
+#[test]
+fn hadamard_fp4_qat_restores_bf16_before_scale_selection() {
+    let _guard = cuda_test_guard();
+    const COLUMNS: usize = 64;
+    const BLOCK: usize = 32;
+
+    let mut input = (0..COLUMNS)
+        .map(|index| {
+            if index.is_multiple_of(2) {
+                0.9375
+            } else {
+                0.5625
+            }
+        })
+        .collect::<Vec<_>>();
+    input[0] = 0.941_406_25;
+
+    let mut transformed = input.clone();
+    normalized_hadamard(&mut transformed);
+    assert_eq!(
+        e8m0_scale_byte_for_amax(
+            transformed[..BLOCK]
+                .iter()
+                .map(|v| v.abs())
+                .fold(0.0, f32::max),
+            6.0
+        ),
+        128,
+        "the fixture must cross the E8M0 scale boundary before BF16 writeback"
+    );
+    transformed
+        .iter_mut()
+        .for_each(|value| *value = bf16_round(*value));
+    assert_eq!(
+        e8m0_scale_byte_for_amax(
+            transformed[..BLOCK]
+                .iter()
+                .map(|v| v.abs())
+                .fold(0.0, f32::max),
+            6.0
+        ),
+        127
+    );
+    fp4_qat_in_place(&mut transformed, BLOCK);
+
+    let context = CudaArtifactOperatorContext::new().expect("create CUDA operator context");
+    let mut actual = context
+        .upload_f32_buffer(&input)
+        .expect("upload indexer values");
+    context
+        .fp4_hadamard_qat_quantize_buffer_in_place(&mut actual, COLUMNS)
+        .expect("run Hadamard/FP4 QAT");
+    let actual = context
+        .download_f32_buffer(&actual)
+        .expect("download QAT values");
+    assert_eq!(
+        actual
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+        transformed
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]

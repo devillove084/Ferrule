@@ -315,11 +315,10 @@ struct HcLinearPlan {
     if (cublasLtMatmulPreferenceCreate(&preference) != CUBLAS_STATUS_SUCCESS) {
       return false;
     }
-    constexpr std::size_t kHeuristicWorkspaceBudget = 64u << 20;
     const cublasStatus_t preference_status =
         cublasLtMatmulPreferenceSetAttribute(
             preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
-            &kHeuristicWorkspaceBudget, sizeof(kHeuristicWorkspaceBudget));
+            &available_workspace_bytes, sizeof(available_workspace_bytes));
     cublasLtMatmulHeuristicResult_t candidates[32];
     int candidate_count = 0;
     const cublasStatus_t heuristic_status =
@@ -334,15 +333,10 @@ struct HcLinearPlan {
     }
 
     for (int candidate = 0; candidate < candidate_count; ++candidate) {
-      int algorithm_id = -1;
       int split_k = 0;
-      int reduction = 0;
+      int reduction = CUBLASLT_REDUCTION_SCHEME_NONE;
       std::size_t written = 0u;
       if (cublasLtMatmulAlgoConfigGetAttribute(
-              &candidates[candidate].algo, CUBLASLT_ALGO_CONFIG_ID,
-              &algorithm_id, sizeof(algorithm_id),
-              &written) != CUBLAS_STATUS_SUCCESS ||
-          cublasLtMatmulAlgoConfigGetAttribute(
               &candidates[candidate].algo, CUBLASLT_ALGO_CONFIG_SPLITK_NUM,
               &split_k, sizeof(split_k), &written) != CUBLAS_STATUS_SUCCESS ||
           cublasLtMatmulAlgoConfigGetAttribute(
@@ -351,8 +345,11 @@ struct HcLinearPlan {
               sizeof(reduction), &written) != CUBLAS_STATUS_SUCCESS) {
         continue;
       }
-      if (algorithm_id == 14 && split_k == 64 &&
-          reduction == CUBLASLT_REDUCTION_SCHEME_COMPUTE_TYPE &&
+      // Split-K changes the FP32 reduction tree and its legal split count is
+      // architecture- and CUDA-version-dependent. Keep one K reduction per
+      // output so decode and wider batches share the same numerical boundary.
+      if (candidates[candidate].state == CUBLAS_STATUS_SUCCESS &&
+          split_k == 1 && reduction == CUBLASLT_REDUCTION_SCHEME_NONE &&
           candidates[candidate].workspaceSize <= available_workspace_bytes) {
         algorithm = candidates[candidate].algo;
         rows = requested_rows;

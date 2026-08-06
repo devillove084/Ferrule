@@ -9,6 +9,9 @@ namespace {
 
 constexpr uint32_t kBlock = 256;
 constexpr uint32_t kMaxTopK = 512;
+constexpr uint32_t kIndexerFusedQuery = 1u << 0;
+constexpr uint32_t kIndexerRowMetadata = 1u << 1;
+constexpr uint32_t kIndexerDirectCompressed = 1u << 2;
 
 inline uint32_t blocks_for(uint64_t count) {
   const uint64_t blocks = (count + kBlock - 1) / kBlock;
@@ -344,6 +347,9 @@ __global__ void quantize_kernel(FerruleCoreQuantizeArgs args) {
       return;
     }
     const uint32_t base = block_index * args.row_width;
+    for (uint32_t index = 0; index < args.row_width; ++index) {
+      values[base + index] = bf16_round(values[base + index]);
+    }
     for (uint32_t span = 1; span < args.row_width; span *= 2) {
       for (uint32_t start = 0; start < args.row_width; start += span * 2) {
         for (uint32_t offset = 0; offset < span; ++offset) {
@@ -356,7 +362,7 @@ __global__ void quantize_kernel(FerruleCoreQuantizeArgs args) {
     }
     const float hadamard_scale = rsqrtf(static_cast<float>(args.row_width));
     for (uint32_t index = 0; index < args.row_width; ++index) {
-      values[base + index] *= hadamard_scale;
+      values[base + index] = bf16_round(values[base + index] * hadamard_scale);
     }
     for (uint32_t block = 0; block < args.row_width / args.block_size;
          ++block) {
@@ -877,16 +883,15 @@ __global__ void router_kernel(FerruleCoreRouterArgs args) {
   }
 }
 
-__device__ inline void compressor_source(bool overlap, uint32_t group,
-                                         uint32_t row, uint32_t ratio,
-                                         uint32_t head_dim, uint32_t dimension,
-                                         bool *valid, uint32_t *token,
-                                         uint32_t *source_dimension,
-                                         uint32_t *ape_dimension) {
+__device__ inline void
+compressor_source(bool prefill, bool overlap, uint32_t group, uint32_t row,
+                  uint32_t ratio, uint32_t head_dim, uint32_t dimension,
+                  bool *valid, uint32_t *token, uint32_t *source_dimension,
+                  uint32_t *ape_dimension) {
   *valid = true;
   if (overlap) {
     if (row < ratio) {
-      if (group == 0) {
+      if (prefill && group == 0) {
         *valid = false;
       }
       *token = (group == 0 ? 0 : group - 1) * ratio + row;
@@ -983,9 +988,9 @@ __global__ void compressor_kernel(FerruleCoreCompressorArgs args) {
   for (uint32_t row = 0; row < rows; ++row) {
     bool source_valid;
     uint32_t token, source_dimension, ape_dimension;
-    compressor_source(args.overlap != 0, group, row, args.ratio, args.head_dim,
-                      dimension, &source_valid, &token, &source_dimension,
-                      &ape_dimension);
+    compressor_source(prefill, args.overlap != 0, group, row, args.ratio,
+                      args.head_dim, dimension, &source_valid, &token,
+                      &source_dimension, &ape_dimension);
     if (source_valid) {
       float score = scores[static_cast<uint64_t>(prefill ? token : row) *
                                args.output_dim +
@@ -1004,9 +1009,9 @@ __global__ void compressor_kernel(FerruleCoreCompressorArgs args) {
   for (uint32_t row = 0; row < rows; ++row) {
     bool source_valid;
     uint32_t token, source_dimension, ape_dimension;
-    compressor_source(args.overlap != 0, group, row, args.ratio, args.head_dim,
-                      dimension, &source_valid, &token, &source_dimension,
-                      &ape_dimension);
+    compressor_source(prefill, args.overlap != 0, group, row, args.ratio,
+                      args.head_dim, dimension, &source_valid, &token,
+                      &source_dimension, &ape_dimension);
     if (source_valid) {
       const uint64_t source =
           static_cast<uint64_t>(prefill ? token : row) * args.output_dim +
@@ -1023,8 +1028,9 @@ __global__ void compressor_kernel(FerruleCoreCompressorArgs args) {
       result += weight * kv[source];
     }
   }
-  pointer<float>(args.output)[index] =
-      denominator > 0.0f && isfinite(denominator) ? result / denominator : 0.0f;
+  pointer<float>(args.output)[index] = bf16_round(
+      denominator > 0.0f && isfinite(denominator) ? result / denominator
+                                                  : 0.0f);
 }
 
 __device__ inline void indexer_insert(float score, int32_t candidate,
@@ -1057,6 +1063,9 @@ __device__ inline void transform_index_query(const FerruleCoreIndexerArgs &args,
       query[dimension + 1] = first * sine + second * cosine;
     }
   }
+  for (uint32_t dimension = 0; dimension < args.head_dim; ++dimension) {
+    query[dimension] = bf16_round(query[dimension]);
+  }
   for (uint32_t span = 1; span < args.head_dim; span *= 2) {
     const uint32_t step = span * 2;
     for (uint32_t start = 0; start < args.head_dim; start += step) {
@@ -1075,7 +1084,7 @@ __device__ inline void transform_index_query(const FerruleCoreIndexerArgs &args,
     float amax = 6.0f * exp2f(-126.0f);
     for (uint32_t element = 0; element < 32; ++element) {
       const uint32_t dimension = block * 32 + element;
-      query[dimension] *= hadamard_scale;
+      query[dimension] = bf16_round(query[dimension] * hadamard_scale);
       amax = fmaxf(amax, fabsf(query[dimension]));
     }
     const float scale = e8m0_scale(e8m0_byte(amax, 6.0f));
@@ -1095,8 +1104,22 @@ __global__ void indexer_kernel(FerruleCoreIndexerArgs args) {
     return;
   }
   const bool prefill = args.prefill != 0;
-  const bool row_decode = !prefill && args.rows > 1;
-  const bool fused_query = (args.flags & 1u) != 0;
+  const bool row_decode = !prefill && (args.flags & kIndexerRowMetadata) != 0;
+  const bool fused_query = (args.flags & kIndexerFusedQuery) != 0;
+  const bool direct_compressed =
+      row_decode && (args.flags & kIndexerDirectCompressed) != 0;
+  const uint32_t window_columns =
+      prefill ? args.window_columns : args.window_size;
+  const uint32_t output_columns = window_columns + args.topk;
+  int32_t *indices = pointer<int32_t>(args.indices);
+  int32_t *selectors = pointer<int32_t>(args.selectors);
+  const uint64_t output_base = static_cast<uint64_t>(row) * output_columns;
+  for (uint32_t column = 0; column < output_columns; ++column) {
+    indices[output_base + column] = -1;
+    if (selectors != nullptr) {
+      selectors[output_base + column] = -1;
+    }
+  }
   if (fused_query &&
       (args.head_dim == 0 || args.head_dim > 256 ||
        (args.head_dim & (args.head_dim - 1)) != 0 ||
@@ -1124,23 +1147,20 @@ __global__ void indexer_kernel(FerruleCoreIndexerArgs args) {
     compressed_len =
         metadata_valid ? static_cast<uint32_t>(compressed_value) : 0;
   }
-  const uint32_t window_columns =
-      prefill ? args.window_columns : args.window_size;
-  const uint32_t output_columns = window_columns + args.topk;
-  int32_t *indices = pointer<int32_t>(args.indices);
-  int32_t *selectors = pointer<int32_t>(args.selectors);
-  const uint64_t output_base = static_cast<uint64_t>(row) * output_columns;
   if (prefill) {
-    const uint32_t first =
-        row + 1 > args.window_size ? row + 1 - args.window_size : 0;
+    const uint32_t absolute_position = args.start_position + row;
+    const uint32_t first = absolute_position + 1 > args.window_size
+                               ? absolute_position + 1 - args.window_size
+                               : 0;
     for (uint32_t column = 0; column < window_columns; ++column) {
       const uint32_t candidate = first + column;
       indices[output_base + column] =
-          candidate <= row ? static_cast<int32_t>(candidate) : -1;
+          candidate <= absolute_position ? static_cast<int32_t>(candidate) : -1;
     }
     compressed_len = args.compress_ratio == 0
                          ? 0
-                         : min((row + 1) / args.compress_ratio, compressed_len);
+                         : min((absolute_position + 1) / args.compress_ratio,
+                               compressed_len);
   } else if (row_decode) {
     for (uint32_t column = 0; column < args.window_size; ++column) {
       if (metadata_valid && window_len <= args.window_size &&
@@ -1148,23 +1168,21 @@ __global__ void indexer_kernel(FerruleCoreIndexerArgs args) {
         indices[output_base + column] =
             static_cast<int32_t>(position + 1 - window_len + column);
         selectors[output_base + column] = 0;
-      } else {
-        indices[output_base + column] = -1;
-        selectors[output_base + column] = -1;
       }
     }
   } else {
     for (uint32_t column = 0; column < args.window_size; ++column) {
       if (window_len < args.window_size) {
-        indices[column] =
+        indices[output_base + column] =
             column < window_len ? static_cast<int32_t>(column) : -1;
       } else {
-        indices[column] = static_cast<int32_t>(
+        indices[output_base + column] = static_cast<int32_t>(
             (position % args.window_size + 1 + column) % args.window_size);
       }
     }
   }
-  if (args.topk == 0 || !metadata_valid) {
+  if (args.topk == 0 || !metadata_valid ||
+      (row_decode && compressed_len != 0 && args.compress_ratio == 0)) {
     return;
   }
   float best_scores[kMaxTopK];
@@ -1178,39 +1196,60 @@ __global__ void indexer_kernel(FerruleCoreIndexerArgs args) {
   const float *plane = const_pointer<float>(args.plane);
   const uint32_t query_row = prefill || row_decode ? row : 0;
   for (uint32_t candidate = 0; candidate < compressed_len; ++candidate) {
-    const uint64_t plane_base = paged_row_offset(
-        args.plane_elements, const_pointer<int32_t>(args.block_slots),
-        const_pointer<int32_t>(args.block_offsets), sequence, candidate,
-        args.page_tokens, args.head_dim, args.layer_index, args.layer_count);
-    float score = plane_base == UINT64_MAX ? -CUDART_INF_F : 0.0f;
-    if (plane_base != UINT64_MAX) {
-      for (uint32_t head = 0; head < args.heads; ++head) {
-        float dot = 0.0f;
-        if (fused_query) {
-          float transformed[256];
-          const uint32_t query_position =
-              prefill ? args.start_position + row : position;
-          transform_index_query(args, query_row, head, query_position,
-                                transformed);
-          for (uint32_t dimension = 0; dimension < args.head_dim; ++dimension) {
-            dot += transformed[dimension] * plane[plane_base + dimension];
+    uint32_t logical_candidate = candidate;
+    if (row_decode) {
+      const uint64_t boundary =
+          (static_cast<uint64_t>(candidate) + 1u) * args.compress_ratio - 1u;
+      if (boundary > INT32_MAX) {
+        continue;
+      }
+      logical_candidate = static_cast<uint32_t>(boundary);
+    }
+    float score = direct_compressed ? 0.0f : -CUDART_INF_F;
+    if (!direct_compressed) {
+      const uint64_t plane_base = paged_row_offset(
+          args.plane_elements, const_pointer<int32_t>(args.block_slots),
+          const_pointer<int32_t>(args.block_offsets), sequence,
+          logical_candidate, args.page_tokens, args.head_dim, args.layer_index,
+          args.layer_count);
+      if (plane_base != UINT64_MAX) {
+        score = 0.0f;
+        for (uint32_t head = 0; head < args.heads; ++head) {
+          float dot = 0.0f;
+          if (fused_query) {
+            float transformed[256];
+            const uint32_t query_position =
+                prefill ? args.start_position + row : position;
+            transform_index_query(args, query_row, head, query_position,
+                                  transformed);
+            for (uint32_t dimension = 0; dimension < args.head_dim;
+                 ++dimension) {
+              dot += transformed[dimension] * plane[plane_base + dimension];
+            }
+          } else {
+            const uint64_t query_base =
+                (static_cast<uint64_t>(query_row) * args.heads + head) *
+                args.head_dim;
+            for (uint32_t dimension = 0; dimension < args.head_dim;
+                 ++dimension) {
+              dot +=
+                  query[query_base + dimension] * plane[plane_base + dimension];
+            }
           }
-        } else {
-          const uint64_t query_base =
-              (static_cast<uint64_t>(query_row) * args.heads + head) *
-              args.head_dim;
-          for (uint32_t dimension = 0; dimension < args.head_dim; ++dimension) {
-            dot +=
-                query[query_base + dimension] * plane[plane_base + dimension];
-          }
+          const float dot_bf16 = bf16_round(dot);
+          const float weight_bf16 = bf16_round(
+              bf16_round(weights[static_cast<uint64_t>(query_row) * args.heads +
+                                 head]) *
+              args.weight_scale);
+          score += bf16_round(fmaxf(dot_bf16, 0.0f) * weight_bf16);
         }
-        score += fmaxf(dot, 0.0f) *
-                 weights[static_cast<uint64_t>(query_row) * args.heads + head] *
-                 args.weight_scale;
       }
     }
-    indexer_insert(score, static_cast<int32_t>(candidate), best_scores,
-                   best_indices, args.topk);
+    score = bf16_round(score);
+    if (isfinite(score)) {
+      indexer_insert(score, static_cast<int32_t>(logical_candidate),
+                     best_scores, best_indices, args.topk);
+    }
   }
   for (uint32_t rank = 0; rank < args.topk; ++rank) {
     const bool found = best_indices[rank] >= 0 && isfinite(best_scores[rank]);
@@ -1540,7 +1579,7 @@ __global__ void moe_kernel(FerruleCoreMoeArgs args) {
              row];
       }
     }
-    pointer<float>(args.output)[index] = bf16_round(result);
+    pointer<float>(args.output)[output] = bf16_round(result);
   } else if (args.kind == FERRULE_CORE_MOE_REDUCE_ROUTES ||
              args.kind == FERRULE_CORE_MOE_REDUCE_EXPERT_GROUP_ROUTES) {
     const uint64_t total = static_cast<uint64_t>(args.tokens) * args.hidden;
@@ -1628,7 +1667,8 @@ __global__ void hc_mean_scatter_kernel(FerruleCoreHcArgs args) {
   const uint64_t output_base =
       (static_cast<uint64_t>(token) * args.tap_count + args.tap_slot) *
       args.hidden_size;
-  pointer<float>(args.output)[output_base + dimension] = sum / args.hc;
+  pointer<float>(args.output)[output_base + dimension] =
+      bf16_round(sum / args.hc);
 }
 
 __global__ void hc_kernel(FerruleCoreHcArgs args) {
@@ -1685,7 +1725,8 @@ __global__ void hc_kernel(FerruleCoreHcArgs args) {
                         static_cast<uint64_t>(copy) * args.hidden_size +
                         dimension];
       }
-      pointer<float>(args.output)[output_base + dimension] = sum / args.hc;
+      pointer<float>(args.output)[output_base + dimension] =
+          bf16_round(sum / args.hc);
     }
     return;
   }

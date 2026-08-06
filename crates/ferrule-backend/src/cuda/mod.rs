@@ -24,11 +24,12 @@ pub use architecture::{
 };
 pub use benchmark::{CudaSmokeBenchmark, run_gemv_rms_smoke_benchmark, run_smoke_benchmark};
 pub use context::{
-    CombinedRingWindowLens, CudaArtifactOperatorContext, CudaCompressorRecurrentCheckpointSlab,
-    CudaCompressorRecurrentState, CudaExpertSlotPointers, CudaF32Buffer, CudaFailpoints,
-    CudaHybridMlaAttentionWorkspace, CudaHybridMlaExplicitSelectionWorkspace, CudaI32Buffer,
-    CudaPreparedRoutedExpert, CudaProposalHeadWorkspace, CudaRoutedExpertArena,
-    CudaRoutedExpertMaterialization, CudaRoutedExpertShape, cuda_probe,
+    CombinedRingWindowLens, CudaArtifactOperatorContext, CudaBf16Buffer,
+    CudaCompressorRecurrentCheckpointSlab, CudaCompressorRecurrentState, CudaExpertSlotPointers,
+    CudaF32Buffer, CudaFailpoints, CudaHybridMlaAttentionWorkspace,
+    CudaHybridMlaExplicitSelectionWorkspace, CudaI32Buffer, CudaPreparedRoutedExpert,
+    CudaProposalHeadWorkspace, CudaRoutedExpertArena, CudaRoutedExpertMaterialization,
+    CudaRoutedExpertShape, cuda_probe,
 };
 pub use counters::CudaOpCounters;
 pub use kv_page_pool::{

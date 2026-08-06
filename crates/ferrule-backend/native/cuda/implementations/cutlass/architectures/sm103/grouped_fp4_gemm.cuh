@@ -52,7 +52,7 @@ inline constexpr std::size_t kInvalidScaleIndex =
 using ElementPairA = ::cutlass::mx_float8_t<::cutlass::float_e4m3_t>;
 using ElementPairB = ::cutlass::mx_float4_t<::cutlass::float_e2m1_t>;
 using ElementScale = ::cutlass::float_ue8m0_t;
-using ElementD = float;
+using ElementD = ::cutlass::bfloat16_t;
 using LayoutA = ::cutlass::layout::RowMajor;
 using LayoutB = ::cutlass::layout::ColumnMajor;
 using LayoutD = ::cutlass::layout::RowMajor;
@@ -61,7 +61,8 @@ using ProblemShape = ::cutlass::gemm::GroupProblemShape<ProblemShapeValue>;
 
 inline constexpr int kAlignmentA = 16;
 inline constexpr int kAlignmentB = 128;
-inline constexpr int kAlignmentD = 4;
+inline constexpr int kAlignmentD =
+    128 / ::cutlass::sizeof_bits<ElementD>::value;
 
 using TileShape1Sm = cute::Shape<cute::_128, cute::_128, cute::_128>;
 using ClusterShape1Sm = cute::Shape<cute::_2, cute::_4, cute::_1>;
@@ -126,6 +127,8 @@ static_assert(std::is_trivially_copyable_v<StrideD>);
 static_assert(std::is_trivially_copyable_v<LayoutSFA>);
 static_assert(std::is_trivially_copyable_v<LayoutSFB>);
 static_assert(sizeof(ElementScale) == 1);
+static_assert(sizeof(ElementD) == 2);
+static_assert(kAlignmentD * sizeof(ElementD) == 16);
 static_assert(alignof(ProblemShapeValue) <= kDescriptorAlignment);
 static_assert(alignof(StrideA) <= kDescriptorAlignment);
 static_assert(alignof(StrideB) <= kDescriptorAlignment);

@@ -128,6 +128,15 @@ impl CompressorRecurrentShape {
 mod tests {
     use super::*;
 
+    fn bf16_round(value: f32) -> f32 {
+        let bits = value.to_bits();
+        if (bits & 0x7fff_ffff) > 0x7f80_0000 {
+            return f32::from_bits((((bits >> 16) | 0x0040) & 0xffff) << 16);
+        }
+        let bias = 0x7fff + ((bits >> 16) & 1);
+        f32::from_bits(bits.wrapping_add(bias) & 0xffff_0000)
+    }
+
     struct ReferenceState {
         shape: CompressorRecurrentShape,
         kv: Vec<f32>,
@@ -201,6 +210,9 @@ mod tests {
                     }
                 }
             }
+            output
+                .iter_mut()
+                .for_each(|value| *value = bf16_round(*value));
             output
         }
 
@@ -485,7 +497,7 @@ mod tests {
             let mut output = context.zero_f32_buffer(shape.head_dim).unwrap();
             let mut reference = ReferenceState::new(shape);
 
-            for position in 0..6 {
+            for position in 0..shape.ratio * 3 {
                 let kv: Vec<f32> = (0..shape.out_dim)
                     .map(|dim| position as f32 + dim as f32 * 0.25)
                     .collect();
@@ -554,6 +566,12 @@ mod tests {
         });
         run(CompressorRecurrentShape {
             ratio: 2,
+            head_dim: 2,
+            out_dim: 4,
+            overlap: true,
+        });
+        run(CompressorRecurrentShape {
+            ratio: 4,
             head_dim: 2,
             out_dim: 4,
             overlap: true,

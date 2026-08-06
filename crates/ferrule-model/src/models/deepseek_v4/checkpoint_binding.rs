@@ -652,8 +652,10 @@ fn decode_tensor_f32(payload: &CheckpointTensorPayload) -> Result<Vec<f32>> {
             }
             Ok(payload
                 .bytes
-                .chunks_exact(4)
-                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|chunk| f32::from_le_bytes(*chunk))
                 .collect())
         }
         CheckpointDType::Bf16 => {
@@ -664,9 +666,11 @@ fn decode_tensor_f32(payload: &CheckpointTensorPayload) -> Result<Vec<f32>> {
             }
             Ok(payload
                 .bytes
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|chunk| {
-                    let bits = u16::from_le_bytes([chunk[0], chunk[1]]) as u32;
+                    let bits = u16::from_le_bytes(*chunk) as u32;
                     f32::from_bits(bits << 16)
                 })
                 .collect())
@@ -692,9 +696,11 @@ fn decode_indices_usize(payload: &CheckpointTensorPayload) -> Result<Vec<usize>>
             }
             payload
                 .bytes
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|chunk| {
-                    let value = i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                    let value = i32::from_le_bytes(*chunk);
                     usize::try_from(value).map_err(|_| Error::Model {
                         message: format!(
                             "negative router index {value} in '{}'",
@@ -712,12 +718,11 @@ fn decode_indices_usize(payload: &CheckpointTensorPayload) -> Result<Vec<usize>>
             }
             payload
                 .bytes
-                .chunks_exact(8)
+                .as_chunks::<8>()
+                .0
+                .iter()
                 .map(|chunk| {
-                    let value = i64::from_le_bytes([
-                        chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
-                        chunk[7],
-                    ]);
+                    let value = i64::from_le_bytes(*chunk);
                     usize::try_from(value).map_err(|_| Error::Model {
                         message: format!(
                             "negative router index {value} in '{}'",

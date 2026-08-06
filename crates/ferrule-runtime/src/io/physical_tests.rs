@@ -1147,8 +1147,10 @@ fn foreground_drains_submitted_warmup_without_reserving_another() {
             .unwrap(),
     ];
     let keys = preparations.map(|preparation| preparation.key());
-    let mut fairness = FairQueueConfig::default();
-    fairness.model_warmup_quantum = BYTES;
+    let fairness = FairQueueConfig {
+        model_warmup_quantum: BYTES,
+        ..FairQueueConfig::default()
+    };
     let mut registry =
         LoadRegistry::new(provider, bounded_physical_resources(1, 1, 1, 1), fairness).unwrap();
     let report = registry

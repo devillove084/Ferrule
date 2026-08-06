@@ -414,6 +414,24 @@ pub fn prepare(
     prepare_with_policy(model, options, policy, elapsed_us(phase_start))
 }
 
+fn fixed_compressed_selection_max_sequence_len(
+    compress_ratios: &[usize],
+    layer_count: usize,
+    index_topk: usize,
+) -> usize {
+    compress_ratios
+        .iter()
+        .copied()
+        .take(layer_count)
+        // The release model equips ratio-4 layers with an indexer. Other
+        // compressed layers directly select every visible compressed row.
+        .filter(|ratio| *ratio > 0 && *ratio != 4)
+        .map(|ratio| ratio.saturating_mul(index_topk))
+        .min()
+        .unwrap_or(u32::MAX as usize)
+        .min(u32::MAX as usize)
+}
+
 pub(crate) fn prepare_with_policy(
     model: DeepSeekV4Checkpoint,
     options: DeepSeekV4PrepareOptions,
@@ -512,6 +530,11 @@ pub(crate) fn prepare_with_policy(
     } else {
         options.max_layers
     };
+    let max_sequence_len = fixed_compressed_selection_max_sequence_len(
+        &model.config.compress_ratios,
+        kv_layer_count,
+        model.config.index_topk,
+    );
     let kv_layout = DeepSeekV4KvLayoutSchema {
         layer_count: kv_layer_count,
         window_size: model.config.window_size,
@@ -545,7 +568,7 @@ pub(crate) fn prepare_with_policy(
         ]
         .into_boxed_slice(),
         page_size: 16,
-        max_sequence_len: u32::MAX as usize,
+        max_sequence_len,
         compress_ratios: (0..kv_layer_count)
             .map(|layer| {
                 model
@@ -1700,6 +1723,19 @@ mod tests {
         assert_eq!(prepared.streaming_policy(), &policy);
         assert_eq!(prepared.resident_capacity(), 6);
         assert_eq!(prepared.prefetch_capacity(), 2);
+    }
+
+    #[test]
+    fn fixed_compressed_selection_caps_the_release_model_at_65536_tokens() {
+        let ratios = [0, 0, 4, 128, 4, 128];
+        assert_eq!(
+            fixed_compressed_selection_max_sequence_len(&ratios, ratios.len(), 512),
+            65_536
+        );
+        assert_eq!(
+            fixed_compressed_selection_max_sequence_len(&ratios, 3, 512),
+            u32::MAX as usize
+        );
     }
 
     #[test]

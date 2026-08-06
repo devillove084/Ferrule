@@ -47,6 +47,7 @@ use super::config::{
 };
 use super::helpers::decode_vector_f32;
 use super::layer::DeepSeekV4Layer;
+use crate::models::common::math::round_to_bf16;
 
 /// One Proposal attachment stage's bound weights.
 ///
@@ -363,10 +364,9 @@ fn parse_hc_field(field: &str) -> Option<(HyperConnectionStage, HyperConnectionT
         (HyperConnectionStage::Attention, suffix)
     } else if let Some(suffix) = field.strip_prefix("hc_ffn_") {
         (HyperConnectionStage::FeedForward, suffix)
-    } else if let Some(suffix) = field.strip_prefix("hc_head_") {
-        (HyperConnectionStage::Head, suffix)
     } else {
-        return None;
+        let suffix = field.strip_prefix("hc_head_")?;
+        (HyperConnectionStage::Head, suffix)
     };
     let kind = match suffix {
         "fn" => HyperConnectionTensorKind::Function,
@@ -650,15 +650,6 @@ pub fn load_proposal_heads(
     })
 }
 
-fn round_to_bf16(value: f32) -> f32 {
-    let bits = value.to_bits();
-    if (bits & 0x7f80_0000) == 0x7f80_0000 {
-        return value;
-    }
-    let rounding_bias = 0x7fffu32 + ((bits >> 16) & 1);
-    f32::from_bits(bits.wrapping_add(rounding_bias) & 0xffff_0000)
-}
-
 impl DeepSeekV4ProposalAttachment {
     pub fn protocol(&self) -> Result<DeepSeekV4ProposalProtocol> {
         DeepSeekV4ProposalProtocol::try_from(&self.config)
@@ -699,8 +690,10 @@ impl DeepSeekV4ProposalAttachment {
         let mut output = Vec::with_capacity(rows * output_size);
         for row in 0..rows {
             let start = row * input_size;
-            let mut projected =
-                projection.reference_matvec(&target_taps[start..start + input_size])?;
+            let mut taps = target_taps[start..start + input_size].to_vec();
+            taps.iter_mut()
+                .for_each(|value| *value = round_to_bf16(*value));
+            let mut projected = projection.reference_matvec(&taps)?;
             projected
                 .iter_mut()
                 .for_each(|value| *value = round_to_bf16(*value));
